@@ -39,9 +39,11 @@
           "devops.source-connection.create",
           "devops.source-connection.read",
           "devops.source-connection.update",
+          "devops.source-connection.recheck",
           "devops.repository-binding.create",
           "devops.repository-binding.read",
           "devops.repository-binding.update",
+          "devops.repository-binding.recheck",
           "devops.pipeline.create",
           "devops.pipeline.read",
           "devops.pipeline.update",
@@ -732,6 +734,32 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "devops.source-connection.recheck"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SOURCE_CONNECTION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "devops.repository-binding.create"
                 }
               },
@@ -785,6 +813,32 @@
               "properties": {
                 "action": {
                   "const": "devops.repository-binding.update"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "REPOSITORY_BINDING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "devops.repository-binding.recheck"
                 }
               },
               "required": [
@@ -1798,6 +1852,32 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "devops.source-connection.recheck"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SOURCE_CONNECTION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "devops.repository-binding.create"
                 }
               },
@@ -1851,6 +1931,32 @@
               "properties": {
                 "action": {
                   "const": "devops.repository-binding.update"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "REPOSITORY_BINDING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "devops.repository-binding.recheck"
                 }
               },
               "required": [

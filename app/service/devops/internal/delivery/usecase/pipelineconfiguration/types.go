@@ -32,14 +32,16 @@ type MutationKind string
 type MutationResultKind string
 
 const (
-	MutationCreateProject           MutationKind = "CREATE_PROJECT"
-	MutationCreateSourceConnection  MutationKind = "CREATE_SOURCE_CONNECTION"
-	MutationUpdateSourceConnection  MutationKind = "UPDATE_SOURCE_CONNECTION"
-	MutationCreateRepositoryBinding MutationKind = "CREATE_REPOSITORY_BINDING"
-	MutationUpdateRepositoryBinding MutationKind = "UPDATE_REPOSITORY_BINDING"
-	MutationCreatePipeline          MutationKind = "CREATE_PIPELINE"
-	MutationUpdatePipelineDraft     MutationKind = "UPDATE_PIPELINE_DRAFT"
-	MutationActivatePipeline        MutationKind = "ACTIVATE_PIPELINE"
+	MutationCreateProject            MutationKind = "CREATE_PROJECT"
+	MutationCreateSourceConnection   MutationKind = "CREATE_SOURCE_CONNECTION"
+	MutationUpdateSourceConnection   MutationKind = "UPDATE_SOURCE_CONNECTION"
+	MutationRecheckSourceConnection  MutationKind = "RECHECK_SOURCE_CONNECTION"
+	MutationCreateRepositoryBinding  MutationKind = "CREATE_REPOSITORY_BINDING"
+	MutationUpdateRepositoryBinding  MutationKind = "UPDATE_REPOSITORY_BINDING"
+	MutationRecheckRepositoryBinding MutationKind = "RECHECK_REPOSITORY_BINDING"
+	MutationCreatePipeline           MutationKind = "CREATE_PIPELINE"
+	MutationUpdatePipelineDraft      MutationKind = "UPDATE_PIPELINE_DRAFT"
+	MutationActivatePipeline         MutationKind = "ACTIVATE_PIPELINE"
 )
 
 const (
@@ -66,10 +68,14 @@ func ContractForMutation(kind MutationKind) (MutationContract, bool) {
 		return MutationContract{iamv1.ActionDevOpsSourceConnectionCreate, iamv1.ResourceSourceConnection, auditv1.ActionDevOpsSourceConnectionCreated, auditv1.TargetSourceConnection, ResultSourceConnection}, true
 	case MutationUpdateSourceConnection:
 		return MutationContract{iamv1.ActionDevOpsSourceConnectionUpdate, iamv1.ResourceSourceConnection, auditv1.ActionDevOpsSourceConnectionUpdated, auditv1.TargetSourceConnection, ResultSourceConnection}, true
+	case MutationRecheckSourceConnection:
+		return MutationContract{iamv1.ActionDevOpsSourceConnectionRecheck, iamv1.ResourceSourceConnection, auditv1.ActionDevOpsSourceConnectionRecheckScheduled, auditv1.TargetSourceConnection, ResultSourceConnection}, true
 	case MutationCreateRepositoryBinding:
 		return MutationContract{iamv1.ActionDevOpsRepositoryBindingCreate, iamv1.ResourceRepositoryBinding, auditv1.ActionDevOpsRepositoryBindingCreated, auditv1.TargetRepositoryBinding, ResultRepositoryBinding}, true
 	case MutationUpdateRepositoryBinding:
 		return MutationContract{iamv1.ActionDevOpsRepositoryBindingUpdate, iamv1.ResourceRepositoryBinding, auditv1.ActionDevOpsRepositoryBindingUpdated, auditv1.TargetRepositoryBinding, ResultRepositoryBinding}, true
+	case MutationRecheckRepositoryBinding:
+		return MutationContract{iamv1.ActionDevOpsRepositoryBindingRecheck, iamv1.ResourceRepositoryBinding, auditv1.ActionDevOpsRepositoryBindingRecheckScheduled, auditv1.TargetRepositoryBinding, ResultRepositoryBinding}, true
 	case MutationCreatePipeline:
 		return MutationContract{iamv1.ActionDevOpsPipelineCreate, iamv1.ResourcePipeline, auditv1.ActionDevOpsPipelineCreated, auditv1.TargetPipeline, ResultPipeline}, true
 	case MutationUpdatePipelineDraft:
@@ -136,8 +142,10 @@ type Transaction interface {
 	CreateProject(context.Context, devopsv1.DevOpsProject, Submission) error
 	CreateSourceConnection(context.Context, devopsv1.SourceConnection, Submission) error
 	UpdateSourceConnection(context.Context, uint64, devopsv1.SourceConnection, Submission) error
+	RecheckSourceConnection(context.Context, uint64, devopsv1.SourceConnection, Submission) error
 	CreateRepositoryBinding(context.Context, devopsv1.RepositoryBinding, Submission) error
 	UpdateRepositoryBinding(context.Context, uint64, devopsv1.RepositoryBinding, Submission) error
+	RecheckRepositoryBinding(context.Context, uint64, devopsv1.RepositoryBinding, Submission) error
 	CreatePipeline(context.Context, devopsv1.Pipeline, Submission) error
 	UpdatePipelineDraft(context.Context, uint64, devopsv1.Pipeline, Submission) error
 	ActivatePipeline(context.Context, uint64, devopsv1.PipelineActivation, Submission) error
@@ -207,6 +215,13 @@ type UpdateSourceConnectionCommand struct {
 	IdempotencyKey          string
 }
 
+type RecheckSourceConnectionCommand struct {
+	Authorization           port.Authorization
+	SourceConnectionID      devopsv1.ResourceID
+	ExpectedResourceVersion uint64
+	IdempotencyKey          string
+}
+
 type CreateRepositoryBindingCommand struct {
 	Authorization  port.Authorization
 	Request        devopsv1.CreateRepositoryBindingRequest
@@ -218,6 +233,13 @@ type UpdateRepositoryBindingCommand struct {
 	RepositoryBindingID     devopsv1.ResourceID
 	ExpectedResourceVersion uint64
 	Request                 devopsv1.UpdateRepositoryBindingRequest
+	IdempotencyKey          string
+}
+
+type RecheckRepositoryBindingCommand struct {
+	Authorization           port.Authorization
+	RepositoryBindingID     devopsv1.ResourceID
+	ExpectedResourceVersion uint64
 	IdempotencyKey          string
 }
 

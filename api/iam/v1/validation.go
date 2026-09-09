@@ -465,10 +465,10 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 	case ActionDevOpsProjectCreate, ActionDevOpsProjectRead:
 		return ResourceDevOpsProject, true
 	case ActionDevOpsSourceConnectionCreate, ActionDevOpsSourceConnectionRead,
-		ActionDevOpsSourceConnectionUpdate:
+		ActionDevOpsSourceConnectionUpdate, ActionDevOpsSourceConnectionRecheck:
 		return ResourceSourceConnection, true
 	case ActionDevOpsRepositoryBindingCreate, ActionDevOpsRepositoryBindingRead,
-		ActionDevOpsRepositoryBindingUpdate:
+		ActionDevOpsRepositoryBindingUpdate, ActionDevOpsRepositoryBindingRecheck:
 		return ResourceRepositoryBinding, true
 	case ActionDevOpsPipelineCreate, ActionDevOpsPipelineRead,
 		ActionDevOpsPipelineUpdate, ActionDevOpsPipelineActivate:

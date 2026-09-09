@@ -83,6 +83,58 @@ func TestPipelineConfigurationJourneyIsAtomicIdempotentAndSnapshotBound(t *testi
 	if err != nil {
 		t.Fatalf("create binding: %v", err)
 	}
+	recheckedConnection, err := usecase.RecheckSourceConnection(ctx, RecheckSourceConnectionCommand{
+		Authorization: authorization(
+			iamv1.ActionDevOpsSourceConnectionRecheck,
+			iamv1.ResourceSourceConnection,
+			connectionRequest.ID,
+		),
+		SourceConnectionID:      connectionRequest.ID,
+		ExpectedResourceVersion: rotated.Value.Metadata.ResourceVersion,
+		IdempotencyKey:          "recheck-connection-one",
+	})
+	if err != nil || recheckedConnection.Replayed || !reflect.DeepEqual(recheckedConnection.Value, rotated.Value) {
+		t.Fatalf("recheck connection=%#v err=%v", recheckedConnection, err)
+	}
+	replayedConnectionRecheck, err := usecase.RecheckSourceConnection(ctx, RecheckSourceConnectionCommand{
+		Authorization: authorization(
+			iamv1.ActionDevOpsSourceConnectionRecheck,
+			iamv1.ResourceSourceConnection,
+			connectionRequest.ID,
+		),
+		SourceConnectionID:      connectionRequest.ID,
+		ExpectedResourceVersion: rotated.Value.Metadata.ResourceVersion,
+		IdempotencyKey:          "recheck-connection-one",
+	})
+	if err != nil || !replayedConnectionRecheck.Replayed ||
+		!reflect.DeepEqual(replayedConnectionRecheck.Value, recheckedConnection.Value) {
+		t.Fatalf("replay connection recheck=%#v err=%v", replayedConnectionRecheck, err)
+	}
+	if _, err := usecase.RecheckSourceConnection(ctx, RecheckSourceConnectionCommand{
+		Authorization: authorization(
+			iamv1.ActionDevOpsSourceConnectionRecheck,
+			iamv1.ResourceSourceConnection,
+			connectionRequest.ID,
+		),
+		SourceConnectionID:      connectionRequest.ID,
+		ExpectedResourceVersion: rotated.Value.Metadata.ResourceVersion - 1,
+		IdempotencyKey:          "recheck-stale-connection-one",
+	}); !errors.Is(err, ErrResourceVersionConflict) {
+		t.Fatalf("stale connection recheck error=%v", err)
+	}
+	recheckedBinding, err := usecase.RecheckRepositoryBinding(ctx, RecheckRepositoryBindingCommand{
+		Authorization: authorization(
+			iamv1.ActionDevOpsRepositoryBindingRecheck,
+			iamv1.ResourceRepositoryBinding,
+			bindingRequest.ID,
+		),
+		RepositoryBindingID:     bindingRequest.ID,
+		ExpectedResourceVersion: binding.Value.Metadata.ResourceVersion,
+		IdempotencyKey:          "recheck-binding-one",
+	})
+	if err != nil || recheckedBinding.Replayed || !reflect.DeepEqual(recheckedBinding.Value, binding.Value) {
+		t.Fatalf("recheck binding=%#v err=%v", recheckedBinding, err)
+	}
 	secondBindingRequest := repositoryRequest("binding-two", projectRequest.ID, connectionRequest.ID, "matrix/other", "main")
 	if _, err := usecase.CreateRepositoryBinding(ctx, CreateRepositoryBindingCommand{
 		Authorization: authorization(iamv1.ActionDevOpsRepositoryBindingCreate, iamv1.ResourceRepositoryBinding, secondBindingRequest.ID),
@@ -231,13 +283,19 @@ func TestPipelineConfigurationJourneyIsAtomicIdempotentAndSnapshotBound(t *testi
 		break
 	}
 
-	if len(repository.state.mutations) != 11 || len(repository.state.audits) != 11 {
+	if len(repository.state.mutations) != 13 || len(repository.state.audits) != 13 {
 		t.Fatalf("mutation/audit count=%d/%d", len(repository.state.mutations), len(repository.state.audits))
 	}
+	recheckActions := map[auditv1.Action]bool{}
 	for _, event := range repository.state.audits {
 		if err := auditv1.ValidateEventForSource(auditv1.SourceDevOps, event); err != nil {
 			t.Fatalf("invalid Audit event: %v", err)
 		}
+		recheckActions[event.Action] = true
+	}
+	if !recheckActions[auditv1.ActionDevOpsSourceConnectionRecheckScheduled] ||
+		!recheckActions[auditv1.ActionDevOpsRepositoryBindingRecheckScheduled] {
+		t.Fatalf("recheck Audit actions=%v", recheckActions)
 	}
 	if updatedBinding.Value.ContentDigest == firstBindingDigest {
 		t.Fatal("binding update did not change digest")
@@ -379,12 +437,18 @@ func (tx *memoryTransaction) UpdateSourceConnection(_ context.Context, _ uint64,
 	tx.repository.state.connections[v.Metadata.ID] = v
 	return tx.record(s)
 }
+func (tx *memoryTransaction) RecheckSourceConnection(_ context.Context, _ uint64, _ devopsv1.SourceConnection, s Submission) error {
+	return tx.record(s)
+}
 func (tx *memoryTransaction) CreateRepositoryBinding(_ context.Context, v devopsv1.RepositoryBinding, s Submission) error {
 	tx.repository.state.bindings[v.Metadata.ID] = v
 	return tx.record(s)
 }
 func (tx *memoryTransaction) UpdateRepositoryBinding(_ context.Context, _ uint64, v devopsv1.RepositoryBinding, s Submission) error {
 	tx.repository.state.bindings[v.Metadata.ID] = v
+	return tx.record(s)
+}
+func (tx *memoryTransaction) RecheckRepositoryBinding(_ context.Context, _ uint64, _ devopsv1.RepositoryBinding, s Submission) error {
 	return tx.record(s)
 }
 func (tx *memoryTransaction) CreatePipeline(_ context.Context, v devopsv1.Pipeline, s Submission) error {

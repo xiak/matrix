@@ -125,6 +125,67 @@ func TestHandlerRequiresMissingIfMatchAs428AndBindsUpdateVersion(t *testing.T) {
 	}
 }
 
+func TestHandlerSchedulesSourceRechecksWithoutAcceptingObservationState(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	workflow := newFakeWorkflow(t)
+	handler := mustHandler(t, authorizer, workflow)
+
+	withBody := jsonRequest(t, http.MethodPost, "/v1/source-connections/connection-one/recheck", map[string]string{
+		"health": "READY",
+	})
+	withBody.Header.Set("Authorization", "Bearer caller-credential")
+	withBody.Header.Set("Idempotency-Key", "recheck-connection-one")
+	withBody.Header.Set("If-Match", `"1"`)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, withBody)
+	assertProblem(t, response, http.StatusBadRequest, devopsv1.ErrorInvalidArgument)
+	if authorizer.calls != 0 || workflow.recheckConnectionCalls != 0 {
+		t.Fatal("caller-supplied health reached the recheck authority boundary")
+	}
+
+	missingGuard := httptest.NewRequest(http.MethodPost, "/v1/source-connections/connection-one/recheck", nil)
+	missingGuard.Header.Set("Authorization", "Bearer caller-credential")
+	missingGuard.Header.Set("Idempotency-Key", "recheck-connection-one")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, missingGuard)
+	assertProblem(t, response, http.StatusPreconditionRequired, devopsv1.ErrorPreconditionRequired)
+	if authorizer.calls != 0 || workflow.recheckConnectionCalls != 0 {
+		t.Fatal("unguarded recheck reached the authority boundary")
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/source-connections/connection-one/recheck", nil)
+	request.Header.Set("Authorization", "Bearer caller-credential")
+	request.Header.Set("Idempotency-Key", "recheck-connection-one")
+	request.Header.Set("If-Match", `"7"`)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || response.Header().Get("ETag") != `"1"` ||
+		response.Header().Get("Location") != "/v1/source-connections/connection-one" {
+		t.Fatalf("connection recheck status=%d headers=%#v body=%s", response.Code, response.Header(), response.Body.String())
+	}
+	if workflow.recheckConnectionCalls != 1 || workflow.recheckConnection.ExpectedResourceVersion != 7 ||
+		authorizer.request.Action != iamv1.ActionDevOpsSourceConnectionRecheck ||
+		authorizer.request.Resource != (iamv1.ResourceReference{Kind: iamv1.ResourceSourceConnection, ID: "connection-one"}) {
+		t.Fatalf("connection recheck=%#v authorization=%#v", workflow.recheckConnection, authorizer.request)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/v1/repository-bindings/binding-one/recheck", nil)
+	request.Header.Set("Authorization", "Bearer caller-credential")
+	request.Header.Set("Idempotency-Key", "recheck-binding-one")
+	request.Header.Set("If-Match", `"9"`)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || response.Header().Get("ETag") != `"1"` ||
+		response.Header().Get("Location") != "/v1/repository-bindings/binding-one" {
+		t.Fatalf("binding recheck status=%d headers=%#v body=%s", response.Code, response.Header(), response.Body.String())
+	}
+	if workflow.recheckBindingCalls != 1 || workflow.recheckBinding.ExpectedResourceVersion != 9 ||
+		authorizer.request.Action != iamv1.ActionDevOpsRepositoryBindingRecheck ||
+		authorizer.request.Resource != (iamv1.ResourceReference{Kind: iamv1.ResourceRepositoryBinding, ID: "binding-one"}) {
+		t.Fatalf("binding recheck=%#v authorization=%#v", workflow.recheckBinding, authorizer.request)
+	}
+}
+
 func TestHandlerReadsRevisionThroughParentPipelineAuthority(t *testing.T) {
 	authorizer := &fakeAuthorizer{}
 	workflow := newFakeWorkflow(t)
@@ -662,12 +723,16 @@ type fakeWorkflow struct {
 	activation devopsv1.PipelineActivation
 	err        error
 
-	createProject         pipelineconfiguration.CreateProjectCommand
-	createProjectCalls    int
-	updateConnection      pipelineconfiguration.UpdateSourceConnectionCommand
-	updateConnectionCalls int
-	getProjectCalls       int
-	getRevision           pipelineconfiguration.GetPipelineRevisionQuery
+	createProject          pipelineconfiguration.CreateProjectCommand
+	createProjectCalls     int
+	updateConnection       pipelineconfiguration.UpdateSourceConnectionCommand
+	updateConnectionCalls  int
+	recheckConnection      pipelineconfiguration.RecheckSourceConnectionCommand
+	recheckConnectionCalls int
+	recheckBinding         pipelineconfiguration.RecheckRepositoryBindingCommand
+	recheckBindingCalls    int
+	getProjectCalls        int
+	getRevision            pipelineconfiguration.GetPipelineRevisionQuery
 }
 
 func newFakeWorkflow(t *testing.T) *fakeWorkflow {
@@ -752,10 +817,20 @@ func (workflow *fakeWorkflow) UpdateSourceConnection(_ context.Context, command 
 	workflow.updateConnection = command
 	return pipelineconfiguration.Result[devopsv1.SourceConnection]{Value: workflow.connection}, workflow.err
 }
+func (workflow *fakeWorkflow) RecheckSourceConnection(_ context.Context, command pipelineconfiguration.RecheckSourceConnectionCommand) (pipelineconfiguration.Result[devopsv1.SourceConnection], error) {
+	workflow.recheckConnectionCalls++
+	workflow.recheckConnection = command
+	return pipelineconfiguration.Result[devopsv1.SourceConnection]{Value: workflow.connection}, workflow.err
+}
 func (workflow *fakeWorkflow) CreateRepositoryBinding(context.Context, pipelineconfiguration.CreateRepositoryBindingCommand) (pipelineconfiguration.Result[devopsv1.RepositoryBinding], error) {
 	return pipelineconfiguration.Result[devopsv1.RepositoryBinding]{Value: workflow.binding}, workflow.err
 }
 func (workflow *fakeWorkflow) UpdateRepositoryBinding(context.Context, pipelineconfiguration.UpdateRepositoryBindingCommand) (pipelineconfiguration.Result[devopsv1.RepositoryBinding], error) {
+	return pipelineconfiguration.Result[devopsv1.RepositoryBinding]{Value: workflow.binding}, workflow.err
+}
+func (workflow *fakeWorkflow) RecheckRepositoryBinding(_ context.Context, command pipelineconfiguration.RecheckRepositoryBindingCommand) (pipelineconfiguration.Result[devopsv1.RepositoryBinding], error) {
+	workflow.recheckBindingCalls++
+	workflow.recheckBinding = command
 	return pipelineconfiguration.Result[devopsv1.RepositoryBinding]{Value: workflow.binding}, workflow.err
 }
 func (workflow *fakeWorkflow) CreatePipeline(context.Context, pipelineconfiguration.CreatePipelineCommand) (pipelineconfiguration.Result[devopsv1.Pipeline], error) {

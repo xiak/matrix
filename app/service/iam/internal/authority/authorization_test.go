@@ -198,8 +198,10 @@ func TestDevOpsRolesAreProductScopedAndLeastPrivilege(t *testing.T) {
 		iamv1.ActionDevOpsProjectCreate,
 		iamv1.ActionDevOpsSourceConnectionCreate,
 		iamv1.ActionDevOpsSourceConnectionUpdate,
+		iamv1.ActionDevOpsSourceConnectionRecheck,
 		iamv1.ActionDevOpsRepositoryBindingCreate,
 		iamv1.ActionDevOpsRepositoryBindingUpdate,
+		iamv1.ActionDevOpsRepositoryBindingRecheck,
 	}
 	for _, action := range adminOnlyActions {
 		if !RoleAllows(iamv1.RoleDevOpsAdmin, action) ||

@@ -48,9 +48,11 @@ const (
 	ActionDevOpsProjectCreated                      Action = "devops.project.created"
 	ActionDevOpsSourceConnectionCreated             Action = "devops.source-connection.created"
 	ActionDevOpsSourceConnectionUpdated             Action = "devops.source-connection.updated"
+	ActionDevOpsSourceConnectionRecheckScheduled    Action = "devops.source-connection.recheck-scheduled"
 	ActionDevOpsSourceConnectionHealthTransitioned  Action = "devops.source-connection.health-transitioned"
 	ActionDevOpsRepositoryBindingCreated            Action = "devops.repository-binding.created"
 	ActionDevOpsRepositoryBindingUpdated            Action = "devops.repository-binding.updated"
+	ActionDevOpsRepositoryBindingRecheckScheduled   Action = "devops.repository-binding.recheck-scheduled"
 	ActionDevOpsRepositoryBindingHealthTransitioned Action = "devops.repository-binding.health-transitioned"
 	ActionDevOpsPipelineCreated                     Action = "devops.pipeline.created"
 	ActionDevOpsPipelineDraftUpdated                Action = "devops.pipeline.draft-updated"
@@ -179,9 +181,11 @@ var allActions = []Action{
 	ActionDevOpsProjectCreated,
 	ActionDevOpsSourceConnectionCreated,
 	ActionDevOpsSourceConnectionUpdated,
+	ActionDevOpsSourceConnectionRecheckScheduled,
 	ActionDevOpsSourceConnectionHealthTransitioned,
 	ActionDevOpsRepositoryBindingCreated,
 	ActionDevOpsRepositoryBindingUpdated,
+	ActionDevOpsRepositoryBindingRecheckScheduled,
 	ActionDevOpsRepositoryBindingHealthTransitioned,
 	ActionDevOpsPipelineCreated,
 	ActionDevOpsPipelineDraftUpdated,
@@ -266,6 +270,10 @@ var actionContracts = map[Action]ActionContract{
 		Source: SourceDevOps, Target: TargetSourceConnection, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
 	},
+	ActionDevOpsSourceConnectionRecheckScheduled: {
+		Source: SourceDevOps, Target: TargetSourceConnection, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
 	ActionDevOpsSourceConnectionHealthTransitioned: {
 		Source: SourceDevOps, Target: TargetSourceConnection, Results: []Result{ResultSucceeded},
 		OperationRequired: true,
@@ -275,6 +283,10 @@ var actionContracts = map[Action]ActionContract{
 		IAMDecisionRequired: true, OperationRequired: true,
 	},
 	ActionDevOpsRepositoryBindingUpdated: {
+		Source: SourceDevOps, Target: TargetRepositoryBinding, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsRepositoryBindingRecheckScheduled: {
 		Source: SourceDevOps, Target: TargetRepositoryBinding, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
 	},

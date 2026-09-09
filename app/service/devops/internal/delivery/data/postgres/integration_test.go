@@ -733,10 +733,10 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("DevOps Audit worker readiness=%#v err=%v", workerReadiness, err)
 	}
 	snapshot, err := outbox.Snapshot(ctx)
-	if err != nil || snapshot.Pending != 88 || snapshot.Delivered != 0 {
+	if err != nil || snapshot.Pending != 91 || snapshot.Delivered != 0 {
 		t.Fatalf("initial Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
-	for index := 0; index < 88; index++ {
+	for index := 0; index < 91; index++ {
 		claim, found, err := outbox.Claim(ctx, "audit-worker-integration", 30*time.Second)
 		if err != nil || !found {
 			t.Fatalf("claim Audit event %d=%#v found=%t err=%v", index, claim, found, err)
@@ -764,7 +764,7 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 		t.Fatalf("empty Audit claim=%#v found=%t err=%v", claim, found, err)
 	}
 	snapshot, err = outbox.Snapshot(ctx)
-	if err != nil || snapshot.Delivered != 88 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
+	if err != nil || snapshot.Delivered != 91 || snapshot.Pending != 0 || snapshot.Leased != 0 ||
 		snapshot.Retry != 0 || snapshot.DeadLetter != 0 || snapshot.ExpiredLease != 0 {
 		t.Fatalf("delivered Audit outbox snapshot=%#v err=%v", snapshot, err)
 	}
@@ -874,8 +874,8 @@ func TestPostgresConfigurationJourneyAndAuthority(t *testing.T) {
 	); err != nil {
 		t.Fatalf("read delivery evidence: %v", err)
 	}
-	if mutationCount != 23 || sourceEventCount != 16 || runCount != 34 || runTaskCount != 10 ||
-		operationCount != 88 || auditCount != 88 || buildReceiptCount != 2 ||
+	if mutationCount != 26 || sourceEventCount != 16 || runCount != 34 || runTaskCount != 10 ||
+		operationCount != 91 || auditCount != 91 || buildReceiptCount != 2 ||
 		bindingRevisionCount != 2 || pipelineRevisionCount != 3 {
 		t.Fatalf(
 			"evidence counts mutation=%d event=%d run=%d task=%d operation=%d audit=%d build=%d binding=%d pipeline=%d",
@@ -1163,6 +1163,7 @@ func assertSourceObservationPersistenceAndFencing(
 	}
 
 	pendingBindings := make(map[devopsv1.ResourceID]bool, len(bindingIDs))
+	observedBindings := make(map[devopsv1.ResourceID]devopsv1.RepositoryBinding, len(bindingIDs))
 	for _, bindingID := range bindingIDs {
 		pendingBindings[bindingID] = true
 	}
@@ -1185,11 +1186,115 @@ func assertSourceObservationPersistenceAndFencing(
 		if err != nil || observedBinding.Status.Health != devopsv1.RepositoryBindingReady {
 			t.Fatalf("complete repository binding=%#v err=%v", observedBinding, err)
 		}
+		observedBindings[lease.ResourceID] = observedBinding
 		delete(pendingBindings, lease.ResourceID)
 	}
 	if len(pendingBindings) != 0 {
 		t.Fatalf("unobserved repository bindings=%v", pendingBindings)
 	}
+
+	scheduledConnection, err := configuration.RecheckSourceConnection(
+		ctx,
+		pipelineconfiguration.RecheckSourceConnectionCommand{
+			Authorization: auth(
+				iamv1.ActionDevOpsSourceConnectionRecheck,
+				iamv1.ResourceSourceConnection,
+				connectionID,
+			),
+			SourceConnectionID:      connectionID,
+			ExpectedResourceVersion: observedConnection.Metadata.ResourceVersion,
+			IdempotencyKey:          "recheck-connection-integration-one",
+		},
+	)
+	if err != nil || !reflect.DeepEqual(scheduledConnection.Value, observedConnection) {
+		t.Fatalf("schedule source connection recheck=%#v err=%v", scheduledConnection, err)
+	}
+	recheckLease, found, err := repository.Claim(
+		ctx, "source-observer-integration", sourceobservation.LeaseDuration,
+	)
+	if err != nil || !found || recheckLease.Kind != sourceobservation.WorkSourceConnection ||
+		recheckLease.ResourceID != connectionID ||
+		recheckLease.ResourceVersion != observedConnection.Metadata.ResourceVersion {
+		t.Fatalf("claim scheduled source connection=%#v found=%t err=%v", recheckLease, found, err)
+	}
+	secondScheduledConnection, err := configuration.RecheckSourceConnection(
+		ctx,
+		pipelineconfiguration.RecheckSourceConnectionCommand{
+			Authorization: auth(
+				iamv1.ActionDevOpsSourceConnectionRecheck,
+				iamv1.ResourceSourceConnection,
+				connectionID,
+			),
+			SourceConnectionID:      connectionID,
+			ExpectedResourceVersion: observedConnection.Metadata.ResourceVersion,
+			IdempotencyKey:          "recheck-connection-integration-two",
+		},
+	)
+	if err != nil || !reflect.DeepEqual(secondScheduledConnection.Value, observedConnection) {
+		t.Fatalf("schedule leased source connection recheck=%#v err=%v", secondScheduledConnection, err)
+	}
+	var leaseOwner string
+	var leaseFence int64
+	if err := admin.QueryRow(ctx, `SELECT lease_owner, fencing_token
+		FROM delivery.source_observation_tasks
+		WHERE tenant_id = 'tenant-one' AND resource_kind = 'SOURCE_CONNECTION'
+		  AND resource_id = $1`, connectionID).Scan(&leaseOwner, &leaseFence); err != nil ||
+		leaseOwner != "source-observer-integration" || leaseFence != int64(recheckLease.FencingToken) {
+		t.Fatalf("recheck replaced active lease owner=%q fence=%d err=%v", leaseOwner, leaseFence, err)
+	}
+	observedConnection, err = repository.CompleteSourceConnection(
+		ctx,
+		recheckLease,
+		domain.SourceConnectionHealthObservation{
+			Health: devopsv1.SourceConnectionReady,
+			Reason: devopsv1.SourceConnectionReasonObserved,
+		},
+	)
+	if err != nil || observedConnection.Status.Health != devopsv1.SourceConnectionReady ||
+		observedConnection.Metadata.ResourceVersion != recheckLease.ResourceVersion+1 {
+		t.Fatalf("complete scheduled source connection=%#v err=%v", observedConnection, err)
+	}
+
+	recheckBindingID := bindingIDs[0]
+	observedBinding := observedBindings[recheckBindingID]
+	scheduledBinding, err := configuration.RecheckRepositoryBinding(
+		ctx,
+		pipelineconfiguration.RecheckRepositoryBindingCommand{
+			Authorization: auth(
+				iamv1.ActionDevOpsRepositoryBindingRecheck,
+				iamv1.ResourceRepositoryBinding,
+				recheckBindingID,
+			),
+			RepositoryBindingID:     recheckBindingID,
+			ExpectedResourceVersion: observedBinding.Metadata.ResourceVersion,
+			IdempotencyKey:          "recheck-binding-integration",
+		},
+	)
+	if err != nil || !reflect.DeepEqual(scheduledBinding.Value, observedBinding) {
+		t.Fatalf("schedule repository binding recheck=%#v err=%v", scheduledBinding, err)
+	}
+	bindingRecheckLease, found, err := repository.Claim(
+		ctx, "source-observer-integration", sourceobservation.LeaseDuration,
+	)
+	if err != nil || !found || bindingRecheckLease.Kind != sourceobservation.WorkRepositoryBinding ||
+		bindingRecheckLease.ResourceID != recheckBindingID ||
+		bindingRecheckLease.ResourceVersion != observedBinding.Metadata.ResourceVersion {
+		t.Fatalf("claim scheduled repository binding=%#v found=%t err=%v", bindingRecheckLease, found, err)
+	}
+	observedBinding, err = repository.CompleteRepositoryBinding(
+		ctx,
+		bindingRecheckLease,
+		domain.RepositoryBindingHealthObservation{
+			Health: devopsv1.RepositoryBindingReady,
+			Reason: devopsv1.RepositoryBindingReasonObserved,
+		},
+	)
+	if err != nil || observedBinding.Status.Health != devopsv1.RepositoryBindingReady ||
+		observedBinding.Metadata.ResourceVersion != bindingRecheckLease.ResourceVersion+1 {
+		t.Fatalf("complete scheduled repository binding=%#v err=%v", observedBinding, err)
+	}
+	observedBindings[recheckBindingID] = observedBinding
+	assertSourceRecheckAuditFacts(t, ctx, admin)
 
 	fairProjectID := devopsv1.ResourceID("project-source-fairness")
 	if _, err := configuration.CreateProject(ctx, pipelineconfiguration.CreateProjectCommand{
@@ -1375,6 +1480,65 @@ func assertSourceObservationPersistenceAndFencing(
 		)
 	}
 	return refreshedConnection.Metadata.ResourceVersion
+}
+
+func assertSourceRecheckAuditFacts(t *testing.T, ctx context.Context, admin *pgx.Conn) {
+	t.Helper()
+	rows, err := admin.Query(ctx, `SELECT operation.operation_kind,
+		mutation.document, mutation.result_document, outbox.document
+		FROM delivery.mutations AS mutation
+		JOIN delivery.audit_operations AS operation
+		  ON operation.tenant_id = mutation.tenant_id AND operation.id = mutation.id
+		JOIN delivery.audit_outbox AS outbox
+		  ON outbox.tenant_id = mutation.tenant_id AND outbox.operation_id = mutation.id
+		WHERE mutation.tenant_id = 'tenant-one'
+		  AND mutation.mutation_kind IN ('RECHECK_SOURCE_CONNECTION', 'RECHECK_REPOSITORY_BINDING')
+		ORDER BY mutation.created_at, mutation.id`)
+	if err != nil {
+		t.Fatalf("read source recheck Audit facts: %v", err)
+	}
+	defer rows.Close()
+	counts := map[auditv1.Action]int{}
+	count := 0
+	for rows.Next() {
+		var operationKind string
+		var recordDocument, resultDocument, eventDocument []byte
+		if err := rows.Scan(&operationKind, &recordDocument, &resultDocument, &eventDocument); err != nil {
+			t.Fatal(err)
+		}
+		var record pipelineconfiguration.MutationRecord
+		var result pipelineconfiguration.MutationResult
+		var event auditv1.Event
+		if err := json.Unmarshal(recordDocument, &record); err != nil {
+			t.Fatalf("decode source recheck mutation: %v", err)
+		}
+		if err := json.Unmarshal(resultDocument, &result); err != nil {
+			t.Fatalf("decode source recheck result: %v", err)
+		}
+		if err := json.Unmarshal(eventDocument, &event); err != nil {
+			t.Fatalf("decode source recheck Audit fact: %v", err)
+		}
+		if operationKind != "SOURCE_RECHECK_SCHEDULED" ||
+			pipelineconfiguration.ValidateStoredMutation(pipelineconfiguration.StoredMutation{
+				Record: record,
+				Result: result,
+			}) != nil ||
+			auditv1.ValidateEventForSource(auditv1.SourceDevOps, event) != nil ||
+			event.Result != auditv1.ResultSucceeded || event.Target != record.Target ||
+			event.IAMDecisionID != auditv1.DecisionID(record.IAMDecisionID) {
+			t.Fatalf("source recheck operation=%s record=%#v result=%#v event=%#v",
+				operationKind, record, result, event)
+		}
+		counts[event.Action]++
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 || counts[auditv1.ActionDevOpsSourceConnectionRecheckScheduled] != 2 ||
+		counts[auditv1.ActionDevOpsRepositoryBindingRecheckScheduled] != 1 {
+		t.Fatalf("source recheck Audit counts=%#v total=%d", counts, count)
+	}
 }
 
 func assertTerminalAuditFacts(t *testing.T, ctx context.Context, admin *pgx.Conn) {

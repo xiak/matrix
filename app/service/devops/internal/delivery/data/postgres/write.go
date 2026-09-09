@@ -23,12 +23,20 @@ func (transaction *configurationTransaction) UpdateSourceConnection(ctx context.
 	return transaction.commit(ctx, pipelineconfiguration.MutationUpdateSourceConnection, expected, value, nil, submission)
 }
 
+func (transaction *configurationTransaction) RecheckSourceConnection(ctx context.Context, expected uint64, value devopsv1.SourceConnection, submission pipelineconfiguration.Submission) error {
+	return transaction.commit(ctx, pipelineconfiguration.MutationRecheckSourceConnection, expected, value, nil, submission)
+}
+
 func (transaction *configurationTransaction) CreateRepositoryBinding(ctx context.Context, value devopsv1.RepositoryBinding, submission pipelineconfiguration.Submission) error {
 	return transaction.commit(ctx, pipelineconfiguration.MutationCreateRepositoryBinding, 0, value, nil, submission)
 }
 
 func (transaction *configurationTransaction) UpdateRepositoryBinding(ctx context.Context, expected uint64, value devopsv1.RepositoryBinding, submission pipelineconfiguration.Submission) error {
 	return transaction.commit(ctx, pipelineconfiguration.MutationUpdateRepositoryBinding, expected, value, nil, submission)
+}
+
+func (transaction *configurationTransaction) RecheckRepositoryBinding(ctx context.Context, expected uint64, value devopsv1.RepositoryBinding, submission pipelineconfiguration.Submission) error {
+	return transaction.commit(ctx, pipelineconfiguration.MutationRecheckRepositoryBinding, expected, value, nil, submission)
 }
 
 func (transaction *configurationTransaction) CreatePipeline(ctx context.Context, value devopsv1.Pipeline, submission pipelineconfiguration.Submission) error {

@@ -66,22 +66,24 @@ const (
 	ActionPaaSDeploymentRead              Action = "paas.deployment.read"
 	ActionPaaSOperationRead               Action = "paas.operation.read"
 
-	ActionDevOpsProjectCreate           Action = "devops.project.create"
-	ActionDevOpsProjectRead             Action = "devops.project.read"
-	ActionDevOpsSourceConnectionCreate  Action = "devops.source-connection.create"
-	ActionDevOpsSourceConnectionRead    Action = "devops.source-connection.read"
-	ActionDevOpsSourceConnectionUpdate  Action = "devops.source-connection.update"
-	ActionDevOpsRepositoryBindingCreate Action = "devops.repository-binding.create"
-	ActionDevOpsRepositoryBindingRead   Action = "devops.repository-binding.read"
-	ActionDevOpsRepositoryBindingUpdate Action = "devops.repository-binding.update"
-	ActionDevOpsPipelineCreate          Action = "devops.pipeline.create"
-	ActionDevOpsPipelineRead            Action = "devops.pipeline.read"
-	ActionDevOpsPipelineUpdate          Action = "devops.pipeline.update"
-	ActionDevOpsPipelineActivate        Action = "devops.pipeline.activate"
-	ActionDevOpsRunRead                 Action = "devops.run.read"
-	ActionDevOpsRunReplay               Action = "devops.run.replay"
-	ActionDevOpsRunCancel               Action = "devops.run.cancel"
-	ActionDevOpsLogRead                 Action = "devops.log.read"
+	ActionDevOpsProjectCreate            Action = "devops.project.create"
+	ActionDevOpsProjectRead              Action = "devops.project.read"
+	ActionDevOpsSourceConnectionCreate   Action = "devops.source-connection.create"
+	ActionDevOpsSourceConnectionRead     Action = "devops.source-connection.read"
+	ActionDevOpsSourceConnectionUpdate   Action = "devops.source-connection.update"
+	ActionDevOpsSourceConnectionRecheck  Action = "devops.source-connection.recheck"
+	ActionDevOpsRepositoryBindingCreate  Action = "devops.repository-binding.create"
+	ActionDevOpsRepositoryBindingRead    Action = "devops.repository-binding.read"
+	ActionDevOpsRepositoryBindingUpdate  Action = "devops.repository-binding.update"
+	ActionDevOpsRepositoryBindingRecheck Action = "devops.repository-binding.recheck"
+	ActionDevOpsPipelineCreate           Action = "devops.pipeline.create"
+	ActionDevOpsPipelineRead             Action = "devops.pipeline.read"
+	ActionDevOpsPipelineUpdate           Action = "devops.pipeline.update"
+	ActionDevOpsPipelineActivate         Action = "devops.pipeline.activate"
+	ActionDevOpsRunRead                  Action = "devops.run.read"
+	ActionDevOpsRunReplay                Action = "devops.run.replay"
+	ActionDevOpsRunCancel                Action = "devops.run.cancel"
+	ActionDevOpsLogRead                  Action = "devops.log.read"
 
 	ActionAuditRecordRead         Action = "audit.record.read"
 	ActionAuditIntegrityVerify    Action = "audit.integrity.verify"
@@ -180,9 +182,11 @@ var allActions = []Action{
 	ActionDevOpsSourceConnectionCreate,
 	ActionDevOpsSourceConnectionRead,
 	ActionDevOpsSourceConnectionUpdate,
+	ActionDevOpsSourceConnectionRecheck,
 	ActionDevOpsRepositoryBindingCreate,
 	ActionDevOpsRepositoryBindingRead,
 	ActionDevOpsRepositoryBindingUpdate,
+	ActionDevOpsRepositoryBindingRecheck,
 	ActionDevOpsPipelineCreate,
 	ActionDevOpsPipelineRead,
 	ActionDevOpsPipelineUpdate,

@@ -243,6 +243,40 @@ func (usecase *Usecase) UpdateSourceConnection(
 	})
 }
 
+func (usecase *Usecase) RecheckSourceConnection(
+	ctx context.Context,
+	command RecheckSourceConnectionCommand,
+) (Result[devopsv1.SourceConnection], error) {
+	identity := struct {
+		ID                      devopsv1.ResourceID `json:"id"`
+		ExpectedResourceVersion uint64              `json:"expectedResourceVersion"`
+	}{command.SourceConnectionID, command.ExpectedResourceVersion}
+	if err := validateCommand(command.Authorization, MutationRecheckSourceConnection, command.SourceConnectionID,
+		command.IdempotencyKey, command.ExpectedResourceVersion, nil); err != nil {
+		return Result[devopsv1.SourceConnection]{}, err
+	}
+	return execute(ctx, usecase, executionPlan[devopsv1.SourceConnection]{
+		authorization: command.Authorization, kind: MutationRecheckSourceConnection,
+		targetID: command.SourceConnectionID, idempotencyKey: command.IdempotencyKey,
+		requestIdentity: identity, resultKind: ResultSourceConnection,
+		build: func(ctx context.Context, tx Transaction, _ time.Time) (devopsv1.SourceConnection, error) {
+			current, found, err := tx.LoadSourceConnection(ctx, command.SourceConnectionID)
+			if err != nil || !found {
+				return devopsv1.SourceConnection{}, missing(err, found)
+			}
+			if current.Metadata.ResourceVersion != command.ExpectedResourceVersion {
+				return devopsv1.SourceConnection{}, ErrResourceVersionConflict
+			}
+			return current, nil
+		},
+		result: sourceConnectionResult,
+		replay: replaySourceConnection,
+		persist: func(ctx context.Context, tx Transaction, value devopsv1.SourceConnection, submission Submission) error {
+			return tx.RecheckSourceConnection(ctx, command.ExpectedResourceVersion, value, submission)
+		},
+	})
+}
+
 func (usecase *Usecase) CreateRepositoryBinding(
 	ctx context.Context,
 	command CreateRepositoryBindingCommand,
@@ -317,6 +351,40 @@ func (usecase *Usecase) UpdateRepositoryBinding(
 		replay: replayRepositoryBinding,
 		persist: func(ctx context.Context, tx Transaction, value devopsv1.RepositoryBinding, submission Submission) error {
 			return tx.UpdateRepositoryBinding(ctx, command.ExpectedResourceVersion, value, submission)
+		},
+	})
+}
+
+func (usecase *Usecase) RecheckRepositoryBinding(
+	ctx context.Context,
+	command RecheckRepositoryBindingCommand,
+) (Result[devopsv1.RepositoryBinding], error) {
+	identity := struct {
+		ID                      devopsv1.ResourceID `json:"id"`
+		ExpectedResourceVersion uint64              `json:"expectedResourceVersion"`
+	}{command.RepositoryBindingID, command.ExpectedResourceVersion}
+	if err := validateCommand(command.Authorization, MutationRecheckRepositoryBinding, command.RepositoryBindingID,
+		command.IdempotencyKey, command.ExpectedResourceVersion, nil); err != nil {
+		return Result[devopsv1.RepositoryBinding]{}, err
+	}
+	return execute(ctx, usecase, executionPlan[devopsv1.RepositoryBinding]{
+		authorization: command.Authorization, kind: MutationRecheckRepositoryBinding,
+		targetID: command.RepositoryBindingID, idempotencyKey: command.IdempotencyKey,
+		requestIdentity: identity, resultKind: ResultRepositoryBinding,
+		build: func(ctx context.Context, tx Transaction, _ time.Time) (devopsv1.RepositoryBinding, error) {
+			current, found, err := tx.LoadRepositoryBinding(ctx, command.RepositoryBindingID)
+			if err != nil || !found {
+				return devopsv1.RepositoryBinding{}, missing(err, found)
+			}
+			if current.Metadata.ResourceVersion != command.ExpectedResourceVersion {
+				return devopsv1.RepositoryBinding{}, ErrResourceVersionConflict
+			}
+			return current, nil
+		},
+		result: repositoryBindingResult,
+		replay: replayRepositoryBinding,
+		persist: func(ctx context.Context, tx Transaction, value devopsv1.RepositoryBinding, submission Submission) error {
+			return tx.RecheckRepositoryBinding(ctx, command.ExpectedResourceVersion, value, submission)
 		},
 	})
 }
@@ -538,8 +606,8 @@ func validateCommand(auth port.Authorization, kind MutationKind, targetID devops
 		devopsv1.ValidateID("targetId", string(targetID)), validateIdempotencyKey(idempotencyKey),
 	)
 	if expectedVersion > devopsv1.MaximumContractInteger ||
-		(expectedVersion == 0 && strings.HasPrefix(string(kind), "UPDATE_")) ||
-		(expectedVersion == 0 && kind == MutationActivatePipeline) {
+		(expectedVersion == 0 && (strings.HasPrefix(string(kind), "UPDATE_") ||
+			strings.HasPrefix(string(kind), "RECHECK_") || kind == MutationActivatePipeline)) {
 		problems = append(problems, errors.New("expected resource version is invalid"))
 	}
 	if err := errors.Join(problems...); err != nil {

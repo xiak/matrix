@@ -24,8 +24,10 @@ type Workflow interface {
 	CreateProject(context.Context, pipelineconfiguration.CreateProjectCommand) (pipelineconfiguration.Result[devopsv1.DevOpsProject], error)
 	CreateSourceConnection(context.Context, pipelineconfiguration.CreateSourceConnectionCommand) (pipelineconfiguration.Result[devopsv1.SourceConnection], error)
 	UpdateSourceConnection(context.Context, pipelineconfiguration.UpdateSourceConnectionCommand) (pipelineconfiguration.Result[devopsv1.SourceConnection], error)
+	RecheckSourceConnection(context.Context, pipelineconfiguration.RecheckSourceConnectionCommand) (pipelineconfiguration.Result[devopsv1.SourceConnection], error)
 	CreateRepositoryBinding(context.Context, pipelineconfiguration.CreateRepositoryBindingCommand) (pipelineconfiguration.Result[devopsv1.RepositoryBinding], error)
 	UpdateRepositoryBinding(context.Context, pipelineconfiguration.UpdateRepositoryBindingCommand) (pipelineconfiguration.Result[devopsv1.RepositoryBinding], error)
+	RecheckRepositoryBinding(context.Context, pipelineconfiguration.RecheckRepositoryBindingCommand) (pipelineconfiguration.Result[devopsv1.RepositoryBinding], error)
 	CreatePipeline(context.Context, pipelineconfiguration.CreatePipelineCommand) (pipelineconfiguration.Result[devopsv1.Pipeline], error)
 	UpdatePipelineDraft(context.Context, pipelineconfiguration.UpdatePipelineDraftCommand) (pipelineconfiguration.Result[devopsv1.Pipeline], error)
 	ActivatePipeline(context.Context, pipelineconfiguration.ActivatePipelineCommand) (pipelineconfiguration.Result[devopsv1.PipelineActivation], error)
@@ -80,9 +82,11 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	routes.HandleFunc("/v1/projects/{projectId}", value.project)
 	routes.HandleFunc("/v1/source-connections", value.sourceConnections)
 	routes.HandleFunc("/v1/source-connections/{sourceConnectionId}", value.sourceConnection)
+	routes.HandleFunc("/v1/source-connections/{sourceConnectionId}/recheck", value.sourceConnectionRecheck)
 	routes.HandleFunc("/v1/source-ingress/{tenantId}/{sourceConnectionId}", value.sourceWebhook)
 	routes.HandleFunc("/v1/repository-bindings", value.repositoryBindings)
 	routes.HandleFunc("/v1/repository-bindings/{repositoryBindingId}", value.repositoryBinding)
+	routes.HandleFunc("/v1/repository-bindings/{repositoryBindingId}/recheck", value.repositoryBindingRecheck)
 	routes.HandleFunc("/v1/pipelines", value.pipelines)
 	routes.HandleFunc("/v1/pipelines/{pipelineId}", value.pipeline)
 	routes.HandleFunc("/v1/pipelines/{pipelineId}/draft", value.pipelineDraft)
@@ -249,6 +253,34 @@ func (value *handler) updateSourceConnection(response http.ResponseWriter, reque
 		result.Value, devopsv1.ValidateSourceConnection, err)
 }
 
+func (value *handler) sourceConnectionRecheck(response http.ResponseWriter, request *http.Request) {
+	if !value.acceptEnvelope(response, request, http.MethodPost, false) {
+		return
+	}
+	id, ok := pathID(response, request, "sourceConnectionId")
+	if !ok {
+		return
+	}
+	version, ok := ifMatch(response, request)
+	if !ok {
+		return
+	}
+	key, ok := idempotencyKey(response, request)
+	if !ok {
+		return
+	}
+	authorization, ok := value.authorize(response, request, iamv1.ActionDevOpsSourceConnectionRecheck, iamv1.ResourceSourceConnection, id)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.RecheckSourceConnection(request.Context(), pipelineconfiguration.RecheckSourceConnectionCommand{
+		Authorization: authorization, SourceConnectionID: id, ExpectedResourceVersion: version,
+		IdempotencyKey: key,
+	})
+	writeMutation(response, request, http.StatusAccepted, "/v1/source-connections/"+string(id),
+		result.Value.Metadata.ResourceVersion, result.Value, devopsv1.ValidateSourceConnection, err)
+}
+
 func (value *handler) repositoryBindings(response http.ResponseWriter, request *http.Request) {
 	if !value.acceptEnvelope(response, request, http.MethodPost, true) {
 		return
@@ -331,6 +363,34 @@ func (value *handler) updateRepositoryBinding(response http.ResponseWriter, requ
 	})
 	writeMutation(response, request, http.StatusOK, "", result.Value.Metadata.ResourceVersion,
 		result.Value, devopsv1.ValidateRepositoryBinding, err)
+}
+
+func (value *handler) repositoryBindingRecheck(response http.ResponseWriter, request *http.Request) {
+	if !value.acceptEnvelope(response, request, http.MethodPost, false) {
+		return
+	}
+	id, ok := pathID(response, request, "repositoryBindingId")
+	if !ok {
+		return
+	}
+	version, ok := ifMatch(response, request)
+	if !ok {
+		return
+	}
+	key, ok := idempotencyKey(response, request)
+	if !ok {
+		return
+	}
+	authorization, ok := value.authorize(response, request, iamv1.ActionDevOpsRepositoryBindingRecheck, iamv1.ResourceRepositoryBinding, id)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.RecheckRepositoryBinding(request.Context(), pipelineconfiguration.RecheckRepositoryBindingCommand{
+		Authorization: authorization, RepositoryBindingID: id, ExpectedResourceVersion: version,
+		IdempotencyKey: key,
+	})
+	writeMutation(response, request, http.StatusAccepted, "/v1/repository-bindings/"+string(id),
+		result.Value.Metadata.ResourceVersion, result.Value, devopsv1.ValidateRepositoryBinding, err)
 }
 
 func (value *handler) pipelines(response http.ResponseWriter, request *http.Request) {

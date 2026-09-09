@@ -193,6 +193,12 @@ func buildPaths() object {
 				"sourceConnectionId", "UpdateSourceConnectionRequest", "SourceConnection",
 			),
 		},
+		"/v1/source-connections/{sourceConnectionId}/recheck": object{
+			"post": recheckOperation(
+				"recheckSourceConnection", "Schedule a source connection recheck",
+				"sourceConnectionId", "SourceConnection",
+			),
+		},
 		"/v1/repository-bindings": object{
 			"post": createOperation(
 				"createRepositoryBinding", "Create a repository binding",
@@ -207,6 +213,12 @@ func buildPaths() object {
 			"put": updateResourceOperation(
 				"updateRepositoryBinding", "Replace a repository binding specification",
 				"repositoryBindingId", "UpdateRepositoryBindingRequest", "RepositoryBinding",
+			),
+		},
+		"/v1/repository-bindings/{repositoryBindingId}/recheck": object{
+			"post": recheckOperation(
+				"recheckRepositoryBinding", "Schedule a repository binding recheck",
+				"repositoryBindingId", "RepositoryBinding",
 			),
 		},
 		"/v1/pipelines": object{
@@ -368,6 +380,28 @@ func activateOperation() object {
 		"description": "No caller body is accepted; IAM supplies the actor and If-Match selects the exact draft resource version.",
 		"parameters": []any{
 			openapi31.PathIDParameter("pipelineId"),
+			openapi31.ComponentRef("#/components/parameters/IdempotencyKey"),
+			openapi31.ComponentRef("#/components/parameters/IfMatch"),
+		},
+		"responses": responses,
+	}
+}
+
+func recheckOperation(operationID, summary, pathParameter, responseSchema string) object {
+	responses := openapi31.ProblemResponses("400", "401", "403", "404", "405", "409", "412", "422", "428", "500", "503")
+	responses["202"] = response(
+		"Reconciliation was scheduled without changing resource state.", responseSchema,
+		object{
+			"ETag":     openapi31.ComponentRef("#/components/headers/ETag"),
+			"Location": openapi31.ComponentRef("#/components/headers/Location"),
+		},
+	)
+	return object{
+		"operationId": operationID,
+		"summary":     summary,
+		"description": "No caller body or health observation is accepted. If-Match selects the exact current resource version; the observer remains the only authority that can change health, reason, and observedAt.",
+		"parameters": []any{
+			openapi31.PathIDParameter(pathParameter),
 			openapi31.ComponentRef("#/components/parameters/IdempotencyKey"),
 			openapi31.ComponentRef("#/components/parameters/IfMatch"),
 		},

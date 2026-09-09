@@ -31,7 +31,8 @@
   and DevOps Audit delivery complete; the joined physical
   IAM/Audit/source/executor/report journey and its fetch, gateway-submission,
   runsc-effect, provider-status, and Audit-acknowledgment restart cases complete;
-  Gate B complete, while Gate C product UI and offline release remain pending
+  Gate B complete; Gate C's guarded source-recheck API and persistence slice is
+  complete, while the product UI and offline release remain pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -111,6 +112,16 @@ user identity, token scope names, filesystem paths, and credential material are
 never rendered. A stale `READY` observation is not admission authority: the UI
 marks it stale and webhook admission fails closed until a fresh observation is
 committed.
+
+Each Recheck is a bodyless, idempotent `POST` to the exact connection or
+binding's `/recheck` command endpoint. It requires a strong `If-Match`, uses a
+separate administrator-only IAM action, returns `202` with the unchanged
+resource snapshot, and emits one normalized `recheck-scheduled` Audit fact. It
+may advance only the delivery-owned observation task's due time. It does not
+change resource version, health, reason, or observation time; those remain
+exclusive output of the fenced source observer. A request that arrives while
+the observer holds the current lease preserves that lease, so it cannot revoke
+or forge the in-flight observation.
 
 The pipeline page shows the bound repository, change trigger, current immutable
 revision, executor profile, limits, connection health, and latest runs. The run
@@ -1022,12 +1033,13 @@ closed IAM role/purpose constraints in place while preserving both current and
 legacy bootstrap replay shapes.
 
 Audit now accepts the credential-derived `DEVOPS` source and the exact user
-mutation facts for project, connection, binding, Pipeline draft, and immutable
-revision activation. Go validation, canonical replay checks, generated OpenAPI,
-and PostgreSQL use the same closed action contracts. The operation identity
-index is generalized from PaaS-only to product operations without retaining a
-parallel compatibility index. A clean PostgreSQL 18 fixture has applied IAM
-and Audit migrations twice and exercised every IAM/Audit catalog entry.
+mutation facts for project, connection, binding, source recheck scheduling,
+Pipeline draft, and immutable revision activation. Go validation, canonical
+replay checks, generated OpenAPI, and PostgreSQL use the same closed action
+contracts. The operation identity index is generalized from PaaS-only to
+product operations without retaining a parallel compatibility index. A clean
+PostgreSQL 18 fixture has applied IAM and Audit migrations twice and exercised
+every IAM/Audit catalog entry.
 
 The source-resource slice adds provider-neutral `SourceConnection` and
 `RepositoryBinding` contracts, create/update commands, resource health, UI-safe
@@ -1054,14 +1066,14 @@ not otherwise change. Resource and revision versions are capped at the largest
 integer exactly representable by all JSON consumers.
 
 The configuration workflow now carries the IAM decision as an action- and
-resource-bound trusted value through eight exact mutations: project and source
-connection creation, source credential-reference rotation, repository binding
-creation/update, Pipeline creation/draft replacement, and immutable revision
-activation. A delivery-internal durable command record derives its stable
-identity from tenant, subject, command, target, and idempotency key. Equal
-replay returns the original successful result snapshot even after later
-updates; a changed request conflicts. This record is not a second public
-Operation resource and does not expand the v1 API.
+resource-bound trusted value through ten exact mutations: project and source
+connection creation, source credential-reference rotation, connection recheck,
+repository binding creation/update/recheck, Pipeline creation/draft replacement,
+and immutable revision activation. A delivery-internal durable command record
+derives its stable identity from tenant, subject, command, target, and
+idempotency key. Equal replay returns the original successful result snapshot
+even after later updates; a changed request conflicts. This record is not a
+second public Operation resource and does not expand the resource model.
 
 The delivery-owned PostgreSQL 18 schema stores projects, connections,
 bindings, binding snapshots, Pipelines, immutable revisions, command records,
@@ -1075,13 +1087,13 @@ access. The migration is repeatable and participates in the platform-wide
 cross-schema credential boundary test.
 
 The HTTP slice exposes only the generated nested resource paths, including
-Pipeline-scoped revision reads and unauthenticated readiness. It derives every
-request identity server-side, rejects caller authority headers, strictly
-decodes bounded JSON, distinguishes media type, payload size, method,
-precondition-required, and precondition-failed outcomes, and normalizes all
-failures without native detail. Reads and writes authorize the exact IAM action
-and resource before touching the repository; IAM alone derives tenant and
-subject identity.
+Pipeline-scoped revision reads, guarded connection/binding recheck commands,
+and unauthenticated readiness. It derives every request identity server-side,
+rejects caller authority headers and recheck bodies, strictly decodes bounded
+JSON, distinguishes media type, payload size, method, precondition-required,
+and precondition-failed outcomes, and normalizes all failures without native
+detail. Reads and writes authorize the exact IAM action and resource before
+touching the repository; IAM alone derives tenant and subject identity.
 
 The IAM adapter authenticates DevOps with its own service credential while
 forwarding the caller Bearer credential, binds correlation and trace context,
@@ -1777,6 +1789,16 @@ Current verification evidence:
   and the unit/security recovery matrices above, this completes all four Gate B
   acceptance items; Gate C product UI and offline-release completion remain
   outstanding
+- the first Gate C command slice adds bodyless, idempotent, strong-ETag-guarded
+  SourceConnection and RepositoryBinding Recheck endpoints with distinct
+  administrator-only IAM actions and normalized Audit facts. PostgreSQL keeps
+  the resource document and version unchanged, advances only the matching
+  observation task, and preserves an already-held observer lease. Unit and HTTP
+  tests reject caller health bodies, stale versions, and missing guards; a
+  clean PostgreSQL `18.6` journey applies the schema twice, proves exact replay,
+  scheduling, active-lease preservation, observer-only state transition, and
+  three correlated scheduling facts. The shared IAM/Audit PostgreSQL `18.6`
+  authority journey also passes with both new closed actions
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,
@@ -1933,10 +1955,10 @@ Current verification evidence:
   create exactly five IAM-bound accepted facts, two manual replays create
   exactly two IAM-bound accepted facts, and nonterminal worker transitions
   create no completion fact; both replay generations have no task before a
-  worker claim. The fresh journey contains 23 mutations, 16 SourceEvents, 34
-  PipelineRuns, ten task intents, two BuildExecutor receipts, and 88 Audit
-  operations/outbox facts, including five source-health transitions and four
-  authorized public log-read facts
+  worker claim. The fresh journey contains 26 mutations, 16 SourceEvents, 34
+  PipelineRuns, ten task intents, two BuildExecutor receipts, and 91 Audit
+  operations/outbox facts, including three source-recheck scheduling facts,
+  five source-health transitions, and four authorized public log-read facts
 - fixed `10fea16` data-bearing upgrade preserving all 17 mutations, 16
   SourceEvents, 32 PipelineRuns, nine task intents, and 71 Audit
   operations/outbox facts while backfilling each original run's creation

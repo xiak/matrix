@@ -1101,7 +1101,9 @@ CREATE TABLE IF NOT EXISTS delivery.mutations (
         AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND mutation_kind IN (
             'CREATE_PROJECT', 'CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION',
+            'RECHECK_SOURCE_CONNECTION',
             'CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING',
+            'RECHECK_REPOSITORY_BINDING',
             'CREATE_PIPELINE', 'UPDATE_PIPELINE_DRAFT', 'ACTIVATE_PIPELINE',
             'CANCEL_PIPELINE_RUN', 'REPLAY_PIPELINE_RUN'
         )
@@ -1155,7 +1157,9 @@ ALTER TABLE delivery.mutations
         AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND mutation_kind IN (
             'CREATE_PROJECT', 'CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION',
+            'RECHECK_SOURCE_CONNECTION',
             'CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING',
+            'RECHECK_REPOSITORY_BINDING',
             'CREATE_PIPELINE', 'UPDATE_PIPELINE_DRAFT', 'ACTIVATE_PIPELINE',
             'CANCEL_PIPELINE_RUN', 'REPLAY_PIPELINE_RUN'
         )
@@ -1202,6 +1206,9 @@ CREATE TABLE IF NOT EXISTS delivery.audit_operations (
                     'DEVOPS_PROJECT', 'SOURCE_CONNECTION',
                     'REPOSITORY_BINDING', 'PIPELINE', 'PIPELINE_REVISION'
                 ))
+            OR (operation_kind = 'SOURCE_RECHECK_SCHEDULED'
+                AND target_kind IN ('SOURCE_CONNECTION', 'REPOSITORY_BINDING')
+                AND id COLLATE "C" ~ '^operation-[0-9a-f]{64}$')
             OR (operation_kind = 'SOURCE_EVENT_ADMISSION'
                 AND target_kind = 'SOURCE_EVENT' AND id = target_id)
             OR (operation_kind = 'PIPELINE_RUN_CREATION'
@@ -1243,6 +1250,9 @@ ALTER TABLE delivery.audit_operations
                     'DEVOPS_PROJECT', 'SOURCE_CONNECTION',
                     'REPOSITORY_BINDING', 'PIPELINE', 'PIPELINE_REVISION'
                 ))
+            OR (operation_kind = 'SOURCE_RECHECK_SCHEDULED'
+                AND target_kind IN ('SOURCE_CONNECTION', 'REPOSITORY_BINDING')
+                AND id COLLATE "C" ~ '^operation-[0-9a-f]{64}$')
             OR (operation_kind = 'SOURCE_EVENT_ADMISSION'
                 AND target_kind = 'SOURCE_EVENT' AND id = target_id)
             OR (operation_kind = 'PIPELINE_RUN_CREATION'
@@ -1284,6 +1294,8 @@ SELECT tenant_id, id,
        CASE mutation_kind
            WHEN 'CANCEL_PIPELINE_RUN' THEN 'PIPELINE_RUN_CANCELLATION'
            WHEN 'REPLAY_PIPELINE_RUN' THEN 'PIPELINE_RUN_REPLAY'
+           WHEN 'RECHECK_SOURCE_CONNECTION' THEN 'SOURCE_RECHECK_SCHEDULED'
+           WHEN 'RECHECK_REPOSITORY_BINDING' THEN 'SOURCE_RECHECK_SCHEDULED'
            ELSE 'CONFIGURATION_MUTATION'
        END,
        target_kind, target_id, created_at
@@ -1779,8 +1791,10 @@ BEGIN
         WHEN 'CREATE_PROJECT' THEN 'devops.project.create'
         WHEN 'CREATE_SOURCE_CONNECTION' THEN 'devops.source-connection.create'
         WHEN 'UPDATE_SOURCE_CONNECTION' THEN 'devops.source-connection.update'
+        WHEN 'RECHECK_SOURCE_CONNECTION' THEN 'devops.source-connection.recheck'
         WHEN 'CREATE_REPOSITORY_BINDING' THEN 'devops.repository-binding.create'
         WHEN 'UPDATE_REPOSITORY_BINDING' THEN 'devops.repository-binding.update'
+        WHEN 'RECHECK_REPOSITORY_BINDING' THEN 'devops.repository-binding.recheck'
         WHEN 'CREATE_PIPELINE' THEN 'devops.pipeline.create'
         WHEN 'UPDATE_PIPELINE_DRAFT' THEN 'devops.pipeline.update'
         WHEN 'ACTIVATE_PIPELINE' THEN 'devops.pipeline.activate'
@@ -1788,9 +1802,15 @@ BEGIN
     END;
     expected_iam_resource := CASE
         WHEN requested_kind = 'CREATE_PROJECT' THEN 'DEVOPS_PROJECT'
-        WHEN requested_kind IN ('CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION')
+        WHEN requested_kind IN (
+            'CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION',
+            'RECHECK_SOURCE_CONNECTION'
+        )
             THEN 'SOURCE_CONNECTION'
-        WHEN requested_kind IN ('CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING')
+        WHEN requested_kind IN (
+            'CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING',
+            'RECHECK_REPOSITORY_BINDING'
+        )
             THEN 'REPOSITORY_BINDING'
         ELSE 'PIPELINE'
     END;
@@ -1798,8 +1818,10 @@ BEGIN
         WHEN 'CREATE_PROJECT' THEN 'devops.project.created'
         WHEN 'CREATE_SOURCE_CONNECTION' THEN 'devops.source-connection.created'
         WHEN 'UPDATE_SOURCE_CONNECTION' THEN 'devops.source-connection.updated'
+        WHEN 'RECHECK_SOURCE_CONNECTION' THEN 'devops.source-connection.recheck-scheduled'
         WHEN 'CREATE_REPOSITORY_BINDING' THEN 'devops.repository-binding.created'
         WHEN 'UPDATE_REPOSITORY_BINDING' THEN 'devops.repository-binding.updated'
+        WHEN 'RECHECK_REPOSITORY_BINDING' THEN 'devops.repository-binding.recheck-scheduled'
         WHEN 'CREATE_PIPELINE' THEN 'devops.pipeline.created'
         WHEN 'UPDATE_PIPELINE_DRAFT' THEN 'devops.pipeline.draft-updated'
         WHEN 'ACTIVATE_PIPELINE' THEN 'devops.pipeline-revision.activated'
@@ -1807,18 +1829,30 @@ BEGIN
     END;
     expected_audit_target := CASE
         WHEN requested_kind = 'CREATE_PROJECT' THEN 'DEVOPS_PROJECT'
-        WHEN requested_kind IN ('CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION')
+        WHEN requested_kind IN (
+            'CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION',
+            'RECHECK_SOURCE_CONNECTION'
+        )
             THEN 'SOURCE_CONNECTION'
-        WHEN requested_kind IN ('CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING')
+        WHEN requested_kind IN (
+            'CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING',
+            'RECHECK_REPOSITORY_BINDING'
+        )
             THEN 'REPOSITORY_BINDING'
         WHEN requested_kind = 'ACTIVATE_PIPELINE' THEN 'PIPELINE_REVISION'
         ELSE 'PIPELINE'
     END;
     expected_result_kind := CASE
         WHEN requested_kind = 'CREATE_PROJECT' THEN 'DevOpsProject'
-        WHEN requested_kind IN ('CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION')
+        WHEN requested_kind IN (
+            'CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION',
+            'RECHECK_SOURCE_CONNECTION'
+        )
             THEN 'SourceConnection'
-        WHEN requested_kind IN ('CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING')
+        WHEN requested_kind IN (
+            'CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING',
+            'RECHECK_REPOSITORY_BINDING'
+        )
             THEN 'RepositoryBinding'
         WHEN requested_kind = 'ACTIVATE_PIPELINE' THEN 'PipelineActivation'
         ELSE 'Pipeline'
@@ -1833,9 +1867,15 @@ BEGIN
     END;
     resource_kind := CASE
         WHEN requested_kind = 'CREATE_PROJECT' THEN 'DevOpsProject'
-        WHEN requested_kind IN ('CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION')
+        WHEN requested_kind IN (
+            'CREATE_SOURCE_CONNECTION', 'UPDATE_SOURCE_CONNECTION',
+            'RECHECK_SOURCE_CONNECTION'
+        )
             THEN 'SourceConnection'
-        WHEN requested_kind IN ('CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING')
+        WHEN requested_kind IN (
+            'CREATE_REPOSITORY_BINDING', 'UPDATE_REPOSITORY_BINDING',
+            'RECHECK_REPOSITORY_BINDING'
+        )
             THEN 'RepositoryBinding'
         ELSE 'Pipeline'
     END;
@@ -1871,11 +1911,18 @@ BEGIN
        OR submitted_resource->>'kind' IS DISTINCT FROM resource_kind
        OR submitted_resource#>>'{metadata,scope,tenantId}' IS DISTINCT FROM effective_tenant_id
        OR COALESCE(resource_id, '') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR (submitted_resource#>>'{metadata,updatedAt}')::timestamptz IS DISTINCT FROM effective_now
+       OR (requested_kind NOT IN (
+                'RECHECK_SOURCE_CONNECTION', 'RECHECK_REPOSITORY_BINDING'
+           ) AND (submitted_resource#>>'{metadata,updatedAt}')::timestamptz IS DISTINCT FROM effective_now)
        OR (CASE WHEN requested_kind LIKE 'CREATE_%'
             THEN (expected_resource_version <> 0
                  OR submitted_resource#>>'{metadata,resourceVersion}' IS DISTINCT FROM '1'
                  OR (submitted_resource#>>'{metadata,createdAt}')::timestamptz IS DISTINCT FROM effective_now)
+            WHEN requested_kind IN (
+                'RECHECK_SOURCE_CONNECTION', 'RECHECK_REPOSITORY_BINDING'
+            ) THEN (expected_resource_version < 1
+                 OR (submitted_resource#>>'{metadata,resourceVersion}')::numeric
+                    IS DISTINCT FROM expected_resource_version)
             ELSE (expected_resource_version < 1
                  OR (submitted_resource#>>'{metadata,resourceVersion}')::numeric
                     IS DISTINCT FROM expected_resource_version + 1)
@@ -2002,6 +2049,18 @@ BEGIN
                document = submitted_resource
          WHERE tenant_id = effective_tenant_id AND id = resource_id
            AND resource_version = expected_resource_version;
+    WHEN 'RECHECK_SOURCE_CONNECTION' THEN
+        SELECT document INTO current_document
+          FROM delivery.source_connections
+         WHERE tenant_id = effective_tenant_id AND id = resource_id
+         FOR UPDATE;
+        IF current_document IS NULL
+           OR (current_document#>>'{metadata,resourceVersion}')::numeric <> expected_resource_version THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'SourceConnection version conflict';
+        END IF;
+        IF current_document IS DISTINCT FROM submitted_resource THEN
+            RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'SourceConnection recheck changed resource state';
+        END IF;
     WHEN 'CREATE_REPOSITORY_BINDING' THEN
         INSERT INTO delivery.repository_bindings (
             tenant_id, id, project_id, source_connection_id, external_repository_id,
@@ -2055,6 +2114,18 @@ BEGIN
             submitted_resource->>'contentDigest', expected_resource_version + 1,
             effective_now, submitted_resource
         );
+    WHEN 'RECHECK_REPOSITORY_BINDING' THEN
+        SELECT document INTO current_document
+          FROM delivery.repository_bindings
+         WHERE tenant_id = effective_tenant_id AND id = resource_id
+         FOR UPDATE;
+        IF current_document IS NULL
+           OR (current_document#>>'{metadata,resourceVersion}')::numeric <> expected_resource_version THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'RepositoryBinding version conflict';
+        END IF;
+        IF current_document IS DISTINCT FROM submitted_resource THEN
+            RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'RepositoryBinding recheck changed resource state';
+        END IF;
     WHEN 'CREATE_PIPELINE' THEN
         INSERT INTO delivery.pipelines (
             tenant_id, id, project_id, repository_binding_id, draft_digest,
@@ -2138,7 +2209,13 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'unsupported delivery mutation';
     END CASE;
 
-    GET DIAGNOSTICS affected = ROW_COUNT;
+    IF requested_kind IN (
+        'RECHECK_SOURCE_CONNECTION', 'RECHECK_REPOSITORY_BINDING'
+    ) THEN
+        affected := 1;
+    ELSE
+        GET DIAGNOSTICS affected = ROW_COUNT;
+    END IF;
     IF affected <> 1 THEN
         RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'delivery resource version conflict';
     END IF;
@@ -2173,6 +2250,33 @@ BEGIN
                );
     END IF;
 
+    IF requested_kind IN (
+        'RECHECK_SOURCE_CONNECTION', 'RECHECK_REPOSITORY_BINDING'
+    ) THEN
+        INSERT INTO delivery.source_observation_tasks (
+            tenant_id, resource_kind, resource_id, resource_version,
+            available_at, fencing_token, created_at, updated_at
+        ) VALUES (
+            effective_tenant_id,
+            CASE requested_kind
+                WHEN 'RECHECK_SOURCE_CONNECTION' THEN 'SOURCE_CONNECTION'
+                ELSE 'REPOSITORY_BINDING'
+            END,
+            resource_id, expected_resource_version, effective_now, 0,
+            effective_now, effective_now
+        )
+        ON CONFLICT ON CONSTRAINT source_observation_tasks_pkey DO UPDATE
+           SET resource_version = excluded.resource_version,
+               available_at = least(
+                   source_observation_tasks.available_at,
+                   excluded.available_at
+               ),
+               updated_at = greatest(
+                   excluded.updated_at,
+                   source_observation_tasks.last_claimed_at
+               );
+    END IF;
+
     IF requested_kind = 'UPDATE_SOURCE_CONNECTION' THEN
         INSERT INTO delivery.source_observation_tasks (
             tenant_id, resource_kind, resource_id, resource_version,
@@ -2199,7 +2303,10 @@ BEGIN
         tenant_id, id, operation_kind, target_kind, target_id, created_at
     ) VALUES (
         effective_tenant_id, submitted_mutation->>'id',
-        'CONFIGURATION_MUTATION', expected_audit_target, audit_target_id,
+        CASE WHEN requested_kind IN (
+            'RECHECK_SOURCE_CONNECTION', 'RECHECK_REPOSITORY_BINDING'
+        ) THEN 'SOURCE_RECHECK_SCHEDULED' ELSE 'CONFIGURATION_MUTATION' END,
+        expected_audit_target, audit_target_id,
         effective_now
     );
 
