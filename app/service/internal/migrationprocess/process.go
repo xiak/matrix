@@ -12,7 +12,10 @@ import (
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 )
 
-const maximumMigrationDSN = 16 * 1024
+const (
+	maximumMigrationDSN      = 16 * 1024
+	maximumMigrationDSNFiles = 5
+)
 
 var environmentPattern = regexp.MustCompile(`^MATRIX_MIGRATION_[A-Z0-9_]+_DSN_FILE$`)
 
@@ -57,7 +60,7 @@ func Run(ctx context.Context, arguments []string, configuration Configuration) e
 
 func validateConfiguration(configuration Configuration) error {
 	if len(configuration.DSNFileEnvironments) < 2 ||
-		len(configuration.DSNFileEnvironments) > 4 ||
+		len(configuration.DSNFileEnvironments) > maximumMigrationDSNFiles ||
 		configuration.Apply == nil || configuration.Verify == nil {
 		return errors.New("migration process configuration is invalid")
 	}
