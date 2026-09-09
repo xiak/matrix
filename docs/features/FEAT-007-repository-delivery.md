@@ -24,7 +24,7 @@
   isolated check-report process, persistence, and fixed-Gitea adapter complete;
   real Linux Docker/runsc source-archive-to-receipt integration and standalone
   PostgreSQL VERIFY-to-REPORTING gateway/build-worker/runner crash recovery
-  complete; real Gitea observation, signed ingress, and standalone
+  complete; real Gitea observation, physical signed HTTP ingress, and standalone
   source-fetcher archive crash recovery complete; physical provider reporting
   and full Gate B remain pending
 - Target product: Matrix DevOps v0.1
@@ -909,8 +909,8 @@ The outbound-only physical runner process now composes these ports. Shutdown
 removes readiness, cancels the active cycle, and waits for that cycle to finish
 its bounded observation and cleanup before the process exits. Its selected
 release packaging, independently credentialed node topology, controlled-host
-installation, and a real standalone process journey are complete below; signed
-source ingress and provider reporting remain later Gate B slices.
+installation, and a real standalone process journey are complete below;
+provider reporting and the joined end-to-end path remain later Gate B slices.
 
 ### Egress, limits, storage, and retention
 
@@ -1319,11 +1319,11 @@ socket or privileged device, read-only source and root filesystems, no non-
 loopback interface, and failed reserved-address egress. A subsequent gate now
 extends this into standalone gateway/build-worker/runner processes backed by
 PostgreSQL and proves crash recovery. A separate gate also drives a real fixed
-Gitea connection through the source observer, signed ingress, PostgreSQL, and
-standalone source-fetcher crash recovery. Joining those passing source and
-execution subjourneys to the physical provider-report effect, plus the
-resource-abuse and oversized-log suite, remains required for the complete
-Gate B.
+Gitea connection through the source observer, physical DevOps webhook ingress,
+PostgreSQL, and standalone source-fetcher crash recovery. Joining those passing
+source and execution subjourneys through the physical provider-report effect,
+plus the resource-abuse and oversized-log suite, remains required for the
+complete Gate B.
 
 Every fenced worker transition now submits the exact next PipelineRun document
 to the database boundary. A terminal transition atomically stores a distinct
@@ -1680,11 +1680,16 @@ Current verification evidence:
   database and the fixed Gitea `1.27.3` image. It applies and verifies the
   migration twice, provisions one private repository and purpose-separated
   fetch/report tokens, writes only canonical private credential envelopes, and
-  starts the actual source-observer and source-fetcher binaries against an
-  exact trusted TLS origin. The observer makes the connection and binding
-  `READY`; a forged signature is rejected, one valid signed pull-request event
-  creates one run and two correlated Audit outbox facts, equal replay returns
-  that run, and changed-byte replay conflicts. The gate locks only the receipt
+  starts the actual DevOps API, source-observer, source-fetcher, and check-
+  reporter binaries against an exact trusted TLS origin. The reporter provides
+  only its real database heartbeat in this subjourney so the API readiness
+  contract is closed; it receives no report task. The API proves its IAM
+  service-identity readiness call through a narrow HTTP test boundary, while
+  the separate authority-process gate owns the physical IAM process evidence.
+  The observer makes the connection and binding `READY`; the physical webhook
+  route rejects a forged signature, one valid signed pull-request event creates
+  one run and two correlated Audit outbox facts, equal replay retains that run,
+  and changed-byte replay conflicts. The gate locks only the receipt
   relation, lets the first fetcher perform exactly one Gitea `upload-pack` and
   atomically publish the archive, then kills it before PostgreSQL can
   acknowledge the effect. The database still has an open fence-one FETCH and
@@ -1694,12 +1699,12 @@ Current verification evidence:
   The archive contains the exact head tree without Git metadata, while its
   content, all selected database documents, and process output contain no
   webhook/token/database credential or private path. The source-fetcher now
-  also waits for active-cycle cleanup on graceful shutdown. The real journey
-  passes in 2.34 seconds; all repository tests and vet, affected Windows race
-  and twenty-run suites, and affected twenty-run disconnected Go `1.26.8`
-  Linux suites pass. This subjourney invokes the production signed-ingress use
-  case but not the physical DevOps HTTP process, BuildExecutor, check reporter,
-  Audit dispatcher, malicious repository suite, or complete Gate B chain
+  also waits for active-cycle cleanup on graceful shutdown. The physical HTTP
+  journey passes in 2.75 seconds; all repository tests and vet, affected
+  Windows race and twenty-run suites, and affected twenty-run disconnected Go
+  `1.26.8` Linux suites pass. This subjourney does not execute the
+  BuildExecutor, create the provider check, dispatch Audit, exercise a
+  malicious repository, or form the complete Gate B chain
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,

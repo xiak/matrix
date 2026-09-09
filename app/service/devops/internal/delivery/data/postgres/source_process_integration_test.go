@@ -35,12 +35,9 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/gitea"
 	devopspostgres "github.com/xiak/matrix/app/service/devops/internal/delivery/data/postgres"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcearchivefile"
-	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcecredentialfile"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/sourcearchive"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/pipelineconfiguration"
-	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runadmission"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
-	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceingress"
 	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
 	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 )
@@ -49,6 +46,8 @@ const (
 	sourceProcessDSNEnvironment           = "MATRIX_DEVOPS_SOURCE_PROCESS_TEST_DSN"
 	sourceProcessGiteaUpstreamEnvironment = "MATRIX_DEVOPS_SOURCE_PROCESS_TEST_GITEA_UPSTREAM"
 	sourceProcessGiteaEndpointEnvironment = "MATRIX_DEVOPS_SOURCE_PROCESS_TEST_GITEA_ENDPOINT"
+	sourceProcessAPIEnvironment           = "MATRIX_DEVOPS_SOURCE_PROCESS_API_BINARY"
+	sourceProcessReporterEnvironment      = "MATRIX_DEVOPS_SOURCE_PROCESS_REPORTER_BINARY"
 	sourceProcessObserverEnvironment      = "MATRIX_DEVOPS_SOURCE_PROCESS_OBSERVER_BINARY"
 	sourceProcessFetcherEnvironment       = "MATRIX_DEVOPS_SOURCE_PROCESS_FETCHER_BINARY"
 
@@ -60,14 +59,15 @@ const (
 	sourceProcessBindingID       = devopsv1.ResourceID("binding-source-process")
 	sourceProcessPipelineID      = devopsv1.ResourceID("pipeline-source-process")
 	sourceProcessDeliveryID      = "123e4567-e89b-42d3-a456-000000000702"
-	sourceProcessCorrelationID   = "correlation-source-process"
+	sourceProcessServiceSecret   = "mx1.SourceProcessDevOpsServiceCredential000000001"
 )
 
 // TestSignedGiteaChangeRecoversThroughSourceFetcherProcess is the opt-in Gate B
-// source subjourney. A real Gitea change becomes one signed admission and one
-// archive. The first source-fetcher is killed after publishing that archive
-// but before PostgreSQL can acknowledge it; a replacement must observe the
-// immutable effect under a larger fence without another provider fetch.
+// source subjourney. A real Gitea change crosses the physical DevOps HTTP
+// process and becomes one signed admission and one archive. The first source-
+// fetcher is killed after publishing that archive but before PostgreSQL can
+// acknowledge it; a replacement must observe the immutable effect under a
+// larger fence without another provider fetch.
 func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	adminDSN := os.Getenv(sourceProcessDSNEnvironment)
 	if adminDSN == "" {
@@ -76,6 +76,8 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
+	apiBinary := requiredExecutionProcessBinary(t, sourceProcessAPIEnvironment)
+	reporterBinary := requiredExecutionProcessBinary(t, sourceProcessReporterEnvironment)
 	observerBinary := requiredExecutionProcessBinary(t, sourceProcessObserverEnvironment)
 	fetcherBinary := requiredExecutionProcessBinary(t, sourceProcessFetcherEnvironment)
 	upstream := requireSourceProcessUpstream(t, os.Getenv(sourceProcessGiteaUpstreamEnvironment))
@@ -172,25 +174,42 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	apiDSNPath := writeExecutionProcessFile(
+		t, temporary, "source-api-dsn", []byte(apiDSN), 0o600,
+	)
+	reporterDSNPath := writeExecutionProcessFile(
+		t, temporary, "source-reporter-dsn", []byte(reporterDSN), 0o600,
+	)
 	observerDSNPath := writeExecutionProcessFile(
 		t, temporary, "source-observer-dsn", []byte(observerDSN), 0o600,
 	)
 	fetcherDSNPath := writeExecutionProcessFile(
 		t, temporary, "source-fetcher-dsn", []byte(fetcherDSN), 0o600,
 	)
-	observerAddress := reserveExecutionProcessAddress(t)
-	firstFetcherAddress := reserveDistinctExecutionProcessAddress(t, observerAddress)
-	secondFetcherAddress := reserveDistinctExecutionProcessAddress(
-		t, observerAddress, firstFetcherAddress,
+	serviceCredentialPath := writeExecutionProcessFile(
+		t, temporary, "source-api-service-credential",
+		[]byte(sourceProcessServiceSecret), 0o600,
 	)
-	children := make([]*executionProcessChild, 0, 3)
+	iam, iamCalls := newSourceProcessIAM(t, sourceProcessServiceSecret)
+	observerAddress := reserveExecutionProcessAddress(t)
+	reporterAddress := reserveDistinctExecutionProcessAddress(t, observerAddress)
+	firstFetcherAddress := reserveDistinctExecutionProcessAddress(
+		t, observerAddress, reporterAddress,
+	)
+	secondFetcherAddress := reserveDistinctExecutionProcessAddress(
+		t, observerAddress, reporterAddress, firstFetcherAddress,
+	)
+	apiAddress := reserveDistinctExecutionProcessAddress(
+		t, observerAddress, reporterAddress, firstFetcherAddress, secondFetcherAddress,
+	)
+	children := make([]*executionProcessChild, 0, 5)
 	t.Cleanup(func() {
 		for index := len(children) - 1; index >= 0; index-- {
 			children[index].stop()
 		}
 		assertSourceProcessOutputSafe(t, children, []string{
 			sourceProcessWebhookSecret, fetchCredential.value, reportCredential.value,
-			apiPassword, reporterPassword, fetcherPassword, observerPassword,
+			sourceProcessServiceSecret, apiPassword, reporterPassword, fetcherPassword, observerPassword,
 			workerPassword, temporary,
 		})
 	})
@@ -214,52 +233,48 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	)
 	waitSourceProcessConfigurationReady(t, ctx, configuration, observer)
 
-	webhookResolver, err := sourcecredentialfile.NewResolver(
-		sourcecredential.PurposeWebhook, webhookRoot,
+	reporter := start(reporterBinary, []string{
+		"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE=" + reporterDSNPath,
+		"MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT=" + reportRoot,
+		"MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID=source-reporter-process",
+		"MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS=" + reporterAddress,
+		"SSL_CERT_FILE=" + caPath,
+	})
+	waitExecutionProcessHTTPStatus(
+		t, ctx, reporter, "http://"+reporterAddress+"/ready", http.StatusOK,
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	admission, err := runadmission.NewUsecase(
-		controlRepository, runadmission.Config{MaxTransactionAttempts: 5},
+	firstFetcherEnvironment := sourceProcessFetcherEnvironmentValues(
+		fetcherDSNPath, fetchRoot, archiveRoot, caPath,
+		"source-fetcher-process-first", firstFetcherAddress,
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ingress, err := sourceingress.NewUsecase(
-		controlRepository, webhookResolver, admission, gitea.NewAdapter(),
+	assertSourceProcessFetcherEnvironment(
+		t, firstFetcherEnvironment, webhookRoot, reportRoot,
+		sourceProcessWebhookSecret, fetchCredential.value, reportCredential.value,
 	)
-	if err != nil {
-		t.Fatal(err)
+	firstFetcher := start(fetcherBinary, firstFetcherEnvironment)
+	waitExecutionProcessHTTPStatus(
+		t, ctx, firstFetcher, "http://"+firstFetcherAddress+"/ready", http.StatusOK,
+	)
+	api := start(apiBinary, []string{
+		"MATRIX_DEVOPS_DATABASE_DSN_FILE=" + apiDSNPath,
+		"MATRIX_DEVOPS_IAM_ENDPOINT=" + iam.URL,
+		"MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE=" + serviceCredentialPath,
+		"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT=" + webhookRoot,
+		"MATRIX_DEVOPS_LISTEN_ADDRESS=" + apiAddress,
+	})
+	apiEndpoint := "http://" + apiAddress
+	waitExecutionProcessHTTPStatus(t, ctx, api, apiEndpoint+"/ready", http.StatusOK)
+	if iamCalls.Load() < 1 {
+		t.Fatal("physical DevOps process did not prove IAM readiness")
 	}
+
 	body := sourceProcessWebhookBody(t, endpoint, repository, change)
-	command := sourceingress.Command{
-		Scope: scope, SourceConnectionID: sourceProcessConnectionID,
-		ProviderEvent: "pull_request", DeliveryID: sourceProcessDeliveryID,
-		Signature: sourceProcessSignature(body, sourceProcessWebhookSecret), Body: body,
-		RequestID: "request-source-process", CorrelationID: sourceProcessCorrelationID,
-	}
-	forged := command
-	forged.Signature = strings.Repeat("0", sha256.Size*2)
-	if _, err := ingress.Receive(ctx, forged); !errors.Is(err, sourceingress.ErrUnauthenticated) {
-		t.Fatalf("forged source process signature error=%v", err)
-	}
-	firstAdmission, err := ingress.Receive(ctx, command)
-	if err != nil || firstAdmission.Replayed || len(firstAdmission.Admission.Runs) != 1 {
-		t.Fatalf("source process admission=%#v err=%v", firstAdmission, err)
-	}
-	equalAdmission, err := ingress.Receive(ctx, command)
-	if err != nil || !equalAdmission.Replayed || len(equalAdmission.Admission.Runs) != 1 ||
-		equalAdmission.Admission.Runs[0] != firstAdmission.Admission.Runs[0] {
-		t.Fatalf("source process equal replay=%#v err=%v", equalAdmission, err)
-	}
-	changedCommand := command
-	changedCommand.Body = append(append([]byte(nil), body...), '\n')
-	changedCommand.Signature = sourceProcessSignature(changedCommand.Body, sourceProcessWebhookSecret)
-	if _, err := ingress.Receive(ctx, changedCommand); !errors.Is(err, runadmission.ErrReplayConflict) {
-		t.Fatalf("source process changed replay error=%v", err)
-	}
-	run := firstAdmission.Admission.Runs[0]
+	webhookEndpoint := apiEndpoint + "/v1/source-ingress/" + string(sourceProcessTenantID) +
+		"/" + string(sourceProcessConnectionID)
+	postSourceProcessWebhook(
+		t, ctx, webhookEndpoint, body, strings.Repeat("0", sha256.Size*2),
+		http.StatusUnauthorized,
+	)
 
 	lock, err := admin.Begin(ctx)
 	if err != nil {
@@ -274,15 +289,20 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	if _, err := lock.Exec(ctx, "LOCK TABLE delivery.source_archives IN ACCESS EXCLUSIVE MODE"); err != nil {
 		t.Fatal(err)
 	}
-	firstFetcherEnvironment := sourceProcessFetcherEnvironmentValues(
-		fetcherDSNPath, fetchRoot, archiveRoot, caPath,
-		"source-fetcher-process-first", firstFetcherAddress,
+	correlationID := postSourceProcessWebhook(
+		t, ctx, webhookEndpoint, body,
+		sourceProcessSignature(body, sourceProcessWebhookSecret), http.StatusNoContent,
 	)
-	assertSourceProcessFetcherEnvironment(
-		t, firstFetcherEnvironment, webhookRoot, reportRoot,
-		sourceProcessWebhookSecret, fetchCredential.value, reportCredential.value,
+	postSourceProcessWebhook(
+		t, ctx, webhookEndpoint, body,
+		sourceProcessSignature(body, sourceProcessWebhookSecret), http.StatusNoContent,
 	)
-	firstFetcher := start(fetcherBinary, firstFetcherEnvironment)
+	changedBody := append(append([]byte(nil), body...), '\n')
+	postSourceProcessWebhook(
+		t, ctx, webhookEndpoint, changedBody,
+		sourceProcessSignature(changedBody, sourceProcessWebhookSecret), http.StatusConflict,
+	)
+	run := readSourceProcessRun(t, ctx, admin)
 	waitSourceProcessArchive(t, ctx, archiveRoot, firstFetcher)
 	if uploadPacks.Load() != 1 {
 		t.Fatalf("source process provider upload-pack requests=%d want=1", uploadPacks.Load())
@@ -314,7 +334,7 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	secondFetcher.stop()
 	observer.stop()
 	assertSourceProcessEvidence(
-		t, ctx, admin, archiveRoot, run, repository, uploadPacks.Load(),
+		t, ctx, admin, archiveRoot, run, repository, correlationID, uploadPacks.Load(),
 		[]string{sourceProcessWebhookSecret, fetchCredential.value, reportCredential.value},
 	)
 }
@@ -333,6 +353,132 @@ type sourceProcessChange struct {
 
 type sourceProcessToken struct {
 	value string
+}
+
+func newSourceProcessIAM(
+	t *testing.T,
+	serviceCredential string,
+) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	identity := iamv1.ServiceIdentity{
+		APIVersion: iamv1.APIVersion,
+		Kind:       "ServiceIdentity",
+		OrganizationID: iamv1.OrganizationID(
+			sourceProcessTenantID,
+		),
+		PrincipalID: "service-devops-source-process",
+		Purpose:     iamv1.ServiceDevOps,
+	}
+	if err := iamv1.ValidateServiceIdentity(identity); err != nil {
+		t.Fatal(err)
+	}
+	calls := &atomic.Int64{}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet || request.URL.Path != "/v1/service-identity" ||
+			request.URL.RawQuery != "" || request.Header.Get("Accept") != "application/json" ||
+			request.Header.Get("Authorization") != "Bearer "+serviceCredential ||
+			request.Header.Get("Matrix-Subject-Credential") != "" {
+			t.Errorf("physical DevOps process sent an invalid IAM readiness request")
+			http.Error(response, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		calls.Add(1)
+		response.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(response).Encode(identity); err != nil {
+			t.Errorf("encode source process IAM identity: %v", err)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server, calls
+}
+
+func postSourceProcessWebhook(
+	t *testing.T,
+	ctx context.Context,
+	endpoint string,
+	body []byte,
+	signature string,
+	wantStatus int,
+) string {
+	t.Helper()
+	request, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, endpoint, bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Gitea-Event", "pull_request")
+	request.Header.Set("X-Gitea-Delivery", sourceProcessDeliveryID)
+	request.Header.Set("X-Gitea-Signature", signature)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+	result, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("invoke physical DevOps source ingress: %v", err)
+	}
+	defer result.Body.Close()
+	document, err := io.ReadAll(io.LimitReader(result.Body, 64*1024+1))
+	if err != nil || len(document) > 64*1024 {
+		t.Fatalf("read physical DevOps source ingress response: %v", err)
+	}
+	requestID := result.Header.Get("Matrix-Request-ID")
+	if devopsv1.ValidateID("requestId", requestID) != nil {
+		t.Fatal("physical DevOps source ingress omitted its request identity")
+	}
+	if result.StatusCode != wantStatus {
+		t.Fatalf(
+			"physical DevOps source ingress status=%d want=%d body=%s",
+			result.StatusCode, wantStatus, document,
+		)
+	}
+	if wantStatus == http.StatusNoContent {
+		if len(document) != 0 || result.Header.Get("Content-Type") != "" {
+			t.Fatalf("physical DevOps source ingress success envelope is not empty")
+		}
+		return requestID
+	}
+	var problem devopsv1.Problem
+	if result.Header.Get("Content-Type") != "application/problem+json" ||
+		json.Unmarshal(document, &problem) != nil || devopsv1.ValidateProblem(problem) != nil {
+		t.Fatalf("physical DevOps source ingress problem=%s", document)
+	}
+	wantCode := devopsv1.ErrorUnauthenticated
+	if wantStatus == http.StatusConflict {
+		wantCode = devopsv1.ErrorConflict
+	}
+	if problem.Code != wantCode || problem.TraceID != requestID {
+		t.Fatalf("physical DevOps source ingress problem=%#v", problem)
+	}
+	return requestID
+}
+
+func readSourceProcessRun(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+) devopsv1.PipelineRun {
+	t.Helper()
+	var document []byte
+	var count int
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT document, count(*) OVER ()
+		   FROM delivery.pipeline_runs
+		  WHERE tenant_id = $1
+		  ORDER BY id
+		  LIMIT 1`,
+		sourceProcessTenantID,
+	).Scan(&document, &count); err != nil || count != 1 {
+		t.Fatalf("read physical DevOps admitted run count=%d err=%v", count, err)
+	}
+	var run devopsv1.PipelineRun
+	if json.Unmarshal(document, &run) != nil || devopsv1.ValidatePipelineRun(run) != nil {
+		t.Fatalf("physical DevOps admitted run=%s", document)
+	}
+	return run
 }
 
 func requireSourceProcessUpstream(t *testing.T, value string) *url.URL {
@@ -941,6 +1087,7 @@ func assertSourceProcessEvidence(
 	archiveRoot string,
 	run devopsv1.PipelineRun,
 	repository sourceProcessRepository,
+	correlationID string,
 	uploadPacks int64,
 	secrets []string,
 ) {
@@ -1029,7 +1176,7 @@ func assertSourceProcessEvidence(
 		sourceProcessTenantID,
 		auditv1.ActionDevOpsSourceEventAdmitted,
 		auditv1.ActionDevOpsPipelineRunCreated,
-		sourceProcessCorrelationID,
+		correlationID,
 	).Scan(&sourceEvents, &pipelineRuns, &admittedFacts, &createdFacts)
 	if err != nil || sourceEvents != 1 || pipelineRuns != 1 ||
 		admittedFacts != 1 || createdFacts != 1 {
