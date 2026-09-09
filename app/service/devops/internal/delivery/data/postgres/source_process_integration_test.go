@@ -75,9 +75,11 @@ const (
 // fetcher is killed after publishing that archive but before PostgreSQL can
 // acknowledge it; a replacement observes the immutable effect under a larger
 // fence without another provider fetch. The same run then crosses the real
-// check-reporter and Audit-dispatcher process boundaries. An in-test passing
-// executor bridge deliberately does not replace the separate isolated runner
-// gate.
+// check-reporter and Audit-dispatcher process boundaries. The first reporting
+// process is killed after Gitea commits its status but before PostgreSQL can
+// acknowledge the receipt; a replacement observes that status under a larger
+// fence without another provider create. An in-test passing executor bridge
+// deliberately does not replace the separate isolated runner gate.
 func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	adminDSN := os.Getenv(sourceProcessDSNEnvironment)
 	if adminDSN == "" {
@@ -211,21 +213,30 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	)
 	iam, iamCalls := newSourceProcessIAM(t, sourceProcessServiceSecret)
 	observerAddress := reserveExecutionProcessAddress(t)
-	reporterAddress := reserveDistinctExecutionProcessAddress(t, observerAddress)
+	bootstrapReporterAddress := reserveDistinctExecutionProcessAddress(t, observerAddress)
 	firstFetcherAddress := reserveDistinctExecutionProcessAddress(
-		t, observerAddress, reporterAddress,
+		t, observerAddress, bootstrapReporterAddress,
 	)
 	secondFetcherAddress := reserveDistinctExecutionProcessAddress(
-		t, observerAddress, reporterAddress, firstFetcherAddress,
+		t, observerAddress, bootstrapReporterAddress, firstFetcherAddress,
 	)
 	apiAddress := reserveDistinctExecutionProcessAddress(
-		t, observerAddress, reporterAddress, firstFetcherAddress, secondFetcherAddress,
+		t, observerAddress, bootstrapReporterAddress, firstFetcherAddress, secondFetcherAddress,
+	)
+	firstRecoveryReporterAddress := reserveDistinctExecutionProcessAddress(
+		t, observerAddress, bootstrapReporterAddress, firstFetcherAddress,
+		secondFetcherAddress, apiAddress,
+	)
+	secondRecoveryReporterAddress := reserveDistinctExecutionProcessAddress(
+		t, observerAddress, bootstrapReporterAddress, firstFetcherAddress,
+		secondFetcherAddress, apiAddress, firstRecoveryReporterAddress,
 	)
 	auditAddress := reserveDistinctExecutionProcessAddress(
-		t, observerAddress, reporterAddress, firstFetcherAddress, secondFetcherAddress,
-		apiAddress,
+		t, observerAddress, bootstrapReporterAddress, firstFetcherAddress,
+		secondFetcherAddress, apiAddress, firstRecoveryReporterAddress,
+		secondRecoveryReporterAddress,
 	)
-	children := make([]*executionProcessChild, 0, 6)
+	children := make([]*executionProcessChild, 0, 8)
 	t.Cleanup(func() {
 		for index := len(children) - 1; index >= 0; index-- {
 			children[index].stop()
@@ -256,15 +267,13 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	)
 	waitSourceProcessConfigurationReady(t, ctx, configuration, observer)
 
-	reporter := start(reporterBinary, []string{
-		"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE=" + reporterDSNPath,
-		"MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT=" + reportRoot,
-		"MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID=source-reporter-process",
-		"MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS=" + reporterAddress,
-		"SSL_CERT_FILE=" + caPath,
-	})
+	bootstrapReporter := start(reporterBinary, sourceProcessReporterEnvironmentValues(
+		reporterDSNPath, reportRoot, caPath,
+		"source-reporter-process-bootstrap", bootstrapReporterAddress,
+	))
 	waitExecutionProcessHTTPStatus(
-		t, ctx, reporter, "http://"+reporterAddress+"/ready", http.StatusOK,
+		t, ctx, bootstrapReporter,
+		"http://"+bootstrapReporterAddress+"/ready", http.StatusOK,
 	)
 	firstFetcherEnvironment := sourceProcessFetcherEnvironmentValues(
 		fetcherDSNPath, fetchRoot, archiveRoot, caPath,
@@ -359,6 +368,7 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	}
 	secondFetcher.stop()
 	observer.stop()
+	bootstrapReporter.stop()
 	reporting := completeSourceProcessBuild(
 		t, ctx, workerDSN, archiveRoot, run.ID,
 	)
@@ -367,14 +377,61 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 		reporting.Status.State != devopsv1.PipelineRunReporting {
 		t.Fatalf("source process reporting run=%#v", reporting)
 	}
-	terminal := waitSourceProcessSucceeded(t, ctx, runController, run.ID, reporter)
+	reportLock, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportLockOpen := true
+	t.Cleanup(func() {
+		if reportLockOpen {
+			_ = reportLock.Rollback(context.Background())
+		}
+	})
+	if _, err := reportLock.Exec(
+		ctx, "LOCK TABLE delivery.check_receipts IN SHARE MODE",
+	); err != nil {
+		t.Fatal(err)
+	}
+	firstRecoveryReporter := start(
+		reporterBinary,
+		sourceProcessReporterEnvironmentValues(
+			reporterDSNPath, reportRoot, caPath,
+			"source-reporter-process-first", firstRecoveryReporterAddress,
+		),
+	)
+	waitExecutionProcessHTTPStatus(
+		t, ctx, firstRecoveryReporter,
+		"http://"+firstRecoveryReporterAddress+"/ready", http.StatusOK,
+	)
+	waitSourceProcessProviderStatusCreate(t, ctx, firstRecoveryReporter, providerCalls)
+	firstRecoveryReporter.crash(t)
+	if err := reportLock.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reportLockOpen = false
+	assertSourceProcessReportUnacknowledged(t, ctx, admin, run.ID)
+	expireSourceProcessReportLease(t, ctx, admin, run.ID)
+	secondRecoveryReporter := start(
+		reporterBinary,
+		sourceProcessReporterEnvironmentValues(
+			reporterDSNPath, reportRoot, caPath,
+			"source-reporter-process-second", secondRecoveryReporterAddress,
+		),
+	)
+	waitExecutionProcessHTTPStatus(
+		t, ctx, secondRecoveryReporter,
+		"http://"+secondRecoveryReporterAddress+"/ready", http.StatusOK,
+	)
+	terminal := waitSourceProcessSucceeded(
+		t, ctx, runController, run.ID, secondRecoveryReporter,
+	)
 	providerStatusID := assertSourceProcessProviderStatus(
 		t, upstream, repository, change, terminal,
 	)
-	if providerCalls.statusCreates.Load() != 1 {
+	if providerCalls.statusCreates.Load() != 1 || providerCalls.statusReads.Load() != 1 {
 		t.Fatalf(
-			"source process provider status creates=%d want=1",
-			providerCalls.statusCreates.Load(),
+			"source process provider status creates=%d reads=%d want=1/1",
+			providerCalls.statusCreates.Load(), providerCalls.statusReads.Load(),
 		)
 	}
 	expectedAudits := readSourceProcessPendingAudits(t, ctx, admin)
@@ -396,6 +453,7 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	assertSourceProcessEvidence(
 		t, ctx, admin, archiveRoot, run, terminal, repository, correlationID,
 		providerCalls.uploadPacks.Load(), providerCalls.statusCreates.Load(),
+		providerCalls.statusReads.Load(),
 		providerStatusID,
 		[]string{
 			sourceProcessWebhookSecret, fetchCredential.value, reportCredential.value,
@@ -423,6 +481,7 @@ type sourceProcessToken struct {
 type sourceProcessProviderCalls struct {
 	uploadPacks   atomic.Int64
 	statusCreates atomic.Int64
+	statusReads   atomic.Int64
 }
 
 func newSourceProcessIAM(
@@ -597,13 +656,20 @@ func newSourceProcessProvider(
 		request.Header.Set("X-Forwarded-Proto", "https")
 	}
 	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		statusCreate := request.Method == http.MethodPost &&
+			strings.Contains(request.URL.Path, "/statuses/")
+		statusRead := request.Method == http.MethodGet &&
+			strings.Contains(request.URL.Path, "/statuses/")
 		if request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/git-upload-pack") {
 			calls.uploadPacks.Add(1)
 		}
-		if request.Method == http.MethodPost && strings.Contains(request.URL.Path, "/statuses/") {
+		proxy.ServeHTTP(response, request)
+		if statusCreate {
 			calls.statusCreates.Add(1)
 		}
-		proxy.ServeHTTP(response, request)
+		if statusRead {
+			calls.statusReads.Add(1)
+		}
 	})
 	server := httptest.NewUnstartedServer(handler)
 	if err := server.Listener.Close(); err != nil {
@@ -1103,6 +1169,22 @@ func sourceProcessSignature(body []byte, secret string) string {
 	return hex.EncodeToString(digest.Sum(nil))
 }
 
+func sourceProcessReporterEnvironmentValues(
+	dsnPath string,
+	reportRoot string,
+	caPath string,
+	workerID string,
+	listenAddress string,
+) []string {
+	return []string{
+		"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE=" + dsnPath,
+		"MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT=" + reportRoot,
+		"MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID=" + workerID,
+		"MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS=" + listenAddress,
+		"SSL_CERT_FILE=" + caPath,
+	}
+}
+
 func sourceProcessFetcherEnvironmentValues(
 	dsnPath string,
 	fetchRoot string,
@@ -1380,6 +1462,92 @@ func completeSourceProcessBuild(
 	return result.Run
 }
 
+func waitSourceProcessProviderStatusCreate(
+	t *testing.T,
+	ctx context.Context,
+	reporter *executionProcessChild,
+	calls *sourceProcessProviderCalls,
+) {
+	t.Helper()
+	for {
+		creates := calls.statusCreates.Load()
+		if creates == 1 {
+			return
+		}
+		if creates > 1 {
+			t.Fatalf("source process provider status creates=%d want=1", creates)
+		}
+		if exited, err := reporter.poll(); exited {
+			t.Fatalf(
+				"first check reporter exited before provider status creation: %v output=%q",
+				err, reporter.output(),
+			)
+		}
+		waitExecutionProcessPoll(t, ctx)
+	}
+}
+
+func assertSourceProcessReportUnacknowledged(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	runID devopsv1.ResourceID,
+) {
+	t.Helper()
+	var runState, runStage, taskStatus, owner string
+	var fence uint64
+	var receipts int
+	err := admin.QueryRow(
+		ctx,
+		`SELECT run.state, run.stage, task.status, task.lease_owner,
+		        task.fencing_token,
+		        (SELECT count(*) FROM delivery.check_receipts
+		          WHERE tenant_id = run.tenant_id AND run_id = run.id)
+		   FROM delivery.pipeline_runs AS run
+		   JOIN delivery.pipeline_run_tasks AS task
+		     ON task.tenant_id = run.tenant_id AND task.run_id = run.id
+		  WHERE run.tenant_id = $1 AND run.id = $2 AND task.stage = 'REPORT'`,
+		sourceProcessTenantID,
+		runID,
+	).Scan(&runState, &runStage, &taskStatus, &owner, &fence, &receipts)
+	if err != nil || runState != "REPORTING" || runStage != "REPORT" ||
+		taskStatus != "INTENT" || owner != "source-reporter-process-first" ||
+		fence != 1 || receipts != 0 {
+		t.Fatalf(
+			"source process unacknowledged report run=%s/%s task=%s/%s/%d receipts=%d err=%v",
+			runState, runStage, taskStatus, owner, fence, receipts, err,
+		)
+	}
+}
+
+func expireSourceProcessReportLease(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	runID devopsv1.ResourceID,
+) {
+	t.Helper()
+	result, err := admin.Exec(
+		ctx,
+		`UPDATE delivery.pipeline_run_tasks
+		    SET lease_expires_at = GREATEST(
+		            last_claimed_at + interval '1 microsecond',
+		            transaction_timestamp() - interval '1 microsecond'
+		        ),
+		        updated_at = transaction_timestamp()
+		  WHERE tenant_id = $1 AND run_id = $2 AND stage = 'REPORT'
+		    AND status = 'INTENT' AND fencing_token = 1`,
+		sourceProcessTenantID,
+		runID,
+	)
+	if err != nil || result.RowsAffected() != 1 {
+		t.Fatalf(
+			"expire source process report lease rows=%d err=%v",
+			result.RowsAffected(), err,
+		)
+	}
+}
+
 func waitSourceProcessSucceeded(
 	t *testing.T,
 	ctx context.Context,
@@ -1615,14 +1783,15 @@ func assertSourceProcessEvidence(
 	correlationID string,
 	uploadPacks int64,
 	statusCreates int64,
+	statusReads int64,
 	providerStatusID uint64,
 	secrets []string,
 ) {
 	t.Helper()
-	if uploadPacks != 1 || statusCreates != 1 {
+	if uploadPacks != 1 || statusCreates != 1 || statusReads != 1 {
 		t.Fatalf(
-			"source process provider upload-packs=%d statuses=%d want=1/1",
-			uploadPacks, statusCreates,
+			"source process provider upload-packs=%d status-creates=%d status-reads=%d want=1/1/1",
+			uploadPacks, statusCreates, statusReads,
 		)
 	}
 	if terminal.ID != run.ID || terminal.Input != run.Input ||
@@ -1727,7 +1896,7 @@ func assertSourceProcessEvidence(
 		&buildDocument, &checkDocument,
 	)
 	if err != nil || verifyStatus != "COMPLETED" || verifyOwner != nil || verifyFence != 1 ||
-		reportStatus != "COMPLETED" || reportOwner != nil || reportFence != 1 {
+		reportStatus != "COMPLETED" || reportOwner != nil || reportFence != 2 {
 		t.Fatalf(
 			"source process verify=%s/%v/%d report=%s/%v/%d err=%v",
 			verifyStatus, verifyOwner, verifyFence, reportStatus, reportOwner, reportFence, err,
