@@ -254,6 +254,7 @@ func TestIsolationProbeInspectionRejectsUnsafeTerminalMetadata(t *testing.T) {
 		"out of memory": func(value *containerInspection) { value.State.OOMKilled = true },
 		"live process":  func(value *containerInspection) { value.State.PID = 42 },
 		"native error":  func(value *containerInspection) { value.State.Error = "native-secret" },
+		"shared memory": func(value *containerInspection) { value.HostConfig.ShmSize = 0 },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

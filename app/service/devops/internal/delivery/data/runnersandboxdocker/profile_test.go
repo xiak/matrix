@@ -62,6 +62,8 @@ func TestStepPlansCloseEveryRepositoryControlledDockerField(t *testing.T) {
 				request.HostConfig.NanoCPUs != devopsv1.FixedCPUMillis*1_000_000 ||
 				request.HostConfig.PidsLimit == nil ||
 				*request.HostConfig.PidsLimit != int64(devopsv1.FixedProcessLimit) ||
+				request.HostConfig.IpcMode != "none" ||
+				request.HostConfig.ShmSize != fixedSharedMemoryBytes ||
 				!equalLogConfig(request.HostConfig.LogConfig, fixedStepLogConfig()) {
 				t.Fatalf("unsafe fixed request: %#v", request)
 			}
@@ -130,6 +132,7 @@ func TestContainerPlanRevalidatesBeforeSerialization(t *testing.T) {
 		"network":            func(value *ContainerPlan) { value.request.HostConfig.NetworkMode = "host" },
 		"privileged":         func(value *ContainerPlan) { value.request.HostConfig.Privileged = true },
 		"runtime":            func(value *ContainerPlan) { value.request.HostConfig.Runtime = "runc" },
+		"shared memory":      func(value *ContainerPlan) { value.request.HostConfig.ShmSize = 0 },
 		"logging":            func(value *ContainerPlan) { value.request.HostConfig.LogConfig.Type = "none" },
 		"writeable source":   func(value *ContainerPlan) { value.request.HostConfig.Mounts[0].ReadOnly = false },
 		"secret environment": func(value *ContainerPlan) { value.request.Env = append(value.request.Env, "TOKEN=value") },

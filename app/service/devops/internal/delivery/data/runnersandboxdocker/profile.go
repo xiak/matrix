@@ -28,11 +28,15 @@ const (
 
 	workTmpfsBytes  = 512 * 1024 * 1024
 	cacheTmpfsBytes = devopsv1.FixedWritableBytes - workTmpfsBytes
-	containerUser   = "65532:65532"
-	stepWorkingDir  = "/workspace/src"
-	probeWorkingDir = "/tmp"
-	stepLogMaxSize  = "64m"
-	stepLogMaxFiles = "2"
+	// Docker persists ShmSize even when IpcMode disables the /dev/shm mount.
+	// Pin the value so request and inspection do not depend on daemon defaults;
+	// the isolation probe separately proves /dev/shm is not mounted or writable.
+	fixedSharedMemoryBytes = 64 * 1024 * 1024
+	containerUser          = "65532:65532"
+	stepWorkingDir         = "/workspace/src"
+	probeWorkingDir        = "/tmp"
+	stepLogMaxSize         = "64m"
+	stepLogMaxFiles        = "2"
 )
 
 var (
@@ -188,6 +192,8 @@ test ! -S /var/run/docker.sock
 test ! -e /dev/kvm
 test ! -e /dev/mem
 test ! -e /dev/dri
+test -z "$(awk '$2 == "/dev/shm" {print; exit}' /proc/mounts)"
+if touch /dev/shm/matrix-shm-write-probe 2>/dev/null; then exit 1; fi
 test -z "${HTTP_PROXY}${HTTPS_PROXY}${ALL_PROXY}${NO_PROXY}"
 test -z "${http_proxy}${https_proxy}${all_proxy}${no_proxy}"
 test -z "${AWS_ACCESS_KEY_ID}${AWS_SECRET_ACCESS_KEY}${AWS_SESSION_TOKEN}"
@@ -349,7 +355,7 @@ func fixedContainerRequest(command []string, workingDirectory string) containerC
 			RestartPolicy:   restartPolicy{Name: "no", MaximumRetryCount: 0},
 			Runtime:         RuntimeName,
 			SecurityOpt:     []string{"no-new-privileges=true"},
-			ShmSize:         0,
+			ShmSize:         fixedSharedMemoryBytes,
 			StorageOpt:      map[string]string{},
 			Sysctls:         map[string]string{},
 			Tmpfs: map[string]string{
@@ -425,7 +431,7 @@ func validateContainerRequest(value containerCreateRequest) error {
 		len(host.PortBindings) != 0 || host.Privileged || host.PublishAllPorts ||
 		!host.ReadonlyRootfs || host.RestartPolicy != (restartPolicy{Name: "no"}) ||
 		host.Runtime != RuntimeName || !equalStrings(host.SecurityOpt, []string{"no-new-privileges=true"}) ||
-		host.ShmSize != 0 || len(host.StorageOpt) != 0 || len(host.Sysctls) != 0 ||
+		host.ShmSize != fixedSharedMemoryBytes || len(host.StorageOpt) != 0 || len(host.Sysctls) != 0 ||
 		len(host.Ulimits) != 0 || host.UTSMode != "" || len(host.VolumesFrom) != 0 ||
 		!equalTmpfs(host.Tmpfs) || (len(host.Mounts) != 0 && len(host.Mounts) != 1) {
 		return ErrInvalid
