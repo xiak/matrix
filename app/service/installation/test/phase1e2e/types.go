@@ -50,6 +50,10 @@ func validateReleasePair(a, b release.VerifiedBundle) error {
 	if _, ok := workloadImage(b.Manifest); !ok {
 		return fail("release-b-workload")
 	}
+	if !a.Manifest.IncludesProduct(release.ProductDevOps) ||
+		!b.Manifest.IncludesProduct(release.ProductDevOps) {
+		return fail("release-devops-product")
+	}
 	return nil
 }
 

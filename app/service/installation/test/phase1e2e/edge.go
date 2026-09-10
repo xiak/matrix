@@ -59,12 +59,18 @@ func (client *edgeClient) close() {
 	if client != nil && client.http != nil {
 		client.http.CloseIdleConnections()
 	}
+	if client != nil {
+		for _, value := range client.forbidden {
+			clear(value)
+		}
+		client.forbidden = nil
+	}
 }
 
 func (client *edgeClient) addForbidden(values ...[]byte) {
 	for _, value := range values {
 		if len(value) != 0 {
-			client.forbidden = append(client.forbidden, value)
+			client.forbidden = append(client.forbidden, bytes.Clone(value))
 		}
 	}
 }
@@ -136,10 +142,30 @@ type changePasswordWire struct {
 	RequestID       string `json:"requestId"`
 }
 
+type createUserWire struct {
+	LoginName       string `json:"loginName"`
+	DisplayName     string `json:"displayName"`
+	InitialPassword string `json:"initialPassword"`
+	RequestID       string `json:"requestId"`
+}
+
 func (client *edgeClient) login(ctx context.Context, password []byte, requestID string) ([]byte, error) {
+	return client.loginAs(
+		ctx, "admin", password, requestID, "principal-admin", "organization-default",
+	)
+}
+
+func (client *edgeClient) loginAs(
+	ctx context.Context,
+	loginName string,
+	password []byte,
+	requestID string,
+	expectedPrincipal iamv1.PrincipalID,
+	expectedOrganization iamv1.OrganizationID,
+) ([]byte, error) {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/login", nil,
-		loginWire{LoginName: "admin", Password: string(password), RequestID: requestID},
+		loginWire{LoginName: loginName, Password: string(password), RequestID: requestID},
 		nil, http.StatusOK,
 	)
 	if err != nil {
@@ -148,7 +174,8 @@ func (client *edgeClient) login(ctx context.Context, password []byte, requestID 
 	defer clear(response.body)
 	var result iamv1.LoginResponse
 	if decodeOne(response.body, &result) != nil || iamv1.ValidateLoginResponse(result) != nil ||
-		result.Session.PrincipalID != "principal-admin" || result.Session.OrganizationID != "organization-default" ||
+		result.Session.PrincipalID != expectedPrincipal ||
+		result.Session.OrganizationID != expectedOrganization ||
 		result.Session.Status != iamv1.SessionActive {
 		return nil, errors.New("IAM login response failed")
 	}
@@ -163,11 +190,19 @@ func (client *edgeClient) changePassword(
 	ctx context.Context,
 	bearer, current, next []byte,
 ) error {
+	return client.changePasswordAs(ctx, bearer, current, next, "phase1-change-password")
+}
+
+func (client *edgeClient) changePasswordAs(
+	ctx context.Context,
+	bearer, current, next []byte,
+	requestID string,
+) error {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/password", bearer,
 		changePasswordWire{
 			CurrentPassword: string(current), NewPassword: string(next),
-			RequestID: "phase1-change-password",
+			RequestID: requestID,
 		},
 		nil, http.StatusOK,
 	)
@@ -181,6 +216,61 @@ func (client *edgeClient) changePassword(
 		return errors.New("IAM password change response failed")
 	}
 	return nil
+}
+
+func (client *edgeClient) createUser(
+	ctx context.Context,
+	bearer []byte,
+	loginName, displayName string,
+	initialPassword []byte,
+	requestID string,
+) (iamv1.Principal, error) {
+	response, err := client.json(
+		ctx, http.MethodPost, "/api/iam/v1/principals", bearer,
+		createUserWire{
+			LoginName: loginName, DisplayName: displayName,
+			InitialPassword: string(initialPassword), RequestID: requestID,
+		},
+		nil, http.StatusCreated,
+	)
+	if err != nil {
+		return iamv1.Principal{}, err
+	}
+	defer clear(response.body)
+	var principal iamv1.Principal
+	if decodeOne(response.body, &principal) != nil || iamv1.ValidatePrincipal(principal) != nil ||
+		principal.OrganizationID != "organization-default" || principal.Type != iamv1.PrincipalUser ||
+		principal.LoginName != loginName || !principal.MustChangePassword {
+		return iamv1.Principal{}, errors.New("IAM user creation response failed")
+	}
+	return principal, nil
+}
+
+func (client *edgeClient) putRoleBinding(
+	ctx context.Context,
+	bearer []byte,
+	principalID iamv1.PrincipalID,
+	role iamv1.BuiltinRole,
+	requestID string,
+) (iamv1.RoleBinding, error) {
+	response, err := client.json(
+		ctx, http.MethodPost, "/api/iam/v1/role-bindings", bearer,
+		iamv1.PutRoleBindingRequest{
+			PrincipalID: principalID, Role: role, RequestID: requestID,
+		},
+		nil, http.StatusOK,
+	)
+	if err != nil {
+		return iamv1.RoleBinding{}, err
+	}
+	defer clear(response.body)
+	var binding iamv1.RoleBinding
+	if decodeOne(response.body, &binding) != nil || iamv1.ValidateRoleBinding(binding) != nil ||
+		binding.OrganizationID != "organization-default" || binding.PrincipalID != principalID ||
+		binding.Role != role {
+		return iamv1.RoleBinding{}, errors.New("IAM role binding response failed")
+	}
+	return binding, nil
 }
 
 func (client *edgeClient) logout(ctx context.Context, bearer []byte) error {
@@ -265,7 +355,7 @@ func (client *edgeClient) get(
 	}
 	defer clear(response.body)
 	if decodeOne(response.body, destination) != nil {
-		return nil, errors.New("PaaS read response failed")
+		return nil, errors.New("resource read response failed")
 	}
 	return response.header, nil
 }

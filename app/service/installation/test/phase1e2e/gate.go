@@ -121,6 +121,12 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("iam-user-authority-through-apisix")
+	if err := value.exerciseDevOpsAccess(
+		ctx, bearer, newPassword, state.InstallationID,
+	); err != nil {
+		return err
+	}
+	emit("devops-multi-role-through-apisix")
 
 	secret, secretDigest, err := value.provisionSecret()
 	if err != nil {
@@ -151,16 +157,25 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	emit("application-generation-two")
 
 	wantInitialAudit := map[auditv1.Action]string{
-		auditv1.ActionIAMBootstrapApplied:              "",
-		auditv1.ActionIAMSessionIssued:                 "",
-		auditv1.ActionIAMPasswordChanged:               "principal-admin",
-		auditv1.ActionIAMAuthorizationDecided:          "",
-		auditv1.ActionPaaSApplicationCreated:           string(applicationID),
-		auditv1.ActionPaaSConfigurationCreated:         string(configurationID),
-		auditv1.ActionPaaSConfigurationRevisionCreated: string(configurationRevisionTwo),
-		auditv1.ActionPaaSApplicationRevisionCreated:   string(applicationRevisionID),
-		auditv1.ActionPaaSDeploymentCreated:            string(deploymentID),
-		auditv1.ActionPaaSDeploymentUpdated:            string(deploymentID),
+		auditv1.ActionIAMBootstrapApplied:                     "",
+		auditv1.ActionIAMSessionIssued:                        "",
+		auditv1.ActionIAMPasswordChanged:                      "principal-admin",
+		auditv1.ActionIAMPrincipalCreated:                     "",
+		auditv1.ActionIAMRoleBindingPut:                       "",
+		auditv1.ActionIAMAuthorizationDecided:                 "",
+		auditv1.ActionDevOpsProjectCreated:                    string(devOpsProjectID),
+		auditv1.ActionDevOpsSourceConnectionCreated:           string(devOpsSourceConnectionID),
+		auditv1.ActionDevOpsSourceConnectionRecheckScheduled:  string(devOpsSourceConnectionID),
+		auditv1.ActionDevOpsRepositoryBindingCreated:          string(devOpsRepositoryBindingID),
+		auditv1.ActionDevOpsRepositoryBindingRecheckScheduled: string(devOpsRepositoryBindingID),
+		auditv1.ActionDevOpsPipelineCreated:                   string(devOpsPipelineID),
+		auditv1.ActionDevOpsPipelineRevisionActivated:         "",
+		auditv1.ActionPaaSApplicationCreated:                  string(applicationID),
+		auditv1.ActionPaaSConfigurationCreated:                string(configurationID),
+		auditv1.ActionPaaSConfigurationRevisionCreated:        string(configurationRevisionTwo),
+		auditv1.ActionPaaSApplicationRevisionCreated:          string(applicationRevisionID),
+		auditv1.ActionPaaSDeploymentCreated:                   string(deploymentID),
+		auditv1.ActionPaaSDeploymentUpdated:                   string(deploymentID),
 	}
 	recordsBeforeBackup, err := value.edge.waitAuditActions(ctx, bearer, wantInitialAudit)
 	if err != nil || !scanAuditForConfigurationValues(recordsBeforeBackup, settingOne, settingTwo) {
@@ -203,6 +218,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.a.Manifest); err != nil {
 		return err
 	}
+	if err := value.assertDevOpsConfiguration(ctx, bearer); err != nil {
+		return fail("automatic-upgrade-rollback-devops-state")
+	}
 	emit("automatic-upgrade-rollback")
 
 	upgrade, err := runMX(ctx, value.releases.b, "upgrade", []string{
@@ -235,6 +253,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.b.Manifest); err != nil {
 		return err
 	}
+	if err := value.assertDevOpsConfiguration(ctx, bearer); err != nil {
+		return fail("release-b-devops-state")
+	}
 	emit("release-b-upgrade-preservation")
 
 	rollback, err := runMX(ctx, value.releases.b, "rollback", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
@@ -256,6 +277,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.a.Manifest); err != nil {
 		return err
+	}
+	if err := value.assertDevOpsConfiguration(ctx, bearer); err != nil {
+		return fail("platform-rollback-devops-state")
 	}
 	emit("explicit-platform-rollback")
 
@@ -287,6 +311,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.a.Manifest); err != nil {
 		return err
+	}
+	if err := value.assertDevOpsConfiguration(ctx, bearer); err != nil {
+		return fail("recovered-devops-state")
 	}
 	emit("backup-recovery")
 
@@ -360,6 +387,9 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	state, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, "")
 	if err != nil {
 		return err
+	}
+	if err := value.assertDevOpsDatabaseState(ctx, state.InstallationID); err != nil {
+		return fail("restart-devops-state")
 	}
 	if err := value.assertWorkloadRemoved(ctx); err != nil {
 		return err
@@ -935,31 +965,53 @@ func (value *gate) assertWorkloadRemoved(ctx context.Context) error {
 }
 
 func (value *gate) activeCapacityClaims(ctx context.Context, installationID string) (int, error) {
+	query := "SELECT count(*) FROM paas.capacity_reservations AS reservation " +
+		"JOIN paas.capacity_claims AS claim ON claim.id = reservation.capacity_claim_id " +
+		"WHERE reservation.tenant_id = 'organization-default' " +
+		"AND reservation.deployment_id = 'phase1-deployment' AND claim.state = 'ACTIVE'"
+	content, err := value.postgresScalar(ctx, installationID, query)
+	if err != nil {
+		return 0, err
+	}
+	count, err := strconv.Atoi(content)
+	if err != nil || count < 0 || count > 1 {
+		return 0, errors.New("capacity observation is invalid")
+	}
+	return count, nil
+}
+
+func (value *gate) postgresScalar(
+	ctx context.Context,
+	installationID, query string,
+) (string, error) {
 	ids, err := dockerLines(
 		ctx, "container", "ls", "--all", "--quiet",
 		"--filter", "label=com.xiak.matrix.installation="+installationID,
 		"--filter", "label=com.xiak.matrix.role=postgres",
 	)
 	if err != nil || len(ids) != 1 {
-		return 0, errors.New("PostgreSQL container is unavailable")
+		return "", errors.New("PostgreSQL container is unavailable")
 	}
-	query := "SELECT count(*) FROM paas.capacity_reservations AS reservation " +
-		"JOIN paas.capacity_claims AS claim ON claim.id = reservation.capacity_claim_id " +
-		"WHERE reservation.tenant_id = 'organization-default' " +
-		"AND reservation.deployment_id = 'phase1-deployment' AND claim.state = 'ACTIVE'"
 	content, err := docker(
 		ctx, "container", "exec", "--user", "postgres", ids[0],
-		"psql", "--no-psqlrc", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1",
+		"psql", "--no-psqlrc", "--quiet", "--tuples-only", "--no-align",
+		"--set", "ON_ERROR_STOP=1",
 		"--username", "matrix", "--dbname", "matrix", "--command", query,
 	)
 	if err != nil {
-		return 0, err
+		return "", err
 	}
-	count, err := strconv.Atoi(strings.TrimSpace(string(content)))
-	if err != nil || count < 0 || count > 1 {
-		return 0, errors.New("capacity observation is invalid")
+	lines := strings.FieldsFunc(string(content), func(character rune) bool {
+		return character == '\r' || character == '\n'
+	})
+	if len(lines) == 0 {
+		return "", errors.New("PostgreSQL scalar observation is invalid")
 	}
-	return count, nil
+	result := strings.TrimSpace(lines[len(lines)-1])
+	if result == "" {
+		return "", errors.New("PostgreSQL scalar observation is invalid")
+	}
+	return result, nil
 }
 
 func (value *gate) writeAndScanSupport(
