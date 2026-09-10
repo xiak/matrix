@@ -195,6 +195,25 @@ func TestReleasePairRequiresDevOpsInBothSignedLifecycles(t *testing.T) {
 	}
 }
 
+func TestExpectedPublishedPortBindingsTracksSelectedProducts(t *testing.T) {
+	paasOnly := release.Manifest{Products: []release.Product{
+		release.ApplicationPaaSProduct("v0.1.0"),
+	}}
+	if bindings := expectedPublishedPortBindings(paasOnly); len(bindings) != 1 ||
+		bindings["apisix"] != 1 {
+		t.Fatalf("PaaS-only published bindings=%v", bindings)
+	}
+	withDevOps := paasOnly
+	withDevOps.Products = append(
+		append([]release.Product(nil), paasOnly.Products...),
+		release.DevOpsProduct("v0.1.0"),
+	)
+	if bindings := expectedPublishedPortBindings(withDevOps); len(bindings) != 2 ||
+		bindings["apisix"] != 1 || bindings["devops-executor-gateway"] != 1 {
+		t.Fatalf("DevOps published bindings=%v", bindings)
+	}
+}
+
 func withoutProducts(manifest release.Manifest) release.Manifest {
 	manifest.Products = nil
 	return manifest

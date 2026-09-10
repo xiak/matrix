@@ -527,6 +527,11 @@ func assertPlatform(
 	if err != nil {
 		return lifecycle.Journal{}, fail("platform-container-inspection")
 	}
+	expectedBindings := expectedPublishedPortBindings(manifest)
+	expectedPublished := 0
+	for _, count := range expectedBindings {
+		expectedPublished += count
+	}
 	seen := make(map[string]struct{}, len(inspections))
 	published := 0
 	for _, inspection := range inspections {
@@ -541,17 +546,27 @@ func assertPlatform(
 			return lifecycle.Journal{}, fail("platform-container-identity")
 		}
 		seen[role] = struct{}{}
+		rolePublished := 0
 		for _, bindings := range inspection.HostConfig.PortBindings {
-			published += len(bindings)
+			rolePublished += len(bindings)
 		}
-		if role != "apisix" && len(inspection.HostConfig.PortBindings) != 0 {
+		published += rolePublished
+		if rolePublished != expectedBindings[role] {
 			return lifecycle.Journal{}, fail("platform-port-boundary")
 		}
 	}
-	if published != 1 {
+	if published != expectedPublished {
 		return lifecycle.Journal{}, fail("platform-edge-boundary")
 	}
 	return state, nil
+}
+
+func expectedPublishedPortBindings(manifest release.Manifest) map[string]int {
+	result := map[string]int{"apisix": 1}
+	if manifest.IncludesProduct(release.ProductDevOps) {
+		result["devops-executor-gateway"] = 1
+	}
+	return result
 }
 
 func assertNoPlatformReleaseContainers(ctx context.Context, releaseID string) error {
