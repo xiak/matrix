@@ -93,6 +93,7 @@ SELECT CASE WHEN
 THEN 'READY' ELSE 'INVALID' END;`
 
 const removeForeignTenantSQL = `BEGIN;
+DELETE FROM iam.session_index WHERE tenant_id = 'organization-phase1-foreign';
 DELETE FROM iam.sessions WHERE tenant_id = 'organization-phase1-foreign';
 DELETE FROM iam.authorization_decisions WHERE tenant_id = 'organization-phase1-foreign';
 DELETE FROM iam.audit_outbox WHERE tenant_id = 'organization-phase1-foreign';
@@ -107,7 +108,19 @@ SELECT CASE WHEN
       WHERE id = 'organization-phase1-foreign')
     AND NOT EXISTS (SELECT 1 FROM iam.principals
       WHERE tenant_id = 'organization-phase1-foreign')
+    AND NOT EXISTS (SELECT 1 FROM iam.sessions
+      WHERE tenant_id = 'organization-phase1-foreign')
+    AND NOT EXISTS (SELECT 1 FROM iam.session_index
+      WHERE tenant_id = 'organization-phase1-foreign')
+    AND NOT EXISTS (SELECT 1 FROM iam.authorization_decisions
+      WHERE tenant_id = 'organization-phase1-foreign')
     AND NOT EXISTS (SELECT 1 FROM iam.audit_outbox
+      WHERE tenant_id = 'organization-phase1-foreign')
+    AND NOT EXISTS (SELECT 1 FROM iam.role_bindings
+      WHERE tenant_id = 'organization-phase1-foreign')
+    AND NOT EXISTS (SELECT 1 FROM iam.user_credentials
+      WHERE tenant_id = 'organization-phase1-foreign')
+    AND NOT EXISTS (SELECT 1 FROM iam.login_index
       WHERE tenant_id = 'organization-phase1-foreign')
 THEN 'REMOVED' ELSE 'PRESENT' END;`
 
@@ -899,11 +912,14 @@ func (value *gate) assertForeignTenantBoundary(
 	}
 	defer clear(bearer)
 	value.edge.addForbidden(bearer)
-	return expectDevOpsProblem(
+	if err := expectDevOpsProblem(
 		ctx, value.edge, http.MethodGet,
 		"/api/devops/v1/projects/"+string(devOpsProjectID), bearer, nil, nil,
 		http.StatusNotFound, devopsv1.ErrorNotFound,
-	)
+	); err != nil {
+		return err
+	}
+	return value.edge.logout(ctx, bearer)
 }
 
 func (value *gate) removeForeignTenantFixture(
