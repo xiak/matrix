@@ -6,7 +6,7 @@
 - Updated: 2026-09-10
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `ae86a55`
+- Current pushed implementation baseline: `39fd910`
 
 ## Goal
 
@@ -37,12 +37,22 @@ architecture, FEAT, implementation, test, and release gates.
   and digest drift. Full Windows repository tests, vet, architecture, JavaScript
   syntax, DOM identity, desktop browser journeys, and exact `360px` no-overflow
   checks pass with no browser console warning or error.
-- Every disposable browser fixture, WSL/database artifact, export, Go cache,
-  and temporary directory used by these Gate C slices has been removed. Docker
-  Desktop and both registered WSL distributions are stopped.
-- Real APISIX authorized/viewer/foreign-tenant browser acceptance, the complete
-  designed UI state/accessibility matrix, and signed offline-release completion
-  remain Gate C work.
+- Pushed `39fd910` integrates the first DevOps-selected Gate C boundary into
+  the existing signed offline lifecycle. Both A and B must select DevOps. The
+  executable gate creates the project/source/binding/Pipeline/revision graph
+  and schedules guarded Rechecks through APISIX, proves a public-IAM-created
+  Viewer can read but not mutate, and uses an immediately cleaned
+  second-organization identity to prove tenant-scoped `404`. It reads the graph
+  after failed upgrade rollback, upgrade, rollback, and recovery, then checks
+  the persisted reference chain after host restart without retaining a user
+  password. Application PaaS and protected Audit/backup assertions remain in
+  the same lifecycle. Full Windows tests and vet plus the affected race and
+  twenty-run suites pass.
+- `39fd910` is acceptance-harness implementation, not real signed-release
+  execution evidence. Operator credential provisioning, the local-provider
+  source-to-check journey, real APISIX-backed browser acceptance, the complete
+  UI state/accessibility matrix, and the exact signed offline run remain Gate C
+  work.
 
 ## Adoption boundary
 
@@ -54,14 +64,15 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue Gate C from FEAT-007's real-edge acceptance boundary. Exercise the
-committed platform-shell client through APISIX with authorized, viewer, and
-foreign-tenant identities; cover success, failure, cancellation, unavailable,
-stale, denied-log, empty/loading, keyboard, focus, contrast, reduced-motion,
-text-expansion, and `360px` states without weakening the guarded public
-commands. Then carry the accepted DevOps topology and UI into the signed
-offline release, recovery, upgrade, rollback, and support-evidence gates without
-changing the Application PaaS product boundary.
+Continue Gate C in the existing offline lifecycle. Add release-carried `mx`
+credential provisioning and an offline local-provider source-to-check journey
+without putting a secret in browser/API/argv/environment/evidence, then execute
+the exact signed A/B lifecycle on a clean external-network-disabled Linux host.
+Exercise the committed platform-shell client through that real APISIX edge with
+authorized, Viewer, and foreign-tenant identities; cover success, failure,
+cancellation, unavailable, stale, denied-log, empty/loading, keyboard, focus,
+contrast, reduced-motion, text-expansion, and `360px` states without weakening
+the guarded public commands or changing the Application PaaS product boundary.
 
 Keep runner authority away from PostgreSQL, source/report credentials, IAM,
 Audit, PaaS, and executor-admin operations. Preserve pragmatic DDD,
