@@ -31,8 +31,9 @@
   and DevOps Audit delivery complete; the joined physical
   IAM/Audit/source/executor/report journey and its fetch, gateway-submission,
   runsc-effect, provider-status, and Audit-acknowledgment restart cases complete;
-  Gate B complete; Gate C's guarded source-recheck API and persistence slice is
-  complete, while the product UI and offline release remain pending
+  Gate B complete; Gate C's guarded source-recheck API/persistence and unified
+  DevOps browser-client baseline are complete, while real-edge multi-role UI
+  acceptance and the offline release remain pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -1799,6 +1800,33 @@ Current verification evidence:
   scheduling, active-lease preservation, observer-only state transition, and
   three correlated scheduling facts. The shared IAM/Audit PostgreSQL `18.6`
   authority journey also passes with both new closed actions
+- the Gate C browser-client slice replaces the unsupported DevOps placeholder
+  in the existing platform shell with product-owned `/devops/code`,
+  `/devops/pipelines`, and `/devops/runs` routes. The ID-driven journey creates
+  projects, exact-origin Gitea connections, repository bindings, fixed-profile
+  drafts, and immutable revisions; reads closed source health, marks a
+  two-minute `READY` observation stale from the server observation clock plus
+  monotonic elapsed time, and schedules bodyless strong-ETag-guarded Rechecks.
+  It also reads exact PipelineRuns and cursor-paged normalized logs, presents
+  `RECEIVE -> FETCH -> VERIFY -> REPORT`, and guards cancellation and manual
+  replay with the current run version. Session and journey state remain only in
+  page memory; source inputs accept three opaque references but no secret value
+  or file, and copyable installation-operator commands contain only safe
+  identities and explicit private-file placeholders. The shell keeps
+  diagnostic reads available while signed product state disables every DevOps
+  mutation. Content-addressed embedded JavaScript/CSS and Go contract tests
+  prove the exact local information architecture, public route inventory,
+  bodyless command boundary, absence of browser persistence/internal authority
+  routes/raw problem reflection, and asset-digest integrity. A disposable
+  same-origin browser fixture exercised the create/connect/bind/activate and
+  run/log journeys with no console warning or error; full-page desktop
+  inspection and exact `360px` responsive checks proved no document overflow,
+  long evidence wrapping, and an intentionally self-scrolling stage rail. The
+  fixture was not retained. Full Windows repository tests, architecture tests,
+  vet, JavaScript syntax, DOM-ID, duplicate-ID, and whitespace gates pass. This
+  establishes the browser baseline only: real APISIX authorized/viewer/foreign-
+  tenant journeys, the complete designed state/accessibility matrix, and the
+  signed offline release remain Gate C work
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,

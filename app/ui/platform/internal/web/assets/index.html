@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Matrix 私有云</title>
-  <link rel="stylesheet" href="/assets/app.5ec06f0a.css">
-  <script defer src="/assets/app.17897b0f.js"></script>
+  <link rel="stylesheet" href="/assets/app.25456f0c.css">
+  <script defer src="/assets/app.ca6de690.js"></script>
 </head>
 <body>
   <a class="skip-link" href="#workspace">跳到主要内容</a>
@@ -117,7 +117,7 @@
                   <label for="configuration-id">配置 ID<input id="configuration-id" value="example-app-runtime" required pattern="[a-z0-9][a-z0-9._-]+"></label>
                   <label for="configuration-name">配置名称<input id="configuration-name" value="Runtime environment" required></label>
                 </div>
-                <button class="primary-button mutation-control" type="submit" id="create-workspace">创建应用与配置</button>
+                <button class="primary-button paas-mutation-control" type="submit" id="create-workspace">创建应用与配置</button>
               </form>
             </section>
 
@@ -135,9 +135,243 @@
                   <textarea id="configuration-values" rows="7" spellcheck="false">APP_ENV=production
 LOG_LEVEL=info</textarea>
                 </label>
-                <button class="primary-button mutation-control" type="submit">发布配置修订</button>
+                <button class="primary-button paas-mutation-control" type="submit">发布配置修订</button>
               </form>
             </section>
+          </div>
+        </section>
+
+        <section class="product-view" id="devops-view" hidden aria-labelledby="devops-title">
+          <div class="product-heading">
+            <div>
+              <p class="breadcrumb">Matrix / <span>DevOps</span></p>
+              <h1 id="devops-title">可信交付</h1>
+              <p>连接代码、激活不可变流水线，并沿着同一条证据链查看每次变更验证。</p>
+            </div>
+            <div class="product-state" id="devops-product-state" role="status">
+              <span class="state-dot" aria-hidden="true"></span>
+              <span><small>产品状态</small><strong id="devops-product-state-label">检查中</strong></span>
+            </div>
+          </div>
+
+          <div class="notice" id="devops-product-notice" hidden role="alert">
+            <strong id="devops-product-notice-title">产品当前不可用</strong>
+            <span id="devops-product-notice-detail">页面保持可诊断，平台已保护所有变更操作。</span>
+          </div>
+
+          <div class="product-summary" aria-label="DevOps 产品与发布信息">
+            <article><small>产品版本</small><strong id="devops-product-version">—</strong><span>来自签名清单</span></article>
+            <article><small>当前发布</small><strong id="devops-release-id">—</strong><span id="devops-release-version">—</span></article>
+            <article><small>状态观测</small><strong id="devops-observed-at">—</strong><span>实时产品探针</span></article>
+          </div>
+
+          <nav class="local-nav" id="devops-local-nav" aria-label="DevOps 功能">
+            <button type="button" data-devops-route="code" aria-controls="devops-code-panel">Code</button>
+            <button type="button" data-devops-route="pipelines" aria-controls="devops-pipelines-panel">Pipelines</button>
+            <button type="button" data-devops-route="runs" aria-controls="devops-runs-panel">Runs</button>
+          </nav>
+
+          <div class="delivery-context" aria-label="当前交付上下文">
+            <span><small>PROJECT</small><strong id="context-project">未选择</strong></span>
+            <i aria-hidden="true">→</i>
+            <span><small>REPOSITORY</small><strong id="context-repository">未绑定</strong></span>
+            <i aria-hidden="true">→</i>
+            <span><small>PIPELINE</small><strong id="context-pipeline">未激活</strong></span>
+            <i aria-hidden="true">→</i>
+            <span><small>RUN</small><strong id="context-run">等待触发</strong></span>
+          </div>
+
+          <div class="devops-panel" id="devops-code-panel" aria-labelledby="code-panel-title">
+            <div class="panel-intro">
+              <div><p class="eyebrow">CODE / TRUSTED SOURCE</p><h2 id="code-panel-title">把仓库接入可信边界</h2></div>
+              <p>管理员只声明坐标和凭据引用；凭据值由安装运维在浏览器之外配置。</p>
+            </div>
+
+            <div class="devops-grid three-up">
+              <section class="workspace-card compact-card">
+                <div class="section-title"><span>01</span><div><h3>DevOps 项目</h3><p>建立当前组织内的交付空间。</p></div></div>
+                <form id="devops-project-form">
+                  <label for="devops-project-id">项目 ID<input id="devops-project-id" value="devops-project-platform" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                  <label for="devops-project-name">项目名称<input id="devops-project-name" value="Platform delivery" required autocomplete="off"></label>
+                  <div class="button-row">
+                    <button class="primary-button devops-mutation-control" type="submit">创建项目</button>
+                    <button class="secondary-button devops-read-control" type="button" id="load-devops-project">按 ID 读取</button>
+                  </div>
+                </form>
+                <div class="resource-summary" id="devops-project-summary">
+                  <span class="empty-mark" aria-hidden="true">＋</span><p>尚未选择项目</p>
+                </div>
+              </section>
+
+              <section class="workspace-card compact-card accent-card">
+                <div class="section-title"><span>02</span><div><h3>Gitea 连接</h3><p>Origin 固定；三个职责使用不同引用。</p></div></div>
+                <form id="source-connection-form">
+                  <div class="fixed-choice"><small>已安装适配器</small><strong>source-adapter-gitea-v1</strong></div>
+                  <label for="source-connection-id">连接 ID<input id="source-connection-id" value="source-connection-gitea" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                  <label for="source-connection-name">连接名称<input id="source-connection-name" value="Private Gitea" required autocomplete="off"></label>
+                  <label for="source-endpoint-origin">Canonical HTTPS Origin<input id="source-endpoint-origin" required inputmode="url" autocomplete="off" aria-describedby="origin-hint"></label>
+                  <small class="field-hint" id="origin-hint">只接受一个规范 HTTPS Origin，不包含路径、查询或用户信息。</small>
+                  <label for="webhook-secret-ref">Webhook secret 引用<input id="webhook-secret-ref" value="gitea-webhook-v1" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                  <label for="fetch-credential-ref">Fetch credential 引用<input id="fetch-credential-ref" value="gitea-fetch-v1" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                  <label for="report-credential-ref">Report credential 引用<input id="report-credential-ref" value="gitea-report-v1" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                  <div class="button-row">
+                    <button class="primary-button devops-mutation-control" type="submit">创建连接</button>
+                    <button class="secondary-button devops-read-control" type="button" id="load-source-connection">读取状态</button>
+                  </div>
+                </form>
+                <div class="resource-summary" id="source-connection-summary">
+                  <span class="empty-mark" aria-hidden="true">◎</span><p>尚未读取连接状态</p>
+                </div>
+                <button class="secondary-button devops-mutation-control" type="button" id="recheck-source-connection" disabled>安排 Recheck</button>
+              </section>
+
+              <section class="workspace-card compact-card">
+                <div class="section-title"><span>03</span><div><h3>仓库绑定</h3><p>把 provider 身份锁定到可信默认分支。</p></div></div>
+                <form id="repository-binding-form">
+                  <label for="binding-id">绑定 ID<input id="binding-id" value="repository-binding-api" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                  <label for="binding-name">绑定名称<input id="binding-name" value="Matrix API repository" required autocomplete="off"></label>
+                  <label for="binding-project-id">项目 ID<input id="binding-project-id" value="devops-project-platform" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                  <label for="binding-connection-id">连接 ID<input id="binding-connection-id" value="source-connection-gitea" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                  <label for="external-repository-id">Provider repository ID<input id="external-repository-id" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                  <label for="repository-path">仓库路径<input id="repository-path" required autocomplete="off" aria-describedby="repository-path-hint"></label>
+                  <small class="field-hint" id="repository-path-hint">例如 organization/repository；仅用于安全显示和配置。</small>
+                  <label for="trusted-default-branch">可信默认分支<input id="trusted-default-branch" value="main" required autocomplete="off"></label>
+                  <div class="button-row">
+                    <button class="primary-button devops-mutation-control" type="submit">创建绑定</button>
+                    <button class="secondary-button devops-read-control" type="button" id="load-repository-binding">读取状态</button>
+                  </div>
+                </form>
+                <div class="resource-summary" id="repository-binding-summary">
+                  <span class="empty-mark" aria-hidden="true">◇</span><p>尚未读取仓库绑定</p>
+                </div>
+                <button class="secondary-button devops-mutation-control" type="button" id="recheck-repository-binding" disabled>安排 Recheck</button>
+              </section>
+            </div>
+
+            <section class="operator-card" aria-labelledby="operator-title">
+              <div><p class="eyebrow">INSTALLATION OPERATOR</p><h3 id="operator-title">在 Matrix 主机配置引用</h3><p>以下命令只包含引用和占位符。真实值从私有文件读取，不进入浏览器、API 或 Audit。</p></div>
+              <div class="command-list" id="source-credential-commands" aria-live="polite"></div>
+            </section>
+          </div>
+
+          <div class="devops-panel" id="devops-pipelines-panel" hidden aria-labelledby="pipelines-panel-title">
+            <div class="panel-intro">
+              <div><p class="eyebrow">PIPELINES / IMMUTABLE REVISION</p><h2 id="pipelines-panel-title">把意图激活为执行契约</h2></div>
+              <p>租户只选择固定验证档案；命令、镜像、主机路径和凭据不属于草稿。</p>
+            </div>
+
+            <div class="devops-grid pipeline-layout">
+              <section class="workspace-card compact-card">
+                <div class="section-title"><span>04</span><div><h3>流水线草稿</h3><p>为变更请求声明最小企业验证目标。</p></div></div>
+                <form id="pipeline-form">
+                  <div class="field-grid">
+                    <label for="pipeline-id">流水线 ID<input id="pipeline-id" value="pipeline-verify-change" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                    <label for="pipeline-name">流水线名称<input id="pipeline-name" value="Verify change" required autocomplete="off"></label>
+                    <label for="pipeline-project-id">项目 ID<input id="pipeline-project-id" value="devops-project-platform" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                    <label for="pipeline-binding-id">仓库绑定 ID<input id="pipeline-binding-id" value="repository-binding-api" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                  </div>
+                  <div class="policy-grid" aria-label="固定流水线策略">
+                    <span><small>TRIGGER</small><strong>CHANGE</strong></span>
+                    <span><small>VERIFY</small><strong>GO_1_26_OFFLINE_V1</strong></span>
+                    <span><small>EGRESS</small><strong>NONE</strong></span>
+                    <span><small>REPORT</small><strong>CHANGE_CHECK_V1</strong></span>
+                  </div>
+                  <div class="button-row">
+                    <button class="primary-button devops-mutation-control" type="submit">创建草稿</button>
+                    <button class="secondary-button devops-read-control" type="button" id="load-pipeline">按 ID 读取</button>
+                  </div>
+                </form>
+              </section>
+
+              <section class="workspace-card compact-card accent-card">
+                <div class="section-title"><span>05</span><div><h3>不可变修订</h3><p>激活时由平台解析并封存执行器、步骤与上限。</p></div></div>
+                <div class="resource-summary large-summary" id="pipeline-summary">
+                  <span class="empty-mark" aria-hidden="true">↗</span><p>尚未创建或读取流水线</p>
+                </div>
+                <button class="primary-button devops-mutation-control" type="button" id="activate-pipeline" disabled>激活当前草稿</button>
+                <div class="revision-contract" id="revision-contract" hidden>
+                  <div class="contract-heading"><span>ACTIVE REVISION</span><strong id="revision-number">—</strong></div>
+                  <dl class="evidence-list">
+                    <div><dt>Revision ID</dt><dd id="revision-id-display">—</dd></div>
+                    <div><dt>Executor</dt><dd id="revision-executor">—</dd></div>
+                    <div><dt>Steps</dt><dd id="revision-steps">—</dd></div>
+                    <div><dt>Timeout</dt><dd id="revision-timeouts">—</dd></div>
+                    <div><dt>Compute</dt><dd id="revision-compute">—</dd></div>
+                    <div><dt>Log ceiling</dt><dd id="revision-log-limit">—</dd></div>
+                  </dl>
+                </div>
+              </section>
+            </div>
+
+            <section class="linked-evidence-card">
+              <div><small>BOUND SOURCE</small><strong id="pipeline-bound-source">未读取仓库绑定</strong><span id="pipeline-source-health">连接健康未知</span></div>
+              <div><small>LATEST KNOWN RUN</small><strong id="pipeline-latest-run">当前页面尚未读取运行</strong><span>通过 Runs 按精确 ID 检索</span></div>
+            </section>
+          </div>
+
+          <div class="devops-panel" id="devops-runs-panel" hidden aria-labelledby="runs-panel-title">
+            <div class="panel-intro">
+              <div><p class="eyebrow">RUNS / CORRELATED EVIDENCE</p><h2 id="runs-panel-title">沿固定阶段检查一次验证</h2></div>
+              <p>运行由已认证变更事件触发；页面只按精确 ID 读取租户可见的规范化证据。</p>
+            </div>
+
+            <section class="run-lookup-card">
+              <form id="run-lookup-form">
+                <label for="run-id">PipelineRun ID<input id="run-id" required pattern="[a-z0-9][a-z0-9._-]+" autocomplete="off"></label>
+                <button class="primary-button devops-read-control" type="submit">读取运行</button>
+              </form>
+              <p>打开或更新 Pull Request 后，输入对应运行 ID。Matrix 不根据名称猜测运行。</p>
+            </section>
+
+            <section class="run-empty" id="run-empty-state">
+              <span aria-hidden="true">RUN</span><div><h3>等待精确运行 ID</h3><p>这里会显示来源提交、不可变修订、执行阶段和规范化日志。</p></div>
+            </section>
+
+            <div id="run-evidence" hidden>
+              <section class="run-hero">
+                <div><p class="eyebrow">PIPELINE RUN</p><h3 id="run-id-display">—</h3><p id="run-context-display">—</p></div>
+                <span class="run-state" id="run-state">—</span>
+              </section>
+
+              <ol class="stage-rail" id="run-stage-rail" aria-label="流水线运行阶段">
+                <li data-stage="RECEIVE"><span>01</span><strong>RECEIVE</strong><small>接受可信事件</small></li>
+                <li data-stage="FETCH"><span>02</span><strong>FETCH</strong><small>获取精确提交</small></li>
+                <li data-stage="VERIFY"><span>03</span><strong>VERIFY</strong><small>隔离验证</small></li>
+                <li data-stage="REPORT"><span>04</span><strong>REPORT</strong><small>回报变更检查</small></li>
+              </ol>
+
+              <div class="devops-grid run-layout">
+                <section class="workspace-card compact-card">
+                  <div class="section-title"><span>06</span><div><h3>来源与执行身份</h3><p>支持定位问题的稳定、无敏感证据。</p></div></div>
+                  <dl class="evidence-list run-identities">
+                    <div><dt>Project / Pipeline</dt><dd id="run-project-pipeline">—</dd></div>
+                    <div><dt>Change</dt><dd id="run-change">—</dd></div>
+                    <div><dt>Head commit</dt><dd id="run-head-commit">—</dd></div>
+                    <div><dt>Trusted base</dt><dd id="run-base-commit">—</dd></div>
+                    <div><dt>Revision</dt><dd id="run-revision">—</dd></div>
+                    <div><dt>Input digest</dt><dd id="run-input-digest">—</dd></div>
+                    <div><dt>Observed</dt><dd id="run-observed-at">—</dd></div>
+                    <div><dt>Reason</dt><dd id="run-reason">—</dd></div>
+                  </dl>
+                  <div class="button-row">
+                    <button class="secondary-button devops-mutation-control" type="button" id="cancel-run">请求取消</button>
+                    <button class="secondary-button devops-mutation-control" type="button" id="replay-run">手动重跑</button>
+                    <button class="secondary-button devops-read-control" type="button" id="refresh-run">刷新状态</button>
+                  </div>
+                </section>
+
+                <section class="workspace-card compact-card log-card">
+                  <div class="section-title"><span>07</span><div><h3>规范化日志</h3><p>按精确 cursor 分页；截断与无输出分别呈现。</p></div></div>
+                  <div class="log-toolbar">
+                    <span id="log-cursor">afterSequence 0</span>
+                    <button class="secondary-button devops-read-control" type="button" id="load-run-logs">读取日志</button>
+                    <button class="quiet-button" type="button" id="clear-run-logs">清空页面日志</button>
+                  </div>
+                  <div class="log-notice" id="log-notice">尚未读取日志。</div>
+                  <pre id="run-logs" tabindex="0" aria-label="PipelineRun 规范化日志">等待日志证据…</pre>
+                </section>
+              </div>
+            </div>
           </div>
         </section>
 
