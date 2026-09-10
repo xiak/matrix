@@ -213,8 +213,22 @@ tenant-authority, offline, upgrade/rollback/recovery, and
   readiness refresh, HTML `v`-flag identity patterns matching the public
   contract, non-duplicated header actions, and guarded command submission.
   `go generate ./...`, `go test ./...`, `go vet ./...`, and
-  the current UI host tests pass. These are code gates only; the new component
-  slice's signed installed-runtime and browser gates remain pending.
+  the current UI host tests pass. These are code gates, not complete browser
+  acceptance.
+- Source `11aacf3b3ebc2c86edfb12a2d0699ae6174a7e45` was assembled as signed
+  release `matrix-v0.3.0-11aacf3b3ebc`. A fresh Docker 27.5.1 host with zero
+  initial containers and images, an internal network, and a Unix-socket-only
+  daemon completed `mx platform install` and `mx platform status` in `READY`.
+  All 17 control-plane services were healthy with zero restarts; the additional
+  installation-owned verification workload was running. No acceptance-task
+  labels were added to the signed inner resources. This verifies the fresh
+  installation slice, not the upgrade, full product-behavior, or browser gates.
+- Authenticated-browser acceptance of that exact source remains open. The
+  temporary Docker Desktop browser ingress did not enforce external-egress
+  isolation even with IP masquerading disabled. It was stopped; production
+  topology, resource-ownership checks and backend authority were not relaxed
+  to complete the gate. Earlier browser observations on a superseded candidate
+  are not final evidence for this source.
 - Fresh bootstrap remains a strict five-service contract. The only retained
   pre-product compatibility is the exact four-service bootstrap inventory,
   accepted solely as an equal replay of an existing `READY` receipt with the
