@@ -6,7 +6,7 @@
 - Updated: 2026-09-10
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `39fd910`
+- Current pushed implementation baseline: `5cca59e`
 
 ## Goal
 
@@ -48,8 +48,18 @@ architecture, FEAT, implementation, test, and release gates.
   password. Application PaaS and protected Audit/backup assertions remain in
   the same lifecycle. Full Windows tests and vet plus the affected race and
   twenty-run suites pass.
-- `39fd910` is acceptance-harness implementation, not real signed-release
-  execution evidence. Operator credential provisioning, the local-provider
+- Pushed `5cca59e` adds the release-carried source-credential lifecycle to that
+  harness. The operator applies all three purpose-separated references, rotates
+  the webhook value, proves equal apply and repeated retirement, and schedules
+  a post-rotation guarded Recheck. Each private input file and its fresh empty
+  directory are removed and proved absent immediately after use. The physical
+  observer must advance the source to `PROVIDER_UNAVAILABLE`, rather than
+  `SECRET_UNAVAILABLE`, before and after rotation, advance the binding to
+  `CONNECTION_NOT_READY`, and deliver both health-transition Audit facts. Strict
+  result and exact non-recursive cleanup tests join full Windows tests/vet and
+  the affected race/twenty-run gates.
+- `5cca59e` is acceptance-harness implementation, not real signed-release
+  execution evidence. Private-provider CA trust, the local-provider
   source-to-check journey, real APISIX-backed browser acceptance, the complete
   UI state/accessibility matrix, and the exact signed offline run remain Gate C
   work.
@@ -64,15 +74,17 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue Gate C in the existing offline lifecycle. Add release-carried `mx`
-credential provisioning and an offline local-provider source-to-check journey
-without putting a secret in browser/API/argv/environment/evidence, then execute
-the exact signed A/B lifecycle on a clean external-network-disabled Linux host.
-Exercise the committed platform-shell client through that real APISIX edge with
-authorized, Viewer, and foreign-tenant identities; cover success, failure,
-cancellation, unavailable, stale, denied-log, empty/loading, keyboard, focus,
-contrast, reduced-motion, text-expansion, and `360px` states without weakening
-the guarded public commands or changing the Application PaaS product boundary.
+Continue Gate C in the existing offline lifecycle. Design the smallest
+installation-owned private-provider CA trust boundary without disabling TLS or
+turning a tenant connection into host trust, then run the local-provider
+source-to-check journey without putting a secret in browser/API/argv/environment/
+evidence. Execute the exact signed A/B lifecycle on a clean external-network-
+disabled Linux host. Exercise the committed platform-shell client through that
+real APISIX edge with authorized, Viewer, and foreign-tenant identities; cover
+success, failure, cancellation, unavailable, stale, denied-log, empty/loading,
+keyboard, focus, contrast, reduced-motion, text-expansion, and `360px` states
+without weakening the guarded public commands or changing the Application PaaS
+product boundary.
 
 Keep runner authority away from PostgreSQL, source/report credentials, IAM,
 Audit, PaaS, and executor-admin operations. Preserve pragmatic DDD,
