@@ -6,7 +6,7 @@
 - Updated: 2026-09-10
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `3850ba4`
+- Current pushed implementation baseline: `8aa7c3c`
 
 ## Goal
 
@@ -30,10 +30,15 @@ architecture, FEAT, implementation, test, and release gates.
   mounts, per-effect custom-only/system-root selection, invalid-present
   fail-closed behavior, and the optional safe UI command. The source-process
   gate no longer uses process-global `SSL_CERT_FILE`.
+- Pushed `8aa7c3c` closes the portable-recovery policy gap: after authenticated
+  database restore and migration, but before target startup, recovery validates
+  every selected DevOps trust record, replayably clears only those records, and
+  retains an empty bind-mounted root. Unsafe shape blocks startup before any
+  proved record is deleted.
 - Full Windows tests, architecture tests, vet, JavaScript syntax, affected race
   and twenty-run suites, custom-root TLS execution, and Linux/amd64 compilation
-  of the source-process gate pass at `3850ba4`. This is implementation evidence,
-  not signed local-provider runtime acceptance.
+  of the source-process and recovery gates pass through `8aa7c3c`. This is
+  implementation evidence, not signed local-provider runtime acceptance.
 
 ## Adoption boundary
 
