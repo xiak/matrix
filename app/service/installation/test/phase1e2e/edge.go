@@ -190,13 +190,16 @@ func (client *edgeClient) changePassword(
 	ctx context.Context,
 	bearer, current, next []byte,
 ) error {
-	return client.changePasswordAs(ctx, bearer, current, next, "phase1-change-password")
+	return client.changePasswordAs(
+		ctx, bearer, current, next, "phase1-change-password", true,
+	)
 }
 
 func (client *edgeClient) changePasswordAs(
 	ctx context.Context,
 	bearer, current, next []byte,
 	requestID string,
+	wantBootstrapFileRetirable bool,
 ) error {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/password", bearer,
@@ -210,12 +213,17 @@ func (client *edgeClient) changePasswordAs(
 		return err
 	}
 	defer clear(response.body)
-	var result iamv1.ChangePasswordResponse
-	if decodeOne(response.body, &result) != nil ||
-		iamv1.ValidateChangePasswordResponse(result) != nil || !result.BootstrapFileRetirable {
+	if !validChangePasswordResponse(response.body, wantBootstrapFileRetirable) {
 		return errors.New("IAM password change response failed")
 	}
 	return nil
+}
+
+func validChangePasswordResponse(content []byte, wantBootstrapFileRetirable bool) bool {
+	var result iamv1.ChangePasswordResponse
+	return decodeOne(content, &result) == nil &&
+		iamv1.ValidateChangePasswordResponse(result) == nil &&
+		result.BootstrapFileRetirable == wantBootstrapFileRetirable
 }
 
 func (client *edgeClient) createUser(

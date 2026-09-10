@@ -825,7 +825,7 @@ func (value *gate) assertDevOpsViewerBoundary(
 	value.edge.addForbidden(initialSession)
 	if err := value.edge.changePasswordAs(
 		ctx, initialSession, initialPassword, currentPassword,
-		"phase1-change-devops-viewer-password",
+		"phase1-change-devops-viewer-password", false,
 	); err != nil {
 		return err
 	}

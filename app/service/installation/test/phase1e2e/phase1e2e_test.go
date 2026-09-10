@@ -56,6 +56,28 @@ func TestMXSourceCredentialResultIsStrict(t *testing.T) {
 	}
 }
 
+func TestPasswordChangeResponseDistinguishesBootstrapAdministrator(t *testing.T) {
+	bootstrap := []byte(`{"changedAt":"2026-09-10T06:00:00Z","bootstrapFileRetirable":true}`)
+	ordinary := []byte(`{"changedAt":"2026-09-10T06:00:00Z","bootstrapFileRetirable":false}`)
+	if !validChangePasswordResponse(bootstrap, true) ||
+		!validChangePasswordResponse(ordinary, false) {
+		t.Fatal("valid password change response was rejected")
+	}
+	for name, content := range map[string][]byte{
+		"bootstrap mismatch": bootstrap,
+		"ordinary mismatch":  ordinary,
+		"unknown field":      []byte(`{"changedAt":"2026-09-10T06:00:00Z","bootstrapFileRetirable":false,"credential":"forbidden"}`),
+		"trailing value":     append(append([]byte(nil), ordinary...), []byte("\n{}")...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			wantBootstrap := name == "ordinary mismatch"
+			if validChangePasswordResponse(content, wantBootstrap) {
+				t.Fatal("unexpected password change response was accepted")
+			}
+		})
+	}
+}
+
 func TestMXSourceTrustResultIsStrict(t *testing.T) {
 	exact := []byte(`{"apiVersion":"cli.matrix.xiak.com/v1","kind":"SourceTrustCommandResult","action":"SOURCE_TRUST_APPLY","status":"SUCCEEDED","result":{"state":"APPLIED","tenant":"organization-default","endpointOrigin":"https://gitea.phase1.invalid"}}`)
 	if !validMXSourceTrustResult(
