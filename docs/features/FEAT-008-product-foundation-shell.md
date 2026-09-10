@@ -1,6 +1,6 @@
 # FEAT-008: Private-cloud product foundation and unified shell
 
-- Status: In progress; UX and architecture complete; Gate A discovery runtime and Gate B unified-shell slice implemented; fixed productless-predecessor and fresh current-release offline lifecycles verified; second-product and authenticated-browser evidence pending
+- Status: In progress; product boundary and discovery runtime implemented; unified-shell slice and fresh signed installation verified; authoritative per-action UI availability, complete browser/accessibility evidence, and second-product upgrade evidence pending
 - Target release: Unscheduled multi-product release
 - Contract: `installation.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -135,6 +135,39 @@ guards, bounded safe responses, and credential-reference-only source inputs.
 An optional preview adapter must be explicitly isolated from this production
 composition and cannot close an API or browser acceptance gate.
 
+### Open acceptance dependency: authoritative action availability
+
+The shell must distinguish product readiness from the current subject's
+permission to perform each action. A ready product is not a write grant. The
+current public IAM `Session` has no action-availability projection, and
+`POST /v1/authorize` requires a calling service credential as well as the
+subject credential; it is not a browser preflight endpoint. The Platform
+service's installed-product-read authority must not be expanded into a
+cross-product authorization proxy to fill this UI gap.
+
+Gate B therefore requires an IAM-owned, refreshable, current-session action
+projection before the UI can accurately suppress unauthorized mutations.
+The exact public contract remains an IAM implementation dependency. It must
+derive identity and available actions from current IAM authority, not accept
+a browser-selected tenant/principal, expose service credentials, or copy
+role-to-action rules into JavaScript. A product-level write boolean is
+insufficient: the current DevOps developer may manage pipelines and runs but
+not create projects, source connections, or repository bindings.
+
+The UI must combine the authoritative action availability with signed product
+visibility, fresh readiness, and the resource's current state. Loading,
+expired, failed, or wrong-session evidence cannot enable a mutation; a clear
+read-only reason and safe retry remain available. Expiry and identity changes
+discard the previous availability, and every actual command remains subject
+to ordinary live server authorization. A capability display is not a bearer
+grant and does not prove access to an arbitrary resource.
+
+Acceptance must exercise the real administrator, viewer, mixed product roles,
+no-product identity, and a role revoked during a session. It must cover both
+creation entry points and detail commands, direct navigation, draft retention
+when capability refresh fails, and the final server-side denial boundary.
+Until this dependency and its browser checks pass, the viewer UX gate is open.
+
 ## Transactions and failure behavior
 
 Product inventory changes only when installation atomically commits a verified
@@ -223,12 +256,25 @@ tenant-authority, offline, upgrade/rollback/recovery, and
   installation-owned verification workload was running. No acceptance-task
   labels were added to the signed inner resources. This verifies the fresh
   installation slice, not the upgrade, full product-behavior, or browser gates.
-- Authenticated-browser acceptance of that exact source remains open. The
-  temporary Docker Desktop browser ingress did not enforce external-egress
-  isolation even with IP masquerading disabled. It was stopped; production
-  topology, resource-ownership checks and backend authority were not relaxed
-  to complete the gate. Earlier browser observations on a superseded candidate
-  are not final evidence for this source.
+- Authenticated-browser checks through real APISIX on that exact source
+  verified administrator login, both signed products in `READY`, PaaS
+  configuration lookup, the native HTML identity pattern accepting
+  `Ui:Config_02`, configuration creation with a `SUCCEEDED` Operation, product
+  switching, DevOps pipeline lookup, a single detail refresh action, viewer
+  deep-link restoration, and the unsaved-draft confirmation. The browser
+  verifier reported a concrete viewer UX failure: an identity with only
+  `PAAS_VIEWER` and `DEVOPS_VIEWER` could enter the pipeline creation wizard
+  and submit it. The backend returned `DENIED` and the UI showed a sanitized
+  error, so command authorization held, but the UI did not communicate the
+  user's read-only authority before entry. `useProduct().canMutate` currently
+  checks readiness only. The action-availability dependency above is required
+  to close this gap; these partial observations do not close Gate B.
+- Browser verification uses a loopback-only pipe to the real isolated
+  runtime. A prior Docker Desktop bridged ingress failed external-egress
+  isolation and was removed; it is not acceptance evidence. Production
+  topology, resource-ownership checks and backend authority were not relaxed.
+  The full role/state/accessibility and responsive matrix remains open, and
+  the temporary pipe is not evidence of production interaction latency.
 - Fresh bootstrap remains a strict five-service contract. The only retained
   pre-product compatibility is the exact four-service bootstrap inventory,
   accepted solely as an equal replay of an existing `READY` receipt with the
