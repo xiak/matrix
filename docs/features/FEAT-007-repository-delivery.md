@@ -38,9 +38,11 @@
   selected-only topology, optional safe UI command, and custom-only TLS gates
   are complete; the DevOps-selected signed A/B offline lifecycle against a
   deliberately unresolvable provider, including APISIX administrator/viewer/
-  foreign-tenant boundaries and real host restart, is runtime-accepted while
-  the local-provider source-to-check journey with its dedicated runner and the
-  complete browser role/state/accessibility UI matrix remain pending
+  foreign-tenant boundaries and real host restart, is runtime-accepted; the
+  signed local-provider source-to-check journey with its dedicated runner is
+  also runtime-accepted at `5acf2a6`, while the complete browser role/state/
+  accessibility UI matrix and one signed-runtime manual-Replay recovery defect
+  remain pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -1529,12 +1531,13 @@ those records while retaining the selected product's private root directory.
 Replay finishes a partially completed reset, while an unsafe shape blocks the
 start without deleting an already proved record. No public resource field,
 database row, system trust mutation, or process-global TLS state was added. The
-signed local-provider source-to-check journey remains the acceptance boundary
-before this becomes accepted runtime capability.
+signed local-provider source-to-check journey is now accepted runtime
+capability by the signed evidence recorded below.
 
-Gate A and Gate B remain complete. This slice advances but does not close Gate
-C: the signed local-provider runtime journey and the complete browser role,
-state, and accessibility matrix remain outstanding.
+Gate A and Gate B's specified gates remain complete. The signed local-provider
+runtime journey closes Gate C item 3, but Gate C and final release remain open
+for the complete browser role/state/accessibility matrix and the signed-runtime
+manual-Replay recovery defect recorded below.
 
 Current verification evidence:
 
@@ -1560,8 +1563,8 @@ Current verification evidence:
   only the selected endpoint root and rejects both a different private root and
   ambient system roots. Full Windows tests, architecture tests, vet, JavaScript
   syntax, affected race and twenty-run suites, and Linux/amd64 compilation of
-  the source-process and recovery gates pass. This is implementation evidence;
-  the signed local-provider source-to-check run remains pending
+  the source-process and recovery gates pass. The signed local-provider
+  source-to-check acceptance is recorded below
 - the same credential suites pass in a disposable disconnected Debian Linux
   container with the source and module cache mounted read-only, exercising
   owner/mode and no-follow checks; Linux/amd64 CGO-disabled `go build ./...`
@@ -1662,9 +1665,9 @@ Current verification evidence:
   authority. The process-mTLS, command, build-execution, and admin-client suites
   pass race detection and twenty-run repetition on Windows and twenty runs in
   the fixed disconnected Go 1.26.8 Linux/amd64 image using read-only source and
-  module cache with module lookup disabled. The real process gate below now
-  proves cross-process PostgreSQL VERIFY execution; the complete source-to-
-  provider journey remains a Gate B item
+  module cache with module lookup disabled. The real process gates below prove
+  both cross-process PostgreSQL VERIFY execution and the complete source-to-
+  provider journey
 - closed runner-sandbox adapter tests proving deterministic exact `go test`
   and `go vet` requests, fixed image/API/runtime/user/environment, no network,
   read-only root and source, dropped capabilities, `no-new-privileges`, no
@@ -1891,8 +1894,7 @@ Current verification evidence:
   cache, download, database, repository, token, and proxy resources are removed
   after the gate. Combined with the adversarial repository execution evidence
   and the unit/security recovery matrices above, this completes all four Gate B
-  acceptance items; Gate C product UI and offline-release completion remain
-  outstanding
+  acceptance items; Gate C evidence follows below
 - the first Gate C command slice adds bodyless, idempotent, strong-ETag-guarded
   SourceConnection and RepositoryBinding Recheck endpoints with distinct
   administrator-only IAM actions and normalized Audit facts. PostgreSQL keeps
@@ -1927,9 +1929,9 @@ Current verification evidence:
   long evidence wrapping, and an intentionally self-scrolling stage rail. The
   fixture was not retained. Full Windows repository tests, architecture tests,
   vet, JavaScript syntax, DOM-ID, duplicate-ID, and whitespace gates pass. This
-  establishes the browser baseline only: real APISIX authorized/viewer/foreign-
-  tenant journeys, the complete designed state/accessibility matrix, and the
-  signed offline release remain Gate C work
+  establishes the browser baseline only: the complete designed role/state/
+  accessibility matrix remains Gate C work; real APISIX authorization and the
+  signed offline release are accepted below
 - the Gate C offline-lifecycle harness now rejects either release in its signed
   A/B pair unless DevOps is selected. After a fresh install, the administrator
   first uses the release-carried `mx devops source-credential` surface to apply
@@ -1947,8 +1949,9 @@ Current verification evidence:
   retirement are idempotent, schedules a distinct guarded Recheck, and observes
   another later `PROVIDER_UNAVAILABLE` version through APISIX. This proves the
   signed topology resolves all three installation-owned credential roots while
-  the deliberately unresolvable provider origin fails closed; it is not a
-  substitute for the pending trusted local-provider journey. A public-IAM-created
+  the deliberately unresolvable provider origin fails closed and establishes
+  the required lifecycle predecessor for the trusted local-provider gate below.
+  A public-IAM-created
   `DEVOPS_VIEWER` reads that exact graph but receives closed `403` Problems for
   create and bodyless Recheck mutations. Because IAM deliberately has no
   tenant-creation API, the gate uses the already-owned PostgreSQL observation
@@ -1991,8 +1994,49 @@ Current verification evidence:
   status/signature verification and `complete-offline-lifecycle`. All gate-
   owned containers, volumes, worktrees, bundles, signing material, downloads,
   binaries, and caches were then removed. This accepts the signed deliberately-
-  unavailable-provider lifecycle; it does not substitute for the pending local
-  Gitea source-to-check journey or its dedicated runner
+  unavailable-provider lifecycle; the local Gitea and dedicated-runner
+  acceptance follows
+- the signed Gate C local-provider gate assembled release
+  `matrix-v0.3.0-5acf2a6cbcc7` from exact commit
+  `5acf2a6cbcc75b914ad390f8799b0af95a8f4319` and installed it without Internet
+  access on a fresh Docker `29.6.2` DIND control host. Installation status and
+  signature verification both returned `READY`. The release-carried operator
+  flow exported the authenticated standalone Linux/amd64 runner subset,
+  reported distinct server and runner CA pins, created the private key and CSR
+  only on a disposable D-backed WSL2/systemd node, enrolled it without moving
+  that key, and installed one slot with Docker `29.6.2`, pinned gVisor
+  `release-20260831.0`, and toolchain image
+  `sha256:07558d5472e9acb5fc5656b485e963602e925e00111b8ad676a804306e711ba3`.
+  Its UID firewall permitted only the executor gateway and its service stayed
+  active with zero restarts. A private HTTPS Gitea `1.27.3` fixture used an
+  exact endpoint-scoped CA and distinct webhook, fetch, and report credentials;
+  the fetch token had `read:repository,read:user` and the report token had
+  `write:repository,read:user`. Through the real APISIX edge, the administrator
+  created `flow-project`, `flow-source`, `flow-repository`, and `flow-pipeline`,
+  activated the fixed two-step revision, and observed the connection and
+  binding at `READY / OBSERVED`. A correctly signed `pull_request` webhook for
+  exact head `18bc4f16facecc48c4de3127a71d392c156d0c58` created only
+  `pipeline-run-576a9d85fc55eb22435fb3b53657731265cba9b4530abe47`; it completed
+  `SUCCEEDED / REPORT / COMPLETED` in about 61 seconds. Public evidence exposed
+  the fixed `GO_TEST` and `GO_VET` revision, one sanitized non-truncated test
+  log, and no credential or private path. Gitea held exactly one `success`
+  status with the same run identity. Audit sequence 100 held the correlated
+  `devops.pipeline-run.completed` fact, and the complete 106-record chain
+  verified. Equal delivery replay returned `204` and retained one run. All
+  DevOps control processes had zero restarts, the runner left no container,
+  and every gate-owned control host, provider, runner, network, worktree,
+  signing artifact, and cache was removed after acceptance. This closes Gate C
+  item 3 without claiming the remaining browser matrix
+- one distinct signed-runtime defect remains open before final release. In an
+  earlier disposable run, stopping the runner node during `VERIFYING` correctly
+  converged the source run to terminal failure. The bodyless public
+  `POST /v1/runs/{sourceRunId}/replay` then created its guarded replay result,
+  but the source-fetcher repeatedly terminated at `FETCH` before any Gitea
+  request and reached restart count 5; guarded cancellation could not converge
+  while that process crash-looped. No database bypass was used. This is not the
+  equal provider-delivery replay proved above. The implementation owner must
+  reproduce it in an installed-runtime gate, repair the replay/fetch invariant,
+  and prove replay plus cancellation recovery before final release
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,
