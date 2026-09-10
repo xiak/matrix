@@ -33,9 +33,11 @@
   runsc-effect, provider-status, and Audit-acknowledgment restart cases complete;
   Gate B complete; Gate C's guarded source-recheck API/persistence, unified
   DevOps browser-client baseline, and DevOps-selected offline-lifecycle access
-  and operator-credential harness are complete, while its signed real-runtime
-  execution, local-provider source-to-check journey, and the complete multi-
-  role/state/accessibility UI matrix remain pending
+  and operator-credential harness are complete; the endpoint-scoped private-
+  provider CA UX, architecture, and acceptance contract is complete while its
+  implementation, signed real-runtime execution, local-provider source-to-
+  check journey, and the complete multi-role/state/accessibility UI matrix
+  remain pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -105,6 +107,14 @@ shows a copyable, non-secret `mx devops source-credential` command for each
 reference; an operator runs those commands on the Matrix host with a private
 input file. This follows CODING's useful credential-reference experience while
 keeping secret custody outside the product API and untrusted execution.
+
+If the exact provider origin is not signed by a system-trusted authority, the
+same page also shows an optional, copyable `mx devops source-trust` command.
+The command contains only the tenant and canonical endpoint origin plus a
+private-file placeholder; the browser never accepts, stores, or renders CA
+material. Installing or removing that trust does not forge readiness. The
+administrator explicitly schedules **Recheck** after the operator completes
+the command.
 
 The connection and each repository binding show a closed health state, closed
 reason, last observation time, and a **Recheck** affordance that only schedules
@@ -379,6 +389,36 @@ a redirect, or trusts a provider-returned URL as a new authority. Split API and
 clone hosts require distinct SourceConnections in a later explicit adapter
 contract; the first release supports a root-hosted Gitea instance only.
 
+Private-provider CA trust is installation configuration, not a
+`SourceConnection` field or tenant-held credential. A selected DevOps
+installation owns `config/devops/source-trust`. Tenant and exact canonical
+endpoint origin are length-framed and SHA-256-derived into one portable
+directory name containing exactly one private regular `roots.pem`. The bundle
+is at most 256 KiB and contains at most sixteen distinct, currently valid,
+self-signed X.509 CA certificates with CA basic constraints and certificate-
+signing usage. Input order and PEM formatting are normalized into one
+deterministic certificate order; private keys, non-certificate blocks,
+intermediate or leaf certificates, duplicate certificates, headers, trailing
+content, symlinks, unsafe ownership, and unsafe modes fail closed.
+
+Trust selection is exact and non-ambient. For a `(tenant, endpointOrigin)` with
+no installed record, the source adapter uses the runtime's verified system
+roots. When a record exists, it uses only that custom pool and never merges it
+with system roots. TLS hostname verification still targets the endpoint's exact
+host, TLS 1.2 or newer remains mandatory, proxies and redirects remain
+disabled, and the custom authority cannot authenticate another tenant or
+origin. The host system trust store, `SSL_CERT_FILE`, process-global TLS state,
+webhook ingress, DevOps API, and untrusted executor are unchanged.
+
+Only the source observer, source fetcher, and check reporter receive the same
+read-only trust root and resolve it independently for each effect. Unsafe or
+invalid installed material is a provider failure, not a system-root fallback:
+the observer reports `UNAVAILABLE / PROVIDER_UNAVAILABLE`, while fetch and
+report use their existing closed unavailable outcomes. Applying or removing a
+record is serialized by the installation lock but does not mutate delivery
+state or call PostgreSQL; the administrator's existing guarded Recheck is the
+only way to advance the observation schedule.
+
 Connection status has one of these valid state/reason pairs:
 
 | Health | Reason | Meaning |
@@ -415,9 +455,10 @@ last-known-good admission fallback.
 
 A separate `matrix-devops-source-observer` process owns this reconciliation.
 It has a distinct table-blind `matrix_devops_source_observer` database identity,
-read-only access to the three credential roots, and provider egress only. It
-cannot call IAM or Audit, claim PipelineRun tasks, mutate configuration specs,
-or read another Matrix schema. A delivery-owned reconciliation table provides
+read-only access to the three credential roots and endpoint-scoped source-trust
+root, and provider egress only. It cannot call IAM or Audit, claim PipelineRun
+tasks, mutate configuration specs, or read another Matrix schema. A
+delivery-owned reconciliation table provides
 oldest-due claims, a 30-second lease, monotonic fencing, and tenant-fair
 selection. Create/update schedules an immediate observation; successful or
 failed completion schedules the next check after 60 seconds. A connection
@@ -458,6 +499,10 @@ mx devops source-credential apply --root <installation> --tenant <id>
   --purpose WEBHOOK|FETCH|REPORT --reference <id> --from-file <private-file>
 mx devops source-credential retire-previous --root <installation>
   --tenant <id> --purpose WEBHOOK --reference <id>
+mx devops source-trust apply --root <installation> --tenant <id>
+  --endpoint-origin <canonical-https-origin> --from-file <private-ca-file>
+mx devops source-trust remove --root <installation> --tenant <id>
+  --endpoint-origin <canonical-https-origin>
 ```
 
 Both commands acquire the installation lock, authenticate the committed
@@ -471,10 +516,29 @@ to end dual webhook acceptance. Human and JSON output contain only the purpose,
 tenant, reference, and `APPLIED|UNCHANGED|PREVIOUS_RETIRED` state. They never
 contain a value, digest, path, provider response, or native error.
 
+Both `source-trust` commands enforce the same installation lock, authenticated
+committed release, selected-product, protected-input, no-follow, and atomic
+publication boundaries. `apply` canonicalizes and replaces only the exact
+tenant-and-origin bundle; an equal bundle is `UNCHANGED`. `remove` first proves
+the derived directory contains exactly the canonical bundle, then deletes that
+file and its now-empty directory; absence and repeated removal are the same
+`REMOVED` result. Output contains only `APPLIED|UNCHANGED|REMOVED`, tenant, and
+endpoint origin. It never contains CA bytes, fingerprints, input/storage paths,
+native errors, or other tenant identities.
+
+In-place verify, upgrade, rollback, and restart revalidate and preserve the
+exact trust directory. A portable protected backup deliberately does not carry
+this out-of-band provider authority to a replacement installation: recovery
+creates an empty selected-product trust root, source observation fails closed,
+and the operator must reapply the CA followed by an administrator Recheck.
+Support evidence reports neither CA content, endpoint origins, derived names,
+nor host paths.
+
 The DevOps API receives only the webhook root. The source observer receives all
-three roots because proving readiness is its sole side effect; later fetch and
-report workers receive only their own purpose root. The source adapter fetches
-only the binding's immutable head and trusted base
+three credential roots plus the read-only source-trust root because proving
+readiness is its sole side effect; later fetch and report workers receive only
+their own purpose root plus that same read-only trust root. The source adapter
+fetches only the binding's immutable head and trusted base
 commits with system/global Git configuration, hooks, redirects, submodules,
 and LFS disabled. It validates both objects, emits a deterministic archive of
 the exact head tree without `.git`, and hashes that archive before handing it
@@ -487,11 +551,12 @@ Audit event, or support output.
 `matrix-devops-source-fetcher` is the only first-release process allowed to
 turn an admitted change into a source archive. It has a distinct
 `matrix_devops_source_fetcher` database role/login, the read-only `FETCH`
-credential root, one installation-owned archive root, and the internal control
-plus source-egress networks. It receives no webhook/report credential, IAM or
-Audit service credential, executor authority, container socket, PaaS state, or
-direct table access. A ten-second database heartbeat with a thirty-second
-freshness limit gates both its own readiness and DevOps API readiness.
+credential root, the read-only endpoint-scoped source-trust root, one
+installation-owned archive root, and the internal control plus source-egress
+networks. It receives no webhook/report credential, IAM or Audit service
+credential, executor authority, container socket, PaaS state, or direct table
+access. A ten-second database heartbeat with a thirty-second freshness limit
+gates both its own readiness and DevOps API readiness.
 
 The fixed implementation is pure Go
 [`go-git` `v5.19.2`](https://github.com/go-git/go-git/releases/tag/v5.19.2)
@@ -507,10 +572,11 @@ and
 [`GHSA-3xc5-wrhm-f963`](https://github.com/go-git/go-git/security/advisories/GHSA-3xc5-wrhm-f963).
 Matrix uses only ephemeral in-memory object storage and never creates a Git
 worktree. The fetch transport accepts only the exact canonical HTTPS origin,
-uses verified system roots with TLS 1.2 or newer, disables proxies and every
-redirect, and never places a credential in a URL. No system/global repository
-configuration, subprocess, hook, submodule, LFS client, SSH/file/git protocol,
-tag, or caller-selected refspec is consulted.
+resolves the exact tenant-and-origin custom-only pool or verified system roots,
+requires TLS 1.2 or newer, disables proxies and every redirect, and never places
+a credential in a URL. No system/global repository configuration, subprocess,
+hook, submodule, LFS client, SSH/file/git protocol, tag, or caller-selected
+refspec is consulted.
 
 The fixed Gitea adapter supports only SHA-1 repositories in v0.1. The source
 observer rejects another `object_format_name`, so unsupported repositories
@@ -604,8 +670,8 @@ worker may commit the receipt.
 `matrix-devops-check-reporter` is the only process allowed to turn a stored
 build receipt into a provider-visible terminal check. It joins the internal
 control network and the source-egress network, mounts only the read-only
-`REPORT` credential root, and receives a dedicated table-blind check-reporter
-DSN. It receives
+`REPORT` credential root plus the endpoint-scoped source-trust root, and
+receives a dedicated table-blind check-reporter DSN. It receives
 no webhook or fetch credential, source archive, executor identity, runner or
 Docker authority, IAM/Audit service credential, PaaS state, or authority to
 change tenant configuration. The build worker correspondingly retains no
@@ -628,8 +694,10 @@ closed JSON document: `context` is
 phrase, `state` is `success` or `failure`, and `target_url` is empty until the
 product has an accepted externally reachable run URL. The token appears only
 in the `Authorization` header. The adapter uses the exact configured HTTPS
-origin, verified roots, no proxy, no redirects, a five-second deadline, a
-64-KiB response ceiling, strict JSON, and exact response echo validation. It
+origin, resolves the exact tenant-and-origin custom-only pool or verified
+system roots, permits TLS 1.2 or newer, uses no proxy or redirect, enforces a
+five-second deadline and 64-KiB response ceiling, and requires strict JSON plus
+exact response echo validation. It
 retains only a normalized positive provider status ID plus the command and
 body digest; provider URLs, users, text, headers, and native errors are never
 persisted, logged, audited, or returned northbound.
@@ -1440,6 +1508,15 @@ network plus one provider-egress network, and has no IAM, Audit, executor, or
 configuration-write capability. Its heartbeat gates both process readiness
 and DevOps API readiness once any SourceConnection exists.
 
+The next Gate C implementation slice is now designed as an installation-owned
+endpoint-scoped CA boundary. It adds no public resource field, database row,
+system trust mutation, or process-global TLS override. Its smallest vertical
+slice is the strict CA codec and derived filesystem identity, the exact
+`mx devops source-trust apply|remove` workflow, selected-only topology mounts,
+per-effect source-adapter resolution, the optional safe UI command, and a real
+local-provider TLS journey. Until those gates pass, private-provider trust is a
+design contract rather than accepted runtime capability.
+
 These slices do not complete Gate A. Source readiness, credential lifecycle,
 observation, acquisition through an installed isolated process, the fenced
 BuildExecutor boundary, and authenticated tenant-leading normalized-log
@@ -2071,8 +2148,10 @@ Current verification evidence:
 ### Gate B: real CI vertical slice
 
 1. Operator CLI provisioning plus the source observer make one real pinned
-   source-provider connection and repository binding ready without a secret
-   crossing browser/API, argv, environment, logs, Audit, or support output. A
+   source-provider connection and repository binding ready, using an exact
+   endpoint-scoped custom CA when system roots do not trust the provider,
+   without a secret or CA bundle crossing browser/API, argv, environment,
+   logs, Audit, or support output. A
    signed change event then creates one run; equal delivery replay is one run,
    while missing/unsafe credentials, unsupported version, permission loss,
    stale health, changed replay, forged/retired signatures, wrong event,
@@ -2096,7 +2175,8 @@ Current verification evidence:
    immutable revision, sees pending/ready/unavailable/stale source states, and
    can schedule but not forge a recheck; a viewer cannot mutate them and
    another tenant cannot observe them. An installation operator provisions and
-   rotates the referenced credentials with the release-carried `mx` CLI.
+   rotates the referenced credentials and, when required, applies or removes
+   the exact tenant-and-origin CA trust with the release-carried `mx` CLI.
 2. A real change event drives the visible RECEIVE/FETCH/VERIFY/REPORT stages.
    Desktop and 360-pixel UI tests cover success, failure, cancellation,
    provider outage, stale data, denied log access, empty/loading states,
