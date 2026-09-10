@@ -6,7 +6,7 @@
 - Updated: 2026-09-10
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `46a524b`
+- Current pushed implementation baseline: `ae86a55`
 
 ## Goal
 
@@ -24,14 +24,25 @@ architecture, FEAT, implementation, test, and release gates.
   distinct administrator-only IAM actions and normalized Audit facts. They
   schedule only the delivery-owned observation task and cannot submit or alter
   health state.
-- Windows full repository tests, vet, generation, and architecture gates pass.
-  Clean PostgreSQL `18.6` journeys pass for DevOps double-apply, unchanged
-  resource snapshots, due scheduling, in-flight lease preservation,
-  observer-only state transition, and shared IAM/Audit action catalogs.
-- The disposable D-drive WSL and PostgreSQL resources and export archive were
-  removed after the gate. D-drive Go caches remain only while Gate C UI work is
-  active and must be removed when that work ends.
-- Gate C platform-shell UI and offline-release completion remain pending.
+- Pushed `ae86a55` adds the Gate C unified DevOps browser-client baseline to
+  the existing platform shell. Product-local `Code`, `Pipelines`, and `Runs`
+  routes exercise the public project, source, immutable-revision, exact-run,
+  normalized-log, Recheck, cancellation, and replay contracts. Mutation
+  admission follows signed product readiness; guarded commands are bodyless;
+  source health cannot be supplied by the browser; and session/journey state
+  remains in page memory.
+- Content-addressed embedded assets and UI contract tests cover the exact
+  product information architecture, public-only route inventory, no
+  secret-value/file inputs, no browser persistence or raw problem reflection,
+  and digest drift. Full Windows repository tests, vet, architecture, JavaScript
+  syntax, DOM identity, desktop browser journeys, and exact `360px` no-overflow
+  checks pass with no browser console warning or error.
+- Every disposable browser fixture, WSL/database artifact, export, Go cache,
+  and temporary directory used by these Gate C slices has been removed. Docker
+  Desktop and both registered WSL distributions are stopped.
+- Real APISIX authorized/viewer/foreign-tenant browser acceptance, the complete
+  designed UI state/accessibility matrix, and signed offline-release completion
+  remain Gate C work.
 
 ## Adoption boundary
 
@@ -43,13 +54,14 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue Gate C from FEAT-007's accepted product experience: integrate DevOps
-into the real platform shell and deliver the smallest independently testable UI
-slice without changing the Application PaaS product boundary. Use the guarded
-public recheck commands rather than synthesizing health state. Keep UI authority
-on the public DevOps and IAM contracts; do not expose provider-native payloads,
-credentials, executor internals, host paths, or unavailable Artifact/Delivery
-capabilities.
+Continue Gate C from FEAT-007's real-edge acceptance boundary. Exercise the
+committed platform-shell client through APISIX with authorized, viewer, and
+foreign-tenant identities; cover success, failure, cancellation, unavailable,
+stale, denied-log, empty/loading, keyboard, focus, contrast, reduced-motion,
+text-expansion, and `360px` states without weakening the guarded public
+commands. Then carry the accepted DevOps topology and UI into the signed
+offline release, recovery, upgrade, rollback, and support-evidence gates without
+changing the Application PaaS product boundary.
 
 Keep runner authority away from PostgreSQL, source/report credentials, IAM,
 Audit, PaaS, and executor-admin operations. Preserve pragmatic DDD,
