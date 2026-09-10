@@ -74,7 +74,7 @@ func TestFetcherRejectsRedirectWithoutForwardingCredential(t *testing.T) {
 
 func TestFetcherRejectsUnsupportedObjectFormatBeforeCredentialLookup(t *testing.T) {
 	resolver := &countingCredentialResolver{}
-	fetcher, err := NewFetcher(resolver)
+	fetcher, err := NewFetcher(resolver, staticTrustResolver{})
 	if err != nil {
 		t.Fatal(err)
 	}

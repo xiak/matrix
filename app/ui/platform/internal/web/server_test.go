@@ -28,7 +28,7 @@ func TestHandlerServesUnifiedShellAndProductDeepLinks(t *testing.T) {
 		body := response.Body.String()
 		for _, required := range []string{
 			"product-navigation", "login-form", "configuration-form", "devops-view",
-			"source-connection-form", "pipeline-form", "run-lookup-form", "/assets/app.ca6de690.js",
+			"source-connection-form", "pipeline-form", "run-lookup-form", "/assets/app.a17d5b08.js",
 		} {
 			if !strings.Contains(body, required) {
 				t.Fatalf("unified shell is missing %q", required)
@@ -41,7 +41,7 @@ func TestHandlerServesUnifiedShellAndProductDeepLinks(t *testing.T) {
 }
 
 func TestBrowserClientUsesOnlyPublicMatrixRoutes(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/assets/app.ca6de690.js", nil)
+	request := httptest.NewRequest(http.MethodGet, "/assets/app.a17d5b08.js", nil)
 	response := httptest.NewRecorder()
 	NewHandler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||
@@ -113,7 +113,7 @@ func TestDevOpsShellOwnsExactPhaseOneInformationArchitecture(t *testing.T) {
 }
 
 func TestDevOpsBrowserCommandsAreGuardedMemoryOnlyAndProviderNeutral(t *testing.T) {
-	body, err := content.ReadFile("assets/app.ca6de690.js")
+	body, err := content.ReadFile("assets/app.a17d5b08.js")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,11 +131,14 @@ func TestDevOpsBrowserCommandsAreGuardedMemoryOnlyAndProviderNeutral(t *testing.
 		"sourceFreshnessMilliseconds",
 		"performance.now()",
 		"mx devops source-credential apply --root <installation>",
+		"mx devops source-trust apply --root <installation>",
 		"['WEBHOOK'",
 		"['FETCH'",
 		"['REPORT'",
 		"--purpose ' + command[0]",
 		"--from-file <private-file>",
+		"--endpoint-origin ' + safeCLIOrigin(spec.endpointOrigin)",
+		"--from-file <private-ca-file>",
 	} {
 		if !strings.Contains(client, required) {
 			t.Fatalf("DevOps browser client is missing %q", required)

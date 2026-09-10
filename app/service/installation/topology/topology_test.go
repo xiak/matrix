@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
-	if actual := ContractDigest(); actual != "sha256:c619f193291737a176efccfd67f0619ef8aef93fef872f1e815d9bde70b43f35" {
+	if actual := ContractDigest(); actual != "sha256:8d9c1fa70a41dde6ef924065870abde89e3b0b633b253d7f85f6958ad26475f5" {
 		t.Fatalf("current topology contract digest drifted: %s", actual)
 	}
 	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
@@ -183,6 +183,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE",
 			"MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS",
 			"MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT",
+			"MATRIX_DEVOPS_CHECK_REPORTER_TRUST_ROOT",
 			"MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID",
 		},
 		"devops-executor-gateway": {
@@ -202,6 +203,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_DEVOPS_SOURCE_FETCHER_DATABASE_DSN_FILE",
 			"MATRIX_DEVOPS_SOURCE_FETCHER_FETCH_ROOT",
 			"MATRIX_DEVOPS_SOURCE_FETCHER_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_TRUST_ROOT",
 			"MATRIX_DEVOPS_SOURCE_FETCHER_WORKER_ID",
 		},
 		"devops-source-observer": {
@@ -209,6 +211,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT",
 			"MATRIX_DEVOPS_SOURCE_OBSERVER_LISTEN_ADDRESS",
 			"MATRIX_DEVOPS_SOURCE_OBSERVER_REPORT_ROOT",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_TRUST_ROOT",
 			"MATRIX_DEVOPS_SOURCE_OBSERVER_WEBHOOK_ROOT",
 			"MATRIX_DEVOPS_SOURCE_OBSERVER_WORKER_ID",
 		},
@@ -539,6 +542,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					"/run/matrix/devops-source-webhooks":     options.Root + "/secrets/devops/source-webhooks",
 					"/run/matrix/devops-source-fetch":        options.Root + "/secrets/devops/source-fetch",
 					"/run/matrix/devops-source-report":       options.Root + "/secrets/devops/source-report",
+					"/run/matrix/devops-source-trust":        options.Root + "/config/devops/source-trust",
 				}
 				if len(volumes) != len(expected) {
 					t.Fatalf("DevOps source observer mount count=%d", len(volumes))
@@ -566,6 +570,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					},
 					"/run/matrix/devops-source-fetch": {
 						options.Root + "/secrets/devops/source-fetch", true,
+					},
+					"/run/matrix/devops-source-trust": {
+						options.Root + "/config/devops/source-trust", true,
 					},
 					"/var/lib/matrix/source-archives": {
 						options.Root + "/data/devops/source-archives", false,
@@ -633,6 +640,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 				expected := map[string]string{
 					"/run/matrix/devops-check-reporter-dsn": options.Root + "/secrets/database/devops-check-reporter-dsn",
 					"/run/matrix/devops-source-report":      options.Root + "/secrets/devops/source-report",
+					"/run/matrix/devops-source-trust":       options.Root + "/config/devops/source-trust",
 				}
 				if len(volumes) != len(expected) {
 					t.Fatalf("DevOps check reporter mount count=%d", len(volumes))

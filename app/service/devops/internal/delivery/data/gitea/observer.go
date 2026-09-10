@@ -38,6 +38,7 @@ type Observer struct {
 	webhook CredentialResolver
 	fetch   CredentialResolver
 	report  CredentialResolver
+	trust   TrustResolver
 	client  *http.Client
 }
 
@@ -47,7 +48,11 @@ func NewObserver(
 	webhook CredentialResolver,
 	fetch CredentialResolver,
 	report CredentialResolver,
+	trust TrustResolver,
 ) (*Observer, error) {
+	if trust == nil {
+		return nil, errors.New("Gitea source trust resolver is required")
+	}
 	dialer := &net.Dialer{Timeout: requestTimeout, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
 		Proxy:                 nil,
@@ -61,13 +66,18 @@ func NewObserver(
 		ExpectContinueTimeout: time.Second,
 		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 	}
-	return newObserver(webhook, fetch, report, &http.Client{
+	observer, err := newObserver(webhook, fetch, report, &http.Client{
 		Transport: transport,
 		Timeout:   requestTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("provider redirects are not permitted")
 		},
 	})
+	if err != nil {
+		return nil, err
+	}
+	observer.trust = trust
+	return observer, nil
 }
 
 func newObserver(
@@ -114,9 +124,19 @@ func (observer *Observer) ObserveSourceConnection(
 		return connectionUnavailable(ctx, devopsv1.SourceConnectionReasonSecretUnavailable, err)
 	}
 	defer report.Clear()
+	client, closeClient, err := providerHTTPClient(
+		ctx, observer.client, observer.trust, connection.Metadata.Scope,
+		connection.Spec.EndpointOrigin,
+	)
+	if err != nil {
+		return connectionUnavailable(ctx, devopsv1.SourceConnectionReasonProviderUnavailable, err)
+	}
+	defer closeClient()
 
 	var version versionResponse
-	status, err := observer.getJSON(ctx, connection.Spec.EndpointOrigin, "/api/v1/version", nil, &version)
+	status, err := observer.getJSON(
+		ctx, client, connection.Spec.EndpointOrigin, "/api/v1/version", nil, &version,
+	)
 	if err != nil || status != http.StatusOK {
 		return connectionUnavailable(ctx, devopsv1.SourceConnectionReasonProviderUnavailable, err)
 	}
@@ -125,7 +145,9 @@ func (observer *Observer) ObserveSourceConnection(
 	}
 	for _, token := range [][]byte{fetch.Current, report.Current} {
 		var user userResponse
-		status, err = observer.getJSON(ctx, connection.Spec.EndpointOrigin, "/api/v1/user", token, &user)
+		status, err = observer.getJSON(
+			ctx, client, connection.Spec.EndpointOrigin, "/api/v1/user", token, &user,
+		)
 		if err != nil {
 			return connectionUnavailable(ctx, devopsv1.SourceConnectionReasonProviderUnavailable, err)
 		}
@@ -170,6 +192,16 @@ func (observer *Observer) ObserveRepositoryBinding(
 		return bindingUnavailable(ctx, devopsv1.RepositoryBindingReasonReportPermissionDenied, err)
 	}
 	defer report.Clear()
+	client, closeClient, err := providerHTTPClient(
+		ctx, observer.client, observer.trust, connection.Metadata.Scope,
+		connection.Spec.EndpointOrigin,
+	)
+	if err != nil {
+		return bindingUnavailable(
+			ctx, devopsv1.RepositoryBindingReasonRepositoryUnavailable, err,
+		)
+	}
+	defer closeClient()
 
 	segments := strings.Split(binding.Spec.RepositoryPath, "/")
 	if len(segments) != 2 {
@@ -179,7 +211,7 @@ func (observer *Observer) ObserveRepositoryBinding(
 	for index, token := range [][]byte{fetch.Current, report.Current} {
 		var repository repositoryResponse
 		status, requestErr := observer.getJSON(
-			ctx, connection.Spec.EndpointOrigin, requestPath, token, &repository,
+			ctx, client, connection.Spec.EndpointOrigin, requestPath, token, &repository,
 		)
 		permissionReason := devopsv1.RepositoryBindingReasonFetchPermissionDenied
 		if index == 1 {
@@ -235,6 +267,7 @@ type permission struct {
 
 func (observer *Observer) getJSON(
 	ctx context.Context,
+	client *http.Client,
 	endpointOrigin string,
 	requestPath string,
 	token []byte,
@@ -252,7 +285,7 @@ func (observer *Observer) getJSON(
 	if len(token) != 0 {
 		request.Header.Set("Authorization", "token "+string(token))
 	}
-	response, err := observer.client.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()

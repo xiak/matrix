@@ -13,6 +13,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/internal/runnernodecommand"
 	"github.com/xiak/matrix/app/service/installation/internal/sourcecredentialcommand"
+	"github.com/xiak/matrix/app/service/installation/internal/sourcetrustcommand"
 )
 
 type composeRecoveryProjectInspector struct{}
@@ -65,6 +66,12 @@ func main() {
 		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
 		os.Exit(cli.ExitInternal)
 	}
+	sourceTrustBackend, err := sourcetrustcommand.NewBackend(effects)
+	if err != nil {
+		stop()
+		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
+		os.Exit(cli.ExitInternal)
+	}
 	runnerNodeBackend, err := runnernodecommand.NewBackend(effects)
 	if err != nil {
 		stop()
@@ -75,7 +82,7 @@ func main() {
 		In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr,
 	}, cli.Backends{
 		Platform: platformBackend, SourceCredential: sourceCredentialBackend,
-		RunnerNode: runnerNodeBackend,
+		SourceTrust: sourceTrustBackend, RunnerNode: runnerNodeBackend,
 	})
 	stop()
 	os.Exit(exitCode)

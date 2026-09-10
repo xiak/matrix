@@ -63,6 +63,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		layout.DevOpsSourceObserver,
 		layout.DevOpsWebhookCredentialRoot,
 		layout.DevOpsFetchCredentialRoot, layout.DevOpsReportCredentialRoot,
+		layout.DevOpsSourceTrustRoot,
 		layout.DevOpsSourceArchiveRoot, layout.DevOpsExecutorSpoolRoot,
 		layout.DevOpsExecutorPKIRoot,
 	} {
@@ -308,6 +309,7 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		layout.DevOpsWebhookCredentialRoot,
 		layout.DevOpsFetchCredentialRoot,
 		layout.DevOpsReportCredentialRoot,
+		layout.DevOpsSourceTrustRoot,
 		layout.DevOpsSourceArchiveRoot,
 		layout.DevOpsExecutorSpoolRoot,
 		layout.DevOpsExecutorPKIRoot,
@@ -367,6 +369,15 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 	if verifyErr != nil {
 		t.Fatalf("DevOps executor server chain is invalid: %v", verifyErr)
 	}
+	sourceTrustRelative := filepath.Join(
+		filepath.FromSlash(layout.DevOpsSourceTrustRoot), strings.Repeat("a", 64), "roots.pem",
+	)
+	sourceTrustBundle := readTestFile(t, plan.Root, layout.DevOpsExecutorServerCA)
+	if err := writeManagedOnce(plan.Root, sourceTrustRelative, sourceTrustBundle); err != nil {
+		clear(sourceTrustBundle)
+		t.Fatalf("write source trust preservation fixture: %v", err)
+	}
+	clear(sourceTrustBundle)
 	before := map[string]string{
 		layout.DevOpsIAMCredential:   string(iamCredential),
 		layout.DevOpsAuditCredential: string(auditCredential),
@@ -375,6 +386,7 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		layout.DevOpsWorker:          string(workerDSN),
 		layout.DevOpsSourceFetcher:   string(sourceFetcherDSN),
 		layout.DevOpsSourceObserver:  string(sourceObserverDSN),
+		sourceTrustRelative:          string(readTestFile(t, plan.Root, sourceTrustRelative)),
 	}
 	for _, relative := range []string{
 		layout.DevOpsExecutorPKIBundle,
@@ -448,6 +460,8 @@ func TestStageDevOpsProductCredentialsAreSelectedAndStable(t *testing.T) {
 		!bytes.Contains(compose, []byte(`"MATRIX_DEVOPS_SOURCE_FETCHER_ARCHIVE_ROOT"`)) ||
 		!bytes.Contains(compose, []byte(`/var/lib/matrix/source-archives`)) ||
 		!bytes.Contains(compose, []byte(`"MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT"`)) ||
+		!bytes.Contains(compose, []byte(`"MATRIX_DEVOPS_SOURCE_OBSERVER_TRUST_ROOT"`)) ||
+		!bytes.Contains(compose, []byte(`/run/matrix/devops-source-trust`)) ||
 		!bytes.Contains(compose, []byte(`/run/matrix/devops-source-report`)) ||
 		!bytes.Contains(compose, []byte(`127.0.0.1:8080`)) ||
 		!bytes.Contains(compose, []byte(`0.0.0.0:8444`)) ||

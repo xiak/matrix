@@ -162,6 +162,13 @@ func ValidateUpdateSourceConnectionRequest(value UpdateSourceConnectionRequest) 
 	return ValidateSourceConnectionSpec(value.Spec)
 }
 
+// ValidateEndpointOrigin exposes the same canonical HTTPS-origin contract to
+// installation-owned source trust without making trust material part of a
+// SourceConnection resource.
+func ValidateEndpointOrigin(value string) error {
+	return validateEndpointOrigin(value)
+}
+
 func ValidateRepositoryBindingSpec(value RepositoryBindingSpec) error {
 	return errors.Join(
 		ValidateID("spec.sourceConnectionId", string(value.SourceConnectionID)),

@@ -23,14 +23,15 @@ const maximumObservedStatuses = 50
 
 type CheckReporter struct {
 	credentials CredentialResolver
+	trust       TrustResolver
 	client      *http.Client
 }
 
 var _ checkreporting.Reporter = (*CheckReporter)(nil)
 
-func NewCheckReporter(credentials CredentialResolver) (*CheckReporter, error) {
-	if credentials == nil {
-		return nil, errors.New("Gitea report credential resolver is required")
+func NewCheckReporter(credentials CredentialResolver, trust TrustResolver) (*CheckReporter, error) {
+	if credentials == nil || trust == nil {
+		return nil, errors.New("Gitea report credential and trust resolvers are required")
 	}
 	dialer := &net.Dialer{Timeout: requestTimeout, KeepAlive: -1}
 	transport := &http.Transport{
@@ -45,13 +46,18 @@ func NewCheckReporter(credentials CredentialResolver) (*CheckReporter, error) {
 		MaxResponseHeaderBytes: maximumResponseBody,
 		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12},
 	}
-	return newCheckReporter(credentials, &http.Client{
+	reporter, err := newCheckReporter(credentials, &http.Client{
 		Transport: transport,
 		Timeout:   checkreporting.ProviderDeadline,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("provider redirects are not permitted")
 		},
 	})
+	if err != nil {
+		return nil, err
+	}
+	reporter.trust = trust
+	return reporter, nil
 }
 
 func newCheckReporter(
@@ -97,6 +103,17 @@ func (reporter *CheckReporter) Create(
 		return checkreporting.Receipt{}, err
 	}
 	defer token.Clear()
+	providerClient, closeClient, err := providerHTTPClient(
+		ctx, reporter.client, reporter.trust, command.Connection.Metadata.Scope,
+		command.Connection.Spec.EndpointOrigin,
+	)
+	if err != nil {
+		if ctx.Err() != nil {
+			return checkreporting.Receipt{}, ctx.Err()
+		}
+		return checkreporting.Receipt{}, checkreporting.ErrReportUnavailable
+	}
+	defer closeClient()
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
@@ -111,7 +128,7 @@ func (reporter *CheckReporter) Create(
 	request.Header.Set("Authorization", "token "+string(token.Current))
 	defer request.Header.Del("Authorization")
 
-	response, err := reporter.client.Do(request)
+	response, err := providerClient.Do(request)
 	if err != nil {
 		closeResponse(response)
 		return checkreporting.Receipt{}, reportRequestFailure(ctx)
@@ -165,6 +182,17 @@ func (reporter *CheckReporter) Observe(
 		return checkreporting.Receipt{}, false, err
 	}
 	defer token.Clear()
+	providerClient, closeClient, err := providerHTTPClient(
+		ctx, reporter.client, reporter.trust, command.Connection.Metadata.Scope,
+		command.Connection.Spec.EndpointOrigin,
+	)
+	if err != nil {
+		if ctx.Err() != nil {
+			return checkreporting.Receipt{}, false, ctx.Err()
+		}
+		return checkreporting.Receipt{}, false, checkreporting.ErrReportUnavailable
+	}
+	defer closeClient()
 	request, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodGet,
@@ -178,7 +206,7 @@ func (reporter *CheckReporter) Observe(
 	request.Header.Set("Authorization", "token "+string(token.Current))
 	defer request.Header.Del("Authorization")
 
-	response, err := reporter.client.Do(request)
+	response, err := providerClient.Do(request)
 	if err != nil {
 		closeResponse(response)
 		return checkreporting.Receipt{}, false, reportRequestFailure(ctx)

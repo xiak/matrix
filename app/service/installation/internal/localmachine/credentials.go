@@ -87,6 +87,7 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	}
 	if staged.Manifest.IncludesProduct(release.ProductDevOps) {
 		for _, directory := range []string{
+			"config/devops", layout.DevOpsSourceTrustRoot,
 			"data/devops", layout.DevOpsSourceArchiveRoot,
 			layout.DevOpsExecutorSpoolRoot,
 			"secrets/devops", layout.DevOpsWebhookCredentialRoot,

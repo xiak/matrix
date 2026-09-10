@@ -414,6 +414,7 @@ func compileServices(
 	devopsWebhookCredentialRoot := path.Join(root, layout.DevOpsWebhookCredentialRoot)
 	devopsFetchCredentialRoot := path.Join(root, layout.DevOpsFetchCredentialRoot)
 	devopsReportCredentialRoot := path.Join(root, layout.DevOpsReportCredentialRoot)
+	devopsSourceTrustRoot := path.Join(root, layout.DevOpsSourceTrustRoot)
 	devopsSourceArchiveRoot := path.Join(root, layout.DevOpsSourceArchiveRoot)
 	devopsExecutorSpoolRoot := path.Join(root, layout.DevOpsExecutorSpoolRoot)
 	devopsExecutorServerCA := path.Join(root, layout.DevOpsExecutorServerCA)
@@ -733,11 +734,13 @@ func compileServices(
 			"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE": "/run/matrix/devops-check-reporter-dsn",
 			"MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS":    "0.0.0.0:8080",
 			"MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT":       "/run/matrix/devops-source-report",
+			"MATRIX_DEVOPS_CHECK_REPORTER_TRUST_ROOT":        "/run/matrix/devops-source-trust",
 			"MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID":         "devops-check-reporter-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
 		}
 		devopsCheckReporter.Volumes = []mount{
 			bind(devopsCheckReporterDSN, "/run/matrix/devops-check-reporter-dsn", true),
 			bind(devopsReportCredentialRoot, "/run/matrix/devops-source-report", true),
+			bind(devopsSourceTrustRoot, "/run/matrix/devops-source-trust", true),
 		}
 		devopsCheckReporter.DependsOn = healthy("postgres")
 
@@ -752,11 +755,13 @@ func compileServices(
 			"MATRIX_DEVOPS_SOURCE_FETCHER_DATABASE_DSN_FILE": "/run/matrix/devops-source-fetcher-dsn",
 			"MATRIX_DEVOPS_SOURCE_FETCHER_FETCH_ROOT":        "/run/matrix/devops-source-fetch",
 			"MATRIX_DEVOPS_SOURCE_FETCHER_LISTEN_ADDRESS":    "0.0.0.0:8080",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_TRUST_ROOT":        "/run/matrix/devops-source-trust",
 			"MATRIX_DEVOPS_SOURCE_FETCHER_WORKER_ID":         "devops-source-fetcher-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
 		}
 		devopsSourceFetcher.Volumes = []mount{
 			bind(devopsSourceFetcherDSN, "/run/matrix/devops-source-fetcher-dsn", true),
 			bind(devopsFetchCredentialRoot, "/run/matrix/devops-source-fetch", true),
+			bind(devopsSourceTrustRoot, "/run/matrix/devops-source-trust", true),
 			bind(devopsSourceArchiveRoot, "/var/lib/matrix/source-archives", false),
 		}
 		devopsSourceFetcher.DependsOn = healthy("postgres")
@@ -772,6 +777,7 @@ func compileServices(
 			"MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT":        "/run/matrix/devops-source-fetch",
 			"MATRIX_DEVOPS_SOURCE_OBSERVER_LISTEN_ADDRESS":    "0.0.0.0:8080",
 			"MATRIX_DEVOPS_SOURCE_OBSERVER_REPORT_ROOT":       "/run/matrix/devops-source-report",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_TRUST_ROOT":        "/run/matrix/devops-source-trust",
 			"MATRIX_DEVOPS_SOURCE_OBSERVER_WEBHOOK_ROOT":      "/run/matrix/devops-source-webhooks",
 			"MATRIX_DEVOPS_SOURCE_OBSERVER_WORKER_ID":         "devops-source-observer-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
 		}
@@ -780,6 +786,7 @@ func compileServices(
 			bind(devopsWebhookCredentialRoot, "/run/matrix/devops-source-webhooks", true),
 			bind(devopsFetchCredentialRoot, "/run/matrix/devops-source-fetch", true),
 			bind(devopsReportCredentialRoot, "/run/matrix/devops-source-report", true),
+			bind(devopsSourceTrustRoot, "/run/matrix/devops-source-trust", true),
 		}
 		devopsSourceObserver.DependsOn = healthy("postgres")
 		services["devops-api"] = devopsAPI

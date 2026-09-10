@@ -43,14 +43,15 @@ var httpsProtocolMutex sync.Mutex
 
 type Fetcher struct {
 	credentials CredentialResolver
+	trust       TrustResolver
 	client      *http.Client
 }
 
 var _ sourceacquisition.SourceFetcher = (*Fetcher)(nil)
 
-func NewFetcher(credentials CredentialResolver) (*Fetcher, error) {
-	if credentials == nil {
-		return nil, errors.New("Gitea source fetch credential resolver is required")
+func NewFetcher(credentials CredentialResolver, trust TrustResolver) (*Fetcher, error) {
+	if credentials == nil || trust == nil {
+		return nil, errors.New("Gitea source fetch credential and trust resolvers are required")
 	}
 	dialer := &net.Dialer{Timeout: gitDialTimeout, KeepAlive: -1}
 	transport := &http.Transport{
@@ -65,13 +66,18 @@ func NewFetcher(credentials CredentialResolver) (*Fetcher, error) {
 		MaxResponseHeaderBytes: maximumAdvertisementBytes,
 		TLSClientConfig:        &tls.Config{MinVersion: tls.VersionTLS12},
 	}
-	return newFetcher(credentials, &http.Client{
+	fetcher, err := newFetcher(credentials, &http.Client{
 		Transport: transport,
 		Timeout:   sourceacquisition.AcquisitionDeadline,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("provider redirects are not permitted")
 		},
 	})
+	if err != nil {
+		return nil, err
+	}
+	fetcher.trust = trust
+	return fetcher, nil
 }
 
 func newFetcher(credentials CredentialResolver, httpClient *http.Client) (*Fetcher, error) {
@@ -125,6 +131,14 @@ func (fetcher *Fetcher) Fetch(
 		return sourceacquisition.ArchiveContent{}, sourceacquisition.ErrSourceUnavailable
 	}
 	defer credential.Clear()
+	providerClient, closeClient, err := providerHTTPClient(
+		ctx, fetcher.client, fetcher.trust, command.Connection.Metadata.Scope,
+		command.Connection.Spec.EndpointOrigin,
+	)
+	if err != nil {
+		return sourceacquisition.ArchiveContent{}, fetchFailure(ctx, err)
+	}
+	defer closeClient()
 	authentication := &githttp.BasicAuth{
 		Username: gitAuthenticationUsername,
 		Password: string(credential.Current),
@@ -161,9 +175,9 @@ func (fetcher *Fetcher) Fetch(
 		}
 	}
 
-	closedClient := *fetcher.client
+	closedClient := *providerClient
 	closedClient.Transport = &closedGitTransport{
-		base: fetcher.client.Transport, endpointOrigin: command.Connection.Spec.EndpointOrigin,
+		base: providerClient.Transport, endpointOrigin: command.Connection.Spec.EndpointOrigin,
 		repositoryPath: repositoryPath,
 	}
 	err = fetchWithHTTPSClient(&closedClient, func() error {

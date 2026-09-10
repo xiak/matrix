@@ -13,6 +13,7 @@ func TestLoadConfigurationRequiresClosedEnvironment(t *testing.T) {
 	for _, name := range []string{
 		databaseDSNFileEnvironment,
 		reportRootEnvironment,
+		trustRootEnvironment,
 		workerIDEnvironment,
 		listenAddressEnvironment,
 	} {
@@ -24,6 +25,7 @@ func TestLoadConfigurationRequiresClosedEnvironment(t *testing.T) {
 
 	t.Setenv(databaseDSNFileEnvironment, "/run/matrix/check-reporter-dsn")
 	t.Setenv(reportRootEnvironment, "/run/matrix/source-report")
+	t.Setenv(trustRootEnvironment, "/run/matrix/source-trust")
 	t.Setenv(workerIDEnvironment, "devops-check-reporter-test")
 	t.Setenv(listenAddressEnvironment, "0.0.0.0:8080")
 	config, err := loadConfiguration()
@@ -31,7 +33,8 @@ func TestLoadConfigurationRequiresClosedEnvironment(t *testing.T) {
 		t.Fatalf("loadConfiguration() error = %v", err)
 	}
 	if config.workerID != "devops-check-reporter-test" ||
-		config.reportRoot != "/run/matrix/source-report" {
+		config.reportRoot != "/run/matrix/source-report" ||
+		config.trustRoot != "/run/matrix/source-trust" {
 		t.Fatalf("loadConfiguration() = %#v", config)
 	}
 

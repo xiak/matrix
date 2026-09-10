@@ -44,6 +44,7 @@ const (
 	DevOpsWebhookCredentialRoot = "secrets/devops/source-webhooks"
 	DevOpsFetchCredentialRoot   = "secrets/devops/source-fetch"
 	DevOpsReportCredentialRoot  = "secrets/devops/source-report"
+	DevOpsSourceTrustRoot       = "config/devops/source-trust"
 	DevOpsSourceArchiveRoot     = "data/devops/source-archives"
 	DevOpsExecutorSpoolRoot     = "data/devops/executor-spool"
 	DevOpsExecutorPKIRoot       = "secrets/devops/executor-pki"

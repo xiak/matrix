@@ -18,6 +18,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/gitea"
 	devopspostgres "github.com/xiak/matrix/app/service/devops/internal/delivery/data/postgres"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcecredentialfile"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcetrustfile"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/checkreporting"
 	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
@@ -27,6 +28,7 @@ import (
 const (
 	databaseDSNFileEnvironment = "MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE"
 	reportRootEnvironment      = "MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT"
+	trustRootEnvironment       = "MATRIX_DEVOPS_CHECK_REPORTER_TRUST_ROOT"
 	workerIDEnvironment        = "MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID"
 	listenAddressEnvironment   = "MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS"
 	pollInterval               = 250 * time.Millisecond
@@ -35,6 +37,7 @@ const (
 type configuration struct {
 	databaseDSNFile string
 	reportRoot      string
+	trustRoot       string
 	workerID        string
 	listenAddress   string
 }
@@ -80,7 +83,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return errors.New("DevOps check reporter credential boundary is unavailable")
 	}
-	reporter, err := gitea.NewCheckReporter(credentials)
+	trust, err := sourcetrustfile.NewResolver(config.trustRoot)
+	if err != nil {
+		return errors.New("DevOps check reporter trust boundary is unavailable")
+	}
+	reporter, err := gitea.NewCheckReporter(credentials, trust)
 	if err != nil {
 		return err
 	}
@@ -192,10 +199,11 @@ func loadConfiguration() (configuration, error) {
 	config := configuration{
 		databaseDSNFile: os.Getenv(databaseDSNFileEnvironment),
 		reportRoot:      os.Getenv(reportRootEnvironment),
+		trustRoot:       os.Getenv(trustRootEnvironment),
 		workerID:        os.Getenv(workerIDEnvironment),
 		listenAddress:   os.Getenv(listenAddressEnvironment),
 	}
-	if config.databaseDSNFile == "" || config.reportRoot == "" ||
+	if config.databaseDSNFile == "" || config.reportRoot == "" || config.trustRoot == "" ||
 		config.workerID == "" || config.listenAddress == "" {
 		return configuration{}, errors.New("DevOps check reporter configuration is incomplete")
 	}

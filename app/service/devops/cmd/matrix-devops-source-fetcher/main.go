@@ -16,6 +16,7 @@ import (
 	devopspostgres "github.com/xiak/matrix/app/service/devops/internal/delivery/data/postgres"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcearchivefile"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcecredentialfile"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcetrustfile"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceacquisition"
 	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
@@ -26,6 +27,7 @@ const (
 	databaseDSNFileEnvironment = "MATRIX_DEVOPS_SOURCE_FETCHER_DATABASE_DSN_FILE"
 	fetchRootEnvironment       = "MATRIX_DEVOPS_SOURCE_FETCHER_FETCH_ROOT"
 	archiveRootEnvironment     = "MATRIX_DEVOPS_SOURCE_FETCHER_ARCHIVE_ROOT"
+	trustRootEnvironment       = "MATRIX_DEVOPS_SOURCE_FETCHER_TRUST_ROOT"
 	workerIDEnvironment        = "MATRIX_DEVOPS_SOURCE_FETCHER_WORKER_ID"
 	listenAddressEnvironment   = "MATRIX_DEVOPS_SOURCE_FETCHER_LISTEN_ADDRESS"
 	pollInterval               = 250 * time.Millisecond
@@ -35,6 +37,7 @@ type configuration struct {
 	databaseDSNFile string
 	fetchRoot       string
 	archiveRoot     string
+	trustRoot       string
 	workerID        string
 	listenAddress   string
 }
@@ -82,7 +85,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	provider, err := gitea.NewFetcher(credentials)
+	trust, err := sourcetrustfile.NewResolver(config.trustRoot)
+	if err != nil {
+		return err
+	}
+	provider, err := gitea.NewFetcher(credentials, trust)
 	if err != nil {
 		return err
 	}
@@ -207,11 +214,12 @@ func loadConfiguration() (configuration, error) {
 		databaseDSNFile: os.Getenv(databaseDSNFileEnvironment),
 		fetchRoot:       os.Getenv(fetchRootEnvironment),
 		archiveRoot:     os.Getenv(archiveRootEnvironment),
+		trustRoot:       os.Getenv(trustRootEnvironment),
 		workerID:        os.Getenv(workerIDEnvironment),
 		listenAddress:   os.Getenv(listenAddressEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.fetchRoot == "" ||
-		config.archiveRoot == "" || config.workerID == "" ||
+		config.archiveRoot == "" || config.trustRoot == "" || config.workerID == "" ||
 		config.listenAddress == "" {
 		return configuration{}, errors.New("DevOps source fetcher configuration is incomplete")
 	}

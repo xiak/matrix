@@ -525,8 +525,32 @@
     return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(normalized) ? normalized : fallback;
   }
 
+  function safeCLIOrigin(value) {
+    const normalized = String(value || '').trim();
+    const match = /^https:\/\/([a-z0-9.-]+)(?::([0-9]{1,5}))?$/.exec(normalized);
+    if (normalized.length < 1 || normalized.length > 512 || !match) return '<canonical-https-origin>';
+    try {
+      const parsed = new URL(normalized);
+      const hostname = match[1];
+      const labels = hostname.split('.');
+      const rawPort = match[2] || '';
+      const port = rawPort ? Number(rawPort) : 443;
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password ||
+          parsed.pathname !== '/' || parsed.search || parsed.hash ||
+          hostname.length > 253 || hostname === 'localhost' || hostname.endsWith('.localhost') ||
+          !Number.isInteger(port) || port < 1 || port > 65535 || (rawPort && String(port) !== rawPort) ||
+          labels.some(label => !label || label.length > 63 || label.startsWith('-') || label.endsWith('-'))) {
+        return '<canonical-https-origin>';
+      }
+      return normalized;
+    } catch (_) {
+      return '<canonical-https-origin>';
+    }
+  }
+
   function renderOperatorCommands() {
     const spec = devopsState.connection && devopsState.connection.spec ? devopsState.connection.spec : {
+      endpointOrigin: element('source-endpoint-origin').value,
       webhookSecretRef: element('webhook-secret-ref').value,
       fetchCredentialRef: element('fetch-credential-ref').value,
       reportCredentialRef: element('report-credential-ref').value
@@ -549,6 +573,14 @@
       row.append(label, code);
       list.append(row);
     }
+    const trustRow = document.createElement('div');
+    const trustLabel = document.createElement('span');
+    trustLabel.textContent = 'PRIVATE CA · OPTIONAL';
+    const trustCode = document.createElement('code');
+    trustCode.textContent = 'mx devops source-trust apply --root <installation> --tenant ' + tenant +
+      ' --endpoint-origin ' + safeCLIOrigin(spec.endpointOrigin) + ' --from-file <private-ca-file>';
+    trustRow.append(trustLabel, trustCode);
+    list.append(trustRow);
   }
 
   function closedValue(value, accepted, fallback) {

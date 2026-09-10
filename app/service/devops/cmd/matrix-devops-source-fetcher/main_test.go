@@ -15,6 +15,7 @@ func TestLoadConfigurationRequiresClosedEnvironment(t *testing.T) {
 		databaseDSNFileEnvironment,
 		fetchRootEnvironment,
 		archiveRootEnvironment,
+		trustRootEnvironment,
 		workerIDEnvironment,
 		listenAddressEnvironment,
 	} {
@@ -27,6 +28,7 @@ func TestLoadConfigurationRequiresClosedEnvironment(t *testing.T) {
 	t.Setenv(databaseDSNFileEnvironment, "/run/matrix/source-fetcher-dsn")
 	t.Setenv(fetchRootEnvironment, "/run/matrix/source-fetch")
 	t.Setenv(archiveRootEnvironment, "/var/lib/matrix/source-archives")
+	t.Setenv(trustRootEnvironment, "/run/matrix/source-trust")
 	t.Setenv(workerIDEnvironment, "devops-source-fetcher-test")
 	t.Setenv(listenAddressEnvironment, "0.0.0.0:8080")
 	config, err := loadConfiguration()
@@ -35,7 +37,8 @@ func TestLoadConfigurationRequiresClosedEnvironment(t *testing.T) {
 	}
 	if config.workerID != "devops-source-fetcher-test" ||
 		config.fetchRoot != "/run/matrix/source-fetch" ||
-		config.archiveRoot != "/var/lib/matrix/source-archives" {
+		config.archiveRoot != "/var/lib/matrix/source-archives" ||
+		config.trustRoot != "/run/matrix/source-trust" {
 		t.Fatalf("loadConfiguration() = %#v", config)
 	}
 

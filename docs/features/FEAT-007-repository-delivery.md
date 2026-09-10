@@ -34,9 +34,10 @@
   Gate B complete; Gate C's guarded source-recheck API/persistence, unified
   DevOps browser-client baseline, and DevOps-selected offline-lifecycle access
   and operator-credential harness are complete; the endpoint-scoped private-
-  provider CA UX, architecture, and acceptance contract is complete while its
-  implementation, signed real-runtime execution, local-provider source-to-
-  check journey, and the complete multi-role/state/accessibility UI matrix
+  provider CA UX, architecture, CLI/filesystem/runtime implementation,
+  selected-only topology, optional safe UI command, and custom-only TLS gates
+  are complete while signed real-runtime execution, the local-provider source-
+  to-check journey, and the complete multi-role/state/accessibility UI matrix
   remain pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
@@ -1508,23 +1509,25 @@ network plus one provider-egress network, and has no IAM, Audit, executor, or
 configuration-write capability. Its heartbeat gates both process readiness
 and DevOps API readiness once any SourceConnection exists.
 
-The next Gate C implementation slice is now designed as an installation-owned
-endpoint-scoped CA boundary. It adds no public resource field, database row,
-system trust mutation, or process-global TLS override. Its smallest vertical
-slice is the strict CA codec and derived filesystem identity, the exact
-`mx devops source-trust apply|remove` workflow, selected-only topology mounts,
-per-effect source-adapter resolution, the optional safe UI command, and a real
-local-provider TLS journey. Until those gates pass, private-provider trust is a
-design contract rather than accepted runtime capability.
+The Gate C endpoint-scoped CA boundary is now implemented as installation-
+owned configuration. A strict bounded codec accepts only canonical, distinct,
+currently valid self-signed CA roots and derives one tenant-and-exact-origin
+directory. The release-carried `mx devops source-trust apply|remove` workflow
+authenticates the idle selected release, atomically applies, rotates, or removes
+only that directory, rejects conflicting filesystem shape, and emits no CA or
+path. Selected-only topology mounts the common root read-only into only the
+observer, fetcher, and reporter. Each provider effect selects either that
+exact custom-only pool or system roots when the exact record is absent; an
+invalid present record never falls back. The UI renders only an optional safe
+placeholder command, and the former process-global TLS test override is
+removed. No public resource field, database row, system trust mutation, or
+process-global TLS state was added. The signed local-provider source-to-check
+journey remains the acceptance boundary before this becomes accepted runtime
+capability.
 
-These slices do not complete Gate A. Source readiness, credential lifecycle,
-observation, acquisition through an installed isolated process, the fenced
-BuildExecutor boundary, and authenticated tenant-leading normalized-log
-persistence, public log reads, and physical runner process composition are
-complete together with the selected DevOps control-plane release topology.
-Dedicated runner-node runtime installation, real isolated execution, reporting,
-remaining runtime quotas, check-receipt Audit facts, and pagination for other
-collection resources remain pending.
+Gate A and Gate B remain complete. This slice advances but does not close Gate
+C: the signed local-provider runtime journey and the complete browser role,
+state, and accessibility matrix remain outstanding.
 
 Current verification evidence:
 
@@ -1538,6 +1541,19 @@ Current verification evidence:
   tamper rejection, protected input enforcement, purpose-separated roots,
   atomic webhook rotation, equal apply, repeated retirement, and closed output;
   the focused suites pass race and 20-run repetition
+- source-trust codec, installation backend/effects, read-only resolver, Gitea
+  transport, selected topology, and UI tests proving the 256-KiB/sixteen-root
+  bounds, deterministic custom-only pool, exact tenant/origin selection,
+  system fallback only on absence, invalid-present rejection, protected and
+  conflict-free atomic apply/rotation/removal, equal and repeated idempotence,
+  PaaS-only/active/tampered-release rejection, replay preservation, three
+  least-authority read-only mounts, no process-global `SSL_CERT_FILE`, safe
+  operator output, and content-addressed browser assets. A real TLS test accepts
+  only the selected endpoint root and rejects both a different private root and
+  ambient system roots. Full Windows tests, architecture tests, vet,
+  JavaScript syntax, affected race and twenty-run suites, and Linux/amd64
+  compilation of the source-process gate pass. This is implementation evidence;
+  the signed local-provider source-to-check run remains pending
 - the same credential suites pass in a disposable disconnected Debian Linux
   container with the source and module cache mounted read-only, exercising
   owner/mode and no-follow checks; Linux/amd64 CGO-disabled `go build ./...`

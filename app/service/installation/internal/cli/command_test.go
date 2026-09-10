@@ -152,7 +152,7 @@ func TestSourceCredentialCommandSurfaceBuildsExactRequests(t *testing.T) {
 			var out, errOut bytes.Buffer
 			command, err := NewCommand(
 				Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
-				Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, RunnerNode: noopRunnerNodeBackend()},
+				Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, SourceTrust: noopSourceTrustBackend(), RunnerNode: noopRunnerNodeBackend()},
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -214,7 +214,7 @@ func TestSourceCredentialJSONAndFailureNeverExposeNativeMaterial(t *testing.T) {
 	exit := Run(
 		context.Background(), requestArgs,
 		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
-		Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, RunnerNode: noopRunnerNodeBackend()},
+		Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, SourceTrust: noopSourceTrustBackend(), RunnerNode: noopRunnerNodeBackend()},
 	)
 	if exit != ExitSuccess || errOut.Len() != 0 ||
 		strings.Contains(out.String(), "/secure/report-token") {
@@ -242,7 +242,7 @@ func TestSourceCredentialJSONAndFailureNeverExposeNativeMaterial(t *testing.T) {
 	exit = Run(
 		context.Background(), requestArgs,
 		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
-		Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, RunnerNode: noopRunnerNodeBackend()},
+		Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, SourceTrust: noopSourceTrustBackend(), RunnerNode: noopRunnerNodeBackend()},
 	)
 	if exit != ExitInternal || out.Len() != 0 ||
 		strings.Contains(errOut.String(), "report-secret-value") ||
@@ -275,7 +275,7 @@ func TestSourceCredentialUsageFailsBeforeBackend(t *testing.T) {
 			exit := Run(
 				context.Background(), args,
 				Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
-				Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, RunnerNode: noopRunnerNodeBackend()},
+				Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, SourceTrust: noopSourceTrustBackend(), RunnerNode: noopRunnerNodeBackend()},
 			)
 			if exit != ExitInvalidInput || out.Len() != 0 ||
 				!strings.Contains(errOut.String(), "INVALID_COMMAND_INPUT") {
@@ -285,6 +285,123 @@ func TestSourceCredentialUsageFailsBeforeBackend(t *testing.T) {
 	}
 	if called {
 		t.Fatal("source credential backend was called for invalid usage")
+	}
+}
+
+func TestSourceTrustCommandsBuildExactClosedRequests(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		want  SourceTrustRequest
+		state string
+	}{
+		{
+			name: "apply",
+			args: []string{
+				"--format", "json", "devops", "source-trust", "apply",
+				"--root", "/srv/matrix", "--tenant", "tenant-one",
+				"--endpoint-origin", "https://git.internal.example:3443",
+				"--from-file", "/secure/provider-ca.pem",
+			},
+			want: SourceTrustRequest{
+				Operation: SourceTrustApply, Root: "/srv/matrix", TenantID: "tenant-one",
+				EndpointOrigin: "https://git.internal.example:3443",
+				FromFile:       "/secure/provider-ca.pem",
+			},
+			state: "APPLIED",
+		},
+		{
+			name: "remove",
+			args: []string{
+				"--format", "json", "devops", "source-trust", "remove",
+				"--root", "/srv/matrix", "--tenant", "tenant-one",
+				"--endpoint-origin", "https://git.internal.example:3443",
+			},
+			want: SourceTrustRequest{
+				Operation: SourceTrustRemove, Root: "/srv/matrix", TenantID: "tenant-one",
+				EndpointOrigin: "https://git.internal.example:3443",
+			},
+			state: "REMOVED",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var got SourceTrustRequest
+			backend := sourceTrustBackendFunc(func(
+				_ context.Context,
+				request SourceTrustRequest,
+			) (SourceTrustResult, error) {
+				got = request
+				return SourceTrustResult{
+					State: test.state, TenantID: request.TenantID,
+					EndpointOrigin: request.EndpointOrigin,
+				}, nil
+			})
+			backends := testBackends(noopPlatformBackend())
+			backends.SourceTrust = backend
+			var out, errOut bytes.Buffer
+			exit := Run(
+				context.Background(), test.args,
+				Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backends,
+			)
+			if exit != ExitSuccess || got != test.want || errOut.Len() != 0 {
+				t.Fatalf("source trust result=%d request=%#v output=%q", exit, got, errOut.String())
+			}
+			if test.want.FromFile != "" && strings.Contains(out.String(), test.want.FromFile) ||
+				!strings.Contains(out.String(), `"kind":"SourceTrustCommandResult"`) ||
+				!strings.Contains(out.String(), `"endpointOrigin":"https://git.internal.example:3443"`) {
+				t.Fatalf("source trust output=%q", out.String())
+			}
+		})
+	}
+}
+
+func TestSourceTrustSurfaceRejectsMaterialAndNoncanonicalOrigin(t *testing.T) {
+	command, err := NewCommand(
+		Streams{In: strings.NewReader(""), Out: io.Discard, ErrOut: io.Discard},
+		testBackends(noopPlatformBackend()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust, _, err := command.Find([]string{"devops", "source-trust"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(trust.Commands()))
+	for _, child := range trust.Commands() {
+		for _, forbidden := range []string{"certificate", "pem", "value", "secret"} {
+			if child.Flags().Lookup(forbidden) != nil {
+				t.Fatalf("source trust command %q exposes --%s", child.Name(), forbidden)
+			}
+		}
+		got = append(got, child.Name())
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"apply", "remove"}) {
+		t.Fatalf("source trust commands=%v", got)
+	}
+
+	called := false
+	backends := testBackends(noopPlatformBackend())
+	backends.SourceTrust = sourceTrustBackendFunc(func(
+		context.Context, SourceTrustRequest,
+	) (SourceTrustResult, error) {
+		called = true
+		return SourceTrustResult{}, nil
+	})
+	var out, errOut bytes.Buffer
+	exit := Run(
+		context.Background(), []string{
+			"devops", "source-trust", "apply", "--root", "/srv/matrix",
+			"--tenant", "tenant-one", "--endpoint-origin", "http://git.internal.example",
+			"--from-file", "/secure/provider-ca.pem",
+		},
+		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backends,
+	)
+	if exit != ExitInvalidInput || called || out.Len() != 0 ||
+		!strings.Contains(errOut.String(), "INVALID_COMMAND_INPUT") {
+		t.Fatalf("invalid source trust result=%d called=%t output=%q", exit, called, errOut.String())
 	}
 }
 
@@ -549,6 +666,18 @@ func (function sourceCredentialBackendFunc) RunSourceCredential(
 	return function(ctx, request)
 }
 
+type sourceTrustBackendFunc func(
+	context.Context,
+	SourceTrustRequest,
+) (SourceTrustResult, error)
+
+func (function sourceTrustBackendFunc) RunSourceTrust(
+	ctx context.Context,
+	request SourceTrustRequest,
+) (SourceTrustResult, error) {
+	return function(ctx, request)
+}
+
 type runnerNodeBackendFunc func(
 	context.Context,
 	RunnerNodeRequest,
@@ -576,6 +705,21 @@ func noopRunnerNodeBackend() runnerNodeBackendFunc {
 	})
 }
 
+func noopSourceTrustBackend() sourceTrustBackendFunc {
+	return sourceTrustBackendFunc(func(
+		_ context.Context,
+		request SourceTrustRequest,
+	) (SourceTrustResult, error) {
+		state := "UNCHANGED"
+		if request.Operation == SourceTrustRemove {
+			state = "REMOVED"
+		}
+		return SourceTrustResult{
+			State: state, TenantID: request.TenantID, EndpointOrigin: request.EndpointOrigin,
+		}, nil
+	})
+}
+
 func testBackends(platform PlatformBackend) Backends {
 	return Backends{
 		Platform: platform,
@@ -585,7 +729,8 @@ func testBackends(platform PlatformBackend) Backends {
 		) (SourceCredentialResult, error) {
 			return sourceCredentialResult(request, "UNCHANGED"), nil
 		}),
-		RunnerNode: noopRunnerNodeBackend(),
+		SourceTrust: noopSourceTrustBackend(),
+		RunnerNode:  noopRunnerNodeBackend(),
 	}
 }
 

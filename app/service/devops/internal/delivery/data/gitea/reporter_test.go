@@ -280,7 +280,7 @@ func TestCheckReporterRejectsOpenConfiguration(t *testing.T) {
 	resolver := staticCredentialResolver{
 		purpose: sourcecredential.PurposeReport, value: checkReporterToken,
 	}
-	if _, err := NewCheckReporter(nil); err == nil {
+	if _, err := NewCheckReporter(nil, staticTrustResolver{}); err == nil {
 		t.Fatal("nil credential resolver was accepted")
 	}
 	client.Timeout++

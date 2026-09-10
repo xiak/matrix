@@ -70,6 +70,31 @@ type SourceCredentialBackend interface {
 	RunSourceCredential(context.Context, SourceCredentialRequest) (SourceCredentialResult, error)
 }
 
+type SourceTrustOperation string
+
+const (
+	SourceTrustApply  SourceTrustOperation = "APPLY"
+	SourceTrustRemove SourceTrustOperation = "REMOVE"
+)
+
+type SourceTrustRequest struct {
+	Operation      SourceTrustOperation
+	Root           string
+	TenantID       string
+	EndpointOrigin string
+	FromFile       string
+}
+
+type SourceTrustResult struct {
+	State          string `json:"state"`
+	TenantID       string `json:"tenant"`
+	EndpointOrigin string `json:"endpointOrigin"`
+}
+
+type SourceTrustBackend interface {
+	RunSourceTrust(context.Context, SourceTrustRequest) (SourceTrustResult, error)
+}
+
 type RunnerNodeOperation string
 
 const (
@@ -113,6 +138,7 @@ type RunnerNodeBackend interface {
 type Backends struct {
 	Platform         PlatformBackend
 	SourceCredential SourceCredentialBackend
+	SourceTrust      SourceTrustBackend
 	RunnerNode       RunnerNodeBackend
 }
 
@@ -195,6 +221,22 @@ func validateSourceCredentialResult(
 			TenantID: devopsv1.TenantID(result.TenantID),
 		}),
 		devopsv1.ValidateID("sourceCredentialRef", result.Reference),
+	)
+}
+
+func validateSourceTrustResult(request SourceTrustRequest, result SourceTrustResult) error {
+	validState := request.Operation == SourceTrustApply &&
+		(result.State == "APPLIED" || result.State == "UNCHANGED") ||
+		request.Operation == SourceTrustRemove && result.State == "REMOVED"
+	if !validState || result.TenantID != request.TenantID ||
+		result.EndpointOrigin != request.EndpointOrigin {
+		return errors.New("source trust result state is invalid")
+	}
+	return errors.Join(
+		devopsv1.ValidateResourceScope(devopsv1.ResourceScope{
+			TenantID: devopsv1.TenantID(result.TenantID),
+		}),
+		devopsv1.ValidateEndpointOrigin(result.EndpointOrigin),
 	)
 }
 

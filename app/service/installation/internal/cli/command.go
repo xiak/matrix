@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 )
@@ -37,6 +38,8 @@ type commandAction string
 const (
 	actionSourceCredentialApply          commandAction = "SOURCE_CREDENTIAL_APPLY"
 	actionSourceCredentialRetirePrevious commandAction = "SOURCE_CREDENTIAL_RETIRE_PREVIOUS"
+	actionSourceTrustApply               commandAction = "SOURCE_TRUST_APPLY"
+	actionSourceTrustRemove              commandAction = "SOURCE_TRUST_REMOVE"
 	actionRunnerNodeExportRelease        commandAction = "RUNNER_NODE_EXPORT_RELEASE"
 	actionRunnerNodeRequest              commandAction = "RUNNER_NODE_REQUEST"
 	actionRunnerNodeEnroll               commandAction = "RUNNER_NODE_ENROLL"
@@ -68,6 +71,13 @@ type sourceCredentialOptions struct {
 	fromFile  string
 }
 
+type sourceTrustOptions struct {
+	root           string
+	tenantID       string
+	endpointOrigin string
+	fromFile       string
+}
+
 type runnerNodeOptions struct {
 	root           string
 	release        string
@@ -87,7 +97,8 @@ func NewCommand(streams Streams, backends Backends) (*cobra.Command, error) {
 	if err := validateStreams(streams); err != nil {
 		return nil, err
 	}
-	if backends.Platform == nil || backends.SourceCredential == nil || backends.RunnerNode == nil {
+	if backends.Platform == nil || backends.SourceCredential == nil ||
+		backends.SourceTrust == nil || backends.RunnerNode == nil {
 		return nil, errors.New("Matrix CLI backends are required")
 	}
 	format := string(formatHuman)
@@ -138,7 +149,8 @@ func NewCommand(streams Streams, backends Backends) (*cobra.Command, error) {
 		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionSupport, &format),
 	)
 	root.AddCommand(newDevOpsCommand(
-		streams.Out, backends.SourceCredential, backends.RunnerNode, &format,
+		streams.Out, backends.SourceCredential, backends.SourceTrust,
+		backends.RunnerNode, &format,
 	))
 	return root, nil
 }
@@ -183,6 +195,7 @@ func newPlatformCommand(
 func newDevOpsCommand(
 	out io.Writer,
 	sourceBackend SourceCredentialBackend,
+	trustBackend SourceTrustBackend,
 	runnerBackend RunnerNodeBackend,
 	format *string,
 ) *cobra.Command {
@@ -210,7 +223,19 @@ func newDevOpsCommand(
 			out, sourceBackend, SourceCredentialRetirePrevious, format,
 		),
 	)
-	devops.AddCommand(source, newRunnerNodeCommand(out, runnerBackend, format))
+	trust := &cobra.Command{
+		Use:   "source-trust",
+		Short: "Manage endpoint-scoped source provider trust",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
+		},
+	}
+	trust.AddCommand(
+		newSourceTrustOperationCommand(out, trustBackend, SourceTrustApply, format),
+		newSourceTrustOperationCommand(out, trustBackend, SourceTrustRemove, format),
+	)
+	devops.AddCommand(source, trust, newRunnerNodeCommand(out, runnerBackend, format))
 	return devops
 }
 
@@ -458,6 +483,89 @@ func sourceCredentialAction(operation SourceCredentialOperation) commandAction {
 	}
 }
 
+func newSourceTrustOperationCommand(
+	out io.Writer,
+	backend SourceTrustBackend,
+	operation SourceTrustOperation,
+	format *string,
+) *cobra.Command {
+	options := &sourceTrustOptions{}
+	name := "apply"
+	short := "Apply endpoint-scoped source provider trust"
+	if operation == SourceTrustRemove {
+		name = "remove"
+		short = "Remove endpoint-scoped source provider trust"
+	}
+	action := sourceTrustAction(operation)
+	command := &cobra.Command{
+		Use: name, Short: short, Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if err := validateSourceTrustFlags(operation, options); err != nil {
+				return &invocationError{action: action, usage: true, err: err}
+			}
+			request := SourceTrustRequest{
+				Operation: operation, Root: options.root, TenantID: options.tenantID,
+				EndpointOrigin: options.endpointOrigin, FromFile: options.fromFile,
+			}
+			result, err := backend.RunSourceTrust(command.Context(), request)
+			if err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			if err := validateSourceTrustResult(request, result); err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			if err := writeSourceTrustSuccess(out, outputFormat(*format), action, result); err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			return nil
+		},
+	}
+	flags := command.Flags()
+	flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
+	flags.StringVar(&options.tenantID, "tenant", "", "Matrix tenant identity")
+	flags.StringVar(
+		&options.endpointOrigin, "endpoint-origin", "", "exact canonical HTTPS provider origin",
+	)
+	if operation == SourceTrustApply {
+		flags.StringVar(&options.fromFile, "from-file", "", "private source CA bundle input file")
+	}
+	return command
+}
+
+func validateSourceTrustFlags(operation SourceTrustOperation, options *sourceTrustOptions) error {
+	if options == nil || strings.TrimSpace(options.root) == "" ||
+		strings.TrimSpace(options.tenantID) == "" ||
+		devopsv1.ValidateResourceScope(devopsv1.ResourceScope{
+			TenantID: devopsv1.TenantID(options.tenantID),
+		}) != nil || devopsv1.ValidateEndpointOrigin(options.endpointOrigin) != nil {
+		return errors.New("source trust identity is invalid")
+	}
+	switch operation {
+	case SourceTrustApply:
+		if strings.TrimSpace(options.fromFile) == "" {
+			return errors.New("source trust input file is required")
+		}
+	case SourceTrustRemove:
+		if options.fromFile != "" {
+			return errors.New("source trust removal cannot accept input material")
+		}
+	default:
+		return errors.New("source trust operation is invalid")
+	}
+	return nil
+}
+
+func sourceTrustAction(operation SourceTrustOperation) commandAction {
+	switch operation {
+	case SourceTrustApply:
+		return actionSourceTrustApply
+	case SourceTrustRemove:
+		return actionSourceTrustRemove
+	default:
+		return ""
+	}
+}
+
 func bindCommandFlags(flags *pflag.FlagSet, action lifecycle.Action, options *commandOptions) {
 	flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
 	switch action {
@@ -531,6 +639,14 @@ func actionForCommand(command *cobra.Command) commandAction {
 			return actionSourceCredentialApply
 		case "retire-previous":
 			return actionSourceCredentialRetirePrevious
+		}
+	}
+	if command.Parent() != nil && command.Parent().Name() == "source-trust" {
+		switch command.Name() {
+		case "apply":
+			return actionSourceTrustApply
+		case "remove":
+			return actionSourceTrustRemove
 		}
 	}
 	if command.Parent() != nil && command.Parent().Name() == "runner-node" {
@@ -660,6 +776,14 @@ type sourceCredentialSuccessEnvelope struct {
 	Result     SourceCredentialResult `json:"result"`
 }
 
+type sourceTrustSuccessEnvelope struct {
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	Action     commandAction     `json:"action"`
+	Status     string            `json:"status"`
+	Result     SourceTrustResult `json:"result"`
+}
+
 type runnerNodeSuccessEnvelope struct {
 	APIVersion string           `json:"apiVersion"`
 	Kind       string           `json:"kind"`
@@ -721,6 +845,25 @@ func writeSourceCredentialSuccess(
 	return err
 }
 
+func writeSourceTrustSuccess(
+	out io.Writer,
+	format outputFormat,
+	action commandAction,
+	result SourceTrustResult,
+) error {
+	if format == formatJSON {
+		return writeJSONLine(out, sourceTrustSuccessEnvelope{
+			APIVersion: OutputAPIVersion, Kind: "SourceTrustCommandResult",
+			Action: action, Status: "SUCCEEDED", Result: result,
+		})
+	}
+	_, err := fmt.Fprintf(
+		out, "%s SUCCEEDED state=%s tenant=%s endpoint-origin=%s\n",
+		action, result.State, result.TenantID, result.EndpointOrigin,
+	)
+	return err
+}
+
 func writeRunnerNodeSuccess(
 	out io.Writer,
 	format outputFormat,
@@ -756,6 +899,8 @@ func writeFailure(out io.Writer, format outputFormat, action commandAction, faul
 		kind := "PlatformCommandFailure"
 		if action == actionSourceCredentialApply || action == actionSourceCredentialRetirePrevious {
 			kind = "SourceCredentialCommandFailure"
+		} else if action == actionSourceTrustApply || action == actionSourceTrustRemove {
+			kind = "SourceTrustCommandFailure"
 		} else if action == actionRunnerNodeExportRelease || action == actionRunnerNodeRequest ||
 			action == actionRunnerNodeEnroll || action == actionRunnerNodeInstall {
 			kind = "RunnerNodeCommandFailure"

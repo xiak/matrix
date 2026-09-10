@@ -45,6 +45,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/runcontrol"
 	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
 	"github.com/xiak/matrix/app/service/devops/sourcecredential"
+	"github.com/xiak/matrix/app/service/devops/sourcetrust"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 )
 
@@ -182,11 +183,28 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	endpoint, provider, providerCalls := newSourceProcessProvider(
 		t, upstream, providerEndpoint,
 	)
-	caPath := writeExecutionProcessFile(
-		t, temporary, "provider-ca.pem",
-		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: provider.Certificate().Raw}),
-		0o600,
+	scope := devopsv1.ResourceScope{TenantID: sourceProcessTenantID}
+	trustRoot := makeExecutionProcessDirectory(t, temporary, "source-trust", 0o700)
+	trustDirectoryName, err := sourcetrust.DirectoryName(scope, endpoint)
+	if err != nil {
+		t.Fatalf("derive source process trust directory: %v", err)
+	}
+	trustDirectory := makeExecutionProcessDirectory(
+		t, trustRoot, trustDirectoryName, 0o700,
 	)
+	trustBundle, err := sourcetrust.Canonicalize(
+		pem.EncodeToMemory(&pem.Block{
+			Type: "CERTIFICATE", Bytes: provider.Certificate().Raw,
+		}),
+		time.Now().UTC(),
+	)
+	if err != nil {
+		t.Fatalf("canonicalize source process provider root: %v", err)
+	}
+	writeExecutionProcessFile(
+		t, trustDirectory, sourcetrust.BundleFilename, trustBundle, 0o600,
+	)
+	clear(trustBundle)
 	repository := provisionSourceProcessRepository(t, upstream)
 	change := provisionSourceProcessChange(t, upstream, repository)
 	fetchCredential := provisionSourceProcessToken(
@@ -195,7 +213,6 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	reportCredential := provisionSourceProcessToken(
 		t, upstream, "source-process-report", []string{"write:repository", "read:user"},
 	)
-	scope := devopsv1.ResourceScope{TenantID: sourceProcessTenantID}
 	writeSourceProcessCredential(
 		t, webhookRoot, sourcecredential.PurposeWebhook, scope,
 		"source-process-webhook", sourceProcessWebhookSecret,
@@ -353,9 +370,9 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 		"MATRIX_DEVOPS_SOURCE_OBSERVER_WEBHOOK_ROOT=" + webhookRoot,
 		"MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT=" + fetchRoot,
 		"MATRIX_DEVOPS_SOURCE_OBSERVER_REPORT_ROOT=" + reportRoot,
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_TRUST_ROOT=" + trustRoot,
 		"MATRIX_DEVOPS_SOURCE_OBSERVER_WORKER_ID=source-observer-process",
 		"MATRIX_DEVOPS_SOURCE_OBSERVER_LISTEN_ADDRESS=" + observerAddress,
-		"SSL_CERT_FILE=" + caPath,
 	}
 	observer := start(observerBinary, observerEnvironment)
 	waitExecutionProcessHTTPStatus(
@@ -364,7 +381,7 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	waitSourceProcessConfigurationReady(t, ctx, configuration, observer)
 
 	bootstrapReporter := start(reporterBinary, sourceProcessReporterEnvironmentValues(
-		reporterDSNPath, reportRoot, caPath,
+		reporterDSNPath, reportRoot, trustRoot,
 		"source-reporter-process-bootstrap", bootstrapReporterAddress,
 	))
 	waitExecutionProcessHTTPStatus(
@@ -372,12 +389,13 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 		"http://"+bootstrapReporterAddress+"/ready", http.StatusOK,
 	)
 	firstFetcherEnvironment := sourceProcessFetcherEnvironmentValues(
-		fetcherDSNPath, fetchRoot, archiveRoot, caPath,
+		fetcherDSNPath, fetchRoot, archiveRoot, trustRoot,
 		"source-fetcher-process-first", firstFetcherAddress,
 	)
 	assertSourceProcessFetcherEnvironment(
 		t, firstFetcherEnvironment, webhookRoot, reportRoot,
 		sourceProcessWebhookSecret, fetchCredential.value, reportCredential.value,
+		"SSL_CERT_FILE=",
 	)
 	firstFetcher := start(fetcherBinary, firstFetcherEnvironment)
 	waitExecutionProcessHTTPStatus(
@@ -444,7 +462,7 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	expireSourceProcessLease(t, ctx, admin, run.ID)
 
 	secondFetcherEnvironment := sourceProcessFetcherEnvironmentValues(
-		fetcherDSNPath, fetchRoot, archiveRoot, caPath,
+		fetcherDSNPath, fetchRoot, archiveRoot, trustRoot,
 		"source-fetcher-process-second", secondFetcherAddress,
 	)
 	secondFetcher := start(fetcherBinary, secondFetcherEnvironment)
@@ -493,7 +511,7 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	firstRecoveryReporter := start(
 		reporterBinary,
 		sourceProcessReporterEnvironmentValues(
-			reporterDSNPath, reportRoot, caPath,
+			reporterDSNPath, reportRoot, trustRoot,
 			"source-reporter-process-first", firstRecoveryReporterAddress,
 		),
 	)
@@ -512,7 +530,7 @@ func TestSignedGiteaChangeRecoversThroughSourceFetcherProcess(t *testing.T) {
 	secondRecoveryReporter := start(
 		reporterBinary,
 		sourceProcessReporterEnvironmentValues(
-			reporterDSNPath, reportRoot, caPath,
+			reporterDSNPath, reportRoot, trustRoot,
 			"source-reporter-process-second", secondRecoveryReporterAddress,
 		),
 	)
@@ -1470,16 +1488,16 @@ func sourceProcessSignature(body []byte, secret string) string {
 func sourceProcessReporterEnvironmentValues(
 	dsnPath string,
 	reportRoot string,
-	caPath string,
+	trustRoot string,
 	workerID string,
 	listenAddress string,
 ) []string {
 	return []string{
 		"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE=" + dsnPath,
 		"MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT=" + reportRoot,
+		"MATRIX_DEVOPS_CHECK_REPORTER_TRUST_ROOT=" + trustRoot,
 		"MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID=" + workerID,
 		"MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS=" + listenAddress,
-		"SSL_CERT_FILE=" + caPath,
 	}
 }
 
@@ -1487,7 +1505,7 @@ func sourceProcessFetcherEnvironmentValues(
 	dsnPath string,
 	fetchRoot string,
 	archiveRoot string,
-	caPath string,
+	trustRoot string,
 	workerID string,
 	listenAddress string,
 ) []string {
@@ -1495,9 +1513,9 @@ func sourceProcessFetcherEnvironmentValues(
 		"MATRIX_DEVOPS_SOURCE_FETCHER_DATABASE_DSN_FILE=" + dsnPath,
 		"MATRIX_DEVOPS_SOURCE_FETCHER_FETCH_ROOT=" + fetchRoot,
 		"MATRIX_DEVOPS_SOURCE_FETCHER_ARCHIVE_ROOT=" + archiveRoot,
+		"MATRIX_DEVOPS_SOURCE_FETCHER_TRUST_ROOT=" + trustRoot,
 		"MATRIX_DEVOPS_SOURCE_FETCHER_WORKER_ID=" + workerID,
 		"MATRIX_DEVOPS_SOURCE_FETCHER_LISTEN_ADDRESS=" + listenAddress,
-		"SSL_CERT_FILE=" + caPath,
 	}
 }
 

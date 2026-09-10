@@ -26,7 +26,7 @@ const maximumDigestRequestBytes = 1024 * 1024
 // The explicit inventory prevents generated or machine-local directories from
 // becoming release inputs through a wildcard.
 //
-//go:embed assets/index.html assets/app.25456f0c.css assets/app.ca6de690.js
+//go:embed assets/index.html assets/app.25456f0c.css assets/app.a17d5b08.js
 var content embed.FS
 
 type readiness struct {
@@ -52,8 +52,8 @@ func NewHandler() http.Handler {
 	mux.HandleFunc("GET /assets/app.25456f0c.css", serveAsset(
 		"assets/app.25456f0c.css", "text/css; charset=utf-8", "public, max-age=31536000, immutable",
 	))
-	mux.HandleFunc("GET /assets/app.ca6de690.js", serveAsset(
-		"assets/app.ca6de690.js", "text/javascript; charset=utf-8", "public, max-age=31536000, immutable",
+	mux.HandleFunc("GET /assets/app.a17d5b08.js", serveAsset(
+		"assets/app.a17d5b08.js", "text/javascript; charset=utf-8", "public, max-age=31536000, immutable",
 	))
 	mux.HandleFunc("GET /ready", serveReadiness)
 	mux.HandleFunc("POST /ui/v1/configuration-digest", serveConfigurationDigest)

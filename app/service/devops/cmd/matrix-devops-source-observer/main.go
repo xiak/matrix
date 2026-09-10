@@ -15,6 +15,7 @@ import (
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/gitea"
 	devopspostgres "github.com/xiak/matrix/app/service/devops/internal/delivery/data/postgres"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcecredentialfile"
+	"github.com/xiak/matrix/app/service/devops/internal/delivery/data/sourcetrustfile"
 	"github.com/xiak/matrix/app/service/devops/internal/delivery/usecase/sourceobservation"
 	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
@@ -26,6 +27,7 @@ const (
 	webhookRootEnvironment     = "MATRIX_DEVOPS_SOURCE_OBSERVER_WEBHOOK_ROOT"
 	fetchRootEnvironment       = "MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT"
 	reportRootEnvironment      = "MATRIX_DEVOPS_SOURCE_OBSERVER_REPORT_ROOT"
+	trustRootEnvironment       = "MATRIX_DEVOPS_SOURCE_OBSERVER_TRUST_ROOT"
 	workerIDEnvironment        = "MATRIX_DEVOPS_SOURCE_OBSERVER_WORKER_ID"
 	listenAddressEnvironment   = "MATRIX_DEVOPS_SOURCE_OBSERVER_LISTEN_ADDRESS"
 	pollInterval               = 250 * time.Millisecond
@@ -36,6 +38,7 @@ type configuration struct {
 	webhookRoot     string
 	fetchRoot       string
 	reportRoot      string
+	trustRoot       string
 	workerID        string
 	listenAddress   string
 }
@@ -90,7 +93,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	provider, err := gitea.NewObserver(webhook, fetch, report)
+	trust, err := sourcetrustfile.NewResolver(config.trustRoot)
+	if err != nil {
+		return err
+	}
+	provider, err := gitea.NewObserver(webhook, fetch, report, trust)
 	if err != nil {
 		return err
 	}
@@ -200,11 +207,12 @@ func loadConfiguration() (configuration, error) {
 		webhookRoot:     os.Getenv(webhookRootEnvironment),
 		fetchRoot:       os.Getenv(fetchRootEnvironment),
 		reportRoot:      os.Getenv(reportRootEnvironment),
+		trustRoot:       os.Getenv(trustRootEnvironment),
 		workerID:        os.Getenv(workerIDEnvironment),
 		listenAddress:   os.Getenv(listenAddressEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.webhookRoot == "" ||
-		config.fetchRoot == "" || config.reportRoot == "" ||
+		config.fetchRoot == "" || config.reportRoot == "" || config.trustRoot == "" ||
 		config.workerID == "" || config.listenAddress == "" {
 		return configuration{}, errors.New("DevOps source observer configuration is incomplete")
 	}

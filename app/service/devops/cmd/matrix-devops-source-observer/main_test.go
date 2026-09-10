@@ -15,6 +15,7 @@ func TestLoadConfigurationRequiresClosedEnvironment(t *testing.T) {
 		webhookRootEnvironment,
 		fetchRootEnvironment,
 		reportRootEnvironment,
+		trustRootEnvironment,
 		workerIDEnvironment,
 		listenAddressEnvironment,
 	} {
@@ -28,6 +29,7 @@ func TestLoadConfigurationRequiresClosedEnvironment(t *testing.T) {
 	t.Setenv(webhookRootEnvironment, "/run/matrix/source-webhooks")
 	t.Setenv(fetchRootEnvironment, "/run/matrix/source-fetch")
 	t.Setenv(reportRootEnvironment, "/run/matrix/source-report")
+	t.Setenv(trustRootEnvironment, "/run/matrix/source-trust")
 	t.Setenv(workerIDEnvironment, "devops-source-observer-test")
 	t.Setenv(listenAddressEnvironment, "0.0.0.0:8080")
 	config, err := loadConfiguration()
@@ -35,7 +37,8 @@ func TestLoadConfigurationRequiresClosedEnvironment(t *testing.T) {
 		t.Fatalf("loadConfiguration() error = %v", err)
 	}
 	if config.workerID != "devops-source-observer-test" ||
-		config.fetchRoot != "/run/matrix/source-fetch" {
+		config.fetchRoot != "/run/matrix/source-fetch" ||
+		config.trustRoot != "/run/matrix/source-trust" {
 		t.Fatalf("loadConfiguration() = %#v", config)
 	}
 
