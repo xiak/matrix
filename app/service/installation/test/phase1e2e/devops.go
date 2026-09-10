@@ -1,14 +1,18 @@
 package phase1e2e
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 )
 
 const (
@@ -131,22 +135,270 @@ func (value *gate) exerciseDevOpsAccess(
 	ctx context.Context,
 	administrator, administratorPassword []byte,
 	installationID string,
-) error {
+) (sourceMaterials [][]byte, returnErr error) {
+	sourceMaterials = make([][]byte, 4)
+	defer func() {
+		if returnErr != nil {
+			clearDevOpsSourceMaterials(sourceMaterials)
+			sourceMaterials = nil
+		}
+	}()
+	for index := range sourceMaterials {
+		material, err := randomPassword(rand.Reader)
+		if err != nil {
+			returnErr = fail("devops-source-credential-entropy")
+			return
+		}
+		sourceMaterials[index] = material
+		for previous := 0; previous < index; previous++ {
+			if bytes.Equal(material, sourceMaterials[previous]) {
+				returnErr = fail("devops-source-credential-entropy")
+				return
+			}
+		}
+	}
+	value.edge.addForbidden(sourceMaterials...)
+	webhookInitial := sourceMaterials[0]
+	webhookRotated := sourceMaterials[1]
+	fetchCredential := sourceMaterials[2]
+	reportCredential := sourceMaterials[3]
+
+	for _, credential := range []struct {
+		purpose   sourcecredential.Purpose
+		reference devopsv1.ResourceID
+		material  []byte
+	}{
+		{
+			purpose: sourcecredential.PurposeWebhook, reference: devOpsWebhookSecretRef,
+			material: webhookInitial,
+		},
+		{
+			purpose: sourcecredential.PurposeFetch, reference: devOpsFetchCredentialRef,
+			material: fetchCredential,
+		},
+		{
+			purpose: sourcecredential.PurposeReport, reference: devOpsReportCredentialRef,
+			material: reportCredential,
+		},
+	} {
+		if err := value.applyDevOpsSourceCredential(
+			ctx, credential.purpose, credential.reference, credential.material,
+			"APPLIED", sourceMaterials,
+		); err != nil {
+			returnErr = fail("devops-source-credential-initial-apply")
+			return
+		}
+	}
 	if err := value.createDevOpsConfiguration(ctx, administrator); err != nil {
-		return fail("devops-admin-control-plane")
+		returnErr = fail("devops-admin-control-plane")
+		return
+	}
+	if _, err := value.waitDevOpsSourceUnavailable(ctx, administrator, 1); err != nil {
+		returnErr = fail("devops-source-credential-initial-observation")
+		return
+	}
+	if err := value.waitDevOpsBindingConnectionNotReady(ctx, administrator, 1); err != nil {
+		returnErr = fail("devops-source-binding-initial-observation")
+		return
+	}
+
+	if err := value.applyDevOpsSourceCredential(
+		ctx, sourcecredential.PurposeWebhook, devOpsWebhookSecretRef, webhookRotated,
+		"APPLIED", sourceMaterials,
+	); err != nil {
+		returnErr = fail("devops-source-credential-rotation")
+		return
+	}
+	if err := value.applyDevOpsSourceCredential(
+		ctx, sourcecredential.PurposeWebhook, devOpsWebhookSecretRef, webhookRotated,
+		"UNCHANGED", sourceMaterials,
+	); err != nil {
+		returnErr = fail("devops-source-credential-equal-replay")
+		return
+	}
+	for index := 0; index < 2; index++ {
+		if err := runMXSourceCredential(
+			ctx, value.releases.a, "retire-previous", value.config.root,
+			string(devOpsTenant), string(sourcecredential.PurposeWebhook),
+			string(devOpsWebhookSecretRef), "",
+			"PREVIOUS_RETIRED", value.forbidden(sourceMaterials...),
+		); err != nil {
+			returnErr = fail("devops-source-credential-retirement")
+			return
+		}
+	}
+	rechecked, err := scheduleDevOpsRecheck(
+		ctx, value.edge,
+		"/api/devops/v1/source-connections/"+string(devOpsSourceConnectionID),
+		"phase1-recheck-devops-source-after-credential-rotation", administrator,
+		devopsv1.ValidateSourceConnection,
+		func(resource devopsv1.SourceConnection) uint64 {
+			return resource.Metadata.ResourceVersion
+		},
+	)
+	if err != nil {
+		returnErr = fail("devops-source-credential-recheck")
+		return
+	}
+	if _, err := value.waitDevOpsSourceUnavailable(
+		ctx, administrator, rechecked.Metadata.ResourceVersion,
+	); err != nil {
+		returnErr = fail("devops-source-credential-rotated-observation")
+		return
 	}
 	if err := value.assertDevOpsConfiguration(ctx, administrator); err != nil {
-		return fail("devops-admin-readback")
+		returnErr = fail("devops-admin-readback")
+		return
 	}
 	if err := value.assertDevOpsViewerBoundary(ctx, administrator); err != nil {
-		return fail("devops-viewer-boundary")
+		returnErr = fail("devops-viewer-boundary")
+		return
 	}
 	if err := value.assertForeignTenantBoundary(
 		ctx, administratorPassword, installationID,
 	); err != nil {
-		return fail("devops-foreign-tenant-boundary")
+		returnErr = fail("devops-foreign-tenant-boundary")
+		return
+	}
+	return
+}
+
+func (value *gate) applyDevOpsSourceCredential(
+	ctx context.Context,
+	purpose sourcecredential.Purpose,
+	reference devopsv1.ResourceID,
+	material []byte,
+	wantState string,
+	allMaterials [][]byte,
+) (returnErr error) {
+	directory, err := os.MkdirTemp(
+		filepath.Dir(value.config.root), ".matrix-phase1-source-credential-",
+	)
+	if err != nil {
+		return errors.New("source credential input directory creation failed")
+	}
+	if chmodErr := os.Chmod(directory, 0o700); chmodErr != nil {
+		return errors.Join(
+			errors.New("source credential input directory protection failed"),
+			removeDevOpsSourceInput(directory),
+		)
+	}
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
+		return errors.Join(
+			errors.New("source credential input directory is not private"),
+			removeDevOpsSourceInput(directory),
+		)
+	}
+	defer func() {
+		if cleanupErr := removeDevOpsSourceInput(directory); cleanupErr != nil {
+			returnErr = errors.Join(returnErr, cleanupErr)
+		}
+	}()
+	input := filepath.Join(directory, "credential.input")
+	defer func() {
+		if cleanupErr := removeDevOpsSourceInput(input); cleanupErr != nil {
+			returnErr = errors.Join(returnErr, cleanupErr)
+		}
+	}()
+	if err := writeDevOpsSourceInput(input, material); err != nil {
+		return err
+	}
+	forbidden := value.forbidden(allMaterials...)
+	forbidden = append(forbidden, []byte(directory), []byte(input))
+	return runMXSourceCredential(
+		ctx, value.releases.a, "apply", value.config.root, string(devOpsTenant),
+		string(purpose), string(reference), input, wantState, forbidden,
+	)
+}
+
+func writeDevOpsSourceInput(path string, material []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return errors.New("source credential input creation failed")
+	}
+	written, writeErr := file.Write(material)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if writeErr != nil || written != len(material) || syncErr != nil || closeErr != nil ||
+		os.Chmod(path, 0o600) != nil {
+		return errors.New("source credential input write failed")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return errors.New("source credential input is not private")
 	}
 	return nil
+}
+
+func removeDevOpsSourceInput(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return errors.New("source credential input removal failed")
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("source credential input remains after removal")
+	}
+	return nil
+}
+
+func clearDevOpsSourceMaterials(materials [][]byte) {
+	for _, material := range materials {
+		clear(material)
+	}
+}
+
+func (value *gate) waitDevOpsSourceUnavailable(
+	ctx context.Context,
+	bearer []byte,
+	afterVersion uint64,
+) (devopsv1.SourceConnection, error) {
+	poll, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	for poll.Err() == nil {
+		var connection devopsv1.SourceConnection
+		_, err := value.edge.get(
+			poll,
+			"/api/devops/v1/source-connections/"+string(devOpsSourceConnectionID),
+			bearer, &connection,
+		)
+		if err == nil && devopsv1.ValidateSourceConnection(connection) == nil &&
+			connection.Metadata.ResourceVersion > afterVersion &&
+			connection.Status.Health == devopsv1.SourceConnectionUnavailable &&
+			connection.Status.Reason == devopsv1.SourceConnectionReasonProviderUnavailable {
+			return connection, nil
+		}
+		if !waitPoll(poll, 200*time.Millisecond) {
+			break
+		}
+	}
+	return devopsv1.SourceConnection{}, errors.New("DevOps source observation did not converge")
+}
+
+func (value *gate) waitDevOpsBindingConnectionNotReady(
+	ctx context.Context,
+	bearer []byte,
+	afterVersion uint64,
+) error {
+	poll, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	for poll.Err() == nil {
+		var binding devopsv1.RepositoryBinding
+		_, err := value.edge.get(
+			poll,
+			"/api/devops/v1/repository-bindings/"+string(devOpsRepositoryBindingID),
+			bearer, &binding,
+		)
+		if err == nil && devopsv1.ValidateRepositoryBinding(binding) == nil &&
+			binding.Metadata.ResourceVersion > afterVersion &&
+			binding.Status.Health == devopsv1.RepositoryBindingPending &&
+			binding.Status.Reason == devopsv1.RepositoryBindingReasonConnectionNotReady {
+			return nil
+		}
+		if !waitPoll(poll, 200*time.Millisecond) {
+			break
+		}
+	}
+	return errors.New("DevOps repository observation did not converge")
 }
 
 func (value *gate) assertDevOpsDatabaseState(

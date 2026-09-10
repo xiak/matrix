@@ -32,9 +32,10 @@
   IAM/Audit/source/executor/report journey and its fetch, gateway-submission,
   runsc-effect, provider-status, and Audit-acknowledgment restart cases complete;
   Gate B complete; Gate C's guarded source-recheck API/persistence, unified
-  DevOps browser-client baseline, and DevOps-selected offline-lifecycle
-  acceptance harness are complete, while its signed real-runtime execution and
-  the complete multi-role/state/accessibility UI matrix remain pending
+  DevOps browser-client baseline, and DevOps-selected offline-lifecycle access
+  and operator-credential harness are complete, while its signed real-runtime
+  execution, local-provider source-to-check journey, and the complete multi-
+  role/state/accessibility UI matrix remain pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -1830,9 +1831,23 @@ Current verification evidence:
   signed offline release remain Gate C work
 - the Gate C offline-lifecycle harness now rejects either release in its signed
   A/B pair unless DevOps is selected. After a fresh install, the administrator
-  uses public IAM and DevOps routes through APISIX to create the project,
-  exact-origin connection, repository binding, fixed-profile Pipeline, guarded
-  source and binding Rechecks, and immutable revision. A public-IAM-created
+  first uses the release-carried `mx devops source-credential` surface to apply
+  the purpose-separated webhook, fetch, and report credentials from private
+  regular input files. Every invocation creates its input in a fresh private
+  sibling directory, scans closed JSON output for all source values and private
+  paths, then removes the exact file and empty directory and proves both are
+  absent before continuing. The administrator uses public IAM and DevOps routes
+  through APISIX to create the project, exact-origin connection, repository
+  binding, fixed-profile Pipeline, guarded source and binding Rechecks, and
+  immutable revision. The physical observer must advance that connection to
+  `UNAVAILABLE / PROVIDER_UNAVAILABLE`, rather than `SECRET_UNAVAILABLE`, and
+  its binding to `PENDING / CONNECTION_NOT_READY`. The operator then atomically
+  rotates the referenced webhook value, proves equal apply and repeated previous
+  retirement are idempotent, schedules a distinct guarded Recheck, and observes
+  another later `PROVIDER_UNAVAILABLE` version through APISIX. This proves the
+  signed topology resolves all three installation-owned credential roots while
+  the deliberately unresolvable provider origin fails closed; it is not a
+  substitute for the pending trusted local-provider journey. A public-IAM-created
   `DEVOPS_VIEWER` reads that exact graph but receives closed `403` Problems for
   create and bodyless Recheck mutations. Because IAM deliberately has no
   tenant-creation API, the gate uses the already-owned PostgreSQL observation
@@ -1845,13 +1860,15 @@ Current verification evidence:
   after failed automatic upgrade rollback, successful B upgrade, explicit A
   rollback, and protected-backup recovery. The post-host-restart phase checks
   the persisted project/connection/binding/Pipeline/revision reference chain
-  directly without retaining a user password. DevOps mutation and IAM
-  authorization Audit facts join the existing protected backup baseline, while
-  the Application PaaS journey remains unchanged. Full Windows repository
-  tests and vet plus the affected race and twenty-run suites pass against the
-  harness. This is executable acceptance-gate implementation, not signed
-  offline runtime evidence; the gate still must run with exact signed DevOps
-  A/B bundles before these Gate C items are accepted
+  directly without retaining a user password. DevOps mutation, source-health
+  transition, and IAM authorization Audit facts join the existing protected
+  backup baseline. Source values remain only in bounded gate memory for command,
+  HTTP, and support-evidence leakage checks and are cleared when the pre-restart
+  phase returns; the Application PaaS journey remains unchanged. Full Windows
+  repository tests and vet plus the affected race and twenty-run suites pass
+  against the harness. This is executable acceptance-gate implementation, not
+  signed offline runtime evidence; the gate still must run with exact signed
+  DevOps A/B bundles before these Gate C items are accepted
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,

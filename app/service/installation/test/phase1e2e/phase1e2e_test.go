@@ -3,6 +3,7 @@ package phase1e2e
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -27,6 +28,64 @@ func TestEdgeClientOwnsAndClearsForbiddenMaterial(t *testing.T) {
 	client.close()
 	if client.forbidden != nil || !bytes.Equal(owned, make([]byte, len(owned))) {
 		t.Fatal("edge client did not clear forbidden material")
+	}
+}
+
+func TestMXSourceCredentialResultIsStrict(t *testing.T) {
+	exact := []byte(`{"apiVersion":"cli.matrix.xiak.com/v1","kind":"SourceCredentialCommandResult","action":"SOURCE_CREDENTIAL_APPLY","status":"SUCCEEDED","result":{"state":"APPLIED","purpose":"WEBHOOK","tenant":"organization-default","reference":"phase1-webhook"}}`)
+	if !validMXSourceCredentialResult(
+		exact, "SOURCE_CREDENTIAL_APPLY", "APPLIED", "WEBHOOK",
+		"organization-default", "phase1-webhook",
+	) {
+		t.Fatal("exact source credential result was rejected")
+	}
+	for name, content := range map[string][]byte{
+		"unknown field":  []byte(`{"apiVersion":"cli.matrix.xiak.com/v1","kind":"SourceCredentialCommandResult","action":"SOURCE_CREDENTIAL_APPLY","status":"SUCCEEDED","result":{"state":"APPLIED","purpose":"WEBHOOK","tenant":"organization-default","reference":"phase1-webhook","value":"forbidden"}}`),
+		"wrong state":    []byte(`{"apiVersion":"cli.matrix.xiak.com/v1","kind":"SourceCredentialCommandResult","action":"SOURCE_CREDENTIAL_APPLY","status":"SUCCEEDED","result":{"state":"UNCHANGED","purpose":"WEBHOOK","tenant":"organization-default","reference":"phase1-webhook"}}`),
+		"trailing value": append(append([]byte(nil), exact...), []byte("\n{}")...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if validMXSourceCredentialResult(
+				content, "SOURCE_CREDENTIAL_APPLY", "APPLIED", "WEBHOOK",
+				"organization-default", "phase1-webhook",
+			) {
+				t.Fatal("unsafe source credential result was accepted")
+			}
+		})
+	}
+}
+
+func TestDevOpsSourceInputCleanupTargetsOnlyExactEmptyPaths(t *testing.T) {
+	root := t.TempDir()
+	directory := filepath.Join(root, "credential-input")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(directory, "credential.input")
+	if err := os.WriteFile(input, []byte("temporary-source-material"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sibling := filepath.Join(root, "must-remain")
+	if err := os.WriteFile(sibling, []byte("owned-by-someone-else"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeDevOpsSourceInput(directory); err == nil {
+		t.Fatal("non-empty source input directory was recursively removed")
+	}
+	if _, err := os.Stat(input); err != nil {
+		t.Fatalf("failed directory removal changed its child: %v", err)
+	}
+	if err := removeDevOpsSourceInput(input); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeDevOpsSourceInput(directory); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("source input directory remains: %v", err)
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Fatalf("source input cleanup changed a sibling: %v", err)
 	}
 }
 

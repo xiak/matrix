@@ -121,11 +121,14 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("iam-user-authority-through-apisix")
-	if err := value.exerciseDevOpsAccess(
+	sourceMaterials, err := value.exerciseDevOpsAccess(
 		ctx, bearer, newPassword, state.InstallationID,
-	); err != nil {
+	)
+	if err != nil {
 		return err
 	}
+	defer clearDevOpsSourceMaterials(sourceMaterials)
+	value.sensitive = append(value.sensitive, sourceMaterials...)
 	emit("devops-multi-role-through-apisix")
 
 	secret, secretDigest, err := value.provisionSecret()
@@ -134,7 +137,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	defer clear(secret)
 	value.edge.addForbidden(secret)
-	value.sensitive = [][]byte{initialPassword, newPassword, firstSession, bearer, secret}
+	value.sensitive = append(
+		value.sensitive, initialPassword, newPassword, firstSession, bearer, secret,
+	)
 	application, err := value.createApplication(ctx, bearer)
 	if err != nil {
 		return err
@@ -157,25 +162,27 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	emit("application-generation-two")
 
 	wantInitialAudit := map[auditv1.Action]string{
-		auditv1.ActionIAMBootstrapApplied:                     "",
-		auditv1.ActionIAMSessionIssued:                        "",
-		auditv1.ActionIAMPasswordChanged:                      "principal-admin",
-		auditv1.ActionIAMPrincipalCreated:                     "",
-		auditv1.ActionIAMRoleBindingPut:                       "",
-		auditv1.ActionIAMAuthorizationDecided:                 "",
-		auditv1.ActionDevOpsProjectCreated:                    string(devOpsProjectID),
-		auditv1.ActionDevOpsSourceConnectionCreated:           string(devOpsSourceConnectionID),
-		auditv1.ActionDevOpsSourceConnectionRecheckScheduled:  string(devOpsSourceConnectionID),
-		auditv1.ActionDevOpsRepositoryBindingCreated:          string(devOpsRepositoryBindingID),
-		auditv1.ActionDevOpsRepositoryBindingRecheckScheduled: string(devOpsRepositoryBindingID),
-		auditv1.ActionDevOpsPipelineCreated:                   string(devOpsPipelineID),
-		auditv1.ActionDevOpsPipelineRevisionActivated:         "",
-		auditv1.ActionPaaSApplicationCreated:                  string(applicationID),
-		auditv1.ActionPaaSConfigurationCreated:                string(configurationID),
-		auditv1.ActionPaaSConfigurationRevisionCreated:        string(configurationRevisionTwo),
-		auditv1.ActionPaaSApplicationRevisionCreated:          string(applicationRevisionID),
-		auditv1.ActionPaaSDeploymentCreated:                   string(deploymentID),
-		auditv1.ActionPaaSDeploymentUpdated:                   string(deploymentID),
+		auditv1.ActionIAMBootstrapApplied:                       "",
+		auditv1.ActionIAMSessionIssued:                          "",
+		auditv1.ActionIAMPasswordChanged:                        "principal-admin",
+		auditv1.ActionIAMPrincipalCreated:                       "",
+		auditv1.ActionIAMRoleBindingPut:                         "",
+		auditv1.ActionIAMAuthorizationDecided:                   "",
+		auditv1.ActionDevOpsProjectCreated:                      string(devOpsProjectID),
+		auditv1.ActionDevOpsSourceConnectionCreated:             string(devOpsSourceConnectionID),
+		auditv1.ActionDevOpsSourceConnectionRecheckScheduled:    string(devOpsSourceConnectionID),
+		auditv1.ActionDevOpsSourceConnectionHealthTransitioned:  string(devOpsSourceConnectionID),
+		auditv1.ActionDevOpsRepositoryBindingCreated:            string(devOpsRepositoryBindingID),
+		auditv1.ActionDevOpsRepositoryBindingRecheckScheduled:   string(devOpsRepositoryBindingID),
+		auditv1.ActionDevOpsRepositoryBindingHealthTransitioned: string(devOpsRepositoryBindingID),
+		auditv1.ActionDevOpsPipelineCreated:                     string(devOpsPipelineID),
+		auditv1.ActionDevOpsPipelineRevisionActivated:           "",
+		auditv1.ActionPaaSApplicationCreated:                    string(applicationID),
+		auditv1.ActionPaaSConfigurationCreated:                  string(configurationID),
+		auditv1.ActionPaaSConfigurationRevisionCreated:          string(configurationRevisionTwo),
+		auditv1.ActionPaaSApplicationRevisionCreated:            string(applicationRevisionID),
+		auditv1.ActionPaaSDeploymentCreated:                     string(deploymentID),
+		auditv1.ActionPaaSDeploymentUpdated:                     string(deploymentID),
 	}
 	recordsBeforeBackup, err := value.edge.waitAuditActions(ctx, bearer, wantInitialAudit)
 	if err != nil || !scanAuditForConfigurationValues(recordsBeforeBackup, settingOne, settingTwo) {

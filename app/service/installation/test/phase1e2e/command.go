@@ -108,6 +108,21 @@ type mxFailure struct {
 	} `json:"error"`
 }
 
+type mxSourceCredentialEnvelope struct {
+	APIVersion string                   `json:"apiVersion"`
+	Kind       string                   `json:"kind"`
+	Action     string                   `json:"action"`
+	Status     string                   `json:"status"`
+	Result     mxSourceCredentialResult `json:"result"`
+}
+
+type mxSourceCredentialResult struct {
+	State     string `json:"state"`
+	Purpose   string `json:"purpose"`
+	Tenant    string `json:"tenant"`
+	Reference string `json:"reference"`
+}
+
 func mxPath(bundle release.VerifiedBundle) string {
 	return filepath.Join(bundle.Root, filepath.FromSlash("bin/mx"))
 }
@@ -134,6 +149,61 @@ func runMX(
 		return mxResult{}, fail("mx-" + action + "-result")
 	}
 	return envelope.Result, nil
+}
+
+func runMXSourceCredential(
+	ctx context.Context,
+	bundle release.VerifiedBundle,
+	operation, root, tenant, purpose, reference, fromFile, wantState string,
+	forbidden [][]byte,
+) error {
+	action := ""
+	switch operation {
+	case "apply":
+		action = "SOURCE_CREDENTIAL_APPLY"
+		if fromFile == "" {
+			return fail("mx-source-credential-command")
+		}
+	case "retire-previous":
+		action = "SOURCE_CREDENTIAL_RETIRE_PREVIOUS"
+		if fromFile != "" {
+			return fail("mx-source-credential-command")
+		}
+	default:
+		return fail("mx-source-credential-command")
+	}
+	args := []string{
+		"--format", "json", "devops", "source-credential", operation,
+		"--root", root, "--tenant", tenant, "--purpose", purpose,
+		"--reference", reference,
+	}
+	if fromFile != "" {
+		args = append(args, "--from-file", fromFile)
+	}
+	output, err := runProcess(ctx, mxPath(bundle), args...)
+	if err != nil || output.exit != 0 || containsAny(output.stdout, forbidden) ||
+		containsAny(output.stderr, forbidden) || len(output.stderr) != 0 {
+		return fail("mx-source-credential-" + operation)
+	}
+	if !validMXSourceCredentialResult(
+		output.stdout, action, wantState, purpose, tenant, reference,
+	) {
+		return fail("mx-source-credential-" + operation + "-result")
+	}
+	return nil
+}
+
+func validMXSourceCredentialResult(
+	content []byte,
+	action, state, purpose, tenant, reference string,
+) bool {
+	var envelope mxSourceCredentialEnvelope
+	return decodeOne(content, &envelope) == nil &&
+		envelope.APIVersion == "cli.matrix.xiak.com/v1" &&
+		envelope.Kind == "SourceCredentialCommandResult" &&
+		envelope.Action == action && envelope.Status == "SUCCEEDED" &&
+		envelope.Result.State == state && envelope.Result.Purpose == purpose &&
+		envelope.Result.Tenant == tenant && envelope.Result.Reference == reference
 }
 
 func startMX(
