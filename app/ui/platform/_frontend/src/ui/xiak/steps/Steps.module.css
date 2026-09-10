@@ -1,0 +1,27 @@
+@layer xiak {
+.steps { min-width: 0; container-type: inline-size; }
+.steps ol { display: flex; gap: var(--xiak-spacing-comfortable); margin: 0; padding: 0; list-style: none; }
+.steps li { display: flex; flex: 1; align-items: center; min-width: 0; gap: var(--xiak-spacing-comfortable); }
+.steps li:not(:last-child)::after { content: ""; flex: 1; min-width: 12px; height: var(--xiak-border-width); background: var(--xiak-color-border-subtle); }
+.steps li:last-child { flex: 0 1 auto; }
+.steps button { display: flex; align-items: center; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-tight) 0; border: 0; background: transparent; color: var(--xiak-color-text-muted); font: inherit; font-size: var(--xiak-font-size-body); text-align: start; cursor: pointer; border-radius: var(--xiak-radius-small); }
+.steps button:disabled { cursor: default; }
+.steps button:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 4px; }
+.marker { display: grid; place-items: center; flex: none; width: 30px; height: 30px; border: var(--xiak-border-control); border-radius: var(--xiak-radius-pill); font-family: var(--xiak-font-numeric); font-weight: var(--xiak-font-weight-medium); line-height: 1; }
+.marker svg { width: 16px; height: 16px; }
+.label { line-height: 1.5; }
+.compact { display: none; }
+.compactHeading { display: flex; justify-content: space-between; align-items: center; gap: var(--xiak-spacing-comfortable); font-size: var(--xiak-font-size-body); }
+.compactHeading strong { color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); }
+.compactHeading > span { flex: none; font-family: var(--xiak-font-numeric); color: var(--xiak-color-text-muted); font-variant-numeric: tabular-nums; }
+.progress { display: flex; gap: var(--xiak-spacing-narrow); margin-top: var(--xiak-spacing-default); }
+.progress > span { flex: 1; height: 3px; border-radius: var(--xiak-radius-pill); background: var(--xiak-color-border-subtle); }
+.progress > span[data-complete] { background: var(--xiak-color-accent-primary); }
+.steps li[aria-current="step"] button { color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); }
+.steps li[aria-current="step"] .marker { border-color: var(--xiak-color-accent-primary); background: var(--xiak-color-accent-primary); color: var(--xiak-color-text-on-accent); }
+.steps li[data-complete] .marker { border-color: var(--xiak-color-accent-primary); color: var(--xiak-color-accent-text); background: var(--xiak-color-accent-haze); }
+@container (max-width: 640px) {
+  .steps ol { display: none; }
+  .compact { display: block; }
+}
+}

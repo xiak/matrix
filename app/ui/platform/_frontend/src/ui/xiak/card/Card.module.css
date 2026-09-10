@@ -1,0 +1,39 @@
+@layer xiak {
+.card {
+  container: xiak-card / inline-size;
+  min-width: 0;
+  overflow: hidden;
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-panel);
+  background: var(--xiak-color-bg-panel);
+  box-shadow: var(--xiak-shadow-panel);
+}
+
+.header,
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--xiak-spacing-default);
+  padding: var(--xiak-spacing-comfortable) var(--xiak-panel-padding);
+}
+
+.header {
+  border-bottom: var(--xiak-border-subtle);
+}
+
+.footer {
+  border-top: var(--xiak-border-subtle);
+  flex-wrap: wrap;
+  background: var(--xiak-color-bg-panel-hover);
+}
+
+.body {
+  padding: var(--xiak-panel-padding);
+}
+.header > div { min-width: 0; }
+@container xiak-card (max-width: 480px) {
+  .header, .body, .footer { padding-inline: var(--xiak-spacing-comfortable); }
+}
+}

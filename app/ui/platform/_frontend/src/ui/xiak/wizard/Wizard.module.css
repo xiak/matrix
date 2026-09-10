@@ -1,0 +1,30 @@
+@layer xiak {
+.wizard { min-width: 0; container: xiak-wizard / inline-size; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
+.stepsBar { padding: var(--xiak-spacing-roomy) var(--xiak-spacing-generous); border-bottom: var(--xiak-border-subtle); }
+.body { min-width: 0; min-height: 460px; border: 0; margin: 0; padding: var(--xiak-spacing-generous); }
+.heading { display: flex; justify-content: space-between; gap: var(--xiak-spacing-comfortable); margin-bottom: var(--xiak-spacing-generous); }
+.heading h2 { margin: 0; font-size: var(--xiak-font-size-title); font-weight: var(--xiak-font-weight-semibold); color: var(--xiak-color-text-strong); }
+.heading h2:focus { outline: none; }
+.heading p { margin-top: var(--xiak-spacing-tight); color: var(--xiak-color-text-muted); line-height: 1.7; }
+.heading > span { white-space: nowrap; color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-small); padding-top: var(--xiak-spacing-tight); }
+.heading[data-completed] { justify-content: center; text-align: center; }
+/* Reach the scrollport edge, not its padded content edge. Otherwise fields
+   can reappear in the gutter below the opaque action bar while it is stuck. */
+.footer { position: sticky; bottom: calc(-1 * var(--xiak-scroll-inset, 0px)); z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-roomy); padding: var(--xiak-spacing-comfortable) var(--xiak-spacing-generous); background: var(--xiak-color-bg-panel); border-top: var(--xiak-border-subtle); border-radius: 0 0 var(--xiak-radius-panel) var(--xiak-radius-panel); }
+.hint { display: flex; align-items: center; gap: var(--xiak-spacing-tight); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.hint svg { flex: none; width: 16px; height: 16px; }
+.actions { display: flex; justify-content: flex-end; gap: var(--xiak-spacing-default); flex-wrap: wrap; margin-left: auto; }
+.actions > button:last-child { min-width: 128px; }
+@container xiak-wizard (max-width: 860px) {
+  .stepsBar, .body { padding: var(--xiak-spacing-roomy); }
+  .footer { padding: var(--xiak-spacing-comfortable) var(--xiak-spacing-roomy); }
+  .hint { display: none; }
+}
+@container xiak-wizard (max-width: 560px) {
+  .heading > span { display: none; }
+  .stepsBar, .body { padding: var(--xiak-spacing-comfortable); }
+  .footer { padding: var(--xiak-spacing-comfortable); }
+  .actions { gap: var(--xiak-spacing-tight); }
+  .actions > button:last-child { min-width: 96px; }
+}
+}

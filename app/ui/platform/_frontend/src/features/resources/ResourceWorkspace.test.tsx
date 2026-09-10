@@ -1,0 +1,30 @@
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { NextIntlClientProvider } from "next-intl";
+import { afterEach, expect, it, vi } from "vitest";
+import messages from "@/i18n/messages/en.json";
+import { InspectedResources } from "./InspectedResources";
+import { ResourceWorkspace } from "./ResourceWorkspace";
+import { UnsavedChangesProvider } from "@ui/xiak";
+
+afterEach(cleanup);
+it("uses one query and replaces old details immediately while reloading", async () => {
+  const user = userEvent.setup();
+  let complete!: (value: { id: string; name: string }) => void;
+  const read = vi.fn(() => new Promise<{ id: string; name: string }>(resolve => { complete = resolve; }));
+  render(<NextIntlClientProvider locale="en" messages={messages}><UnsavedChangesProvider><InspectedResources><ResourceWorkspace resource={{ key: "projects", label: "Projects", id: item => item.id, name: item => item.name, read }} writable>{value => <p>Details: {value.name}</p>}</ResourceWorkspace></InspectedResources></UnsavedChangesProvider></NextIntlClientProvider>);
+  expect(screen.getAllByRole("searchbox")).toHaveLength(1);
+  await user.type(screen.getByRole("searchbox"), "project-a");
+  await user.click(screen.getByRole("button", { name: messages.Collection.lookup }));
+  expect(screen.getByRole("status").textContent).toContain(messages.Platform.loading);
+  complete({ id: "project-a", name: "First" });
+  await screen.findByText("Details: First");
+  await user.click(screen.getByRole("button", { name: messages.Platform.refresh }));
+  expect(screen.queryByText("Details: First")).toBeNull();
+  expect(screen.getByRole("status").textContent).toContain(messages.Platform.loading);
+  complete({ id: "project-a", name: "Updated" });
+  await screen.findByText("Details: Updated");
+  await user.click(screen.getByRole("button", { name: messages.Collection.back }));
+  await waitFor(() => expect(screen.getAllByRole("searchbox")).toHaveLength(1));
+  expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("project-a");
+});

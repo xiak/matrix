@@ -2,194 +2,147 @@ package web
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
-	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path"
+	"regexp"
 	"strings"
 	"testing"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
-func TestHandlerServesUnifiedShellAndProductDeepLinks(t *testing.T) {
-	for _, route := range []string{
-		"/", "/paas/configuration", "/devops/code", "/devops/pipelines", "/devops/runs", "/unknown",
-	} {
-		request := httptest.NewRequest(http.MethodGet, route, nil)
+func TestStaticPagesAndRouterSegments(t *testing.T) {
+	handler := NewHandler()
+	for _, route := range []string{"/", "/account", "/paas/applications/", "/paas/configuration", "/paas/deployments", "/paas/operations", "/devops/code", "/devops/pipelines", "/devops/runs/"} {
 		response := httptest.NewRecorder()
-		NewHandler().ServeHTTP(response, request)
-		if response.Code != http.StatusOK ||
-			!strings.HasPrefix(response.Header().Get("Content-Type"), "text/html") ||
-			response.Header().Get("Content-Security-Policy") == "" ||
-			response.Header().Get("Cache-Control") != "no-store" {
-			t.Fatalf("shell route %q response is incomplete: status=%d headers=%v", route, response.Code, response.Header())
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, route, nil))
+		if response.Code != 200 || !strings.HasPrefix(response.Header().Get("Content-Type"), "text/html") || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("page %s status=%d headers=%v", route, response.Code, response.Header())
 		}
-		body := response.Body.String()
-		for _, required := range []string{
-			"product-navigation", "login-form", "configuration-form", "devops-view",
-			"source-connection-form", "pipeline-form", "run-lookup-form", "/assets/app.a17d5b08.js",
-		} {
-			if !strings.Contains(body, required) {
-				t.Fatalf("unified shell is missing %q", required)
+		if !strings.Contains(response.Body.String(), "Matrix Cloud") {
+			t.Fatal("page has no accessible product identity")
+		}
+	}
+	assets, _ := fs.Sub(content, "assets")
+	count := 0
+	err := fs.WalkDir(assets, ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		extension := path.Ext(name)
+		if extension != ".js" && extension != ".css" && extension != ".txt" && extension != ".svg" {
+			return nil
+		}
+		target := "/" + name
+		if extension == ".txt" {
+			target += "?_rsc=router-test"
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+		if response.Code != 200 || response.Body.Len() == 0 {
+			t.Fatalf("asset %s status=%d", name, response.Code)
+		}
+		if extension == ".css" && !strings.HasPrefix(response.Header().Get("Content-Type"), "text/css") {
+			t.Fatalf("CSS MIME for %s", name)
+		}
+		if strings.HasPrefix(name, "_next/static/") && !strings.Contains(response.Header().Get("Cache-Control"), "immutable") {
+			t.Fatalf("static asset %s not cached", name)
+		}
+		count++
+		return nil
+	})
+	if err != nil || count < 1 {
+		t.Fatalf("export inventory: %v, assets=%d", err, count)
+	}
+}
+
+func TestStaticCSPAllowsOnlyExactBundledScripts(t *testing.T) {
+	handler := NewHandler()
+	assets, _ := fs.Sub(content, "assets")
+	ref := regexp.MustCompile(`(?:src|href)="(/[^"]+)"`)
+	err := fs.WalkDir(assets, ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || path.Ext(name) != ".html" {
+			return nil
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/"+name, nil))
+		policy := response.Header().Get("Content-Security-Policy")
+		for _, forbidden := range []string{"unsafe-inline", "unsafe-eval", "https:", "http:"} {
+			if strings.Contains(policy, forbidden) {
+				t.Fatalf("unsafe CSP: %s", forbidden)
 			}
 		}
-		if strings.Contains(body, "https://") || strings.Contains(body, "http://") {
-			t.Fatal("offline shell references an external asset")
+		if !strings.Contains(policy, "style-src 'self'") || !strings.Contains(policy, "frame-ancestors 'none'") || !strings.Contains(policy, "connect-src 'self'") {
+			t.Fatal("CSP lost its boundary")
 		}
+		page := response.Body.Bytes()
+		for _, match := range inlineScript.FindAllSubmatch(page, -1) {
+			if len(match[1]) == 0 {
+				continue
+			}
+			hash := sha256.Sum256(match[1])
+			if !strings.Contains(policy, "'sha256-"+base64.StdEncoding.EncodeToString(hash[:])+"'") {
+				t.Fatalf("page %s has blocked hydration", name)
+			}
+		}
+		for _, match := range ref.FindAllSubmatch(page, -1) {
+			target := string(match[1])
+			if strings.HasPrefix(target, "/_next/") || strings.HasPrefix(target, "/brand/") || strings.HasSuffix(target, ".svg") {
+				target = strings.Split(target, "?")[0]
+				if _, err := fs.ReadFile(assets, strings.TrimPrefix(target, "/")); err != nil {
+					t.Fatalf("page %s has missing asset %s", name, target)
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestBrowserClientUsesOnlyPublicMatrixRoutes(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/assets/app.a17d5b08.js", nil)
+func TestUIRequestAndUnknownRouteBoundaries(t *testing.T) {
+	handler := NewHandler()
+	for _, route := range []string{"/unknown", "/console/access", "/api/iam/v1/auth/login", "/_next/static/missing.js"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, route, nil))
+		if response.Code != 404 {
+			t.Fatalf("unknown route %s status=%d", route, response.Code)
+		}
+	}
+	for _, route := range []string{"/?tenant=other", "/ready?extra=1", "/index.txt?_rsc=a&_rsc=b", "/index.txt?_rsc=", "/index.txt?_rsc=%zz"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, route, nil))
+		if response.Code != 400 {
+			t.Fatalf("invalid query %s status=%d", route, response.Code)
+		}
+	}
 	response := httptest.NewRecorder()
-	NewHandler().ServeHTTP(response, request)
-	if response.Code != http.StatusOK ||
-		!strings.Contains(response.Header().Get("Cache-Control"), "max-age=") {
-		t.Fatalf("browser client response=%d headers=%v", response.Code, response.Header())
+	request := httptest.NewRequest(http.MethodGet, "/", strings.NewReader("input"))
+	handler.ServeHTTP(response, request)
+	if response.Code != 400 {
+		t.Fatal("GET body accepted")
 	}
-	body := response.Body.String()
-	for _, required := range []string{
-		"/api/iam/v1/auth/login", "/api/platform/v1/installed-products", "/api/paas/v1/applications",
-		"/api/devops/v1/projects", "/api/devops/v1/source-connections",
-		"/api/devops/v1/repository-bindings", "/api/devops/v1/pipelines/",
-		"/api/devops/v1/runs/",
-	} {
-		if !strings.Contains(body, required) {
-			t.Fatalf("browser client lacks public route %q", required)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/ready", nil))
+	var ready readiness
+	if json.Unmarshal(response.Body.Bytes(), &ready) != nil || ready.Kind != "MatrixUIReadiness" || ready.APIVersion != APIVersion || ready.State != "READY" {
+		t.Fatal("release readiness contract changed")
+	}
+	for name, value := range map[string]string{"X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Cross-Origin-Resource-Policy": "same-origin", "Permissions-Policy": "camera=(), microphone=(), geolocation=()"} {
+		if response.Header().Get(name) != value {
+			t.Fatalf("security header %s changed", name)
 		}
-	}
-	for _, forbidden := range []string{
-		"http://iam", "http://paas-api", "http://devops", "Matrix-Subject-Credential",
-		"localStorage", "sessionStorage", "indexedDB", "document.cookie", "innerHTML",
-		"body.detail", "body.title",
-	} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("browser client contains forbidden internal or persistent authority surface %q", forbidden)
-		}
-	}
-}
-
-func TestDevOpsShellOwnsExactPhaseOneInformationArchitecture(t *testing.T) {
-	body, err := content.ReadFile("assets/index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	shell := string(body)
-	for _, required := range []string{
-		`data-devops-route="code"`,
-		`data-devops-route="pipelines"`,
-		`data-devops-route="runs"`,
-		`aria-label="DevOps 功能"`,
-		`id="source-credential-commands"`,
-		`id="run-stage-rail"`,
-		`data-stage="RECEIVE"`,
-		`data-stage="FETCH"`,
-		`data-stage="VERIFY"`,
-		`data-stage="REPORT"`,
-	} {
-		if !strings.Contains(shell, required) {
-			t.Fatalf("DevOps shell is missing %q", required)
-		}
-	}
-	if count := strings.Count(shell, "data-devops-route="); count != 3 {
-		t.Fatalf("DevOps local navigation has %d entries, want exactly Code/Pipelines/Runs", count)
-	}
-	for _, forbidden := range []string{
-		`data-devops-route="artifacts"`,
-		`data-devops-route="delivery"`,
-		`type="file"`,
-		`id="webhook-secret-value"`,
-		`id="fetch-credential-value"`,
-		`id="report-credential-value"`,
-	} {
-		if strings.Contains(shell, forbidden) {
-			t.Fatalf("DevOps shell exposes deferred or secret-bearing surface %q", forbidden)
-		}
-	}
-	if count := strings.Count(shell, `type="password"`); count != 1 {
-		t.Fatalf("shell has %d password inputs, want only the IAM login input", count)
-	}
-}
-
-func TestDevOpsBrowserCommandsAreGuardedMemoryOnlyAndProviderNeutral(t *testing.T) {
-	body, err := content.ReadFile("assets/app.a17d5b08.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	client := string(body)
-	for _, required := range []string{
-		"'If-Match'",
-		"'Idempotency-Key'",
-		"/recheck",
-		"/activate",
-		"/cancel",
-		"/replay",
-		"/logs?afterSequence=",
-		"GO_1_26_OFFLINE_V1",
-		"MATRIX_NATIVE_ISOLATED_V1",
-		"sourceFreshnessMilliseconds",
-		"performance.now()",
-		"mx devops source-credential apply --root <installation>",
-		"mx devops source-trust apply --root <installation>",
-		"['WEBHOOK'",
-		"['FETCH'",
-		"['REPORT'",
-		"--purpose ' + command[0]",
-		"--from-file <private-file>",
-		"--endpoint-origin ' + safeCLIOrigin(spec.endpointOrigin)",
-		"--from-file <private-ca-file>",
-	} {
-		if !strings.Contains(client, required) {
-			t.Fatalf("DevOps browser client is missing %q", required)
-		}
-	}
-	start := strings.Index(client, "async function guardedCommand")
-	end := strings.Index(client, "function requireDevOpsKind")
-	if start < 0 || end <= start {
-		t.Fatal("guarded command boundary is missing")
-	}
-	if strings.Contains(client[start:end], "body:") ||
-		strings.Contains(client, "status.health =") ||
-		strings.Contains(client, "status.reason =") {
-		t.Fatal("browser can send a guarded command body or forge observed source health")
-	}
-}
-
-func TestEmbeddedAssetNamesMatchContentDigests(t *testing.T) {
-	index, err := content.ReadFile("assets/index.html")
-	if err != nil {
-		t.Fatal(err)
-	}
-	entries, err := content.ReadDir("assets")
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := 0
-	for _, entry := range entries {
-		name := entry.Name()
-		if !strings.HasPrefix(name, "app.") || (!strings.HasSuffix(name, ".js") && !strings.HasSuffix(name, ".css")) {
-			continue
-		}
-		parts := strings.Split(name, ".")
-		if len(parts) != 3 || len(parts[1]) != 8 {
-			t.Fatalf("asset name is not content-addressed: %s", name)
-		}
-		body, readErr := content.ReadFile("assets/" + name)
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		digest := fmt.Sprintf("%x", sha256.Sum256(body))
-		if parts[1] != digest[:8] {
-			t.Fatalf("asset %s digest prefix=%s", name, digest[:8])
-		}
-		if !strings.Contains(string(index), "/assets/"+name) {
-			t.Fatalf("index does not reference embedded asset %s", name)
-		}
-		found++
-	}
-	if found != 2 {
-		t.Fatalf("embedded content-addressed assets=%d, want JavaScript and CSS", found)
 	}
 }
 

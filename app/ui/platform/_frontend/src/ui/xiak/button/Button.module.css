@@ -1,0 +1,109 @@
+@layer xiak {
+.button {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: var(--xiak-spacing-tight);
+  border: var(--xiak-border-transparent);
+  border-radius: var(--xiak-radius-control);
+  font: inherit;
+  font-weight: var(--xiak-font-weight-semibold);
+  line-height: 1.4;
+  text-align: center;
+  cursor: pointer;
+  outline: none;
+  transition:
+    background var(--xiak-motion-fast) var(--xiak-ease-standard),
+    border-color var(--xiak-motion-fast) var(--xiak-ease-standard),
+    color var(--xiak-motion-fast) var(--xiak-ease-standard),
+    transform var(--xiak-motion-fast) var(--xiak-ease-standard);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--xiak-color-border-focus);
+  outline-offset: 2px;
+}
+
+.button:active:not(:disabled) {
+  transform: translateY(var(--xiak-press-offset));
+}
+
+.button:disabled {
+  border-color: var(--xiak-color-border-subtle);
+  background: var(--xiak-color-bg-control-hover);
+  color: var(--xiak-color-text-disabled);
+  cursor: not-allowed;
+}
+
+.button > svg {
+  width: var(--xiak-icon-size);
+  height: var(--xiak-icon-size);
+  flex: none;
+  stroke-width: 1.75;
+}
+
+.small {
+  min-height: var(--xiak-control-height-small);
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-default);
+  font-size: var(--xiak-font-size-small);
+}
+
+.default {
+  min-height: var(--xiak-control-height);
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-comfortable);
+  font-size: var(--xiak-font-size-body);
+}
+
+.large {
+  min-height: var(--xiak-control-height-large);
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-roomy);
+  font-size: var(--xiak-font-size-body);
+}
+
+.primary {
+  border-color: var(--xiak-color-accent-primary);
+  background: var(--xiak-color-accent-primary);
+  color: var(--xiak-color-text-on-accent);
+}
+
+.primary:hover:not(:disabled) {
+  border-color: var(--xiak-color-accent-hover);
+  background: var(--xiak-color-accent-hover);
+}
+
+.secondary {
+  border-color: var(--xiak-color-border-control);
+  background: var(--xiak-color-bg-control);
+  color: var(--xiak-color-text-base);
+}
+
+.secondary:hover:not(:disabled),
+.ghost:hover:not(:disabled) {
+  background: var(--xiak-color-bg-control-hover);
+  color: var(--xiak-color-text-strong);
+}
+
+.ghost {
+  background: transparent;
+  color: var(--xiak-color-text-muted);
+}
+
+.danger {
+  border-color: var(--xiak-color-danger);
+  background: var(--xiak-color-danger);
+  color: var(--xiak-color-text-on-danger);
+}
+
+.danger:hover:not(:disabled) {
+  border-color: var(--xiak-color-danger-hover);
+  background: var(--xiak-color-danger-hover);
+}
+
+.block {
+  width: 100%;
+}
+.iconOnly { flex: none; padding: 0; width: var(--xiak-control-height); }
+.iconOnly.small { width: var(--xiak-control-height-small); }
+.iconOnly.large { width: var(--xiak-control-height-large); }
+}

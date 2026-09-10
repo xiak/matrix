@@ -1,0 +1,9 @@
+@layer xiak {
+.brand { display: block; flex: none; background: currentColor; }
+.lockup { width: 168px; aspect-ratio: 6; mask: url("/brand/matrix-header-cyan.svg") center / contain no-repeat; }
+.signature { width: 480px; max-width: 100%; aspect-ratio: 1020 / 172; mask: url("/brand/matrix-horizontal-cyan.svg") center / contain no-repeat; }
+.symbol { width: 36px; aspect-ratio: 252 / 172; mask: url("/brand/matrix-symbol-cyan.svg") center / contain no-repeat; }
+@container matrix-control-shell (max-width: 840px) {
+  .responsive { width: 36px; aspect-ratio: 252 / 172; mask-image: url("/brand/matrix-symbol-cyan.svg"); }
+}
+}

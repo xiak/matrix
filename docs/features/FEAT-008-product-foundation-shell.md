@@ -97,6 +97,44 @@ route not found, and stale observation. Desktop and 360-pixel layouts, keyboard
 navigation, visible focus, WCAG AA contrast, reduced motion, and Chinese/English
 text expansion are part of acceptance.
 
+### Component migration target
+
+The current platform owner adopts the accepted Matrix brand and compact UX
+through one React/Next static frontend under `app/ui/platform/_frontend`.
+`matrix-ui` remains the existing Go delivery entry point, with the existing
+readiness and configuration-digest contracts. Product routes remain `/paas/*`
+and `/devops/{code,pipelines,runs}`; no second shell or legacy component alias
+is introduced. The fixed source and per-slice decisions belong to the
+[frontend adoption record](../adoption/FEAT-008-platform-ui.md).
+
+The shared component owner supplies semantic light/mixed/dark tokens, the
+responsive brand/header, local product navigation, a compact page context
+bar, accessible dialogs, and a single keyword/ID query with optional disclosed
+conditions. Product components own forms, resource details and their local
+loading/error states. Opening a surface gives immediate feedback; session or
+organization changes cancel requests and discard product state before any new
+identity is used. Navigation preserves safe query context, not authority or
+credentials. Chinese and English messages are keyed, not embedded in domain
+rules.
+
+The production entry point uses only current public IAM, installation, PaaS
+and DevOps APIs. Signed discovery is the exclusive product inventory; closed
+compiled metadata supplies reviewed labels, icons and routes only. Failed,
+malformed or stale discovery cannot reuse a previously healthy mutation
+decision. Missing products cannot be exposed by a deep link, browser storage,
+query parameter or a fixed preview catalogue. Unavailable/degraded products
+remain read-only diagnostic workspaces. The API remains authorization truth.
+
+Current resource APIs are ID-driven, not collection-list APIs. The UI labels
+ID lookups and session-local inspected resources honestly; it does not invent
+global totals or send unsupported list requests. The IAM surface presents the
+authenticated account/session and public password flow; unsupported CAM
+policy/group/SSO simulation is not installed as production IAM. The existing
+PaaS configuration and DevOps source/pipeline/run journeys must retain request
+guards, bounded safe responses, and credential-reference-only source inputs.
+An optional preview adapter must be explicitly isolated from this production
+composition and cannot close an API or browser acceptance gate.
+
 ## Transactions and failure behavior
 
 Product inventory changes only when installation atomically commits a verified
@@ -160,6 +198,21 @@ tenant-authority, offline, upgrade/rollback/recovery, and
 
 ## Current implementation evidence
 
+- The current platform frontend replaces the vanilla shell with the fixed-source
+  React/Next component adoption described above. Static export and Go embedding
+  preserve the published UI readiness and configuration-digest endpoints and
+  strict CSP, request-body, path, query and cache behavior. Public OpenAPI
+  validators are compiled at build time rather than dynamically evaluating
+  schemas in the browser.
+- The component migration passes Node 24.19.0/npm 11.6.4 `npm run check`:
+  contract generation drift, TypeScript, ESLint, product/public-UI architecture,
+  228 theme contrast pairs, 59 component/API tests, three static-path behavioral
+  tests, and production-export/embedded-asset equality. Tests cover immediate
+  feedback, single-query tables, session cancellation and cross-scope responses,
+  uninstalled/read-only products, dependency evidence expiration, and guarded
+  command submission. `go generate ./...`, `go test ./...`, `go vet ./...`, and
+  the current UI host tests pass. These are code gates only; the new component
+  slice's signed installed-runtime and browser gates remain pending.
 - Fresh bootstrap remains a strict five-service contract. The only retained
   pre-product compatibility is the exact four-service bootstrap inventory,
   accepted solely as an equal replay of an existing `READY` receipt with the

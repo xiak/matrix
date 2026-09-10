@@ -1,0 +1,65 @@
+@layer xiak {
+.page {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.header {
+  position: relative;
+  display: flex;
+  min-height: var(--xiak-content-header-height);
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--xiak-spacing-default);
+  border-bottom: var(--xiak-border-subtle);
+  padding: 0 var(--xiak-spacing-roomy);
+  background: var(--xiak-color-bg-header);
+}
+
+.headerContent { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.headerContent[hidden] { display: none; }
+.headerActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; max-width: 100%; flex: none; }
+.identity { display: flex; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; }
+.parentLink { flex: none; }
+.separator { flex: none; width: var(--xiak-font-size-small); height: var(--xiak-font-size-small); color: var(--xiak-color-text-subtle); }
+.title { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-page-context); font-weight: var(--xiak-font-weight-semibold); outline: none; }
+.standaloneHeading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--xiak-spacing-default); }
+
+.body {
+  --xiak-scroll-inset: var(--xiak-spacing-roomy);
+  container-name: matrix-page-content;
+  container-type: inline-size;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow: auto;
+  padding: var(--xiak-scroll-inset);
+}
+
+.stage { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
+.enter { animation: pageEnter var(--xiak-motion-page) var(--xiak-ease-standard); }
+.pending { position: absolute; inset: 0; background: var(--xiak-color-bg-canvas); }
+@keyframes pageEnter { from { opacity: 0.45; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .enter { animation: none; } }
+
+@media (max-width: 760px) {
+  .header {
+    min-height: var(--xiak-content-header-height-compact);
+    padding-inline: var(--xiak-spacing-default);
+  }
+
+  .headerContent { flex-wrap: wrap; padding-block: var(--xiak-spacing-tight); gap: var(--xiak-spacing-tight); }
+  .headerActions { flex-wrap: wrap; }
+  .identity { flex: 1 1 auto; }
+
+  .body {
+    --xiak-scroll-inset: var(--xiak-spacing-default);
+  }
+}
+}

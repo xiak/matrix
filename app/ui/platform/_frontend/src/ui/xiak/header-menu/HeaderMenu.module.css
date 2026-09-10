@@ -1,0 +1,13 @@
+@layer xiak {
+.trigger { height: 40px; min-height: 40px; align-items: center; gap: 8px; color: var(--xiak-color-header-text); font-size: var(--xiak-font-size-body); font-weight: var(--xiak-font-weight-medium); }
+.trigger svg { width: 16px; height: 16px; flex: 0 0 16px; }
+.trigger .chevron { width: 12px; height: 12px; flex-basis: 12px; }
+.trigger[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.backdrop { position: fixed; inset: 64px 0 0; background: var(--xiak-color-bg-overlay); z-index: 50; }
+.panel { position: fixed; z-index: 51; inset: 64px 16px auto auto; width: 340px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 80px); display: flex; flex-direction: column; background: var(--xiak-color-header-panel); color: var(--xiak-color-header-text); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); box-shadow: var(--xiak-shadow-panel); }
+.panel[data-wide="true"] { inset: 64px 0 0; width: 100%; max-width: none; max-height: none; border-radius: 0; }
+.heading { display: flex; justify-content: space-between; align-items: center; padding: var(--xiak-spacing-default) var(--xiak-spacing-roomy); border-bottom: var(--xiak-border-subtle); flex-shrink: 0; }
+.body { min-height: 0; overflow: auto; padding: var(--xiak-spacing-roomy); }
+.panel[data-wide="true"] .body { padding: clamp(20px, 4vw, 56px); }
+@media (max-width: 680px) { .trigger > span, .trigger .chevron { display: none; } .trigger { width: 40px; padding-inline: 0; } .heading, .body { padding-inline: 16px; } }
+}

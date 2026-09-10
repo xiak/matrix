@@ -1,0 +1,9 @@
+@layer xiak {
+.root { position: relative; min-width: 0; width: 100%; }
+.root > svg { position: absolute; inset-inline-start: var(--xiak-spacing-default); top: 50%; width: var(--xiak-icon-size); height: var(--xiak-icon-size); transform: translateY(-50%); color: var(--xiak-color-text-muted); pointer-events: none; }
+.input { padding-inline-start: calc(var(--xiak-spacing-default) * 2 + var(--xiak-icon-size)); }
+.root[data-clearable] .input { padding-inline-end: calc(var(--xiak-control-height-small) + var(--xiak-spacing-tight)); }
+.root[data-clearable] .input::-webkit-search-cancel-button { display: none; }
+.clear { position: absolute; inset-inline-end: var(--xiak-spacing-narrow); top: 50%; transform: translateY(-50%); }
+.clear:active:not(:disabled) { transform: translateY(-50%); }
+}

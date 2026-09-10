@@ -1,0 +1,20 @@
+.stack { display: grid; gap: var(--xiak-spacing-roomy); min-width: 0; }
+.form { display: grid; gap: var(--xiak-spacing-roomy); min-width: 0; }
+.fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-roomy); min-width: 0; border: 0; padding: 0; margin: 0; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-default); }
+.facts { margin: 0; display: grid; gap: var(--xiak-spacing-roomy); grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); }
+.facts > div { min-width: 0; }
+.facts dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); margin-bottom: var(--xiak-spacing-tight); }
+.facts dd { margin: 0; overflow-wrap: anywhere; color: var(--xiak-color-text-strong); }
+.muted { font-size: var(--xiak-font-size-small); color: var(--xiak-color-text-muted); overflow-wrap: anywhere; }
+.feedback { display: flex; align-items: flex-start; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default) var(--xiak-spacing-roomy); background: var(--xiak-color-status-info-bg); color: var(--xiak-color-status-info); border-inline-start: 2px solid currentColor; min-width: 0; overflow-wrap: anywhere; }
+.feedback svg { width: 18px; height: 18px; flex-shrink: 0; margin-top: 2px; }
+.feedback[data-tone="danger"] { background: var(--xiak-color-status-danger-bg); color: var(--xiak-color-status-danger); }
+.feedback[data-tone="success"] { background: var(--xiak-color-status-success-bg); color: var(--xiak-color-status-success); }
+.spin { animation: rotation 1s linear infinite; }
+.link { border: 0; padding: 0; background: transparent; color: var(--xiak-color-accent-text); cursor: pointer; font: inherit; text-align: start; overflow-wrap: anywhere; }
+.link:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 3px; }
+.resourceName { display: grid; gap: var(--xiak-spacing-tight); }
+.code { padding: var(--xiak-spacing-roomy); background: var(--xiak-color-bg-code); color: var(--xiak-color-text-code); font-family: var(--xiak-font-mono); font-size: var(--xiak-font-size-small); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 400px; overflow: auto; }
+@keyframes rotation { to { transform: rotate(360deg); } }
+@media (max-width: 680px) { .fields { grid-template-columns: minmax(0, 1fr); } .feedback { padding: var(--xiak-spacing-default); } }
