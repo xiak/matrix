@@ -2033,10 +2033,20 @@ Current verification evidence:
   `POST /v1/runs/{sourceRunId}/replay` then created its guarded replay result,
   but the source-fetcher repeatedly terminated at `FETCH` before any Gitea
   request and reached restart count 5; guarded cancellation could not converge
-  while that process crash-looped. No database bypass was used. This is not the
-  equal provider-delivery replay proved above. The implementation owner must
-  reproduce it in an installed-runtime gate, repair the replay/fetch invariant,
-  and prove replay plus cancellation recovery before final release
+  while that process crash-looped. Code inspection identifies the exact
+  contradiction: `ReplayPipelineRun` correctly preserves the original immutable
+  SourceEvent input while assigning the descendant its later replay creation
+  time, but `sourceacquisition.ValidateCommand` unconditionally requires
+  `SourceEvent.ReceivedAt == PipelineRun.CreatedAt`. The PostgreSQL claim
+  therefore decodes the replay command and rejects it before the provider
+  adapter runs; the process loop treats that claim error as fatal and exits.
+  Existing manual-Replay tests create, read, replay, and cancel descendants but
+  never claim one through the source-acquisition boundary. No database bypass
+  was used. This is not the equal provider-delivery replay proved above. The
+  implementation owner must replace the original-only time equality with an
+  explicit original-versus-replay temporal invariant, add unit and PostgreSQL
+  coverage that drives a replay through source acquisition, and prove
+  installed-runtime replay plus cancellation recovery before final release
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,

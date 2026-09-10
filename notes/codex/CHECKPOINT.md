@@ -39,8 +39,14 @@ architecture, FEAT, implementation, test, and release gates.
 - One installed-runtime defect remains open: after a deliberately interrupted
   source run failed during `VERIFYING`, public bodyless manual Replay created
   its result but crash-looped the source-fetcher at `FETCH` before any provider
-  request; guarded cancellation could not converge. This differs from equal
-  provider-delivery replay and must be fixed and gated before final release.
+  request; guarded cancellation could not converge. The exact contradiction is
+  `ReplayPipelineRun` retaining the original SourceEvent time while assigning a
+  later replay `CreatedAt`, against `sourceacquisition.ValidateCommand` requiring
+  those times to be equal. PostgreSQL rejects the claimed command before the
+  provider adapter and the process loop exits on that error. Existing
+  manual-Replay tests never drive a descendant through source acquisition. This
+  differs from equal provider-delivery replay and must be fixed and gated before
+  final release.
 - The complete browser role/state/accessibility and 360-pixel matrix remains
   pending and is owned by the separate UI workstream requested by the user.
 
@@ -54,11 +60,13 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-The DevOps implementation owner should reproduce the installed-runtime manual-
-Replay crash, repair the replay/source-fetch invariant without a database
-bypass or compatibility path, and add a real-runtime replay plus cancellation
-recovery gate. The UI owner should complete the real-APISIX role/state/
-accessibility and `360px` matrix without changing the accepted contracts.
+The DevOps implementation owner should reproduce the installed-runtime
+manual-Replay crash, replace the original-only SourceEvent/run time equality with an
+explicit original-versus-replay temporal invariant without a database bypass
+or compatibility path, and add unit, PostgreSQL, and real-runtime replay plus
+cancellation recovery gates. The UI owner should complete the real-APISIX
+role/state/accessibility and `360px` matrix without changing the accepted
+contracts.
 After both land, rerun the common committed-worktree gates and one signed
 offline local-provider release before claiming FEAT-007 complete.
 
