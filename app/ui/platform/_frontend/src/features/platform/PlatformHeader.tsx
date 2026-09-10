@@ -28,7 +28,10 @@ export function PlatformHeader({ backgroundRef }: { backgroundRef: RefObject<HTM
     return () => window.removeEventListener("keydown", key);
   }, []);
   const close = () => setSurface(null);
-  const visible = inventory.value?.products.filter(product => [t(`productNames.${product.id}`), t(`productDescriptions.${product.id}`), product.id, ...productPresentation[product.id].pages.map(page => t(`pages.${page}`))].join(" ").toLowerCase().includes(query.trim().toLowerCase())) ?? [];
+  const keyword = query.trim().toLowerCase();
+  const matches = (terms: string[]) => terms.join(" ").toLowerCase().includes(keyword);
+  const visible = inventory.value?.products.filter(product => matches([t(`productNames.${product.id}`), t(`productDescriptions.${product.id}`), t(`categories.${product.id}`), product.id, ...productPresentation[product.id].pages.map(page => t(`pages.${page}`))])) ?? [];
+  const accountMatches = matches([t("account"), t("identity")]);
   return <header className={styles.header} data-surface="shell" aria-label={t("navigation")}>
     <PlatformLink href="/" aria-label={t("home")} className={styles.brand}><Brand responsive decorative /></PlatformLink>
     <HeaderMenuTrigger triggerRef={productTrigger} label={t("products")} icon={<Grid2X2 aria-hidden="true" />} open={surface === "products"} controls="matrix-product-menu" onClick={() => { setSurface(value => value === "products" ? null : "products"); setQuery(""); }} />
@@ -36,7 +39,7 @@ export function PlatformHeader({ backgroundRef }: { backgroundRef: RefObject<HTM
     <span className={styles.installation}>{t("privateCloud")}</span>
     <Button ref={accountTrigger} className={styles.accountTrigger} variant="ghost" iconOnly aria-label={`${t("account")} · ${session.loginName}`} aria-expanded={surface === "account"} aria-haspopup="dialog" onClick={() => setSurface(value => value === "account" ? null : "account")}><UserRound aria-hidden="true" /></Button>
     {surface === "products" || surface === "search" ? <HeaderMenu wide persistent={surface === "products"} label={t(surface === "products" ? "products" : "search")} id="matrix-product-menu" closeLabel={t("close")} onClose={close} triggerRef={surface === "products" ? productTrigger : searchTrigger} backgroundRef={backgroundRef}>
-      <SearchInput aria-label={t("productSearch")} placeholder={t("productSearch")} value={query} onChange={event => setQuery(event.target.value)} className={styles.catalogSearch} />
+      <SearchInput aria-label={t("productSearch")} placeholder={t("productSearch")} value={query} onChange={event => setQuery(event.target.value)} clearAction={query ? { label: t("clearSearch"), onClear: () => setQuery("") } : undefined} className={styles.catalogSearch} />
       <p className={styles.catalogHint}>{t("signedInventory")}</p>
       {inventory.status === "loading" ? <PageSkeleton label={t("loadingProducts")} /> : <div className={styles.catalogGrid}>
         {visible.map(product => { const Icon = product.id === "APPLICATION_PAAS" ? Layers3 : GitBranch; return <section className={styles.catalogProduct} key={product.id}>
@@ -45,9 +48,9 @@ export function PlatformHeader({ backgroundRef }: { backgroundRef: RefObject<HTM
           <p>{t(`productDescriptions.${product.id}`)}</p><Badge status={product.state === "READY" ? "success" : "warning"}>{t(`states.${product.state}`)}</Badge>
           <nav aria-label={t(`productNames.${product.id}`)}>{productPresentation[product.id].pages.map(page => <PlatformLink key={page} href={`/${product.routeKey}/${page}/`} onNavigate={close}>{t(`pages.${page}`)}</PlatformLink>)}</nav>
         </section>; })}
-        {!query || t("account").includes(query) ? <section className={styles.catalogProduct}><div className={styles.catalogCategory}><ShieldCheck aria-hidden="true" />{t("identity")}</div><PlatformLink href="/account/" onNavigate={close} className={styles.catalogTitle}>{t("account")}<ChevronRight aria-hidden="true" /></PlatformLink><p>{session.organizationId}</p></section> : null}
+        {accountMatches ? <section className={styles.catalogProduct}><div className={styles.catalogCategory}><ShieldCheck aria-hidden="true" />{t("identity")}</div><PlatformLink href="/account/" onNavigate={close} className={styles.catalogTitle}>{t("account")}<ChevronRight aria-hidden="true" /></PlatformLink><p>{session.organizationId}</p></section> : null}
       </div>}
-      {inventory.status !== "loading" && visible.length === 0 && query && !t("account").includes(query) ? <EmptyState title={t("noMatches")} /> : null}
+      {inventory.status !== "loading" && visible.length === 0 && !accountMatches ? <EmptyState title={t("noMatches")} /> : null}
     </HeaderMenu> : null}
     {surface === "account" ? <HeaderMenu label={t("account")} id="matrix-account-menu" closeLabel={t("close")} onClose={close} triggerRef={accountTrigger} backgroundRef={backgroundRef}>
       <section className={styles.accountIdentity}><small>{t("signedIn")}</small><strong>{session.loginName}</strong><small>{session.principalId}</small></section>

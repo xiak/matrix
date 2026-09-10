@@ -239,12 +239,15 @@ tenant-authority, offline, upgrade/rollback/recovery, and
   schemas in the browser.
 - The component migration passes Node 24.19.0/npm 11.6.4 `npm run check`:
   contract generation drift, TypeScript, ESLint, product/public-UI architecture,
-  228 theme contrast pairs, 62 component/API tests, three static-path behavioral
+  228 theme contrast pairs, 69 component/API tests, three static-path behavioral
   tests, and production-export/embedded-asset equality. Tests cover immediate
   feedback, single-query tables, session cancellation and cross-scope responses,
   uninstalled/read-only products, dependency evidence expiration, guarded
   readiness refresh, HTML `v`-flag identity patterns matching the public
   contract, non-duplicated header actions, and guarded command submission.
+  Product/account/category search uses the same trimmed, case-insensitive
+  matching in both languages; its shared clear action restores input focus
+  without closing the surface or exposing an uninstalled product.
   `go generate ./...`, `go test ./...`, `go vet ./...`, and
   the current UI host tests pass. These are code gates, not complete browser
   acceptance.
@@ -269,7 +272,19 @@ tenant-authority, offline, upgrade/rollback/recovery, and
   user's read-only authority before entry. `useProduct().canMutate` currently
   checks readiness only. The action-availability dependency above is required
   to close this gap; these partial observations do not close Gate B.
-- Browser verification uses a loopback-only pipe to the real isolated
+- On the same signed source, the no-product identity saw no products and a
+  sanitized denial on a direct `/devops/code/` entry. Its 360-by-800 header,
+  collapsed navigation, and denied workspace had no horizontal overflow;
+  mobile navigation opened and closed, light appearance and Chinese/English
+  switching worked, and self-service logout returned to login. No browser
+  warnings or errors were observed in the two inspected tabs. Independent
+  public API checks confirmed both administrator-visible products in `READY`,
+  the created `Ui:Config_02`, viewer read access to the test pipeline,
+  unauthenticated `401`, no-product `403`, and `404` for the viewer's denied
+  creation. These observations do not prove every page at 360 pixels or the
+  complete theme/keyboard matrix. Real 200-percent browser zoom was not
+  exercised and remains open.
+- Browser verification used a loopback-only pipe to the real isolated
   runtime. A prior Docker Desktop bridged ingress failed external-egress
   isolation and was removed; it is not acceptance evidence. Production
   topology, resource-ownership checks and backend authority were not relaxed.
