@@ -1,0 +1,3 @@
+# Generated framework chunks retain exact compiler bytes, including literals.
+# Source TS/TSX/CSS and all other assets keep normal text and whitespace gates.
+internal/web/assets/_next/static/chunks/* -diff -text
