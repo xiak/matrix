@@ -6,7 +6,7 @@
 - Updated: 2026-09-10
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `8aa7c3c`
+- Current pushed implementation baseline: `eef57d8`
 
 ## Goal
 
@@ -35,10 +35,15 @@ architecture, FEAT, implementation, test, and release gates.
   every selected DevOps trust record, replayably clears only those records, and
   retains an empty bind-mounted root. Unsafe shape blocks startup before any
   proved record is deleted.
+- Pushed `eef57d8` extends the signed A/B offline lifecycle harness through the
+  strict source-trust CLI: apply/equal replay, verify/upgrade/rollback
+  preservation, deliberate recovery reset, operator reapply plus Recheck,
+  restart preservation, support-evidence exclusion, and idempotent removal.
 - Full Windows tests, architecture tests, vet, JavaScript syntax, affected race
   and twenty-run suites, custom-root TLS execution, and Linux/amd64 compilation
-  of the source-process and recovery gates pass through `8aa7c3c`. This is
-  implementation evidence, not signed local-provider runtime acceptance.
+  of the source-process, recovery, and offline-lifecycle gates pass through
+  `eef57d8`. This is implementation evidence, not signed local-provider runtime
+  acceptance.
 
 ## Adoption boundary
 
