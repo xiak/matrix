@@ -9,7 +9,7 @@ export type AccountSession = Session & { loginName: string };
 export type RequestOptions = { method?: "GET" | "POST" | "PUT"; body?: unknown; version?: number; idempotencyKey?: string; signal?: AbortSignal; sessionId?: string };
 export function requestIdentity(prefix: string) { return prefix + crypto.randomUUID(); }
 export function resourcePath(id: string) {
-  if (!/^[a-z0-9][a-z0-9._-]{0,127}$/.test(id)) throw new ApiError("INPUT");
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(id)) throw new ApiError("INPUT");
   return encodeURIComponent(id);
 }
 function statusCode(status: number): ErrorCode {

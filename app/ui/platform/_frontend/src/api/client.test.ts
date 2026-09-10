@@ -76,7 +76,8 @@ describe("memory-only public API session", () => {
     await api.login("admin", "test-password");
     for (const path of ["https://attacker.example/", "/api/iam/internal/admin", "/console/preview"]) await expect(api.request({ Item: () => true }, "Item", path)).rejects.toMatchObject({ code: "INPUT" });
     await expect(api.request({ Item: () => true }, "Item", "/api/devops/v1/runs/run-a/cancel", { version: 0 })).rejects.toMatchObject({ code: "VERSION" });
-    for (const id of ["../other", "a/b", "a?tenant=b", "a\nheader"]) expect(() => resourcePath(id)).toThrow(ApiError);
+    for (const id of ["../other", "a/b", "a?tenant=b", "a\nheader", "a%2Fb", "a".repeat(129)]) expect(() => resourcePath(id)).toThrow(ApiError);
+    expect(resourcePath("App:Prod_01.2-a")).toBe("App%3AProd_01.2-a");
     expect(fetcher).toHaveBeenCalledTimes(1);
     api.dispose();
   });

@@ -206,11 +206,13 @@ tenant-authority, offline, upgrade/rollback/recovery, and
   schemas in the browser.
 - The component migration passes Node 24.19.0/npm 11.6.4 `npm run check`:
   contract generation drift, TypeScript, ESLint, product/public-UI architecture,
-  228 theme contrast pairs, 59 component/API tests, three static-path behavioral
+  228 theme contrast pairs, 62 component/API tests, three static-path behavioral
   tests, and production-export/embedded-asset equality. Tests cover immediate
   feedback, single-query tables, session cancellation and cross-scope responses,
-  uninstalled/read-only products, dependency evidence expiration, and guarded
-  command submission. `go generate ./...`, `go test ./...`, `go vet ./...`, and
+  uninstalled/read-only products, dependency evidence expiration, guarded
+  readiness refresh, HTML `v`-flag identity patterns matching the public
+  contract, non-duplicated header actions, and guarded command submission.
+  `go generate ./...`, `go test ./...`, `go vet ./...`, and
   the current UI host tests pass. These are code gates only; the new component
   slice's signed installed-runtime and browser gates remain pending.
 - Fresh bootstrap remains a strict five-service contract. The only retained

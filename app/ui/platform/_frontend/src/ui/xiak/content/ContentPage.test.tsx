@@ -20,10 +20,20 @@ describe("ContentPage context heading", () => {
     render(<ContentPage><ContentPage.Header trailing={<Tools />}><h1>Users</h1></ContentPage.Header><ContentPage.Body><Feature.Provider value="Save changes"><Detail /></Feature.Provider></ContentPage.Body></ContentPage>);
     const count = toolsRendered.mock.calls.length;
     expect(screen.getAllByRole("heading")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
     await user.type(screen.getByRole("textbox"), "-edited");
     expect(screen.getByRole("heading", { name: "admin-edited" })).toBeTruthy();
     expect(within(screen.getByRole("banner")).getByRole("button", { name: "Save changes" })).toBeTruthy();
     expect(toolsRendered).toHaveBeenCalledTimes(count);
+  });
+
+  it("uses local actions instead of duplicating shell actions and restores the default on exit", () => {
+    const page = (detail: boolean) => <ContentPage><ContentPage.Header trailing={<button>Refresh</button>}><h1>Resources</h1></ContentPage.Header><ContentPage.Body>{detail ? <ContentPage.Heading title="Application" actions={<button>Refresh</button>} /> : <ContentPage.Heading title="Resources" />}</ContentPage.Body></ContentPage>;
+    const view = render(page(true));
+    expect(screen.getAllByRole("button", { name: "Refresh" })).toHaveLength(1);
+    view.rerender(page(false));
+    expect(screen.getAllByRole("button", { name: "Refresh" })).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "Resources" })).toBeTruthy();
   });
 
   it("hides outgoing actions while pending and restores them on cancellation; cleans up on exit", () => {

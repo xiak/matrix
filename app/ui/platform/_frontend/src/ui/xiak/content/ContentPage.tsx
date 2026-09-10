@@ -7,19 +7,24 @@ import { Button } from "../button/Button";
 import { classNames } from "../utils";
 import styles from "./ContentPage.module.css";
 
-type HeadingSlot = { target: HTMLDivElement | null; parentLabel?: string; register(): () => void };
+type HeadingSlot = { target: HTMLDivElement | null; parentLabel?: string; register(hasActions: boolean): () => void };
 const HeadingSlotContext = createContext<HeadingSlot | null>(null);
-const HeaderStateContext = createContext<{ active: boolean; setTarget(target: HTMLDivElement | null): void } | null>(null);
+const HeaderStateContext = createContext<{ active: boolean; overrideActions: boolean; setTarget(target: HTMLDivElement | null): void } | null>(null);
 const ScrollPositionContext = createContext<Map<string, number> | null>(null);
 
 function ContentPageRoot({ className, children, parentLabel, pending = false, ...props }: ComponentPropsWithoutRef<"section"> & { parentLabel?: string; pending?: boolean }) {
   const [target, setTarget] = useState<HTMLDivElement | null>(null);
   const [contributors, setContributors] = useState(0);
+  const [actionContributors, setActionContributors] = useState(0);
   const [positions] = useState(() => new Map<string, number>());
-  const register = useCallback(() => { setContributors((count) => count + 1); return () => setContributors((count) => count - 1); }, []);
+  const register = useCallback((hasActions: boolean) => {
+    setContributors(count => count + 1);
+    if (hasActions) setActionContributors(count => count + 1);
+    return () => { setContributors(count => count - 1); if (hasActions) setActionContributors(count => count - 1); };
+  }, []);
   // Heading registration never carries form state through the console shell.
   const slot = useMemo(() => ({ target, parentLabel, register }), [target, parentLabel, register]);
-  const header = useMemo(() => ({ active: contributors > 0 && !pending, setTarget }), [contributors, pending]);
+  const header = useMemo(() => ({ active: contributors > 0 && !pending, overrideActions: actionContributors > 0 && !pending, setTarget }), [contributors, actionContributors, pending]);
   return <HeadingSlotContext.Provider value={slot}><HeaderStateContext.Provider value={header}><ScrollPositionContext.Provider value={positions}>
     <section className={classNames(styles.page, className)} {...props}>{children}</section>
   </ScrollPositionContext.Provider></HeaderStateContext.Provider></HeadingSlotContext.Provider>;
@@ -33,7 +38,7 @@ function Header({ className, children, leading, trailing, progress, ...props }: 
     {leading}
     <div className={styles.headerContent} hidden={active}>{children}</div>
     {setTarget ? <div className={styles.headerContent} hidden={!active} ref={setTarget} /> : null}
-    {trailing ? <div className={styles.headerActions}>{trailing}</div> : null}
+    {trailing ? <div className={styles.headerActions} hidden={state?.overrideActions}>{trailing}</div> : null}
     {progress}
   </header>;
 }
@@ -44,7 +49,8 @@ function Heading({ title, back, actions, focus = false }: { title: string; back?
   const target = slot?.target;
   const standalone = !slot;
   const heading = useRef<HTMLHeadingElement>(null);
-  useLayoutEffect(() => register?.(), [register]);
+  const hasActions = Boolean(actions);
+  useLayoutEffect(() => register?.(hasActions), [register, hasActions]);
   useLayoutEffect(() => { if (focus && (standalone || target)) heading.current?.focus({ preventScroll: true }); }, [focus, target, standalone]);
   const content = <>
     <div className={styles.identity}>
