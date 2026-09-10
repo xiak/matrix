@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,6 +15,44 @@ import (
 	"github.com/xiak/matrix/app/service/devops/sourcetrust"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
+
+func TestEdgeClientKeepsSuccessAndProblemMediaTypesDistinct(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/success":
+			response.Header().Set("Content-Type", jsonMediaType)
+			_, _ = response.Write([]byte(`{"status":"ok"}`))
+		case "/problem":
+			response.Header().Set("Content-Type", problemJSONMediaType)
+			response.WriteHeader(http.StatusForbidden)
+			_, _ = response.Write([]byte(`{"status":403}`))
+		default:
+			http.NotFound(response, request)
+		}
+	}))
+	defer server.Close()
+
+	client := newEdgeClient(server.URL)
+	defer client.close()
+	ctx := context.Background()
+
+	success, err := client.json(ctx, http.MethodGet, "/success", nil, nil, nil, http.StatusOK)
+	if err != nil {
+		t.Fatalf("accept JSON success response: %v", err)
+	}
+	clear(success.body)
+	problem, err := client.problem(ctx, http.MethodGet, "/problem", nil, nil, nil, http.StatusForbidden)
+	if err != nil {
+		t.Fatalf("accept problem JSON response: %v", err)
+	}
+	clear(problem.body)
+	if _, err := client.json(ctx, http.MethodGet, "/problem", nil, nil, nil, http.StatusForbidden); err == nil {
+		t.Fatal("success response accepted problem JSON media type")
+	}
+	if _, err := client.problem(ctx, http.MethodGet, "/success", nil, nil, nil, http.StatusOK); err == nil {
+		t.Fatal("problem response accepted JSON success media type")
+	}
+}
 
 func TestEdgeClientOwnsAndClearsForbiddenMaterial(t *testing.T) {
 	client := newEdgeClient("http://127.0.0.1")

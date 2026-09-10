@@ -1016,7 +1016,7 @@ func expectDevOpsProblem(
 	status int,
 	code devopsv1.ErrorCode,
 ) error {
-	response, err := client.json(ctx, method, path, bearer, body, headers, status)
+	response, err := client.problem(ctx, method, path, bearer, body, headers, status)
 	if err != nil {
 		return err
 	}

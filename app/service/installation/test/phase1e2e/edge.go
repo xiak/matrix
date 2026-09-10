@@ -21,7 +21,11 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
-const maximumHTTPBody = 1024 * 1024
+const (
+	maximumHTTPBody      = 1024 * 1024
+	jsonMediaType        = "application/json"
+	problemJSONMediaType = "application/problem+json"
+)
 
 type edgeClient struct {
 	endpoint  string
@@ -83,6 +87,33 @@ func (client *edgeClient) json(
 	headers map[string]string,
 	wantStatus ...int,
 ) (httpResult, error) {
+	return client.jsonWithResponseMediaType(
+		ctx, method, path, bearer, body, headers, jsonMediaType, wantStatus...,
+	)
+}
+
+func (client *edgeClient) problem(
+	ctx context.Context,
+	method, path string,
+	bearer []byte,
+	body any,
+	headers map[string]string,
+	wantStatus ...int,
+) (httpResult, error) {
+	return client.jsonWithResponseMediaType(
+		ctx, method, path, bearer, body, headers, problemJSONMediaType, wantStatus...,
+	)
+}
+
+func (client *edgeClient) jsonWithResponseMediaType(
+	ctx context.Context,
+	method, path string,
+	bearer []byte,
+	body any,
+	headers map[string]string,
+	wantMediaType string,
+	wantStatus ...int,
+) (httpResult, error) {
 	var encoded []byte
 	var err error
 	if body != nil {
@@ -114,7 +145,7 @@ func (client *edgeClient) json(
 	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	content, readErr := io.ReadAll(io.LimitReader(response.Body, maximumHTTPBody+1))
 	if readErr != nil || len(content) > maximumHTTPBody || mediaErr != nil ||
-		mediaType != "application/json" || response.Header.Get("Content-Encoding") != "" ||
+		mediaType != wantMediaType || response.Header.Get("Content-Encoding") != "" ||
 		containsAny(content, client.forbidden) {
 		clear(content)
 		return httpResult{}, errors.New("HTTP response contract failed")
