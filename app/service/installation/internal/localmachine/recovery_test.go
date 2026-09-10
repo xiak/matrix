@@ -3,6 +3,7 @@ package localmachine
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,8 +14,10 @@ import (
 	"strings"
 	"testing"
 
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
+	"github.com/xiak/matrix/app/service/devops/sourcetrust"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/release"
@@ -156,6 +159,114 @@ func TestRecoveredVerificationRequiresExactProviderGenerationAndReadiness(t *tes
 		context.Background(), runtimeBoundary, inspector, plan, verification,
 	); !errors.Is(err, platformcommand.ErrEffectVerification) {
 		t.Fatalf("unhealthy recovered provider generation error=%v", err)
+	}
+}
+
+func TestRecoveryResetsSelectedSourceTrustInPlaceAndReplays(t *testing.T) {
+	plan := newDevOpsInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage selected DevOps installation: %v", err)
+	}
+	trustRoot := filepath.Join(
+		plan.Root, filepath.FromSlash(layout.DevOpsSourceTrustRoot),
+	)
+	before, err := os.Stat(trustRoot)
+	if err != nil {
+		t.Fatalf("inspect source trust root before recovery: %v", err)
+	}
+	bundle := readTestFile(t, plan.Root, layout.DevOpsExecutorServerCA)
+	defer clear(bundle)
+	records := []struct {
+		tenant devopsv1.TenantID
+		origin string
+	}{
+		{tenant: "tenant-one", origin: "https://git.one.internal"},
+		{tenant: "tenant-two", origin: "https://git.two.internal:8443"},
+	}
+	for _, record := range records {
+		_, relative, pathErr := sourceTrustPaths(
+			devopsv1.ResourceScope{TenantID: record.tenant}, record.origin,
+		)
+		if pathErr != nil {
+			t.Fatalf("write recovery source trust record %s: %v", record.tenant, pathErr)
+		}
+		if err := writeManagedOnce(plan.Root, relative, bundle); err != nil {
+			t.Fatalf("write recovery source trust record %s: %v", record.tenant, err)
+		}
+		if record.tenant == "tenant-two" {
+			if err := writeManagedOnce(
+				plan.Root, relative+".replacement", []byte("interrupted replacement"),
+			); err != nil {
+				t.Fatalf("write interrupted source trust replacement: %v", err)
+			}
+		}
+	}
+	siblingRelative := filepath.Join("config", "devops", "recovery-sibling")
+	if err := writeManagedOnce(plan.Root, siblingRelative, []byte("preserve")); err != nil {
+		t.Fatalf("write recovery sibling: %v", err)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := resetRecoveredSourceTrust(plan.Root); err != nil {
+			t.Fatalf("reset recovered source trust attempt %d: %v", attempt, err)
+		}
+	}
+	after, err := os.Stat(trustRoot)
+	entries, readErr := os.ReadDir(trustRoot)
+	if err != nil || readErr != nil || !os.SameFile(before, after) || len(entries) != 0 {
+		t.Fatalf(
+			"recovered trust root changed: stat=%v read=%v same=%t entries=%d",
+			err, readErr, err == nil && os.SameFile(before, after), len(entries),
+		)
+	}
+	if sibling := readTestFile(t, plan.Root, siblingRelative); string(sibling) != "preserve" {
+		clear(sibling)
+		t.Fatal("source trust reset changed its configuration sibling")
+	} else {
+		clear(sibling)
+	}
+}
+
+func TestRecoveryRejectsSourceTrustConflictBeforeDeletingAnyRecord(t *testing.T) {
+	plan := newDevOpsInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage selected DevOps installation: %v", err)
+	}
+	bundle := readTestFile(t, plan.Root, layout.DevOpsExecutorServerCA)
+	defer clear(bundle)
+	stored := make([]string, 0, 2)
+	for index, origin := range []string{
+		"https://git.safe.internal", "https://git.conflict.internal",
+	} {
+		directory, relative, err := sourceTrustPaths(
+			devopsv1.ResourceScope{TenantID: "tenant-one"}, origin,
+		)
+		if err != nil {
+			t.Fatalf("write source trust fixture %d: %v", index, err)
+		}
+		if err := writeManagedOnce(plan.Root, relative, bundle); err != nil {
+			t.Fatalf("write source trust fixture %d: %v", index, err)
+		}
+		stored = append(stored, relative)
+		if index == 1 {
+			if err := writeManagedOnce(
+				plan.Root, filepath.Join(directory, "unexpected"), []byte("conflict"),
+			); err != nil {
+				t.Fatalf("write conflicting source trust entry: %v", err)
+			}
+		}
+	}
+
+	if err := resetRecoveredSourceTrust(plan.Root); !errors.Is(err, errManagedConflict) {
+		t.Fatalf("conflicting recovered source trust reset error=%v", err)
+	}
+	for _, relative := range stored {
+		content, err := readManagedFile(plan.Root, relative, sourcetrust.MaximumBundleBytes)
+		if err != nil || !bytes.Equal(content, bundle) {
+			clear(content)
+			t.Fatalf("conflict deleted a proved source trust record: %v", err)
+		}
+		clear(content)
 	}
 }
 

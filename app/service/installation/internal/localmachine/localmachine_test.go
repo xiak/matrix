@@ -23,6 +23,7 @@ import (
 	"time"
 
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -1393,7 +1394,20 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine recovery effects target Linux")
 	}
-	plan, expectation := configuredPlatformStartFixture(t)
+	plan, expectation := configuredDevOpsPlatformStartFixture(t)
+	_, sourceTrustRelative, err := sourceTrustPaths(
+		devopsv1.ResourceScope{TenantID: "tenant-recovery"},
+		"https://git.recovery.internal",
+	)
+	if err != nil {
+		t.Fatalf("derive recovery source trust fixture: %v", err)
+	}
+	sourceTrustBundle := readTestFile(t, plan.Root, layout.DevOpsExecutorServerCA)
+	if err := writeManagedOnce(plan.Root, sourceTrustRelative, sourceTrustBundle); err != nil {
+		clear(sourceTrustBundle)
+		t.Fatalf("write recovery source trust fixture: %v", err)
+	}
+	clear(sourceTrustBundle)
 	secret := []byte("selected-backup-secret")
 	secretRelative := filepath.Join(
 		filepath.FromSlash(layout.WorkloadSecretRoot),
@@ -1470,6 +1484,12 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 		t.Fatalf("restored secret differs: %v", err)
 	}
 	clear(restored)
+	trustEntries, err := os.ReadDir(filepath.Join(
+		plan.Root, filepath.FromSlash(layout.DevOpsSourceTrustRoot),
+	))
+	if err != nil || len(trustEntries) != 0 {
+		t.Fatalf("recovery retained host source trust: entries=%d err=%v", len(trustEntries), err)
+	}
 	if runtimeBoundary.recoveryRestores != 1 || runtimeBoundary.postgresOnly ||
 		!runtimeBoundary.started || runtimeBoundary.providerRemovals == removals ||
 		verifier.calls != 1 ||
@@ -1717,7 +1737,21 @@ func configuredPlatformStartFixture(
 	t *testing.T,
 ) (platformcommand.InstallPlan, platformComposeExpectation) {
 	t.Helper()
-	plan := newInstallPlan(t)
+	return configuredPlatformStartFixtureForPlan(t, newInstallPlan(t))
+}
+
+func configuredDevOpsPlatformStartFixture(
+	t *testing.T,
+) (platformcommand.InstallPlan, platformComposeExpectation) {
+	t.Helper()
+	return configuredPlatformStartFixtureForPlan(t, newDevOpsInstallPlan(t))
+}
+
+func configuredPlatformStartFixtureForPlan(
+	t *testing.T,
+	plan platformcommand.InstallPlan,
+) (platformcommand.InstallPlan, platformComposeExpectation) {
+	t.Helper()
 	if err := stageInstallation(plan, rand.Reader); err != nil {
 		t.Fatalf("stage installation: %v", err)
 	}

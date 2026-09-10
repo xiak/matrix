@@ -1520,10 +1520,15 @@ observer, fetcher, and reporter. Each provider effect selects either that
 exact custom-only pool or system roots when the exact record is absent; an
 invalid present record never falls back. The UI renders only an optional safe
 placeholder command, and the former process-global TLS test override is
-removed. No public resource field, database row, system trust mutation, or
-process-global TLS state was added. The signed local-provider source-to-check
-journey remains the acceptance boundary before this becomes accepted runtime
-capability.
+removed. Protected recovery now validates every derived record before changing
+one, accepts only the exact canonical bundle or bounded write/replace residue,
+and, after database restore and migration but before target startup, deletes
+those records while retaining the selected product's private root directory.
+Replay finishes a partially completed reset, while an unsafe shape blocks the
+start without deleting an already proved record. No public resource field,
+database row, system trust mutation, or process-global TLS state was added. The
+signed local-provider source-to-check journey remains the acceptance boundary
+before this becomes accepted runtime capability.
 
 Gate A and Gate B remain complete. This slice advances but does not close Gate
 C: the signed local-provider runtime journey and the complete browser role,
@@ -1546,13 +1551,14 @@ Current verification evidence:
   bounds, deterministic custom-only pool, exact tenant/origin selection,
   system fallback only on absence, invalid-present rejection, protected and
   conflict-free atomic apply/rotation/removal, equal and repeated idempotence,
-  PaaS-only/active/tampered-release rejection, replay preservation, three
+  PaaS-only/active/tampered-release rejection, in-place lifecycle preservation,
+  all-record prevalidation and replayable pre-start recovery reset, three
   least-authority read-only mounts, no process-global `SSL_CERT_FILE`, safe
   operator output, and content-addressed browser assets. A real TLS test accepts
   only the selected endpoint root and rejects both a different private root and
-  ambient system roots. Full Windows tests, architecture tests, vet,
-  JavaScript syntax, affected race and twenty-run suites, and Linux/amd64
-  compilation of the source-process gate pass. This is implementation evidence;
+  ambient system roots. Full Windows tests, architecture tests, vet, JavaScript
+  syntax, affected race and twenty-run suites, and Linux/amd64 compilation of
+  the source-process and recovery gates pass. This is implementation evidence;
   the signed local-provider source-to-check run remains pending
 - the same credential suites pass in a disposable disconnected Debian Linux
   container with the source and module cache mounted read-only, exercising

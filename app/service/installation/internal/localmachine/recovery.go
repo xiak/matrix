@@ -158,7 +158,32 @@ func recoverBackup(
 			errors.New("recovery schema identity changed"),
 		)
 	}
-	return migrateInstallation(ctx, runtimeBoundary, target)
+	if err := migrateInstallation(ctx, runtimeBoundary, target); err != nil {
+		return err
+	}
+	if !target.Bundle.Manifest.IncludesProduct(release.ProductDevOps) {
+		return nil
+	}
+	if err := resetRecoveredSourceTrust(target.Root); err != nil {
+		switch {
+		case errors.Is(err, errManagedOutcomeUnknown):
+			return errors.Join(
+				platformcommand.ErrEffectOutcomeUnknown,
+				errors.New("recovered source trust reset outcome is unknown"),
+			)
+		case errors.Is(err, errManagedConflict):
+			return errors.Join(
+				platformcommand.ErrEffectConflict,
+				errors.New("recovered source trust ownership is invalid"),
+			)
+		default:
+			return errors.Join(
+				platformcommand.ErrEffectUnavailable,
+				errors.New("recovered source trust reset is unavailable"),
+			)
+		}
+	}
+	return nil
 }
 
 func removeRecoveredVerificationProject(
