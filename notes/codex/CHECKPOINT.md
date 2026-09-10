@@ -6,7 +6,7 @@
 - Updated: 2026-09-10
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/devops-cicd-prow-adoption`
-- Current pushed implementation baseline: `eef57d8`
+- Current pushed implementation baseline: `7584848`
 
 ## Goal
 
@@ -39,11 +39,23 @@ architecture, FEAT, implementation, test, and release gates.
   strict source-trust CLI: apply/equal replay, verify/upgrade/rollback
   preservation, deliberate recovery reset, operator reapply plus Recheck,
   restart preservation, support-evidence exclusion, and idempotent removal.
+- Pushed `8dc319d`, `97ace6c`, `1b9ac1e`, `d1b8494`, and `7584848` align the
+  signed Gate C harness with the selected runner-gateway port, ordinary-user
+  password response, RFC problem media type, cross-tenant fixture cleanup, and
+  Docker's signed reference plus resolved image identity.
+- Exact signed releases A `matrix-v0.1.0-3850ba4faa2b` (`3850ba4`) and B
+  `matrix-v0.2.0-7584848f226a` (`7584848`) passed the disconnected fresh-host
+  A/B lifecycle in 466.91 seconds. A real host stop/start then passed the
+  post-restart phase in 27.46 seconds. This accepts the deliberately
+  unresolvable-provider credential/trust, APISIX multi-role/cross-tenant,
+  upgrade/rollback/recovery, PaaS-preservation, Audit, support-zero-leakage,
+  and restart boundary. It is not local-provider source-to-check or dedicated-
+  runner acceptance.
 - Full Windows tests, architecture tests, vet, JavaScript syntax, affected race
   and twenty-run suites, custom-root TLS execution, and Linux/amd64 compilation
   of the source-process, recovery, and offline-lifecycle gates pass through
-  `eef57d8`. This is implementation evidence, not signed local-provider runtime
-  acceptance.
+  `7584848`. All disposable Gate C Docker and filesystem resources were removed
+  after acceptance.
 
 ## Adoption boundary
 
@@ -55,14 +67,16 @@ architecture, FEAT, implementation, test, and release gates.
 
 ## Continuation
 
-Continue Gate C in the existing offline lifecycle. Run the exact signed A/B
-DevOps lifecycle against a local HTTPS provider whose CA is not system-trusted,
-apply trust with the release-carried CLI, and prove the full source-to-check
-journey plus lifecycle preservation without exposing CA, credentials, or host
-paths. Then exercise the committed platform shell through the real APISIX edge
-for the remaining role, state, accessibility, and `360px` matrix.
+Continue Gate C with the pending local HTTPS Gitea source-to-check journey and
+its dedicated runner, using the accepted release-carried credential/trust
+boundaries without exposing CA, credentials, or host paths. Then exercise the
+committed platform shell through the real APISIX edge for the remaining role,
+state, accessibility, and `360px` matrix.
 
 Keep runner authority away from PostgreSQL, source/report credentials, IAM,
 Audit, PaaS, and executor-admin operations. Preserve pragmatic DDD,
 replacement-first pre-v1 changes, optional-product isolation, and
 repository-local Git identity `Xiak <Jellal@aliyun.com>`.
+
+On this Windows host, keep disposable build, test, download, and container data
+on D-scoped storage and remove task-owned resources immediately after use.

@@ -36,9 +36,11 @@
   and operator-credential harness are complete; the endpoint-scoped private-
   provider CA UX, architecture, CLI/filesystem/runtime implementation,
   selected-only topology, optional safe UI command, and custom-only TLS gates
-  are complete while signed real-runtime execution, the local-provider source-
-  to-check journey, and the complete multi-role/state/accessibility UI matrix
-  remain pending
+  are complete; the DevOps-selected signed A/B offline lifecycle against a
+  deliberately unresolvable provider, including APISIX administrator/viewer/
+  foreign-tenant boundaries and real host restart, is runtime-accepted while
+  the local-provider source-to-check journey with its dedicated runner and the
+  complete browser role/state/accessibility UI matrix remain pending
 - Target product: Matrix DevOps v0.1
 - Contract: `devops.matrix.xiak.com/v1`
 - Target design date: 2026-09-07
@@ -1971,9 +1973,26 @@ Current verification evidence:
   in bounded gate memory for command, HTTP, and support-evidence leakage checks
   and are cleared when each phase returns; the Application PaaS journey remains
   unchanged. Full Windows repository tests and vet plus the affected race and
-  twenty-run suites pass against the harness. This is executable acceptance-
-  gate implementation, not signed offline runtime evidence; the gate still must
-  run with exact signed DevOps A/B bundles before these Gate C items are accepted
+  twenty-run suites pass against the harness. The signed runtime gate used A
+  `matrix-v0.1.0-3850ba4faa2b` from `3850ba4faa2bf2132d2f6f42f265007f323c772f`
+  and B `matrix-v0.2.0-7584848f226a` from
+  `7584848f226a3894dd5ff03ec37f0e423392945c`, with B naming A as its exact
+  predecessor. Both selected `APPLICATION_PAAS` and `DEVOPS`. They ran in a
+  fresh Docker `27.5.1`/Compose `2.33.0` DIND host whose outer network was
+  `none`, inner engine was empty, default route was absent before and after
+  restart, release payloads had minimum transport modes, and signing private
+  material was not mounted. The 466.91-second main phase passed installation,
+  repeated status/signature verification, IAM and APISIX multi-role/cross-
+  tenant boundaries, credential rotation, source-trust lifecycle, two PaaS
+  generations, Audit integrity, protected backup, automatic failed-upgrade
+  rollback, B upgrade, explicit A rollback, recovery, application rollback/
+  stop/capacity release, support zero-leakage, and the restart boundary. An
+  actual host stop/start followed by a 27.46-second phase passed post-restart
+  status/signature verification and `complete-offline-lifecycle`. All gate-
+  owned containers, volumes, worktrees, bundles, signing material, downloads,
+  binaries, and caches were then removed. This accepts the signed deliberately-
+  unavailable-provider lifecycle; it does not substitute for the pending local
+  Gitea source-to-check journey or its dedicated runner
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,
