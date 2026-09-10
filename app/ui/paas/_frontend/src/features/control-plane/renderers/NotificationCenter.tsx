@@ -1,29 +1,33 @@
 "use client";
 
-import Link from "next/link";
+import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
 import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { Bell } from "lucide-react";
-import { Badge } from "@ui/xiak";
-import type { AlertScene } from "../scenes/consoleScene";
+import { Bell, ChevronRight, Workflow } from "lucide-react";
+import { useTranslations } from "next-intl";
+import type { ConsoleMessageScene } from "../scenes/consoleScene";
+import { useConsoleUiStore } from "../application/consoleUiStore";
+import { MessageInbox } from "./MessageInbox";
 import { HeaderPopover, HeaderPopoverHeader } from "./HeaderPopover";
 import headerToolStyles from "./HeaderTool.module.css";
 import styles from "./NotificationCenter.module.css";
 
 type NotificationCenterProps = Readonly<{
-  count: number;
-  notices: AlertScene[];
+  activeOperationCount: number;
+  messages: ConsoleMessageScene[];
   onOpenChange(open: boolean): void;
   open: boolean;
 }>;
 
 const panelId = "global-notification-center";
 
-export function NotificationCenter({ count, notices, onOpenChange, open }: NotificationCenterProps) {
+export function NotificationCenter({ activeOperationCount, messages, onOpenChange, open }: NotificationCenterProps) {
+  const t = useTranslations("Notifications");
+  const readIds = useConsoleUiStore((state) => state.readMessageIds);
+  const count = messages.filter((message) => !readIds.includes(message.id)).length;
   const trigger = useRef<HTMLButtonElement>(null);
-  const firstNotice = useRef<HTMLAnchorElement>(null);
-  const viewAll = useRef<HTMLAnchorElement>(null);
+  const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (open) (firstNotice.current ?? viewAll.current)?.focus();
+    if (open) root.current?.querySelector<HTMLButtonElement>('[role="tab"]')?.focus();
   }, [open]);
 
   function closeAndRestoreFocus() {
@@ -39,38 +43,30 @@ export function NotificationCenter({ count, notices, onOpenChange, open }: Notif
   }
 
   return (
-    <div className={styles.root}>
+    <div className={styles.root} ref={root}>
       <button
         aria-controls={open ? panelId : undefined}
         aria-expanded={open}
         aria-haspopup="dialog"
-        aria-label={`${open ? "关闭" : "打开"}通知中心，${count} 个待处理`}
+        aria-label={t(open ? "close" : "open", { count })}
         className={headerToolStyles.iconButton}
         onClick={() => onOpenChange(!open)}
         ref={trigger}
+        title={t("title")}
         type="button"
       >
-        <Bell aria-hidden="true" />{count ? <span>{count}</span> : null}
+        <Bell aria-hidden="true" />{count ? <span>{count > 99 ? "99+" : count}</span> : null}
       </button>
 
       {open ? (
-        <HeaderPopover align="end" id={panelId} label="通知中心" onKeyDown={handleKeyDown} size="medium">
+        <HeaderPopover align="end" id={panelId} label={t("title")} onKeyDown={handleKeyDown} size="medium">
           <HeaderPopoverHeader
-            action={<Link href="/console/observability/" onClick={() => onOpenChange(false)} ref={viewAll}>告警中心</Link>}
-            description={`${count} 个事项需要处理`}
-            title="通知中心"
+            action={<Link href="/console/messages/" onClick={() => onOpenChange(false)}>{t("viewAll")}</Link>}
+            description={t("count", { count })}
+            title={t("title")}
           />
-          <ul className={styles.list}>
-            {notices.map((notice, index) => (
-              <li key={notice.id}>
-                <Link href="/console/observability/" onClick={() => onOpenChange(false)} ref={index === 0 ? firstNotice : undefined}>
-                  <span data-status={notice.status} />
-                  <span className={styles.copy}><strong>{notice.title}</strong><small>{notice.serviceName} · {notice.startedAt}</small></span>
-                  <Badge status={notice.status}>{notice.severityLabel}</Badge>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          {activeOperationCount > 0 ? <Link className={styles.activeTasks} href="/console/operations/" onClick={() => onOpenChange(false)}><Workflow aria-hidden="true" /><span><strong>{t("runningTasks", { count: activeOperationCount })}</strong><small>{t("taskProgressHint")}</small></span><ChevronRight aria-hidden="true" /></Link> : null}
+          <MessageInbox compact messages={messages} onNavigate={() => onOpenChange(false)} />
         </HeaderPopover>
       ) : null}
     </div>

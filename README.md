@@ -3,5 +3,6 @@
 - [Features](docs/features/README.md)
 - [Architecture decisions](docs/architecture/README.md)
 - [Donor adoption records](docs/adoption/README.md)
+- [Tencent CAM reference](docs/research/tencent-cam/README.md)
 - [PaaS v1 contract](api/paas/v1/README.md)
 - [Managed-service v1 contract](api/managedservice/v1/README.md)

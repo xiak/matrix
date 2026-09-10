@@ -1,24 +1,12 @@
-export type ExperienceAvailability = "AVAILABLE" | "PREVIEW" | "PLANNED";
 export type ExperienceResourceState = "HEALTHY" | "RUNNING" | "DEGRADED" | "FAILED";
 export type ExperienceOperationState = "SUCCEEDED" | "RUNNING" | "FAILED";
 export type ExperienceAlertSeverity = "CRITICAL" | "WARNING" | "INFO";
 
-export type ExperienceProduct = {
-  id: "foundation" | "paas" | "devops" | "observability" | "security";
-  name: string;
-  eyebrow: string;
-  description: string;
-  href: string;
-  availability: ExperienceAvailability;
-  resourceCount: number;
-  capabilities: string[];
-};
-
 export type ExperienceResource = {
   id: string;
   name: string;
-  kind: string;
-  productId: ExperienceProduct["id"];
+  kind: "POSTGRESQL" | "APPLICATION" | "PIPELINE" | "SERVICE_MONITOR" | "COMPUTE_NODE";
+  productId: "foundation" | "paas" | "devops" | "observability" | "security";
   productName: string;
   projectId: string;
   projectName: string;
@@ -38,6 +26,7 @@ export type ExperienceOperation = {
   state: ExperienceOperationState;
   progress: number;
   startedAt: string;
+  finishedAt?: string;
 };
 
 export type ExperiencePipeline = {
@@ -48,7 +37,7 @@ export type ExperiencePipeline = {
   commit: string;
   environment: string;
   state: ExperienceOperationState;
-  duration: string;
+  durationSeconds: number;
   triggeredAt: string;
 };
 
@@ -56,9 +45,9 @@ export type ExperienceServiceHealth = {
   id: string;
   name: string;
   productName: string;
-  availability: string;
-  latency: string;
-  errorRate: string;
+  availability: number;
+  latencyMs: number;
+  errorRate: number;
   state: ExperienceResourceState;
   trend: number[];
 };
@@ -77,10 +66,34 @@ export type ExperienceSnapshot = {
   organization: { id: string; name: string };
   projects: Array<{ id: string; name: string }>;
   regions: Array<{ id: string; name: string }>;
-  products: ExperienceProduct[];
   resources: ExperienceResource[];
   operations: ExperienceOperation[];
   pipelines: ExperiencePipeline[];
   serviceHealth: ExperienceServiceHealth[];
   alerts: ExperienceAlert[];
+  announcements: Array<{ id: string; title: string; body: string; publishedAt: string }>;
+  logs: ExperienceLogs;
+};
+
+export type ExperienceLogs = {
+  topics: Array<{
+    id: string;
+    name: string;
+    regionId: string;
+    retentionDays: number;
+    storageGiB: number;
+    source: "KUBERNETES" | "HOST";
+    path: string;
+    nodeCount: number;
+    state: "ACTIVE" | "PAUSED";
+  }>;
+  events: Array<{
+    id: string;
+    timestamp: string;
+    topicId: string;
+    level: "INFO" | "WARN" | "ERROR";
+    service: string;
+    message: string;
+    traceId: string;
+  }>;
 };

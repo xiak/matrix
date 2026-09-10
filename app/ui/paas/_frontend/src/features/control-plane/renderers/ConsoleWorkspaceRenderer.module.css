@@ -38,23 +38,9 @@
   height: 20px;
 }
 
-.form,
-.field {
-  display: grid;
-}
-
 .form {
+  display: grid;
   gap: var(--xiak-spacing-roomy);
-}
-
-.field {
-  gap: var(--xiak-spacing-tight);
-}
-
-.field > span {
-  color: var(--xiak-color-text-muted);
-  font-size: var(--xiak-font-size-small);
-  font-weight: var(--xiak-font-weight-semibold);
 }
 
 .resourceSummary {
@@ -83,28 +69,6 @@
 .resourceSummary span {
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
-}
-
-.notice {
-  border-radius: var(--xiak-radius-control);
-  padding: var(--xiak-spacing-default);
-  background: var(--xiak-color-bg-canvas);
-  color: var(--xiak-color-text-muted);
-  font-size: var(--xiak-font-size-small);
-  line-height: 1.6;
-}
-
-.accepted {
-  display: flex;
-  align-items: center;
-  gap: var(--xiak-spacing-tight);
-  color: var(--xiak-color-status-success);
-  font-size: var(--xiak-font-size-small);
-}
-
-.accepted svg {
-  width: 17px;
-  height: 17px;
 }
 
 .statusList {

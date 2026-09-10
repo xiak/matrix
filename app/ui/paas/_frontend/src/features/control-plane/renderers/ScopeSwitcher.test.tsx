@@ -1,55 +1,93 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { LocaleProvider } from "@/i18n/LocaleProvider";
 import type { ConsoleScopeScene } from "../scenes/consoleScene";
-import { CompactScopeSwitcher, HeaderScopeControls } from "./ScopeSwitcher";
+import { RegionSwitcher } from "./ScopeSwitcher";
 
 const scope: ConsoleScopeScene = {
   organization: { id: "org-xiak", name: "Xiak 科技" },
-  projects: [{ id: "all", name: "全部项目" }, { id: "platform-dev", name: "平台研发" }],
   regions: [{ id: "all", name: "全部区域" }, { id: "cn-local-a", name: "上海私有云 A 区" }]
 };
 
-function CompactHarness() {
+function RegionHarness() {
   const [open, setOpen] = useState(false);
-  const [projectId, setProjectId] = useState("all");
   const [regionId, setRegionId] = useState("all");
-  return <CompactScopeSwitcher onOpenChange={setOpen} onProjectChange={setProjectId} onRegionChange={setRegionId} open={open} projectId={projectId} regionId={regionId} scope={scope} />;
+  return <LocaleProvider><RegionSwitcher onOpenChange={setOpen} onRegionChange={setRegionId} open={open} regionId={regionId} scope={scope} /><button type="button">后续操作</button></LocaleProvider>;
 }
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); localStorage.clear(); });
 
-describe("resource scope switchers", () => {
-  it("keeps the desktop project and region controls explicit", async () => {
+describe("region scope switcher", () => {
+  it("exposes one region-only entry and restores focus after selection", async () => {
     const user = userEvent.setup();
-    const onProjectChange = vi.fn();
-    const onRegionChange = vi.fn();
-    render(<HeaderScopeControls onProjectChange={onProjectChange} onRegionChange={onRegionChange} projectId="all" regionId="all" scope={scope} />);
-
-    expect(screen.getByLabelText("全局资源范围").textContent).toContain("Xiak 科技");
-    await user.selectOptions(screen.getByRole("combobox", { name: "选择项目范围" }), "platform-dev");
-    await user.selectOptions(screen.getByRole("combobox", { name: "选择区域范围" }), "cn-local-a");
-    expect(onProjectChange).toHaveBeenCalledWith("platform-dev");
-    expect(onRegionChange).toHaveBeenCalledWith("cn-local-a");
+    render(<RegionHarness />);
+    expect(screen.queryByRole("button", { name: /项目|资源范围/ })).toBeNull();
+    const trigger = screen.getByRole("button", { name: "选择区域范围，当前 全部区域" });
+    expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(trigger.hasAttribute("aria-controls")).toBe(false);
+    await user.tab();
+    expect(document.activeElement).toBe(trigger);
+    await user.keyboard(" ");
+    const panel = screen.getByRole("dialog", { name: "切换区域" });
+    expect(panel.textContent).toContain("Xiak 科技");
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(trigger.getAttribute("aria-controls")).toBe(panel.id);
+    expect(screen.getByRole("option", { name: /全部区域/ }).getAttribute("aria-selected")).toBe("true");
+    await user.click(screen.getByRole("option", { name: /上海私有云 A 区/ }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    expect(trigger.hasAttribute("aria-controls")).toBe(false);
+    expect(trigger.getAttribute("aria-label")).toBe("选择区域范围，当前 上海私有云 A 区");
+    expect(trigger.getAttribute("data-filtered")).toBe("true");
+    await user.click(trigger);
+    await user.click(screen.getByRole("option", { name: /全部区域/ }));
+    expect(trigger.hasAttribute("data-filtered")).toBe(false);
   });
 
-  it("shows compact scope context and restores its trigger after dismissal", async () => {
+  it("moves focus without selecting until Enter and restores focus on Escape", async () => {
     const user = userEvent.setup();
-    render(<CompactHarness />);
-    const trigger = screen.getByRole("button", { name: "打开资源范围，项目 全部项目，区域 全部区域" });
-
+    render(<RegionHarness />);
+    const trigger = screen.getByRole("button", { name: /选择区域范围/ });
     await user.click(trigger);
-    expect(screen.getByRole("dialog", { name: "资源范围" })).toBeTruthy();
-    const project = screen.getByRole("combobox", { name: "紧凑模式选择项目范围" });
-    expect(document.activeElement).toBe(project);
-    await user.selectOptions(project, "platform-dev");
-    await user.selectOptions(screen.getByRole("combobox", { name: "紧凑模式选择区域范围" }), "cn-local-a");
-    expect(screen.getByRole("button", { name: "关闭资源范围，项目 平台研发，区域 上海私有云 A 区" })).toBeTruthy();
-    await user.keyboard("{Escape}");
-
-    expect(screen.queryByRole("dialog", { name: "资源范围" })).toBeNull();
+    const all = screen.getByRole("option", { name: /全部区域/ });
+    const region = screen.getByRole("option", { name: /上海私有云 A 区/ });
+    expect(document.activeElement).toBe(all);
+    await user.keyboard("{ArrowUp}");
+    expect(document.activeElement).toBe(region);
+    expect(all.getAttribute("aria-selected")).toBe("true");
+    await user.keyboard("{ArrowDown}{End}{Home}");
+    expect(document.activeElement).toBe(all);
+    await user.keyboard("{End}{Enter}");
+    expect(trigger.textContent).toContain("上海私有云 A 区");
     expect(document.activeElement).toBe(trigger);
-    expect(screen.getByRole("button", { name: "打开资源范围，项目 平台研发，区域 上海私有云 A 区" })).toBe(trigger);
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(screen.getByRole("option", { name: /上海私有云 A 区/ }));
+    await user.keyboard("{Home}{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(trigger.textContent).toContain("上海私有云 A 区");
+  });
+
+  it("dismisses when Tab leaves without trapping keyboard focus", async () => {
+    const user = userEvent.setup();
+    render(<RegionHarness />);
+    await user.click(screen.getByRole("button", { name: /选择区域范围/ }));
+    await user.tab();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "后续操作" }));
+  });
+
+  it("localizes the entry and all-region option", async () => {
+    localStorage.setItem("matrix.locale", "en");
+    const user = userEvent.setup();
+    render(<RegionHarness />);
+    await user.click(screen.getByRole("button", { name: "Select region scope, current All regions" }));
+    expect(screen.getByRole("dialog", { name: "Switch region" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /All regions/ })).toBeTruthy();
+    expect(screen.queryByText("全部区域")).toBeNull();
   });
 });

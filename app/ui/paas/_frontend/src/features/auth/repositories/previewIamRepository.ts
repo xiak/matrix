@@ -11,6 +11,11 @@ import type {
   IamRepository,
   LoginResult
 } from "./iamRepository";
+import { createPreviewAccessWorkspace } from "./previewAccessWorkspace";
+import { enterprisePrincipalId, previewUserPrincipalId } from "../domain/accessWorkspace";
+import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
+import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import { applyUserBatch } from "../domain/userBatch";
 
 export const previewCredential = "matrix-ux-preview-memory-only";
 
@@ -76,6 +81,9 @@ let accounts: Account[] = [
 function requirePreviewCredential(credential: string): void {
   if (credential !== previewCredential) throw new Error("INVALID_PREVIEW_CREDENTIAL");
 }
+const initialPreviewState = structuredClone({ account, users, accounts });
+
+const workspace = createPreviewAccessWorkspace(account.organization.id, () => users.map((user) => user.principal.id), account.primaryPrincipalId);
 
 function loginResult(): LoginResult {
   return {
@@ -101,6 +109,9 @@ export const previewIamRepository: IamRepository = {
   },
   async logout(credential) {
     requirePreviewCredential(credential);
+    workspace.reset();
+    const initial = structuredClone(initialPreviewState);
+    account = initial.account; users = initial.users; accounts = initial.accounts;
   }
 };
 
@@ -130,6 +141,33 @@ function updateUser(principalId: string, update: (user: AccountUser) => AccountU
 }
 
 export const previewAccountRepository: AccountRepository = {
+  async executeUserBatch(credential, command) {
+    requirePreviewCredential(credential);
+    const result = workspace.transact((source) => applyUserBatch(source, users, currentIdentity(), command, { id: crypto.randomUUID(), at: new Date().toISOString() }));
+    users = result.users;
+    return { workspace: result.workspace };
+  },
+  workspace: {
+    async read(credential) { requirePreviewCredential(credential); return workspace.read(credential); },
+    async execute(credential, command) {
+      requirePreviewCredential(credential);
+      if (command.kind === "create-subuser" && (users.some((user) => user.principal.loginName === command.loginName) || account.primaryLoginName === command.loginName)) throw new AccessWorkspaceError("duplicate");
+      const result = await workspace.execute(credential, command);
+      if (command.kind === "create-subuser") users.push({
+        principal: { id: previewUserPrincipalId(command.loginName), organizationId: account.organization.id, loginName: command.loginName, displayName: command.displayName.trim(), status: "ACTIVE", mustChangePassword: command.profile.consoleAccess && command.profile.passwordResetRequired, resourceVersion: 1 }, roleBindings: []
+      });
+      if (command.kind === "import-enterprise-members") {
+        for (const memberId of command.memberIds) {
+          const principalId = enterprisePrincipalId(command.id, memberId);
+          const member = result.workspace.enterpriseMembers.find((entry) => entry.id === memberId)!;
+          if (!users.some((entry) => entry.principal.id === principalId)) users.push({ principal: { id: principalId, organizationId: account.organization.id, loginName: "wecom." + command.id.slice(0, 8) + "." + memberId, displayName: member.name, source: "wecom", status: "ACTIVE", mustChangePassword: false, resourceVersion: 1 }, roleBindings: [] });
+        }
+      }
+      if (command.kind === "delete-user") users = users.filter((user) => user.principal.id !== command.principalId);
+      if (command.kind === "update-user") updateUser(command.principalId, (user) => ({ ...user, principal: { ...user.principal, displayName: command.displayName.trim(), resourceVersion: user.principal.resourceVersion + 1 } }));
+      return result;
+    }
+  },
   async currentIdentity(credential) {
     requirePreviewCredential(credential);
     return structuredClone(currentIdentity());
@@ -144,7 +182,10 @@ export const previewAccountRepository: AccountRepository = {
   },
   async execute(credential, command: AccountCommand) {
     requirePreviewCredential(credential);
+    if ("principalId" in command && command.principalId === account.primaryPrincipalId) throw new HttpProblem(403, "PREVIEW_PROTECTED_PRIMARY");
     if (command.kind === "create-user") {
+      if (users.some((user) => user.principal.loginName === command.loginName) || account.primaryLoginName === command.loginName) throw new HttpProblem(409, "PREVIEW_NAME_CONFLICT");
+      if (!/^[a-z][a-z0-9._-]{2,63}$/.test(command.loginName) || !command.displayName.trim() || command.initialPassword.length < 14) throw new HttpProblem(422, "PREVIEW_INVALID_USER");
       const principalId = `principal-${command.loginName}`;
       const roleBindings: UserRoleBinding[] = command.initialRole ? [{
         id: `binding-${command.loginName}-${command.initialRole.toLowerCase()}`,
@@ -167,6 +208,7 @@ export const previewAccountRepository: AccountRepository = {
       return;
     }
     if (command.kind === "create-organization") {
+      if (accounts.some((entry) => entry.organization.id === command.id)) throw new HttpProblem(409, "PREVIEW_NAME_CONFLICT");
       accounts = [...accounts, {
         organization: { id: command.id, displayName: command.displayName, status: "ACTIVE", resourceVersion: 1 },
         primaryPrincipalId: `principal-${command.id}-admin`,
@@ -197,7 +239,7 @@ export const previewAccountRepository: AccountRepository = {
     if (command.kind === "grant-role") {
       updateUser(command.principalId, (user) => ({
         ...user,
-        roleBindings: [...user.roleBindings, {
+        roleBindings: [...user.roleBindings.filter((binding) => binding.role !== command.role), {
           id: `binding-${command.principalId}-${command.role.toLowerCase()}`,
           principalId: command.principalId,
           organizationId: account.organization.id,
@@ -206,6 +248,7 @@ export const previewAccountRepository: AccountRepository = {
       }));
       return;
     }
+    if (!users.some((user) => user.roleBindings.some((binding) => binding.id === command.bindingId))) throw new HttpProblem(403, "PREVIEW_PROTECTED_OR_UNKNOWN_BINDING");
     users = users.map((user) => ({
       ...user,
       roleBindings: user.roleBindings.filter((binding) => binding.id !== command.bindingId)

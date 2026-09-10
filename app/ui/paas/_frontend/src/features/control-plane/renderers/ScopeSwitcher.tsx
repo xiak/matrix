@@ -1,123 +1,115 @@
 "use client";
 
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { ChevronDown, Layers3, MapPin, ShieldCheck } from "lucide-react";
-import { Button, Select } from "@ui/xiak";
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { Check, MapPin } from "lucide-react";
+import { useTranslations } from "next-intl";
 import type { ConsoleScopeScene } from "../scenes/consoleScene";
-import { HeaderPopover, HeaderPopoverHeader } from "./HeaderPopover";
+import { HeaderPopover, HeaderPopoverHeader, HeaderPopoverTrigger } from "./HeaderPopover";
 import styles from "./ScopeSwitcher.module.css";
 
-type ScopeSelectionProps = Readonly<{
-  onProjectChange(value: string): void;
+type RegionSwitcherProps = Readonly<{
   onRegionChange(value: string): void;
-  projectId: string;
   regionId: string;
   scope: ConsoleScopeScene;
+  open: boolean;
+  onOpenChange(open: boolean): void;
 }>;
 
-export function HeaderScopeControls({ onProjectChange, onRegionChange, projectId, regionId, scope }: ScopeSelectionProps) {
+type RegionOptionsProps = Readonly<{
+  onChange(value: string): void;
+  options: ConsoleScopeScene["regions"];
+  value: string;
+}>;
+
+function RegionOptions({ onChange, options, value }: RegionOptionsProps) {
+  const t = useTranslations("RegionScope");
+  const selectedIndex = Math.max(0, options.findIndex((item) => item.id === value));
+  const [activeIndex, setActiveIndex] = useState(selectedIndex);
+  const items = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    items.current[selectedIndex]?.focus();
+  }, [selectedIndex]);
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
+    if (!options.length) return;
+    let nextIndex: number | undefined;
+    if (event.key === "ArrowDown") nextIndex = (activeIndex + 1) % options.length;
+    if (event.key === "ArrowUp") nextIndex = (activeIndex - 1 + options.length) % options.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = options.length - 1;
+    if (nextIndex === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setActiveIndex(nextIndex);
+    items.current[nextIndex]?.focus();
+  }
+
   return (
-    <div aria-label="全局资源范围" className={styles.headerControls}>
-      <span className={styles.organization}><ShieldCheck aria-hidden="true" /><span>{scope.organization.name}</span></span>
-      <label>
-        <span>项目</span>
-        <select aria-label="选择项目范围" onChange={(event) => onProjectChange(event.target.value)} value={projectId}>
-          {scope.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-        </select>
-        <ChevronDown aria-hidden="true" />
-      </label>
-      <label>
-        <span>区域</span>
-        <select aria-label="选择区域范围" onChange={(event) => onRegionChange(event.target.value)} value={regionId}>
-          {scope.regions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}
-        </select>
-        <ChevronDown aria-hidden="true" />
-      </label>
+    <div aria-label={t("list")} className={styles.options} onKeyDown={handleKeyDown} role="listbox">
+      {options.map((item, index) => (
+        <button
+          aria-selected={item.id === value}
+          className={styles.option}
+          key={item.id}
+          onClick={() => onChange(item.id)}
+          onFocus={() => setActiveIndex(index)}
+          ref={(node) => { items.current[index] = node; }}
+          role="option"
+          tabIndex={index === activeIndex ? 0 : -1}
+          type="button"
+        >
+          <span><strong>{item.id === "all" ? t("all") : item.name}</strong><small>{item.id === "all" ? t("allHint") : item.id}</small></span>
+          {item.id === value ? <Check aria-hidden="true" /> : null}
+        </button>
+      ))}
     </div>
   );
 }
 
-type CompactScopeSwitcherProps = ScopeSelectionProps & Readonly<{
-  onOpenChange(open: boolean): void;
-  open: boolean;
-}>;
-
-const panelId = "compact-global-scope-switcher";
-
-export function CompactScopeSwitcher({
-  onOpenChange,
-  onProjectChange,
-  onRegionChange,
-  open,
-  projectId,
-  regionId,
-  scope
-}: CompactScopeSwitcherProps) {
+export function RegionSwitcher({ onRegionChange, onOpenChange, open, regionId, scope }: RegionSwitcherProps) {
+  const t = useTranslations("RegionScope");
+  const pickerId = "global-region-scope";
+  const selectedName = regionId === "all" ? t("all") : scope.regions.find((item) => item.id === regionId)?.name ?? t("unspecified");
   const trigger = useRef<HTMLButtonElement>(null);
-  const projectSelect = useRef<HTMLSelectElement>(null);
-  const projectName = scope.projects.find((project) => project.id === projectId)?.name ?? "未指定项目";
-  const regionName = scope.regions.find((region) => region.id === regionId)?.name ?? "未指定区域";
-
-  useEffect(() => {
-    if (open) projectSelect.current?.focus();
-  }, [open]);
 
   function closeAndRestoreFocus() {
     onOpenChange(false);
     trigger.current?.focus();
   }
 
-  function handleKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
-    if (event.key !== "Escape") return;
-    event.preventDefault();
-    event.stopPropagation();
-    closeAndRestoreFocus();
-  }
-
-  const actionLabel = `${open ? "关闭" : "打开"}资源范围，项目 ${projectName}，区域 ${regionName}`;
-
   return (
-    <div className={styles.compactRoot}>
-      <button
-        aria-controls={open ? panelId : undefined}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-label={actionLabel}
-        className={styles.compactTrigger}
+    <div className={styles.picker} onBlur={(event) => {
+      if (!event.currentTarget.contains(event.relatedTarget)) onOpenChange(false);
+    }}>
+      <HeaderPopoverTrigger
+        aria-label={t("trigger", { name: selectedName })}
+        compactLabel={t("label")}
+        filtered={regionId !== "all"}
+        icon={<MapPin />}
+        label={selectedName}
         onClick={() => open ? closeAndRestoreFocus() : onOpenChange(true)}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+          event.preventDefault();
+          onOpenChange(true);
+        }}
+        open={open}
+        panelId={pickerId}
         ref={trigger}
-        type="button"
-      >
-        <Layers3 aria-hidden="true" />
-        <span className={styles.summary}>
-          <small>资源范围 · {scope.organization.name}</small>
-          <strong>{projectName}<span>·</span>{regionName}</strong>
-        </span>
-        <ChevronDown aria-hidden="true" className={styles.compactChevron} />
-      </button>
-
+        title={t("trigger", { name: selectedName })}
+        variant="selection"
+      />
       {open ? (
-        <HeaderPopover align="start" id={panelId} label="资源范围" onKeyDown={handleKeyDown} size="compact">
-          <HeaderPopoverHeader
-            action={<Button onClick={closeAndRestoreFocus} size="small" variant="ghost">完成</Button>}
-            description={scope.organization.name}
-            title="资源范围"
-          />
-          <div className={styles.panelBody}>
-            <label className={styles.field}>
-              <span><Layers3 aria-hidden="true" />项目</span>
-              <Select aria-label="紧凑模式选择项目范围" onChange={(event) => onProjectChange(event.target.value)} ref={projectSelect} value={projectId}>
-                {scope.projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-              </Select>
-            </label>
-            <label className={styles.field}>
-              <span><MapPin aria-hidden="true" />区域</span>
-              <Select aria-label="紧凑模式选择区域范围" onChange={(event) => onRegionChange(event.target.value)} value={regionId}>
-                {scope.regions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}
-              </Select>
-            </label>
-            <p>资源总览、列表与运行状态会立即按此范围更新。</p>
-          </div>
+        <HeaderPopover align="end" id={pickerId} label={t("title")} onKeyDown={(event) => {
+          if (event.key !== "Escape") return;
+          event.preventDefault();
+          event.stopPropagation();
+          closeAndRestoreFocus();
+        }} size="compact">
+          <HeaderPopoverHeader action={<MapPin aria-hidden="true" className={styles.scopeIcon} />} description={scope.organization.name} title={t("title")} />
+          <RegionOptions onChange={(id) => { onRegionChange(id); closeAndRestoreFocus(); }} options={scope.regions} value={regionId} />
+          <p className={styles.scopeHint}>{t("hint")}</p>
         </HeaderPopover>
       ) : null}
     </div>

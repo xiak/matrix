@@ -1,5 +1,6 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AccountMenu, type AccountIdentity } from "./AccountMenu";
@@ -13,13 +14,13 @@ const identity: AccountIdentity = {
 
 function AccountMenuHarness({ onLogout = vi.fn() }: { onLogout?: () => void }) {
   const [open, setOpen] = useState(false);
-  return <AccountMenu identity={identity} onLogout={onLogout} onOpenChange={setOpen} open={open} revoking={false} />;
+  return <LocaleProvider><AccountMenu identity={identity} onLogout={onLogout} onOpenChange={setOpen} open={open} revoking={false} /></LocaleProvider>;
 }
 
 afterEach(cleanup);
 
 describe("AccountMenu", () => {
-  it("renders identity and account actions as one semantic menu", async () => {
+  it("keeps preference radio groups distinct from the account-action menu", async () => {
     const user = userEvent.setup();
     const onLogout = vi.fn();
     render(<AccountMenuHarness onLogout={onLogout} />);
@@ -30,7 +31,10 @@ describe("AccountMenu", () => {
     expect(dialog.textContent).toContain("preview-admin");
     expect(dialog.textContent).toContain("principal-admin");
     expect(dialog.textContent).toContain("Xiak 科技");
-    expect(screen.getByRole("menu", { name: "账号操作" })).toBeTruthy();
+    expect(within(screen.getByRole("group", { name: "主题" })).getAllByRole("radio")).toHaveLength(4);
+    expect(within(screen.getByRole("group", { name: "语言" })).getAllByRole("radio")).toHaveLength(2);
+    const actions = screen.getByRole("menu", { name: "账号操作" });
+    expect(within(actions).queryByRole("radio")).toBeNull();
     expect(screen.getAllByRole("menuitem")).toHaveLength(2);
     expect(screen.getByRole("menuitem", { name: /账号与权限.*用户、角色与租户/ })).toBeTruthy();
 

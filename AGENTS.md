@@ -14,6 +14,15 @@
 - Keep Phase 1 a modular monolith. Split a context physically only for a real
   scaling, release, ownership, failure-isolation, security, or data boundary.
 
+## Frontend experience
+
+- Reuse the existing public UI owner for shared controls, brand assets,
+  dimensions, focus, keyboard, loading, and error states. Extract components
+  for demonstrated reuse or existing interaction complexity, not every node.
+- New or rewritten UI uses semantic theme tokens and keyed locale messages.
+  Keep business state language-neutral; format user-facing values at the
+  presentation boundary. Preserve offline assets and the static host's CSP.
+
 ## Feature adoption
 
 For each FEAT, design the smallest enterprise target first. Then inspect the
@@ -55,13 +64,18 @@ Every fact has exactly one documentation owner:
 - an ADR owns only a costly-to-reverse boundary shared by multiple FEATs;
 - an adoption record owns only fixed donor commits and
   `REUSE`/`ADAPT`/`REFERENCE`/`REJECT` decisions;
+- an explicitly requested external reference collection under `docs/research/`
+  owns source-backed findings, coverage and limitations, not Matrix requirements,
+  implementation status or acceptance evidence;
 - a runbook owns only commands that have been executed and verified.
 
 README and index files are link-only navigation. They must not duplicate FEAT
 status, resource tables, acceptance criteria, commands, or adoption results.
-Research notes, implementation diaries, discussion, and transient progress
+Transient research notes, implementation diaries, discussion, and progress
 belong in GitHub Issues or the non-authoritative `notes/codex/CHECKPOINT.md`,
-not formal repository documentation. Rewrite or remove stale prose instead of
+not formal repository documentation. External reference collections keep a
+link-only topic index and distinguish sourced facts, observations, analysis,
+and unadopted recommendations. Rewrite or remove stale prose instead of
 appending amendment histories.
 
 Load context on demand:
@@ -74,6 +88,9 @@ Load context on demand:
    verified runbook.
 5. Resume after compaction or handoff: read the single Codex checkpoint, then
    validate it against Git and the owning FEAT. Do not load it for normal work.
+6. Tencent CAM reference: open `docs/research/tencent-cam/README.md`, then only
+   the leaf for the current question. Open evidence files to check coverage or
+   conflicts; do not preload the collection.
 
 Do not scan or load the entire `docs/` tree by default. Do not add a document
 for a newly learned fact; place durable conclusions in the existing owner.

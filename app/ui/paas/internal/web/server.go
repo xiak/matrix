@@ -23,7 +23,10 @@ import (
 
 const APIVersion = "ui.matrix.xiak.com/v1"
 
-//go:embed assets/*
+// Next's router fetches nested __next segment files. Directory embedding must
+// include underscore-prefixed generated assets, not only HTML and JS/CSS.
+//
+//go:embed all:assets
 var content embed.FS
 
 var inlineScript = regexp.MustCompile(`(?is)<script(?:\s[^>]*)?>(.*?)</script>`)

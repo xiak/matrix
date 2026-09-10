@@ -1,80 +1,58 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { ChevronDown, ChevronRight, Grid2X2 } from "lucide-react";
-import type { GlobalSearchResultScene } from "../scenes/consoleScene";
-import { ExperienceIconTile } from "./ExperienceIconTile";
-import { HeaderPopover, HeaderPopoverHeader } from "./HeaderPopover";
+import { useRef, type KeyboardEvent } from "react";
+import { useTranslations } from "next-intl";
+import { Grid2X2 } from "lucide-react";
+import { HeaderPopover, HeaderPopoverTrigger } from "./HeaderPopover";
+import { ServiceDirectory } from "./ServiceDirectory";
 import styles from "./ProductLauncher.module.css";
 
 type ProductLauncherProps = Readonly<{
   onOpenChange(open: boolean): void;
   open: boolean;
-  products: GlobalSearchResultScene[];
 }>;
 
 const panelId = "global-product-launcher";
 
-export function ProductLauncher({ onOpenChange, open, products }: ProductLauncherProps) {
+export function ProductLauncher({ onOpenChange, open }: ProductLauncherProps) {
+  const t = useTranslations("ServiceDirectory");
   const trigger = useRef<HTMLButtonElement>(null);
-  const firstProduct = useRef<HTMLAnchorElement>(null);
-  const viewAll = useRef<HTMLAnchorElement>(null);
-
-  useEffect(() => {
-    if (open) (firstProduct.current ?? viewAll.current)?.focus();
-  }, [open]);
 
   function closeAndRestoreFocus() {
     onOpenChange(false);
     trigger.current?.focus();
   }
 
-  function handleKeyDown(event: ReactKeyboardEvent<HTMLElement>) {
-    if (event.key !== "Escape") return;
-    event.preventDefault();
-    event.stopPropagation();
-    closeAndRestoreFocus();
+  function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('input, button:not([disabled]):not([tabindex="-1"]), a[href]:not([tabindex="-1"])'));
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+    if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
   }
 
   return (
     <div className={styles.root}>
-      <button
-        aria-controls={open ? panelId : undefined}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        aria-label={`${open ? "关闭" : "打开"}产品与服务`}
-        className={styles.trigger}
-        onClick={() => onOpenChange(!open)}
+      <HeaderPopoverTrigger
+        aria-label={t(open ? "close" : "open")}
+        icon={<Grid2X2 />}
+        label={t("title")}
+        onClick={() => open ? closeAndRestoreFocus() : onOpenChange(true)}
+        open={open}
+        panelId={panelId}
         ref={trigger}
-        type="button"
-      >
-        <Grid2X2 aria-hidden="true" /><span>产品</span><ChevronDown aria-hidden="true" />
-      </button>
-
+        tabIndex={open ? -1 : undefined}
+        title={t(open ? "close" : "open")}
+      />
       {open ? (
-        <HeaderPopover align="start" id={panelId} label="云产品入口" onKeyDown={handleKeyDown} size="wide">
-          <HeaderPopoverHeader
-            action={<Link href="/console/products/" onClick={() => onOpenChange(false)} ref={viewAll}>查看全部</Link>}
-            description="按工作场景进入 Matrix Cloud"
-            title="产品与服务"
-          />
-          <ul className={styles.grid}>
-            {products.map((product, index) => (
-              <li key={product.id}>
-                <Link
-                  className={styles.item}
-                  href={product.href}
-                  onClick={() => onOpenChange(false)}
-                  ref={index === 0 ? firstProduct : undefined}
-                >
-                  <ExperienceIconTile kind={product.icon} />
-                  <span className={styles.copy}><strong>{product.label}</strong><small>{product.description}</small></span>
-                  <ChevronRight aria-hidden="true" />
-                </Link>
-              </li>
-            ))}
-          </ul>
+        <HeaderPopover align="start" id={panelId} label={t("dialog")} modal onKeyDown={handleKeyDown} size="catalog">
+          <ServiceDirectory onClose={closeAndRestoreFocus} onNavigate={() => onOpenChange(false)} />
         </HeaderPopover>
       ) : null}
     </div>

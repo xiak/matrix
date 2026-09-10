@@ -1,3 +1,4 @@
+@layer xiak {
 .skeleton {
   min-height: var(--xiak-control-height);
   border-radius: var(--xiak-radius-control);
@@ -21,4 +22,5 @@
   .skeleton {
     animation: none;
   }
+}
 }

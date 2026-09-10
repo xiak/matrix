@@ -1,4 +1,7 @@
+@layer base, xiak;
 @import "./tokens.css";
+
+@layer base {
 
 *,
 *::before,
@@ -25,8 +28,6 @@ body {
   font-family: var(--xiak-font-sans);
   font-size: var(--xiak-font-size-body);
   line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -73,4 +74,5 @@ strong {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
   }
+}
 }

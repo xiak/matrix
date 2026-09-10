@@ -32,6 +32,8 @@ function staticBuildId() {
     digest.update("\0");
   }
   addTree(digest, join(project, "src"));
+  addTree(digest, join(project, "public"));
+  addTree(digest, join(project, "scripts"));
   return `matrix-${digest.digest("hex").slice(0, 20)}`;
 }
 

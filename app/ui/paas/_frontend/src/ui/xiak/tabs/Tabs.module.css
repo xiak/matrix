@@ -1,0 +1,12 @@
+@layer xiak {
+.root { min-width: 0; max-width: 100%; }
+.list { display: flex; min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain; scrollbar-width: thin; gap: var(--xiak-spacing-roomy); border-bottom: var(--xiak-border-subtle); outline: none; }
+.trigger { position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; gap: var(--xiak-spacing-tight); white-space: nowrap; min-height: var(--xiak-control-height-large); border: 0; padding: var(--xiak-spacing-tight) 0; background: transparent; color: var(--xiak-color-text-muted); cursor: pointer; }
+.trigger[data-state="active"] { color: var(--xiak-color-accent-text); font-weight: var(--xiak-font-weight-semibold); }
+.trigger[data-state="active"]::after { position: absolute; inset-inline: 0; bottom: 0; height: 2px; background: currentColor; content: ""; }
+.trigger:focus-visible, .content:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: -2px; }
+.trigger:disabled { color: var(--xiak-color-text-disabled); cursor: not-allowed; }
+.content { min-width: 0; max-width: 100%; padding-block-start: var(--xiak-spacing-roomy); outline: none; }
+.trigger > svg { width: var(--xiak-icon-size); height: var(--xiak-icon-size); }
+.trigger:hover:not(:disabled) { color: var(--xiak-color-accent-text); }
+}

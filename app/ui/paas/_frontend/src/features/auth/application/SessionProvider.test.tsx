@@ -79,7 +79,7 @@ describe("SessionProvider", () => {
     await act(async () => fireEvent.click(screen.getByText("logout")));
     await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("authenticated"));
     expect(screen.getByTestId("principal").textContent).toBe("admin");
-    expect(screen.getByTestId("error").textContent).toContain("会话仍保留");
+    expect(screen.getByTestId("error").textContent).toBe("logoutUnavailable");
   });
 
   it("forgets the session only after IAM confirms revocation", async () => {
@@ -126,6 +126,6 @@ describe("SessionProvider", () => {
     await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("password-change-required"));
     await act(async () => fireEvent.click(screen.getByText("change")));
     await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("password-change-required"));
-    expect(screen.getByTestId("error").textContent).toContain("无法更新密码");
+    expect(screen.getByTestId("error").textContent).toBe("passwordUnavailable");
   });
 });

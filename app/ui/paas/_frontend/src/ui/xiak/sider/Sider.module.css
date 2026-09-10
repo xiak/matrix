@@ -1,3 +1,4 @@
+@layer xiak {
 .sider {
   position: relative;
   display: flex;
@@ -54,4 +55,5 @@
 
 .resizeHandle:hover::after {
   opacity: 1;
+}
 }

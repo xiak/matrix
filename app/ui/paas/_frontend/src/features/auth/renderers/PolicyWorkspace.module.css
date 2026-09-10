@@ -1,0 +1,86 @@
+.directory, .stack { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: var(--xiak-spacing-comfortable); }
+.directoryContent { padding-block-start: 0; }
+.directory { container: policy-directory / inline-size; }
+.directoryHeading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default) var(--xiak-panel-padding); border-bottom: var(--xiak-border-subtle); }
+.note { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.7; margin: 0; overflow-wrap: anywhere; }
+.actions, .pagination, .selectionBar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--xiak-spacing-tight); min-width: 0; }
+.pagination > :first-child { width: 72px; }
+.selectionBar { padding: var(--xiak-spacing-tight) var(--xiak-panel-padding); background: var(--xiak-color-accent-haze); border-block: var(--xiak-border-subtle); color: var(--xiak-color-accent-text); }
+.policyTable { table-layout: fixed; min-width: 880px; }
+.policyTable td { padding-block: var(--xiak-spacing-default); }
+.policyTable .checkCell { width: 44px; min-width: 0; padding-inline: var(--xiak-spacing-default); }
+.policyTable .nameCell { width: 240px; }
+.policyTable .kindCell { width: 100px; }
+.policyTable .countCell { width: 136px; }
+.policyTable .actionCell { width: 100px; white-space: nowrap; }
+.policyTable td:last-child > button { white-space: nowrap; }
+.policyTable [data-selected] { background: var(--xiak-color-accent-haze); }
+.ellipsis, .nameLink { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nameLink { border: 0; background: none; padding: 0; color: var(--xiak-color-accent-text); cursor: pointer; font: inherit; text-align: start; }
+.nameLink:hover { text-decoration: underline; }
+.nameLink:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 3px; }
+.levels { word-break: keep-all; font-size: var(--xiak-font-size-small); }
+.summaryToolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--xiak-spacing-default); }
+.summaryToolbar > :last-child { flex: 0 1 340px; }
+.serviceBlock { display: grid; gap: var(--xiak-spacing-narrow); }
+.serviceBlock + .serviceBlock { margin-top: var(--xiak-spacing-default); }
+.details summary { cursor: pointer; color: var(--xiak-color-accent-text); padding-block: var(--xiak-spacing-tight); overflow-wrap: anywhere; }
+.details summary:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 2px; }
+.details > :not(summary) { margin-top: var(--xiak-spacing-default); }
+.facts { display: flex; flex-wrap: wrap; gap: var(--xiak-spacing-comfortable) var(--xiak-spacing-roomy); margin: 0; padding-bottom: var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); }
+.facts div { min-width: 0; display: grid; gap: var(--xiak-spacing-narrow); }
+.facts dt { font-size: var(--xiak-font-size-small); color: var(--xiak-color-text-muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.reviewSection { display: grid; gap: var(--xiak-spacing-default); min-width: 0; border-top: var(--xiak-border-subtle); padding-top: var(--xiak-spacing-comfortable); }
+.reviewSection h3 { font-size: var(--xiak-font-size-body); margin: 0; }
+.changeColumns { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: var(--xiak-spacing-roomy); align-items: start; min-width: 0; }
+.effectBadge { justify-self: start; }
+.subjectList { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--xiak-spacing-tight); }
+.subjectList li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--xiak-spacing-tight); overflow-wrap: anywhere; }
+.diagnostics { min-width: 0; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); padding: var(--xiak-spacing-comfortable); display: grid; gap: var(--xiak-spacing-default); background: var(--xiak-color-bg-panel); }
+.diagnosticList { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--xiak-spacing-default); max-height: 300px; overflow: auto; }
+.diagnosticList li { display: grid; gap: var(--xiak-spacing-tight); padding-bottom: var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); }
+.diagnosticList button { justify-self: start; }
+.diagnosticList code { font-size: var(--xiak-font-size-small); overflow-wrap: anywhere; }
+@container policy-directory (max-width: 480px) {
+  .directoryHeading { padding-inline: var(--xiak-spacing-default); }
+  .directoryHeading > button { width: 100%; }
+}
+
+.summaryBrowser { container: policy-summary / inline-size; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-comfortable); min-width: 0; }
+.summaryStack { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-default); min-width: 0; }
+.summaryPagination { display: flex; justify-content: space-between; align-items: center; gap: var(--xiak-spacing-default); }
+.serviceTable, .operationTable { min-width: 0; table-layout: fixed; }
+.serviceTable td, .operationTable td { min-width: 0; vertical-align: top; padding-block: var(--xiak-spacing-default); }
+.serviceTable thead th:nth-child(1) { width: 26%; }
+.serviceTable thead th:nth-child(2) { width: 17%; }
+.serviceTable thead th:nth-child(3) { width: 27%; }
+.serviceTable thead th:nth-child(4) { width: 30%; }
+.operationTable thead th:nth-child(1) { width: 22%; }
+.operationTable thead th:nth-child(2) { width: 30%; }
+.operationTable thead th:nth-child(3) { width: 24%; }
+.operationTable thead th:nth-child(4) { width: 24%; }
+.serviceTable td code, .operationTable td code { display: block; white-space: normal; overflow-wrap: anywhere; font-size: var(--xiak-font-size-small); color: var(--xiak-color-text-muted); }
+.effectGroup th { background: var(--xiak-color-bg-panel-hover); }
+.effectGroup th > span + span { margin-inline-start: var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-weight: var(--xiak-font-weight-regular); }
+.serviceLink { display: block; padding: 0; margin-block-end: var(--xiak-spacing-narrow); border: 0; background: none; color: var(--xiak-color-accent-text); font: inherit; font-weight: var(--xiak-font-weight-medium); text-align: start; cursor: pointer; }
+.serviceLink:hover { text-decoration: underline; }
+.serviceLink:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 4px; }
+.serviceHeading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-default); min-width: 0; padding-bottom: var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); }
+.serviceHeading h3 { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); overflow-wrap: anywhere; }
+.serviceHeading h3 code { margin-inline-start: var(--xiak-spacing-tight); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-regular); }
+.serviceHeading h3:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 4px; }
+.sourceRule { display: grid; gap: var(--xiak-spacing-narrow); min-width: 0; }
+.sourceRule code { font-size: var(--xiak-font-size-small); overflow-wrap: anywhere; }
+@container policy-summary (max-width: 580px) {
+  .summaryToolbar { align-items: stretch; }
+  .summaryToolbar > :last-child { flex: 1 1 100%; }
+  .serviceHeading > button { flex-basis: 100%; justify-content: start; }
+  .serviceTable, .operationTable, .serviceTable tbody, .operationTable tbody { display: block; width: 100%; }
+  .serviceTable thead, .operationTable thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .serviceTable tr, .operationTable tr { display: grid; grid-template-columns: minmax(0, 1fr); padding-block: var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); }
+  .serviceTable td, .operationTable td { display: block; height: auto; border: 0; padding: var(--xiak-spacing-tight) var(--xiak-spacing-default); }
+  .serviceTable td[data-label]::before, .operationTable td[data-label]::before { content: attr(data-label); display: block; font-size: var(--xiak-font-size-small); color: var(--xiak-color-text-muted); margin-bottom: var(--xiak-spacing-narrow); }
+  .serviceTable .effectGroup { padding: 0; }
+  .effectGroup th { display: block; height: auto; border: 0; padding: var(--xiak-spacing-default); }
+}

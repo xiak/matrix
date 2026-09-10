@@ -1,12 +1,17 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { Profiler, useState } from "react";
 import userEvent from "@testing-library/user-event";
+import { LocaleProvider, useLocalePreference } from "@/i18n/LocaleProvider";
+import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
-import type { AccountIdentity, AccountPrincipal, AccountUser } from "../domain/accounts";
+import { AccountAccessProvider, useAccountCapabilities } from "../application/AccountAccessProvider";
+import type { AccountIdentity, AccountPrincipal, AccountUser, AccountAccessView } from "../domain/accounts";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LoginRenderer } from "./LoginRenderer";
+import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
@@ -34,14 +39,28 @@ function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository
   };
 }
 
-function AuthenticatedAccess({ repository }: { repository: AccountRepository }) {
-  const session = useSession();
-  return session.phase === "authenticated" ? <AccountAccessRenderer repository={repository} /> : <LoginRenderer />;
+function LanguageSwitch() {
+  const { locale, setLocale } = useLocalePreference();
+  return <button onClick={() => setLocale(locale === "en" ? "zh-CN" : "en")}>Switch language</button>;
 }
 
-async function openAccess(repository = accounts(), iamRepository = iam()) {
+const capabilityCommit = vi.fn();
+function CapabilityProbe() {
+  const capabilities = useAccountCapabilities();
+  return <Profiler id="navigation-capabilities" onRender={capabilityCommit}><output data-testid="can-manage">{String(capabilities.canManage)}</output></Profiler>;
+}
+
+function AuthenticatedAccess({ repository, initialView }: { repository: AccountRepository; initialView: AccountAccessView }) {
+  const requestLeave = useLeaveConfirmation();
+  const session = useSession();
+  const [view, setView] = useState(initialView);
+  const [entityId, setEntityId] = useState<string>();
+  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository}><CapabilityProbe /><nav>{(["overview", "users", "settings", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} onNavigate={(next, id) => requestLeave(() => { setView(next); setEntityId(id); })} /></AccountAccessProvider> : <LoginRenderer />;
+}
+
+async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users") {
   const user = userEvent.setup();
-  const view = render(<SessionProvider repository={iamRepository}><AuthenticatedAccess repository={repository} /></SessionProvider>);
+  const view = render(<LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={repository} initialView={initialView} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>);
   await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
   await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledWith(credential));
@@ -54,7 +73,7 @@ describe("qualified login", () => {
   it("returns a primary user to the originally requested console page", async () => {
     const repository = iam();
     const user = userEvent.setup();
-    render(<SessionProvider repository={repository}><LoginRenderer returnTo="/console/resources/" /></SessionProvider>);
+    render(<LocaleProvider><SessionProvider repository={repository}><LoginRenderer returnTo="/console/resources/" /></SessionProvider></LocaleProvider>);
     await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/console/resources/"));
@@ -63,9 +82,9 @@ describe("qualified login", () => {
   it("uses one text identifier, clears secrets on mode change, and preserves IAM's account namespace", async () => {
     const repository = iam();
     const user = userEvent.setup();
-    render(<SessionProvider repository={repository}><LoginRenderer /></SessionProvider>);
+    render(<LocaleProvider><SessionProvider repository={repository}><LoginRenderer /></SessionProvider></LocaleProvider>);
     await user.type(screen.getByLabelText("密码", { exact: true }), "Previous-mode-secret-49!");
-    await user.click(screen.getByRole("button", { name: "IAM 子账号" }));
+    await user.click(screen.getByRole("tab", { name: "IAM 子账号" }));
     expect((screen.getByLabelText("密码", { exact: true }) as HTMLInputElement).value).toBe("");
     const field = screen.getByLabelText("子账号登录名") as HTMLInputElement;
     expect(field.type).toBe("text");
@@ -73,18 +92,18 @@ describe("qualified login", () => {
     await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
     await waitFor(() => expect(repository.login).toHaveBeenCalledWith({ loginName: "developer@tenant-a", password: "Only-Test-Password-49!" }));
-    expect(navigation.replace).toHaveBeenCalledWith("/console/access/");
+    expect(navigation.replace).toHaveBeenCalledWith("/console/");
     expect(localStorage.length + sessionStorage.length).toBe(0);
   });
 
   it("does not submit an unqualified child or leak prior authentication errors between modes", async () => {
     const repository = iam({ login: vi.fn().mockRejectedValue(new HttpProblem(401, "private upstream")) });
     const user = userEvent.setup();
-    render(<SessionProvider repository={repository}><LoginRenderer /></SessionProvider>);
+    render(<LocaleProvider><SessionProvider repository={repository}><LoginRenderer /></SessionProvider></LocaleProvider>);
     await user.type(screen.getByLabelText("密码", { exact: true }), "Wrong-Password-49!");
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
     await screen.findByRole("alert");
-    await user.click(screen.getByRole("button", { name: "IAM 子账号" }));
+    await user.click(screen.getByRole("tab", { name: "IAM 子账号" }));
     expect(screen.queryByRole("alert")).toBeNull();
     await user.type(screen.getByLabelText("子账号登录名"), "developer");
     await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
@@ -95,44 +114,145 @@ describe("qualified login", () => {
 });
 
 describe("account access", () => {
-  it("uses one keyboard-operable tablist for the access sections", async () => {
+  it("keeps owner identity separate from child targets and never infers type from administrator grants", () => {
+    const adminChild: AccountUser = { ...child, roleBindings: [{ ...child.roleBindings[0]!, role: "ORGANIZATION_ADMIN" }] };
+    const scene = buildAccountAccessScene(identity, { items: [{ principal, roleBindings: [] }, adminChild], nextAfter: null }, null);
+    expect(scene.primaryUser).toMatchObject({ id: "primary-a", accountType: "primary", name: "Account owner", state: "active" });
+    expect(scene.users).toHaveLength(1);
+    expect(scene.users[0]).toMatchObject({ id: "child-a", accountType: "subuser", bindings: [{ role: "ORGANIZATION_ADMIN" }] });
+    const actingChild = { ...identity, principal: child.principal };
+    const pageWithoutOwner = buildAccountAccessScene(actingChild, { items: [child], nextAfter: "later" }, null);
+    expect(pageWithoutOwner.primaryUser).toMatchObject({ id: "primary-a", loginName: "admin", name: null, state: null, isCurrent: false });
+    expect(pageWithoutOwner.primaryUser.name).not.toBe(actingChild.principal.displayName);
+    expect(pageWithoutOwner.users[0]?.protected).toBe(true);
+  });
+
+  it("shows a read-only resource owner with separate identity, access and permission details", async () => {
+    const { user, repository } = await openAccess();
+    const owner = within((await screen.findByRole("button", { name: "查看用户 admin" })).closest("tr")!);
+    expect(owner.getByText("主账号")).toBeTruthy();
+    expect(owner.getByText("资源所有者")).toBeTruthy();
+    expect(owner.queryByText("未授权")).toBeNull();
+    expect(owner.queryByRole("button", { name: "管理 admin" })).toBeNull();
+    await user.click(owner.getByRole("button", { name: "查看用户 admin" }));
+    expect(await screen.findByRole("heading", { name: "admin" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "身份信息" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("primary-a")).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "权限策略" }));
+    expect(screen.getByText(/主账号默认拥有所属账号资源的完整访问权限/)).toBeTruthy();
+    for (const name of ["禁用用户", "授予角色", "删除", "重置密码", "关联策略"]) expect(screen.queryByRole("button", { name })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "访问方式" }));
+    expect(screen.getByText(/当前页面不提供主账号密钥创建或密码重置/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Switch language" }));
+    expect(screen.getByRole("tab", { name: "Access methods" }).getAttribute("aria-selected")).toBe("true");
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("filters owner separately from ungranted subusers and keeps an administrator a subuser", async () => {
+    const adminChild: AccountUser = { ...child, roleBindings: [{ ...child.roleBindings[0]!, role: "ORGANIZATION_ADMIN" }] };
+    const ungranted: AccountUser = { principal: { ...child.principal, id: "ungranted", loginName: "new.user" }, roleBindings: [] };
+    const { user } = await openAccess(accounts({ listUsers: vi.fn().mockResolvedValue({ items: [adminChild, ungranted], nextAfter: null }) }));
+    const admin = within((await screen.findByRole("button", { name: "查看用户 developer" })).closest("tr")!);
+    expect(admin.getByText("IAM 子用户")).toBeTruthy();
+    expect(admin.getByText("租户管理员")).toBeTruthy();
+    expect(admin.queryByText("主账号")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "筛选" }));
+    await user.click(screen.getByRole("combobox", { name: "筛选用户角色" }));
+    await user.click(screen.getByRole("option", { name: "未授权" }));
+    expect(screen.getByRole("button", { name: "查看用户 new.user" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "查看用户 admin" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
+    await user.click(screen.getByRole("combobox", { name: "用户类型" }));
+    await user.click(screen.getByRole("option", { name: "主账号" }));
+    expect(within(screen.getByRole("table", { name: "租户用户列表" })).getAllByRole("row")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "查看用户 admin" })).toBeTruthy();
+  });
+
+  it("keeps navigation out of mutation renders but updates it when permissions change", async () => {
+    let finish!: () => void;
+    const repository = accounts({ execute: vi.fn(() => new Promise<void>((resolve) => { finish = resolve; })) });
+    const { user } = await openAccess(repository, iam(), "settings");
+    await screen.findByRole("button", { name: "保存别名" });
+    await user.type(screen.getByLabelText(/^主账号别名/), "acme");
+    expect(screen.getByTestId("can-manage").textContent).toBe("true");
+    capabilityCommit.mockClear();
+    await user.click(screen.getByRole("button", { name: "保存别名" }));
+    expect(screen.getByRole("button", { name: "正在保存…" })).toBeTruthy();
+    expect(capabilityCommit).not.toHaveBeenCalled();
+    vi.mocked(repository.currentIdentity).mockResolvedValue({ ...identity, roles: [] });
+    await act(async () => { finish(); });
+    await waitFor(() => expect(screen.getByTestId("can-manage").textContent).toBe("false"));
+    expect(capabilityCommit).toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "保存别名" })).toBeNull();
+  });
+
+  it("switches a settings draft and an existing safe error without reloading IAM", async () => {
+    const repository = accounts({ execute: vi.fn().mockRejectedValue(new HttpProblem(409, "PRIVATE UPSTREAM DETAIL")) });
+    const { user } = await openAccess(repository);
+    await screen.findByText("Developer A");
+    await user.click(screen.getByTestId("nav-settings"));
+    await user.type(screen.getByLabelText("主账号别名", { exact: true }), "team-new");
+    await user.click(screen.getByRole("button", { name: "Switch language" }));
+    expect(screen.getByTestId("nav-settings").getAttribute("aria-current")).toBe("page");
+    expect((screen.getByLabelText("Primary account alias", { exact: true }) as HTMLInputElement).value).toBe("team-new");
+    await user.click(screen.getByRole("button", { name: "Save alias" }));
+    expect((await screen.findByRole("alert")).textContent).toContain("The name is taken or reserved");
+    await user.click(screen.getByRole("button", { name: "Switch language" }));
+    expect(screen.getByRole("alert").textContent).toContain("名称已被占用或保留");
+    expect(screen.getByRole("alert").textContent).not.toContain("PRIVATE UPSTREAM");
+    expect((screen.getByLabelText("主账号别名", { exact: true }) as HTMLInputElement).value).toBe("team-new");
+    expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
+  });
+
+  it("localizes the complete management dialog and restores its initiating action", async () => {
     const { user } = await openAccess();
     await screen.findByText("Developer A");
-    const tablist = screen.getByRole("tablist", { name: "访问管理页面" });
-    const users = within(tablist).getByRole("tab", { name: "用户" });
-    const permissions = within(tablist).getByRole("tab", { name: "权限" });
-    const tenants = within(tablist).getByRole("tab", { name: "租户管理" });
+    await user.click(screen.getByRole("button", { name: "Switch language" }));
+    const trigger = screen.getByRole("button", { name: "View user developer" });
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "Manage Developer A" });
+    expect(dialog.textContent).not.toMatch(/\p{Script=Han}/u);
+    expect(within(dialog).getByRole("button", { name: "Revoke Read-only user" })).toBeTruthy();
+    expect((within(dialog).getByRole("button", { name: "Grant role" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(within(dialog).getByRole("button", { name: "Reset password" }));
+    expect(document.activeElement).toBe(within(dialog).getByLabelText("Initial password"));
+    expect(dialog.textContent).not.toMatch(/\p{Script=Han}/u);
+    await user.click(within(dialog).getAllByRole("button", { name: "Close details" })[0]!);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    await user.click(screen.getByTestId("nav-roles"));
+    expect(screen.getByText("Four built-in, tenant-scoped roles are available")).toBeTruthy();
+    await user.click(screen.getByTestId("nav-tenants"));
+    expect(screen.getByRole("table", { name: "Tenant accounts" })).toBeTruthy();
+  });
 
-    expect(within(tablist).getAllByRole("tab")).toHaveLength(4);
-    expect(within(tablist).queryByRole("button", { name: "刷新账号信息" })).toBeNull();
-    expect(users.getAttribute("aria-selected")).toBe("true");
-    expect(users.tabIndex).toBe(0);
-    users.focus();
-    await user.keyboard("{ArrowRight}");
-    expect(document.activeElement).toBe(permissions);
-    expect(permissions.getAttribute("aria-selected")).toBe("true");
-    const panel = screen.getByRole("tabpanel", { name: "权限" });
-    expect(permissions.getAttribute("aria-controls")).toBe(panel.id);
-
-    await user.keyboard("{End}");
-    expect(document.activeElement).toBe(tenants);
-    expect(tenants.getAttribute("aria-selected")).toBe("true");
-    await user.keyboard("{Home}");
-    expect(document.activeElement).toBe(users);
-    expect(users.getAttribute("aria-selected")).toBe("true");
+  it("starts on a dedicated overview and opens the user workspace without an extra fetch", async () => {
+    const repository = accounts();
+    const { user } = await openAccess(repository, iam(), "overview");
+    await screen.findByText("Account owner");
+    expect(screen.getByText("所属账号 · 资源归属")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "子用户列表" })).toBeNull();
+    await user.click(screen.getByTestId("nav-users"));
+    await screen.findByText("Developer A");
+    expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
   });
 
   it("separates the resource owner from subusers and defaults creation to no business grant", async () => {
     const { user, repository, view } = await openAccess();
     await screen.findByText("Developer A");
     expect(screen.queryByRole("button", { name: "管理 admin" })).toBeNull();
-    expect(screen.getByText("所属账号 · 资源归属")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "创建用户" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("form", { name: "创建子用户" })).toBeTruthy();
     await user.type(screen.getByLabelText(/^子用户名/), "new.developer");
     await user.type(screen.getByLabelText("用户显示名称"), "New Developer");
     await user.type(screen.getByLabelText(/^初始密码/), "New-Child-Test-Password-49!");
-    expect((screen.getByLabelText(/^初始权限/) as HTMLSelectElement).value).toBe("");
-    await user.click(within(screen.getByRole("form", { name: "创建子用户" })).getByRole("button", { name: "创建用户" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("combobox", { name: /^初始权限/ }).textContent).toBe("暂不授权（默认）");
+    expect(repository.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.queryByDisplayValue("New-Child-Test-Password-49!")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "确认创建用户" }));
     await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-user", loginName: "new.developer", displayName: "New Developer", initialPassword: "New-Child-Test-Password-49!", initialRole: undefined }));
     expect(view.container.textContent).not.toContain(credential);
     expect(view.container.innerHTML).not.toContain("New-Child-Test-Password-49!");
@@ -142,7 +262,7 @@ describe("account access", () => {
     const repository = accounts();
     const { user } = await openAccess(repository);
     await screen.findByText("Developer A");
-    await user.click(screen.getByRole("tab", { name: "用户设置" }));
+    await user.click(screen.getByTestId("nav-settings"));
     await user.type(screen.getByLabelText(/^主账号别名/), "acme");
     await user.click(screen.getByRole("button", { name: "保存别名" }));
     await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-alias", alias: "acme", resourceVersion: 1 }));
@@ -153,7 +273,7 @@ describe("account access", () => {
   it("allows an unprivileged user to inspect its own settings without querying admin directories", async () => {
     const reader: AccountIdentity = { ...identity, principal: child.principal, roles: [], canCreateOrganizations: false };
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(reader) });
-    await openAccess(repository, iam({}, "child-a"));
+    await openAccess(repository, iam({}, "child-a"), "overview");
     await screen.findByText("尚未授予业务权限");
     expect(repository.listUsers).not.toHaveBeenCalled();
     expect(repository.listAccounts).not.toHaveBeenCalled();
@@ -164,18 +284,19 @@ describe("account access", () => {
 
   it("requires an explicit role choice for every grant", async () => {
     const { user, repository } = await openAccess();
-    await user.click(await screen.findByRole("button", { name: "管理 developer" }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
     expect((screen.getByRole("button", { name: "授予角色" }) as HTMLButtonElement).disabled).toBe(true);
-    await user.selectOptions(screen.getByLabelText("授予角色"), "PAAS_DEVELOPER");
+    await user.click(screen.getByRole("combobox", { name: "授予角色" }));
+    await user.click(screen.getByRole("option", { name: "服务开发者" }));
     await user.click(screen.getByRole("button", { name: "授予角色" }));
     await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "grant-role", principalId: "child-a", role: "PAAS_DEVELOPER" }));
-    await waitFor(() => expect((screen.getByLabelText("授予角色") as HTMLSelectElement).value).toBe(""));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "授予角色" }).textContent).toBe("请选择角色"));
     expect((screen.getByRole("button", { name: "授予角色" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("requires confirmation for revocation and disabling and clears a submitted reset password", async () => {
     const { user, repository } = await openAccess();
-    await user.click(await screen.findByRole("button", { name: "管理 developer" }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
     await user.click(screen.getByRole("button", { name: "撤销只读用户" }));
     expect(repository.execute).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "确认撤销" }));

@@ -1,42 +1,31 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent } from "react";
 import {
   Activity,
-  CheckCircle2,
   Database,
   MapPin,
   PackagePlus,
   ServerCog,
   ShoppingCart
 } from "lucide-react";
-import { Badge, Button, Input, Select, Typography } from "@ui/xiak";
+import { Alert, FormField, Badge, Button, Input, Select, Typography } from "@ui/xiak";
 import { useControlPlane } from "../application/ControlPlaneProvider";
 import type { ConsoleWorkspaceScene } from "../scenes/consoleScene";
 import styles from "./ConsoleWorkspaceRenderer.module.css";
+import { useTranslations } from "next-intl";
+import { useConsoleFormat } from "./useConsoleFormat";
 
 const installationIDPatternSource = "[a-z0-9][a-z0-9._\\-]{0,61}[a-z0-9]";
 const installationIDPattern = new RegExp(`^${installationIDPatternSource}$`);
-
-function Field({
-  children,
-  label
-}: {
-  children: React.ReactNode;
-  label: string;
-}) {
-  return <label className={styles.field}><span>{label}</span>{children}</label>;
-}
-
-function OrderNotice({ children }: { children: React.ReactNode }) {
-  return <p className={styles.notice}>{children}</p>;
-}
 
 function QuotaOrder({
   scene
 }: {
   scene: Extract<NonNullable<ConsoleWorkspaceScene>, { kind: "quota-order" }>;
 }) {
+  const t = useTranslations("ServiceWorkflow");
+  const format = useConsoleFormat();
   const controlPlane = useControlPlane();
   const initialOffering = scene.options[0];
   const [offeringId, setOfferingId] = useState(initialOffering?.offeringId ?? "");
@@ -45,9 +34,11 @@ function QuotaOrder({
   const [accepted, setAccepted] = useState(false);
   const selectedOffering = scene.options.find((item) => item.offeringId === offeringId);
   const selectedShape = selectedOffering?.shapes.find((item) => item.id === shapeId);
+  const canSubmit = Boolean(selectedShape && Number.isInteger(instanceCount) && instanceCount >= 1 && instanceCount <= 8);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canSubmit) return;
     setAccepted(false);
     const success = await controlPlane.activateQuota({
       offeringId,
@@ -62,39 +53,37 @@ function QuotaOrder({
       <header className={styles.heading}>
         <div className={styles.headingIcon}><ShoppingCart aria-hidden="true" /></div>
         <div>
-          <Typography.Eyebrow>Quota activation</Typography.Eyebrow>
-          <Typography.Title as="h2" level={3}>激活服务配额</Typography.Title>
+          <Typography.Eyebrow>{t("quotaEyebrow")}</Typography.Eyebrow>
+          <Typography.Title as="h2" level={3}>{t("quotaTitle")}</Typography.Title>
         </div>
       </header>
       {scene.options.length === 0 ? (
-        <OrderNotice>服务目录没有返回可激活的真实产品。</OrderNotice>
+        <Alert>{t("catalogEmpty")}</Alert>
       ) : (
         <form className={styles.form} onSubmit={submit}>
-          <Field label="服务产品">
+          <FormField label={t("offering")}>
             <Select
-              onChange={(event) => {
-                const nextOffering = scene.options.find((item) => item.offeringId === event.target.value);
-                setOfferingId(event.target.value);
+              onValueChange={(next) => {
+                const nextOffering = scene.options.find((item) => item.offeringId === next);
+                setOfferingId(next);
                 setShapeId(nextOffering?.shapes[0]?.id ?? "");
                 setAccepted(false);
               }}
               value={offeringId}
-            >
-              {scene.options.map((item) => <option key={item.offeringId} value={item.offeringId}>{item.offeringName}</option>)}
-            </Select>
-          </Field>
-          <Field label="资源规格">
-            <Select onChange={(event) => { setShapeId(event.target.value); setAccepted(false); }} value={shapeId}>
-              {selectedOffering?.shapes.map((shape) => <option key={shape.id} value={shape.id}>{shape.label}</option>)}
-            </Select>
-          </Field>
+              options={scene.options.map((item) => ({ value: item.offeringId, label: item.offeringName }))}
+            />
+          </FormField>
+          <FormField label={t("shape")}>
+            <Select onValueChange={(next) => { setShapeId(next); setAccepted(false); }} value={shapeId}
+              options={selectedOffering?.shapes.map((shape) => ({ value: shape.id, label: shape.label })) ?? []} />
+          </FormField>
           {selectedShape ? (
             <div className={styles.resourceSummary}>
               <Database aria-hidden="true" />
-              <div><strong>{selectedShape.label}</strong><span>{selectedShape.resourceSummary}</span></div>
+              <div><strong>{selectedShape.label}</strong><span>{format.resources(selectedShape.resources)}</span></div>
             </div>
           ) : null}
-          <Field label="实例数量">
+          <FormField label={t("instanceCount")}>
             <Input
               max={8}
               min={1}
@@ -103,19 +92,19 @@ function QuotaOrder({
               type="number"
               value={instanceCount}
             />
-          </Field>
-          <OrderNotice>
-            此操作创建组织配额权益，不处理金额、支付、账单或折扣。
-          </OrderNotice>
-          {accepted ? <p className={styles.accepted}><CheckCircle2 aria-hidden="true" /> 配额已由平台确认</p> : null}
+          </FormField>
+          <Alert>
+            {t("quotaNotice")}
+          </Alert>
+          {accepted ? <Alert status="success">{t("quotaAccepted")}</Alert> : null}
           <Button
             block
-            disabled={!offeringId || !shapeId || instanceCount < 1 || controlPlane.mutation === "quota"}
+            disabled={!canSubmit || controlPlane.mutation === "quota"}
             size="large"
             type="submit"
           >
             <PackagePlus aria-hidden="true" />
-            {controlPlane.mutation === "quota" ? "正在激活…" : "确认激活配额"}
+            {controlPlane.mutation === "quota" ? t("activating") : t("activate")}
           </Button>
         </form>
       )}
@@ -128,18 +117,20 @@ function InstallationOrder({
 }: {
   scene: Extract<NonNullable<ConsoleWorkspaceScene>, { kind: "installation-order" }>;
 }) {
+  const t = useTranslations("ServiceWorkflow");
   const controlPlane = useControlPlane();
+  const instanceIdField = useId();
   const [entitlementId, setEntitlementId] = useState(scene.entitlementOptions[0]?.entitlementId ?? "");
   const [regionId, setRegionId] = useState(scene.regionOptions[0]?.id ?? "");
   const [name, setName] = useState("postgres-primary");
   const [id, setId] = useState("postgres-primary");
   const [accepted, setAccepted] = useState(false);
   const selectedEntitlement = scene.entitlementOptions.find((item) => item.entitlementId === entitlementId);
-  const canSubmit = Boolean(selectedEntitlement && regionId && installationIDPattern.test(id) && name.trim());
+  const canSubmit = Boolean(selectedEntitlement && scene.regionOptions.some((region) => region.id === regionId) && installationIDPattern.test(id) && name.trim());
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedEntitlement) return;
+    if (!selectedEntitlement || !canSubmit) return;
     setAccepted(false);
     const success = await controlPlane.createInstallation({
       id,
@@ -156,50 +147,48 @@ function InstallationOrder({
       <header className={styles.heading}>
         <div className={styles.headingIcon}><ServerCog aria-hidden="true" /></div>
         <div>
-          <Typography.Eyebrow>Install service</Typography.Eyebrow>
-          <Typography.Title as="h2" level={3}>安装 PostgreSQL</Typography.Title>
+          <Typography.Eyebrow>{t("installEyebrow")}</Typography.Eyebrow>
+          <Typography.Title as="h2" level={3}>{t("installTitle")}</Typography.Title>
         </div>
       </header>
       {scene.entitlementOptions.length === 0 ? (
-        <OrderNotice>没有可用配额。请先激活 PostgreSQL 配额，或等待现有安装释放额度。</OrderNotice>
+        <Alert>{t("quotaEmpty")}</Alert>
       ) : scene.regionOptions.length === 0 ? (
-        <OrderNotice>没有就绪区域。安装器必须先完成本机能力检查。</OrderNotice>
+        <Alert>{t("regionsEmpty")}</Alert>
       ) : (
         <form className={styles.form} onSubmit={submit}>
-          <Field label="实例 ID">
+          <FormField id={instanceIdField} hint={t("idHint")} label={t("instanceId")}>
             <Input
+              id={instanceIdField}
+              aria-describedby={`${instanceIdField}-hint`}
+              minLength={2}
+              maxLength={63}
               invalid={Boolean(id) && !installationIDPattern.test(id)}
               onChange={(event) => { setId(event.target.value); setAccepted(false); }}
               pattern={installationIDPatternSource}
               required
               value={id}
             />
-          </Field>
-          <Field label="显示名称">
+          </FormField>
+          <FormField label={t("displayName")}>
             <Input onChange={(event) => { setName(event.target.value); setAccepted(false); }} required value={name} />
-          </Field>
-          <Field label="配额">
-            <Select onChange={(event) => { setEntitlementId(event.target.value); setAccepted(false); }} value={entitlementId}>
-              {scene.entitlementOptions.map((item) => (
-                <option key={item.entitlementId} value={item.entitlementId}>
-                  {item.label} · 可用 {item.available}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="安装区域">
-            <Select onChange={(event) => { setRegionId(event.target.value); setAccepted(false); }} value={regionId}>
-              {scene.regionOptions.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </Select>
-          </Field>
+          </FormField>
+          <FormField label={t("quota")}>
+            <Select onValueChange={(next) => { setEntitlementId(next); setAccepted(false); }} value={entitlementId}
+              options={scene.entitlementOptions.map((item) => ({ value: item.entitlementId, label: `${item.label} · ${t("available", { count: item.available })}` }))} />
+          </FormField>
+          <FormField label={t("installRegion")}>
+            <Select onValueChange={(next) => { setRegionId(next); setAccepted(false); }} value={regionId}
+              options={scene.regionOptions.map((item) => ({ value: item.id, label: item.label }))} />
+          </FormField>
           <div className={styles.resourceSummary}>
             <MapPin aria-hidden="true" />
-            <div><strong>本机受管安装</strong><span>制品、端口和持久化策略由服务端决定</span></div>
+            <div><strong>{t("localInstall")}</strong><span>{t("serverPolicy")}</span></div>
           </div>
-          {accepted ? <p className={styles.accepted}><CheckCircle2 aria-hidden="true" /> 安装任务已由平台接受</p> : null}
+          {accepted ? <Alert status="success">{t("installAccepted")}</Alert> : null}
           <Button block disabled={!canSubmit || controlPlane.mutation === "installation"} size="large" type="submit">
             <ServerCog aria-hidden="true" />
-            {controlPlane.mutation === "installation" ? "正在提交…" : "提交安装任务"}
+            {controlPlane.mutation === "installation" ? t("submitting") : t("install")}
           </Button>
         </form>
       )}
@@ -212,36 +201,38 @@ function PlatformStatus({
 }: {
   scene: Extract<NonNullable<ConsoleWorkspaceScene>, { kind: "platform-status" }>;
 }) {
-  const facts = useMemo(() => [
-    { icon: MapPin, label: "就绪区域", value: scene.readyRegions, status: scene.readyRegions > 0 ? "success" : "warning" },
-    { icon: Activity, label: "活动任务", value: scene.activeOperations, status: scene.activeOperations > 0 ? "info" : "neutral" },
-    { icon: Database, label: "服务实例", value: scene.serviceCount, status: "neutral" }
-  ] as const, [scene]);
+  const t = useTranslations("ServiceWorkflow");
+  const format = useConsoleFormat();
+  const facts = [
+    { icon: MapPin, key: "readyRegions", value: scene.readyRegions, status: scene.readyRegions > 0 ? "success" : "warning" },
+    { icon: Activity, key: "activeOperations", value: scene.activeOperations, status: scene.activeOperations > 0 ? "info" : "neutral" },
+    { icon: Database, key: "serviceCount", value: scene.serviceCount, status: "neutral" }
+  ] as const;
 
   return (
     <div className={styles.workspace}>
       <header className={styles.heading}>
         <div className={styles.headingIcon}><Activity aria-hidden="true" /></div>
         <div>
-          <Typography.Eyebrow>Live status</Typography.Eyebrow>
-          <Typography.Title as="h2" level={3}>平台状态</Typography.Title>
+          <Typography.Eyebrow>{t("statusEyebrow")}</Typography.Eyebrow>
+          <Typography.Title as="h2" level={3}>{t("statusTitle")}</Typography.Title>
         </div>
       </header>
       <div className={styles.statusList}>
         {facts.map((fact) => {
           const Icon = fact.icon;
           return (
-            <div className={styles.statusItem} key={fact.label}>
+            <div className={styles.statusItem} key={fact.key}>
               <Icon aria-hidden="true" />
-              <span>{fact.label}</span>
-              <Badge status={fact.status}>{fact.value}</Badge>
+              <span>{t(fact.key)}</span>
+              <Badge status={fact.status}>{format.number(fact.value)}</Badge>
             </div>
           );
         })}
       </div>
-      <OrderNotice>
-        数值来自当前组织的真实控制面快照。未知或失败状态不会被折算成健康。
-      </OrderNotice>
+      <Alert>
+        {t("statusNotice")}
+      </Alert>
     </div>
   );
 }

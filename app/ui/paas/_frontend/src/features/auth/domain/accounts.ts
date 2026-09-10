@@ -1,6 +1,9 @@
 export const userRoles = ["ORGANIZATION_ADMIN", "PAAS_DEVELOPER", "PAAS_VIEWER", "AUDIT_READER"] as const;
 export type UserRole = typeof userRoles[number];
 
+export const accountAccessViews = ["users", "create-user", "groups", "create-group", "policies", "create-policy", "simulator", "roles", "create-role", "providers", "user-sso", "federations", "keys", "settings", "tenants"] as const;
+export type AccountAccessView = "overview" | typeof accountAccessViews[number];
+
 export type Account = {
   organization: { id: string; displayName: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number };
   primaryPrincipalId: string;
@@ -9,6 +12,7 @@ export type Account = {
 };
 
 export type AccountPrincipal = {
+  source?: "local" | "wecom";
   id: string;
   organizationId: string;
   loginName: string;

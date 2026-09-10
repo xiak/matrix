@@ -1,0 +1,3 @@
+.controls { display: flex; align-items: center; gap: var(--xiak-spacing-narrow); }
+@media (max-width: 480px) { .themeLabel { display: none; } }
+.panel { display: grid; gap: var(--xiak-spacing-comfortable); }

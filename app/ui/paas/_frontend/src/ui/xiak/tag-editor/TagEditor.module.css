@@ -1,0 +1,14 @@
+@layer xiak {
+.root { container: tag-editor / inline-size; min-width: 0; display: grid; gap: var(--xiak-spacing-comfortable); }
+.rows { display: grid; gap: var(--xiak-spacing-comfortable); }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: var(--xiak-spacing-comfortable); align-items: end; }
+.empty { margin: 0; padding: var(--xiak-spacing-roomy); border: var(--xiak-border-subtle); color: var(--xiak-color-text-muted); text-align: center; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-default); }
+.actions > span { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.error { margin: 0; color: var(--xiak-color-danger-text); }
+@container tag-editor (max-width: 560px) {
+  .row { grid-template-columns: minmax(0, 1fr) auto; padding-bottom: var(--xiak-spacing-comfortable); border-bottom: var(--xiak-border-subtle); }
+  .row > :nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
+  .row > :last-child { grid-column: 2; grid-row: 1; }
+}
+}

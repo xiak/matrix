@@ -1,66 +1,8 @@
-.root {
-  position: relative;
-}
-
-.list {
-  display: grid;
-  max-height: 420px;
-  overflow: auto;
-  margin: 0;
-  padding: var(--xiak-spacing-tight);
-  list-style: none;
-}
-
-.list li > a {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: var(--xiak-spacing-default);
-  align-items: center;
-  border-radius: var(--xiak-radius-control);
-  padding: var(--xiak-spacing-default);
-  color: var(--xiak-color-text-base);
-  outline: none;
-}
-
-.list li > a:hover,
-.list li > a:focus-visible {
-  background: var(--xiak-color-bg-panel-hover);
-}
-
-.list li > a > span:first-child {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--xiak-radius-pill);
-  background: var(--xiak-color-status-neutral);
-}
-
-.list li > a > span[data-status="danger"] {
-  background: var(--xiak-color-status-danger);
-}
-
-.list li > a > span[data-status="warning"] {
-  background: var(--xiak-color-status-warning);
-}
-
-.list li > a > span[data-status="info"] {
-  background: var(--xiak-color-status-info);
-}
-
-.copy {
-  display: grid;
-  min-width: 0;
-  gap: var(--xiak-spacing-narrow);
-}
-
-.copy strong,
-.copy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.copy small {
-  color: var(--xiak-color-text-subtle);
-  font-size: var(--xiak-font-size-caption);
-}
+.root { position: relative; }
+.activeTasks { display: flex; align-items: center; gap: var(--xiak-spacing-default); min-height: 64px; padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable); border-bottom: var(--xiak-border-subtle); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
+.activeTasks:hover { background: var(--xiak-color-accent-haze-hover); }
+.activeTasks:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: -2px; }
+.activeTasks > svg { flex: none; width: 18px; height: 18px; }
+.activeTasks > svg:last-child { margin-inline-start: auto; }
+.activeTasks > span { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
+.activeTasks small { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); }

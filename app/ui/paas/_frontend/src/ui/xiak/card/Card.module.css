@@ -1,4 +1,6 @@
+@layer xiak {
 .card {
+  container: xiak-card / inline-size;
   min-width: 0;
   overflow: hidden;
   border: var(--xiak-border-subtle);
@@ -10,10 +12,11 @@
 .header,
 .footer {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--xiak-spacing-default);
-  padding: var(--xiak-spacing-comfortable) var(--xiak-spacing-roomy);
+  padding: var(--xiak-spacing-comfortable) var(--xiak-panel-padding);
 }
 
 .header {
@@ -27,5 +30,10 @@
 }
 
 .body {
-  padding: var(--xiak-spacing-roomy);
+  padding: var(--xiak-panel-padding);
+}
+.header > div { min-width: 0; }
+@container xiak-card (max-width: 480px) {
+  .header, .body, .footer { padding-inline: var(--xiak-spacing-comfortable); }
+}
 }

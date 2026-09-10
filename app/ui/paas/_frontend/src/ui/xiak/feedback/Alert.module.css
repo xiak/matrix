@@ -1,0 +1,9 @@
+@layer xiak {
+.alert { display: flex; min-width: 0; align-items: flex-start; gap: var(--xiak-spacing-default); border: 1px solid currentColor; border-radius: var(--xiak-radius-control); padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable); font-size: var(--xiak-font-size-body); line-height: 1.6; }
+.alert[data-status="info"] { background: var(--xiak-color-status-info-bg); color: var(--xiak-color-status-info); }
+.alert[data-status="success"] { background: var(--xiak-color-status-success-bg); color: var(--xiak-color-status-success); }
+.alert[data-status="warning"] { background: var(--xiak-color-status-warning-bg); color: var(--xiak-color-status-warning); }
+.alert[data-status="danger"] { background: var(--xiak-color-status-danger-bg); color: var(--xiak-color-status-danger); }
+.alert > svg { flex: none; width: var(--xiak-icon-size); height: var(--xiak-icon-size); margin-top: var(--xiak-spacing-narrow); }
+.alert > div { min-width: 0; overflow-wrap: anywhere; }
+}

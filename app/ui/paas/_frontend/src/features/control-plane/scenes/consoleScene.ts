@@ -1,9 +1,17 @@
-import type { ConsoleSection } from "../domain/selection";
+import type { ExperienceResource, ExperienceOperation, ExperiencePipeline, ExperienceServiceHealth } from "../domain/experience";
+import type { Region, ServiceInstallation } from "../domain/resources";
+import type { ConsoleSection, ServiceView } from "../domain/selection";
 
 export type RailIconKind = "overview" | "database" | "devops" | "observability" | "access";
 export type NavigationIconKind =
+  | "policy"
+  | "sso"
+  | "key"
+  | "users"
+  | "settings"
+  | "tenants"
   | "overview"
-  | "products"
+  | "messages"
   | "resources"
   | "operations"
   | "catalog"
@@ -18,111 +26,61 @@ export type SceneStatus = "neutral" | "info" | "success" | "warning" | "danger";
 
 export type ProductRailItemScene = {
   id: string;
-  label: string;
   href: string;
   icon: RailIconKind;
   selected: boolean;
 };
 
 export type ConsoleNavigationItemScene = {
-  id: ConsoleSection;
-  label: string;
-  description: string;
+  id: string;
+  messageKey: import("./serviceDirectory").ServicePageId | ConsoleSection;
   href: string;
   icon: NavigationIconKind;
   selected: boolean;
   count?: number;
+  group?: "identity" | "authorization" | "identityProviders" | "security" | "administration";
 };
 
 export type MetricScene = {
-  id: string;
-  label: string;
-  value: string;
-  detail: string;
+  id: "offerings" | "quota" | "services" | "regions" | "all-resources" | "healthy-resources" | "active-operations" | "active-alerts" | "pipeline-success" | "pipeline-running" | "lead-time" | "deployment-frequency" | "service-health" | "availability" | "alert-firing" | "ingestion";
+  value: number;
+  detailCount?: number;
   status: SceneStatus;
 };
 
-export type ExperienceProductScene = {
-  id: string;
-  name: string;
-  eyebrow: string;
-  description: string;
-  href: string;
-  icon: ExperienceIconKind;
-  status: SceneStatus;
-  statusLabel: string;
-  resourceCount: number;
-  capabilities: string[];
-};
+export type UnifiedResourceScene = ExperienceResource & { status: SceneStatus };
 
-export type UnifiedResourceScene = {
-  id: string;
-  name: string;
-  kind: string;
-  productId: string;
-  productName: string;
-  projectId: string;
-  projectName: string;
-  regionId: string;
-  regionName: string;
-  stateLabel: string;
-  status: SceneStatus;
-  updatedAt: string;
-  href: string;
-};
+export type OperationScene = ExperienceOperation & { status: SceneStatus };
 
-export type OperationScene = {
-  id: string;
-  action: string;
-  target: string;
-  productName: string;
-  actor: string;
-  stateLabel: string;
-  status: SceneStatus;
-  progress: number;
-  startedAt: string;
-};
+export type PipelineScene = ExperiencePipeline & { status: SceneStatus };
 
-export type PipelineScene = {
-  id: string;
-  name: string;
-  repository: string;
-  branch: string;
-  commit: string;
-  environment: string;
-  stateLabel: string;
-  status: SceneStatus;
-  duration: string;
-  triggeredAt: string;
-};
-
-export type ServiceHealthScene = {
-  id: string;
-  name: string;
-  productName: string;
-  availability: string;
-  latency: string;
-  errorRate: string;
-  stateLabel: string;
-  status: SceneStatus;
-  trend: number[];
-};
+export type ServiceHealthScene = ExperienceServiceHealth & { status: SceneStatus };
 
 export type AlertScene = {
   id: string;
   title: string;
   serviceName: string;
-  severityLabel: string;
+  severity: import("../domain/experience").ExperienceAlertSeverity;
   status: SceneStatus;
-  stateLabel: string;
+  state: import("../domain/experience").ExperienceAlert["state"];
   startedAt: string;
   owner: string;
 };
 
 export type ConsoleScopeScene = {
   organization: { id: string; name: string };
-  projects: Array<{ id: string; name: string }>;
   regions: Array<{ id: string; name: string }>;
+};
+
+export type ConsoleMessageScene = {
+  id: string;
+  category: "alert" | "operation" | "platform";
+  title: string;
+  description: string;
+  createdAt: string;
+  status: SceneStatus;
+  result?: "SUCCEEDED" | "FAILED";
+  href?: string;
 };
 
 export type GlobalSearchResultScene = {
@@ -130,8 +88,9 @@ export type GlobalSearchResultScene = {
   label: string;
   description: string;
   href: string;
-  category: "页面" | "产品" | "资源";
+  category: "page" | "product" | "resource";
   icon: ExperienceIconKind;
+  keywords?: readonly string[];
 };
 
 export type OfferingScene = {
@@ -149,7 +108,7 @@ export type EntitlementScene = {
   id: string;
   offeringName: string;
   shapeName: string;
-  resourceSummary: string;
+  resources: Region["capacity"] | null;
   purchased: number;
   inUse: number;
   available: number;
@@ -161,7 +120,7 @@ export type InstallationScene = {
   name: string;
   engine: string;
   regionName: string;
-  phase: string;
+  phase: ServiceInstallation["phase"];
   status: SceneStatus;
   endpoint: string | null;
   operationId: string;
@@ -171,11 +130,11 @@ export type InstallationScene = {
 export type RegionScene = {
   id: string;
   name: string;
-  profile: string;
-  state: string;
+  profile: Region["profile"];
+  state: Region["state"];
   status: SceneStatus;
-  capacity: string;
-  inspectedAt: string;
+  capacity: Region["capacity"];
+  inspectedAt: string | null;
 };
 
 export type QuotaOrderOptionScene = {
@@ -184,7 +143,7 @@ export type QuotaOrderOptionScene = {
   shapes: Array<{
     id: string;
     label: string;
-    resourceSummary: string;
+    resources: Region["capacity"];
   }>;
 };
 
@@ -204,22 +163,24 @@ export type ConsoleContentScene =
     }
   | {
       kind: "cloud-overview";
+      regionCount: number;
+      readyRegions: number;
       metrics: MetricScene[];
-      products: ExperienceProductScene[];
       recentResources: UnifiedResourceScene[];
       operations: OperationScene[];
       alerts: AlertScene[];
     }
-  | { kind: "products"; products: ExperienceProductScene[] }
+  | { kind: "messages"; messages: ConsoleMessageScene[]; preview: boolean }
   | { kind: "resources"; resources: UnifiedResourceScene[] }
   | { kind: "operations"; operations: OperationScene[] }
-  | { kind: "devops"; metrics: MetricScene[]; pipelines: PipelineScene[] }
-  | { kind: "observability"; metrics: MetricScene[]; services: ServiceHealthScene[]; alerts: AlertScene[] }
+  | { kind: "devops"; view?: ServiceView; metrics: MetricScene[]; pipelines: PipelineScene[] }
+  | { kind: "observability"; view?: ServiceView; metrics: MetricScene[]; services: ServiceHealthScene[]; alerts: AlertScene[] }
   | { kind: "catalog"; offerings: OfferingScene[] }
   | { kind: "quotas"; entitlements: EntitlementScene[] }
   | { kind: "installations"; installations: InstallationScene[] }
   | { kind: "regions"; regions: RegionScene[] }
-  | { kind: "access" };
+  | { kind: "logs"; view?: ServiceView; data: import("../domain/experience").ExperienceLogs | null }
+  | { kind: "access"; view: import("@/features/auth/domain/accounts").AccountAccessView };
 
 export type ConsoleWorkspaceScene =
   | {
@@ -241,17 +202,13 @@ export type ConsoleWorkspaceScene =
 
 export type ConsoleScene = {
   section: ConsoleSection;
-  title: string;
-  eyebrow: string;
-  description: string;
-  productName: string;
+  productId: import("./serviceDirectory").ServiceId | "console";
   productEyebrow: string;
   productIcon: RailIconKind;
   preview: boolean;
   scope: ConsoleScopeScene | null;
-  search: GlobalSearchResultScene[];
-  noticeCount: number;
-  notices: AlertScene[];
+  search: Array<GlobalSearchResultScene & { resourceKind: import("../domain/experience").ExperienceResource["kind"] }>;
+  messages: ConsoleMessageScene[];
   activeOperationCount: number;
   rail: ProductRailItemScene[];
   navigation: ConsoleNavigationItemScene[];

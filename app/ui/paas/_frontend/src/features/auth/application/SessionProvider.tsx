@@ -18,10 +18,13 @@ import type {
 import { httpIamRepository } from "../repositories/httpIamRepository";
 import type { IamRepository } from "../repositories/iamRepository";
 
+export type SessionErrorCode = "invalidCredentials" | "tooManyAttempts" | "loginUnavailable"
+  | "invalidCurrentPassword" | "passwordPolicy" | "passwordConflict" | "passwordUnavailable" | "logoutUnavailable";
+
 type SessionContextValue = {
   phase: SessionPhase;
   current: AuthenticatedSession | null;
-  error: string | null;
+  error: SessionErrorCode | null;
   clearError(): void;
   login(loginName: string, password: string): Promise<LoginOutcome | null>;
   changePassword(currentPassword: string, newPassword: string): Promise<boolean>;
@@ -35,27 +38,27 @@ type CredentialContextValue = {
 const SessionContext = createContext<SessionContextValue | null>(null);
 const CredentialContext = createContext<CredentialContextValue | null>(null);
 
-function authenticationMessage(error: unknown): string {
+function authenticationError(error: unknown): SessionErrorCode {
   if (error instanceof HttpProblem && error.status === 401) {
-    return "账号、主账号标识或密码不正确";
+    return "invalidCredentials";
   }
   if (error instanceof HttpProblem && error.status === 429) {
-    return "登录尝试过于频繁，请稍后重试";
+    return "tooManyAttempts";
   }
-  return "IAM 暂时不可用，请稍后重试";
+  return "loginUnavailable";
 }
 
-function passwordChangeMessage(error: unknown): string {
+function passwordChangeError(error: unknown): SessionErrorCode {
   if (error instanceof HttpProblem && error.status === 401) {
-    return "当前密码不正确，或登录会话已经失效";
+    return "invalidCurrentPassword";
   }
   if (error instanceof HttpProblem && error.status === 422) {
-    return "新密码需为 14–128 字节，且至少包含三类：大写字母、小写字母、数字、符号";
+    return "passwordPolicy";
   }
   if (error instanceof HttpProblem && error.status === 409) {
-    return "密码已在其他会话中更新，请退出后重新登录";
+    return "passwordConflict";
   }
-  return "IAM 暂时无法更新密码，请稍后重试";
+  return "passwordUnavailable";
 }
 
 export function SessionProvider({
@@ -68,7 +71,7 @@ export function SessionProvider({
   const [phase, setPhase] = useState<SessionPhase>("anonymous");
   const [current, setCurrent] = useState<AuthenticatedSession | null>(null);
   const [credential, setCredential] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<SessionErrorCode | null>(null);
   const clearError = useCallback(() => { setError(null); }, []);
 
   const forget = useCallback(() => {
@@ -103,7 +106,7 @@ export function SessionProvider({
     } catch (loginError) {
       setCredential(null);
       setCurrent(null);
-      setError(authenticationMessage(loginError));
+      setError(authenticationError(loginError));
       setPhase("anonymous");
       return null;
     }
@@ -123,7 +126,7 @@ export function SessionProvider({
       setPhase("authenticated");
       return true;
     } catch (changeError) {
-      setError(passwordChangeMessage(changeError));
+      setError(passwordChangeError(changeError));
       setPhase("password-change-required");
       return false;
     }
@@ -145,7 +148,7 @@ export function SessionProvider({
         forget();
         return true;
       }
-      setError("IAM 注销失败，会话仍保留在当前页面内存中");
+      setError("logoutUnavailable");
       setPhase(
         phase === "password-change-required" || phase === "changing-password"
           ? "password-change-required"

@@ -1,21 +1,23 @@
-import Link from "next/link";
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import { ConsoleLink as Link, useConsoleNavigation } from "../routes/ConsoleNavigation";
 import { AccountAccessRenderer } from "@/features/auth/renderers/AccountAccessRenderer";
-import type { AccountRepository } from "@/features/auth/repositories/iamRepository";
 import {
   ArrowRight,
-  Box,
   CheckCircle2,
   Cpu,
   Database,
-  Gauge,
   HardDrive,
   MapPin,
   PackageCheck,
-  PackageSearch,
   Server
 } from "lucide-react";
 import {
+  Table,
+  PageSkeleton,
+  EmptyState,
   Badge,
+  Button,
   Card,
   ContentLayout,
   Typography
@@ -27,104 +29,58 @@ import type {
 } from "../scenes/consoleScene";
 import { ExperienceContentRenderer, type ResourceScope } from "./ExperienceContentRenderer";
 import styles from "./ConsoleContentRenderer.module.css";
-
-const metricIcons: Record<string, typeof Database> = {
-  offerings: PackageSearch,
-  quota: Gauge,
-  services: Database,
-  regions: MapPin
-};
-
-function phaseLabel(value: string): string {
-  const labels: Record<string, string> = {
-    PENDING: "等待处理",
-    PROVISIONING: "安装中",
-    READY: "运行中",
-    FAILED: "失败",
-    AVAILABLE: "可用",
-    UNAVAILABLE: "不可用",
-    STALE: "待复检"
-  };
-  return labels[value] ?? value;
-}
-
-function EmptyState({
-  description,
-  title
-}: {
-  description: string;
-  title: string;
-}) {
-  return (
-    <div className={styles.empty}>
-      <Box aria-hidden="true" />
-      <Typography.Title as="h3" level={3}>{title}</Typography.Title>
-      <Typography.Text tone="muted">{description}</Typography.Text>
-    </div>
-  );
-}
+import { ConsoleMetrics } from "./ConsoleMetrics";
+import { useConsoleFormat } from "./useConsoleFormat";
+import { useTranslations } from "next-intl";
+import { LogServiceRenderer } from "./LogServiceRenderer";
+import { MessageCenterRenderer } from "./MessageCenterRenderer";
 
 function InstallationRows({ items }: { items: InstallationScene[] }) {
+  const t = useTranslations("ManagedService");
+  const format = useConsoleFormat();
   if (items.length === 0) {
     return (
       <EmptyState
-        description="激活配额后，可以从服务实例页发起第一个 PostgreSQL 安装。"
-        title="还没有服务实例"
+        description={t("instancesEmptyHint")}
+        title={t("instancesEmpty")}
       />
     );
   }
   return (
-    <div aria-label="服务实例列表" className={styles.tableWrap} role="region" tabIndex={0}>
-      <table className={styles.table}>
+    <Table aria-label={t("instancesTable")}>
         <thead>
-          <tr><th>实例</th><th>区域</th><th>状态</th><th>端点</th><th>最近观察</th></tr>
+          <tr><th scope="col">{t("instance")}</th><th scope="col">{t("region")}</th><th scope="col">{t("status")}</th><th scope="col">{t("endpoint")}</th><th scope="col">{t("observed")}</th></tr>
         </thead>
         <tbody>
           {items.map((item) => (
             <tr key={item.id}>
               <td><strong>{item.name}</strong><small>{item.engine}</small></td>
               <td>{item.regionName}</td>
-              <td><Badge status={item.status}>{phaseLabel(item.phase)}</Badge></td>
-              <td><Typography.Code>{item.endpoint ?? "尚未分配"}</Typography.Code></td>
-              <td>{item.observedAt}</td>
+              <td><Badge status={item.status}>{t(`installationPhases.${item.phase}`)}</Badge></td>
+              <td><Typography.Code>{item.endpoint ?? t("unassigned")}</Typography.Code></td>
+              <td>{format.timestamp(item.observedAt)}</td>
             </tr>
           ))}
         </tbody>
-      </table>
-    </div>
+      </Table>
   );
 }
 
 function OverviewContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "overview" }> }) {
+  const t = useTranslations("ManagedService");
   return (
     <ContentLayout>
       <ContentLayout.Main>
-        <section className={styles.metricGrid} aria-label="平台指标">
-          {scene.metrics.map((metric) => {
-            const Icon = metricIcons[metric.id] ?? Box;
-            return (
-              <Card className={styles.metric} key={metric.id}>
-                <Card.Body>
-                  <div className={styles.metricHeading}>
-                    <span>{metric.label}</span>
-                    <Icon aria-hidden="true" data-status={metric.status} />
-                  </div>
-                  <strong>{metric.value}</strong>
-                  <p>{metric.detail}</p>
-                </Card.Body>
-              </Card>
-            );
-          })}
-        </section>
+        <ConsoleMetrics metrics={scene.metrics} />
 
         <Card>
           <Card.Header>
             <div>
-              <Typography.Title as="h2" level={3}>最近服务实例</Typography.Title>
-              <Typography.Text tone="muted">安装任务与运行端点</Typography.Text>
+              <Typography.Title as="h2" level={3}>{t("recentInstances")}</Typography.Title>
+              <Typography.Text tone="muted">{t("recentHint")}</Typography.Text>
             </div>
             <Link className={styles.textLink} href="/console/installations/">
-              查看全部 <ArrowRight aria-hidden="true" />
+              {t("viewAll")} <ArrowRight aria-hidden="true" />
             </Link>
           </Card.Header>
           <InstallationRows items={scene.recentInstallations} />
@@ -135,19 +91,19 @@ function OverviewContent({ scene }: { scene: Extract<ConsoleContentScene, { kind
         <Card className={styles.featureCard}>
           <Card.Body className={styles.featureCardBody}>
             <div className={styles.databaseIcon}><Database aria-hidden="true" /></div>
-            <Typography.Eyebrow>Default managed database</Typography.Eyebrow>
+            <Typography.Eyebrow>{t("databaseEyebrow")}</Typography.Eyebrow>
             <Typography.Title as="h2" level={2}>
               {scene.offering?.name ?? "PostgreSQL"}
             </Typography.Title>
-            <p>{scene.offering?.description ?? "服务目录尚未返回可用产品。"}</p>
+            <p>{scene.offering?.description ?? t("offeringUnavailable")}</p>
             <div className={styles.featureMeta}>
-              <span><PackageCheck aria-hidden="true" /> 固定发布制品</span>
-              <span><HardDrive aria-hidden="true" /> 持久化存储</span>
-              <span><CheckCircle2 aria-hidden="true" /> 平台托管凭据</span>
+              <span><PackageCheck aria-hidden="true" /> {t("fixedArtifact")}</span>
+              <span><HardDrive aria-hidden="true" /> {t("persistentStorage")}</span>
+              <span><CheckCircle2 aria-hidden="true" /> {t("managedCredentials")}</span>
             </div>
-            <Link className={styles.primaryLink} href="/console/catalog/">
-              浏览服务目录 <ArrowRight aria-hidden="true" />
-            </Link>
+            <Button asChild><Link href="/console/catalog/">
+              {t("browseCatalog")} <ArrowRight aria-hidden="true" />
+            </Link></Button>
           </Card.Body>
         </Card>
       </ContentLayout.Aside>
@@ -156,8 +112,9 @@ function OverviewContent({ scene }: { scene: Extract<ConsoleContentScene, { kind
 }
 
 function CatalogContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "catalog" }> }) {
+  const t = useTranslations("ManagedService");
   if (scene.offerings.length === 0) {
-    return <EmptyState title="服务目录不可用" description="平台没有返回任何可真实安装的产品。" />;
+    return <EmptyState title={t("catalogUnavailable")} description={t("catalogUnavailableHint")} />;
   }
   return (
     <div className={styles.catalogGrid}>
@@ -167,23 +124,23 @@ function CatalogContent({ scene }: { scene: Extract<ConsoleContentScene, { kind:
             <div className={styles.productTopline}>
               <div className={styles.databaseIcon}><Database aria-hidden="true" /></div>
               <Badge status={offering.available ? "success" : "neutral"}>
-                {offering.available ? "可激活" : "不可用"}
+                {offering.available ? t("activatable") : t("unavailable")}
               </Badge>
             </div>
             <Typography.Eyebrow>{offering.engine}</Typography.Eyebrow>
             <Typography.Title as="h2" level={2}>{offering.name}</Typography.Title>
             <p className={styles.productDescription}>{offering.description}</p>
             <dl className={styles.productFacts}>
-              <div><dt>引擎版本</dt><dd>{offering.version}</dd></div>
-              <div><dt>配额规格</dt><dd>{offering.shapeCount} 种</dd></div>
-              <div><dt>可选规格</dt><dd>{offering.shapeSummary}</dd></div>
+              <div><dt>{t("engineVersion")}</dt><dd>{offering.version}</dd></div>
+              <div><dt>{t("quotaShapes")}</dt><dd>{t("shapeCount", { count: offering.shapeCount })}</dd></div>
+              <div><dt>{t("availableShapes")}</dt><dd>{offering.shapeSummary}</dd></div>
             </dl>
           </Card.Body>
           <Card.Footer>
-            <Typography.Text tone="subtle">配额激活不涉及付款</Typography.Text>
-            <Link className={styles.primaryLink} href="/console/quotas/">
-              配置配额 <ArrowRight aria-hidden="true" />
-            </Link>
+            <Typography.Text tone="subtle">{t("noPayment")}</Typography.Text>
+            <Button asChild><Link href="/console/quotas/">
+              {t("configureQuota")} <ArrowRight aria-hidden="true" />
+            </Link></Button>
           </Card.Footer>
         </Card>
       ))}
@@ -192,11 +149,13 @@ function CatalogContent({ scene }: { scene: Extract<ConsoleContentScene, { kind:
 }
 
 function QuotaContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "quotas" }> }) {
+  const t = useTranslations("ManagedService");
+  const format = useConsoleFormat();
   if (scene.entitlements.length === 0) {
     return (
       <EmptyState
-        title="尚未激活服务配额"
-        description="从右侧订单面板选择 PostgreSQL 规格和实例数量。平台只记录真实额度，不模拟支付。"
+        title={t("quotaEmpty")}
+        description={t("quotaEmptyHint")}
       />
     );
   }
@@ -209,16 +168,16 @@ function QuotaContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "
             <Card.Body className={styles.quotaRow}>
               <div className={styles.quotaIdentity}>
                 <Database aria-hidden="true" />
-                <div><strong>{item.offeringName}</strong><span>{item.shapeName} · {item.resourceSummary}</span></div>
+                <div><strong>{item.offeringName}</strong><span>{item.shapeName} · {format.resources(item.resources)}</span></div>
               </div>
               <div className={styles.quotaNumbers}>
-                <div><small>已激活</small><strong>{item.purchased}</strong></div>
-                <div><small>使用中</small><strong>{item.inUse}</strong></div>
-                <div><small>可用</small><strong>{item.available}</strong></div>
+                <div><small>{t("activated")}</small><strong>{format.number(item.purchased)}</strong></div>
+                <div><small>{t("inUse")}</small><strong>{format.number(item.inUse)}</strong></div>
+                <div><small>{t("available")}</small><strong>{format.number(item.available)}</strong></div>
               </div>
               <div className={styles.quotaStatus}>
-                <Badge status={status}>{item.available > 0 ? "可安装" : "额度已用尽"}</Badge>
-                <small>{item.activatedAt}</small>
+                <Badge status={status}>{item.available > 0 ? t("installable") : t("exhausted")}</Badge>
+                <small>{format.timestamp(item.activatedAt)}</small>
               </div>
             </Card.Body>
           </Card>
@@ -229,14 +188,15 @@ function QuotaContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "
 }
 
 function InstallationContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "installations" }> }) {
+  const t = useTranslations("ManagedService");
   return (
     <Card>
       <Card.Header>
         <div>
-          <Typography.Title as="h2" level={3}>组织服务实例</Typography.Title>
-          <Typography.Text tone="muted">状态来自真实安装 Operation</Typography.Text>
+          <Typography.Title as="h2" level={3}>{t("organizationInstances")}</Typography.Title>
+          <Typography.Text tone="muted">{t("installationStateHint")}</Typography.Text>
         </div>
-        <Badge status="info">{scene.installations.length} 个实例</Badge>
+        <Badge status="info">{t("instanceCount", { count: scene.installations.length })}</Badge>
       </Card.Header>
       <InstallationRows items={scene.installations} />
     </Card>
@@ -244,8 +204,10 @@ function InstallationContent({ scene }: { scene: Extract<ConsoleContentScene, { 
 }
 
 function RegionContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "regions" }> }) {
+  const t = useTranslations("ManagedService");
+  const format = useConsoleFormat();
   if (scene.regions.length === 0) {
-    return <EmptyState title="尚未配置区域" description="请先由平台安装器登记本机区域绑定。" />;
+    return <EmptyState title={t("regionsEmpty")} description={t("regionsEmptyHint")} />;
   }
   return (
     <div className={styles.regionGrid}>
@@ -254,14 +216,14 @@ function RegionContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: 
           <Card.Body className={styles.regionCard}>
             <div className={styles.regionIcon}><MapPin aria-hidden="true" /></div>
             <div className={styles.regionHeading}>
-              <div><Typography.Title as="h2" level={3}>{region.name}</Typography.Title><span>{region.profile}</span></div>
-              <Badge status={region.status}>{phaseLabel(region.state)}</Badge>
+              <div><Typography.Title as="h2" level={3}>{region.name}</Typography.Title><span>{t("localProfile")}</span></div>
+              <Badge status={region.status}>{t(`regionStates.${region.state}`)}</Badge>
             </div>
             <div className={styles.regionFacts}>
-              <span><Cpu aria-hidden="true" /> {region.capacity}</span>
-              <span><Server aria-hidden="true" /> 最近检查：{region.inspectedAt}</span>
+              <span><Cpu aria-hidden="true" /> {format.resources(region.capacity)}</span>
+              <span><Server aria-hidden="true" /> {t("lastInspection")} {format.timestamp(region.inspectedAt)}</span>
             </div>
-            <p>浏览器只显示归一化能力；Docker socket、主机路径和机器凭据由安装器保管。</p>
+            <p>{t("regionSecurityHint")}</p>
           </Card.Body>
         </Card>
       ))}
@@ -269,19 +231,25 @@ function RegionContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: 
   );
 }
 
+function AccessContent({ view }: { view: Extract<ConsoleContentScene, { kind: "access" }>["view"] }) {
+  const { navigate } = useConsoleNavigation();
+  const entityId = useSearchParams().get("id") ?? undefined;
+  return <AccountAccessRenderer key={view + ":" + (entityId ?? "")} view={view} entityId={entityId} onNavigate={(next, id) => navigate((next === "overview" ? "/console/access/" : `/console/access/${next}/`) + (id ? "?id=" + encodeURIComponent(id) : ""))} />;
+}
+
 export function ConsoleContentRenderer({
-  accountRepository,
   scene,
   scope
 }: {
-  accountRepository?: AccountRepository;
   scene: ConsoleContentScene;
   scope?: ResourceScope;
 }) {
-  if (scene.kind === "access") return <AccountAccessRenderer repository={accountRepository} />;
+  const t = useTranslations("AccountAccess");
+  if (scene.kind === "logs") return <LogServiceRenderer regionId={scope?.regionId} scene={scene} />;
+  if (scene.kind === "access") return <Suspense fallback={<PageSkeleton layout="access" label={t("loading")} />}><AccessContent view={scene.view} /></Suspense>;
+  if (scene.kind === "messages") return <MessageCenterRenderer scene={scene} />;
   if (
     scene.kind === "cloud-overview" ||
-    scene.kind === "products" ||
     scene.kind === "resources" ||
     scene.kind === "operations" ||
     scene.kind === "devops" ||

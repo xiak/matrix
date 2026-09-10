@@ -23,12 +23,14 @@ import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepo
 import { buildAccessConsoleScene, buildConsoleScene } from "../scenes/buildConsoleScene";
 import type { ConsoleScene } from "../scenes/consoleScene";
 
+type ControlPlaneError = "expired" | "forbidden" | "unavailable";
+
 type MutationKind = "quota" | "installation" | null;
 
 type ControlPlaneContextValue = {
   scene: ConsoleScene | null;
   loading: boolean;
-  error: string | null;
+  error: ControlPlaneError | null;
   mutation: MutationKind;
   reload(): Promise<void>;
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
@@ -37,14 +39,14 @@ type ControlPlaneContextValue = {
 
 const ControlPlaneContext = createContext<ControlPlaneContextValue | null>(null);
 
-function loadMessage(error: unknown): string {
+function loadMessage(error: unknown): ControlPlaneError {
   if (error instanceof HttpProblem && error.status === 401) {
-    return "IAM 会话已失效，请注销后重新登录。";
+    return "expired";
   }
   if (error instanceof HttpProblem && error.status === 403) {
-    return "当前角色无权查看托管服务控制面。";
+    return "forbidden";
   }
-  return "托管服务控制面暂时不可用，未展示任何模拟资源。";
+  return "unavailable";
 }
 
 export function ControlPlaneProvider({
@@ -62,7 +64,7 @@ export function ControlPlaneProvider({
   const isAccess = selection.section === "access";
   const [snapshot, setSnapshot] = useState<ControlPlaneSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ControlPlaneError | null>(null);
   const [mutation, setMutation] = useState<MutationKind>(null);
 
   const reload = useCallback(async () => {
@@ -178,8 +180,8 @@ export function ControlPlaneProvider({
   }, [credential, repository]);
 
   const scene = useMemo(
-    () => isAccess ? buildAccessConsoleScene(experience) : snapshot ? buildConsoleScene(selection.section, snapshot, experience) : null,
-    [experience, isAccess, selection.section, snapshot]
+    () => isAccess ? buildAccessConsoleScene(experience, selection.view) : snapshot ? buildConsoleScene(selection.section, snapshot, experience, selection.view) : null,
+    [experience, isAccess, selection.section, selection.view, snapshot]
   );
   const value = useMemo<ControlPlaneContextValue>(() => ({
     scene,

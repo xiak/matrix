@@ -1,3 +1,4 @@
+@layer xiak {
 .button {
   display: inline-flex;
   min-width: 0;
@@ -8,7 +9,8 @@
   border-radius: var(--xiak-radius-control);
   font: inherit;
   font-weight: var(--xiak-font-weight-semibold);
-  line-height: 1;
+  line-height: 1.4;
+  text-align: center;
   cursor: pointer;
   outline: none;
   transition:
@@ -19,7 +21,8 @@
 }
 
 .button:focus-visible {
-  box-shadow: var(--xiak-shadow-focus);
+  outline: 2px solid var(--xiak-color-border-focus);
+  outline-offset: 2px;
 }
 
 .button:active:not(:disabled) {
@@ -34,27 +37,27 @@
 }
 
 .button > svg {
-  width: 16px;
-  height: 16px;
+  width: var(--xiak-icon-size);
+  height: var(--xiak-icon-size);
   flex: none;
   stroke-width: 1.75;
 }
 
 .small {
   min-height: var(--xiak-control-height-small);
-  padding: 0 var(--xiak-spacing-default);
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-default);
   font-size: var(--xiak-font-size-small);
 }
 
 .default {
   min-height: var(--xiak-control-height);
-  padding: 0 var(--xiak-spacing-comfortable);
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-comfortable);
   font-size: var(--xiak-font-size-body);
 }
 
 .large {
   min-height: var(--xiak-control-height-large);
-  padding: 0 var(--xiak-spacing-roomy);
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-roomy);
   font-size: var(--xiak-font-size-body);
 }
 
@@ -70,7 +73,7 @@
 }
 
 .secondary {
-  border-color: var(--xiak-color-border-subtle);
+  border-color: var(--xiak-color-border-control);
   background: var(--xiak-color-bg-control);
   color: var(--xiak-color-text-base);
 }
@@ -99,4 +102,8 @@
 
 .block {
   width: 100%;
+}
+.iconOnly { flex: none; padding: 0; width: var(--xiak-control-height); }
+.iconOnly.small { width: var(--xiak-control-height-small); }
+.iconOnly.large { width: var(--xiak-control-height-large); }
 }

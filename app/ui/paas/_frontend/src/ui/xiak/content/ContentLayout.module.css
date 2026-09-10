@@ -1,3 +1,4 @@
+@layer xiak {
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(240px, 280px);
@@ -16,4 +17,5 @@
   .layout {
     grid-template-columns: minmax(0, 1fr);
   }
+}
 }

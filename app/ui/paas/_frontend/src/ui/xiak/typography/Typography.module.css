@@ -1,3 +1,4 @@
+@layer xiak {
 .text {
   color: var(--xiak-color-text-base);
 }
@@ -55,4 +56,5 @@
   color: var(--xiak-color-text-code);
   font-family: var(--xiak-font-mono);
   font-size: var(--xiak-font-size-small);
+}
 }
