@@ -953,7 +953,7 @@ func (value *gate) assertWorkload(
 		len(inspection.HostConfig.PortBindings) != 0 {
 		return fail("workload-container-state")
 	}
-	if !value.signedWorkloadImage(inspection.Config.Image) {
+	if !value.signedWorkloadImage(inspection.Config.Image, inspection.Image) {
 		return fail("workload-image-identity")
 	}
 	if generation == 2 {
@@ -1002,10 +1002,10 @@ func (value *gate) assertWorkload(
 	return nil
 }
 
-func (value *gate) signedWorkloadImage(imageID string) bool {
+func (value *gate) signedWorkloadImage(reference, imageID string) bool {
 	for _, manifest := range []release.Manifest{value.releases.a.Manifest, value.releases.b.Manifest} {
 		workload, ok := workloadImage(manifest)
-		if ok && workload.ImageID == imageID {
+		if ok && workload.LocalReference == reference && workload.ImageID == imageID {
 			return true
 		}
 	}

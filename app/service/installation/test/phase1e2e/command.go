@@ -430,6 +430,7 @@ func assertEmptyDocker(ctx context.Context) error {
 type containerInspection struct {
 	ID     string `json:"Id"`
 	Name   string `json:"Name"`
+	Image  string `json:"Image"`
 	Config struct {
 		Image  string            `json:"Image"`
 		Labels map[string]string `json:"Labels"`

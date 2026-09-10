@@ -227,6 +227,34 @@ func TestReleasePairAllowsReleaseSpecificWorkloadImages(t *testing.T) {
 	}
 }
 
+func TestSignedWorkloadImageRequiresMatchedReferenceAndResolvedIdentity(t *testing.T) {
+	imageA := release.Image{
+		Purpose: release.ImageWorkload, LocalReference: "matrix.local/workload:a", ImageID: "sha256:a",
+	}
+	imageB := release.Image{
+		Purpose: release.ImageWorkload, LocalReference: "matrix.local/workload:b", ImageID: "sha256:b",
+	}
+	acceptance := gate{releases: releasePair{
+		a: release.VerifiedBundle{Manifest: release.Manifest{Images: []release.Image{imageA}}},
+		b: release.VerifiedBundle{Manifest: release.Manifest{Images: []release.Image{imageB}}},
+	}}
+	for _, accepted := range []release.Image{imageA, imageB} {
+		if !acceptance.signedWorkloadImage(accepted.LocalReference, accepted.ImageID) {
+			t.Fatalf("signed workload identity rejected: %#v", accepted)
+		}
+	}
+	for _, rejected := range []struct{ reference, imageID string }{
+		{imageA.LocalReference, imageB.ImageID},
+		{imageB.LocalReference, imageA.ImageID},
+		{"matrix.local/workload:unknown", imageA.ImageID},
+		{imageA.LocalReference, "sha256:unknown"},
+	} {
+		if acceptance.signedWorkloadImage(rejected.reference, rejected.imageID) {
+			t.Fatalf("mismatched workload identity accepted: %#v", rejected)
+		}
+	}
+}
+
 func TestReleasePairRequiresDevOpsInBothSignedLifecycles(t *testing.T) {
 	baseA := release.VerifiedBundle{Manifest: release.Manifest{
 		Release:  release.ReleaseIdentity{ID: "release-a", Version: "v0.1.0", SourceCommit: "commit-a"},
