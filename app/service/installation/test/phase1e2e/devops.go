@@ -3,8 +3,15 @@ package phase1e2e
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
+	"io"
+	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,22 +20,26 @@ import (
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/devops/sourcecredential"
+	"github.com/xiak/matrix/app/service/devops/sourcetrust"
+	"github.com/xiak/matrix/app/service/installation/internal/layout"
 )
 
 const (
-	devOpsProjectID           devopsv1.ResourceID  = "phase1-project"
-	devOpsSourceConnectionID  devopsv1.ResourceID  = "phase1-source"
-	devOpsRepositoryBindingID devopsv1.ResourceID  = "phase1-repository"
-	devOpsPipelineID          devopsv1.ResourceID  = "phase1-pipeline"
-	devOpsTenant              devopsv1.TenantID    = "organization-default"
-	devOpsForeignOrganization iamv1.OrganizationID = "organization-phase1-foreign"
-	devOpsForeignPrincipal    iamv1.PrincipalID    = "principal-phase1-foreign"
-	devOpsForeignLogin                             = "phase1-foreign-viewer"
-	devOpsViewerLogin                              = "phase1-devops-viewer"
-	devOpsSourceEndpoint                           = "https://gitea.phase1.invalid"
-	devOpsWebhookSecretRef    devopsv1.ResourceID  = "phase1-webhook"
-	devOpsFetchCredentialRef  devopsv1.ResourceID  = "phase1-fetch"
-	devOpsReportCredentialRef devopsv1.ResourceID  = "phase1-report"
+	devOpsProjectID                devopsv1.ResourceID  = "phase1-project"
+	devOpsSourceConnectionID       devopsv1.ResourceID  = "phase1-source"
+	devOpsRepositoryBindingID      devopsv1.ResourceID  = "phase1-repository"
+	devOpsPipelineID               devopsv1.ResourceID  = "phase1-pipeline"
+	devOpsTenant                   devopsv1.TenantID    = "organization-default"
+	devOpsForeignOrganization      iamv1.OrganizationID = "organization-phase1-foreign"
+	devOpsForeignPrincipal         iamv1.PrincipalID    = "principal-phase1-foreign"
+	devOpsForeignLogin                                  = "phase1-foreign-viewer"
+	devOpsViewerLogin                                   = "phase1-devops-viewer"
+	devOpsSourceEndpoint                                = "https://gitea.phase1.invalid"
+	devOpsWebhookSecretRef         devopsv1.ResourceID  = "phase1-webhook"
+	devOpsFetchCredentialRef       devopsv1.ResourceID  = "phase1-fetch"
+	devOpsReportCredentialRef      devopsv1.ResourceID  = "phase1-report"
+	devOpsSourceTrustMaterialIndex                      = 4
+	devOpsSourceMaterialCount                           = 5
 )
 
 const seedForeignTenantSQL = `BEGIN;
@@ -136,14 +147,14 @@ func (value *gate) exerciseDevOpsAccess(
 	administrator, administratorPassword []byte,
 	installationID string,
 ) (sourceMaterials [][]byte, returnErr error) {
-	sourceMaterials = make([][]byte, 4)
+	sourceMaterials = make([][]byte, devOpsSourceMaterialCount)
 	defer func() {
 		if returnErr != nil {
 			clearDevOpsSourceMaterials(sourceMaterials)
 			sourceMaterials = nil
 		}
 	}()
-	for index := range sourceMaterials {
+	for index := 0; index < devOpsSourceTrustMaterialIndex; index++ {
 		material, err := randomPassword(rand.Reader)
 		if err != nil {
 			returnErr = fail("devops-source-credential-entropy")
@@ -157,6 +168,12 @@ func (value *gate) exerciseDevOpsAccess(
 			}
 		}
 	}
+	sourceTrust, err := newDevOpsSourceTrustBundle(time.Now().UTC())
+	if err != nil {
+		returnErr = fail("devops-source-trust-entropy")
+		return
+	}
+	sourceMaterials[devOpsSourceTrustMaterialIndex] = sourceTrust
 	value.edge.addForbidden(sourceMaterials...)
 	webhookInitial := sourceMaterials[0]
 	webhookRotated := sourceMaterials[1]
@@ -188,6 +205,22 @@ func (value *gate) exerciseDevOpsAccess(
 			returnErr = fail("devops-source-credential-initial-apply")
 			return
 		}
+	}
+	if err := value.applyDevOpsSourceTrust(
+		ctx, sourceTrust, "APPLIED", sourceMaterials,
+	); err != nil {
+		returnErr = fail("devops-source-trust-initial-apply")
+		return
+	}
+	if err := value.applyDevOpsSourceTrust(
+		ctx, sourceTrust, "UNCHANGED", sourceMaterials,
+	); err != nil {
+		returnErr = fail("devops-source-trust-equal-replay")
+		return
+	}
+	if err := value.assertDevOpsSourceTrust(sourceTrust); err != nil {
+		returnErr = fail("devops-source-trust-initial-state")
+		return
 	}
 	if err := value.createDevOpsConfiguration(ctx, administrator); err != nil {
 		returnErr = fail("devops-admin-control-plane")
@@ -270,23 +303,59 @@ func (value *gate) applyDevOpsSourceCredential(
 	material []byte,
 	wantState string,
 	allMaterials [][]byte,
+) error {
+	return value.withDevOpsSourceInput(material, allMaterials, func(
+		input string,
+		forbidden [][]byte,
+	) error {
+		return runMXSourceCredential(
+			ctx, value.releases.a, "apply", value.config.root, string(devOpsTenant),
+			string(purpose), string(reference), input, wantState, forbidden,
+		)
+	})
+}
+
+func (value *gate) applyDevOpsSourceTrust(
+	ctx context.Context,
+	material []byte,
+	wantState string,
+	allMaterials [][]byte,
+) error {
+	return value.withDevOpsSourceInput(material, allMaterials, func(
+		input string,
+		forbidden [][]byte,
+	) error {
+		return runMXSourceTrust(
+			ctx, value.releases.a, "apply", value.config.root, string(devOpsTenant),
+			devOpsSourceEndpoint, input, wantState, forbidden,
+		)
+	})
+}
+
+func (value *gate) withDevOpsSourceInput(
+	material []byte,
+	allMaterials [][]byte,
+	apply func(string, [][]byte) error,
 ) (returnErr error) {
+	if len(material) == 0 || apply == nil {
+		return errors.New("DevOps source input is invalid")
+	}
 	directory, err := os.MkdirTemp(
-		filepath.Dir(value.config.root), ".matrix-phase1-source-credential-",
+		filepath.Dir(value.config.root), ".matrix-phase1-source-input-",
 	)
 	if err != nil {
-		return errors.New("source credential input directory creation failed")
+		return errors.New("DevOps source input directory creation failed")
 	}
 	if chmodErr := os.Chmod(directory, 0o700); chmodErr != nil {
 		return errors.Join(
-			errors.New("source credential input directory protection failed"),
+			errors.New("DevOps source input directory protection failed"),
 			removeDevOpsSourceInput(directory),
 		)
 	}
 	info, err := os.Lstat(directory)
 	if err != nil || !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
 		return errors.Join(
-			errors.New("source credential input directory is not private"),
+			errors.New("DevOps source input directory is not private"),
 			removeDevOpsSourceInput(directory),
 		)
 	}
@@ -295,7 +364,7 @@ func (value *gate) applyDevOpsSourceCredential(
 			returnErr = errors.Join(returnErr, cleanupErr)
 		}
 	}()
-	input := filepath.Join(directory, "credential.input")
+	input := filepath.Join(directory, "material.input")
 	defer func() {
 		if cleanupErr := removeDevOpsSourceInput(input); cleanupErr != nil {
 			returnErr = errors.Join(returnErr, cleanupErr)
@@ -306,10 +375,7 @@ func (value *gate) applyDevOpsSourceCredential(
 	}
 	forbidden := value.forbidden(allMaterials...)
 	forbidden = append(forbidden, []byte(directory), []byte(input))
-	return runMXSourceCredential(
-		ctx, value.releases.a, "apply", value.config.root, string(devOpsTenant),
-		string(purpose), string(reference), input, wantState, forbidden,
-	)
+	return apply(input, forbidden)
 }
 
 func writeDevOpsSourceInput(path string, material []byte) error {
@@ -345,6 +411,127 @@ func clearDevOpsSourceMaterials(materials [][]byte) {
 	for _, material := range materials {
 		clear(material)
 	}
+}
+
+func newDevOpsSourceTrustBundle(now time.Time) ([]byte, error) {
+	if now.IsZero() || now.Location() != time.UTC {
+		return nil, errors.New("source trust time is invalid")
+	}
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, errors.New("source trust key generation failed")
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Matrix Phase 1 local provider root"},
+		NotBefore:             now.Add(-5 * time.Minute),
+		NotAfter:              now.AddDate(1, 0, 0),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(
+		rand.Reader, template, template, &privateKey.PublicKey, privateKey,
+	)
+	privateKey.D.SetInt64(0)
+	if err != nil {
+		return nil, errors.New("source trust certificate generation failed")
+	}
+	content := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	canonical, err := sourcetrust.Canonicalize(content, now)
+	clear(content)
+	if err != nil {
+		return nil, errors.New("source trust certificate is invalid")
+	}
+	return canonical, nil
+}
+
+func (value *gate) assertDevOpsSourceTrust(expected []byte) error {
+	entries, err := inspectDevOpsSourceTrustRoot(value.config.root)
+	if err != nil {
+		return err
+	}
+	if expected == nil {
+		if len(entries) != 0 {
+			return errors.New("source trust root is not empty")
+		}
+		return nil
+	}
+	content, err := value.readDevOpsSourceTrust()
+	if err != nil {
+		return err
+	}
+	defer clear(content)
+	if !bytes.Equal(content, expected) {
+		return errors.New("source trust bundle changed")
+	}
+	return nil
+}
+
+func inspectDevOpsSourceTrustRoot(root string) ([]os.DirEntry, error) {
+	path := filepath.Join(root, filepath.FromSlash(layout.DevOpsSourceTrustRoot))
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+		info.Mode().Perm()&0o077 != 0 {
+		return nil, errors.New("source trust root is unsafe")
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, errors.New("source trust root cannot be read")
+	}
+	return entries, nil
+}
+
+func (value *gate) readDevOpsSourceTrust() ([]byte, error) {
+	entries, err := inspectDevOpsSourceTrustRoot(value.config.root)
+	if err != nil {
+		return nil, err
+	}
+	directoryName, err := sourcetrust.DirectoryName(
+		devopsv1.ResourceScope{TenantID: devOpsTenant}, devOpsSourceEndpoint,
+	)
+	if err != nil || len(entries) != 1 || entries[0].Name() != directoryName ||
+		!entries[0].IsDir() || entries[0].Type()&os.ModeSymlink != 0 {
+		return nil, errors.New("source trust record identity is invalid")
+	}
+	directory := filepath.Join(
+		value.config.root, filepath.FromSlash(layout.DevOpsSourceTrustRoot), directoryName,
+	)
+	directoryInfo, err := os.Lstat(directory)
+	if err != nil || !directoryInfo.IsDir() || directoryInfo.Mode()&os.ModeSymlink != 0 ||
+		directoryInfo.Mode().Perm()&0o077 != 0 {
+		return nil, errors.New("source trust record is unsafe")
+	}
+	children, err := os.ReadDir(directory)
+	if err != nil || len(children) != 1 || children[0].Name() != sourcetrust.BundleFilename ||
+		children[0].IsDir() || children[0].Type()&os.ModeSymlink != 0 {
+		return nil, errors.New("source trust record shape is invalid")
+	}
+	path := filepath.Join(directory, sourcetrust.BundleFilename)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 ||
+		info.Mode().Perm()&0o077 != 0 || info.Size() < 1 ||
+		info.Size() > sourcetrust.MaximumBundleBytes {
+		return nil, errors.New("source trust bundle is unsafe")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, errors.New("source trust bundle cannot be read")
+	}
+	content, readErr := io.ReadAll(io.LimitReader(file, sourcetrust.MaximumBundleBytes+1))
+	openedInfo, statErr := file.Stat()
+	closeErr := file.Close()
+	if readErr != nil || statErr != nil || closeErr != nil ||
+		len(content) == 0 || len(content) > sourcetrust.MaximumBundleBytes ||
+		!openedInfo.Mode().IsRegular() || !os.SameFile(info, openedInfo) {
+		clear(content)
+		return nil, errors.New("source trust bundle cannot be read")
+	}
+	if _, err := sourcetrust.CertPool(content, time.Now().UTC()); err != nil {
+		clear(content)
+		return nil, errors.New("source trust bundle is invalid")
+	}
+	return content, nil
 }
 
 func (value *gate) waitDevOpsSourceUnavailable(

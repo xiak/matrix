@@ -1955,19 +1955,25 @@ Current verification evidence:
   read to a closed tenant-scoped `404`, and invokes a non-cancelled bounded
   cleanup for every fixture authority and outbox row even when the assertion
   fails; no plaintext credential enters SQL or is retained for restart. The
-  same graph is read back
-  after failed automatic upgrade rollback, successful B upgrade, explicit A
-  rollback, and protected-backup recovery. The post-host-restart phase checks
-  the persisted project/connection/binding/Pipeline/revision reference chain
-  directly without retaining a user password. DevOps mutation, source-health
-  transition, and IAM authorization Audit facts join the existing protected
-  backup baseline. Source values remain only in bounded gate memory for command,
-  HTTP, and support-evidence leakage checks and are cleared when the pre-restart
-  phase returns; the Application PaaS journey remains unchanged. Full Windows
-  repository tests and vet plus the affected race and twenty-run suites pass
-  against the harness. This is executable acceptance-gate implementation, not
-  signed offline runtime evidence; the gate still must run with exact signed
-  DevOps A/B bundles before these Gate C items are accepted
+  same graph is read back after failed automatic upgrade rollback, successful B
+  upgrade, explicit A rollback, and protected-backup recovery. A dedicated
+  in-memory self-signed provider CA now crosses the strict release-carried
+  `source-trust apply` and equal-replay output contract. Its exact private
+  record must survive verify, failed upgrade rollback, upgrade, and explicit
+  rollback; recovery must expose an empty retained root before the CLI reapplies
+  the CA and an administrator schedules a distinct Recheck. The post-host-
+  restart phase proves the reapplied record remains canonical, scans support
+  evidence with its bytes forbidden, and exercises two idempotent exact removals.
+  It also checks the persisted project/connection/binding/Pipeline/revision
+  reference chain directly without retaining a user password. DevOps mutation,
+  source-health transition, and IAM authorization Audit facts join the existing
+  protected backup baseline. Source credential values and CA bytes remain only
+  in bounded gate memory for command, HTTP, and support-evidence leakage checks
+  and are cleared when each phase returns; the Application PaaS journey remains
+  unchanged. Full Windows repository tests and vet plus the affected race and
+  twenty-run suites pass against the harness. This is executable acceptance-
+  gate implementation, not signed offline runtime evidence; the gate still must
+  run with exact signed DevOps A/B bundles before these Gate C items are accepted
 - selected-product installation and topology tests proving journal-stable PKI
   issuance time, three disjoint P-256 authorities, exact gateway and
   build-worker identities, canonical write-once authority storage,

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	installationv1 "github.com/xiak/matrix/api/installation/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
@@ -127,8 +128,13 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	if len(sourceMaterials) != devOpsSourceMaterialCount {
+		clearDevOpsSourceMaterials(sourceMaterials)
+		return fail("devops-source-material-contract")
+	}
 	defer clearDevOpsSourceMaterials(sourceMaterials)
 	value.sensitive = append(value.sensitive, sourceMaterials...)
+	sourceTrust := sourceMaterials[devOpsSourceTrustMaterialIndex]
 	emit("devops-multi-role-through-apisix")
 
 	secret, secretDigest, err := value.provisionSecret()
@@ -228,6 +234,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertDevOpsConfiguration(ctx, bearer); err != nil {
 		return fail("automatic-upgrade-rollback-devops-state")
 	}
+	if err := value.assertDevOpsSourceTrust(sourceTrust); err != nil {
+		return fail("automatic-upgrade-rollback-source-trust")
+	}
 	emit("automatic-upgrade-rollback")
 
 	upgrade, err := runMX(ctx, value.releases.b, "upgrade", []string{
@@ -263,6 +272,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertDevOpsConfiguration(ctx, bearer); err != nil {
 		return fail("release-b-devops-state")
 	}
+	if err := value.assertDevOpsSourceTrust(sourceTrust); err != nil {
+		return fail("release-b-source-trust")
+	}
 	emit("release-b-upgrade-preservation")
 
 	rollback, err := runMX(ctx, value.releases.b, "rollback", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
@@ -287,6 +299,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	if err := value.assertDevOpsConfiguration(ctx, bearer); err != nil {
 		return fail("platform-rollback-devops-state")
+	}
+	if err := value.assertDevOpsSourceTrust(sourceTrust); err != nil {
+		return fail("platform-rollback-source-trust")
 	}
 	emit("explicit-platform-rollback")
 
@@ -321,6 +336,34 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	if err := value.assertDevOpsConfiguration(ctx, bearer); err != nil {
 		return fail("recovered-devops-state")
+	}
+	if err := value.assertDevOpsSourceTrust(nil); err != nil {
+		return fail("recovered-source-trust-not-retired")
+	}
+	if err := value.applyDevOpsSourceTrust(
+		ctx, sourceTrust, "APPLIED", sourceMaterials,
+	); err != nil {
+		return fail("recovered-source-trust-reapply")
+	}
+	if err := value.assertDevOpsSourceTrust(sourceTrust); err != nil {
+		return fail("recovered-source-trust-state")
+	}
+	rechecked, err := scheduleDevOpsRecheck(
+		ctx, value.edge,
+		"/api/devops/v1/source-connections/"+string(devOpsSourceConnectionID),
+		"phase1-recheck-devops-source-after-recovery-trust", bearer,
+		devopsv1.ValidateSourceConnection,
+		func(resource devopsv1.SourceConnection) uint64 {
+			return resource.Metadata.ResourceVersion
+		},
+	)
+	if err != nil {
+		return fail("recovered-source-trust-recheck")
+	}
+	if _, err := value.waitDevOpsSourceUnavailable(
+		ctx, bearer, rechecked.Metadata.ResourceVersion,
+	); err != nil {
+		return fail("recovered-source-trust-observation")
 	}
 	emit("backup-recovery")
 
@@ -404,8 +447,26 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if active, err := value.activeCapacityClaims(ctx, state.InstallationID); err != nil || active != 0 {
 		return fail("restart-capacity-release")
 	}
-	if err := value.writeAndScanSupport(ctx, value.releases.a.Manifest, "phase1-after-restart.json", nil); err != nil {
+	sourceTrust, err := value.readDevOpsSourceTrust()
+	if err != nil {
+		return fail("restart-source-trust-preservation")
+	}
+	defer clear(sourceTrust)
+	if err := value.writeAndScanSupport(
+		ctx, value.releases.a.Manifest, "phase1-after-restart.json", sourceTrust,
+	); err != nil {
 		return err
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := runMXSourceTrust(
+			ctx, value.releases.a, "remove", value.config.root, string(devOpsTenant),
+			devOpsSourceEndpoint, "", "REMOVED", value.forbidden(sourceTrust),
+		); err != nil {
+			return fail("restart-source-trust-removal")
+		}
+	}
+	if err := value.assertDevOpsSourceTrust(nil); err != nil {
+		return fail("restart-source-trust-removal-state")
 	}
 	if err := assertNoExternalRoute(); err != nil {
 		return err

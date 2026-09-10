@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xiak/matrix/app/service/devops/sourcetrust"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
@@ -52,6 +53,43 @@ func TestMXSourceCredentialResultIsStrict(t *testing.T) {
 				t.Fatal("unsafe source credential result was accepted")
 			}
 		})
+	}
+}
+
+func TestMXSourceTrustResultIsStrict(t *testing.T) {
+	exact := []byte(`{"apiVersion":"cli.matrix.xiak.com/v1","kind":"SourceTrustCommandResult","action":"SOURCE_TRUST_APPLY","status":"SUCCEEDED","result":{"state":"APPLIED","tenant":"organization-default","endpointOrigin":"https://gitea.phase1.invalid"}}`)
+	if !validMXSourceTrustResult(
+		exact, "SOURCE_TRUST_APPLY", "APPLIED", "organization-default",
+		"https://gitea.phase1.invalid",
+	) {
+		t.Fatal("exact source trust result was rejected")
+	}
+	for name, content := range map[string][]byte{
+		"unknown field":  []byte(`{"apiVersion":"cli.matrix.xiak.com/v1","kind":"SourceTrustCommandResult","action":"SOURCE_TRUST_APPLY","status":"SUCCEEDED","result":{"state":"APPLIED","tenant":"organization-default","endpointOrigin":"https://gitea.phase1.invalid","certificate":"forbidden"}}`),
+		"wrong state":    []byte(`{"apiVersion":"cli.matrix.xiak.com/v1","kind":"SourceTrustCommandResult","action":"SOURCE_TRUST_APPLY","status":"SUCCEEDED","result":{"state":"UNCHANGED","tenant":"organization-default","endpointOrigin":"https://gitea.phase1.invalid"}}`),
+		"trailing value": append(append([]byte(nil), exact...), []byte("\n{}")...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if validMXSourceTrustResult(
+				content, "SOURCE_TRUST_APPLY", "APPLIED", "organization-default",
+				"https://gitea.phase1.invalid",
+			) {
+				t.Fatal("unsafe source trust result was accepted")
+			}
+		})
+	}
+}
+
+func TestDevOpsSourceTrustFixtureIsCanonical(t *testing.T) {
+	now := time.Now().UTC()
+	bundle, err := newDevOpsSourceTrustBundle(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(bundle)
+	if _, err := sourcetrust.CertPool(bundle, now); err != nil ||
+		bytes.Contains(bundle, []byte("PRIVATE KEY")) {
+		t.Fatalf("source trust fixture is invalid or contains a private key: %v", err)
 	}
 }
 
