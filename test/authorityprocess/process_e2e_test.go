@@ -162,10 +162,10 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 	legacyTemporary := loginIAM(t, endpoint, oldChildLogin, initialReaderPassword, "request-upgrade-old-temporary")
 	changePasswordIAM(t, endpoint, member.Credential, initialReaderPassword, changedReaderPassword, "request-upgrade-member-password")
 	legacyCurrent := loginIAM(t, endpoint, oldChildLogin, changedReaderPassword, "request-upgrade-old-current")
-	binding := putIAMBinding(t, endpoint, administrator.Credential, user.ID, iamv1.RolePaaSViewer, "request-upgrade-role")
-	revokeIAMBinding(t, endpoint, administrator.Credential, binding.ID, "request-upgrade-role-revoke")
+	binding := putLegacyIAMBinding(t, endpoint, administrator.Credential, user.ID, legacyRolePaaSViewer, "request-upgrade-role")
+	revokeLegacyIAMBinding(t, endpoint, administrator.Credential, binding.ID, "request-upgrade-role-revoke")
 	revokeIAMSession(t, endpoint, administrator.Credential, member.Session.ID, "request-upgrade-session-revoke")
-	revokeIAMBinding(t, endpoint, administrator.Credential, "bootstrap-platform-operator-binding", "request-upgrade-platform-revoke")
+	revokeLegacyIAMBinding(t, endpoint, administrator.Credential, "bootstrap-platform-operator-binding", "request-upgrade-platform-revoke")
 	old.stop()
 	rows, err := admin.Query(ctx, "SELECT event_id,event_document FROM iam.audit_outbox")
 	if err != nil {
@@ -238,7 +238,7 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 		child := loginIAM(t, endpoint, "retained.viewer@organization-process", retainedReaderPassword, "request-upgrade-retained-child")
 		childResponse := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", child.Credential, nil)
 		var childIdentity iamv1.CurrentIdentity
-		if childResponse.Status != http.StatusOK || json.Unmarshal(childResponse.Body, &childIdentity) != nil || childIdentity.Principal.ID != user.ID || len(childIdentity.Roles) != 0 {
+		if childResponse.Status != http.StatusOK || json.Unmarshal(childResponse.Body, &childIdentity) != nil || childIdentity.Principal.ID != user.ID || len(childIdentity.PolicyAttachments) != 0 {
 			t.Fatal("upgrade changed member identity or revived a revoked role")
 		}
 		if attempt == 0 {
@@ -657,12 +657,12 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		initialDeveloperPassword,
 		"request-create-developer",
 	)
-	developerBinding := putIAMBinding(
+	developerBinding := createIAMPolicyAttachment(
 		t,
 		iamEndpoint,
 		adminLogin.Credential,
 		developer.ID,
-		iamv1.RolePaaSDeveloper,
+		iamv1.SystemPolicyPaaSDeveloper,
 		"request-bind-developer",
 	)
 	developerLogin := loginIAM(
@@ -685,14 +685,14 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-denied", false),
 	)
 	assertPlatformAuditAccess(t, auditEndpoint, developerLogin.Credential, http.StatusForbidden)
-	platformBinding := putIAMBinding(t, replicaEndpoint, adminLogin.Credential, developer.ID,
-		iamv1.RolePlatformOperator, "request-bind-platform-operator")
+	platformBinding := createIAMPolicyAttachment(t, replicaEndpoint, adminLogin.Credential, developer.ID,
+		iamv1.SystemPolicyPlatformOperator, "request-bind-platform-operator")
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-granted", true),
 	)
 	assertPlatformAuditAccess(t, auditEndpoint, developerLogin.Credential, http.StatusOK)
 	queryAudit(t, auditEndpoint, developerLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 10}, http.StatusForbidden)
-	revokeIAMBinding(t, iamEndpoint, adminLogin.Credential, platformBinding.ID, "request-revoke-platform-operator")
+	revokeIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, platformBinding.ID, 1, "request-revoke-platform-operator")
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-revoked", false),
 		assertPlatformAuthorization(t, replicaEndpoint, developerLogin.Credential, string(developer.ID), "request-replica-platform-revoked", false),
@@ -724,13 +724,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		"application-process",
 		string(developer.ID),
 	)
-	revokeIAMBinding(
-		t,
-		iamEndpoint,
-		adminLogin.Credential,
-		developerBinding.ID,
-		"request-revoke-developer-binding",
-	)
+	revokeIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, developerBinding.ID, 1, "request-revoke-developer-binding")
 	deniedBefore := countAuditFacts(
 		t,
 		ctx,
@@ -760,12 +754,12 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	); deniedAfter != deniedBefore+1 {
 		t.Fatalf("denied IAM Audit facts before=%d after=%d", deniedBefore, deniedAfter)
 	}
-	putIAMBinding(
+	createIAMPolicyAttachment(
 		t,
 		iamEndpoint,
 		adminLogin.Credential,
 		developer.ID,
-		iamv1.RolePaaSDeveloper,
+		iamv1.SystemPolicyPaaSDeveloper,
 		"request-rebind-developer",
 	)
 	createPaaSConfiguration(
@@ -798,12 +792,12 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		initialReaderPassword,
 		"request-create-reader",
 	)
-	binding := putIAMBinding(
+	binding := createIAMPolicyAttachment(
 		t,
 		iamEndpoint,
 		adminLogin.Credential,
 		reader.ID,
-		iamv1.RoleAuditReader,
+		iamv1.SystemPolicyAuditReader,
 		"request-bind-reader",
 	)
 	readerLogin := loginIAM(
@@ -833,20 +827,14 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	)
 	assertPaaSApplicationAbsent(t, ctx, admin, "application-reader-denied")
 	queryAudit(t, auditEndpoint, readerLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 10}, http.StatusOK)
-	revokeIAMBinding(
-		t,
-		iamEndpoint,
-		adminLogin.Credential,
-		binding.ID,
-		"request-revoke-reader-binding",
-	)
+	revokeIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, binding.ID, 1, "request-revoke-reader-binding")
 	queryAudit(t, auditEndpoint, readerLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 10}, http.StatusForbidden)
-	putIAMBinding(
+	createIAMPolicyAttachment(
 		t,
 		iamEndpoint,
 		adminLogin.Credential,
 		reader.ID,
-		iamv1.RoleAuditReader,
+		iamv1.SystemPolicyAuditReader,
 		"request-rebind-reader",
 	)
 	queryAudit(t, auditEndpoint, readerLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 10}, http.StatusOK)
@@ -879,14 +867,14 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 			waitHTTPStatus(t, ctx, auditProcess, auditEndpoint+"/ready", http.StatusOK)
 		})
 	sensitive = append(sensitive, recoverySecrets...)
-	revokeIAMBinding(t, iamEndpoint, adminLogin.Credential, "bootstrap-platform-operator-binding", "request-revoke-bootstrap-platform")
+	revokeIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, "bootstrap-platform-operator-binding", 1, "request-revoke-bootstrap-platform")
 	verifyHistoricalRecovery()
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin-revoked", false),
 	)
 	assertPlatformAuditAccess(t, auditEndpoint, adminLogin.Credential, http.StatusForbidden)
-	selfGrant := performJSON(t, http.MethodPost, iamEndpoint+"/v1/role-bindings", adminLogin.Credential,
-		iamv1.PutRoleBindingRequest{PrincipalID: "principal-admin", Role: iamv1.RolePlatformOperator, RequestID: "request-platform-self-grant"})
+	selfGrant := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policy-attachments", adminLogin.Credential,
+		iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: "principal-admin"}, PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "request-platform-self-grant"})
 	if selfGrant.Status != http.StatusForbidden {
 		t.Fatalf("organization administrator restored its platform authority: status=%d", selfGrant.Status)
 	}
@@ -1610,43 +1598,42 @@ func createIAMUser(
 	return principal
 }
 
-func putIAMBinding(
+func createIAMPolicyAttachment(
 	t *testing.T,
 	endpoint string,
 	bearer string,
 	principalID iamv1.PrincipalID,
-	role iamv1.BuiltinRole,
+	policy iamv1.PolicyID,
 	requestID string,
-) iamv1.RoleBinding {
+) iamv1.PolicyAttachment {
 	t.Helper()
-	response := performJSON(t, http.MethodPost, endpoint+"/v1/role-bindings", bearer, iamv1.PutRoleBindingRequest{
-		PrincipalID: principalID, Role: role, RequestID: requestID,
-	})
+	response := performJSON(t, http.MethodPost, endpoint+"/v1/policy-attachments", bearer, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(principalID)}, PolicyID: policy, PolicyResourceVersion: 1, RequestID: requestID})
 	if response.Status != http.StatusOK {
 		t.Fatalf("put IAM binding status=%d", response.Status)
 	}
-	var binding iamv1.RoleBinding
+	var binding iamv1.PolicyAttachment
 	if err := json.Unmarshal(response.Body, &binding); err != nil ||
-		iamv1.ValidateRoleBinding(binding) != nil {
+		iamv1.ValidatePolicyAttachment(binding) != nil {
 		t.Fatalf("decode IAM binding: %v", err)
 	}
 	return binding
 }
 
-func revokeIAMBinding(
+func revokeIAMPolicyAttachment(
 	t *testing.T,
 	endpoint string,
 	bearer string,
-	bindingID iamv1.RoleBindingID,
+	attachmentID iamv1.PolicyAttachmentID,
+	resourceVersion uint64,
 	requestID string,
 ) {
 	t.Helper()
 	response := performJSON(
 		t,
 		http.MethodPost,
-		endpoint+"/v1/role-bindings/"+string(bindingID)+":revoke",
+		endpoint+"/v1/policy-attachments/"+string(attachmentID)+":revoke",
 		bearer,
-		iamv1.RevokeRoleBindingRequest{RequestID: requestID},
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: resourceVersion, RequestID: requestID},
 	)
 	if response.Status != http.StatusOK {
 		t.Fatalf("revoke IAM binding status=%d", response.Status)
@@ -1732,7 +1719,7 @@ func proveTenantAccountProcesses(
 		t.Fatalf("customer alias status=%d", alias.Status)
 	}
 	child := createIAMUser(t, endpoint, primary.Credential, "account.user", "Customer developer", initial, "request-customer-user")
-	putIAMBinding(t, endpoint, primary.Credential, child.ID, iamv1.RolePaaSDeveloper, "request-customer-role")
+	createIAMPolicyAttachment(t, endpoint, primary.Credential, child.ID, iamv1.SystemPolicyPaaSDeveloper, "request-customer-role")
 	childLogin := loginIAM(t, endpoint, "account.user@process-company", initial, "request-customer-child-login")
 	changePasswordIAM(t, endpoint, childLogin.Credential, initial, changed, "request-customer-child-password")
 	operation := createPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", "customer-only", "create-customer-application", http.StatusCreated)
@@ -1744,13 +1731,9 @@ func proveTenantAccountProcesses(
 	response := performJSON(
 		t,
 		http.MethodPost,
-		endpoint+"/v1/role-bindings",
+		endpoint+"/v1/policy-attachments",
 		bearer,
-		iamv1.PutRoleBindingRequest{
-			PrincipalID: child.ID,
-			Role:        iamv1.RoleAuditReader,
-			RequestID:   "request-process-cross-tenant-binding",
-		},
+		iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(child.ID)}, PolicyID: iamv1.SystemPolicyAuditReader, PolicyResourceVersion: 1, RequestID: "request-process-cross-tenant-binding"},
 	)
 	if response.Status != http.StatusForbidden ||
 		bytes.Contains(response.Body, []byte(child.ID)) ||
@@ -1759,7 +1742,7 @@ func proveTenantAccountProcesses(
 	}
 	var unauthorizedBindings int
 	if err := admin.QueryRow(ctx,
-		"SELECT count(*) FROM iam.role_bindings WHERE principal_id=$1 AND role_name='AUDIT_READER'",
+		"SELECT count(*) FROM iam.policy_attachments WHERE principal_id=$1 AND policy_id='system.audit-reader'",
 		child.ID).Scan(&unauthorizedBindings); err != nil || unauthorizedBindings != 0 {
 		t.Fatalf("cross-tenant IAM attack created bindings=%d err=%v", unauthorizedBindings, err)
 	}
@@ -1927,11 +1910,11 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	homeUser := createIAMUser(t, iamEndpoint, homeBearer, "account.user", "Home resource member", initialDeveloperPassword, "request-home-resource-member")
 	home := loginIAM(t, iamEndpoint, "account.user@organization-process", initialDeveloperPassword, "request-home-resource-login")
 	changePasswordIAM(t, iamEndpoint, home.Credential, initialDeveloperPassword, changedDeveloperPassword, "request-home-resource-password")
-	developerBinding := putIAMBinding(t, iamEndpoint, homeBearer, homeUser.ID, iamv1.RolePaaSDeveloper, "request-home-resource-role")
+	developerBinding := createIAMPolicyAttachment(t, iamEndpoint, homeBearer, homeUser.ID, iamv1.SystemPolicyPaaSDeveloper, "request-home-resource-role")
 	platformUser := createIAMUser(t, iamEndpoint, homeBearer, "resource.platform", "Platform only", initialDeveloperPassword, "request-resource-platform-member")
 	platform := loginIAM(t, iamEndpoint, "resource.platform@organization-process", initialDeveloperPassword, "request-resource-platform-login")
 	changePasswordIAM(t, iamEndpoint, platform.Credential, initialDeveloperPassword, changedDeveloperPassword, "request-resource-platform-password")
-	putIAMBinding(t, iamEndpoint, homeBearer, platformUser.ID, iamv1.RolePlatformOperator, "request-resource-platform-role")
+	createIAMPolicyAttachment(t, iamEndpoint, homeBearer, platformUser.ID, iamv1.SystemPolicyPlatformOperator, "request-resource-platform-role")
 	tenants := []struct {
 		id, owner, member string
 		memberID          iamv1.PrincipalID
@@ -2035,14 +2018,14 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	}
 	applicationValues := proveApplicationTenantProcesses(t, ctx, admin, paasEndpoint, home, customer, platform.Credential)
 	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", platform.Credential, "platform-quota-attempt", activation), http.StatusForbidden, "platform-only tenant write")
-	revokeIAMBinding(t, iamEndpoint, homeBearer, developerBinding.ID, "request-resource-developer-revoked")
-	viewerBinding := putIAMBinding(t, iamEndpoint, homeBearer, homeUser.ID, iamv1.RolePaaSViewer, "request-resource-viewer")
+	revokeIAMPolicyAttachment(t, iamEndpoint, homeBearer, developerBinding.ID, 1, "request-resource-developer-revoked")
+	viewerBinding := createIAMPolicyAttachment(t, iamEndpoint, homeBearer, homeUser.ID, iamv1.SystemPolicyPaaSViewer, "request-resource-viewer")
 	assertStatus(performJSON(t, http.MethodGet, base+"/service-installations", home.Credential, nil), http.StatusOK, "viewer read")
 	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", home.Credential, "viewer-quota-attempt", activation), http.StatusForbidden, "viewer write")
 	getPaaSApplication(t, paasEndpoint, home.Credential, "application-shared-id", http.StatusOK)
 	createPaaSApplication(t, paasEndpoint, home.Credential, "application-viewer-denied", "viewer-denied", "viewer-application-attempt", http.StatusForbidden)
 	assertPaaSApplicationAbsent(t, ctx, admin, "application-viewer-denied")
-	revokeIAMBinding(t, iamEndpoint, homeBearer, viewerBinding.ID, "request-resource-viewer-revoked")
+	revokeIAMPolicyAttachment(t, iamEndpoint, homeBearer, viewerBinding.ID, 1, "request-resource-viewer-revoked")
 	assertStatus(performJSON(t, http.MethodGet, base+"/service-installations", home.Credential, nil), http.StatusForbidden, "next-request role revocation")
 	getPaaSApplication(t, paasEndpoint, home.Credential, "application-shared-id", http.StatusForbidden)
 	waitAllIAMOutboxDelivered(t, ctx, admin)

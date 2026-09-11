@@ -111,8 +111,8 @@ BEGIN
       JOIN iam.principals AS principal ON principal.tenant_id=organization.id
       JOIN iam.login_index AS login ON login.tenant_id=principal.tenant_id AND login.principal_id=principal.id AND login.account_owner
       JOIN iam.user_credentials AS credential ON credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id
-      JOIN iam.role_bindings AS binding ON binding.tenant_id=principal.tenant_id AND binding.principal_id=principal.id
-       AND binding.role_name='PLATFORM_OPERATOR' AND binding.revoked_at IS NULL
+      JOIN iam.policy_attachments AS binding ON binding.tenant_id=principal.tenant_id AND binding.principal_id=principal.id
+       AND binding.policy_id='system.platform-operator' AND binding.revoked_at IS NULL
      WHERE organization.id=scope->>'organizationId' AND organization.status='ACTIVE'
        AND principal.id=scope->>'principalId' AND principal.principal_type='USER' AND principal.status='ACTIVE'
        AND credential.credential_version BETWEEN 1 AND 9007199254740990
@@ -127,7 +127,7 @@ CREATE OR REPLACE FUNCTION iam.recover_local_credentials(scope jsonb, expected j
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE
     stored iam.local_credential_recoveries%ROWTYPE;
-    binding iam.role_bindings%ROWTYPE;
+    binding iam.policy_attachments%ROWTYPE;
     principal iam.principals%ROWTYPE;
     organization iam.organizations%ROWTYPE;
     generation bigint;
@@ -170,15 +170,9 @@ BEGIN
         END IF;
         RETURN stored.completed_result || jsonb_build_object('state','EQUAL_REPLAY');
     END IF;
-    -- The actual platform binding is locked before its target principal, as
-    -- in revoke_role_binding. Grants/password changes serialize on principal.
-    SELECT * INTO binding FROM iam.role_bindings AS candidate
-     WHERE candidate.tenant_id=scope->>'organizationId' AND candidate.id=expected->>'platformBindingId'
-       AND candidate.principal_id=scope->>'principalId' AND candidate.role_name='PLATFORM_OPERATOR'
-     FOR UPDATE;
-    IF NOT FOUND OR binding.revoked_at IS NOT NULL THEN
-        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='local recovery platform binding is ineligible';
-    END IF;
+    -- Match online writes: organization -> principal -> policy -> attachment
+    -- -> credential -> sessions. Receipt replay above remains independent of
+    -- current eligibility and never mutates the original completed evidence.
     SELECT * INTO organization FROM iam.organizations AS candidate WHERE candidate.id=scope->>'organizationId' FOR UPDATE;
     IF NOT FOUND OR organization.status <> 'ACTIVE' THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='local recovery organization is ineligible';
@@ -189,6 +183,16 @@ BEGIN
         OR NOT EXISTS (SELECT 1 FROM iam.login_index AS login WHERE login.tenant_id=principal.tenant_id
             AND login.principal_id=principal.id AND login.account_owner) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='local recovery primary is ineligible';
+    END IF;
+    PERFORM 1 FROM iam.policies AS policy WHERE policy.id='system.platform-operator' FOR SHARE;
+    SELECT * INTO binding FROM iam.policy_attachments AS candidate
+     WHERE candidate.tenant_id=scope->>'organizationId' AND candidate.id=expected->>'platformBindingId'
+       AND candidate.principal_id=scope->>'principalId' AND candidate.policy_id='system.platform-operator'
+       AND candidate.authority_scope='INSTALLATION'
+       AND candidate.installation_id=scope->>'installationId'
+     FOR UPDATE;
+    IF NOT FOUND OR binding.revoked_at IS NOT NULL THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='local recovery platform binding is ineligible';
     END IF;
     SELECT credential.credential_version INTO generation FROM iam.user_credentials AS credential
      WHERE credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id FOR UPDATE;

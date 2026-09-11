@@ -40,6 +40,10 @@ const (
 	ActionIAMPrincipalCreated                        Action = "iam.principal.created"
 	ActionIAMRoleBindingPut                          Action = "iam.role-binding.put"
 	ActionIAMRoleBindingRevoked                      Action = "iam.role-binding.revoked"
+	ActionIAMPolicyAttachmentCreated                 Action = "iam.policy-attachment.created"
+	ActionIAMPolicyAttachmentRevoked                 Action = "iam.policy-attachment.revoked"
+	ActionIAMPlatformPolicyAttachmentCreated         Action = "iam.platform-policy-attachment.created"
+	ActionIAMPlatformPolicyAttachmentRevoked         Action = "iam.platform-policy-attachment.revoked"
 	ActionIAMAuthorizationDecided                    Action = "iam.authorization.decided"
 
 	ActionPaaSApplicationCreated                  Action = "paas.application.created"
@@ -67,6 +71,7 @@ const (
 	TargetInstallation          TargetKind = "INSTALLATION"
 	TargetPrincipal             TargetKind = "PRINCIPAL"
 	TargetRoleBinding           TargetKind = "ROLE_BINDING"
+	TargetPolicyAttachment      TargetKind = "POLICY_ATTACHMENT"
 	TargetSession               TargetKind = "SESSION"
 	TargetAuthorizationDecision TargetKind = "AUTHORIZATION_DECISION"
 	TargetApplication           TargetKind = "APPLICATION"
@@ -118,6 +123,7 @@ type ActionContract struct {
 	IAMDecisionRequired  bool
 	OperationRequired    bool
 	PlatformOnly         bool
+	UserActorRequired    bool
 }
 
 func AllActions() []Action {
@@ -150,6 +156,10 @@ var allActions = []Action{
 	ActionIAMPrincipalCreated,
 	ActionIAMRoleBindingPut,
 	ActionIAMRoleBindingRevoked,
+	ActionIAMPolicyAttachmentCreated,
+	ActionIAMPolicyAttachmentRevoked,
+	ActionIAMPlatformPolicyAttachmentCreated,
+	ActionIAMPlatformPolicyAttachmentRevoked,
 	ActionIAMAuthorizationDecided,
 	ActionPaaSApplicationCreated,
 	ActionPaaSConfigurationCreated,
@@ -222,6 +232,18 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMAuthorizationDecided: {
 		Source: SourceIAM, Target: TargetAuthorizationDecision,
 		Results: []Result{ResultAllowed, ResultDenied}, IAMDecisionRequired: true,
+	},
+	ActionIAMPolicyAttachmentCreated: {
+		Source: SourceIAM, Target: TargetPolicyAttachment, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPolicyAttachmentRevoked: {
+		Source: SourceIAM, Target: TargetPolicyAttachment, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPlatformPolicyAttachmentCreated: {
+		Source: SourceIAM, Target: TargetPolicyAttachment, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMPlatformPolicyAttachmentRevoked: {
+		Source: SourceIAM, Target: TargetPolicyAttachment, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
 	},
 	ActionPaaSApplicationCreated: {
 		Source: SourcePaaS, Target: TargetApplication, Results: []Result{ResultSucceeded},

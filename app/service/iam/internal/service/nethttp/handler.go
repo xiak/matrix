@@ -21,6 +21,7 @@ import (
 type Workflow interface {
 	CurrentIdentity(context.Context, iamv1.Secret) (iamv1.CurrentIdentity, error)
 	ListPrincipals(context.Context, iamv1.Secret, string, string) (iamv1.PrincipalList, error)
+	ListPolicies(context.Context, iamv1.Secret, bool, string) (iamv1.PolicyList, error)
 	ListAccounts(context.Context, iamv1.Secret, string, string) (iamv1.OrganizationAccountList, error)
 	ReadOrganization(context.Context, iamv1.Secret, iamv1.OrganizationID, string) (iamv1.OrganizationAccount, error)
 	SetOrganizationStatus(context.Context, iamv1.Secret, iamv1.OrganizationID, iamv1.SetOrganizationStatusRequest) (iamv1.OrganizationAccount, error)
@@ -37,12 +38,12 @@ type Workflow interface {
 	Logout(context.Context, iamv1.Secret, iamv1.LogoutRequest) (iamv1.LogoutResponse, error)
 	ChangePassword(context.Context, iamv1.Secret, iamv1.ChangePasswordRequest) (iamv1.ChangePasswordResponse, error)
 	CreateUser(context.Context, iamv1.Secret, iamv1.CreateUserRequest) (iamv1.Principal, error)
-	PutRoleBinding(context.Context, iamv1.Secret, iamv1.PutRoleBindingRequest) (iamv1.RoleBinding, error)
-	RevokeRoleBinding(
+	CreatePolicyAttachment(context.Context, iamv1.Secret, iamv1.CreatePolicyAttachmentRequest) (iamv1.PolicyAttachment, error)
+	RevokePolicyAttachment(
 		context.Context,
 		iamv1.Secret,
-		iamv1.RoleBindingID,
-		iamv1.RevokeRoleBindingRequest,
+		iamv1.PolicyAttachmentID,
+		iamv1.RevokePolicyAttachmentRequest,
 	) (iamv1.Revocation, error)
 	RevokeSession(
 		context.Context,
@@ -90,6 +91,8 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/audit-producer:resolve", value.resolveAuditProducer)
 	routes.HandleFunc("/v1/auth/login", value.login)
 	routes.HandleFunc("/v1/auth/me", value.currentIdentity)
+	routes.HandleFunc("/v1/policies", value.listPolicies)
+	routes.HandleFunc("/v1/platform-policies", value.listPolicies)
 	routes.HandleFunc("/v1/organizations", value.organizations)
 	routes.HandleFunc("/v1/organizations/", value.organization)
 	routes.HandleFunc("/v1/organization:alias", value.setAccountAlias)
@@ -99,8 +102,8 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
 	routes.HandleFunc("/v1/principals", value.createUser)
 	routes.HandleFunc("/v1/principals/", value.changeSubaccount)
-	routes.HandleFunc("/v1/role-bindings", value.putRoleBinding)
-	routes.HandleFunc("/v1/role-bindings/", value.revokeRoleBinding)
+	routes.HandleFunc("/v1/policy-attachments", value.createPolicyAttachment)
+	routes.HandleFunc("/v1/policy-attachments/", value.revokePolicyAttachment)
 	routes.HandleFunc("/v1/sessions/", value.revokeSession)
 	routes.HandleFunc("/", value.notFound)
 	value.routes = routes
@@ -130,6 +133,22 @@ func (value *handler) ready(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	writeJSON(response, http.StatusOK, readiness)
+}
+
+func (value *handler) listPolicies(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.ListPolicies(request.Context(), credential, request.URL.Path == "/v1/platform-policies", requestID(request))
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
 }
 
 func (value *handler) bootstrapStatus(response http.ResponseWriter, request *http.Request) {
@@ -273,7 +292,7 @@ func (value *handler) createUser(response http.ResponseWriter, request *http.Req
 	writeJSON(response, http.StatusCreated, result)
 }
 
-func (value *handler) putRoleBinding(response http.ResponseWriter, request *http.Request) {
+func (value *handler) createPolicyAttachment(response http.ResponseWriter, request *http.Request) {
 	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
 	}
@@ -281,11 +300,11 @@ func (value *handler) putRoleBinding(response http.ResponseWriter, request *http
 	if !ok {
 		return
 	}
-	body, ok := decodeJSON[iamv1.PutRoleBindingRequest](value, response, request)
+	body, ok := decodeJSON[iamv1.CreatePolicyAttachmentRequest](value, response, request)
 	if !ok {
 		return
 	}
-	result, err := value.workflow.PutRoleBinding(request.Context(), credential, body)
+	result, err := value.workflow.CreatePolicyAttachment(request.Context(), credential, body)
 	if err != nil {
 		value.writeError(response, request, err)
 		return
@@ -293,8 +312,8 @@ func (value *handler) putRoleBinding(response http.ResponseWriter, request *http
 	writeJSON(response, http.StatusOK, result)
 }
 
-func (value *handler) revokeRoleBinding(response http.ResponseWriter, request *http.Request) {
-	id, ok := commandPathID(response, request, "/v1/role-bindings/", ":revoke", "roleBindingId")
+func (value *handler) revokePolicyAttachment(response http.ResponseWriter, request *http.Request) {
+	id, ok := commandPathID(response, request, "/v1/policy-attachments/", ":revoke", "attachmentId")
 	if !ok || !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
 	}
@@ -302,12 +321,12 @@ func (value *handler) revokeRoleBinding(response http.ResponseWriter, request *h
 	if !ok {
 		return
 	}
-	body, ok := decodeJSON[iamv1.RevokeRoleBindingRequest](value, response, request)
+	body, ok := decodeJSON[iamv1.RevokePolicyAttachmentRequest](value, response, request)
 	if !ok {
 		return
 	}
-	result, err := value.workflow.RevokeRoleBinding(
-		request.Context(), credential, iamv1.RoleBindingID(id), body,
+	result, err := value.workflow.RevokePolicyAttachment(
+		request.Context(), credential, iamv1.PolicyAttachmentID(id), body,
 	)
 	if err != nil {
 		value.writeError(response, request, err)

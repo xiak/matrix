@@ -2,7 +2,6 @@ package identityaccess
 
 import (
 	"context"
-	"slices"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
@@ -26,9 +25,21 @@ func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.
 		if err != nil {
 			return err
 		}
+		// This conservative UI hint is evaluated at the exact directory target;
+		// it is not a permit and the eventual command makes its own decision.
+		hint, err := authority.Decide(subject, iamv1.ServiceIAM, iamv1.AuthorizationRequest{
+			Action:    iamv1.ActionIAMOrganizationCreate,
+			Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: "organizations"},
+			RequestID: "current-identity-hint", CorrelationID: "current-identity-hint"}, "current-identity-hint", now)
+		if err != nil {
+			return ErrUnavailable
+		}
+		attachments := make([]iamv1.PolicyAttachment, 0, len(subject.Policies))
+		for _, row := range subject.Policies {
+			attachments = append(attachments, row.Attachment)
+		}
 		result = iamv1.CurrentIdentity{APIVersion: iamv1.APIVersion, Kind: "CurrentIdentity", Account: account,
-			Principal: subject.Principal, Roles: append([]iamv1.BuiltinRole{}, subject.Roles...),
-			CanCreateOrganizations: subject.InstallationID != "" && !subject.Principal.MustChangePassword && slices.Contains(subject.Roles, iamv1.RolePlatformOperator)}
+			Principal: subject.Principal, PolicyAttachments: attachments, CanCreateOrganizations: hint.Allowed}
 		return nil
 	})
 	if err != nil {
@@ -92,6 +103,55 @@ func (service *Authority) ListPrincipals(ctx context.Context, credential iamv1.S
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.PrincipalList, error) {
 			return tx.ListPrincipals(ctx, AccountRead{OrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: after})
 		})
+}
+
+func (service *Authority) ListPolicies(ctx context.Context, credential iamv1.Secret, platform bool, requestID string) (iamv1.PolicyList, error) {
+	if iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.PolicyList{}, ErrInvalidArgument
+	}
+	var result iamv1.PolicyList
+	denied := false
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		denied = false
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		action, scope := iamv1.ActionIAMPolicyList, iamv1.AuthorityScopeTenant
+		target := iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: string(subject.Subject.Organization.ID)}
+		if platform {
+			action, scope = iamv1.ActionIAMPlatformPolicyList, iamv1.AuthorityScopeInstallation
+			target = iamv1.ResourceReference{Kind: iamv1.ResourceInstallation, ID: subject.Subject.InstallationID}
+			if target.ID == "" {
+				return ErrForbidden
+			}
+		}
+		decision, err := service.managementDecision(ctx, tx, subject, action, target, requestID, now)
+		if err != nil {
+			return err
+		}
+		if !decision.Allowed {
+			denied = true
+			return nil
+		}
+		result, err = tx.ListPolicies(ctx, AccountRead{OrganizationID: subject.Subject.Organization.ID,
+			ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, scope)
+		return err
+	})
+	if err != nil {
+		return iamv1.PolicyList{}, err
+	}
+	if denied {
+		return iamv1.PolicyList{}, ErrForbidden
+	}
+	if iamv1.ValidatePolicyList(result) != nil {
+		return iamv1.PolicyList{}, ErrUnavailable
+	}
+	return result, nil
 }
 
 func (service *Authority) ListAccounts(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.OrganizationAccountList, error) {
@@ -200,7 +260,7 @@ func (service *Authority) RecoverOrganizationAdministrator(ctx context.Context, 
 			if err != nil {
 				return iamv1.OrganizationAccount{}, ErrUnavailable
 			}
-			bindingID, err := service.config.NewID("binding")
+			attachmentID, err := service.config.NewID("attachment")
 			if err != nil {
 				return iamv1.OrganizationAccount{}, ErrUnavailable
 			}
@@ -212,7 +272,7 @@ func (service *Authority) RecoverOrganizationAdministrator(ctx context.Context, 
 			return tx.RecoverOrganizationAdministrator(ctx, OrganizationAdministratorRecovery{
 				ActorOrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
 				DecisionID: decision.ID, OrganizationID: id, PrincipalID: request.PrincipalID,
-				ResourceVersion: request.ResourceVersion, PasswordHash: hash, BindingID: iamv1.RoleBindingID(bindingID), AuditEvent: event,
+				ResourceVersion: request.ResourceVersion, PasswordHash: hash, AttachmentID: iamv1.PolicyAttachmentID(attachmentID), AuditEvent: event,
 			})
 		})
 }
@@ -299,31 +359,4 @@ func (service *Authority) changeSubaccount(ctx context.Context, credential iamv1
 			}
 			return tx.ChangeSubaccount(ctx, mutation)
 		})
-}
-
-func (service *Authority) putInitialRole(ctx context.Context, tx Transaction, subject SessionCredential, principal iamv1.PrincipalID, role iamv1.BuiltinRole, requestID string, now time.Time) error {
-	request := iamv1.PutRoleBindingRequest{PrincipalID: principal, Role: role, RequestID: requestID}
-	decision, err := service.managementDecision(ctx, tx, subject, iamv1.ActionIAMRoleBindingPut, iamv1.ResourceReference{Kind: iamv1.ResourcePrincipal, ID: string(principal)}, requestID, now)
-	if err != nil {
-		return err
-	}
-	if !decision.Allowed {
-		return ErrForbidden
-	}
-	id, err := service.config.NewID("binding")
-	if err != nil {
-		return ErrUnavailable
-	}
-	digest, err := digestSanitized("role-binding-put", request)
-	if err != nil {
-		return err
-	}
-	event, err := service.newManagementEvent(subject, auditv1.ActionIAMRoleBindingPut, auditv1.TargetRoleBinding, id, decision.ID, digest, requestID, now)
-	if err != nil {
-		return err
-	}
-	_, _, err = tx.PutRoleBinding(ctx, RoleBindingMutation{ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, AuditEvent: event,
-		Binding: iamv1.RoleBinding{APIVersion: iamv1.APIVersion, Kind: "RoleBinding", ID: iamv1.RoleBindingID(id), OrganizationID: subject.Subject.Organization.ID,
-			PrincipalID: principal, Role: role, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}})
-	return err
 }

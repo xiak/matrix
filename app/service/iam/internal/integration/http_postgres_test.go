@@ -4,20 +4,24 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	"github.com/xiak/matrix/app/service/iam/internal/authority"
 	iampostgres "github.com/xiak/matrix/app/service/iam/internal/data/postgres"
 	iamhttp "github.com/xiak/matrix/app/service/iam/internal/service/nethttp"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/auditdispatch"
@@ -39,6 +43,1006 @@ const (
 	verifierCredential       = "mx1.VerifierHTTPIntegrationCredential0000000001"
 	iamProducerCredential    = "mx1.IAMHTTPIntegrationCredential0000000000000001"
 )
+
+var removedBuiltinRoleNames = []string{
+	"ORGANIZATION_ADMIN",
+	"PLATFORM_OPERATOR",
+	"PAAS_DEVELOPER",
+	"PAAS_VIEWER",
+	"AUDIT_READER",
+	"INSTALLATION_VERIFIER",
+}
+
+func proveDirectPolicyAttachments(t *testing.T, ctx context.Context, handler http.Handler, admin *pgx.Conn, primary string) {
+	t.Helper()
+	post := func(path, credential string, body any, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequest(handler, http.MethodPost, path, credential, encoded)
+		if response.Code != want {
+			t.Fatalf("policy management %s: status=%d want=%d body=%s", path, response.Code, want, response.Body.String())
+		}
+		return response
+	}
+	for _, path := range []string{"/v1/role-bindings", "/v1/role-bindings/old:revoke"} {
+		post(path, primary, map[string]any{}, http.StatusNotFound)
+	}
+	response := post("/v1/principals", primary, map[string]any{"loginName": "policy-member", "displayName": "Policy member", "initialPassword": initialDeveloperPassword, "requestId": "policy-member-create"}, http.StatusCreated)
+	var member iamv1.Principal
+	if json.Unmarshal(response.Body.Bytes(), &member) != nil || iamv1.ValidatePrincipal(member) != nil {
+		t.Fatal("invalid new member")
+	}
+	bearer := localRecoveryLogin(t, handler, "policy-member@"+string(member.OrganizationID), initialDeveloperPassword, true)
+	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+	authorize := func(want bool) {
+		t.Helper()
+		body, _ := json.Marshal(iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "attachment-app"}, RequestID: "attachment-read", CorrelationID: "attachment-read"})
+		response := performIAMRequestWithSubject(handler, body, paasCredential, bearer)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || decision.Allowed != want {
+			t.Fatalf("member allowed=%t want=%t status=%d", decision.Allowed, want, response.Code)
+		}
+	}
+	authorize(false)
+	request := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "policy-member-grant"}
+	parse := func(response *httptest.ResponseRecorder) iamv1.PolicyAttachment {
+		t.Helper()
+		var attachment iamv1.PolicyAttachment
+		if json.Unmarshal(response.Body.Bytes(), &attachment) != nil || iamv1.ValidatePolicyAttachment(attachment) != nil {
+			t.Fatal("invalid policy attachment response")
+		}
+		return attachment
+	}
+	attachment := parse(post("/v1/policy-attachments", primary, request, http.StatusOK))
+	directoryAttachment := func(expected iamv1.PolicyAttachment, present bool) {
+		t.Helper()
+		response := performIAMRequest(handler, http.MethodGet, "/v1/principals", primary, nil)
+		var directory iamv1.PrincipalList
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &directory) != nil || iamv1.ValidatePrincipalList(directory) != nil || strings.Contains(response.Body.String(), `"roleBindings"`) {
+			t.Fatalf("invalid policy directory: status=%d body=%s", response.Code, response.Body.String())
+		}
+		found := false
+		for _, entry := range directory.Items {
+			for _, actual := range entry.PolicyAttachments {
+				if actual.ID == expected.ID {
+					found = true
+					if actual != expected {
+						t.Fatal("directory altered attachment identity or scope")
+					}
+				}
+			}
+		}
+		if found != present {
+			t.Fatalf("directory attachment present=%t want=%t", found, present)
+		}
+	}
+	directoryAttachment(attachment, true)
+	if attachment.Target != request.Target || attachment.PolicyID != request.PolicyID || attachment.Scope != iamv1.AuthorityScopeTenant || attachment.AccountID != member.OrganizationID {
+		t.Fatal("attachment authority differs")
+	}
+	if replay := parse(post("/v1/policy-attachments", primary, request, http.StatusOK)); replay.ID != attachment.ID || replay.CreatedAt != attachment.CreatedAt {
+		t.Fatal("create replay changed attachment identity")
+	}
+	authorize(true)
+	variant := request
+	variant.PolicyID = iamv1.SystemPolicyPaaSDeveloper
+	post("/v1/policy-attachments", primary, variant, http.StatusConflict)
+	variant = request
+	variant.RequestID = "policy-stale-version"
+	variant.PolicyResourceVersion = 2
+	post("/v1/policy-attachments", primary, variant, http.StatusConflict)
+	variant = request
+	variant.RequestID = "policy-foreign-user"
+	variant.Target.ID = "foreign-user"
+	post("/v1/policy-attachments", primary, variant, http.StatusForbidden)
+	variant = request
+	variant.RequestID = "policy-probe-user"
+	variant.PolicyID = iamv1.SystemPolicyInstallationVerifier
+	post("/v1/policy-attachments", primary, variant, http.StatusForbidden)
+	variant = request
+	variant.RequestID = "policy-self-admin"
+	variant.PolicyID = iamv1.SystemPolicyAccountAdministrator
+	post("/v1/policy-attachments", bearer, variant, http.StatusForbidden)
+	administratorRequest := variant
+	path := "/v1/policy-attachments/" + string(attachment.ID) + ":revoke"
+	revoke := iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 2, RequestID: "policy-member-revoke"}
+	post(path, primary, revoke, http.StatusConflict)
+	authorize(true)
+	revoke.ResourceVersion = 1
+	post(path, primary, revoke, http.StatusOK)
+	post(path, primary, revoke, http.StatusOK)
+	post("/v1/policy-attachments", primary, request, http.StatusConflict)
+	authorize(false)
+	directoryAttachment(attachment, false)
+	var revoked bool
+	var createdFacts, revokedFacts int
+	if err := admin.QueryRow(ctx, `SELECT revoked_at IS NOT NULL AND resource_version=2 FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$2`, member.OrganizationID, attachment.ID).Scan(&revoked); err != nil || !revoked {
+		t.Fatal("attachment revocation did not persist")
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FILTER (WHERE event_document->>'action'='iam.policy-attachment.created'),count(*) FILTER (WHERE event_document->>'action'='iam.policy-attachment.revoked') FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{target,id}'=$2`, member.OrganizationID, attachment.ID).Scan(&createdFacts, &revokedFacts); err != nil || createdFacts != 1 || revokedFacts != 1 {
+		t.Fatal("replay duplicated attachment facts")
+	}
+	regrant := request
+	regrant.RequestID = "policy-member-new-explicit-grant"
+	replacement := parse(post("/v1/policy-attachments", primary, regrant, http.StatusOK))
+	if replacement.ID == attachment.ID {
+		t.Fatal("explicit regrant reused revoked attachment")
+	}
+	authorize(true)
+	post(path, primary, revoke, http.StatusOK)
+	authorize(true) // Exact old revoke replay cannot revoke the new relationship.
+	post("/v1/policy-attachments/"+string(replacement.ID)+":revoke", primary, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: "policy-member-new-revoke"}, http.StatusOK)
+	authorize(false)
+	post("/v1/policy-attachments", primary, administratorRequest, http.StatusOK)
+	variant = administratorRequest
+	variant.RequestID = "policy-self-platform"
+	variant.PolicyID = iamv1.SystemPolicyPlatformOperator
+	post("/v1/policy-attachments", bearer, variant, http.StatusForbidden)
+	platform := parse(post("/v1/policy-attachments", primary, variant, http.StatusOK))
+	if platform.Scope != iamv1.AuthorityScopeInstallation || platform.InstallationID == "" {
+		t.Fatal("platform grant lost sealed scope")
+	}
+	directoryAttachment(platform, true)
+	post("/v1/policy-attachments/"+string(platform.ID)+":revoke", primary, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: "policy-platform-revoke"}, http.StatusOK)
+	directoryAttachment(platform, false)
+	t.Run("platform attachment serializes with credential mutations", func(t *testing.T) {
+		provePlatformCredentialProtection(t, ctx, handler, admin, primary, bearer)
+	})
+	rows, err := admin.Query(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{target,id}'=$2 ORDER BY event_id`, member.OrganizationID, platform.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	facts := 0
+	for rows.Next() {
+		var body []byte
+		var event auditv1.Event
+		if rows.Scan(&body) != nil || json.Unmarshal(body, &event) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil || event.TenantID != "" || event.InstallationID != platform.InstallationID {
+			t.Fatal("platform attachment fact lost its scope")
+		}
+		facts++
+	}
+	if rows.Err() != nil || facts != 2 {
+		t.Fatal("missing platform attachment facts")
+	}
+}
+
+func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
+	const environment = "MATRIX_IAM_POLICY_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(environment)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_policy_") {
+		t.Fatal("policy storage gate requires its own matrix_iam_policy_ database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	admin, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect policy storage database")
+	}
+	defer admin.Close(context.Background())
+	assertIAMPostgres18(t, ctx, admin)
+	assertCleanIAMSchema(t, ctx, admin)
+	applyIAMSchema(t, ctx, admin)
+	applyIAMSchema(t, ctx, admin)
+	createIAMHTTPRole(t, ctx, admin)
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole)
+	document := iamHTTPBootstrap(t)
+	status, err := workflow.Bootstrap(ctx, document)
+	if err != nil || status.State != iamv1.BootstrapReady {
+		t.Fatalf("bootstrap policy authority: status=%#v err=%v", status, err)
+	}
+	applyIAMSchema(t, ctx, admin)
+	replayed, err := workflow.Bootstrap(ctx, document)
+	if err != nil || replayed.ContentDigest != status.ContentDigest || replayed.AppliedAt == nil ||
+		status.AppliedAt == nil || *replayed.AppliedAt != *status.AppliedAt {
+		t.Fatalf("replay policy authority bootstrap: status=%#v err=%v", replayed, err)
+	}
+	handler, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary := localRecoveryLogin(t, handler, "admin", adminPassword, true)
+	primary = localRecoveryChangePassword(t, handler, primary, adminPassword, changedAdminPassword)
+	identityResponse := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", primary, nil)
+	var currentIdentity iamv1.CurrentIdentity
+	if identityResponse.Code != http.StatusOK || json.Unmarshal(identityResponse.Body.Bytes(), &currentIdentity) != nil ||
+		iamv1.ValidateCurrentIdentity(currentIdentity) != nil || len(currentIdentity.PolicyAttachments) != 2 {
+		t.Fatal("current identity did not consume the new policy snapshot")
+	}
+	readSnapshot := func() []authority.AttachedPolicy {
+		t.Helper()
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, `SET LOCAL ROLE matrix_iam_owner; SELECT set_config('matrix.iam_tenant_id',$1,true)`, document.Organization.ID); err != nil {
+			t.Fatal(err)
+		}
+		var encoded []byte
+		if err := tx.QueryRow(ctx, `SELECT iam.current_policy_snapshot($1,$2)`, document.Organization.ID, document.Administrator.ID).Scan(&encoded); err != nil {
+			t.Fatal(err)
+		}
+		var rows []authority.AttachedPolicy
+		if json.Unmarshal(encoded, &rows) != nil {
+			t.Fatal("decode stored policy snapshot")
+		}
+		for index := range rows {
+			row := &rows[index]
+			row.Policy.CreatedAt, row.Policy.UpdatedAt = row.Policy.CreatedAt.UTC(), row.Policy.UpdatedAt.UTC()
+			row.Attachment.CreatedAt, row.Attachment.UpdatedAt = row.Attachment.CreatedAt.UTC(), row.Attachment.UpdatedAt.UTC()
+			if iamv1.ValidatePolicy(row.Policy) != nil || iamv1.ValidatePolicyVersion(row.Version) != nil || iamv1.ValidatePolicyAttachment(row.Attachment) != nil {
+				t.Fatal("stored policy snapshot violates its public contract")
+			}
+		}
+		return rows
+	}
+	initial := readSnapshot()
+	if len(initial) != 2 {
+		t.Fatalf("bootstrap must create separate account/platform attachments, got %d", len(initial))
+	}
+	for _, definition := range iamv1.AllRecordedActionDefinitions() {
+		if _, current := iamv1.LookupActionDefinition(definition.Action); current {
+			continue
+		}
+		body, err := json.Marshal(iamv1.AuthorizationRequest{Action: definition.Action,
+			Resource:  iamv1.ResourceReference{Kind: definition.ResourceKind, ID: "retired-target"},
+			RequestID: "retired-action-request", CorrelationID: "retired-action-request"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequestWithSubject(handler, body, iamProducerCredential, primary)
+		if response.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("retired action %s reached current HTTP authorization: %d", definition.Action, response.Code)
+		}
+	}
+	var retiredDecisions int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.authorization_decisions WHERE request_id='retired-action-request'`).Scan(&retiredDecisions); err != nil || retiredDecisions != 0 {
+		t.Fatal("retired HTTP action created a current authorization decision")
+	}
+	assertDecision := func(action iamv1.Action, resource iamv1.ResourceReference, allowed bool) {
+		t.Helper()
+		result, evidence, err := authority.EvaluateAttachedPolicies(document.Organization.ID, document.InstallationID,
+			iamv1.Subject{Type: iamv1.PrincipalUser, ID: document.Administrator.ID}, readSnapshot(), action, resource)
+		if err != nil || result.Allowed != allowed || (allowed && len(evidence) == 0) {
+			t.Fatalf("stored policy decision action=%s allowed=%t error=%v", action, result.Allowed, err)
+		}
+		body, err := json.Marshal(iamv1.AuthorizationRequest{Action: action, Resource: resource, RequestID: "policy-storage-authorize", CorrelationID: "policy-storage-authorize"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequestWithSubject(handler, body, paasCredential, primary)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || iamv1.ValidateAuthorizationDecision(decision) != nil || decision.Allowed != allowed {
+			t.Fatalf("HTTP policy evaluation status=%d decision=%+v", response.Code, decision)
+		}
+		var stored []byte
+		if err := admin.QueryRow(ctx, `SELECT policy_evidence FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, document.Organization.ID, decision.ID).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		var actual []authority.PolicyAttachmentEvidence
+		if json.Unmarshal(stored, &actual) != nil || actual == nil || !slices.Equal(actual, evidence) {
+			t.Fatal("HTTP decision did not persist exact evaluated attachment/version evidence")
+		}
+	}
+	assertDecision(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"}, true)
+	t.Run("policy directories isolate metadata and permissions", func(t *testing.T) {
+		provePolicyDirectories(t, ctx, handler, admin, primary)
+	})
+	t.Run("direct policy attachment management", func(t *testing.T) {
+		proveDirectPolicyAttachments(t, ctx, handler, admin, primary)
+	})
+	t.Run("policy publication versus attachment revision", func(t *testing.T) {
+		provePolicyDefaultAttachmentRaces(t, ctx, handler, admin, primary)
+	})
+	t.Run("policy-backed credential transaction races", func(t *testing.T) {
+		provePasswordSessionRaces(t, ctx, handler, admin, primary)
+	})
+	t.Run("platform scope protects credentials independently of policy name", func(t *testing.T) {
+		provePolicyScopeCredentialProtection(t, ctx, handler, admin, primary)
+	})
+	var accountAttachment iamv1.PolicyAttachment
+	for _, row := range initial {
+		if row.Policy.ID == iamv1.SystemPolicyAccountAdministrator {
+			accountAttachment = row.Attachment
+		}
+	}
+	if accountAttachment.ID == "" {
+		t.Fatal("bootstrap account policy is absent")
+	}
+	assertRejected := func(name, sql, code string, args ...any) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(ctx)
+			if _, err := tx.Exec(ctx, `SET LOCAL ROLE matrix_iam_owner; SELECT set_config('matrix.iam_tenant_id',$1,true)`, document.Organization.ID); err != nil {
+				t.Fatal(err)
+			}
+			_, err = tx.Exec(ctx, sql, args...)
+			var databaseError *pgconn.PgError
+			if !errors.As(err, &databaseError) || databaseError.Code != code {
+				t.Fatalf("attack result=%v want SQLSTATE %s", err, code)
+			}
+		})
+	}
+	assertRejected("immutable-version-update", `UPDATE iam.policy_versions SET content_digest=content_digest`, "42501")
+	assertRejected("immutable-version-delete", `DELETE FROM iam.policy_versions`, "42501")
+	assertRejected("immutable-decision-evidence", `UPDATE iam.authorization_decisions SET policy_evidence='[]'::jsonb`, "42501")
+	for _, attack := range []struct{ name, evidence, code string }{
+		{"allowed-without-policy-evidence", `'[]'::jsonb`, "22023"},
+		{"decision-with-forged-version-digest", `jsonb_set(policy_evidence,'{0,version,contentDigest}',to_jsonb('sha256:'||repeat('0',64)))`, "42501"},
+		{"decision-with-forged-attachment", `jsonb_set(policy_evidence,'{0,attachmentId}','"missing-attachment"'::jsonb)`, "42501"},
+		{"decision-with-duplicate-evidence", `policy_evidence||policy_evidence`, "22023"},
+		{"decision-with-unknown-evidence-field", `jsonb_set(policy_evidence,'{0,permit}','true'::jsonb)`, "22023"},
+	} {
+		// Refresh only the decision identity/time. Bad evidence must be refused
+		// before the deliberately absent audit fact can be accepted or written.
+		assertRejected(attack.name, `SELECT iam.record_authorization($1,$2,
+			document||jsonb_build_object('id','forged-policy-decision','decidedAt',
+			to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')),
+			'{}'::jsonb,`+attack.evidence+`) FROM iam.authorization_decisions WHERE allowed ORDER BY decided_at,id LIMIT 1`,
+			attack.code, document.Organization.ID, document.Administrator.ID)
+	}
+	assertRejected("immutable-version-truncate", `TRUNCATE iam.policy_versions`, "0A000") // Referenced defaults also prohibit truncation.
+	assertRejected("default-must-belong-to-policy", `UPDATE iam.policies SET default_version_id=(SELECT default_version_id FROM iam.policies WHERE id='system.platform-operator'),resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE id='system.account-administrator'; SET CONSTRAINTS ALL IMMEDIATE`, "23503")
+	assertRejected("attachment-identity-immutable", `UPDATE iam.policy_attachments SET policy_id='system.paas-viewer' WHERE id=$1`, "42501", accountAttachment.ID)
+	assertRejected("attachment-history-delete", `DELETE FROM iam.policy_attachments WHERE id=$1`, "42501", accountAttachment.ID)
+	assertRejected("attachment-forged-installation", `INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,installation_id,resource_version,created_at,updated_at) VALUES($1,'forged-installation',$2,'system.platform-operator','other-installation',1,transaction_timestamp(),transaction_timestamp())`, "23503", document.Organization.ID, document.Administrator.ID)
+	assertRejected("attachment-wrong-principal-kind", `INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,target_kind,policy_id,resource_version,created_at,updated_at) VALUES($1,'forged-kind',$2,'SERVICE_ACCOUNT','system.paas-viewer',1,transaction_timestamp(),transaction_timestamp())`, "23503", document.Organization.ID, document.Administrator.ID)
+	assertRejected("tenant-attachment-cannot-select-installation", `INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,installation_id,resource_version,created_at,updated_at) VALUES($1,'forged-tenant-scope',$2,'system.paas-viewer',$3,1,transaction_timestamp(),transaction_timestamp())`, "22023", document.Organization.ID, document.Administrator.ID, document.InstallationID)
+	for _, role := range []string{iamHTTPTestRole, iamHTTPWorkerRole, "matrix_iam_credential_recovery"} {
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+pgx.Identifier{role}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, `SELECT * FROM iam.policy_versions`)
+		var databaseError *pgconn.PgError
+		if !errors.As(err, &databaseError) || databaseError.Code != "42501" {
+			t.Fatalf("runtime %s acquired policy table access: %v", role, err)
+		}
+		if err := tx.Rollback(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A different immutable default must drive evaluation; replaying the
+	// code-owned seeds must not silently choose the original Allow again.
+	denyDocument := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "deny-application-read", Effect: iamv1.PolicyDeny,
+			Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{
+				{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+	canonical, digest, err := iamv1.CanonicalizePolicyDocument(denyDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only the database fixture owner creates these rows: this proves forced
+	// RLS and relationship constraints, not a customer-policy management API.
+	if _, err := admin.Exec(ctx, `BEGIN;
+		INSERT INTO iam.organizations(id,display_name,status,resource_version,created_at,updated_at)
+		VALUES('policy-other-account','Other account','ACTIVE',1,transaction_timestamp(),transaction_timestamp());
+		INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
+		VALUES('customer.local','CUSTOMER',$1,'Same policy name','TENANT','ACTIVE','same-version-id',1,transaction_timestamp(),transaction_timestamp()),
+		('customer.other','CUSTOMER','policy-other-account','Same policy name','TENANT','ACTIVE','same-version-id',1,transaction_timestamp(),transaction_timestamp());
+		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
+		SELECT id,'same-version-id','TENANT',$2::jsonb,$2,$3,transaction_timestamp() FROM iam.policies WHERE id IN ('customer.local','customer.other');
+		COMMIT;`, document.Organization.ID, canonical, digest); err != nil {
+		t.Fatal(err)
+	}
+	rls, err := admin.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rls.Exec(ctx, `SET LOCAL ROLE matrix_iam_owner; SELECT set_config('matrix.iam_tenant_id',$1,true)`, document.Organization.ID); err != nil {
+		t.Fatal(err)
+	}
+	var visiblePolicies, visibleVersions int
+	if err := rls.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.policies WHERE id IN ('customer.local','customer.other')),
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id IN ('customer.local','customer.other'))`).Scan(&visiblePolicies, &visibleVersions); err != nil || visiblePolicies != 1 || visibleVersions != 1 {
+		t.Fatal("customer metadata or versions escaped owner-forced RLS")
+	}
+	if err := rls.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertRejected("attachment-cannot-use-another-account-policy", `INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at) VALUES($1,'cross-account-policy',$2,'customer.other',1,transaction_timestamp(),transaction_timestamp())`, "23503", document.Organization.ID, document.Administrator.ID)
+	allowDocument := denyDocument
+	allowDocument.Statements = append([]iamv1.PolicyStatement{}, denyDocument.Statements...)
+	allowDocument.Statements[0].Effect = iamv1.PolicyAllow
+	allowCanonical, allowDigest, err := iamv1.CanonicalizePolicyDocument(allowDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The 257th row deliberately sorts last and contains Deny. A projection
+	// that silently truncates at 256 would authorize this request incorrectly.
+	if _, err := admin.Exec(ctx, `BEGIN;
+		INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
+		SELECT 'budget-policy-'||i,'CUSTOMER',$1,'Budget policy','TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp() FROM generate_series(1,255) i;
+		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
+		SELECT 'budget-policy-'||i,'v1','TENANT',CASE WHEN i=255 THEN $4::jsonb ELSE $2::jsonb END,
+		CASE WHEN i=255 THEN $4 ELSE $2 END,CASE WHEN i=255 THEN $5 ELSE $3 END,transaction_timestamp() FROM generate_series(1,255) i;
+		INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at)
+		SELECT $1,'budget-attachment-'||i,$6,'budget-policy-'||i,1,transaction_timestamp(),transaction_timestamp() FROM generate_series(1,254) i;
+		COMMIT;`, document.Organization.ID, allowCanonical, allowDigest, canonical, digest, document.Administrator.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertDecision(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"}, true)
+	if _, err := admin.Exec(ctx, `INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at)
+		VALUES($1,'zz-budget-attachment-deny',$2,'budget-policy-255',1,transaction_timestamp(),transaction_timestamp())`, document.Organization.ID, document.Administrator.ID); err != nil {
+		t.Fatal(err)
+	}
+	var beforeBudget, afterBudget int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.authorization_decisions`).Scan(&beforeBudget); err != nil {
+		t.Fatal(err)
+	}
+	budgetRequest, _ := json.Marshal(iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"},
+		RequestID: "policy-over-budget", CorrelationID: "policy-over-budget"})
+	if response := performIAMRequestWithSubject(handler, budgetRequest, paasCredential, primary); response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("overflow policy snapshot was truncated or accepted: %d", response.Code)
+	}
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.authorization_decisions`).Scan(&afterBudget); err != nil || beforeBudget != afterBudget {
+		t.Fatal("over-budget snapshot produced a partial authorization decision")
+	}
+	if _, err := admin.Exec(ctx, `UPDATE iam.policy_attachments SET revoked_at=transaction_timestamp(),updated_at=transaction_timestamp(),resource_version=resource_version+1
+		WHERE tenant_id=$1 AND policy_id LIKE 'budget-policy-%'`, document.Organization.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `BEGIN;
+		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
+		VALUES('system.account-administrator','storage-deny-v2','TENANT',$1::jsonb,$1,$2,transaction_timestamp());
+		UPDATE iam.policies SET default_version_id='storage-deny-v2',resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE id='system.account-administrator'; COMMIT;`, canonical, digest); err != nil {
+		t.Fatal(err)
+	}
+	assertDecision(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"}, false)
+	applyIAMSchema(t, ctx, admin)
+	assertDecision(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"}, false)
+	for _, row := range readSnapshot() {
+		if row.Policy.ID == iamv1.SystemPolicyAccountAdministrator && (row.Version.ID != "storage-deny-v2" || row.Policy.ResourceVersion != 2 || row.Attachment.ID != accountAttachment.ID) {
+			t.Fatal("migration rewrote a policy default, revision or attachment")
+		}
+	}
+	for _, row := range initial {
+		if row.Policy.ID == iamv1.SystemPolicyAccountAdministrator {
+			if _, err := admin.Exec(ctx, `UPDATE iam.policies SET default_version_id=$1,resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE id='system.account-administrator'`, row.Version.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	assertDecision(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"}, true)
+	// Storage transition fixture, not an online root-revocation API. Verify
+	// that replay cannot recreate an attachment even if its root still exists.
+	if _, err := admin.Exec(ctx, `UPDATE iam.policy_attachments SET revoked_at=transaction_timestamp(),updated_at=transaction_timestamp(),resource_version=resource_version+1 WHERE tenant_id=$1 AND id=$2`, document.Organization.ID, accountAttachment.ID); err != nil {
+		t.Fatal(err)
+	}
+	assertRejected("revoked-attachment-cannot-resurrect", `UPDATE iam.policy_attachments SET revoked_at=NULL,updated_at=transaction_timestamp(),resource_version=resource_version+1 WHERE id=$1`, "42501", accountAttachment.ID)
+	applyIAMSchema(t, ctx, admin)
+	if _, err := workflow.Bootstrap(ctx, document); err != nil {
+		t.Fatal(err)
+	}
+	assertDecision(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"}, false)
+	if _, err := admin.Exec(ctx, `UPDATE iam.policies SET status='RETIRED',resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE id='system.platform-operator'`); err != nil {
+		t.Fatal(err)
+	}
+	assertRejected("retired-policy-cannot-reactivate", `UPDATE iam.policies SET status='ACTIVE',resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE id='system.platform-operator'`, "42501")
+	applyIAMSchema(t, ctx, admin)
+	if rows := readSnapshot(); len(rows) != 0 {
+		t.Fatal("retired policy or revoked attachment was reactivated by migration")
+	}
+	var retainedVersions int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.policy_versions WHERE policy_id='system.account-administrator'`).Scan(&retainedVersions); err != nil || retainedVersions != 2 {
+		t.Fatal("migration lost an immutable version")
+	}
+	identity := performIAMRequest(handler, http.MethodGet, "/v1/service-identity", verifierCredential, nil)
+	var service iamv1.ServiceIdentity
+	if identity.Code != http.StatusOK || json.Unmarshal(identity.Body.Bytes(), &service) != nil ||
+		service.Purpose != iamv1.ServiceInstallationVerifier || service.InstallationID != document.InstallationID {
+		t.Fatal("policy migration changed sealed verifier purpose or installation")
+	}
+}
+
+func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
+	t.Helper()
+	post := func(path, bearer string, body any, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequest(handler, http.MethodPost, path, bearer, encoded)
+		if response.Code != want {
+			t.Fatalf("directory setup %s status=%d want=%d: %s", path, response.Code, want, response.Body.String())
+		}
+		return response
+	}
+	read := func(path, bearer string, want int) iamv1.PolicyList {
+		t.Helper()
+		response := performIAMRequest(handler, http.MethodGet, path, bearer, nil)
+		if response.Code != want {
+			t.Fatalf("directory %s status=%d want=%d: %s", path, response.Code, want, response.Body.String())
+		}
+		var result iamv1.PolicyList
+		if want == http.StatusOK {
+			decoder := json.NewDecoder(response.Body)
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&result) != nil || iamv1.ValidatePolicyList(result) != nil {
+				t.Fatal("directory exposes invalid metadata or additional fields")
+			}
+		}
+		return result
+	}
+	home := read("/v1/policies", operator, http.StatusOK)
+	platform := read("/v1/platform-policies", operator, http.StatusOK)
+	if home.Scope != iamv1.AuthorityScopeTenant || platform.Scope != iamv1.AuthorityScopeInstallation || platform.AccountID != home.AccountID || platform.InstallationID != iamHTTPBootstrap(t).InstallationID {
+		t.Fatal("directory scope was not derived from authoritative account and installation")
+	}
+	for _, secret := range []string{iamProducerCredential, paasCredential, verifierCredential} {
+		read("/v1/policies", secret, http.StatusUnauthorized)
+		read("/v1/platform-policies", secret, http.StatusUnauthorized)
+	}
+	for _, path := range []string{"/v1/policies?accountId=other", "/v1/policies?scope=INSTALLATION", "/v1/platform-policies?installationId=other", "/v1/policies?after=other"} {
+		read(path, operator, http.StatusBadRequest)
+	}
+	const otherAccount = "organization-policy-catalog"
+	post("/v1/organizations", operator, map[string]any{"id": otherAccount, "displayName": "Directory isolation", "administratorLoginName": "catalog.primary", "administratorDisplayName": "Catalog owner", "initialPassword": initialDeveloperPassword, "requestId": "catalog-account-create"}, http.StatusCreated)
+	other := localRecoveryLogin(t, handler, "catalog.primary", initialDeveloperPassword, true)
+	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
+	if got := read("/v1/policies", other, http.StatusOK); got.AccountID != otherAccount {
+		t.Fatal("foreign primary used home account directory")
+	}
+	read("/v1/platform-policies", other, http.StatusForbidden)
+	created := post("/v1/principals", operator, map[string]any{"loginName": "catalog.reader", "displayName": "Directory reader", "initialPassword": initialDeveloperPassword, "requestId": "catalog-reader-create"}, http.StatusCreated)
+	var member iamv1.Principal
+	if json.Unmarshal(created.Body.Bytes(), &member) != nil || iamv1.ValidatePrincipal(member) != nil {
+		t.Fatal("invalid catalog member")
+	}
+	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.OrganizationID), initialDeveloperPassword, true)
+	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+	read("/v1/policies", bearer, http.StatusForbidden)
+	read("/v1/platform-policies", bearer, http.StatusForbidden)
+	// Fixture publication creates arbitrary customer IDs with identical display
+	// names. Runtime authorization must not depend on a predefined role name.
+	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "catalog", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyList},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceOrganization, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+	canonical, digest, err := iamv1.CanonicalizePolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range []struct {
+		id      string
+		account iamv1.OrganizationID
+	}{{"customer.catalog-a", home.AccountID}, {"customer.catalog-b", otherAccount}} {
+		if _, err := database.Exec(ctx, `BEGIN;
+			INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
+			VALUES($1,'CUSTOMER',$2,'Same display name','TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp());
+			INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
+			VALUES($1,'v1','TENANT',$3::jsonb,$3,$4,transaction_timestamp()); COMMIT;`, fixture.id, fixture.account, canonical, digest); err != nil {
+			t.Fatal(err)
+		}
+	}
+	find := func(list iamv1.PolicyList, id iamv1.PolicyID) *iamv1.Policy {
+		t.Helper()
+		for i := range list.Items {
+			if list.Items[i].ID == id {
+				return &list.Items[i]
+			}
+		}
+		return nil
+	}
+	for _, fixture := range []struct {
+		bearer          string
+		present, absent iamv1.PolicyID
+	}{{operator, "customer.catalog-a", "customer.catalog-b"}, {other, "customer.catalog-b", "customer.catalog-a"}} {
+		list := read("/v1/policies", fixture.bearer, http.StatusOK)
+		if find(list, fixture.present) == nil || find(list, fixture.absent) != nil {
+			t.Fatal("customer metadata crossed account boundary")
+		}
+	}
+	request := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: "customer.catalog-a", PolicyResourceVersion: 1, RequestID: "catalog-reader-grant"}
+	post("/v1/policy-attachments", operator, request, http.StatusOK)
+	if got := read("/v1/policies", bearer, http.StatusOK); find(got, request.PolicyID) == nil {
+		t.Fatal("list-only policy did not permit its actual directory")
+	}
+	request.PolicyID, request.RequestID = iamv1.SystemPolicyPaaSViewer, "catalog-reader-escalation"
+	post("/v1/policy-attachments", bearer, request, http.StatusForbidden)
+	read("/v1/platform-policies", bearer, http.StatusForbidden)
+	// A separately granted platform attachment is not tenant directory access.
+	platformCreated := post("/v1/principals", operator, map[string]any{"loginName": "catalog.platform", "displayName": "Platform directory", "initialPassword": initialDeveloperPassword, "requestId": "catalog-platform-create"}, http.StatusCreated)
+	var platformMember iamv1.Principal
+	if json.Unmarshal(platformCreated.Body.Bytes(), &platformMember) != nil || iamv1.ValidatePrincipal(platformMember) != nil {
+		t.Fatal("invalid platform catalog member")
+	}
+	platformBearer := localRecoveryLogin(t, handler, platformMember.LoginName+"@"+string(platformMember.OrganizationID), initialDeveloperPassword, true)
+	platformBearer = localRecoveryChangePassword(t, handler, platformBearer, initialDeveloperPassword, changedDeveloperPassword)
+	request.Target.ID, request.PolicyID, request.RequestID = string(platformMember.ID), iamv1.SystemPolicyPlatformOperator, "catalog-platform-grant"
+	platformGrant := post("/v1/policy-attachments", operator, request, http.StatusOK)
+	var platformAttachment iamv1.PolicyAttachment
+	if json.Unmarshal(platformGrant.Body.Bytes(), &platformAttachment) != nil || iamv1.ValidatePolicyAttachment(platformAttachment) != nil {
+		t.Fatal("invalid platform directory attachment")
+	}
+	read("/v1/platform-policies", platformBearer, http.StatusOK)
+	read("/v1/policies", platformBearer, http.StatusForbidden)
+	post("/v1/policy-attachments/"+string(platformAttachment.ID)+":revoke", operator,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: platformAttachment.ResourceVersion, RequestID: "catalog-platform-revoke"}, http.StatusOK)
+	read("/v1/platform-policies", platformBearer, http.StatusForbidden)
+	if _, err := database.Exec(ctx, `UPDATE iam.policies SET status='RETIRED',resource_version=2,updated_at=transaction_timestamp() WHERE id='customer.catalog-a'`); err != nil {
+		t.Fatal(err)
+	}
+	retired := find(read("/v1/policies", operator, http.StatusOK), "customer.catalog-a")
+	if retired == nil || retired.Status != iamv1.PolicyRetired || retired.ResourceVersion != 2 {
+		t.Fatal("retired metadata or current revision was hidden")
+	}
+	read("/v1/policies", bearer, http.StatusForbidden)
+	// A prior read decision is a historical fact, not a reusable SQL permit.
+	var oldDecision string
+	if err := database.QueryRow(ctx, `SELECT id FROM iam.authorization_decisions WHERE tenant_id=$1 AND action_name='iam.policy.list' AND allowed ORDER BY decided_at DESC LIMIT 1`, home.AccountID).Scan(&oldDecision); err != nil {
+		t.Fatal(err)
+	}
+	runtimeConfig := database.Config().Copy()
+	runtimeConfig.User, runtimeConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+	runtime, err := pgx.ConnectConfig(ctx, runtimeConfig)
+	if err != nil {
+		t.Fatal("connect restricted catalog runtime")
+	}
+	defer runtime.Close(context.Background())
+	for _, scope := range []string{"TENANT", "INSTALLATION"} {
+		var result []byte
+		err := runtime.QueryRow(ctx, `SELECT iam.list_policies($1,$2,$3,$4)`, home.AccountID, iamHTTPBootstrap(t).Administrator.ID, oldDecision, scope).Scan(&result)
+		var denied *pgconn.PgError
+		if !errors.As(err, &denied) || denied.Code != "42501" {
+			t.Fatalf("stale/mismatched directory decision was accepted: %v", err)
+		}
+	}
+	for _, role := range []string{"matrix_iam_worker", "matrix_iam_credential_recovery"} {
+		var permitted bool
+		if err := database.QueryRow(ctx, `SELECT has_function_privilege($1,'iam.list_policies(text,text,text,text)','EXECUTE')`, role).Scan(&permitted); err != nil || permitted {
+			t.Fatalf("non-API role can execute directory: %s err=%v", role, err)
+		}
+	}
+	// Fill only the second account to the advertised complete-snapshot limit.
+	// Its actor has one attachment, so an overflow must be the metadata budget,
+	// not the independent current-authorization snapshot budget.
+	before := read("/v1/policies", other, http.StatusOK)
+	remaining := iamv1.MaxPolicyListItems - len(before.Items)
+	if remaining < 1 {
+		t.Fatal("invalid directory budget fixture")
+	}
+	insertBudget := func(first, last int) {
+		t.Helper()
+		if _, err := database.Exec(ctx, `BEGIN;
+			INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
+			SELECT 'catalog-budget-'||i,'CUSTOMER',$1,'Catalog budget','TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp() FROM generate_series($4::int,$5::int) i;
+			INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
+			SELECT 'catalog-budget-'||i,'v1','TENANT',$2::jsonb,$2,$3,transaction_timestamp() FROM generate_series($4::int,$5::int) i;
+			COMMIT;`, otherAccount, canonical, digest, first, last); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertBudget(1, remaining)
+	if got := read("/v1/policies", other, http.StatusOK); len(got.Items) != iamv1.MaxPolicyListItems {
+		t.Fatal("complete directory truncated below its limit")
+	}
+	insertBudget(remaining+1, remaining+1)
+	var decisionsBefore, decisionsAfter, outboxBefore, outboxAfter int
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.authorization_decisions),(SELECT count(*) FROM iam.audit_outbox)`).Scan(&decisionsBefore, &outboxBefore); err != nil {
+		t.Fatal(err)
+	}
+	read("/v1/policies", other, http.StatusServiceUnavailable)
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.authorization_decisions),(SELECT count(*) FROM iam.audit_outbox)`).Scan(&decisionsAfter, &outboxAfter); err != nil || decisionsAfter != decisionsBefore || outboxAfter != outboxBefore {
+		t.Fatal("overflow produced a partial catalog decision or audit fact")
+	}
+	if got := read("/v1/policies", operator, http.StatusOK); len(got.Items) >= iamv1.MaxPolicyListItems {
+		t.Fatal("another account's catalog budget affected this account")
+	}
+}
+
+func provePolicyDefaultAttachmentRaces(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
+	t.Helper()
+	// Publication is a fixture-owner transaction, not an unimplemented online
+	// policy editor. Actual USER commands run through restricted IAM HTTP.
+	for _, transition := range []string{"switch", "retire", "rollback"} {
+		t.Run(transition, func(t *testing.T) {
+			policyID := iamv1.PolicyID("customer.publication-" + transition)
+			requestID := "publication-" + transition
+			created := performIAMRequest(handler, http.MethodPost, "/v1/principals", operator,
+				[]byte(`{"loginName":"publication.`+transition+`","displayName":"Publication member","initialPassword":"Publication-Initial-Password-49!","requestId":"`+requestID+`-user"}`))
+			var member iamv1.Principal
+			if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &member) != nil || iamv1.ValidatePrincipal(member) != nil {
+				t.Fatal("create publication race member")
+			}
+			session := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.OrganizationID), "Publication-Initial-Password-49!", true)
+			session = localRecoveryChangePassword(t, handler, session, "Publication-Initial-Password-49!", "Publication-Stable-Password-62!")
+			document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{{SID: "read", Effect: iamv1.PolicyAllow,
+					Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{
+						{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+			allow, allowDigest, err := iamv1.CanonicalizePolicyDocument(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			document.Statements[0].Effect = iamv1.PolicyDeny
+			deny, denyDigest, err := iamv1.CanonicalizePolicyDocument(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.Exec(ctx, `BEGIN;
+				INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
+				VALUES($1,'CUSTOMER',$2,'Publication race','TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp());
+				INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
+				VALUES($1,'v1','TENANT',$3::jsonb,$3,$4,transaction_timestamp()),
+				($1,'v2','TENANT',$5::jsonb,$5,$6,transaction_timestamp()); COMMIT;`,
+				policyID, member.OrganizationID, allow, allowDigest, deny, denyDigest); err != nil {
+				t.Fatal(err)
+			}
+			publisher, err := pgx.ConnectConfig(ctx, database.Config().Copy())
+			if err != nil {
+				t.Fatal("connect publication transaction")
+			}
+			defer publisher.Close(context.Background())
+			tx, err := publisher.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(context.Background())
+			if _, err := tx.Exec(ctx, `UPDATE iam.policies SET default_version_id='v2',resource_version=resource_version+1,
+				status=CASE WHEN $2='retire' THEN 'RETIRED' ELSE 'ACTIVE' END,updated_at=transaction_timestamp() WHERE id=$1`, policyID, transition); err != nil {
+				t.Fatal(err)
+			}
+			request := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
+				PolicyID: policyID, PolicyResourceVersion: 1, RequestID: requestID}
+			body, err := json.Marshal(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			completed := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				completed <- performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", operator, body)
+			}()
+			// Confirm real blocking, not timing or an assumed goroutine order.
+			waitForLocalRecoveryLock(t, ctx, database, iamHTTPTestRole)
+			if transition == "rollback" {
+				err = tx.Rollback(ctx)
+			} else {
+				err = tx.Commit(ctx)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var response *httptest.ResponseRecorder
+			select {
+			case response = <-completed:
+			case <-ctx.Done():
+				t.Fatal("attachment did not resolve after publication")
+			}
+			want := http.StatusConflict
+			if transition == "retire" {
+				want = http.StatusForbidden
+			} else if transition == "rollback" {
+				want = http.StatusOK
+			}
+			if response.Code != want {
+				t.Fatalf("publication/attachment result=%d want=%d", response.Code, want)
+			}
+			assertIntent := func(id string, attachments, decisions, facts int) {
+				t.Helper()
+				var actualAttachments, actualDecisions, actualFacts int
+				if err := database.QueryRow(ctx, `SELECT
+					(SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND principal_id=$2 AND policy_id=$3),
+					(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$4),
+					(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$4
+					 AND event_document->>'action'='iam.policy-attachment.created')`,
+					member.OrganizationID, member.ID, policyID, id).Scan(&actualAttachments, &actualDecisions, &actualFacts); err != nil ||
+					actualAttachments != attachments || actualDecisions != decisions || actualFacts != facts {
+					t.Fatalf("intent persisted attachments/decisions/facts=%d/%d/%d want=%d/%d/%d err=%v",
+						actualAttachments, actualDecisions, actualFacts, attachments, decisions, facts, err)
+				}
+			}
+			if transition != "rollback" {
+				assertIntent(requestID, 0, 0, 0)
+				if transition == "retire" {
+					return
+				}
+				// A fresh explicit intent accepting the new revision is required.
+				request.PolicyResourceVersion, request.RequestID = 2, requestID+"-confirmed"
+				body, _ = json.Marshal(request)
+				response = performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", operator, body)
+				if response.Code != http.StatusOK {
+					t.Fatalf("confirmed revision was not attachable: %d", response.Code)
+				}
+			}
+			assertIntent(request.RequestID, 1, 1, 1)
+			var attachment iamv1.PolicyAttachment
+			if json.Unmarshal(response.Body.Bytes(), &attachment) != nil || iamv1.ValidatePolicyAttachment(attachment) != nil {
+				t.Fatal("invalid publication attachment")
+			}
+			assertEvaluation := func(version string, digest string, allowed bool) []byte {
+				t.Helper()
+				body, _ := json.Marshal(iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+					Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "publication-resource"},
+					RequestID: requestID + "-evaluate-" + version, CorrelationID: requestID})
+				response := performIAMRequestWithSubject(handler, body, paasCredential, session)
+				var decision iamv1.AuthorizationDecision
+				if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil ||
+					iamv1.ValidateAuthorizationDecision(decision) != nil || decision.Allowed != allowed {
+					t.Fatalf("published version did not drive current decision: %d allowed=%t", response.Code, decision.Allowed)
+				}
+				var encoded []byte
+				if err := database.QueryRow(ctx, `SELECT policy_evidence FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, member.OrganizationID, decision.ID).Scan(&encoded); err != nil {
+					t.Fatal(err)
+				}
+				var evidence []authority.PolicyAttachmentEvidence
+				if json.Unmarshal(encoded, &evidence) != nil || len(evidence) != 1 || evidence[0].AttachmentID != attachment.ID ||
+					evidence[0].Version.PolicyID != policyID || string(evidence[0].Version.VersionID) != version || evidence[0].Version.ContentDigest != digest {
+					t.Fatal("decision evidence does not bind the evaluated policy version and attachment")
+				}
+				return encoded
+			}
+			if transition == "switch" {
+				assertEvaluation("v2", denyDigest, false)
+			} else {
+				original := assertEvaluation("v1", allowDigest, true)
+				if _, err := database.Exec(ctx, `UPDATE iam.policies SET default_version_id='v2',resource_version=resource_version+1,
+					updated_at=transaction_timestamp() WHERE id=$1`, policyID); err != nil {
+					t.Fatal(err)
+				}
+				assertEvaluation("v2", denyDigest, false)
+				var retained []byte
+				if err := database.QueryRow(ctx, `SELECT policy_evidence FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$2`,
+					member.OrganizationID, requestID+"-evaluate-v1").Scan(&retained); err != nil || !bytes.Equal(original, retained) {
+					t.Fatal("default publication rewrote prior immutable decision evidence")
+				}
+			}
+		})
+	}
+}
+
+func provePolicyScopeCredentialProtection(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
+	t.Helper()
+	const initial = "Policy-Scope-Initial-Password-49!"
+	const stable = "Policy-Scope-Stable-Password-62!"
+	var beforePrincipals, beforeOutbox int
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.principals),(SELECT count(*) FROM iam.audit_outbox)`).Scan(&beforePrincipals, &beforeOutbox); err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range removedBuiltinRoleNames {
+		body, _ := json.Marshal(map[string]any{"loginName": "policy.rejected", "displayName": "Rejected role carrier",
+			"initialPassword": initial, "initialRole": role, "requestId": "rejected-initial-role"})
+		if response := performIAMRequest(handler, http.MethodPost, "/v1/principals", operator, body); response.Code != http.StatusBadRequest {
+			t.Fatalf("removed initialRole reached user creation: status=%d", response.Code)
+		}
+	}
+	var afterPrincipals, afterOutbox int
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.principals),(SELECT count(*) FROM iam.audit_outbox)`).Scan(&afterPrincipals, &afterOutbox); err != nil || beforePrincipals != afterPrincipals || beforeOutbox != afterOutbox {
+		t.Fatal("rejected initial authority partially created an identity or fact")
+	}
+	created := performIAMRequest(handler, http.MethodPost, "/v1/principals", operator,
+		[]byte(`{"loginName":"policy.scope.protected","displayName":"Policy scope protection","initialPassword":"Policy-Scope-Initial-Password-49!","requestId":"scope-protection-create"}`))
+	var member iamv1.Principal
+	if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &member) != nil {
+		t.Fatal("create policy scope protection member")
+	}
+	var attachments int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND principal_id=$2`, member.OrganizationID, member.ID).Scan(&attachments); err != nil || attachments != 0 {
+		t.Fatal("user creation implicitly granted a policy attachment")
+	}
+	session := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.OrganizationID), initial, true)
+	localRecoveryChangePassword(t, handler, session, initial, stable)
+	// A future published installation policy must protect its attached USER
+	// even when it is not named PlatformOperator. Only this isolated fixture
+	// owner publishes it; this is not an online system-policy editing API.
+	version, err := authority.SystemPolicyVersion(iamv1.SystemPolicyPlatformOperator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, digest, err := iamv1.CanonicalizePolicyDocument(version.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(ctx, `BEGIN;
+		INSERT INTO iam.policies(id,management,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
+		VALUES('system.scope-protection','SYSTEM','Scope protection','INSTALLATION','ACTIVE','scope-v1',1,transaction_timestamp(),transaction_timestamp());
+		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
+		VALUES('system.scope-protection','scope-v1','INSTALLATION',$1::jsonb,$1,$2,transaction_timestamp());
+		INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at)
+		VALUES($3,'scope-protection-attachment',$4,'system.scope-protection',1,transaction_timestamp(),transaction_timestamp()); COMMIT;`,
+		canonical, digest, member.OrganizationID, member.ID); err != nil {
+		t.Fatal("prepare alternative platform policy fixture")
+	}
+	snapshot := func() (string, uint64) {
+		t.Helper()
+		var state string
+		var revision uint64
+		if err := database.QueryRow(ctx, `SELECT jsonb_build_array(principal.status,principal.resource_version,principal.must_change_password,
+			credential.password_hash,credential.credential_version,
+			(SELECT jsonb_agg(jsonb_build_array(id,status,resource_version,credential_version,revoked_at) ORDER BY id)
+			FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2))::text,principal.resource_version
+			FROM iam.principals AS principal JOIN iam.user_credentials AS credential
+			ON credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id
+			WHERE principal.tenant_id=$1 AND principal.id=$2`, member.OrganizationID, member.ID).Scan(&state, &revision); err != nil {
+			t.Fatal("read protected credential state")
+		}
+		return state, revision
+	}
+	for _, phase := range []string{"active", "retired-policy", "disabled-user"} {
+		if phase == "retired-policy" {
+			if _, err := database.Exec(ctx, `UPDATE iam.policies SET status='RETIRED',resource_version=resource_version+1,updated_at=transaction_timestamp()
+				WHERE id='system.scope-protection'`); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if phase == "disabled-user" {
+			if _, err := database.Exec(ctx, `UPDATE iam.principals SET status='DISABLED',resource_version=resource_version+1,updated_at=transaction_timestamp()
+				WHERE tenant_id=$1 AND id=$2`, member.OrganizationID, member.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		response := performIAMRequest(handler, http.MethodGet, "/v1/principals", operator, nil)
+		var directory iamv1.PrincipalList
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &directory) != nil || iamv1.ValidatePrincipalList(directory) != nil {
+			t.Fatalf("protected identity directory %s: status=%d", phase, response.Code)
+		}
+		found := false
+		for _, entry := range directory.Items {
+			if entry.Principal.ID != member.ID {
+				continue
+			}
+			for _, attachment := range entry.PolicyAttachments {
+				if attachment.ID == "scope-protection-attachment" && attachment.Scope == iamv1.AuthorityScopeInstallation && attachment.RevokedAt == nil {
+					found = true
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("directory hid protected association in %s", phase)
+		}
+		for _, operation := range []string{"set-status", "reset-password"} {
+			before, revision := snapshot()
+			body := map[string]any{"resourceVersion": revision, "requestId": "scope-protection-" + phase + "-" + operation}
+			if operation == "set-status" {
+				body["status"] = "ACTIVE"
+			} else {
+				body["initialPassword"] = "Policy-Scope-Forbidden-Password-73!"
+			}
+			encoded, err := json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := performIAMRequest(handler, http.MethodPost, "/v1/principals/"+string(member.ID)+":"+operation, operator, encoded)
+			if response.Code != http.StatusForbidden {
+				t.Fatalf("platform credential protection %s/%s status=%d", phase, operation, response.Code)
+			}
+			if after, _ := snapshot(); after != before {
+				t.Fatal("rejected platform credential operation partially changed credentials or sessions")
+			}
+		}
+	}
+	var successes int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId' LIKE 'scope-protection-%'
+		AND event_document->>'result'='SUCCEEDED' AND event_document->>'action' IN ('iam.principal.status-set','iam.password.reset')`).Scan(&successes); err != nil || successes != 0 {
+		t.Fatal("rejected platform credential operation emitted a success fact")
+	}
+	if _, err := database.Exec(ctx, `UPDATE iam.policy_attachments SET revoked_at=transaction_timestamp(),updated_at=transaction_timestamp(),resource_version=resource_version+1
+		WHERE tenant_id=$1 AND id='scope-protection-attachment'`, member.OrganizationID); err != nil {
+		t.Fatal(err)
+	}
+	_, revision := snapshot()
+	body, _ := json.Marshal(iamv1.SetPrincipalStatusRequest{Status: iamv1.PrincipalActive, ResourceVersion: revision, RequestID: "scope-protection-after-revocation"})
+	if response := performIAMRequest(handler, http.MethodPost, "/v1/principals/"+string(member.ID)+":set-status", operator, body); response.Code != http.StatusOK {
+		t.Fatalf("ordinary member remained unmanageable after platform attachment revocation: %d", response.Code)
+	}
+}
 
 func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	dsn := os.Getenv(iamHTTPPostgresDSN)
@@ -261,23 +1265,22 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		developer.LoginName != "developer" || !developer.MustChangePassword {
 		t.Fatalf("IAM created user=%#v err=%v", developer, err)
 	}
-	putBindingBody, err := json.Marshal(iamv1.PutRoleBindingRequest{
-		PrincipalID: developer.ID,
-		Role:        iamv1.RolePaaSDeveloper,
-		RequestID:   "request-bind-developer",
+	putBindingBody, err := json.Marshal(iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(developer.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: "request-bind-developer",
 	})
 	if err != nil {
 		t.Fatalf("encode IAM role binding request: %v", err)
 	}
 	putBinding := performIAMRequest(
-		handler, http.MethodPost, "/v1/role-bindings", loginWire.Credential, putBindingBody,
+		handler, http.MethodPost, "/v1/policy-attachments", loginWire.Credential, putBindingBody,
 	)
 	if putBinding.Code != http.StatusOK {
 		t.Fatalf("IAM put binding status=%d body=%s", putBinding.Code, putBinding.Body.String())
 	}
-	var binding iamv1.RoleBinding
+	var binding iamv1.PolicyAttachment
 	if err := json.Unmarshal(putBinding.Body.Bytes(), &binding); err != nil ||
-		binding.PrincipalID != developer.ID || binding.Role != iamv1.RolePaaSDeveloper {
+		binding.Target.ID != string(developer.ID) || binding.PolicyID != iamv1.SystemPolicyPaaSDeveloper {
 		t.Fatalf("IAM role binding=%#v err=%v", binding, err)
 	}
 
@@ -368,9 +1371,9 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	revokeBinding := performIAMRequest(
 		handler,
 		http.MethodPost,
-		"/v1/role-bindings/"+string(binding.ID)+":revoke",
+		"/v1/policy-attachments/"+string(binding.ID)+":revoke",
 		loginWire.Credential,
-		[]byte(`{"requestId":"request-revoke-developer-binding"}`),
+		[]byte(`{"resourceVersion":1,"requestId":"request-revoke-developer-binding"}`),
 	)
 	if revokeBinding.Code != http.StatusOK {
 		t.Fatalf("IAM revoke binding status=%d body=%s", revokeBinding.Code, revokeBinding.Body.String())
@@ -404,15 +1407,21 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	verifierRevocation := performIAMRequest(
 		handler,
 		http.MethodPost,
-		"/v1/role-bindings/bootstrap-verifier-binding:revoke",
+		"/v1/policy-attachments/bootstrap-verifier-binding:revoke",
 		loginWire.Credential,
-		[]byte(`{"requestId":"request-revoke-verifier-binding"}`),
+		[]byte(`{"resourceVersion":1,"requestId":"request-revoke-verifier-binding"}`),
 	)
-	if verifierRevocation.Code != http.StatusOK {
+	if verifierRevocation.Code != http.StatusForbidden {
 		t.Fatalf(
 			"IAM verifier role revocation status=%d body=%s",
 			verifierRevocation.Code, verifierRevocation.Body.String(),
 		)
+	}
+	// Installation-probe service membership has no online USER-management route.
+	// This storage revocation fixture proves current verifier authority, not a
+	// supported service-identity administration workflow.
+	if _, err := admin.Exec(ctx, "UPDATE iam.policy_attachments SET revoked_at=transaction_timestamp(),updated_at=transaction_timestamp(),resource_version=resource_version+1 WHERE tenant_id=$1 AND id='bootstrap-verifier-binding'", document.Organization.ID); err != nil {
+		t.Fatal(err)
 	}
 	verificationBody = []byte(`{"action":"installation.verify","resource":{"kind":"INSTALLATION","id":"installation-http-integration"},"requestId":"request-installation-revoked","correlationId":"correlation-installation-revoked"}`)
 	verification = performIAMRequest(
@@ -578,7 +1587,7 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 		request(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized)
 	}
 	create := request(http.MethodPost, "/v1/principals", operator, map[string]any{
-		"loginName": "password.policy", "displayName": "Password policy", "initialPassword": initial, "initialRole": iamv1.RolePaaSViewer,
+		"loginName": "password.policy", "displayName": "Password policy", "initialPassword": initial,
 	}, http.StatusCreated)
 	var principal iamv1.Principal
 	if json.Unmarshal(create.Body.Bytes(), &principal) != nil {
@@ -648,9 +1657,9 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 
 	// An old temporary session may not gain platform authority when this USER
 	// later receives an explicit platform binding after confirmed replacement.
-	grant := request(http.MethodPost, "/v1/role-bindings", operator,
-		map[string]any{"principalId": principal.ID, "role": iamv1.RolePlatformOperator}, http.StatusOK)
-	var platform iamv1.RoleBinding
+	grant := request(http.MethodPost, "/v1/policy-attachments", operator,
+		map[string]any{"target": iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(principal.ID)}, "policyId": iamv1.SystemPolicyPlatformOperator, "policyResourceVersion": 1}, http.StatusOK)
+	var platform iamv1.PolicyAttachment
 	if json.Unmarshal(grant.Body.Bytes(), &platform) != nil {
 		t.Fatal("invalid policy platform binding")
 	}
@@ -658,7 +1667,7 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 	for _, stale := range []string{temporary, resetOther, current, loggedOut} {
 		invalid(stale)
 	}
-	request(http.MethodPost, "/v1/role-bindings/"+string(platform.ID)+":revoke", operator, map[string]any{}, http.StatusOK)
+	request(http.MethodPost, "/v1/policy-attachments/"+string(platform.ID)+":revoke", operator, map[string]any{"resourceVersion": 1}, http.StatusOK)
 
 	created := request(http.MethodPost, "/v1/organizations", operator, map[string]any{
 		"id": "organization-password-policy", "displayName": "Password recovery policy", "administratorLoginName": "password.primary",
@@ -992,16 +2001,16 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	passwordChange := func(bearer, previous, next string) {
 		request(http.MethodPost, "/v1/auth/password", bearer, map[string]any{"currentPassword": previous, "newPassword": next, "requestId": "request-account-password"}, http.StatusOK)
 	}
-	createUser := func(bearer, name string, role iamv1.BuiltinRole, expected int) iamv1.Principal {
+	createUser := func(bearer, name string, policy iamv1.PolicyID, expected int) iamv1.Principal {
 		t.Helper()
 		body := map[string]any{"loginName": name, "displayName": "Account test user", "initialPassword": childPassword, "requestId": "request-account-user"}
-		if role != "" {
-			body["initialRole"] = role
-		}
 		response := request(http.MethodPost, "/v1/principals", bearer, body, expected)
 		var result iamv1.Principal
 		if expected == http.StatusCreated && (json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidatePrincipal(result) != nil) {
 			t.Fatal("invalid created user")
+		}
+		if policy != "" && result.ID != "" {
+			request(http.MethodPost, "/v1/policy-attachments", bearer, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(result.ID)}, PolicyID: policy, PolicyResourceVersion: 1, RequestID: "explicit-member-policy-" + string(result.ID)}, http.StatusOK)
 		}
 		return result
 	}
@@ -1052,9 +2061,9 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	setAlias(primaryB, "customer-a", 2, http.StatusConflict)
 	setAlias(primaryB, tenantA, 2, http.StatusConflict)
 	setAlias(root, "stale-alias", 1, http.StatusConflict)
-	createUser(root, "bad.verifier", iamv1.RoleInstallationVerifier, http.StatusUnprocessableEntity)
+	request(http.MethodPost, "/v1/principals", root, map[string]any{"loginName": "bad.verifier", "displayName": "Rejected initial role", "initialPassword": childPassword, "initialRole": "INSTALLATION_VERIFIER", "requestId": "rejected-verifier-initial-role"}, http.StatusBadRequest)
 
-	childA := createUser(root, "shared.user", iamv1.RolePaaSViewer, http.StatusCreated)
+	childA := createUser(root, "shared.user", iamv1.SystemPolicyPaaSViewer, http.StatusCreated)
 	childB := createUser(primaryB, "shared.user", "", http.StatusCreated)
 	if childA.ID == childB.ID || childA.OrganizationID != tenantA || childB.OrganizationID != tenantB {
 		t.Fatal("same-name child identities were not isolated")
@@ -1071,7 +2080,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	if id := identity(childSessionA); id.Principal.ID != childA.ID || id.Account.Organization.ID != tenantA || id.CanCreateOrganizations {
 		t.Fatal("wrong tenant or platform capability in child identity")
 	}
-	if len(identity(childSessionB).Roles) != 0 {
+	if len(identity(childSessionB).PolicyAttachments) != 0 {
 		t.Fatal("new child gained implicit business permissions")
 	}
 	assertPaasDecision(childSessionA, iamv1.ActionManagedServiceInstallationRead, true, tenantA)
@@ -1079,43 +2088,43 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	assertPaasDecision(childSessionB, iamv1.ActionManagedServiceInstallationRead, false, "")
 	request(http.MethodGet, "/v1/principals", childSessionA, nil, http.StatusForbidden)
 	setAlias(childSessionA, "forged-alias", 2, http.StatusForbidden)
-	request(http.MethodPost, "/v1/role-bindings", childSessionA, map[string]any{"principalId": childA.ID, "role": "ORGANIZATION_ADMIN", "requestId": "request-escalate"}, http.StatusForbidden)
+	request(http.MethodPost, "/v1/policy-attachments", childSessionA, map[string]any{"target": iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(childA.ID)}, "policyId": iamv1.SystemPolicyAccountAdministrator, "policyResourceVersion": 1, "requestId": "request-escalate"}, http.StatusForbidden)
 
 	listResponse := request(http.MethodGet, "/v1/principals", root, nil, http.StatusOK)
 	var users iamv1.PrincipalList
 	if json.Unmarshal(listResponse.Body.Bytes(), &users) != nil || iamv1.ValidatePrincipalList(users) != nil {
 		t.Fatal("invalid tenant directory")
 	}
-	var childBinding iamv1.RoleBindingID
+	var childBinding iamv1.PolicyAttachmentID
 	for _, entry := range users.Items {
 		if entry.Principal.OrganizationID != tenantA || entry.Principal.Type != iamv1.PrincipalUser {
 			t.Fatal("directory leaked a different tenant or service identity")
 		}
 		if entry.Principal.ID == childA.ID {
-			if len(entry.RoleBindings) != 1 || entry.RoleBindings[0].Role != iamv1.RolePaaSViewer {
-				t.Fatal("initial user role was not atomic")
+			if len(entry.PolicyAttachments) != 1 || entry.PolicyAttachments[0].PolicyID != iamv1.SystemPolicyPaaSViewer {
+				t.Fatal("explicit user policy attachment missing")
 			}
-			childBinding = entry.RoleBindings[0].ID
+			childBinding = entry.PolicyAttachments[0].ID
 		}
 	}
 	if childBinding == "" {
 		t.Fatal("created child missing from directory")
 	}
-	request(http.MethodPost, "/v1/role-bindings", root, map[string]any{"principalId": childB.ID, "role": "ORGANIZATION_ADMIN", "requestId": "request-cross-tenant-role"}, http.StatusForbidden)
-	request(http.MethodPost, "/v1/role-bindings/"+string(childBinding)+":revoke", primaryB, map[string]any{"requestId": "request-cross-tenant-revoke"}, http.StatusForbidden)
+	request(http.MethodPost, "/v1/policy-attachments", root, map[string]any{"target": iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(childB.ID)}, "policyId": iamv1.SystemPolicyAccountAdministrator, "policyResourceVersion": 1, "requestId": "request-cross-tenant-role"}, http.StatusForbidden)
+	request(http.MethodPost, "/v1/policy-attachments/"+string(childBinding)+":revoke", primaryB, map[string]any{"resourceVersion": 1, "requestId": "request-cross-tenant-revoke"}, http.StatusForbidden)
 	for _, target := range []string{string(childB.ID), "principal-admin", "service-paas"} {
 		request(http.MethodPost, "/v1/principals/"+target+":set-status", root, map[string]any{"status": "DISABLED", "resourceVersion": 1, "requestId": "request-protected-status"}, http.StatusForbidden)
 		request(http.MethodPost, "/v1/principals/"+target+":reset-password", root, map[string]any{"initialPassword": resetPassword, "resourceVersion": 1, "requestId": "request-protected-password"}, http.StatusForbidden)
 	}
-	request(http.MethodPost, "/v1/role-bindings/bootstrap-admin-binding:revoke", root, map[string]any{"requestId": "request-primary-binding"}, http.StatusForbidden)
-	request(http.MethodPost, "/v1/role-bindings/primary-admin-binding:revoke", primaryB, map[string]any{"requestId": "request-primary-binding"}, http.StatusForbidden)
+	request(http.MethodPost, "/v1/policy-attachments/bootstrap-admin-binding:revoke", root, map[string]any{"resourceVersion": 1, "requestId": "request-primary-binding"}, http.StatusForbidden)
+	request(http.MethodPost, "/v1/policy-attachments/primary-admin-binding:revoke", primaryB, map[string]any{"resourceVersion": 1, "requestId": "request-primary-binding"}, http.StatusForbidden)
 	for _, path := range []string{"/v1/principals?tenantId=" + tenantB, "/v1/principals?after=x&after=y", "/v1/principals?after=", "/v1/organizations?organizationId=" + tenantB, "/v1/auth/me?tenantId=" + tenantB} {
 		request(http.MethodGet, path, root, nil, http.StatusBadRequest)
 	}
 	request(http.MethodPost, "/v1/organization:alias", root, map[string]any{"alias": "forged", "tenantId": tenantB, "resourceVersion": 2, "requestId": "request-forged-alias"}, http.StatusBadRequest)
 	request(http.MethodGet, "/v1/principals?after="+string(childB.ID), root, nil, http.StatusOK)
 
-	delegated := createUser(root, "delegated.admin", iamv1.RoleOrganizationAdmin, http.StatusCreated)
+	delegated := createUser(root, "delegated.admin", iamv1.SystemPolicyAccountAdministrator, http.StatusCreated)
 	delegatedSession := login("delegated.admin@customer-a", childPassword, http.StatusOK)
 	passwordChange(delegatedSession, childPassword, childChangedA)
 	if identity(delegatedSession).CanCreateOrganizations {
@@ -1139,9 +2148,9 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	login("shared.user@customer-a-new", childChangedA, http.StatusUnauthorized)
 	login("shared.user@customer-a", childChangedA, http.StatusOK)
 
-	request(http.MethodPost, "/v1/role-bindings/"+string(childBinding)+":revoke", root, map[string]any{"requestId": "request-child-revoke"}, http.StatusOK)
+	request(http.MethodPost, "/v1/policy-attachments/"+string(childBinding)+":revoke", root, map[string]any{"resourceVersion": 1, "requestId": "request-child-revoke"}, http.StatusOK)
 	assertPaasDecision(childSessionA, iamv1.ActionManagedServiceInstallationRead, false, "")
-	grant := request(http.MethodPost, "/v1/role-bindings", primaryB, map[string]any{"principalId": childB.ID, "role": "PAAS_DEVELOPER", "requestId": "request-child-grant"}, http.StatusOK)
+	grant := request(http.MethodPost, "/v1/policy-attachments", primaryB, map[string]any{"target": iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(childB.ID)}, "policyId": iamv1.SystemPolicyPaaSDeveloper, "policyResourceVersion": 1, "requestId": "request-child-grant"}, http.StatusOK)
 	if bytes.Contains(grant.Body.Bytes(), []byte(tenantA)) {
 		t.Fatal("grant selected the wrong tenant")
 	}
@@ -1289,26 +2298,26 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	changePassword := func(bearer, previous, next string) {
 		request(http.MethodPost, "/v1/auth/password", bearer, map[string]any{"currentPassword": previous, "newPassword": next, "requestId": "request-lifecycle-password"}, http.StatusOK)
 	}
-	createMember := func(bearer, name string, role iamv1.BuiltinRole) iamv1.Principal {
+	createMember := func(bearer, name string, policy iamv1.PolicyID) iamv1.Principal {
 		t.Helper()
 		body := map[string]any{"loginName": name, "displayName": "Lifecycle member", "initialPassword": initial, "requestId": "request-lifecycle-member"}
-		if role != "" {
-			body["initialRole"] = role
-		}
 		response := request(http.MethodPost, "/v1/principals", bearer, body, http.StatusCreated)
 		var result iamv1.Principal
 		if json.Unmarshal(response.Body.Bytes(), &result) != nil {
 			t.Fatal("invalid lifecycle member")
+		}
+		if policy != "" && result.ID != "" {
+			request(http.MethodPost, "/v1/policy-attachments", bearer, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(result.ID)}, PolicyID: policy, PolicyResourceVersion: 1, RequestID: "explicit-member-policy-" + string(result.ID)}, http.StatusOK)
 		}
 		return result
 	}
 	operatorUser := createMember(root, "lifecycle.operator", "")
 	operator := login("lifecycle.operator@"+home, initial, http.StatusOK)
 	changePassword(operator, initial, changed)
-	request(http.MethodPost, "/v1/role-bindings", root, map[string]any{"principalId": operatorUser.ID, "role": iamv1.RolePlatformOperator, "requestId": "request-lifecycle-platform-grant"}, http.StatusOK)
+	request(http.MethodPost, "/v1/policy-attachments", root, map[string]any{"target": iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(operatorUser.ID)}, "policyId": iamv1.SystemPolicyPlatformOperator, "policyResourceVersion": 1, "requestId": "request-lifecycle-platform-grant"}, http.StatusOK)
 	operatorIdentity := request(http.MethodGet, "/v1/auth/me", operator, nil, http.StatusOK)
 	var identity iamv1.CurrentIdentity
-	if json.Unmarshal(operatorIdentity.Body.Bytes(), &identity) != nil || !identity.CanCreateOrganizations || len(identity.Roles) != 1 || identity.Principal.ID == identity.Account.PrimaryPrincipalID {
+	if json.Unmarshal(operatorIdentity.Body.Bytes(), &identity) != nil || !identity.CanCreateOrganizations || len(identity.PolicyAttachments) != 1 || identity.Principal.ID == identity.Account.PrimaryPrincipalID {
 		t.Fatal("tenant lifecycle still requires bootstrap/primary or tenant-admin identity")
 	}
 	request(http.MethodGet, "/v1/principals", operator, nil, http.StatusForbidden)
@@ -1321,7 +2330,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	primaryID := account.PrimaryPrincipalID
 	primary := login("lifecycle.primary", initial, http.StatusOK)
 	changePassword(primary, initial, changed)
-	member := createMember(primary, "shared.user", iamv1.RolePaaSViewer)
+	member := createMember(primary, "shared.user", iamv1.SystemPolicyPaaSViewer)
 	memberSession := login("shared.user@"+tenantID, initial, http.StatusOK)
 	changePassword(memberSession, initial, changed)
 	readAccount := func(id string) iamv1.OrganizationAccount {
@@ -1350,7 +2359,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 			'organizations',(SELECT jsonb_agg(jsonb_build_array(o.id,o.status,o.resource_version) ORDER BY o.id) FROM iam.organizations AS o),
 			'principals',(SELECT jsonb_agg(jsonb_build_array(p.tenant_id,p.id,p.status,p.must_change_password,p.resource_version,c.password_hash) ORDER BY p.tenant_id,p.id) FROM iam.principals AS p LEFT JOIN iam.user_credentials AS c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id),
 			'sessions',(SELECT jsonb_agg(jsonb_build_array(s.tenant_id,s.id,s.status,s.resource_version,s.revoked_at) ORDER BY s.tenant_id,s.id) FROM iam.sessions AS s),
-			'bindings',(SELECT jsonb_agg(jsonb_build_array(b.tenant_id,b.id,b.principal_id,b.role_name,b.resource_version,b.revoked_at) ORDER BY b.tenant_id,b.id) FROM iam.role_bindings AS b),
+			'bindings',(SELECT jsonb_agg(jsonb_build_array(b.tenant_id,b.id,b.principal_id,b.policy_id,b.resource_version,b.revoked_at) ORDER BY b.tenant_id,b.id) FROM iam.policy_attachments AS b),
 			'successes',(SELECT jsonb_agg(jsonb_build_array(e.event_id,e.event_document) ORDER BY e.event_id) FROM iam.audit_outbox AS e WHERE e.event_document->>'result'='SUCCEEDED')
 		)::text`).Scan(&state)
 		if err != nil {
@@ -1403,8 +2412,8 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	// Seed a legacy damaged primary only as an adversarial fixture. Recovery
 	// itself must go through HTTP and must not resurrect the old revoked binding.
 	if _, err := database.Exec(ctx, `WITH revoked AS (
-		UPDATE iam.role_bindings SET revoked_at=transaction_timestamp(),updated_at=transaction_timestamp(),resource_version=resource_version+1
-		WHERE tenant_id=$1 AND principal_id=$2 AND role_name='ORGANIZATION_ADMIN' AND revoked_at IS NULL RETURNING id)
+		UPDATE iam.policy_attachments SET revoked_at=transaction_timestamp(),updated_at=transaction_timestamp(),resource_version=resource_version+1
+		WHERE tenant_id=$1 AND principal_id=$2 AND policy_id='system.account-administrator' AND revoked_at IS NULL RETURNING id)
 		UPDATE iam.principals SET status='DISABLED',updated_at=transaction_timestamp(),resource_version=resource_version+1
 		WHERE tenant_id=$1 AND id=$2`, tenantID, primaryID); err != nil {
 		t.Fatal(err)
@@ -1415,8 +2424,8 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	}
 	var retainedRevocation, repaired bool
 	if err := database.QueryRow(ctx, `SELECT
-		EXISTS(SELECT 1 FROM iam.role_bindings WHERE tenant_id=$1 AND id='primary-admin-binding' AND revoked_at IS NOT NULL),
-		(SELECT count(*)=1 FROM iam.role_bindings WHERE tenant_id=$1 AND principal_id=$2 AND role_name='ORGANIZATION_ADMIN' AND revoked_at IS NULL)`,
+		EXISTS(SELECT 1 FROM iam.policy_attachments WHERE tenant_id=$1 AND id='primary-admin-binding' AND revoked_at IS NOT NULL),
+		(SELECT count(*)=1 FROM iam.policy_attachments WHERE tenant_id=$1 AND principal_id=$2 AND policy_id='system.account-administrator' AND revoked_at IS NULL)`,
 		tenantID, primaryID).Scan(&retainedRevocation, &repaired); err != nil || !retainedRevocation || !repaired {
 		t.Fatal("primary recovery revived an old binding or did not restore exactly one tenant-admin binding")
 	}
@@ -1425,13 +2434,13 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	login("lifecycle.primary", changed, http.StatusUnauthorized)
 	primary = login("lifecycle.primary", recovered, http.StatusOK)
 	current := request(http.MethodGet, "/v1/auth/me", primary, nil, http.StatusOK)
-	if json.Unmarshal(current.Body.Bytes(), &identity) != nil || !identity.Principal.MustChangePassword || identity.CanCreateOrganizations || len(identity.Roles) != 1 || identity.Roles[0] != iamv1.RoleOrganizationAdmin {
+	if json.Unmarshal(current.Body.Bytes(), &identity) != nil || !identity.Principal.MustChangePassword || identity.CanCreateOrganizations || len(identity.PolicyAttachments) != 1 || identity.PolicyAttachments[0].PolicyID != iamv1.SystemPolicyAccountAdministrator {
 		t.Fatal("primary recovery gained platform access or skipped required password change")
 	}
 	request(http.MethodGet, "/v1/principals", primary, nil, http.StatusForbidden)
 	changePassword(primary, recovered, changed)
 	// A delegated administrator is revocable; the primary is not replaced by it.
-	delegate := createMember(primary, "daily.admin", iamv1.RoleOrganizationAdmin)
+	delegate := createMember(primary, "daily.admin", iamv1.SystemPolicyAccountAdministrator)
 	delegateSession := login("daily.admin@"+tenantID, initial, http.StatusOK)
 	changePassword(delegateSession, initial, changed)
 	directory := request(http.MethodGet, "/v1/principals", primary, nil, http.StatusOK)
@@ -1441,14 +2450,14 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	}
 	for _, user := range users.Items {
 		if user.Principal.ID == delegate.ID {
-			for _, binding := range user.RoleBindings {
-				request(http.MethodPost, "/v1/role-bindings/"+string(binding.ID)+":revoke", primary, map[string]any{"requestId": "request-daily-admin-handoff"}, http.StatusOK)
+			for _, binding := range user.PolicyAttachments {
+				request(http.MethodPost, "/v1/policy-attachments/"+string(binding.ID)+":revoke", primary, map[string]any{"resourceVersion": 1, "requestId": "request-daily-admin-handoff"}, http.StatusOK)
 			}
 		}
 	}
 	request(http.MethodGet, "/v1/principals", delegateSession, nil, http.StatusForbidden)
 	unchanged(func() {
-		request(http.MethodPost, "/v1/role-bindings/primary-admin-binding:revoke", primary, map[string]any{"requestId": "request-primary-handoff-attack"}, http.StatusForbidden)
+		request(http.MethodPost, "/v1/policy-attachments/primary-admin-binding:revoke", primary, map[string]any{"resourceVersion": 1, "requestId": "request-primary-handoff-attack"}, http.StatusForbidden)
 	})
 	knownPassword := changed
 	for _, next := range []iamv1.OrganizationStatus{iamv1.OrganizationDisabled, iamv1.OrganizationActive} {
@@ -1613,11 +2622,12 @@ func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http
 	const initial = "Proof-Actor-Initial-Password-93!"
 	const changed = "Proof-Actor-Changed-Password-84!"
 	for tenant, root := range tenants {
-		created := post("/v1/principals", root, map[string]any{"loginName": "proof.actor", "displayName": "Proof actor", "initialPassword": initial, "initialRole": iamv1.RoleOrganizationAdmin, "requestId": "request-proof-actor"}, http.StatusCreated)
+		created := post("/v1/principals", root, map[string]any{"loginName": "proof.actor", "displayName": "Proof actor", "initialPassword": initial, "requestId": "request-proof-actor"}, http.StatusCreated)
 		var principal iamv1.Principal
 		if json.Unmarshal(created.Body.Bytes(), &principal) != nil {
 			t.Fatal("decode proof actor")
 		}
+		post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(principal.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "proof-actor-policy"}, http.StatusOK)
 		loggedIn := post("/v1/auth/login", "", map[string]any{"loginName": "proof.actor@" + tenant, "password": initial, "requestId": "request-proof-login"}, http.StatusOK)
 		var session struct {
 			Credential string `json:"credential"`
@@ -1727,26 +2737,26 @@ func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http
 
 func assertPlatformAuthorityHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, administrator, member string, memberID iamv1.PrincipalID) {
 	t.Helper()
-	put := func(actor string, principalID iamv1.PrincipalID, role iamv1.BuiltinRole, expected int) iamv1.RoleBinding {
+	put := func(actor string, principalID iamv1.PrincipalID, policy iamv1.PolicyID, expected int) iamv1.PolicyAttachment {
 		t.Helper()
-		body, err := json.Marshal(iamv1.PutRoleBindingRequest{PrincipalID: principalID, Role: role, RequestID: "request-platform-role-put"})
+		body, err := json.Marshal(iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(principalID)}, PolicyID: policy, PolicyResourceVersion: 1, RequestID: "request-platform-policy-" + string(principalID) + "-" + string(policy)})
 		if err != nil {
 			t.Fatal(err)
 		}
-		response := performIAMRequest(handler, http.MethodPost, "/v1/role-bindings", actor, body)
+		response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", actor, body)
 		if response.Code != expected {
 			t.Fatalf("platform role grant status=%d expected=%d body=%s", response.Code, expected, response.Body.String())
 		}
-		var binding iamv1.RoleBinding
-		if expected == http.StatusOK && (json.Unmarshal(response.Body.Bytes(), &binding) != nil || iamv1.ValidateRoleBinding(binding) != nil) {
+		var binding iamv1.PolicyAttachment
+		if expected == http.StatusOK && (json.Unmarshal(response.Body.Bytes(), &binding) != nil || iamv1.ValidatePolicyAttachment(binding) != nil) {
 			t.Fatal("platform role grant returned an invalid binding")
 		}
 		return binding
 	}
-	revoke := func(actor string, id iamv1.RoleBindingID, expected int) {
+	revoke := func(actor string, id iamv1.PolicyAttachmentID, expected int) {
 		t.Helper()
-		response := performIAMRequest(handler, http.MethodPost, "/v1/role-bindings/"+string(id)+":revoke", actor,
-			[]byte(`{"requestId":"request-platform-role-revoke"}`))
+		response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments/"+string(id)+":revoke", actor,
+			[]byte(`{"resourceVersion":1,"requestId":"request-platform-policy-revoke"}`))
 		if response.Code != expected {
 			t.Fatalf("platform role revocation status=%d expected=%d body=%s", response.Code, expected, response.Body.String())
 		}
@@ -1754,12 +2764,12 @@ func assertPlatformAuthorityHTTP(t *testing.T, ctx context.Context, handler http
 	assertPlatformDecisionHTTP(t, handler, administrator, paasCredential, true)
 	assertPlatformDecisionHTTP(t, handler, administrator, auditCredential, false)
 	assertPlatformDecisionHTTP(t, handler, member, paasCredential, false)
-	organizationBinding := put(administrator, memberID, iamv1.RoleOrganizationAdmin, http.StatusOK)
+	organizationBinding := put(administrator, memberID, iamv1.SystemPolicyAccountAdministrator, http.StatusOK)
 	assertPlatformDecisionHTTP(t, handler, member, paasCredential, false)
-	put(member, memberID, iamv1.RolePlatformOperator, http.StatusForbidden)
+	put(member, memberID, iamv1.SystemPolicyPlatformOperator, http.StatusForbidden)
 	revoke(member, "bootstrap-platform-operator-binding", http.StatusForbidden)
-	put(administrator, "service-paas", iamv1.RolePlatformOperator, http.StatusForbidden)
-	platformBinding := put(administrator, memberID, iamv1.RolePlatformOperator, http.StatusOK)
+	put(administrator, "service-paas", iamv1.SystemPolicyPlatformOperator, http.StatusForbidden)
+	platformBinding := put(administrator, memberID, iamv1.SystemPolicyPlatformOperator, http.StatusOK)
 	assertPlatformDecisionHTTP(t, handler, member, paasCredential, true)
 	for _, command := range []struct{ suffix, body string }{
 		{":set-status", `{"status":"DISABLED","resourceVersion":2,"requestId":"request-protect-platform-status"}`},
@@ -1805,8 +2815,8 @@ func provePlatformCredentialProtection(t *testing.T, ctx context.Context, handle
 			if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &principal) != nil {
 				t.Fatalf("create platform race user status=%d", created.Code)
 			}
-			grantBody := map[string]any{"principalId": principal.ID, "role": iamv1.RolePlatformOperator, "requestId": "request-race-grant-" + mutation}
-			if response := request("/v1/role-bindings", operator, grantBody); response.Code != http.StatusForbidden {
+			grantBody := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(principal.ID)}, PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "request-race-grant-" + mutation}
+			if response := request("/v1/policy-attachments", operator, grantBody); response.Code != http.StatusForbidden {
 				t.Fatal("unconfirmed initial password gained platform authority")
 			}
 			login := request("/v1/auth/login", "", map[string]any{
@@ -1824,7 +2834,7 @@ func provePlatformCredentialProtection(t *testing.T, ctx context.Context, handle
 				t.Fatalf("initialize platform race user status=%d", response.Code)
 			}
 			if mutation == "legacy-disabled" {
-				if response := request("/v1/role-bindings", operator, grantBody); response.Code != http.StatusOK {
+				if response := request("/v1/policy-attachments", operator, grantBody); response.Code != http.StatusOK {
 					t.Fatalf("grant legacy platform fixture status=%d", response.Code)
 				}
 				// Model a disabled platform user from an older installation. New
@@ -1860,7 +2870,7 @@ func provePlatformCredentialProtection(t *testing.T, ctx context.Context, handle
 			grants, changes := make(chan int, 1), make(chan int, 1)
 			go func() {
 				<-start
-				grants <- performIAMRequest(handler, http.MethodPost, "/v1/role-bindings", operator, grantJSON).Code
+				grants <- performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", operator, grantJSON).Code
 			}()
 			go func() {
 				<-start
@@ -1876,7 +2886,7 @@ func provePlatformCredentialProtection(t *testing.T, ctx context.Context, handle
 			var status string
 			var mustChange bool
 			if err := database.QueryRow(ctx, `SELECT p.status,p.must_change_password,
-				EXISTS(SELECT 1 FROM iam.role_bindings AS b WHERE b.tenant_id=p.tenant_id AND b.principal_id=p.id AND b.role_name='PLATFORM_OPERATOR' AND b.revoked_at IS NULL)
+				EXISTS(SELECT 1 FROM iam.policy_attachments AS b WHERE b.tenant_id=p.tenant_id AND b.principal_id=p.id AND b.authority_scope='INSTALLATION' AND b.revoked_at IS NULL)
 				FROM iam.principals AS p WHERE p.tenant_id=$1 AND p.id=$2`, principal.OrganizationID, principal.ID).Scan(&status, &mustChange, &activePlatform); err != nil {
 				t.Fatal(err)
 			}

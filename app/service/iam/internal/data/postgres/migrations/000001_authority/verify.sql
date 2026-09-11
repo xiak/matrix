@@ -41,7 +41,7 @@ BEGIN
       INTO missing
       FROM (VALUES
         ('bootstrap_receipts'), ('organizations'), ('principals'),
-        ('role_bindings'), ('user_credentials'), ('login_index'),
+        ('policy_attachments'), ('user_credentials'), ('login_index'),
         ('service_credentials'), ('service_credential_index'),
         ('sessions'), ('session_index'), ('authorization_decisions'),
         ('audit_outbox')
@@ -66,7 +66,7 @@ BEGIN
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
       FROM (VALUES
-        ('organizations'), ('principals'), ('role_bindings'),
+        ('organizations'), ('principals'), ('policy_attachments'),
         ('user_credentials'), ('service_credentials'), ('sessions'),
         ('authorization_decisions'), ('audit_outbox')
       ) AS required(name)
@@ -118,12 +118,12 @@ BEGIN
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_session(text)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_service(text)', 'EXECUTE')
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.lookup_service_roles(text,text)', 'EXECUTE'
+            'matrix_iam_api', 'iam.lookup_service_policies(text,text)', 'EXECUTE'
        )
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_password(text,text)', 'EXECUTE')
        OR NOT has_function_privilege(
             'matrix_iam_api',
-            'iam.record_authorization(text,text,jsonb,jsonb)',
+            'iam.record_authorization(text,text,jsonb,jsonb,jsonb)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(
@@ -136,12 +136,17 @@ BEGIN
             'matrix_iam_api', 'iam.create_user(text,text,text,text,text,text,text,jsonb)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.put_role_binding(text,text,text,text,text,text,jsonb)', 'EXECUTE'
+            'matrix_iam_api', 'iam.create_policy_attachment(text,text,text,text,bigint,text,text,jsonb)', 'EXECUTE'
        )
-       OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_role_binding_role(text,text)', 'EXECUTE')
-       OR has_function_privilege('matrix_iam_worker', 'iam.lookup_role_binding_role(text,text)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_policy(text,text)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_iam_api', 'iam.list_policies(text,text,text,text)', 'EXECUTE')
+       OR has_function_privilege('matrix_iam_worker', 'iam.list_policies(text,text,text,text)', 'EXECUTE')
+       OR has_function_privilege('matrix_iam_credential_recovery', 'iam.list_policies(text,text,text,text)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_policy_attachment(text,text)', 'EXECUTE')
+       OR has_function_privilege('matrix_iam_worker', 'iam.lookup_policy_attachment(text,text)', 'EXECUTE')
+       OR has_function_privilege('matrix_iam_worker', 'iam.lookup_policy(text,text)', 'EXECUTE')
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.revoke_role_binding(text,text,text,text,jsonb)', 'EXECUTE'
+            'matrix_iam_api', 'iam.revoke_policy_attachment(text,text,bigint,text,text,jsonb)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_iam_worker', 'iam.claim_audit_event(text,integer)', 'EXECUTE'
@@ -214,6 +219,23 @@ BEGIN
        OR iam.resource_kind_for_action('managedservice.service-installation.read') IS DISTINCT FROM 'SERVICE_INSTALLATION'
        OR iam.resource_kind_for_action('paas.execution-target.register') IS DISTINCT FROM 'EXECUTION_TARGET'
        OR iam.resource_kind_for_action('paas.execution-pool.create') IS DISTINCT FROM 'EXECUTION_POOL'
+       OR iam.resource_kind_for_action('iam.policy-attachment.create') IS DISTINCT FROM 'PRINCIPAL'
+       OR iam.resource_kind_for_action('iam.policy-attachment.revoke') IS DISTINCT FROM 'POLICY_ATTACHMENT'
+       OR iam.resource_kind_for_action('iam.platform-policy-attachment.create') IS DISTINCT FROM 'PRINCIPAL'
+       OR iam.resource_kind_for_action('iam.policy.list') IS DISTINCT FROM 'ORGANIZATION'
+       OR iam.resource_kind_for_action('iam.platform-policy.list') IS DISTINCT FROM 'INSTALLATION'
+       OR NOT iam.is_platform_action('iam.platform-policy.list')
+       OR iam.is_platform_action('iam.policy.list')
+       OR iam.resource_kind_for_action('iam.platform-policy-attachment.revoke') IS DISTINCT FROM 'POLICY_ATTACHMENT'
+       OR NOT iam.is_platform_action('iam.platform-policy-attachment.create')
+       OR NOT iam.is_platform_action('iam.platform-policy-attachment.revoke')
+       OR iam.is_platform_action('iam.policy-attachment.create')
+       OR iam.is_platform_action('iam.policy-attachment.revoke')
+       OR EXISTS (
+           SELECT 1 FROM unnest(ARRAY['iam.role-binding.put', 'iam.role-binding.revoke',
+               'iam.platform-role-binding.put', 'iam.platform-role-binding.revoke']) AS retired(action)
+           WHERE iam.resource_kind_for_action(retired.action) IS NOT NULL OR iam.is_platform_action(retired.action)
+       )
        OR iam.resource_kind_for_action('unsupported') IS NOT NULL
        OR NOT iam.is_platform_action('paas.execution-target.register')
        OR iam.is_platform_action('paas.application.create')

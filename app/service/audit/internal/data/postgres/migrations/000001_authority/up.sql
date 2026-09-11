@@ -286,6 +286,7 @@ BEGIN
     platform_only := action_name IN (
         'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled', 'iam.tenant-administrator.recovered',
         'iam.installation-primary.credentials-recovered',
+        'iam.platform-policy-attachment.created', 'iam.platform-policy-attachment.revoked',
         'paas.execution-pool.created', 'paas.execution-target.registered',
         'audit.platform-records.read', 'audit.platform-integrity.verified'
     );
@@ -312,6 +313,10 @@ BEGIN
         ('iam.principal.created', 'IAM', 'PRINCIPAL', 'SUCCEEDED', true, true, false),
         ('iam.role-binding.put', 'IAM', 'ROLE_BINDING', 'SUCCEEDED', true, true, false),
         ('iam.role-binding.revoked', 'IAM', 'ROLE_BINDING', 'SUCCEEDED', true, true, false),
+        ('iam.policy-attachment.created', 'IAM', 'POLICY_ATTACHMENT', 'SUCCEEDED', true, true, false),
+        ('iam.policy-attachment.revoked', 'IAM', 'POLICY_ATTACHMENT', 'SUCCEEDED', true, true, false),
+        ('iam.platform-policy-attachment.created', 'IAM', 'POLICY_ATTACHMENT', 'SUCCEEDED', true, true, false),
+        ('iam.platform-policy-attachment.revoked', 'IAM', 'POLICY_ATTACHMENT', 'SUCCEEDED', true, true, false),
         ('iam.authorization.decided', 'IAM', 'AUTHORIZATION_DECISION', NULL, true, true, false),
         ('paas.application.created', 'PAAS', 'APPLICATION', 'SUCCEEDED', true, true, true),
         ('paas.configuration.created', 'PAAS', 'CONFIGURATION', 'SUCCEEDED', true, true, true),
@@ -412,6 +417,8 @@ BEGIN
        OR COALESCE(submitted_event#>>'{actor,id}', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT', 'SYSTEM')
+       OR (action_name IN ('iam.policy-attachment.created','iam.policy-attachment.revoked')
+           AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
        OR COALESCE(submitted_event#>>'{target,id}', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_event->>'requestDigest', '') COLLATE "C"
@@ -461,7 +468,7 @@ AS $function$
         to_regclass('audit.chain_heads') IS NOT NULL
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL,
-        3::bigint,
+        4::bigint,
         transaction_timestamp()
 $function$;
 
@@ -763,6 +770,8 @@ BEGIN
        OR (submitted_action IS NOT NULL AND submitted_action NOT IN (
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.session.revoked', 'iam.password.changed',
+            'iam.policy-attachment.created', 'iam.policy-attachment.revoked',
+            'iam.platform-policy-attachment.created', 'iam.platform-policy-attachment.revoked',
             'iam.principal.created', 'iam.role-binding.put',
             'iam.organization.created', 'iam.account-alias.set',
             'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled',

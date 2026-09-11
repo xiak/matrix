@@ -17,15 +17,15 @@ var ErrInvalidPolicyState = errors.New("IAM policy authority state is invalid")
 // permission document. Group/role inheritance needs its own proven source path
 // before it can enter the direct-subject evaluation below.
 type AttachedPolicy struct {
-	Policy     iamv1.Policy
-	Version    iamv1.PolicyVersion
-	Attachment iamv1.PolicyAttachment
+	Policy     iamv1.Policy           `json:"policy"`
+	Version    iamv1.PolicyVersion    `json:"version"`
+	Attachment iamv1.PolicyAttachment `json:"attachment"`
 }
 
 type PolicyAttachmentEvidence struct {
-	AttachmentID    iamv1.PolicyAttachmentID
-	ResourceVersion uint64
-	Version         iamv1.PolicyVersionReference
+	AttachmentID    iamv1.PolicyAttachmentID     `json:"attachmentId"`
+	ResourceVersion uint64                       `json:"resourceVersion"`
+	Version         iamv1.PolicyVersionReference `json:"version"`
 }
 
 type PolicyEvaluation struct {
@@ -156,10 +156,10 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 	switch id {
 	case iamv1.SystemPolicyAccountAdministrator:
 		actions = []iamv1.Action{
-			iamv1.ActionIAMAccountAliasSet, iamv1.ActionIAMPrincipalList,
+			iamv1.ActionIAMAccountAliasSet, iamv1.ActionIAMPrincipalList, iamv1.ActionIAMPolicyList,
 			iamv1.ActionIAMPrincipalSetStatus, iamv1.ActionIAMPasswordReset,
 			iamv1.ActionIAMPrincipalCreate, iamv1.ActionIAMPrincipalRead,
-			iamv1.ActionIAMRoleBindingPut, iamv1.ActionIAMRoleBindingRevoke,
+			iamv1.ActionIAMPolicyAttachmentCreate, iamv1.ActionIAMPolicyAttachmentRevoke,
 			iamv1.ActionIAMSessionRevoke,
 			iamv1.ActionPaaSApplicationCreate, iamv1.ActionPaaSApplicationRead,
 			iamv1.ActionPaaSConfigurationCreate, iamv1.ActionPaaSConfigurationRead,
@@ -176,9 +176,9 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 	case iamv1.SystemPolicyPlatformOperator:
 		scope = iamv1.AuthorityScopeInstallation
 		actions = []iamv1.Action{
-			iamv1.ActionIAMOrganizationCreate, iamv1.ActionIAMOrganizationRead,
+			iamv1.ActionIAMOrganizationCreate, iamv1.ActionIAMOrganizationRead, iamv1.ActionIAMPlatformPolicyList,
 			iamv1.ActionIAMOrganizationSetStatus, iamv1.ActionIAMOrganizationAdministratorRecover,
-			iamv1.ActionIAMPlatformRoleBindingPut, iamv1.ActionIAMPlatformRoleBindingRevoke,
+			iamv1.ActionIAMPlatformPolicyAttachmentCreate, iamv1.ActionIAMPlatformPolicyAttachmentRevoke,
 			iamv1.ActionPaaSExecutionPoolCreate, iamv1.ActionPaaSExecutionPoolRead,
 			iamv1.ActionPaaSExecutionTargetRegister, iamv1.ActionPaaSExecutionTargetRead,
 			iamv1.ActionPaaSPlatformOperationRead,

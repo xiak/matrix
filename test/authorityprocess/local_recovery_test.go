@@ -25,6 +25,22 @@ import (
 
 const localRecoveryProcessLogin = "matrix_iam_credential_recovery_login"
 
+type legacyBuiltinRole string
+
+const legacyRolePaaSViewer legacyBuiltinRole = "PAAS_VIEWER"
+
+type legacyRoleBinding struct {
+	APIVersion      string               `json:"apiVersion"`
+	Kind            string               `json:"kind"`
+	ID              iamv1.RoleBindingID  `json:"id"`
+	OrganizationID  iamv1.OrganizationID `json:"organizationId"`
+	PrincipalID     iamv1.PrincipalID    `json:"principalId"`
+	Role            legacyBuiltinRole    `json:"role"`
+	ResourceVersion uint64               `json:"resourceVersion"`
+	CreatedAt       time.Time            `json:"createdAt"`
+	UpdatedAt       time.Time            `json:"updatedAt"`
+}
+
 func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_LOCAL_RECOVERY_UPGRADE_POSTGRES_TEST_DSN"
 	dsn := os.Getenv(variable)
@@ -93,8 +109,8 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	member := createIAMUser(t, endpoint, primary.Credential, "retained.local.viewer", "Retained local viewer", initialReaderPassword, "schema3-member-create")
 	memberSession := loginIAM(t, endpoint, "retained.local.viewer@organization-process", initialReaderPassword, "schema3-member-login")
 	changePasswordIAM(t, endpoint, memberSession.Credential, initialReaderPassword, changedReaderPassword, "schema3-member-change")
-	binding := putIAMBinding(t, endpoint, primary.Credential, member.ID, iamv1.RolePaaSViewer, "schema3-member-grant")
-	revokeIAMBinding(t, endpoint, primary.Credential, binding.ID, "schema3-member-revoke")
+	binding := putLegacyIAMBinding(t, endpoint, primary.Credential, member.ID, legacyRolePaaSViewer, "schema3-member-grant")
+	revokeLegacyIAMBinding(t, endpoint, primary.Credential, binding.ID, "schema3-member-revoke")
 	retired := loginIAM(t, endpoint, "admin", changedAdminPassword, "schema3-retired-login")
 	revokeIAMSession(t, endpoint, primary.Credential, retired.Session.ID, "schema3-retired-revoke")
 	var originalGeneration uint64
@@ -124,6 +140,25 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	if rows.Err() != nil || len(retained) == 0 {
 		t.Fatal("schema3 fixture has no real committed facts")
 	}
+	var expectedAttachments []byte
+	if err := admin.QueryRow(ctx, `SELECT jsonb_agg(jsonb_build_object(
+        'account',b.tenant_id,'id',b.id,'principal',b.principal_id,'targetKind',p.principal_type,
+        'policy',CASE b.role_name
+            WHEN 'ORGANIZATION_ADMIN' THEN 'system.account-administrator'
+            WHEN 'PLATFORM_OPERATOR' THEN 'system.platform-operator'
+            WHEN 'PAAS_DEVELOPER' THEN 'system.paas-developer'
+            WHEN 'PAAS_VIEWER' THEN 'system.paas-viewer'
+            WHEN 'AUDIT_READER' THEN 'system.audit-reader'
+            WHEN 'INSTALLATION_VERIFIER' THEN 'system.installation-verifier' END,
+        'scope',CASE b.role_name WHEN 'PLATFORM_OPERATOR' THEN 'INSTALLATION'
+            WHEN 'INSTALLATION_VERIFIER' THEN 'INSTALLATION_PROBE' ELSE 'TENANT' END,
+        'installation',CASE WHEN b.role_name IN ('PLATFORM_OPERATOR','INSTALLATION_VERIFIER')
+            THEN (SELECT installation_id FROM iam.bootstrap_receipts WHERE singleton) END,
+        'revision',b.resource_version,'created',b.created_at,'updated',b.updated_at,'revoked',b.revoked_at)
+        ORDER BY b.tenant_id,b.id)
+        FROM iam.role_bindings b JOIN iam.principals p ON (p.tenant_id,p.id)=(b.tenant_id,b.principal_id)`).Scan(&expectedAttachments); err != nil {
+		t.Fatal("read actual old executable permission history")
+	}
 	old.stop()
 	assertIAMMigrationFailureAtomic(t, ctx, admin, false)
 	assertIAMMigrationFailureAtomic(t, ctx, admin, true)
@@ -143,6 +178,38 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 			t.Fatalf("verify installed recovery login: %v", err)
 		}
 	}
+	var actualAttachments []byte
+	if err := admin.QueryRow(ctx, `SELECT jsonb_agg(jsonb_build_object(
+        'account',a.tenant_id,'id',a.id,'principal',a.principal_id,'targetKind',a.target_kind,
+        'policy',a.policy_id,'scope',a.authority_scope,'installation',a.installation_id,
+        'revision',a.resource_version,'created',a.created_at,'updated',a.updated_at,'revoked',a.revoked_at)
+        ORDER BY a.tenant_id,a.id) FROM iam.policy_attachments a`).Scan(&actualAttachments); err != nil ||
+		!bytes.Equal(actualAttachments, expectedAttachments) {
+		t.Fatal("policy cutover changed old identity, scope, revisions or revocation history")
+	}
+	var originalDecisions int
+	var noInventedEvidence bool
+	if err := admin.QueryRow(ctx, `SELECT count(*),bool_and(policy_evidence IS NULL) FROM iam.authorization_decisions`).Scan(&originalDecisions, &noInventedEvidence); err != nil || originalDecisions == 0 || !noInventedEvidence {
+		t.Fatal("policy cutover guessed policy evidence for historical decisions")
+	}
+	for id, canonical := range retained {
+		var raw []byte
+		var event auditv1.Event
+		if err := admin.QueryRow(ctx, "SELECT event_document FROM iam.audit_outbox WHERE event_id=$1", id).Scan(&raw); err != nil || json.Unmarshal(raw, &event) != nil {
+			t.Fatal("policy cutover lost an old IAM fact")
+		}
+		event.OccurredAt = event.OccurredAt.UTC()
+		current, _, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+		if err != nil || current != canonical {
+			t.Fatal("policy cutover changed old canonical bytes")
+		}
+	}
+	obsolete := startChild(t, root, oldBinary, environment)
+	children = append(children, obsolete)
+	if err := obsolete.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
+		t.Fatal("old role executable accepted the replaced policy authority")
+	}
+	t.Log("actual schema3 executable history migrated without permission revival; old binary rejected new authority")
 	environment[0] = "MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-schema4-dsn", []byte(apiDSN))
 	current := start(currentBinary)
 	for _, credential := range []string{primary.Credential, memberSession.Credential} {
@@ -200,7 +267,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		}
 		memberIdentity := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", memberSession.Credential, nil)
 		var memberState iamv1.CurrentIdentity
-		if memberIdentity.Status != http.StatusOK || json.Unmarshal(memberIdentity.Body, &memberState) != nil || len(memberState.Roles) != 0 {
+		if memberIdentity.Status != http.StatusOK || json.Unmarshal(memberIdentity.Body, &memberState) != nil || len(memberState.PolicyAttachments) != 0 {
 			t.Fatal("primary recovery changed the retained member or repaired its revoked binding")
 		}
 		if attempt == 0 {
@@ -298,8 +365,10 @@ DROP FUNCTION public.matrix_iam_cutover_fault(); DROP SEQUENCE public.matrix_iam
 		t.Fatal("failed migration partially changed schema or retained authority")
 	}
 	var recoveryTableAbsent bool
-	if err := database.QueryRow(ctx, "SELECT to_regclass('iam.local_credential_recoveries') IS NULL").Scan(&recoveryTableAbsent); err != nil || !recoveryTableAbsent {
-		t.Fatal("failed migration exposed a partial recovery capability")
+	if err := database.QueryRow(ctx, `SELECT to_regclass('iam.local_credential_recoveries') IS NULL
+        AND to_regclass('iam.policies') IS NULL AND to_regclass('iam.policy_versions') IS NULL
+        AND to_regclass('iam.policy_attachments') IS NULL`).Scan(&recoveryTableAbsent); err != nil || !recoveryTableAbsent {
+		t.Fatal("failed migration exposed a partial recovery or policy authority")
 	}
 }
 
@@ -390,7 +459,7 @@ func proveLocalCredentialRecoveryProcesses(t *testing.T, ctx context.Context, ad
 			t.Fatal(err)
 		}
 		defer lock.Rollback(ctx)
-		if _, err := lock.Exec(ctx, "SELECT id FROM iam.role_bindings WHERE tenant_id=$1 AND id=$2 FOR UPDATE", local.Scope.OrganizationID, request.Expected.PlatformBindingID); err != nil {
+		if _, err := lock.Exec(ctx, "SELECT id FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$2 FOR UPDATE", local.Scope.OrganizationID, request.Expected.PlatformBindingID); err != nil {
 			t.Fatal(err)
 		}
 		applied = apply(requestPath, 0, func() {
@@ -572,4 +641,58 @@ func invokeLocalRecoveryProcess(t *testing.T, ctx context.Context, root, binary,
 		t.Fatal("local recovery gate context expired")
 	}
 	return append([]byte(nil), child.stdout.Bytes()...)
+}
+
+// These wire helpers only construct retained history through fixed pre-policy
+// executables. Current runtime flows must use policy attachment endpoints.
+func putLegacyIAMBinding(
+	t *testing.T,
+	endpoint string,
+	bearer string,
+	principalID iamv1.PrincipalID,
+	role legacyBuiltinRole,
+	requestID string,
+) legacyRoleBinding {
+	t.Helper()
+	response := performJSON(t, http.MethodPost, endpoint+"/v1/role-bindings", bearer, struct {
+		PrincipalID iamv1.PrincipalID `json:"principalId"`
+		Role        legacyBuiltinRole `json:"role"`
+		RequestID   string            `json:"requestId"`
+	}{principalID, role, requestID})
+	if response.Status != http.StatusOK {
+		t.Fatalf("put IAM binding status=%d", response.Status)
+	}
+	var binding legacyRoleBinding
+	if err := json.Unmarshal(response.Body, &binding); err != nil ||
+		binding.APIVersion != iamv1.APIVersion || binding.Kind != "RoleBinding" ||
+		iamv1.ValidateID("legacyRoleBinding.id", string(binding.ID)) != nil ||
+		iamv1.ValidateID("legacyRoleBinding.organizationId", string(binding.OrganizationID)) != nil ||
+		iamv1.ValidateID("legacyRoleBinding.principalId", string(binding.PrincipalID)) != nil ||
+		binding.Role != role || binding.ResourceVersion == 0 || binding.CreatedAt.IsZero() ||
+		binding.UpdatedAt.Before(binding.CreatedAt) {
+		t.Fatalf("decode IAM binding: %v", err)
+	}
+	return binding
+}
+
+func revokeLegacyIAMBinding(
+	t *testing.T,
+	endpoint string,
+	bearer string,
+	bindingID iamv1.RoleBindingID,
+	requestID string,
+) {
+	t.Helper()
+	response := performJSON(
+		t,
+		http.MethodPost,
+		endpoint+"/v1/role-bindings/"+string(bindingID)+":revoke",
+		bearer,
+		struct {
+			RequestID string `json:"requestId"`
+		}{requestID},
+	)
+	if response.Status != http.StatusOK {
+		t.Fatalf("revoke IAM binding status=%d", response.Status)
+	}
 }

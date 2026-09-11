@@ -135,6 +135,9 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 			event.TenantID, event.InstallationID = "", "installation-example"
 			event.Actor.Type = ActorUser
 		}
+		if contract.UserActorRequired {
+			event.Actor.Type = ActorUser
+		}
 		if action == ActionIAMInstallationPrimaryCredentialsRecovered {
 			event.Actor = ActorReference{Type: ActorSystem, ID: "iam-local-recovery"}
 		}
@@ -143,6 +146,15 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		}
 		if err := ValidateEventForSource(contract.Source, event); err != nil {
 			t.Fatalf("valid action contract %q rejected: %v", action, err)
+		}
+		if contract.UserActorRequired {
+			for _, actorType := range []ActorType{ActorSystem, ActorServiceAccount} {
+				forged := event
+				forged.Actor.Type = actorType
+				if ValidateEvent(forged) == nil {
+					t.Fatal("attachment fact accepted a non-USER actor")
+				}
+			}
 		}
 		if err := ValidateEventForSource(otherAuditSource(contract.Source), event); err == nil {
 			t.Fatalf("action %q accepted a forged source", action)

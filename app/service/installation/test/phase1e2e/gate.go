@@ -460,9 +460,9 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 			tenant.Child.OrganizationID != tenantID || tenant.Child.Type != iamv1.PrincipalUser {
 			return fail("tenant-child-create-" + label)
 		}
-		if err := value.edge.mutateIAM(ctx, "/role-bindings", tenant.OldPrimaryCredential,
-			iamv1.PutRoleBindingRequest{PrincipalID: tenant.Child.ID, Role: iamv1.RolePaaSDeveloper, RequestID: "phase1-grant-" + label},
-			&tenant.ChildBinding, http.StatusOK); err != nil || iamv1.ValidateRoleBinding(tenant.ChildBinding) != nil {
+		if err := value.edge.mutateIAM(ctx, "/policy-attachments", tenant.OldPrimaryCredential,
+			iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(tenant.Child.ID)}, PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: "phase1-grant-" + label},
+			&tenant.ChildAttachment, http.StatusOK); err != nil || iamv1.ValidatePolicyAttachment(tenant.ChildAttachment) != nil {
 			return fail("tenant-child-grant-" + label)
 		}
 		child, err := value.edge.loginNamed(ctx, "developer@"+string(tenantID), tenant.InitialPassword,
@@ -507,8 +507,8 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		}
 		clear(quota.body)
 		if index == 0 {
-			if err := value.edge.mutateIAM(ctx, "/role-bindings/"+string(tenant.ChildBinding.ID)+":revoke", tenant.OldPrimaryCredential,
-				iamv1.RevokeRoleBindingRequest{RequestID: "phase1-revoke-child-role"}, nil, http.StatusOK); err != nil {
+			if err := value.edge.mutateIAM(ctx, "/policy-attachments/"+string(tenant.ChildAttachment.ID)+":revoke", tenant.OldPrimaryCredential,
+				iamv1.RevokePolicyAttachmentRequest{ResourceVersion: tenant.ChildAttachment.ResourceVersion, RequestID: "phase1-revoke-child-attachment"}, nil, http.StatusOK); err != nil {
 				return fail("tenant-role-revoke")
 			}
 			if err := value.edge.logout(ctx, tenant.OldChildCredential); err != nil {
@@ -652,7 +652,7 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 		if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", tenant.RetainedPrimaryCredential, &retainedIdentity); err != nil ||
 			iamv1.ValidateCurrentIdentity(retainedIdentity) != nil || retainedIdentity.Principal.ID != account.PrimaryPrincipalID ||
 			retainedIdentity.Principal.OrganizationID != id || retainedIdentity.Principal.MustChangePassword ||
-			!slices.Contains(retainedIdentity.Roles, iamv1.RoleOrganizationAdmin) || slices.Contains(retainedIdentity.Roles, iamv1.RolePlatformOperator) {
+			!slices.ContainsFunc(retainedIdentity.PolicyAttachments, accountAdministratorPolicy) || slices.ContainsFunc(retainedIdentity.PolicyAttachments, installationPolicy) {
 			return fail("tenant-valid-password-session-not-retained")
 		}
 		primary, err := value.edge.loginNamed(ctx, account.PrimaryLoginName, tenant.PrimaryPassword, id, account.PrimaryPrincipalID, "phase1-retained-primary")
@@ -664,8 +664,8 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 		value.edge.addForbidden(bearer)
 		var identity iamv1.CurrentIdentity
 		if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", bearer, &identity); err != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
-			identity.Principal.ID != account.PrimaryPrincipalID || !slices.Contains(identity.Roles, iamv1.RoleOrganizationAdmin) ||
-			slices.Contains(identity.Roles, iamv1.RolePlatformOperator) || identity.CanCreateOrganizations {
+			identity.Principal.ID != account.PrimaryPrincipalID || !slices.ContainsFunc(identity.PolicyAttachments, accountAdministratorPolicy) ||
+			slices.ContainsFunc(identity.PolicyAttachments, installationPolicy) || identity.CanCreateOrganizations {
 			return fail("tenant-primary-became-platform-operator")
 		}
 		if err := value.assertTenantResources(ctx, tenant, bearer, false); err != nil {
@@ -681,7 +681,7 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 				continue
 			}
 			found = member.Principal.Status == iamv1.PrincipalActive && !member.Principal.MustChangePassword
-			if len(member.RoleBindings) != 0 {
+			if len(member.PolicyAttachments) != 0 {
 				return fail("tenant-revoked-role-resurrected")
 			}
 		}
@@ -870,7 +870,7 @@ func (value *gate) restorePausedTenant(ctx context.Context) error {
 	var identity iamv1.CurrentIdentity
 	if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", bearer, &identity); err != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
 		identity.Principal.ID != account.PrimaryPrincipalID || identity.Principal.MustChangePassword ||
-		!slices.Contains(identity.Roles, iamv1.RoleOrganizationAdmin) || slices.Contains(identity.Roles, iamv1.RolePlatformOperator) || identity.CanCreateOrganizations {
+		!slices.ContainsFunc(identity.PolicyAttachments, accountAdministratorPolicy) || slices.ContainsFunc(identity.PolicyAttachments, installationPolicy) || identity.CanCreateOrganizations {
 		return fail("recovered-primary-scope")
 	}
 	var principals iamv1.PrincipalList
@@ -1664,4 +1664,12 @@ func installedSecretValues(root string) ([][]byte, error) {
 	}
 	values = append(values, journalKey)
 	return values, nil
+}
+
+func accountAdministratorPolicy(attachment iamv1.PolicyAttachment) bool {
+	return attachment.PolicyID == iamv1.SystemPolicyAccountAdministrator && attachment.RevokedAt == nil && attachment.Scope == iamv1.AuthorityScopeTenant
+}
+
+func installationPolicy(attachment iamv1.PolicyAttachment) bool {
+	return attachment.Scope == iamv1.AuthorityScopeInstallation && attachment.RevokedAt == nil
 }

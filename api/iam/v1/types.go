@@ -48,18 +48,6 @@ type Principal struct {
 	UpdatedAt          time.Time       `json:"updatedAt"`
 }
 
-type RoleBinding struct {
-	APIVersion      string         `json:"apiVersion"`
-	Kind            string         `json:"kind"`
-	ID              RoleBindingID  `json:"id"`
-	OrganizationID  OrganizationID `json:"organizationId"`
-	PrincipalID     PrincipalID    `json:"principalId"`
-	Role            BuiltinRole    `json:"role"`
-	ResourceVersion uint64         `json:"resourceVersion"`
-	CreatedAt       time.Time      `json:"createdAt"`
-	UpdatedAt       time.Time      `json:"updatedAt"`
-}
-
 type Session struct {
 	APIVersion     string         `json:"apiVersion"`
 	Kind           string         `json:"kind"`
@@ -175,11 +163,10 @@ type ChangePasswordResponse struct {
 }
 
 type CreateUserRequest struct {
-	LoginName       string       `json:"loginName"`
-	DisplayName     string       `json:"displayName"`
-	InitialPassword Secret       `json:"initialPassword"`
-	InitialRole     *BuiltinRole `json:"initialRole,omitempty"`
-	RequestID       string       `json:"requestId"`
+	LoginName       string `json:"loginName"`
+	DisplayName     string `json:"displayName"`
+	InitialPassword Secret `json:"initialPassword"`
+	RequestID       string `json:"requestId"`
 }
 
 // OrganizationAccount is the non-secret account boundary used for login and
@@ -196,13 +183,13 @@ type CurrentIdentity struct {
 	Kind                   string              `json:"kind"`
 	Account                OrganizationAccount `json:"account"`
 	Principal              Principal           `json:"principal"`
-	Roles                  []BuiltinRole       `json:"roles"`
+	PolicyAttachments      []PolicyAttachment  `json:"policyAttachments"`
 	CanCreateOrganizations bool                `json:"canCreateOrganizations"`
 }
 
 type PrincipalAccess struct {
-	Principal    Principal     `json:"principal"`
-	RoleBindings []RoleBinding `json:"roleBindings"`
+	Principal         Principal          `json:"principal"`
+	PolicyAttachments []PolicyAttachment `json:"policyAttachments"`
 }
 
 type PrincipalList struct {
@@ -258,16 +245,6 @@ type ResetUserPasswordRequest struct {
 	InitialPassword Secret `json:"initialPassword"`
 	ResourceVersion uint64 `json:"resourceVersion"`
 	RequestID       string `json:"requestId"`
-}
-
-type PutRoleBindingRequest struct {
-	PrincipalID PrincipalID `json:"principalId"`
-	Role        BuiltinRole `json:"role"`
-	RequestID   string      `json:"requestId"`
-}
-
-type RevokeRoleBindingRequest struct {
-	RequestID string `json:"requestId"`
 }
 
 type RevokeSessionRequest struct {

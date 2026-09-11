@@ -38,7 +38,7 @@ type iamRetention struct {
 type tenantRetention struct {
 	Account                    iamv1.OrganizationAccount
 	Child                      iamv1.Principal
-	ChildBinding               iamv1.RoleBinding
+	ChildAttachment            iamv1.PolicyAttachment
 	InitialPassword            []byte
 	PrimaryPassword            []byte
 	PreviousPrimaryPassword    []byte

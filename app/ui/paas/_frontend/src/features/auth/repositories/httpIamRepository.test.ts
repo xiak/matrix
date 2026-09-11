@@ -2,15 +2,37 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { httpAccountRepository, httpIamRepository } from "./httpIamRepository";
 
 const apiVersion = "iam.matrix.xiak.com/v1";
+const timestamp = "2026-09-11T08:00:00Z";
 const principal = {
   apiVersion, kind: "Principal", type: "USER", id: "principal-alex", organizationId: "account-acme",
-  loginName: "alex", displayName: "Alex", status: "ACTIVE", mustChangePassword: true, resourceVersion: 2
+  loginName: "alex", displayName: "Alex", status: "ACTIVE", mustChangePassword: false, resourceVersion: 2
 };
 const account = {
   organization: { apiVersion, kind: "Organization", id: "account-acme", displayName: "Acme", status: "ACTIVE", resourceVersion: 2 },
   primaryPrincipalId: "primary-acme", primaryLoginName: "acme.owner", loginAlias: "acme"
 };
-const binding = { apiVersion, kind: "RoleBinding", id: "binding-viewer", organizationId: "account-acme", principalId: "principal-alex", role: "PAAS_VIEWER" };
+const tenantAttachment = {
+  apiVersion, kind: "PolicyAttachment", id: "attachment-viewer", accountId: "account-acme",
+  target: { kind: "USER", id: "principal-alex" }, policyId: "system.paas-viewer", scope: "TENANT",
+  resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp
+};
+const platformAttachment = {
+  ...tenantAttachment, id: "attachment-platform", policyId: "system.platform-operator", scope: "INSTALLATION",
+  installationId: "installation-acme"
+};
+const tenantPolicy = {
+  apiVersion, kind: "Policy", id: "system.paas-viewer", management: "SYSTEM", displayName: "只读策略",
+  scope: "TENANT", status: "ACTIVE", defaultVersionId: "version-viewer", resourceVersion: 3,
+  createdAt: timestamp, updatedAt: timestamp
+};
+const customerPolicy = {
+  ...tenantPolicy, id: "customer.build", management: "CUSTOMER", accountId: "account-acme",
+  displayName: "构建策略", defaultVersionId: "version-build"
+};
+const platformPolicy = {
+  ...tenantPolicy, id: "system.platform-operator", displayName: "平台运营策略", scope: "INSTALLATION",
+  defaultVersionId: "version-platform"
+};
 
 function reply(body: unknown) {
   const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -32,7 +54,7 @@ afterEach(() => { vi.unstubAllGlobals(); });
 
 describe("IAM HTTP account boundary", () => {
   it.each([undefined, true, false])("sends only the password session policy %s, never a retained-session selector", async (revokeOtherSessions) => {
-    const fetcher = reply({ changedAt: "2026-08-28T01:02:03Z", bootstrapFileRetirable: false });
+    const fetcher = reply({ changedAt: timestamp, bootstrapFileRetirable: false });
     const command = { currentPassword: "Current-Only-Test-Password-49!", newPassword: "New-Only-Test-Password-73!", revokeOtherSessions, sessionId: "forged-session", tenantId: "forged-tenant" };
     await httpIamRepository.changePassword("transient-bearer", command);
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/password");
@@ -45,129 +67,114 @@ describe("IAM HTTP account boundary", () => {
 
   it("sends the qualified username as one login identifier", async () => {
     const fetcher = reply({ credential: "transient-bearer", mustChangePassword: false,
-      session: { id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: "2026-08-27T00:00:00Z", expiresAt: "2099-08-27T00:00:00Z" } });
+      session: { id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } });
     await httpIamRepository.login({ loginName: "alex@acme", password: "synthetic-test-password" });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/login");
     expect(requestBody(fetcher)).toEqual({ loginName: "alex@acme", password: "synthetic-test-password", requestId: expect.any(String) });
   });
 
-  it("creates a user without an implicit role or caller-supplied tenant", async () => {
-    const fetcher = reply(principal);
-    const command = { kind: "create-user" as const, loginName: "alex", displayName: "Alex", initialPassword: "synthetic-test-password", tenantId: "forged" };
+  it("creates a user with no implicit policy or caller-supplied account", async () => {
+    const fetcher = reply({ ...principal, mustChangePassword: true });
+    const command = { kind: "create-user" as const, loginName: "alex", displayName: "Alex", initialPassword: "synthetic-test-password", initialRole: "PAAS_VIEWER", tenantId: "forged" };
     await httpAccountRepository.execute("transient-bearer", command);
     expect(requestBody(fetcher)).toEqual({ loginName: "alex", displayName: "Alex", initialPassword: "synthetic-test-password", requestId: expect.any(String) });
     expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer transient-bearer" } });
   });
 
-  it("preserves explicit initial roles and optimistic alias versions", async () => {
-    let fetcher = reply(principal);
-    await httpAccountRepository.execute("bearer", { kind: "create-user", loginName: "alex", displayName: "Alex", initialPassword: "synthetic-test-password", initialRole: "PAAS_VIEWER" });
-    expect(requestBody(fetcher).initialRole).toBe("PAAS_VIEWER");
-    fetcher = reply(account);
-    await httpAccountRepository.execute("bearer", { kind: "set-alias", alias: "acme", resourceVersion: 1 });
-    expect(requestBody(fetcher)).toEqual({ alias: "acme", resourceVersion: 1, requestId: expect.any(String) });
-  });
-
-  it("parses account ownership without treating a child as a platform administrator", async () => {
-    reply({ apiVersion, kind: "CurrentIdentity", account, principal, roles: [], canCreateOrganizations: false });
+  it("parses current attachments without interpreting policy names", async () => {
+    reply({ apiVersion, kind: "CurrentIdentity", account, principal, policyAttachments: [tenantAttachment, platformAttachment], canCreateOrganizations: true });
     const identity = await httpAccountRepository.currentIdentity("bearer");
-    expect(identity.account.primaryLoginName).toBe("acme.owner");
-    expect(identity.principal.loginName).toBe("alex");
-    expect(identity.roles).toEqual([]);
+    expect(identity.policyAttachments.map((item) => item.policyId)).toEqual(["system.paas-viewer", "system.platform-operator"]);
     for (const patch of [
-      { canCreateOrganizations: true },
+      { canCreateOrganizations: true, policyAttachments: [tenantAttachment] },
       { principal: { ...principal, organizationId: "another-account" } },
-      { roles: ["INSTALLATION_VERIFIER"] },
+      { policyAttachments: [{ ...tenantAttachment, accountId: "another-account" }] },
+      { policyAttachments: [tenantAttachment, tenantAttachment] },
+      { roles: ["PLATFORM_OPERATOR"] },
       { apiVersion: "future/v2" }
     ]) {
-      reply({ apiVersion, kind: "CurrentIdentity", account, principal, roles: [], canCreateOrganizations: false, ...patch });
+      reply({ apiVersion, kind: "CurrentIdentity", account, principal, policyAttachments: [], canCreateOrganizations: false, ...patch });
       await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });
 
-  it("bounds directory pages and rejects foreign or duplicate grants", async () => {
-    const fetcher = reply({ apiVersion, kind: "PrincipalList", items: [{ principal, roleBindings: [binding] }], nextAfter: principal.id });
+  it("bounds member pages and rejects foreign, duplicate, revoked, or old role projections", async () => {
+    const fetcher = reply({ apiVersion, kind: "PrincipalList", items: [{ principal, policyAttachments: [tenantAttachment] }], nextAfter: principal.id });
     const page = await httpAccountRepository.listUsers("bearer", "principal:first");
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/principals?after=principal%3Afirst");
-    expect(page.items[0]?.roleBindings[0]?.role).toBe("PAAS_VIEWER");
-    for (const roles of [[{ ...binding, organizationId: "another-account" }], [binding, binding]]) {
-      reply({ apiVersion, kind: "PrincipalList", items: [{ principal, roleBindings: roles }] });
+    expect(page.items[0]?.policyAttachments[0]?.policyId).toBe("system.paas-viewer");
+    for (const item of [
+      { principal, policyAttachments: [{ ...tenantAttachment, accountId: "another-account" }] },
+      { principal, policyAttachments: [tenantAttachment, tenantAttachment] },
+      { principal, policyAttachments: [{ ...tenantAttachment, revokedAt: timestamp }] },
+      { principal, roleBindings: [] }
+    ]) {
+      reply({ apiVersion, kind: "PrincipalList", items: [item] });
       await expect(httpAccountRepository.listUsers("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
-    reply({ apiVersion, kind: "PrincipalList", items: Array.from({ length: 101 }, () => ({ principal, roleBindings: [] })) });
+    reply({ apiVersion, kind: "PrincipalList", items: Array.from({ length: 101 }, () => ({ principal, policyAttachments: [] })) });
     await expect(httpAccountRepository.listUsers("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
-  it("reads a platform binding without turning it into a tenant role", async () => {
-    reply({ apiVersion, kind: "CurrentIdentity", account, principal,
-      roles: ["PLATFORM_OPERATOR"], canCreateOrganizations: false });
-    expect((await httpAccountRepository.currentIdentity("bearer")).roles).toEqual(["PLATFORM_OPERATOR"]);
-    reply({ apiVersion, kind: "PrincipalList", items: [{ principal,
-      roleBindings: [{ ...binding, role: "PLATFORM_OPERATOR" }] }] });
-    expect((await httpAccountRepository.listUsers("bearer")).items[0]?.roleBindings[0]?.role).toBe("PLATFORM_OPERATOR");
-  });
-
-  it("accepts a changed-password platform-only child, not a primary tenant administrator, for tenant management", async () => {
-    const operator = { ...principal, mustChangePassword: false };
-    reply({ apiVersion, kind: "CurrentIdentity", account, principal: operator,
-      roles: ["PLATFORM_OPERATOR"], canCreateOrganizations: true });
-    expect((await httpAccountRepository.currentIdentity("bearer")).canCreateOrganizations).toBe(true);
-    for (const [actor, roles] of [
-      [{ ...operator, id: account.primaryPrincipalId }, ["ORGANIZATION_ADMIN"]],
-      [principal, ["PLATFORM_OPERATOR"]]
+  it("reads separate complete policy directories with no caller selector", async () => {
+    let fetcher = reply({ apiVersion, kind: "PolicyList", accountId: "account-acme", scope: "TENANT", items: [customerPolicy, tenantPolicy].sort((a, b) => a.id.localeCompare(b.id)) });
+    const tenant = await httpAccountRepository.listPolicies("bearer", false);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policies");
+    expect(tenant.items.map((item) => item.id)).toEqual(["customer.build", "system.paas-viewer"]);
+    fetcher = reply({ apiVersion, kind: "PolicyList", accountId: "account-acme", scope: "INSTALLATION", installationId: "installation-acme", items: [platformPolicy] });
+    const platform = await httpAccountRepository.listPolicies("bearer", true);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/platform-policies");
+    expect(platform.installationId).toBe("installation-acme");
+    for (const body of [
+      { apiVersion, kind: "PolicyList", accountId: "account-acme", scope: "TENANT", items: [{ ...customerPolicy, accountId: "other" }] },
+      { apiVersion, kind: "PolicyList", accountId: "account-acme", scope: "TENANT", items: [tenantPolicy, customerPolicy] },
+      { apiVersion, kind: "PolicyList", accountId: "account-acme", scope: "TENANT", items: [{ ...tenantPolicy, document: {} }] },
+      { apiVersion, kind: "PolicyList", accountId: "account-acme", scope: "TENANT", items: [{ ...tenantPolicy, status: "DELETED" }] },
+      { apiVersion, kind: "PolicyList", accountId: "account-acme", scope: "TENANT", items: Array.from({ length: 257 }, (_, index) => ({ ...customerPolicy, id: `customer.${index.toString().padStart(3, "0")}` })) },
+      { apiVersion, kind: "PolicyList", accountId: "account-acme", scope: "TENANT", installationId: "forged", items: [] }
     ]) {
-      reply({ apiVersion, kind: "CurrentIdentity", account, principal: actor, roles, canCreateOrganizations: true });
-      await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+      reply(body);
+      await expect(httpAccountRepository.listPolicies("bearer", false)).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });
 
-  it("binds lifecycle requests to an explicit platform target, original primary and organization version", async () => {
+  it("binds lifecycle requests to the exact account, original primary, and resource version", async () => {
     const disabled = { ...account, organization: { ...account.organization, status: "DISABLED" } };
     let fetcher = reply(disabled);
-    const status = { kind: "set-organization-status" as const, organizationId: account.organization.id,
-      status: "DISABLED" as const, resourceVersion: 1, tenantId: "forged", principalId: "unrelated" };
-    await httpAccountRepository.execute("bearer", status);
+    await httpAccountRepository.execute("bearer", { kind: "set-organization-status", organizationId: account.organization.id,
+      status: "DISABLED", resourceVersion: 1 });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/organizations/account-acme:set-status");
     expect(requestBody(fetcher)).toEqual({ status: "DISABLED", resourceVersion: 1, requestId: expect.any(String) });
 
     fetcher = reply(disabled);
-    const recovery = { kind: "recover-primary" as const, organizationId: account.organization.id,
-      principalId: account.primaryPrincipalId, initialPassword: "Recovery-Test-Password-49!", resourceVersion: 1,
-      tenantId: "forged", role: "PLATFORM_OPERATOR", status: "ACTIVE" };
-    await httpAccountRepository.execute("bearer", recovery);
+    await httpAccountRepository.execute("bearer", { kind: "recover-primary", organizationId: account.organization.id,
+      principalId: account.primaryPrincipalId, initialPassword: "Recovery-Test-Password-49!", resourceVersion: 1 });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/organizations/account-acme:recover-administrator");
     expect(requestBody(fetcher)).toEqual({ principalId: account.primaryPrincipalId,
       initialPassword: "Recovery-Test-Password-49!", resourceVersion: 1, requestId: expect.any(String) });
-    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
   });
 
-  it("rejects lifecycle responses with a foreign tenant, unchanged version, wrong status or changed primary", async () => {
-    for (const changed of [
-      { ...account, organization: { ...account.organization, id: "other-tenant", status: "DISABLED" } },
-      { ...account, organization: { ...account.organization, resourceVersion: 1, status: "DISABLED" } },
-      account
-    ]) {
-      reply(changed);
-      await expect(httpAccountRepository.execute("bearer", { kind: "set-organization-status",
-        organizationId: account.organization.id, status: "DISABLED", resourceVersion: 1 })).rejects.toThrow("INVALID_IAM_RESPONSE");
-    }
-    for (const changed of [
-      { ...account, primaryPrincipalId: "promoted-child" },
-      { ...account, organization: { ...account.organization, id: "other-tenant" } },
-      { ...account, organization: { ...account.organization, resourceVersion: 1 } }
-    ]) {
-      reply(changed);
-      await expect(httpAccountRepository.execute("bearer", { kind: "recover-primary",
-        organizationId: account.organization.id, principalId: account.primaryPrincipalId,
-        initialPassword: "Recovery-Test-Password-49!", resourceVersion: 1 })).rejects.toThrow("INVALID_IAM_RESPONSE");
-    }
+  it("uses exact policy identity and revisions for attach and revoke", async () => {
+    let fetcher = reply(tenantAttachment);
+    await httpAccountRepository.execute("bearer", { kind: "create-policy-attachment", principalId: principal.id,
+      policyId: tenantAttachment.policyId, policyResourceVersion: 3 });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policy-attachments");
+    expect(requestBody(fetcher)).toEqual({ target: { kind: "USER", id: principal.id }, policyId: tenantAttachment.policyId,
+      policyResourceVersion: 3, requestId: expect.any(String) });
+
+    fetcher = reply({ apiVersion, kind: "Revocation", id: tenantAttachment.id, resourceVersion: 2, revokedAt: timestamp });
+    await httpAccountRepository.execute("bearer", { kind: "revoke-policy-attachment", attachmentId: tenantAttachment.id, resourceVersion: 1 });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policy-attachments/attachment-viewer:revoke");
+    expect(requestBody(fetcher)).toEqual({ resourceVersion: 1, requestId: expect.any(String) });
   });
 
-  it("rejects successful-looking responses for a different command target", async () => {
-    reply({ ...principal, id: "another-user", status: "DISABLED" });
-    await expect(httpAccountRepository.execute("bearer", { kind: "set-status", principalId: principal.id, status: "DISABLED", resourceVersion: 1 })).rejects.toThrow("INVALID_IAM_RESPONSE");
-    reply({ ...binding, role: "ORGANIZATION_ADMIN" });
-    await expect(httpAccountRepository.execute("bearer", { kind: "grant-role", principalId: principal.id, role: "PAAS_VIEWER" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+  it("rejects successful-looking responses for a different mutation target", async () => {
+    reply({ ...tenantAttachment, target: { kind: "USER", id: "another-user" } });
+    await expect(httpAccountRepository.execute("bearer", { kind: "create-policy-attachment", principalId: principal.id,
+      policyId: tenantAttachment.policyId, policyResourceVersion: 3 })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    reply({ apiVersion, kind: "Revocation", id: "another-attachment", resourceVersion: 2, revokedAt: timestamp });
+    await expect(httpAccountRepository.execute("bearer", { kind: "revoke-policy-attachment", attachmentId: tenantAttachment.id,
+      resourceVersion: 1 })).rejects.toThrow("INVALID_IAM_RESPONSE");
     reply({ ...account, loginAlias: "wrong-alias" });
     await expect(httpAccountRepository.execute("bearer", { kind: "set-alias", alias: "acme", resourceVersion: 1 })).rejects.toThrow("INVALID_IAM_RESPONSE");
   });

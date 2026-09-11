@@ -51,6 +51,39 @@ type Policy struct {
 	UpdatedAt        time.Time        `json:"updatedAt"`
 }
 
+const MaxPolicyListItems = 256
+
+// PolicyList is a complete bounded metadata snapshot, not an authorization
+// permit. The scope is derived from the separately authorized route.
+type PolicyList struct {
+	APIVersion     string         `json:"apiVersion"`
+	Kind           string         `json:"kind"`
+	AccountID      OrganizationID `json:"accountId"`
+	Scope          AuthorityScope `json:"scope"`
+	InstallationID string         `json:"installationId,omitempty"`
+	Items          []Policy       `json:"items"`
+}
+
+func ValidatePolicyList(value PolicyList) error {
+	if value.APIVersion != APIVersion || value.Kind != "PolicyList" || ValidateID("accountId", string(value.AccountID)) != nil ||
+		value.Items == nil || len(value.Items) > MaxPolicyListItems {
+		return ErrInvalidPolicy
+	}
+	if (value.Scope != AuthorityScopeTenant && value.Scope != AuthorityScopeInstallation) ||
+		(value.Scope == AuthorityScopeTenant && value.InstallationID != "") ||
+		(value.Scope == AuthorityScopeInstallation && ValidateID("installationId", value.InstallationID) != nil) {
+		return ErrInvalidPolicy
+	}
+	var previous PolicyID
+	for _, item := range value.Items {
+		if ValidatePolicy(item) != nil || item.Scope != value.Scope || (item.AccountID != "" && item.AccountID != value.AccountID) || item.ID <= previous {
+			return ErrInvalidPolicy
+		}
+		previous = item.ID
+	}
+	return nil
+}
+
 // Target kinds describe authorization carriers, not authenticatable principal
 // types. A group cannot become a login identity by appearing in this contract.
 type PolicyAttachmentTarget struct {
@@ -71,6 +104,34 @@ type PolicyAttachment struct {
 	CreatedAt       time.Time              `json:"createdAt"`
 	UpdatedAt       time.Time              `json:"updatedAt"`
 	RevokedAt       *time.Time             `json:"revokedAt,omitempty"`
+}
+
+// The requested policy revision is a concurrency precondition, not permission
+// to attach it. Account, installation and scope come from current authority.
+type CreatePolicyAttachmentRequest struct {
+	Target                PolicyAttachmentTarget `json:"target"`
+	PolicyID              PolicyID               `json:"policyId"`
+	PolicyResourceVersion uint64                 `json:"policyResourceVersion"`
+	RequestID             string                 `json:"requestId"`
+}
+
+type RevokePolicyAttachmentRequest struct {
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+func ValidateCreatePolicyAttachmentRequest(value CreatePolicyAttachmentRequest) error {
+	// This direct-user management slice does not admit unimplemented group,
+	// role or service-credential workflows through a permissive target enum.
+	if value.Target.Kind != PolicyTargetUser {
+		return ErrInvalidPolicy
+	}
+	return errors.Join(ValidateID("target.id", value.Target.ID), ValidateID("policyId", string(value.PolicyID)),
+		validatePositiveVersion(value.PolicyResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateRevokePolicyAttachmentRequest(value RevokePolicyAttachmentRequest) error {
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
 func ValidatePolicy(policy Policy) error {

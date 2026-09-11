@@ -166,11 +166,9 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='page boundary is invalid';
     END IF;
     SELECT COALESCE(jsonb_agg(jsonb_build_object('principal',iam.principal_snapshot(tenant,p.id),
-        'roleBindings',COALESCE((SELECT jsonb_agg(jsonb_build_object(
-            'apiVersion','iam.matrix.xiak.com/v1','kind','RoleBinding','id',b.id,'organizationId',b.tenant_id,
-            'principalId',b.principal_id,'role',b.role_name,'resourceVersion',b.resource_version,
-            'createdAt',b.created_at,'updatedAt',b.updated_at) ORDER BY b.id)
-            FROM iam.role_bindings AS b WHERE b.tenant_id=tenant AND b.principal_id=p.id AND b.revoked_at IS NULL),'[]'::jsonb))
+        'policyAttachments',COALESCE((SELECT jsonb_agg(iam.lookup_policy_attachment(tenant,b.id) ORDER BY b.id)
+            FROM (SELECT a.id FROM iam.policy_attachments AS a WHERE a.tenant_id=tenant
+                AND a.principal_id=p.id AND a.revoked_at IS NULL ORDER BY a.id LIMIT 257) AS b),'[]'::jsonb))
         ORDER BY p.id),'[]'::jsonb) INTO result
     FROM (SELECT principal.id FROM iam.principals AS principal WHERE principal.tenant_id=tenant
         AND principal.principal_type='USER' AND principal.id > after_id COLLATE "C" ORDER BY principal.id LIMIT 101) AS p;
@@ -251,8 +249,8 @@ BEGIN
     INSERT INTO iam.user_credentials(tenant_id,principal_id,password_hash,changed_at)
     VALUES(new_id,primary_id,password_hash,effective_now);
     INSERT INTO iam.login_index(login_name,tenant_id,principal_id,account_owner) VALUES(login_name,new_id,primary_id,true);
-    INSERT INTO iam.role_bindings(tenant_id,id,principal_id,role_name,resource_version,created_at,updated_at)
-    VALUES(new_id,'primary-admin-binding',primary_id,'ORGANIZATION_ADMIN',1,effective_now,effective_now);
+    INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at)
+    VALUES(new_id,'primary-admin-binding',primary_id,'system.account-administrator',1,effective_now,effective_now);
     result := iam.account_snapshot(new_id);
     PERFORM iam.append_account_event(tenant,actor,decision,'iam.tenant.created','ORGANIZATION',new_id,event);
     RETURN result;
@@ -310,8 +308,8 @@ BEGIN
     PERFORM 1 FROM iam.principals AS principal JOIN iam.login_index AS login
         ON login.tenant_id=principal.tenant_id AND login.principal_id=principal.id AND login.account_owner
         WHERE principal.tenant_id=target_tenant AND principal.id=primary_id AND principal.principal_type='USER' FOR UPDATE OF principal;
-    IF NOT FOUND OR EXISTS(SELECT 1 FROM iam.role_bindings AS binding WHERE binding.tenant_id=target_tenant
-        AND binding.principal_id=primary_id AND binding.role_name='PLATFORM_OPERATOR' AND binding.revoked_at IS NULL) THEN
+    IF NOT FOUND OR EXISTS(SELECT 1 FROM iam.policy_attachments AS binding WHERE binding.tenant_id=target_tenant
+        AND binding.principal_id=primary_id AND binding.authority_scope='INSTALLATION' AND binding.revoked_at IS NULL) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='primary recovery is forbidden';
     END IF;
     UPDATE iam.principals AS principal SET status='ACTIVE',must_change_password=true,
@@ -323,10 +321,10 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='primary credential is unavailable'; END IF;
     UPDATE iam.sessions AS session SET status='REVOKED',revoked_at=transaction_timestamp(),resource_version=session.resource_version+1
     WHERE session.tenant_id=target_tenant AND session.principal_id=primary_id AND session.status='ACTIVE';
-    INSERT INTO iam.role_bindings(tenant_id,id,principal_id,role_name,resource_version,created_at,updated_at)
-    SELECT target_tenant,new_binding_id,primary_id,'ORGANIZATION_ADMIN',1,transaction_timestamp(),transaction_timestamp()
-    WHERE NOT EXISTS(SELECT 1 FROM iam.role_bindings AS binding WHERE binding.tenant_id=target_tenant
-        AND binding.principal_id=primary_id AND binding.role_name='ORGANIZATION_ADMIN' AND binding.revoked_at IS NULL);
+    INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at)
+    SELECT target_tenant,new_binding_id,primary_id,'system.account-administrator',1,transaction_timestamp(),transaction_timestamp()
+    WHERE NOT EXISTS(SELECT 1 FROM iam.policy_attachments AS binding WHERE binding.tenant_id=target_tenant
+        AND binding.principal_id=primary_id AND binding.policy_id='system.account-administrator' AND binding.revoked_at IS NULL);
     UPDATE iam.organizations AS organization SET resource_version=organization.resource_version+1,updated_at=transaction_timestamp()
     WHERE organization.id=target_tenant;
     PERFORM iam.append_account_event(tenant,actor,decision,'iam.tenant-administrator.recovered','PRINCIPAL',primary_id,event);
@@ -375,12 +373,17 @@ BEGIN
     ELSE action := 'iam.password.reset'; event_action := 'iam.password.reset'; END IF;
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,action,'PRINCIPAL',principal);
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.organizations AS organization
+        WHERE organization.id=tenant AND organization.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='subaccount organization is unavailable';
+    END IF;
     SELECT * INTO stored FROM iam.principals AS p WHERE p.tenant_id=tenant AND p.id=principal FOR UPDATE;
     IF NOT FOUND OR stored.principal_type <> 'USER' OR principal=actor
         OR EXISTS(SELECT 1 FROM iam.login_index AS login WHERE login.tenant_id=tenant AND login.principal_id=principal AND login.account_owner)
-        OR EXISTS(SELECT 1 FROM iam.role_bindings AS binding
+        OR EXISTS(SELECT 1 FROM iam.policy_attachments AS binding
             WHERE binding.tenant_id=tenant AND binding.principal_id=principal
-              AND binding.role_name='PLATFORM_OPERATOR' AND binding.revoked_at IS NULL) THEN
+              AND binding.authority_scope='INSTALLATION' AND binding.revoked_at IS NULL) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='subaccount is not manageable';
     END IF;
     IF expected_version IS NULL OR expected_version < 1 OR expected_version <> stored.resource_version THEN

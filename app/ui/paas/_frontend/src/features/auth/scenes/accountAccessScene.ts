@@ -1,20 +1,25 @@
-import type { Account, AccountIdentity, AccountUser, DirectoryPage, IdentityRole } from "../domain/accounts";
+import type { Account, AccountIdentity, AccountUser, DirectoryPage, PolicyDirectory } from "../domain/accounts";
 
-export const roleLabels: Record<IdentityRole, string> = {
-  PLATFORM_OPERATOR: "平台运营者",
-  ORGANIZATION_ADMIN: "租户管理员", PAAS_DEVELOPER: "服务开发者", PAAS_VIEWER: "只读用户", AUDIT_READER: "审计只读"
-};
-
-export const roleDescriptions: Record<IdentityRole, string> = {
-  PLATFORM_OPERATOR: "管理安装级平台资源和租户开通、停复用、原主账号恢复；不隐含租户数据读取或成员管理权限。",
-  ORGANIZATION_ADMIN: "管理本租户的用户、授权、别名、PaaS 资源与审计记录；不能开通新租户或访问其他租户资源。",
-  PAAS_DEVELOPER: "查看本租户的 PaaS 资源，激活配额、创建服务实例，以及管理应用部署；不能管理账号或授权。",
-  PAAS_VIEWER: "只读查看本租户的 PaaS 资源、配额与运行状态；不能创建或修改资源。",
-  AUDIT_READER: "读取和校验本租户的审计记录；不会同时获得 PaaS 资源或用户管理权限。"
-};
-
-export function buildAccountAccessScene(identity: AccountIdentity, users: DirectoryPage<AccountUser> | null, accounts: DirectoryPage<Account> | null) {
+export function buildAccountAccessScene(
+  identity: AccountIdentity,
+  users: DirectoryPage<AccountUser> | null,
+  accounts: DirectoryPage<Account> | null,
+  tenantPolicies: PolicyDirectory | null,
+  platformPolicies: PolicyDirectory | null
+) {
   const account = identity.account;
+  const policies = [...(tenantPolicies?.items ?? []), ...(platformPolicies?.items ?? [])];
+  if (new Set(policies.map((policy) => policy.id)).size !== policies.length) throw new Error("INVALID_IAM_POLICY_DIRECTORY");
+  const byID = new Map(policies.map((policy) => [policy.id, policy]));
+  const describeAttachment = (attachment: AccountIdentity["policyAttachments"][number]) => {
+    const policy = byID.get(attachment.policyId);
+    return {
+      ...attachment,
+      label: policy?.displayName ?? attachment.policyId,
+      policyStatus: policy?.status ?? null,
+      policyResourceVersion: policy?.resourceVersion ?? null
+    };
+  };
   return {
     accountId: account.organization.id,
     accountName: account.organization.displayName,
@@ -23,16 +28,25 @@ export function buildAccountAccessScene(identity: AccountIdentity, users: Direct
     primaryLoginName: account.primaryLoginName,
     identityLabel: identity.principal.displayName,
     isPrimary: identity.principal.id === account.primaryPrincipalId,
-    roles: identity.roles.map((role) => roleLabels[role]),
-    canManage: !identity.principal.mustChangePassword && identity.roles.includes("ORGANIZATION_ADMIN"),
-    canCreateOrganizations: identity.canCreateOrganizations,
-    users: users?.items.filter(({ principal }) => principal.id !== account.primaryPrincipalId).map(({ principal, roleBindings }) => ({
+    identityAttachments: identity.policyAttachments.map(describeAttachment),
+    canManage: users !== null,
+    canCreateOrganizations: accounts !== null,
+    canViewPolicies: tenantPolicies !== null || platformPolicies !== null,
+    tenantPoliciesAvailable: tenantPolicies !== null,
+    platformPoliciesAvailable: platformPolicies !== null,
+    policies: policies.map((policy) => ({
+      ...policy,
+      ownerLabel: policy.management === "SYSTEM" ? "系统管理" : "本租户管理",
+      scopeLabel: policy.scope === "INSTALLATION" ? "平台安装" : "当前租户",
+      statusLabel: policy.status === "ACTIVE" ? "可关联" : "已停用"
+    })),
+    users: users?.items.filter(({ principal }) => principal.id !== account.primaryPrincipalId).map(({ principal, policyAttachments }) => ({
       id: principal.id, name: principal.displayName, loginName: principal.loginName,
       qualifiedName: `${principal.loginName}@${account.loginAlias ?? account.organization.id}`,
-      credentialProtection: roleBindings.some((binding) => binding.role === "PLATFORM_OPERATOR") ? "platform" : principal.id === identity.principal.id ? "self" : null,
+      credentialProtection: policyAttachments.some((attachment) => attachment.scope === "INSTALLATION") ? "platform" : principal.id === identity.principal.id ? "self" : null,
       enabled: principal.status === "ACTIVE", resourceVersion: principal.resourceVersion,
       statusLabel: principal.status === "DISABLED" ? "已禁用" : principal.mustChangePassword ? "待修改初始密码" : "正常",
-      bindings: roleBindings.map((binding) => ({ ...binding, label: roleLabels[binding.role] }))
+      attachments: policyAttachments.map(describeAttachment)
     })) ?? [],
     nextUserPage: users?.nextAfter ?? null,
     accounts: accounts?.items.map((entry) => ({

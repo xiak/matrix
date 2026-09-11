@@ -79,7 +79,7 @@ func (value *transaction) RecoverOrganizationAdministrator(ctx context.Context, 
 	var encoded []byte
 	err = value.tx.QueryRow(ctx, "SELECT iam.recover_organization_administrator($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
 		mutation.ActorOrganizationID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.OrganizationID,
-		mutation.PrincipalID, mutation.ResourceVersion, string(mutation.PasswordHash), mutation.BindingID, event).Scan(&encoded)
+		mutation.PrincipalID, mutation.ResourceVersion, string(mutation.PasswordHash), mutation.AttachmentID, event).Scan(&encoded)
 	if err != nil {
 		return iamv1.OrganizationAccount{}, mapAuthorizationDatabaseError("recover IAM organization administrator", err)
 	}
@@ -109,13 +109,32 @@ func (value *transaction) ListPrincipals(ctx context.Context, read identityacces
 		if item.Principal.OrganizationID != read.OrganizationID {
 			return iamv1.PrincipalList{}, identityaccess.ErrUnavailable
 		}
-		for j := range item.RoleBindings {
-			item.RoleBindings[j].CreatedAt = item.RoleBindings[j].CreatedAt.UTC()
-			item.RoleBindings[j].UpdatedAt = item.RoleBindings[j].UpdatedAt.UTC()
+		for j := range item.PolicyAttachments {
+			item.PolicyAttachments[j].CreatedAt = item.PolicyAttachments[j].CreatedAt.UTC()
+			item.PolicyAttachments[j].UpdatedAt = item.PolicyAttachments[j].UpdatedAt.UTC()
 		}
 	}
 	if iamv1.ValidatePrincipalList(result) != nil {
 		return iamv1.PrincipalList{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) ListPolicies(ctx context.Context, read identityaccess.AccountRead, scope iamv1.AuthorityScope) (iamv1.PolicyList, error) {
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.list_policies($1,$2,$3,$4)", read.OrganizationID, read.ActorPrincipalID, read.DecisionID, scope).Scan(&encoded); err != nil {
+		return iamv1.PolicyList{}, mapAuthorizationDatabaseError("list IAM policies", err)
+	}
+	var result iamv1.PolicyList
+	if json.Unmarshal(encoded, &result) != nil {
+		return iamv1.PolicyList{}, identityaccess.ErrUnavailable
+	}
+	for index := range result.Items {
+		result.Items[index].CreatedAt = result.Items[index].CreatedAt.UTC()
+		result.Items[index].UpdatedAt = result.Items[index].UpdatedAt.UTC()
+	}
+	if iamv1.ValidatePolicyList(result) != nil || result.AccountID != read.OrganizationID || result.Scope != scope {
+		return iamv1.PolicyList{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }

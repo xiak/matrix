@@ -32,6 +32,15 @@ function accountError(error: unknown): string {
   return "访问管理暂时不可用，未使用模拟数据。请刷新重试。";
 }
 
+async function readWhenAuthorized<T>(read: () => Promise<T>): Promise<T | null> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof HttpProblem && error.status === 403) return null;
+    throw error;
+  }
+}
+
 export function AccountAccessProvider({ children, repository = httpAccountRepository }: { children: ReactNode; repository?: AccountRepository }) {
   const credential = useSessionCredential();
   const session = useSession();
@@ -52,13 +61,16 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     async function read() {
       const identity = await repository.currentIdentity(credential!);
       if (identity.account.organization.id !== tenantId || identity.principal.id !== principalId) throw new Error("INVALID_IAM_IDENTITY");
-      const canManage = identity.roles.includes("ORGANIZATION_ADMIN") && !identity.principal.mustChangePassword;
-      const [users, accounts] = await Promise.all([
-        canManage ? repository.listUsers(credential!, page.users || undefined) : null,
-        identity.canCreateOrganizations ? repository.listAccounts(credential!, page.accounts || undefined) : null
+      const [users, accounts, tenantPolicies, platformPolicies] = await Promise.all([
+        readWhenAuthorized(() => repository.listUsers(credential!, page.users || undefined)),
+        identity.canCreateOrganizations ? readWhenAuthorized(() => repository.listAccounts(credential!, page.accounts || undefined)) : null,
+        readWhenAuthorized(() => repository.listPolicies(credential!, false)),
+        readWhenAuthorized(() => repository.listPolicies(credential!, true))
       ]);
       if (users?.items.some((entry) => entry.principal.organizationId !== tenantId)) throw new Error("INVALID_IAM_TENANT");
-      return buildAccountAccessScene(identity, users, accounts);
+      if (tenantPolicies && tenantPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
+      if (platformPolicies && platformPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
+      return buildAccountAccessScene(identity, users, accounts, tenantPolicies, platformPolicies);
     }
     read().then((loaded) => { if (active) { setScene(loaded); setError(null); } },
       (failure: unknown) => { if (active) { setScene(null); setSuccess(null); setError(accountError(failure)); } })

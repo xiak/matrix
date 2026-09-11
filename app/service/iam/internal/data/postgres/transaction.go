@@ -1,9 +1,11 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -206,7 +208,7 @@ func (value *transaction) LookupSession(
 		sessionIssuedAt, sessionExpiresAt                           time.Time
 		sessionRevokedAt                                            *time.Time
 		verificationDigest                                          string
-		roles                                                       []string
+		policies                                                    []byte
 	)
 	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.lookup_session($1)", lookupDigest).Scan(
 		&organizationID,
@@ -230,7 +232,7 @@ func (value *transaction) LookupSession(
 		&sessionExpiresAt,
 		&sessionRevokedAt,
 		&verificationDigest,
-		&roles,
+		&policies,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.SessionCredential{}, false, nil
@@ -284,8 +286,9 @@ func (value *transaction) LookupSession(
 			RevokedAt:      revokedAt,
 		},
 	}
-	for _, role := range roles {
-		subject.Roles = append(subject.Roles, iamv1.BuiltinRole(role))
+	subject.Policies, err = decodeAttachedPolicies(policies)
+	if err != nil {
+		return identityaccess.SessionCredential{}, false, err
 	}
 	if iamv1.ValidateOrganization(subject.Organization) != nil ||
 		iamv1.ValidatePrincipal(subject.Principal) != nil ||
@@ -374,19 +377,19 @@ func (value *transaction) ReadAuditEvidence(
 	return result, true, nil
 }
 
-func (value *transaction) LookupServiceRoles(
+func (value *transaction) LookupServicePolicies(
 	ctx context.Context,
 	organizationID iamv1.OrganizationID,
 	principalID iamv1.PrincipalID,
-) ([]iamv1.BuiltinRole, error) {
+) ([]authority.AttachedPolicy, error) {
 	if iamv1.ValidateID("organizationId", string(organizationID)) != nil ||
 		iamv1.ValidateID("principalId", string(principalID)) != nil {
 		return nil, identityaccess.ErrInvalidArgument
 	}
-	var stored []string
+	var stored []byte
 	err := value.tx.QueryRow(
 		ctx,
-		"SELECT * FROM iam.lookup_service_roles($1, $2)",
+		"SELECT * FROM iam.lookup_service_policies($1, $2)",
 		string(organizationID),
 		string(principalID),
 	).Scan(&stored)
@@ -394,13 +397,41 @@ func (value *transaction) LookupServiceRoles(
 		return nil, identityaccess.ErrUnavailable
 	}
 	if err != nil {
-		return nil, mapDatabaseError("lookup IAM service roles", err)
+		return nil, mapDatabaseError("lookup IAM service policies", err)
 	}
-	roles := make([]iamv1.BuiltinRole, 0, len(stored))
-	for _, role := range stored {
-		roles = append(roles, iamv1.BuiltinRole(role))
+	return decodeAttachedPolicies(stored)
+}
+
+func decodeAttachedPolicies(encoded []byte) ([]authority.AttachedPolicy, error) {
+	// The SQL projection returns at most budget+1 records, so excess authority
+	// fails closed instead of silently discarding a later Deny.
+	const maxSnapshotBytes = (iamv1.MaxPolicyBytes + 4096) * authority.MaxEvaluationPolicies
+	if int64(len(encoded)) > maxSnapshotBytes {
+		return nil, identityaccess.ErrUnavailable
 	}
-	return roles, nil
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.DisallowUnknownFields()
+	var policies []authority.AttachedPolicy
+	if decoder.Decode(&policies) != nil || policies == nil || len(policies) > authority.MaxEvaluationPolicies {
+		return nil, identityaccess.ErrUnavailable
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF {
+		return nil, identityaccess.ErrUnavailable
+	}
+	for index := range policies {
+		row := &policies[index]
+		row.Policy.CreatedAt, row.Policy.UpdatedAt = row.Policy.CreatedAt.UTC(), row.Policy.UpdatedAt.UTC()
+		row.Attachment.CreatedAt, row.Attachment.UpdatedAt = row.Attachment.CreatedAt.UTC(), row.Attachment.UpdatedAt.UTC()
+		if row.Attachment.RevokedAt != nil {
+			revoked := row.Attachment.RevokedAt.UTC()
+			row.Attachment.RevokedAt = &revoked
+		}
+		if iamv1.ValidatePolicy(row.Policy) != nil || iamv1.ValidatePolicyAttachment(row.Attachment) != nil || iamv1.ValidatePolicyVersion(row.Version) != nil {
+			return nil, identityaccess.ErrUnavailable
+		}
+	}
+	return policies, nil
 }
 
 func (value *transaction) LookupPassword(
@@ -445,16 +476,24 @@ func (value *transaction) RecordAuthorization(
 		clear(decision)
 		return identityaccess.ErrUnavailable
 	}
+	evidence, err := json.Marshal(mutation.PolicyEvidence)
+	if err != nil || mutation.PolicyEvidence == nil || len(mutation.PolicyEvidence) > authority.MaxEvaluationPolicies {
+		clear(decision)
+		clear(event)
+		return identityaccess.ErrUnavailable
+	}
 	_, err = value.tx.Exec(
 		ctx,
-		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb)",
+		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb)",
 		string(mutation.OrganizationID),
 		string(mutation.PrincipalID),
 		decision,
 		event,
+		evidence,
 	)
 	clear(decision)
 	clear(event)
+	clear(evidence)
 	if err != nil {
 		return mapSubjectDatabaseError("record IAM authorization", err)
 	}
@@ -592,90 +631,83 @@ func (value *transaction) CreateUser(
 	return stored, nil
 }
 
-func (value *transaction) PutRoleBinding(
-	ctx context.Context,
-	mutation identityaccess.RoleBindingMutation,
-) (iamv1.RoleBinding, bool, error) {
-	if iamv1.ValidateRoleBinding(mutation.Binding) != nil ||
-		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
-		iamv1.ValidateID("decisionId", string(mutation.DecisionID)) != nil ||
+func (value *transaction) LookupPolicy(ctx context.Context, account iamv1.OrganizationID, id iamv1.PolicyID) (iamv1.Policy, bool, error) {
+	if iamv1.ValidateID("accountId", string(account)) != nil || iamv1.ValidateID("policyId", string(id)) != nil {
+		return iamv1.Policy{}, false, identityaccess.ErrInvalidArgument
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.lookup_policy($1,$2)", string(account), string(id)).Scan(&encoded); err != nil {
+		return iamv1.Policy{}, false, mapDatabaseError("read IAM policy", err)
+	}
+	if len(encoded) == 0 {
+		return iamv1.Policy{}, false, nil
+	}
+	var policy iamv1.Policy
+	if iamv1.DecodeRequest(bytes.NewReader(encoded), &policy) != nil {
+		return iamv1.Policy{}, false, identityaccess.ErrUnavailable
+	}
+	policy.CreatedAt, policy.UpdatedAt = policy.CreatedAt.UTC(), policy.UpdatedAt.UTC()
+	if iamv1.ValidatePolicy(policy) != nil {
+		return iamv1.Policy{}, false, identityaccess.ErrUnavailable
+	}
+	return policy, true, nil
+}
+
+func decodePolicyAttachment(encoded []byte) (iamv1.PolicyAttachment, error) {
+	var attachment iamv1.PolicyAttachment
+	if iamv1.DecodeRequest(bytes.NewReader(encoded), &attachment) != nil {
+		return attachment, identityaccess.ErrUnavailable
+	}
+	attachment.CreatedAt, attachment.UpdatedAt = attachment.CreatedAt.UTC(), attachment.UpdatedAt.UTC()
+	if attachment.RevokedAt != nil {
+		utc := attachment.RevokedAt.UTC()
+		attachment.RevokedAt = &utc
+	}
+	if iamv1.ValidatePolicyAttachment(attachment) != nil {
+		return iamv1.PolicyAttachment{}, identityaccess.ErrUnavailable
+	}
+	return attachment, nil
+}
+
+func (value *transaction) LookupPolicyAttachment(ctx context.Context, account iamv1.OrganizationID, id iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error) {
+	if iamv1.ValidateID("accountId", string(account)) != nil || iamv1.ValidateID("attachmentId", string(id)) != nil {
+		return iamv1.PolicyAttachment{}, false, identityaccess.ErrInvalidArgument
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.lookup_policy_attachment($1,$2)", string(account), string(id)).Scan(&encoded); err != nil {
+		return iamv1.PolicyAttachment{}, false, mapDatabaseError("read IAM policy attachment", err)
+	}
+	if len(encoded) == 0 {
+		return iamv1.PolicyAttachment{}, false, nil
+	}
+	attachment, err := decodePolicyAttachment(encoded)
+	return attachment, err == nil, err
+}
+
+func (value *transaction) CreatePolicyAttachment(ctx context.Context, mutation identityaccess.PolicyAttachmentMutation) (iamv1.PolicyAttachment, error) {
+	attachment := mutation.Attachment
+	if iamv1.ValidatePolicyAttachment(attachment) != nil || iamv1.ValidateCreatePolicyAttachmentRequest(iamv1.CreatePolicyAttachmentRequest{
+		Target: attachment.Target, PolicyID: attachment.PolicyID, PolicyResourceVersion: mutation.PolicyResourceVersion, RequestID: mutation.AuditEvent.RequestID}) != nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
-		return iamv1.RoleBinding{}, false, identityaccess.ErrInvalidArgument
+		return iamv1.PolicyAttachment{}, identityaccess.ErrInvalidArgument
 	}
 	event, err := json.Marshal(mutation.AuditEvent)
 	if err != nil {
-		return iamv1.RoleBinding{}, false, identityaccess.ErrUnavailable
+		return iamv1.PolicyAttachment{}, identityaccess.ErrUnavailable
 	}
-	var id, principalID, role string
-	var version uint64
-	var createdAt, updatedAt time.Time
-	var applied bool
-	err = value.tx.QueryRow(
-		ctx,
-		"SELECT * FROM iam.put_role_binding($1, $2, $3, $4, $5, $6, $7::jsonb)",
-		string(mutation.Binding.OrganizationID),
-		string(mutation.Binding.ID),
-		string(mutation.Binding.PrincipalID),
-		string(mutation.Binding.Role),
-		string(mutation.ActorPrincipalID),
-		string(mutation.DecisionID),
-		event,
-	).Scan(&id, &principalID, &role, &version, &createdAt, &updatedAt, &applied)
-	clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, "SELECT iam.create_policy_attachment($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
+		string(attachment.AccountID), string(attachment.ID), attachment.Target.ID, string(attachment.PolicyID), mutation.PolicyResourceVersion,
+		string(mutation.ActorPrincipalID), string(mutation.DecisionID), event).Scan(&encoded)
 	if err != nil {
-		return iamv1.RoleBinding{}, false, mapAuthorizationDatabaseError("put IAM role binding", err)
+		return iamv1.PolicyAttachment{}, mapAuthorizationDatabaseError("create IAM policy attachment", err)
 	}
-	stored := iamv1.RoleBinding{
-		APIVersion:      iamv1.APIVersion,
-		Kind:            "RoleBinding",
-		ID:              iamv1.RoleBindingID(id),
-		OrganizationID:  mutation.Binding.OrganizationID,
-		PrincipalID:     iamv1.PrincipalID(principalID),
-		Role:            iamv1.BuiltinRole(role),
-		ResourceVersion: version,
-		CreatedAt:       createdAt.UTC(),
-		UpdatedAt:       updatedAt.UTC(),
-	}
-	if iamv1.ValidateRoleBinding(stored) != nil {
-		return iamv1.RoleBinding{}, false, identityaccess.ErrUnavailable
-	}
-	return stored, applied, nil
+	return decodePolicyAttachment(encoded)
 }
 
-func (value *transaction) LookupRoleBindingRole(
-	ctx context.Context,
-	organizationID iamv1.OrganizationID,
-	bindingID iamv1.RoleBindingID,
-) (iamv1.BuiltinRole, bool, error) {
-	if iamv1.ValidateID("organizationId", string(organizationID)) != nil ||
-		iamv1.ValidateID("roleBindingId", string(bindingID)) != nil {
-		return "", false, identityaccess.ErrInvalidArgument
-	}
-	var role iamv1.BuiltinRole
-	err := value.tx.QueryRow(ctx, "SELECT role_name FROM iam.lookup_role_binding_role($1, $2)",
-		string(organizationID), string(bindingID)).Scan(&role)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, mapDatabaseError("look up IAM role binding authority", err)
-	}
-	for _, known := range iamv1.AllBuiltinRoles() {
-		if role == known {
-			return role, true, nil
-		}
-	}
-	return "", false, identityaccess.ErrUnavailable
-}
-
-func (value *transaction) RevokeRoleBinding(
-	ctx context.Context,
-	mutation identityaccess.RoleBindingRevocationMutation,
-) (iamv1.Revocation, bool, error) {
-	if iamv1.ValidateID("organizationId", string(mutation.OrganizationID)) != nil ||
-		iamv1.ValidateID("roleBindingId", string(mutation.RoleBindingID)) != nil ||
-		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
-		iamv1.ValidateID("decisionId", string(mutation.DecisionID)) != nil ||
+func (value *transaction) RevokePolicyAttachment(ctx context.Context, mutation identityaccess.PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error) {
+	if iamv1.ValidateID("accountId", string(mutation.OrganizationID)) != nil || iamv1.ValidateID("attachmentId", string(mutation.AttachmentID)) != nil ||
+		iamv1.ValidateRevokePolicyAttachmentRequest(iamv1.RevokePolicyAttachmentRequest{ResourceVersion: mutation.ResourceVersion, RequestID: mutation.AuditEvent.RequestID}) != nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.Revocation{}, false, identityaccess.ErrInvalidArgument
 	}
@@ -683,29 +715,15 @@ func (value *transaction) RevokeRoleBinding(
 	if err != nil {
 		return iamv1.Revocation{}, false, identityaccess.ErrUnavailable
 	}
-	var version uint64
-	var revokedAt time.Time
+	result := iamv1.Revocation{APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(mutation.AttachmentID)}
 	var applied bool
-	err = value.tx.QueryRow(
-		ctx,
-		"SELECT * FROM iam.revoke_role_binding($1, $2, $3, $4, $5::jsonb)",
-		string(mutation.OrganizationID),
-		string(mutation.RoleBindingID),
-		string(mutation.ActorPrincipalID),
-		string(mutation.DecisionID),
-		event,
-	).Scan(&version, &revokedAt, &applied)
-	clear(event)
+	err = value.tx.QueryRow(ctx, "SELECT * FROM iam.revoke_policy_attachment($1,$2,$3,$4,$5,$6::jsonb)",
+		string(mutation.OrganizationID), string(mutation.AttachmentID), mutation.ResourceVersion, string(mutation.ActorPrincipalID),
+		string(mutation.DecisionID), event).Scan(&result.ResourceVersion, &result.RevokedAt, &applied)
 	if err != nil {
-		return iamv1.Revocation{}, false, mapAuthorizationDatabaseError("revoke IAM role binding", err)
+		return iamv1.Revocation{}, false, mapAuthorizationDatabaseError("revoke IAM policy attachment", err)
 	}
-	result := iamv1.Revocation{
-		APIVersion:      iamv1.APIVersion,
-		Kind:            "Revocation",
-		ID:              string(mutation.RoleBindingID),
-		ResourceVersion: version,
-		RevokedAt:       revokedAt.UTC(),
-	}
+	result.RevokedAt = result.RevokedAt.UTC()
 	if iamv1.ValidateRevocation(result) != nil {
 		return iamv1.Revocation{}, false, identityaccess.ErrUnavailable
 	}

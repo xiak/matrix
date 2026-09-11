@@ -4,7 +4,6 @@ type OrganizationStatus string
 type PrincipalType string
 type PrincipalStatus string
 type SessionStatus string
-type BuiltinRole string
 type Action string
 type ResourceKind string
 type DecisionReason string
@@ -64,31 +63,24 @@ const (
 )
 
 const (
-	RoleOrganizationAdmin    BuiltinRole = "ORGANIZATION_ADMIN"
-	RolePlatformOperator     BuiltinRole = "PLATFORM_OPERATOR"
-	RolePaaSDeveloper        BuiltinRole = "PAAS_DEVELOPER"
-	RolePaaSViewer           BuiltinRole = "PAAS_VIEWER"
-	RoleAuditReader          BuiltinRole = "AUDIT_READER"
-	RoleInstallationVerifier BuiltinRole = "INSTALLATION_VERIFIER"
-)
-
-const (
 	ActionIAMOrganizationCreate               Action = "iam.organization.create"
 	ActionIAMOrganizationRead                 Action = "iam.organization.read"
 	ActionIAMOrganizationSetStatus            Action = "iam.organization.set-status"
 	ActionIAMOrganizationAdministratorRecover Action = "iam.organization-administrator.recover"
 	ActionIAMAccountAliasSet                  Action = "iam.account-alias.set"
 	ActionIAMPrincipalList                    Action = "iam.principal.list"
+	ActionIAMPolicyList                       Action = "iam.policy.list"
+	ActionIAMPlatformPolicyList               Action = "iam.platform-policy.list"
 	ActionIAMPrincipalSetStatus               Action = "iam.principal.set-status"
 	ActionIAMPasswordReset                    Action = "iam.password.reset"
 
-	ActionIAMPrincipalCreate           Action = "iam.principal.create"
-	ActionIAMPrincipalRead             Action = "iam.principal.read"
-	ActionIAMRoleBindingPut            Action = "iam.role-binding.put"
-	ActionIAMRoleBindingRevoke         Action = "iam.role-binding.revoke"
-	ActionIAMSessionRevoke             Action = "iam.session.revoke"
-	ActionIAMPlatformRoleBindingPut    Action = "iam.platform-role-binding.put"
-	ActionIAMPlatformRoleBindingRevoke Action = "iam.platform-role-binding.revoke"
+	ActionIAMPrincipalCreate                Action = "iam.principal.create"
+	ActionIAMPrincipalRead                  Action = "iam.principal.read"
+	ActionIAMSessionRevoke                  Action = "iam.session.revoke"
+	ActionIAMPolicyAttachmentCreate         Action = "iam.policy-attachment.create"
+	ActionIAMPolicyAttachmentRevoke         Action = "iam.policy-attachment.revoke"
+	ActionIAMPlatformPolicyAttachmentCreate Action = "iam.platform-policy-attachment.create"
+	ActionIAMPlatformPolicyAttachmentRevoke Action = "iam.platform-policy-attachment.revoke"
 
 	ActionPaaSExecutionPoolCreate     Action = "paas.execution-pool.create"
 	ActionPaaSExecutionPoolRead       Action = "paas.execution-pool.read"
@@ -125,10 +117,20 @@ const (
 	ActionInstallationVerify           Action = "installation.verify"
 )
 
+// Published historical decisions retain these literals; no active action
+// definition or policy may use them.
+const (
+	ActionIAMRoleBindingPut            Action = "iam.role-binding.put"
+	ActionIAMRoleBindingRevoke         Action = "iam.role-binding.revoke"
+	ActionIAMPlatformRoleBindingPut    Action = "iam.platform-role-binding.put"
+	ActionIAMPlatformRoleBindingRevoke Action = "iam.platform-role-binding.revoke"
+)
+
 const (
 	ResourceOrganization          ResourceKind = "ORGANIZATION"
 	ResourcePrincipal             ResourceKind = "PRINCIPAL"
 	ResourceRoleBinding           ResourceKind = "ROLE_BINDING"
+	ResourcePolicyAttachment      ResourceKind = "POLICY_ATTACHMENT"
 	ResourceSession               ResourceKind = "SESSION"
 	ResourceApplication           ResourceKind = "APPLICATION"
 	ResourceConfiguration         ResourceKind = "CONFIGURATION"
@@ -192,8 +194,33 @@ func LookupActionDefinition(action Action) (ActionDefinition, bool) {
 	return ActionDefinition{}, false
 }
 
-func AllBuiltinRoles() []BuiltinRole {
-	return append([]BuiltinRole(nil), allBuiltinRoles...)
+// AllRecordedActionDefinitions describes only the strict decoding of immutable
+// decisions. Retired entries are NOT callable operations: requests, policies,
+// service admission and new decision writes use the current catalog instead.
+// Current definitions are derived, not maintained as a second authority.
+func AllRecordedActionDefinitions() []ActionDefinition {
+	return append(AllActionDefinitions(), retiredActionDefinitions[:]...)
+}
+
+func lookupRecordedActionDefinition(action Action) (ActionDefinition, bool) {
+	if definition, known := LookupActionDefinition(action); known {
+		return definition, true
+	}
+	for _, definition := range retiredActionDefinitions {
+		if definition.Action == action {
+			return definition, true
+		}
+	}
+	return ActionDefinition{}, false
+}
+
+// Only published decision vocabulary is retained. Do not add aliases, infer
+// unknown actions from prefixes, or pass these entries to policy evaluation.
+var retiredActionDefinitions = [...]ActionDefinition{
+	{ActionIAMRoleBindingPut, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
+	{ActionIAMRoleBindingRevoke, ProductIAM, ServiceIAM, ResourceRoleBinding, AuthorityScopeTenant},
+	{ActionIAMPlatformRoleBindingPut, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
+	{ActionIAMPlatformRoleBindingRevoke, ProductIAM, ServiceIAM, ResourceRoleBinding, AuthorityScopeInstallation},
 }
 
 // AllServicePurposes returns the exact installer bootstrap order. The order is
@@ -211,15 +238,17 @@ var actionDefinitions = [...]ActionDefinition{
 	{ActionIAMOrganizationAdministratorRecover, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
 	{ActionIAMAccountAliasSet, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
 	{ActionIAMPrincipalList, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
+	{ActionIAMPolicyList, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
+	{ActionIAMPlatformPolicyList, ProductIAM, ServiceIAM, ResourceInstallation, AuthorityScopeInstallation},
 	{ActionIAMPrincipalSetStatus, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
 	{ActionIAMPasswordReset, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
 	{ActionIAMPrincipalCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
 	{ActionIAMPrincipalRead, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
-	{ActionIAMRoleBindingPut, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
-	{ActionIAMRoleBindingRevoke, ProductIAM, ServiceIAM, ResourceRoleBinding, AuthorityScopeTenant},
+	{ActionIAMPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
+	{ActionIAMPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeTenant},
 	{ActionIAMSessionRevoke, ProductIAM, ServiceIAM, ResourceSession, AuthorityScopeTenant},
-	{ActionIAMPlatformRoleBindingPut, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
-	{ActionIAMPlatformRoleBindingRevoke, ProductIAM, ServiceIAM, ResourceRoleBinding, AuthorityScopeInstallation},
+	{ActionIAMPlatformPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
+	{ActionIAMPlatformPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeInstallation},
 	{ActionPaaSExecutionPoolCreate, ProductPaaS, ServicePaaS, ResourceExecutionPool, AuthorityScopeInstallation},
 	{ActionPaaSExecutionPoolRead, ProductPaaS, ServicePaaS, ResourceExecutionPool, AuthorityScopeInstallation},
 	{ActionPaaSExecutionTargetRegister, ProductPaaS, ServicePaaS, ResourceExecutionTarget, AuthorityScopeInstallation},
@@ -250,15 +279,6 @@ var actionDefinitions = [...]ActionDefinition{
 	{ActionAuditPlatformRecordRead, ProductAudit, ServiceAudit, ResourceAuditRecord, AuthorityScopeInstallation},
 	{ActionAuditPlatformIntegrityVerify, ProductAudit, ServiceAudit, ResourceAuditChain, AuthorityScopeInstallation},
 	{ActionInstallationVerify, ProductInstallation, ServiceInstallationVerifier, ResourceInstallation, AuthorityScopeInstallationProbe},
-}
-
-var allBuiltinRoles = []BuiltinRole{
-	RoleOrganizationAdmin,
-	RolePlatformOperator,
-	RolePaaSDeveloper,
-	RolePaaSViewer,
-	RoleAuditReader,
-	RoleInstallationVerifier,
 }
 
 var allServicePurposes = []ServicePurpose{

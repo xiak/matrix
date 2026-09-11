@@ -5,9 +5,8 @@ import { Building2, KeyRound, Plus, RefreshCcw, ShieldCheck, UserRound, Users } 
 import { Badge, Button, Card, Input, Select, Typography } from "@ui/xiak";
 import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
 import { useSession } from "../application/SessionProvider";
-import { userRoles, type UserRole } from "../domain/accounts";
 import type { AccountRepository } from "../repositories/iamRepository";
-import { roleDescriptions, roleLabels, type AccountAccessScene, type AccountUserScene, type TenantAccountScene } from "../scenes/accountAccessScene";
+import type { AccountAccessScene, AccountUserScene, TenantAccountScene } from "../scenes/accountAccessScene";
 import styles from "./AccountAccessRenderer.module.css";
 
 const loginPattern = "[a-z][a-z0-9._\\-]{2,63}";
@@ -38,7 +37,7 @@ function CreateAccountForm({ tenant, onClose }: { tenant: boolean; onClose(): vo
       kind: "create-organization", id: String(fields.get("accountId") ?? "").trim(),
       displayName: String(fields.get("accountName") ?? "").trim(),
       administratorLoginName: loginName, administratorDisplayName: displayName, initialPassword
-    } : { kind: "create-user", loginName, displayName, initialPassword, initialRole: (fields.get("role") || undefined) as UserRole | undefined });
+    } : { kind: "create-user", loginName, displayName, initialPassword });
     if (accepted) onClose();
   }
   return <Card>
@@ -51,7 +50,6 @@ function CreateAccountForm({ tenant, onClose }: { tenant: boolean; onClose(): vo
         </> : null}
         <Field label={tenant ? "主账号登录名" : "子用户名"}><Input autoComplete="off" maxLength={64} minLength={3} name="loginName" pattern={loginPattern} placeholder={tenant ? "例如 team-admin" : "例如 developer"} required /><small>以小写字母开头，可包含小写字母、数字、点、下划线和短横线。{tenant ? "主账号登录名全平台唯一。" : "仅填写用户名，不包含 @ 后缀。"}</small></Field>
         <Field label="用户显示名称"><Input maxLength={128} name="displayName" required /></Field>
-        {!tenant ? <Field label="初始权限"><Select defaultValue="" name="role"><option value="">暂不授权（默认）</option>{userRoles.map((role) => <option key={role} value={role}>{roleLabels[role]}</option>)}</Select><small>默认只可登录查看自身账号信息。选择角色后，权限对本租户的相应资源生效，不限于该用户创建的资源。</small></Field> : null}
         <PasswordField onChange={setPassword} value={password} />
         <p className={styles.note}>{tenant ? "新租户拥有独立主账号与资源空间。主账号不获得平台权限，开通者也不获得该租户的资源权限。请通过安全渠道交付初始密码。" : "子用户按授权使用所属租户的资源与配额，不是另一个租户。请通过安全渠道交付初始密码。"}</p>
         <div className={styles.actions}>
@@ -63,15 +61,16 @@ function CreateAccountForm({ tenant, onClose }: { tenant: boolean; onClose(): vo
   </Card>;
 }
 
-function UserAccess({ user, onClose }: { user: AccountUserScene; onClose(): void }) {
+function UserAccess({ scene, user, onClose }: { scene: AccountAccessScene; user: AccountUserScene; onClose(): void }) {
   const access = useAccountAccess();
   const [password, setPassword] = useState("");
   const [confirmStatus, setConfirmStatus] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
-  const [selectedRole, setSelectedRole] = useState<UserRole | "">("");
-  const availableRoles = userRoles.filter((role) => !user.bindings.some((binding) => binding.role === role));
-  const role = selectedRole && availableRoles.includes(selectedRole) ? selectedRole : "";
+  const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; resourceVersion: number } | null>(null);
+  const availablePolicies = scene.policies.filter((policy) => policy.status === "ACTIVE" && !user.attachments.some((attachment) => attachment.policyId === policy.id));
+  const currentSelection = selectedPolicy ? availablePolicies.find((policy) => policy.id === selectedPolicy.id) : null;
+  const selectionChanged = selectedPolicy !== null && currentSelection?.resourceVersion !== selectedPolicy.resourceVersion;
   const disabled = access.busy || access.loading;
 
   async function resetPassword(event: FormEvent<HTMLFormElement>) {
@@ -86,27 +85,32 @@ function UserAccess({ user, onClose }: { user: AccountUserScene; onClose(): void
       <Button onClick={onClose} size="small" variant="ghost">关闭详情</Button>
     </Card.Header>
     <Card.Body className={styles.detail}>
-      <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>已授予权限（内置角色）</strong></div>
-      <p className={styles.note}>租户角色的授权范围为所属租户的资源，不是“仅自己创建的资源”。管理员交接通过授予、撤销子用户角色完成，不转让原主账号。</p>
+      <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>已关联策略</strong></div>
+      <p className={styles.note}>策略按明确权威范围生效，不限于该用户创建的资源。管理员交接通过关联、撤销策略完成，不转让原主账号。</p>
       <ul className={styles.bindingList}>
-        {user.bindings.map((binding) => <li key={binding.id}>
-          <span>{binding.label}</span>
-          {binding.role === "PLATFORM_OPERATOR" ? <span>由平台权限管理</span> : revokeId === binding.id ? <div className={styles.actions}>
-            <span>立即撤销？</span><Button disabled={disabled} onClick={async () => { if (await access.execute({ kind: "revoke-role", bindingId: binding.id })) setRevokeId(null); }} size="small" variant="danger">确认撤销</Button>
+        {user.attachments.map((attachment) => <li key={attachment.id}>
+          <span>{attachment.label} <Badge status="neutral">{attachment.scope === "INSTALLATION" ? "平台" : "租户"}</Badge></span>
+          {attachment.policyResourceVersion === null ? <span>由另一授权范围管理</span> : revokeId === attachment.id ? <div className={styles.actions}>
+            <span>立即撤销？</span><Button disabled={disabled} onClick={async () => { if (await access.execute({ kind: "revoke-policy-attachment", attachmentId: attachment.id, resourceVersion: attachment.resourceVersion })) setRevokeId(null); }} size="small" variant="danger">确认撤销</Button>
             <Button disabled={disabled} onClick={() => setRevokeId(null)} size="small" variant="ghost">取消</Button>
-          </div> : <Button aria-label={`撤销${binding.label}`} disabled={disabled} onClick={() => setRevokeId(binding.id)} size="small" variant="ghost">撤销</Button>}
+          </div> : <Button aria-label={`撤销${attachment.label}`} disabled={disabled} onClick={() => setRevokeId(attachment.id)} size="small" variant="ghost">撤销</Button>}
         </li>)}
       </ul>
-      {user.bindings.length === 0 ? <p className={styles.note}>尚未授予角色。用户可登录查看自身账号，但不能访问受保护资源。</p> : null}
-      {availableRoles.length > 0 ? <form className={styles.inlineForm} onSubmit={async (event) => {
+      {user.attachments.length === 0 ? <p className={styles.note}>尚未关联策略。用户可登录查看自身账号，但不能访问受保护资源。</p> : null}
+      {availablePolicies.length > 0 || selectedPolicy ? <form className={styles.inlineForm} onSubmit={async (event) => {
         event.preventDefault();
-        if (role && await access.execute({ kind: "grant-role", principalId: user.id, role })) setSelectedRole("");
+        if (selectedPolicy && !selectionChanged && await access.execute({ kind: "create-policy-attachment", principalId: user.id,
+          policyId: selectedPolicy.id, policyResourceVersion: selectedPolicy.resourceVersion })) setSelectedPolicy(null);
       }}>
-        <Field label="授予角色"><Select disabled={disabled} onChange={(event) => setSelectedRole(event.target.value as UserRole | "")} required value={role}><option disabled value="">请选择角色</option>{availableRoles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}</Select></Field>
-        <Button disabled={disabled || !role} type="submit" variant="secondary">授予角色</Button>
+        <Field label="关联策略"><Select disabled={disabled} onChange={(event) => {
+          const policy = availablePolicies.find((item) => item.id === event.target.value);
+          setSelectedPolicy(policy ? { id: policy.id, resourceVersion: policy.resourceVersion } : null);
+        }} required value={selectionChanged ? "" : selectedPolicy?.id ?? ""}><option disabled value="">{selectionChanged ? "策略版本已变化，请重新选择" : "请选择策略"}</option>{availablePolicies.map((item) => <option key={item.id} value={item.id}>{item.displayName} · {item.scopeLabel}</option>)}</Select></Field>
+        <Button disabled={disabled || !selectedPolicy || selectionChanged} type="submit" variant="secondary">关联策略</Button>
+        {selectionChanged ? <p className={styles.note} role="alert">策略版本已经变化，请重新选择后再提交。</p> : null}
       </form> : null}
       <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>登录与安全</strong></div>
-      {user.credentialProtection ? <p className={styles.note}>{user.credentialProtection === "platform" ? "该用户有未撤销的平台角色绑定，即使已禁用，也不能通过租户成员管理启用、禁用或重置密码。平台凭证恢复须走离线流程。" : "不能通过子用户管理禁用或重置当前登录用户。"}</p> : <>
+      {user.credentialProtection ? <p className={styles.note}>{user.credentialProtection === "platform" ? "该用户有未撤销的平台策略关联，即使已禁用，也不能通过租户成员管理启用、禁用或重置密码。平台凭证恢复须走离线流程。" : "不能通过子用户管理禁用或重置当前登录用户。"}</p> : <>
         <div className={styles.actions}>
           <Button disabled={disabled} onClick={() => { setConfirmStatus(true); setResettingPassword(false); setPassword(""); }} variant="secondary">{user.enabled ? "禁用用户" : "启用用户"}</Button>
           <Button disabled={disabled} onClick={() => { setResettingPassword(true); setConfirmStatus(false); }} variant="secondary">重置密码</Button>
@@ -141,10 +145,10 @@ function UserDirectory({ scene }: { scene: AccountAccessScene }) {
       </Card.Header>
       <div aria-label="租户用户列表" className={styles.tableWrap} role="region" tabIndex={0}>
         <table className={styles.table}>
-          <thead><tr><th>用户</th><th>角色</th><th>状态</th><th>操作</th></tr></thead>
+          <thead><tr><th>用户</th><th>策略</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>{scene.users.map((user) => <tr key={user.id}>
             <td><strong>{user.name}</strong><small>{user.qualifiedName}</small></td>
-            <td><div className={styles.roleTags}>{user.bindings.length ? user.bindings.map((binding) => <Badge key={binding.id} status="neutral">{binding.label}</Badge>) : "未授权"}</div></td>
+            <td><div className={styles.roleTags}>{user.attachments.length ? user.attachments.map((attachment) => <Badge key={attachment.id} status="neutral">{attachment.label}</Badge>) : "未授权"}</div></td>
             <td><Badge status={user.enabled ? "success" : "neutral"}>{user.statusLabel}</Badge></td>
             <td><Button aria-label={`管理 ${user.loginName}`} disabled={access.busy || access.loading} onClick={() => { setSelectedId(user.id); setCreating(false); }} size="small" variant="ghost">管理</Button></td>
           </tr>)}</tbody>
@@ -154,7 +158,7 @@ function UserDirectory({ scene }: { scene: AccountAccessScene }) {
       <Card.Footer><span className={styles.note}>每页最多 100 名子用户；主账号信息见用户设置</span><div className={styles.actions}><Button disabled={access.busy || access.loading} onClick={() => { setSelectedId(null); access.usersPage(""); }} size="small" variant="ghost">首页</Button><Button disabled={access.busy || access.loading || !scene.nextUserPage} onClick={() => { setSelectedId(null); access.usersPage(scene.nextUserPage!); }} size="small" variant="secondary">下一页</Button></div></Card.Footer>
     </Card>
     {creating ? <CreateAccountForm onClose={() => setCreating(false)} tenant={false} /> : null}
-    {selected ? <UserAccess key={`${selected.id}:${selected.resourceVersion}`} onClose={() => setSelectedId(null)} user={selected} /> : null}
+    {selected ? <UserAccess key={`${selected.id}:${selected.resourceVersion}`} onClose={() => setSelectedId(null)} scene={scene} user={selected} /> : null}
   </div>;
 }
 
@@ -262,7 +266,7 @@ function TenantAccess({ account, onClose }: { account: TenantAccountScene; onClo
         <Button disabled={disabled} onClick={() => { setConfirmation("recovery"); setPassword(""); }} variant="secondary">恢复原主账号</Button>
       </div>
       {confirmation === "status" ? <div className={styles.confirmation}>
-        <p>{account.enabled ? "确认停用此租户？下一次受保护请求将被拒绝，新变更被冻结，现有会话被撤销。不删除数据、不停止已有工作负载，也不取消已接受的 Operation 或历史审计投递。" : "确认恢复此租户的访问？用户须重新登录；已撤销的会话或角色不会恢复。"}</p>
+        <p>{account.enabled ? "确认停用此租户？下一次受保护请求将被拒绝，新变更被冻结，现有会话被撤销。不删除数据、不停止已有工作负载，也不取消已接受的 Operation 或历史审计投递。" : "确认恢复此租户的访问？用户须重新登录；已撤销的会话或策略关联不会恢复。"}</p>
         <div className={styles.actions}>
           <Button disabled={disabled} onClick={async () => {
             if (await access.execute({ kind: "set-organization-status", organizationId: account.id,
@@ -272,7 +276,7 @@ function TenantAccess({ account, onClose }: { account: TenantAccountScene; onClo
         </div>
       </div> : null}
       {confirmation === "recovery" ? <form aria-label="恢复原主账号" className={styles.form} onSubmit={recover}>
-        <p className={styles.note}>仅恢复上方原主账号的凭证和租户管理员权限，不把子账号提升为主账号，也不授予平台角色。有未撤销平台角色绑定的身份必须走离线恢复。</p>
+        <p className={styles.note}>仅恢复上方原主账号的凭证和租户管理员策略，不把子账号提升为主账号，也不授予平台策略。有未撤销平台策略关联的身份必须走离线恢复。</p>
         <PasswordField onChange={setPassword} value={password} />
         <p className={styles.note}>确认后将启用原主账号、撤销其旧会话，下次登录必须改密。不会自动恢复租户访问。请通过安全渠道交付临时密码。</p>
         <div className={styles.actions}><Button disabled={disabled || !password} type="submit" variant="danger">确认恢复原主账号</Button><Button disabled={disabled} onClick={cancel} variant="ghost">取消</Button></div>
@@ -302,13 +306,17 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   </div>;
 }
 
-function PermissionCatalog() {
+function PermissionCatalog({ scene }: { scene: AccountAccessScene }) {
   return <Card>
-    <Card.Header><div><Typography.Title as="h2" level={3}>权限</Typography.Title><Typography.Text tone="muted">当前提供四种租户级内置角色</Typography.Text></div></Card.Header>
+    <Card.Header><div><Typography.Title as="h2" level={3}>策略目录</Typography.Title><Typography.Text tone="muted">来自当前账号与平台范围的实时元数据</Typography.Text></div></Card.Header>
     <Card.Body className={styles.detail}>
       <p className={styles.note}>未授权默认拒绝。主账号和子用户创建的资源都归租户，配额也归租户，不随创建者停用而改变；不同租户默认不能互相访问。</p>
-      <dl className={styles.permissionList}>{userRoles.map((role) => <div key={role}><dt>{roleLabels[role]}</dt><dd>{roleDescriptions[role]}</dd></div>)}</dl>
-      <p className={styles.note}>当前尚未提供用户组、自定义策略、项目或实例级授权、跨账号角色切换。资源隔离由服务端鉴权执行，不依赖菜单隐藏。</p>
+      <dl className={styles.permissionList}>{scene.policies.map((policy) => <div key={policy.id}>
+        <dt>{policy.displayName} <Badge status={policy.status === "ACTIVE" ? "success" : "neutral"}>{policy.statusLabel}</Badge></dt>
+        <dd><Typography.Code>{policy.id}</Typography.Code> · {policy.ownerLabel} · {policy.scopeLabel} · 修订 {policy.resourceVersion} · 默认版本 {policy.defaultVersionId}</dd>
+      </div>)}</dl>
+      {!scene.policies.length ? <p className={styles.note}>当前身份没有可读取的策略目录。</p> : null}
+      <p className={styles.note}>目录只用于展示和选择，不是访问许可。每次关联都提交用户实际选择时的策略修订，并由服务端重新鉴权；新增产品策略不需要修改页面中的角色名称判断。</p>
     </Card.Body>
   </Card>;
 }
@@ -317,13 +325,14 @@ function AccountAccessContent() {
   const access = useAccountAccess();
   const scene = access.scene;
   const [selection, setSelection] = useState<"users" | "permissions" | "settings" | "tenants">("users");
-  const fallback = scene?.canManage ? "users" : scene?.canCreateOrganizations ? "tenants" : "settings";
-  const tab = (selection === "users" && !scene?.canManage) || (selection === "tenants" && !scene?.canCreateOrganizations) ? fallback : selection;
+  const fallback = scene?.canManage ? "users" : scene?.canViewPolicies ? "permissions" : scene?.canCreateOrganizations ? "tenants" : "settings";
+  const tab = (selection === "users" && !scene?.canManage) || (selection === "permissions" && !scene?.canViewPolicies) ||
+    (selection === "tenants" && !scene?.canCreateOrganizations) ? fallback : selection;
   return <section aria-label="账号与权限" aria-busy={access.loading || access.busy} className={styles.stack}>
     <div className={styles.toolbar}>
       <div aria-label="访问管理页面" className={styles.tabs} role="group">
         {scene?.canManage ? <Button aria-pressed={tab === "users"} onClick={() => setSelection("users")} variant={tab === "users" ? "secondary" : "ghost"}><Users aria-hidden="true" />用户</Button> : null}
-        {scene ? <Button aria-pressed={tab === "permissions"} onClick={() => setSelection("permissions")} variant={tab === "permissions" ? "secondary" : "ghost"}><ShieldCheck aria-hidden="true" />权限</Button> : null}
+        {scene?.canViewPolicies ? <Button aria-pressed={tab === "permissions"} onClick={() => setSelection("permissions")} variant={tab === "permissions" ? "secondary" : "ghost"}><ShieldCheck aria-hidden="true" />策略</Button> : null}
         <Button aria-pressed={tab === "settings"} onClick={() => setSelection("settings")} variant={tab === "settings" ? "secondary" : "ghost"}><UserRound aria-hidden="true" />用户设置</Button>
         {scene?.canCreateOrganizations ? <Button aria-pressed={tab === "tenants"} onClick={() => setSelection("tenants")} variant={tab === "tenants" ? "secondary" : "ghost"}><Building2 aria-hidden="true" />租户管理</Button> : null}
       </div>
@@ -336,9 +345,9 @@ function AccountAccessContent() {
       <div className={styles.identity}>
         <ShieldCheck aria-hidden="true" />
         <div><small>所属租户 · 资源归属</small><strong>{scene.accountName}</strong><small>{scene.accountId}</small></div>
-        <div><small>当前登录用户</small><strong>{scene.identityLabel}<Badge status="info">{scene.isPrimary ? "主账号" : "IAM 子用户"}</Badge></strong><small>{scene.roles.join(" · ") || "尚未授予业务权限"}</small></div>
+        <div><small>当前登录用户</small><strong>{scene.identityLabel}<Badge status="info">{scene.isPrimary ? "主账号" : "IAM 子用户"}</Badge></strong><small>{scene.identityAttachments.map((attachment) => attachment.label).join(" · ") || "尚未关联权限策略"}</small></div>
       </div>
-      {tab === "users" ? <UserDirectory scene={scene} /> : tab === "tenants" ? <TenantDirectory scene={scene} /> : tab === "permissions" ? <PermissionCatalog /> : <UserSettings key={scene.accountVersion} scene={scene} />}
+      {tab === "users" ? <UserDirectory scene={scene} /> : tab === "tenants" ? <TenantDirectory scene={scene} /> : tab === "permissions" ? <PermissionCatalog scene={scene} /> : <UserSettings key={scene.accountVersion} scene={scene} />}
     </> : null}
   </section>;
 }

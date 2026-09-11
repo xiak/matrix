@@ -65,6 +65,9 @@ func ValidateEvent(value Event) error {
 		problems = append(problems, errors.New("Audit action is invalid"))
 	} else {
 		localRecovery := value.Action == ActionIAMInstallationPrimaryCredentialsRecovered
+		if contract.UserActorRequired && value.Actor.Type != ActorUser {
+			problems = append(problems, errors.New("Audit action requires a USER actor"))
+		}
 		if contract.PlatformOnly != (value.InstallationID != "") ||
 			contract.PlatformOnly && !localRecovery && value.Actor.Type != ActorUser ||
 			localRecovery && (value.Actor.Type != ActorSystem || value.Actor.ID != "iam-local-recovery") {

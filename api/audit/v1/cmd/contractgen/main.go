@@ -326,6 +326,9 @@ func actionRules() (eventRules []any, recordRules []any) {
 		} else {
 			target["properties"].(object)["tenantId"] = false
 		}
+		if contract.UserActorRequired {
+			thenProperties["actor"] = object{"properties": object{"type": object{"const": string(auditv1.ActorUser)}}}
+		}
 		if contract.PlatformOnly {
 			thenRequired = append(thenRequired, "installationId")
 			thenProperties["tenantId"] = false

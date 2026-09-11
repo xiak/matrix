@@ -473,12 +473,12 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	if err != nil || created.LoginName != "developer" || !created.MustChangePassword {
 		t.Fatalf("create organization user: principal=%#v err=%v", created, err)
 	}
-	binding, err := service.PutRoleBinding(context.Background(), login.Credential, iamv1.PutRoleBindingRequest{
-		PrincipalID: created.ID,
-		Role:        iamv1.RolePaaSDeveloper,
-		RequestID:   "request-bind-developer",
+	binding, err := service.CreatePolicyAttachment(context.Background(), login.Credential, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(created.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1,
+		RequestID: "request-bind-developer",
 	})
-	if err != nil || binding.PrincipalID != created.ID || binding.Role != iamv1.RolePaaSDeveloper {
+	if err != nil || binding.Target.ID != string(created.ID) || binding.PolicyID != iamv1.SystemPolicyPaaSDeveloper {
 		t.Fatalf("bind organization user: binding=%#v err=%v", binding, err)
 	}
 	developerLogin, err := service.Login(context.Background(), iamv1.LoginRequest{
@@ -516,11 +516,11 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	if err != nil || !decision.Allowed || decision.Subject == nil || decision.Subject.ID != created.ID {
 		t.Fatalf("developer decision=%#v err=%v, want allowed", decision, err)
 	}
-	revokedBinding, err := service.RevokeRoleBinding(
+	revokedBinding, err := service.RevokePolicyAttachment(
 		context.Background(),
 		login.Credential,
 		binding.ID,
-		iamv1.RevokeRoleBindingRequest{RequestID: "request-revoke-developer-binding"},
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: "request-revoke-developer-binding"},
 	)
 	if err != nil || revokedBinding.ID != string(binding.ID) || revokedBinding.ResourceVersion != 2 {
 		t.Fatalf("revoke developer binding: revocation=%#v err=%v", revokedBinding, err)
@@ -545,15 +545,22 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	if _, err := service.Authorize(context.Background(), paasCredential, developerLogin.Credential, request); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("revoked developer session error=%v, want unauthenticated", err)
 	}
-	verifierRevocation, err := service.RevokeRoleBinding(
+	verifierRevocation, err := service.RevokePolicyAttachment(
 		context.Background(),
 		login.Credential,
 		"bootstrap-verifier-binding",
-		iamv1.RevokeRoleBindingRequest{RequestID: "request-revoke-verifier-binding"},
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: "request-revoke-verifier-binding"},
 	)
-	if err != nil || verifierRevocation.ID != "bootstrap-verifier-binding" {
+	if !errors.Is(err, ErrForbidden) || verifierRevocation.ID != "" {
 		t.Fatalf("revoke installation verifier binding: revocation=%#v err=%v", verifierRevocation, err)
 	}
+	// Online user attachment management cannot revoke the sealed service probe.
+	// Independently revoke the fixture to retain current service-authority coverage.
+	probe := repository.transaction.attachments["bootstrap-verifier-binding"]
+	probe.ResourceVersion++
+	probe.UpdatedAt = repository.transaction.now
+	probe.RevokedAt = &probe.UpdatedAt
+	repository.transaction.attachments[probe.ID] = probe
 	verificationRequest.RequestID = "request-installation-after-role-revoke"
 	verificationRequest.CorrelationID = verificationRequest.RequestID
 	verificationDecision, err = service.VerifyInstallation(
@@ -568,15 +575,29 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	if err != nil || logout.RevokedAt != repository.transaction.now {
 		t.Fatalf("logout administrator: response=%#v err=%v", logout, err)
 	}
-	if len(repository.transaction.authorizations) != 14 {
-		t.Fatalf("stored authorization decisions=%d want=14", len(repository.transaction.authorizations))
+	expectedDecisions := map[string]bool{
+		"request-bind-developer": true, "request-revoke-developer-binding": true,
+		"request-developer-before-password": false, "request-developer-allowed": true,
+		"request-developer-after-binding-revoke": false,
 	}
 	for _, mutation := range repository.transaction.authorizations {
+		if _, current := iamv1.LookupActionDefinition(mutation.Decision.Action); !current {
+			t.Fatal("management wrote a retired action")
+		}
+		if allowed, expected := expectedDecisions[mutation.Decision.RequestID]; expected {
+			if mutation.Decision.Allowed != allowed {
+				t.Fatalf("unexpected authority for %s", mutation.Decision.RequestID)
+			}
+			delete(expectedDecisions, mutation.Decision.RequestID)
+		}
 		if mutation.AuditEvent.IAMDecisionID != auditv1.DecisionID(mutation.Decision.ID) ||
 			mutation.AuditEvent.Target.ID != string(mutation.Decision.ID) ||
 			mutation.AuditEvent.TenantID != "organization-example" {
 			t.Fatalf("authorization Audit fact differs from decision: %#v", mutation)
 		}
+	}
+	if len(expectedDecisions) != 0 {
+		t.Fatalf("management path lost decisions: %v", expectedDecisions)
 	}
 	readiness, err := service.Readiness(context.Background())
 	if err != nil || readiness.State != iamv1.ReadinessReady || readiness.CheckedAt != repository.transaction.now {
@@ -607,8 +628,7 @@ type coreTransaction struct {
 	authorizations          []AuthorizationMutation
 	passwords               map[iamv1.PrincipalID]authority.PasswordHash
 	users                   map[iamv1.PrincipalID]iamv1.Principal
-	bindings                map[iamv1.RoleBindingID]iamv1.RoleBinding
-	bindingRevocations      map[iamv1.RoleBindingID]iamv1.Revocation
+	attachments             map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment
 	localRecoveryInspection iamv1.LocalCredentialRecoveryInspection
 	localRecoveryResult     iamv1.LocalCredentialRecoveryResult
 	localRecoveryMutation   *LocalCredentialRecoveryMutation
@@ -625,13 +645,12 @@ func (transaction *coreTransaction) RecoverLocalCredentials(_ context.Context, m
 
 func newCoreTransaction() *coreTransaction {
 	return &coreTransaction{
-		now:                time.Date(2026, 8, 26, 8, 9, 10, 123000, time.UTC),
-		services:           make(map[string]ServiceCredential),
-		sessions:           make(map[string]SessionCredential),
-		passwords:          make(map[iamv1.PrincipalID]authority.PasswordHash),
-		users:              make(map[iamv1.PrincipalID]iamv1.Principal),
-		bindings:           make(map[iamv1.RoleBindingID]iamv1.RoleBinding),
-		bindingRevocations: make(map[iamv1.RoleBindingID]iamv1.Revocation),
+		now:         time.Date(2026, 8, 26, 8, 9, 10, 123000, time.UTC),
+		services:    make(map[string]ServiceCredential),
+		sessions:    make(map[string]SessionCredential),
+		passwords:   make(map[iamv1.PrincipalID]authority.PasswordHash),
+		users:       make(map[iamv1.PrincipalID]iamv1.Principal),
+		attachments: make(map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment),
 	}
 }
 
@@ -697,18 +716,8 @@ func (transaction *coreTransaction) ApplyBootstrap(
 	}
 	transaction.passwords[mutation.Administrator.ID] = mutation.Administrator.PasswordHash
 	transaction.users[mutation.Administrator.ID] = transaction.principal
-	transaction.bindings["bootstrap-admin-binding"] = iamv1.RoleBinding{
-		APIVersion: iamv1.APIVersion, Kind: "RoleBinding", ID: "bootstrap-admin-binding",
-		OrganizationID: mutation.Organization.ID, PrincipalID: mutation.Administrator.ID,
-		Role: iamv1.RoleOrganizationAdmin, ResourceVersion: 1,
-		CreatedAt: transaction.now, UpdatedAt: transaction.now,
-	}
-	transaction.bindings["bootstrap-platform-operator-binding"] = iamv1.RoleBinding{
-		APIVersion: iamv1.APIVersion, Kind: "RoleBinding", ID: "bootstrap-platform-operator-binding",
-		OrganizationID: mutation.Organization.ID, PrincipalID: mutation.Administrator.ID,
-		Role: iamv1.RolePlatformOperator, ResourceVersion: 1,
-		CreatedAt: transaction.now, UpdatedAt: transaction.now,
-	}
+	transaction.attachments["bootstrap-admin-binding"] = transaction.bootstrapPolicyAttachment("bootstrap-admin-binding", mutation.Administrator.ID, iamv1.SystemPolicyAccountAdministrator, iamv1.PolicyTargetUser)
+	transaction.attachments["bootstrap-platform-operator-binding"] = transaction.bootstrapPolicyAttachment("bootstrap-platform-operator-binding", mutation.Administrator.ID, iamv1.SystemPolicyPlatformOperator, iamv1.PolicyTargetUser)
 	for _, service := range mutation.Services {
 		transaction.services[service.LookupDigest] = ServiceCredential{
 			Identity: iamv1.ServiceIdentity{
@@ -722,12 +731,7 @@ func (transaction *coreTransaction) ApplyBootstrap(
 			VerificationDigest: service.VerificationDigest,
 		}
 		if service.Purpose == iamv1.ServiceInstallationVerifier {
-			transaction.bindings["bootstrap-verifier-binding"] = iamv1.RoleBinding{
-				APIVersion: iamv1.APIVersion, Kind: "RoleBinding", ID: "bootstrap-verifier-binding",
-				OrganizationID: mutation.Organization.ID, PrincipalID: service.PrincipalID,
-				Role: iamv1.RoleInstallationVerifier, ResourceVersion: 1,
-				CreatedAt: transaction.now, UpdatedAt: transaction.now,
-			}
+			transaction.attachments["bootstrap-verifier-binding"] = transaction.bootstrapPolicyAttachment("bootstrap-verifier-binding", service.PrincipalID, iamv1.SystemPolicyInstallationVerifier, iamv1.PolicyTargetService)
 		}
 	}
 	return authority.BootstrapApply, nil
@@ -763,21 +767,12 @@ func (transaction *coreTransaction) IssueSession(
 	if !found {
 		return iamv1.Session{}, ErrUnauthenticated
 	}
-	roles := make([]iamv1.BuiltinRole, 0)
-	for _, binding := range transaction.bindings {
-		if _, revoked := transaction.bindingRevocations[binding.ID]; revoked {
-			continue
-		}
-		if binding.PrincipalID == principal.ID {
-			roles = append(roles, binding.Role)
-		}
-	}
 	transaction.sessions[mutation.LookupDigest] = SessionCredential{
 		Subject: authority.SubjectContext{
 			Organization: transaction.organization,
 			Principal:    principal,
 			Session:      mutation.Session,
-			Roles:        roles,
+			Policies:     transaction.attachedPolicies(principal.ID),
 		},
 		VerificationDigest: mutation.VerificationDigest,
 	}
@@ -800,15 +795,7 @@ func (transaction *coreTransaction) LookupSession(
 		return SessionCredential{}, false, nil
 	}
 	binding.Subject.Principal = principal
-	binding.Subject.Roles = nil
-	for _, roleBinding := range transaction.bindings {
-		if _, revoked := transaction.bindingRevocations[roleBinding.ID]; revoked {
-			continue
-		}
-		if roleBinding.PrincipalID == principal.ID {
-			binding.Subject.Roles = append(binding.Subject.Roles, roleBinding.Role)
-		}
-	}
+	binding.Subject.Policies = transaction.attachedPolicies(principal.ID)
 	return binding, true, nil
 }
 
@@ -832,24 +819,48 @@ func (transaction *coreTransaction) LookupService(
 	return binding, found, nil
 }
 
-func (transaction *coreTransaction) LookupServiceRoles(
+func (transaction *coreTransaction) LookupServicePolicies(
 	_ context.Context,
 	organizationID iamv1.OrganizationID,
 	principalID iamv1.PrincipalID,
-) ([]iamv1.BuiltinRole, error) {
+) ([]authority.AttachedPolicy, error) {
 	if organizationID != transaction.organization.ID {
 		return nil, ErrUnavailable
 	}
-	roles := make([]iamv1.BuiltinRole, 0)
-	for _, binding := range transaction.bindings {
-		if _, revoked := transaction.bindingRevocations[binding.ID]; revoked {
+	return transaction.attachedPolicies(principalID), nil
+}
+
+func (transaction *coreTransaction) bootstrapPolicyAttachment(id iamv1.PolicyAttachmentID, principal iamv1.PrincipalID, policyID iamv1.PolicyID, kind iamv1.PolicyAttachmentTargetKind) iamv1.PolicyAttachment {
+	version, err := authority.SystemPolicyVersion(policyID)
+	if err != nil {
+		panic(err)
+	}
+	attachment := iamv1.PolicyAttachment{APIVersion: iamv1.APIVersion, Kind: "PolicyAttachment", ID: id, AccountID: transaction.organization.ID,
+		Target: iamv1.PolicyAttachmentTarget{Kind: kind, ID: string(principal)}, PolicyID: policyID, Scope: version.Document.Scope,
+		ResourceVersion: 1, CreatedAt: transaction.now, UpdatedAt: transaction.now}
+	if attachment.Scope != iamv1.AuthorityScopeTenant {
+		attachment.InstallationID = transaction.status.InstallationID
+	}
+	return attachment
+}
+
+func (transaction *coreTransaction) attachedPolicies(principalID iamv1.PrincipalID) []authority.AttachedPolicy {
+	result := make([]authority.AttachedPolicy, 0)
+	for _, attachment := range transaction.attachments {
+		if attachment.Target.ID != string(principalID) || attachment.RevokedAt != nil {
 			continue
 		}
-		if binding.OrganizationID == organizationID && binding.PrincipalID == principalID {
-			roles = append(roles, binding.Role)
+		policy, found, err := transaction.LookupPolicy(context.Background(), attachment.AccountID, attachment.PolicyID)
+		if err != nil || !found {
+			panic("missing test policy")
 		}
+		version, err := authority.SystemPolicyVersion(attachment.PolicyID)
+		if err != nil {
+			panic(err)
+		}
+		result = append(result, authority.AttachedPolicy{Attachment: attachment, Policy: policy, Version: version})
 	}
-	return roles, nil
+	return result
 }
 
 func (transaction *coreTransaction) RecordAuthorization(
@@ -930,54 +941,52 @@ func (transaction *coreTransaction) CreateUser(
 	return mutation.Principal, nil
 }
 
-func (transaction *coreTransaction) PutRoleBinding(
-	_ context.Context,
-	mutation RoleBindingMutation,
-) (iamv1.RoleBinding, bool, error) {
-	if _, found := transaction.users[mutation.Binding.PrincipalID]; !found {
-		return iamv1.RoleBinding{}, false, ErrForbidden
+func (transaction *coreTransaction) LookupPolicy(_ context.Context, account iamv1.OrganizationID, id iamv1.PolicyID) (iamv1.Policy, bool, error) {
+	version, err := authority.SystemPolicyVersion(id)
+	if err != nil || account != transaction.organization.ID {
+		return iamv1.Policy{}, false, nil
 	}
-	for _, existing := range transaction.bindings {
-		if _, revoked := transaction.bindingRevocations[existing.ID]; revoked {
-			continue
-		}
-		if existing.PrincipalID == mutation.Binding.PrincipalID && existing.Role == mutation.Binding.Role {
-			return existing, false, nil
-		}
-	}
-	transaction.bindings[mutation.Binding.ID] = mutation.Binding
-	return mutation.Binding, true, nil
+	return iamv1.Policy{APIVersion: iamv1.APIVersion, Kind: "Policy", ID: id, Management: iamv1.PolicySystemManaged, DisplayName: string(id),
+		Scope: version.Document.Scope, Status: iamv1.PolicyActive, DefaultVersionID: version.ID, ResourceVersion: 1,
+		CreatedAt: transaction.organization.CreatedAt, UpdatedAt: transaction.organization.CreatedAt}, true, nil
 }
 
-func (transaction *coreTransaction) LookupRoleBindingRole(
-	_ context.Context,
-	organizationID iamv1.OrganizationID,
-	bindingID iamv1.RoleBindingID,
-) (iamv1.BuiltinRole, bool, error) {
-	binding, found := transaction.bindings[bindingID]
-	if !found || binding.OrganizationID != organizationID {
-		return "", false, nil
-	}
-	return binding.Role, true, nil
+func (transaction *coreTransaction) LookupPolicyAttachment(_ context.Context, account iamv1.OrganizationID, id iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error) {
+	attachment, found := transaction.attachments[id]
+	return attachment, found && attachment.AccountID == account, nil
 }
 
-func (transaction *coreTransaction) RevokeRoleBinding(
-	_ context.Context,
-	mutation RoleBindingRevocationMutation,
-) (iamv1.Revocation, bool, error) {
-	if revoked, found := transaction.bindingRevocations[mutation.RoleBindingID]; found {
-		return revoked, false, nil
+func (transaction *coreTransaction) CreatePolicyAttachment(_ context.Context, mutation PolicyAttachmentMutation) (iamv1.PolicyAttachment, error) {
+	if _, found := transaction.users[iamv1.PrincipalID(mutation.Attachment.Target.ID)]; !found {
+		return iamv1.PolicyAttachment{}, ErrForbidden
 	}
-	binding, found := transaction.bindings[mutation.RoleBindingID]
-	if !found {
+	if mutation.PolicyResourceVersion != 1 {
+		return iamv1.PolicyAttachment{}, ErrConflict
+	}
+	if existing, found := transaction.attachments[mutation.Attachment.ID]; found {
+		if existing.RevokedAt != nil || existing.PolicyID != mutation.Attachment.PolicyID || existing.Target != mutation.Attachment.Target {
+			return iamv1.PolicyAttachment{}, ErrConflict
+		}
+		return existing, nil
+	}
+	transaction.attachments[mutation.Attachment.ID] = mutation.Attachment
+	return mutation.Attachment, nil
+}
+
+func (transaction *coreTransaction) RevokePolicyAttachment(_ context.Context, mutation PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error) {
+	attachment, found := transaction.attachments[mutation.AttachmentID]
+	if !found || attachment.AccountID != mutation.OrganizationID {
 		return iamv1.Revocation{}, false, ErrForbidden
 	}
-	revocation := iamv1.Revocation{
-		APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(binding.ID),
-		ResourceVersion: binding.ResourceVersion + 1, RevokedAt: transaction.now,
+	if attachment.ResourceVersion != mutation.ResourceVersion || attachment.RevokedAt != nil {
+		return iamv1.Revocation{}, false, ErrConflict
 	}
-	transaction.bindingRevocations[mutation.RoleBindingID] = revocation
-	return revocation, true, nil
+	attachment.ResourceVersion++
+	attachment.UpdatedAt = transaction.now
+	now := transaction.now
+	attachment.RevokedAt = &now
+	transaction.attachments[attachment.ID] = attachment
+	return iamv1.Revocation{APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(attachment.ID), ResourceVersion: attachment.ResourceVersion, RevokedAt: now}, true, nil
 }
 
 func (transaction *coreTransaction) Readiness(context.Context) (ReadinessSnapshot, error) {

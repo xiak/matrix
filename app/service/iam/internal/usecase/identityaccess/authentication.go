@@ -205,8 +205,8 @@ func (service *Authority) authenticateSession(
 		return SessionCredential{}, ErrUnavailable
 	}
 	binding.Subject.InstallationID = ""
-	for _, role := range binding.Subject.Roles {
-		if role != iamv1.RolePlatformOperator {
+	for _, policy := range binding.Subject.Policies {
+		if policy.Attachment.Scope == iamv1.AuthorityScopeTenant {
 			continue
 		}
 		status, err := transaction.BootstrapStatus(ctx)

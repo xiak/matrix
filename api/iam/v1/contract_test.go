@@ -16,6 +16,15 @@ import (
 	"github.com/xiak/matrix/api/contractjson"
 )
 
+var removedBuiltinRoleNames = []string{
+	"ORGANIZATION_ADMIN",
+	"PLATFORM_OPERATOR",
+	"PAAS_DEVELOPER",
+	"PAAS_VIEWER",
+	"AUDIT_READER",
+	"INSTALLATION_VERIFIER",
+}
+
 func TestLocalRecoveryCapabilityBindsOnePrivateIntent(t *testing.T) {
 	secret := func(value string) Secret {
 		t.Helper()
@@ -232,7 +241,6 @@ func TestIAMExamplesPassDomainValidation(t *testing.T) {
 	}{
 		{"organization", validIAMExample[Organization]("examples/organization.json", ValidateOrganization)},
 		{"principal", validIAMExample[Principal]("examples/principal.json", ValidatePrincipal)},
-		{"role binding", validIAMExample[RoleBinding]("examples/role-binding.json", ValidateRoleBinding)},
 		{"bootstrap status", validIAMExample[BootstrapStatus]("examples/bootstrap-status.json", ValidateBootstrapStatus)},
 		{"service identity", validIAMExample[ServiceIdentity]("examples/service-identity.json", ValidateServiceIdentity)},
 		{"login request", validIAMExample[LoginRequest]("examples/login-request.json", ValidateLoginRequest)},
@@ -242,8 +250,8 @@ func TestIAMExamplesPassDomainValidation(t *testing.T) {
 		{"password request", validIAMExample[ChangePasswordRequest]("examples/change-password-request.json", ValidateChangePasswordRequest)},
 		{"password response", validIAMExample[ChangePasswordResponse]("examples/change-password-response.json", ValidateChangePasswordResponse)},
 		{"create user", validIAMExample[CreateUserRequest]("examples/create-user-request.json", ValidateCreateUserRequest)},
-		{"put role binding", validIAMExample[PutRoleBindingRequest]("examples/put-role-binding-request.json", ValidatePutRoleBindingRequest)},
-		{"revoke role binding", validIAMExample[RevokeRoleBindingRequest]("examples/revoke-role-binding-request.json", ValidateRevokeRoleBindingRequest)},
+		{"create policy attachment", validIAMExample[CreatePolicyAttachmentRequest]("examples/create-policy-attachment-request.json", ValidateCreatePolicyAttachmentRequest)},
+		{"revoke policy attachment", validIAMExample[RevokePolicyAttachmentRequest]("examples/revoke-policy-attachment-request.json", ValidateRevokePolicyAttachmentRequest)},
 		{"revoke session", validIAMExample[RevokeSessionRequest]("examples/revoke-session-request.json", ValidateRevokeSessionRequest)},
 		{"revocation", validIAMExample[Revocation]("examples/revocation.json", ValidateRevocation)},
 		{"authorization request", validIAMExample[AuthorizationRequest]("examples/authorization-request.json", ValidateAuthorizationRequest)},
@@ -327,9 +335,10 @@ func TestIAMActionDefinitionsDeclareProductServiceAndScope(t *testing.T) {
 		{ActionIAMOrganizationCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeInstallation},
 		{ActionIAMOrganizationAdministratorRecover, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
 		{ActionIAMPrincipalCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
-		{ActionIAMRoleBindingPut, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
-		{ActionIAMRoleBindingRevoke, ProductIAM, ServiceIAM, ResourceRoleBinding, AuthorityScopeTenant},
-		{ActionIAMPlatformRoleBindingPut, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
+		{ActionIAMPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
+		{ActionIAMPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeTenant},
+		{ActionIAMPlatformPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
+		{ActionIAMPlatformPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeInstallation},
 		{ActionIAMSessionRevoke, ProductIAM, ServiceIAM, ResourceSession, AuthorityScopeTenant},
 		{ActionPaaSApplicationCreate, ProductPaaS, ServicePaaS, ResourceApplication, AuthorityScopeTenant},
 		{ActionPaaSExecutionPoolCreate, ProductPaaS, ServicePaaS, ResourceExecutionPool, AuthorityScopeInstallation},
@@ -422,6 +431,17 @@ func TestIAMCatalogReadsCannotModifyAuthority(t *testing.T) {
 		if action == "paas.forged.execute" {
 			t.Fatal("action slice exposed mutable catalog storage")
 		}
+	}
+	for index := range AllRecordedActionDefinitions() {
+		copy := AllRecordedActionDefinitions()
+		copy[index] = ActionDefinition{Action: "iam.forged.execute"}
+	}
+	seen := map[Action]bool{}
+	for _, definition := range AllRecordedActionDefinitions() {
+		if definition.Action == "iam.forged.execute" || seen[definition.Action] {
+			t.Fatal("historical catalog was mutable or ambiguous")
+		}
+		seen[definition.Action] = true
 	}
 }
 
@@ -650,6 +670,61 @@ func TestPolicyMetadataAndAttachmentOwnershipContracts(t *testing.T) {
 	}
 }
 
+func TestCurrentIdentityUsesOnlyItsLiveUserPolicyAttachments(t *testing.T) {
+	now := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
+	identity := CurrentIdentity{APIVersion: APIVersion, Kind: "CurrentIdentity",
+		Account: OrganizationAccount{Organization: Organization{APIVersion: APIVersion, Kind: "Organization", ID: "account-a",
+			DisplayName: "Account A", Status: OrganizationActive, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
+			PrimaryPrincipalID: "user-a", PrimaryLoginName: "admin"},
+		Principal: Principal{APIVersion: APIVersion, Kind: "Principal", ID: "user-a", OrganizationID: "account-a",
+			Type: PrincipalUser, LoginName: "admin", DisplayName: "Administrator", Status: PrincipalActive,
+			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
+		PolicyAttachments: []PolicyAttachment{{APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "attachment-a",
+			AccountID: "account-a", Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: "user-a"},
+			PolicyID: SystemPolicyAccountAdministrator, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}}}
+	if ValidateCurrentIdentity(identity) != nil {
+		t.Fatal("current policy identity rejected")
+	}
+	for name, mutate := range map[string]func(*CurrentIdentity){
+		"missing snapshot":     func(v *CurrentIdentity) { v.PolicyAttachments = nil },
+		"another account":      func(v *CurrentIdentity) { v.PolicyAttachments[0].AccountID = "account-b" },
+		"another user":         func(v *CurrentIdentity) { v.PolicyAttachments[0].Target.ID = "user-b" },
+		"service carrier":      func(v *CurrentIdentity) { v.PolicyAttachments[0].Target.Kind = PolicyTargetService },
+		"duplicate attachment": func(v *CurrentIdentity) { v.PolicyAttachments = append(v.PolicyAttachments, v.PolicyAttachments[0]) },
+		"revoked attachment": func(v *CurrentIdentity) {
+			v.PolicyAttachments[0].RevokedAt = &now
+			v.PolicyAttachments[0].ResourceVersion = 2
+		},
+		"tenant attachment platform hint": func(v *CurrentIdentity) { v.CanCreateOrganizations = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := identity
+			value.PolicyAttachments = append([]PolicyAttachment{}, identity.PolicyAttachments...)
+			mutate(&value)
+			if ValidateCurrentIdentity(value) == nil {
+				t.Fatal("invalid current attachment relationship accepted")
+			}
+		})
+	}
+	encoded, err := json.Marshal(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire map[string]json.RawMessage
+	if json.Unmarshal(encoded, &wire) != nil {
+		t.Fatal("decode identity fixture")
+	}
+	wire["roles"] = json.RawMessage(`[]`)
+	encoded, err = json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded CurrentIdentity
+	if DecodeRequest(bytes.NewReader(encoded), &decoded) == nil {
+		t.Fatal("old roles field remained as a parallel current identity contract")
+	}
+}
+
 func TestPolicyCanonicalizationEnforcesByteBudgetForTypedInputs(t *testing.T) {
 	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant}
 	for i := 0; i < MaxPolicyStatements; i++ {
@@ -698,29 +773,56 @@ func TestQualifiedLoginIsAnAccountNamespaceNotAnEmail(t *testing.T) {
 	}
 	create.LoginName = "developer"
 	if ValidateCreateUserRequest(create) != nil {
-		t.Fatal("creation without an initial role must be accepted")
+		t.Fatal("creation without implicit authority must be accepted")
 	}
-	for _, role := range AllBuiltinRoles() {
-		create.InitialRole = &role
-		if (ValidateCreateUserRequest(create) == nil) != (role != RoleInstallationVerifier && role != RolePlatformOperator) {
-			t.Errorf("initial role assignability is wrong for %s", role)
+	for _, role := range removedBuiltinRoleNames {
+		encoded, err := json.Marshal(map[string]any{"loginName": "developer", "displayName": "Developer", "initialPassword": "Initial-Password-49!", "requestId": "initial-role-rejected", "initialRole": role})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if DecodeRequest(bytes.NewReader(encoded), &create) == nil {
+			t.Fatalf("removed initialRole field accepted %s", role)
 		}
 	}
 }
 
 func TestAccountDirectoryContractsRejectCrossTenantAuthority(t *testing.T) {
 	principal := decodeIAMExample[Principal](t, "examples/principal.json")
-	binding := decodeIAMExample[RoleBinding](t, "examples/role-binding.json")
-	binding.PrincipalID, binding.OrganizationID = principal.ID, principal.OrganizationID
-	list := PrincipalList{APIVersion: APIVersion, Kind: "PrincipalList", Items: []PrincipalAccess{{Principal: principal, RoleBindings: []RoleBinding{binding}}}}
+	attachment := PolicyAttachment{APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "attachment-directory",
+		AccountID: principal.OrganizationID, Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: string(principal.ID)},
+		PolicyID: SystemPolicyPaaSViewer, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: principal.CreatedAt, UpdatedAt: principal.CreatedAt}
+	list := PrincipalList{APIVersion: APIVersion, Kind: "PrincipalList", Items: []PrincipalAccess{{Principal: principal, PolicyAttachments: []PolicyAttachment{attachment}}}}
 	if err := ValidatePrincipalList(list); err != nil {
 		t.Fatalf("valid directory: %v", err)
 	}
-	list.Items[0].RoleBindings[0].OrganizationID = "organization-other"
-	if ValidatePrincipalList(list) == nil {
-		t.Fatal("directory accepted a cross-tenant role binding")
+	for name, mutate := range map[string]func(*PolicyAttachment){
+		"wrong subject": func(a *PolicyAttachment) { a.Target.ID = "other-user" },
+		"wrong carrier": func(a *PolicyAttachment) { a.Target.Kind = PolicyTargetService },
+		"revoked":       func(a *PolicyAttachment) { a.ResourceVersion = 2; a.RevokedAt = &a.UpdatedAt },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := attachment
+			mutate(&changed)
+			list.Items[0].PolicyAttachments = []PolicyAttachment{changed}
+			if ValidatePrincipalList(list) == nil {
+				t.Fatal("invalid directory attachment accepted")
+			}
+		})
 	}
-	list.Items[0].RoleBindings = []RoleBinding{}
+	list.Items[0].PolicyAttachments = []PolicyAttachment{attachment, attachment}
+	if ValidatePrincipalList(list) == nil {
+		t.Fatal("duplicate attachment accepted")
+	}
+	list.Items[0].PolicyAttachments[1].ID = "another-attachment"
+	if ValidatePrincipalList(list) == nil {
+		t.Fatal("duplicate active policy accepted")
+	}
+	list.Items[0].PolicyAttachments = []PolicyAttachment{attachment}
+	list.Items[0].PolicyAttachments[0].AccountID = "organization-other"
+	if ValidatePrincipalList(list) == nil {
+		t.Fatal("directory accepted a cross-tenant policy attachment")
+	}
+	list.Items[0].PolicyAttachments = []PolicyAttachment{}
 	list.NextAfter = "different-principal"
 	if ValidatePrincipalList(list) == nil {
 		t.Fatal("directory accepted an unrelated cursor")

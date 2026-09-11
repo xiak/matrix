@@ -109,6 +109,52 @@ func TestIAMHTTPExposesOnlyCredentialBoundCoreRoutes(t *testing.T) {
 	}
 }
 
+func TestIAMHTTPPolicyDirectoriesDeriveScopeOnlyFromRoute(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	handler := newTestHandler(t, workflow)
+	for _, route := range []string{"/v1/policies", "/v1/platform-policies"} {
+		for _, test := range []struct {
+			name, method, suffix, body, bearer string
+			status                             int
+		}{
+			{"read", http.MethodGet, "", "", "catalog-session", http.StatusOK},
+			{"query scope", http.MethodGet, "?scope=INSTALLATION", "", "catalog-session", http.StatusBadRequest},
+			{"query account", http.MethodGet, "?accountId=other", "", "catalog-session", http.StatusBadRequest},
+			{"body selector", http.MethodGet, "", `{"installationId":"other"}`, "catalog-session", http.StatusBadRequest},
+			{"missing bearer", http.MethodGet, "", "", "", http.StatusUnauthorized},
+			{"wrong method", http.MethodPost, "", "", "catalog-session", http.StatusMethodNotAllowed},
+		} {
+			t.Run(route+"/"+test.name, func(t *testing.T) {
+				before := workflow.policyCalls
+				request := httptest.NewRequest(test.method, route+test.suffix, strings.NewReader(test.body))
+				if test.bearer != "" {
+					request.Header.Set("Authorization", "Bearer "+test.bearer)
+				}
+				request.Header.Set("Matrix-Tenant-ID", "forged-header")
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				if response.Code != test.status {
+					t.Fatalf("status=%d want=%d", response.Code, test.status)
+				}
+				if test.status != http.StatusOK {
+					if workflow.policyCalls != before {
+						t.Fatal("invalid request reached directory workflow")
+					}
+					return
+				}
+				wantedCredential, _ := iamv1.NewSecret(test.bearer)
+				if workflow.policyCalls != before+1 || workflow.policyPlatform != (route == "/v1/platform-policies") || workflow.policyCredential != wantedCredential {
+					t.Fatal("directory route or credential changed")
+				}
+				var result iamv1.PolicyList
+				if json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidatePolicyList(result) != nil || result.AccountID != "account-catalog" {
+					t.Fatal("directory lost authoritative account")
+				}
+			})
+		}
+	}
+}
+
 func TestIAMHTTPStrictDecodingAndRedactedProblems(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	handler := newTestHandler(t, workflow)
@@ -200,12 +246,12 @@ func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
 			body: `{"loginName":"developer","displayName":"Developer","initialPassword":"Initial-Developer-Password-84!","requestId":"request-user"}`,
 		},
 		{
-			name: "put binding", target: "/v1/role-bindings", status: http.StatusOK,
-			body: `{"principalId":"principal-user","role":"PAAS_DEVELOPER","requestId":"request-binding"}`,
+			name: "put binding", target: "/v1/policy-attachments", status: http.StatusOK,
+			body: `{"target":{"kind":"USER","id":"principal-user"},"policyId":"system.paas-developer","policyResourceVersion":1,"requestId":"request-binding"}`,
 		},
 		{
-			name: "revoke binding", target: "/v1/role-bindings/binding-user:revoke", status: http.StatusOK,
-			body: `{"requestId":"request-binding-revoke"}`,
+			name: "revoke binding", target: "/v1/policy-attachments/binding-user:revoke", status: http.StatusOK,
+			body: `{"resourceVersion":1,"requestId":"request-binding-revoke"}`,
 		},
 		{
 			name: "revoke session", target: "/v1/sessions/session-user:revoke", status: http.StatusOK,
@@ -284,6 +330,9 @@ func TestIAMAccountRoutesRejectSelectorsAndMissingCredentialsBeforeWorkflow(t *t
 
 type httpWorkflow struct {
 	Workflow
+	policyCalls             int
+	policyPlatform          bool
+	policyCredential        iamv1.Secret
 	readiness               iamv1.Readiness
 	status                  iamv1.BootstrapStatus
 	identity                iamv1.ServiceIdentity
@@ -295,6 +344,16 @@ type httpWorkflow struct {
 	loginCalls              int
 	authorizeCalls          int
 	verifyInstallationCalls int
+}
+
+func (value *httpWorkflow) ListPolicies(_ context.Context, credential iamv1.Secret, platform bool, _ string) (iamv1.PolicyList, error) {
+	value.policyCalls++
+	value.policyPlatform, value.policyCredential = platform, credential
+	result := iamv1.PolicyList{APIVersion: iamv1.APIVersion, Kind: "PolicyList", AccountID: "account-catalog", Scope: iamv1.AuthorityScopeTenant, Items: []iamv1.Policy{}}
+	if platform {
+		result.Scope, result.InstallationID = iamv1.AuthorityScopeInstallation, "installation-catalog"
+	}
+	return result, nil
 }
 
 func newHTTPWorkflow(t *testing.T) *httpWorkflow {
@@ -433,24 +492,24 @@ func (workflow *httpWorkflow) CreateUser(
 	}, nil
 }
 
-func (workflow *httpWorkflow) PutRoleBinding(
+func (workflow *httpWorkflow) CreatePolicyAttachment(
 	context.Context,
 	iamv1.Secret,
-	iamv1.PutRoleBindingRequest,
-) (iamv1.RoleBinding, error) {
+	iamv1.CreatePolicyAttachmentRequest,
+) (iamv1.PolicyAttachment, error) {
 	now := workflow.login.Session.IssuedAt
-	return iamv1.RoleBinding{
-		APIVersion: iamv1.APIVersion, Kind: "RoleBinding", ID: "binding-user",
-		OrganizationID: "organization-example", PrincipalID: "principal-user",
-		Role: iamv1.RolePaaSDeveloper, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
+	return iamv1.PolicyAttachment{
+		APIVersion: iamv1.APIVersion, Kind: "PolicyAttachment", ID: "binding-user",
+		AccountID: "organization-example", Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: "principal-user"},
+		PolicyID: iamv1.SystemPolicyPaaSDeveloper, Scope: iamv1.AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
 
-func (workflow *httpWorkflow) RevokeRoleBinding(
+func (workflow *httpWorkflow) RevokePolicyAttachment(
 	_ context.Context,
 	_ iamv1.Secret,
-	id iamv1.RoleBindingID,
-	_ iamv1.RevokeRoleBindingRequest,
+	id iamv1.PolicyAttachmentID,
+	_ iamv1.RevokePolicyAttachmentRequest,
 ) (iamv1.Revocation, error) {
 	return iamv1.Revocation{
 		APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(id),

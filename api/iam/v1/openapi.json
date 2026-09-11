@@ -21,15 +21,17 @@
           "iam.organization-administrator.recover",
           "iam.account-alias.set",
           "iam.principal.list",
+          "iam.policy.list",
+          "iam.platform-policy.list",
           "iam.principal.set-status",
           "iam.password.reset",
           "iam.principal.create",
           "iam.principal.read",
-          "iam.role-binding.put",
-          "iam.role-binding.revoke",
+          "iam.policy-attachment.create",
+          "iam.policy-attachment.revoke",
           "iam.session.revoke",
-          "iam.platform-role-binding.put",
-          "iam.platform-role-binding.revoke",
+          "iam.platform-policy-attachment.create",
+          "iam.platform-policy-attachment.revoke",
           "paas.execution-pool.create",
           "paas.execution-pool.read",
           "paas.execution-target.register",
@@ -127,6 +129,14 @@
         ],
         "type": "object"
       },
+      "AuthorityScope": {
+        "enum": [
+          "TENANT",
+          "INSTALLATION",
+          "INSTALLATION_PROBE"
+        ],
+        "type": "string"
+      },
       "AuthorizationDecision": {
         "additionalProperties": false,
         "allOf": [
@@ -202,15 +212,18 @@
                       "iam.organization.read",
                       "iam.organization.set-status",
                       "iam.organization-administrator.recover",
-                      "iam.platform-role-binding.put",
-                      "iam.platform-role-binding.revoke",
+                      "iam.platform-policy.list",
+                      "iam.platform-policy-attachment.create",
+                      "iam.platform-policy-attachment.revoke",
                       "paas.execution-pool.create",
                       "paas.execution-pool.read",
                       "paas.execution-target.register",
                       "paas.execution-target.read",
                       "paas.platform-operation.read",
                       "audit.platform-record.read",
-                      "audit.platform-integrity.verify"
+                      "audit.platform-integrity.verify",
+                      "iam.platform-role-binding.put",
+                      "iam.platform-role-binding.revoke"
                     ]
                   }
                 },
@@ -395,6 +408,58 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "iam.policy.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ORGANIZATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.platform-policy.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "INSTALLATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "iam.principal.set-status"
                 }
               },
@@ -499,7 +564,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.role-binding.put"
+                  "const": "iam.policy-attachment.create"
                 }
               },
               "required": [
@@ -525,7 +590,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.role-binding.revoke"
+                  "const": "iam.policy-attachment.revoke"
                 }
               },
               "required": [
@@ -537,7 +602,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "ROLE_BINDING"
+                      "const": "POLICY_ATTACHMENT"
                     }
                   },
                   "required": [
@@ -577,7 +642,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.platform-role-binding.put"
+                  "const": "iam.platform-policy-attachment.create"
                 }
               },
               "required": [
@@ -603,7 +668,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.platform-role-binding.revoke"
+                  "const": "iam.platform-policy-attachment.revoke"
                 }
               },
               "required": [
@@ -615,7 +680,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "ROLE_BINDING"
+                      "const": "POLICY_ATTACHMENT"
                     }
                   },
                   "required": [
@@ -1404,11 +1469,168 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-binding.put"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-binding.revoke"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE_BINDING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.platform-role-binding.put"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.platform-role-binding.revoke"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE_BINDING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
           }
         ],
         "properties": {
           "action": {
-            "$ref": "#/components/schemas/Action"
+            "enum": [
+              "iam.organization.create",
+              "iam.organization.read",
+              "iam.organization.set-status",
+              "iam.organization-administrator.recover",
+              "iam.account-alias.set",
+              "iam.principal.list",
+              "iam.policy.list",
+              "iam.platform-policy.list",
+              "iam.principal.set-status",
+              "iam.password.reset",
+              "iam.principal.create",
+              "iam.principal.read",
+              "iam.policy-attachment.create",
+              "iam.policy-attachment.revoke",
+              "iam.session.revoke",
+              "iam.platform-policy-attachment.create",
+              "iam.platform-policy-attachment.revoke",
+              "paas.execution-pool.create",
+              "paas.execution-pool.read",
+              "paas.execution-target.register",
+              "paas.execution-target.read",
+              "paas.platform-operation.read",
+              "paas.application.create",
+              "paas.application.read",
+              "paas.configuration.create",
+              "paas.configuration.read",
+              "paas.configuration-revision.create",
+              "paas.configuration-revision.read",
+              "paas.application-revision.create",
+              "paas.application-revision.read",
+              "paas.deployment.create",
+              "paas.deployment.update",
+              "paas.deployment.rollback",
+              "paas.deployment.stop",
+              "paas.deployment.read",
+              "paas.operation.read",
+              "managedservice.offering.read",
+              "managedservice.region.read",
+              "managedservice.quota-entitlement.activate",
+              "managedservice.quota-entitlement.read",
+              "managedservice.service-installation.create",
+              "managedservice.service-installation.read",
+              "audit.record.read",
+              "audit.integrity.verify",
+              "audit.platform-record.read",
+              "audit.platform-integrity.verify",
+              "installation.verify",
+              "iam.role-binding.put",
+              "iam.role-binding.revoke",
+              "iam.platform-role-binding.put",
+              "iam.platform-role-binding.revoke"
+            ],
+            "type": "string"
           },
           "allowed": {
             "type": "boolean"
@@ -1620,6 +1842,58 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "iam.policy.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ORGANIZATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.platform-policy.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "INSTALLATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "iam.principal.set-status"
                 }
               },
@@ -1724,7 +1998,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.role-binding.put"
+                  "const": "iam.policy-attachment.create"
                 }
               },
               "required": [
@@ -1750,7 +2024,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.role-binding.revoke"
+                  "const": "iam.policy-attachment.revoke"
                 }
               },
               "required": [
@@ -1762,7 +2036,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "ROLE_BINDING"
+                      "const": "POLICY_ATTACHMENT"
                     }
                   },
                   "required": [
@@ -1802,7 +2076,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.platform-role-binding.put"
+                  "const": "iam.platform-policy-attachment.create"
                 }
               },
               "required": [
@@ -1828,7 +2102,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.platform-role-binding.revoke"
+                  "const": "iam.platform-policy-attachment.revoke"
                 }
               },
               "required": [
@@ -1840,7 +2114,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "ROLE_BINDING"
+                      "const": "POLICY_ATTACHMENT"
                     }
                   },
                   "required": [
@@ -2849,17 +3123,6 @@
         ],
         "type": "object"
       },
-      "BuiltinRole": {
-        "enum": [
-          "ORGANIZATION_ADMIN",
-          "PLATFORM_OPERATOR",
-          "PAAS_DEVELOPER",
-          "PAAS_VIEWER",
-          "AUDIT_READER",
-          "INSTALLATION_VERIFIER"
-        ],
-        "type": "string"
-      },
       "ChangePasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2939,6 +3202,43 @@
         ],
         "type": "object"
       },
+      "CreatePolicyAttachmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "policyId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "policyResourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "target": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PolicyAttachmentTarget"
+              },
+              {
+                "properties": {
+                  "kind": {
+                    "const": "USER"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "required": [
+          "policyId",
+          "policyResourceVersion",
+          "requestId",
+          "target"
+        ],
+        "type": "object"
+      },
       "CreateUserRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2948,15 +3248,6 @@
           "initialPassword": {
             "$ref": "#/components/schemas/Secret",
             "writeOnly": true
-          },
-          "initialRole": {
-            "enum": [
-              "ORGANIZATION_ADMIN",
-              "PAAS_DEVELOPER",
-              "PAAS_VIEWER",
-              "AUDIT_READER"
-            ],
-            "type": "string"
           },
           "loginName": {
             "maxLength": 64,
@@ -2992,16 +3283,23 @@
             },
             "then": {
               "properties": {
+                "policyAttachments": {
+                  "contains": {
+                    "properties": {
+                      "scope": {
+                        "const": "INSTALLATION"
+                      }
+                    },
+                    "required": [
+                      "scope"
+                    ]
+                  }
+                },
                 "principal": {
                   "properties": {
                     "mustChangePassword": {
                       "const": false
                     }
-                  }
-                },
-                "roles": {
-                  "contains": {
-                    "const": "PLATFORM_OPERATOR"
                   }
                 }
               }
@@ -3021,14 +3319,31 @@
           "kind": {
             "const": "CurrentIdentity"
           },
+          "policyAttachments": {
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/PolicyAttachment"
+                },
+                {
+                  "properties": {
+                    "revokedAt": false,
+                    "target": {
+                      "properties": {
+                        "kind": {
+                          "const": "USER"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
           "principal": {
             "$ref": "#/components/schemas/Principal"
-          },
-          "roles": {
-            "items": {
-              "$ref": "#/components/schemas/BuiltinRole"
-            },
-            "type": "array"
           }
         },
         "required": [
@@ -3036,8 +3351,8 @@
           "apiVersion",
           "canCreateOrganizations",
           "kind",
-          "principal",
-          "roles"
+          "policyAttachments",
+          "principal"
         ],
         "type": "object"
       },
@@ -3296,6 +3611,329 @@
         ],
         "type": "string"
       },
+      "Policy": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "accountId": false,
+              "id": {
+                "pattern": "^system\\..+"
+              },
+              "management": {
+                "const": "SYSTEM"
+              }
+            }
+          },
+          {
+            "properties": {
+              "id": {
+                "not": {
+                  "pattern": "^system\\."
+                }
+              },
+              "management": {
+                "const": "CUSTOMER"
+              },
+              "scope": {
+                "const": "TENANT"
+              }
+            },
+            "required": [
+              "accountId"
+            ]
+          }
+        ],
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "defaultVersionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "displayName": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "Policy"
+          },
+          "management": {
+            "$ref": "#/components/schemas/PolicyManagement"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AuthorityScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PolicyStatus"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "createdAt",
+          "defaultVersionId",
+          "displayName",
+          "id",
+          "kind",
+          "management",
+          "resourceVersion",
+          "scope",
+          "status",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "PolicyAttachment": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "installationId": false,
+              "scope": {
+                "const": "TENANT"
+              }
+            }
+          },
+          {
+            "properties": {
+              "scope": {
+                "const": "INSTALLATION"
+              },
+              "target": {
+                "properties": {
+                  "kind": {
+                    "const": "USER"
+                  }
+                }
+              }
+            },
+            "required": [
+              "installationId"
+            ]
+          },
+          {
+            "properties": {
+              "scope": {
+                "const": "INSTALLATION_PROBE"
+              },
+              "target": {
+                "properties": {
+                  "kind": {
+                    "const": "SERVICE_ACCOUNT"
+                  }
+                }
+              }
+            },
+            "required": [
+              "installationId"
+            ]
+          }
+        ],
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "PolicyAttachment"
+          },
+          "policyId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "revokedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AuthorityScope"
+          },
+          "target": {
+            "$ref": "#/components/schemas/PolicyAttachmentTarget"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "createdAt",
+          "id",
+          "kind",
+          "policyId",
+          "resourceVersion",
+          "scope",
+          "target",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "PolicyAttachmentID": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ID"
+          }
+        ]
+      },
+      "PolicyAttachmentTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PolicyAttachmentTargetKind"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "PolicyAttachmentTargetKind": {
+        "enum": [
+          "USER",
+          "SERVICE_ACCOUNT",
+          "GROUP",
+          "ROLE"
+        ],
+        "type": "string"
+      },
+      "PolicyID": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ID"
+          }
+        ]
+      },
+      "PolicyList": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "installationId": false,
+              "items": {
+                "items": {
+                  "properties": {
+                    "scope": {
+                      "const": "TENANT"
+                    }
+                  }
+                }
+              },
+              "scope": {
+                "const": "TENANT"
+              }
+            }
+          },
+          {
+            "properties": {
+              "items": {
+                "items": {
+                  "properties": {
+                    "scope": {
+                      "const": "INSTALLATION"
+                    }
+                  }
+                }
+              },
+              "scope": {
+                "const": "INSTALLATION"
+              }
+            },
+            "required": [
+              "installationId"
+            ]
+          }
+        ],
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Policy"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "kind": {
+            "const": "PolicyList"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AuthorityScope"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "items",
+          "kind",
+          "scope"
+        ],
+        "type": "object"
+      },
+      "PolicyManagement": {
+        "enum": [
+          "SYSTEM",
+          "CUSTOMER"
+        ],
+        "type": "string"
+      },
+      "PolicyStatus": {
+        "enum": [
+          "ACTIVE",
+          "RETIRED"
+        ],
+        "type": "string"
+      },
+      "PolicyVersionID": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ID"
+          }
+        ]
+      },
       "Principal": {
         "additionalProperties": false,
         "allOf": [
@@ -3395,19 +4033,36 @@
       "PrincipalAccess": {
         "additionalProperties": false,
         "properties": {
+          "policyAttachments": {
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/PolicyAttachment"
+                },
+                {
+                  "properties": {
+                    "revokedAt": false,
+                    "target": {
+                      "properties": {
+                        "kind": {
+                          "const": "USER"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
           "principal": {
             "$ref": "#/components/schemas/Principal"
-          },
-          "roleBindings": {
-            "items": {
-              "$ref": "#/components/schemas/RoleBinding"
-            },
-            "type": "array"
           }
         },
         "required": [
-          "principal",
-          "roleBindings"
+          "policyAttachments",
+          "principal"
         ],
         "type": "object"
       },
@@ -3489,33 +4144,6 @@
           "status",
           "title",
           "type"
-        ],
-        "type": "object"
-      },
-      "PutRoleBindingRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "principalId": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "requestId": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "role": {
-            "enum": [
-              "ORGANIZATION_ADMIN",
-              "PAAS_DEVELOPER",
-              "PAAS_VIEWER",
-              "AUDIT_READER",
-              "PLATFORM_OPERATOR"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "principalId",
-          "requestId",
-          "role"
         ],
         "type": "object"
       },
@@ -3623,6 +4251,7 @@
           "ORGANIZATION",
           "PRINCIPAL",
           "ROLE_BINDING",
+          "POLICY_ATTACHMENT",
           "SESSION",
           "APPLICATION",
           "CONFIGURATION",
@@ -3688,15 +4317,21 @@
         ],
         "type": "object"
       },
-      "RevokeRoleBindingRequest": {
+      "RevokePolicyAttachmentRequest": {
         "additionalProperties": false,
         "properties": {
           "requestId": {
             "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
           }
         },
         "required": [
-          "requestId"
+          "requestId",
+          "resourceVersion"
         ],
         "type": "object"
       },
@@ -3709,52 +4344,6 @@
         },
         "required": [
           "requestId"
-        ],
-        "type": "object"
-      },
-      "RoleBinding": {
-        "additionalProperties": false,
-        "properties": {
-          "apiVersion": {
-            "const": "iam.matrix.xiak.com/v1"
-          },
-          "createdAt": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "id": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "kind": {
-            "const": "RoleBinding"
-          },
-          "organizationId": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "principalId": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "resourceVersion": {
-            "maximum": 9007199254740991,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "role": {
-            "$ref": "#/components/schemas/BuiltinRole"
-          },
-          "updatedAt": {
-            "$ref": "#/components/schemas/Timestamp"
-          }
-        },
-        "required": [
-          "apiVersion",
-          "createdAt",
-          "id",
-          "kind",
-          "organizationId",
-          "principalId",
-          "resourceVersion",
-          "role",
-          "updatedAt"
         ],
         "type": "object"
       },
@@ -4781,6 +5370,189 @@
         "summary": "Suspend or restore tenant access without stopping workloads"
       }
     },
+    "/v1/platform-policies": {
+      "get": {
+        "operationId": "listPlatformPolicies",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read the separately authorized sealed installation policy metadata directory"
+      }
+    },
+    "/v1/policies": {
+      "get": {
+        "operationId": "listPolicies",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read the complete bounded current account policy metadata directory"
+      }
+    },
+    "/v1/policy-attachments": {
+      "post": {
+        "operationId": "createPolicyAttachment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePolicyAttachmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyAttachment"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create a direct user policy attachment"
+      }
+    },
+    "/v1/policy-attachments/{attachmentId}:revoke": {
+      "post": {
+        "operationId": "revokePolicyAttachment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "attachmentId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokePolicyAttachmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Revocation"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Revoke a policy attachment"
+      }
+    },
     "/v1/principals": {
       "get": {
         "operationId": "listPrincipals",
@@ -4819,7 +5591,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           }
         },
-        "summary": "List the current tenant users and role bindings"
+        "summary": "List the current tenant users and policy attachments"
       },
       "post": {
         "operationId": "createUser",
@@ -5009,129 +5781,6 @@
           }
         },
         "summary": "Disable or enable a subaccount"
-      }
-    },
-    "/v1/role-bindings": {
-      "post": {
-        "operationId": "putRoleBinding",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PutRoleBindingRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RoleBinding"
-                }
-              }
-            },
-            "description": "Command completed."
-          },
-          "400": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "401": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "409": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "413": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "415": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "422": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProblemResponse"
-          }
-        },
-        "summary": "Put a built-in role binding"
-      }
-    },
-    "/v1/role-bindings/{roleBindingId}:revoke": {
-      "post": {
-        "operationId": "revokeRoleBinding",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "roleBindingId",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RevokeRoleBindingRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Revocation"
-                }
-              }
-            },
-            "description": "Command completed."
-          },
-          "400": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "401": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "409": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "413": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "415": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "422": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProblemResponse"
-          }
-        },
-        "summary": "Revoke a role binding"
       }
     },
     "/v1/service-identity": {

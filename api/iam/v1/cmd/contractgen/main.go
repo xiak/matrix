@@ -86,7 +86,9 @@ func buildPaths() object {
 		"/v1/auth/login": object{"post": mutationOperation(
 			"login", "Log in with a password", "LoginRequest", "LoginResponse", "200", []any{}, nil,
 		)},
-		"/v1/auth/me": object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
+		"/v1/auth/me":           object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
+		"/v1/policies":          object{"get": readOperation("listPolicies", "Read the complete bounded current account policy metadata directory", "PolicyList", nil, nil)},
+		"/v1/platform-policies": object{"get": readOperation("listPlatformPolicies", "Read the separately authorized sealed installation policy metadata directory", "PolicyList", nil, nil)},
 		"/v1/organizations": object{
 			"get":  readOperation("listOrganizations", "List tenant accounts as a platform operator", "OrganizationAccountList", nil, accountPageParameters()),
 			"post": mutationOperation("createOrganization", "Open a tenant account", "CreateOrganizationRequest", "OrganizationAccount", "201", nil, nil),
@@ -103,15 +105,15 @@ func buildPaths() object {
 		"/v1/auth/password": object{"post": mutationOperation(
 			"changePassword", "Change the current user password", "ChangePasswordRequest", "ChangePasswordResponse", "200", nil, nil,
 		)},
-		"/v1/principals": object{"get": readOperation("listPrincipals", "List the current tenant users and role bindings", "PrincipalList", nil, accountPageParameters()), "post": mutationOperation(
+		"/v1/principals": object{"get": readOperation("listPrincipals", "List the current tenant users and policy attachments", "PrincipalList", nil, accountPageParameters()), "post": mutationOperation(
 			"createUser", "Create an organization user", "CreateUserRequest", "Principal", "201", nil, nil,
 		)},
-		"/v1/role-bindings": object{"post": mutationOperation(
-			"putRoleBinding", "Put a built-in role binding", "PutRoleBindingRequest", "RoleBinding", "200", nil, nil,
+		"/v1/policy-attachments": object{"post": mutationOperation(
+			"createPolicyAttachment", "Create a direct user policy attachment", "CreatePolicyAttachmentRequest", "PolicyAttachment", "200", nil, nil,
 		)},
-		"/v1/role-bindings/{roleBindingId}:revoke": object{"post": mutationOperation(
-			"revokeRoleBinding", "Revoke a role binding", "RevokeRoleBindingRequest", "Revocation", "200", nil,
-			[]any{openapi31.PathIDParameter("roleBindingId")},
+		"/v1/policy-attachments/{attachmentId}:revoke": object{"post": mutationOperation(
+			"revokePolicyAttachment", "Revoke a policy attachment", "RevokePolicyAttachmentRequest", "Revocation", "200", nil,
+			[]any{openapi31.PathIDParameter("attachmentId")},
 		)},
 		"/v1/sessions/{sessionId}:revoke": object{"post": mutationOperation(
 			"revokeSession", "Revoke an organization session", "RevokeSessionRequest", "Revocation", "200", nil,
@@ -194,6 +196,7 @@ func scalarSchemas() object {
 	}
 	for _, name := range []string{
 		"OrganizationID", "PrincipalID", "RoleBindingID", "SessionID", "DecisionID",
+		"PolicyID", "PolicyVersionID", "PolicyAttachmentID",
 	} {
 		result[name] = object{"allOf": []any{openapi31.Ref("ID")}}
 	}
@@ -202,14 +205,17 @@ func scalarSchemas() object {
 
 func enumSchemas() map[string][]string {
 	return map[string][]string{
-		"OrganizationStatus": {string(iamv1.OrganizationActive), string(iamv1.OrganizationDisabled)},
-		"PrincipalType":      {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
-		"PrincipalStatus":    {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
-		"SessionStatus":      {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
-		"BuiltinRole":        openapi31.StringValues(iamv1.AllBuiltinRoles()),
-		"Action":             openapi31.StringValues(iamv1.AllActions()),
+		"OrganizationStatus":         {string(iamv1.OrganizationActive), string(iamv1.OrganizationDisabled)},
+		"PrincipalType":              {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
+		"PrincipalStatus":            {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
+		"SessionStatus":              {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
+		"AuthorityScope":             {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
+		"PolicyAttachmentTargetKind": {string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetService), string(iamv1.PolicyTargetGroup), string(iamv1.PolicyTargetRole)},
+		"PolicyManagement":           {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
+		"PolicyStatus":               {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
+		"Action":                     openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
-			string(iamv1.ResourceOrganization), string(iamv1.ResourcePrincipal), string(iamv1.ResourceRoleBinding),
+			string(iamv1.ResourceOrganization), string(iamv1.ResourcePrincipal), string(iamv1.ResourceRoleBinding), string(iamv1.ResourcePolicyAttachment),
 			string(iamv1.ResourceSession), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
 			string(iamv1.ResourceConfigurationRevision), string(iamv1.ResourceApplicationRevision),
 			string(iamv1.ResourceDeployment), string(iamv1.ResourceOperation),
@@ -232,7 +238,11 @@ func structContracts() map[string]reflect.Type {
 		"ResourceReference":                       openapi31.StructType[iamv1.ResourceReference](),
 		"Organization":                            openapi31.StructType[iamv1.Organization](),
 		"Principal":                               openapi31.StructType[iamv1.Principal](),
-		"RoleBinding":                             openapi31.StructType[iamv1.RoleBinding](),
+		"PolicyAttachment":                        openapi31.StructType[iamv1.PolicyAttachment](),
+		"Policy":                                  openapi31.StructType[iamv1.Policy](),
+		"PolicyAttachmentTarget":                  openapi31.StructType[iamv1.PolicyAttachmentTarget](),
+		"CreatePolicyAttachmentRequest":           openapi31.StructType[iamv1.CreatePolicyAttachmentRequest](),
+		"RevokePolicyAttachmentRequest":           openapi31.StructType[iamv1.RevokePolicyAttachmentRequest](),
 		"Session":                                 openapi31.StructType[iamv1.Session](),
 		"InitialOrganization":                     openapi31.StructType[iamv1.InitialOrganization](),
 		"InitialAdministrator":                    openapi31.StructType[iamv1.InitialAdministrator](),
@@ -251,6 +261,7 @@ func structContracts() map[string]reflect.Type {
 		"CreateUserRequest":                       openapi31.StructType[iamv1.CreateUserRequest](),
 		"OrganizationAccount":                     openapi31.StructType[iamv1.OrganizationAccount](),
 		"CurrentIdentity":                         openapi31.StructType[iamv1.CurrentIdentity](),
+		"PolicyList":                              openapi31.StructType[iamv1.PolicyList](),
 		"PrincipalAccess":                         openapi31.StructType[iamv1.PrincipalAccess](),
 		"PrincipalList":                           openapi31.StructType[iamv1.PrincipalList](),
 		"OrganizationAccountList":                 openapi31.StructType[iamv1.OrganizationAccountList](),
@@ -260,8 +271,6 @@ func structContracts() map[string]reflect.Type {
 		"SetOrganizationStatusRequest":            openapi31.StructType[iamv1.SetOrganizationStatusRequest](),
 		"RecoverOrganizationAdministratorRequest": openapi31.StructType[iamv1.RecoverOrganizationAdministratorRequest](),
 		"ResetUserPasswordRequest":                openapi31.StructType[iamv1.ResetUserPasswordRequest](),
-		"PutRoleBindingRequest":                   openapi31.StructType[iamv1.PutRoleBindingRequest](),
-		"RevokeRoleBindingRequest":                openapi31.StructType[iamv1.RevokeRoleBindingRequest](),
 		"RevokeSessionRequest":                    openapi31.StructType[iamv1.RevokeSessionRequest](),
 		"Revocation":                              openapi31.StructType[iamv1.Revocation](),
 		"AuthorizationRequest":                    openapi31.StructType[iamv1.AuthorizationRequest](),
@@ -272,6 +281,9 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if owner == "Policy" && jsonName == "displayName" {
+		base["minLength"], base["maxLength"] = 1, 128
+	}
 	if jsonName == "contentDigest" {
 		base = object{"type": "string", "pattern": `^sha256:[0-9a-f]{64}$`}
 	}
@@ -287,18 +299,23 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if jsonName == "loginAlias" {
 		base = object{"anyOf": []any{object{"type": "null"}, object{"type": "string", "pattern": `^[a-z][a-z0-9-]{1,61}[a-z0-9]$`, "minLength": 3, "maxLength": 63}}}
 	}
-	if (owner == "PutRoleBindingRequest" && jsonName == "role") || (owner == "CreateUserRequest" && jsonName == "initialRole") {
-		roles := []string{"ORGANIZATION_ADMIN", "PAAS_DEVELOPER", "PAAS_VIEWER", "AUDIT_READER"}
-		if owner == "PutRoleBindingRequest" {
-			roles = append(roles, string(iamv1.RolePlatformOperator))
-		}
-		base = object{"type": "string", "enum": roles}
-	}
 	if jsonName == "nextAfter" {
 		base = openapi31.Ref("ID")
 	}
+	if owner == "CreatePolicyAttachmentRequest" && jsonName == "target" {
+		base = object{"allOf": []any{openapi31.Ref("PolicyAttachmentTarget"), object{"properties": object{"kind": object{"const": "USER"}}}}}
+	}
 	if (owner == "PrincipalList" || owner == "OrganizationAccountList") && jsonName == "items" {
 		base["maxItems"] = 100
+	}
+	if owner == "PolicyList" && jsonName == "items" {
+		base["maxItems"] = iamv1.MaxPolicyListItems
+	}
+	if (owner == "CurrentIdentity" || owner == "PrincipalAccess") && jsonName == "policyAttachments" {
+		base["maxItems"] = 256
+		base["items"] = object{"allOf": []any{openapi31.Ref("PolicyAttachment"), object{"properties": object{
+			"revokedAt": false, "target": object{"properties": object{"kind": object{"const": "USER"}}},
+		}}}}
 	}
 	if field.Type.Name() == "Secret" {
 		base["writeOnly"] = true
@@ -311,7 +328,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		(jsonName == "id" || strings.HasSuffix(jsonName, "Id")) {
 		base = openapi31.Ref("ID")
 	}
-	if jsonName == "resourceVersion" || jsonName == "schemaVersion" {
+	if jsonName == "resourceVersion" || jsonName == "schemaVersion" || jsonName == "policyResourceVersion" {
 		base["minimum"] = 1
 	}
 	if owner == "ChangePasswordRequest" && jsonName == "revokeOtherSessions" {
@@ -322,21 +339,43 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["Policy"].(object)["oneOf"] = []any{
+		object{"properties": object{"management": object{"const": "SYSTEM"}, "accountId": false,
+			"id": object{"pattern": `^system\..+`}}},
+		object{"required": []string{"accountId"}, "properties": object{"management": object{"const": "CUSTOMER"},
+			"scope": object{"const": "TENANT"}, "id": object{"not": object{"pattern": `^system\.`}}}},
+	}
+	schemas["PolicyList"].(object)["oneOf"] = []any{
+		object{"properties": object{"scope": object{"const": "TENANT"}, "installationId": false,
+			"items": object{"items": object{"properties": object{"scope": object{"const": "TENANT"}}}}}},
+		object{"required": []string{"installationId"}, "properties": object{"scope": object{"const": "INSTALLATION"},
+			"items": object{"items": object{"properties": object{"scope": object{"const": "INSTALLATION"}}}}}},
+	}
 	schemas["CurrentIdentity"].(object)["allOf"] = []any{object{
 		"if": object{"properties": object{"canCreateOrganizations": object{"const": true}}, "required": []string{"canCreateOrganizations"}},
 		"then": object{"properties": object{
-			"roles":     object{"contains": object{"const": string(iamv1.RolePlatformOperator)}},
-			"principal": object{"properties": object{"mustChangePassword": object{"const": false}}},
+			"policyAttachments": object{"contains": object{"properties": object{"scope": object{"const": "INSTALLATION"}}, "required": []string{"scope"}}},
+			"principal":         object{"properties": object{"mustChangePassword": object{"const": false}}},
 		}},
 	}}
+	schemas["PolicyAttachment"].(object)["oneOf"] = []any{
+		object{"properties": object{"scope": object{"const": "TENANT"}, "installationId": false}},
+		object{"required": []string{"installationId"}, "properties": object{"scope": object{"const": "INSTALLATION"},
+			"target": object{"properties": object{"kind": object{"const": "USER"}}}}},
+		object{"required": []string{"installationId"}, "properties": object{"scope": object{"const": "INSTALLATION_PROBE"},
+			"target": object{"properties": object{"kind": object{"const": "SERVICE_ACCOUNT"}}}}},
+	}
 	schemas["AuditProducerAuthorization"].(object)["oneOf"] = []any{
 		object{"required": []string{"tenantId"}, "properties": object{"installationId": false}},
 		object{"required": []string{"installationId"}, "properties": object{"tenantId": false}},
 	}
 	kinds := map[string]string{
+		"Policy":          "Policy",
+		"PolicyList":      "PolicyList",
 		"CurrentIdentity": "CurrentIdentity", "PrincipalList": "PrincipalList", "OrganizationAccountList": "OrganizationAccountList",
-		"Organization": "Organization", "Principal": "Principal", "RoleBinding": "RoleBinding",
-		"Session": "Session", "BootstrapDocument": "IAMBootstrap", "BootstrapStatus": "BootstrapStatus",
+		"Organization": "Organization", "Principal": "Principal",
+		"PolicyAttachment": "PolicyAttachment",
+		"Session":          "Session", "BootstrapDocument": "IAMBootstrap", "BootstrapStatus": "BootstrapStatus",
 		"ServiceIdentity":            "ServiceIdentity",
 		"AuditProducerAuthorization": "AuditProducerAuthorization",
 		"Revocation":                 "Revocation", "AuthorizationDecision": "AuthorizationDecision",
@@ -402,6 +441,13 @@ func applySemanticOverlays(schemas object) {
 	}
 
 	decision := schemas["AuthorizationDecision"].(object)
+	var recordedActions []string
+	for _, definition := range iamv1.AllRecordedActionDefinitions() {
+		recordedActions = append(recordedActions, string(definition.Action))
+	}
+	// The shared Action enum remains current-only. Historical vocabulary is
+	// accepted only in immutable decision responses, never in requests/policies.
+	decision["properties"].(object)["action"] = object{"type": "string", "enum": recordedActions}
 	decisionRules := []any{
 		object{
 			"if": object{"properties": object{"allowed": object{"const": true}}, "required": []string{"allowed"}},
@@ -418,9 +464,9 @@ func applySemanticOverlays(schemas object) {
 		},
 	}
 	var platformActions []string
-	for _, action := range iamv1.AllActions() {
-		if iamv1.IsPlatformAction(action) {
-			platformActions = append(platformActions, string(action))
+	for _, definition := range iamv1.AllRecordedActionDefinitions() {
+		if definition.AuthorityScope == iamv1.AuthorityScopeInstallation {
+			platformActions = append(platformActions, string(definition.Action))
 		}
 	}
 	decisionRules = append(decisionRules, object{
@@ -433,8 +479,8 @@ func applySemanticOverlays(schemas object) {
 			"else": object{"required": []string{"tenantId"}, "properties": object{"installationId": false}},
 		},
 	})
-	decision["allOf"] = append(decisionRules, actionResourceRules()...)
-	schemas["AuthorizationRequest"].(object)["allOf"] = actionResourceRules()
+	decision["allOf"] = append(decisionRules, actionResourceRules(iamv1.AllRecordedActionDefinitions())...)
+	schemas["AuthorizationRequest"].(object)["allOf"] = actionResourceRules(iamv1.AllActionDefinitions())
 
 	session := schemas["Session"].(object)
 	session["allOf"] = []any{
@@ -446,23 +492,18 @@ func applySemanticOverlays(schemas object) {
 	}
 }
 
-func actionResourceRules() []any {
-	actions := iamv1.AllActions()
-	rules := make([]any, 0, len(actions))
-	for _, action := range actions {
-		resourceKind, known := iamv1.ResourceKindForAction(action)
-		if !known {
-			panic("IAM action has no resource kind: " + string(action))
-		}
+func actionResourceRules(definitions []iamv1.ActionDefinition) []any {
+	rules := make([]any, 0, len(definitions))
+	for _, definition := range definitions {
 		rules = append(rules, object{
 			"if": object{
-				"properties": object{"action": object{"const": string(action)}},
+				"properties": object{"action": object{"const": string(definition.Action)}},
 				"required":   []string{"action"},
 			},
 			"then": object{
 				"properties": object{
 					"resource": object{
-						"properties": object{"kind": object{"const": string(resourceKind)}},
+						"properties": object{"kind": object{"const": string(definition.ResourceKind)}},
 						"required":   []string{"kind"},
 					},
 				},

@@ -6,6 +6,8 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+const SchemaVersion uint64 = 4
+
 func (service *Service) Readiness(ctx context.Context) (auditv1.Readiness, error) {
 	var snapshot ReadinessSnapshot
 	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
@@ -17,7 +19,7 @@ func (service *Service) Readiness(ctx context.Context) (auditv1.Readiness, error
 		return auditv1.Readiness{}, err
 	}
 	state := auditv1.ReadinessNotReady
-	if snapshot.Ready {
+	if snapshot.Ready && snapshot.SchemaVersion == SchemaVersion {
 		state = auditv1.ReadinessReady
 	}
 	result := auditv1.Readiness{

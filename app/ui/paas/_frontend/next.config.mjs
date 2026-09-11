@@ -38,6 +38,9 @@ const nextConfig = {
   reactStrictMode: true,
   trailingSlash: true,
   poweredByHeader: false,
+  experimental: {
+    cpus: 2,
+  },
 };
 
 export default nextConfig;

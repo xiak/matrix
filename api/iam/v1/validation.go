@@ -190,26 +190,7 @@ func ValidateCreateUserRequest(value CreateUserRequest) error {
 	if !value.InitialPassword.Present() {
 		problems = append(problems, ErrInvalidSecret)
 	}
-	if value.InitialRole != nil && (!UserAssignableRole(*value.InitialRole) || *value.InitialRole == RolePlatformOperator) {
-		problems = append(problems, errors.New("initial role is invalid"))
-	}
 	return errors.Join(problems...)
-}
-
-func ValidatePutRoleBindingRequest(value PutRoleBindingRequest) error {
-	var problems []error
-	problems = append(problems,
-		ValidateID("principalId", string(value.PrincipalID)),
-		ValidateID("requestId", value.RequestID),
-	)
-	if !UserAssignableRole(value.Role) {
-		problems = append(problems, errors.New("role is invalid"))
-	}
-	return errors.Join(problems...)
-}
-
-func ValidateRevokeRoleBindingRequest(value RevokeRoleBindingRequest) error {
-	return ValidateID("requestId", value.RequestID)
 }
 
 func ValidateRevokeSessionRequest(value RevokeSessionRequest) error {
@@ -242,14 +223,21 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	return errors.Join(problems...)
 }
 
+// ValidateAuthorizationDecision validates immutable evidence, including exact
+// published retired actions. It does not admit a new authorization request;
+// that boundary must use ValidateAuthorizationRequest and the current catalog.
 func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 	var problems []error
+	definition, known := lookupRecordedActionDefinition(value.Action)
+	if !known || value.Resource.Kind != definition.ResourceKind {
+		problems = append(problems, errors.New("recorded action and resource kind are invalid"))
+	}
 	if value.APIVersion != APIVersion || value.Kind != "AuthorizationDecision" {
 		problems = append(problems, errors.New("authorization decision type metadata is invalid"))
 	}
 	problems = append(problems,
 		ValidateID("id", string(value.ID)),
-		validateResourceForAction(value.Action, value.Resource),
+		ValidateID("resource.id", value.Resource.ID),
 		ValidateID("requestId", value.RequestID),
 		validateTime("decidedAt", value.DecidedAt),
 	)
@@ -259,7 +247,7 @@ func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 		} else {
 			problems = append(problems, ValidateSubject(*value.Subject))
 		}
-		if IsPlatformAction(value.Action) {
+		if definition.AuthorityScope == AuthorityScopeInstallation {
 			problems = append(problems, ValidateID("installationId", value.InstallationID))
 			if value.TenantID != "" || value.Subject != nil && value.Subject.Type != PrincipalUser {
 				problems = append(problems, errors.New("platform decision contains invalid authority"))
@@ -325,24 +313,6 @@ func ValidatePrincipal(value Principal) error {
 	} else if value.LoginName != "" || value.MustChangePassword {
 		problems = append(problems, errors.New("service principal contains user fields"))
 	}
-	return errors.Join(problems...)
-}
-
-func ValidateRoleBinding(value RoleBinding) error {
-	var problems []error
-	if value.APIVersion != APIVersion || value.Kind != "RoleBinding" {
-		problems = append(problems, errors.New("role binding type metadata is invalid"))
-	}
-	if !knownRole(value.Role) {
-		problems = append(problems, errors.New("role is invalid"))
-	}
-	problems = append(problems,
-		ValidateID("roleBinding.id", string(value.ID)),
-		ValidateID("roleBinding.organizationId", string(value.OrganizationID)),
-		ValidateID("roleBinding.principalId", string(value.PrincipalID)),
-		validatePositiveVersion(value.ResourceVersion),
-		validateChronology(value.CreatedAt, value.UpdatedAt),
-	)
 	return errors.Join(problems...)
 }
 
@@ -415,15 +385,6 @@ func knownAction(value Action) bool {
 	return known
 }
 
-func knownRole(value BuiltinRole) bool {
-	for _, candidate := range allBuiltinRoles {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
-}
-
 func knownServicePurpose(value ServicePurpose) bool {
 	for _, candidate := range allServicePurposes {
 		if value == candidate {
@@ -472,10 +433,6 @@ func ValidateAccountAlias(value string) error {
 		return errors.New("account alias is invalid")
 	}
 	return nil
-}
-
-func UserAssignableRole(role BuiltinRole) bool {
-	return knownRole(role) && role != RoleInstallationVerifier
 }
 
 func ValidateCreateOrganizationRequest(value CreateOrganizationRequest) error {
@@ -538,20 +495,24 @@ func ValidateOrganizationAccount(value OrganizationAccount) error {
 
 func ValidateCurrentIdentity(value CurrentIdentity) error {
 	if value.APIVersion != APIVersion || value.Kind != "CurrentIdentity" ||
-		value.Principal.Type != PrincipalUser || value.Roles == nil ||
+		value.Principal.Type != PrincipalUser || value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 ||
 		value.Principal.OrganizationID != value.Account.Organization.ID ||
 		(value.CanCreateOrganizations && value.Principal.MustChangePassword) {
 		return errors.New("current identity is invalid")
 	}
-	seen := map[BuiltinRole]bool{}
-	for _, role := range value.Roles {
-		if !UserAssignableRole(role) || seen[role] {
-			return errors.New("current roles are invalid")
+	seen := map[PolicyAttachmentID]bool{}
+	platform := false
+	for _, attachment := range value.PolicyAttachments {
+		if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil || seen[attachment.ID] ||
+			attachment.AccountID != value.Account.Organization.ID || attachment.Target.Kind != PolicyTargetUser ||
+			attachment.Target.ID != string(value.Principal.ID) {
+			return errors.New("current policy attachments are invalid")
 		}
-		seen[role] = true
+		seen[attachment.ID] = true
+		platform = platform || attachment.Scope == AuthorityScopeInstallation
 	}
-	if value.CanCreateOrganizations && !seen[RolePlatformOperator] {
-		return errors.New("tenant opening requires a platform role")
+	if value.CanCreateOrganizations && !platform {
+		return errors.New("tenant opening requires platform authority")
 	}
 	return errors.Join(ValidateOrganizationAccount(value.Account), ValidatePrincipal(value.Principal))
 }
@@ -564,7 +525,7 @@ func ValidatePrincipalList(value PrincipalList) error {
 	var tenant OrganizationID
 	for _, item := range value.Items {
 		if ValidatePrincipal(item.Principal) != nil || item.Principal.Type != PrincipalUser ||
-			string(item.Principal.ID) <= previous || item.RoleBindings == nil {
+			string(item.Principal.ID) <= previous || item.PolicyAttachments == nil || len(item.PolicyAttachments) > 256 {
 			return errors.New("principal list item is invalid")
 		}
 		previous = string(item.Principal.ID)
@@ -572,13 +533,16 @@ func ValidatePrincipalList(value PrincipalList) error {
 			return errors.New("principal directory contains multiple tenants")
 		}
 		tenant = item.Principal.OrganizationID
-		roles := map[BuiltinRole]bool{}
-		for _, binding := range item.RoleBindings {
-			if ValidateRoleBinding(binding) != nil || !UserAssignableRole(binding.Role) ||
-				binding.OrganizationID != item.Principal.OrganizationID || binding.PrincipalID != item.Principal.ID || roles[binding.Role] {
-				return errors.New("principal role binding is invalid")
+		attachments := map[PolicyAttachmentID]bool{}
+		policies := map[PolicyID]bool{}
+		for _, attachment := range item.PolicyAttachments {
+			if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil ||
+				attachment.AccountID != item.Principal.OrganizationID || attachment.Target.Kind != PolicyTargetUser ||
+				attachment.Target.ID != string(item.Principal.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
+				return errors.New("principal policy attachment is invalid")
 			}
-			roles[binding.Role] = true
+			attachments[attachment.ID] = true
+			policies[attachment.PolicyID] = true
 		}
 	}
 	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {

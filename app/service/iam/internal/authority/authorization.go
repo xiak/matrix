@@ -17,11 +17,18 @@ type SubjectContext struct {
 	Organization iamv1.Organization
 	Principal    iamv1.Principal
 	Session      iamv1.Session
-	Roles        []iamv1.BuiltinRole
+	Policies     []AttachedPolicy
 	// InstallationID is read from the sealed IAM bootstrap receipt, not a
 	// request field or an organization ID. Empty context cannot grant platform
-	// authority even when a role name has been supplied.
+	// authority even when an attachment has been supplied.
 	InstallationID string
+}
+
+// AuthorizationEvaluation keeps private policy provenance alongside the
+// sanitized public decision. Only the decision is returned to a caller.
+type AuthorizationEvaluation struct {
+	iamv1.AuthorizationDecision
+	PolicyEvidence []PolicyAttachmentEvidence `json:"-"`
 }
 
 func AuthenticateSession(
@@ -57,16 +64,16 @@ func Decide(
 	request iamv1.AuthorizationRequest,
 	decisionID iamv1.DecisionID,
 	databaseTime time.Time,
-) (iamv1.AuthorizationDecision, error) {
+) (AuthorizationEvaluation, error) {
 	if err := validateSubjectContext(context, databaseTime); err != nil {
-		return iamv1.AuthorizationDecision{}, err
+		return AuthorizationEvaluation{}, err
 	}
 	return decide(
 		context.Organization.ID,
 		context.InstallationID,
 		iamv1.Subject{Type: context.Principal.Type, ID: context.Principal.ID},
 		context.Principal.MustChangePassword,
-		context.Roles,
+		context.Policies,
 		callingService,
 		request,
 		decisionID,
@@ -78,21 +85,21 @@ func Decide(
 // The installation verification endpoint is its only Phase 1 consumer.
 func DecideService(
 	identity iamv1.ServiceIdentity,
-	roles []iamv1.BuiltinRole,
+	policies []AttachedPolicy,
 	request iamv1.AuthorizationRequest,
 	decisionID iamv1.DecisionID,
 	databaseTime time.Time,
-) (iamv1.AuthorizationDecision, error) {
+) (AuthorizationEvaluation, error) {
 	if iamv1.ValidateServiceIdentity(identity) != nil ||
-		validateAuthorityTime(databaseTime) != nil || validateRoles(roles) != nil {
-		return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
+		validateAuthorityTime(databaseTime) != nil {
+		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
 	return decide(
 		identity.OrganizationID,
-		"",
+		identity.InstallationID,
 		iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: identity.PrincipalID},
 		false,
-		roles,
+		policies,
 		identity.Purpose,
 		request,
 		decisionID,
@@ -105,43 +112,30 @@ func decide(
 	installationID string,
 	subject iamv1.Subject,
 	mustChangePassword bool,
-	roles []iamv1.BuiltinRole,
+	policies []AttachedPolicy,
 	callingService iamv1.ServicePurpose,
 	request iamv1.AuthorizationRequest,
 	decisionID iamv1.DecisionID,
 	databaseTime time.Time,
-) (iamv1.AuthorizationDecision, error) {
+) (AuthorizationEvaluation, error) {
 	if iamv1.ValidateAuthorizationRequest(request) != nil {
-		return iamv1.AuthorizationDecision{}, ErrInvalidAuthorizationRequest
+		return AuthorizationEvaluation{}, ErrInvalidAuthorizationRequest
 	}
 	if iamv1.ValidateID("decisionId", string(decisionID)) != nil {
-		return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
+		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
 	if !knownServicePurpose(callingService) {
-		return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
+		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
-	allowed := false
+	evaluation, evidence, err := EvaluateAttachedPolicies(tenantID, installationID, subject, policies, request.Action, request.Resource)
+	if err != nil {
+		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
+	}
 	platform := iamv1.IsPlatformAction(request.Action)
 	platformContext := !platform || subject.Type == iamv1.PrincipalUser && iamv1.ValidateID("installationId", installationID) == nil
-	if !mustChangePassword && platformContext && ServiceCanRequest(callingService, request.Action) {
-		versions := make([]iamv1.PolicyVersion, 0, len(roles))
-		for _, role := range roles {
-			id, err := systemPolicyIDForRole(role)
-			if err != nil {
-				return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
-			}
-			version, err := SystemPolicyVersion(id)
-			if err != nil {
-				return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
-			}
-			versions = append(versions, version)
-		}
-		evaluation, err := EvaluatePolicies(versions, request.Action, request.Resource)
-		if err != nil {
-			return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
-		}
-		allowed = evaluation.Allowed
-	}
+	probeContext := request.Action != iamv1.ActionInstallationVerify ||
+		subject.Type == iamv1.PrincipalServiceAccount && request.Resource.ID == installationID
+	allowed := evaluation.Allowed && !mustChangePassword && platformContext && probeContext && ServiceCanRequest(callingService, request.Action)
 	decision := iamv1.AuthorizationDecision{
 		APIVersion: iamv1.APIVersion,
 		Kind:       "AuthorizationDecision",
@@ -163,9 +157,9 @@ func decide(
 		decision.Subject = &subject
 	}
 	if err := iamv1.ValidateAuthorizationDecision(decision); err != nil {
-		return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
+		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
-	return decision, nil
+	return AuthorizationEvaluation{AuthorizationDecision: decision, PolicyEvidence: evidence}, nil
 }
 
 // ServiceCanRequest confines each authorization action to the service that
@@ -174,28 +168,6 @@ func decide(
 func ServiceCanRequest(purpose iamv1.ServicePurpose, action iamv1.Action) bool {
 	definition, known := iamv1.LookupActionDefinition(action)
 	return known && definition.CallingService == purpose
-}
-
-// systemPolicyIDForRole interprets the still-current stored binding vocabulary
-// during the atomic policy replacement. It selects content, never evaluates
-// permission. The role-binding loader/API is removed at the storage cutover.
-func systemPolicyIDForRole(role iamv1.BuiltinRole) (iamv1.PolicyID, error) {
-	switch role {
-	case iamv1.RoleOrganizationAdmin:
-		return iamv1.SystemPolicyAccountAdministrator, nil
-	case iamv1.RolePlatformOperator:
-		return iamv1.SystemPolicyPlatformOperator, nil
-	case iamv1.RolePaaSDeveloper:
-		return iamv1.SystemPolicyPaaSDeveloper, nil
-	case iamv1.RolePaaSViewer:
-		return iamv1.SystemPolicyPaaSViewer, nil
-	case iamv1.RoleAuditReader:
-		return iamv1.SystemPolicyAuditReader, nil
-	case iamv1.RoleInstallationVerifier:
-		return iamv1.SystemPolicyInstallationVerifier, nil
-	default:
-		return "", ErrInvalidPolicyState
-	}
 }
 
 func validateSubjectContext(context SubjectContext, databaseTime time.Time) error {
@@ -216,27 +188,7 @@ func validateSubjectContext(context SubjectContext, databaseTime time.Time) erro
 		!databaseTime.Before(context.Session.ExpiresAt) {
 		return ErrUnauthenticated
 	}
-	return validateRoles(context.Roles)
-}
-
-func validateRoles(roles []iamv1.BuiltinRole) error {
-	seen := map[iamv1.BuiltinRole]struct{}{}
-	for _, role := range roles {
-		if _, duplicate := seen[role]; duplicate || !knownRole(role) {
-			return ErrAuthorityUnavailable
-		}
-		seen[role] = struct{}{}
-	}
 	return nil
-}
-
-func knownRole(role iamv1.BuiltinRole) bool {
-	for _, candidate := range iamv1.AllBuiltinRoles() {
-		if role == candidate {
-			return true
-		}
-	}
-	return false
 }
 
 func knownServicePurpose(purpose iamv1.ServicePurpose) bool {

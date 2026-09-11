@@ -62,7 +62,7 @@ func (service *Authority) Authorize(
 				principalID:    subject.Subject.Principal.ID,
 				principalType:  subject.Subject.Principal.Type,
 			},
-			func(decisionID iamv1.DecisionID) (iamv1.AuthorizationDecision, error) {
+			func(decisionID iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
 				return authority.Decide(
 					subject.Subject, caller.Identity.Purpose, request, decisionID, now,
 				)
@@ -106,7 +106,7 @@ func (service *Authority) VerifyInstallation(
 		if err != nil {
 			return err
 		}
-		roles, err := transaction.LookupServiceRoles(
+		policies, err := transaction.LookupServicePolicies(
 			transactionContext,
 			caller.Identity.OrganizationID,
 			caller.Identity.PrincipalID,
@@ -121,7 +121,7 @@ func (service *Authority) VerifyInstallation(
 			return ErrUnavailable
 		}
 		if status.InstallationID != request.Resource.ID {
-			roles = nil
+			policies = nil
 		}
 		decision, err = service.decideAndRecord(
 			transactionContext,
@@ -134,8 +134,8 @@ func (service *Authority) VerifyInstallation(
 				principalID:    caller.Identity.PrincipalID,
 				principalType:  iamv1.PrincipalServiceAccount,
 			},
-			func(decisionID iamv1.DecisionID) (iamv1.AuthorizationDecision, error) {
-				return authority.DecideService(caller.Identity, roles, request, decisionID, now)
+			func(decisionID iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
+				return authority.DecideService(caller.Identity, policies, request, decisionID, now)
 			},
 		)
 		return err
@@ -156,7 +156,7 @@ func (service *Authority) decideAndRecord(
 	requestDigest string,
 	now time.Time,
 	actor authorizationActor,
-	decide func(iamv1.DecisionID) (iamv1.AuthorizationDecision, error),
+	decide func(iamv1.DecisionID) (authority.AuthorizationEvaluation, error),
 ) (iamv1.AuthorizationDecision, error) {
 	decisionID, err := service.config.NewID("decision")
 	if err != nil {
@@ -200,10 +200,11 @@ func (service *Authority) decideAndRecord(
 	if err := transaction.RecordAuthorization(ctx, AuthorizationMutation{
 		OrganizationID: actor.organizationID,
 		PrincipalID:    actor.principalID,
-		Decision:       decision,
+		Decision:       decision.AuthorizationDecision,
+		PolicyEvidence: decision.PolicyEvidence,
 		AuditEvent:     event,
 	}); err != nil {
 		return iamv1.AuthorizationDecision{}, err
 	}
-	return decision, nil
+	return decision.AuthorizationDecision, nil
 }

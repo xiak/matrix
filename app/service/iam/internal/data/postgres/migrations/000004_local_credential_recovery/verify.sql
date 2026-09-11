@@ -1,5 +1,5 @@
 DO $verify_local_recovery$
-DECLARE function_name text; role_name text;
+DECLARE function_name text; policy_id text;
 BEGIN
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='matrix_iam_credential_recovery'
         AND NOT rolcanlogin AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls) THEN
@@ -10,9 +10,9 @@ BEGIN
           AND pg_has_role('matrix_iam_credential_recovery',inherited.oid,'MEMBER')) THEN
         RAISE EXCEPTION 'IAM local recovery role inherits unrelated authority';
     END IF;
-    FOREACH role_name IN ARRAY ARRAY['matrix_iam_owner','matrix_iam_migrator','matrix_iam_api','matrix_iam_worker'] LOOP
-        IF pg_has_role('matrix_iam_credential_recovery',role_name,'MEMBER')
-            OR (role_name IN ('matrix_iam_api','matrix_iam_worker') AND pg_has_role(role_name,'matrix_iam_credential_recovery','MEMBER')) THEN
+    FOREACH policy_id IN ARRAY ARRAY['matrix_iam_owner','matrix_iam_migrator','matrix_iam_api','matrix_iam_worker'] LOOP
+        IF pg_has_role('matrix_iam_credential_recovery',policy_id,'MEMBER')
+            OR (policy_id IN ('matrix_iam_api','matrix_iam_worker') AND pg_has_role(policy_id,'matrix_iam_credential_recovery','MEMBER')) THEN
             RAISE EXCEPTION 'IAM local recovery role membership is invalid';
         END IF;
     END LOOP;
@@ -37,8 +37,8 @@ BEGIN
             OR NOT has_function_privilege('matrix_iam_credential_recovery',function_name,'EXECUTE') THEN
             RAISE EXCEPTION 'IAM local recovery function shape is unavailable';
         END IF;
-        FOREACH role_name IN ARRAY ARRAY['public','matrix_iam_api','matrix_iam_worker'] LOOP
-            IF has_function_privilege(role_name,function_name,'EXECUTE') THEN
+        FOREACH policy_id IN ARRAY ARRAY['public','matrix_iam_api','matrix_iam_worker'] LOOP
+            IF has_function_privilege(policy_id,function_name,'EXECUTE') THEN
                 RAISE EXCEPTION 'IAM runtime can invoke local recovery';
             END IF;
         END LOOP;

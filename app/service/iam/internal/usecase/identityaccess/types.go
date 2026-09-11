@@ -42,20 +42,22 @@ type Transaction interface {
 	LookupPassword(context.Context, iamv1.OrganizationID, iamv1.PrincipalID) (authority.PasswordHash, bool, error)
 	LookupService(context.Context, string) (ServiceCredential, bool, error)
 	ReadAuditEvidence(context.Context, iamv1.ServiceIdentity, auditv1.Event) (AuditEvidence, bool, error)
-	LookupServiceRoles(
+	LookupServicePolicies(
 		context.Context,
 		iamv1.OrganizationID,
 		iamv1.PrincipalID,
-	) ([]iamv1.BuiltinRole, error)
+	) ([]authority.AttachedPolicy, error)
 	RecordAuthorization(context.Context, AuthorizationMutation) error
 	ChangePassword(context.Context, PasswordMutation) (iamv1.ChangePasswordResponse, error)
 	RevokeSession(context.Context, SessionRevocationMutation) (iamv1.Revocation, bool, error)
 	CreateUser(context.Context, UserMutation) (iamv1.Principal, error)
-	PutRoleBinding(context.Context, RoleBindingMutation) (iamv1.RoleBinding, bool, error)
-	LookupRoleBindingRole(context.Context, iamv1.OrganizationID, iamv1.RoleBindingID) (iamv1.BuiltinRole, bool, error)
-	RevokeRoleBinding(context.Context, RoleBindingRevocationMutation) (iamv1.Revocation, bool, error)
+	LookupPolicy(context.Context, iamv1.OrganizationID, iamv1.PolicyID) (iamv1.Policy, bool, error)
+	LookupPolicyAttachment(context.Context, iamv1.OrganizationID, iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error)
+	CreatePolicyAttachment(context.Context, PolicyAttachmentMutation) (iamv1.PolicyAttachment, error)
+	RevokePolicyAttachment(context.Context, PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error)
 	ReadAccount(context.Context, iamv1.OrganizationID, iamv1.PrincipalID) (iamv1.OrganizationAccount, error)
 	ListPrincipals(context.Context, AccountRead) (iamv1.PrincipalList, error)
+	ListPolicies(context.Context, AccountRead, iamv1.AuthorityScope) (iamv1.PolicyList, error)
 	ListAccounts(context.Context, AccountRead) (iamv1.OrganizationAccountList, error)
 	ReadOrganization(context.Context, AccountRead, iamv1.OrganizationID) (iamv1.OrganizationAccount, error)
 	CreateOrganization(context.Context, OrganizationMutation) (iamv1.OrganizationAccount, error)
@@ -111,7 +113,7 @@ type OrganizationAdministratorRecovery struct {
 	PrincipalID         iamv1.PrincipalID
 	ResourceVersion     uint64
 	PasswordHash        authority.PasswordHash
-	BindingID           iamv1.RoleBindingID
+	AttachmentID        iamv1.PolicyAttachmentID
 	AuditEvent          auditv1.Event
 }
 
@@ -190,6 +192,7 @@ type AuthorizationMutation struct {
 	OrganizationID iamv1.OrganizationID
 	PrincipalID    iamv1.PrincipalID
 	Decision       iamv1.AuthorizationDecision
+	PolicyEvidence []authority.PolicyAttachmentEvidence
 	AuditEvent     auditv1.Event
 }
 
@@ -219,16 +222,18 @@ type UserMutation struct {
 	AuditEvent       auditv1.Event
 }
 
-type RoleBindingMutation struct {
-	Binding          iamv1.RoleBinding
-	ActorPrincipalID iamv1.PrincipalID
-	DecisionID       iamv1.DecisionID
-	AuditEvent       auditv1.Event
+type PolicyAttachmentMutation struct {
+	Attachment            iamv1.PolicyAttachment
+	PolicyResourceVersion uint64
+	ActorPrincipalID      iamv1.PrincipalID
+	DecisionID            iamv1.DecisionID
+	AuditEvent            auditv1.Event
 }
 
-type RoleBindingRevocationMutation struct {
+type PolicyAttachmentRevocationMutation struct {
 	OrganizationID   iamv1.OrganizationID
-	RoleBindingID    iamv1.RoleBindingID
+	AttachmentID     iamv1.PolicyAttachmentID
+	ResourceVersion  uint64
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
