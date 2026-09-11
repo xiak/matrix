@@ -1,6 +1,6 @@
 # FEAT-006 adoption review: Platform IAM and Audit authorities
 
-- Status: Complete for the accepted foundation and the 2026-09-11 account/policy/role refactor review
+- Status: Complete for the accepted foundation and the reviewed IAM replacement slices; later slices require their own fixed-source review
 - Target: [`FEAT-006 Platform IAM and Audit authorities`](../features/FEAT-006-platform-authorities.md)
 - Review date: 2026-08-25
 - Refactor review date: 2026-09-11
@@ -169,7 +169,8 @@ internal process topology.
 | A role is a virtual identity with a separate trust policy and permission policies, no persistent password/access key, and STS issues bounded temporary credentials | `ADAPT` in a later vertical slice | Introduce `Role` and `RoleSession` only after policies exist. Require both caller permission and target trust, preserve the original principal, and keep long-lived user/service credentials distinct. Sources: [role concepts](https://cloud.tencent.com/document/product/598/19421), [AssumeRole](https://cloud.tencent.com/document/product/1312/48197). |
 | Role operations retain the assumer/session identity in operation audit | `ADAPT` | Extend the existing immutable decision and Audit correlation with direct and original principals; Audit remains evidence, never an online authorization source. Source: [role audit](https://cloud.tencent.com/document/product/598/115890). |
 | Each product documents whether it supports service-, action- or resource-level authorization and which resources each API accepts | `ADAPT` | Matrix products publish a versioned `AuthorizationProfile` used by both static analysis and runtime validation. This machine-readable signed profile is a Matrix design, not a claim about Tencent's internal implementation. Sources: [supported products](https://cloud.tencent.com/document/product/598/67350), [product API example](https://cloud.tencent.com/document/product/598/70005). |
-| SAML/OIDC user and role SSO, cross-account roles, ABAC/tag authorization and regionally replicated policy state | `REFERENCE` and defer | Retain extension boundaries, but do not put IdP, cross-account trust, arbitrary tag conditions or regional replication into the first private-deployment slices. Sources: [SSO overview](https://cloud.tencent.com/document/product/598/96014), [ABAC overview](https://cloud.tencent.com/document/product/598/74876), [product consistency](https://cloud.tencent.com/document/product/598/10586). |
+| SAML/OIDC user and role SSO, cross-account roles and regionally replicated policy state | `REFERENCE` and defer | Retain external-source and deployment prerequisites under IAM/012. Sources: [SSO overview](https://cloud.tencent.com/document/product/598/96014), [product consistency](https://cloud.tencent.com/document/product/598/10586). |
+| ABAC/tag authorization | `ADAPT` | Implement typed, product-attested attributes in IAM/008; do not accept arbitrary caller maps. Source: [ABAC overview](https://cloud.tencent.com/document/product/598/74876). |
 | Main-account keys, provider-specific user categories, account numbers, resource strings, console routes, quotas and API names | `REJECT` as Matrix contracts | Preserve the security lessons—secrets returned once, disable/rotate/delete lifecycle and least privilege—but do not clone Tencent identifiers, product-specific exceptions or UI wording. Source: [access-key lifecycle](https://cloud.tencent.com/document/product/598/40488). |
 
 ## Refactor decisions against the current Matrix implementation
@@ -186,10 +187,23 @@ internal process topology.
 | immutable tenant/installation Audit, event-bound producer proof and local platform recovery | `REUSE` | Preserve canonical bytes, chain identity, seven-column claim and closed recovery facts. Policy refactoring cannot reclassify old events, revive credentials or grant platform roles. |
 | The paused global `allowedActions`/action-availability proposal | `REJECT` as an authorization contract; `REFERENCE` for a future UI hint | Resource- and condition-sensitive permission cannot be represented as a globally authoritative action list. A later UI capability endpoint must be context-bound, revision-bound and conservative; the server still authorizes every request. |
 
-The first executable slice is therefore system-policy parity, not a full cloud
-IAM rollout: register only today's product vocabulary, create system-managed
-policy versions equivalent to the six built-in roles, migrate existing
-bindings atomically, replace `RoleAllows`, and prove identical decisions plus
-retained-data upgrade and rollback. Root separation, groups, customer policy
-versions, permission boundaries, roles/STS and SSO remain subsequent slices
-owned by FEAT-006.
+The implementation requirements, slice order and acceptance now belong to
+[`IAM/`](../../IAM/README.md), not a duplicate design in this adoption record.
+
+## IAM/001 fixed action-catalog adoption
+
+The smallest target is the existing action/resource/calling-service/scope
+contract with one immutable owner; no new permission or dynamic profile is
+implied. The target was recorded before this focused source inspection.
+
+| Fixed source and slice | Decision | Reason |
+| --- | --- | --- |
+| Matrix `b0e8627b7e8303136875bda074f2e382c23dfc0b`: `api/iam/v1/enums.go`, `validation.go`, `authority/authorization.go` and owning tests | `ADAPT` | Retain exact accepted action literals, resource bindings, caller confinement, scope and verifier semantics. Replace the repeated inventory/switch/prefix definitions with one value-only catalog consumed by all three owners. |
+| Legacy PaaS `69336e51f94fa98f6aa278fa4c62382e224dbeaf`: `accessgrant/usecase/action_validation.go` | `REFERENCE` | A referenced action must exist and explicitly support its authorization resource kind; unavailable or mismatched definitions fail closed. No legacy repository/reader/domain type is imported. |
+| Same legacy commit: `accessgrant/seed/catalog.go`, `platformaccess/profile/domain/bootstrap_profile.go` | `REJECT` as implementation | Its multi-level grant graph, deterministic UUID framework, obligations and required platform-admin bootstrap profile do not implement this release's single sealed service purpose and bounded verifier probe. No bootstrap entitlement is inferred from a catalog entry. |
+| Matrix fixed snapshot `66f772ea1363886669c4a0a5a8a729bf0407324c` | `REFERENCE` for subsequent consumer alignment | The installation owner identifies this as a host-enrollment consumer snapshot. It is not imported into the catalog slice, and its Phase 3 acceptance is not inherited. The complete integration must preserve its host actions and exact proof mappings; the eventual fixed donor review belongs to that slice. |
+
+The foundation donor object `f51d5ed...` is not available in this checkout's
+object database. Its prior foundation review is not new inspection evidence;
+IAM/001 imports no code from it. The actual legacy review above uses read-only
+Git objects, never the donor's working files.
