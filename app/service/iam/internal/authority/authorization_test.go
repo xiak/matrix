@@ -165,6 +165,67 @@ func TestEveryIAMActionHasOnlyFixedRoleAuthority(t *testing.T) {
 	}
 }
 
+func TestCatalogConfinementIsEnforcedByActualDecisions(t *testing.T) {
+	now := authorityTestTime()
+	for _, definition := range iamv1.AllActionDefinitions() {
+		t.Run(string(definition.Action), func(t *testing.T) {
+			request := iamv1.AuthorizationRequest{Action: definition.Action,
+				Resource:  iamv1.ResourceReference{Kind: definition.ResourceKind, ID: "resource-example"},
+				RequestID: "request-catalog", CorrelationID: "correlation-catalog"}
+			for _, service := range iamv1.AllServicePurposes() {
+				var decision iamv1.AuthorizationDecision
+				var err error
+				if definition.AuthorityScope == iamv1.AuthorityScopeInstallationProbe {
+					identity := iamv1.ServiceIdentity{APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
+						InstallationID: "installation-example", OrganizationID: "organization-example",
+						PrincipalID: "service-example", Purpose: service}
+					decision, err = DecideService(identity, []iamv1.BuiltinRole{iamv1.RoleInstallationVerifier}, request, "decision-catalog", now)
+				} else {
+					context := authoritySubject(now, iamv1.RoleOrganizationAdmin, iamv1.RolePlatformOperator)
+					context.InstallationID = "installation-example"
+					decision, err = Decide(context, service, request, "decision-catalog", now)
+				}
+				wantAllowed := service == definition.CallingService
+				if err != nil || decision.Allowed != wantAllowed {
+					t.Fatalf("caller=%s decision=%+v err=%v", service, decision, err)
+				}
+				if !wantAllowed {
+					if decision.Subject != nil || decision.TenantID != "" || decision.InstallationID != "" {
+						t.Fatal("wrong-service denial leaked authority context")
+					}
+					continue
+				}
+				if definition.AuthorityScope == iamv1.AuthorityScopeInstallation {
+					if decision.InstallationID != "installation-example" || decision.TenantID != "" || decision.Subject.Type != iamv1.PrincipalUser {
+						t.Fatal("platform action lost its installation/user authority")
+					}
+				} else if decision.TenantID != "organization-example" || decision.InstallationID != "" {
+					t.Fatal("tenant/probe decision changed its bound home tenant")
+				}
+				if definition.AuthorityScope == iamv1.AuthorityScopeInstallationProbe && decision.Subject.Type != iamv1.PrincipalServiceAccount {
+					t.Fatal("probe no longer identifies the authenticated service")
+				}
+			}
+			context := authoritySubject(now, iamv1.RoleOrganizationAdmin, iamv1.RolePlatformOperator)
+			context.InstallationID = "installation-example"
+			request.Resource.Kind = iamv1.ResourceApplication
+			if definition.ResourceKind == request.Resource.Kind {
+				request.Resource.Kind = iamv1.ResourceOrganization
+			}
+			if _, err := Decide(context, definition.CallingService, request, "decision-mismatched-resource", now); !errors.Is(err, ErrInvalidAuthorizationRequest) {
+				t.Fatalf("action with another registered resource kind: %v", err)
+			}
+		})
+	}
+	for _, service := range iamv1.AllServicePurposes() {
+		for _, action := range []iamv1.Action{"iam.principal.unknown", "paas.unregistered.execute", "managedservice.unregistered.read", "installation.verify.other"} {
+			if ServiceCanRequest(service, action) {
+				t.Fatalf("prefix-only admission: %s/%s", service, action)
+			}
+		}
+	}
+}
+
 func TestManagedServiceUsesTheExistingClosedPaaSRoleMatrix(t *testing.T) {
 	readActions := []iamv1.Action{
 		iamv1.ActionManagedServiceOfferingRead,

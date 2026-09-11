@@ -1,6 +1,6 @@
 # FEAT-IAM-001：业务授权能力目录
 
-- 状态：实施中，未验收。
+- 状态：CAT-01–04 的代码已实现，本地全仓与真实运行门禁通过；独立 CI 待完成。CAT-05 未实施，本 FEAT 整体未验收。
 - 依赖：[产品契约](./FEAT-IAM-000-product-contract.md)。
 - Owner：IAM 公共契约与现有 authority；产品拥有其业务词汇。
 - 首片：把现有已接受的动作、允许调用服务、资源种类和 scope 收敛为一份不可变目录，所有当前验证和决定路径消费该目录。
@@ -35,4 +35,15 @@
 
 ## 采用与证据
 
-复用 owner 和固定源见 [adoption](../docs/adoption/FEAT-006-platform-authorities.md)。本片当前尚无新增运行验收证据。
+复用 owner 和固定源见 [adoption](../docs/adoption/FEAT-006-platform-authorities.md)。
+
+2026-09-11 本分支首片证据：
+
+- `TestIAMActionDefinitionsDeclareProductServiceAndScope`、`TestIAMCatalogReadsCannotModifyAuthority` 和 `TestCatalogConfinementIsEnforcedByActualDecisions` 先因目录缺失失败，实现后通过。它们验证真实决定的调用服务/资源/scope、未知动作失败关闭及返回值不可修改目录，不快照 SQL 或文件布局。
+- `go generate ./api/...` 后生成 JSON 没有差异；API、IAM、Audit、architecture 的 race 与 vet 通过。原有动作、公开 wire、ServiceIdentity、lookup_service、七列 claim、canonical 和 SQL schema/profile 均未改变。
+- 独立 PG18 固定镜像 `postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a`，1 CPU/768 MiB/PIDs192；专属网络、卷、loopback 随机端口及六个一次性数据库。串行 `-race -p 1 -count=1` 实跑 IAM HTTP/本地恢复事务（100.449s）、Audit HTTP（3.373s）、双 authority 数据库权限/不可变性（5.811s）、独立服务进程与实际固定 `5721b7b` 旧 executable 保留升级（77.444s）。
+- 进程门禁保留受限 runtime 身份探针、双租户业务/Operation/outbox、实时权限撤销、安装 verifier、producer 历史证明与原 local-recovery 事实。没有把默认跳过的数据库测试当真实门禁，也未声明新的签名包或其他 Phase 验收。
+
+- 提交前全仓 `go test -race -p 2 ./...`、`go vet -p 2 ./...`、`go mod verify` 和 Linux amd64 全仓构建通过。任务专属 PG 容器、六个 fixture 数据库所在卷及网络已按精确标签清理；不涉及用户数据或其他任务对象。
+
+精确 SHA CI 在通过后补入本节；CAT-05、策略替换及最终 IAM6 组合仍分别按 owning FEAT 实施。

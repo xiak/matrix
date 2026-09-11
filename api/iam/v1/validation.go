@@ -411,12 +411,8 @@ func ValidateProblem(value Problem) error {
 }
 
 func knownAction(value Action) bool {
-	for _, candidate := range allActions {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
+	_, known := LookupActionDefinition(value)
+	return known
 }
 
 func knownRole(value BuiltinRole) bool {
@@ -451,56 +447,11 @@ func validateResourceForAction(action Action, resource ResourceReference) error 
 	return nil
 }
 
-// ResourceKindForAction is the single action-to-resource catalog used by
-// domain validation and contract generation.
+// ResourceKindForAction reads the shared catalog for domain validation and
+// contract generation; resource ownership still requires product enforcement.
 func ResourceKindForAction(action Action) (ResourceKind, bool) {
-	switch action {
-	case ActionIAMPrincipalCreate, ActionIAMPrincipalList,
-		ActionIAMOrganizationCreate, ActionIAMOrganizationRead, ActionIAMOrganizationSetStatus, ActionIAMAccountAliasSet:
-		return ResourceOrganization, true
-	case ActionIAMPrincipalRead, ActionIAMRoleBindingPut, ActionIAMPlatformRoleBindingPut,
-		ActionIAMPrincipalSetStatus, ActionIAMPasswordReset, ActionIAMOrganizationAdministratorRecover:
-		return ResourcePrincipal, true
-	case ActionIAMRoleBindingRevoke, ActionIAMPlatformRoleBindingRevoke:
-		return ResourceRoleBinding, true
-	case ActionIAMSessionRevoke:
-		return ResourceSession, true
-	case ActionPaaSApplicationCreate, ActionPaaSApplicationRead:
-		return ResourceApplication, true
-	case ActionPaaSConfigurationCreate, ActionPaaSConfigurationRead:
-		return ResourceConfiguration, true
-	case ActionPaaSConfigurationRevisionCreate, ActionPaaSConfigurationRevisionRead:
-		return ResourceConfigurationRevision, true
-	case ActionPaaSApplicationRevisionCreate, ActionPaaSApplicationRevisionRead:
-		return ResourceApplicationRevision, true
-	case ActionPaaSDeploymentCreate, ActionPaaSDeploymentUpdate,
-		ActionPaaSDeploymentRollback, ActionPaaSDeploymentStop, ActionPaaSDeploymentRead:
-		return ResourceDeployment, true
-	case ActionPaaSOperationRead, ActionPaaSPlatformOperationRead:
-		return ResourceOperation, true
-	case ActionPaaSExecutionPoolCreate, ActionPaaSExecutionPoolRead:
-		return ResourceExecutionPool, true
-	case ActionPaaSExecutionTargetRegister, ActionPaaSExecutionTargetRead:
-		return ResourceExecutionTarget, true
-	case ActionManagedServiceOfferingRead:
-		return ResourceServiceOffering, true
-	case ActionManagedServiceRegionRead:
-		return ResourceRegion, true
-	case ActionManagedServiceQuotaEntitlementActivate,
-		ActionManagedServiceQuotaEntitlementRead:
-		return ResourceQuotaEntitlement, true
-	case ActionManagedServiceInstallationCreate,
-		ActionManagedServiceInstallationRead:
-		return ResourceServiceInstallation, true
-	case ActionAuditRecordRead, ActionAuditPlatformRecordRead:
-		return ResourceAuditRecord, true
-	case ActionAuditIntegrityVerify, ActionAuditPlatformIntegrityVerify:
-		return ResourceAuditChain, true
-	case ActionInstallationVerify:
-		return ResourceInstallation, true
-	default:
-		return "", false
-	}
+	definition, known := LookupActionDefinition(action)
+	return definition.ResourceKind, known
 }
 
 // ValidateLoginIdentifier accepts a primary login or one qualified subaccount

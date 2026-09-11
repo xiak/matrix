@@ -320,6 +320,111 @@ func TestIAMActionCatalogHasOneResourceKind(t *testing.T) {
 	}
 }
 
+func TestIAMActionDefinitionsDeclareProductServiceAndScope(t *testing.T) {
+	// These cases pin security boundaries, including equal resource kinds in
+	// different authority scopes and managedservice's PaaS caller.
+	for _, want := range []ActionDefinition{
+		{ActionIAMOrganizationCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeInstallation},
+		{ActionIAMOrganizationAdministratorRecover, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
+		{ActionIAMPrincipalCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
+		{ActionIAMRoleBindingPut, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
+		{ActionIAMRoleBindingRevoke, ProductIAM, ServiceIAM, ResourceRoleBinding, AuthorityScopeTenant},
+		{ActionIAMPlatformRoleBindingPut, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
+		{ActionIAMSessionRevoke, ProductIAM, ServiceIAM, ResourceSession, AuthorityScopeTenant},
+		{ActionPaaSApplicationCreate, ProductPaaS, ServicePaaS, ResourceApplication, AuthorityScopeTenant},
+		{ActionPaaSExecutionPoolCreate, ProductPaaS, ServicePaaS, ResourceExecutionPool, AuthorityScopeInstallation},
+		{ActionPaaSExecutionTargetRegister, ProductPaaS, ServicePaaS, ResourceExecutionTarget, AuthorityScopeInstallation},
+		{ActionPaaSOperationRead, ProductPaaS, ServicePaaS, ResourceOperation, AuthorityScopeTenant},
+		{ActionPaaSPlatformOperationRead, ProductPaaS, ServicePaaS, ResourceOperation, AuthorityScopeInstallation},
+		{ActionManagedServiceOfferingRead, ProductManagedService, ServicePaaS, ResourceServiceOffering, AuthorityScopeTenant},
+		{ActionManagedServiceInstallationCreate, ProductManagedService, ServicePaaS, ResourceServiceInstallation, AuthorityScopeTenant},
+		{ActionAuditRecordRead, ProductAudit, ServiceAudit, ResourceAuditRecord, AuthorityScopeTenant},
+		{ActionAuditPlatformRecordRead, ProductAudit, ServiceAudit, ResourceAuditRecord, AuthorityScopeInstallation},
+		{ActionAuditIntegrityVerify, ProductAudit, ServiceAudit, ResourceAuditChain, AuthorityScopeTenant},
+		{ActionAuditPlatformIntegrityVerify, ProductAudit, ServiceAudit, ResourceAuditChain, AuthorityScopeInstallation},
+		{ActionInstallationVerify, ProductInstallation, ServiceInstallationVerifier, ResourceInstallation, AuthorityScopeInstallationProbe},
+	} {
+		if got, known := LookupActionDefinition(want.Action); !known || got != want {
+			t.Errorf("definition %s = %+v known=%v, want %+v", want.Action, got, known, want)
+		}
+	}
+
+	callers := map[ProductID]ServicePurpose{
+		ProductIAM: ServiceIAM, ProductPaaS: ServicePaaS, ProductManagedService: ServicePaaS,
+		ProductAudit: ServiceAudit, ProductInstallation: ServiceInstallationVerifier,
+	}
+	seen := make(map[Action]bool)
+	for _, definition := range AllActionDefinitions() {
+		if seen[definition.Action] || definition.Action == "" {
+			t.Fatalf("duplicate/empty action definition %q", definition.Action)
+		}
+		seen[definition.Action] = true
+		if caller, known := callers[definition.Product]; !known || caller != definition.CallingService {
+			t.Errorf("product caller changed: %+v", definition)
+		}
+		switch definition.AuthorityScope {
+		case AuthorityScopeTenant, AuthorityScopeInstallation:
+			if definition.Product == ProductInstallation {
+				t.Fatal("installation verifier became a business authorization product")
+			}
+		case AuthorityScopeInstallationProbe:
+			if definition.Action != ActionInstallationVerify || definition.CallingService != ServiceInstallationVerifier {
+				t.Fatal("probe scope admitted an unrelated action or service")
+			}
+		default:
+			t.Errorf("missing authority scope: %+v", definition)
+		}
+		kind, known := ResourceKindForAction(definition.Action)
+		if !known || kind != definition.ResourceKind || IsPlatformAction(definition.Action) != (definition.AuthorityScope == AuthorityScopeInstallation) {
+			t.Errorf("validators diverge from the definition: %+v", definition)
+		}
+	}
+	actions := AllActions()
+	if len(seen) != len(actions) {
+		t.Fatal("action inventory and definitions diverge")
+	}
+	for _, action := range actions {
+		if !seen[action] {
+			t.Errorf("action %s lacks an explicit definition", action)
+		}
+	}
+	for _, unknown := range []Action{"", "iam.principal.unknown", "paas.unregistered.execute", "installation.verify.other"} {
+		if definition, known := LookupActionDefinition(unknown); known || definition != (ActionDefinition{}) || IsPlatformAction(unknown) {
+			t.Errorf("unknown action obtained a definition/authority: %q", unknown)
+		}
+	}
+}
+
+func TestIAMCatalogReadsCannotModifyAuthority(t *testing.T) {
+	want, known := LookupActionDefinition(ActionIAMOrganizationCreate)
+	if !known {
+		t.Fatal("organization creation is not registered")
+	}
+	definitions := AllActionDefinitions()
+	for index := range definitions {
+		definitions[index] = ActionDefinition{Action: "paas.forged.execute", CallingService: ServicePaaS}
+	}
+	actions := AllActions()
+	for index := range actions {
+		actions[index] = "paas.forged.execute"
+	}
+	copy, _ := LookupActionDefinition(want.Action)
+	copy.CallingService, copy.AuthorityScope = ServicePaaS, AuthorityScopeTenant
+	if got, known := LookupActionDefinition(want.Action); !known || got != want {
+		t.Fatal("caller mutation changed the authority catalog")
+	}
+	for _, definition := range AllActionDefinitions() {
+		if definition.Action == "paas.forged.execute" {
+			t.Fatal("definition slice exposed mutable catalog storage")
+		}
+	}
+	for _, action := range AllActions() {
+		if action == "paas.forged.execute" {
+			t.Fatal("action slice exposed mutable catalog storage")
+		}
+	}
+}
+
 func TestQualifiedLoginIsAnAccountNamespaceNotAnEmail(t *testing.T) {
 	for _, name := range []string{"admin", "developer@acme", "developer@123456789", "developer@tenant-prod", "developer@tenant.example", "dev.user@tenant:region-1"} {
 		if err := ValidateLoginIdentifier(name); err != nil {

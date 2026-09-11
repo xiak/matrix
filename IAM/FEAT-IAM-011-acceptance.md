@@ -37,6 +37,7 @@
 - `BootstrapDigest`、封存 receipt/home organization/original primary；原 platform binding 到附件的确定性迁移及不可复权。
 - `matrix-iam-local-recovery` 的 FILE/固定退出码、commandId/inputCommitment/精确历史重放、专用登录和无秘密输出；修改私有 ABI 必须一起迁移安装消费者。
 - 固定主机消费者的 node-enrollment create/read/revoke/regenerate、target register/read/drain/activate/remove、pool 与 platform-operation 均保持 platform-only。enrollment 派生的 registered 事实只能沿对应历史 enrollment 证明，直接登记仍需精确 target register 决定；不放宽为任意 create 证明。
+- 固定消费者中的 terminal-session create/close 仍是租户业务权限，不能因主机管理权限而开放；PaaSDeveloper 的已有授权、PaaSViewer/PlatformOperator 的拒绝和终端历史 actor/source 证明一并回归。
 
 安装 owner 的源快照和候选固定 SHA 归 adoption；其既有 host 证据不复制成本分支新版本验收。
 

@@ -11,6 +11,36 @@ type DecisionReason string
 type BootstrapState string
 type ServicePurpose string
 type ReadinessState string
+type ProductID string
+type AuthorityScope string
+
+// ActionDefinition binds a product operation to its only authorization caller,
+// resource kind and authority scope. It describes a registered operation; it
+// does not grant permission, attest a resource's owner, or imply instance-level
+// filtering. These value-only records are not caller-editable profiles.
+type ActionDefinition struct {
+	Action         Action
+	Product        ProductID
+	CallingService ServicePurpose
+	ResourceKind   ResourceKind
+	AuthorityScope AuthorityScope
+}
+
+const (
+	ProductIAM            ProductID = "iam"
+	ProductPaaS           ProductID = "paas"
+	ProductManagedService ProductID = "managedservice"
+	ProductAudit          ProductID = "audit"
+	ProductInstallation   ProductID = "installation"
+)
+
+const (
+	AuthorityScopeTenant       AuthorityScope = "TENANT"
+	AuthorityScopeInstallation AuthorityScope = "INSTALLATION"
+	// The existing verifier probe yields a home-tenant-bound service decision,
+	// not a platform USER decision or a permit for any business operation.
+	AuthorityScopeInstallationProbe AuthorityScope = "INSTALLATION_PROBE"
+)
 
 const (
 	OrganizationActive   OrganizationStatus = "ACTIVE"
@@ -140,7 +170,26 @@ const (
 )
 
 func AllActions() []Action {
-	return append([]Action(nil), allActions...)
+	actions := make([]Action, len(actionDefinitions))
+	for index, definition := range actionDefinitions {
+		actions[index] = definition.Action
+	}
+	return actions
+}
+
+// AllActionDefinitions returns copies in the established contract-generation
+// order. No caller can mutate the shared catalog through these values.
+func AllActionDefinitions() []ActionDefinition {
+	return append([]ActionDefinition(nil), actionDefinitions[:]...)
+}
+
+func LookupActionDefinition(action Action) (ActionDefinition, bool) {
+	for _, definition := range actionDefinitions {
+		if definition.Action == action {
+			return definition, true
+		}
+	}
+	return ActionDefinition{}, false
 }
 
 func AllBuiltinRoles() []BuiltinRole {
@@ -153,52 +202,54 @@ func AllServicePurposes() []ServicePurpose {
 	return append([]ServicePurpose(nil), allServicePurposes...)
 }
 
-var allActions = []Action{
-	ActionIAMOrganizationCreate,
-	ActionIAMOrganizationRead,
-	ActionIAMOrganizationSetStatus,
-	ActionIAMOrganizationAdministratorRecover,
-	ActionIAMAccountAliasSet,
-	ActionIAMPrincipalList,
-	ActionIAMPrincipalSetStatus,
-	ActionIAMPasswordReset,
-	ActionIAMPrincipalCreate,
-	ActionIAMPrincipalRead,
-	ActionIAMRoleBindingPut,
-	ActionIAMRoleBindingRevoke,
-	ActionIAMSessionRevoke,
-	ActionIAMPlatformRoleBindingPut,
-	ActionIAMPlatformRoleBindingRevoke,
-	ActionPaaSExecutionPoolCreate,
-	ActionPaaSExecutionPoolRead,
-	ActionPaaSExecutionTargetRegister,
-	ActionPaaSExecutionTargetRead,
-	ActionPaaSPlatformOperationRead,
-	ActionPaaSApplicationCreate,
-	ActionPaaSApplicationRead,
-	ActionPaaSConfigurationCreate,
-	ActionPaaSConfigurationRead,
-	ActionPaaSConfigurationRevisionCreate,
-	ActionPaaSConfigurationRevisionRead,
-	ActionPaaSApplicationRevisionCreate,
-	ActionPaaSApplicationRevisionRead,
-	ActionPaaSDeploymentCreate,
-	ActionPaaSDeploymentUpdate,
-	ActionPaaSDeploymentRollback,
-	ActionPaaSDeploymentStop,
-	ActionPaaSDeploymentRead,
-	ActionPaaSOperationRead,
-	ActionManagedServiceOfferingRead,
-	ActionManagedServiceRegionRead,
-	ActionManagedServiceQuotaEntitlementActivate,
-	ActionManagedServiceQuotaEntitlementRead,
-	ActionManagedServiceInstallationCreate,
-	ActionManagedServiceInstallationRead,
-	ActionAuditRecordRead,
-	ActionAuditIntegrityVerify,
-	ActionAuditPlatformRecordRead,
-	ActionAuditPlatformIntegrityVerify,
-	ActionInstallationVerify,
+// This is the sole action/resource/caller/scope catalog. Preserve its order:
+// existing generated contracts use AllActions.
+var actionDefinitions = [...]ActionDefinition{
+	{ActionIAMOrganizationCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeInstallation},
+	{ActionIAMOrganizationRead, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeInstallation},
+	{ActionIAMOrganizationSetStatus, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeInstallation},
+	{ActionIAMOrganizationAdministratorRecover, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
+	{ActionIAMAccountAliasSet, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
+	{ActionIAMPrincipalList, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
+	{ActionIAMPrincipalSetStatus, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
+	{ActionIAMPasswordReset, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
+	{ActionIAMPrincipalCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
+	{ActionIAMPrincipalRead, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
+	{ActionIAMRoleBindingPut, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
+	{ActionIAMRoleBindingRevoke, ProductIAM, ServiceIAM, ResourceRoleBinding, AuthorityScopeTenant},
+	{ActionIAMSessionRevoke, ProductIAM, ServiceIAM, ResourceSession, AuthorityScopeTenant},
+	{ActionIAMPlatformRoleBindingPut, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
+	{ActionIAMPlatformRoleBindingRevoke, ProductIAM, ServiceIAM, ResourceRoleBinding, AuthorityScopeInstallation},
+	{ActionPaaSExecutionPoolCreate, ProductPaaS, ServicePaaS, ResourceExecutionPool, AuthorityScopeInstallation},
+	{ActionPaaSExecutionPoolRead, ProductPaaS, ServicePaaS, ResourceExecutionPool, AuthorityScopeInstallation},
+	{ActionPaaSExecutionTargetRegister, ProductPaaS, ServicePaaS, ResourceExecutionTarget, AuthorityScopeInstallation},
+	{ActionPaaSExecutionTargetRead, ProductPaaS, ServicePaaS, ResourceExecutionTarget, AuthorityScopeInstallation},
+	{ActionPaaSPlatformOperationRead, ProductPaaS, ServicePaaS, ResourceOperation, AuthorityScopeInstallation},
+	{ActionPaaSApplicationCreate, ProductPaaS, ServicePaaS, ResourceApplication, AuthorityScopeTenant},
+	{ActionPaaSApplicationRead, ProductPaaS, ServicePaaS, ResourceApplication, AuthorityScopeTenant},
+	{ActionPaaSConfigurationCreate, ProductPaaS, ServicePaaS, ResourceConfiguration, AuthorityScopeTenant},
+	{ActionPaaSConfigurationRead, ProductPaaS, ServicePaaS, ResourceConfiguration, AuthorityScopeTenant},
+	{ActionPaaSConfigurationRevisionCreate, ProductPaaS, ServicePaaS, ResourceConfigurationRevision, AuthorityScopeTenant},
+	{ActionPaaSConfigurationRevisionRead, ProductPaaS, ServicePaaS, ResourceConfigurationRevision, AuthorityScopeTenant},
+	{ActionPaaSApplicationRevisionCreate, ProductPaaS, ServicePaaS, ResourceApplicationRevision, AuthorityScopeTenant},
+	{ActionPaaSApplicationRevisionRead, ProductPaaS, ServicePaaS, ResourceApplicationRevision, AuthorityScopeTenant},
+	{ActionPaaSDeploymentCreate, ProductPaaS, ServicePaaS, ResourceDeployment, AuthorityScopeTenant},
+	{ActionPaaSDeploymentUpdate, ProductPaaS, ServicePaaS, ResourceDeployment, AuthorityScopeTenant},
+	{ActionPaaSDeploymentRollback, ProductPaaS, ServicePaaS, ResourceDeployment, AuthorityScopeTenant},
+	{ActionPaaSDeploymentStop, ProductPaaS, ServicePaaS, ResourceDeployment, AuthorityScopeTenant},
+	{ActionPaaSDeploymentRead, ProductPaaS, ServicePaaS, ResourceDeployment, AuthorityScopeTenant},
+	{ActionPaaSOperationRead, ProductPaaS, ServicePaaS, ResourceOperation, AuthorityScopeTenant},
+	{ActionManagedServiceOfferingRead, ProductManagedService, ServicePaaS, ResourceServiceOffering, AuthorityScopeTenant},
+	{ActionManagedServiceRegionRead, ProductManagedService, ServicePaaS, ResourceRegion, AuthorityScopeTenant},
+	{ActionManagedServiceQuotaEntitlementActivate, ProductManagedService, ServicePaaS, ResourceQuotaEntitlement, AuthorityScopeTenant},
+	{ActionManagedServiceQuotaEntitlementRead, ProductManagedService, ServicePaaS, ResourceQuotaEntitlement, AuthorityScopeTenant},
+	{ActionManagedServiceInstallationCreate, ProductManagedService, ServicePaaS, ResourceServiceInstallation, AuthorityScopeTenant},
+	{ActionManagedServiceInstallationRead, ProductManagedService, ServicePaaS, ResourceServiceInstallation, AuthorityScopeTenant},
+	{ActionAuditRecordRead, ProductAudit, ServiceAudit, ResourceAuditRecord, AuthorityScopeTenant},
+	{ActionAuditIntegrityVerify, ProductAudit, ServiceAudit, ResourceAuditChain, AuthorityScopeTenant},
+	{ActionAuditPlatformRecordRead, ProductAudit, ServiceAudit, ResourceAuditRecord, AuthorityScopeInstallation},
+	{ActionAuditPlatformIntegrityVerify, ProductAudit, ServiceAudit, ResourceAuditChain, AuthorityScopeInstallation},
+	{ActionInstallationVerify, ProductInstallation, ServiceInstallationVerifier, ResourceInstallation, AuthorityScopeInstallationProbe},
 }
 
 var allBuiltinRoles = []BuiltinRole{
@@ -220,15 +271,6 @@ var allServicePurposes = []ServicePurpose{
 // IsPlatformAction identifies installation authority, never the subject's
 // organization membership. Unknown actions grant neither kind of authority.
 func IsPlatformAction(action Action) bool {
-	switch action {
-	case ActionIAMOrganizationCreate, ActionIAMOrganizationRead,
-		ActionIAMOrganizationSetStatus, ActionIAMOrganizationAdministratorRecover,
-		ActionIAMPlatformRoleBindingPut, ActionIAMPlatformRoleBindingRevoke,
-		ActionPaaSExecutionPoolCreate, ActionPaaSExecutionPoolRead,
-		ActionPaaSExecutionTargetRegister, ActionPaaSExecutionTargetRead,
-		ActionPaaSPlatformOperationRead, ActionAuditPlatformRecordRead, ActionAuditPlatformIntegrityVerify:
-		return true
-	default:
-		return false
-	}
+	definition, known := LookupActionDefinition(action)
+	return known && definition.AuthorityScope == AuthorityScopeInstallation
 }

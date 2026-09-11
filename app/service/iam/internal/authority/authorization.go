@@ -2,7 +2,6 @@ package authority
 
 import (
 	"errors"
-	"strings"
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -162,22 +161,8 @@ func decide(
 // owns its product boundary. APISIX forwards credentials but never asks IAM
 // for product authorization on another service's behalf.
 func ServiceCanRequest(purpose iamv1.ServicePurpose, action iamv1.Action) bool {
-	if !knownAction(action) {
-		return false
-	}
-	switch purpose {
-	case iamv1.ServiceIAM:
-		return strings.HasPrefix(string(action), "iam.")
-	case iamv1.ServicePaaS:
-		return strings.HasPrefix(string(action), "paas.") ||
-			strings.HasPrefix(string(action), "managedservice.")
-	case iamv1.ServiceAudit:
-		return strings.HasPrefix(string(action), "audit.")
-	case iamv1.ServiceInstallationVerifier:
-		return action == iamv1.ActionInstallationVerify
-	default:
-		return false
-	}
+	definition, known := iamv1.LookupActionDefinition(action)
+	return known && definition.CallingService == purpose
 }
 
 func RoleAllows(role iamv1.BuiltinRole, action iamv1.Action) bool {
@@ -265,12 +250,8 @@ func validateRoles(roles []iamv1.BuiltinRole) error {
 }
 
 func knownAction(action iamv1.Action) bool {
-	for _, candidate := range iamv1.AllActions() {
-		if action == candidate {
-			return true
-		}
-	}
-	return false
+	_, known := iamv1.LookupActionDefinition(action)
+	return known
 }
 
 func knownRole(role iamv1.BuiltinRole) bool {
