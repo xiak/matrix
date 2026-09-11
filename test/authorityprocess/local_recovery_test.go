@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -124,6 +125,8 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		t.Fatal("schema3 fixture has no real committed facts")
 	}
 	old.stop()
+	assertIAMMigrationFailureAtomic(t, ctx, admin, false)
+	assertIAMMigrationFailureAtomic(t, ctx, admin, true)
 	unmigrated := startChild(t, root, currentBinary, environment)
 	children = append(children, unmigrated)
 	if err := unmigrated.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
@@ -228,6 +231,75 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		if err != nil || current != canonical {
 			t.Fatal("local recovery upgrade changed old tenant canonical bytes")
 		}
+	}
+}
+
+func assertIAMMigrationFailureAtomic(t *testing.T, ctx context.Context, database *pgx.Conn, failVerification bool) {
+	t.Helper()
+	// Deliberately fail a security entrypoint's DDL, after the existing schema
+	// and retained data have been loaded. The sequence proves that our fault,
+	// rather than an unrelated startup error, was reached. It is fixture-only.
+	fault := "RAISE EXCEPTION USING ERRCODE='P0017', MESSAGE='injected IAM cutover failure';"
+	if failVerification {
+		// Leave invalid newly-created state for the real final verifier to reject.
+		fault = "ALTER TABLE iam.local_credential_recoveries DISABLE ROW LEVEL SECURITY;"
+	}
+	if _, err := database.Exec(ctx, fmt.Sprintf(`CREATE SEQUENCE public.matrix_iam_cutover_fault_seen;
+CREATE FUNCTION public.matrix_iam_cutover_fault() RETURNS event_trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $fault$
+BEGIN
+    IF EXISTS(SELECT 1 FROM pg_event_trigger_ddl_commands()
+        WHERE schema_name='iam' AND object_type='function'
+          AND object_identity LIKE 'iam.recover_local_credentials(%%') THEN
+        PERFORM nextval('public.matrix_iam_cutover_fault_seen');
+        %s
+    END IF;
+END $fault$;
+CREATE EVENT TRIGGER matrix_iam_cutover_fault ON ddl_command_end
+EXECUTE FUNCTION public.matrix_iam_cutover_fault();`, fault)); err != nil {
+		t.Fatal("install isolated migration failure fixture")
+	}
+	defer func() {
+		_, _ = database.Exec(context.Background(), "ROLLBACK")
+		if _, err := database.Exec(context.Background(), `DROP EVENT TRIGGER matrix_iam_cutover_fault;
+DROP FUNCTION public.matrix_iam_cutover_fault(); DROP SEQUENCE public.matrix_iam_cutover_fault_seen`); err != nil {
+			t.Error("remove isolated migration failure fixture")
+		}
+	}()
+	snapshot := func() []byte {
+		t.Helper()
+		var state []byte
+		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+            'readinessVersion',(SELECT schema_version FROM iam.readiness()),
+            'receipt',(SELECT jsonb_agg(to_jsonb(r) ORDER BY organization_id) FROM iam.bootstrap_receipts r),
+            'organizations',(SELECT jsonb_agg(to_jsonb(o) ORDER BY id) FROM iam.organizations o),
+            'principals',(SELECT jsonb_agg(to_jsonb(p) ORDER BY tenant_id,id) FROM iam.principals p),
+            'bindings',(SELECT jsonb_agg(to_jsonb(b) ORDER BY tenant_id,id) FROM iam.role_bindings b),
+            'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.user_credentials c),
+            'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY tenant_id,id) FROM iam.sessions s),
+            'decisions',(SELECT jsonb_agg(to_jsonb(d) ORDER BY tenant_id,id) FROM iam.authorization_decisions d),
+            'outbox',(SELECT jsonb_agg(to_jsonb(e) ORDER BY tenant_id,event_id) FROM iam.audit_outbox e))`).Scan(&state); err != nil {
+			t.Fatal("read retained authority state")
+		}
+		return state
+	}
+	before := snapshot()
+	if err := iammigration.Up(ctx, database); err == nil {
+		t.Fatal("injected migration unexpectedly succeeded")
+	}
+	if _, err := database.Exec(ctx, "ROLLBACK"); err != nil {
+		t.Fatal("rollback failed migration")
+	}
+	var injected bool
+	if err := database.QueryRow(ctx, "SELECT is_called FROM public.matrix_iam_cutover_fault_seen").Scan(&injected); err != nil || !injected {
+		t.Fatal("migration did not reach the injected failure")
+	}
+	if !bytes.Equal(before, snapshot()) {
+		t.Fatal("failed migration partially changed schema or retained authority")
+	}
+	var recoveryTableAbsent bool
+	if err := database.QueryRow(ctx, "SELECT to_regclass('iam.local_credential_recoveries') IS NULL").Scan(&recoveryTableAbsent); err != nil || !recoveryTableAbsent {
+		t.Fatal("failed migration exposed a partial recovery capability")
 	}
 }
 

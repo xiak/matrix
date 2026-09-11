@@ -484,6 +484,30 @@ Internal `tenant:` and `installation:` chain keys keep equal raw IDs separate.
 Existing tenant canonical bytes, hashes and cursors remain unchanged. The one
 public `auditv1.CanonicalizeEvent` encoder serves ingestion, replay and proof.
 
+Serializable Audit transactions retry only known rolled-back serialization
+or deadlock failures (PostgreSQL 40001/40P01). The default remains five attempts;
+competing chain writers wait with bounded exponential jitter between attempts
+(5 ms initial minimum, less than 100 ms per scheduled wait). Cancellation ends
+the wait and prevents a new attempt. Authentication, authorization, invalid
+input, replay conflicts, unavailable storage and unknown commit outcomes are
+not transaction-retry signals. Exhaustion still fails closed; this is not a
+throughput guarantee or a retry of external IAM calls.
+
+The `273196d` [independent authority-process run](https://github.com/xiak/matrix/actions/runs/34567733186) failed when five immediate
+serialization retries collided with ongoing chain writes; its Go and node
+jobs passing did not accept that candidate. The service-side pacing correction
+keeps the HTTP gate strict, rather than masking the failure with client retry.
+Focused tests cover bounded attempts, minimum pacing, cancellation and
+non-retryable errors. The isolated PG18 retained-upgrade and independent
+IAM/Audit/PaaS process regression passes locally (57.432s on 2026-09-11);
+the correction's independent CI remains a separate gate. The broader PG18
+regression also passes: separated IAM/Audit schemas and retained tenant-chain
+upgrade (5.802s), Audit HTTP (3.100s), IAM HTTP and local recovery/concurrency
+(91.862s). These do not accept the new policy-storage replacement or full HA.
+Two additional fresh-database independent-process race runs pass without
+client retries (46.505s and 51.722s). Full-repository race/vet, module checks,
+stable generation and Linux/amd64 builds also pass for the correction.
+
 Phase 1 retention is `INDEFINITE`: there is no purge, overwrite, truncate, or
 tenant deletion path. Configurable expiry, archive tiers, legal hold, and
 cryptographic checkpoint export require a later accepted contract. Indefinite

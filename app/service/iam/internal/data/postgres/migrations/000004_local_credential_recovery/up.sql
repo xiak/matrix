@@ -1,4 +1,3 @@
-BEGIN;
 SET LOCAL ROLE matrix_iam_owner;
 
 -- A completion is purpose-specific security evidence, not a generic command
@@ -240,4 +239,3 @@ REVOKE ALL ON FUNCTION iam.assert_local_recovery_scope(jsonb),iam.reject_local_r
 GRANT USAGE ON SCHEMA iam TO matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.inspect_local_credential_recovery(jsonb,text,text),
     iam.recover_local_credentials(jsonb,jsonb,text,text,text,jsonb) TO matrix_iam_credential_recovery;
-COMMIT;

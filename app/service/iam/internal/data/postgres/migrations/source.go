@@ -24,10 +24,13 @@ var (
 )
 
 func Source() postgresmigration.Source {
+	verification := authorityVerifySQL + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL
 	return postgresmigration.Source{
 		Context: "iam", BootstrapSQL: bootstrapSQL,
-		UpSQL:         authorityUpSQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL,
-		VerifySQL:     authorityVerifySQL + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL,
+		// IAM owns one commit boundary across schema, retained-state changes and
+		// its final invariant verification. A late failure exposes none of them.
+		UpSQL:         "BEGIN;\n" + authorityUpSQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + verification + "\nCOMMIT;",
+		VerifySQL:     verification,
 		ExecutionRole: "matrix_iam_migrator",
 	}
 }

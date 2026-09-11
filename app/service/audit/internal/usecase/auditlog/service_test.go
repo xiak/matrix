@@ -15,6 +15,88 @@ import (
 
 const testDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+func TestAuditTransactionRetryIsBoundedAndPaced(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		failures     int
+		wantAttempts int
+		wantError    error
+	}{
+		{"no conflict", 0, 1, nil},
+		{"rolled back conflict", 1, 2, nil},
+		{"exhausted conflicts", 10, 3, ErrRetryableTransaction},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			attempts := 0
+			var lastConflict time.Time
+			repository := auditTransactionAttempt(func(context.Context, func(context.Context, Transaction) error) error {
+				if !lastConflict.IsZero() && time.Since(lastConflict) < 5*time.Millisecond {
+					t.Fatal("retry did not leave the minimum contention backoff")
+				}
+				attempts++
+				if attempts <= test.failures {
+					lastConflict = time.Now()
+					return fmt.Errorf("rolled back: %w", ErrRetryableTransaction)
+				}
+				return nil
+			})
+			service := &Service{repository: repository, config: Config{MaxTransactionAttempts: 3}}
+			err := service.withinTransaction(context.Background(), func(context.Context, Transaction) error { return nil })
+			if !errors.Is(err, test.wantError) || attempts != test.wantAttempts {
+				t.Fatalf("attempts=%d err=%v", attempts, err)
+			}
+		})
+	}
+}
+
+func TestAuditTransactionDoesNotRetryOtherFailures(t *testing.T) {
+	for _, failure := range []error{ErrUnavailable, ErrConflict, ErrInvalidArgument, ErrUnauthenticated, ErrForbidden, context.Canceled, errors.New("unknown commit outcome")} {
+		attempts := 0
+		service := &Service{repository: auditTransactionAttempt(func(context.Context, func(context.Context, Transaction) error) error {
+			attempts++
+			return failure
+		}), config: Config{MaxTransactionAttempts: 5}}
+		err := service.withinTransaction(context.Background(), func(context.Context, Transaction) error { return nil })
+		if !errors.Is(err, failure) || attempts != 1 {
+			t.Fatalf("non-retryable failure attempts=%d err=%v", attempts, err)
+		}
+	}
+}
+
+func TestAuditTransactionCancellationStopsAttempts(t *testing.T) {
+	for _, beforeStart := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		if beforeStart {
+			cancel()
+		}
+		attempts := 0
+		service := &Service{repository: auditTransactionAttempt(func(context.Context, func(context.Context, Transaction) error) error {
+			attempts++
+			cancel()
+			return ErrRetryableTransaction
+		}), config: Config{MaxTransactionAttempts: 5}}
+		err := service.withinTransaction(ctx, func(context.Context, Transaction) error { return nil })
+		cancel()
+		if !errors.Is(err, context.Canceled) || attempts > 1 || (beforeStart && attempts != 0) {
+			t.Fatalf("cancelled transaction attempts=%d err=%v", attempts, err)
+		}
+	}
+}
+
+func TestAuditTransactionBackoffHonorsDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	if err := waitTransactionRetry(ctx, 9); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("backoff did not honor deadline: %v", err)
+	}
+}
+
+type auditTransactionAttempt func(context.Context, func(context.Context, Transaction) error) error
+
+func (attempt auditTransactionAttempt) WithinTransaction(ctx context.Context, callback func(context.Context, Transaction) error) error {
+	return attempt(ctx, callback)
+}
+
 func TestAuditUsecasesBindIAMAndAuditEveryAuthorizedRead(t *testing.T) {
 	transaction := newAuditTransaction()
 	repository := &auditRepository{transaction: transaction}

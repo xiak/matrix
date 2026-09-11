@@ -77,7 +77,11 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 种子文档使用现有 Go 策略编码拥有者生成，SQL 不复制第二套 Action 权限集合或摘要编码。第一次迁移显式确定每种旧绑定对应版本；后续发布新版本不因重放种子而切换已有默认版本。历史附件/决定引用的版本不能下架后物理删除；当前有效来源读取不能返回撤销附件或多个冲突默认版本。
 
-已检查当前 `migrations.Source()` 直接串接多个各自 BEGIN/COMMIT 的 SQL 文件，现有执行器不自动把它们包成一个事务。新切换不能沿用该形状却宣称“原子迁移”：IAM owner 要将本次权威结构/数据映射/函数替换/readiness 更新纳入同一实际事务，并以中途失败注入证明无部分切换。等值重放不能重建可写旧 RoleBinding 权威或导入迁移后才出现的旧写入；旧 executable/readiness 需失败关闭。不要修改共享 migration executor 来掩盖服务自己的事务边界。
+IAM `migrations.Source()` 现在拥有一个实际 BEGIN/COMMIT 边界，包住全部现有权威 SQL 片段与最终 schema/权限验证；片段不再分别提交。角色 bootstrap 仍是独立安装前置，runtime 登录仍由原安装流程在 Up 成功后配置；本片没有改变共享 migration executor、发布 profile 或跨版本准入。
+
+2026-09-11 的真实 5721 executable 保留数据门禁加入两种受限数据库故障：创建恢复入口时中断 DDL，以及 SQL 完成但故意留下不安全 RLS 供最终 verifier 拒绝。第一种反例在旧 Source 下确实失败（暴露部分迁移），修复后两种均通过；封存 receipt、组织/主体、凭据、会话、绑定、原授权决定与 outbox 保持原状态，新恢复表不暴露。含正常双次迁移/恢复/重启的该门禁通过 15.386s。它证明现有 schema3→4 的原子前置，不证明待实现的 IAM6 附件迁移或跨 release-profile 升级。
+
+后续新权威结构/数据映射/函数替换/readiness 更新必须纳入同一事务，扩充此失败门禁。等值重放不能重建可写旧 RoleBinding 权威或导入迁移后才出现的旧写入；旧 executable/readiness 需失败关闭。
 
 原 `local_credential_recoveries.expected_state` 保存了精确 `platformBindingId` 与版本，但没有指向旧 role_bindings 的外键；这是已发布完成证据，不是可删除字段。新附件继承原 ID/RV，当前恢复检查查询附件，历史 receipt 仍按原 bytes 独立返回，不重签已完成意图。SQL 保留数据资格不等于跨完整 release profile 的安装准入。
 

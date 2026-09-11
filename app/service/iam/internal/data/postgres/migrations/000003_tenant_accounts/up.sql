@@ -1,4 +1,3 @@
-BEGIN;
 SET LOCAL ROLE matrix_iam_owner;
 
 -- Credential lookup indexes are deliberately separate from tenant data. They
@@ -425,4 +424,3 @@ GRANT EXECUTE ON FUNCTION iam.read_account(text,text), iam.read_organization(tex
     iam.create_organization(text,text,text,text,text,text,text,text,text,jsonb),
     iam.set_account_alias(text,text,text,text,bigint,jsonb),
     iam.change_subaccount(text,text,text,text,bigint,text,text,jsonb) TO matrix_iam_api;
-COMMIT;

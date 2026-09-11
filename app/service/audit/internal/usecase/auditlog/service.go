@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	mathrand "math/rand/v2"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
@@ -52,6 +53,9 @@ func (service *Service) withinTransaction(
 	}
 	var transactionErr error
 	for attempt := 0; attempt < service.config.MaxTransactionAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		transactionErr = service.repository.WithinTransaction(ctx, callback)
 		if transactionErr == nil || !errors.Is(transactionErr, ErrRetryableTransaction) {
 			return transactionErr
@@ -59,8 +63,28 @@ func (service *Service) withinTransaction(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if attempt+1 < service.config.MaxTransactionAttempts {
+			if err := waitTransactionRetry(ctx, attempt); err != nil {
+				return err
+			}
+		}
 	}
 	return fmt.Errorf("Audit transaction attempts exhausted: %w", transactionErr)
+}
+
+func waitTransactionRetry(ctx context.Context, attempt int) error {
+	// Only known rolled-back serialization/deadlock failures reach this wait.
+	// Jitter separates competing chain writers; it is not security randomness.
+	base := min(5*time.Millisecond<<min(attempt, 4), 50*time.Millisecond)
+	delay := base + time.Duration(mathrand.Int64N(int64(base)))
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return ctx.Err()
+	}
 }
 
 func newID(prefix string) (string, error) {

@@ -20,6 +20,7 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	auditauthority "github.com/xiak/matrix/app/service/audit/internal/authority"
+	"github.com/xiak/matrix/app/service/audit/internal/usecase/auditlog"
 	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 )
@@ -44,6 +45,26 @@ var authorityGroupRoles = []string{
 	"matrix_audit_owner",
 	"matrix_audit_migrator",
 	"matrix_audit_runtime",
+}
+
+func TestAuditDatabaseRetryClassification(t *testing.T) {
+	for _, test := range []struct {
+		input error
+		want  error
+	}{
+		{&pgconn.PgError{Code: "40001"}, auditlog.ErrRetryableTransaction},
+		{&pgconn.PgError{Code: "40P01"}, auditlog.ErrRetryableTransaction},
+		{&pgconn.PgError{Code: "23505"}, auditlog.ErrConflict},
+		{&pgconn.PgError{Code: "42501"}, auditlog.ErrUnavailable},
+		{&pgconn.PgError{Code: "08007"}, auditlog.ErrUnavailable},
+		{errors.New("connection lost during commit"), auditlog.ErrUnavailable},
+		{context.Canceled, context.Canceled},
+		{context.DeadlineExceeded, context.DeadlineExceeded},
+	} {
+		if actual := mapDatabaseError("transaction", fmt.Errorf("driver: %w", test.input)); !errors.Is(actual, test.want) {
+			t.Fatalf("database failure classification=%v want=%v", actual, test.want)
+		}
+	}
 }
 
 func TestPostgresAuthorityIntegration(t *testing.T) {
