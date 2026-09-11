@@ -378,10 +378,10 @@ function ConsoleShell() {
   const selectedPage = scene.navigation.find((item) => item.selected);
   const localNavigation = scene.navigation.filter((item) => {
     if (scene.section !== "access" || item.id === "access" || item.id === "settings") return true;
-    if (item.id === "users") return accountCapabilities.canManage;
-    if (item.id === "policies") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canManage : accountCapabilities.canViewPolicies;
-    if (item.id === "tenants") return accountCapabilities.canCreateOrganizations;
-    return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canManage;
+    if (item.id === "users") return accountCapabilities.canListUsers;
+    if (item.id === "policies") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canViewPolicies;
+    if (item.id === "tenants") return accountCapabilities.canReadAccounts;
+    return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canListUsers;
   });
   const accessTitles = { "create-user": accountText("createUserTitle"), "create-group": iamWorkspaceText("createGroup"), "create-policy": iamWorkspaceText("createPolicy"), "create-role": iamWorkspaceText("createRole"), tenants: accountText("tenantAccounts") };
   const accessView = scene.content.kind === "access" ? scene.content.view : undefined;

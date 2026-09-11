@@ -8,7 +8,7 @@ import { type AccessWorkspace, type AccessWorkspaceCommand } from "../domain/acc
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import type { AccountRepository } from "../repositories/iamRepository";
 import { httpAccountRepository } from "../repositories/httpIamRepository";
-import { buildAccountAccessScene, type AccountAccessScene } from "../scenes/accountAccessScene";
+import { buildAccountAccessScene, findActionCapability, type AccountAccessScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
@@ -40,7 +40,7 @@ type AccountAccess = {
 };
 
 const AccountAccessContext = createContext<AccountAccess | null>(null);
-type AccountCapabilities = Pick<AccountAccessScene, "canManage" | "canCreateOrganizations" | "canViewPolicies"> & { hasPreviewWorkspace: boolean };
+type AccountCapabilities = Pick<AccountAccessScene, "canListUsers" | "canReadAccounts" | "canCreateAccounts" | "canViewPolicies"> & { hasPreviewWorkspace: boolean };
 const AccountCapabilitiesContext = createContext<AccountCapabilities | null>(null);
 
 function accountError(error: unknown): AccountError {
@@ -60,6 +60,25 @@ async function readWhenAuthorized<T>(read: () => Promise<T>): Promise<T | null> 
     if (error instanceof HttpProblem && error.status === 403) return null;
     throw error;
   }
+}
+
+function accountCommandAvailable(scene: AccountAccessScene, command: AccountCommand): boolean {
+  if (command.kind === "create-user") return scene.canCreateUsers;
+  if (command.kind === "create-account") return scene.canCreateAccounts;
+  if (command.kind === "set-alias") return scene.canSetAlias;
+  if (command.kind === "set-account-status" || command.kind === "recover-root-credentials") {
+    const account = scene.accounts.find((item) => item.id === command.accountId);
+    return command.kind === "set-account-status" ? account?.canSetStatus === true : account?.canRecoverRoot === true;
+  }
+  if (command.kind === "revoke-policy-attachment") {
+    return scene.users.some((user) => user.attachments.some((attachment) => attachment.id === command.attachmentId && attachment.canRevoke));
+  }
+  const user = scene.users.find((item) => item.id === command.userId);
+  if (!user) return false;
+  if (command.kind === "set-status") return user.canSetStatus;
+  if (command.kind === "reset-password") return user.canResetPassword;
+  const policy = scene.policies.find((item) => item.id === command.policyId);
+  return policy?.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy;
 }
 
 export function AccountAccessProvider({ children, repository = httpAccountRepository, active = true }: { children: ReactNode; repository?: AccountRepository; active?: boolean }) {
@@ -92,29 +111,32 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     remember(view: UserDirectoryView) { storedUserView.current = { session: viewSession, view: { ...view } }; }
   }), [viewSession]);
   const clearFeedback = useCallback(() => { setWorkspaceError(null); setSuccess(null); }, []);
-  const canManage = Boolean(scene?.canManage);
-  const canCreateOrganizations = Boolean(scene?.canCreateOrganizations);
+  const canListUsers = Boolean(scene?.canListUsers);
+  const canReadAccounts = Boolean(scene?.canReadAccounts);
+  const canCreateAccounts = Boolean(scene?.canCreateAccounts);
   const canViewPolicies = Boolean(scene?.canViewPolicies);
   const hasPreviewWorkspace = Boolean(repository.workspace);
   // Navigation observes permission changes, not every form's pending/error state.
-  const capabilities = useMemo(() => ({ canManage, canCreateOrganizations, canViewPolicies, hasPreviewWorkspace }), [canCreateOrganizations, canManage, canViewPolicies, hasPreviewWorkspace]);
+  const capabilities = useMemo(() => ({ canListUsers, canReadAccounts, canCreateAccounts, canViewPolicies, hasPreviewWorkspace }), [canCreateAccounts, canListUsers, canReadAccounts, canViewPolicies, hasPreviewWorkspace]);
 
   useEffect(() => {
     if (!active || !credential || !tenantId) return;
     let mounted = true;
     async function read() {
       const identity = await repository.currentIdentity(credential!);
-      if (identity.account.organization.id !== tenantId || identity.principal.id !== principalId) throw new Error("INVALID_IAM_IDENTITY");
+      if (identity.account.id !== tenantId || identity.user.id !== principalId) throw new Error("INVALID_IAM_IDENTITY");
+      const currentCapability = (action: Parameters<typeof findActionCapability>[1], id = identity.account.id) =>
+        findActionCapability(identity.capabilities, action, "ACCOUNT", id)?.available === true;
       const [users, accounts, tenantPolicies, platformPolicies] = await Promise.all([
-        readWhenAuthorized(() => repository.listUsers(credential!, page.users || undefined)),
-        identity.canCreateOrganizations ? readWhenAuthorized(() => repository.listAccounts(credential!, page.accounts || undefined)) : null,
-        readWhenAuthorized(() => repository.listPolicies(credential!, false)),
+        currentCapability("iam.user.list") ? readWhenAuthorized(() => repository.listUsers(credential!, page.users || undefined)) : null,
+        currentCapability("iam.account.read", "accounts") ? readWhenAuthorized(() => repository.listAccounts(credential!, page.accounts || undefined)) : null,
+        currentCapability("iam.policy.list") ? readWhenAuthorized(() => repository.listPolicies(credential!, false)) : null,
         readWhenAuthorized(() => repository.listPolicies(credential!, true))
       ]);
       // The advanced workspace is an explicit preview capability. Do not fetch its
       // larger graph unless the live directory boundary has authorized management.
       const extension = users !== null && repository.workspace ? await repository.workspace.read(credential!) : null;
-      if (users?.items.some((entry) => entry.principal.organizationId !== tenantId)) throw new Error("INVALID_IAM_TENANT");
+      if (users?.items.some((entry) => entry.user.accountId !== tenantId || entry.user.id === identity.account.rootIdentity.principalId)) throw new Error("INVALID_IAM_TENANT");
       if (tenantPolicies && tenantPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
       if (platformPolicies && platformPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
       if (extension && (extension.accountId !== tenantId || extension.mode !== "preview")) throw new Error("INVALID_IAM_TENANT");
@@ -130,9 +152,18 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     supportsUserBatch: Boolean(repository.executeUserBatch),
     async executeUserBatch(command) {
       if (!active || !credential || !scene || !workspace || !repository.executeUserBatch || loading || mutationPending.current) return false;
-      const targets = command.targets.map((target) => ({ id: target.id, enabled: target.id === scene.primaryUser.id ? null : scene.users.find((user) => user.id === target.id)?.enabled ?? null }));
-      const unavailable = command.targets.some((target) => target.id !== scene.primaryUser.id && !scene.users.some((user) => user.id === target.id && user.resourceVersion === target.resourceVersion));
-      if (unavailable || userBatchDisabledReason(command.action, { targets, primaryId: scene.primaryUser.id, actorId: scene.principalId, canManage: scene.canManage, supported: true })) { setWorkspaceError("ineligibleUsers"); return false; }
+      const targets = command.targets.map((target) => {
+        const user = scene.users.find((entry) => entry.id === target.id);
+        return {
+          id: target.id,
+          enabled: target.id === scene.accountOwner.id ? null : user?.enabled ?? null,
+          canSetStatus: user?.canSetStatus ?? false,
+          canAttachPolicy: user?.canAttachTenantPolicy ?? false,
+          protected: user?.protected ?? true
+        };
+      });
+      const unavailable = command.targets.some((target) => target.id !== scene.accountOwner.id && !scene.users.some((user) => user.id === target.id && user.resourceVersion === target.resourceVersion));
+      if (unavailable || userBatchDisabledReason(command.action, { targets, rootId: scene.accountOwner.id, actorId: scene.currentUserId, canListUsers: scene.canListUsers, supported: true })) { setWorkspaceError("ineligibleUsers"); return false; }
       mutationPending.current = true;
       setBusy(true); setWorkspaceError(null); setSuccess(null);
       try {
@@ -149,8 +180,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     workspace, workspaceError,
     clearWorkspaceError, clearFeedback,
     async executeWorkspace(command) {
-      if (!active || !credential || !scene?.canManage || !repository.workspace || loading || mutationPending.current) return null;
-      if ("principalId" in command && command.principalId === scene.primaryUser.id) { setWorkspaceError("forbidden"); return null; }
+      if (!active || !credential || !scene?.canListUsers || !repository.workspace || loading || mutationPending.current) return null;
+      if ("principalId" in command && command.principalId === scene.accountOwner.id) { setWorkspaceError("forbidden"); return null; }
       mutationPending.current = true;
       setBusy(true); setWorkspaceError(null); setSuccess(null);
       try {
@@ -171,8 +202,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     accountsPage(after) { setLoading(true); setPage((current) => ({ ...current, accounts: after })); },
     async execute(command) {
       if (!active || !credential || loading || mutationPending.current) return false;
-      const protectedPrimary = (command.kind === "set-status" || command.kind === "reset-password" || command.kind === "create-policy-attachment") && command.principalId === scene?.primaryUser.id;
-      if (protectedPrimary) { setError("forbidden"); return false; }
+      if (!scene || !accountCommandAvailable(scene, command)) { setError("forbidden"); return false; }
       mutationPending.current = true;
       setBusy(true); setError(null); setSuccess(null);
       try {

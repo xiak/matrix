@@ -1,15 +1,19 @@
 import { requestJSON, requestToken } from "@/infrastructure/http/jsonRequest";
 import type {
   Account,
+  AccountAccess,
   AccountIdentity,
   AccountPolicy,
-  AccountPrincipal,
-  AccountUser,
+  ActionCapability,
+  CapabilityRestriction,
   DirectoryPage,
+  IamAction,
   PolicyDirectory,
   PolicyManagement,
   PolicyScope,
   PolicyStatus,
+  User,
+  UserAccess,
   UserPolicyAttachment
 } from "../domain/accounts";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand, LoginResult } from "./iamRepository";
@@ -51,6 +55,63 @@ function policyScope(value: unknown): PolicyScope {
   return value;
 }
 
+const capabilityActions = new Set<IamAction>([
+  "iam.account.create", "iam.account.read", "iam.account.set-status", "iam.account.recover-root-credentials",
+  "iam.account.alias-set", "iam.user.list", "iam.user.create", "iam.policy.list", "iam.user.set-status",
+  "iam.user.reset-password", "iam.policy-attachment.create", "iam.platform-policy-attachment.create",
+  "iam.policy-attachment.revoke", "iam.platform-policy-attachment.revoke"
+]);
+
+const capabilityRestrictions = new Set<CapabilityRestriction>([
+  "AUTHORITY_REQUIRED", "CURRENT_CREDENTIAL_CHANGE_REQUIRED", "SELF_PROTECTED", "ROOT_IDENTITY_PROTECTED",
+  "INSTALLATION_AUTHORITY_PROTECTED", "SYSTEM_ACCOUNT_PROTECTED", "TARGET_DISABLED",
+  "TARGET_CREDENTIAL_CHANGE_REQUIRED"
+]);
+
+function capabilityResourceKind(action: IamAction): ActionCapability["resource"]["kind"] {
+  if (action === "iam.user.set-status" || action === "iam.user.reset-password" ||
+      action === "iam.policy-attachment.create" || action === "iam.platform-policy-attachment.create") return "USER";
+  if (action === "iam.policy-attachment.revoke" || action === "iam.platform-policy-attachment.revoke") return "POLICY_ATTACHMENT";
+  return "ACCOUNT";
+}
+
+function parseCapability(value: unknown): ActionCapability {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["action", "resource", "available"], ["restrictionReason"]);
+  if (typeof wire.action !== "string" || !capabilityActions.has(wire.action as IamAction) || typeof wire.available !== "boolean") {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const action = wire.action as IamAction;
+  const resource = accountRecord(wire.resource);
+  exactKeys(resource, ["kind", "id"]);
+  const reason = wire.restrictionReason;
+  if (resource.kind !== capabilityResourceKind(action) || typeof resource.id !== "string" || !resource.id.length ||
+      (wire.available && reason !== undefined) ||
+      (!wire.available && (typeof reason !== "string" || !capabilityRestrictions.has(reason as CapabilityRestriction)))) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return {
+    action,
+    resource: { kind: resource.kind as ActionCapability["resource"]["kind"], id: resource.id },
+    available: wire.available,
+    restrictionReason: wire.available ? null : reason as CapabilityRestriction
+  };
+}
+
+function capabilityKey(value: Pick<ActionCapability, "action" | "resource">): string {
+  return `${value.action}\u0000${value.resource.kind}\u0000${value.resource.id}`;
+}
+
+function parseCapabilities(value: unknown, expected: Array<Pick<ActionCapability, "action" | "resource">>): ActionCapability[] {
+  if (!Array.isArray(value) || value.length !== expected.length) throw new Error("INVALID_IAM_RESPONSE");
+  const capabilities = value.map(parseCapability);
+  const actual = new Set(capabilities.map(capabilityKey));
+  if (actual.size !== capabilities.length || expected.some((item) => !actual.has(capabilityKey(item)))) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return capabilities;
+}
+
 function exactKeys(wire: Record<string, unknown>, required: string[], optional: string[] = []) {
   const allowed = new Set([...required, ...optional]);
   if (required.some((key) => !(key in wire)) || Object.keys(wire).some((key) => !allowed.has(key))) throw new Error("INVALID_IAM_RESPONSE");
@@ -62,29 +123,33 @@ function requireAccountKind(wire: Record<string, unknown>, kind: string) {
 
 function parseAccount(value: unknown): Account {
   const wire = accountRecord(value);
-  const organization = accountRecord(wire.organization);
-  requireAccountKind(organization, "Organization");
+  exactKeys(wire, ["apiVersion", "kind", "id", "displayName", "status", "rootIdentity", "loginAlias", "resourceVersion", "createdAt", "updatedAt"]);
+  requireAccountKind(wire, "Account");
+  const root = accountRecord(wire.rootIdentity);
+  exactKeys(root, ["principalId", "loginName"]);
   if (wire.loginAlias !== null && (typeof wire.loginAlias !== "string" || !/^[a-z][a-z0-9-]{1,61}[a-z0-9]$/.test(wire.loginAlias))) throw new Error("INVALID_IAM_RESPONSE");
+  accountTimestamp(wire.createdAt);
+  accountTimestamp(wire.updatedAt);
   return {
-    organization: {
-      id: accountText(organization.id),
-      displayName: accountText(organization.displayName),
-      status: accountStatus(organization.status),
-      resourceVersion: accountVersion(organization.resourceVersion)
-    },
-    primaryPrincipalId: accountText(wire.primaryPrincipalId),
-    primaryLoginName: accountText(wire.primaryLoginName),
-    loginAlias: wire.loginAlias
+    id: accountText(wire.id),
+    displayName: accountText(wire.displayName),
+    status: accountStatus(wire.status),
+    rootIdentity: { principalId: accountText(root.principalId), loginName: accountText(root.loginName) },
+    loginAlias: wire.loginAlias,
+    resourceVersion: accountVersion(wire.resourceVersion)
   };
 }
 
-function parseAccountPrincipal(value: unknown): AccountPrincipal {
+function parseUser(value: unknown): User {
   const wire = accountRecord(value);
-  requireAccountKind(wire, "Principal");
-  if (wire.type !== "USER" || (wire.mustChangePassword !== undefined && typeof wire.mustChangePassword !== "boolean")) throw new Error("INVALID_IAM_RESPONSE");
+  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "loginName", "displayName", "status", "resourceVersion", "createdAt", "updatedAt"], ["mustChangePassword"]);
+  requireAccountKind(wire, "User");
+  if (wire.mustChangePassword !== undefined && typeof wire.mustChangePassword !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+  accountTimestamp(wire.createdAt);
+  accountTimestamp(wire.updatedAt);
   return {
     id: accountText(wire.id),
-    organizationId: accountText(wire.organizationId),
+    accountId: accountText(wire.accountId),
     loginName: accountText(wire.loginName),
     displayName: accountText(wire.displayName),
     status: accountStatus(wire.status),
@@ -164,20 +229,65 @@ function parsePolicyDirectory(value: unknown, expectedScope: PolicyScope): Polic
 
 function parseAccountIdentity(value: unknown): AccountIdentity {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "account", "principal", "policyAttachments", "canCreateOrganizations"]);
+  exactKeys(wire, ["apiVersion", "kind", "account", "user", "identityKind", "policyAttachments", "capabilities"]);
   requireAccountKind(wire, "CurrentIdentity");
-  if (!Array.isArray(wire.policyAttachments) || wire.policyAttachments.length > 256 || typeof wire.canCreateOrganizations !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+  if (!Array.isArray(wire.policyAttachments) || wire.policyAttachments.length > 256 ||
+      (wire.identityKind !== "ROOT_IDENTITY" && wire.identityKind !== "USER")) throw new Error("INVALID_IAM_RESPONSE");
   const account = parseAccount(wire.account);
-  const principal = parseAccountPrincipal(wire.principal);
+  const user = parseUser(wire.user);
+  const policyAttachments = wire.policyAttachments.map(parsePolicyAttachment);
+  const accountResource = { kind: "ACCOUNT" as const, id: account.id };
+  const capabilities = parseCapabilities(wire.capabilities, [
+    { action: "iam.account.create", resource: { kind: "ACCOUNT", id: "accounts" } },
+    { action: "iam.account.read", resource: { kind: "ACCOUNT", id: "accounts" } },
+    { action: "iam.account.alias-set", resource: accountResource },
+    { action: "iam.user.list", resource: accountResource },
+    { action: "iam.user.create", resource: accountResource },
+    { action: "iam.policy.list", resource: accountResource }
+  ]);
+  if (
+    account.id !== user.accountId ||
+    (wire.identityKind === "ROOT_IDENTITY") !== (account.rootIdentity.principalId === user.id) ||
+    policyAttachments.some((attachment) => attachment.accountId !== user.accountId || attachment.target.id !== user.id) ||
+    new Set(policyAttachments.map((attachment) => attachment.id)).size !== policyAttachments.length ||
+    new Set(policyAttachments.map((attachment) => attachment.policyId)).size !== policyAttachments.length
+  ) throw new Error("INVALID_IAM_RESPONSE");
+  return { account, user, identityKind: wire.identityKind, policyAttachments, capabilities };
+}
+
+function parseUserAccess(value: unknown): UserAccess {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["user", "policyAttachments", "capabilities"]);
+  if (!Array.isArray(wire.policyAttachments) || wire.policyAttachments.length > 256) throw new Error("INVALID_IAM_RESPONSE");
+  const user = parseUser(wire.user);
   const policyAttachments = wire.policyAttachments.map(parsePolicyAttachment);
   if (
-    account.organization.id !== principal.organizationId ||
-    policyAttachments.some((attachment) => attachment.accountId !== principal.organizationId || attachment.target.id !== principal.id) ||
+    policyAttachments.some((attachment) => attachment.target.id !== user.id || attachment.accountId !== user.accountId) ||
     new Set(policyAttachments.map((attachment) => attachment.id)).size !== policyAttachments.length ||
-    new Set(policyAttachments.map((attachment) => attachment.policyId)).size !== policyAttachments.length ||
-    (wire.canCreateOrganizations && (principal.mustChangePassword || !policyAttachments.some((attachment) => attachment.scope === "INSTALLATION")))
+    new Set(policyAttachments.map((attachment) => attachment.policyId)).size !== policyAttachments.length
   ) throw new Error("INVALID_IAM_RESPONSE");
-  return { account, principal, policyAttachments, canCreateOrganizations: wire.canCreateOrganizations };
+  const capabilities = parseCapabilities(wire.capabilities, [
+    { action: "iam.user.set-status", resource: { kind: "USER", id: user.id } },
+    { action: "iam.user.reset-password", resource: { kind: "USER", id: user.id } },
+    { action: "iam.policy-attachment.create", resource: { kind: "USER", id: user.id } },
+    { action: "iam.platform-policy-attachment.create", resource: { kind: "USER", id: user.id } },
+    ...policyAttachments.map((attachment) => ({
+      action: attachment.scope === "INSTALLATION" ? "iam.platform-policy-attachment.revoke" as const : "iam.policy-attachment.revoke" as const,
+      resource: { kind: "POLICY_ATTACHMENT" as const, id: attachment.id }
+    }))
+  ]);
+  return { user, policyAttachments, capabilities };
+}
+
+function parseAccountAccess(value: unknown): AccountAccess {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["account", "capabilities"]);
+  const account = parseAccount(wire.account);
+  const capabilities = parseCapabilities(wire.capabilities, [
+    { action: "iam.account.set-status", resource: { kind: "ACCOUNT", id: account.id } },
+    { action: "iam.account.recover-root-credentials", resource: { kind: "ACCOUNT", id: account.id } }
+  ]);
+  return { account, capabilities };
 }
 
 function accountPage<T>(value: unknown, kind: string, parse: (item: unknown) => T): DirectoryPage<T> {
@@ -194,54 +304,41 @@ export const httpAccountRepository: AccountRepository = {
     return parseAccountIdentity(await requestJSON<unknown>("/api/iam/v1/auth/me", { headers: accountHeaders(credential) }));
   },
   async listUsers(credential, after) {
-    return accountPage<AccountUser>(await requestJSON<unknown>(`/api/iam/v1/principals${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "PrincipalList", (value) => {
-      const wire = accountRecord(value);
-      exactKeys(wire, ["principal", "policyAttachments"]);
-      if (!Array.isArray(wire.policyAttachments) || wire.policyAttachments.length > 256) throw new Error("INVALID_IAM_RESPONSE");
-      const principal = parseAccountPrincipal(wire.principal);
-      const policyAttachments = wire.policyAttachments.map(parsePolicyAttachment);
-      if (
-        policyAttachments.some((attachment) => attachment.target.id !== principal.id || attachment.accountId !== principal.organizationId) ||
-        new Set(policyAttachments.map((attachment) => attachment.id)).size !== policyAttachments.length ||
-        new Set(policyAttachments.map((attachment) => attachment.policyId)).size !== policyAttachments.length
-      ) throw new Error("INVALID_IAM_RESPONSE");
-      return { principal, policyAttachments };
-    });
+    return accountPage<UserAccess>(await requestJSON<unknown>(`/api/iam/v1/users${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "UserList", parseUserAccess);
   },
   async listPolicies(credential, platform) {
     return parsePolicyDirectory(await requestJSON<unknown>(platform ? "/api/iam/v1/platform-policies" : "/api/iam/v1/policies", { headers: accountHeaders(credential) }), platform ? "INSTALLATION" : "TENANT");
   },
   async listAccounts(credential, after) {
-    return accountPage(await requestJSON<unknown>(`/api/iam/v1/organizations${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "OrganizationAccountList", parseAccount);
+    return accountPage<AccountAccess>(await requestJSON<unknown>(`/api/iam/v1/accounts${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "AccountList", parseAccountAccess);
   },
   async execute(credential, command) {
     const requestId = requestToken("ui-account-");
     let path: string;
     let body: object;
     switch (command.kind) {
-      case "create-user": path = "/api/iam/v1/principals"; body = { loginName: command.loginName, displayName: command.displayName, initialPassword: command.initialPassword }; break;
-      case "create-organization": path = "/api/iam/v1/organizations"; body = { id: command.id, displayName: command.displayName, administratorLoginName: command.administratorLoginName, administratorDisplayName: command.administratorDisplayName, initialPassword: command.initialPassword }; break;
-      case "set-organization-status": path = `/api/iam/v1/organizations/${encodeURIComponent(command.organizationId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
-      case "recover-primary": path = `/api/iam/v1/organizations/${encodeURIComponent(command.organizationId)}:recover-administrator`; body = { principalId: command.principalId, initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
-      case "set-alias": path = "/api/iam/v1/organization:alias"; body = { alias: command.alias, resourceVersion: command.resourceVersion }; break;
-      case "set-status": path = `/api/iam/v1/principals/${encodeURIComponent(command.principalId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
-      case "reset-password": path = `/api/iam/v1/principals/${encodeURIComponent(command.principalId)}:reset-password`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
-      case "create-policy-attachment": path = "/api/iam/v1/policy-attachments"; body = { target: { kind: "USER", id: command.principalId }, policyId: command.policyId, policyResourceVersion: command.policyResourceVersion }; break;
+      case "create-user": path = "/api/iam/v1/users"; body = { loginName: command.loginName, displayName: command.displayName, initialPassword: command.initialPassword }; break;
+      case "create-account": path = "/api/iam/v1/accounts"; body = { id: command.id, displayName: command.displayName, rootLoginName: command.rootLoginName, rootDisplayName: command.rootDisplayName, initialPassword: command.initialPassword }; break;
+      case "set-account-status": path = `/api/iam/v1/accounts/${encodeURIComponent(command.accountId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
+      case "recover-root-credentials": path = `/api/iam/v1/accounts/${encodeURIComponent(command.accountId)}:recover-root-credentials`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
+      case "set-alias": path = "/api/iam/v1/account:alias"; body = { alias: command.alias, resourceVersion: command.resourceVersion }; break;
+      case "set-status": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
+      case "reset-password": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:reset-password`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
+      case "create-policy-attachment": path = "/api/iam/v1/policy-attachments"; body = { target: { kind: "USER", id: command.userId }, policyId: command.policyId, policyResourceVersion: command.policyResourceVersion }; break;
       case "revoke-policy-attachment": path = `/api/iam/v1/policy-attachments/${encodeURIComponent(command.attachmentId)}:revoke`; body = { resourceVersion: command.resourceVersion }; break;
     }
     const result = await requestJSON<unknown>(path, { method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" }, body: JSON.stringify({ ...body, requestId }) });
-    if (command.kind === "create-organization" || command.kind === "set-alias" || command.kind === "set-organization-status" || command.kind === "recover-primary") {
+    if (command.kind === "create-account" || command.kind === "set-alias" || command.kind === "set-account-status" || command.kind === "recover-root-credentials") {
       const parsed = parseAccount(result);
-      if (command.kind === "create-organization" && (parsed.organization.id !== command.id || parsed.primaryLoginName !== command.administratorLoginName)) throw new Error("INVALID_IAM_RESPONSE");
-      if (command.kind === "set-alias" && (parsed.loginAlias !== command.alias || parsed.organization.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
-      if ((command.kind === "set-organization-status" || command.kind === "recover-primary") && (parsed.organization.id !== command.organizationId || parsed.organization.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
-      if (command.kind === "set-organization-status" && parsed.organization.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
-      if (command.kind === "recover-primary" && parsed.primaryPrincipalId !== command.principalId) throw new Error("INVALID_IAM_RESPONSE");
+      if (command.kind === "create-account" && (parsed.id !== command.id || parsed.rootIdentity.loginName !== command.rootLoginName)) throw new Error("INVALID_IAM_RESPONSE");
+      if (command.kind === "set-alias" && (parsed.loginAlias !== command.alias || parsed.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
+      if ((command.kind === "set-account-status" || command.kind === "recover-root-credentials") && (parsed.id !== command.accountId || parsed.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
+      if (command.kind === "set-account-status" && parsed.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
       return;
     }
     if (command.kind === "create-policy-attachment") {
       const attachment = parsePolicyAttachment(result);
-      if (attachment.target.id !== command.principalId || attachment.policyId !== command.policyId) throw new Error("INVALID_IAM_RESPONSE");
+      if (attachment.target.id !== command.userId || attachment.policyId !== command.policyId) throw new Error("INVALID_IAM_RESPONSE");
       return;
     }
     if (command.kind === "revoke-policy-attachment") {
@@ -252,11 +349,11 @@ export const httpAccountRepository: AccountRepository = {
       accountTimestamp(wire.revokedAt);
       return;
     }
-    const principal = parseAccountPrincipal(result);
-    if (command.kind === "create-user" && principal.loginName !== command.loginName) throw new Error("INVALID_IAM_RESPONSE");
-    if (command.kind !== "create-user" && (principal.id !== command.principalId || principal.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
-    if (command.kind === "set-status" && principal.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
-    if ((command.kind === "create-user" || command.kind === "reset-password") && !principal.mustChangePassword) throw new Error("INVALID_IAM_RESPONSE");
+    const user = parseUser(result);
+    if (command.kind === "create-user" && user.loginName !== command.loginName) throw new Error("INVALID_IAM_RESPONSE");
+    if (command.kind !== "create-user" && (user.id !== command.userId || user.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
+    if (command.kind === "set-status" && user.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
+    if ((command.kind === "create-user" || command.kind === "reset-password") && !user.mustChangePassword) throw new Error("INVALID_IAM_RESPONSE");
   }
 };
 

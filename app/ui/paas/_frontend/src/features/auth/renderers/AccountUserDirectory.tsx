@@ -26,7 +26,6 @@ function AccountUserRow({ user, principalId, workspace, grants, checked, disable
     <td><div className={styles.userIdentity}>
       <button className={styles.userLink} aria-label={t("viewUser", { name: user.loginName })} onClick={onOpen} type="button">{user.loginName}</button>
       {user.name && user.name !== user.loginName ? <span className={styles.userDisplayName}>{user.name}</span> : null}
-      {user.source === "wecom" ? <Badge>{w("wecom")}</Badge> : null}
     </div><small className={styles.userIdentifier}>{user.id}</small></td>
     <td>{t("child")}{user.id === principalId ? <small>{t("signedIn")}</small> : null}</td>
     <td><AccountUserAccessMethods user={user} workspace={workspace} /></td>
@@ -44,7 +43,7 @@ function AccountUserRow({ user, principalId, workspace, grants, checked, disable
 
 function AccountOwnerSummary({ scene, onOpen }: { scene: AccountAccessScene; onOpen(): void }) {
   const t = useTranslations("AccountAccess");
-  const owner = scene.primaryUser;
+  const owner = scene.accountOwner;
   return <section className={styles.accountOwner} aria-label={t("resourceOwner")}>
     <div className={styles.accountOwnerIdentity}>
       <span className={styles.accountOwnerLabel}>{t("resourceOwner")}</span>
@@ -101,18 +100,18 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   const checkedUsers = filtered.filter((user) => checkedIds.has(user.id));
   const allChecked = filtered.length > 0 && checkedUsers.length === filtered.length;
   const blocked = access.busy || access.loading || !access.supportsUserBatch;
-  const batchContext = { canManage: scene.canManage, supported: access.supportsUserBatch, primaryId: scene.primaryUser.id, actorId: scene.principalId, targets: checkedUsers.map((user) => ({ id: user.id, enabled: user.enabled })) };
-  if (entityId === scene.primaryUser.id) return <AccountPrimaryWorkspace scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
+  const batchContext = { canListUsers: scene.canListUsers, supported: access.supportsUserBatch, rootId: scene.accountOwner.id, actorId: scene.currentUserId, targets: checkedUsers.map((user) => ({ id: user.id, enabled: user.enabled, canSetStatus: user.canSetStatus, canAttachPolicy: user.canAttachTenantPolicy, protected: user.protected })) };
+  if (entityId === scene.accountOwner.id) return <AccountPrimaryWorkspace scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
   if (entityId && !detail) return <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
   if (detail && access.workspace) return <AccountUserWorkspace user={detail} workspace={access.workspace} scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
   return <div className={styles.userDirectory}>
     <Card>
-      <ContentPage.Heading title={t("usersTitle")} actions={<div className={styles.directoryActions}><Button ref={createRef} disabled={access.busy || access.loading} onClick={onCreate} size="small"><Plus aria-hidden="true" />{t("createUser")}</Button>
+      <ContentPage.Heading title={t("usersTitle")} actions={<div className={styles.directoryActions}>{scene.canCreateUsers ? <Button ref={createRef} disabled={access.busy || access.loading} onClick={onCreate} size="small"><Plus aria-hidden="true" />{t("createUser")}</Button> : null}
           <TableActions label={batch("more")} disabled={blocked || !checkedUsers.length} hint={batch(access.supportsUserBatch ? "selectHint" : "unsupportedHint")}
             selectionLabel={checkedUsers.length ? batch("selected", { count: checkedUsers.length }) : undefined} clearLabel={batch("clear")} onClear={clearSelection}
             actions={userBatchActions.map((action) => { const reason = userBatchDisabledReason(action, batchContext); return { id: action, label: batch(`actions.${action}`), danger: action === "delete", disabledReason: reason ? batch(`reasons.${reason}`) : undefined, onSelect: () => setBatchDialog({ action, users: checkedUsers }) }; })} />
           </div>} />
-      <AccountOwnerSummary scene={scene} onOpen={() => onOpen("users", scene.primaryUser.id)} />
+      <AccountOwnerSummary scene={scene} onOpen={() => onOpen("users", scene.accountOwner.id)} />
       <TableToolbar labels={toolbarLabels} search={{ label: t("searchUsers"), placeholder: t("searchUsersPlaceholder"), value: query, onChange: (value) => changeFilter(() => setQuery(value)) }}
         status={t("userResults", { shown: filtered.length, loaded: scene.users.length })} filters={[
           { id: "state", label: t("filterUserState"), value: state, onChange: (value) => changeFilter(() => setState(value)), options: [{ value: "all", label: t("allStates") }, ...(["active", "passwordChangeRequired", "disabled"] as const).map((value) => ({ value, label: t(`states.${value}`) }))] },
@@ -121,7 +120,7 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
       {!access.supportsUserBatch || filtered.length > userBatchLimit ? <p className={styles.selectionHint}>{batch(!access.supportsUserBatch ? "unsupportedHint" : "limitHint", { limit: userBatchLimit })}</p> : null}
       {filtered.length ? <Table aria-label={t("userTable")} className={styles.userTable}>
           <thead><tr><TableSelectionCell header label={batch("selectPage")} checked={allChecked ? true : checkedUsers.length ? "mixed" : false} disabled={blocked || filtered.length > userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? filtered.map((user) => user.id) : [] })} /><th scope="col">{t("user")}</th><th scope="col">{t("userType")}</th><th scope="col">{t("accessMethods")}</th><th scope="col">{w("policyAssociations")}</th><th scope="col">{t("status")}</th></tr></thead>
-          <tbody>{filtered.map((user) => <AccountUserRow key={user.id} user={user} principalId={scene.principalId} workspace={workspace} grants={associations.get(user.id)}
+          <tbody>{filtered.map((user) => <AccountUserRow key={user.id} user={user} principalId={scene.currentUserId} workspace={workspace} grants={associations.get(user.id)}
             checked={checkedIds.has(user.id)} disabled={blocked || !checkedIds.has(user.id) && checkedUsers.length >= userBatchLimit}
             onSelect={(checked) => setSelection({ scene, ids: checked ? [...checkedIds, user.id] : [...checkedIds].filter((id) => id !== user.id) })}
             onOpen={() => workspace ? onOpen("users", user.id) : setSelectedId(user.id)} />)}</tbody>

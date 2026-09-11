@@ -49,7 +49,7 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
   function validateIdentity(): Errors {
     const result: Errors = {};
     if (!/^[a-z][a-z0-9._-]{2,63}$/.test(login.trim())) result.login = "invalidLogin";
-    else if (login.trim() === scene!.primaryLoginName || scene!.users.some((user) => user.loginName === login.trim())) result.login = "duplicateLogin";
+    else if (login.trim() === scene!.rootLoginName || scene!.users.some((user) => user.loginName === login.trim())) result.login = "duplicateLogin";
     if (!name.trim()) result.name = "requiredName";
     if (preview && !profile.consoleAccess && !profile.programmaticAccess) result.access = "requiredAccess";
     if ((!preview || (profile.consoleAccess && passwordMode === "custom")) && (password.length < 14 || password.length > 128)) result.password = "passwordHint";

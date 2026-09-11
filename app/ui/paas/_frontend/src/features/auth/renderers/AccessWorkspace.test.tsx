@@ -6,7 +6,7 @@ import { LocaleProvider, useLocalePreference } from "@/i18n/LocaleProvider";
 import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider } from "../application/AccountAccessProvider";
-import { accountAccessViews, type AccountAccessView, type AccountIdentity, type AccountUser } from "../domain/accounts";
+import { accountAccessViews, type AccountAccessView, type AccountIdentity, type ActionCapability, type CapabilityRestriction, type IamAction, type User, type UserAccess } from "../domain/accounts";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorkspace";
 import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
@@ -24,10 +24,27 @@ vi.mock("next/link", () => ({
   }}>{children}</a>
 }));
 
-const platformAttachment = { id: "attachment-admin-platform", accountId: "org-xiak", target: { kind: "USER" as const, id: "admin" }, policyId: "system.platform-admin", scope: "INSTALLATION" as const, installationId: "preview", resourceVersion: 1, createdAt: "2026-09-09T00:00:00Z", updatedAt: "2026-09-09T00:00:00Z" };
-const identity: AccountIdentity = { account: { organization: { id: "org-xiak", displayName: "Example", status: "ACTIVE", resourceVersion: 1 }, primaryPrincipalId: "admin", primaryLoginName: "admin", loginAlias: "example" }, principal: { id: "admin", organizationId: "org-xiak", loginName: "admin", displayName: "Administrator", status: "ACTIVE", mustChangePassword: false, resourceVersion: 1 }, policyAttachments: [platformAttachment], canCreateOrganizations: true };
-const users: AccountUser[] = ["lin", "chen"].map((name) => ({ principal: { ...identity.principal, id: "principal-" + name, loginName: name, displayName: name }, policyAttachments: [] }));
-const reviewUsers: AccountUser[] = [...users, ...["qiao", "wu"].map((name) => ({ principal: { ...identity.principal, id: "principal-" + name, loginName: name, displayName: name }, policyAttachments: [] }))];
+const account = { id: "org-xiak", displayName: "Example", status: "ACTIVE" as const, rootIdentity: { principalId: "admin", loginName: "admin" }, loginAlias: "example", resourceVersion: 1 };
+const rootUser: User = { id: "admin", accountId: "org-xiak", loginName: "admin", displayName: "Administrator", status: "ACTIVE", mustChangePassword: false, resourceVersion: 1 };
+const capability = (action: IamAction, kind: ActionCapability["resource"]["kind"], id: string, reason: CapabilityRestriction | null = null): ActionCapability => ({ action, resource: { kind, id }, available: reason === null, restrictionReason: reason });
+const currentCapabilities = (available = true): ActionCapability[] => [
+  capability("iam.account.create", "ACCOUNT", "accounts", available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.account.read", "ACCOUNT", "accounts", available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.account.alias-set", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.user.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.user.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.policy.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED")
+];
+const userAccess = (name: string): UserAccess => {
+  const user: User = { ...rootUser, id: "principal-" + name, loginName: name, displayName: name };
+  return { user, policyAttachments: [], capabilities: [
+    capability("iam.user.set-status", "USER", user.id), capability("iam.user.reset-password", "USER", user.id),
+    capability("iam.policy-attachment.create", "USER", user.id), capability("iam.platform-policy-attachment.create", "USER", user.id)
+  ] };
+};
+const identity: AccountIdentity = { account, user: rootUser, identityKind: "ROOT_IDENTITY", policyAttachments: [], capabilities: currentCapabilities() };
+const users: UserAccess[] = ["lin", "chen"].map(userAccess);
+const reviewUsers: UserAccess[] = [...users, ...["qiao", "wu"].map(userAccess)];
 const login: IamRepository = { login: async () => ({ credential: "preview-only", mustChangePassword: false, session: { id: "session", organizationId: "org-xiak", principalId: "admin", status: "ACTIVE", issuedAt: "2026-09-09T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z" } }), changePassword: async () => {}, logout: async () => {} };
 
 function Harness({ repository, initialView, initialEntityId }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string }) {
@@ -40,12 +57,12 @@ function Harness({ repository, initialView, initialEntityId }: { repository: Acc
   if (!session.current) return <button onClick={() => void session.login("admin", "preview")}>Enter</button>;
   return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} onNavigate={(next, id, method) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); })} /></AccountAccessProvider>;
 }
-async function open(initialView: AccountAccessView, options?: { live?: boolean; reader?: boolean; entityId?: string; users?: AccountUser[]; seed?(extension: ReturnType<typeof createPreviewAccessWorkspace>): Promise<void> }) {
+async function open(initialView: AccountAccessView, options?: { live?: boolean; reader?: boolean; entityId?: string; users?: UserAccess[]; seed?(extension: ReturnType<typeof createPreviewAccessWorkspace>): Promise<void> }) {
   const directoryUsers = options?.users ?? users;
-  const extension = createPreviewAccessWorkspace("org-xiak", () => directoryUsers.map((user) => user.principal.id), identity.account.primaryPrincipalId);
+  const extension = createPreviewAccessWorkspace("org-xiak", () => directoryUsers.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
   await options?.seed?.(extension);
   const repository: AccountRepository = {
-    currentIdentity: vi.fn().mockResolvedValue(options?.reader ? { ...identity, policyAttachments: [], canCreateOrganizations: false } : identity),
+    currentIdentity: vi.fn().mockResolvedValue(options?.reader ? { ...identity, policyAttachments: [], capabilities: currentCapabilities(false) } : identity),
     listUsers: options?.reader ? vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) : vi.fn().mockResolvedValue({ items: directoryUsers, nextAfter: null }),
     listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => ({ accountId: "org-xiak", scope: platform ? "INSTALLATION" : "TENANT", installationId: platform ? "preview" : null, items: [] })),
     listAccounts: vi.fn().mockResolvedValue({ items: [], nextAfter: null }),
@@ -176,8 +193,8 @@ describe("selection-driven user directory", () => {
     await user.click(dialog.getByRole("button", { name: "确认执行" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const after = (await previewAccountRepository.listUsers(previewCredential)).items;
-    expect(after.filter((user) => ["lin", "chen"].includes(user.principal.loginName)).every((user) => user.principal.status === "DISABLED")).toBe(true);
-    expect(after.filter((user) => !["lin", "chen"].includes(user.principal.loginName)).every((user) => user.principal.status === "ACTIVE")).toBe(true);
+    expect(after.filter((entry) => ["lin", "chen"].includes(entry.user.loginName)).every((entry) => entry.user.status === "DISABLED")).toBe(true);
+    expect(after.filter((entry) => !["lin", "chen"].includes(entry.user.loginName)).every((entry) => entry.user.status === "ACTIVE")).toBe(true);
     expect(repository.executeUserBatch).toHaveBeenCalledTimes(2);
     expect(repository.execute).not.toHaveBeenCalled();
   });
@@ -345,10 +362,10 @@ describe("policy creation entry and directory contract", () => {
   it("matches CAM directory columns, omits preset metadata in custom view and restores chooser focus", async () => {
     const { user, repository } = await open("policies");
     const headings = () => within(screen.getByRole("table", { name: "策略" })).getAllByRole("columnheader").map((cell) => cell.textContent).filter(Boolean);
-    expect(headings()).toEqual(["策略名", "所属产品", "权限级别", "描述", "上次修改时间", "操作"]);
+    expect(headings()).toEqual(["策略名", "所属产品", "权限级别", "描述", "上次修改时间"]);
     await select(user, "权限级别", "全局权限");
     await user.click(screen.getByRole("tab", { name: "自定义策略" }));
-    expect(headings()).toEqual(["策略名", "描述", "上次修改时间", "操作"]);
+    expect(headings()).toEqual(["策略名", "描述", "上次修改时间"]);
     expect(screen.getByRole("button", { name: "ProductionLogReader" })).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "权限级别" })).toBeNull();
     const create = screen.getByRole("button", { name: "新建自定义策略" });
@@ -1476,7 +1493,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByLabelText("Entity destination").textContent).toBe("policy-delivery-boundary");
   });
   it("separates an ungranted login profile and a disabled user from policy evaluation", async () => {
-    const { user } = await open("simulator", { users: reviewUsers.map((entry) => entry.principal.id === "principal-lin" ? { ...entry, principal: { ...entry.principal, status: "DISABLED" } } : entry) });
+    const { user } = await open("simulator", { users: reviewUsers.map((entry) => entry.user.id === "principal-lin" ? { ...entry, user: { ...entry.user, status: "DISABLED" } } : entry) });
     expect(screen.getByText(/此用户已停用/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "运行模拟" }));
     expect(screen.getByText("策略允许", { exact: true })).toBeTruthy();
@@ -1837,7 +1854,7 @@ describe("CAM-style access workspace", () => {
     const { repository } = await open(view, { reader: true });
     await screen.findByText("没有此页面的管理权限");
     expect(repository.workspace?.read).not.toHaveBeenCalled();
-    expect(repository.listUsers).toHaveBeenCalledTimes(1);
+    expect(repository.listUsers).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "新建用户组" })).toBeNull();
   });
   it.each(["keys", "create-policy", "simulator"] as const)("shows an honest unavailable state for %s on the live adapter", async (view) => {
@@ -1861,7 +1878,7 @@ describe("CAM-style access workspace", () => {
     expect(state.providers).toHaveLength(1);
   });
   it("allowlists report fields instead of exporting a raw account snapshot", async () => {
-    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((user) => user.principal.id), identity.account.primaryPrincipalId);
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
     const workspace = await extension.read("preview");
     const report = buildAccessReport("security", workspace, buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] }), "2026-09-09T00:00:00Z");
     expect(report.mode).toBe("MOCK");

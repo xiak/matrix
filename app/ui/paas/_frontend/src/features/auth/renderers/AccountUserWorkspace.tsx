@@ -25,7 +25,7 @@ export function AccountUserAccessMethods({ user, workspace }: { user: AccountUse
 export function AccountPrimaryWorkspace({ scene, onBack, onOpen }: { scene: AccountAccessScene; onBack(): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
-  const primary = scene.primaryUser;
+  const primary = scene.accountOwner;
   return <WorkspaceDetail title={primary.loginName} onBack={onBack} actions={<Button variant="secondary" onClick={() => onOpen("settings")}>{t("settings")}</Button>}>
     <div className={styles.userSummary}><div><strong>{primary.name ?? t("resourceOwner")}</strong><span className={styles.note}>{scene.accountName}</span></div><Badge>{t("primary")}</Badge></div>
 

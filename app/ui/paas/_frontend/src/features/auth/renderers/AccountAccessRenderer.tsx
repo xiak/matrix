@@ -24,6 +24,7 @@ import { AccessCredentials } from "./AccessCredentials";
 import { AccessSecuritySettings, AccessUserSso } from "./AccessSecuritySettings";
 import { AccessEnterpriseAccounts } from "./AccessEnterpriseAccounts";
 import { AccountPolicyDirectory } from "./AccountPolicyDirectory";
+import { AccountTenantWorkspace } from "./AccountTenantWorkspace";
 import styles from "./AccountAccessRenderer.module.css";
 
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
@@ -39,11 +40,11 @@ function UserSettings({ scene }: { scene: AccountAccessScene }) {
       <p className={styles.note}>{t("aliasHint")}</p>
       <dl className={styles.facts}>
         <div><dt>{t("accountId")}</dt><dd><AccountIdentifier label={t("accountId")} value={scene.accountId} /></dd></div>
-        <div><dt>{t("primaryLogin")}</dt><dd>{scene.primaryLoginName}</dd></div>
+        <div><dt>{t("primaryLogin")}</dt><dd>{scene.rootLoginName}</dd></div>
         <div><dt>{t("idLogin")}</dt><dd><AccountIdentifier label={t("idLogin")} value={`username@${scene.accountId}`} /></dd></div>
         <div><dt>{t("aliasLogin")}</dt><dd>{scene.loginAlias ? <AccountIdentifier label={t("aliasLogin")} value={`username@${scene.loginAlias}`} /> : t("aliasPending")}</dd></div>
       </dl>
-      {scene.canManage ? <form className={styles.form} onSubmit={async (event) => { event.preventDefault(); await access.execute({ kind: "set-alias", alias: alias.trim(), resourceVersion: scene.accountVersion }); }}>
+      {scene.canSetAlias ? <form className={styles.form} onSubmit={async (event) => { event.preventDefault(); await access.execute({ kind: "set-alias", alias: alias.trim(), resourceVersion: scene.accountVersion }); }}>
         <FormField id={aliasId} label={t("alias")} hint={t("aliasRule")}><Input id={aliasId} aria-describedby={`${aliasId}-hint`} autoComplete="off" maxLength={63} minLength={3} onChange={(event) => setAlias(event.target.value)} pattern={aliasPattern} placeholder={t("aliasPlaceholder")} required value={alias} /></FormField>
         <p className={styles.note}>{t("aliasChangeHint")}</p>
         <div><Button disabled={access.busy || access.loading || !alias.trim() || alias.trim() === scene.loginAlias} type="submit">{access.busy ? t("saving") : t("saveAlias")}</Button></div>
@@ -56,14 +57,17 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   const t = useTranslations("AccountAccess");
   const access = useAccountAccess();
   const [creating, setCreating] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = scene.accounts.find((account) => account.id === selectedId);
+  if (selected) return <AccountTenantWorkspace account={selected} key={`${selected.id}:${selected.resourceVersion}`} onBack={() => setSelectedId(null)} />;
   return <div className={styles.stack}>
     <Card>
-      <ContentPage.Heading title={t("tenantAccounts")} actions={<Button disabled={access.busy || access.loading} onClick={() => setCreating(true)} size="small"><Plus aria-hidden="true" />{t("openTenant")}</Button>} />
-      <Table aria-label={t("tenantTable")}><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th></tr></thead>
-          <tbody>{scene.accounts.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>{account.id}</small></td><td>{account.primaryLoginName}</td><td>{account.loginAlias ?? t("aliasUnset")}</td></tr>)}</tbody>
+      <ContentPage.Heading title={t("tenantAccounts")} actions={scene.canCreateAccounts ? <Button disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />{t("openTenant")}</Button> : undefined} />
+      <Table aria-label={t("tenantTable")}><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
+          <tbody>{scene.accounts.map((account) => <tr key={account.id}><td><button className={styles.userLink} onClick={() => { setSelectedId(account.id); setCreating(false); }} type="button">{account.name}</button><small>{account.id}</small></td><td>{account.rootLoginName}</td><td>{account.loginAlias ?? t("aliasUnset")}</td><td><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
         </Table>
         {!scene.accounts.length ? <EmptyState title={t("noTenants")} /> : null}
-      <Card.Footer><span className={styles.note}>{t("tenantScopeHint")}</span><div className={styles.actions}><Button disabled={access.busy || access.loading} onClick={() => access.accountsPage("")} size="small" variant="ghost">{t("firstPage")}</Button><Button disabled={access.busy || access.loading || !scene.nextAccountPage} onClick={() => access.accountsPage(scene.nextAccountPage!)} size="small" variant="secondary">{t("nextPage")}</Button></div></Card.Footer>
+      <Card.Footer><span className={styles.note}>{t("tenantScopeHint")}</span><div className={styles.actions}><Button disabled={access.busy || access.loading} onClick={() => { setSelectedId(null); setCreating(false); access.accountsPage(""); }} size="small" variant="ghost">{t("firstPage")}</Button><Button disabled={access.busy || access.loading || !scene.nextAccountPage} onClick={() => { setSelectedId(null); setCreating(false); access.accountsPage(scene.nextAccountPage!); }} size="small" variant="secondary">{t("nextPage")}</Button></div></Card.Footer>
     </Card>
     {creating ? <CreateTenantDialog onClose={() => setCreating(false)} /> : null}
   </div>;
@@ -81,10 +85,11 @@ export function AccountAccessRenderer({ view = "overview", entityId, policyMetho
   useEffect(() => { clearFeedback(); }, [view, clearFeedback]);
   const previewOnly = ["groups", "create-group", "create-policy", "simulator", "roles", "create-role", "providers", "user-sso", "federations", "keys"].includes(view);
   const denied = scene && (
-    ((view === "users" || view === "create-user") && !scene.canManage) ||
-    (view === "tenants" && !scene.canCreateOrganizations) ||
-    (view === "policies" && !(workspace ? scene.canManage : scene.canViewPolicies)) ||
-    (previewOnly && capabilities.hasPreviewWorkspace && !scene.canManage)
+    (view === "users" && !scene.canListUsers) ||
+    (view === "create-user" && !scene.canCreateUsers) ||
+    (view === "tenants" && !scene.canReadAccounts) ||
+    (view === "policies" && !(workspace ? scene.canListUsers : scene.canViewPolicies)) ||
+    (previewOnly && capabilities.hasPreviewWorkspace && !scene.canListUsers)
   );
   return <section aria-label={t("title")} aria-busy={access.loading || access.busy} className={styles.stack}>
     {access.error && !workflow ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}

@@ -1,4 +1,4 @@
-import type { AccountIdentity, AccountUser } from "./accounts";
+import type { AccountIdentity, UserAccess } from "./accounts";
 import { applyAccessWorkspaceCommand, withoutUserAccess, type AccessWorkspace } from "./accessWorkspace";
 import { AccessWorkspaceError } from "./accessWorkspaceError";
 
@@ -12,21 +12,23 @@ export type UserBatchCommand = { targets: UserBatchTarget[] } & (
   | { action: "enable" | "disable" | "delete" }
 );
 export type UserBatchContext = {
-  canManage: boolean; supported: boolean; primaryId: string; actorId: string;
-  targets: { id: string; enabled: boolean | null }[];
+  canListUsers: boolean; supported: boolean; rootId: string; actorId: string;
+  targets: { id: string; enabled: boolean | null; canSetStatus: boolean; canAttachPolicy: boolean; protected: boolean }[];
 };
 
 // The same eligibility rule drives menu explanations and mutation validation.
 // An ineligible target blocks the whole selection; it is never silently skipped.
 export function userBatchDisabledReason(action: UserBatchAction, context: UserBatchContext) {
-  if (!context.canManage) return "forbidden";
+  if (!context.canListUsers) return "forbidden";
   if (!context.supported) return "unsupported";
   if (!context.targets.length) return "empty";
   if (context.targets.length > userBatchLimit) return "limit";
-  if (context.targets.some((target) => target.id === context.primaryId)) return "primary";
+  if (context.targets.some((target) => target.id === context.rootId)) return "primary";
   if (action === "add-groups") return null;
-  if (action === "authorize") return null;
+  if (action === "authorize") return context.targets.some((target) => !target.canAttachPolicy) ? "protected" : null;
   if (context.targets.some((target) => target.id === context.actorId)) return "self";
+  if (action === "delete" && context.targets.some((target) => target.protected)) return "protected";
+  if ((action === "enable" || action === "disable") && context.targets.some((target) => !target.canSetStatus)) return "protected";
   if (action === "enable" && context.targets.some((target) => target.enabled !== false)) return "notDisabled";
   if (action === "disable" && context.targets.some((target) => target.enabled !== true)) return "notEnabled";
   return null;
@@ -34,24 +36,31 @@ export function userBatchDisabledReason(action: UserBatchAction, context: UserBa
 
 // One preview transaction spans directory identities and their workspace access.
 // Both results are published by the adapter only after every check succeeds.
-export function applyUserBatch(source: AccessWorkspace, users: AccountUser[], identity: AccountIdentity, command: UserBatchCommand, clock: { id: string; at: string; canManage: boolean }) {
+export function applyUserBatch(source: AccessWorkspace, users: UserAccess[], identity: AccountIdentity, command: UserBatchCommand, clock: { id: string; at: string; canListUsers: boolean }) {
   const invalid = () => { throw new AccessWorkspaceError("invalid"); };
-  if (source.accountId !== identity.account.organization.id || identity.principal.organizationId !== source.accountId ||
-    users.some((user) => user.principal.organizationId !== source.accountId) || !userBatchActions.includes(command.action) ||
+  if (source.accountId !== identity.account.id || identity.user.accountId !== source.accountId ||
+    users.some((entry) => entry.user.accountId !== source.accountId) || !userBatchActions.includes(command.action) ||
     new Set(command.targets.map((target) => target.id)).size !== command.targets.length) invalid();
-  const directory = new Map(users.map((user) => [user.principal.id, user]));
-  const primaryId = identity.account.primaryPrincipalId;
+  const directory = new Map(users.map((entry) => [entry.user.id, entry]));
+  const rootId = identity.account.rootIdentity.principalId;
   const targets = command.targets.map((target) => {
-    if (target.id === primaryId) return { id: target.id, enabled: null };
-    const user = directory.get(target.id);
-    if (!user) throw new AccessWorkspaceError("notFound");
-    if (target.resourceVersion !== user.principal.resourceVersion) throw new AccessWorkspaceError("staleUsers");
-    return { id: target.id, enabled: user.principal.status === "ACTIVE" };
+    if (target.id === rootId) return { id: target.id, enabled: null, canSetStatus: false, canAttachPolicy: false, protected: true };
+    const entry = directory.get(target.id);
+    if (!entry) throw new AccessWorkspaceError("notFound");
+    if (target.resourceVersion !== entry.user.resourceVersion) throw new AccessWorkspaceError("staleUsers");
+    const capability = (action: string) => entry.capabilities.find((item) => item.action === action && item.resource.kind === "USER" && item.resource.id === entry.user.id);
+    return {
+      id: target.id,
+      enabled: entry.user.status === "ACTIVE",
+      canSetStatus: capability("iam.user.set-status")?.available === true,
+      canAttachPolicy: capability("iam.policy-attachment.create")?.available === true,
+      protected: entry.capabilities.some((item) => item.restrictionReason === "INSTALLATION_AUTHORITY_PROTECTED")
+    };
   });
-  const reason = userBatchDisabledReason(command.action, { targets, primaryId, actorId: identity.principal.id, supported: true, canManage: clock.canManage });
+  const reason = userBatchDisabledReason(command.action, { targets, rootId, actorId: identity.user.id, supported: true, canListUsers: clock.canListUsers });
   if (reason) throw new AccessWorkspaceError("ineligibleUsers");
   const ids = new Set(targets.map((target) => target.id));
-  const context = { ...clock, primaryPrincipalId: primaryId, userIds: users.filter((user) => user.principal.id !== primaryId).map((user) => user.principal.id) };
+  const context = { id: clock.id, at: clock.at, primaryPrincipalId: rootId, userIds: users.map((entry) => entry.user.id) };
   let workspace = source;
   let nextUsers = users;
   if (command.action === "authorize") {
@@ -67,9 +76,9 @@ export function applyUserBatch(source: AccessWorkspace, users: AccountUser[], id
     for (const group of workspace.groups) if (command.groupIds.includes(group.id)) group.memberIds = [...new Set([...group.memberIds, ...ids])];
   } else if (command.action === "delete") {
     workspace = withoutUserAccess(source, [...ids], clock.at);
-    nextUsers = users.filter((user) => !ids.has(user.principal.id));
+    nextUsers = users.filter((entry) => !ids.has(entry.user.id));
   } else {
-    nextUsers = users.map((user) => ids.has(user.principal.id) ? { ...user, principal: { ...user.principal, status: command.action === "enable" ? "ACTIVE" as const : "DISABLED" as const, resourceVersion: user.principal.resourceVersion + 1 } } : user);
+    nextUsers = users.map((entry) => ids.has(entry.user.id) ? { ...entry, user: { ...entry.user, status: command.action === "enable" ? "ACTIVE" as const : "DISABLED" as const, resourceVersion: entry.user.resourceVersion + 1 } } : entry);
   }
   workspace = { ...workspace, events: [{ id: clock.id, action: "batch-users" as const, target: command.action + ": " + [...ids].join(", "), at: clock.at }, ...source.events].slice(0, 100) };
   return { workspace, users: nextUsers };

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountCapabilities } from "../application/AccountAccessProvider";
-import type { AccountIdentity, AccountPolicy, AccountPrincipal, AccountUser, AccountAccessView, PolicyDirectory, UserPolicyAttachment } from "../domain/accounts";
+import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, ActionCapability, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment } from "../domain/accounts";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LoginRenderer } from "./LoginRenderer";
@@ -17,16 +17,37 @@ const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
 const credential = "account-test-only-memory-credential";
 const timestamp = "2026-09-11T08:00:00Z";
-const principal: AccountPrincipal = { id: "primary-a", organizationId: "tenant-a", loginName: "admin", displayName: "Account owner", status: "ACTIVE", resourceVersion: 2, mustChangePassword: false };
+const account: Account = { id: "tenant-a", displayName: "Team A", status: "ACTIVE", rootIdentity: { principalId: "primary-a", loginName: "admin" }, loginAlias: null, resourceVersion: 1 };
+const rootUser: User = { id: "primary-a", accountId: "tenant-a", loginName: "admin", displayName: "Account owner", status: "ACTIVE", resourceVersion: 2, mustChangePassword: false };
 const tenantPolicy: AccountPolicy = { id: "system.paas-viewer", management: "SYSTEM", accountId: null, displayName: "ReadOnlyAccess", scope: "TENANT", status: "ACTIVE", defaultVersionId: "version-1", resourceVersion: 3, createdAt: timestamp, updatedAt: timestamp };
 const platformPolicy: AccountPolicy = { ...tenantPolicy, id: "system.platform-admin", displayName: "PlatformAdministrator", scope: "INSTALLATION", resourceVersion: 2 };
 const attachment = (principalId: string, policy: AccountPolicy): UserPolicyAttachment => ({ id: `attachment-${principalId}-${policy.id}`, accountId: "tenant-a", target: { kind: "USER", id: principalId }, policyId: policy.id, scope: policy.scope, installationId: policy.scope === "INSTALLATION" ? "installation-a" : null, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp });
 const directory = (platform: boolean): PolicyDirectory => ({ accountId: "tenant-a", scope: platform ? "INSTALLATION" : "TENANT", installationId: platform ? "installation-a" : null, items: [platform ? platformPolicy : tenantPolicy] });
+const capability = (action: IamAction, kind: ActionCapability["resource"]["kind"], id: string, reason: CapabilityRestriction | null = null): ActionCapability => ({ action, resource: { kind, id }, available: reason === null, restrictionReason: reason });
+const currentCapabilities = (available = true): ActionCapability[] => [
+  capability("iam.account.create", "ACCOUNT", "accounts", available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.account.read", "ACCOUNT", "accounts", available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.account.alias-set", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.user.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.user.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.policy.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED")
+];
+const userCapabilities = (user: User, attachments: UserPolicyAttachment[] = [], reason: CapabilityRestriction | null = null): ActionCapability[] => [
+  capability("iam.user.set-status", "USER", user.id, reason),
+  capability("iam.user.reset-password", "USER", user.id, reason),
+  capability("iam.policy-attachment.create", "USER", user.id),
+  capability("iam.platform-policy-attachment.create", "USER", user.id),
+  ...attachments.map((item) => capability(item.scope === "INSTALLATION" ? "iam.platform-policy-attachment.revoke" : "iam.policy-attachment.revoke", "POLICY_ATTACHMENT", item.id))
+];
+const accountAccess = (value: Account): AccountAccess => ({ account: value, capabilities: [
+  capability("iam.account.set-status", "ACCOUNT", value.id),
+  capability("iam.account.recover-root-credentials", "ACCOUNT", value.id)
+] });
 const identity: AccountIdentity = {
-  account: { organization: { id: "tenant-a", displayName: "Team A", status: "ACTIVE", resourceVersion: 1 }, primaryPrincipalId: "primary-a", primaryLoginName: "admin", loginAlias: null },
-  principal, policyAttachments: [attachment("primary-a", platformPolicy)], canCreateOrganizations: true
+  account, user: rootUser, identityKind: "ROOT_IDENTITY", policyAttachments: [], capabilities: currentCapabilities()
 };
-const child: AccountUser = { principal: { ...principal, id: "child-a", loginName: "developer", displayName: "Developer A" }, policyAttachments: [attachment("child-a", tenantPolicy)] };
+const childUser: User = { ...rootUser, id: "child-a", loginName: "developer", displayName: "Developer A" };
+const child: UserAccess = { user: childUser, policyAttachments: [attachment("child-a", tenantPolicy)], capabilities: userCapabilities(childUser, [attachment("child-a", tenantPolicy)]) };
 
 function iam(overrides: Partial<IamRepository> = {}, id = "primary-a"): IamRepository {
   return {
@@ -38,9 +59,9 @@ function iam(overrides: Partial<IamRepository> = {}, id = "primary-a"): IamRepos
 function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository {
   return {
     currentIdentity: vi.fn().mockResolvedValue(structuredClone(identity)),
-    listUsers: vi.fn().mockResolvedValue({ items: [{ principal, policyAttachments: identity.policyAttachments }, child], nextAfter: null }),
+    listUsers: vi.fn().mockResolvedValue({ items: [child], nextAfter: null }),
     listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => directory(platform)),
-    listAccounts: vi.fn().mockResolvedValue({ items: [identity.account], nextAfter: null }),
+    listAccounts: vi.fn().mockResolvedValue({ items: [accountAccess(identity.account)], nextAfter: null }),
     execute: vi.fn().mockResolvedValue(undefined), ...overrides
   } as AccountRepository;
 }
@@ -53,7 +74,10 @@ function LanguageSwitch() {
 const capabilityCommit = vi.fn();
 function CapabilityProbe() {
   const capabilities = useAccountCapabilities();
-  return <Profiler id="navigation-capabilities" onRender={capabilityCommit}><output data-testid="can-manage">{String(capabilities.canManage)}</output></Profiler>;
+  return <Profiler id="navigation-capabilities" onRender={capabilityCommit}>
+    <output data-testid="can-manage">{String(capabilities.canListUsers)}</output>
+    <output data-testid="can-read-accounts">{String(capabilities.canReadAccounts)}</output>
+  </Profiler>;
 }
 
 function AuthenticatedAccess({ repository, initialView }: { repository: AccountRepository; initialView: AccountAccessView }) {
@@ -122,16 +146,18 @@ describe("qualified login", () => {
 describe("account access", () => {
   it("keeps owner identity separate from child targets and never infers identity type from policy names", () => {
     const namedAdministrator = { ...tenantPolicy, id: "customer.administrator", management: "CUSTOMER" as const, accountId: "tenant-a", displayName: "TenantAdministrator" };
-    const adminChild: AccountUser = { ...child, policyAttachments: [attachment("child-a", namedAdministrator)] };
+    const adminAttachment = attachment("child-a", namedAdministrator);
+    const adminChild: UserAccess = { ...child, policyAttachments: [adminAttachment], capabilities: userCapabilities(child.user, [adminAttachment]) };
     const tenantDirectory = { ...directory(false), items: [namedAdministrator, tenantPolicy].sort((left, right) => left.id.localeCompare(right.id)) };
-    const scene = buildAccountAccessScene(identity, { items: [{ principal, policyAttachments: identity.policyAttachments }, adminChild], nextAfter: null }, null, tenantDirectory, directory(true));
-    expect(scene.primaryUser).toMatchObject({ id: "primary-a", accountType: "primary", name: "Account owner", state: "active" });
+    const scene = buildAccountAccessScene(identity, { items: [adminChild], nextAfter: null }, null, tenantDirectory, directory(true));
+    expect(scene.accountOwner).toMatchObject({ id: "primary-a", accountType: "primary", name: "Account owner", state: "active" });
     expect(scene.users).toHaveLength(1);
     expect(scene.users[0]).toMatchObject({ id: "child-a", accountType: "subuser", attachments: [{ policyId: "customer.administrator" }] });
-    const actingChild = { ...identity, principal: child.principal, policyAttachments: child.policyAttachments, canCreateOrganizations: false };
-    const pageWithoutOwner = buildAccountAccessScene(actingChild, { items: [child], nextAfter: "later" }, null, directory(false), null);
-    expect(pageWithoutOwner.primaryUser).toMatchObject({ id: "primary-a", loginName: "admin", name: null, state: null, isCurrent: false });
-    expect(pageWithoutOwner.primaryUser.name).not.toBe(actingChild.principal.displayName);
+    const actingChild: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", policyAttachments: child.policyAttachments, capabilities: currentCapabilities(false) };
+    const selfProtected: UserAccess = { ...child, capabilities: userCapabilities(child.user, child.policyAttachments, "SELF_PROTECTED") };
+    const pageWithoutOwner = buildAccountAccessScene(actingChild, { items: [selfProtected], nextAfter: "later" }, null, directory(false), null);
+    expect(pageWithoutOwner.accountOwner).toMatchObject({ id: "primary-a", loginName: "admin", name: null, state: null, isCurrent: false });
+    expect(pageWithoutOwner.accountOwner.name).not.toBe(actingChild.user.displayName);
     expect(pageWithoutOwner.users[0]?.protected).toBe(true);
   });
 
@@ -157,8 +183,9 @@ describe("account access", () => {
   });
 
   it("filters subusers without hiding the separately projected account owner", async () => {
-    const adminChild: AccountUser = { ...child, policyAttachments: [attachment("child-a", tenantPolicy)] };
-    const ungranted: AccountUser = { principal: { ...child.principal, id: "ungranted", loginName: "new.user" }, policyAttachments: [] };
+    const adminChild: UserAccess = child;
+    const ungrantedUser: User = { ...child.user, id: "ungranted", loginName: "new.user" };
+    const ungranted: UserAccess = { user: ungrantedUser, policyAttachments: [], capabilities: userCapabilities(ungrantedUser) };
     const { user } = await openAccess(accounts({ listUsers: vi.fn().mockResolvedValue({ items: [adminChild, ungranted], nextAfter: null }) }));
     const admin = within((await screen.findByRole("button", { name: "查看用户 developer" })).closest("tr")!);
     expect(admin.getByText("IAM 子用户")).toBeTruthy();
@@ -173,7 +200,7 @@ describe("account access", () => {
     expect(within(screen.getByRole("table", { name: "租户用户列表" })).getAllByRole("row")).toHaveLength(3);
   });
 
-  it("keeps navigation out of mutation renders but updates it when permissions change", async () => {
+  it("keeps navigation out of mutation renders and preserves unrelated exact capabilities", async () => {
     let finish!: () => void;
     const repository = accounts({ execute: vi.fn(() => new Promise<void>((resolve) => { finish = resolve; })) });
     const { user } = await openAccess(repository, iam(), "settings");
@@ -187,8 +214,9 @@ describe("account access", () => {
     vi.mocked(repository.listUsers).mockRejectedValue(new HttpProblem(403, "FORBIDDEN"));
     await act(async () => { finish(); });
     await waitFor(() => expect(screen.getByTestId("can-manage").textContent).toBe("false"));
+    expect(screen.getByTestId("can-read-accounts").textContent).toBe("true");
     expect(capabilityCommit).toHaveBeenCalled();
-    expect(screen.queryByRole("button", { name: "保存别名" })).toBeNull();
+    expect(screen.getByRole("button", { name: "保存别名" })).toBeTruthy();
   });
 
   it("switches a settings draft and an existing safe error without reloading IAM", async () => {
@@ -231,6 +259,24 @@ describe("account access", () => {
     expect(screen.getByRole("table", { name: "Policy metadata directory" })).toBeTruthy();
     await user.click(screen.getByTestId("nav-tenants"));
     expect(screen.getByRole("table", { name: "Tenant accounts" })).toBeTruthy();
+  });
+
+  it("opens account lifecycle management from the object name without adding an operation column", async () => {
+    const repository = accounts();
+    const { user } = await openAccess(repository, iam(), "tenants");
+    const table = await screen.findByRole("table", { name: "租户账号列表" });
+    expect(within(table).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    await user.click(within(table).getByRole("button", { name: "Team A" }));
+    expect(screen.getByRole("heading", { name: "Team A" })).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "租户账号列表" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "停用账户" }));
+    await user.click(screen.getByRole("button", { name: "确认停用账户" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, {
+      kind: "set-account-status",
+      accountId: "tenant-a",
+      status: "DISABLED",
+      resourceVersion: 1
+    }));
   });
 
   it("starts on a dedicated overview and opens the user workspace without an extra fetch", async () => {
@@ -279,11 +325,11 @@ describe("account access", () => {
   });
 
   it("allows an unprivileged user to inspect its own settings without querying admin directories", async () => {
-    const reader: AccountIdentity = { ...identity, principal: child.principal, policyAttachments: [], canCreateOrganizations: false };
+    const reader: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", policyAttachments: [], capabilities: currentCapabilities(false) };
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(reader), listUsers: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) });
     await openAccess(repository, iam({}, "child-a"), "overview");
     await screen.findByText("未授权");
-    expect(repository.listUsers).toHaveBeenCalledTimes(1);
+    expect(repository.listUsers).not.toHaveBeenCalled();
     expect(repository.listAccounts).not.toHaveBeenCalled();
     expect(screen.queryByRole("tab", { name: "租户管理" })).toBeNull();
     expect(screen.queryByRole("button", { name: "保存别名" })).toBeNull();
@@ -321,7 +367,7 @@ describe("account access", () => {
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
     await user.click(screen.getByRole("button", { name: "关联策略" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-policy-attachment", principalId: "child-a", policyId: "system.platform-admin", policyResourceVersion: 2 }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-policy-attachment", userId: "child-a", policyId: "system.platform-admin", policyResourceVersion: 2 }));
     await waitFor(() => expect(screen.getByRole("combobox", { name: "关联策略" }).textContent).toBe("选择可关联策略"));
     expect((screen.getByRole("button", { name: "关联策略" }) as HTMLButtonElement).disabled).toBe(true);
   });
@@ -337,20 +383,24 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "禁用用户" }));
     expect(repository.execute).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "确认禁用" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-status", principalId: "child-a", status: "DISABLED", resourceVersion: 2 }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-status", userId: "child-a", status: "DISABLED", resourceVersion: 2 }));
     await waitFor(() => expect((screen.getByRole("button", { name: "重置密码" }) as HTMLButtonElement).disabled).toBe(false));
     await user.click(screen.getByRole("button", { name: "重置密码" }));
     await user.type(screen.getByLabelText(/^初始密码/), "Reset-Only-Test-Password-74!");
     await user.click(screen.getByRole("button", { name: "确认重置密码" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "reset-password", principalId: "child-a", initialPassword: "Reset-Only-Test-Password-74!", resourceVersion: 2 }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "reset-password", userId: "child-a", initialPassword: "Reset-Only-Test-Password-74!", resourceVersion: 2 }));
     expect(screen.queryByDisplayValue("Reset-Only-Test-Password-74!")).toBeNull();
   });
 
-  it.each(["identity", "directory", "principal"])("fails closed on a mismatched %s instead of showing another subject", async (mismatch) => {
+  it.each(["identity", "directory", "principal", "root-directory"])("fails closed on a mismatched %s instead of showing another subject", async (mismatch) => {
     const other = structuredClone(identity);
-    if (mismatch === "identity") other.account.organization.id = "tenant-b";
-    if (mismatch === "principal") other.principal.id = "other-principal";
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(other), ...(mismatch === "directory" ? { listUsers: vi.fn().mockResolvedValue({ items: [{ ...child, principal: { ...child.principal, organizationId: "tenant-b", displayName: "PRIVATE OTHER USER" } }], nextAfter: null }) } : {}) });
+    if (mismatch === "identity") other.account.id = "tenant-b";
+    if (mismatch === "principal") other.user.id = "other-principal";
+    const foreignUser: User = { ...child.user, accountId: "tenant-b", displayName: "PRIVATE OTHER USER" };
+    const directoryUser = mismatch === "root-directory"
+      ? { user: rootUser, policyAttachments: [], capabilities: userCapabilities(rootUser, [], "ROOT_IDENTITY_PROTECTED") }
+      : { user: foreignUser, policyAttachments: [], capabilities: userCapabilities(foreignUser) };
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(other), ...(["directory", "root-directory"].includes(mismatch) ? { listUsers: vi.fn().mockResolvedValue({ items: [directoryUser], nextAfter: null }) } : {}) });
     await openAccess(repository);
     expect((await screen.findByRole("alert")).textContent).toContain("暂时不可用");
     expect(screen.queryByText("PRIVATE OTHER USER")).toBeNull();

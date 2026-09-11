@@ -32,12 +32,12 @@ export function AccountIdentifier({ value, label }: { value: string; label: stri
 function AccountIdentityCard({ scene }: { scene: AccountAccessScene }) {
   const t = useTranslations("AccountAccess");
   return <Card>
-    <Card.Header><Typography.Title as="h2" level={3}>{t("accountIdentity")}</Typography.Title><Badge status="info">{scene.isPrimary ? t("primary") : t("child")}</Badge></Card.Header>
+    <Card.Header><Typography.Title as="h2" level={3}>{t("accountIdentity")}</Typography.Title><Badge status="info">{scene.isRoot ? t("primary") : t("child")}</Badge></Card.Header>
     <Card.Body className={styles.detail}>
       <div className={styles.accountName}><span className={styles.accountAvatar}><ShieldCheck aria-hidden="true" /></span><div><strong>{scene.accountName}</strong><small>{t("ownership")}</small></div></div>
       <dl className={styles.compactFacts}>
         <div><dt>{t("signedIn")}</dt><dd>{scene.identityLabel}</dd></div>
-        <div><dt>{t("currentLoginName")}</dt><dd>{scene.loginName}</dd></div>
+        <div><dt>{t("currentLoginName")}</dt><dd>{scene.currentLoginName}</dd></div>
         <div><dt>{t("accountId")}</dt><dd><AccountIdentifier label={t("accountId")} value={scene.accountId} /></dd></div>
         <div><dt>{t("directPolicyAttachments")}</dt><dd>{scene.identityAttachments.map((attachment) => attachment.label).join(" · ") || t("noGrantLabel")}</dd></div>
       </dl>
@@ -78,9 +78,9 @@ if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperatio
       <div className={styles.stack}>
         <div className={styles.overviewToolbar}>
           <div><Typography.Title as="h2" level={3}>{t("overviewSummary")}</Typography.Title><p className={styles.note}>{t("accountWide")}</p></div>
-          {scene.canManage ? <Button disabled={access.busy || access.loading} onClick={() => onNavigate("create-user")}><Plus aria-hidden="true" />{t("createUser")}</Button> : null}
+          {scene.canCreateUsers ? <Button disabled={access.busy || access.loading} onClick={() => onNavigate("create-user")}><Plus aria-hidden="true" />{t("createUser")}</Button> : null}
         </div>
-        {scene.canManage ? <>
+        {scene.canListUsers ? <>
           {!workspace ? <div aria-label={t("userSummary")} className={styles.overviewMetrics}>
             <Statistic label={t("totalUsers")} value={format.number(scene.users.length)} icon={<Users />} />
             <Statistic label={t("enabledUsers")} value={format.number(active)} icon={<UserCheck />} status="success" />

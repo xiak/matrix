@@ -1,21 +1,61 @@
 export type PolicyScope = "TENANT" | "INSTALLATION";
 export type PolicyManagement = "SYSTEM" | "CUSTOMER";
 export type PolicyStatus = "ACTIVE" | "RETIRED";
+export type IdentityKind = "ROOT_IDENTITY" | "USER";
+
+export type IamAction =
+  | "iam.account.create"
+  | "iam.account.read"
+  | "iam.account.set-status"
+  | "iam.account.recover-root-credentials"
+  | "iam.account.alias-set"
+  | "iam.user.list"
+  | "iam.user.create"
+  | "iam.policy.list"
+  | "iam.user.set-status"
+  | "iam.user.reset-password"
+  | "iam.policy-attachment.create"
+  | "iam.platform-policy-attachment.create"
+  | "iam.policy-attachment.revoke"
+  | "iam.platform-policy-attachment.revoke";
+
+export type CapabilityRestriction =
+  | "AUTHORITY_REQUIRED"
+  | "CURRENT_CREDENTIAL_CHANGE_REQUIRED"
+  | "SELF_PROTECTED"
+  | "ROOT_IDENTITY_PROTECTED"
+  | "INSTALLATION_AUTHORITY_PROTECTED"
+  | "SYSTEM_ACCOUNT_PROTECTED"
+  | "TARGET_DISABLED"
+  | "TARGET_CREDENTIAL_CHANGE_REQUIRED";
+
+export type ActionCapability = {
+  action: IamAction;
+  resource: { kind: "ACCOUNT" | "USER" | "POLICY_ATTACHMENT"; id: string };
+  available: boolean;
+  restrictionReason: CapabilityRestriction | null;
+};
 
 export const accountAccessViews = ["users", "create-user", "groups", "create-group", "policies", "create-policy", "simulator", "roles", "create-role", "providers", "user-sso", "federations", "keys", "settings", "tenants"] as const;
 export type AccountAccessView = "overview" | typeof accountAccessViews[number];
 
-export type Account = {
-  organization: { id: string; displayName: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number };
-  primaryPrincipalId: string;
-  primaryLoginName: string;
-  loginAlias: string | null;
+export type RootIdentity = {
+  principalId: string;
+  loginName: string;
 };
 
-export type AccountPrincipal = {
-  source?: "local" | "wecom";
+export type Account = {
   id: string;
-  organizationId: string;
+  displayName: string;
+  status: "ACTIVE" | "DISABLED";
+  rootIdentity: RootIdentity;
+  loginAlias: string | null;
+  resourceVersion: number;
+};
+
+export type User = {
+  id: string;
+  accountId: string;
   loginName: string;
   displayName: string;
   status: "ACTIVE" | "DISABLED";
@@ -57,21 +97,23 @@ export type PolicyDirectory = {
 
 export type AccountIdentity = {
   account: Account;
-  principal: AccountPrincipal;
+  user: User;
+  identityKind: IdentityKind;
   policyAttachments: UserPolicyAttachment[];
-  canCreateOrganizations: boolean;
+  capabilities: ActionCapability[];
 };
 
-export type AccountUser = { principal: AccountPrincipal; policyAttachments: UserPolicyAttachment[] };
+export type UserAccess = { user: User; policyAttachments: UserPolicyAttachment[]; capabilities: ActionCapability[] };
+export type AccountAccess = { account: Account; capabilities: ActionCapability[] };
 export type DirectoryPage<T> = { items: T[]; nextAfter: string | null };
 
 export type AccountCommand =
   | { kind: "create-user"; loginName: string; displayName: string; initialPassword: string }
-  | { kind: "create-organization"; id: string; displayName: string; administratorLoginName: string; administratorDisplayName: string; initialPassword: string }
-  | { kind: "set-organization-status"; organizationId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
-  | { kind: "recover-primary"; organizationId: string; principalId: string; initialPassword: string; resourceVersion: number }
+  | { kind: "create-account"; id: string; displayName: string; rootLoginName: string; rootDisplayName: string; initialPassword: string }
+  | { kind: "set-account-status"; accountId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
+  | { kind: "recover-root-credentials"; accountId: string; initialPassword: string; resourceVersion: number }
   | { kind: "set-alias"; alias: string; resourceVersion: number }
-  | { kind: "set-status"; principalId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
-  | { kind: "reset-password"; principalId: string; initialPassword: string; resourceVersion: number }
-  | { kind: "create-policy-attachment"; principalId: string; policyId: string; policyResourceVersion: number }
+  | { kind: "set-status"; userId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
+  | { kind: "reset-password"; userId: string; initialPassword: string; resourceVersion: number }
+  | { kind: "create-policy-attachment"; userId: string; policyId: string; policyResourceVersion: number }
   | { kind: "revoke-policy-attachment"; attachmentId: string; resourceVersion: number };

@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { KeyRound, ShieldCheck } from "lucide-react";
 import { Alert, Dialog, FormField, Badge, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
+import type { CapabilityRestriction } from "../domain/accounts";
 import type { AccountUserScene } from "../scenes/accountAccessScene";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -32,9 +33,9 @@ export function CreateTenantDialog({ onClose }: { onClose(): void }) {
     const initialPassword = password;
     setPassword("");
     if (await access.execute({
-      kind: "create-organization", id: String(fields.get("accountId") ?? "").trim(),
+      kind: "create-account", id: String(fields.get("accountId") ?? "").trim(),
       displayName: String(fields.get("accountName") ?? "").trim(),
-      administratorLoginName: loginName.trim(), administratorDisplayName: displayName.trim(), initialPassword
+      rootLoginName: loginName.trim(), rootDisplayName: displayName.trim(), initialPassword
     })) onClose();
   }
   return <Dialog open title={t("createTenantTitle")} closeLabel={t("closeCreate")} onClose={onClose} busy={access.busy} footer={<>
@@ -67,12 +68,14 @@ export function UserAccessDialog({ user, onClose }: { user: AccountUserScene; on
   const currentPolicy = selectedPolicy ? policies.find((policy) => policy.id === selectedPolicy.id) : undefined;
   const policyChanged = Boolean(selectedPolicy && (!currentPolicy || currentPolicy.resourceVersion !== selectedPolicy.resourceVersion));
   const disabled = access.busy || access.loading;
+  const attachablePolicies = availablePolicies.filter((policy) => policy.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy);
+  const restriction = (reason: CapabilityRestriction | null) => t(`restrictions.${reason ?? "AUTHORITY_REQUIRED"}`);
 
   async function resetPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const initialPassword = password;
     setPassword("");
-    if (await access.execute({ kind: "reset-password", principalId: user.id, resourceVersion: user.resourceVersion, initialPassword })) setResettingPassword(false);
+    if (await access.execute({ kind: "reset-password", userId: user.id, resourceVersion: user.resourceVersion, initialPassword })) setResettingPassword(false);
   }
   return <Dialog open title={t("manageUser", { name: user.name })} closeLabel={t("closeDetails")} onClose={onClose} busy={access.busy} footer={<Button disabled={access.busy} onClick={onClose} variant="secondary">{t("closeDetails")}</Button>}>
     <div className={styles.detail}>
@@ -89,28 +92,28 @@ export function UserAccessDialog({ user, onClose }: { user: AccountUserScene; on
           {revokeId === attachment.id ? <div className={styles.actions}>
             <span>{t("revokePrompt")}</span><Button disabled={disabled} onClick={async () => { if (await access.execute({ kind: "revoke-policy-attachment", attachmentId: attachment.id, resourceVersion: attachment.resourceVersion })) setRevokeId(null); }} size="small" variant="danger">{t("confirmRevoke")}</Button>
             <Button disabled={disabled} onClick={() => setRevokeId(null)} size="small" variant="ghost">{t("cancel")}</Button>
-          </div> : <Button aria-label={t("revokePolicy", { name: attachment.label })} disabled={disabled} onClick={() => setRevokeId(attachment.id)} size="small" variant="ghost">{t("revoke")}</Button>}
+          </div> : <Button aria-label={t("revokePolicy", { name: attachment.label })} disabled={disabled || !attachment.canRevoke} title={!attachment.canRevoke ? restriction(attachment.revokeRestrictionReason) : undefined} onClick={() => setRevokeId(attachment.id)} size="small" variant="ghost">{t("revoke")}</Button>}
         </li>)}
       </ul>
       {user.attachments.length === 0 ? <p className={styles.note}>{t("noPolicyAttachmentsHint")}</p> : null}
       {policyChanged ? <Alert status="warning">{t("policyRevisionChanged")} <Button size="small" variant="ghost" onClick={() => setSelectedPolicy(null)}>{t("reselectPolicy")}</Button></Alert> : null}
-      {availablePolicies.length > 0 ? <form className={styles.inlineForm} onSubmit={async (event) => {
+      {attachablePolicies.length > 0 ? <form className={styles.inlineForm} onSubmit={async (event) => {
         event.preventDefault();
-        if (selectedPolicy && !policyChanged && await access.execute({ kind: "create-policy-attachment", principalId: user.id, policyId: selectedPolicy.id, policyResourceVersion: selectedPolicy.resourceVersion })) setSelectedPolicy(null);
+        if (selectedPolicy && !policyChanged && await access.execute({ kind: "create-policy-attachment", userId: user.id, policyId: selectedPolicy.id, policyResourceVersion: selectedPolicy.resourceVersion })) setSelectedPolicy(null);
       }}>
-        <FormField label={t("attachPolicy")}><Select disabled={disabled} onValueChange={(policyId) => { const policy = policies.find((item) => item.id === policyId); setSelectedPolicy(policy ? { id: policy.id, resourceVersion: policy.resourceVersion } : null); }} required value={selectedPolicy?.id ?? ""} placeholder={t("choosePolicy")} options={availablePolicies.map((policy) => ({ value: policy.id, label: `${policy.displayName} · ${t(policy.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}` }))} /></FormField>
+        <FormField label={t("attachPolicy")}><Select disabled={disabled} onValueChange={(policyId) => { const policy = policies.find((item) => item.id === policyId); setSelectedPolicy(policy ? { id: policy.id, resourceVersion: policy.resourceVersion } : null); }} required value={selectedPolicy?.id ?? ""} placeholder={t("choosePolicy")} options={attachablePolicies.map((policy) => ({ value: policy.id, label: `${policy.displayName} · ${t(policy.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}` }))} /></FormField>
         <Button disabled={disabled || !selectedPolicy || policyChanged} type="submit" variant="secondary">{t("attachPolicy")}</Button>
-      </form> : <p className={styles.note}>{access.scene?.canViewPolicies ? t("allPoliciesAttached") : t("policyDirectoryUnavailable")}</p>}
+      </form> : <p className={styles.note}>{availablePolicies.length ? restriction(user.tenantAttachmentRestrictionReason ?? user.platformAttachmentRestrictionReason) : access.scene?.canViewPolicies ? t("allPoliciesAttached") : t("policyDirectoryUnavailable")}</p>}
       <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("loginSecurity")}</strong></div>
-      {user.protected ? <p className={styles.note}>{t("protectedHint")}</p> : <>
-        <div className={styles.actions}>
-          <Button disabled={disabled} onClick={() => { setConfirmStatus(true); setResettingPassword(false); setPassword(""); }} variant="secondary">{user.enabled ? t("disableUser") : t("enableUser")}</Button>
-          <Button disabled={disabled} onClick={() => { setResettingPassword(true); setConfirmStatus(false); }} variant="secondary">{t("resetPassword")}</Button>
-        </div>
+      <div className={styles.actions}>
+          <Button disabled={disabled || !user.canSetStatus} title={!user.canSetStatus ? restriction(user.statusRestrictionReason) : undefined} onClick={() => { setConfirmStatus(true); setResettingPassword(false); setPassword(""); }} variant="secondary">{user.enabled ? t("disableUser") : t("enableUser")}</Button>
+          <Button disabled={disabled || !user.canResetPassword} title={!user.canResetPassword ? restriction(user.passwordRestrictionReason) : undefined} onClick={() => { setResettingPassword(true); setConfirmStatus(false); }} variant="secondary">{t("resetPassword")}</Button>
+      </div>
+      {!user.canSetStatus || !user.canResetPassword ? <p className={styles.note}>{restriction(user.statusRestrictionReason ?? user.passwordRestrictionReason)}</p> : null}
         {confirmStatus ? <Alert status={user.enabled ? "warning" : "info"}><div className={styles.confirmation}>
           <p>{user.enabled ? t("disableHint") : t("enableHint")}</p>
           <div className={styles.actions}>
-            <Button disabled={disabled} onClick={async () => { if (await access.execute({ kind: "set-status", principalId: user.id, status: user.enabled ? "DISABLED" : "ACTIVE", resourceVersion: user.resourceVersion })) setConfirmStatus(false); }} variant={user.enabled ? "danger" : "primary"}>{user.enabled ? t("confirmDisable") : t("confirmEnable")}</Button>
+            <Button disabled={disabled || !user.canSetStatus} onClick={async () => { if (await access.execute({ kind: "set-status", userId: user.id, status: user.enabled ? "DISABLED" : "ACTIVE", resourceVersion: user.resourceVersion })) setConfirmStatus(false); }} variant={user.enabled ? "danger" : "primary"}>{user.enabled ? t("confirmDisable") : t("confirmEnable")}</Button>
             <Button disabled={disabled} onClick={() => setConfirmStatus(false)} variant="ghost">{t("cancel")}</Button>
           </div>
         </div></Alert> : null}
@@ -119,7 +122,6 @@ export function UserAccessDialog({ user, onClose }: { user: AccountUserScene; on
           <p className={styles.note}>{t("resetHint")}</p>
           <div className={styles.actions}><Button disabled={disabled || !password} type="submit">{t("confirmReset")}</Button><Button disabled={disabled} onClick={() => { setResettingPassword(false); setPassword(""); }} variant="ghost">{t("cancel")}</Button></div>
         </form> : null}
-      </>}
     </div>
   </Dialog>;
 }

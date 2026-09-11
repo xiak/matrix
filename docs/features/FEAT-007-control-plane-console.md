@@ -1124,6 +1124,20 @@ account recovery and settings require their own capabilities. Unknown owner
 display names or statuses and absent user access profiles are not fabricated
 from the current actor or interpreted as disabled.
 
+The live account-access projection consumes the IAM contract fixed at
+`4201989773b6ca24829506b7e60dc3f9c4f20446`. `CurrentIdentity` controls which
+account-wide directories may be requested. Every `UserAccess` and
+`AccountAccess` entry then carries an exact action, resource kind and resource
+ID for each supported operation. The scene may use that projection to show an
+entry, disable it and translate a closed restriction reason; it must not infer
+authority from an administrator policy name, an installation-scoped badge or
+a successful list read. Missing, duplicate, foreign, extra or unknown
+capabilities invalidate the response. Availability is advisory interaction
+data, never a client-side permit: mutations retain target identity and resource
+version and IAM reauthorizes against current state. The richer group, batch,
+role, custom-policy and simulator actions remain explicit DEMO repository
+extensions until their own fixed IAM contracts are accepted.
+
 The directory table contains only daily manageable Users, with independent
 type, access-method, authorization-source and status columns. Status/source
 filters and keyword search cover the loaded user page; the redundant type
@@ -1166,8 +1180,8 @@ and in the review. Console and programmatic access may coexist, independently
 of policy grants, identity status and credential availability. Password and MFA
 options are explicitly simulated; no real credentials or automatic API keys
 are generated. Preview profiles reset with the session and can be inspected
-in user details. The live-capability flow retains only identity, initial
-fixed-role authorization and review, defaults to no grant and excludes
+in user details. The live user-creation flow retains only identity, access
+setup and review, defaults to no grant and excludes
 passwords from review and storage. Draft cancellation requires confirmation;
 browser reload warns about unsaved edits. Submitted passwords are cleared on
 success and failure. Reusable collection, selection, detail and dialog
@@ -1435,7 +1449,7 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- The current Theme/component, navigation and CAM-style IAM slice has 472 frontend tests across 35 test
+- The current Theme/component, navigation and CAM-style IAM slice has 477 frontend tests across 35 test
   files; the complete suite passes with two workers at the default timeout
   (the long user-selection journey retains its explicit 15s timeout).
   Worker concurrency is bounded in the test owner because simultaneously
@@ -1540,7 +1554,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   feedback without new warning/error logs. Shared control tests cover required
   semantics, classification/status distinction, controlled paging and dialog
   focus return; existing large-candidate and batch/permission gates remain.
-  All 472 frontend tests and three static-export normalization tests pass,
+  All 477 frontend tests and three static-export normalization tests pass,
   alongside TypeScript, lint, architecture and 228 theme contrast checks.
   All 213 generated production files from 38 static routes match the Go-embedded export, and Go UI
   tests and vet pass. Tables, forms, dialogs, choices,
@@ -1561,8 +1575,18 @@ and `git diff --check` gates must pass on the same committed worktree.
   authorization.
   The fixed live IAM projection now replaces built-in-role inference with
   direct, revisioned USER policy attachments and independent tenant/platform
-  policy metadata directories. Focused contract and renderer verification has
-  189 passing cases, including new-user default deny, missing platform metadata,
+  policy metadata directories. `iam.account.read` and `iam.account.create`
+  remain independent navigation and action capabilities: a reader can reach the
+  tenant directory without being offered account creation. Tenant rows retain
+  the approved object-name navigation instead of an operation column; the
+  content-area account detail exposes status and root-credential recovery only
+  from their exact per-account capabilities, explains stable restriction
+  reasons before a dead-end click, and requires an impact review before either
+  mutation. The protected installation account and a manageable preview tenant
+  were browser-checked in light, mixed and dark themes without changing either
+  account. RootIdentity entries returned inside `UserList` now invalidate the
+  whole live scene rather than entering ordinary-user selection. Focused
+  contract and renderer verification includes new-user default deny, missing platform metadata,
   403 section degradation, non-authorization failure closure, stale policy
   reselection, exact attach/revoke revisions and preservation of the explicit
   MOCK workspace. This is management-plane evidence only; it does not claim
@@ -1862,7 +1886,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   policy association was submitted on either console. Policy parsing is cached by document text;
   collapsed message details and their destination links are not mounted.
   Wizard tests cover explicit access methods, permission selection, preview
-  creation, the live fixed-role contract and access-only dirty-draft cancellation.
+  creation, the live exact-capability contract and access-only dirty-draft cancellation.
   Mobile browser checks verify the compact stepper and non-overflowing permission
   hints. Policy-wizard scroll checks at 2560 x 1271, 1468 x 866 and 360 x 800
   verify the footer reaches the viewport bottom with no exposed fields beneath
