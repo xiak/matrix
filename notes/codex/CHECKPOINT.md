@@ -2,89 +2,62 @@
 
 > Non-authoritative portable memory. Validate against Git and the owning FEAT.
 
-- Updated: 2026-08-28
+- Updated: 2026-09-11
 - Repository: `https://github.com/xiak/matrix.git`
-- Branch: `feat/iam-xxx`
-- Pushed local-recovery backend: `aa345eca5f1ed3921000aa5380d5bfd2aa6d0a50`
-- Accepted minimum multi-tenant implementation: `5721b7b1a985f25c9730ddb9229a51f7f6c3b63a`
+- Branch: `feat/iam`
+- Pushed design baseline: `38f348e6b4e00fcd4961abebb91cacbb9e28442a`
+- Pushed verified action-catalog slice: `3b11eb9dbabd70211e665c00e4e665658b461bd1`
 
 ## Resume route
 
-1. [FEAT-006](../../docs/features/FEAT-006-platform-authorities.md) owns IAM,
-   Audit, the accepted multi-tenant boundary and this subsequent local
-   installation-primary recovery backend.
-2. Its [adoption record](../../docs/adoption/FEAT-006-platform-authorities.md)
-   owns fixed source decisions. Public capability/private-file contracts and
-   the single BootstrapDigest owner were fixed at `91af848` before the atomic
-   implementation.
-3. [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md) and
-   [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md) retain
-   the installed-browser and signed lifecycle evidence for the accepted
-   minimum slice. Do not extend that evidence to the new recovery profile.
-4. Phase 3's installation/CLI integration remains in its separate task and
-   FEAT-008 owner. Read only confirmed fixed objects when integration is
-   requested; never inspect or import another worktree's WIP/checkpoint.
+1. Read AGENTS.md, then [IAM product contract](../../IAM/FEAT-IAM-000-product-contract.md).
+2. [IAM/001](../../IAM/FEAT-IAM-001-authorization-profile.md) owns the accepted
+   CAT-01–04 action-catalog slice and exact local/CI evidence. Full Profile
+   behavior is not implemented.
+3. Continue [IAM/002](../../IAM/FEAT-IAM-002-policy-authority.md), then its
+   owning API/domain/use-case/SQL/tests and the
+   [existing adoption record](../../docs/adoption/FEAT-006-platform-authorities.md).
+4. [IAM navigation](../../IAM/README.md) links all requirements/features.
+   [FEAT-006](../../docs/features/FEAT-006-platform-authorities.md) retains the
+   old accepted foundation/multi-tenant/local-recovery evidence; it is not
+   acceptance of the new IAM system.
 
-## Current boundary
+## Current milestone
 
-The minimum primary/subaccount IAM goal remains complete. Primary ownership
-never transfers to a child administrator; tenant ownership and platform roles
-remain separate. The password-session contract uses monotonic credential
-generation. Forced replacement revokes other temporary sessions; ordinary
-replacement defaults to revoking other sessions, with explicit false retaining
-only already valid same-user sessions. Legacy NULL generations fail closed.
-The user deferred native keyboard-only verification, not the core IAM goal.
-User-facing documents default to Markdown.
+The user-requested IAM replacement goal is active, not complete. The branch
+name is exactly feat/iam; feat/iam-cam remains the research baseline. All
+user-facing deliverables are Markdown. Product references are fixed at
+1ad6884 and the completed public-source study at b0e8627, not runtime dependencies.
 
-The subsequent local recovery backend is implemented and independently
-verified. It accepts only the sealed original installation primary while its
-USER and organization are ACTIVE and its exact platform binding is unrevoked.
-The fixed one-shot entry has only inspect/apply modes and purpose-only private
-files/database authority; no northbound permission or route exists. It changes
-only the password hash, credential generation, principal version, forced-change
-flag and old sessions, with immutable completion plus one closed SYSTEM Audit
-fact in the same transaction. It cannot grant/regrant roles, enable identities,
-transfer ownership or recover service credentials.
+The catalog now owns each current action's product, authenticated calling
+service, resource kind and tenant/platform/probe scope. Existing validation,
+generation and actual decisions consume it. All existing wire/SQL/profile
+contracts are unchanged. The old RoleAllows/binding authority still exists
+until its atomic policy replacement; policies, groups and STS are not yet
+implemented. Do not confuse this accepted foundation slice with final delivery.
 
-Original command/commitment receipt inspection remains available after later
-password changes or revocation and after private intent cleanup. Equal replay
-only returns original completion; missing receipt never issues fresh expected
-state. The trusted executable checks the MAC; PostgreSQL authenticates the
-dedicated role and enforces sealed ownership/atomic state, not the MAC itself.
+The exact 3b11eb9 CI run 34565145241 completed successfully for go,
+authority-process and node-process. Local full race/vet/generation/module
+verification/Linux builds and isolated PG18 HTTP, least-privilege,
+independent-process and actual 5721 retained-upgrade gates passed. The task's
+temporary PG container, network and volume were cleaned; no running fixture
+is required to resume.
 
-Current source profile is IAM4/Audit3/PaaS1 plus contract revision 4, with the
-existing seven-column IAM claim and unchanged ServiceIdentity/lookup_service/
-CanonicalizeEvent bytes. Different complete profiles still fail before effects.
-The installation owner adapts to its own PaaS2 composition and independently
-validates 4/3/2+r4; it must not import this branch's profile or acceptance state.
-This branch has not integrated or accepted the new signed installation/CLI
-consumer. New schema support does not imply a usable signed recovery command,
-cross-profile release transition or historical binary compatibility.
+## Integration boundary
 
-## Verified fixed milestone
+Phase 3 granted this task the public IAM/Audit edit window. The final agreed
+composition is IAM6/Audit4/PaaS5 + contractRevision 12; do not reuse IAM5/r11,
+import a moving branch, or label a PaaS1 composition as the final installable
+product. This branch still has the prior 4/3/1+r4 runtime profile.
 
-`aa345ec` passes full-repository race/architecture/vet, strict generation,
-dependency verification and Linux builds. Dedicated PostgreSQL 18 tests prove
-actual restricted identities, closed facts, immutable receipts, both ordered
-recovery/revoke races and the other credential/session/role races. The actual
-fixed `5721b7b` executable creates retained schema-3 state before current
-migration/restart; old canonical bytes, valid sessions and revoked history
-retain their meanings. Older `9fd45b0`/`a36cf98` upgrade and dual-tenant
-resource/Operation/outbox regressions remain covered.
+Use only confirmed fixed objects for consumer adoption. The fixed 66f772ea
+snapshot exposes IAM5 host/terminal actions and producer mappings; inspecting
+it is not adoption or inherited acceptance. Keep sealed ServiceIdentity,
+lookup_service, seven-column claim, canonical/history, original primary,
+local-recovery capability and revoked binding identity semantics while
+atomically migrating actual consumers. Consult IAM/002 and IAM/011 before
+changing the ABI.
 
-The independent-process gate runs the real local executable, normal forced
-password replacement, original receipt lookup without its old secret file,
-Audit outage delivery, exact action/SYSTEM filtering and historical replay
-after password change, platform revocation and IAM restart. It does not claim
-a Docker transport interruption, signed CLI journal or release integration.
-GitHub API verifies exact-SHA
-[Verification 33153170437](https://github.com/xiak/matrix/actions/runs/33153170437)
-with go, authority-process and node-process all successful.
-
-Phase 3 task `01a04149-5dbb-7300-9e4c-31d9e85c8ada` owns the remaining
-installation/CLI/journal/release integration and has received the fixed
-implementation and exact CI confirmation. Do not start extra agents/tasks,
-change other Phase environments, infer authorization for a new recovery/grant
-slice, or reopen the completed minimum IAM goal. Never restart remote machines
-or shared services. Keep commits and tests in this task's own feature branch
-and isolated resources; replace this checkpoint only at pushed milestones.
+No extra agents/tasks, remote restarts, shared-service changes, other
+worktree mutations or shared fixture reuse. Use this branch and uniquely
+named, labelled and bounded local test resources only.

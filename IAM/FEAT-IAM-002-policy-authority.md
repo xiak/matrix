@@ -1,7 +1,7 @@
 # FEAT-IAM-002：策略权限权威替换
 
 - 状态：设计；未实施/未验收。
-- 依赖：001，固定安装/IAM5 消费者对齐。
+- 依赖：001 已验收的 CAT-01–04，固定安装/IAM5 消费者对齐；完整产品 Profile 的集成仍由 008 证明。
 - Owner：IAM `authority`、`identityaccess`、PostgreSQL；Audit 只保存事实。
 
 ## 需求与详细设计
@@ -34,3 +34,11 @@
 固定采用归既有 adoption。安装 owner 已冻结 IAM6/Audit4/PaaS5+r12；落地前仍须逐项核对实际 ABI，不能只分配一个数字。`/v1/authorize` 和严格 `{event}` 的 `/v1/audit-producer:resolve` 在切换片中与消费者原子适配；不留下旧组织 selector 旁路。
 
 原始 bootstrap 的 primary/platform 关系保留为显式系统策略附件。旧 binding 的 ID、resourceVersion、created/revoked 历史必须确定性迁移；平台凭据恢复只能使用仍未撤销的等价平台附件。若改动私有 `LocalCredentialRecoveryExpected` 中的 binding 字段，须在同一候选中更新 API、安装消费者、SQL、签名 codec 和旧 receipt 迁移，不能并存两套授权状态。首次授权与撤销后重新授权不因重构获得入口。
+
+## 保留数据与活跃权限的分离
+
+迁移依据真实 `role_bindings` 的 `(tenant_id,id)`、principal、role、resourceVersion 和 created/updated/revoked 时间；不能以“当前还能登录”推断历史有效状态。原安装 primary 的 local-recovery expected/receipt 已封存具体平台 binding ID 与版本，附件继承同一身份而不重新分配；历史完成的查询不重新判断当前附件是否有效。
+
+当前旧恢复事务按 platform binding → organization → principal → credential 加锁，旧 revoke 也先锁实际 binding。目标的新锁序必须在 grant/revoke/reset/status/recover 全部路径中一起切换并做双向竞争门禁；不能只按本文件的目标顺序改一个函数。
+
+删除的是旧在线 RoleBinding 权限权威，不是不可变历史词汇。旧 Audit action/target、authorizations 和 receipt 的严格读取由原历史契约继续验证，不重编码、不新增授予能力。活跃请求不得调用已退役的 role-management 动作；历史校验不能作为第二条当前授权入口。具体 catalogue/record schema 的区分须由 API 与 SQL 同一候选实现，不能以放宽 unknown action 校验兼容旧记录。
