@@ -68,6 +68,35 @@ describe("shared themed controls", () => {
     expect(close).not.toHaveBeenCalled();
     await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
+  it.each([false, true])("closes a select on Tab (backwards: %s) so keyboard users can continue through the form", async (shift) => {
+    const user = userEvent.setup();
+    render(<><Input aria-label="Before" /><Select aria-label="Region" defaultValue="a" options={[{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }]} /><Input aria-label="After" /></>);
+    const trigger = screen.getByRole("combobox", { name: "Region" });
+    trigger.focus();
+    await user.keyboard("{ArrowDown}");
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("option", { name: "Alpha" })));
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(screen.getByRole("option", { name: "Beta" }));
+    await user.tab({ shift });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(trigger.textContent).toBe("Beta");
+    await user.tab({ shift });
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: shift ? "Before" : "After" }));
+  });
+  it("keeps the committed value when Escape cancels an explored option", async () => {
+    const user = userEvent.setup();
+    const onValueChange = vi.fn();
+    render(<Select aria-label="Region" defaultValue="a" onValueChange={onValueChange} options={[{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }]} />);
+    const trigger = screen.getByRole("combobox", { name: "Region" });
+    await user.click(trigger);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("option", { name: "Alpha" })));
+    await user.keyboard("{ArrowDown}{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(trigger.textContent).toBe("Alpha");
+    expect(onValueChange).not.toHaveBeenCalled();
+  });
   it("allows outside focus and never opens a disabled dropdown", async () => {
     const user = userEvent.setup();
     const options = [{ value: "a", label: "Alpha" }];

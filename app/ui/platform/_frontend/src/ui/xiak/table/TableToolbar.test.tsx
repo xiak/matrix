@@ -43,8 +43,11 @@ describe("TableToolbar collection search", () => {
     }
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(screen.getByRole("status").textContent).toBe("all/all/lin");
+    expect(screen.getByRole("group", { name: "Filters" })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Filters" }));
     await user.click(screen.getByRole("button", { name: "Clear search" }));
     expect(screen.getByRole("status").textContent).toBe("all/all/");
+    expect(document.activeElement).toBe(screen.getByRole("searchbox"));
   });
 
   it("uses Escape for the nested select first, then closes filters and restores trigger focus", async () => {

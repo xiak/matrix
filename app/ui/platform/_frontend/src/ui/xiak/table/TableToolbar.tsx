@@ -26,7 +26,11 @@ export function TableToolbar({ search, filters = [], labels, actions, status, to
   const panelId = useId();
   const toggle = useRef<HTMLButtonElement>(null);
   const active = filters.filter((filter) => filter.value !== (filter.defaultValue ?? "all"));
-  const reset = () => active.forEach((filter) => filter.onChange(filter.defaultValue ?? "all"));
+  const reset = () => {
+    active.forEach((filter) => filter.onChange(filter.defaultValue ?? "all"));
+    // Clearing removes its own button in both expanded and collapsed layouts.
+    toggle.current?.focus();
+  };
   return <div className={styles.root}>
     <div className={styles.bar}>
       {actions ? <div className={styles.actions}>{actions}</div> : null}
@@ -50,7 +54,7 @@ export function TableToolbar({ search, filters = [], labels, actions, status, to
         return <Button className={styles.chip} key={filter.id} variant="secondary" size="small" aria-label={labels.removeFilter(label)}
           onClick={() => { filter.onChange(filter.defaultValue ?? "all"); toggle.current?.focus(); }}><span>{label}</span><X aria-hidden="true" /></Button>;
       })}
-      {!expanded ? <Button variant="ghost" size="small" onClick={() => { reset(); toggle.current?.focus(); }}>{labels.clearFilters}</Button> : null}
+      {!expanded ? <Button variant="ghost" size="small" onClick={reset}>{labels.clearFilters}</Button> : null}
     </div> : null}
   </div>;
 }
