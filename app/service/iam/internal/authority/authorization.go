@@ -124,12 +124,23 @@ func decide(
 	platform := iamv1.IsPlatformAction(request.Action)
 	platformContext := !platform || subject.Type == iamv1.PrincipalUser && iamv1.ValidateID("installationId", installationID) == nil
 	if !mustChangePassword && platformContext && ServiceCanRequest(callingService, request.Action) {
+		versions := make([]iamv1.PolicyVersion, 0, len(roles))
 		for _, role := range roles {
-			if RoleAllows(role, request.Action) {
-				allowed = true
-				break
+			id, err := systemPolicyIDForRole(role)
+			if err != nil {
+				return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
 			}
+			version, err := SystemPolicyVersion(id)
+			if err != nil {
+				return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
+			}
+			versions = append(versions, version)
 		}
+		evaluation, err := EvaluatePolicies(versions, request.Action, request.Resource)
+		if err != nil {
+			return iamv1.AuthorizationDecision{}, ErrAuthorityUnavailable
+		}
+		allowed = evaluation.Allowed
 	}
 	decision := iamv1.AuthorizationDecision{
 		APIVersion: iamv1.APIVersion,
@@ -165,56 +176,26 @@ func ServiceCanRequest(purpose iamv1.ServicePurpose, action iamv1.Action) bool {
 	return known && definition.CallingService == purpose
 }
 
-func RoleAllows(role iamv1.BuiltinRole, action iamv1.Action) bool {
+// systemPolicyIDForRole interprets the still-current stored binding vocabulary
+// during the atomic policy replacement. It selects content, never evaluates
+// permission. The role-binding loader/API is removed at the storage cutover.
+func systemPolicyIDForRole(role iamv1.BuiltinRole) (iamv1.PolicyID, error) {
 	switch role {
 	case iamv1.RoleOrganizationAdmin:
-		return action != iamv1.ActionInstallationVerify && !iamv1.IsPlatformAction(action) && knownAction(action)
+		return iamv1.SystemPolicyAccountAdministrator, nil
 	case iamv1.RolePlatformOperator:
-		return iamv1.IsPlatformAction(action)
+		return iamv1.SystemPolicyPlatformOperator, nil
 	case iamv1.RolePaaSDeveloper:
-		switch action {
-		case iamv1.ActionPaaSApplicationCreate,
-			iamv1.ActionPaaSApplicationRead,
-			iamv1.ActionPaaSConfigurationCreate,
-			iamv1.ActionPaaSConfigurationRead,
-			iamv1.ActionPaaSConfigurationRevisionCreate,
-			iamv1.ActionPaaSConfigurationRevisionRead,
-			iamv1.ActionPaaSApplicationRevisionCreate,
-			iamv1.ActionPaaSApplicationRevisionRead,
-			iamv1.ActionPaaSDeploymentCreate,
-			iamv1.ActionPaaSDeploymentUpdate,
-			iamv1.ActionPaaSDeploymentRollback,
-			iamv1.ActionPaaSDeploymentStop,
-			iamv1.ActionPaaSDeploymentRead,
-			iamv1.ActionPaaSOperationRead,
-			iamv1.ActionManagedServiceOfferingRead,
-			iamv1.ActionManagedServiceRegionRead,
-			iamv1.ActionManagedServiceQuotaEntitlementActivate,
-			iamv1.ActionManagedServiceQuotaEntitlementRead,
-			iamv1.ActionManagedServiceInstallationCreate,
-			iamv1.ActionManagedServiceInstallationRead:
-			return true
-		}
+		return iamv1.SystemPolicyPaaSDeveloper, nil
 	case iamv1.RolePaaSViewer:
-		switch action {
-		case iamv1.ActionPaaSApplicationRead,
-			iamv1.ActionPaaSConfigurationRead,
-			iamv1.ActionPaaSConfigurationRevisionRead,
-			iamv1.ActionPaaSApplicationRevisionRead,
-			iamv1.ActionPaaSDeploymentRead,
-			iamv1.ActionPaaSOperationRead,
-			iamv1.ActionManagedServiceOfferingRead,
-			iamv1.ActionManagedServiceRegionRead,
-			iamv1.ActionManagedServiceQuotaEntitlementRead,
-			iamv1.ActionManagedServiceInstallationRead:
-			return true
-		}
+		return iamv1.SystemPolicyPaaSViewer, nil
 	case iamv1.RoleAuditReader:
-		return action == iamv1.ActionAuditRecordRead || action == iamv1.ActionAuditIntegrityVerify
+		return iamv1.SystemPolicyAuditReader, nil
 	case iamv1.RoleInstallationVerifier:
-		return action == iamv1.ActionInstallationVerify
+		return iamv1.SystemPolicyInstallationVerifier, nil
+	default:
+		return "", ErrInvalidPolicyState
 	}
-	return false
 }
 
 func validateSubjectContext(context SubjectContext, databaseTime time.Time) error {
@@ -247,11 +228,6 @@ func validateRoles(roles []iamv1.BuiltinRole) error {
 		seen[role] = struct{}{}
 	}
 	return nil
-}
-
-func knownAction(action iamv1.Action) bool {
-	_, known := iamv1.LookupActionDefinition(action)
-	return known
 }
 
 func knownRole(role iamv1.BuiltinRole) bool {

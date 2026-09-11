@@ -425,6 +425,152 @@ func TestIAMCatalogReadsCannotModifyAuthority(t *testing.T) {
 	}
 }
 
+func policyDocumentFixture() PolicyDocument {
+	return PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant, Statements: []PolicyStatement{
+		{SID: "read", Effect: PolicyAllow, Actions: []Action{ActionPaaSDeploymentRead, ActionPaaSApplicationRead}, Resources: []PolicyResourceSelector{
+			{Kind: ResourceDeployment, Match: PolicyResourceExact, ID: "deployment-one"},
+			{Kind: ResourceApplication, Match: PolicyResourceExact, ID: "application-one"},
+		}},
+		{SID: "create", Effect: PolicyDeny, Actions: []Action{ActionPaaSApplicationCreate}, Resources: []PolicyResourceSelector{
+			{Kind: ResourceApplication, Match: PolicyResourceAnyInAuthority},
+		}},
+	}}
+}
+
+func TestPolicyContentCanonicalizationIsStableAndDoesNotMutateTheDocument(t *testing.T) {
+	document := policyDocumentFixture()
+	before, _ := json.Marshal(document)
+	encoded, digest, err := CanonicalizePolicyDocument(document)
+	if err != nil || ValidateDigest("policy digest", digest) != nil {
+		t.Fatalf("canonicalize: %v", err)
+	}
+	after, _ := json.Marshal(document)
+	if !bytes.Equal(before, after) {
+		t.Fatal("canonicalization mutated caller-owned collections")
+	}
+	document.Statements[0], document.Statements[1] = document.Statements[1], document.Statements[0]
+	document.Statements[1].Actions[0], document.Statements[1].Actions[1] = document.Statements[1].Actions[1], document.Statements[1].Actions[0]
+	document.Statements[1].Resources[0], document.Statements[1].Resources[1] = document.Statements[1].Resources[1], document.Statements[1].Resources[0]
+	if reordered, reorderedDigest, err := CanonicalizePolicyDocument(document); err != nil || reordered != encoded || reorderedDigest != digest {
+		t.Fatalf("set ordering changed canonical policy content: %v", err)
+	}
+	decoded, err := DecodePolicyDocument(strings.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := PolicyVersion{PolicyID: "policy-example", ID: "version-first", Document: decoded, ContentDigest: digest}
+	if ValidatePolicyVersion(version) != nil {
+		t.Fatal("valid immutable version rejected")
+	}
+	version.Document.Statements[0].Effect = PolicyAllow
+	if ValidatePolicyVersion(version) == nil {
+		t.Fatal("changed policy content retained its old digest")
+	}
+	if _, changedDigest, err := CanonicalizePolicyDocument(version.Document); err != nil || changedDigest == digest {
+		t.Fatal("effect change did not change the digest")
+	}
+}
+
+func TestPolicyLanguageRejectsUnsupportedOrAmbiguousAuthority(t *testing.T) {
+	for name, mutate := range map[string]func(*PolicyDocument){
+		"language":                   func(v *PolicyDocument) { v.LanguageVersion = "future" },
+		"scope":                      func(v *PolicyDocument) { v.Scope = "ACCOUNT_FROM_REQUEST" },
+		"empty statements":           func(v *PolicyDocument) { v.Statements = nil },
+		"empty sid":                  func(v *PolicyDocument) { v.Statements[0].SID = "" },
+		"duplicate sid":              func(v *PolicyDocument) { v.Statements[0].SID = v.Statements[1].SID },
+		"unknown effect":             func(v *PolicyDocument) { v.Statements[0].Effect = "PERMIT" },
+		"empty actions":              func(v *PolicyDocument) { v.Statements[0].Actions = nil },
+		"unknown action":             func(v *PolicyDocument) { v.Statements[0].Actions[0] = "paas.*" },
+		"duplicate action":           func(v *PolicyDocument) { v.Statements[0].Actions[0] = v.Statements[0].Actions[1] },
+		"mixed scope":                func(v *PolicyDocument) { v.Statements[0].Actions[0] = ActionPaaSExecutionTargetRegister },
+		"missing required resource":  func(v *PolicyDocument) { v.Statements[0].Resources = v.Statements[0].Resources[:1] },
+		"extra resource kind":        func(v *PolicyDocument) { v.Statements[0].Resources[0].Kind = ResourcePrincipal },
+		"unknown match":              func(v *PolicyDocument) { v.Statements[0].Resources[0].Match = "PREFIX" },
+		"exact wildcard":             func(v *PolicyDocument) { v.Statements[0].Resources[0].ID = "*" },
+		"missing exact id":           func(v *PolicyDocument) { v.Statements[0].Resources[0].ID = "" },
+		"authority wildcard with id": func(v *PolicyDocument) { v.Statements[1].Resources[0].ID = "selected-by-caller" },
+		"duplicate selector": func(v *PolicyDocument) {
+			v.Statements[0].Resources = append(v.Statements[0].Resources, v.Statements[0].Resources[0])
+		},
+		"too many actions": func(v *PolicyDocument) { v.Statements[0].Actions = make([]Action, MaxStatementActions+1) },
+		"too many resources": func(v *PolicyDocument) {
+			v.Statements[0].Resources = make([]PolicyResourceSelector, MaxStatementResources+1)
+		},
+		"too many statements": func(v *PolicyDocument) { v.Statements = make([]PolicyStatement, MaxPolicyStatements+1) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			document := policyDocumentFixture()
+			mutate(&document)
+			if !errors.Is(ValidatePolicyDocument(document), ErrInvalidPolicy) {
+				t.Fatal("invalid policy accepted")
+			}
+			if encoded, digest, err := CanonicalizePolicyDocument(document); !errors.Is(err, ErrInvalidPolicy) || encoded != "" || digest != "" {
+				t.Fatal("invalid policy acquired canonical authority")
+			}
+		})
+	}
+	encoded, _, _ := CanonicalizePolicyDocument(policyDocumentFixture())
+	for _, forged := range []string{
+		strings.Replace(encoded, `"languageVersion":`, `"languageVersion":"future","languageVersion":`, 1),
+		strings.Replace(encoded, `"effect":`, `"conditions":{"callerAdmin":true},"effect":`, 1),
+		strings.Replace(encoded, `"kind":"APPLICATION"`, `"kind":"PRINCIPAL","kind":"APPLICATION"`, 1),
+		strings.Replace(encoded, `"scope":`, `"tenantId":"other","scope":`, 1),
+		strings.Replace(encoded, `"actions":[`, `"actions":[null,`, 1),
+		strings.Replace(encoded, `"match":"ANY_IN_AUTHORITY"`, `"match":"ANY_IN_AUTHORITY","id":null`, 1),
+		strings.Replace(encoded, `"match":"ANY_IN_AUTHORITY"`, `"match":"ANY_IN_AUTHORITY","id":""`, 1),
+		encoded + `{}`,
+		strings.Repeat(" ", int(MaxPolicyBytes)) + encoded,
+	} {
+		if _, err := DecodePolicyDocument(strings.NewReader(forged)); !errors.Is(err, ErrInvalidPolicy) {
+			t.Fatal("ambiguous/unsupported wire document accepted")
+		}
+	}
+}
+
+func FuzzPolicyDocumentCanonicalRoundTrip(f *testing.F) {
+	valid, _, _ := CanonicalizePolicyDocument(policyDocumentFixture())
+	f.Add(valid)
+	f.Add(`{"languageVersion":"1","scope":"TENANT","statements":[]}`)
+	f.Add(`{"statements":null}`)
+	f.Fuzz(func(t *testing.T, source string) {
+		document, err := DecodePolicyDocument(strings.NewReader(source))
+		if err != nil {
+			return
+		}
+		canonical, digest, err := CanonicalizePolicyDocument(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		repeated, err := DecodePolicyDocument(strings.NewReader(canonical))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again, againDigest, err := CanonicalizePolicyDocument(repeated); err != nil || canonical != again || digest != againDigest {
+			t.Fatal("accepted policy has unstable canonical content")
+		}
+	})
+}
+
+func TestPolicyCanonicalizationEnforcesByteBudgetForTypedInputs(t *testing.T) {
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant}
+	for i := 0; i < MaxPolicyStatements; i++ {
+		statement := PolicyStatement{SID: fmt.Sprintf("statement-%d", i), Effect: PolicyAllow, Actions: []Action{ActionPaaSApplicationRead}}
+		for j := 0; j < MaxStatementResources; j++ {
+			statement.Resources = append(statement.Resources, PolicyResourceSelector{Kind: ResourceApplication, Match: PolicyResourceExact, ID: fmt.Sprintf("application-%d", j)})
+		}
+		document.Statements = append(document.Statements, statement)
+	}
+	if validatePolicyStructure(document) != nil {
+		t.Fatal("fixture must obey structural limits")
+	}
+	if !errors.Is(ValidatePolicyDocument(document), ErrInvalidPolicy) {
+		t.Fatal("typed document bypassed byte budget")
+	}
+	if encoded, digest, err := CanonicalizePolicyDocument(document); !errors.Is(err, ErrInvalidPolicy) || encoded != "" || digest != "" {
+		t.Fatal("oversized typed document acquired a digest")
+	}
+}
+
 func TestQualifiedLoginIsAnAccountNamespaceNotAnEmail(t *testing.T) {
 	for _, name := range []string{"admin", "developer@acme", "developer@123456789", "developer@tenant-prod", "developer@tenant.example", "dev.user@tenant:region-1"} {
 		if err := ValidateLoginIdentifier(name); err != nil {

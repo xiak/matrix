@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -39,7 +41,7 @@ func TestSessionAuthenticationUsesBindingDigestRevocationAndDatabaseTime(t *test
 	}
 }
 
-func TestFixedRBACAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testing.T) {
+func TestSystemPolicyAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testing.T) {
 	now := authorityTestTime()
 	context := authoritySubject(now, iamv1.RolePaaSDeveloper)
 	request := iamv1.AuthorizationRequest{
@@ -132,13 +134,45 @@ func TestInstallationVerifierServiceCanAuthorizeOnlyItsFixedAction(t *testing.T)
 	}
 }
 
-func TestEveryIAMActionHasOnlyFixedRoleAuthority(t *testing.T) {
+// Exercise the actual decision boundary while old binding fixtures are migrated.
+func boundPolicyAllows(t *testing.T, role iamv1.BuiltinRole, action iamv1.Action) bool {
+	t.Helper()
+	definition, known := iamv1.LookupActionDefinition(action)
+	if !known {
+		t.Fatal("unknown test action")
+	}
+	if _, err := systemPolicyIDForRole(role); err != nil {
+		return false
+	}
+	request := iamv1.AuthorizationRequest{Action: action,
+		Resource:  iamv1.ResourceReference{Kind: definition.ResourceKind, ID: "resource-example"},
+		RequestID: "request-policy", CorrelationID: "correlation-policy"}
+	now := authorityTestTime()
+	var decision iamv1.AuthorizationDecision
+	var err error
+	if role == iamv1.RoleInstallationVerifier {
+		identity := iamv1.ServiceIdentity{APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
+			InstallationID: "installation-example", OrganizationID: "organization-example",
+			PrincipalID: "service-example", Purpose: definition.CallingService}
+		decision, err = DecideService(identity, []iamv1.BuiltinRole{role}, request, "decision-policy", now)
+	} else {
+		subject := authoritySubject(now, role)
+		subject.InstallationID = "installation-example"
+		decision, err = Decide(subject, definition.CallingService, request, "decision-policy", now)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return decision.Allowed
+}
+
+func TestEveryIAMActionHasSystemPolicyAndUniqueServiceAuthority(t *testing.T) {
 	roles := iamv1.AllBuiltinRoles()
 	services := iamv1.AllServicePurposes()
 	for _, action := range iamv1.AllActions() {
 		owners := 0
 		for _, role := range roles {
-			if RoleAllows(role, action) {
+			if boundPolicyAllows(t, role, action) {
 				owners++
 			}
 		}
@@ -155,9 +189,9 @@ func TestEveryIAMActionHasOnlyFixedRoleAuthority(t *testing.T) {
 			t.Fatalf("IAM action %q has %d service owners, want exactly one", action, serviceOwners)
 		}
 	}
-	if RoleAllows(iamv1.RoleInstallationVerifier, iamv1.ActionPaaSDeploymentRead) ||
-		RoleAllows(iamv1.RoleAuditReader, iamv1.ActionPaaSApplicationRead) ||
-		RoleAllows(iamv1.BuiltinRole("CUSTOM"), iamv1.ActionPaaSApplicationRead) {
+	if boundPolicyAllows(t, iamv1.RoleInstallationVerifier, iamv1.ActionPaaSDeploymentRead) ||
+		boundPolicyAllows(t, iamv1.RoleAuditReader, iamv1.ActionPaaSApplicationRead) ||
+		boundPolicyAllows(t, iamv1.BuiltinRole("CUSTOM"), iamv1.ActionPaaSApplicationRead) {
 		t.Fatal("fixed least-privilege roles accepted authority outside their catalog")
 	}
 	if ServiceCanRequest(iamv1.ServiceIAM, iamv1.ActionPaaSApplicationRead) {
@@ -226,6 +260,185 @@ func TestCatalogConfinementIsEnforcedByActualDecisions(t *testing.T) {
 	}
 }
 
+func policyVersionForTest(t *testing.T, id iamv1.PolicyID, effect iamv1.PolicyEffect, action iamv1.Action, match iamv1.PolicyResourceMatch, resourceID string) iamv1.PolicyVersion {
+	t.Helper()
+	definition, known := iamv1.LookupActionDefinition(action)
+	if !known {
+		t.Fatal("invalid test action")
+	}
+	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: definition.AuthorityScope,
+		Statements: []iamv1.PolicyStatement{{SID: "statement", Effect: effect, Actions: []iamv1.Action{action}, Resources: []iamv1.PolicyResourceSelector{{Kind: definition.ResourceKind, Match: match, ID: resourceID}}}}}
+	_, digest, err := iamv1.CanonicalizePolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return iamv1.PolicyVersion{PolicyID: id, ID: "version-one", Document: document, ContentDigest: digest}
+}
+
+func TestPolicyEvaluationDefaultsToDenyAndExplicitDenyWins(t *testing.T) {
+	allow := policyVersionForTest(t, "policy-allow", iamv1.PolicyAllow, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceAnyInAuthority, "")
+	deny := policyVersionForTest(t, "policy-deny", iamv1.PolicyDeny, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceExact, "application-protected")
+	for _, test := range []struct {
+		name                  string
+		policies              []iamv1.PolicyVersion
+		resourceID            string
+		allowed, explicitDeny bool
+		matched               int
+	}{
+		{"no grant", nil, "application-open", false, false, 0},
+		{"allow", []iamv1.PolicyVersion{allow}, "application-open", true, false, 1},
+		{"unmatched deny", []iamv1.PolicyVersion{deny}, "application-open", false, false, 0},
+		{"allow without matching deny", []iamv1.PolicyVersion{allow, deny}, "application-open", true, false, 1},
+		{"deny last", []iamv1.PolicyVersion{allow, deny}, "application-protected", false, true, 2},
+		{"deny first", []iamv1.PolicyVersion{deny, allow}, "application-protected", false, true, 2},
+		{"inherited duplicate", []iamv1.PolicyVersion{allow, allow}, "application-open", true, false, 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := EvaluatePolicies(test.policies, iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: test.resourceID})
+			if err != nil || result.Allowed != test.allowed || result.ExplicitDeny != test.explicitDeny || len(result.MatchedVersions) != test.matched {
+				t.Fatalf("evaluation=%+v err=%v", result, err)
+			}
+		})
+	}
+	if result, err := EvaluatePolicies([]iamv1.PolicyVersion{allow}, iamv1.ActionPaaSApplicationCreate, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-open"}); err != nil || result.Allowed {
+		t.Fatal("read permission allowed a write")
+	}
+}
+
+func TestSystemPoliciesPublishIndependentContentBoundVersions(t *testing.T) {
+	for _, id := range []iamv1.PolicyID{iamv1.SystemPolicyAccountAdministrator, iamv1.SystemPolicyPlatformOperator,
+		iamv1.SystemPolicyPaaSDeveloper, iamv1.SystemPolicyPaaSViewer, iamv1.SystemPolicyAuditReader, iamv1.SystemPolicyInstallationVerifier} {
+		t.Run(string(id), func(t *testing.T) {
+			original, err := SystemPolicyVersion(id)
+			if err != nil || iamv1.ValidatePolicyVersion(original) != nil {
+				t.Fatalf("invalid system policy: %v", err)
+			}
+			before, digest, err := iamv1.CanonicalizePolicyDocument(original.Document)
+			if err != nil || string(original.ID) != "version-"+digest[len("sha256:"):] {
+				t.Fatal("version does not identify its content")
+			}
+			original.Document.Statements[0].Effect = iamv1.PolicyDeny
+			original.Document.Statements[0].Resources[0].Match = iamv1.PolicyResourceExact
+			original.Document.Statements[0].Resources[0].ID = "resource-changed"
+			if iamv1.ValidatePolicyVersion(original) == nil {
+				t.Fatal("changed content retained the old digest")
+			}
+			fresh, err := SystemPolicyVersion(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, afterDigest, err := iamv1.CanonicalizePolicyDocument(fresh.Document)
+			if err != nil || before != after || digest != afterDigest {
+				t.Fatal("caller mutated published system policy content")
+			}
+		})
+	}
+	if _, err := SystemPolicyVersion("system.unregistered"); !errors.Is(err, ErrInvalidPolicyState) {
+		t.Fatal("unknown system policy became authority")
+	}
+}
+
+func BenchmarkPolicyEvaluation(b *testing.B) {
+	for _, count := range []int{1, 16, 64} {
+		b.Run(fmt.Sprintf("policies-%d", count), func(b *testing.B) {
+			version, err := SystemPolicyVersion(iamv1.SystemPolicyPaaSDeveloper)
+			if err != nil {
+				b.Fatal(err)
+			}
+			policies := make([]iamv1.PolicyVersion, count)
+			for i := range policies {
+				policies[i] = version
+				policies[i].PolicyID = iamv1.PolicyID(fmt.Sprintf("policy-%d", i))
+			}
+			resource := iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-example"}
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.RunParallel(func(iterations *testing.PB) {
+				for iterations.Next() {
+					result, err := EvaluatePolicies(policies, iamv1.ActionPaaSApplicationRead, resource)
+					if err != nil || !result.Allowed || len(result.MatchedVersions) != count {
+						b.Error("invalid evaluation")
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestPolicyEvaluationBoundsTotalWorkAndOrdersEvidence(t *testing.T) {
+	first := policyVersionForTest(t, "policy-a", iamv1.PolicyAllow, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceAnyInAuthority, "")
+	last := policyVersionForTest(t, "policy-z", iamv1.PolicyDeny, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceAnyInAuthority, "")
+	resource := iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-one"}
+	left, err := EvaluatePolicies([]iamv1.PolicyVersion{last, first}, iamv1.ActionPaaSApplicationRead, resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := EvaluatePolicies([]iamv1.PolicyVersion{first, last}, iamv1.ActionPaaSApplicationRead, resource)
+	if err != nil || !slices.Equal(left.MatchedVersions, right.MatchedVersions) || left.Allowed || right.Allowed || !right.ExplicitDeny {
+		t.Fatal("source order changed authority evidence")
+	}
+	large := first
+	large.Document.Statements = make([]iamv1.PolicyStatement, iamv1.MaxPolicyStatements)
+	for i := range large.Document.Statements {
+		large.Document.Statements[i] = first.Document.Statements[0]
+		large.Document.Statements[i].SID = fmt.Sprintf("statement-%d", i)
+	}
+	_, large.ContentDigest, err = iamv1.CanonicalizePolicyDocument(large.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	versions := make([]iamv1.PolicyVersion, MaxEvaluationStatements/iamv1.MaxPolicyStatements)
+	for i := range versions {
+		versions[i] = large
+		versions[i].PolicyID = iamv1.PolicyID(fmt.Sprintf("policy-%d", i))
+	}
+	if result, err := EvaluatePolicies(versions, iamv1.ActionPaaSApplicationRead, resource); err != nil || !result.Allowed {
+		t.Fatalf("valid bounded snapshot rejected: %v", err)
+	}
+	versions = append(versions, last)
+	if result, err := EvaluatePolicies(versions, iamv1.ActionPaaSApplicationRead, resource); !errors.Is(err, ErrInvalidPolicyState) || result.Allowed || len(result.MatchedVersions) != 0 {
+		t.Fatal("aggregate statement limit returned partial authority")
+	}
+}
+
+func TestPolicyEvaluationSeparatesScopesAndFailsClosedOnCorruptSnapshots(t *testing.T) {
+	tenant := policyVersionForTest(t, "policy-tenant", iamv1.PolicyAllow, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceAnyInAuthority, "")
+	platform := policyVersionForTest(t, "policy-platform", iamv1.PolicyAllow, iamv1.ActionPaaSExecutionTargetRead, iamv1.PolicyResourceAnyInAuthority, "")
+	probe := policyVersionForTest(t, "policy-probe", iamv1.PolicyAllow, iamv1.ActionInstallationVerify, iamv1.PolicyResourceAnyInAuthority, "")
+	request := iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-one"}
+	if result, err := EvaluatePolicies([]iamv1.PolicyVersion{platform, probe}, iamv1.ActionPaaSApplicationRead, request); err != nil || result.Allowed {
+		t.Fatal("platform/probe policy granted tenant resource access")
+	}
+	if result, err := EvaluatePolicies([]iamv1.PolicyVersion{tenant, platform, probe}, iamv1.ActionPaaSApplicationRead, request); err != nil || !result.Allowed || len(result.MatchedVersions) != 1 || result.MatchedVersions[0].PolicyID != tenant.PolicyID {
+		t.Fatal("unrelated scope changed tenant permission/evidence")
+	}
+	conflicting := tenant
+	conflicting.ID = "version-two"
+	invalid := platform
+	invalid.ContentDigest = "sha256:invalid"
+	for name, policies := range map[string][]iamv1.PolicyVersion{
+		"conflicting effective versions":        {tenant, conflicting},
+		"allow cannot hide invalid other scope": {tenant, invalid},
+		"invalid first":                         {invalid, tenant},
+		"too many policies":                     make([]iamv1.PolicyVersion, MaxEvaluationPolicies+1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := EvaluatePolicies(policies, iamv1.ActionPaaSApplicationRead, request)
+			if !errors.Is(err, ErrInvalidPolicyState) || result.Allowed || result.ExplicitDeny || len(result.MatchedVersions) != 0 {
+				t.Fatalf("invalid authority returned a partial result: %+v %v", result, err)
+			}
+		})
+	}
+	for _, resource := range []iamv1.ResourceReference{{Kind: iamv1.ResourcePrincipal, ID: "application-one"}, {Kind: iamv1.ResourceApplication, ID: "*"}} {
+		if result, err := EvaluatePolicies([]iamv1.PolicyVersion{tenant}, iamv1.ActionPaaSApplicationRead, resource); !errors.Is(err, ErrInvalidAuthorizationRequest) || result.Allowed {
+			t.Fatal("malformed request acquired authority")
+		}
+	}
+	if result, err := EvaluatePolicies([]iamv1.PolicyVersion{tenant}, "paas.unregistered.read", request); !errors.Is(err, ErrInvalidAuthorizationRequest) || result.Allowed {
+		t.Fatal("unknown action acquired authority")
+	}
+}
+
 func TestManagedServiceUsesTheExistingClosedPaaSRoleMatrix(t *testing.T) {
 	readActions := []iamv1.Action{
 		iamv1.ActionManagedServiceOfferingRead,
@@ -234,9 +447,9 @@ func TestManagedServiceUsesTheExistingClosedPaaSRoleMatrix(t *testing.T) {
 		iamv1.ActionManagedServiceInstallationRead,
 	}
 	for _, action := range readActions {
-		if !RoleAllows(iamv1.RoleOrganizationAdmin, action) ||
-			!RoleAllows(iamv1.RolePaaSDeveloper, action) ||
-			!RoleAllows(iamv1.RolePaaSViewer, action) ||
+		if !boundPolicyAllows(t, iamv1.RoleOrganizationAdmin, action) ||
+			!boundPolicyAllows(t, iamv1.RolePaaSDeveloper, action) ||
+			!boundPolicyAllows(t, iamv1.RolePaaSViewer, action) ||
 			!ServiceCanRequest(iamv1.ServicePaaS, action) {
 			t.Fatalf("managed-service read action %q is not mapped to the fixed roles", action)
 		}
@@ -245,9 +458,9 @@ func TestManagedServiceUsesTheExistingClosedPaaSRoleMatrix(t *testing.T) {
 		iamv1.ActionManagedServiceQuotaEntitlementActivate,
 		iamv1.ActionManagedServiceInstallationCreate,
 	} {
-		if !RoleAllows(iamv1.RoleOrganizationAdmin, action) ||
-			!RoleAllows(iamv1.RolePaaSDeveloper, action) ||
-			RoleAllows(iamv1.RolePaaSViewer, action) ||
+		if !boundPolicyAllows(t, iamv1.RoleOrganizationAdmin, action) ||
+			!boundPolicyAllows(t, iamv1.RolePaaSDeveloper, action) ||
+			boundPolicyAllows(t, iamv1.RolePaaSViewer, action) ||
 			!ServiceCanRequest(iamv1.ServicePaaS, action) {
 			t.Fatalf("managed-service mutation action %q has an invalid role mapping", action)
 		}
@@ -258,7 +471,7 @@ func TestPlatformAuthorityRequiresAnExplicitRoleAndInstallationBinding(t *testin
 	now := authorityTestTime()
 	for _, action := range iamv1.AllActions() {
 		if !iamv1.IsPlatformAction(action) {
-			if RoleAllows(iamv1.RolePlatformOperator, action) {
+			if boundPolicyAllows(t, iamv1.RolePlatformOperator, action) {
 				t.Fatalf("platform operator received unrelated authority %s", action)
 			}
 			continue
@@ -309,7 +522,7 @@ func TestPlatformAuthorityRequiresAnExplicitRoleAndInstallationBinding(t *testin
 func TestTenantAccountCommandsRemainOrganizationAdminOnly(t *testing.T) {
 	for _, action := range []iamv1.Action{iamv1.ActionIAMAccountAliasSet, iamv1.ActionIAMPrincipalList, iamv1.ActionIAMPrincipalSetStatus, iamv1.ActionIAMPasswordReset} {
 		for _, role := range iamv1.AllBuiltinRoles() {
-			if RoleAllows(role, action) != (role == iamv1.RoleOrganizationAdmin) {
+			if boundPolicyAllows(t, role, action) != (role == iamv1.RoleOrganizationAdmin) {
 				t.Errorf("unexpected authority %s/%s", role, action)
 			}
 		}

@@ -613,6 +613,22 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	platformDecisions := []iamv1.AuthorizationDecision{
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin", true),
 	}
+	// A second real process uses its own bounded runtime login but the same
+	// authoritative state. No sticky routing or in-memory session replication.
+	const replicaLogin = "matrix_authority_process_iam_replica"
+	createProcessLogin(t, ctx, admin, replicaLogin, "matrix_iam_api")
+	replicaDSNPath := writeProtectedFile(t, temporary, "iam-replica-dsn", []byte(runtimeDSN(t, adminConfig, replicaLogin, processDBPassword)))
+	replicaAddress := freeAddress(t)
+	replicaEndpoint := "http://" + replicaAddress
+	replicaProcess := start(binaries.iam, []string{
+		"MATRIX_IAM_DATABASE_DSN_FILE=" + replicaDSNPath,
+		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
+		"MATRIX_IAM_LISTEN_ADDRESS=" + replicaAddress,
+	})
+	waitHTTPStatus(t, ctx, replicaProcess, replicaEndpoint+"/ready", http.StatusOK)
+	assertRuntimeProcessLogins(t, ctx, admin, replicaLogin)
+	platformDecisions = append(platformDecisions,
+		assertPlatformAuthorization(t, replicaEndpoint, adminLogin.Credential, "principal-admin", "request-replica-existing-session", true))
 	sensitive = append(sensitive, proveTenantAccountProcesses(t, ctx, admin, iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential,
 		func(admit func()) {
 			auditProcess.stop()
@@ -669,7 +685,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-denied", false),
 	)
 	assertPlatformAuditAccess(t, auditEndpoint, developerLogin.Credential, http.StatusForbidden)
-	platformBinding := putIAMBinding(t, iamEndpoint, adminLogin.Credential, developer.ID,
+	platformBinding := putIAMBinding(t, replicaEndpoint, adminLogin.Credential, developer.ID,
 		iamv1.RolePlatformOperator, "request-bind-platform-operator")
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-granted", true),
@@ -679,6 +695,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	revokeIAMBinding(t, iamEndpoint, adminLogin.Credential, platformBinding.ID, "request-revoke-platform-operator")
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-revoked", false),
+		assertPlatformAuthorization(t, replicaEndpoint, developerLogin.Credential, string(developer.ID), "request-replica-platform-revoked", false),
 	)
 	assertPlatformAuditAccess(t, auditEndpoint, developerLogin.Credential, http.StatusForbidden)
 	developerOperation := createPaaSApplication(
@@ -841,6 +858,9 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		"request-revoke-reader-session",
 	)
 	queryAudit(t, auditEndpoint, readerLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 10}, http.StatusUnauthorized)
+	if response := performJSON(t, http.MethodGet, replicaEndpoint+"/v1/auth/me", readerLogin.Credential, nil); response.Status != http.StatusUnauthorized {
+		t.Fatalf("another IAM process accepted a revoked session: status=%d", response.Status)
+	}
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	verification := verifyAudit(t, auditEndpoint, adminLogin.Credential)
 	if verification.TenantID != "organization-process" ||
@@ -872,6 +892,45 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	}
 	iamProcess.stop()
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusServiceUnavailable)
+	assertReplicaRead := func(requestID string, status int) {
+		t.Helper()
+		request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+			Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-process"},
+			RequestID: requestID, CorrelationID: requestID}
+		response := performJSONWithHeaders(t, http.MethodPost, replicaEndpoint+"/v1/authorize", paasServiceCredential, "", request,
+			map[string]string{"Matrix-Subject-Credential": adminLogin.Credential})
+		if response.Status != status {
+			t.Fatalf("replica authorization status=%d want=%d", response.Status, status)
+		}
+		if status == http.StatusOK {
+			var decision iamv1.AuthorizationDecision
+			if json.Unmarshal(response.Body, &decision) != nil || iamv1.ValidateAuthorizationDecision(decision) != nil ||
+				!decision.Allowed || decision.TenantID != bootstrap.Organization.ID || decision.Subject == nil || decision.Subject.ID != "principal-admin" {
+				t.Fatal("surviving replica lost the existing session/authority")
+			}
+		} else if bytes.Contains(response.Body, []byte(`"allowed":true`)) {
+			t.Fatal("unavailable replica returned an old permit")
+		}
+	}
+	assertReplicaRead("request-replica-survives-peer", http.StatusOK)
+	platformDecisions = append(platformDecisions,
+		assertPlatformAuthorization(t, replicaEndpoint, adminLogin.Credential, "principal-admin", "request-replica-revocation-survives-peer", false))
+	// Disconnect only this fixture's replica login. Other authority processes
+	// keep their own connections and are not restarted or reconfigured.
+	if _, err := admin.Exec(ctx, `ALTER ROLE matrix_authority_process_iam_replica NOLOGIN`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+		WHERE datname=current_database() AND usename='matrix_authority_process_iam_replica'`); err != nil {
+		t.Fatal(err)
+	}
+	assertReplicaRead("request-replica-database-unavailable", http.StatusServiceUnavailable)
+	if _, err := admin.Exec(ctx, `ALTER ROLE matrix_authority_process_iam_replica LOGIN`); err != nil {
+		t.Fatal(err)
+	}
+	waitHTTPStatus(t, ctx, replicaProcess, replicaEndpoint+"/ready", http.StatusOK)
+	assertReplicaRead("request-replica-database-restored", http.StatusOK)
+	replicaProcess.stop()
 	createPaaSApplication(
 		t,
 		paasEndpoint,

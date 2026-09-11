@@ -207,3 +207,15 @@ The foundation donor object `f51d5ed...` is not available in this checkout's
 object database. Its prior foundation review is not new inspection evidence;
 IAM/001 imports no code from it. The actual legacy review above uses read-only
 Git objects, never the donor's working files.
+
+## IAM/002 policy authority adoption
+
+The smallest target is system-policy parity with immutable documents/versions,
+one deny-first evaluator and transactional attachments preserving real revoked
+history; the feature target precedes this review.
+
+| Fixed source and slice | Decision | Reason |
+| --- | --- | --- |
+| Matrix `3b11eb9dbabd70211e665c00e4e665658b461bd1`: action definitions, actual decision tests and current `authority.RoleAllows` | `ADAPT` | Preserve the accepted action/resource/service/scope matrix, then remove the role-specific evaluator rather than keeping a fallback. |
+| Legacy `69336e51f94fa98f6aa278fa4c62382e224dbeaf`: `accessgrant/domain/accessprofile/profile.go`, `statement.go`, `version.go` | `REFERENCE` for invariant separation; `REJECT` as code | The donor separates stable profile identity, version content, statements and defensive copies. Its multiple active versions, scope inheritance, obligation/operation/reference graph and external condition references do not implement this product's one effective immutable policy version or bounded typed language. No donor type, module or runtime is imported. |
+| Matrix `aa345eca5f1ed3921000aa5380d5bfd2aa6d0a50`: current role-binding and local credential-recovery SQL/receipt contracts | `ADAPT` for storage; `REUSE` sealed history | Migrate exact binding IDs, versions and revoked history into attachments. Preserve historical receipt/capability bytes and one-shot recovery; a new policy model cannot supply an offline grant or revive a revoked link. |
