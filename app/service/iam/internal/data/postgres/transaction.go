@@ -59,7 +59,7 @@ func (value *transaction) BootstrapStatus(
 		status.InstallationID = *installationID
 	}
 	if organizationID != nil {
-		status.OrganizationID = iamv1.OrganizationID(*organizationID)
+		status.AccountID = iamv1.AccountID(*organizationID)
 	}
 	if contentDigest != nil {
 		status.ContentDigest = *contentDigest
@@ -126,7 +126,7 @@ func (value *transaction) LookupLogin(
 	var passwordHash string
 	var organizationStatus, principalStatus string
 	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.lookup_login($1)", loginName).Scan(
-		&account.OrganizationID,
+		&account.AccountID,
 		&account.PrincipalID,
 		&passwordHash,
 		&organizationStatus,
@@ -140,7 +140,7 @@ func (value *transaction) LookupLogin(
 		return identityaccess.LoginAccount{}, false, mapDatabaseError("lookup IAM login", err)
 	}
 	account.PasswordHash = authority.PasswordHash(passwordHash)
-	account.OrganizationStatus = iamv1.OrganizationStatus(organizationStatus)
+	account.AccountStatus = iamv1.AccountStatus(organizationStatus)
 	account.PrincipalStatus = iamv1.PrincipalStatus(principalStatus)
 	return account, true, nil
 }
@@ -168,7 +168,7 @@ func (value *transaction) IssueSession(
 			$1, $2, $3, $4, $5, $6, $7::jsonb
 		)`,
 		string(mutation.Session.ID),
-		string(mutation.Session.OrganizationID),
+		string(mutation.Session.AccountID),
 		string(mutation.Session.PrincipalID),
 		mutation.LookupDigest,
 		mutation.VerificationDigest,
@@ -253,9 +253,9 @@ func (value *transaction) LookupSession(
 		Organization: iamv1.Organization{
 			APIVersion:      iamv1.APIVersion,
 			Kind:            "Organization",
-			ID:              iamv1.OrganizationID(organizationID),
+			ID:              iamv1.AccountID(organizationID),
 			DisplayName:     organizationDisplayName,
-			Status:          iamv1.OrganizationStatus(organizationStatus),
+			Status:          iamv1.AccountStatus(organizationStatus),
 			ResourceVersion: organizationVersion,
 			CreatedAt:       organizationCreatedAt.UTC(),
 			UpdatedAt:       organizationUpdatedAt.UTC(),
@@ -264,7 +264,7 @@ func (value *transaction) LookupSession(
 			APIVersion:         iamv1.APIVersion,
 			Kind:               "Principal",
 			ID:                 iamv1.PrincipalID(principalID),
-			OrganizationID:     iamv1.OrganizationID(organizationID),
+			AccountID:          iamv1.AccountID(organizationID),
 			Type:               iamv1.PrincipalType(principalType),
 			LoginName:          loginName,
 			DisplayName:        principalDisplayName,
@@ -275,15 +275,15 @@ func (value *transaction) LookupSession(
 			UpdatedAt:          principalUpdatedAt.UTC(),
 		},
 		Session: iamv1.Session{
-			APIVersion:     iamv1.APIVersion,
-			Kind:           "Session",
-			ID:             iamv1.SessionID(sessionID),
-			OrganizationID: iamv1.OrganizationID(organizationID),
-			PrincipalID:    iamv1.PrincipalID(principalID),
-			Status:         iamv1.SessionStatus(sessionStatus),
-			IssuedAt:       sessionIssuedAt.UTC(),
-			ExpiresAt:      sessionExpiresAt.UTC(),
-			RevokedAt:      revokedAt,
+			APIVersion:  iamv1.APIVersion,
+			Kind:        "Session",
+			ID:          iamv1.SessionID(sessionID),
+			AccountID:   iamv1.AccountID(organizationID),
+			PrincipalID: iamv1.PrincipalID(principalID),
+			Status:      iamv1.SessionStatus(sessionStatus),
+			IssuedAt:    sessionIssuedAt.UTC(),
+			ExpiresAt:   sessionExpiresAt.UTC(),
+			RevokedAt:   revokedAt,
 		},
 	}
 	subject.Policies, err = decodeAttachedPolicies(policies)
@@ -323,7 +323,7 @@ func (value *transaction) LookupService(
 		APIVersion:     iamv1.APIVersion,
 		Kind:           "ServiceIdentity",
 		InstallationID: installationID,
-		OrganizationID: iamv1.OrganizationID(organizationID),
+		AccountID:      iamv1.AccountID(organizationID),
 		PrincipalID:    iamv1.PrincipalID(principalID),
 		Purpose:        iamv1.ServicePurpose(purpose),
 	}
@@ -353,7 +353,7 @@ func (value *transaction) ReadAuditEvidence(
 	var storedEvent, decision []byte
 	var verifier *string
 	err = value.tx.QueryRow(ctx, "SELECT * FROM iam.read_audit_evidence($1,$2,$3,$4,$5::jsonb)",
-		identity.OrganizationID, identity.PrincipalID, identity.Purpose, identity.InstallationID, encoded,
+		identity.AccountID, identity.PrincipalID, identity.Purpose, identity.InstallationID, encoded,
 	).Scan(&result.InstallationID, &storedEvent, &decision, &verifier)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.AuditEvidence{}, false, nil
@@ -379,7 +379,7 @@ func (value *transaction) ReadAuditEvidence(
 
 func (value *transaction) LookupServicePolicies(
 	ctx context.Context,
-	organizationID iamv1.OrganizationID,
+	organizationID iamv1.AccountID,
 	principalID iamv1.PrincipalID,
 ) ([]authority.AttachedPolicy, error) {
 	if iamv1.ValidateID("organizationId", string(organizationID)) != nil ||
@@ -436,7 +436,7 @@ func decodeAttachedPolicies(encoded []byte) ([]authority.AttachedPolicy, error) 
 
 func (value *transaction) LookupPassword(
 	ctx context.Context,
-	organizationID iamv1.OrganizationID,
+	organizationID iamv1.AccountID,
 	principalID iamv1.PrincipalID,
 ) (authority.PasswordHash, bool, error) {
 	if iamv1.ValidateID("organizationId", string(organizationID)) != nil ||
@@ -485,7 +485,7 @@ func (value *transaction) RecordAuthorization(
 	_, err = value.tx.Exec(
 		ctx,
 		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb)",
-		string(mutation.OrganizationID),
+		string(mutation.AccountID),
 		string(mutation.PrincipalID),
 		decision,
 		event,
@@ -504,7 +504,7 @@ func (value *transaction) ChangePassword(
 	ctx context.Context,
 	mutation identityaccess.PasswordMutation,
 ) (iamv1.ChangePasswordResponse, error) {
-	if iamv1.ValidateID("organizationId", string(mutation.OrganizationID)) != nil ||
+	if iamv1.ValidateID("organizationId", string(mutation.AccountID)) != nil ||
 		iamv1.ValidateID("principalId", string(mutation.PrincipalID)) != nil ||
 		iamv1.ValidateID("sessionId", string(mutation.SessionID)) != nil ||
 		mutation.ExpectedPasswordHash == "" || mutation.NewPasswordHash == "" ||
@@ -519,7 +519,7 @@ func (value *transaction) ChangePassword(
 	err = value.tx.QueryRow(
 		ctx,
 		"SELECT * FROM iam.change_password($1, $2, $3, $4, $5::jsonb, $6, $7)",
-		string(mutation.OrganizationID),
+		string(mutation.AccountID),
 		string(mutation.PrincipalID),
 		string(mutation.ExpectedPasswordHash),
 		string(mutation.NewPasswordHash),
@@ -543,7 +543,7 @@ func (value *transaction) RevokeSession(
 	ctx context.Context,
 	mutation identityaccess.SessionRevocationMutation,
 ) (iamv1.Revocation, bool, error) {
-	if iamv1.ValidateID("organizationId", string(mutation.OrganizationID)) != nil ||
+	if iamv1.ValidateID("organizationId", string(mutation.AccountID)) != nil ||
 		iamv1.ValidateID("sessionId", string(mutation.SessionID)) != nil ||
 		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
@@ -566,7 +566,7 @@ func (value *transaction) RevokeSession(
 	err = value.tx.QueryRow(
 		ctx,
 		"SELECT * FROM iam.revoke_session($1, $2, $3, $4, $5::jsonb)",
-		string(mutation.OrganizationID),
+		string(mutation.AccountID),
 		string(mutation.SessionID),
 		string(mutation.ActorPrincipalID),
 		decisionID,
@@ -592,26 +592,26 @@ func (value *transaction) RevokeSession(
 func (value *transaction) CreateUser(
 	ctx context.Context,
 	mutation identityaccess.UserMutation,
-) (iamv1.Principal, error) {
-	if iamv1.ValidatePrincipal(mutation.Principal) != nil ||
+) (iamv1.User, error) {
+	if iamv1.ValidateUser(mutation.User) != nil ||
 		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
 		iamv1.ValidateID("decisionId", string(mutation.DecisionID)) != nil ||
 		mutation.PasswordHash == "" ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
-		return iamv1.Principal{}, identityaccess.ErrInvalidArgument
+		return iamv1.User{}, identityaccess.ErrInvalidArgument
 	}
 	event, err := json.Marshal(mutation.AuditEvent)
 	if err != nil {
-		return iamv1.Principal{}, identityaccess.ErrUnavailable
+		return iamv1.User{}, identityaccess.ErrUnavailable
 	}
 	var createdAt, updatedAt time.Time
 	err = value.tx.QueryRow(
 		ctx,
 		"SELECT * FROM iam.create_user($1, $2, $3, $4, $5, $6, $7, $8::jsonb)",
-		string(mutation.Principal.OrganizationID),
-		string(mutation.Principal.ID),
-		mutation.Principal.LoginName,
-		mutation.Principal.DisplayName,
+		string(mutation.User.AccountID),
+		string(mutation.User.ID),
+		mutation.User.LoginName,
+		mutation.User.DisplayName,
 		string(mutation.PasswordHash),
 		string(mutation.ActorPrincipalID),
 		string(mutation.DecisionID),
@@ -619,19 +619,19 @@ func (value *transaction) CreateUser(
 	).Scan(&createdAt, &updatedAt)
 	clear(event)
 	if err != nil {
-		return iamv1.Principal{}, mapAuthorizationDatabaseError("create IAM user", err)
+		return iamv1.User{}, mapAuthorizationDatabaseError("create IAM user", err)
 	}
-	stored := mutation.Principal
+	stored := mutation.User
 	stored.CreatedAt = createdAt.UTC()
 	stored.UpdatedAt = updatedAt.UTC()
-	if iamv1.ValidatePrincipal(stored) != nil || stored.CreatedAt != mutation.Principal.CreatedAt ||
-		stored.UpdatedAt != mutation.Principal.UpdatedAt {
-		return iamv1.Principal{}, identityaccess.ErrUnavailable
+	if iamv1.ValidateUser(stored) != nil || stored.CreatedAt != mutation.User.CreatedAt ||
+		stored.UpdatedAt != mutation.User.UpdatedAt {
+		return iamv1.User{}, identityaccess.ErrUnavailable
 	}
 	return stored, nil
 }
 
-func (value *transaction) LookupPolicy(ctx context.Context, account iamv1.OrganizationID, id iamv1.PolicyID) (iamv1.Policy, bool, error) {
+func (value *transaction) LookupPolicy(ctx context.Context, account iamv1.AccountID, id iamv1.PolicyID) (iamv1.Policy, bool, error) {
 	if iamv1.ValidateID("accountId", string(account)) != nil || iamv1.ValidateID("policyId", string(id)) != nil {
 		return iamv1.Policy{}, false, identityaccess.ErrInvalidArgument
 	}
@@ -669,7 +669,7 @@ func decodePolicyAttachment(encoded []byte) (iamv1.PolicyAttachment, error) {
 	return attachment, nil
 }
 
-func (value *transaction) LookupPolicyAttachment(ctx context.Context, account iamv1.OrganizationID, id iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error) {
+func (value *transaction) LookupPolicyAttachment(ctx context.Context, account iamv1.AccountID, id iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error) {
 	if iamv1.ValidateID("accountId", string(account)) != nil || iamv1.ValidateID("attachmentId", string(id)) != nil {
 		return iamv1.PolicyAttachment{}, false, identityaccess.ErrInvalidArgument
 	}
@@ -706,7 +706,7 @@ func (value *transaction) CreatePolicyAttachment(ctx context.Context, mutation i
 }
 
 func (value *transaction) RevokePolicyAttachment(ctx context.Context, mutation identityaccess.PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error) {
-	if iamv1.ValidateID("accountId", string(mutation.OrganizationID)) != nil || iamv1.ValidateID("attachmentId", string(mutation.AttachmentID)) != nil ||
+	if iamv1.ValidateID("accountId", string(mutation.AccountID)) != nil || iamv1.ValidateID("attachmentId", string(mutation.AttachmentID)) != nil ||
 		iamv1.ValidateRevokePolicyAttachmentRequest(iamv1.RevokePolicyAttachmentRequest{ResourceVersion: mutation.ResourceVersion, RequestID: mutation.AuditEvent.RequestID}) != nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.Revocation{}, false, identityaccess.ErrInvalidArgument
@@ -718,7 +718,7 @@ func (value *transaction) RevokePolicyAttachment(ctx context.Context, mutation i
 	result := iamv1.Revocation{APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(mutation.AttachmentID)}
 	var applied bool
 	err = value.tx.QueryRow(ctx, "SELECT * FROM iam.revoke_policy_attachment($1,$2,$3,$4,$5,$6::jsonb)",
-		string(mutation.OrganizationID), string(mutation.AttachmentID), mutation.ResourceVersion, string(mutation.ActorPrincipalID),
+		string(mutation.AccountID), string(mutation.AttachmentID), mutation.ResourceVersion, string(mutation.ActorPrincipalID),
 		string(mutation.DecisionID), event).Scan(&result.ResourceVersion, &result.RevokedAt, &applied)
 	if err != nil {
 		return iamv1.Revocation{}, false, mapAuthorizationDatabaseError("revoke IAM policy attachment", err)

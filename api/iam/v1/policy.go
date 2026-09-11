@@ -41,7 +41,7 @@ type Policy struct {
 	Kind             string           `json:"kind"`
 	ID               PolicyID         `json:"id"`
 	Management       PolicyManagement `json:"management"`
-	AccountID        OrganizationID   `json:"accountId,omitempty"`
+	AccountID        AccountID        `json:"accountId,omitempty"`
 	DisplayName      string           `json:"displayName"`
 	Scope            AuthorityScope   `json:"scope"`
 	Status           PolicyStatus     `json:"status"`
@@ -58,7 +58,7 @@ const MaxPolicyListItems = 256
 type PolicyList struct {
 	APIVersion     string         `json:"apiVersion"`
 	Kind           string         `json:"kind"`
-	AccountID      OrganizationID `json:"accountId"`
+	AccountID      AccountID      `json:"accountId"`
 	Scope          AuthorityScope `json:"scope"`
 	InstallationID string         `json:"installationId,omitempty"`
 	Items          []Policy       `json:"items"`
@@ -95,7 +95,7 @@ type PolicyAttachment struct {
 	APIVersion      string                 `json:"apiVersion"`
 	Kind            string                 `json:"kind"`
 	ID              PolicyAttachmentID     `json:"id"`
-	AccountID       OrganizationID         `json:"accountId"`
+	AccountID       AccountID              `json:"accountId"`
 	Target          PolicyAttachmentTarget `json:"target"`
 	PolicyID        PolicyID               `json:"policyId"`
 	Scope           AuthorityScope         `json:"scope"`

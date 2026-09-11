@@ -2,6 +2,18 @@ SET LOCAL ROLE matrix_iam_owner;
 
 REVOKE ALL ON SCHEMA iam FROM PUBLIC;
 
+-- Account is the current ownership aggregate. Upgrade the pre-release table
+-- name before any current definition is compiled; never create two sources of
+-- ownership truth.
+DO $account_table_cutover$
+BEGIN
+    IF to_regclass('iam.accounts') IS NULL AND to_regclass('iam.organizations') IS NOT NULL THEN
+        ALTER TABLE iam.organizations RENAME TO accounts;
+    ELSIF to_regclass('iam.accounts') IS NOT NULL AND to_regclass('iam.organizations') IS NOT NULL THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='IAM account ownership tables conflict';
+    END IF;
+END $account_table_cutover$;
+
 CREATE OR REPLACE FUNCTION iam.current_tenant_id()
 RETURNS text
 LANGUAGE sql
@@ -32,14 +44,14 @@ CREATE TABLE IF NOT EXISTS iam.bootstrap_receipts (
     )
 );
 
-CREATE TABLE IF NOT EXISTS iam.organizations (
+CREATE TABLE IF NOT EXISTS iam.accounts (
     id text COLLATE "C" PRIMARY KEY,
     display_name text NOT NULL,
     status text COLLATE "C" NOT NULL,
     resource_version bigint NOT NULL,
     created_at timestamptz(6) NOT NULL,
     updated_at timestamptz(6) NOT NULL,
-    CONSTRAINT organizations_values_valid CHECK (
+    CONSTRAINT accounts_values_valid CHECK (
         id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND length(display_name) BETWEEN 1 AND 128
         AND btrim(display_name) = display_name
@@ -61,8 +73,8 @@ CREATE TABLE IF NOT EXISTS iam.principals (
     created_at timestamptz(6) NOT NULL,
     updated_at timestamptz(6) NOT NULL,
     PRIMARY KEY (tenant_id, id),
-    CONSTRAINT principals_organization_fk FOREIGN KEY (tenant_id)
-        REFERENCES iam.organizations (id),
+    CONSTRAINT principals_account_fk FOREIGN KEY (tenant_id)
+        REFERENCES iam.accounts (id),
     CONSTRAINT principals_login_uq UNIQUE (tenant_id, login_name),
     CONSTRAINT principals_values_valid CHECK (
         tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -90,7 +102,7 @@ CREATE TABLE IF NOT EXISTS iam.principals (
 CREATE TABLE IF NOT EXISTS iam.policies (
     id text COLLATE "C" PRIMARY KEY,
     management text COLLATE "C" NOT NULL,
-    owner_tenant_id text COLLATE "C" REFERENCES iam.organizations(id),
+    owner_tenant_id text COLLATE "C" REFERENCES iam.accounts(id),
     display_name text NOT NULL,
     authority_scope text COLLATE "C" NOT NULL,
     status text COLLATE "C" NOT NULL,
@@ -471,8 +483,8 @@ CREATE TABLE IF NOT EXISTS iam.audit_outbox (
     )
 );
 
-ALTER TABLE iam.organizations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE iam.organizations FORCE ROW LEVEL SECURITY;
+ALTER TABLE iam.accounts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.accounts FORCE ROW LEVEL SECURITY;
 ALTER TABLE iam.principals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.principals FORCE ROW LEVEL SECURITY;
 ALTER TABLE iam.policy_attachments ENABLE ROW LEVEL SECURITY;
@@ -512,10 +524,10 @@ BEGIN
     END LOOP;
     IF NOT EXISTS (
         SELECT 1 FROM pg_catalog.pg_policies
-         WHERE schemaname = 'iam' AND tablename = 'organizations'
+         WHERE schemaname = 'iam' AND tablename = 'accounts'
            AND policyname = 'tenant_isolation'
     ) THEN
-        CREATE POLICY tenant_isolation ON iam.organizations
+        CREATE POLICY tenant_isolation ON iam.accounts
             USING (id = iam.current_tenant_id())
             WITH CHECK (id = iam.current_tenant_id());
     END IF;
@@ -552,6 +564,7 @@ AS $function$
 DECLARE
     local_recovery boolean := expected_action = 'iam.installation-primary.credentials-recovered';
     platform_lifecycle boolean := expected_action IN (
+        'iam.account.created','iam.account.disabled','iam.account.enabled','iam.account-root.credentials-recovered',
         'iam.tenant.created','iam.tenant.disabled','iam.tenant.enabled','iam.tenant-administrator.recovered',
         'iam.installation-primary.credentials-recovered',
         'iam.platform-policy-attachment.created','iam.platform-policy-attachment.revoked');
@@ -583,11 +596,11 @@ BEGIN
        ]) <> '{}'::jsonb
        OR ((submitted_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
        OR ((submitted_event->'target') - ARRAY['kind', 'id', 'tenantId']) <> '{}'::jsonb
-       OR (expected_action IN ('iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (
+       OR (expected_action IN ('iam.account-root.credentials-recovered','iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (
             jsonb_typeof(submitted_event#>'{target,tenantId}') IS DISTINCT FROM 'string'
             OR COALESCE(submitted_event#>>'{target,tenantId}','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
           ))
-       OR (expected_action NOT IN ('iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (submitted_event->'target') ? 'tenantId')
+       OR (expected_action NOT IN ('iam.account-root.credentials-recovered','iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (submitted_event->'target') ? 'tenantId')
        OR jsonb_typeof(submitted_event#>'{actor,type}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{actor,id}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{target,kind}') <> 'string'
@@ -647,11 +660,14 @@ BEGIN
        OR NOT pg_input_is_valid(
             COALESCE(submitted_event->>'occurredAt', ''), 'timestamptz'
        )
-       OR (expected_action IN (
+        OR (expected_action IN (
             'iam.bootstrap.applied', 'iam.session.issued',
-            'iam.password.changed', 'iam.installation-primary.credentials-recovered'
-       ) AND submitted_event ? 'iamDecisionId')
-       OR (expected_action IN (
+            'iam.password.changed', 'iam.user.password-changed', 'iam.installation-primary.credentials-recovered'
+        ) AND submitted_event ? 'iamDecisionId')
+        OR (expected_action IN (
+            'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
+            'iam.account-root.credentials-recovered', 'iam.account.alias-set',
+            'iam.user.created', 'iam.user.status-set', 'iam.user.password-reset',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',
             'iam.platform-policy-attachment.created', 'iam.platform-policy-attachment.revoked',
             'iam.principal.created', 'iam.role-binding.put',
@@ -738,7 +754,7 @@ BEGIN
         submitted_installation_id,
         'SUCCEEDED'
     );
-    INSERT INTO iam.organizations (
+    INSERT INTO iam.accounts (
         id, display_name, status, resource_version, created_at, updated_at
     ) VALUES (
         submitted_organization_id, submitted_organization_name,
@@ -758,11 +774,13 @@ BEGIN
         submitted_organization_id, submitted_administrator_id,
         submitted_password_hash, effective_now
     );
-    INSERT INTO iam.login_index (login_name, tenant_id, principal_id, account_owner)
+    INSERT INTO iam.login_index (login_name, tenant_id, principal_id)
     VALUES (
         submitted_login_name, submitted_organization_id,
-        submitted_administrator_id, true
+        submitted_administrator_id
     );
+    INSERT INTO iam.account_roots(account_id,principal_id,login_name)
+    VALUES(submitted_organization_id,submitted_administrator_id,submitted_login_name);
     INSERT INTO iam.bootstrap_receipts (
         installation_id, content_digest, organization_id,
         administrator_principal_id, applied_at
@@ -912,8 +930,11 @@ BEGIN
                 WHERE protection.tgrelid='iam.authorization_decisions'::regclass
                   AND protection.tgname IN ('authorization_decisions_are_immutable','authorization_decisions_cannot_be_truncated')
                   AND NOT protection.tgisinternal AND protection.tgenabled='A')=2
-           AND to_regprocedure('iam.set_organization_status(text,text,text,text,text,bigint,jsonb)') IS NOT NULL
-           AND to_regprocedure('iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
+            AND to_regprocedure('iam.set_account_status(text,text,text,text,text,bigint,jsonb)') IS NOT NULL
+            AND to_regprocedure('iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
+            AND to_regprocedure('iam.read_account_root(text,text,text,text)') IS NOT NULL
+            AND to_regprocedure('iam.set_organization_status(text,text,text,text,text,bigint,jsonb)') IS NULL
+            AND to_regprocedure('iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb)') IS NULL
            AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean)') IS NOT NULL
            AND to_regprocedure('iam.change_password(text,text,text,text,jsonb)') IS NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc AS recovery
@@ -972,21 +993,31 @@ PARALLEL SAFE
 SET search_path = pg_catalog, pg_temp
 AS $function$
     SELECT CASE submitted_action
+        WHEN 'iam.account.create' THEN 'ACCOUNT'
+        WHEN 'iam.account.read' THEN 'ACCOUNT'
+        WHEN 'iam.account.set-status' THEN 'ACCOUNT'
+        WHEN 'iam.account.recover-root-credentials' THEN 'ACCOUNT'
+        WHEN 'iam.account.alias-set' THEN 'ACCOUNT'
+        WHEN 'iam.user.list' THEN 'ACCOUNT'
+        WHEN 'iam.user.set-status' THEN 'USER'
+        WHEN 'iam.user.reset-password' THEN 'USER'
+        WHEN 'iam.user.create' THEN 'ACCOUNT'
+        WHEN 'iam.user.read' THEN 'USER'
         WHEN 'iam.organization.create' THEN 'ORGANIZATION'
         WHEN 'iam.organization.read' THEN 'ORGANIZATION'
         WHEN 'iam.organization.set-status' THEN 'ORGANIZATION'
         WHEN 'iam.organization-administrator.recover' THEN 'PRINCIPAL'
         WHEN 'iam.account-alias.set' THEN 'ORGANIZATION'
         WHEN 'iam.principal.list' THEN 'ORGANIZATION'
-        WHEN 'iam.policy.list' THEN 'ORGANIZATION'
+        WHEN 'iam.policy.list' THEN 'ACCOUNT'
         WHEN 'iam.platform-policy.list' THEN 'INSTALLATION'
         WHEN 'iam.principal.set-status' THEN 'PRINCIPAL'
         WHEN 'iam.password.reset' THEN 'PRINCIPAL'
         WHEN 'iam.principal.create' THEN 'ORGANIZATION'
         WHEN 'iam.principal.read' THEN 'PRINCIPAL'
-        WHEN 'iam.policy-attachment.create' THEN 'PRINCIPAL'
+        WHEN 'iam.policy-attachment.create' THEN 'USER'
         WHEN 'iam.policy-attachment.revoke' THEN 'POLICY_ATTACHMENT'
-        WHEN 'iam.platform-policy-attachment.create' THEN 'PRINCIPAL'
+        WHEN 'iam.platform-policy-attachment.create' THEN 'USER'
         WHEN 'iam.platform-policy-attachment.revoke' THEN 'POLICY_ATTACHMENT'
         WHEN 'iam.session.revoke' THEN 'SESSION'
         WHEN 'paas.execution-pool.create' THEN 'EXECUTION_POOL'
@@ -1031,6 +1062,8 @@ PARALLEL SAFE
 SET search_path = pg_catalog, pg_temp
 AS $function$
     SELECT COALESCE(submitted_action IN (
+        'iam.account.create', 'iam.account.read',
+        'iam.account.set-status', 'iam.account.recover-root-credentials',
         'iam.organization.create', 'iam.organization.read',
         'iam.organization.set-status', 'iam.organization-administrator.recover',
         'iam.platform-policy-attachment.create', 'iam.platform-policy-attachment.revoke', 'iam.platform-policy.list',
@@ -1068,7 +1101,7 @@ BEGIN
     SELECT organization.id, principal.id, credential.password_hash,
            organization.status, principal.status,
            principal.must_change_password
-      FROM iam.organizations AS organization
+      FROM iam.accounts AS organization
       JOIN iam.principals AS principal
         ON principal.tenant_id = organization.id
        AND principal.id = indexed.principal_id
@@ -1111,7 +1144,7 @@ BEGIN
     effective_expires_at := effective_now + make_interval(secs => submitted_lifetime_seconds);
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
     SELECT credential.credential_version INTO password_version
-      FROM iam.organizations AS organization
+      FROM iam.accounts AS organization
       JOIN iam.principals AS principal ON principal.tenant_id = organization.id
       JOIN iam.user_credentials AS credential
         ON credential.tenant_id = principal.tenant_id AND credential.principal_id = principal.id
@@ -1218,7 +1251,7 @@ BEGIN
            session.revoked_at, session.verification_digest,
            iam.current_policy_snapshot(principal.tenant_id,principal.id)
       FROM iam.sessions AS session
-      JOIN iam.organizations AS organization ON organization.id = session.tenant_id
+      JOIN iam.accounts AS organization ON organization.id = session.tenant_id
       JOIN iam.principals AS principal
         ON principal.tenant_id = session.tenant_id
        AND principal.id = session.principal_id
@@ -1263,7 +1296,7 @@ BEGIN
     SELECT credential.tenant_id, credential.principal_id,
            credential.purpose, credential.verification_digest, receipt.installation_id
       FROM iam.service_credentials AS credential
-      JOIN iam.organizations AS organization ON organization.id = credential.tenant_id
+      JOIN iam.accounts AS organization ON organization.id = credential.tenant_id
       JOIN iam.principals AS principal
         ON principal.tenant_id = credential.tenant_id
        AND principal.id = credential.principal_id
@@ -1297,7 +1330,7 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
     RETURN QUERY
     SELECT iam.current_policy_snapshot(principal.tenant_id,principal.id)
-      FROM iam.organizations AS organization
+      FROM iam.accounts AS organization
       JOIN iam.principals AS principal
         ON principal.tenant_id = organization.id
      WHERE organization.id = submitted_tenant_id
@@ -1386,7 +1419,7 @@ BEGIN
 
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
     SELECT principal.principal_type INTO actor_type
-      FROM iam.organizations AS organization
+      FROM iam.accounts AS organization
       JOIN iam.principals AS principal
         ON principal.tenant_id = organization.id
      WHERE organization.id = submitted_tenant_id
@@ -1622,7 +1655,7 @@ BEGIN
     RETURN QUERY
     SELECT credential.password_hash
       FROM iam.user_credentials AS credential
-      JOIN iam.organizations AS organization ON organization.id = credential.tenant_id
+      JOIN iam.accounts AS organization ON organization.id = credential.tenant_id
       JOIN iam.principals AS principal
         ON principal.tenant_id = credential.tenant_id
        AND principal.id = credential.principal_id
@@ -1672,7 +1705,7 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
     -- All credential changes share the principal lock with reset/recovery and
     -- platform grants; the caller cannot select a session in the public API.
-    PERFORM 1 FROM iam.organizations AS organization
+    PERFORM 1 FROM iam.accounts AS organization
      WHERE organization.id=submitted_tenant_id AND organization.status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='password organization is unavailable';
@@ -1699,7 +1732,7 @@ BEGIN
     revoke_others := subject.must_change_password OR submitted_revoke_other_sessions;
     PERFORM iam.assert_audit_event(
         submitted_audit_event, submitted_tenant_id,
-        'iam.password.changed', 'PRINCIPAL', submitted_principal_id, 'SUCCEEDED'
+        'iam.user.password-changed', 'USER', submitted_principal_id, 'SUCCEEDED'
     );
     PERFORM iam.assert_user_audit_actor(
         submitted_tenant_id, submitted_principal_id, submitted_audit_event
@@ -1784,7 +1817,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'session revocation is invalid';
     END IF;
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
-    PERFORM 1 FROM iam.organizations AS organization
+    PERFORM 1 FROM iam.accounts AS organization
      WHERE organization.id=submitted_tenant_id AND organization.status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='session organization is unavailable';
@@ -1878,11 +1911,11 @@ BEGIN
     END IF;
     PERFORM iam.assert_allowed_decision(
         submitted_tenant_id, submitted_actor_principal_id,
-        submitted_decision_id, 'iam.principal.create', 'ORGANIZATION', submitted_tenant_id
+        submitted_decision_id, 'iam.user.create', 'ACCOUNT', submitted_tenant_id
     );
     PERFORM iam.assert_audit_event(
         submitted_audit_event, submitted_tenant_id,
-        'iam.principal.created', 'PRINCIPAL', submitted_principal_id, 'SUCCEEDED'
+        'iam.user.created', 'USER', submitted_principal_id, 'SUCCEEDED'
     );
     PERFORM iam.assert_user_audit_actor(
         submitted_tenant_id, submitted_actor_principal_id, submitted_audit_event
@@ -1972,7 +2005,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy directory scope is invalid';
     END IF;
     PERFORM set_config('matrix.iam_tenant_id',submitted_tenant_id,true);
-    IF NOT EXISTS(SELECT 1 FROM iam.principals AS p JOIN iam.organizations AS o ON o.id=p.tenant_id
+    IF NOT EXISTS(SELECT 1 FROM iam.principals AS p JOIN iam.accounts AS o ON o.id=p.tenant_id
         WHERE p.tenant_id=submitted_tenant_id AND p.id=submitted_actor_principal_id
           AND p.principal_type='USER' AND p.status='ACTIVE' AND NOT p.must_change_password AND o.status='ACTIVE') THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy directory actor is unavailable';
@@ -1986,7 +2019,7 @@ BEGIN
             'iam.platform-policy.list','INSTALLATION',installation);
     ELSE
         PERFORM iam.assert_allowed_decision(submitted_tenant_id,submitted_actor_principal_id,submitted_decision_id,
-            'iam.policy.list','ORGANIZATION',submitted_tenant_id);
+            'iam.policy.list','ACCOUNT',submitted_tenant_id);
     END IF;
     SELECT COALESCE(jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
         'apiVersion','iam.matrix.xiak.com/v1','kind','Policy','id',p.id,'management',p.management,
@@ -2027,7 +2060,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy attachment input is invalid';
     END IF;
     PERFORM set_config('matrix.iam_tenant_id',submitted_tenant_id,true);
-    PERFORM 1 FROM iam.organizations WHERE id=submitted_tenant_id AND status='ACTIVE' FOR SHARE;
+    PERFORM 1 FROM iam.accounts WHERE id=submitted_tenant_id AND status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable'; END IF;
     SELECT * INTO target FROM iam.principals
      WHERE tenant_id=submitted_tenant_id AND id=submitted_principal_id AND principal_type='USER' AND status='ACTIVE' FOR UPDATE;
@@ -2049,7 +2082,7 @@ BEGIN
     event_action := CASE policy.authority_scope WHEN 'INSTALLATION' THEN 'iam.platform-policy-attachment.created'
                     ELSE 'iam.policy-attachment.created' END;
     PERFORM iam.assert_allowed_decision(submitted_tenant_id,submitted_actor_principal_id,submitted_decision_id,
-        action_name,'PRINCIPAL',submitted_principal_id);
+        action_name,'USER',submitted_principal_id);
     PERFORM iam.assert_audit_event(submitted_audit_event,submitted_tenant_id,event_action,'POLICY_ATTACHMENT',submitted_attachment_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_actor_principal_id,submitted_audit_event);
     IF submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM submitted_decision_id THEN
@@ -2096,7 +2129,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='attachment revocation input is invalid';
     END IF;
     PERFORM set_config('matrix.iam_tenant_id',submitted_tenant_id,true);
-    PERFORM 1 FROM iam.organizations WHERE id=submitted_tenant_id AND status='ACTIVE' FOR SHARE;
+    PERFORM 1 FROM iam.accounts WHERE id=submitted_tenant_id AND status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable'; END IF;
     SELECT * INTO stored FROM iam.policy_attachments
      WHERE tenant_id=submitted_tenant_id AND id=submitted_attachment_id;
@@ -2114,7 +2147,7 @@ BEGIN
     PERFORM iam.assert_allowed_decision(submitted_tenant_id,submitted_actor_principal_id,submitted_decision_id,
         action_name,'POLICY_ATTACHMENT',submitted_attachment_id);
     IF stored.policy_id='system.account-administrator' AND EXISTS (
-        SELECT 1 FROM iam.login_index WHERE tenant_id=submitted_tenant_id AND principal_id=stored.principal_id AND account_owner
+        SELECT 1 FROM iam.account_roots WHERE account_id=submitted_tenant_id AND principal_id=stored.principal_id
     ) THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='primary authority is protected'; END IF;
     PERFORM iam.assert_audit_event(submitted_audit_event,submitted_tenant_id,event_action,'POLICY_ATTACHMENT',submitted_attachment_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_actor_principal_id,submitted_audit_event);

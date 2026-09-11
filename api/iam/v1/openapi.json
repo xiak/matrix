@@ -13,20 +13,120 @@
       }
     },
     "schemas": {
+      "Account": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "Account"
+          },
+          "loginAlias": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "maxLength": 63,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$",
+                "type": "string"
+              }
+            ]
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "rootIdentity": {
+            "$ref": "#/components/schemas/RootIdentity"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AccountStatus"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "createdAt",
+          "displayName",
+          "id",
+          "kind",
+          "resourceVersion",
+          "rootIdentity",
+          "status",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "AccountID": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ID"
+          }
+        ]
+      },
+      "AccountList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Account"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "const": "AccountList"
+          },
+          "nextAfter": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "AccountStatus": {
+        "enum": [
+          "ACTIVE",
+          "DISABLED"
+        ],
+        "type": "string"
+      },
       "Action": {
         "enum": [
-          "iam.organization.create",
-          "iam.organization.read",
-          "iam.organization.set-status",
-          "iam.organization-administrator.recover",
-          "iam.account-alias.set",
-          "iam.principal.list",
+          "iam.account.create",
+          "iam.account.read",
+          "iam.account.set-status",
+          "iam.account.recover-root-credentials",
+          "iam.account.alias-set",
+          "iam.user.list",
           "iam.policy.list",
           "iam.platform-policy.list",
-          "iam.principal.set-status",
-          "iam.password.reset",
-          "iam.principal.create",
-          "iam.principal.read",
+          "iam.user.set-status",
+          "iam.user.reset-password",
+          "iam.user.create",
+          "iam.user.read",
           "iam.policy-attachment.create",
           "iam.policy-attachment.revoke",
           "iam.session.revoke",
@@ -208,10 +308,10 @@
                 "properties": {
                   "action": {
                     "enum": [
-                      "iam.organization.create",
-                      "iam.organization.read",
-                      "iam.organization.set-status",
-                      "iam.organization-administrator.recover",
+                      "iam.account.create",
+                      "iam.account.read",
+                      "iam.account.set-status",
+                      "iam.account.recover-root-credentials",
                       "iam.platform-policy.list",
                       "iam.platform-policy-attachment.create",
                       "iam.platform-policy-attachment.revoke",
@@ -222,6 +322,10 @@
                       "paas.platform-operation.read",
                       "audit.platform-record.read",
                       "audit.platform-integrity.verify",
+                      "iam.organization.create",
+                      "iam.organization.read",
+                      "iam.organization.set-status",
+                      "iam.organization-administrator.recover",
                       "iam.platform-role-binding.put",
                       "iam.platform-role-binding.revoke"
                     ]
@@ -252,7 +356,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.organization.create"
+                  "const": "iam.account.create"
                 }
               },
               "required": [
@@ -264,7 +368,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "ORGANIZATION"
+                      "const": "ACCOUNT"
                     }
                   },
                   "required": [
@@ -278,7 +382,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.organization.read"
+                  "const": "iam.account.read"
                 }
               },
               "required": [
@@ -290,7 +394,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "ORGANIZATION"
+                      "const": "ACCOUNT"
                     }
                   },
                   "required": [
@@ -304,7 +408,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.organization.set-status"
+                  "const": "iam.account.set-status"
                 }
               },
               "required": [
@@ -316,7 +420,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "ORGANIZATION"
+                      "const": "ACCOUNT"
                     }
                   },
                   "required": [
@@ -330,7 +434,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.organization-administrator.recover"
+                  "const": "iam.account.recover-root-credentials"
                 }
               },
               "required": [
@@ -342,7 +446,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "PRINCIPAL"
+                      "const": "ACCOUNT"
                     }
                   },
                   "required": [
@@ -356,7 +460,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.account-alias.set"
+                  "const": "iam.account.alias-set"
                 }
               },
               "required": [
@@ -368,7 +472,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "ORGANIZATION"
+                      "const": "ACCOUNT"
                     }
                   },
                   "required": [
@@ -382,7 +486,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.principal.list"
+                  "const": "iam.user.list"
                 }
               },
               "required": [
@@ -394,7 +498,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "ORGANIZATION"
+                      "const": "ACCOUNT"
                     }
                   },
                   "required": [
@@ -420,7 +524,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "ORGANIZATION"
+                      "const": "ACCOUNT"
                     }
                   },
                   "required": [
@@ -460,7 +564,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.principal.set-status"
+                  "const": "iam.user.set-status"
                 }
               },
               "required": [
@@ -472,7 +576,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "PRINCIPAL"
+                      "const": "USER"
                     }
                   },
                   "required": [
@@ -486,7 +590,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.password.reset"
+                  "const": "iam.user.reset-password"
                 }
               },
               "required": [
@@ -498,7 +602,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "PRINCIPAL"
+                      "const": "USER"
                     }
                   },
                   "required": [
@@ -512,7 +616,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.principal.create"
+                  "const": "iam.user.create"
                 }
               },
               "required": [
@@ -524,7 +628,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "ORGANIZATION"
+                      "const": "ACCOUNT"
                     }
                   },
                   "required": [
@@ -538,7 +642,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.principal.read"
+                  "const": "iam.user.read"
                 }
               },
               "required": [
@@ -550,7 +654,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "PRINCIPAL"
+                      "const": "USER"
                     }
                   },
                   "required": [
@@ -576,7 +680,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "PRINCIPAL"
+                      "const": "USER"
                     }
                   },
                   "required": [
@@ -654,7 +758,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "PRINCIPAL"
+                      "const": "USER"
                     }
                   },
                   "required": [
@@ -1474,218 +1578,6 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.role-binding.put"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "properties": {
-                "resource": {
-                  "properties": {
-                    "kind": {
-                      "const": "PRINCIPAL"
-                    }
-                  },
-                  "required": [
-                    "kind"
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "iam.role-binding.revoke"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "properties": {
-                "resource": {
-                  "properties": {
-                    "kind": {
-                      "const": "ROLE_BINDING"
-                    }
-                  },
-                  "required": [
-                    "kind"
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "iam.platform-role-binding.put"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "properties": {
-                "resource": {
-                  "properties": {
-                    "kind": {
-                      "const": "PRINCIPAL"
-                    }
-                  },
-                  "required": [
-                    "kind"
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "iam.platform-role-binding.revoke"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "properties": {
-                "resource": {
-                  "properties": {
-                    "kind": {
-                      "const": "ROLE_BINDING"
-                    }
-                  },
-                  "required": [
-                    "kind"
-                  ]
-                }
-              }
-            }
-          }
-        ],
-        "properties": {
-          "action": {
-            "enum": [
-              "iam.organization.create",
-              "iam.organization.read",
-              "iam.organization.set-status",
-              "iam.organization-administrator.recover",
-              "iam.account-alias.set",
-              "iam.principal.list",
-              "iam.policy.list",
-              "iam.platform-policy.list",
-              "iam.principal.set-status",
-              "iam.password.reset",
-              "iam.principal.create",
-              "iam.principal.read",
-              "iam.policy-attachment.create",
-              "iam.policy-attachment.revoke",
-              "iam.session.revoke",
-              "iam.platform-policy-attachment.create",
-              "iam.platform-policy-attachment.revoke",
-              "paas.execution-pool.create",
-              "paas.execution-pool.read",
-              "paas.execution-target.register",
-              "paas.execution-target.read",
-              "paas.platform-operation.read",
-              "paas.application.create",
-              "paas.application.read",
-              "paas.configuration.create",
-              "paas.configuration.read",
-              "paas.configuration-revision.create",
-              "paas.configuration-revision.read",
-              "paas.application-revision.create",
-              "paas.application-revision.read",
-              "paas.deployment.create",
-              "paas.deployment.update",
-              "paas.deployment.rollback",
-              "paas.deployment.stop",
-              "paas.deployment.read",
-              "paas.operation.read",
-              "managedservice.offering.read",
-              "managedservice.region.read",
-              "managedservice.quota-entitlement.activate",
-              "managedservice.quota-entitlement.read",
-              "managedservice.service-installation.create",
-              "managedservice.service-installation.read",
-              "audit.record.read",
-              "audit.integrity.verify",
-              "audit.platform-record.read",
-              "audit.platform-integrity.verify",
-              "installation.verify",
-              "iam.role-binding.put",
-              "iam.role-binding.revoke",
-              "iam.platform-role-binding.put",
-              "iam.platform-role-binding.revoke"
-            ],
-            "type": "string"
-          },
-          "allowed": {
-            "type": "boolean"
-          },
-          "apiVersion": {
-            "const": "iam.matrix.xiak.com/v1"
-          },
-          "decidedAt": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "id": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "installationId": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "kind": {
-            "const": "AuthorizationDecision"
-          },
-          "reason": {
-            "$ref": "#/components/schemas/DecisionReason"
-          },
-          "requestId": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "resource": {
-            "$ref": "#/components/schemas/ResourceReference"
-          },
-          "subject": {
-            "$ref": "#/components/schemas/Subject"
-          },
-          "tenantId": {
-            "$ref": "#/components/schemas/ID"
-          }
-        },
-        "required": [
-          "action",
-          "allowed",
-          "apiVersion",
-          "decidedAt",
-          "id",
-          "kind",
-          "reason",
-          "requestId",
-          "resource"
-        ],
-        "type": "object"
-      },
-      "AuthorizationRequest": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "action": {
                   "const": "iam.organization.create"
                 }
               },
@@ -1842,58 +1734,6 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.policy.list"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "properties": {
-                "resource": {
-                  "properties": {
-                    "kind": {
-                      "const": "ORGANIZATION"
-                    }
-                  },
-                  "required": [
-                    "kind"
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
-                  "const": "iam.platform-policy.list"
-                }
-              },
-              "required": [
-                "action"
-              ]
-            },
-            "then": {
-              "properties": {
-                "resource": {
-                  "properties": {
-                    "kind": {
-                      "const": "INSTALLATION"
-                    }
-                  },
-                  "required": [
-                    "kind"
-                  ]
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "action": {
                   "const": "iam.principal.set-status"
                 }
               },
@@ -1998,7 +1838,7 @@
             "if": {
               "properties": {
                 "action": {
-                  "const": "iam.policy-attachment.create"
+                  "const": "iam.role-binding.put"
                 }
               },
               "required": [
@@ -2011,6 +1851,540 @@
                   "properties": {
                     "kind": {
                       "const": "PRINCIPAL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-binding.revoke"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE_BINDING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.platform-role-binding.put"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.platform-role-binding.revoke"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE_BINDING"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "action": {
+            "enum": [
+              "iam.account.create",
+              "iam.account.read",
+              "iam.account.set-status",
+              "iam.account.recover-root-credentials",
+              "iam.account.alias-set",
+              "iam.user.list",
+              "iam.policy.list",
+              "iam.platform-policy.list",
+              "iam.user.set-status",
+              "iam.user.reset-password",
+              "iam.user.create",
+              "iam.user.read",
+              "iam.policy-attachment.create",
+              "iam.policy-attachment.revoke",
+              "iam.session.revoke",
+              "iam.platform-policy-attachment.create",
+              "iam.platform-policy-attachment.revoke",
+              "paas.execution-pool.create",
+              "paas.execution-pool.read",
+              "paas.execution-target.register",
+              "paas.execution-target.read",
+              "paas.platform-operation.read",
+              "paas.application.create",
+              "paas.application.read",
+              "paas.configuration.create",
+              "paas.configuration.read",
+              "paas.configuration-revision.create",
+              "paas.configuration-revision.read",
+              "paas.application-revision.create",
+              "paas.application-revision.read",
+              "paas.deployment.create",
+              "paas.deployment.update",
+              "paas.deployment.rollback",
+              "paas.deployment.stop",
+              "paas.deployment.read",
+              "paas.operation.read",
+              "managedservice.offering.read",
+              "managedservice.region.read",
+              "managedservice.quota-entitlement.activate",
+              "managedservice.quota-entitlement.read",
+              "managedservice.service-installation.create",
+              "managedservice.service-installation.read",
+              "audit.record.read",
+              "audit.integrity.verify",
+              "audit.platform-record.read",
+              "audit.platform-integrity.verify",
+              "installation.verify",
+              "iam.organization.create",
+              "iam.organization.read",
+              "iam.organization.set-status",
+              "iam.organization-administrator.recover",
+              "iam.account-alias.set",
+              "iam.principal.list",
+              "iam.principal.set-status",
+              "iam.password.reset",
+              "iam.principal.create",
+              "iam.principal.read",
+              "iam.role-binding.put",
+              "iam.role-binding.revoke",
+              "iam.platform-role-binding.put",
+              "iam.platform-role-binding.revoke"
+            ],
+            "type": "string"
+          },
+          "allowed": {
+            "type": "boolean"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "decidedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "AuthorizationDecision"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/DecisionReason"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceReference"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/Subject"
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "action",
+          "allowed",
+          "apiVersion",
+          "decidedAt",
+          "id",
+          "kind",
+          "reason",
+          "requestId",
+          "resource"
+        ],
+        "type": "object"
+      },
+      "AuthorizationRequest": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.account.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.account.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.account.set-status"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.account.recover-root-credentials"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.account.alias-set"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.user.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.platform-policy.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "INSTALLATION"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.user.set-status"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "USER"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.user.reset-password"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "USER"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.user.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.user.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "USER"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy-attachment.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "USER"
                     }
                   },
                   "required": [
@@ -2088,7 +2462,7 @@
                 "resource": {
                   "properties": {
                     "kind": {
-                      "const": "PRINCIPAL"
+                      "const": "USER"
                     }
                   },
                   "required": [
@@ -3166,18 +3540,9 @@
         ],
         "type": "object"
       },
-      "CreateOrganizationRequest": {
+      "CreateAccountRequest": {
         "additionalProperties": false,
         "properties": {
-          "administratorDisplayName": {
-            "type": "string"
-          },
-          "administratorLoginName": {
-            "maxLength": 64,
-            "minLength": 3,
-            "pattern": "^[a-z][a-z0-9._-]{2,63}$",
-            "type": "string"
-          },
           "displayName": {
             "type": "string"
           },
@@ -3190,15 +3555,24 @@
           },
           "requestId": {
             "$ref": "#/components/schemas/ID"
+          },
+          "rootDisplayName": {
+            "type": "string"
+          },
+          "rootLoginName": {
+            "maxLength": 64,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9._-]{2,63}$",
+            "type": "string"
           }
         },
         "required": [
-          "administratorDisplayName",
-          "administratorLoginName",
           "displayName",
           "id",
           "initialPassword",
-          "requestId"
+          "requestId",
+          "rootDisplayName",
+          "rootLoginName"
         ],
         "type": "object"
       },
@@ -3273,12 +3647,12 @@
           {
             "if": {
               "properties": {
-                "canCreateOrganizations": {
+                "canCreateAccounts": {
                   "const": true
                 }
               },
               "required": [
-                "canCreateOrganizations"
+                "canCreateAccounts"
               ]
             },
             "then": {
@@ -3295,7 +3669,7 @@
                     ]
                   }
                 },
-                "principal": {
+                "user": {
                   "properties": {
                     "mustChangePassword": {
                       "const": false
@@ -3308,13 +3682,16 @@
         ],
         "properties": {
           "account": {
-            "$ref": "#/components/schemas/OrganizationAccount"
+            "$ref": "#/components/schemas/Account"
           },
           "apiVersion": {
             "const": "iam.matrix.xiak.com/v1"
           },
-          "canCreateOrganizations": {
+          "canCreateAccounts": {
             "type": "boolean"
+          },
+          "identityKind": {
+            "$ref": "#/components/schemas/IdentityKind"
           },
           "kind": {
             "const": "CurrentIdentity"
@@ -3342,17 +3719,18 @@
             "maxItems": 256,
             "type": "array"
           },
-          "principal": {
-            "$ref": "#/components/schemas/Principal"
+          "user": {
+            "$ref": "#/components/schemas/User"
           }
         },
         "required": [
           "account",
           "apiVersion",
-          "canCreateOrganizations",
+          "canCreateAccounts",
+          "identityKind",
           "kind",
           "policyAttachments",
-          "principal"
+          "user"
         ],
         "type": "object"
       },
@@ -3377,6 +3755,13 @@
         "maxLength": 128,
         "minLength": 1,
         "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+        "type": "string"
+      },
+      "IdentityKind": {
+        "enum": [
+          "ROOT_IDENTITY",
+          "USER"
+        ],
         "type": "string"
       },
       "InitialAdministrator": {
@@ -3491,125 +3876,6 @@
           "revokedAt"
         ],
         "type": "object"
-      },
-      "Organization": {
-        "additionalProperties": false,
-        "properties": {
-          "apiVersion": {
-            "const": "iam.matrix.xiak.com/v1"
-          },
-          "createdAt": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "displayName": {
-            "type": "string"
-          },
-          "id": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "kind": {
-            "const": "Organization"
-          },
-          "resourceVersion": {
-            "maximum": 9007199254740991,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "status": {
-            "$ref": "#/components/schemas/OrganizationStatus"
-          },
-          "updatedAt": {
-            "$ref": "#/components/schemas/Timestamp"
-          }
-        },
-        "required": [
-          "apiVersion",
-          "createdAt",
-          "displayName",
-          "id",
-          "kind",
-          "resourceVersion",
-          "status",
-          "updatedAt"
-        ],
-        "type": "object"
-      },
-      "OrganizationAccount": {
-        "additionalProperties": false,
-        "properties": {
-          "loginAlias": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "maxLength": 63,
-                "minLength": 3,
-                "pattern": "^[a-z][a-z0-9-]{1,61}[a-z0-9]$",
-                "type": "string"
-              }
-            ]
-          },
-          "organization": {
-            "$ref": "#/components/schemas/Organization"
-          },
-          "primaryLoginName": {
-            "maxLength": 64,
-            "minLength": 3,
-            "pattern": "^[a-z][a-z0-9._-]{2,63}$",
-            "type": "string"
-          },
-          "primaryPrincipalId": {
-            "$ref": "#/components/schemas/ID"
-          }
-        },
-        "required": [
-          "organization",
-          "primaryLoginName",
-          "primaryPrincipalId"
-        ],
-        "type": "object"
-      },
-      "OrganizationAccountList": {
-        "additionalProperties": false,
-        "properties": {
-          "apiVersion": {
-            "const": "iam.matrix.xiak.com/v1"
-          },
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/OrganizationAccount"
-            },
-            "maxItems": 100,
-            "type": "array"
-          },
-          "kind": {
-            "const": "OrganizationAccountList"
-          },
-          "nextAfter": {
-            "$ref": "#/components/schemas/ID"
-          }
-        },
-        "required": [
-          "apiVersion",
-          "items",
-          "kind"
-        ],
-        "type": "object"
-      },
-      "OrganizationID": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/ID"
-          }
-        ]
-      },
-      "OrganizationStatus": {
-        "enum": [
-          "ACTIVE",
-          "DISABLED"
-        ],
-        "type": "string"
       },
       "Policy": {
         "additionalProperties": false,
@@ -3934,171 +4200,12 @@
           }
         ]
       },
-      "Principal": {
-        "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "type": {
-                  "const": "USER"
-                }
-              },
-              "required": [
-                "type"
-              ]
-            },
-            "then": {
-              "required": [
-                "loginName"
-              ]
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "type": {
-                  "const": "SERVICE_ACCOUNT"
-                }
-              },
-              "required": [
-                "type"
-              ]
-            },
-            "then": {
-              "properties": {
-                "loginName": false,
-                "mustChangePassword": false
-              }
-            }
-          }
-        ],
-        "properties": {
-          "apiVersion": {
-            "const": "iam.matrix.xiak.com/v1"
-          },
-          "createdAt": {
-            "$ref": "#/components/schemas/Timestamp"
-          },
-          "displayName": {
-            "type": "string"
-          },
-          "id": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "kind": {
-            "const": "Principal"
-          },
-          "loginName": {
-            "maxLength": 64,
-            "minLength": 3,
-            "pattern": "^[a-z][a-z0-9._-]{2,63}$",
-            "type": "string"
-          },
-          "mustChangePassword": {
-            "type": "boolean"
-          },
-          "organizationId": {
-            "$ref": "#/components/schemas/ID"
-          },
-          "resourceVersion": {
-            "maximum": 9007199254740991,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "status": {
-            "$ref": "#/components/schemas/PrincipalStatus"
-          },
-          "type": {
-            "$ref": "#/components/schemas/PrincipalType"
-          },
-          "updatedAt": {
-            "$ref": "#/components/schemas/Timestamp"
-          }
-        },
-        "required": [
-          "apiVersion",
-          "createdAt",
-          "displayName",
-          "id",
-          "kind",
-          "organizationId",
-          "resourceVersion",
-          "status",
-          "type",
-          "updatedAt"
-        ],
-        "type": "object"
-      },
-      "PrincipalAccess": {
-        "additionalProperties": false,
-        "properties": {
-          "policyAttachments": {
-            "items": {
-              "allOf": [
-                {
-                  "$ref": "#/components/schemas/PolicyAttachment"
-                },
-                {
-                  "properties": {
-                    "revokedAt": false,
-                    "target": {
-                      "properties": {
-                        "kind": {
-                          "const": "USER"
-                        }
-                      }
-                    }
-                  }
-                }
-              ]
-            },
-            "maxItems": 256,
-            "type": "array"
-          },
-          "principal": {
-            "$ref": "#/components/schemas/Principal"
-          }
-        },
-        "required": [
-          "policyAttachments",
-          "principal"
-        ],
-        "type": "object"
-      },
       "PrincipalID": {
         "allOf": [
           {
             "$ref": "#/components/schemas/ID"
           }
         ]
-      },
-      "PrincipalList": {
-        "additionalProperties": false,
-        "properties": {
-          "apiVersion": {
-            "const": "iam.matrix.xiak.com/v1"
-          },
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/PrincipalAccess"
-            },
-            "maxItems": 100,
-            "type": "array"
-          },
-          "kind": {
-            "const": "PrincipalList"
-          },
-          "nextAfter": {
-            "$ref": "#/components/schemas/ID"
-          }
-        },
-        "required": [
-          "apiVersion",
-          "items",
-          "kind"
-        ],
-        "type": "object"
       },
       "PrincipalStatus": {
         "enum": [
@@ -4184,15 +4291,12 @@
         ],
         "type": "string"
       },
-      "RecoverOrganizationAdministratorRequest": {
+      "RecoverRootCredentialsRequest": {
         "additionalProperties": false,
         "properties": {
           "initialPassword": {
             "$ref": "#/components/schemas/Secret",
             "writeOnly": true
-          },
-          "principalId": {
-            "$ref": "#/components/schemas/ID"
           },
           "requestId": {
             "$ref": "#/components/schemas/ID"
@@ -4205,7 +4309,6 @@
         },
         "required": [
           "initialPassword",
-          "principalId",
           "requestId",
           "resourceVersion"
         ],
@@ -4248,6 +4351,8 @@
       },
       "ResourceKind": {
         "enum": [
+          "ACCOUNT",
+          "USER",
           "ORGANIZATION",
           "PRINCIPAL",
           "ROLE_BINDING",
@@ -4353,6 +4458,25 @@
             "$ref": "#/components/schemas/ID"
           }
         ]
+      },
+      "RootIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "loginName": {
+            "maxLength": 64,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9._-]{2,63}$",
+            "type": "string"
+          },
+          "principalId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "loginName",
+          "principalId"
+        ],
+        "type": "object"
       },
       "Secret": {
         "maxLength": 16384,
@@ -4508,7 +4632,7 @@
         ],
         "type": "object"
       },
-      "SetOrganizationStatusRequest": {
+      "SetAccountStatusRequest": {
         "additionalProperties": false,
         "properties": {
           "requestId": {
@@ -4520,7 +4644,7 @@
             "type": "integer"
           },
           "status": {
-            "$ref": "#/components/schemas/OrganizationStatus"
+            "$ref": "#/components/schemas/AccountStatus"
           }
         },
         "required": [
@@ -4530,7 +4654,7 @@
         ],
         "type": "object"
       },
-      "SetPrincipalStatusRequest": {
+      "SetUserStatusRequest": {
         "additionalProperties": false,
         "properties": {
           "requestId": {
@@ -4572,6 +4696,125 @@
         "format": "date-time",
         "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$",
         "type": "string"
+      },
+      "User": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "User"
+          },
+          "loginName": {
+            "maxLength": 64,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9._-]{2,63}$",
+            "type": "string"
+          },
+          "mustChangePassword": {
+            "type": "boolean"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PrincipalStatus"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "createdAt",
+          "displayName",
+          "id",
+          "kind",
+          "loginName",
+          "resourceVersion",
+          "status",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "UserAccess": {
+        "additionalProperties": false,
+        "properties": {
+          "policyAttachments": {
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/PolicyAttachment"
+                },
+                {
+                  "properties": {
+                    "revokedAt": false,
+                    "target": {
+                      "properties": {
+                        "kind": {
+                          "const": "USER"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "user": {
+            "$ref": "#/components/schemas/User"
+          }
+        },
+        "required": [
+          "policyAttachments",
+          "user"
+        ],
+        "type": "object"
+      },
+      "UserList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UserAccess"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "const": "UserList"
+          },
+          "nextAfter": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "items",
+          "kind"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -4628,6 +4871,334 @@
         },
         "security": [],
         "summary": "Get IAM readiness"
+      }
+    },
+    "/v1/account:alias": {
+      "post": {
+        "operationId": "setAccountAlias",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAccountAliasRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Set the current account login alias"
+      }
+    },
+    "/v1/accounts": {
+      "get": {
+        "operationId": "listAccounts",
+        "parameters": [
+          {
+            "description": "Exclusive user or account ID boundary within the authorized directory.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List accounts as a platform operator"
+      },
+      "post": {
+        "operationId": "createAccount",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create an account and its immutable root identity"
+      }
+    },
+    "/v1/accounts/{accountId}": {
+      "get": {
+        "operationId": "getAccount",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read account metadata as a platform operator"
+      }
+    },
+    "/v1/accounts/{accountId}:recover-root-credentials": {
+      "post": {
+        "operationId": "recoverRootCredentials",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoverRootCredentialsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Recover the account's immutable root identity without transferring ownership"
+      }
+    },
+    "/v1/accounts/{accountId}:set-status": {
+      "post": {
+        "operationId": "setAccountStatus",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAccountStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Suspend or restore account access without stopping workloads"
       }
     },
     "/v1/audit-producer:resolve": {
@@ -5042,334 +5613,6 @@
         "summary": "Authorize the credential-bound installation verifier"
       }
     },
-    "/v1/organization:alias": {
-      "post": {
-        "operationId": "setAccountAlias",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetAccountAliasRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationAccount"
-                }
-              }
-            },
-            "description": "Command completed."
-          },
-          "400": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "401": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "409": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "413": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "415": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "422": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProblemResponse"
-          }
-        },
-        "summary": "Set the current account login alias"
-      }
-    },
-    "/v1/organizations": {
-      "get": {
-        "operationId": "listOrganizations",
-        "parameters": [
-          {
-            "description": "Exclusive principal or organization ID boundary within the authorized directory.",
-            "in": "query",
-            "name": "after",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/ID"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationAccountList"
-                }
-              }
-            },
-            "description": "Current authority state."
-          },
-          "401": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProblemResponse"
-          }
-        },
-        "summary": "List tenant accounts as a platform operator"
-      },
-      "post": {
-        "operationId": "createOrganization",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateOrganizationRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationAccount"
-                }
-              }
-            },
-            "description": "Command completed."
-          },
-          "400": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "401": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "409": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "413": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "415": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "422": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProblemResponse"
-          }
-        },
-        "summary": "Open a tenant account"
-      }
-    },
-    "/v1/organizations/{organizationId}": {
-      "get": {
-        "operationId": "getOrganization",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "organizationId",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationAccount"
-                }
-              }
-            },
-            "description": "Current authority state."
-          },
-          "401": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProblemResponse"
-          }
-        },
-        "summary": "Read tenant account metadata as a platform operator"
-      }
-    },
-    "/v1/organizations/{organizationId}:recover-administrator": {
-      "post": {
-        "operationId": "recoverOrganizationAdministrator",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "organizationId",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RecoverOrganizationAdministratorRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationAccount"
-                }
-              }
-            },
-            "description": "Command completed."
-          },
-          "400": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "401": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "409": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "413": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "415": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "422": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProblemResponse"
-          }
-        },
-        "summary": "Recover the original primary user without transferring ownership"
-      }
-    },
-    "/v1/organizations/{organizationId}:set-status": {
-      "post": {
-        "operationId": "setOrganizationStatus",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "organizationId",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetOrganizationStatusRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OrganizationAccount"
-                }
-              }
-            },
-            "description": "Command completed."
-          },
-          "400": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "401": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "409": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "413": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "415": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "422": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProblemResponse"
-          }
-        },
-        "summary": "Suspend or restore tenant access without stopping workloads"
-      }
-    },
     "/v1/platform-policies": {
       "get": {
         "operationId": "listPlatformPolicies",
@@ -5553,236 +5796,6 @@
         "summary": "Revoke a policy attachment"
       }
     },
-    "/v1/principals": {
-      "get": {
-        "operationId": "listPrincipals",
-        "parameters": [
-          {
-            "description": "Exclusive principal or organization ID boundary within the authorized directory.",
-            "in": "query",
-            "name": "after",
-            "required": false,
-            "schema": {
-              "$ref": "#/components/schemas/ID"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PrincipalList"
-                }
-              }
-            },
-            "description": "Current authority state."
-          },
-          "401": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProblemResponse"
-          }
-        },
-        "summary": "List the current tenant users and policy attachments"
-      },
-      "post": {
-        "operationId": "createUser",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateUserRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Principal"
-                }
-              }
-            },
-            "description": "Command completed."
-          },
-          "400": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "401": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "409": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "413": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "415": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "422": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProblemResponse"
-          }
-        },
-        "summary": "Create an organization user"
-      }
-    },
-    "/v1/principals/{principalId}:reset-password": {
-      "post": {
-        "operationId": "resetUserPassword",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "principalId",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ResetUserPasswordRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Principal"
-                }
-              }
-            },
-            "description": "Command completed."
-          },
-          "400": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "401": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "409": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "413": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "415": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "422": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProblemResponse"
-          }
-        },
-        "summary": "Reset a subaccount password and revoke its sessions"
-      }
-    },
-    "/v1/principals/{principalId}:set-status": {
-      "post": {
-        "operationId": "setPrincipalStatus",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "principalId",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetPrincipalStatusRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Principal"
-                }
-              }
-            },
-            "description": "Command completed."
-          },
-          "400": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "401": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "403": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "409": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "413": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "415": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "422": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "500": {
-            "$ref": "#/components/responses/ProblemResponse"
-          },
-          "503": {
-            "$ref": "#/components/responses/ProblemResponse"
-          }
-        },
-        "summary": "Disable or enable a subaccount"
-      }
-    },
     "/v1/service-identity": {
       "get": {
         "operationId": "getServiceIdentity",
@@ -5883,7 +5896,237 @@
             "$ref": "#/components/responses/ProblemResponse"
           }
         },
-        "summary": "Revoke an organization session"
+        "summary": "Revoke an account session"
+      }
+    },
+    "/v1/users": {
+      "get": {
+        "operationId": "listUsers",
+        "parameters": [
+          {
+            "description": "Exclusive user or account ID boundary within the authorized directory.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List manageable users and their bounded direct policy attachments in the current account"
+      },
+      "post": {
+        "operationId": "createUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create an account user"
+      }
+    },
+    "/v1/users/{userId}:reset-password": {
+      "post": {
+        "operationId": "resetUserPassword",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetUserPasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Reset an account user password and revoke its sessions"
+      }
+    },
+    "/v1/users/{userId}:set-status": {
+      "post": {
+        "operationId": "setUserStatus",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetUserStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Disable or enable an account user"
       }
     }
   },

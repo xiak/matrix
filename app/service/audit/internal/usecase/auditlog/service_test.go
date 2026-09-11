@@ -105,7 +105,7 @@ func TestAuditUsecasesBindIAMAndAuditEveryAuthorizedRead(t *testing.T) {
 			InstallationID: "installation-example",
 			APIVersion:     iamv1.APIVersion,
 			Kind:           "ServiceIdentity",
-			OrganizationID: "organization-example",
+			AccountID:      "organization-example",
 			PrincipalID:    "service-iam",
 			Purpose:        iamv1.ServiceIAM,
 		},
@@ -219,7 +219,7 @@ func TestAuditUsecasesFailClosedBeforeMutation(t *testing.T) {
 			InstallationID: "installation-example",
 			APIVersion:     iamv1.APIVersion,
 			Kind:           "ServiceIdentity",
-			OrganizationID: "organization-example",
+			AccountID:      "organization-example",
 			PrincipalID:    "service-iam",
 			Purpose:        iamv1.ServiceIAM,
 		},
@@ -323,7 +323,7 @@ func TestPlatformAuditUsesInstallationAuthorityAndCannotReadTenantChain(t *testi
 	transaction := newAuditTransaction()
 	iam := &auditIAM{now: transaction.now, identity: iamv1.ServiceIdentity{
 		APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
-		InstallationID: "organization-example", OrganizationID: "organization-example",
+		InstallationID: "organization-example", AccountID: "organization-example",
 		PrincipalID: "service-paas", Purpose: iamv1.ServicePaaS,
 	}}
 	nextID := 0

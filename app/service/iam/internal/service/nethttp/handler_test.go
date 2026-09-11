@@ -242,7 +242,7 @@ func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
 			body: `{"currentPassword":"Initial-Admin-Password-49!","newPassword":"Changed-Admin-Password-73!","requestId":"request-password"}`,
 		},
 		{
-			name: "create user", target: "/v1/principals", status: http.StatusCreated,
+			name: "create user", target: "/v1/users", status: http.StatusCreated,
 			body: `{"loginName":"developer","displayName":"Developer","initialPassword":"Initial-Developer-Password-84!","requestId":"request-user"}`,
 		},
 		{
@@ -277,7 +277,7 @@ func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
 
 	missingCredential := httptest.NewRequest(
 		http.MethodPost,
-		"/v1/principals",
+		"/v1/users",
 		strings.NewReader(`{"loginName":"developer","displayName":"Developer","initialPassword":"Initial-Developer-Password-84!","requestId":"request-user"}`),
 	)
 	missingCredential.Header.Set("Content-Type", "application/json")
@@ -303,27 +303,36 @@ func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
 
 func TestIAMAccountRoutesRejectSelectorsAndMissingCredentialsBeforeWorkflow(t *testing.T) {
 	handler := newTestHandler(t, newHTTPWorkflow(t))
-	for _, target := range []string{"/v1/auth/me", "/v1/principals", "/v1/organizations", "/v1/organizations/tenant-a"} {
+	for _, target := range []string{"/v1/auth/me", "/v1/users", "/v1/accounts", "/v1/accounts/account-a"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
 		if response.Code != http.StatusUnauthorized {
 			t.Errorf("anonymous %s status=%d", target, response.Code)
 		}
 	}
-	for _, target := range []string{"/v1/organization:alias", "/v1/organizations", "/v1/principals/user-a:set-status", "/v1/principals/user-a:reset-password", "/v1/organizations/tenant-a:set-status", "/v1/organizations/tenant-a:recover-administrator"} {
+	for _, target := range []string{"/v1/account:alias", "/v1/accounts", "/v1/users/user-a:set-status", "/v1/users/user-a:reset-password", "/v1/accounts/account-a:set-status", "/v1/accounts/account-a:recover-root-credentials"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, target, strings.NewReader(`{}`)))
 		if response.Code != http.StatusUnauthorized {
 			t.Errorf("anonymous %s status=%d", target, response.Code)
 		}
 	}
-	for _, target := range []string{"/v1/auth/me?tenantId=forged", "/v1/principals?tenantId=forged", "/v1/organizations/tenant-a?tenantId=forged", "/v1/organizations?after=a&after=b", "/v1/principals?after=", "/v1/principals?after=%2f", "/v1/principals?after=" + strings.Repeat("a", 513)} {
+	for _, target := range []string{"/v1/auth/me?tenantId=forged", "/v1/users?tenantId=forged", "/v1/accounts/account-a?tenantId=forged", "/v1/accounts?after=a&after=b", "/v1/users?after=", "/v1/users?after=%2f", "/v1/users?after=" + strings.Repeat("a", 513)} {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		request.Header.Set("Authorization", "Bearer only-test-credential")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
 		if response.Code != http.StatusBadRequest {
 			t.Errorf("forged selector %s status=%d", target, response.Code)
+		}
+	}
+	for _, target := range []string{"/v1/organizations", "/v1/organizations/account-a", "/v1/organization:alias", "/v1/principals", "/v1/principals/user-a:set-status"} {
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		request.Header.Set("Authorization", "Bearer only-test-credential")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusNotFound {
+			t.Errorf("removed route %s status=%d", target, response.Code)
 		}
 	}
 }
@@ -378,7 +387,7 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 			Kind:           "BootstrapStatus",
 			State:          iamv1.BootstrapReady,
 			InstallationID: "installation-example",
-			OrganizationID: "organization-example",
+			AccountID:      "organization-example",
 			ContentDigest:  "sha256:" + strings.Repeat("1", 64),
 			AppliedAt:      &appliedAt,
 		},
@@ -386,20 +395,20 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 			InstallationID: "installation-example",
 			APIVersion:     iamv1.APIVersion,
 			Kind:           "ServiceIdentity",
-			OrganizationID: "organization-example",
+			AccountID:      "organization-example",
 			PrincipalID:    "service-paas",
 			Purpose:        iamv1.ServicePaaS,
 		},
 		login: iamv1.LoginResponse{
 			Session: iamv1.Session{
-				APIVersion:     iamv1.APIVersion,
-				Kind:           "Session",
-				ID:             "session-example",
-				OrganizationID: "organization-example",
-				PrincipalID:    "principal-admin",
-				Status:         iamv1.SessionActive,
-				IssuedAt:       now,
-				ExpiresAt:      now.Add(time.Hour),
+				APIVersion:  iamv1.APIVersion,
+				Kind:        "Session",
+				ID:          "session-example",
+				AccountID:   "organization-example",
+				PrincipalID: "principal-admin",
+				Status:      iamv1.SessionActive,
+				IssuedAt:    now,
+				ExpiresAt:   now.Add(time.Hour),
 			},
 			Credential:         credential,
 			MustChangePassword: true,
@@ -482,11 +491,11 @@ func (workflow *httpWorkflow) CreateUser(
 	context.Context,
 	iamv1.Secret,
 	iamv1.CreateUserRequest,
-) (iamv1.Principal, error) {
+) (iamv1.User, error) {
 	now := workflow.login.Session.IssuedAt
-	return iamv1.Principal{
-		APIVersion: iamv1.APIVersion, Kind: "Principal", ID: "principal-user",
-		OrganizationID: "organization-example", Type: iamv1.PrincipalUser,
+	return iamv1.User{
+		APIVersion: iamv1.APIVersion, Kind: "User", ID: "principal-user",
+		AccountID: "organization-example",
 		LoginName: "developer", DisplayName: "Developer", Status: iamv1.PrincipalActive,
 		MustChangePassword: true, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
 	}, nil

@@ -47,9 +47,9 @@ func TestRetiredActionsAreHistoricalDecisionsNotRequestsOrPolicies(t *testing.T)
 		{ActionIAMRoleBindingRevoke, ResourceRoleBinding, AuthorityScopeTenant, false},
 		{ActionIAMPlatformRoleBindingPut, ResourcePrincipal, AuthorityScopeInstallation, false},
 		{ActionIAMPlatformRoleBindingRevoke, ResourceRoleBinding, AuthorityScopeInstallation, false},
-		{ActionIAMPolicyAttachmentCreate, ResourcePrincipal, AuthorityScopeTenant, true},
+		{ActionIAMPolicyAttachmentCreate, ResourceUser, AuthorityScopeTenant, true},
 		{ActionIAMPolicyAttachmentRevoke, ResourcePolicyAttachment, AuthorityScopeTenant, true},
-		{ActionIAMPlatformPolicyAttachmentCreate, ResourcePrincipal, AuthorityScopeInstallation, true},
+		{ActionIAMPlatformPolicyAttachmentCreate, ResourceUser, AuthorityScopeInstallation, true},
 		{ActionIAMPlatformPolicyAttachmentRevoke, ResourcePolicyAttachment, AuthorityScopeInstallation, true},
 	} {
 		t.Run(string(test.action), func(t *testing.T) {
@@ -111,13 +111,13 @@ func TestRetiredActionsAreHistoricalDecisionsNotRequestsOrPolicies(t *testing.T)
 	}
 }
 
-func TestPrincipalDirectoryUsesBoundedUserPolicyAttachments(t *testing.T) {
+func TestUserDirectoryUsesBoundedTenantPolicyAttachments(t *testing.T) {
 	document := loadIAMOpenAPI(t)
-	schema := compileIAMOpenAPISchema(t, document, "PrincipalAccess")
-	principal := decodeIAMExample[Principal](t, "examples/principal.json")
+	schema := compileIAMOpenAPISchema(t, document, "UserAccess")
+	user := decodeIAMExample[User](t, "examples/user.json")
 	attachment := PolicyAttachment{APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "directory-attachment",
-		AccountID: principal.OrganizationID, Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: string(principal.ID)},
-		PolicyID: SystemPolicyPaaSViewer, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: principal.CreatedAt, UpdatedAt: principal.CreatedAt}
+		AccountID: user.AccountID, Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: string(user.ID)},
+		PolicyID: SystemPolicyPaaSViewer, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: user.CreatedAt, UpdatedAt: user.CreatedAt}
 	for _, test := range []struct {
 		name   string
 		mutate func(map[string]any)
@@ -145,7 +145,7 @@ func TestPrincipalDirectoryUsesBoundedUserPolicyAttachments(t *testing.T) {
 		}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			encoded, err := json.Marshal(PrincipalAccess{Principal: principal, PolicyAttachments: []PolicyAttachment{attachment}})
+			encoded, err := json.Marshal(UserAccess{User: user, PolicyAttachments: []PolicyAttachment{attachment}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -373,16 +373,16 @@ func TestIAMPasswordChangePolicyHasNoCurrentSessionSelector(t *testing.T) {
 	}
 }
 
-func TestIAMTenantLifecycleRequestsBindVersionAndOriginalPrimary(t *testing.T) {
+func TestIAMAccountLifecycleRequestsBindVersionAndDeriveRoot(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	status := map[string]any{"status": "DISABLED", "resourceVersion": float64(1), "requestId": "request-status"}
-	recovery := map[string]any{"principalId": "primary-original", "initialPassword": "Recovery-Temporary-Password-79!", "resourceVersion": float64(1), "requestId": "request-recovery"}
-	for name, instance := range map[string]map[string]any{"SetOrganizationStatusRequest": status, "RecoverOrganizationAdministratorRequest": recovery} {
+	recovery := map[string]any{"initialPassword": "Recovery-Temporary-Password-79!", "resourceVersion": float64(1), "requestId": "request-recovery"}
+	for name, instance := range map[string]map[string]any{"SetAccountStatusRequest": status, "RecoverRootCredentialsRequest": recovery} {
 		schema := compileIAMOpenAPISchema(t, document, name)
 		if err := schema.Validate(instance); err != nil {
 			t.Fatalf("valid %s: %v", name, err)
 		}
-		for _, selector := range []string{"tenantId", "installationId", "organizationId", "newPrimaryId", "role"} {
+		for _, selector := range []string{"tenantId", "installationId", "organizationId", "principalId", "newRootId", "role"} {
 			instance[selector] = "forged"
 			if schema.Validate(instance) == nil {
 				t.Fatalf("%s accepted selector %s", name, selector)
@@ -396,20 +396,16 @@ func TestIAMTenantLifecycleRequestsBindVersionAndOriginalPrimary(t *testing.T) {
 		instance["resourceVersion"] = float64(1)
 	}
 	encoded, _ := json.Marshal(recovery)
-	var request RecoverOrganizationAdministratorRequest
-	if err := DecodeRequest(bytes.NewReader(encoded), &request); err != nil || ValidateRecoverOrganizationAdministratorRequest(request) != nil {
-		t.Fatal("valid primary recovery request rejected")
+	var request RecoverRootCredentialsRequest
+	if err := DecodeRequest(bytes.NewReader(encoded), &request); err != nil || ValidateRecoverRootCredentialsRequest(request) != nil {
+		t.Fatal("valid root recovery request rejected")
 	}
 	if _, err := json.Marshal(request); !errors.Is(err, ErrSecretSerialization) {
 		t.Fatal("primary recovery serialized its temporary credential")
 	}
-	request.PrincipalID = ""
-	if ValidateRecoverOrganizationAdministratorRequest(request) == nil {
-		t.Fatal("recovery accepted missing original principal")
-	}
-	delete(recovery, "principalId")
-	if compileIAMOpenAPISchema(t, document, "RecoverOrganizationAdministratorRequest").Validate(recovery) == nil {
-		t.Fatal("recovery schema accepted missing original principal")
+	request.ResourceVersion = 0
+	if ValidateRecoverRootCredentialsRequest(request) == nil {
+		t.Fatal("recovery accepted missing concurrency authority")
 	}
 }
 
@@ -501,7 +497,7 @@ func TestAuditProducerSchemaKeepsAppendAuthoritySeparate(t *testing.T) {
 		t.Fatal("verifier gained producer authority in the schema")
 	}
 	value := AuditProducerAuthorization{APIVersion: APIVersion, Kind: "AuditProducerAuthorization", TenantID: "organization-customer", ContentDigest: digest,
-		Producer: ServiceIdentity{APIVersion: APIVersion, Kind: "ServiceIdentity", InstallationID: "installation-example", OrganizationID: "organization-platform", PrincipalID: "service-iam", Purpose: ServiceIAM}}
+		Producer: ServiceIdentity{APIVersion: APIVersion, Kind: "ServiceIdentity", InstallationID: "installation-example", AccountID: "organization-platform", PrincipalID: "service-iam", Purpose: ServiceIAM}}
 	if err := ValidateAuditProducerAuthorization(value); err != nil {
 		t.Fatal(err)
 	}
@@ -514,8 +510,8 @@ func TestAuditProducerSchemaKeepsAppendAuthoritySeparate(t *testing.T) {
 func TestIAMExamplesValidateAgainstOpenAPISchemas(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	examples := map[string]string{
-		"examples/organization.json":                     "Organization",
-		"examples/principal.json":                        "Principal",
+		"examples/account.json":                          "Account",
+		"examples/user.json":                             "User",
 		"examples/bootstrap-document.json":               "BootstrapDocument",
 		"examples/bootstrap-status.json":                 "BootstrapStatus",
 		"examples/service-identity.json":                 "ServiceIdentity",

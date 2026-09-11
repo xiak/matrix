@@ -51,7 +51,7 @@ func (service *Authority) Login(
 			}
 			return ErrUnauthenticated
 		}
-		if !found || !verified || account.OrganizationStatus != iamv1.OrganizationActive ||
+		if !found || !verified || account.AccountStatus != iamv1.AccountActive ||
 			account.PrincipalStatus != iamv1.PrincipalActive {
 			return ErrUnauthenticated
 		}
@@ -68,14 +68,14 @@ func (service *Authority) Login(
 			return err
 		}
 		session := iamv1.Session{
-			APIVersion:     iamv1.APIVersion,
-			Kind:           "Session",
-			ID:             iamv1.SessionID(sessionID),
-			OrganizationID: account.OrganizationID,
-			PrincipalID:    account.PrincipalID,
-			Status:         iamv1.SessionActive,
-			IssuedAt:       now,
-			ExpiresAt:      now.Add(service.config.SessionLifetime),
+			APIVersion:  iamv1.APIVersion,
+			Kind:        "Session",
+			ID:          iamv1.SessionID(sessionID),
+			AccountID:   account.AccountID,
+			PrincipalID: account.PrincipalID,
+			Status:      iamv1.SessionActive,
+			IssuedAt:    now,
+			ExpiresAt:   now.Add(service.config.SessionLifetime),
 		}
 		eventID, err := service.config.NewID("event")
 		if err != nil {
@@ -83,7 +83,7 @@ func (service *Authority) Login(
 		}
 		event, err := newAuditEvent(
 			eventID,
-			account.OrganizationID,
+			account.AccountID,
 			"",
 			auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(account.PrincipalID)},
 			auditv1.ActionIAMSessionIssued,
@@ -211,7 +211,7 @@ func (service *Authority) authenticateSession(
 		}
 		status, err := transaction.BootstrapStatus(ctx)
 		if err != nil || iamv1.ValidateBootstrapStatus(status) != nil ||
-			status.State != iamv1.BootstrapReady || status.OrganizationID != binding.Subject.Organization.ID {
+			status.State != iamv1.BootstrapReady || status.AccountID != binding.Subject.Organization.ID {
 			return SessionCredential{}, ErrUnavailable
 		}
 		binding.Subject.InstallationID = status.InstallationID

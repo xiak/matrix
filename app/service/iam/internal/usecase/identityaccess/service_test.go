@@ -25,7 +25,7 @@ func TestLocalRecoveryWorkflowBindsOnePrivateIntentToOneSanitizedFact(t *testing
 		return result
 	}
 	local := iamv1.LocalCredentialRecoveryAuthority{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryAuthority", Purpose: iamv1.LocalCredentialRecoveryPurpose,
-		Scope:         iamv1.LocalCredentialRecoveryScope{InstallationID: "installation-local", BootstrapDigest: "sha256:" + strings.Repeat("b", 64), OrganizationID: "organization-local", PrincipalID: "principal-original"},
+		Scope:         iamv1.LocalCredentialRecoveryScope{InstallationID: "installation-local", BootstrapDigest: "sha256:" + strings.Repeat("b", 64), AccountID: "organization-local", PrincipalID: "principal-original"},
 		CapabilityKey: secret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x47}, 32)))}
 	request, err := iamv1.SignLocalCredentialRecoveryRequest(local, iamv1.LocalCredentialRecoveryRequest{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryRequest", Purpose: iamv1.LocalCredentialRecoveryPurpose,
 		Scope: local.Scope, CommandID: "command-local", Expected: iamv1.LocalCredentialRecoveryExpected{OrganizationResourceVersion: 1, PrincipalResourceVersion: 2, CredentialGeneration: 3, PlatformBindingID: "binding-original", PlatformBindingResourceVersion: 4},
@@ -61,7 +61,7 @@ func TestLocalRecoveryWorkflowBindsOnePrivateIntentToOneSanitizedFact(t *testing
 	event := mutation.AuditEvent
 	if auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil || event.Action != auditv1.ActionIAMInstallationPrimaryCredentialsRecovered ||
 		event.Actor != (auditv1.ActorReference{Type: auditv1.ActorSystem, ID: iamv1.LocalCredentialRecoveryActor}) || event.InstallationID != local.Scope.InstallationID || event.TenantID != "" ||
-		event.Target.ID != string(local.Scope.PrincipalID) || event.Target.TenantID != auditv1.TenantID(local.Scope.OrganizationID) || event.RequestID != request.CommandID || event.CorrelationID != request.CommandID || event.OccurredAt != transaction.now || event.IAMDecisionID != "" {
+		event.Target.ID != string(local.Scope.PrincipalID) || event.Target.TenantID != auditv1.TenantID(local.Scope.AccountID) || event.RequestID != request.CommandID || event.CorrelationID != request.CommandID || event.OccurredAt != transaction.now || event.IAMDecisionID != "" {
 		t.Fatal("local workflow broadened or fabricated security authority")
 	}
 	encoded, err := json.Marshal(event)
@@ -87,7 +87,7 @@ func TestLocalRecoveryWorkflowBindsOnePrivateIntentToOneSanitizedFact(t *testing
 	if _, err := service.InspectLocalCredentialRecovery(context.Background(), local, nil); err != nil {
 		t.Fatal(err)
 	}
-	transaction.localRecoveryInspection.Scope.OrganizationID = "organization-substituted"
+	transaction.localRecoveryInspection.Scope.AccountID = "organization-substituted"
 	if _, err := service.InspectLocalCredentialRecovery(context.Background(), local, nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatal("inspection returned another tenant's authority")
 	}
@@ -200,13 +200,13 @@ func TestAuditProofVerifierIsNotGenericServiceAuthority(t *testing.T) {
 	} {
 		t.Run(string(probe.event), func(t *testing.T) {
 			identity, event, evidence := historicalAuditFixture(probe.event, iamv1.ActionInstallationVerify, "installation-proof")
-			event.TenantID = auditv1.TenantID(identity.OrganizationID)
+			event.TenantID = auditv1.TenantID(identity.AccountID)
 			event.Actor = auditv1.ActorReference{Type: auditv1.ActorServiceAccount, ID: "service-verifier"}
 			event.Target.ID = probe.target
 			if probe.event != auditv1.ActionAuditIntegrityVerified {
 				event.Target.ID += strings.Repeat("a", 24)
 			}
-			evidence.Decision.TenantID = identity.OrganizationID
+			evidence.Decision.TenantID = identity.AccountID
 			evidence.Decision.Subject = &iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: "service-verifier"}
 			evidence.Event.TenantID = event.TenantID
 			evidence.Event.Actor = event.Actor
@@ -231,7 +231,7 @@ func historicalAuditFixture(eventAction auditv1.Action, decisionAction iamv1.Act
 	now := time.Date(2026, 8, 27, 5, 6, 7, 0, time.UTC)
 	contract, _ := auditv1.ContractForAction(eventAction)
 	resourceKind, _ := iamv1.ResourceKindForAction(decisionAction)
-	identity := iamv1.ServiceIdentity{APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity", InstallationID: "installation-proof", OrganizationID: "tenant-platform", PrincipalID: "service-producer", Purpose: iamv1.ServicePaaS}
+	identity := iamv1.ServiceIdentity{APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity", InstallationID: "installation-proof", AccountID: "tenant-platform", PrincipalID: "service-producer", Purpose: iamv1.ServicePaaS}
 	if contract.Source == auditv1.SourceAudit {
 		identity.Purpose = iamv1.ServiceAudit
 	}
@@ -258,7 +258,7 @@ func historicalAuditFixture(eventAction auditv1.Action, decisionAction iamv1.Act
 	original.OccurredAt = now
 	original.InstallationID = ""
 	if contract.PlatformOnly {
-		original.TenantID = auditv1.TenantID(identity.OrganizationID)
+		original.TenantID = auditv1.TenantID(identity.AccountID)
 	}
 	return identity, event, AuditEvidence{InstallationID: identity.InstallationID, Event: original, Decision: &decision}
 }
@@ -686,7 +686,7 @@ func (transaction *coreTransaction) ApplyBootstrap(
 		Kind:           "BootstrapStatus",
 		State:          iamv1.BootstrapReady,
 		InstallationID: mutation.InstallationID,
-		OrganizationID: mutation.Organization.ID,
+		AccountID:      mutation.Organization.ID,
 		ContentDigest:  mutation.ContentDigest,
 		AppliedAt:      &appliedAt,
 	}
@@ -695,7 +695,7 @@ func (transaction *coreTransaction) ApplyBootstrap(
 		Kind:            "Organization",
 		ID:              mutation.Organization.ID,
 		DisplayName:     mutation.Organization.DisplayName,
-		Status:          iamv1.OrganizationActive,
+		Status:          iamv1.AccountActive,
 		ResourceVersion: 1,
 		CreatedAt:       transaction.now,
 		UpdatedAt:       transaction.now,
@@ -704,7 +704,7 @@ func (transaction *coreTransaction) ApplyBootstrap(
 		APIVersion:         iamv1.APIVersion,
 		Kind:               "Principal",
 		ID:                 mutation.Administrator.ID,
-		OrganizationID:     mutation.Organization.ID,
+		AccountID:          mutation.Organization.ID,
 		Type:               iamv1.PrincipalUser,
 		LoginName:          mutation.Administrator.LoginName,
 		DisplayName:        mutation.Administrator.DisplayName,
@@ -724,7 +724,7 @@ func (transaction *coreTransaction) ApplyBootstrap(
 				APIVersion:     iamv1.APIVersion,
 				Kind:           "ServiceIdentity",
 				InstallationID: mutation.InstallationID,
-				OrganizationID: mutation.Organization.ID,
+				AccountID:      mutation.Organization.ID,
 				PrincipalID:    service.PrincipalID,
 				Purpose:        service.Purpose,
 			},
@@ -744,14 +744,14 @@ func (transaction *coreTransaction) LookupLogin(
 	localName, suffix, qualified := strings.Cut(loginName, "@")
 	for principalID, principal := range transaction.users {
 		primary := principalID == transaction.principal.ID
-		if principal.LoginName != localName || qualified == primary || (qualified && suffix != string(principal.OrganizationID)) {
+		if principal.LoginName != localName || qualified == primary || (qualified && suffix != string(principal.AccountID)) {
 			continue
 		}
 		return LoginAccount{
-			OrganizationID:     principal.OrganizationID,
+			AccountID:          principal.AccountID,
 			PrincipalID:        principalID,
 			PasswordHash:       transaction.passwords[principalID],
-			OrganizationStatus: transaction.organization.Status,
+			AccountStatus:      transaction.organization.Status,
 			PrincipalStatus:    principal.Status,
 			MustChangePassword: principal.MustChangePassword,
 		}, true, nil
@@ -801,7 +801,7 @@ func (transaction *coreTransaction) LookupSession(
 
 func (transaction *coreTransaction) LookupPassword(
 	_ context.Context,
-	organizationID iamv1.OrganizationID,
+	organizationID iamv1.AccountID,
 	principalID iamv1.PrincipalID,
 ) (authority.PasswordHash, bool, error) {
 	if organizationID != transaction.organization.ID {
@@ -821,7 +821,7 @@ func (transaction *coreTransaction) LookupService(
 
 func (transaction *coreTransaction) LookupServicePolicies(
 	_ context.Context,
-	organizationID iamv1.OrganizationID,
+	organizationID iamv1.AccountID,
 	principalID iamv1.PrincipalID,
 ) ([]authority.AttachedPolicy, error) {
 	if organizationID != transaction.organization.ID {
@@ -930,18 +930,24 @@ func (transaction *coreTransaction) RevokeSession(
 func (transaction *coreTransaction) CreateUser(
 	_ context.Context,
 	mutation UserMutation,
-) (iamv1.Principal, error) {
+) (iamv1.User, error) {
 	for _, existing := range transaction.users {
-		if existing.LoginName == mutation.Principal.LoginName {
-			return iamv1.Principal{}, ErrConflict
+		if existing.LoginName == mutation.User.LoginName {
+			return iamv1.User{}, ErrConflict
 		}
 	}
-	transaction.users[mutation.Principal.ID] = mutation.Principal
-	transaction.passwords[mutation.Principal.ID] = mutation.PasswordHash
-	return mutation.Principal, nil
+	transaction.users[mutation.User.ID] = iamv1.Principal{
+		APIVersion: mutation.User.APIVersion, Kind: "Principal", ID: mutation.User.ID,
+		AccountID: mutation.User.AccountID, Type: iamv1.PrincipalUser, LoginName: mutation.User.LoginName,
+		DisplayName: mutation.User.DisplayName, Status: mutation.User.Status,
+		MustChangePassword: mutation.User.MustChangePassword, ResourceVersion: mutation.User.ResourceVersion,
+		CreatedAt: mutation.User.CreatedAt, UpdatedAt: mutation.User.UpdatedAt,
+	}
+	transaction.passwords[mutation.User.ID] = mutation.PasswordHash
+	return mutation.User, nil
 }
 
-func (transaction *coreTransaction) LookupPolicy(_ context.Context, account iamv1.OrganizationID, id iamv1.PolicyID) (iamv1.Policy, bool, error) {
+func (transaction *coreTransaction) LookupPolicy(_ context.Context, account iamv1.AccountID, id iamv1.PolicyID) (iamv1.Policy, bool, error) {
 	version, err := authority.SystemPolicyVersion(id)
 	if err != nil || account != transaction.organization.ID {
 		return iamv1.Policy{}, false, nil
@@ -951,7 +957,7 @@ func (transaction *coreTransaction) LookupPolicy(_ context.Context, account iamv
 		CreatedAt: transaction.organization.CreatedAt, UpdatedAt: transaction.organization.CreatedAt}, true, nil
 }
 
-func (transaction *coreTransaction) LookupPolicyAttachment(_ context.Context, account iamv1.OrganizationID, id iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error) {
+func (transaction *coreTransaction) LookupPolicyAttachment(_ context.Context, account iamv1.AccountID, id iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error) {
 	attachment, found := transaction.attachments[id]
 	return attachment, found && attachment.AccountID == account, nil
 }
@@ -975,7 +981,7 @@ func (transaction *coreTransaction) CreatePolicyAttachment(_ context.Context, mu
 
 func (transaction *coreTransaction) RevokePolicyAttachment(_ context.Context, mutation PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error) {
 	attachment, found := transaction.attachments[mutation.AttachmentID]
-	if !found || attachment.AccountID != mutation.OrganizationID {
+	if !found || attachment.AccountID != mutation.AccountID {
 		return iamv1.Revocation{}, false, ErrForbidden
 	}
 	if attachment.ResourceVersion != mutation.ResourceVersion || attachment.RevokedAt != nil {

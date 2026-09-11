@@ -61,7 +61,7 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 	}
 	originalTenant := decision.TenantID
 	if decision.InstallationID != "" {
-		originalTenant = identity.OrganizationID
+		originalTenant = identity.AccountID
 	}
 	if evidence.Event.TenantID != auditv1.TenantID(originalTenant) || evidence.Event.InstallationID != "" {
 		return "", ErrForbidden
@@ -69,7 +69,7 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 	if decision.Action == iamv1.ActionInstallationVerify {
 		if decision.Subject.Type != iamv1.PrincipalServiceAccount || evidence.VerifierPrincipalID == "" ||
 			decision.Subject.ID != evidence.VerifierPrincipalID || decision.Resource.ID != identity.InstallationID ||
-			decision.TenantID != identity.OrganizationID || !fixedVerificationFact(source, event) {
+			decision.TenantID != identity.AccountID || !fixedVerificationFact(source, event) {
 			return "", ErrForbidden
 		}
 		return digest, nil
@@ -178,7 +178,7 @@ func (service *Authority) ResolveAuditProducer(
 		}
 		result = iamv1.AuditProducerAuthorization{
 			APIVersion: iamv1.APIVersion, Kind: "AuditProducerAuthorization",
-			Producer: binding.Identity, TenantID: iamv1.OrganizationID(request.Event.TenantID),
+			Producer: binding.Identity, TenantID: iamv1.AccountID(request.Event.TenantID),
 			InstallationID: request.Event.InstallationID, ContentDigest: digest,
 		}
 		return nil

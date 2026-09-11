@@ -321,7 +321,9 @@ func actionRules() (eventRules []any, recordRules []any) {
 		}
 		thenRequired := []string{}
 		target := thenProperties["target"].(object)
-		if action == auditv1.ActionIAMTenantAdministratorRecovered || action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
+		if action == auditv1.ActionIAMAccountRootCredentialsRecovered ||
+			action == auditv1.ActionIAMTenantAdministratorRecovered ||
+			action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
 			target["required"] = []string{"kind", "tenantId"}
 		} else {
 			target["properties"].(object)["tenantId"] = false

@@ -28,8 +28,8 @@ func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.
 		// This conservative UI hint is evaluated at the exact directory target;
 		// it is not a permit and the eventual command makes its own decision.
 		hint, err := authority.Decide(subject, iamv1.ServiceIAM, iamv1.AuthorizationRequest{
-			Action:    iamv1.ActionIAMOrganizationCreate,
-			Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: "organizations"},
+			Action:    iamv1.ActionIAMAccountCreate,
+			Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "accounts"},
 			RequestID: "current-identity-hint", CorrelationID: "current-identity-hint"}, "current-identity-hint", now)
 		if err != nil {
 			return ErrUnavailable
@@ -38,8 +38,16 @@ func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.
 		for _, row := range subject.Policies {
 			attachments = append(attachments, row.Attachment)
 		}
+		user, err := userFromPrincipal(subject.Principal)
+		if err != nil {
+			return err
+		}
+		identityKind := iamv1.IdentityUser
+		if account.RootIdentity.PrincipalID == user.ID {
+			identityKind = iamv1.IdentityRoot
+		}
 		result = iamv1.CurrentIdentity{APIVersion: iamv1.APIVersion, Kind: "CurrentIdentity", Account: account,
-			Principal: subject.Principal, PolicyAttachments: attachments, CanCreateOrganizations: hint.Allowed}
+			User: user, IdentityKind: identityKind, PolicyAttachments: attachments, CanCreateAccounts: hint.Allowed}
 		return nil
 	})
 	if err != nil {
@@ -94,14 +102,14 @@ func withAccountAuthorization[T any](service *Authority, ctx context.Context, cr
 	return result, nil
 }
 
-func (service *Authority) ListPrincipals(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.PrincipalList, error) {
+func (service *Authority) ListUsers(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.UserList, error) {
 	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidateID("after", after) != nil) {
-		return iamv1.PrincipalList{}, ErrInvalidArgument
+		return iamv1.UserList{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPrincipalList,
-		iamv1.ResourceReference{Kind: iamv1.ResourceOrganization}, requestID,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.PrincipalList, error) {
-			return tx.ListPrincipals(ctx, AccountRead{OrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: after})
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserList,
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.UserList, error) {
+			return tx.ListUsers(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: after})
 		})
 }
 
@@ -122,7 +130,7 @@ func (service *Authority) ListPolicies(ctx context.Context, credential iamv1.Sec
 			return err
 		}
 		action, scope := iamv1.ActionIAMPolicyList, iamv1.AuthorityScopeTenant
-		target := iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: string(subject.Subject.Organization.ID)}
+		target := iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Subject.Organization.ID)}
 		if platform {
 			action, scope = iamv1.ActionIAMPlatformPolicyList, iamv1.AuthorityScopeInstallation
 			target = iamv1.ResourceReference{Kind: iamv1.ResourceInstallation, ID: subject.Subject.InstallationID}
@@ -138,7 +146,7 @@ func (service *Authority) ListPolicies(ctx context.Context, credential iamv1.Sec
 			denied = true
 			return nil
 		}
-		result, err = tx.ListPolicies(ctx, AccountRead{OrganizationID: subject.Subject.Organization.ID,
+		result, err = tx.ListPolicies(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
 			ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, scope)
 		return err
 	})
@@ -154,124 +162,128 @@ func (service *Authority) ListPolicies(ctx context.Context, credential iamv1.Sec
 	return result, nil
 }
 
-func (service *Authority) ListAccounts(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.OrganizationAccountList, error) {
+func (service *Authority) ListAccounts(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.AccountList, error) {
 	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidateID("after", after) != nil) {
-		return iamv1.OrganizationAccountList{}, ErrInvalidArgument
+		return iamv1.AccountList{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMOrganizationRead,
-		iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: "organizations"}, requestID,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.OrganizationAccountList, error) {
-			return tx.ListAccounts(ctx, AccountRead{OrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: after})
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "accounts"}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.AccountList, error) {
+			return tx.ListAccounts(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: after})
 		})
 }
 
-func (service *Authority) ReadOrganization(ctx context.Context, credential iamv1.Secret, id iamv1.OrganizationID, requestID string) (iamv1.OrganizationAccount, error) {
-	if iamv1.ValidateID("organizationId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
-		return iamv1.OrganizationAccount{}, ErrInvalidArgument
+func (service *Authority) GetAccount(ctx context.Context, credential iamv1.Secret, id iamv1.AccountID, requestID string) (iamv1.Account, error) {
+	if iamv1.ValidateID("accountId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.Account{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMOrganizationRead,
-		iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: string(id)}, requestID,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.OrganizationAccount, error) {
-			return tx.ReadOrganization(ctx, AccountRead{OrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id)
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(id)}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.Account, error) {
+			return tx.ReadAccountAsPlatform(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id)
 		})
 }
 
-func (service *Authority) CreateOrganization(ctx context.Context, credential iamv1.Secret, request iamv1.CreateOrganizationRequest) (iamv1.OrganizationAccount, error) {
-	if iamv1.ValidateCreateOrganizationRequest(request) != nil || authority.ValidatePassword(request.InitialPassword) != nil {
-		return iamv1.OrganizationAccount{}, ErrInvalidArgument
+func (service *Authority) CreateAccount(ctx context.Context, credential iamv1.Secret, request iamv1.CreateAccountRequest) (iamv1.Account, error) {
+	if iamv1.ValidateCreateAccountRequest(request) != nil || authority.ValidatePassword(request.InitialPassword) != nil {
+		return iamv1.Account{}, ErrInvalidArgument
 	}
-	digest, err := digestSanitized("organization-create", struct {
-		ID                                                   iamv1.OrganizationID
-		DisplayName, LoginName, AdministratorName, RequestID string
+	digest, err := digestSanitized("account-create", struct {
+		ID                                          iamv1.AccountID
+		DisplayName, LoginName, RootName, RequestID string
 	}{
-		request.ID, request.DisplayName, request.AdministratorLoginName, request.AdministratorDisplayName, request.RequestID})
+		request.ID, request.DisplayName, request.RootLoginName, request.RootDisplayName, request.RequestID})
 	if err != nil {
-		return iamv1.OrganizationAccount{}, err
+		return iamv1.Account{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMOrganizationCreate,
-		iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: string(request.ID)}, request.RequestID,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.OrganizationAccount, error) {
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountCreate,
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(request.ID)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Account, error) {
 			hash, err := service.passwords.Hash(request.InitialPassword)
 			if err != nil {
-				return iamv1.OrganizationAccount{}, ErrUnavailable
+				return iamv1.Account{}, ErrUnavailable
 			}
 			id, err := service.config.NewID("principal")
 			if err != nil {
-				return iamv1.OrganizationAccount{}, ErrUnavailable
+				return iamv1.Account{}, ErrUnavailable
 			}
-			event, err := service.newTenantLifecycleEvent(subject, decision, auditv1.ActionIAMTenantCreated,
-				auditv1.TargetReference{Kind: auditv1.TargetOrganization, ID: string(request.ID)}, digest, request.RequestID, now)
+			event, err := service.newTenantLifecycleEvent(subject, decision, auditv1.ActionIAMAccountCreated,
+				auditv1.TargetReference{Kind: auditv1.TargetAccount, ID: string(request.ID)}, digest, request.RequestID, now)
 			if err != nil {
-				return iamv1.OrganizationAccount{}, err
+				return iamv1.Account{}, err
 			}
-			return tx.CreateOrganization(ctx, OrganizationMutation{ActorOrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
-				DecisionID: decision.ID, Organization: iamv1.InitialOrganization{ID: request.ID, DisplayName: request.DisplayName},
-				Administrator: BootstrapAdministrator{ID: iamv1.PrincipalID(id), LoginName: request.AdministratorLoginName, DisplayName: request.AdministratorDisplayName, PasswordHash: hash}, AuditEvent: event})
+			return tx.CreateAccount(ctx, AccountMutation{ActorAccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				DecisionID: decision.ID, Account: iamv1.InitialOrganization{ID: request.ID, DisplayName: request.DisplayName},
+				Root: BootstrapAdministrator{ID: iamv1.PrincipalID(id), LoginName: request.RootLoginName, DisplayName: request.RootDisplayName, PasswordHash: hash}, AuditEvent: event})
 		})
 }
 
-func (service *Authority) SetOrganizationStatus(ctx context.Context, credential iamv1.Secret, id iamv1.OrganizationID, request iamv1.SetOrganizationStatusRequest) (iamv1.OrganizationAccount, error) {
-	if iamv1.ValidateID("organizationId", string(id)) != nil || iamv1.ValidateSetOrganizationStatusRequest(request) != nil {
-		return iamv1.OrganizationAccount{}, ErrInvalidArgument
+func (service *Authority) SetAccountStatus(ctx context.Context, credential iamv1.Secret, id iamv1.AccountID, request iamv1.SetAccountStatusRequest) (iamv1.Account, error) {
+	if iamv1.ValidateID("accountId", string(id)) != nil || iamv1.ValidateSetAccountStatusRequest(request) != nil {
+		return iamv1.Account{}, ErrInvalidArgument
 	}
-	digest, err := digestSanitized("organization-status", struct {
-		ID      iamv1.OrganizationID
-		Request iamv1.SetOrganizationStatusRequest
+	digest, err := digestSanitized("account-status", struct {
+		ID      iamv1.AccountID
+		Request iamv1.SetAccountStatusRequest
 	}{id, request})
 	if err != nil {
-		return iamv1.OrganizationAccount{}, err
+		return iamv1.Account{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMOrganizationSetStatus,
-		iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: string(id)}, request.RequestID,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.OrganizationAccount, error) {
-			action := auditv1.ActionIAMTenantDisabled
-			if request.Status == iamv1.OrganizationActive {
-				action = auditv1.ActionIAMTenantEnabled
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountSetStatus,
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(id)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Account, error) {
+			action := auditv1.ActionIAMAccountDisabled
+			if request.Status == iamv1.AccountActive {
+				action = auditv1.ActionIAMAccountEnabled
 			}
 			event, err := service.newTenantLifecycleEvent(subject, decision, action,
-				auditv1.TargetReference{Kind: auditv1.TargetOrganization, ID: string(id)}, digest, request.RequestID, now)
+				auditv1.TargetReference{Kind: auditv1.TargetAccount, ID: string(id)}, digest, request.RequestID, now)
 			if err != nil {
-				return iamv1.OrganizationAccount{}, err
+				return iamv1.Account{}, err
 			}
-			return tx.SetOrganizationStatus(ctx, OrganizationStatusMutation{
-				ActorOrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
-				DecisionID: decision.ID, OrganizationID: id, Status: request.Status, ResourceVersion: request.ResourceVersion, AuditEvent: event,
+			return tx.SetAccountStatus(ctx, AccountStatusMutation{
+				ActorAccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				DecisionID: decision.ID, AccountID: id, Status: request.Status, ResourceVersion: request.ResourceVersion, AuditEvent: event,
 			})
 		})
 }
 
-func (service *Authority) RecoverOrganizationAdministrator(ctx context.Context, credential iamv1.Secret, id iamv1.OrganizationID, request iamv1.RecoverOrganizationAdministratorRequest) (iamv1.OrganizationAccount, error) {
-	if iamv1.ValidateID("organizationId", string(id)) != nil || iamv1.ValidateRecoverOrganizationAdministratorRequest(request) != nil || authority.ValidatePassword(request.InitialPassword) != nil {
-		return iamv1.OrganizationAccount{}, ErrInvalidArgument
+func (service *Authority) RecoverRootCredentials(ctx context.Context, credential iamv1.Secret, id iamv1.AccountID, request iamv1.RecoverRootCredentialsRequest) (iamv1.Account, error) {
+	if iamv1.ValidateID("accountId", string(id)) != nil || iamv1.ValidateRecoverRootCredentialsRequest(request) != nil || authority.ValidatePassword(request.InitialPassword) != nil {
+		return iamv1.Account{}, ErrInvalidArgument
 	}
-	digest, err := digestSanitized("organization-administrator-recover", struct {
-		OrganizationID  iamv1.OrganizationID
-		PrincipalID     iamv1.PrincipalID
+	digest, err := digestSanitized("account-root-credentials-recover", struct {
+		AccountID       iamv1.AccountID
 		ResourceVersion uint64
 		RequestID       string
-	}{id, request.PrincipalID, request.ResourceVersion, request.RequestID})
+	}{id, request.ResourceVersion, request.RequestID})
 	if err != nil {
-		return iamv1.OrganizationAccount{}, err
+		return iamv1.Account{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMOrganizationAdministratorRecover,
-		iamv1.ResourceReference{Kind: iamv1.ResourcePrincipal, ID: string(request.PrincipalID)}, request.RequestID,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.OrganizationAccount, error) {
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRootCredentialsRecover,
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(id)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Account, error) {
+			root, err := tx.ReadAccountRoot(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id)
+			if err != nil {
+				return iamv1.Account{}, err
+			}
 			hash, err := service.passwords.Hash(request.InitialPassword)
 			if err != nil {
-				return iamv1.OrganizationAccount{}, ErrUnavailable
+				return iamv1.Account{}, ErrUnavailable
 			}
 			attachmentID, err := service.config.NewID("attachment")
 			if err != nil {
-				return iamv1.OrganizationAccount{}, ErrUnavailable
+				return iamv1.Account{}, ErrUnavailable
 			}
-			event, err := service.newTenantLifecycleEvent(subject, decision, auditv1.ActionIAMTenantAdministratorRecovered,
-				auditv1.TargetReference{Kind: auditv1.TargetPrincipal, ID: string(request.PrincipalID), TenantID: auditv1.TenantID(id)}, digest, request.RequestID, now)
+			event, err := service.newTenantLifecycleEvent(subject, decision, auditv1.ActionIAMAccountRootCredentialsRecovered,
+				auditv1.TargetReference{Kind: auditv1.TargetUser, ID: string(root.PrincipalID), TenantID: auditv1.TenantID(id)}, digest, request.RequestID, now)
 			if err != nil {
-				return iamv1.OrganizationAccount{}, err
+				return iamv1.Account{}, err
 			}
-			return tx.RecoverOrganizationAdministrator(ctx, OrganizationAdministratorRecovery{
-				ActorOrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
-				DecisionID: decision.ID, OrganizationID: id, PrincipalID: request.PrincipalID,
+			return tx.RecoverRootCredentials(ctx, RootCredentialRecovery{
+				ActorAccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				DecisionID: decision.ID, AccountID: id, PrincipalID: root.PrincipalID,
 				ResourceVersion: request.ResourceVersion, PasswordHash: hash, AttachmentID: iamv1.PolicyAttachmentID(attachmentID), AuditEvent: event,
 			})
 		})
@@ -291,43 +303,43 @@ func (service *Authority) newTenantLifecycleEvent(subject SessionCredential, dec
 		action, target, auditv1.ResultSucceeded, decision.ID, digest, requestID, requestID, now)
 }
 
-func (service *Authority) SetAccountAlias(ctx context.Context, credential iamv1.Secret, request iamv1.SetAccountAliasRequest) (iamv1.OrganizationAccount, error) {
+func (service *Authority) SetAccountAlias(ctx context.Context, credential iamv1.Secret, request iamv1.SetAccountAliasRequest) (iamv1.Account, error) {
 	if iamv1.ValidateSetAccountAliasRequest(request) != nil {
-		return iamv1.OrganizationAccount{}, ErrInvalidArgument
+		return iamv1.Account{}, ErrInvalidArgument
 	}
 	digest, err := digestSanitized("account-alias-set", request)
 	if err != nil {
-		return iamv1.OrganizationAccount{}, err
+		return iamv1.Account{}, err
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountAliasSet,
-		iamv1.ResourceReference{Kind: iamv1.ResourceOrganization}, request.RequestID,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.OrganizationAccount, error) {
-			event, err := service.newManagementEvent(subject, auditv1.ActionIAMAccountAliasSet, auditv1.TargetOrganization, string(subject.Subject.Organization.ID), decision.ID, digest, request.RequestID, now)
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Account, error) {
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMAccountAliasUpdated, auditv1.TargetAccount, string(subject.Subject.Organization.ID), decision.ID, digest, request.RequestID, now)
 			if err != nil {
-				return iamv1.OrganizationAccount{}, err
+				return iamv1.Account{}, err
 			}
-			return tx.SetAccountAlias(ctx, AccountAliasMutation{OrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+			return tx.SetAccountAlias(ctx, AccountAliasMutation{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
 				DecisionID: decision.ID, Alias: request.Alias, ResourceVersion: request.ResourceVersion, AuditEvent: event})
 		})
 }
 
-func (service *Authority) SetPrincipalStatus(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, request iamv1.SetPrincipalStatusRequest) (iamv1.Principal, error) {
-	if iamv1.ValidateID("principalId", string(id)) != nil || iamv1.ValidateSetPrincipalStatusRequest(request) != nil {
-		return iamv1.Principal{}, ErrInvalidArgument
+func (service *Authority) SetUserStatus(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, request iamv1.SetUserStatusRequest) (iamv1.User, error) {
+	if iamv1.ValidateID("userId", string(id)) != nil || iamv1.ValidateSetUserStatusRequest(request) != nil {
+		return iamv1.User{}, ErrInvalidArgument
 	}
 	digest, err := digestSanitized("principal-status", struct {
 		ID      iamv1.PrincipalID
-		Request iamv1.SetPrincipalStatusRequest
+		Request iamv1.SetUserStatusRequest
 	}{id, request})
 	if err != nil {
-		return iamv1.Principal{}, err
+		return iamv1.User{}, err
 	}
-	return service.changeSubaccount(ctx, credential, id, request.ResourceVersion, &request.Status, iamv1.Secret{}, iamv1.ActionIAMPrincipalSetStatus, auditv1.ActionIAMPrincipalStatusSet, digest, request.RequestID)
+	return service.changeUser(ctx, credential, id, request.ResourceVersion, &request.Status, iamv1.Secret{}, iamv1.ActionIAMUserSetStatus, auditv1.ActionIAMUserStatusSet, digest, request.RequestID)
 }
 
-func (service *Authority) ResetUserPassword(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, request iamv1.ResetUserPasswordRequest) (iamv1.Principal, error) {
-	if iamv1.ValidateID("principalId", string(id)) != nil || iamv1.ValidateResetUserPasswordRequest(request) != nil || authority.ValidatePassword(request.InitialPassword) != nil {
-		return iamv1.Principal{}, ErrInvalidArgument
+func (service *Authority) ResetUserPassword(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, request iamv1.ResetUserPasswordRequest) (iamv1.User, error) {
+	if iamv1.ValidateID("userId", string(id)) != nil || iamv1.ValidateResetUserPasswordRequest(request) != nil || authority.ValidatePassword(request.InitialPassword) != nil {
+		return iamv1.User{}, ErrInvalidArgument
 	}
 	digest, err := digestSanitized("principal-password-reset", struct {
 		ID              iamv1.PrincipalID
@@ -335,28 +347,42 @@ func (service *Authority) ResetUserPassword(ctx context.Context, credential iamv
 		RequestID       string
 	}{id, request.ResourceVersion, request.RequestID})
 	if err != nil {
-		return iamv1.Principal{}, err
+		return iamv1.User{}, err
 	}
-	return service.changeSubaccount(ctx, credential, id, request.ResourceVersion, nil, request.InitialPassword, iamv1.ActionIAMPasswordReset, auditv1.ActionIAMPasswordReset, digest, request.RequestID)
+	return service.changeUser(ctx, credential, id, request.ResourceVersion, nil, request.InitialPassword, iamv1.ActionIAMUserPasswordReset, auditv1.ActionIAMUserPasswordReset, digest, request.RequestID)
 }
 
-func (service *Authority) changeSubaccount(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, version uint64, status *iamv1.PrincipalStatus,
-	password iamv1.Secret, action iamv1.Action, auditAction auditv1.Action, digest, requestID string) (iamv1.Principal, error) {
-	return withAccountAuthorization(service, ctx, credential, action, iamv1.ResourceReference{Kind: iamv1.ResourcePrincipal, ID: string(id)}, requestID,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Principal, error) {
-			event, err := service.newManagementEvent(subject, auditAction, auditv1.TargetPrincipal, string(id), decision.ID, digest, requestID, now)
+func (service *Authority) changeUser(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, version uint64, status *iamv1.PrincipalStatus,
+	password iamv1.Secret, action iamv1.Action, auditAction auditv1.Action, digest, requestID string) (iamv1.User, error) {
+	return withAccountAuthorization(service, ctx, credential, action, iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.User, error) {
+			event, err := service.newManagementEvent(subject, auditAction, auditv1.TargetUser, string(id), decision.ID, digest, requestID, now)
 			if err != nil {
-				return iamv1.Principal{}, err
+				return iamv1.User{}, err
 			}
-			mutation := SubaccountMutation{OrganizationID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, PrincipalID: id,
+			mutation := UserChange{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, PrincipalID: id,
 				DecisionID: decision.ID, ResourceVersion: version, Status: status, AuditEvent: event}
 			if password.Present() {
 				hash, err := service.passwords.Hash(password)
 				if err != nil {
-					return iamv1.Principal{}, ErrUnavailable
+					return iamv1.User{}, ErrUnavailable
 				}
 				mutation.PasswordHash = &hash
 			}
-			return tx.ChangeSubaccount(ctx, mutation)
+			return tx.ChangeUser(ctx, mutation)
 		})
+}
+
+func userFromPrincipal(value iamv1.Principal) (iamv1.User, error) {
+	if iamv1.ValidatePrincipal(value) != nil || value.Type != iamv1.PrincipalUser {
+		return iamv1.User{}, ErrUnavailable
+	}
+	result := iamv1.User{APIVersion: iamv1.APIVersion, Kind: "User", ID: value.ID, AccountID: value.AccountID,
+		LoginName: value.LoginName, DisplayName: value.DisplayName, Status: value.Status,
+		MustChangePassword: value.MustChangePassword, ResourceVersion: value.ResourceVersion,
+		CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
+	if iamv1.ValidateUser(result) != nil {
+		return iamv1.User{}, ErrUnavailable
+	}
+	return result, nil
 }

@@ -10,7 +10,7 @@ import (
 )
 
 type authorizationActor struct {
-	organizationID iamv1.OrganizationID
+	organizationID iamv1.AccountID
 	principalID    iamv1.PrincipalID
 	principalType  iamv1.PrincipalType
 }
@@ -108,7 +108,7 @@ func (service *Authority) VerifyInstallation(
 		}
 		policies, err := transaction.LookupServicePolicies(
 			transactionContext,
-			caller.Identity.OrganizationID,
+			caller.Identity.AccountID,
 			caller.Identity.PrincipalID,
 		)
 		if err != nil {
@@ -117,7 +117,7 @@ func (service *Authority) VerifyInstallation(
 		status, err := transaction.BootstrapStatus(transactionContext)
 		if err != nil || iamv1.ValidateBootstrapStatus(status) != nil ||
 			status.State != iamv1.BootstrapReady ||
-			status.OrganizationID != caller.Identity.OrganizationID {
+			status.AccountID != caller.Identity.AccountID {
 			return ErrUnavailable
 		}
 		if status.InstallationID != request.Resource.ID {
@@ -130,7 +130,7 @@ func (service *Authority) VerifyInstallation(
 			requestDigest,
 			now,
 			authorizationActor{
-				organizationID: caller.Identity.OrganizationID,
+				organizationID: caller.Identity.AccountID,
 				principalID:    caller.Identity.PrincipalID,
 				principalType:  iamv1.PrincipalServiceAccount,
 			},
@@ -198,7 +198,7 @@ func (service *Authority) decideAndRecord(
 		return iamv1.AuthorizationDecision{}, err
 	}
 	if err := transaction.RecordAuthorization(ctx, AuthorizationMutation{
-		OrganizationID: actor.organizationID,
+		AccountID:      actor.organizationID,
 		PrincipalID:    actor.principalID,
 		Decision:       decision.AuthorizationDecision,
 		PolicyEvidence: decision.PolicyEvidence,

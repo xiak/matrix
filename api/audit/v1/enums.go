@@ -24,6 +24,18 @@ const (
 )
 
 const (
+	ActionIAMAccountCreated                  Action = "iam.account.created"
+	ActionIAMAccountDisabled                 Action = "iam.account.disabled"
+	ActionIAMAccountEnabled                  Action = "iam.account.enabled"
+	ActionIAMAccountRootCredentialsRecovered Action = "iam.account-root.credentials-recovered"
+	ActionIAMAccountAliasUpdated             Action = "iam.account.alias-set"
+	ActionIAMUserCreated                     Action = "iam.user.created"
+	ActionIAMUserStatusSet                   Action = "iam.user.status-set"
+	ActionIAMUserPasswordReset               Action = "iam.user.password-reset"
+	ActionIAMUserPasswordChanged             Action = "iam.user.password-changed"
+
+	// Published historical facts remain decodable and hash-stable. New writes
+	// use the Account/User facts above so their target contracts cannot drift.
 	ActionIAMOrganizationCreated                     Action = "iam.organization.created"
 	ActionIAMTenantCreated                           Action = "iam.tenant.created"
 	ActionIAMTenantDisabled                          Action = "iam.tenant.disabled"
@@ -67,6 +79,8 @@ const (
 )
 
 const (
+	TargetAccount               TargetKind = "ACCOUNT"
+	TargetUser                  TargetKind = "USER"
 	TargetOrganization          TargetKind = "ORGANIZATION"
 	TargetInstallation          TargetKind = "INSTALLATION"
 	TargetPrincipal             TargetKind = "PRINCIPAL"
@@ -140,6 +154,15 @@ func ContractForAction(action Action) (ActionContract, bool) {
 }
 
 var allActions = []Action{
+	ActionIAMAccountCreated,
+	ActionIAMAccountDisabled,
+	ActionIAMAccountEnabled,
+	ActionIAMAccountRootCredentialsRecovered,
+	ActionIAMAccountAliasUpdated,
+	ActionIAMUserCreated,
+	ActionIAMUserStatusSet,
+	ActionIAMUserPasswordReset,
+	ActionIAMUserPasswordChanged,
 	ActionIAMOrganizationCreated,
 	ActionIAMTenantCreated,
 	ActionIAMTenantDisabled,
@@ -181,6 +204,33 @@ var allActions = []Action{
 }
 
 var actionContracts = map[Action]ActionContract{
+	ActionIAMAccountCreated: {
+		Source: SourceIAM, Target: TargetAccount, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMAccountDisabled: {
+		Source: SourceIAM, Target: TargetAccount, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMAccountEnabled: {
+		Source: SourceIAM, Target: TargetAccount, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMAccountRootCredentialsRecovered: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
+	},
+	ActionIAMAccountAliasUpdated: {
+		Source: SourceIAM, Target: TargetAccount, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserCreated: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserStatusSet: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserPasswordReset: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserPasswordChanged: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true,
+	},
 	ActionIAMTenantCreated: {
 		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
 	},

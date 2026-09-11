@@ -158,7 +158,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	wantInitialAudit := map[auditv1.Action]string{
 		auditv1.ActionIAMBootstrapApplied:              "",
 		auditv1.ActionIAMSessionIssued:                 "",
-		auditv1.ActionIAMPasswordChanged:               "principal-admin",
+		auditv1.ActionIAMUserPasswordChanged:           "principal-admin",
 		auditv1.ActionIAMAuthorizationDecided:          "",
 		auditv1.ActionPaaSApplicationCreated:           string(applicationID),
 		auditv1.ActionPaaSConfigurationCreated:         string(configurationID),
@@ -417,23 +417,23 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 			*password = generated
 			value.edge.addForbidden(generated)
 		}
-		tenantID := iamv1.OrganizationID("phase1-tenant-" + label)
-		if err := value.edge.mutateIAM(ctx, "/organizations", operator, map[string]any{
+		tenantID := iamv1.AccountID("phase1-tenant-" + label)
+		if err := value.edge.mutateIAM(ctx, "/accounts", operator, map[string]any{
 			"id": tenantID, "displayName": "Offline " + label,
-			"administratorLoginName": "offline." + label + ".primary", "administratorDisplayName": "Offline primary",
+			"rootLoginName": "offline." + label + ".primary", "rootDisplayName": "Offline primary",
 			"initialPassword": string(tenant.InitialPassword), "requestId": "phase1-open-" + label,
-		}, &tenant.Account, http.StatusCreated); err != nil || iamv1.ValidateOrganizationAccount(tenant.Account) != nil || tenant.Account.Organization.ID != tenantID {
+		}, &tenant.Account, http.StatusCreated); err != nil || iamv1.ValidateAccount(tenant.Account) != nil || tenant.Account.ID != tenantID {
 			return fail("tenant-onboarding-" + label)
 		}
-		primary, err := value.edge.loginNamed(ctx, tenant.Account.PrimaryLoginName, tenant.InitialPassword,
-			tenantID, tenant.Account.PrimaryPrincipalID, "phase1-primary-login-"+label)
+		primary, err := value.edge.loginNamed(ctx, tenant.Account.RootIdentity.LoginName, tenant.InitialPassword,
+			tenantID, tenant.Account.RootIdentity.PrincipalID, "phase1-primary-login-"+label)
 		if err != nil || !primary.MustChangePassword {
 			return fail("tenant-primary-first-login-" + label)
 		}
 		tenant.OldPrimaryCredential = primary.Credential.CopyBytes()
 		value.edge.addForbidden(tenant.OldPrimaryCredential)
-		temporary, err := value.edge.loginNamed(ctx, tenant.Account.PrimaryLoginName, tenant.InitialPassword,
-			tenantID, tenant.Account.PrimaryPrincipalID, "phase1-primary-temporary-"+label)
+		temporary, err := value.edge.loginNamed(ctx, tenant.Account.RootIdentity.LoginName, tenant.InitialPassword,
+			tenantID, tenant.Account.RootIdentity.PrincipalID, "phase1-primary-temporary-"+label)
 		if err != nil || !temporary.MustChangePassword {
 			return fail("tenant-primary-temporary-login-" + label)
 		}
@@ -443,8 +443,8 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		if err := value.edge.changePassword(ctx, tenant.OldPrimaryCredential, tenant.InitialPassword, tenant.PreviousPrimaryPassword, false, &keepOtherSessions); err != nil {
 			return fail("tenant-primary-password-" + label)
 		}
-		retained, err := value.edge.loginNamed(ctx, tenant.Account.PrimaryLoginName, tenant.PreviousPrimaryPassword,
-			tenantID, tenant.Account.PrimaryPrincipalID, "phase1-primary-retained-"+label)
+		retained, err := value.edge.loginNamed(ctx, tenant.Account.RootIdentity.LoginName, tenant.PreviousPrimaryPassword,
+			tenantID, tenant.Account.RootIdentity.PrincipalID, "phase1-primary-retained-"+label)
 		if err != nil || retained.MustChangePassword {
 			return fail("tenant-primary-retained-login-" + label)
 		}
@@ -453,11 +453,11 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 		if err := value.edge.changePassword(ctx, tenant.OldPrimaryCredential, tenant.PreviousPrimaryPassword, tenant.PrimaryPassword, false, &keepOtherSessions); err != nil {
 			return fail("tenant-primary-retain-valid-session-" + label)
 		}
-		if err := value.edge.mutateIAM(ctx, "/principals", tenant.OldPrimaryCredential, map[string]any{
+		if err := value.edge.mutateIAM(ctx, "/users", tenant.OldPrimaryCredential, map[string]any{
 			"loginName": "developer", "displayName": "Offline developer", "initialPassword": string(tenant.InitialPassword),
 			"requestId": "phase1-child-" + label,
-		}, &tenant.Child, http.StatusCreated); err != nil || iamv1.ValidatePrincipal(tenant.Child) != nil ||
-			tenant.Child.OrganizationID != tenantID || tenant.Child.Type != iamv1.PrincipalUser {
+		}, &tenant.Child, http.StatusCreated); err != nil || iamv1.ValidateUser(tenant.Child) != nil ||
+			tenant.Child.AccountID != tenantID {
 			return fail("tenant-child-create-" + label)
 		}
 		if err := value.edge.mutateIAM(ctx, "/policy-attachments", tenant.OldPrimaryCredential,
@@ -519,8 +519,8 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 			if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", tenant.OldChildCredential, &identity); err != nil || iamv1.ValidateCurrentIdentity(identity) != nil {
 				return fail("tenant-child-current-version")
 			}
-			if err := value.edge.mutateIAM(ctx, "/principals/"+string(tenant.Child.ID)+":set-status", tenant.OldPrimaryCredential,
-				iamv1.SetPrincipalStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: identity.Principal.ResourceVersion, RequestID: "phase1-disable-child"},
+			if err := value.edge.mutateIAM(ctx, "/users/"+string(tenant.Child.ID)+":set-status", tenant.OldPrimaryCredential,
+				iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: identity.User.ResourceVersion, RequestID: "phase1-disable-child"},
 				&tenant.Child, http.StatusOK); err != nil {
 				return fail("tenant-child-disable")
 			}
@@ -533,15 +533,15 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 				return fail("tenant-primary-session-revoke")
 			}
 		} else {
-			if err := value.edge.mutateIAM(ctx, "/organizations/"+string(tenantID)+":set-status", operator,
-				iamv1.SetOrganizationStatusRequest{Status: iamv1.OrganizationDisabled, ResourceVersion: tenant.Account.Organization.ResourceVersion, RequestID: "phase1-pause-tenant"},
+			if err := value.edge.mutateIAM(ctx, "/accounts/"+string(tenantID)+":set-status", operator,
+				iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled, ResourceVersion: tenant.Account.ResourceVersion, RequestID: "phase1-pause-tenant"},
 				&tenant.Account, http.StatusOK); err != nil {
 				return fail("tenant-pause")
 			}
-			if err := value.edge.mutateIAM(ctx, "/organizations/"+string(tenantID)+":recover-administrator", operator, map[string]any{
-				"principalId": tenant.Account.PrimaryPrincipalID, "resourceVersion": tenant.Account.Organization.ResourceVersion,
+			if err := value.edge.mutateIAM(ctx, "/accounts/"+string(tenantID)+":recover-root-credentials", operator, map[string]any{
+				"resourceVersion": tenant.Account.ResourceVersion,
 				"initialPassword": string(tenant.RecoveryPassword), "requestId": "phase1-recover-original-primary",
-			}, &tenant.Account, http.StatusOK); err != nil || tenant.Account.Organization.Status != iamv1.OrganizationDisabled {
+			}, &tenant.Account, http.StatusOK); err != nil || tenant.Account.Status != iamv1.AccountDisabled {
 				return fail("tenant-original-primary-recovery")
 			}
 		}
@@ -605,12 +605,12 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 	}
 	for index := range value.retainedIAM.Tenants {
 		tenant := &value.retainedIAM.Tenants[index]
-		id := tenant.Account.Organization.ID
-		var account iamv1.OrganizationAccount
-		if _, err := value.edge.get(ctx, "/api/iam/v1/organizations/"+string(id), operator, &account); err != nil ||
-			iamv1.ValidateOrganizationAccount(account) != nil || account.PrimaryPrincipalID != tenant.Account.PrimaryPrincipalID ||
-			account.PrimaryLoginName != tenant.Account.PrimaryLoginName || account.Organization.Status != tenant.Account.Organization.Status ||
-			account.Organization.ResourceVersion != tenant.Account.Organization.ResourceVersion {
+		id := tenant.Account.ID
+		var account iamv1.Account
+		if _, err := value.edge.get(ctx, "/api/iam/v1/accounts/"+string(id), operator, &account); err != nil ||
+			iamv1.ValidateAccount(account) != nil || account.RootIdentity.PrincipalID != tenant.Account.RootIdentity.PrincipalID ||
+			account.RootIdentity.LoginName != tenant.Account.RootIdentity.LoginName || account.Status != tenant.Account.Status ||
+			account.ResourceVersion != tenant.Account.ResourceVersion {
 			return fail("tenant-retained-original-account")
 		}
 		for _, credential := range [][]byte{tenant.OldChildCredential, tenant.OldPrimaryCredential, tenant.TemporaryPrimaryCredential, tenant.TemporaryChildCredential} {
@@ -621,10 +621,10 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 			}
 		}
 		for _, login := range []loginWire{
-			{LoginName: account.PrimaryLoginName, Password: string(tenant.InitialPassword), RequestID: "phase1-retained-old-primary-password"},
-			{LoginName: account.PrimaryLoginName, Password: string(tenant.PreviousPrimaryPassword), RequestID: "phase1-retained-previous-primary-password"},
+			{LoginName: account.RootIdentity.LoginName, Password: string(tenant.InitialPassword), RequestID: "phase1-retained-old-primary-password"},
+			{LoginName: account.RootIdentity.LoginName, Password: string(tenant.PreviousPrimaryPassword), RequestID: "phase1-retained-previous-primary-password"},
 			{LoginName: "developer@" + string(id), Password: string(tenant.InitialPassword), RequestID: "phase1-retained-old-child-password"},
-			{LoginName: "developer@" + string(value.retainedIAM.Tenants[1-index].Account.Organization.ID), Password: string(tenant.ChildPassword), RequestID: "phase1-retained-wrong-realm"},
+			{LoginName: "developer@" + string(value.retainedIAM.Tenants[1-index].Account.ID), Password: string(tenant.ChildPassword), RequestID: "phase1-retained-wrong-realm"},
 		} {
 			response, err := value.edge.json(ctx, http.MethodPost, "/api/iam/v1/auth/login", nil, login, nil, http.StatusUnauthorized)
 			clear(response.body)
@@ -640,7 +640,7 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 			}
 			for _, password := range [][]byte{tenant.PrimaryPassword, tenant.RecoveryPassword} {
 				response, err := value.edge.json(ctx, http.MethodPost, "/api/iam/v1/auth/login", nil,
-					loginWire{LoginName: account.PrimaryLoginName, Password: string(password), RequestID: "phase1-retained-paused-primary"}, nil, http.StatusUnauthorized)
+					loginWire{LoginName: account.RootIdentity.LoginName, Password: string(password), RequestID: "phase1-retained-paused-primary"}, nil, http.StatusUnauthorized)
 				clear(response.body)
 				if err != nil {
 					return fail("tenant-pause-resurrected-access")
@@ -650,12 +650,12 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 		}
 		var retainedIdentity iamv1.CurrentIdentity
 		if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", tenant.RetainedPrimaryCredential, &retainedIdentity); err != nil ||
-			iamv1.ValidateCurrentIdentity(retainedIdentity) != nil || retainedIdentity.Principal.ID != account.PrimaryPrincipalID ||
-			retainedIdentity.Principal.OrganizationID != id || retainedIdentity.Principal.MustChangePassword ||
+			iamv1.ValidateCurrentIdentity(retainedIdentity) != nil || retainedIdentity.User.ID != account.RootIdentity.PrincipalID ||
+			retainedIdentity.User.AccountID != id || retainedIdentity.User.MustChangePassword ||
 			!slices.ContainsFunc(retainedIdentity.PolicyAttachments, accountAdministratorPolicy) || slices.ContainsFunc(retainedIdentity.PolicyAttachments, installationPolicy) {
 			return fail("tenant-valid-password-session-not-retained")
 		}
-		primary, err := value.edge.loginNamed(ctx, account.PrimaryLoginName, tenant.PrimaryPassword, id, account.PrimaryPrincipalID, "phase1-retained-primary")
+		primary, err := value.edge.loginNamed(ctx, account.RootIdentity.LoginName, tenant.PrimaryPassword, id, account.RootIdentity.PrincipalID, "phase1-retained-primary")
 		if err != nil || primary.MustChangePassword {
 			return fail("tenant-retained-primary-password")
 		}
@@ -664,23 +664,23 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 		value.edge.addForbidden(bearer)
 		var identity iamv1.CurrentIdentity
 		if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", bearer, &identity); err != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
-			identity.Principal.ID != account.PrimaryPrincipalID || !slices.ContainsFunc(identity.PolicyAttachments, accountAdministratorPolicy) ||
-			slices.ContainsFunc(identity.PolicyAttachments, installationPolicy) || identity.CanCreateOrganizations {
+			identity.User.ID != account.RootIdentity.PrincipalID || !slices.ContainsFunc(identity.PolicyAttachments, accountAdministratorPolicy) ||
+			slices.ContainsFunc(identity.PolicyAttachments, installationPolicy) || identity.CanCreateAccounts {
 			return fail("tenant-primary-became-platform-operator")
 		}
 		if err := value.assertTenantResources(ctx, tenant, bearer, false); err != nil {
 			return err
 		}
-		var members iamv1.PrincipalList
-		if _, err := value.edge.get(ctx, "/api/iam/v1/principals", bearer, &members); err != nil || iamv1.ValidatePrincipalList(members) != nil {
+		var members iamv1.UserList
+		if _, err := value.edge.get(ctx, "/api/iam/v1/users", bearer, &members); err != nil || iamv1.ValidateUserList(members) != nil {
 			return fail("tenant-retained-member-list")
 		}
 		found := false
 		for _, member := range members.Items {
-			if member.Principal.ID != tenant.Child.ID {
+			if member.User.ID != tenant.Child.ID {
 				continue
 			}
-			found = member.Principal.Status == iamv1.PrincipalActive && !member.Principal.MustChangePassword
+			found = member.User.Status == iamv1.PrincipalActive && !member.User.MustChangePassword
 			if len(member.PolicyAttachments) != 0 {
 				return fail("tenant-revoked-role-resurrected")
 			}
@@ -703,7 +703,7 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 		}
 		other := value.retainedIAM.Tenants[1-index]
 		for _, path := range []string{"/api/paas/v1/operations/" + string(other.Operations[0].ID), "/api/managed-services/v1/quota-entitlements/" + other.Quota.ID} {
-			response, err := value.edge.json(ctx, http.MethodGet, path, bearer, nil, map[string]string{"X-Tenant-ID": string(other.Account.Organization.ID)}, http.StatusNotFound)
+			response, err := value.edge.json(ctx, http.MethodGet, path, bearer, nil, map[string]string{"X-Tenant-ID": string(other.Account.ID)}, http.StatusNotFound)
 			clear(response.body)
 			if err != nil {
 				return fail("tenant-retained-foreign-resource")
@@ -717,7 +717,7 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 }
 
 func (value *gate) assertTenantResources(ctx context.Context, tenant *tenantRetention, bearer []byte, capture bool) error {
-	id := string(tenant.Account.Organization.ID)
+	id := string(tenant.Account.ID)
 	var application paasv1.Application
 	if _, err := value.edge.get(ctx, "/api/paas/v1/applications/"+string(tenantApplicationID), bearer, &application); err != nil ||
 		paasv1.ValidateApplication(application) != nil || application.Metadata.Name != id || string(application.Metadata.Scope.TenantID) != id {
@@ -745,7 +745,7 @@ func (value *gate) assertTenantResources(ctx context.Context, tenant *tenantRete
 	poll, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	for poll.Err() == nil {
-		records, err := value.edge.allAuditRecords(poll, bearer, tenant.Account.Organization.ID, "")
+		records, err := value.edge.allAuditRecords(poll, bearer, tenant.Account.ID, "")
 		if err == nil {
 			complete := true
 			for _, operation := range tenant.Operations {
@@ -774,7 +774,7 @@ func (value *gate) assertTenantResources(ctx context.Context, tenant *tenantRete
 				} else if !containsAuditHistory(records, tenant.AuditHashes) {
 					return fail("tenant-audit-history-lost")
 				}
-				if _, err := value.edge.verifyAuditChain(poll, bearer, tenant.Account.Organization.ID, ""); err != nil {
+				if _, err := value.edge.verifyAuditChain(poll, bearer, tenant.Account.ID, ""); err != nil {
 					return fail("tenant-audit-chain-retained")
 				}
 				return nil
@@ -789,8 +789,8 @@ func (value *gate) assertTenantResources(ctx context.Context, tenant *tenantRete
 
 func (value *gate) writePostUpgradeTenantResource(ctx context.Context) (paasv1.Operation, error) {
 	tenant := value.retainedIAM.Tenants[0]
-	login, err := value.edge.loginNamed(ctx, tenant.Account.PrimaryLoginName, tenant.PrimaryPassword,
-		tenant.Account.Organization.ID, tenant.Account.PrimaryPrincipalID, "phase1-post-upgrade-primary")
+	login, err := value.edge.loginNamed(ctx, tenant.Account.RootIdentity.LoginName, tenant.PrimaryPassword,
+		tenant.Account.ID, tenant.Account.RootIdentity.PrincipalID, "phase1-post-upgrade-primary")
 	if err != nil {
 		return paasv1.Operation{}, fail("post-upgrade-tenant-login")
 	}
@@ -800,7 +800,7 @@ func (value *gate) writePostUpgradeTenantResource(ctx context.Context) (paasv1.O
 	operation, err := value.edge.createResource(ctx, "/api/paas/v1/applications", "phase1-after-upgrade", bearer,
 		paasv1.CreateApplicationRequest{ID: postUpgradeApplicationID, Name: string(postUpgradeApplicationID)},
 		paasv1.OperationCreateApplication, paasv1.ResourceRef{Kind: "Application", ID: postUpgradeApplicationID})
-	if err != nil || string(operation.Scope.TenantID) != string(tenant.Account.Organization.ID) {
+	if err != nil || string(operation.Scope.TenantID) != string(tenant.Account.ID) {
 		return paasv1.Operation{}, fail("post-upgrade-tenant-resource")
 	}
 	return operation, nil
@@ -808,8 +808,8 @@ func (value *gate) writePostUpgradeTenantResource(ctx context.Context) (paasv1.O
 
 func (value *gate) assertPostUpgradeTenantResource(ctx context.Context, operation paasv1.Operation, retained bool) error {
 	tenant := value.retainedIAM.Tenants[0]
-	login, err := value.edge.loginNamed(ctx, tenant.Account.PrimaryLoginName, tenant.PrimaryPassword,
-		tenant.Account.Organization.ID, tenant.Account.PrimaryPrincipalID, "phase1-post-upgrade-read")
+	login, err := value.edge.loginNamed(ctx, tenant.Account.RootIdentity.LoginName, tenant.PrimaryPassword,
+		tenant.Account.ID, tenant.Account.RootIdentity.PrincipalID, "phase1-post-upgrade-read")
 	if err != nil {
 		return fail("post-upgrade-tenant-read-login")
 	}
@@ -838,25 +838,25 @@ func (value *gate) restorePausedTenant(ctx context.Context) error {
 	defer clear(operator)
 	defer func() { _ = value.edge.logout(ctx, operator) }()
 	tenant := &value.retainedIAM.Tenants[1]
-	id := tenant.Account.Organization.ID
-	var account iamv1.OrganizationAccount
-	if _, err := value.edge.get(ctx, "/api/iam/v1/organizations/"+string(id), operator, &account); err != nil {
+	id := tenant.Account.ID
+	var account iamv1.Account
+	if _, err := value.edge.get(ctx, "/api/iam/v1/accounts/"+string(id), operator, &account); err != nil {
 		return fail("restore-tenant-read")
 	}
-	if err := value.edge.mutateIAM(ctx, "/organizations/"+string(id)+":set-status", operator,
-		iamv1.SetOrganizationStatusRequest{Status: iamv1.OrganizationActive, ResourceVersion: account.Organization.ResourceVersion, RequestID: "phase1-explicit-tenant-resume"},
-		&account, http.StatusOK); err != nil || account.PrimaryPrincipalID != tenant.Account.PrimaryPrincipalID {
+	if err := value.edge.mutateIAM(ctx, "/accounts/"+string(id)+":set-status", operator,
+		iamv1.SetAccountStatusRequest{Status: iamv1.AccountActive, ResourceVersion: account.ResourceVersion, RequestID: "phase1-explicit-tenant-resume"},
+		&account, http.StatusOK); err != nil || account.RootIdentity.PrincipalID != tenant.Account.RootIdentity.PrincipalID {
 		return fail("restore-original-tenant")
 	}
 	for _, password := range [][]byte{tenant.InitialPassword, tenant.PrimaryPassword} {
 		response, err := value.edge.json(ctx, http.MethodPost, "/api/iam/v1/auth/login", nil,
-			loginWire{LoginName: account.PrimaryLoginName, Password: string(password), RequestID: "phase1-recovered-old-password"}, nil, http.StatusUnauthorized)
+			loginWire{LoginName: account.RootIdentity.LoginName, Password: string(password), RequestID: "phase1-recovered-old-password"}, nil, http.StatusUnauthorized)
 		clear(response.body)
 		if err != nil {
 			return fail("recovery-restored-old-primary-password")
 		}
 	}
-	primary, err := value.edge.loginNamed(ctx, account.PrimaryLoginName, tenant.RecoveryPassword, id, account.PrimaryPrincipalID, "phase1-recovered-primary-login")
+	primary, err := value.edge.loginNamed(ctx, account.RootIdentity.LoginName, tenant.RecoveryPassword, id, account.RootIdentity.PrincipalID, "phase1-recovered-primary-login")
 	if err != nil || !primary.MustChangePassword {
 		return fail("recovered-primary-required-password-change")
 	}
@@ -869,27 +869,27 @@ func (value *gate) restorePausedTenant(ctx context.Context) error {
 	}
 	var identity iamv1.CurrentIdentity
 	if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", bearer, &identity); err != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
-		identity.Principal.ID != account.PrimaryPrincipalID || identity.Principal.MustChangePassword ||
-		!slices.ContainsFunc(identity.PolicyAttachments, accountAdministratorPolicy) || slices.ContainsFunc(identity.PolicyAttachments, installationPolicy) || identity.CanCreateOrganizations {
+		identity.User.ID != account.RootIdentity.PrincipalID || identity.User.MustChangePassword ||
+		!slices.ContainsFunc(identity.PolicyAttachments, accountAdministratorPolicy) || slices.ContainsFunc(identity.PolicyAttachments, installationPolicy) || identity.CanCreateAccounts {
 		return fail("recovered-primary-scope")
 	}
-	var principals iamv1.PrincipalList
-	if _, err := value.edge.get(ctx, "/api/iam/v1/principals", bearer, &principals); err != nil || iamv1.ValidatePrincipalList(principals) != nil {
+	var principals iamv1.UserList
+	if _, err := value.edge.get(ctx, "/api/iam/v1/users", bearer, &principals); err != nil || iamv1.ValidateUserList(principals) != nil {
 		return fail("recovered-member-list")
 	}
-	var disabled iamv1.Principal
+	var disabled iamv1.User
 	for _, member := range principals.Items {
-		if member.Principal.ID == tenant.Child.ID {
-			disabled = member.Principal
+		if member.User.ID == tenant.Child.ID {
+			disabled = member.User
 		}
 	}
 	if disabled.Status != iamv1.PrincipalDisabled || disabled.MustChangePassword {
 		return fail("recovered-member-disabled-state")
 	}
-	var enabled iamv1.Principal
-	if err := value.edge.mutateIAM(ctx, "/principals/"+string(disabled.ID)+":set-status", bearer,
-		iamv1.SetPrincipalStatusRequest{Status: iamv1.PrincipalActive, ResourceVersion: disabled.ResourceVersion, RequestID: "phase1-explicit-child-resume"},
-		&enabled, http.StatusOK); err != nil || enabled.ID != tenant.Child.ID || enabled.OrganizationID != id {
+	var enabled iamv1.User
+	if err := value.edge.mutateIAM(ctx, "/users/"+string(disabled.ID)+":set-status", bearer,
+		iamv1.SetUserStatusRequest{Status: iamv1.PrincipalActive, ResourceVersion: disabled.ResourceVersion, RequestID: "phase1-explicit-child-resume"},
+		&enabled, http.StatusOK); err != nil || enabled.ID != tenant.Child.ID || enabled.AccountID != id {
 		return fail("recovered-member-resume")
 	}
 	response, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/auth/me", tenant.OldChildCredential, nil, nil, http.StatusUnauthorized)
@@ -921,11 +921,11 @@ func (value *gate) assertPlatformAuditRetention(ctx context.Context, bearer []by
 		action auditv1.Action
 		target auditv1.TargetReference
 	}{
-		"phase1-open-alpha":   {auditv1.ActionIAMTenantCreated, auditv1.TargetReference{Kind: auditv1.TargetOrganization, ID: string(alpha.Account.Organization.ID)}},
-		"phase1-open-beta":    {auditv1.ActionIAMTenantCreated, auditv1.TargetReference{Kind: auditv1.TargetOrganization, ID: string(beta.Account.Organization.ID)}},
-		"phase1-pause-tenant": {auditv1.ActionIAMTenantDisabled, auditv1.TargetReference{Kind: auditv1.TargetOrganization, ID: string(beta.Account.Organization.ID)}},
-		"phase1-recover-original-primary": {auditv1.ActionIAMTenantAdministratorRecovered, auditv1.TargetReference{
-			Kind: auditv1.TargetPrincipal, ID: string(beta.Account.PrimaryPrincipalID), TenantID: auditv1.TenantID(beta.Account.Organization.ID),
+		"phase1-open-alpha":   {auditv1.ActionIAMAccountCreated, auditv1.TargetReference{Kind: auditv1.TargetAccount, ID: string(alpha.Account.ID)}},
+		"phase1-open-beta":    {auditv1.ActionIAMAccountCreated, auditv1.TargetReference{Kind: auditv1.TargetAccount, ID: string(beta.Account.ID)}},
+		"phase1-pause-tenant": {auditv1.ActionIAMAccountDisabled, auditv1.TargetReference{Kind: auditv1.TargetAccount, ID: string(beta.Account.ID)}},
+		"phase1-recover-original-primary": {auditv1.ActionIAMAccountRootCredentialsRecovered, auditv1.TargetReference{
+			Kind: auditv1.TargetUser, ID: string(beta.Account.RootIdentity.PrincipalID), TenantID: auditv1.TenantID(beta.Account.ID),
 		}},
 	}
 	poll, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -1019,7 +1019,7 @@ func (value *gate) pathLeakage() [][]byte {
 			result = append(result, tenant.InitialPassword, tenant.PrimaryPassword, tenant.ChildPassword,
 				tenant.RecoveryPassword, tenant.FinalPrimaryPassword, tenant.OldPrimaryCredential, tenant.OldChildCredential,
 				tenant.PreviousPrimaryPassword, tenant.TemporaryPrimaryCredential, tenant.TemporaryChildCredential, tenant.RetainedPrimaryCredential,
-				[]byte(string(tenant.Account.Organization.ID)+"-private-value"))
+				[]byte(string(tenant.Account.ID)+"-private-value"))
 		}
 	}
 	return append(result, value.sensitive...)

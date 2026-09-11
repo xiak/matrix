@@ -8,121 +8,133 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 )
 
-func normalizeAccount(value *iamv1.OrganizationAccount) {
-	value.Organization.CreatedAt = value.Organization.CreatedAt.UTC()
-	value.Organization.UpdatedAt = value.Organization.UpdatedAt.UTC()
-}
-
-func normalizePrincipal(value *iamv1.Principal) {
+func normalizeAccount(value *iamv1.Account) {
 	value.CreatedAt = value.CreatedAt.UTC()
 	value.UpdatedAt = value.UpdatedAt.UTC()
 }
 
-func (value *transaction) ReadAccount(ctx context.Context, tenant iamv1.OrganizationID, principal iamv1.PrincipalID) (iamv1.OrganizationAccount, error) {
+func normalizeUser(value *iamv1.User) {
+	value.CreatedAt = value.CreatedAt.UTC()
+	value.UpdatedAt = value.UpdatedAt.UTC()
+}
+
+func (value *transaction) ReadAccount(ctx context.Context, tenant iamv1.AccountID, principal iamv1.PrincipalID) (iamv1.Account, error) {
 	var encoded []byte
 	if err := value.tx.QueryRow(ctx, "SELECT iam.read_account($1,$2)", tenant, principal).Scan(&encoded); err != nil {
-		return iamv1.OrganizationAccount{}, mapSubjectDatabaseError("read IAM account", err)
+		return iamv1.Account{}, mapSubjectDatabaseError("read IAM account", err)
 	}
 	return decodeAccount(encoded)
 }
 
-func decodeAccount(encoded []byte) (iamv1.OrganizationAccount, error) {
-	var result iamv1.OrganizationAccount
+func decodeAccount(encoded []byte) (iamv1.Account, error) {
+	var result iamv1.Account
 	if json.Unmarshal(encoded, &result) != nil {
 		return result, identityaccess.ErrUnavailable
 	}
 	normalizeAccount(&result)
-	if iamv1.ValidateOrganizationAccount(result) != nil {
-		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+	if iamv1.ValidateAccount(result) != nil {
+		return iamv1.Account{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }
 
-func (value *transaction) ReadOrganization(ctx context.Context, read identityaccess.AccountRead, id iamv1.OrganizationID) (iamv1.OrganizationAccount, error) {
+func (value *transaction) ReadAccountAsPlatform(ctx context.Context, read identityaccess.AccountRead, id iamv1.AccountID) (iamv1.Account, error) {
 	var encoded []byte
-	if err := value.tx.QueryRow(ctx, "SELECT iam.read_organization($1,$2,$3,$4)", read.OrganizationID, read.ActorPrincipalID, read.DecisionID, id).Scan(&encoded); err != nil {
-		return iamv1.OrganizationAccount{}, mapAuthorizationDatabaseError("read IAM organization", err)
+	if err := value.tx.QueryRow(ctx, "SELECT iam.read_account_as_platform($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, id).Scan(&encoded); err != nil {
+		return iamv1.Account{}, mapAuthorizationDatabaseError("read IAM account", err)
 	}
 	result, err := decodeAccount(encoded)
-	if err != nil || result.Organization.ID != id {
-		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+	if err != nil || result.ID != id {
+		return iamv1.Account{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }
 
-func (value *transaction) SetOrganizationStatus(ctx context.Context, mutation identityaccess.OrganizationStatusMutation) (iamv1.OrganizationAccount, error) {
+func (value *transaction) ReadAccountRoot(ctx context.Context, read identityaccess.AccountRead, id iamv1.AccountID) (iamv1.RootIdentity, error) {
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.read_account_root($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, id).Scan(&encoded); err != nil {
+		return iamv1.RootIdentity{}, mapAuthorizationDatabaseError("read IAM account root", err)
+	}
+	var result iamv1.RootIdentity
+	if json.Unmarshal(encoded, &result) != nil || iamv1.ValidateRootIdentity(result) != nil {
+		return iamv1.RootIdentity{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) SetAccountStatus(ctx context.Context, mutation identityaccess.AccountStatusMutation) (iamv1.Account, error) {
 	event, err := json.Marshal(mutation.AuditEvent)
 	if err != nil {
-		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+		return iamv1.Account{}, identityaccess.ErrUnavailable
 	}
 	defer clear(event)
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.set_organization_status($1,$2,$3,$4,$5,$6,$7::jsonb)",
-		mutation.ActorOrganizationID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.OrganizationID,
+	err = value.tx.QueryRow(ctx, "SELECT iam.set_account_status($1,$2,$3,$4,$5,$6,$7::jsonb)",
+		mutation.ActorAccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.AccountID,
 		mutation.Status, mutation.ResourceVersion, event).Scan(&encoded)
 	if err != nil {
-		return iamv1.OrganizationAccount{}, mapAuthorizationDatabaseError("set IAM organization status", err)
+		return iamv1.Account{}, mapAuthorizationDatabaseError("set IAM account status", err)
 	}
 	result, err := decodeAccount(encoded)
-	if err != nil || result.Organization.ID != mutation.OrganizationID || result.Organization.Status != mutation.Status {
-		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+	if err != nil || result.ID != mutation.AccountID || result.Status != mutation.Status {
+		return iamv1.Account{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }
 
-func (value *transaction) RecoverOrganizationAdministrator(ctx context.Context, mutation identityaccess.OrganizationAdministratorRecovery) (iamv1.OrganizationAccount, error) {
+func (value *transaction) RecoverRootCredentials(ctx context.Context, mutation identityaccess.RootCredentialRecovery) (iamv1.Account, error) {
 	event, err := json.Marshal(mutation.AuditEvent)
 	if err != nil {
-		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+		return iamv1.Account{}, identityaccess.ErrUnavailable
 	}
 	defer clear(event)
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.recover_organization_administrator($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
-		mutation.ActorOrganizationID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.OrganizationID,
+	err = value.tx.QueryRow(ctx, "SELECT iam.recover_root_credentials($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
+		mutation.ActorAccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.AccountID,
 		mutation.PrincipalID, mutation.ResourceVersion, string(mutation.PasswordHash), mutation.AttachmentID, event).Scan(&encoded)
 	if err != nil {
-		return iamv1.OrganizationAccount{}, mapAuthorizationDatabaseError("recover IAM organization administrator", err)
+		return iamv1.Account{}, mapAuthorizationDatabaseError("recover IAM account root credentials", err)
 	}
 	result, err := decodeAccount(encoded)
-	if err != nil || result.Organization.ID != mutation.OrganizationID || result.PrimaryPrincipalID != mutation.PrincipalID {
-		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+	if err != nil || result.ID != mutation.AccountID || result.RootIdentity.PrincipalID != mutation.PrincipalID {
+		return iamv1.Account{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }
 
-func (value *transaction) ListPrincipals(ctx context.Context, read identityaccess.AccountRead) (iamv1.PrincipalList, error) {
+func (value *transaction) ListUsers(ctx context.Context, read identityaccess.AccountRead) (iamv1.UserList, error) {
 	var encoded []byte
-	if err := value.tx.QueryRow(ctx, "SELECT iam.list_principals($1,$2,$3,$4)", read.OrganizationID, read.ActorPrincipalID, read.DecisionID, read.After).Scan(&encoded); err != nil {
-		return iamv1.PrincipalList{}, mapAuthorizationDatabaseError("list IAM principals", err)
+	if err := value.tx.QueryRow(ctx, "SELECT iam.list_users($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, read.After).Scan(&encoded); err != nil {
+		return iamv1.UserList{}, mapAuthorizationDatabaseError("list IAM users", err)
 	}
-	result := iamv1.PrincipalList{APIVersion: iamv1.APIVersion, Kind: "PrincipalList"}
+	result := iamv1.UserList{APIVersion: iamv1.APIVersion, Kind: "UserList"}
 	if json.Unmarshal(encoded, &result.Items) != nil || len(result.Items) > 101 {
 		return result, identityaccess.ErrUnavailable
 	}
 	if len(result.Items) > 100 {
 		result.Items = result.Items[:100]
-		result.NextAfter = string(result.Items[99].Principal.ID)
+		result.NextAfter = string(result.Items[99].User.ID)
 	}
 	for i := range result.Items {
 		item := &result.Items[i]
-		normalizePrincipal(&item.Principal)
-		if item.Principal.OrganizationID != read.OrganizationID {
-			return iamv1.PrincipalList{}, identityaccess.ErrUnavailable
+		normalizeUser(&item.User)
+		if item.User.AccountID != read.AccountID {
+			return iamv1.UserList{}, identityaccess.ErrUnavailable
 		}
 		for j := range item.PolicyAttachments {
 			item.PolicyAttachments[j].CreatedAt = item.PolicyAttachments[j].CreatedAt.UTC()
 			item.PolicyAttachments[j].UpdatedAt = item.PolicyAttachments[j].UpdatedAt.UTC()
 		}
 	}
-	if iamv1.ValidatePrincipalList(result) != nil {
-		return iamv1.PrincipalList{}, identityaccess.ErrUnavailable
+	if iamv1.ValidateUserList(result) != nil {
+		return iamv1.UserList{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }
 
 func (value *transaction) ListPolicies(ctx context.Context, read identityaccess.AccountRead, scope iamv1.AuthorityScope) (iamv1.PolicyList, error) {
 	var encoded []byte
-	if err := value.tx.QueryRow(ctx, "SELECT iam.list_policies($1,$2,$3,$4)", read.OrganizationID, read.ActorPrincipalID, read.DecisionID, scope).Scan(&encoded); err != nil {
+	if err := value.tx.QueryRow(ctx, "SELECT iam.list_policies($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, scope).Scan(&encoded); err != nil {
 		return iamv1.PolicyList{}, mapAuthorizationDatabaseError("list IAM policies", err)
 	}
 	var result iamv1.PolicyList
@@ -133,70 +145,70 @@ func (value *transaction) ListPolicies(ctx context.Context, read identityaccess.
 		result.Items[index].CreatedAt = result.Items[index].CreatedAt.UTC()
 		result.Items[index].UpdatedAt = result.Items[index].UpdatedAt.UTC()
 	}
-	if iamv1.ValidatePolicyList(result) != nil || result.AccountID != read.OrganizationID || result.Scope != scope {
+	if iamv1.ValidatePolicyList(result) != nil || result.AccountID != read.AccountID || result.Scope != scope {
 		return iamv1.PolicyList{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }
 
-func (value *transaction) ListAccounts(ctx context.Context, read identityaccess.AccountRead) (iamv1.OrganizationAccountList, error) {
+func (value *transaction) ListAccounts(ctx context.Context, read identityaccess.AccountRead) (iamv1.AccountList, error) {
 	var encoded []byte
-	if err := value.tx.QueryRow(ctx, "SELECT iam.list_accounts($1,$2,$3,$4)", read.OrganizationID, read.ActorPrincipalID, read.DecisionID, read.After).Scan(&encoded); err != nil {
-		return iamv1.OrganizationAccountList{}, mapAuthorizationDatabaseError("list IAM accounts", err)
+	if err := value.tx.QueryRow(ctx, "SELECT iam.list_accounts($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, read.After).Scan(&encoded); err != nil {
+		return iamv1.AccountList{}, mapAuthorizationDatabaseError("list IAM accounts", err)
 	}
-	result := iamv1.OrganizationAccountList{APIVersion: iamv1.APIVersion, Kind: "OrganizationAccountList"}
+	result := iamv1.AccountList{APIVersion: iamv1.APIVersion, Kind: "AccountList"}
 	if json.Unmarshal(encoded, &result.Items) != nil || len(result.Items) > 101 {
 		return result, identityaccess.ErrUnavailable
 	}
 	if len(result.Items) > 100 {
 		result.Items = result.Items[:100]
-		result.NextAfter = string(result.Items[99].Organization.ID)
+		result.NextAfter = string(result.Items[99].ID)
 	}
 	for i := range result.Items {
 		normalizeAccount(&result.Items[i])
 	}
-	if iamv1.ValidateOrganizationAccountList(result) != nil {
-		return iamv1.OrganizationAccountList{}, identityaccess.ErrUnavailable
+	if iamv1.ValidateAccountList(result) != nil {
+		return iamv1.AccountList{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }
 
-func (value *transaction) CreateOrganization(ctx context.Context, mutation identityaccess.OrganizationMutation) (iamv1.OrganizationAccount, error) {
+func (value *transaction) CreateAccount(ctx context.Context, mutation identityaccess.AccountMutation) (iamv1.Account, error) {
 	event, err := json.Marshal(mutation.AuditEvent)
 	if err != nil {
-		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+		return iamv1.Account{}, identityaccess.ErrUnavailable
 	}
 	defer clear(event)
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, `SELECT iam.create_organization($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
-		mutation.ActorOrganizationID, mutation.ActorPrincipalID, mutation.DecisionID,
-		mutation.Organization.ID, mutation.Organization.DisplayName, mutation.Administrator.ID,
-		mutation.Administrator.LoginName, mutation.Administrator.DisplayName, string(mutation.Administrator.PasswordHash), event).Scan(&encoded)
+	err = value.tx.QueryRow(ctx, `SELECT iam.create_account($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
+		mutation.ActorAccountID, mutation.ActorPrincipalID, mutation.DecisionID,
+		mutation.Account.ID, mutation.Account.DisplayName, mutation.Root.ID,
+		mutation.Root.LoginName, mutation.Root.DisplayName, string(mutation.Root.PasswordHash), event).Scan(&encoded)
 	if err != nil {
-		return iamv1.OrganizationAccount{}, mapAuthorizationDatabaseError("create IAM organization", err)
+		return iamv1.Account{}, mapAuthorizationDatabaseError("create IAM account", err)
 	}
 	return decodeAccount(encoded)
 }
 
-func (value *transaction) SetAccountAlias(ctx context.Context, mutation identityaccess.AccountAliasMutation) (iamv1.OrganizationAccount, error) {
+func (value *transaction) SetAccountAlias(ctx context.Context, mutation identityaccess.AccountAliasMutation) (iamv1.Account, error) {
 	event, err := json.Marshal(mutation.AuditEvent)
 	if err != nil {
-		return iamv1.OrganizationAccount{}, identityaccess.ErrUnavailable
+		return iamv1.Account{}, identityaccess.ErrUnavailable
 	}
 	defer clear(event)
 	var encoded []byte
 	err = value.tx.QueryRow(ctx, `SELECT iam.set_account_alias($1,$2,$3,$4,$5,$6::jsonb)`,
-		mutation.OrganizationID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.Alias, mutation.ResourceVersion, event).Scan(&encoded)
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.Alias, mutation.ResourceVersion, event).Scan(&encoded)
 	if err != nil {
-		return iamv1.OrganizationAccount{}, mapAuthorizationDatabaseError("set IAM account alias", err)
+		return iamv1.Account{}, mapAuthorizationDatabaseError("set IAM account alias", err)
 	}
 	return decodeAccount(encoded)
 }
 
-func (value *transaction) ChangeSubaccount(ctx context.Context, mutation identityaccess.SubaccountMutation) (iamv1.Principal, error) {
+func (value *transaction) ChangeUser(ctx context.Context, mutation identityaccess.UserChange) (iamv1.User, error) {
 	event, err := json.Marshal(mutation.AuditEvent)
 	if err != nil {
-		return iamv1.Principal{}, identityaccess.ErrUnavailable
+		return iamv1.User{}, identityaccess.ErrUnavailable
 	}
 	defer clear(event)
 	var encoded []byte
@@ -207,19 +219,19 @@ func (value *transaction) ChangeSubaccount(ctx context.Context, mutation identit
 	if mutation.PasswordHash != nil {
 		hash = string(*mutation.PasswordHash)
 	}
-	err = value.tx.QueryRow(ctx, `SELECT iam.change_subaccount($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
-		mutation.OrganizationID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PrincipalID,
+	err = value.tx.QueryRow(ctx, `SELECT iam.change_user($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PrincipalID,
 		mutation.ResourceVersion, status, hash, event).Scan(&encoded)
 	if err != nil {
-		return iamv1.Principal{}, mapAuthorizationDatabaseError("change IAM subaccount", err)
+		return iamv1.User{}, mapAuthorizationDatabaseError("change IAM user", err)
 	}
-	var result iamv1.Principal
+	var result iamv1.User
 	if json.Unmarshal(encoded, &result) != nil {
 		return result, identityaccess.ErrUnavailable
 	}
-	normalizePrincipal(&result)
-	if iamv1.ValidatePrincipal(result) != nil || result.OrganizationID != mutation.OrganizationID || result.ID != mutation.PrincipalID {
-		return iamv1.Principal{}, identityaccess.ErrUnavailable
+	normalizeUser(&result)
+	if iamv1.ValidateUser(result) != nil || result.AccountID != mutation.AccountID || result.ID != mutation.PrincipalID {
+		return iamv1.User{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }

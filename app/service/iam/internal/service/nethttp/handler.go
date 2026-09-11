@@ -20,16 +20,16 @@ import (
 
 type Workflow interface {
 	CurrentIdentity(context.Context, iamv1.Secret) (iamv1.CurrentIdentity, error)
-	ListPrincipals(context.Context, iamv1.Secret, string, string) (iamv1.PrincipalList, error)
+	ListUsers(context.Context, iamv1.Secret, string, string) (iamv1.UserList, error)
 	ListPolicies(context.Context, iamv1.Secret, bool, string) (iamv1.PolicyList, error)
-	ListAccounts(context.Context, iamv1.Secret, string, string) (iamv1.OrganizationAccountList, error)
-	ReadOrganization(context.Context, iamv1.Secret, iamv1.OrganizationID, string) (iamv1.OrganizationAccount, error)
-	SetOrganizationStatus(context.Context, iamv1.Secret, iamv1.OrganizationID, iamv1.SetOrganizationStatusRequest) (iamv1.OrganizationAccount, error)
-	RecoverOrganizationAdministrator(context.Context, iamv1.Secret, iamv1.OrganizationID, iamv1.RecoverOrganizationAdministratorRequest) (iamv1.OrganizationAccount, error)
-	CreateOrganization(context.Context, iamv1.Secret, iamv1.CreateOrganizationRequest) (iamv1.OrganizationAccount, error)
-	SetAccountAlias(context.Context, iamv1.Secret, iamv1.SetAccountAliasRequest) (iamv1.OrganizationAccount, error)
-	SetPrincipalStatus(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.SetPrincipalStatusRequest) (iamv1.Principal, error)
-	ResetUserPassword(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.ResetUserPasswordRequest) (iamv1.Principal, error)
+	ListAccounts(context.Context, iamv1.Secret, string, string) (iamv1.AccountList, error)
+	GetAccount(context.Context, iamv1.Secret, iamv1.AccountID, string) (iamv1.Account, error)
+	SetAccountStatus(context.Context, iamv1.Secret, iamv1.AccountID, iamv1.SetAccountStatusRequest) (iamv1.Account, error)
+	RecoverRootCredentials(context.Context, iamv1.Secret, iamv1.AccountID, iamv1.RecoverRootCredentialsRequest) (iamv1.Account, error)
+	CreateAccount(context.Context, iamv1.Secret, iamv1.CreateAccountRequest) (iamv1.Account, error)
+	SetAccountAlias(context.Context, iamv1.Secret, iamv1.SetAccountAliasRequest) (iamv1.Account, error)
+	SetUserStatus(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.SetUserStatusRequest) (iamv1.User, error)
+	ResetUserPassword(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.ResetUserPasswordRequest) (iamv1.User, error)
 	Readiness(context.Context) (iamv1.Readiness, error)
 	BootstrapStatus(context.Context, iamv1.Secret) (iamv1.BootstrapStatus, error)
 	ServiceIdentity(context.Context, iamv1.Secret) (iamv1.ServiceIdentity, error)
@@ -37,7 +37,7 @@ type Workflow interface {
 	Login(context.Context, iamv1.LoginRequest) (iamv1.LoginResponse, error)
 	Logout(context.Context, iamv1.Secret, iamv1.LogoutRequest) (iamv1.LogoutResponse, error)
 	ChangePassword(context.Context, iamv1.Secret, iamv1.ChangePasswordRequest) (iamv1.ChangePasswordResponse, error)
-	CreateUser(context.Context, iamv1.Secret, iamv1.CreateUserRequest) (iamv1.Principal, error)
+	CreateUser(context.Context, iamv1.Secret, iamv1.CreateUserRequest) (iamv1.User, error)
 	CreatePolicyAttachment(context.Context, iamv1.Secret, iamv1.CreatePolicyAttachmentRequest) (iamv1.PolicyAttachment, error)
 	RevokePolicyAttachment(
 		context.Context,
@@ -93,15 +93,15 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/me", value.currentIdentity)
 	routes.HandleFunc("/v1/policies", value.listPolicies)
 	routes.HandleFunc("/v1/platform-policies", value.listPolicies)
-	routes.HandleFunc("/v1/organizations", value.organizations)
-	routes.HandleFunc("/v1/organizations/", value.organization)
-	routes.HandleFunc("/v1/organization:alias", value.setAccountAlias)
+	routes.HandleFunc("/v1/accounts", value.accounts)
+	routes.HandleFunc("/v1/accounts/", value.account)
+	routes.HandleFunc("/v1/account:alias", value.setAccountAlias)
 	routes.HandleFunc("/v1/auth/logout", value.logout)
 	routes.HandleFunc("/v1/auth/password", value.changePassword)
 	routes.HandleFunc("/v1/authorize", value.authorize)
 	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
-	routes.HandleFunc("/v1/principals", value.createUser)
-	routes.HandleFunc("/v1/principals/", value.changeSubaccount)
+	routes.HandleFunc("/v1/users", value.users)
+	routes.HandleFunc("/v1/users/", value.changeUser)
 	routes.HandleFunc("/v1/policy-attachments", value.createPolicyAttachment)
 	routes.HandleFunc("/v1/policy-attachments/", value.revokePolicyAttachment)
 	routes.HandleFunc("/v1/sessions/", value.revokeSession)
@@ -268,9 +268,9 @@ func (value *handler) changePassword(response http.ResponseWriter, request *http
 	writeJSON(response, http.StatusOK, result)
 }
 
-func (value *handler) createUser(response http.ResponseWriter, request *http.Request) {
+func (value *handler) users(response http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodGet {
-		value.listPrincipals(response, request)
+		value.listUsers(response, request)
 		return
 	}
 	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
@@ -452,7 +452,7 @@ func accountPage(response http.ResponseWriter, request *http.Request) (string, b
 	return values[0], true
 }
 
-func (value *handler) listPrincipals(response http.ResponseWriter, request *http.Request) {
+func (value *handler) listUsers(response http.ResponseWriter, request *http.Request) {
 	after, ok := accountPage(response, request)
 	if !ok {
 		return
@@ -461,7 +461,7 @@ func (value *handler) listPrincipals(response http.ResponseWriter, request *http
 	if !ok {
 		return
 	}
-	result, err := value.workflow.ListPrincipals(request.Context(), credential, after, requestID(request))
+	result, err := value.workflow.ListUsers(request.Context(), credential, after, requestID(request))
 	if err != nil {
 		value.writeError(response, request, err)
 		return
@@ -469,7 +469,7 @@ func (value *handler) listPrincipals(response http.ResponseWriter, request *http
 	writeJSON(response, http.StatusOK, result)
 }
 
-func (value *handler) organizations(response http.ResponseWriter, request *http.Request) {
+func (value *handler) accounts(response http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodGet {
 		after, ok := accountPage(response, request)
 		if !ok {
@@ -494,11 +494,11 @@ func (value *handler) organizations(response http.ResponseWriter, request *http.
 	if !ok {
 		return
 	}
-	body, ok := decodeJSON[iamv1.CreateOrganizationRequest](value, response, request)
+	body, ok := decodeJSON[iamv1.CreateAccountRequest](value, response, request)
 	if !ok {
 		return
 	}
-	result, err := value.workflow.CreateOrganization(request.Context(), credential, body)
+	result, err := value.workflow.CreateAccount(request.Context(), credential, body)
 	if err != nil {
 		value.writeError(response, request, err)
 		return
@@ -526,18 +526,18 @@ func (value *handler) setAccountAlias(response http.ResponseWriter, request *htt
 	writeJSON(response, http.StatusOK, result)
 }
 
-func (value *handler) organization(response http.ResponseWriter, request *http.Request) {
+func (value *handler) account(response http.ResponseWriter, request *http.Request) {
 	suffix := ""
 	if request.Method != http.MethodGet {
 		if !value.requireMethod(response, request, http.MethodPost) {
 			return
 		}
 		suffix = ":set-status"
-		if strings.HasSuffix(request.URL.Path, ":recover-administrator") {
-			suffix = ":recover-administrator"
+		if strings.HasSuffix(request.URL.Path, ":recover-root-credentials") {
+			suffix = ":recover-root-credentials"
 		}
 	}
-	id, ok := commandPathID(response, request, "/v1/organizations/", suffix, "organizationId")
+	id, ok := commandPathID(response, request, "/v1/accounts/", suffix, "accountId")
 	if !ok || !rejectQuery(response, request) {
 		return
 	}
@@ -545,26 +545,26 @@ func (value *handler) organization(response http.ResponseWriter, request *http.R
 	if !ok {
 		return
 	}
-	var result iamv1.OrganizationAccount
+	var result iamv1.Account
 	var err error
 	switch suffix {
 	case "":
 		if !rejectQueryAndBody(response, request) {
 			return
 		}
-		result, err = value.workflow.ReadOrganization(request.Context(), credential, iamv1.OrganizationID(id), requestID(request))
+		result, err = value.workflow.GetAccount(request.Context(), credential, iamv1.AccountID(id), requestID(request))
 	case ":set-status":
-		body, ok := decodeJSON[iamv1.SetOrganizationStatusRequest](value, response, request)
+		body, ok := decodeJSON[iamv1.SetAccountStatusRequest](value, response, request)
 		if !ok {
 			return
 		}
-		result, err = value.workflow.SetOrganizationStatus(request.Context(), credential, iamv1.OrganizationID(id), body)
-	case ":recover-administrator":
-		body, ok := decodeJSON[iamv1.RecoverOrganizationAdministratorRequest](value, response, request)
+		result, err = value.workflow.SetAccountStatus(request.Context(), credential, iamv1.AccountID(id), body)
+	case ":recover-root-credentials":
+		body, ok := decodeJSON[iamv1.RecoverRootCredentialsRequest](value, response, request)
 		if !ok {
 			return
 		}
-		result, err = value.workflow.RecoverOrganizationAdministrator(request.Context(), credential, iamv1.OrganizationID(id), body)
+		result, err = value.workflow.RecoverRootCredentials(request.Context(), credential, iamv1.AccountID(id), body)
 	}
 	if err != nil {
 		value.writeError(response, request, err)
@@ -573,13 +573,13 @@ func (value *handler) organization(response http.ResponseWriter, request *http.R
 	writeJSON(response, http.StatusOK, result)
 }
 
-func (value *handler) changeSubaccount(response http.ResponseWriter, request *http.Request) {
+func (value *handler) changeUser(response http.ResponseWriter, request *http.Request) {
 	suffix := ":set-status"
 	reset := strings.HasSuffix(request.URL.Path, ":reset-password")
 	if reset {
 		suffix = ":reset-password"
 	}
-	id, ok := commandPathID(response, request, "/v1/principals/", suffix, "principalId")
+	id, ok := commandPathID(response, request, "/v1/users/", suffix, "userId")
 	if !ok || !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
 	}
@@ -587,7 +587,7 @@ func (value *handler) changeSubaccount(response http.ResponseWriter, request *ht
 	if !ok {
 		return
 	}
-	var result iamv1.Principal
+	var result iamv1.User
 	var err error
 	if reset {
 		body, ok := decodeJSON[iamv1.ResetUserPasswordRequest](value, response, request)
@@ -596,11 +596,11 @@ func (value *handler) changeSubaccount(response http.ResponseWriter, request *ht
 		}
 		result, err = value.workflow.ResetUserPassword(request.Context(), credential, iamv1.PrincipalID(id), body)
 	} else {
-		body, ok := decodeJSON[iamv1.SetPrincipalStatusRequest](value, response, request)
+		body, ok := decodeJSON[iamv1.SetUserStatusRequest](value, response, request)
 		if !ok {
 			return
 		}
-		result, err = value.workflow.SetPrincipalStatus(request.Context(), credential, iamv1.PrincipalID(id), body)
+		result, err = value.workflow.SetUserStatus(request.Context(), credential, iamv1.PrincipalID(id), body)
 	}
 	if err != nil {
 		value.writeError(response, request, err)

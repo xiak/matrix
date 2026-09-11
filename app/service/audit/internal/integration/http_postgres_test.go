@@ -676,7 +676,7 @@ func (client *integrationIAM) ResolveAuditProducer(
 	credential iamv1.Secret,
 	request iamv1.ResolveAuditProducerRequest,
 ) (iamv1.AuditProducerAuthorization, error) {
-	organizationID := iamv1.OrganizationID("")
+	organizationID := iamv1.AccountID("")
 	purpose := iamv1.ServiceIAM
 	principalID := iamv1.PrincipalID("service-iam")
 	switch {
@@ -702,11 +702,11 @@ func (client *integrationIAM) ResolveAuditProducer(
 	}
 	return iamv1.AuditProducerAuthorization{
 		APIVersion: iamv1.APIVersion, Kind: "AuditProducerAuthorization",
-		TenantID: iamv1.OrganizationID(request.Event.TenantID), ContentDigest: digest,
+		TenantID: iamv1.AccountID(request.Event.TenantID), ContentDigest: digest,
 		Producer: iamv1.ServiceIdentity{
 			APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
 			InstallationID: "installation-example",
-			OrganizationID: organizationID, PrincipalID: principalID, Purpose: purpose,
+			AccountID:      organizationID, PrincipalID: principalID, Purpose: purpose,
 		},
 	}, nil
 }

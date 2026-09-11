@@ -1,9 +1,8 @@
 {
   "apiVersion": "iam.matrix.xiak.com/v1",
-  "kind": "Principal",
-  "id": "principal-developer",
-  "organizationId": "organization-example",
-  "type": "USER",
+  "kind": "User",
+  "id": "user-developer",
+  "accountId": "account-example",
   "loginName": "developer",
   "displayName": "Example Developer",
   "status": "ACTIVE",

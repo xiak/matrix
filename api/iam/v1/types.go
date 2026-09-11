@@ -6,7 +6,7 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
-type OrganizationID string
+type AccountID string
 type PrincipalID string
 type RoleBindingID string
 type SessionID string
@@ -23,21 +23,21 @@ type ResourceReference struct {
 }
 
 type Organization struct {
-	APIVersion      string             `json:"apiVersion"`
-	Kind            string             `json:"kind"`
-	ID              OrganizationID     `json:"id"`
-	DisplayName     string             `json:"displayName"`
-	Status          OrganizationStatus `json:"status"`
-	ResourceVersion uint64             `json:"resourceVersion"`
-	CreatedAt       time.Time          `json:"createdAt"`
-	UpdatedAt       time.Time          `json:"updatedAt"`
+	APIVersion      string        `json:"apiVersion"`
+	Kind            string        `json:"kind"`
+	ID              AccountID     `json:"id"`
+	DisplayName     string        `json:"displayName"`
+	Status          AccountStatus `json:"status"`
+	ResourceVersion uint64        `json:"resourceVersion"`
+	CreatedAt       time.Time     `json:"createdAt"`
+	UpdatedAt       time.Time     `json:"updatedAt"`
 }
 
 type Principal struct {
 	APIVersion         string          `json:"apiVersion"`
 	Kind               string          `json:"kind"`
 	ID                 PrincipalID     `json:"id"`
-	OrganizationID     OrganizationID  `json:"organizationId"`
+	AccountID          AccountID       `json:"organizationId"`
 	Type               PrincipalType   `json:"type"`
 	LoginName          string          `json:"loginName,omitempty"`
 	DisplayName        string          `json:"displayName"`
@@ -49,20 +49,20 @@ type Principal struct {
 }
 
 type Session struct {
-	APIVersion     string         `json:"apiVersion"`
-	Kind           string         `json:"kind"`
-	ID             SessionID      `json:"id"`
-	OrganizationID OrganizationID `json:"organizationId"`
-	PrincipalID    PrincipalID    `json:"principalId"`
-	Status         SessionStatus  `json:"status"`
-	IssuedAt       time.Time      `json:"issuedAt"`
-	ExpiresAt      time.Time      `json:"expiresAt"`
-	RevokedAt      *time.Time     `json:"revokedAt,omitempty"`
+	APIVersion  string        `json:"apiVersion"`
+	Kind        string        `json:"kind"`
+	ID          SessionID     `json:"id"`
+	AccountID   AccountID     `json:"organizationId"`
+	PrincipalID PrincipalID   `json:"principalId"`
+	Status      SessionStatus `json:"status"`
+	IssuedAt    time.Time     `json:"issuedAt"`
+	ExpiresAt   time.Time     `json:"expiresAt"`
+	RevokedAt   *time.Time    `json:"revokedAt,omitempty"`
 }
 
 type InitialOrganization struct {
-	ID          OrganizationID `json:"id"`
-	DisplayName string         `json:"displayName"`
+	ID          AccountID `json:"id"`
+	DisplayName string    `json:"displayName"`
 }
 
 type InitialAdministrator struct {
@@ -95,7 +95,7 @@ type BootstrapStatus struct {
 	Kind           string         `json:"kind"`
 	State          BootstrapState `json:"state"`
 	InstallationID string         `json:"installationId,omitempty"`
-	OrganizationID OrganizationID `json:"organizationId,omitempty"`
+	AccountID      AccountID      `json:"organizationId,omitempty"`
 	ContentDigest  string         `json:"contentDigest,omitempty"`
 	AppliedAt      *time.Time     `json:"appliedAt,omitempty"`
 }
@@ -106,7 +106,7 @@ type ServiceIdentity struct {
 	APIVersion     string         `json:"apiVersion"`
 	Kind           string         `json:"kind"`
 	InstallationID string         `json:"installationId"`
-	OrganizationID OrganizationID `json:"organizationId"`
+	AccountID      AccountID      `json:"organizationId"`
 	PrincipalID    PrincipalID    `json:"principalId"`
 	Purpose        ServicePurpose `json:"purpose"`
 }
@@ -121,7 +121,7 @@ type AuditProducerAuthorization struct {
 	APIVersion     string          `json:"apiVersion"`
 	Kind           string          `json:"kind"`
 	Producer       ServiceIdentity `json:"producer"`
-	TenantID       OrganizationID  `json:"tenantId,omitempty"`
+	TenantID       AccountID       `json:"tenantId,omitempty"`
 	InstallationID string          `json:"installationId,omitempty"`
 	ContentDigest  string          `json:"contentDigest"`
 }
@@ -169,50 +169,80 @@ type CreateUserRequest struct {
 	RequestID       string `json:"requestId"`
 }
 
-// OrganizationAccount is the non-secret account boundary used for login and
-// tenant administration. The alias is independent of the primary login name.
-type OrganizationAccount struct {
-	Organization       Organization `json:"organization"`
-	PrimaryPrincipalID PrincipalID  `json:"primaryPrincipalId"`
-	PrimaryLoginName   string       `json:"primaryLoginName"`
-	LoginAlias         *string      `json:"loginAlias"`
+// RootIdentity is the immutable relation from an account to its original
+// controlling USER principal. It has no second credential or identity ID.
+type RootIdentity struct {
+	PrincipalID PrincipalID `json:"principalId"`
+	LoginName   string      `json:"loginName"`
+}
+
+// Account is the non-secret resource and security ownership boundary. Its
+// login alias is independent of the immutable root login name.
+type Account struct {
+	APIVersion      string        `json:"apiVersion"`
+	Kind            string        `json:"kind"`
+	ID              AccountID     `json:"id"`
+	DisplayName     string        `json:"displayName"`
+	Status          AccountStatus `json:"status"`
+	RootIdentity    RootIdentity  `json:"rootIdentity"`
+	LoginAlias      *string       `json:"loginAlias"`
+	ResourceVersion uint64        `json:"resourceVersion"`
+	CreatedAt       time.Time     `json:"createdAt"`
+	UpdatedAt       time.Time     `json:"updatedAt"`
+}
+
+// User is the manageable account-local USER projection. Service identities
+// and the account root are not members of the user directory.
+type User struct {
+	APIVersion         string          `json:"apiVersion"`
+	Kind               string          `json:"kind"`
+	ID                 PrincipalID     `json:"id"`
+	AccountID          AccountID       `json:"accountId"`
+	LoginName          string          `json:"loginName"`
+	DisplayName        string          `json:"displayName"`
+	Status             PrincipalStatus `json:"status"`
+	MustChangePassword bool            `json:"mustChangePassword,omitempty"`
+	ResourceVersion    uint64          `json:"resourceVersion"`
+	CreatedAt          time.Time       `json:"createdAt"`
+	UpdatedAt          time.Time       `json:"updatedAt"`
 }
 
 type CurrentIdentity struct {
-	APIVersion             string              `json:"apiVersion"`
-	Kind                   string              `json:"kind"`
-	Account                OrganizationAccount `json:"account"`
-	Principal              Principal           `json:"principal"`
-	PolicyAttachments      []PolicyAttachment  `json:"policyAttachments"`
-	CanCreateOrganizations bool                `json:"canCreateOrganizations"`
+	APIVersion        string             `json:"apiVersion"`
+	Kind              string             `json:"kind"`
+	Account           Account            `json:"account"`
+	User              User               `json:"user"`
+	IdentityKind      IdentityKind       `json:"identityKind"`
+	PolicyAttachments []PolicyAttachment `json:"policyAttachments"`
+	CanCreateAccounts bool               `json:"canCreateAccounts"`
 }
 
-type PrincipalAccess struct {
-	Principal         Principal          `json:"principal"`
+type UserAccess struct {
+	User              User               `json:"user"`
 	PolicyAttachments []PolicyAttachment `json:"policyAttachments"`
 }
 
-type PrincipalList struct {
-	APIVersion string            `json:"apiVersion"`
-	Kind       string            `json:"kind"`
-	Items      []PrincipalAccess `json:"items"`
-	NextAfter  string            `json:"nextAfter,omitempty"`
+type UserList struct {
+	APIVersion string       `json:"apiVersion"`
+	Kind       string       `json:"kind"`
+	Items      []UserAccess `json:"items"`
+	NextAfter  string       `json:"nextAfter,omitempty"`
 }
 
-type OrganizationAccountList struct {
-	APIVersion string                `json:"apiVersion"`
-	Kind       string                `json:"kind"`
-	Items      []OrganizationAccount `json:"items"`
-	NextAfter  string                `json:"nextAfter,omitempty"`
+type AccountList struct {
+	APIVersion string    `json:"apiVersion"`
+	Kind       string    `json:"kind"`
+	Items      []Account `json:"items"`
+	NextAfter  string    `json:"nextAfter,omitempty"`
 }
 
-type CreateOrganizationRequest struct {
-	ID                       OrganizationID `json:"id"`
-	DisplayName              string         `json:"displayName"`
-	AdministratorLoginName   string         `json:"administratorLoginName"`
-	AdministratorDisplayName string         `json:"administratorDisplayName"`
-	InitialPassword          Secret         `json:"initialPassword"`
-	RequestID                string         `json:"requestId"`
+type CreateAccountRequest struct {
+	ID              AccountID `json:"id"`
+	DisplayName     string    `json:"displayName"`
+	RootLoginName   string    `json:"rootLoginName"`
+	RootDisplayName string    `json:"rootDisplayName"`
+	InitialPassword Secret    `json:"initialPassword"`
+	RequestID       string    `json:"requestId"`
 }
 
 type SetAccountAliasRequest struct {
@@ -221,24 +251,24 @@ type SetAccountAliasRequest struct {
 	RequestID       string `json:"requestId"`
 }
 
-type SetPrincipalStatusRequest struct {
+type SetUserStatusRequest struct {
 	Status          PrincipalStatus `json:"status"`
 	ResourceVersion uint64          `json:"resourceVersion"`
 	RequestID       string          `json:"requestId"`
 }
 
-type SetOrganizationStatusRequest struct {
-	Status          OrganizationStatus `json:"status"`
-	ResourceVersion uint64             `json:"resourceVersion"`
-	RequestID       string             `json:"requestId"`
+type SetAccountStatusRequest struct {
+	Status          AccountStatus `json:"status"`
+	ResourceVersion uint64        `json:"resourceVersion"`
+	RequestID       string        `json:"requestId"`
 }
 
-// Recovery names the existing primary USER; it cannot select a new owner.
-type RecoverOrganizationAdministratorRequest struct {
-	PrincipalID     PrincipalID `json:"principalId"`
-	InitialPassword Secret      `json:"initialPassword"`
-	ResourceVersion uint64      `json:"resourceVersion"`
-	RequestID       string      `json:"requestId"`
+// Recovery always targets the account's immutable root relation. It cannot
+// select a replacement owner.
+type RecoverRootCredentialsRequest struct {
+	InitialPassword Secret `json:"initialPassword"`
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
 }
 
 type ResetUserPasswordRequest struct {
@@ -275,7 +305,7 @@ type AuthorizationDecision struct {
 	ID         DecisionID     `json:"id"`
 	Allowed    bool           `json:"allowed"`
 	Reason     DecisionReason `json:"reason"`
-	TenantID   OrganizationID `json:"tenantId,omitempty"`
+	TenantID   AccountID      `json:"tenantId,omitempty"`
 	// Platform decisions bind the installed authority and omit tenantId. The
 	// principal's home organization is not ownership of a platform resource.
 	InstallationID string            `json:"installationId,omitempty"`

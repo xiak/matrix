@@ -104,7 +104,7 @@ func digestSanitized(domain string, value any) (string, error) {
 
 func newAuditEvent(
 	eventID string,
-	tenantID iamv1.OrganizationID,
+	tenantID iamv1.AccountID,
 	installationID string,
 	actor auditv1.ActorReference,
 	action auditv1.Action,

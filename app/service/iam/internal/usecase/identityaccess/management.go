@@ -63,7 +63,7 @@ func (service *Authority) Logout(
 			return err
 		}
 		revocation, applied, err := transaction.RevokeSession(transactionContext, SessionRevocationMutation{
-			OrganizationID:   subject.Subject.Organization.ID,
+			AccountID:        subject.Subject.Organization.ID,
 			SessionID:        subject.Subject.Session.ID,
 			ActorPrincipalID: subject.Subject.Principal.ID,
 			AuditEvent:       event,
@@ -139,8 +139,8 @@ func (service *Authority) ChangePassword(
 		}
 		event, err := service.newManagementEvent(
 			subject,
-			auditv1.ActionIAMPasswordChanged,
-			auditv1.TargetPrincipal,
+			auditv1.ActionIAMUserPasswordChanged,
+			auditv1.TargetUser,
 			string(subject.Subject.Principal.ID),
 			"",
 			requestDigest,
@@ -151,7 +151,7 @@ func (service *Authority) ChangePassword(
 			return err
 		}
 		response, err = transaction.ChangePassword(transactionContext, PasswordMutation{
-			OrganizationID:       subject.Subject.Organization.ID,
+			AccountID:            subject.Subject.Organization.ID,
 			PrincipalID:          subject.Subject.Principal.ID,
 			SessionID:            subject.Subject.Session.ID,
 			RevokeOtherSessions:  revokeOthers,
@@ -174,18 +174,18 @@ func (service *Authority) CreateUser(
 	ctx context.Context,
 	credential iamv1.Secret,
 	request iamv1.CreateUserRequest,
-) (iamv1.Principal, error) {
+) (iamv1.User, error) {
 	if iamv1.ValidateCreateUserRequest(request) != nil ||
 		authority.ValidatePassword(request.InitialPassword) != nil {
-		return iamv1.Principal{}, ErrInvalidArgument
+		return iamv1.User{}, ErrInvalidArgument
 	}
-	requestDigest, err := digestSanitized("principal-create", createUserDigestInput{
+	requestDigest, err := digestSanitized("user-create", createUserDigestInput{
 		LoginName: request.LoginName, DisplayName: request.DisplayName, RequestID: request.RequestID,
 	})
 	if err != nil {
-		return iamv1.Principal{}, err
+		return iamv1.User{}, err
 	}
-	var created iamv1.Principal
+	var created iamv1.User
 	denied := false
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		denied = false
@@ -201,8 +201,8 @@ func (service *Authority) CreateUser(
 			transactionContext,
 			transaction,
 			subject,
-			iamv1.ActionIAMPrincipalCreate,
-			iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: string(subject.Subject.Organization.ID)},
+			iamv1.ActionIAMUserCreate,
+			iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Subject.Organization.ID)},
 			request.RequestID,
 			now,
 		)
@@ -221,12 +221,11 @@ func (service *Authority) CreateUser(
 		if err != nil {
 			return ErrUnavailable
 		}
-		proposed := iamv1.Principal{
+		proposed := iamv1.User{
 			APIVersion:         iamv1.APIVersion,
-			Kind:               "Principal",
+			Kind:               "User",
 			ID:                 iamv1.PrincipalID(principalID),
-			OrganizationID:     subject.Subject.Organization.ID,
-			Type:               iamv1.PrincipalUser,
+			AccountID:          subject.Subject.Organization.ID,
 			LoginName:          request.LoginName,
 			DisplayName:        request.DisplayName,
 			Status:             iamv1.PrincipalActive,
@@ -237,8 +236,8 @@ func (service *Authority) CreateUser(
 		}
 		event, err := service.newManagementEvent(
 			subject,
-			auditv1.ActionIAMPrincipalCreated,
-			auditv1.TargetPrincipal,
+			auditv1.ActionIAMUserCreated,
+			auditv1.TargetUser,
 			principalID,
 			decision.ID,
 			requestDigest,
@@ -249,7 +248,7 @@ func (service *Authority) CreateUser(
 			return err
 		}
 		created, err = transaction.CreateUser(transactionContext, UserMutation{
-			Principal:        proposed,
+			User:             proposed,
 			PasswordHash:     passwordHash,
 			ActorPrincipalID: subject.Subject.Principal.ID,
 			DecisionID:       decision.ID,
@@ -258,13 +257,13 @@ func (service *Authority) CreateUser(
 		return err
 	})
 	if err != nil {
-		return iamv1.Principal{}, err
+		return iamv1.User{}, err
 	}
 	if denied {
-		return iamv1.Principal{}, ErrForbidden
+		return iamv1.User{}, ErrForbidden
 	}
-	if iamv1.ValidatePrincipal(created) != nil {
-		return iamv1.Principal{}, ErrUnavailable
+	if iamv1.ValidateUser(created) != nil {
+		return iamv1.User{}, ErrUnavailable
 	}
 	return created, nil
 }
@@ -307,7 +306,7 @@ func (service *Authority) CreatePolicyAttachment(ctx context.Context, credential
 			action, fact = iamv1.ActionIAMPlatformPolicyAttachmentCreate, auditv1.ActionIAMPlatformPolicyAttachmentCreated
 		}
 		decision, err := service.managementDecision(ctx, tx, subject, action,
-			iamv1.ResourceReference{Kind: iamv1.ResourcePrincipal, ID: request.Target.ID}, request.RequestID, now)
+			iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: request.Target.ID}, request.RequestID, now)
 		if err != nil {
 			return err
 		}
@@ -319,9 +318,9 @@ func (service *Authority) CreatePolicyAttachment(ctx context.Context, credential
 			return ErrConflict
 		}
 		identityDigest, err := digestSanitized("policy-attachment-identity", struct {
-			AccountID iamv1.OrganizationID `json:"accountId"`
-			ActorID   iamv1.PrincipalID    `json:"actorId"`
-			RequestID string               `json:"requestId"`
+			AccountID iamv1.AccountID   `json:"accountId"`
+			ActorID   iamv1.PrincipalID `json:"actorId"`
+			RequestID string            `json:"requestId"`
 		}{subject.Subject.Organization.ID, subject.Subject.Principal.ID, request.RequestID})
 		if err != nil {
 			return err
@@ -410,7 +409,7 @@ func (service *Authority) RevokePolicyAttachment(ctx context.Context, credential
 		if err != nil {
 			return err
 		}
-		result, _, err = tx.RevokePolicyAttachment(ctx, PolicyAttachmentRevocationMutation{OrganizationID: subject.Subject.Organization.ID,
+		result, _, err = tx.RevokePolicyAttachment(ctx, PolicyAttachmentRevocationMutation{AccountID: subject.Subject.Organization.ID,
 			AttachmentID: id, ResourceVersion: request.ResourceVersion, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, AuditEvent: event})
 		return err
 	})
@@ -452,7 +451,7 @@ func (service *Authority) RevokeSession(
 			event auditv1.Event,
 		) (iamv1.Revocation, bool, error) {
 			return transaction.RevokeSession(transactionContext, SessionRevocationMutation{
-				OrganizationID:   subject.Subject.Organization.ID,
+				AccountID:        subject.Subject.Organization.ID,
 				SessionID:        sessionID,
 				ActorPrincipalID: subject.Subject.Principal.ID,
 				DecisionID:       decision.ID,
@@ -605,7 +604,7 @@ func (service *Authority) managementDecision(
 		return iamv1.AuthorizationDecision{}, err
 	}
 	if err := transaction.RecordAuthorization(ctx, AuthorizationMutation{
-		OrganizationID: subject.Subject.Organization.ID,
+		AccountID:      subject.Subject.Organization.ID,
 		PrincipalID:    subject.Subject.Principal.ID,
 		Decision:       decision.AuthorizationDecision,
 		PolicyEvidence: decision.PolicyEvidence,

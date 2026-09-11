@@ -1,8 +1,8 @@
-import type { Account, AccountIdentity, AccountUser, DirectoryPage, PolicyDirectory } from "../domain/accounts";
+import type { Account, AccountIdentity, DirectoryPage, PolicyDirectory, UserAccess } from "../domain/accounts";
 
 export function buildAccountAccessScene(
   identity: AccountIdentity,
-  users: DirectoryPage<AccountUser> | null,
+  users: DirectoryPage<UserAccess> | null,
   accounts: DirectoryPage<Account> | null,
   tenantPolicies: PolicyDirectory | null,
   platformPolicies: PolicyDirectory | null
@@ -21,16 +21,16 @@ export function buildAccountAccessScene(
     };
   };
   return {
-    accountId: account.organization.id,
-    accountName: account.organization.displayName,
-    accountVersion: account.organization.resourceVersion,
+    accountId: account.id,
+    accountName: account.displayName,
+    accountVersion: account.resourceVersion,
     loginAlias: account.loginAlias,
-    primaryLoginName: account.primaryLoginName,
-    identityLabel: identity.principal.displayName,
-    isPrimary: identity.principal.id === account.primaryPrincipalId,
+    rootLoginName: account.rootIdentity.loginName,
+    identityLabel: identity.user.displayName,
+    isRoot: identity.identityKind === "ROOT_IDENTITY",
     identityAttachments: identity.policyAttachments.map(describeAttachment),
     canManage: users !== null,
-    canCreateOrganizations: accounts !== null,
+    canCreateAccounts: accounts !== null,
     canViewPolicies: tenantPolicies !== null || platformPolicies !== null,
     tenantPoliciesAvailable: tenantPolicies !== null,
     platformPoliciesAvailable: platformPolicies !== null,
@@ -40,19 +40,19 @@ export function buildAccountAccessScene(
       scopeLabel: policy.scope === "INSTALLATION" ? "平台安装" : "当前租户",
       statusLabel: policy.status === "ACTIVE" ? "可关联" : "已停用"
     })),
-    users: users?.items.filter(({ principal }) => principal.id !== account.primaryPrincipalId).map(({ principal, policyAttachments }) => ({
-      id: principal.id, name: principal.displayName, loginName: principal.loginName,
-      qualifiedName: `${principal.loginName}@${account.loginAlias ?? account.organization.id}`,
-      credentialProtection: policyAttachments.some((attachment) => attachment.scope === "INSTALLATION") ? "platform" : principal.id === identity.principal.id ? "self" : null,
-      enabled: principal.status === "ACTIVE", resourceVersion: principal.resourceVersion,
-      statusLabel: principal.status === "DISABLED" ? "已禁用" : principal.mustChangePassword ? "待修改初始密码" : "正常",
+    users: users?.items.map(({ user, policyAttachments }) => ({
+      id: user.id, name: user.displayName, loginName: user.loginName,
+      qualifiedName: `${user.loginName}@${account.loginAlias ?? account.id}`,
+      credentialProtection: policyAttachments.some((attachment) => attachment.scope === "INSTALLATION") ? "platform" : user.id === identity.user.id ? "self" : null,
+      enabled: user.status === "ACTIVE", resourceVersion: user.resourceVersion,
+      statusLabel: user.status === "DISABLED" ? "已禁用" : user.mustChangePassword ? "待修改初始密码" : "正常",
       attachments: policyAttachments.map(describeAttachment)
     })) ?? [],
     nextUserPage: users?.nextAfter ?? null,
     accounts: accounts?.items.map((entry) => ({
-      id: entry.organization.id, name: entry.organization.displayName, loginAlias: entry.loginAlias,
-      primaryLoginName: entry.primaryLoginName, primaryPrincipalId: entry.primaryPrincipalId,
-      enabled: entry.organization.status === "ACTIVE", resourceVersion: entry.organization.resourceVersion
+      id: entry.id, name: entry.displayName, loginAlias: entry.loginAlias,
+      rootLoginName: entry.rootIdentity.loginName, rootPrincipalId: entry.rootIdentity.principalId,
+      enabled: entry.status === "ACTIVE", resourceVersion: entry.resourceVersion
     })) ?? [],
     nextAccountPage: accounts?.nextAfter ?? null
   };

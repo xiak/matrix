@@ -37,7 +37,7 @@ type PolicyEvaluation struct {
 // EvaluateAttachedPolicies joins current policy metadata, immutable content and
 // a live attachment inside an already authenticated authority snapshot. It
 // invokes the sole statement evaluator only after every ownership link agrees.
-func EvaluateAttachedPolicies(accountID iamv1.OrganizationID, installationID string, subject iamv1.Subject,
+func EvaluateAttachedPolicies(accountID iamv1.AccountID, installationID string, subject iamv1.Subject,
 	attached []AttachedPolicy, action iamv1.Action, resource iamv1.ResourceReference,
 ) (PolicyEvaluation, []PolicyAttachmentEvidence, error) {
 	if iamv1.ValidateID("accountId", string(accountID)) != nil ||
@@ -156,9 +156,9 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 	switch id {
 	case iamv1.SystemPolicyAccountAdministrator:
 		actions = []iamv1.Action{
-			iamv1.ActionIAMAccountAliasSet, iamv1.ActionIAMPrincipalList, iamv1.ActionIAMPolicyList,
-			iamv1.ActionIAMPrincipalSetStatus, iamv1.ActionIAMPasswordReset,
-			iamv1.ActionIAMPrincipalCreate, iamv1.ActionIAMPrincipalRead,
+			iamv1.ActionIAMAccountAliasSet, iamv1.ActionIAMUserList, iamv1.ActionIAMPolicyList,
+			iamv1.ActionIAMUserSetStatus, iamv1.ActionIAMUserPasswordReset,
+			iamv1.ActionIAMUserCreate, iamv1.ActionIAMUserRead,
 			iamv1.ActionIAMPolicyAttachmentCreate, iamv1.ActionIAMPolicyAttachmentRevoke,
 			iamv1.ActionIAMSessionRevoke,
 			iamv1.ActionPaaSApplicationCreate, iamv1.ActionPaaSApplicationRead,
@@ -176,8 +176,8 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 	case iamv1.SystemPolicyPlatformOperator:
 		scope = iamv1.AuthorityScopeInstallation
 		actions = []iamv1.Action{
-			iamv1.ActionIAMOrganizationCreate, iamv1.ActionIAMOrganizationRead, iamv1.ActionIAMPlatformPolicyList,
-			iamv1.ActionIAMOrganizationSetStatus, iamv1.ActionIAMOrganizationAdministratorRecover,
+			iamv1.ActionIAMAccountCreate, iamv1.ActionIAMAccountRead, iamv1.ActionIAMPlatformPolicyList,
+			iamv1.ActionIAMAccountSetStatus, iamv1.ActionIAMAccountRootCredentialsRecover,
 			iamv1.ActionIAMPlatformPolicyAttachmentCreate, iamv1.ActionIAMPlatformPolicyAttachmentRevoke,
 			iamv1.ActionPaaSExecutionPoolCreate, iamv1.ActionPaaSExecutionPoolRead,
 			iamv1.ActionPaaSExecutionTargetRegister, iamv1.ActionPaaSExecutionTargetRead,

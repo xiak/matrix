@@ -39,55 +39,56 @@ type Transaction interface {
 	LookupLogin(context.Context, string) (LoginAccount, bool, error)
 	IssueSession(context.Context, SessionMutation) (iamv1.Session, error)
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
-	LookupPassword(context.Context, iamv1.OrganizationID, iamv1.PrincipalID) (authority.PasswordHash, bool, error)
+	LookupPassword(context.Context, iamv1.AccountID, iamv1.PrincipalID) (authority.PasswordHash, bool, error)
 	LookupService(context.Context, string) (ServiceCredential, bool, error)
 	ReadAuditEvidence(context.Context, iamv1.ServiceIdentity, auditv1.Event) (AuditEvidence, bool, error)
 	LookupServicePolicies(
 		context.Context,
-		iamv1.OrganizationID,
+		iamv1.AccountID,
 		iamv1.PrincipalID,
 	) ([]authority.AttachedPolicy, error)
 	RecordAuthorization(context.Context, AuthorizationMutation) error
 	ChangePassword(context.Context, PasswordMutation) (iamv1.ChangePasswordResponse, error)
 	RevokeSession(context.Context, SessionRevocationMutation) (iamv1.Revocation, bool, error)
-	CreateUser(context.Context, UserMutation) (iamv1.Principal, error)
-	LookupPolicy(context.Context, iamv1.OrganizationID, iamv1.PolicyID) (iamv1.Policy, bool, error)
-	LookupPolicyAttachment(context.Context, iamv1.OrganizationID, iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error)
+	CreateUser(context.Context, UserMutation) (iamv1.User, error)
+	LookupPolicy(context.Context, iamv1.AccountID, iamv1.PolicyID) (iamv1.Policy, bool, error)
+	LookupPolicyAttachment(context.Context, iamv1.AccountID, iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error)
 	CreatePolicyAttachment(context.Context, PolicyAttachmentMutation) (iamv1.PolicyAttachment, error)
 	RevokePolicyAttachment(context.Context, PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error)
-	ReadAccount(context.Context, iamv1.OrganizationID, iamv1.PrincipalID) (iamv1.OrganizationAccount, error)
-	ListPrincipals(context.Context, AccountRead) (iamv1.PrincipalList, error)
+	ReadAccount(context.Context, iamv1.AccountID, iamv1.PrincipalID) (iamv1.Account, error)
+	ListUsers(context.Context, AccountRead) (iamv1.UserList, error)
 	ListPolicies(context.Context, AccountRead, iamv1.AuthorityScope) (iamv1.PolicyList, error)
-	ListAccounts(context.Context, AccountRead) (iamv1.OrganizationAccountList, error)
-	ReadOrganization(context.Context, AccountRead, iamv1.OrganizationID) (iamv1.OrganizationAccount, error)
-	CreateOrganization(context.Context, OrganizationMutation) (iamv1.OrganizationAccount, error)
-	SetOrganizationStatus(context.Context, OrganizationStatusMutation) (iamv1.OrganizationAccount, error)
-	RecoverOrganizationAdministrator(context.Context, OrganizationAdministratorRecovery) (iamv1.OrganizationAccount, error)
+	ListAccounts(context.Context, AccountRead) (iamv1.AccountList, error)
+	ReadAccountAsPlatform(context.Context, AccountRead, iamv1.AccountID) (iamv1.Account, error)
+	ReadAccountRoot(context.Context, AccountRead, iamv1.AccountID) (iamv1.RootIdentity, error)
+	CreateAccount(context.Context, AccountMutation) (iamv1.Account, error)
+	SetAccountStatus(context.Context, AccountStatusMutation) (iamv1.Account, error)
+	RecoverRootCredentials(context.Context, RootCredentialRecovery) (iamv1.Account, error)
 	InspectLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, *iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, error)
 	RecoverLocalCredentials(context.Context, LocalCredentialRecoveryMutation) (iamv1.LocalCredentialRecoveryResult, error)
-	SetAccountAlias(context.Context, AccountAliasMutation) (iamv1.OrganizationAccount, error)
-	ChangeSubaccount(context.Context, SubaccountMutation) (iamv1.Principal, error)
+	SetAccountAlias(context.Context, AccountAliasMutation) (iamv1.Account, error)
+	ChangeUser(context.Context, UserChange) (iamv1.User, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
 }
 
 type AccountRead struct {
-	OrganizationID   iamv1.OrganizationID
+	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	After            string
 }
 
-type OrganizationMutation struct {
-	ActorOrganizationID iamv1.OrganizationID
-	ActorPrincipalID    iamv1.PrincipalID
-	DecisionID          iamv1.DecisionID
-	Organization        iamv1.InitialOrganization
-	Administrator       BootstrapAdministrator
-	AuditEvent          auditv1.Event
+type AccountMutation struct {
+	ActorAccountID   iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	Account          iamv1.InitialOrganization
+	Root             BootstrapAdministrator
+	AuditEvent       auditv1.Event
 }
 
 type AccountAliasMutation struct {
-	OrganizationID   iamv1.OrganizationID
+	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	Alias            string
@@ -95,26 +96,26 @@ type AccountAliasMutation struct {
 	AuditEvent       auditv1.Event
 }
 
-type OrganizationStatusMutation struct {
-	ActorOrganizationID iamv1.OrganizationID
-	ActorPrincipalID    iamv1.PrincipalID
-	DecisionID          iamv1.DecisionID
-	OrganizationID      iamv1.OrganizationID
-	Status              iamv1.OrganizationStatus
-	ResourceVersion     uint64
-	AuditEvent          auditv1.Event
+type AccountStatusMutation struct {
+	ActorAccountID   iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AccountID        iamv1.AccountID
+	Status           iamv1.AccountStatus
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
 }
 
-type OrganizationAdministratorRecovery struct {
-	ActorOrganizationID iamv1.OrganizationID
-	ActorPrincipalID    iamv1.PrincipalID
-	DecisionID          iamv1.DecisionID
-	OrganizationID      iamv1.OrganizationID
-	PrincipalID         iamv1.PrincipalID
-	ResourceVersion     uint64
-	PasswordHash        authority.PasswordHash
-	AttachmentID        iamv1.PolicyAttachmentID
-	AuditEvent          auditv1.Event
+type RootCredentialRecovery struct {
+	ActorAccountID   iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AccountID        iamv1.AccountID
+	PrincipalID      iamv1.PrincipalID
+	ResourceVersion  uint64
+	PasswordHash     authority.PasswordHash
+	AttachmentID     iamv1.PolicyAttachmentID
+	AuditEvent       auditv1.Event
 }
 
 // The local entry authenticates this mutation with installation-private
@@ -128,8 +129,8 @@ type LocalCredentialRecoveryMutation struct {
 	AuditEvent      auditv1.Event
 }
 
-type SubaccountMutation struct {
-	OrganizationID   iamv1.OrganizationID
+type UserChange struct {
+	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
 	PrincipalID      iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
@@ -163,10 +164,10 @@ type BootstrapMutation struct {
 }
 
 type LoginAccount struct {
-	OrganizationID     iamv1.OrganizationID
+	AccountID          iamv1.AccountID
 	PrincipalID        iamv1.PrincipalID
 	PasswordHash       authority.PasswordHash
-	OrganizationStatus iamv1.OrganizationStatus
+	AccountStatus      iamv1.AccountStatus
 	PrincipalStatus    iamv1.PrincipalStatus
 	MustChangePassword bool
 }
@@ -189,7 +190,7 @@ type ServiceCredential struct {
 }
 
 type AuthorizationMutation struct {
-	OrganizationID iamv1.OrganizationID
+	AccountID      iamv1.AccountID
 	PrincipalID    iamv1.PrincipalID
 	Decision       iamv1.AuthorizationDecision
 	PolicyEvidence []authority.PolicyAttachmentEvidence
@@ -197,7 +198,7 @@ type AuthorizationMutation struct {
 }
 
 type PasswordMutation struct {
-	OrganizationID       iamv1.OrganizationID
+	AccountID            iamv1.AccountID
 	PrincipalID          iamv1.PrincipalID
 	SessionID            iamv1.SessionID
 	RevokeOtherSessions  bool
@@ -207,7 +208,7 @@ type PasswordMutation struct {
 }
 
 type SessionRevocationMutation struct {
-	OrganizationID   iamv1.OrganizationID
+	AccountID        iamv1.AccountID
 	SessionID        iamv1.SessionID
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
@@ -215,7 +216,7 @@ type SessionRevocationMutation struct {
 }
 
 type UserMutation struct {
-	Principal        iamv1.Principal
+	User             iamv1.User
 	PasswordHash     authority.PasswordHash
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
@@ -231,7 +232,7 @@ type PolicyAttachmentMutation struct {
 }
 
 type PolicyAttachmentRevocationMutation struct {
-	OrganizationID   iamv1.OrganizationID
+	AccountID        iamv1.AccountID
 	AttachmentID     iamv1.PolicyAttachmentID
 	ResourceVersion  uint64
 	ActorPrincipalID iamv1.PrincipalID

@@ -60,14 +60,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     let active = true;
     async function read() {
       const identity = await repository.currentIdentity(credential!);
-      if (identity.account.organization.id !== tenantId || identity.principal.id !== principalId) throw new Error("INVALID_IAM_IDENTITY");
+      if (identity.account.id !== tenantId || identity.user.id !== principalId) throw new Error("INVALID_IAM_IDENTITY");
       const [users, accounts, tenantPolicies, platformPolicies] = await Promise.all([
         readWhenAuthorized(() => repository.listUsers(credential!, page.users || undefined)),
-        identity.canCreateOrganizations ? readWhenAuthorized(() => repository.listAccounts(credential!, page.accounts || undefined)) : null,
+        identity.canCreateAccounts ? readWhenAuthorized(() => repository.listAccounts(credential!, page.accounts || undefined)) : null,
         readWhenAuthorized(() => repository.listPolicies(credential!, false)),
         readWhenAuthorized(() => repository.listPolicies(credential!, true))
       ]);
-      if (users?.items.some((entry) => entry.principal.organizationId !== tenantId)) throw new Error("INVALID_IAM_TENANT");
+      if (users?.items.some((entry) => entry.user.accountId !== tenantId)) throw new Error("INVALID_IAM_TENANT");
       if (tenantPolicies && tenantPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
       if (platformPolicies && platformPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
       return buildAccountAccessScene(identity, users, accounts, tenantPolicies, platformPolicies);

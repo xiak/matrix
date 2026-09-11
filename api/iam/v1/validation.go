@@ -80,7 +80,7 @@ func ValidateServiceIdentity(value ServiceIdentity) error {
 	}
 	problems = append(problems,
 		ValidateID("serviceIdentity.installationId", value.InstallationID),
-		ValidateID("serviceIdentity.organizationId", string(value.OrganizationID)),
+		ValidateID("serviceIdentity.organizationId", string(value.AccountID)),
 		ValidateID("serviceIdentity.principalId", string(value.PrincipalID)),
 	)
 	if !knownServicePurpose(value.Purpose) {
@@ -115,7 +115,7 @@ func ValidateBootstrapStatus(value BootstrapStatus) error {
 	}
 	switch value.State {
 	case BootstrapUninitialized:
-		if value.InstallationID != "" || value.OrganizationID != "" ||
+		if value.InstallationID != "" || value.AccountID != "" ||
 			value.ContentDigest != "" || value.AppliedAt != nil {
 			return errors.New("uninitialized bootstrap status contains initialized data")
 		}
@@ -124,7 +124,7 @@ func ValidateBootstrapStatus(value BootstrapStatus) error {
 		var problems []error
 		problems = append(problems,
 			ValidateID("installationId", value.InstallationID),
-			ValidateID("organizationId", string(value.OrganizationID)),
+			ValidateID("organizationId", string(value.AccountID)),
 			ValidateDigest("contentDigest", value.ContentDigest),
 		)
 		if value.AppliedAt == nil {
@@ -278,7 +278,7 @@ func ValidateOrganization(value Organization) error {
 	if value.APIVersion != APIVersion || value.Kind != "Organization" {
 		problems = append(problems, errors.New("organization type metadata is invalid"))
 	}
-	if value.Status != OrganizationActive && value.Status != OrganizationDisabled {
+	if value.Status != AccountActive && value.Status != AccountDisabled {
 		problems = append(problems, errors.New("organization status is invalid"))
 	}
 	problems = append(problems,
@@ -303,7 +303,7 @@ func ValidatePrincipal(value Principal) error {
 	}
 	problems = append(problems,
 		ValidateID("principal.id", string(value.ID)),
-		ValidateID("principal.organizationId", string(value.OrganizationID)),
+		ValidateID("principal.organizationId", string(value.AccountID)),
 		validateText("principal.displayName", value.DisplayName, 1, 128),
 		validatePositiveVersion(value.ResourceVersion),
 		validateChronology(value.CreatedAt, value.UpdatedAt),
@@ -326,7 +326,7 @@ func ValidateSession(value Session) error {
 	}
 	problems = append(problems,
 		ValidateID("session.id", string(value.ID)),
-		ValidateID("session.organizationId", string(value.OrganizationID)),
+		ValidateID("session.organizationId", string(value.AccountID)),
 		ValidateID("session.principalId", string(value.PrincipalID)),
 		validateTime("session.issuedAt", value.IssuedAt),
 		validateTime("session.expiresAt", value.ExpiresAt),
@@ -415,7 +415,7 @@ func ResourceKindForAction(action Action) (ResourceKind, bool) {
 	return definition.ResourceKind, known
 }
 
-// ValidateLoginIdentifier accepts a primary login or one qualified subaccount
+// ValidateLoginIdentifier accepts a root login or one qualified account user
 // name. It deliberately does not normalize case, whitespace, Unicode, or DNS.
 func ValidateLoginIdentifier(value string) error {
 	name, namespace, qualified := strings.Cut(value, "@")
@@ -435,16 +435,16 @@ func ValidateAccountAlias(value string) error {
 	return nil
 }
 
-func ValidateCreateOrganizationRequest(value CreateOrganizationRequest) error {
+func ValidateCreateAccountRequest(value CreateAccountRequest) error {
 	var secretError error
 	if !value.InitialPassword.Present() {
 		secretError = ErrInvalidSecret
 	}
 	return errors.Join(
-		ValidateID("organization.id", string(value.ID)),
+		ValidateID("account.id", string(value.ID)),
 		validateText("displayName", value.DisplayName, 1, 128),
-		validateLoginName(value.AdministratorLoginName),
-		validateText("administratorDisplayName", value.AdministratorDisplayName, 1, 128),
+		validateLoginName(value.RootLoginName),
+		validateText("rootDisplayName", value.RootDisplayName, 1, 128),
 		ValidateID("requestId", value.RequestID), secretError,
 	)
 }
@@ -454,26 +454,25 @@ func ValidateSetAccountAliasRequest(value SetAccountAliasRequest) error {
 		validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
-func ValidateSetPrincipalStatusRequest(value SetPrincipalStatusRequest) error {
+func ValidateSetUserStatusRequest(value SetUserStatusRequest) error {
 	if value.Status != PrincipalActive && value.Status != PrincipalDisabled {
-		return errors.New("principal status is invalid")
+		return errors.New("user status is invalid")
 	}
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
-func ValidateSetOrganizationStatusRequest(value SetOrganizationStatusRequest) error {
-	if value.Status != OrganizationActive && value.Status != OrganizationDisabled {
-		return errors.New("organization status is invalid")
+func ValidateSetAccountStatusRequest(value SetAccountStatusRequest) error {
+	if value.Status != AccountActive && value.Status != AccountDisabled {
+		return errors.New("account status is invalid")
 	}
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
-func ValidateRecoverOrganizationAdministratorRequest(value RecoverOrganizationAdministratorRequest) error {
+func ValidateRecoverRootCredentialsRequest(value RecoverRootCredentialsRequest) error {
 	if !value.InitialPassword.Present() {
 		return ErrInvalidSecret
 	}
-	return errors.Join(ValidateID("principalId", string(value.PrincipalID)),
-		validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
 func ValidateResetUserPasswordRequest(value ResetUserPasswordRequest) error {
@@ -483,87 +482,114 @@ func ValidateResetUserPasswordRequest(value ResetUserPasswordRequest) error {
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
-func ValidateOrganizationAccount(value OrganizationAccount) error {
+func ValidateRootIdentity(value RootIdentity) error {
+	return errors.Join(ValidateID("rootIdentity.principalId", string(value.PrincipalID)),
+		validateLoginName(value.LoginName))
+}
+
+func ValidateAccount(value Account) error {
 	var aliasError error
 	if value.LoginAlias != nil {
 		aliasError = ValidateAccountAlias(*value.LoginAlias)
 	}
-	return errors.Join(ValidateOrganization(value.Organization),
-		ValidateID("primaryPrincipalId", string(value.PrimaryPrincipalID)),
-		validateLoginName(value.PrimaryLoginName), aliasError)
+	if value.APIVersion != APIVersion || value.Kind != "Account" ||
+		(value.Status != AccountActive && value.Status != AccountDisabled) {
+		return errors.New("account is invalid")
+	}
+	return errors.Join(ValidateID("account.id", string(value.ID)),
+		validateText("account.displayName", value.DisplayName, 1, 128),
+		ValidateRootIdentity(value.RootIdentity), validatePositiveVersion(value.ResourceVersion),
+		validateChronology(value.CreatedAt, value.UpdatedAt), aliasError)
+}
+
+func ValidateUser(value User) error {
+	if value.APIVersion != APIVersion || value.Kind != "User" ||
+		(value.Status != PrincipalActive && value.Status != PrincipalDisabled) {
+		return errors.New("user is invalid")
+	}
+	return errors.Join(ValidateID("user.id", string(value.ID)), ValidateID("user.accountId", string(value.AccountID)),
+		validateLoginName(value.LoginName), validateText("user.displayName", value.DisplayName, 1, 128),
+		validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
 }
 
 func ValidateCurrentIdentity(value CurrentIdentity) error {
 	if value.APIVersion != APIVersion || value.Kind != "CurrentIdentity" ||
-		value.Principal.Type != PrincipalUser || value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 ||
-		value.Principal.OrganizationID != value.Account.Organization.ID ||
-		(value.CanCreateOrganizations && value.Principal.MustChangePassword) {
+		value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 ||
+		value.User.AccountID != value.Account.ID ||
+		(value.CanCreateAccounts && value.User.MustChangePassword) {
 		return errors.New("current identity is invalid")
+	}
+	expectedKind := IdentityUser
+	if value.User.ID == value.Account.RootIdentity.PrincipalID {
+		expectedKind = IdentityRoot
+	}
+	if value.IdentityKind != expectedKind {
+		return errors.New("current identity kind is invalid")
 	}
 	seen := map[PolicyAttachmentID]bool{}
 	platform := false
 	for _, attachment := range value.PolicyAttachments {
 		if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil || seen[attachment.ID] ||
-			attachment.AccountID != value.Account.Organization.ID || attachment.Target.Kind != PolicyTargetUser ||
-			attachment.Target.ID != string(value.Principal.ID) {
+			attachment.AccountID != value.Account.ID || attachment.Target.Kind != PolicyTargetUser ||
+			attachment.Target.ID != string(value.User.ID) {
 			return errors.New("current policy attachments are invalid")
 		}
 		seen[attachment.ID] = true
 		platform = platform || attachment.Scope == AuthorityScopeInstallation
 	}
-	if value.CanCreateOrganizations && !platform {
-		return errors.New("tenant opening requires platform authority")
+	if value.CanCreateAccounts && !platform {
+		return errors.New("account opening requires platform authority")
 	}
-	return errors.Join(ValidateOrganizationAccount(value.Account), ValidatePrincipal(value.Principal))
+	return errors.Join(ValidateAccount(value.Account), ValidateUser(value.User))
 }
 
-func ValidatePrincipalList(value PrincipalList) error {
-	if value.APIVersion != APIVersion || value.Kind != "PrincipalList" || value.Items == nil || len(value.Items) > 100 {
-		return errors.New("principal list is invalid")
+func ValidateUserList(value UserList) error {
+	if value.APIVersion != APIVersion || value.Kind != "UserList" || value.Items == nil || len(value.Items) > 100 {
+		return errors.New("user list is invalid")
 	}
 	var previous string
-	var tenant OrganizationID
+	var account AccountID
 	for _, item := range value.Items {
-		if ValidatePrincipal(item.Principal) != nil || item.Principal.Type != PrincipalUser ||
-			string(item.Principal.ID) <= previous || item.PolicyAttachments == nil || len(item.PolicyAttachments) > 256 {
-			return errors.New("principal list item is invalid")
+		if ValidateUser(item.User) != nil || string(item.User.ID) <= previous ||
+			item.PolicyAttachments == nil || len(item.PolicyAttachments) > 256 {
+			return errors.New("user list item is invalid")
 		}
-		previous = string(item.Principal.ID)
-		if tenant != "" && item.Principal.OrganizationID != tenant {
-			return errors.New("principal directory contains multiple tenants")
+		previous = string(item.User.ID)
+		if account != "" && item.User.AccountID != account {
+			return errors.New("user directory contains multiple accounts")
 		}
-		tenant = item.Principal.OrganizationID
+		account = item.User.AccountID
 		attachments := map[PolicyAttachmentID]bool{}
 		policies := map[PolicyID]bool{}
 		for _, attachment := range item.PolicyAttachments {
 			if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil ||
-				attachment.AccountID != item.Principal.OrganizationID || attachment.Target.Kind != PolicyTargetUser ||
-				attachment.Target.ID != string(item.Principal.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
-				return errors.New("principal policy attachment is invalid")
+				attachment.AccountID != item.User.AccountID || attachment.Target.Kind != PolicyTargetUser ||
+				attachment.Target.ID != string(item.User.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
+				return errors.New("user policy attachment is invalid")
 			}
 			attachments[attachment.ID] = true
 			policies[attachment.PolicyID] = true
 		}
 	}
 	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
-		return errors.New("principal page boundary is invalid")
+		return errors.New("user page boundary is invalid")
 	}
 	return nil
 }
 
-func ValidateOrganizationAccountList(value OrganizationAccountList) error {
-	if value.APIVersion != APIVersion || value.Kind != "OrganizationAccountList" || value.Items == nil || len(value.Items) > 100 {
-		return errors.New("organization list is invalid")
+func ValidateAccountList(value AccountList) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccountList" || value.Items == nil || len(value.Items) > 100 {
+		return errors.New("account list is invalid")
 	}
 	var previous string
 	for _, item := range value.Items {
-		if ValidateOrganizationAccount(item) != nil || string(item.Organization.ID) <= previous {
-			return errors.New("organization list item is invalid")
+		if ValidateAccount(item) != nil || string(item.ID) <= previous {
+			return errors.New("account list item is invalid")
 		}
-		previous = string(item.Organization.ID)
+		previous = string(item.ID)
 	}
 	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
-		return errors.New("organization page boundary is invalid")
+		return errors.New("account page boundary is invalid")
 	}
 	return nil
 }

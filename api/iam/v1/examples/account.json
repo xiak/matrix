@@ -1,0 +1,15 @@
+{
+  "apiVersion": "iam.matrix.xiak.com/v1",
+  "kind": "Account",
+  "id": "account-example",
+  "displayName": "Example Account",
+  "status": "ACTIVE",
+  "rootIdentity": {
+    "principalId": "user-root",
+    "loginName": "root"
+  },
+  "loginAlias": "example-account",
+  "resourceVersion": 1,
+  "createdAt": "2026-08-25T01:02:03.000000Z",
+  "updatedAt": "2026-08-25T01:02:03.000000Z"
+}

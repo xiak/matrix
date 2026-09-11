@@ -30,15 +30,15 @@ type legacyBuiltinRole string
 const legacyRolePaaSViewer legacyBuiltinRole = "PAAS_VIEWER"
 
 type legacyRoleBinding struct {
-	APIVersion      string               `json:"apiVersion"`
-	Kind            string               `json:"kind"`
-	ID              iamv1.RoleBindingID  `json:"id"`
-	OrganizationID  iamv1.OrganizationID `json:"organizationId"`
-	PrincipalID     iamv1.PrincipalID    `json:"principalId"`
-	Role            legacyBuiltinRole    `json:"role"`
-	ResourceVersion uint64               `json:"resourceVersion"`
-	CreatedAt       time.Time            `json:"createdAt"`
-	UpdatedAt       time.Time            `json:"updatedAt"`
+	APIVersion      string              `json:"apiVersion"`
+	Kind            string              `json:"kind"`
+	ID              iamv1.RoleBindingID `json:"id"`
+	AccountID       iamv1.AccountID     `json:"organizationId"`
+	PrincipalID     iamv1.PrincipalID   `json:"principalId"`
+	Role            legacyBuiltinRole   `json:"role"`
+	ResourceVersion uint64              `json:"resourceVersion"`
+	CreatedAt       time.Time           `json:"createdAt"`
+	UpdatedAt       time.Time           `json:"updatedAt"`
 }
 
 func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
@@ -339,7 +339,7 @@ DROP FUNCTION public.matrix_iam_cutover_fault(); DROP SEQUENCE public.matrix_iam
 		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
             'readinessVersion',(SELECT schema_version FROM iam.readiness()),
             'receipt',(SELECT jsonb_agg(to_jsonb(r) ORDER BY organization_id) FROM iam.bootstrap_receipts r),
-            'organizations',(SELECT jsonb_agg(to_jsonb(o) ORDER BY id) FROM iam.organizations o),
+            'organizations',(SELECT jsonb_agg(to_jsonb(o) ORDER BY id) FROM iam.accounts o),
             'principals',(SELECT jsonb_agg(to_jsonb(p) ORDER BY tenant_id,id) FROM iam.principals p),
             'bindings',(SELECT jsonb_agg(to_jsonb(b) ORDER BY tenant_id,id) FROM iam.role_bindings b),
             'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.user_credentials c),
@@ -459,7 +459,7 @@ func proveLocalCredentialRecoveryProcesses(t *testing.T, ctx context.Context, ad
 			t.Fatal(err)
 		}
 		defer lock.Rollback(ctx)
-		if _, err := lock.Exec(ctx, "SELECT id FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$2 FOR UPDATE", local.Scope.OrganizationID, request.Expected.PlatformBindingID); err != nil {
+		if _, err := lock.Exec(ctx, "SELECT id FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$2 FOR UPDATE", local.Scope.AccountID, request.Expected.PlatformBindingID); err != nil {
 			t.Fatal(err)
 		}
 		applied = apply(requestPath, 0, func() {
@@ -529,7 +529,7 @@ func proveLocalCredentialRecoveryProcesses(t *testing.T, ctx context.Context, ad
 	}
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	eventID, event := findIAMEvent(t, ctx, admin, auditv1.ActionIAMInstallationPrimaryCredentialsRecovered, string(local.Scope.PrincipalID))
-	if eventID != string(applied.AuditEventID) || event.InstallationID != local.Scope.InstallationID || event.TenantID != "" || event.Actor != (auditv1.ActorReference{Type: auditv1.ActorSystem, ID: iamv1.LocalCredentialRecoveryActor}) || event.Target.TenantID != auditv1.TenantID(local.Scope.OrganizationID) || event.IAMDecisionID != "" {
+	if eventID != string(applied.AuditEventID) || event.InstallationID != local.Scope.InstallationID || event.TenantID != "" || event.Actor != (auditv1.ActorReference{Type: auditv1.ActorSystem, ID: iamv1.LocalCredentialRecoveryActor}) || event.Target.TenantID != auditv1.TenantID(local.Scope.AccountID) || event.IAMDecisionID != "" {
 		t.Fatal("local completion did not deliver its exact single security fact")
 	}
 	assertAuditEventCount(t, ctx, admin, eventID, 1)
@@ -600,7 +600,7 @@ func localRecoveryProcessAuthority(t *testing.T, bootstrap iamv1.BootstrapDocume
 		t.Fatal(err)
 	}
 	return iamv1.LocalCredentialRecoveryAuthority{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryAuthority", Purpose: iamv1.LocalCredentialRecoveryPurpose,
-		Scope:         iamv1.LocalCredentialRecoveryScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest, OrganizationID: bootstrap.Organization.ID, PrincipalID: bootstrap.Administrator.ID},
+		Scope:         iamv1.LocalCredentialRecoveryScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest, AccountID: bootstrap.Organization.ID, PrincipalID: bootstrap.Administrator.ID},
 		CapabilityKey: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x6d}, 32)))}
 }
 
@@ -666,7 +666,7 @@ func putLegacyIAMBinding(
 	if err := json.Unmarshal(response.Body, &binding); err != nil ||
 		binding.APIVersion != iamv1.APIVersion || binding.Kind != "RoleBinding" ||
 		iamv1.ValidateID("legacyRoleBinding.id", string(binding.ID)) != nil ||
-		iamv1.ValidateID("legacyRoleBinding.organizationId", string(binding.OrganizationID)) != nil ||
+		iamv1.ValidateID("legacyRoleBinding.organizationId", string(binding.AccountID)) != nil ||
 		iamv1.ValidateID("legacyRoleBinding.principalId", string(binding.PrincipalID)) != nil ||
 		binding.Role != role || binding.ResourceVersion == 0 || binding.CreatedAt.IsZero() ||
 		binding.UpdatedAt.Before(binding.CreatedAt) {

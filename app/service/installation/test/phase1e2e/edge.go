@@ -150,7 +150,7 @@ func (client *edgeClient) login(ctx context.Context, password []byte, requestID 
 
 func (client *edgeClient) loginNamed(
 	ctx context.Context, loginName string, password []byte,
-	tenantID iamv1.OrganizationID, principalID iamv1.PrincipalID, requestID string,
+	tenantID iamv1.AccountID, principalID iamv1.PrincipalID, requestID string,
 ) (iamv1.LoginResponse, error) {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/login", nil,
@@ -163,7 +163,7 @@ func (client *edgeClient) loginNamed(
 	defer clear(response.body)
 	var result iamv1.LoginResponse
 	if decodeOne(response.body, &result) != nil || iamv1.ValidateLoginResponse(result) != nil ||
-		result.Session.PrincipalID != principalID || result.Session.OrganizationID != tenantID ||
+		result.Session.PrincipalID != principalID || result.Session.AccountID != tenantID ||
 		result.Session.Status != iamv1.SessionActive {
 		return iamv1.LoginResponse{}, errors.New("IAM login response failed")
 	}
@@ -368,7 +368,7 @@ func (client *edgeClient) queryAudit(
 	ctx context.Context,
 	bearer []byte,
 	request auditv1.QueryRecordsRequest,
-	tenantID iamv1.OrganizationID,
+	tenantID iamv1.AccountID,
 	installationID string,
 ) (auditv1.RecordPage, error) {
 	path := "/api/audit/v1/records:query"
@@ -393,7 +393,7 @@ func (client *edgeClient) queryAudit(
 func (client *edgeClient) allAuditRecords(
 	ctx context.Context,
 	bearer []byte,
-	tenantID iamv1.OrganizationID,
+	tenantID iamv1.AccountID,
 	installationID string,
 ) ([]auditv1.AuditRecord, error) {
 	request := auditv1.QueryRecordsRequest{PageSize: auditv1.MaxPageSize}
@@ -446,7 +446,7 @@ func (client *edgeClient) waitAuditActions(
 func (client *edgeClient) verifyAuditChain(
 	ctx context.Context,
 	bearer []byte,
-	tenantID iamv1.OrganizationID,
+	tenantID iamv1.AccountID,
 	installationID string,
 ) (auditv1.ChainVerification, error) {
 	path := "/api/audit/v1/integrity:verify"

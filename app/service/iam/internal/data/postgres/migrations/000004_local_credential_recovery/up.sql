@@ -107,9 +107,9 @@ BEGIN
     SELECT jsonb_build_object('organizationResourceVersion',organization.resource_version,
         'principalResourceVersion',principal.resource_version,'credentialGeneration',credential.credential_version,
         'platformBindingId',binding.id,'platformBindingResourceVersion',binding.resource_version)
-      INTO expected FROM iam.organizations AS organization
+      INTO expected FROM iam.accounts AS organization
       JOIN iam.principals AS principal ON principal.tenant_id=organization.id
-      JOIN iam.login_index AS login ON login.tenant_id=principal.tenant_id AND login.principal_id=principal.id AND login.account_owner
+      JOIN iam.account_roots AS root ON root.account_id=principal.tenant_id AND root.principal_id=principal.id
       JOIN iam.user_credentials AS credential ON credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id
       JOIN iam.policy_attachments AS binding ON binding.tenant_id=principal.tenant_id AND binding.principal_id=principal.id
        AND binding.policy_id='system.platform-operator' AND binding.revoked_at IS NULL
@@ -129,7 +129,7 @@ DECLARE
     stored iam.local_credential_recoveries%ROWTYPE;
     binding iam.policy_attachments%ROWTYPE;
     principal iam.principals%ROWTYPE;
-    organization iam.organizations%ROWTYPE;
+    organization iam.accounts%ROWTYPE;
     generation bigint;
     revoked_count bigint;
     version_name text;
@@ -173,15 +173,15 @@ BEGIN
     -- Match online writes: organization -> principal -> policy -> attachment
     -- -> credential -> sessions. Receipt replay above remains independent of
     -- current eligibility and never mutates the original completed evidence.
-    SELECT * INTO organization FROM iam.organizations AS candidate WHERE candidate.id=scope->>'organizationId' FOR UPDATE;
+    SELECT * INTO organization FROM iam.accounts AS candidate WHERE candidate.id=scope->>'organizationId' FOR UPDATE;
     IF NOT FOUND OR organization.status <> 'ACTIVE' THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='local recovery organization is ineligible';
     END IF;
     SELECT * INTO principal FROM iam.principals AS candidate
      WHERE candidate.tenant_id=scope->>'organizationId' AND candidate.id=scope->>'principalId' FOR UPDATE;
     IF NOT FOUND OR principal.principal_type <> 'USER' OR principal.status <> 'ACTIVE'
-        OR NOT EXISTS (SELECT 1 FROM iam.login_index AS login WHERE login.tenant_id=principal.tenant_id
-            AND login.principal_id=principal.id AND login.account_owner) THEN
+        OR NOT EXISTS (SELECT 1 FROM iam.account_roots AS root WHERE root.account_id=principal.tenant_id
+            AND root.principal_id=principal.id) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='local recovery primary is ineligible';
     END IF;
     PERFORM 1 FROM iam.policies AS policy WHERE policy.id='system.platform-operator' FOR SHARE;

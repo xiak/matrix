@@ -33,11 +33,11 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 			_, digest, _ := auditv1.CanonicalizeEvent(auditv1.SourcePaaS, body.Event)
 			_ = json.NewEncoder(response).Encode(iamv1.AuditProducerAuthorization{
 				APIVersion: iamv1.APIVersion, Kind: "AuditProducerAuthorization",
-				TenantID: iamv1.OrganizationID(body.Event.TenantID), ContentDigest: digest,
+				TenantID: iamv1.AccountID(body.Event.TenantID), ContentDigest: digest,
 				Producer: iamv1.ServiceIdentity{
 					APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
 					InstallationID: "installation-example",
-					OrganizationID: "organization-example", PrincipalID: "service-paas", Purpose: iamv1.ServicePaaS,
+					AccountID:      "organization-example", PrincipalID: "service-paas", Purpose: iamv1.ServicePaaS,
 				},
 			})
 		case "/v1/authorize":
@@ -105,7 +105,7 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 		iamv1.ResolveAuditProducerRequest{Event: clientEvent()},
 	)
 	if err != nil || identity.Producer.Purpose != iamv1.ServicePaaS ||
-		identity.Producer.OrganizationID != "organization-example" || identity.TenantID != "organization-second" {
+		identity.Producer.AccountID != "organization-example" || identity.TenantID != "organization-second" {
 		t.Fatalf("IAM service identity=%#v err=%v", identity, err)
 	}
 	authorization := iamv1.AuthorizationRequest{

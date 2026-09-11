@@ -284,6 +284,7 @@ DECLARE
 BEGIN
     action_name := submitted_event->>'action';
     platform_only := action_name IN (
+        'iam.account.created', 'iam.account.disabled', 'iam.account.enabled', 'iam.account-root.credentials-recovered',
         'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled', 'iam.tenant-administrator.recovered',
         'iam.installation-primary.credentials-recovered',
         'iam.platform-policy-attachment.created', 'iam.platform-policy-attachment.revoked',
@@ -297,6 +298,15 @@ BEGIN
            iam_decision_permitted, iam_decision_required,
            operation_required
       FROM (VALUES
+        ('iam.account.created', 'IAM', 'ACCOUNT', 'SUCCEEDED', true, true, false),
+        ('iam.account.disabled', 'IAM', 'ACCOUNT', 'SUCCEEDED', true, true, false),
+        ('iam.account.enabled', 'IAM', 'ACCOUNT', 'SUCCEEDED', true, true, false),
+        ('iam.account-root.credentials-recovered', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.account.alias-set', 'IAM', 'ACCOUNT', 'SUCCEEDED', true, true, false),
+        ('iam.user.created', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.user.status-set', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.user.password-reset', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.user.password-changed', 'IAM', 'USER', 'SUCCEEDED', false, false, false),
         ('iam.tenant.created', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.tenant.disabled', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.tenant.enabled', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
@@ -372,11 +382,11 @@ BEGIN
        ]) <> '{}'::jsonb
        OR ((submitted_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
        OR ((submitted_event->'target') - ARRAY['kind', 'id', 'tenantId']) <> '{}'::jsonb
-       OR (action_name IN ('iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (
+       OR (action_name IN ('iam.account-root.credentials-recovered','iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (
             jsonb_typeof(submitted_event#>'{target,tenantId}') IS DISTINCT FROM 'string'
             OR COALESCE(submitted_event#>>'{target,tenantId}','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
           ))
-       OR (action_name NOT IN ('iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (submitted_event->'target') ? 'tenantId')
+       OR (action_name NOT IN ('iam.account-root.credentials-recovered','iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (submitted_event->'target') ? 'tenantId')
        OR jsonb_typeof(submitted_event#>'{actor,type}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{actor,id}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{target,kind}') <> 'string'
@@ -417,8 +427,10 @@ BEGIN
        OR COALESCE(submitted_event#>>'{actor,id}', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT', 'SYSTEM')
-       OR (action_name IN ('iam.policy-attachment.created','iam.policy-attachment.revoked')
-           AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
+        OR (action_name IN ('iam.account.alias-set','iam.user.created','iam.user.status-set',
+            'iam.user.password-reset','iam.user.password-changed',
+            'iam.policy-attachment.created','iam.policy-attachment.revoked')
+            AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
        OR COALESCE(submitted_event#>>'{target,id}', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_event->>'requestDigest', '') COLLATE "C"
@@ -767,7 +779,11 @@ BEGIN
        OR submitted_page_size NOT BETWEEN 1 AND 201
        OR (submitted_from IS NOT NULL AND submitted_to IS NOT NULL
             AND submitted_to < submitted_from)
-       OR (submitted_action IS NOT NULL AND submitted_action NOT IN (
+        OR (submitted_action IS NOT NULL AND submitted_action NOT IN (
+            'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
+            'iam.account-root.credentials-recovered', 'iam.account.alias-set',
+            'iam.user.created', 'iam.user.status-set', 'iam.user.password-reset',
+            'iam.user.password-changed',
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.session.revoked', 'iam.password.changed',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',

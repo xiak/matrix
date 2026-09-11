@@ -56,8 +56,8 @@ func TestSystemPolicyAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testin
 		t.Fatalf("developer decision = %#v err=%v", allowed, err)
 	}
 
-	request.Action = iamv1.ActionIAMPrincipalCreate
-	request.Resource.Kind = iamv1.ResourceOrganization
+	request.Action = iamv1.ActionIAMUserCreate
+	request.Resource.Kind = iamv1.ResourceAccount
 	denied, err := Decide(context, iamv1.ServicePaaS, request, "decision-denied", now)
 	if err != nil || denied.Allowed || denied.TenantID != "" || denied.Subject != nil {
 		t.Fatalf("denied decision = %#v err=%v", denied, err)
@@ -92,7 +92,7 @@ func TestInstallationVerifierServiceCanAuthorizeOnlyItsFixedAction(t *testing.T)
 		InstallationID: "installation-example",
 		APIVersion:     iamv1.APIVersion,
 		Kind:           "ServiceIdentity",
-		OrganizationID: "organization-example",
+		AccountID:      "organization-example",
 		PrincipalID:    "service-installation-verifier",
 		Purpose:        iamv1.ServiceInstallationVerifier,
 	}
@@ -110,7 +110,7 @@ func TestInstallationVerifierServiceCanAuthorizeOnlyItsFixedAction(t *testing.T)
 		"decision-installation-verify",
 		now,
 	)
-	if err != nil || !allowed.Allowed || allowed.TenantID != identity.OrganizationID ||
+	if err != nil || !allowed.Allowed || allowed.TenantID != identity.AccountID ||
 		allowed.Subject == nil || allowed.Subject.Type != iamv1.PrincipalServiceAccount ||
 		allowed.Subject.ID != identity.PrincipalID {
 		t.Fatalf("installation verifier decision=%#v err=%v", allowed, err)
@@ -152,7 +152,7 @@ func attachedSystemPolicyAllows(t *testing.T, policyID iamv1.PolicyID, action ia
 	var err error
 	if policyID == iamv1.SystemPolicyInstallationVerifier {
 		identity := iamv1.ServiceIdentity{APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
-			InstallationID: "installation-example", OrganizationID: "organization-example",
+			InstallationID: "installation-example", AccountID: "organization-example",
 			PrincipalID: "service-example", Purpose: definition.CallingService}
 		if request.Action == iamv1.ActionInstallationVerify {
 			request.Resource.ID = identity.InstallationID
@@ -239,7 +239,7 @@ func TestCatalogConfinementIsEnforcedByActualDecisions(t *testing.T) {
 				var err error
 				if definition.AuthorityScope == iamv1.AuthorityScopeInstallationProbe {
 					identity := iamv1.ServiceIdentity{APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
-						InstallationID: "installation-example", OrganizationID: "organization-example",
+						InstallationID: "installation-example", AccountID: "organization-example",
 						PrincipalID: "service-example", Purpose: service}
 					request.Resource.ID = identity.InstallationID
 					decision, err = DecideService(identity, authorityServicePolicies(now, identity, iamv1.SystemPolicyInstallationVerifier), request, "decision-catalog", now)
@@ -647,8 +647,8 @@ func TestPlatformAuthorityRequiresAnExplicitPolicyAndInstallationBinding(t *test
 	}
 }
 
-func TestTenantAccountCommandsRemainOrganizationAdminOnly(t *testing.T) {
-	for _, action := range []iamv1.Action{iamv1.ActionIAMAccountAliasSet, iamv1.ActionIAMPrincipalList, iamv1.ActionIAMPrincipalSetStatus, iamv1.ActionIAMPasswordReset} {
+func TestAccountUserCommandsRemainAccountAdministratorOnly(t *testing.T) {
+	for _, action := range []iamv1.Action{iamv1.ActionIAMAccountAliasSet, iamv1.ActionIAMUserList, iamv1.ActionIAMUserSetStatus, iamv1.ActionIAMUserPasswordReset} {
 		for _, policyID := range testSystemPolicyIDs {
 			if attachedSystemPolicyAllows(t, policyID, action) != (policyID == iamv1.SystemPolicyAccountAdministrator) {
 				t.Errorf("unexpected authority %s/%s", policyID, action)
@@ -684,12 +684,12 @@ func TestAuthorizationFailsClosedOnInconsistentOrInactiveAuthority(t *testing.T)
 		RequestID: "request-authorize", CorrelationID: "correlation-authorize",
 	}
 	context := authoritySubject(now, iamv1.SystemPolicyPaaSViewer)
-	context.Session.OrganizationID = "organization-other"
+	context.Session.AccountID = "organization-other"
 	if _, err := Decide(context, iamv1.ServicePaaS, request, "decision-mismatch", now); !errors.Is(err, ErrAuthorityUnavailable) {
 		t.Fatalf("inconsistent authority error = %v", err)
 	}
 	context = authoritySubject(now, iamv1.SystemPolicyPaaSViewer)
-	context.Organization.Status = iamv1.OrganizationDisabled
+	context.Organization.Status = iamv1.AccountDisabled
 	if _, err := Decide(context, iamv1.ServicePaaS, request, "decision-disabled", now); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("disabled organization error = %v", err)
 	}
@@ -704,18 +704,18 @@ func authoritySubject(now time.Time, policyIDs ...iamv1.PolicyID) SubjectContext
 	return SubjectContext{
 		Organization: iamv1.Organization{
 			APIVersion: iamv1.APIVersion, Kind: "Organization", ID: "organization-example",
-			DisplayName: "Example Organization", Status: iamv1.OrganizationActive,
+			DisplayName: "Example Organization", Status: iamv1.AccountActive,
 			ResourceVersion: 1, CreatedAt: createdAt, UpdatedAt: createdAt,
 		},
 		Principal: iamv1.Principal{
 			APIVersion: iamv1.APIVersion, Kind: "Principal", ID: "principal-developer",
-			OrganizationID: "organization-example", Type: iamv1.PrincipalUser,
+			AccountID: "organization-example", Type: iamv1.PrincipalUser,
 			LoginName: "developer", DisplayName: "Example Developer", Status: iamv1.PrincipalActive,
 			ResourceVersion: 1, CreatedAt: createdAt, UpdatedAt: createdAt,
 		},
 		Session: iamv1.Session{
 			APIVersion: iamv1.APIVersion, Kind: "Session", ID: "session-example",
-			OrganizationID: "organization-example", PrincipalID: "principal-developer",
+			AccountID: "organization-example", PrincipalID: "principal-developer",
 			Status: iamv1.SessionActive, IssuedAt: createdAt, ExpiresAt: now.Add(time.Hour),
 		},
 		Policies:       authorityPolicies(now, "organization-example", iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"}, "installation-example", policyIDs...),
@@ -733,10 +733,10 @@ var testSystemPolicyIDs = []iamv1.PolicyID{
 }
 
 func authorityServicePolicies(now time.Time, identity iamv1.ServiceIdentity, policyIDs ...iamv1.PolicyID) []AttachedPolicy {
-	return authorityPolicies(now, identity.OrganizationID, iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: identity.PrincipalID}, identity.InstallationID, policyIDs...)
+	return authorityPolicies(now, identity.AccountID, iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: identity.PrincipalID}, identity.InstallationID, policyIDs...)
 }
 
-func authorityPolicies(now time.Time, account iamv1.OrganizationID, subject iamv1.Subject, installation string, policyIDs ...iamv1.PolicyID) []AttachedPolicy {
+func authorityPolicies(now time.Time, account iamv1.AccountID, subject iamv1.Subject, installation string, policyIDs ...iamv1.PolicyID) []AttachedPolicy {
 	result := make([]AttachedPolicy, 0, len(policyIDs))
 	for _, policyID := range policyIDs {
 		version, err := SystemPolicyVersion(policyID)

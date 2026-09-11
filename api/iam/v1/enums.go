@@ -1,6 +1,6 @@
 package iamv1
 
-type OrganizationStatus string
+type AccountStatus string
 type PrincipalType string
 type PrincipalStatus string
 type SessionStatus string
@@ -12,6 +12,7 @@ type ServicePurpose string
 type ReadinessState string
 type ProductID string
 type AuthorityScope string
+type IdentityKind string
 
 // ActionDefinition binds a product operation to its only authorization caller,
 // resource kind and authority scope. It describes a registered operation; it
@@ -42,8 +43,8 @@ const (
 )
 
 const (
-	OrganizationActive   OrganizationStatus = "ACTIVE"
-	OrganizationDisabled OrganizationStatus = "DISABLED"
+	AccountActive   AccountStatus = "ACTIVE"
+	AccountDisabled AccountStatus = "DISABLED"
 )
 
 const (
@@ -57,25 +58,30 @@ const (
 )
 
 const (
+	IdentityRoot IdentityKind = "ROOT_IDENTITY"
+	IdentityUser IdentityKind = "USER"
+)
+
+const (
 	SessionActive  SessionStatus = "ACTIVE"
 	SessionRevoked SessionStatus = "REVOKED"
 	SessionExpired SessionStatus = "EXPIRED"
 )
 
 const (
-	ActionIAMOrganizationCreate               Action = "iam.organization.create"
-	ActionIAMOrganizationRead                 Action = "iam.organization.read"
-	ActionIAMOrganizationSetStatus            Action = "iam.organization.set-status"
-	ActionIAMOrganizationAdministratorRecover Action = "iam.organization-administrator.recover"
-	ActionIAMAccountAliasSet                  Action = "iam.account-alias.set"
-	ActionIAMPrincipalList                    Action = "iam.principal.list"
-	ActionIAMPolicyList                       Action = "iam.policy.list"
-	ActionIAMPlatformPolicyList               Action = "iam.platform-policy.list"
-	ActionIAMPrincipalSetStatus               Action = "iam.principal.set-status"
-	ActionIAMPasswordReset                    Action = "iam.password.reset"
+	ActionIAMAccountCreate                 Action = "iam.account.create"
+	ActionIAMAccountRead                   Action = "iam.account.read"
+	ActionIAMAccountSetStatus              Action = "iam.account.set-status"
+	ActionIAMAccountRootCredentialsRecover Action = "iam.account.recover-root-credentials"
+	ActionIAMAccountAliasSet               Action = "iam.account.alias-set"
+	ActionIAMUserList                      Action = "iam.user.list"
+	ActionIAMPolicyList                    Action = "iam.policy.list"
+	ActionIAMPlatformPolicyList            Action = "iam.platform-policy.list"
+	ActionIAMUserSetStatus                 Action = "iam.user.set-status"
+	ActionIAMUserPasswordReset             Action = "iam.user.reset-password"
 
-	ActionIAMPrincipalCreate                Action = "iam.principal.create"
-	ActionIAMPrincipalRead                  Action = "iam.principal.read"
+	ActionIAMUserCreate                     Action = "iam.user.create"
+	ActionIAMUserRead                       Action = "iam.user.read"
 	ActionIAMSessionRevoke                  Action = "iam.session.revoke"
 	ActionIAMPolicyAttachmentCreate         Action = "iam.policy-attachment.create"
 	ActionIAMPolicyAttachmentRevoke         Action = "iam.policy-attachment.revoke"
@@ -120,13 +126,25 @@ const (
 // Published historical decisions retain these literals; no active action
 // definition or policy may use them.
 const (
-	ActionIAMRoleBindingPut            Action = "iam.role-binding.put"
-	ActionIAMRoleBindingRevoke         Action = "iam.role-binding.revoke"
-	ActionIAMPlatformRoleBindingPut    Action = "iam.platform-role-binding.put"
-	ActionIAMPlatformRoleBindingRevoke Action = "iam.platform-role-binding.revoke"
+	ActionIAMOrganizationCreate               Action = "iam.organization.create"
+	ActionIAMOrganizationRead                 Action = "iam.organization.read"
+	ActionIAMOrganizationSetStatus            Action = "iam.organization.set-status"
+	ActionIAMOrganizationAdministratorRecover Action = "iam.organization-administrator.recover"
+	ActionIAMLegacyAccountAliasSet            Action = "iam.account-alias.set"
+	ActionIAMPrincipalList                    Action = "iam.principal.list"
+	ActionIAMPrincipalSetStatus               Action = "iam.principal.set-status"
+	ActionIAMPasswordReset                    Action = "iam.password.reset"
+	ActionIAMPrincipalCreate                  Action = "iam.principal.create"
+	ActionIAMPrincipalRead                    Action = "iam.principal.read"
+	ActionIAMRoleBindingPut                   Action = "iam.role-binding.put"
+	ActionIAMRoleBindingRevoke                Action = "iam.role-binding.revoke"
+	ActionIAMPlatformRoleBindingPut           Action = "iam.platform-role-binding.put"
+	ActionIAMPlatformRoleBindingRevoke        Action = "iam.platform-role-binding.revoke"
 )
 
 const (
+	ResourceAccount               ResourceKind = "ACCOUNT"
+	ResourceUser                  ResourceKind = "USER"
 	ResourceOrganization          ResourceKind = "ORGANIZATION"
 	ResourcePrincipal             ResourceKind = "PRINCIPAL"
 	ResourceRoleBinding           ResourceKind = "ROLE_BINDING"
@@ -217,6 +235,16 @@ func lookupRecordedActionDefinition(action Action) (ActionDefinition, bool) {
 // Only published decision vocabulary is retained. Do not add aliases, infer
 // unknown actions from prefixes, or pass these entries to policy evaluation.
 var retiredActionDefinitions = [...]ActionDefinition{
+	{ActionIAMOrganizationCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeInstallation},
+	{ActionIAMOrganizationRead, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeInstallation},
+	{ActionIAMOrganizationSetStatus, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeInstallation},
+	{ActionIAMOrganizationAdministratorRecover, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
+	{ActionIAMLegacyAccountAliasSet, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
+	{ActionIAMPrincipalList, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
+	{ActionIAMPrincipalSetStatus, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
+	{ActionIAMPasswordReset, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
+	{ActionIAMPrincipalCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
+	{ActionIAMPrincipalRead, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
 	{ActionIAMRoleBindingPut, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
 	{ActionIAMRoleBindingRevoke, ProductIAM, ServiceIAM, ResourceRoleBinding, AuthorityScopeTenant},
 	{ActionIAMPlatformRoleBindingPut, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
@@ -232,22 +260,22 @@ func AllServicePurposes() []ServicePurpose {
 // This is the sole action/resource/caller/scope catalog. Preserve its order:
 // existing generated contracts use AllActions.
 var actionDefinitions = [...]ActionDefinition{
-	{ActionIAMOrganizationCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeInstallation},
-	{ActionIAMOrganizationRead, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeInstallation},
-	{ActionIAMOrganizationSetStatus, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeInstallation},
-	{ActionIAMOrganizationAdministratorRecover, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
-	{ActionIAMAccountAliasSet, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
-	{ActionIAMPrincipalList, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
-	{ActionIAMPolicyList, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
+	{ActionIAMAccountCreate, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeInstallation},
+	{ActionIAMAccountRead, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeInstallation},
+	{ActionIAMAccountSetStatus, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeInstallation},
+	{ActionIAMAccountRootCredentialsRecover, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeInstallation},
+	{ActionIAMAccountAliasSet, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
+	{ActionIAMUserList, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
+	{ActionIAMPolicyList, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
 	{ActionIAMPlatformPolicyList, ProductIAM, ServiceIAM, ResourceInstallation, AuthorityScopeInstallation},
-	{ActionIAMPrincipalSetStatus, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
-	{ActionIAMPasswordReset, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
-	{ActionIAMPrincipalCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
-	{ActionIAMPrincipalRead, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
-	{ActionIAMPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
+	{ActionIAMUserSetStatus, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
+	{ActionIAMUserPasswordReset, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
+	{ActionIAMUserCreate, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
+	{ActionIAMUserRead, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
+	{ActionIAMPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
 	{ActionIAMPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeTenant},
 	{ActionIAMSessionRevoke, ProductIAM, ServiceIAM, ResourceSession, AuthorityScopeTenant},
-	{ActionIAMPlatformPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
+	{ActionIAMPlatformPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeInstallation},
 	{ActionIAMPlatformPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeInstallation},
 	{ActionPaaSExecutionPoolCreate, ProductPaaS, ServicePaaS, ResourceExecutionPool, AuthorityScopeInstallation},
 	{ActionPaaSExecutionPoolRead, ProductPaaS, ServicePaaS, ResourceExecutionPool, AuthorityScopeInstallation},

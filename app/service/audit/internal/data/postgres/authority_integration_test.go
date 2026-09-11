@@ -694,7 +694,7 @@ func assertAuthorityDatabaseAttackSurface(
 			assertAuthorityPostgresCode(t, err, "42501")
 		}
 	}
-	err := iamAPI.QueryRow(ctx, "SELECT count(*) FROM iam.organizations").Scan(&count)
+	err := iamAPI.QueryRow(ctx, "SELECT count(*) FROM iam.accounts").Scan(&count)
 	assertAuthorityPostgresCode(t, err, "42501")
 	_, err = iamAPI.Exec(ctx, "SET ROLE matrix_iam_owner")
 	assertAuthorityPostgresCode(t, err, "42501")
@@ -836,7 +836,7 @@ func applyIAMBootstrap(
 		ctx,
 		`SELECT
 			(SELECT count(*) FROM iam.bootstrap_receipts),
-			(SELECT count(*) FROM iam.organizations),
+			(SELECT count(*) FROM iam.accounts),
 			(SELECT count(*) FROM iam.audit_outbox)`,
 	).Scan(&receiptCount, &organizationCount, &outboxCount); err != nil {
 		t.Fatalf("inspect applied IAM bootstrap: %v", err)
@@ -1365,13 +1365,13 @@ func assertForcedTenantIsolation(
 	t.Helper()
 	if count := ownerTenantCount(
 		t, ctx, iamMigrator, "matrix_iam_owner", "matrix.iam_tenant_id",
-		"iam.organizations", string(tenantA),
+		"iam.accounts", string(tenantA),
 	); count != 1 {
 		t.Fatalf("IAM owner tenant A row count = %d, want 1", count)
 	}
 	if count := ownerTenantCount(
 		t, ctx, iamMigrator, "matrix_iam_owner", "matrix.iam_tenant_id",
-		"iam.organizations", "organization-other",
+		"iam.accounts", "organization-other",
 	); count != 0 {
 		t.Fatalf("IAM owner cross-tenant row count = %d, want 0", count)
 	}
@@ -1675,7 +1675,7 @@ func assertIAMSessionLookup(
 		row.Attachment.CreatedAt, row.Attachment.UpdatedAt = row.Attachment.CreatedAt.UTC(), row.Attachment.UpdatedAt.UTC()
 		if iamv1.ValidatePolicy(row.Policy) != nil || iamv1.ValidatePolicyVersion(row.Version) != nil ||
 			iamv1.ValidatePolicyAttachment(row.Attachment) != nil || row.Policy.Status != iamv1.PolicyActive ||
-			row.Attachment.RevokedAt != nil || row.Attachment.AccountID != iamv1.OrganizationID(fixture.TenantID) ||
+			row.Attachment.RevokedAt != nil || row.Attachment.AccountID != iamv1.AccountID(fixture.TenantID) ||
 			row.Attachment.Target.ID != fixture.Administrator || string(row.Attachment.Target.Kind) != "USER" ||
 			row.Attachment.PolicyID != row.Policy.ID || row.Version.PolicyID != row.Policy.ID ||
 			row.Version.ID != row.Policy.DefaultVersionID || row.Version.Document.Scope != row.Policy.Scope ||
@@ -1802,7 +1802,7 @@ func assertIAMAuthorizationCatalog(
 			ID:         iamv1.DecisionID(decisionID),
 			Allowed:    true,
 			Reason:     iamv1.DecisionAllowed,
-			TenantID:   iamv1.OrganizationID(fixture.TenantID),
+			TenantID:   iamv1.AccountID(fixture.TenantID),
 			Subject:    &iamv1.Subject{Type: iamv1.PrincipalUser, ID: iamv1.PrincipalID(fixture.Administrator)},
 			Action:     action,
 			Resource:   iamv1.ResourceReference{Kind: resourceKind, ID: fmt.Sprintf("resource-catalog-%d", index)},
@@ -1886,7 +1886,7 @@ func assertIAMAuthorizationCatalog(
 			}
 			decision := iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
 				ID: "decision-retired-action", Allowed: allowed, Reason: iamv1.DecisionAllowed,
-				TenantID: iamv1.OrganizationID(fixture.TenantID), Subject: &iamv1.Subject{Type: iamv1.PrincipalUser, ID: iamv1.PrincipalID(fixture.Administrator)},
+				TenantID: iamv1.AccountID(fixture.TenantID), Subject: &iamv1.Subject{Type: iamv1.PrincipalUser, ID: iamv1.PrincipalID(fixture.Administrator)},
 				Action: definition.Action, Resource: iamv1.ResourceReference{Kind: definition.ResourceKind, ID: "retired-target"},
 				RequestID: "retired-action-request", DecidedAt: now.UTC()}
 			evidence := tenantEvidence
@@ -1939,7 +1939,7 @@ func assertIAMAuthorizationCatalog(
 		ID:         "decision-forged-kind",
 		Allowed:    true,
 		Reason:     iamv1.DecisionAllowed,
-		TenantID:   iamv1.OrganizationID(fixture.TenantID),
+		TenantID:   iamv1.AccountID(fixture.TenantID),
 		Subject:    &iamv1.Subject{Type: iamv1.PrincipalUser, ID: iamv1.PrincipalID(fixture.Administrator)},
 		Action:     iamv1.ActionPaaSApplicationRead,
 		Resource:   iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "application-forged-kind"},
@@ -1992,7 +1992,7 @@ func assertIAMAuthorizationCatalog(
 		decision.TenantID, decision.InstallationID = "", fixture.InstallationID
 		decision.DecidedAt, event.OccurredAt = databaseTime.UTC(), databaseTime.UTC()
 		if attack == "mixed authority" {
-			decision.TenantID = iamv1.OrganizationID(fixture.TenantID)
+			decision.TenantID = iamv1.AccountID(fixture.TenantID)
 		}
 		if attack == "wrong installation" {
 			decision.InstallationID = "installation-other"

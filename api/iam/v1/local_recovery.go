@@ -24,10 +24,10 @@ const (
 var ErrInvalidLocalCredentialRecovery = errors.New("local IAM credential recovery is invalid")
 
 type LocalCredentialRecoveryScope struct {
-	InstallationID  string         `json:"installationId"`
-	BootstrapDigest string         `json:"bootstrapDigest"`
-	OrganizationID  OrganizationID `json:"organizationId"`
-	PrincipalID     PrincipalID    `json:"principalId"`
+	InstallationID  string      `json:"installationId"`
+	BootstrapDigest string      `json:"bootstrapDigest"`
+	AccountID       AccountID   `json:"organizationId"`
+	PrincipalID     PrincipalID `json:"principalId"`
 }
 
 type LocalCredentialRecoveryExpected struct {
@@ -100,7 +100,7 @@ type LocalCredentialRecoveryResult struct {
 func ValidateLocalCredentialRecoveryScope(value LocalCredentialRecoveryScope) error {
 	if ValidateID("installationId", value.InstallationID) != nil ||
 		ValidateDigest("bootstrapDigest", value.BootstrapDigest) != nil ||
-		ValidateID("organizationId", string(value.OrganizationID)) != nil ||
+		ValidateID("organizationId", string(value.AccountID)) != nil ||
 		ValidateID("principalId", string(value.PrincipalID)) != nil {
 		return ErrInvalidLocalCredentialRecovery
 	}

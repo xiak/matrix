@@ -198,7 +198,7 @@ func TestClientReadinessRequiresPaaSServiceIdentity(t *testing.T) {
 		_ = json.NewEncoder(response).Encode(iamv1.ServiceIdentity{
 			InstallationID: "installation-example",
 			APIVersion:     iamv1.APIVersion, Kind: "ServiceIdentity",
-			OrganizationID: "organization-a", PrincipalID: "service-paas",
+			AccountID: "organization-a", PrincipalID: "service-paas",
 			Purpose: iamv1.ServicePaaS,
 		})
 	}))

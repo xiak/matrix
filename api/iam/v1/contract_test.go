@@ -36,7 +36,7 @@ func TestLocalRecoveryCapabilityBindsOnePrivateIntent(t *testing.T) {
 	}
 	scope := LocalCredentialRecoveryScope{
 		InstallationID: "installation-local", BootstrapDigest: "sha256:" + strings.Repeat("a", 64),
-		OrganizationID: "organization-original", PrincipalID: "principal-original",
+		AccountID: "organization-original", PrincipalID: "principal-original",
 	}
 	local := LocalCredentialRecoveryAuthority{
 		APIVersion: APIVersion, Kind: "LocalCredentialRecoveryAuthority", Purpose: LocalCredentialRecoveryPurpose,
@@ -66,7 +66,7 @@ func TestLocalRecoveryCapabilityBindsOnePrivateIntent(t *testing.T) {
 		"command":              func(v *LocalCredentialRecoveryRequest) { v.CommandID = "command-other" },
 		"installation":         func(v *LocalCredentialRecoveryRequest) { v.Scope.InstallationID = "installation-other" },
 		"bootstrap":            func(v *LocalCredentialRecoveryRequest) { v.Scope.BootstrapDigest = "sha256:" + strings.Repeat("b", 64) },
-		"tenant":               func(v *LocalCredentialRecoveryRequest) { v.Scope.OrganizationID = "organization-other" },
+		"tenant":               func(v *LocalCredentialRecoveryRequest) { v.Scope.AccountID = "organization-other" },
 		"primary":              func(v *LocalCredentialRecoveryRequest) { v.Scope.PrincipalID = "principal-child" },
 		"organization version": func(v *LocalCredentialRecoveryRequest) { v.Expected.OrganizationResourceVersion++ },
 		"principal version":    func(v *LocalCredentialRecoveryRequest) { v.Expected.PrincipalResourceVersion++ },
@@ -136,7 +136,7 @@ func TestLocalRecoveryCapabilityBindsOnePrivateIntent(t *testing.T) {
 }
 
 func TestLocalRecoveryReceiptIsHistoricalNotFreshAuthority(t *testing.T) {
-	scope := LocalCredentialRecoveryScope{InstallationID: "installation-original", BootstrapDigest: "sha256:" + strings.Repeat("a", 64), OrganizationID: "organization-original", PrincipalID: "principal-original"}
+	scope := LocalCredentialRecoveryScope{InstallationID: "installation-original", BootstrapDigest: "sha256:" + strings.Repeat("a", 64), AccountID: "organization-original", PrincipalID: "principal-original"}
 	expected := LocalCredentialRecoveryExpected{OrganizationResourceVersion: 1, PrincipalResourceVersion: 4, CredentialGeneration: 3, PlatformBindingID: "binding-original", PlatformBindingResourceVersion: 1}
 	result := LocalCredentialRecoveryResult{APIVersion: APIVersion, Kind: "LocalCredentialRecoveryResult", State: "APPLIED", CommandID: "command-original",
 		InputCommitment: "sha256:" + strings.Repeat("b", 64), Scope: scope, PreviousCredentialGeneration: 3, CredentialGeneration: 4,
@@ -239,8 +239,8 @@ func TestIAMExamplesPassDomainValidation(t *testing.T) {
 		name string
 		run  func(*testing.T)
 	}{
-		{"organization", validIAMExample[Organization]("examples/organization.json", ValidateOrganization)},
-		{"principal", validIAMExample[Principal]("examples/principal.json", ValidatePrincipal)},
+		{"account", validIAMExample[Account]("examples/account.json", ValidateAccount)},
+		{"user", validIAMExample[User]("examples/user.json", ValidateUser)},
 		{"bootstrap status", validIAMExample[BootstrapStatus]("examples/bootstrap-status.json", ValidateBootstrapStatus)},
 		{"service identity", validIAMExample[ServiceIdentity]("examples/service-identity.json", ValidateServiceIdentity)},
 		{"login request", validIAMExample[LoginRequest]("examples/login-request.json", ValidateLoginRequest)},
@@ -332,12 +332,12 @@ func TestIAMActionDefinitionsDeclareProductServiceAndScope(t *testing.T) {
 	// These cases pin security boundaries, including equal resource kinds in
 	// different authority scopes and managedservice's PaaS caller.
 	for _, want := range []ActionDefinition{
-		{ActionIAMOrganizationCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeInstallation},
-		{ActionIAMOrganizationAdministratorRecover, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
-		{ActionIAMPrincipalCreate, ProductIAM, ServiceIAM, ResourceOrganization, AuthorityScopeTenant},
-		{ActionIAMPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeTenant},
+		{ActionIAMAccountCreate, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeInstallation},
+		{ActionIAMAccountRootCredentialsRecover, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeInstallation},
+		{ActionIAMUserCreate, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
+		{ActionIAMPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
 		{ActionIAMPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeTenant},
-		{ActionIAMPlatformPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourcePrincipal, AuthorityScopeInstallation},
+		{ActionIAMPlatformPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeInstallation},
 		{ActionIAMPlatformPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeInstallation},
 		{ActionIAMSessionRevoke, ProductIAM, ServiceIAM, ResourceSession, AuthorityScopeTenant},
 		{ActionPaaSApplicationCreate, ProductPaaS, ServicePaaS, ResourceApplication, AuthorityScopeTenant},
@@ -405,9 +405,9 @@ func TestIAMActionDefinitionsDeclareProductServiceAndScope(t *testing.T) {
 }
 
 func TestIAMCatalogReadsCannotModifyAuthority(t *testing.T) {
-	want, known := LookupActionDefinition(ActionIAMOrganizationCreate)
+	want, known := LookupActionDefinition(ActionIAMAccountCreate)
 	if !known {
-		t.Fatal("organization creation is not registered")
+		t.Fatal("account creation is not registered")
 	}
 	definitions := AllActionDefinitions()
 	for index := range definitions {
@@ -673,12 +673,13 @@ func TestPolicyMetadataAndAttachmentOwnershipContracts(t *testing.T) {
 func TestCurrentIdentityUsesOnlyItsLiveUserPolicyAttachments(t *testing.T) {
 	now := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
 	identity := CurrentIdentity{APIVersion: APIVersion, Kind: "CurrentIdentity",
-		Account: OrganizationAccount{Organization: Organization{APIVersion: APIVersion, Kind: "Organization", ID: "account-a",
-			DisplayName: "Account A", Status: OrganizationActive, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
-			PrimaryPrincipalID: "user-a", PrimaryLoginName: "admin"},
-		Principal: Principal{APIVersion: APIVersion, Kind: "Principal", ID: "user-a", OrganizationID: "account-a",
-			Type: PrincipalUser, LoginName: "admin", DisplayName: "Administrator", Status: PrincipalActive,
+		Account: Account{APIVersion: APIVersion, Kind: "Account", ID: "account-a", DisplayName: "Account A",
+			Status: AccountActive, RootIdentity: RootIdentity{PrincipalID: "user-a", LoginName: "admin"},
 			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
+		User: User{APIVersion: APIVersion, Kind: "User", ID: "user-a", AccountID: "account-a",
+			LoginName: "admin", DisplayName: "Administrator", Status: PrincipalActive,
+			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
+		IdentityKind: IdentityRoot,
 		PolicyAttachments: []PolicyAttachment{{APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "attachment-a",
 			AccountID: "account-a", Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: "user-a"},
 			PolicyID: SystemPolicyAccountAdministrator, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}}}
@@ -695,7 +696,7 @@ func TestCurrentIdentityUsesOnlyItsLiveUserPolicyAttachments(t *testing.T) {
 			v.PolicyAttachments[0].RevokedAt = &now
 			v.PolicyAttachments[0].ResourceVersion = 2
 		},
-		"tenant attachment platform hint": func(v *CurrentIdentity) { v.CanCreateOrganizations = true },
+		"tenant attachment platform hint": func(v *CurrentIdentity) { v.CanCreateAccounts = true },
 	} {
 		t.Run(name, func(t *testing.T) {
 			value := identity
@@ -787,12 +788,12 @@ func TestQualifiedLoginIsAnAccountNamespaceNotAnEmail(t *testing.T) {
 }
 
 func TestAccountDirectoryContractsRejectCrossTenantAuthority(t *testing.T) {
-	principal := decodeIAMExample[Principal](t, "examples/principal.json")
+	user := decodeIAMExample[User](t, "examples/user.json")
 	attachment := PolicyAttachment{APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "attachment-directory",
-		AccountID: principal.OrganizationID, Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: string(principal.ID)},
-		PolicyID: SystemPolicyPaaSViewer, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: principal.CreatedAt, UpdatedAt: principal.CreatedAt}
-	list := PrincipalList{APIVersion: APIVersion, Kind: "PrincipalList", Items: []PrincipalAccess{{Principal: principal, PolicyAttachments: []PolicyAttachment{attachment}}}}
-	if err := ValidatePrincipalList(list); err != nil {
+		AccountID: user.AccountID, Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: string(user.ID)},
+		PolicyID: SystemPolicyPaaSViewer, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: user.CreatedAt, UpdatedAt: user.CreatedAt}
+	list := UserList{APIVersion: APIVersion, Kind: "UserList", Items: []UserAccess{{User: user, PolicyAttachments: []PolicyAttachment{attachment}}}}
+	if err := ValidateUserList(list); err != nil {
 		t.Fatalf("valid directory: %v", err)
 	}
 	for name, mutate := range map[string]func(*PolicyAttachment){
@@ -804,38 +805,38 @@ func TestAccountDirectoryContractsRejectCrossTenantAuthority(t *testing.T) {
 			changed := attachment
 			mutate(&changed)
 			list.Items[0].PolicyAttachments = []PolicyAttachment{changed}
-			if ValidatePrincipalList(list) == nil {
+			if ValidateUserList(list) == nil {
 				t.Fatal("invalid directory attachment accepted")
 			}
 		})
 	}
 	list.Items[0].PolicyAttachments = []PolicyAttachment{attachment, attachment}
-	if ValidatePrincipalList(list) == nil {
+	if ValidateUserList(list) == nil {
 		t.Fatal("duplicate attachment accepted")
 	}
 	list.Items[0].PolicyAttachments[1].ID = "another-attachment"
-	if ValidatePrincipalList(list) == nil {
+	if ValidateUserList(list) == nil {
 		t.Fatal("duplicate active policy accepted")
 	}
 	list.Items[0].PolicyAttachments = []PolicyAttachment{attachment}
 	list.Items[0].PolicyAttachments[0].AccountID = "organization-other"
-	if ValidatePrincipalList(list) == nil {
+	if ValidateUserList(list) == nil {
 		t.Fatal("directory accepted a cross-tenant policy attachment")
 	}
 	list.Items[0].PolicyAttachments = []PolicyAttachment{}
 	list.NextAfter = "different-principal"
-	if ValidatePrincipalList(list) == nil {
+	if ValidateUserList(list) == nil {
 		t.Fatal("directory accepted an unrelated cursor")
 	}
 	list.NextAfter = ""
 	list.Items = append(list.Items, list.Items[0])
-	if ValidatePrincipalList(list) == nil {
+	if ValidateUserList(list) == nil {
 		t.Fatal("directory accepted duplicate principals")
 	}
 	if ValidateSetAccountAliasRequest(SetAccountAliasRequest{Alias: "acme", RequestID: "request-alias"}) == nil {
 		t.Fatal("alias mutation accepted no concurrency version")
 	}
-	if ValidateSetPrincipalStatusRequest(SetPrincipalStatusRequest{Status: "REMOVED", ResourceVersion: 1, RequestID: "request-status"}) == nil {
+	if ValidateSetUserStatusRequest(SetUserStatusRequest{Status: "REMOVED", ResourceVersion: 1, RequestID: "request-status"}) == nil {
 		t.Fatal("unsupported status accepted")
 	}
 }

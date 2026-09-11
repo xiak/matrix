@@ -95,7 +95,7 @@ func DecideService(
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
 	return decide(
-		identity.OrganizationID,
+		identity.AccountID,
 		identity.InstallationID,
 		iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: identity.PrincipalID},
 		false,
@@ -108,7 +108,7 @@ func DecideService(
 }
 
 func decide(
-	tenantID iamv1.OrganizationID,
+	tenantID iamv1.AccountID,
 	installationID string,
 	subject iamv1.Subject,
 	mustChangePassword bool,
@@ -177,12 +177,12 @@ func validateSubjectContext(context SubjectContext, databaseTime time.Time) erro
 		iamv1.ValidateSession(context.Session) != nil {
 		return ErrAuthorityUnavailable
 	}
-	if context.Principal.OrganizationID != context.Organization.ID ||
-		context.Session.OrganizationID != context.Organization.ID ||
+	if context.Principal.AccountID != context.Organization.ID ||
+		context.Session.AccountID != context.Organization.ID ||
 		context.Session.PrincipalID != context.Principal.ID {
 		return ErrAuthorityUnavailable
 	}
-	if context.Organization.Status != iamv1.OrganizationActive ||
+	if context.Organization.Status != iamv1.AccountActive ||
 		context.Principal.Status != iamv1.PrincipalActive ||
 		context.Session.Status != iamv1.SessionActive ||
 		!databaseTime.Before(context.Session.ExpiresAt) {

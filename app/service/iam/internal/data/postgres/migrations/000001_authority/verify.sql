@@ -40,7 +40,7 @@ BEGIN
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
       FROM (VALUES
-        ('bootstrap_receipts'), ('organizations'), ('principals'),
+        ('bootstrap_receipts'), ('accounts'), ('principals'),
         ('policy_attachments'), ('user_credentials'), ('login_index'),
         ('service_credentials'), ('service_credential_index'),
         ('sessions'), ('session_index'), ('authorization_decisions'),
@@ -66,7 +66,7 @@ BEGIN
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
       FROM (VALUES
-        ('organizations'), ('principals'), ('policy_attachments'),
+        ('accounts'), ('principals'), ('policy_attachments'),
         ('user_credentials'), ('service_credentials'), ('sessions'),
         ('authorization_decisions'), ('audit_outbox')
       ) AS required(name)
@@ -219,10 +219,20 @@ BEGIN
        OR iam.resource_kind_for_action('managedservice.service-installation.read') IS DISTINCT FROM 'SERVICE_INSTALLATION'
        OR iam.resource_kind_for_action('paas.execution-target.register') IS DISTINCT FROM 'EXECUTION_TARGET'
        OR iam.resource_kind_for_action('paas.execution-pool.create') IS DISTINCT FROM 'EXECUTION_POOL'
-       OR iam.resource_kind_for_action('iam.policy-attachment.create') IS DISTINCT FROM 'PRINCIPAL'
+       OR iam.resource_kind_for_action('iam.account.create') IS DISTINCT FROM 'ACCOUNT'
+       OR iam.resource_kind_for_action('iam.account.read') IS DISTINCT FROM 'ACCOUNT'
+       OR iam.resource_kind_for_action('iam.account.set-status') IS DISTINCT FROM 'ACCOUNT'
+       OR iam.resource_kind_for_action('iam.account.recover-root-credentials') IS DISTINCT FROM 'ACCOUNT'
+       OR iam.resource_kind_for_action('iam.account.alias-set') IS DISTINCT FROM 'ACCOUNT'
+       OR iam.resource_kind_for_action('iam.user.list') IS DISTINCT FROM 'ACCOUNT'
+       OR iam.resource_kind_for_action('iam.user.create') IS DISTINCT FROM 'ACCOUNT'
+       OR iam.resource_kind_for_action('iam.user.read') IS DISTINCT FROM 'USER'
+       OR iam.resource_kind_for_action('iam.user.set-status') IS DISTINCT FROM 'USER'
+       OR iam.resource_kind_for_action('iam.user.reset-password') IS DISTINCT FROM 'USER'
+       OR iam.resource_kind_for_action('iam.policy-attachment.create') IS DISTINCT FROM 'USER'
        OR iam.resource_kind_for_action('iam.policy-attachment.revoke') IS DISTINCT FROM 'POLICY_ATTACHMENT'
-       OR iam.resource_kind_for_action('iam.platform-policy-attachment.create') IS DISTINCT FROM 'PRINCIPAL'
-       OR iam.resource_kind_for_action('iam.policy.list') IS DISTINCT FROM 'ORGANIZATION'
+       OR iam.resource_kind_for_action('iam.platform-policy-attachment.create') IS DISTINCT FROM 'USER'
+       OR iam.resource_kind_for_action('iam.policy.list') IS DISTINCT FROM 'ACCOUNT'
        OR iam.resource_kind_for_action('iam.platform-policy.list') IS DISTINCT FROM 'INSTALLATION'
        OR NOT iam.is_platform_action('iam.platform-policy.list')
        OR iam.is_platform_action('iam.policy.list')
