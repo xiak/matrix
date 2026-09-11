@@ -3,7 +3,7 @@ import { useId, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Dialog, EmptyState, FormField, Table, Tabs, TextArea } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
-import { policyAssociationCount, policyVersionLimit, type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
+import { policyUsageCounts, policyVersionLimit, type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
 import { includesPermissionManagement } from "../domain/policyDocument";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
@@ -30,7 +30,7 @@ function PolicyDescriptionEditor({ policy, onClose }: { policy: AccessPolicy; on
   </WorkspaceDialog>;
 }
 
-function PolicyVersionHistory({ policy, associationCount, workspace, scene }: { policy: AccessPolicy; associationCount: number; workspace: AccessWorkspace; scene: AccountAccessScene }) {
+function PolicyVersionHistory({ policy, usageCount, workspace, scene }: { policy: AccessPolicy; usageCount: number; workspace: AccessWorkspace; scene: AccountAccessScene }) {
   const t = useTranslations("IamWorkspace");
   const access = useAccountAccess();
   const p = useTranslations("PolicyWorkspace");
@@ -59,7 +59,7 @@ function PolicyVersionHistory({ policy, associationCount, workspace, scene }: { 
       <p className={styles.note}>{t("inspectVersionHint")}</p><PolicyDocumentViewer document={revision.document} />
     </Dialog> : null}
     {revision && intent?.action === "activate" ? <WorkspaceDialog fallbackFocusRef={history} size="wide" title={t("activateVersion", { version: revision.id })} onClose={close} submitLabel={t("setDefault")} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "set-policy-version", id: policy.id, version: revision.id }))}>
-      <Alert status="warning">{t("rollbackImpact", { count: associationCount })}</Alert>
+      <Alert status="warning">{t("rollbackImpact", { count: usageCount })}</Alert>
       <PolicyDocumentChanges before={currentDocument(policy)} after={revision.document} />
       <PolicyAffectedIdentities policyId={policy.id} workspace={workspace} scene={scene} />
       <details className={policyStyles.details}><summary>{p("compareJson")}</summary><div className={styles.policyComparison}>
@@ -78,12 +78,32 @@ function PolicyVersionHistory({ policy, associationCount, workspace, scene }: { 
   </div>;
 }
 
-function PolicyBoundaryUses({ policyId, workspace, scene, onOpen }: { policyId: string; workspace: AccessWorkspace; scene: AccountAccessScene; onOpen(view: AccountAccessView, id?: string): void }) {
-  const t = useTranslations("RoleWorkspace"), w = useTranslations("IamWorkspace");
-  const users = Object.entries(workspace.userBoundaries).filter(([, id]) => id === policyId).map(([id]) => ({ id, name: scene.users.find((user) => user.id === id)?.loginName ?? id, view: "users" as const }));
-  const roles = workspace.roles.filter((role) => role.boundaryPolicyId === policyId).map((role) => ({ id: role.id, name: role.name, view: "roles" as const }));
-  if (!users.length && !roles.length) return null;
-  return <section className={styles.stack}><h3>{t("boundaryUses")}</h3><p className={styles.note}>{t("boundaryHint")}</p><Table aria-label={t("boundaryUses")}><thead><tr><th>{w("name")}</th><th>{w("type")}</th></tr></thead><tbody>{[...users, ...roles].map((subject) => <tr key={subject.view + subject.id}><td><button className={styles.userLink} onClick={() => onOpen(subject.view, subject.id)}>{subject.name}</button></td><td>{w(subject.view === "users" ? "subusers" : "roles")}</td></tr>)}</tbody></Table></section>;
+type PolicyUseSubject = { id: string; name: string; view: "users" | "groups" | "roles" };
+
+function PolicyUseSection({ title, hint, empty, subjects, onOpen }: { title: string; hint: string; empty: string; subjects: PolicyUseSubject[]; onOpen(view: AccountAccessView, id?: string): void }) {
+  const t = useTranslations("IamWorkspace");
+  return <section className={styles.stack}>
+    <h3>{title} ({subjects.length})</h3>
+    <p className={styles.note}>{hint}</p>
+    {subjects.length ? <Table aria-label={title}><thead><tr><th>{t("name")}</th><th>{t("type")}</th></tr></thead><tbody>{subjects.map((subject) => <tr key={subject.view + subject.id}><td><button className={styles.userLink} onClick={() => onOpen(subject.view, subject.id)}>{subject.name}</button></td><td>{t(subject.view === "users" ? "subusers" : subject.view)}</td></tr>)}</tbody></Table> : <p className={styles.note}>{empty}</p>}
+  </section>;
+}
+
+function PolicyUses({ policyId, workspace, scene, onOpen }: { policyId: string; workspace: AccessWorkspace; scene: AccountAccessScene; onOpen(view: AccountAccessView, id?: string): void }) {
+  const t = useTranslations("IamWorkspace"), role = useTranslations("RoleWorkspace");
+  const permissionSubjects: PolicyUseSubject[] = [
+    ...scene.users.filter((user) => workspace.userPolicies[user.id]?.includes(policyId)).map((user) => ({ id: user.id, name: user.loginName, view: "users" as const })),
+    ...workspace.groups.filter((group) => group.policyIds.includes(policyId)).map((group) => ({ id: group.id, name: group.name, view: "groups" as const })),
+    ...workspace.roles.filter((entry) => entry.policyIds.includes(policyId)).map((entry) => ({ id: entry.id, name: entry.name, view: "roles" as const }))
+  ];
+  const boundarySubjects: PolicyUseSubject[] = [
+    ...Object.entries(workspace.userBoundaries).filter(([, id]) => id === policyId).map(([id]) => ({ id, name: scene.users.find((user) => user.id === id)?.loginName ?? id, view: "users" as const })),
+    ...workspace.roles.filter((entry) => entry.boundaryPolicyId === policyId).map((entry) => ({ id: entry.id, name: entry.name, view: "roles" as const }))
+  ];
+  return <div className={styles.stack}>
+    <PolicyUseSection title={t("permissionUses")} hint={t("permissionUsesHint")} empty={t("noPermissionUses")} subjects={permissionSubjects} onOpen={onOpen} />
+    <PolicyUseSection title={role("boundaryUses")} hint={role("boundaryHint")} empty={t("noBoundaryUses")} subjects={boundarySubjects} onOpen={onOpen} />
+  </div>;
 }
 
 export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onCreate(method: PolicyCreationMethod): void; onOpen(view: AccountAccessView, id?: string): void }) {
@@ -98,6 +118,7 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
   const [editingDescription, setEditingDescription] = useState(false);
   const [choosingMethod, setChoosingMethod] = useState(false);
   const selected = workspace.policies.find((policy) => policy.id === entityId);
+  const usage = selected ? policyUsageCounts(workspace, selected.id) : null;
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("policies")}>{t("back")}</Button>} />;
   if (editing) return <PolicyAuthoringWizard {...editing} workspace={workspace} scene={scene} onBack={() => setEditing(null)} onDone={(id) => { setEditing(null); onOpen("policies", id); }} />;
   return <>
@@ -113,10 +134,10 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
       {selected.tags.length ? <section aria-label={p("metadataTags")} className={styles.actions}><span className={styles.note}>{p("metadataTags")}</span>{selected.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}</section> : null}
       {selected.kind === "system" ? <p className={styles.note}>{t("systemReadOnly")}</p> : null}
       {includesPermissionManagement(currentDocument(selected)) ? <Alert status="warning">{t("highPrivilege")}</Alert> : null}
-      <Tabs.Root defaultValue="document"><Tabs.List aria-label={selected.name}><Tabs.Trigger value="document">{t("document")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versions")}</Tabs.Trigger><Tabs.Trigger value="associations">{t("associations")} ({policyAssociationCount(workspace, selected.id)})</Tabs.Trigger></Tabs.List>
+      <Tabs.Root defaultValue="document"><Tabs.List aria-label={selected.name}><Tabs.Trigger value="document">{t("document")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versions")}</Tabs.Trigger><Tabs.Trigger value="usage">{t("usage")} ({usage!.total})</Tabs.Trigger></Tabs.List>
         <Tabs.Content value="document"><PolicyDocumentViewer document={currentDocument(selected)} /></Tabs.Content>
-        <Tabs.Content value="versions"><PolicyVersionHistory policy={selected} associationCount={policyAssociationCount(workspace, selected.id)} workspace={workspace} scene={scene} /></Tabs.Content>
-        <Tabs.Content value="associations"><Table aria-label={t("associations")}><thead><tr><th>{t("name")}</th><th>{t("type")}</th></tr></thead><tbody>{scene.users.filter((user) => workspace.userPolicies[user.id]?.includes(selected.id)).map((user) => <tr key={user.id}><td><button className={styles.userLink} onClick={() => onOpen("users", user.id)}>{user.loginName}</button></td><td>{t("subusers")}</td></tr>)}{workspace.groups.filter((group) => group.policyIds.includes(selected.id)).map((group) => <tr key={group.id}><td><button className={styles.userLink} onClick={() => onOpen("groups", group.id)}>{group.name}</button></td><td>{t("groups")}</td></tr>)}{workspace.roles.filter((role) => role.policyIds.includes(selected.id)).map((role) => <tr key={role.id}><td><button className={styles.userLink} onClick={() => onOpen("roles", role.id)}>{role.name}</button></td><td>{t("roles")}</td></tr>)}</tbody></Table>{!policyAssociationCount(workspace, selected.id) ? <p className={styles.note}>{t("empty")}</p> : null}<PolicyBoundaryUses policyId={selected.id} workspace={workspace} scene={scene} onOpen={onOpen} /></Tabs.Content>
+        <Tabs.Content value="versions"><PolicyVersionHistory policy={selected} usageCount={usage!.total} workspace={workspace} scene={scene} /></Tabs.Content>
+        <Tabs.Content value="usage"><PolicyUses policyId={selected.id} workspace={workspace} scene={scene} onOpen={onOpen} /></Tabs.Content>
       </Tabs.Root>
     </WorkspaceDetail> : <PolicyDirectory workspace={workspace} onCreate={() => setChoosingMethod(true)} onOpen={(id) => onOpen("policies", id)} onAssociate={(policies, additive) => setAssociating({ policies, additive })} />}
     {choosingMethod ? <PolicyCreationMethods onClose={() => setChoosingMethod(false)} onSelect={(method) => { setChoosingMethod(false); onCreate(method); }} /> : null}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyAccessWorkspaceCommand, policyAssociationCount, type AccessWorkspace } from "../domain/accessWorkspace";
+import { applyAccessWorkspaceCommand, policyUsageCounts, type AccessWorkspace } from "../domain/accessWorkspace";
 import { parsePolicyDocument, type PolicyCondition, type PolicyDocument } from "../domain/policyDocument";
 import { evaluateUserAccess, evaluateRoleAssumption, evaluateRoleSessionAccess, type AccessTestRequest } from "../domain/policyEvaluation";
 import { actionPatternValid, expandPolicyActions, formatPolicyResource, parsePolicyResource, policyActions, policyConditionsForActions, policyConditionKeys, sourceCidrValid, sourceIpMatches, utcTimeValid } from "../domain/policyLanguage";
@@ -198,7 +198,7 @@ describe("role trust, boundaries and temporary session diagnostics", () => {
     let workspace = initialAccessWorkspace("org-xiak");
     workspace = applyAccessWorkspaceCommand(workspace, { kind: "set-user-boundary", principalId: "principal-chen", policyId: "policy-prod-logs" }, roleContext);
     expect(evaluateUserAccess(workspace, userIds, { ...request, principalId: "principal-chen" }).decision).toBe("implicitDeny");
-    expect(policyAssociationCount(workspace, "policy-prod-logs")).toBe(2);
+    expect(policyUsageCounts(workspace, "policy-prod-logs").total).toBe(2);
     workspace.userPolicies = {};
     expect(() => applyAccessWorkspaceCommand(workspace, { kind: "delete-policy", id: "policy-prod-logs" }, roleContext)).toThrow("referenced");
     workspace = applyAccessWorkspaceCommand(workspace, { kind: "delete-user", principalId: "principal-chen" }, roleContext);

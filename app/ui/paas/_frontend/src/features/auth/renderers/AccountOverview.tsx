@@ -10,7 +10,7 @@ import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccessReports } from "./AccessReports";
-import { policyAssociationCount } from "../domain/accessWorkspace";
+import { policyUsageCounts } from "../domain/accessWorkspace";
 import { includesPermissionManagement } from "../domain/policyDocument";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -107,7 +107,7 @@ if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperatio
           <Card.Body><p className={styles.note}>{w("highPoliciesHint")}</p></Card.Body>
           <Table className={styles.compactTable} aria-label={w("highPolicies")}>
             <thead><tr><th scope="col">{w("name")}</th><th scope="col">{w("associations")}</th></tr></thead>
-            <tbody>{highPolicies.map((policy) => <tr key={policy.id}><td><Link className={styles.userLink} href={`/console/access/policies/?id=${encodeURIComponent(policy.id)}`} onNavigate={open("policies", policy.id)}>{policy.name}</Link></td><td>{policyAssociationCount(workspace, policy.id)}</td></tr>)}</tbody>
+            <tbody>{highPolicies.map((policy) => <tr key={policy.id}><td><Link className={styles.userLink} href={`/console/access/policies/?id=${encodeURIComponent(policy.id)}`} onNavigate={open("policies", policy.id)}>{policy.name}</Link></td><td>{policyUsageCounts(workspace, policy.id).total}</td></tr>)}</tbody>
           </Table>
         </Card> : null}
       </div>

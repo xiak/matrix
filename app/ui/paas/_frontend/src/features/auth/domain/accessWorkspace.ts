@@ -101,11 +101,19 @@ export function policyGrantTargets(state: AccessWorkspace, policyId: string): Po
   };
 }
 
-export function policyAssociationCount(state: AccessWorkspace, policyId: string): number {
-  return [...state.groups, ...state.roles].filter((entry) => entry.policyIds.includes(policyId)).length +
-    Object.values(state.userPolicies).filter((ids) => ids.includes(policyId)).length +
-    state.roles.filter((role) => role.boundaryPolicyId === policyId).length +
-    Object.values(state.userBoundaries).filter((id) => id === policyId).length;
+export function policyBoundaryTargets(state: AccessWorkspace, policyId: string) {
+  return {
+    userIds: Object.entries(state.userBoundaries).filter(([, id]) => id === policyId).map(([id]) => id),
+    roleIds: state.roles.filter((role) => role.boundaryPolicyId === policyId).map((role) => role.id)
+  };
+}
+
+export function policyUsageCounts(state: AccessWorkspace, policyId: string) {
+  const grants = policyGrantTargets(state, policyId);
+  const boundaries = policyBoundaryTargets(state, policyId);
+  const permissionAttachments = grants.userIds.length + grants.groupIds.length + grants.roleIds.length;
+  const permissionBoundaries = boundaries.userIds.length + boundaries.roleIds.length;
+  return { permissionAttachments, permissionBoundaries, total: permissionAttachments + permissionBoundaries };
 }
 
 // Shared single/bulk cleanup, after the caller validates identity and authority.
@@ -261,7 +269,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     }
     case "delete-policy":
       if (exists(state.policies, id).kind === "system") throw new AccessWorkspaceError("systemPolicy");
-      if (policyAssociationCount(state, id)) throw new AccessWorkspaceError("referenced");
+      if (policyUsageCounts(state, id).total) throw new AccessWorkspaceError("referenced");
       state.policies = state.policies.filter((entry) => entry.id !== id); break;
     case "associate-policy": {
       exists(state.policies, id);

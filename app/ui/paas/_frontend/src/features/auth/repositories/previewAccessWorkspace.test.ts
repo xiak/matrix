@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyAccessWorkspaceCommand, policyAssociationCount } from "../domain/accessWorkspace";
+import { applyAccessWorkspaceCommand, policyUsageCounts } from "../domain/accessWorkspace";
 import { analyzePolicyDocument, includesPermissionManagement, parsePolicyDocument, policyStatementKey, resourcesForPolicyActions, summarizePolicyServices, type PolicyDocument } from "../domain/policyDocument";
 import { expandPolicyActions, policyActions, policyServices } from "../domain/policyLanguage";
 import { createPreviewAccessWorkspace, initialAccessWorkspace } from "./previewAccessWorkspace";
@@ -447,7 +447,7 @@ describe("access workspace preview invariants", () => {
     expect(() => applyAccessWorkspaceCommand(state, { kind: "delete-policy", id: "policy-admin" }, context)).toThrow("systemPolicy");
     expect(() => applyAccessWorkspaceCommand(state, { kind: "delete-policy", id: "policy-prod-logs" }, context)).toThrow("referenced");
     state = applyAccessWorkspaceCommand(state, { kind: "associate-policy", id: "policy-prod-logs", userIds: [], groupIds: ["group-delivery"], roleIds: ["role-pipeline"] }, context);
-    expect(policyAssociationCount(state, "policy-prod-logs")).toBe(2);
+    expect(policyUsageCounts(state, "policy-prod-logs")).toEqual({ permissionAttachments: 2, permissionBoundaries: 0, total: 2 });
     expect(state.userPolicies["principal-lin"]).not.toContain("policy-prod-logs");
     state = applyAccessWorkspaceCommand(state, { kind: "associate-policy", id: "policy-prod-logs", userIds: [], groupIds: [], roleIds: [] }, context);
     expect(applyAccessWorkspaceCommand(state, { kind: "delete-policy", id: "policy-prod-logs" }, context).policies.some((policy) => policy.id === "policy-prod-logs")).toBe(false);

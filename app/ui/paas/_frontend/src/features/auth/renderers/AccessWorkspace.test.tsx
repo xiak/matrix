@@ -1031,7 +1031,9 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await user.click(within(screen.getByRole("region", { name: "权限边界" })).getByRole("button", { name: "MatrixReadOnlyAccess" }));
-    await user.click(screen.getByRole("tab", { name: /关联对象/ }));
+    await user.click(screen.getByRole("tab", { name: /策略用法/ }));
+    expect(screen.getByRole("heading", { name: /作为权限策略使用/ })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: /作为权限边界使用/ })).toBeTruthy();
     const uses = screen.getByRole("table", { name: "作为权限边界使用" });
     await user.click(within(uses).getByRole("button", { name: "lin" }));
     expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-lin");
@@ -1250,7 +1252,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("tab", { name: "权限策略 (2)" }));
     await user.click(screen.getByRole("button", { name: "ProductionLogReader" }));
     expect(screen.getByLabelText("Entity destination").textContent).toBe("policy-prod-logs");
-    await user.click(screen.getByRole("tab", { name: /关联/ }));
+    await user.click(screen.getByRole("tab", { name: /策略用法/ }));
     expect(screen.getByRole("button", { name: "lin" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "DeliveryTeam" }));
     expect(screen.getByRole("heading", { name: "DeliveryTeam" })).toBeTruthy();

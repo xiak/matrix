@@ -1745,8 +1745,9 @@ and `git diff --check` gates must pass on the same committed worktree.
   shared role-configuration fields. Trust, metadata, settings, attached-policy deltas and boundaries
   have isolated ownership. Role name and carrier are immutable; new roles
   receive no default grants. Boundary review shows the prior and proposed
-  references and affected identity; policy details distinguish boundary use
-  from permission grants and protect both from deletion. Read-only principals
+  references and affected identity; policy details expose separately counted
+  permission-policy and permission-boundary usage regions, while version impact
+  and deletion protection cover both relationship types. Read-only principals
   cannot enter mutating role workspaces or the creation workflow.
   Pure-domain tests cover explicit account trust plus an exact `iam:assumeRole`
   grant, caller boundary restrictions, known workload principals, enabled
