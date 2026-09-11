@@ -149,6 +149,10 @@
 | [AdministratorAccess 详情](https://console.cloud.tencent.com/cam/policy/detail/1&AdministratorAccess&2&All) | 预设策略文档、摘要、版本与关联视角 | 只读，不修改预设或授权 |
 | [服务用途策略详情](https://console.cloud.tencent.com/cam/policy/detail/274481109&QcloudAccessForAgsCosReadWrite&2&All) | 2026-09-11 所属产品与授权目标服务、服务摘要展开、可见 JSON 操作和权限／边界使用分区 | 只读；描述与文档差异归[证据限制](caveats.md#策略描述与实际规则)，没有验证真实资源操作 |
 | [角色目录](https://console.cloud.tencent.com/cam/role)及服务角色详情 | 2026-09-11 角色类型／载体、权限／信任与会话分区 | 只读；不保存私人角色标识，不承担角色或撤销会话 |
+| [主账号用户详情](https://console.cloud.tencent.com/cam) | 2026-09-11 主账号类型、身份／联系信息、快捷登录和用户组关系的分区方式 | 只读；不修改主账号资料或成员关系；腾讯可见操作不自动成为 Matrix RootIdentity 契约 |
+| [用户组目录与创建](https://console.cloud.tencent.com/cam/groups) | 2026-09-11 目录列与“组信息 → 关联策略 → 审阅”页面内向导 | 只读；不保存私人账号库存，未输入或提交创建信息 |
+| [角色目录与创建](https://console.cloud.tencent.com/cam/role) | 2026-09-11 角色类型／载体／标签列、服务相关角色提示及“载体 → 策略 → 标签 → 审阅”向导 | 只读；未选择载体、创建、授权或删除角色 |
+| [QcloudCVMFullAccess 详情](https://console.cloud.tencent.com/cam/policy/detail/243312&QcloudCVMFullAccess&2&All) | 2026-09-11 策略摘要／JSON、版本、权限策略用途和权限边界用途的独立分区 | 只读；未编辑策略、建立附件或设置边界 |
 | 策略目录中的自定义策略入口 | CVM 服务、操作分类、资源范围、条件与标签表单 | 未提交；具体接口行为另以官方文档为据 |
 | [快速创建用户](https://console.cloud.tencent.com/cam/user/create?systemType=FastCreateV2) | 2026-09-10 策略选择弹层：左右候选／已选表格、全选与增量加载、批量限制及风险提示 | 临时选择后取消，原草稿无权限；未创建用户、应用权限或执行安全验证；机制归[访问管理 UX](../ux/access-management.md) |
 
