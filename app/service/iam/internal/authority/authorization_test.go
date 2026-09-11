@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -302,6 +303,102 @@ func TestPolicyEvaluationDefaultsToDenyAndExplicitDenyWins(t *testing.T) {
 	}
 	if result, err := EvaluatePolicies([]iamv1.PolicyVersion{allow}, iamv1.ActionPaaSApplicationCreate, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-open"}); err != nil || result.Allowed {
 		t.Fatal("read permission allowed a write")
+	}
+}
+
+func TestAttachedPolicyEvaluationRequiresCurrentOwnedRelationships(t *testing.T) {
+	now := authorityTestTime()
+	version := policyVersionForTest(t, "policy-reader", iamv1.PolicyAllow, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceAnyInAuthority, "")
+	row := AttachedPolicy{
+		Policy: iamv1.Policy{APIVersion: iamv1.APIVersion, Kind: "Policy", ID: version.PolicyID, Management: iamv1.PolicyCustomerManaged,
+			AccountID: "account-a", DisplayName: "Reader", Scope: iamv1.AuthorityScopeTenant, Status: iamv1.PolicyActive,
+			DefaultVersionID: version.ID, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
+		Version: version,
+		Attachment: iamv1.PolicyAttachment{APIVersion: iamv1.APIVersion, Kind: "PolicyAttachment", ID: "attachment-a", AccountID: "account-a",
+			Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: "user-a"}, PolicyID: version.PolicyID,
+			Scope: iamv1.AuthorityScopeTenant, ResourceVersion: 7, CreatedAt: now, UpdatedAt: now},
+	}
+	subject := iamv1.Subject{Type: iamv1.PrincipalUser, ID: "user-a"}
+	resource := iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-a"}
+	result, evidence, err := EvaluateAttachedPolicies("account-a", "installation-a", subject, []AttachedPolicy{row}, iamv1.ActionPaaSApplicationRead, resource)
+	if err != nil || !result.Allowed || len(evidence) != 1 || evidence[0].AttachmentID != row.Attachment.ID ||
+		evidence[0].ResourceVersion != 7 || evidence[0].Version.ContentDigest != version.ContentDigest {
+		t.Fatal("valid attachment lost its authority evidence")
+	}
+	for name, mutate := range map[string]func(*AttachedPolicy){
+		"foreign attachment account": func(v *AttachedPolicy) { v.Attachment.AccountID = "account-b" },
+		"foreign policy owner":       func(v *AttachedPolicy) { v.Policy.AccountID = "account-b" },
+		"foreign user":               func(v *AttachedPolicy) { v.Attachment.Target.ID = "user-b" },
+		"user service confusion":     func(v *AttachedPolicy) { v.Attachment.Target.Kind = iamv1.PolicyTargetService },
+		"unproved group inheritance": func(v *AttachedPolicy) { v.Attachment.Target.Kind = iamv1.PolicyTargetGroup },
+		"unproved role session":      func(v *AttachedPolicy) { v.Attachment.Target.Kind = iamv1.PolicyTargetRole },
+		"retired policy":             func(v *AttachedPolicy) { v.Policy.Status = iamv1.PolicyRetired },
+		"revoked attachment":         func(v *AttachedPolicy) { v.Attachment.RevokedAt = &now },
+		"foreign policy reference":   func(v *AttachedPolicy) { v.Attachment.PolicyID = "policy-b" },
+		"foreign version owner":      func(v *AttachedPolicy) { v.Version.PolicyID = "policy-b" },
+		"nondefault version":         func(v *AttachedPolicy) { v.Policy.DefaultVersionID = "version-next" },
+		"wrong digest":               func(v *AttachedPolicy) { v.Version.ContentDigest = "sha256:" + strings.Repeat("0", 64) },
+		"mixed scope": func(v *AttachedPolicy) {
+			v.Attachment.Scope, v.Attachment.InstallationID = iamv1.AuthorityScopeInstallation, "installation-a"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := row
+			changed.Attachment.ID = "attachment-b"
+			mutate(&changed)
+			result, evidence, err := EvaluateAttachedPolicies("account-a", "installation-a", subject, []AttachedPolicy{row, changed}, iamv1.ActionPaaSApplicationRead, resource)
+			if !errors.Is(err, ErrInvalidPolicyState) || result.Allowed || len(evidence) != 0 {
+				t.Fatal("invalid current relationship produced a partial decision")
+			}
+		})
+	}
+	if result, evidence, err := EvaluateAttachedPolicies("account-a", "installation-a", subject, nil, iamv1.ActionPaaSApplicationRead, resource); err != nil || result.Allowed || len(evidence) != 0 {
+		t.Fatal("empty policy authority granted permission")
+	}
+	if result, _, err := EvaluateAttachedPolicies("account-a", "installation-a", subject, []AttachedPolicy{row, row}, iamv1.ActionPaaSApplicationRead, resource); !errors.Is(err, ErrInvalidPolicyState) || result.Allowed {
+		t.Fatal("duplicate attachment identity accepted")
+	}
+	if result, evidence, err := EvaluateAttachedPolicies("account-a", "installation-a", subject, make([]AttachedPolicy, MaxEvaluationPolicies+1), iamv1.ActionPaaSApplicationRead, resource); !errors.Is(err, ErrInvalidPolicyState) || result.Allowed || len(evidence) != 0 {
+		t.Fatal("attachment work budget was not enforced")
+	}
+	deny := row
+	deny.Version = policyVersionForTest(t, "policy-deny", iamv1.PolicyDeny, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceAnyInAuthority, "")
+	deny.Policy.ID, deny.Policy.DefaultVersionID = deny.Version.PolicyID, deny.Version.ID
+	deny.Attachment.ID, deny.Attachment.PolicyID = "attachment-b", deny.Version.PolicyID
+	result, evidence, err = EvaluateAttachedPolicies("account-a", "installation-a", subject, []AttachedPolicy{deny, row}, iamv1.ActionPaaSApplicationRead, resource)
+	if err != nil || result.Allowed || !result.ExplicitDeny || len(evidence) != 2 || evidence[0].AttachmentID != row.Attachment.ID || evidence[1].Version.PolicyID != deny.Policy.ID {
+		t.Fatal("deny or the exact attachment/content evidence was lost")
+	}
+	_, reversed, err := EvaluateAttachedPolicies("account-a", "installation-a", subject, []AttachedPolicy{row, deny}, iamv1.ActionPaaSApplicationRead, resource)
+	if err != nil || !slices.Equal(evidence, reversed) {
+		t.Fatal("source order changed immutable policy evidence")
+	}
+	changedDefault := row
+	changedDefault.Version = policyVersionForTest(t, row.Policy.ID, iamv1.PolicyDeny, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceAnyInAuthority, "")
+	changedDefault.Version.ID = "version-new-default"
+	changedDefault.Policy.DefaultVersionID = changedDefault.Version.ID
+	changedDefault.Policy.ResourceVersion++
+	result, evidence, err = EvaluateAttachedPolicies("account-a", "installation-a", subject, []AttachedPolicy{changedDefault}, iamv1.ActionPaaSApplicationRead, resource)
+	if err != nil || result.Allowed || !result.ExplicitDeny || len(evidence) != 1 || evidence[0].Version.VersionID != changedDefault.Version.ID {
+		t.Fatal("current default content did not govern the unchanged attachment")
+	}
+	platform, err := SystemPolicyVersion(iamv1.SystemPolicyPlatformOperator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row.Policy.ID, row.Policy.Management, row.Policy.AccountID = platform.PolicyID, iamv1.PolicySystemManaged, ""
+	row.Policy.Scope, row.Policy.DefaultVersionID, row.Version = platform.Document.Scope, platform.ID, platform
+	row.Attachment.PolicyID, row.Attachment.Scope, row.Attachment.InstallationID = platform.PolicyID, platform.Document.Scope, "installation-a"
+	platformResource := iamv1.ResourceReference{Kind: iamv1.ResourceExecutionTarget, ID: "host-a"}
+	for _, installation := range []string{"", "installation-b", "installation-a"} {
+		result, _, err := EvaluateAttachedPolicies("account-a", installation, subject, []AttachedPolicy{row}, iamv1.ActionPaaSExecutionTargetRead, platformResource)
+		if installation == "installation-a" {
+			if err != nil || !result.Allowed {
+				t.Fatal("sealed platform attachment rejected")
+			}
+		} else if !errors.Is(err, ErrInvalidPolicyState) || result.Allowed {
+			t.Fatal("platform attachment escaped its installation")
+		}
 	}
 }
 

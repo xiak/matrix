@@ -13,10 +13,77 @@ const MaxEvaluationStatements = 4096
 
 var ErrInvalidPolicyState = errors.New("IAM policy authority state is invalid")
 
+// AttachedPolicy is one database-resolved relationship, not a caller-provided
+// permission document. Group/role inheritance needs its own proven source path
+// before it can enter the direct-subject evaluation below.
+type AttachedPolicy struct {
+	Policy     iamv1.Policy
+	Version    iamv1.PolicyVersion
+	Attachment iamv1.PolicyAttachment
+}
+
+type PolicyAttachmentEvidence struct {
+	AttachmentID    iamv1.PolicyAttachmentID
+	ResourceVersion uint64
+	Version         iamv1.PolicyVersionReference
+}
+
 type PolicyEvaluation struct {
 	Allowed         bool
 	ExplicitDeny    bool
 	MatchedVersions []iamv1.PolicyVersionReference
+}
+
+// EvaluateAttachedPolicies joins current policy metadata, immutable content and
+// a live attachment inside an already authenticated authority snapshot. It
+// invokes the sole statement evaluator only after every ownership link agrees.
+func EvaluateAttachedPolicies(accountID iamv1.OrganizationID, installationID string, subject iamv1.Subject,
+	attached []AttachedPolicy, action iamv1.Action, resource iamv1.ResourceReference,
+) (PolicyEvaluation, []PolicyAttachmentEvidence, error) {
+	if iamv1.ValidateID("accountId", string(accountID)) != nil ||
+		iamv1.ValidateID("subject.id", string(subject.ID)) != nil ||
+		(subject.Type != iamv1.PrincipalUser && subject.Type != iamv1.PrincipalServiceAccount) ||
+		(installationID != "" && iamv1.ValidateID("installationId", installationID) != nil) ||
+		len(attached) > MaxEvaluationPolicies {
+		return PolicyEvaluation{}, nil, ErrInvalidPolicyState
+	}
+	versions := make([]iamv1.PolicyVersion, 0, len(attached))
+	seen := make(map[iamv1.PolicyAttachmentID]bool, len(attached))
+	for _, row := range attached {
+		policy, attachment := row.Policy, row.Attachment
+		if iamv1.ValidatePolicy(policy) != nil || iamv1.ValidatePolicyAttachment(attachment) != nil ||
+			policy.Status != iamv1.PolicyActive || attachment.RevokedAt != nil || seen[attachment.ID] ||
+			attachment.AccountID != accountID || attachment.Target.ID != string(subject.ID) ||
+			string(attachment.Target.Kind) != string(subject.Type) ||
+			(policy.Management == iamv1.PolicyCustomerManaged && policy.AccountID != accountID) ||
+			attachment.PolicyID != policy.ID || row.Version.PolicyID != policy.ID ||
+			row.Version.ID != policy.DefaultVersionID || row.Version.Document.Scope != policy.Scope ||
+			attachment.Scope != policy.Scope ||
+			(attachment.Scope != iamv1.AuthorityScopeTenant && attachment.InstallationID != installationID) {
+			return PolicyEvaluation{}, nil, ErrInvalidPolicyState
+		}
+		seen[attachment.ID] = true
+		versions = append(versions, row.Version)
+	}
+	result, err := EvaluatePolicies(versions, action, resource)
+	if err != nil {
+		return PolicyEvaluation{}, nil, err
+	}
+	matched := make(map[iamv1.PolicyID]iamv1.PolicyVersionReference, len(result.MatchedVersions))
+	for _, version := range result.MatchedVersions {
+		matched[version.PolicyID] = version
+	}
+	evidence := make([]PolicyAttachmentEvidence, 0, len(result.MatchedVersions))
+	for _, row := range attached {
+		if version, found := matched[row.Policy.ID]; found {
+			evidence = append(evidence, PolicyAttachmentEvidence{AttachmentID: row.Attachment.ID,
+				ResourceVersion: row.Attachment.ResourceVersion, Version: version})
+		}
+	}
+	slices.SortFunc(evidence, func(left, right PolicyAttachmentEvidence) int {
+		return cmp.Compare(left.AttachmentID, right.AttachmentID)
+	})
+	return result, evidence, nil
 }
 
 // EvaluatePolicies evaluates a current, owner-validated policy snapshot. It

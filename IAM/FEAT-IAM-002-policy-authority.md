@@ -39,6 +39,18 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 用例负责系统策略装配、附件授予撤销、当前来源收集和决定持久化。写入按 scope → principal → policy → attachment 锁序；撤销与密码/状态保护使用相同 principal 锁。API/worker/verifier 无越权 DML，查询走 RLS/受限函数。安装恢复用例要查询新的显式平台附件，保持封存 primary tuple 与原 receipt。
 
+### 读取结果进入评估器的契约
+
+`Policy` 保存 management=SYSTEM/CUSTOMER、稳定 ID、显示名、scope、ACTIVE/RETIRED、默认版本 ID、资源修订与时间。CUSTOMER 必须属于一个 Account 且只能是 tenant scope；SYSTEM 无客户所有者并使用保留的 `system.` ID 命名空间。显示名不决定权限。退休仍保留默认版本和历史引用，不等于删除内容。
+
+`PolicyAttachment` 保存 Account、稳定关联 ID、target(kind/id)、policy ID、scope、封存 installation ID（仅平台/probe）、修订和创建/更新/撤销时间。平台关联只接受 USER，probe 只接受 SERVICE_ACCOUNT；租户 target 的 USER/SERVICE_ACCOUNT/GROUP/ROLE 描述授权载体，不扩展可登录主体类型。已撤销关联必须有更新后的修订与一致撤销时间，不提供恢复为活跃状态的变体。
+
+数据库的当前来源查询应返回 `AttachedPolicy`：关联、策略元数据和精确默认内容版本。`EvaluateAttachedPolicies` 先检查所有关系的 Account/主体/安装归属、状态和默认版本一致，再调用已有唯一语句评估器；任一损坏关系不能留下部分 Allow 或证据。当前直接主体路径拒绝未证明的 Group/Role 来源，继承证明由 004/006 接入后才启用。结果绑定准确关联 ID/修订以及命中的 policy/version/digest，按关联 ID 排序，不把允许权限重新解释为策略名称。
+
+以上对象/严格解码与关系校验已实现于现有 API/domain owner；尚未替换当前 SQL loader 或发布新的管理路由，也不是新的在线权限入口。其契约测试覆盖跨 Account、错主体、伪造安装、未证明继承、非默认版本、退休/撤销、摘要替换、重复关联、预算和 Deny 证据顺序；真实存储/迁移仍是本 FEAT 的必要剩余项。
+
+2026-09-11 该契约增量通过 API/IAM 全部 owning packages 与 architecture 的无缓存 race、IAM/API vet、生成稳定及 Linux/amd64 IAM 构建；API/domain 连续三次聚焦 race 也通过。默认版本改为另一不可变内容后，同一关联产生对应的新决定与版本证据；坏记录位于有效 Allow 之后仍整体拒绝。没有以 mock、默认跳过 PG 的测试或仅类型存在宣称数据库已接入，也未更改当前 schema/profile。
+
 ## 验收
 
 ### 已实现的求值核心；未完成的权威替换

@@ -500,7 +500,10 @@ keeps the HTTP gate strict, rather than masking the failure with client retry.
 Focused tests cover bounded attempts, minimum pacing, cancellation and
 non-retryable errors. The isolated PG18 retained-upgrade and independent
 IAM/Audit/PaaS process regression passes locally (57.432s on 2026-09-11);
-the correction's independent CI remains a separate gate. The broader PG18
+the correction's independent CI passes at fixed
+`0f99ec98ef52bdb69017fd16dfe21f1c2cc55177`
+([Verification 34569666803](https://github.com/xiak/matrix/actions/runs/34569666803):
+go, authority-process and node-process all success). The broader PG18
 regression also passes: separated IAM/Audit schemas and retained tenant-chain
 upgrade (5.802s), Audit HTTP (3.100s), IAM HTTP and local recovery/concurrency
 (91.862s). These do not accept the new policy-storage replacement or full HA.

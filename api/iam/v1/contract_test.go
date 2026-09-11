@@ -551,6 +551,105 @@ func FuzzPolicyDocumentCanonicalRoundTrip(f *testing.F) {
 	})
 }
 
+func TestPolicyMetadataAndAttachmentOwnershipContracts(t *testing.T) {
+	now := time.Date(2026, 9, 11, 8, 0, 0, 0, time.UTC)
+	policy := Policy{APIVersion: APIVersion, Kind: "Policy", ID: "policy-example", Management: PolicyCustomerManaged,
+		AccountID: "account-a", DisplayName: "Application reader", Scope: AuthorityScopeTenant, Status: PolicyActive,
+		DefaultVersionID: "version-one", ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+	attachment := PolicyAttachment{APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "attachment-example", AccountID: "account-a",
+		Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: "user-example"}, PolicyID: policy.ID,
+		Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+	if ValidatePolicy(policy) != nil || ValidatePolicyAttachment(attachment) != nil {
+		t.Fatal("valid policy relationship rejected")
+	}
+	for name, mutate := range map[string]func(*Policy){
+		"missing owner":             func(v *Policy) { v.AccountID = "" },
+		"customer system namespace": func(v *Policy) { v.ID = SystemPolicyPlatformOperator },
+		"customer platform scope":   func(v *Policy) { v.Scope = AuthorityScopeInstallation },
+		"customer probe scope":      func(v *Policy) { v.Scope = AuthorityScopeInstallationProbe },
+		"unknown manager":           func(v *Policy) { v.Management = "PUBLIC" },
+		"unknown status":            func(v *Policy) { v.Status = "DELETED" },
+		"no default":                func(v *Policy) { v.DefaultVersionID = "" },
+		"zero revision":             func(v *Policy) { v.ResourceVersion = 0 },
+		"invalid chronology":        func(v *Policy) { v.UpdatedAt = now.Add(-time.Second) },
+		"unsafe display name":       func(v *Policy) { v.DisplayName = "reader\nowner" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := policy
+			mutate(&value)
+			if !errors.Is(ValidatePolicy(value), ErrInvalidPolicy) {
+				t.Fatal("invalid metadata accepted")
+			}
+		})
+	}
+	system := policy
+	system.Management, system.ID, system.AccountID, system.Scope = PolicySystemManaged, SystemPolicyPlatformOperator, "", AuthorityScopeInstallation
+	if ValidatePolicy(system) != nil {
+		t.Fatal("system metadata rejected")
+	}
+	system.AccountID = "account-a"
+	if ValidatePolicy(system) == nil {
+		t.Fatal("system metadata accepted a customer owner")
+	}
+	for name, mutate := range map[string]func(*PolicyAttachment){
+		"missing account":               func(v *PolicyAttachment) { v.AccountID = "" },
+		"unknown target":                func(v *PolicyAttachment) { v.Target.Kind = "ROOT" },
+		"missing target":                func(v *PolicyAttachment) { v.Target.ID = "" },
+		"mixed scope":                   func(v *PolicyAttachment) { v.InstallationID = "installation-a" },
+		"platform without installation": func(v *PolicyAttachment) { v.Scope = AuthorityScopeInstallation },
+		"unknown scope":                 func(v *PolicyAttachment) { v.Scope = "GLOBAL" },
+		"unversioned revocation":        func(v *PolicyAttachment) { v.RevokedAt = &now },
+		"revocation time differs":       func(v *PolicyAttachment) { at := now.Add(time.Second); v.RevokedAt, v.ResourceVersion = &at, 2 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := attachment
+			mutate(&value)
+			if ValidatePolicyAttachment(value) == nil {
+				t.Fatal("invalid attachment accepted")
+			}
+		})
+	}
+	for _, kind := range []PolicyAttachmentTargetKind{PolicyTargetUser, PolicyTargetService, PolicyTargetGroup, PolicyTargetRole} {
+		value := attachment
+		value.Target.Kind = kind
+		if ValidatePolicyAttachment(value) != nil {
+			t.Fatal("tenant target contract rejected")
+		}
+		value.Scope, value.InstallationID = AuthorityScopeInstallation, "installation-a"
+		if (ValidatePolicyAttachment(value) == nil) != (kind == PolicyTargetUser) {
+			t.Fatal("platform attachment must target a USER")
+		}
+		value.Scope = AuthorityScopeInstallationProbe
+		if (ValidatePolicyAttachment(value) == nil) != (kind == PolicyTargetService) {
+			t.Fatal("probe attachment must target a service")
+		}
+	}
+	attachment.RevokedAt, attachment.ResourceVersion = &now, 2
+	if ValidatePolicyAttachment(attachment) != nil {
+		t.Fatal("immutable revoked relationship rejected")
+	}
+	policy.Status = PolicyRetired
+	if ValidatePolicy(policy) != nil {
+		t.Fatal("retired metadata rejected")
+	}
+	policyJSON, _ := json.Marshal(policy)
+	attachmentJSON, _ := json.Marshal(attachment)
+	if got, err := DecodePolicy(bytes.NewReader(policyJSON)); err != nil || got.ID != policy.ID {
+		t.Fatal("metadata round trip failed")
+	}
+	if got, err := DecodePolicyAttachment(bytes.NewReader(attachmentJSON)); err != nil || got.RevokedAt == nil {
+		t.Fatal("revocation round trip failed")
+	}
+	for _, prefix := range []string{`{"unknown":true,`, `{"id":"injected",`} {
+		if _, err := DecodePolicy(strings.NewReader(prefix + string(policyJSON[1:]))); err == nil {
+			t.Fatal("policy accepted unknown/duplicate input")
+		}
+		if _, err := DecodePolicyAttachment(strings.NewReader(prefix + string(attachmentJSON[1:]))); err == nil {
+			t.Fatal("attachment accepted unknown/duplicate input")
+		}
+	}
+}
+
 func TestPolicyCanonicalizationEnforcesByteBudgetForTypedInputs(t *testing.T) {
 	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant}
 	for i := 0; i < MaxPolicyStatements; i++ {

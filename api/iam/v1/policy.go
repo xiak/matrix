@@ -8,6 +8,8 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/xiak/matrix/api/contractjson"
 )
@@ -16,6 +18,144 @@ type PolicyID string
 type PolicyVersionID string
 type PolicyEffect string
 type PolicyResourceMatch string
+type PolicyManagement string
+type PolicyStatus string
+type PolicyAttachmentID string
+type PolicyAttachmentTargetKind string
+
+const (
+	PolicySystemManaged   PolicyManagement           = "SYSTEM"
+	PolicyCustomerManaged PolicyManagement           = "CUSTOMER"
+	PolicyActive          PolicyStatus               = "ACTIVE"
+	PolicyRetired         PolicyStatus               = "RETIRED"
+	PolicyTargetUser      PolicyAttachmentTargetKind = "USER"
+	PolicyTargetService   PolicyAttachmentTargetKind = "SERVICE_ACCOUNT"
+	PolicyTargetGroup     PolicyAttachmentTargetKind = "GROUP"
+	PolicyTargetRole      PolicyAttachmentTargetKind = "ROLE"
+)
+
+// Policy is mutable metadata pointing to one immutable content version. It
+// never contains subjects or constitutes permission to attach the policy.
+type Policy struct {
+	APIVersion       string           `json:"apiVersion"`
+	Kind             string           `json:"kind"`
+	ID               PolicyID         `json:"id"`
+	Management       PolicyManagement `json:"management"`
+	AccountID        OrganizationID   `json:"accountId,omitempty"`
+	DisplayName      string           `json:"displayName"`
+	Scope            AuthorityScope   `json:"scope"`
+	Status           PolicyStatus     `json:"status"`
+	DefaultVersionID PolicyVersionID  `json:"defaultVersionId"`
+	ResourceVersion  uint64           `json:"resourceVersion"`
+	CreatedAt        time.Time        `json:"createdAt"`
+	UpdatedAt        time.Time        `json:"updatedAt"`
+}
+
+// Target kinds describe authorization carriers, not authenticatable principal
+// types. A group cannot become a login identity by appearing in this contract.
+type PolicyAttachmentTarget struct {
+	Kind PolicyAttachmentTargetKind `json:"kind"`
+	ID   string                     `json:"id"`
+}
+
+type PolicyAttachment struct {
+	APIVersion      string                 `json:"apiVersion"`
+	Kind            string                 `json:"kind"`
+	ID              PolicyAttachmentID     `json:"id"`
+	AccountID       OrganizationID         `json:"accountId"`
+	Target          PolicyAttachmentTarget `json:"target"`
+	PolicyID        PolicyID               `json:"policyId"`
+	Scope           AuthorityScope         `json:"scope"`
+	InstallationID  string                 `json:"installationId,omitempty"`
+	ResourceVersion uint64                 `json:"resourceVersion"`
+	CreatedAt       time.Time              `json:"createdAt"`
+	UpdatedAt       time.Time              `json:"updatedAt"`
+	RevokedAt       *time.Time             `json:"revokedAt,omitempty"`
+}
+
+func ValidatePolicy(policy Policy) error {
+	if policy.APIVersion != APIVersion || policy.Kind != "Policy" ||
+		ValidateID("policyId", string(policy.ID)) != nil ||
+		validateText("displayName", policy.DisplayName, 1, 128) != nil ||
+		ValidateID("defaultVersionId", string(policy.DefaultVersionID)) != nil ||
+		validatePositiveVersion(policy.ResourceVersion) != nil ||
+		validateChronology(policy.CreatedAt, policy.UpdatedAt) != nil ||
+		(policy.Status != PolicyActive && policy.Status != PolicyRetired) {
+		return ErrInvalidPolicy
+	}
+	switch policy.Management {
+	case PolicySystemManaged:
+		if policy.AccountID != "" || !strings.HasPrefix(string(policy.ID), "system.") || policy.ID == "system." || !validPolicyScope(policy.Scope) {
+			return ErrInvalidPolicy
+		}
+	case PolicyCustomerManaged:
+		if ValidateID("accountId", string(policy.AccountID)) != nil ||
+			strings.HasPrefix(string(policy.ID), "system.") || policy.Scope != AuthorityScopeTenant {
+			return ErrInvalidPolicy
+		}
+	default:
+		return ErrInvalidPolicy
+	}
+	return nil
+}
+
+func ValidatePolicyAttachment(attachment PolicyAttachment) error {
+	if attachment.APIVersion != APIVersion || attachment.Kind != "PolicyAttachment" ||
+		ValidateID("attachmentId", string(attachment.ID)) != nil ||
+		ValidateID("accountId", string(attachment.AccountID)) != nil ||
+		ValidateID("target.id", attachment.Target.ID) != nil ||
+		ValidateID("policyId", string(attachment.PolicyID)) != nil ||
+		validatePositiveVersion(attachment.ResourceVersion) != nil ||
+		validateChronology(attachment.CreatedAt, attachment.UpdatedAt) != nil {
+		return ErrInvalidPolicy
+	}
+	switch attachment.Target.Kind {
+	case PolicyTargetUser, PolicyTargetService, PolicyTargetGroup, PolicyTargetRole:
+	default:
+		return ErrInvalidPolicy
+	}
+	switch attachment.Scope {
+	case AuthorityScopeTenant:
+		if attachment.InstallationID != "" {
+			return ErrInvalidPolicy
+		}
+	case AuthorityScopeInstallation:
+		if attachment.Target.Kind != PolicyTargetUser || ValidateID("installationId", attachment.InstallationID) != nil {
+			return ErrInvalidPolicy
+		}
+	case AuthorityScopeInstallationProbe:
+		if attachment.Target.Kind != PolicyTargetService || ValidateID("installationId", attachment.InstallationID) != nil {
+			return ErrInvalidPolicy
+		}
+	default:
+		return ErrInvalidPolicy
+	}
+	if attachment.RevokedAt != nil && (validateTime("revokedAt", *attachment.RevokedAt) != nil ||
+		attachment.RevokedAt.Before(attachment.CreatedAt) || !attachment.RevokedAt.Equal(attachment.UpdatedAt) || attachment.ResourceVersion < 2) {
+		return ErrInvalidPolicy
+	}
+	return nil
+}
+
+func DecodePolicy(reader io.Reader) (Policy, error) {
+	var value Policy
+	if contractjson.DecodeObject(reader, MaxPolicyBytes, &value) != nil || ValidatePolicy(value) != nil {
+		return Policy{}, ErrInvalidPolicy
+	}
+	return value, nil
+}
+
+func DecodePolicyAttachment(reader io.Reader) (PolicyAttachment, error) {
+	var value PolicyAttachment
+	if contractjson.DecodeObject(reader, MaxPolicyBytes, &value) != nil || ValidatePolicyAttachment(value) != nil {
+		return PolicyAttachment{}, ErrInvalidPolicy
+	}
+	return value, nil
+}
+
+func validPolicyScope(scope AuthorityScope) bool {
+	return scope == AuthorityScopeTenant || scope == AuthorityScopeInstallation || scope == AuthorityScopeInstallationProbe
+}
 
 const (
 	SystemPolicyAccountAdministrator PolicyID = "system.account-administrator"
@@ -120,9 +260,7 @@ func validatePolicyStructure(document PolicyDocument) error {
 		len(document.Statements) == 0 || len(document.Statements) > MaxPolicyStatements {
 		return ErrInvalidPolicy
 	}
-	switch document.Scope {
-	case AuthorityScopeTenant, AuthorityScopeInstallation, AuthorityScopeInstallationProbe:
-	default:
+	if !validPolicyScope(document.Scope) {
 		return ErrInvalidPolicy
 	}
 	seenStatements := make(map[string]bool, len(document.Statements))
