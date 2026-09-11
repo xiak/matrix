@@ -1,0 +1,922 @@
+# 腾讯云访问管理完整来源导航
+
+> 本文件仅记录公开文档的标题、父子层级与原始链接，用于验证产品能力抽象没有遗漏来源栏目。
+
+- 来源：[腾讯云访问管理](https://cloud.tencent.com/document/product/598)
+- 抓取日期：2026-09-10
+- 一级节点：13
+- 目录节点：202
+- 页面节点：706
+- 总节点：908
+- 最大层级：5
+
+## 完整左侧导航树
+
+- 公告 · [官方合并 PDF](https://main.qcloudimg.com/raw/document/product/pdf/598_58201_cn.pdf) <!-- directory:58201 -->
+  - [腾讯云 API 密钥升级公告](https://cloud.tencent.com/document/product/598/96157) <!-- page:96157 -->
+  - [企业微信关联方式升级为小程序](https://cloud.tencent.com/document/product/598/58202) <!-- page:58202 -->
+  - [访问管理接口授权粒度升级通知](https://cloud.tencent.com/document/product/598/83509) <!-- page:83509 -->
+- 产品简介 · [官方合并 PDF](https://main.qcloudimg.com/raw/document/product/pdf/598_10582_cn.pdf) <!-- directory:10582 -->
+  - [CAM 概述](https://cloud.tencent.com/document/product/598/10583) <!-- page:10583 -->
+  - [产品功能](https://cloud.tencent.com/document/product/598/10586) <!-- page:10586 -->
+  - [应用场景](https://cloud.tencent.com/document/product/598/10587) <!-- page:10587 -->
+  - [基本概念](https://cloud.tencent.com/document/product/598/54591) <!-- page:54591 -->
+  - [使用限制](https://cloud.tencent.com/document/product/598/10609) <!-- page:10609 -->
+  - [用户类型](https://cloud.tencent.com/document/product/598/13665) <!-- page:13665 -->
+  - [CAM 之外的安全管理](https://cloud.tencent.com/document/product/598/74011) <!-- page:74011 -->
+- [购买指南](https://cloud.tencent.com/document/product/598/17944) <!-- page:17944 -->
+- 快速入门 · [官方合并 PDF](https://main.qcloudimg.com/raw/document/product/pdf/598_47710_cn.pdf) <!-- directory:47710 -->
+  - [创建管理员用户](https://cloud.tencent.com/document/product/598/47711) <!-- page:47711 -->
+  - [创建子账号并授权](https://cloud.tencent.com/document/product/598/54458) <!-- page:54458 -->
+  - [子账号登录控制台](https://cloud.tencent.com/document/product/598/48026) <!-- page:48026 -->
+- 用户指南 · [官方合并 PDF](https://main.qcloudimg.com/raw/document/product/pdf/598_10590_cn.pdf) <!-- directory:10590 -->
+  - [概览](https://cloud.tencent.com/document/product/598/17848) <!-- page:17848 -->
+  - 用户 <!-- directory:10594 -->
+    - 主账号 <!-- directory:41465 -->
+      - [主账号相关](https://cloud.tencent.com/document/product/598/41656) <!-- page:41656 -->
+      - [主账号消息订阅](https://cloud.tencent.com/document/product/598/41466) <!-- page:41466 -->
+    - 子用户 <!-- directory:34543 -->
+      - [新建子用户](https://cloud.tencent.com/document/product/598/13674) <!-- page:13674 -->
+      - [通过微信创建子用户](https://cloud.tencent.com/document/product/598/34542) <!-- page:34542 -->
+      - [通过企业微信导入子用户](https://cloud.tencent.com/document/product/598/36287) <!-- page:36287 -->
+      - [子用户权限设置](https://cloud.tencent.com/document/product/598/36256) <!-- page:36256 -->
+      - 子用户安全凭证 <!-- directory:36262 -->
+        - [子用户登录](https://cloud.tencent.com/document/product/598/39133) <!-- page:39133 -->
+        - [为子用户重置登录密码或管理通行密钥](https://cloud.tencent.com/document/product/598/36260) <!-- page:36260 -->
+        - [子用户登录方式设置](https://cloud.tencent.com/document/product/598/43024) <!-- page:43024 -->
+        - [为子账号设置安全保护](https://cloud.tencent.com/document/product/598/36383) <!-- page:36383 -->
+        - [子账号绑定 MFA 设备](https://cloud.tencent.com/document/product/598/134897) <!-- page:134897 -->
+        - [为子账号解绑 MFA 设备](https://cloud.tencent.com/document/product/598/134905) <!-- page:134905 -->
+        - [子用户管理和使用通行密钥 ](https://cloud.tencent.com/document/product/598/131652) <!-- page:131652 -->
+        - [为子账号、协作者设置备注](https://cloud.tencent.com/document/product/598/118708) <!-- page:118708 -->
+      - [子用户订阅消息](https://cloud.tencent.com/document/product/598/36257) <!-- page:36257 -->
+      - [子用户信息查询](https://cloud.tencent.com/document/product/598/36258) <!-- page:36258 -->
+      - [删除子用户](https://cloud.tencent.com/document/product/598/36259) <!-- page:36259 -->
+      - [禁用子用户](https://cloud.tencent.com/document/product/598/108522) <!-- page:108522 -->
+      - [启用已禁用的子用户](https://cloud.tencent.com/document/product/598/108523) <!-- page:108523 -->
+    - 协作者 <!-- directory:36617 -->
+      - [新建协作者](https://cloud.tencent.com/document/product/598/36618) <!-- page:36618 -->
+      - [协作者权限设置](https://cloud.tencent.com/document/product/598/36619) <!-- page:36619 -->
+      - 协作者安全凭证 <!-- directory:36625 -->
+        - [协作者登录](https://cloud.tencent.com/document/product/598/36621) <!-- page:36621 -->
+        - [为协作者设置安全保护](https://cloud.tencent.com/document/product/598/36626) <!-- page:36626 -->
+      - [协作者订阅消息](https://cloud.tencent.com/document/product/598/36622) <!-- page:36622 -->
+      - [协作者信息查询](https://cloud.tencent.com/document/product/598/36623) <!-- page:36623 -->
+      - [删除协作者](https://cloud.tencent.com/document/product/598/13666) <!-- page:13666 -->
+      - [协作者身份切换](https://cloud.tencent.com/document/product/598/36845) <!-- page:36845 -->
+    - 消息接收人 <!-- directory:37191 -->
+      - [新建消息接收人](https://cloud.tencent.com/document/product/598/13667) <!-- page:13667 -->
+      - [消息接收人订阅消息](https://cloud.tencent.com/document/product/598/37193) <!-- page:37193 -->
+      - [消息接收人用户组设置](https://cloud.tencent.com/document/product/598/37195) <!-- page:37195 -->
+      - [删除消息接收人](https://cloud.tencent.com/document/product/598/37196) <!-- page:37196 -->
+    - [用户信息](https://cloud.tencent.com/document/product/598/39365) <!-- page:39365 -->
+    - 用户设置 <!-- directory:38311 -->
+      - [密码规则](https://cloud.tencent.com/document/product/598/36249) <!-- page:36249 -->
+      - [登录限制](https://cloud.tencent.com/document/product/598/38318) <!-- page:38318 -->
+      - [微信限制](https://cloud.tencent.com/document/product/598/38312) <!-- page:38312 -->
+      - [企业微信限制](https://cloud.tencent.com/document/product/598/73858) <!-- page:73858 -->
+      - [登录状态管理](https://cloud.tencent.com/document/product/598/56220) <!-- page:56220 -->
+      - [闲置用户管理](https://cloud.tencent.com/document/product/598/126175) <!-- page:126175 -->
+      - [身份安全管理](https://cloud.tencent.com/document/product/598/73859) <!-- page:73859 -->
+      - [设置主账号别名](https://cloud.tencent.com/document/product/598/118709) <!-- page:118709 -->
+  - 访问密钥 <!-- directory:40487 -->
+    - [主账号访问密钥管理](https://cloud.tencent.com/document/product/598/40488) <!-- page:40488 -->
+    - [子账号访问密钥管理](https://cloud.tencent.com/document/product/598/37140) <!-- page:37140 -->
+    - [查看访问密钥活跃时间](https://cloud.tencent.com/document/product/598/120122) <!-- page:120122 -->
+    - [访问密钥网络访问限制策略](https://cloud.tencent.com/document/product/598/131331) <!-- page:131331 -->
+    - [定期轮转访问密钥（AccessKey）的安全建议](https://cloud.tencent.com/document/product/598/123925) <!-- page:123925 -->
+  - 用户组 <!-- directory:37296 -->
+    - [新建用户组](https://cloud.tencent.com/document/product/598/14985) <!-- page:14985 -->
+    - [为用户组添加/移除用户](https://cloud.tencent.com/document/product/598/10599) <!-- page:10599 -->
+    - [为用户组添加/解除策略](https://cloud.tencent.com/document/product/598/37299) <!-- page:37299 -->
+    - [删除用户组](https://cloud.tencent.com/document/product/598/37300) <!-- page:37300 -->
+  - 角色 <!-- directory:19330 -->
+    - [角色概述](https://cloud.tencent.com/document/product/598/19420) <!-- page:19420 -->
+    - [基本概念](https://cloud.tencent.com/document/product/598/19421) <!-- page:19421 -->
+    - [创建角色](https://cloud.tencent.com/document/product/598/19381) <!-- page:19381 -->
+    - [修改角色](https://cloud.tencent.com/document/product/598/19389) <!-- page:19389 -->
+    - [使用角色](https://cloud.tencent.com/document/product/598/19419) <!-- page:19419 -->
+    - [删除角色](https://cloud.tencent.com/document/product/598/19388) <!-- page:19388 -->
+    - [为子账号赋予扮演角色策略](https://cloud.tencent.com/document/product/598/19422) <!-- page:19422 -->
+    - [角色免密登录控制台](https://cloud.tencent.com/document/product/598/45529) <!-- page:45529 -->
+    - [基于资源的服务角色](https://cloud.tencent.com/document/product/598/85616) <!-- page:85616 -->
+    - [角色审计](https://cloud.tencent.com/document/product/598/115890) <!-- page:115890 -->
+  - 身份提供商 <!-- directory:30283 -->
+    - [SSO 概览](https://cloud.tencent.com/document/product/598/96014) <!-- page:96014 -->
+    - [SSO 的适用场景](https://cloud.tencent.com/document/product/598/95620) <!-- page:95620 -->
+    -  用户 SSO <!-- directory:61671 -->
+      - [用户 SSO 概述](https://cloud.tencent.com/document/product/598/61673) <!-- page:61673 -->
+      - [腾讯云 SP 进行 SAML 配置](https://cloud.tencent.com/document/product/598/61674) <!-- page:61674 -->
+      - [腾讯云 SP 进行 OIDC 配置](https://cloud.tencent.com/document/product/598/93431) <!-- page:93431 -->
+      - [企业 IdP 进行 SAML 配置](https://cloud.tencent.com/document/product/598/61675) <!-- page:61675 -->
+      - [企业 IdP 进行 OIDC 配置](https://cloud.tencent.com/document/product/598/94830) <!-- page:94830 -->
+      - [Okta 用户 SSO 使用说明](https://cloud.tencent.com/document/product/598/122021) <!-- page:122021 -->
+      - [ADFS 用户 SSO 使用说明](https://cloud.tencent.com/document/product/598/84174) <!-- page:84174 -->
+      - [KEYCLOAK 用户 SSO 登录腾讯云使用说明](https://cloud.tencent.com/document/product/598/105783) <!-- page:105783 -->
+      - [关闭用户 SSO 登录设置](https://cloud.tencent.com/document/product/598/104594) <!-- page:104594 -->
+    - 角色 SSO <!-- directory:61672 -->
+      - [角色 SSO 概述](https://cloud.tencent.com/document/product/598/30284) <!-- page:30284 -->
+      - [SAML 角色 SSO 概览](https://cloud.tencent.com/document/product/598/96012) <!-- page:96012 -->
+      - [OIDC 角色 SSO 概览](https://cloud.tencent.com/document/product/598/96013) <!-- page:96013 -->
+      - [基于 SAML 2.0 联合身份验证](https://cloud.tencent.com/document/product/598/30286) <!-- page:30286 -->
+      - [使用 SAML 2.0 联合身份用户访问腾讯云管理控制台](https://cloud.tencent.com/document/product/598/38058) <!-- page:38058 -->
+      - [创建 SAML 身份提供商](https://cloud.tencent.com/document/product/598/30290) <!-- page:30290 -->
+      - [创建 OIDC 身份提供商](https://cloud.tencent.com/document/product/598/93430) <!-- page:93430 -->
+      - [管理身份提供商](https://cloud.tencent.com/document/product/598/30291) <!-- page:30291 -->
+      - [Azure Active Directory 单点登录腾讯云指南](https://cloud.tencent.com/document/product/598/35713) <!-- page:35713 -->
+      - [OneLogin 单点登录腾讯云指南](https://cloud.tencent.com/document/product/598/35817) <!-- page:35817 -->
+      - [Okta 单点登录腾讯云指南](https://cloud.tencent.com/document/product/598/37658) <!-- page:37658 -->
+      - [ADFS 单点登录腾讯云指南](https://cloud.tencent.com/document/product/598/42702) <!-- page:42702 -->
+      - [KEYCLOAK 单点登录腾讯云指南](https://cloud.tencent.com/document/product/598/105784) <!-- page:105784 -->
+      - [Google Workspace 单点登录腾讯云指南](https://cloud.tencent.com/document/product/598/108524) <!-- page:108524 -->
+  - 策略 <!-- directory:10595 -->
+    - [相关概念](https://cloud.tencent.com/document/product/598/10600) <!-- page:10600 -->
+    - 相关定义 <!-- directory:34544 -->
+      - 策略与权限 <!-- directory:38502 -->
+        - [策略与权限概述](https://cloud.tencent.com/document/product/598/38503) <!-- page:38503 -->
+        - [全局预设策略](https://cloud.tencent.com/document/product/598/105584) <!-- page:105584 -->
+    - 授权指南 <!-- directory:34545 -->
+      - [通过策略生成器创建自定义策略](https://cloud.tencent.com/document/product/598/37739) <!-- page:37739 -->
+      - [通过标签授权创建自定义策略](https://cloud.tencent.com/document/product/598/80788) <!-- page:80788 -->
+      - [通过策略语法创建自定义策略](https://cloud.tencent.com/document/product/598/80789) <!-- page:80789 -->
+      - [授权管理](https://cloud.tencent.com/document/product/598/10602) <!-- page:10602 -->
+      - [限制 IP 访问](https://cloud.tencent.com/document/product/598/38037) <!-- page:38037 -->
+    - 语法逻辑 <!-- directory:10596 -->
+      - 元素参考 <!-- directory:107702 -->
+        - [元素参考概述](https://cloud.tencent.com/document/product/598/10603) <!-- page:10603 -->
+      - [语法结构](https://cloud.tencent.com/document/product/598/10604) <!-- page:10604 -->
+      - [评估逻辑](https://cloud.tencent.com/document/product/598/10605) <!-- page:10605 -->
+      - [资源描述方式](https://cloud.tencent.com/document/product/598/10606) <!-- page:10606 -->
+      - [策略变量](https://cloud.tencent.com/document/product/598/10607) <!-- page:10607 -->
+      - 生效条件 <!-- directory:73085 -->
+        - [生效条件概述](https://cloud.tencent.com/document/product/598/73088) <!-- page:73088 -->
+        - [条件键和条件运算符](https://cloud.tencent.com/document/product/598/10608) <!-- page:10608 -->
+        - [应用场景](https://cloud.tencent.com/document/product/598/73087) <!-- page:73087 -->
+    - [策略版本控制](https://cloud.tencent.com/document/product/598/37301) <!-- page:37301 -->
+    - [权限策略 deny 不生效场景](https://cloud.tencent.com/document/product/598/73561) <!-- page:73561 -->
+    - [策略分析器](https://cloud.tencent.com/document/product/598/107704) <!-- page:107704 -->
+  - 联合账号 <!-- directory:14472 -->
+    - 企业微信 <!-- directory:36312 -->
+      - [腾讯云账号关联企业微信](https://cloud.tencent.com/document/product/598/14482) <!-- page:14482 -->
+      - [设置企业微信可见范围](https://cloud.tencent.com/document/product/598/36314) <!-- page:36314 -->
+      - [腾讯云账号取消关联企业微信](https://cloud.tencent.com/document/product/598/36315) <!-- page:36315 -->
+  - [权限边界](https://cloud.tencent.com/document/product/598/48770) <!-- page:48770 -->
+  - 排除故障 <!-- directory:38349 -->
+    - [如何根据无权限信息创建权限策略](https://cloud.tencent.com/document/product/598/38350) <!-- page:38350 -->
+  - [下载安全分析报告](https://cloud.tencent.com/document/product/598/65676) <!-- page:65676 -->
+- 支持角色的业务 · [官方合并 PDF](https://main.qcloudimg.com/raw/document/product/pdf/598_84823_cn.pdf) <!-- directory:84823 -->
+  - [支持角色的业务](https://cloud.tencent.com/document/product/598/85165) <!-- page:85165 -->
+  - 计算 <!-- directory:84825 -->
+    - 计算 <!-- directory:84852 -->
+      - [云服务器](https://cloud.tencent.com/document/product/598/85164) <!-- page:85164 -->
+      - [轻量应用服务器](https://cloud.tencent.com/document/product/598/85204) <!-- page:85204 -->
+      - [批量计算](https://cloud.tencent.com/document/product/598/90384) <!-- page:90384 -->
+      - [自动化助手](https://cloud.tencent.com/document/product/598/85215) <!-- page:85215 -->
+      - [高性能计算平台](https://cloud.tencent.com/document/product/598/85220) <!-- page:85220 -->
+  - 容器与中间件 <!-- directory:84826 -->
+    - 容器 <!-- directory:84856 -->
+      - [容器服务](https://cloud.tencent.com/document/product/598/85222) <!-- page:85222 -->
+      - [Agent Runtime](https://cloud.tencent.com/document/product/598/127791) <!-- page:127791 -->
+      - [云原生分布式云中心](https://cloud.tencent.com/document/product/598/85216) <!-- page:85216 -->
+      - [应用管理平台](https://cloud.tencent.com/document/product/598/98531) <!-- page:98531 -->
+      - [云原生 etcd](https://cloud.tencent.com/document/product/598/98532) <!-- page:98532 -->
+    - 中间件 <!-- directory:84858 -->
+      - [消息队列 TDMQ](https://cloud.tencent.com/document/product/598/85217) <!-- page:85217 -->
+    - 微服务 <!-- directory:84859 -->
+      - [弹性微服务](https://cloud.tencent.com/document/product/598/85218) <!-- page:85218 -->
+  - 存储 <!-- directory:84827 -->
+    - 基础存储服务 <!-- directory:84860 -->
+      - [对象存储](https://cloud.tencent.com/document/product/598/97608) <!-- page:97608 -->
+      - [云 HDFS](https://cloud.tencent.com/document/product/598/85183) <!-- page:85183 -->
+      - [数据加速器 GooseFS](https://cloud.tencent.com/document/product/598/98535) <!-- page:98535 -->
+    - 存储数据服务 <!-- directory:84861 -->
+      - [日志服务](https://cloud.tencent.com/document/product/598/103362) <!-- page:103362 -->
+      - [Cloud Mate](https://cloud.tencent.com/document/product/598/126598) <!-- page:126598 -->
+      - [智能媒资托管](https://cloud.tencent.com/document/product/598/85212) <!-- page:85212 -->
+    - 数据迁移 <!-- directory:84863 -->
+      - [云迁移](https://cloud.tencent.com/document/product/598/93498) <!-- page:93498 -->
+  - 网络与CDN <!-- directory:84828 -->
+    - 网络 <!-- directory:84870 -->
+      - [私有网络](https://cloud.tencent.com/document/product/598/85225) <!-- page:85225 -->
+    - CDN与加速 <!-- directory:84871 -->
+      - [内容分发网络 CDN](https://cloud.tencent.com/document/product/598/85176) <!-- page:85176 -->
+      - [全球应用加速](https://cloud.tencent.com/document/product/598/85195) <!-- page:85195 -->
+  - 数据库 <!-- directory:84829 -->
+    - 关系型数据库 <!-- directory:84872 -->
+      - [TDSQL-C MySQL 版](https://cloud.tencent.com/document/product/598/96137) <!-- page:96137 -->
+      - [云数据库 MySQL](https://cloud.tencent.com/document/product/598/103764) <!-- page:103764 -->
+      - [云数据库 MariaDB](https://cloud.tencent.com/document/product/598/100804) <!-- page:100804 -->
+      - [云数据库 SQL Server](https://cloud.tencent.com/document/product/598/112743) <!-- page:112743 -->
+      - [云数据库 PostgreSQL](https://cloud.tencent.com/document/product/598/85210) <!-- page:85210 -->
+    - 企业级分布式数据库 <!-- directory:84873 -->
+      - [TDSQL MySQL 版](https://cloud.tencent.com/document/product/598/85190) <!-- page:85190 -->
+    - NoSQL 数据库 <!-- directory:84874 -->
+      - [腾讯云分布式缓存数据库](https://cloud.tencent.com/document/product/598/106553) <!-- page:106553 -->
+      - [云数据库 MongoDB](https://cloud.tencent.com/document/product/598/102544) <!-- page:102544 -->
+    - 数据库软硬一体 <!-- directory:84875 -->
+      - [云数据库独享集群](https://cloud.tencent.com/document/product/598/132712) <!-- page:132712 -->
+    - 数据库 SaaS 服务 <!-- directory:84876 -->
+      - [数据库智能管家 DBbrain](https://cloud.tencent.com/document/product/598/117109) <!-- page:117109 -->
+      - [数据传输服务](https://cloud.tencent.com/document/product/598/129031) <!-- page:129031 -->
+      - [数据库管理](https://cloud.tencent.com/document/product/598/97864) <!-- page:97864 -->
+  - 视频服务 <!-- directory:84830 -->
+    - 视频服务 <!-- directory:84878 -->
+      - [实时音视频](https://cloud.tencent.com/document/product/598/85223) <!-- page:85223 -->
+      - [云点播](https://cloud.tencent.com/document/product/598/85224) <!-- page:85224 -->
+    - 媒体处理 <!-- directory:84880 -->
+      - [应用云渲染](https://cloud.tencent.com/document/product/598/99233) <!-- page:99233 -->
+      - [云游戏](https://cloud.tencent.com/document/product/598/104879) <!-- page:104879 -->
+      - [媒体处理](https://cloud.tencent.com/document/product/598/121706) <!-- page:121706 -->
+    - 云渲染 <!-- directory:84881 -->
+      - [云桌面](https://cloud.tencent.com/document/product/598/95079) <!-- page:95079 -->
+  - 安全 <!-- directory:84831 -->
+    - 网络安全 <!-- directory:84884 -->
+      - [DDoS 防护](https://cloud.tencent.com/document/product/598/85170) <!-- page:85170 -->
+      - [边缘安全加速平台 EO](https://cloud.tencent.com/document/product/598/85219) <!-- page:85219 -->
+    - 应用安全 <!-- directory:84886 -->
+      - [Web 应用防火墙](https://cloud.tencent.com/document/product/598/85226) <!-- page:85226 -->
+    - 业务安全 <!-- directory:84887 -->
+      - [AI Agent安全网关](https://cloud.tencent.com/document/product/598/117107) <!-- page:117107 -->
+    - 数据安全 <!-- directory:84889 -->
+      - [数据安全治理中心](https://cloud.tencent.com/document/product/598/107110) <!-- page:107110 -->
+      - [运维安全中心（堡垒机）](https://cloud.tencent.com/document/product/598/85189) <!-- page:85189 -->
+      - [数据安全审计](https://cloud.tencent.com/document/product/598/85177) <!-- page:85177 -->
+    - 安全服务 <!-- directory:84890 -->
+      - [安全托管服务](https://cloud.tencent.com/document/product/598/85207) <!-- page:85207 -->
+      - [暴露面管理服务](https://cloud.tencent.com/document/product/598/124467) <!-- page:124467 -->
+  - 大数据 <!-- directory:84832 -->
+    - 数据分析 <!-- directory:84895 -->
+      - [弹性 MapReduce](https://cloud.tencent.com/document/product/598/93040) <!-- page:93040 -->
+      - [Elasticsearch Service](https://cloud.tencent.com/document/product/598/85193) <!-- page:85193 -->
+      - [腾讯云数据仓库 TCHouse-P](https://cloud.tencent.com/document/product/598/85276) <!-- page:85276 -->
+      - [数据湖计算 DLC](https://cloud.tencent.com/document/product/598/85191) <!-- page:85191 -->
+      - [腾讯云数据仓库 TCHouse-C](https://cloud.tencent.com/document/product/598/85179) <!-- page:85179 -->
+      - [腾讯云数据仓库 TCHouse-D](https://cloud.tencent.com/document/product/598/85180) <!-- page:85180 -->
+      - [腾讯云数据仓库 TCHouse-X](https://cloud.tencent.com/document/product/598/98540) <!-- page:98540 -->
+    - 数据开发与治理 <!-- directory:84896 -->
+      - [数据开发治理平台 WeData](https://cloud.tencent.com/document/product/598/123176) <!-- page:123176 -->
+    - 数据应用与可视化 <!-- directory:84897 -->
+      - [腾讯云 BI](https://cloud.tencent.com/document/product/598/85173) <!-- page:85173 -->
+  - 人工智能 <!-- directory:84833 -->
+    - 媒体智能 <!-- directory:84909 -->
+      - [视频理解](https://cloud.tencent.com/document/product/598/85202) <!-- page:85202 -->
+  - 企业应用与云通信 <!-- directory:84834 -->
+    - 云通信 <!-- directory:84910 -->
+      - [邮件推送](https://cloud.tencent.com/document/product/598/132484) <!-- page:132484 -->
+    - 域名与网站 <!-- directory:84911 -->
+      - [SSL 证书](https://cloud.tencent.com/document/product/598/85213) <!-- page:85213 -->
+      - [移动解析 HTTPDNS](https://cloud.tencent.com/document/product/598/85198) <!-- page:85198 -->
+      - [私有域解析 Private DNS](https://cloud.tencent.com/document/product/598/89907) <!-- page:89907 -->
+    - 区块链 <!-- directory:84912 -->
+      - [隐私云计算](https://cloud.tencent.com/document/product/598/123175) <!-- page:123175 -->
+    - 企业通信 <!-- directory:84914 -->
+      - [云联络中心](https://cloud.tencent.com/document/product/598/85174) <!-- page:85174 -->
+    - 办公协同 <!-- directory:84915 -->
+      - [腾讯统一身份](https://cloud.tencent.com/document/product/598/134986) <!-- page:134986 -->
+      - [腾讯云安灯](https://cloud.tencent.com/document/product/598/98539) <!-- page:98539 -->
+  - 行业应用 <!-- directory:84835 -->
+    - 教育服务 <!-- directory:84918 -->
+      - [智聆口语评测](https://cloud.tencent.com/document/product/598/100194) <!-- page:100194 -->
+    - 游戏服务 <!-- directory:84919 -->
+      - [游戏多媒体引擎](https://cloud.tencent.com/document/product/598/85196) <!-- page:85196 -->
+    - 汽车服务 <!-- directory:84924 -->
+      - [智能汽车云平台](https://cloud.tencent.com/document/product/598/98538) <!-- page:98538 -->
+    - 医疗服务 <!-- directory:84925 -->
+      - [腾讯健康组学平台](https://cloud.tencent.com/document/product/598/98537) <!-- page:98537 -->
+    - 科创服务 <!-- directory:84929 -->
+      - [材料研究平台](https://cloud.tencent.com/document/product/598/98536) <!-- page:98536 -->
+  - 开发与运维 <!-- directory:84836 -->
+    - 低代码 <!-- directory:84931 -->
+      - [云开发 CloudBase](https://cloud.tencent.com/document/product/598/99232) <!-- page:99232 -->
+    - 云资源管理 <!-- directory:84932 -->
+      - [控制中心](https://cloud.tencent.com/document/product/598/127792) <!-- page:127792 -->
+      - [智能顾问](https://cloud.tencent.com/document/product/598/85169) <!-- page:85169 -->
+      - [访问管理](https://cloud.tencent.com/document/product/598/99234) <!-- page:99234 -->
+      - [配置审计](https://cloud.tencent.com/document/product/598/98534) <!-- page:98534 -->
+      - [商业流程服务](https://cloud.tencent.com/document/product/598/107566) <!-- page:107566 -->
+    - 管理与审计 <!-- directory:84933 -->
+      - [集团账号管理](https://cloud.tencent.com/document/product/598/85209) <!-- page:85209 -->
+      - [标签](https://cloud.tencent.com/document/product/598/88710) <!-- page:88710 -->
+    - 监控与运维 <!-- directory:84934 -->
+      - [业务监控](https://cloud.tencent.com/document/product/598/117108) <!-- page:117108 -->
+      - [应用性能监控](https://cloud.tencent.com/document/product/598/112095) <!-- page:112095 -->
+      - [腾讯云可观测平台](https://cloud.tencent.com/document/product/598/85205) <!-- page:85205 -->
+      - [云顾问-混沌演练](https://cloud.tencent.com/document/product/598/85182) <!-- page:85182 -->
+    - 开发者工具 <!-- directory:84935 -->
+      - [Cloud Studio（云端 IDE）](https://cloud.tencent.com/document/product/598/104307) <!-- page:104307 -->
+      - [云应用](https://cloud.tencent.com/document/product/598/98533) <!-- page:98533 -->
+  - 物联网 <!-- directory:84837 -->
+    - 物联平台服务 <!-- directory:84940 -->
+      - [物联网开发平台](https://cloud.tencent.com/document/product/598/85199) <!-- page:85199 -->
+    - 物联设备服务 <!-- directory:84941 -->
+      - [物联网智能视频服务(行业版)](https://cloud.tencent.com/document/product/598/85201) <!-- page:85201 -->
+  - 云平台服务 <!-- directory:84838 -->
+    - 平台服务 <!-- directory:84944 -->
+      - [消息中心](https://cloud.tencent.com/document/product/598/122453) <!-- page:122453 -->
+      - [费用中心](https://cloud.tencent.com/document/product/598/85194) <!-- page:85194 -->
+      - [Helix](https://cloud.tencent.com/document/product/598/121705) <!-- page:121705 -->
+- 支持CAM的业务接口 · [官方合并 PDF](https://main.qcloudimg.com/raw/document/product/pdf/598_66380_cn.pdf) <!-- directory:66380 -->
+  - [概览](https://cloud.tencent.com/document/product/598/67350) <!-- page:67350 -->
+  - 计算 <!-- directory:66382 -->
+    - 计算 <!-- directory:66407 -->
+      - [云服务器](https://cloud.tencent.com/document/product/598/69910) <!-- page:69910 -->
+      - [轻量应用服务器](https://cloud.tencent.com/document/product/598/69972) <!-- page:69972 -->
+      - [弹性伸缩](https://cloud.tencent.com/document/product/598/69859) <!-- page:69859 -->
+      - [自动化助手](https://cloud.tencent.com/document/product/598/70026) <!-- page:70026 -->
+      - [裸金属云服务器](https://cloud.tencent.com/document/product/598/99433) <!-- page:99433 -->
+      - [黑石私有网络](https://cloud.tencent.com/document/product/598/99451) <!-- page:99451 -->
+      - [黑石负载均衡](https://cloud.tencent.com/document/product/598/99738) <!-- page:99738 -->
+    - 分布式云 <!-- directory:98062 -->
+      - [专属可用区](https://cloud.tencent.com/document/product/598/86611) <!-- page:86611 -->
+      - [本地专用集群](https://cloud.tencent.com/document/product/598/98107) <!-- page:98107 -->
+      - [云托付物理服务器](https://cloud.tencent.com/document/product/598/117059) <!-- page:117059 -->
+    - 高性能计算 <!-- directory:98097 -->
+      - [高性能计算平台](https://cloud.tencent.com/document/product/598/98182) <!-- page:98182 -->
+      - [批量计算](https://cloud.tencent.com/document/product/598/99236) <!-- page:99236 -->
+      - [高性能应用服务](https://cloud.tencent.com/document/product/598/99248) <!-- page:99248 -->
+  - 容器与中间件 <!-- directory:66383 -->
+    - 容器 <!-- directory:66411 -->
+      - [容器服务](https://cloud.tencent.com/document/product/598/70052) <!-- page:70052 -->
+      - [容器镜像服务](https://cloud.tencent.com/document/product/598/70035) <!-- page:70035 -->
+      - [云原生分布式云中心](https://cloud.tencent.com/document/product/598/70380) <!-- page:70380 -->
+      - [应用管理平台](https://cloud.tencent.com/document/product/598/83860) <!-- page:83860 -->
+      - [云原生 etcd](https://cloud.tencent.com/document/product/598/98111) <!-- page:98111 -->
+    - Serverless <!-- directory:66412 -->
+      - [云函数](https://cloud.tencent.com/document/product/598/70005) <!-- page:70005 -->
+      - [Serverless 应用中心](https://cloud.tencent.com/document/product/598/70010) <!-- page:70010 -->
+    - 消息队列 <!-- directory:98066 -->
+      - [消息队列 RocketMQ 版](https://cloud.tencent.com/document/product/598/91708) <!-- page:91708 -->
+      - [消息队列 RabbitMQ 版](https://cloud.tencent.com/document/product/598/117084) <!-- page:117084 -->
+      - [消息队列 TDMQ](https://cloud.tencent.com/document/product/598/98179) <!-- page:98179 -->
+      - [消息队列 CKafka 版](https://cloud.tencent.com/document/product/598/101280) <!-- page:101280 -->
+      - [消息队列 CMQ](https://cloud.tencent.com/document/product/598/107485) <!-- page:107485 -->
+    - 微服务工具与平台 <!-- directory:98094 -->
+      - [服务网格](https://cloud.tencent.com/document/product/598/98176) <!-- page:98176 -->
+      - [弹性微服务](https://cloud.tencent.com/document/product/598/98180) <!-- page:98180 -->
+      - [微服务引擎 TSE](https://cloud.tencent.com/document/product/598/98187) <!-- page:98187 -->
+      - [微服务平台 TSF](https://cloud.tencent.com/document/product/598/98188) <!-- page:98188 -->
+  - 存储 <!-- directory:66384 -->
+    - 基础存储服务 <!-- directory:66416 -->
+      - [对象存储](https://cloud.tencent.com/document/product/598/69901) <!-- page:69901 -->
+      - [文件存储](https://cloud.tencent.com/document/product/598/69886) <!-- page:69886 -->
+      - [归档存储](https://cloud.tencent.com/document/product/598/69874) <!-- page:69874 -->
+      - [云 HDFS](https://cloud.tencent.com/document/product/598/69888) <!-- page:69888 -->
+      - [数据加速器 GooseFS](https://cloud.tencent.com/document/product/598/77806) <!-- page:77806 -->
+      - [轻量对象存储](https://cloud.tencent.com/document/product/598/117067) <!-- page:117067 -->
+    - 存储数据服务 <!-- directory:66417 -->
+      - [智能媒资托管](https://cloud.tencent.com/document/product/598/70011) <!-- page:70011 -->
+      - [数据万象](https://cloud.tencent.com/document/product/598/98114) <!-- page:98114 -->
+      - [日志服务](https://cloud.tencent.com/document/product/598/98119) <!-- page:98119 -->
+    - 数据迁移 <!-- directory:66419 -->
+      - [云数据迁移](https://cloud.tencent.com/document/product/598/69881) <!-- page:69881 -->
+    - 混合云存储 <!-- directory:66420 -->
+      - [存储网关](https://cloud.tencent.com/document/product/598/69906) <!-- page:69906 -->
+    - 智能存储 <!-- directory:66421 -->
+      - [智能视图计算平台](https://cloud.tencent.com/document/product/598/69968) <!-- page:69968 -->
+  - 网络 <!-- directory:66385 -->
+    - 混合云网络 <!-- directory:98070 -->
+      - [专线接入](https://cloud.tencent.com/document/product/598/98123) <!-- page:98123 -->
+      - [全球应用加速](https://cloud.tencent.com/document/product/598/98140) <!-- page:98140 -->
+    - 云上网络 <!-- directory:98084 -->
+      - [智能高性能网络](https://cloud.tencent.com/document/product/598/119308) <!-- page:119308 -->
+      - [负载均衡](https://cloud.tencent.com/document/product/598/98118) <!-- page:98118 -->
+      - [私有网络](https://cloud.tencent.com/document/product/598/98194) <!-- page:98194 -->
+      - [负载均衡身份认证](https://cloud.tencent.com/document/product/598/110535) <!-- page:110535 -->
+  - 数据库 <!-- directory:66386 -->
+    - 关系型数据库 <!-- directory:66424 -->
+      - [云数据库 MySQL](https://cloud.tencent.com/document/product/598/69878) <!-- page:69878 -->
+      - [云数据库 MariaDB](https://cloud.tencent.com/document/product/598/67483) <!-- page:67483 -->
+      - [云数据库 SQL Server](https://cloud.tencent.com/document/product/598/70015) <!-- page:70015 -->
+      - [云数据库 PostgreSQL](https://cloud.tencent.com/document/product/598/69996) <!-- page:69996 -->
+    - NoSQL 数据库 <!-- directory:66426 -->
+      - [NoSQL 数据库 CKV](https://cloud.tencent.com/document/product/598/69893) <!-- page:69893 -->
+      - [云数据库 MongoDB](https://cloud.tencent.com/document/product/598/69982) <!-- page:69982 -->
+      - [云数据库 Memcached](https://cloud.tencent.com/document/product/598/67485) <!-- page:67485 -->
+      - [时序数据库 CTSDB](https://cloud.tencent.com/document/product/598/69908) <!-- page:69908 -->
+      - [游戏数据库 TcaplusDB](https://cloud.tencent.com/document/product/598/70031) <!-- page:70031 -->
+      - [云数据库 KeeWiDB](https://cloud.tencent.com/document/product/598/72555) <!-- page:72555 -->
+      - [云数据库 Redis®](https://cloud.tencent.com/document/product/598/112151) <!-- page:112151 -->
+      - [向量数据库](https://cloud.tencent.com/document/product/598/104151) <!-- page:104151 -->
+    - 数据库软硬一体 <!-- directory:66427 -->
+      - [云数据库独享集群](https://cloud.tencent.com/document/product/598/69914) <!-- page:69914 -->
+    - 数据库 SaaS 服务 <!-- directory:66428 -->
+      - [数据库智能管家 DBbrain](https://cloud.tencent.com/document/product/598/69913) <!-- page:69913 -->
+      - [数据传输服务](https://cloud.tencent.com/document/product/598/69928) <!-- page:69928 -->
+      - [数据库专家服务](https://cloud.tencent.com/document/product/598/69915) <!-- page:69915 -->
+      - [数据库管理](https://cloud.tencent.com/document/product/598/69921) <!-- page:69921 -->
+      - [数据库备份服务](https://cloud.tencent.com/document/product/598/81549) <!-- page:81549 -->
+    - 关系型数据库 TDSQL <!-- directory:137297 -->
+      - [TDSQL-C MySQL 版](https://cloud.tencent.com/document/product/598/69912) <!-- page:69912 -->
+      - [TDSQL MySQL 版](https://cloud.tencent.com/document/product/598/69917) <!-- page:69917 -->
+      - [TDSQL PostgreSQL 版](https://cloud.tencent.com/document/product/598/70028) <!-- page:70028 -->
+      - [TDSQL-A ClickHouse 版](https://cloud.tencent.com/document/product/598/70038) <!-- page:70038 -->
+      - [TDSQL-C PostgreSQL 版](https://cloud.tencent.com/document/product/598/108436) <!-- page:108436 -->
+      - [轻量数据库](https://cloud.tencent.com/document/product/598/107678) <!-- page:107678 -->
+  - 视频服务 <!-- directory:66387 -->
+    - 视频服务 <!-- directory:66429 -->
+      - [云点播](https://cloud.tencent.com/document/product/598/70068) <!-- page:70068 -->
+      - [智能创作](https://cloud.tencent.com/document/product/598/69899) <!-- page:69899 -->
+      - [媒体传输](https://cloud.tencent.com/document/product/598/69975) <!-- page:69975 -->
+      - [媒体直播](https://cloud.tencent.com/document/product/598/69976) <!-- page:69976 -->
+      - [媒体包装](https://cloud.tencent.com/document/product/598/69977) <!-- page:69977 -->
+      - [腾讯云智绘](https://cloud.tencent.com/document/product/598/70023) <!-- page:70023 -->
+      - [云直播](https://cloud.tencent.com/document/product/598/98576) <!-- page:98576 -->
+      - [小程序 · 云直播](https://cloud.tencent.com/document/product/598/99711) <!-- page:99711 -->
+    - 视频终端 <!-- directory:98088 -->
+      - [音视频终端 SDK(腾讯云视立方)](https://cloud.tencent.com/document/product/598/67003) <!-- page:67003 -->
+    - 媒体处理 <!-- directory:104139 -->
+      - [云桌面](https://cloud.tencent.com/document/product/598/104115) <!-- page:104115 -->
+      - [云游戏](https://cloud.tencent.com/document/product/598/104116) <!-- page:104116 -->
+      - [媒体处理](https://cloud.tencent.com/document/product/598/104118) <!-- page:104118 -->
+      - [应用云渲染](https://cloud.tencent.com/document/product/598/104140) <!-- page:104140 -->
+    - 实时互动 <!-- directory:98034 -->
+      - [实时音视频](https://cloud.tencent.com/document/product/598/70059) <!-- page:70059 -->
+      - [即时通信 IM](https://cloud.tencent.com/document/product/598/69962) <!-- page:69962 -->
+      - [语音消息](https://cloud.tencent.com/document/product/598/70067) <!-- page:70067 -->
+      - [云联络中心](https://cloud.tencent.com/document/product/598/98106) <!-- page:98106 -->
+      - [游戏多媒体引擎](https://cloud.tencent.com/document/product/598/98141) <!-- page:98141 -->
+      - [实时互动-工业能源版](https://cloud.tencent.com/document/product/598/101297) <!-- page:101297 -->
+      - [实时互动-教育版](https://cloud.tencent.com/document/product/598/100789) <!-- page:100789 -->
+    - 内容创作 <!-- directory:66432 -->
+      - [音速达直播音乐版权引擎](https://cloud.tencent.com/document/product/598/76023) <!-- page:76023 -->
+  - 安全 <!-- directory:66388 -->
+    - 应用安全 <!-- directory:66435 -->
+      - [游戏应用安全](https://cloud.tencent.com/document/product/598/84277) <!-- page:84277 -->
+    - 业务安全 <!-- directory:66436 -->
+      - [小程序安全](https://cloud.tencent.com/document/product/598/69980) <!-- page:69980 -->
+      - [全栈式风控引擎](https://cloud.tencent.com/document/product/598/70001) <!-- page:70001 -->
+      - [黑产检测及情报](https://cloud.tencent.com/document/product/598/98191) <!-- page:98191 -->
+    - 数据安全 <!-- directory:66438 -->
+      - [数据安全审计](https://cloud.tencent.com/document/product/598/67470) <!-- page:67470 -->
+      - [云加密机](https://cloud.tencent.com/document/product/598/69896) <!-- page:69896 -->
+      - [密钥管理系统](https://cloud.tencent.com/document/product/598/69971) <!-- page:69971 -->
+      - [凭据管理系统](https://cloud.tencent.com/document/product/598/70019) <!-- page:70019 -->
+      - [云访问安全代理](https://cloud.tencent.com/document/product/598/69875) <!-- page:69875 -->
+      - [数据安全网关（云访问安全代理）](https://cloud.tencent.com/document/product/598/107293) <!-- page:107293 -->
+      - [数据安全治理中心](https://cloud.tencent.com/document/product/598/101688) <!-- page:101688 -->
+      - [运维安全中心（堡垒机）](https://cloud.tencent.com/document/product/598/106609) <!-- page:106609 -->
+      - [证书监控 SSLPod](https://cloud.tencent.com/document/product/598/98169) <!-- page:98169 -->
+    - 安全服务 <!-- directory:66439 -->
+      - [安全托管服务](https://cloud.tencent.com/document/product/598/69986) <!-- page:69986 -->
+      - [暴露面管理服务](https://cloud.tencent.com/document/product/598/117063) <!-- page:117063 -->
+    - 安全运营 <!-- directory:98057 -->
+      - [威胁情报云查与本地引擎](https://cloud.tencent.com/document/product/598/105333) <!-- page:105333 -->
+      - [文件多引擎判定平台](https://cloud.tencent.com/document/product/598/98193) <!-- page:98193 -->
+    - 云安全 <!-- directory:98112 -->
+      - [主机安全](https://cloud.tencent.com/document/product/598/69911) <!-- page:69911 -->
+      - [容器安全服务](https://cloud.tencent.com/document/product/598/70036) <!-- page:70036 -->
+      - [大模型安全网关](https://cloud.tencent.com/document/product/598/119297) <!-- page:119297 -->
+      - [云防火墙](https://cloud.tencent.com/document/product/598/98113) <!-- page:98113 -->
+      - [小程序安全检测](https://cloud.tencent.com/document/product/598/117070) <!-- page:117070 -->
+      - [安全湖](https://cloud.tencent.com/document/product/598/117077) <!-- page:117077 -->
+      - [云安全中心](https://cloud.tencent.com/document/product/598/98167) <!-- page:98167 -->
+      - [Web 应用防火墙](https://cloud.tencent.com/document/product/598/98197) <!-- page:98197 -->
+      - [漏洞扫描服务](https://cloud.tencent.com/document/product/598/99255) <!-- page:99255 -->
+    - 内容安全 <!-- directory:137849 -->
+      - [音频内容安全](https://cloud.tencent.com/document/product/598/99431) <!-- page:99431 -->
+      - [图片内容安全](https://cloud.tencent.com/document/product/598/137846) <!-- page:137846 -->
+      - [视频内容安全](https://cloud.tencent.com/document/product/598/137847) <!-- page:137847 -->
+    - 业务风控 <!-- directory:131240 -->
+      - [借贷反欺诈](https://cloud.tencent.com/document/product/598/69849) <!-- page:69849 -->
+      - [保险反欺诈](https://cloud.tencent.com/document/product/598/69955) <!-- page:69955 -->
+      - [定制建模](https://cloud.tencent.com/document/product/598/69850) <!-- page:69850 -->
+      - [流量反欺诈](https://cloud.tencent.com/document/product/598/70022) <!-- page:70022 -->
+      - [活动防刷](https://cloud.tencent.com/document/product/598/69845) <!-- page:69845 -->
+      - [验证码](https://cloud.tencent.com/document/product/598/69873) <!-- page:69873 -->
+      - [联邦学习](https://cloud.tencent.com/document/product/598/69943) <!-- page:69943 -->
+      - [置信度评分](https://cloud.tencent.com/document/product/598/69970) <!-- page:69970 -->
+      - [行业风险评估](https://cloud.tencent.com/document/product/598/70000) <!-- page:70000 -->
+      - [设备安全](https://cloud.tencent.com/document/product/598/80529) <!-- page:80529 -->
+      - [品牌经营管家](https://cloud.tencent.com/document/product/598/98103) <!-- page:98103 -->
+      - [身份访问控制](https://cloud.tencent.com/document/product/598/117060) <!-- page:117060 -->
+      - [专家兼容测试](https://cloud.tencent.com/document/product/598/98130) <!-- page:98130 -->
+      - [风控平台服务](https://cloud.tencent.com/document/product/598/117086) <!-- page:117086 -->
+      - [远程调试](https://cloud.tencent.com/document/product/598/98160) <!-- page:98160 -->
+      - [安全云手机](https://cloud.tencent.com/document/product/598/98163) <!-- page:98163 -->
+      - [标准兼容测试](https://cloud.tencent.com/document/product/598/98164) <!-- page:98164 -->
+      - [手游安全测试](https://cloud.tencent.com/document/product/598/98166) <!-- page:98166 -->
+      - [安全短链接](https://cloud.tencent.com/document/product/598/98170) <!-- page:98170 -->
+      - [测试服务](https://cloud.tencent.com/document/product/598/98199) <!-- page:98199 -->
+      - [业务风险情报](https://cloud.tencent.com/document/product/598/101278) <!-- page:101278 -->
+      - [版权保护平台](https://cloud.tencent.com/document/product/598/103869) <!-- page:103869 -->
+      - [风险识别 RCE](https://cloud.tencent.com/document/product/598/120537) <!-- page:120537 -->
+    - 零信任 <!-- directory:98047 -->
+      - [iOA 零信任安全管理系统](https://cloud.tencent.com/document/product/598/82002) <!-- page:82002 -->
+    - 身份安全 <!-- directory:66443 -->
+      - [数字身份管控平台](https://cloud.tencent.com/document/product/598/69957) <!-- page:69957 -->
+      - [数字身份管控平台（员工版）](https://cloud.tencent.com/document/product/598/101282) <!-- page:101282 -->
+  - 大数据 <!-- directory:66389 -->
+    - 数据分析 <!-- directory:66444 -->
+      - [弹性 MapReduce](https://cloud.tencent.com/document/product/598/69934) <!-- page:69934 -->
+      - [Elasticsearch Service](https://cloud.tencent.com/document/product/598/69937) <!-- page:69937 -->
+      - [腾讯云数据仓库 TCHouse-P](https://cloud.tencent.com/document/product/598/69884) <!-- page:69884 -->
+      - [流计算 Oceanus](https://cloud.tencent.com/document/product/598/69991) <!-- page:69991 -->
+      - [数据湖计算 DLC](https://cloud.tencent.com/document/product/598/69918) <!-- page:69918 -->
+      - [腾讯云数据仓库 TCHouse-D](https://cloud.tencent.com/document/product/598/70495) <!-- page:70495 -->
+      - [腾讯云数据仓库 TCHouse-C](https://cloud.tencent.com/document/product/598/69883) <!-- page:69883 -->
+      - [腾讯云数据仓库 TCHouse-X](https://cloud.tencent.com/document/product/598/117080) <!-- page:117080 -->
+      - [腾讯云数据仓库 TCHouse](https://cloud.tencent.com/document/product/598/98175) <!-- page:98175 -->
+      - [检索分析服务](https://cloud.tencent.com/document/product/598/101298) <!-- page:101298 -->
+    - 数据开发与治理 <!-- directory:66445 -->
+      - [数据开发治理平台 WeData](https://cloud.tencent.com/document/product/598/70075) <!-- page:70075 -->
+    - 数据应用与可视化 <!-- directory:98101 -->
+      - [腾讯云 BI](https://cloud.tencent.com/document/product/598/98102) <!-- page:98102 -->
+      - [数字营销](https://cloud.tencent.com/document/product/598/98124) <!-- page:98124 -->
+      - [移动推送](https://cloud.tencent.com/document/product/598/98186) <!-- page:98186 -->
+  - 云通信与企业服务 <!-- directory:66391 -->
+    - 云通信 <!-- directory:66459 -->
+      - [邮件推送](https://cloud.tencent.com/document/product/598/70009) <!-- page:70009 -->
+      - [短信](https://cloud.tencent.com/document/product/598/85395) <!-- page:85395 -->
+    - 域名管理 <!-- directory:66460 -->
+      - [域名注册](https://cloud.tencent.com/document/product/598/86259) <!-- page:86259 -->
+      - [移动解析 HTTPDNS](https://cloud.tencent.com/document/product/598/69954) <!-- page:69954 -->
+      - [私有域解析 Private DNS](https://cloud.tencent.com/document/product/598/69997) <!-- page:69997 -->
+      - [智能全局流量管理](https://cloud.tencent.com/document/product/598/98148) <!-- page:98148 -->
+      - [云解析 DNS](https://cloud.tencent.com/document/product/598/99243) <!-- page:99243 -->
+    - 区块链 <!-- directory:66461 -->
+      - [腾讯云区块链服务平台 TBaaS](https://cloud.tencent.com/document/product/598/70027) <!-- page:70027 -->
+      - [分布式身份](https://cloud.tencent.com/document/product/598/70041) <!-- page:70041 -->
+      - [可信计算服务](https://cloud.tencent.com/document/product/598/85727) <!-- page:85727 -->
+    - 网站与备案 <!-- directory:98068 -->
+      - [SSL 证书](https://cloud.tencent.com/document/product/598/98168) <!-- page:98168 -->
+      - [网站建设](https://cloud.tencent.com/document/product/598/98198) <!-- page:98198 -->
+      - [ICP备案](https://cloud.tencent.com/document/product/598/101277) <!-- page:101277 -->
+    - 资质证照 <!-- directory:98083 -->
+      - [腾讯云拓客通](https://cloud.tencent.com/document/product/598/70033) <!-- page:70033 -->
+  - 行业应用 <!-- directory:66392 -->
+    - 金融服务 <!-- directory:66467 -->
+      - [云支付](https://cloud.tencent.com/document/product/598/69902) <!-- page:69902 -->
+      - [金融围笼](https://cloud.tencent.com/document/product/598/69942) <!-- page:69942 -->
+    - 教育服务 <!-- directory:66468 -->
+      - [智聆口语评测](https://cloud.tencent.com/document/product/598/69508) <!-- page:69508 -->
+      - [数学作业批改](https://cloud.tencent.com/document/product/598/69953) <!-- page:69953 -->
+      - [互动白板](https://cloud.tencent.com/document/product/598/70051) <!-- page:70051 -->
+      - [腾讯教育教师助手](https://cloud.tencent.com/document/product/598/70046) <!-- page:70046 -->
+      - [在线课堂](https://cloud.tencent.com/document/product/598/101963) <!-- page:101963 -->
+      - [互动在线课堂](https://cloud.tencent.com/document/product/598/101979) <!-- page:101979 -->
+    - 游戏服务 <!-- directory:66469 -->
+      - [游戏语音GVoice](https://cloud.tencent.com/document/product/598/98143) <!-- page:98143 -->
+    - 汽车服务 <!-- directory:66474 -->
+      - [智能汽车云平台](https://cloud.tencent.com/document/product/598/86111) <!-- page:86111 -->
+    - 医疗服务 <!-- directory:66475 -->
+      - [智能导诊](https://cloud.tencent.com/document/product/598/69960) <!-- page:69960 -->
+      - [智能预问诊](https://cloud.tencent.com/document/product/598/69967) <!-- page:69967 -->
+      - [医疗报告结构化](https://cloud.tencent.com/document/product/598/69984) <!-- page:69984 -->
+      - [患者档案](https://cloud.tencent.com/document/product/598/94248) <!-- page:94248 -->
+      - [腾讯健康组学平台](https://cloud.tencent.com/document/product/598/86262) <!-- page:86262 -->
+      - [家医助手](https://cloud.tencent.com/document/product/598/104528) <!-- page:104528 -->
+      - [医学术语标准化API](https://cloud.tencent.com/document/product/598/117072) <!-- page:117072 -->
+    - 科创服务 <!-- directory:98045 -->
+      - [材料研究平台](https://cloud.tencent.com/document/product/598/81552) <!-- page:81552 -->
+  - 人工智能与机器学习 <!-- directory:98051 -->
+    - AI 应用产品 <!-- directory:98052 -->
+      - [智能硬件 AI 语音助手](https://cloud.tencent.com/document/product/598/84394) <!-- page:84394 -->
+      - [人脸核身](https://cloud.tencent.com/document/product/598/98136) <!-- page:98136 -->
+      - [对话机器人](https://cloud.tencent.com/document/product/598/98146) <!-- page:98146 -->
+      - [图片内容安全](https://cloud.tencent.com/document/product/598/137851) <!-- page:137851 -->
+      - [视频内容安全](https://cloud.tencent.com/document/product/598/137852) <!-- page:137852 -->
+      - [腾讯同传](https://cloud.tencent.com/document/product/598/98189) <!-- page:98189 -->
+      - [腾讯云智能数智人](https://cloud.tencent.com/document/product/598/109777) <!-- page:109777 -->
+    - AI 基础产品 <!-- directory:98064 -->
+      - [语音识别](https://cloud.tencent.com/document/product/598/98096) <!-- page:98096 -->
+      - [人脸融合](https://cloud.tencent.com/document/product/598/98135) <!-- page:98135 -->
+      - [人脸试妆](https://cloud.tencent.com/document/product/598/98137) <!-- page:98137 -->
+      - [人像变换](https://cloud.tencent.com/document/product/598/98138) <!-- page:98138 -->
+      - [文字识别](https://cloud.tencent.com/document/product/598/107102) <!-- page:107102 -->
+      - [人脸识别](https://cloud.tencent.com/document/product/598/98145) <!-- page:98145 -->
+      - [视频理解](https://cloud.tencent.com/document/product/598/98156) <!-- page:98156 -->
+      - [图像识别](https://cloud.tencent.com/document/product/598/98183) <!-- page:98183 -->
+      - [机器翻译](https://cloud.tencent.com/document/product/598/98185) <!-- page:98185 -->
+      - [语音合成](https://cloud.tencent.com/document/product/598/98190) <!-- page:98190 -->
+      - [声音复刻](https://cloud.tencent.com/document/product/598/98196) <!-- page:98196 -->
+      - [视频转译](https://cloud.tencent.com/document/product/598/104603) <!-- page:104603 -->
+      - [音色变换](https://cloud.tencent.com/document/product/598/101292) <!-- page:101292 -->
+    - 腾讯大模型 <!-- directory:104374 -->
+      - [腾讯混元大模型](https://cloud.tencent.com/document/product/598/97722) <!-- page:97722 -->
+      - [腾讯混元生图](https://cloud.tencent.com/document/product/598/121144) <!-- page:121144 -->
+      - [腾讯混元生视频](https://cloud.tencent.com/document/product/598/121165) <!-- page:121165 -->
+  - 办公协同 <!-- directory:98054 -->
+    - 办公协同 <!-- directory:98055 -->
+      - [腾讯云企业网盘](https://cloud.tencent.com/document/product/598/85555) <!-- page:85555 -->
+      - [腾讯乐享](https://cloud.tencent.com/document/product/598/91041) <!-- page:91041 -->
+      - [腾讯浏览服务](https://cloud.tencent.com/document/product/598/84667) <!-- page:84667 -->
+      - [腾讯云安灯](https://cloud.tencent.com/document/product/598/86755) <!-- page:86755 -->
+      - [腾讯云 CA](https://cloud.tencent.com/document/product/598/103510) <!-- page:103510 -->
+      - [腾讯电子签](https://cloud.tencent.com/document/product/598/101311) <!-- page:101311 -->
+      - [腾讯云商付](https://cloud.tencent.com/document/product/598/120269) <!-- page:120269 -->
+    - 企业应用 <!-- directory:98089 -->
+      - [代理记账](https://cloud.tencent.com/document/product/598/98090) <!-- page:98090 -->
+      - [腾讯电子签企业版](https://cloud.tencent.com/document/product/598/101283) <!-- page:101283 -->
+    - 连接器 <!-- directory:98131 -->
+      - [腾讯轻联](https://cloud.tencent.com/document/product/598/98132) <!-- page:98132 -->
+  - 微信生态 <!-- directory:98086 -->
+    - CRM <!-- directory:117097 -->
+      - [腾讯企点](https://cloud.tencent.com/document/product/598/117098) <!-- page:117098 -->
+  - CDN与边缘 <!-- directory:98108 -->
+    - CDN与边缘平台 <!-- directory:98109 -->
+      - [DDoS 防护](https://cloud.tencent.com/document/product/598/67463) <!-- page:67463 -->
+      - [内容分发网络 CDN](https://cloud.tencent.com/document/product/598/98110) <!-- page:98110 -->
+      - [全站加速网络](https://cloud.tencent.com/document/product/598/98126) <!-- page:98126 -->
+      - [多网聚合加速](https://cloud.tencent.com/document/product/598/98157) <!-- page:98157 -->
+      - [边缘安全加速平台 EO](https://cloud.tencent.com/document/product/598/99327) <!-- page:99327 -->
+    - 边缘计算 <!-- directory:98128 -->
+      - [边缘计算机器](https://cloud.tencent.com/document/product/598/98129) <!-- page:98129 -->
+      - [物联网边缘计算平台](https://cloud.tencent.com/document/product/598/98147) <!-- page:98147 -->
+  - 开发与运维 <!-- directory:98039 -->
+    - 云资源管理 <!-- directory:98049 -->
+      - [云顾问](https://cloud.tencent.com/document/product/598/69848) <!-- page:69848 -->
+      - [访问管理](https://cloud.tencent.com/document/product/598/69872) <!-- page:69872 -->
+      - [集团账号管理](https://cloud.tencent.com/document/product/598/69994) <!-- page:69994 -->
+      - [商业流程服务](https://cloud.tencent.com/document/product/598/69868) <!-- page:69868 -->
+      - [标签](https://cloud.tencent.com/document/product/598/67492) <!-- page:67492 -->
+      - [控制中心](https://cloud.tencent.com/document/product/598/92790) <!-- page:92790 -->
+      - [配置审计](https://cloud.tencent.com/document/product/598/82423) <!-- page:82423 -->
+      - [腾讯云健康看板](https://cloud.tencent.com/document/product/598/94461) <!-- page:94461 -->
+      - [云顾问-混沌演练](https://cloud.tencent.com/document/product/598/119299) <!-- page:119299 -->
+      - [TRTC云助手](https://cloud.tencent.com/document/product/598/102779) <!-- page:102779 -->
+      - [节省计划](https://cloud.tencent.com/document/product/598/103574) <!-- page:103574 -->
+      - [操作审计](https://cloud.tencent.com/document/product/598/102588) <!-- page:102588 -->
+      - [身份识别平台](https://cloud.tencent.com/document/product/598/110536) <!-- page:110536 -->
+    - 开发者工具 <!-- directory:98060 -->
+      - [CODING DevOps](https://cloud.tencent.com/document/product/598/69900) <!-- page:69900 -->
+      - [Cloud Studio（云端 IDE）](https://cloud.tencent.com/document/product/598/76022) <!-- page:76022 -->
+      - [云应用](https://cloud.tencent.com/document/product/598/85808) <!-- page:85808 -->
+      - [腾讯云小程序平台](https://cloud.tencent.com/document/product/598/91707) <!-- page:91707 -->
+      - [云原生自动化测试](https://cloud.tencent.com/document/product/598/105242) <!-- page:105242 -->
+      - [腾讯云代码分析](https://cloud.tencent.com/document/product/598/105334) <!-- page:105334 -->
+      - [地图基础服务](https://cloud.tencent.com/document/product/598/103873) <!-- page:103873 -->
+      - [软件成分分析](https://cloud.tencent.com/document/product/598/112086) <!-- page:112086 -->
+    - 设计协同管理工具 <!-- directory:98072 -->
+      - [设计协作平台](https://cloud.tencent.com/document/product/598/93459) <!-- page:93459 -->
+    - 监控与运维 <!-- directory:98074 -->
+      - [腾讯云可观测平台](https://cloud.tencent.com/document/product/598/67487) <!-- page:67487 -->
+      - [云拨测](https://cloud.tencent.com/document/product/598/69876) <!-- page:69876 -->
+      - [云压测](https://cloud.tencent.com/document/product/598/69999) <!-- page:69999 -->
+      - [前端性能监控](https://cloud.tencent.com/document/product/598/70004) <!-- page:70004 -->
+      - [应用性能监控](https://cloud.tencent.com/document/product/598/69858) <!-- page:69858 -->
+      - [业务监控](https://cloud.tencent.com/document/product/598/98121) <!-- page:98121 -->
+      - [事件总线](https://cloud.tencent.com/document/product/598/98127) <!-- page:98127 -->
+    - 管理与审计 <!-- directory:98085 -->
+      - [安全凭证服务](https://cloud.tencent.com/document/product/598/70020) <!-- page:70020 -->
+    - API 与工具 <!-- directory:98092 -->
+      - [云 API](https://cloud.tencent.com/document/product/598/98093) <!-- page:98093 -->
+    - 云原生应用平台 <!-- directory:133085 -->
+      - [云托管 CloudBase Run](https://cloud.tencent.com/document/product/598/76364) <!-- page:76364 -->
+      - [云开发 CloudBase](https://cloud.tencent.com/document/product/598/98174) <!-- page:98174 -->
+      - [腾讯云微搭低代码](https://cloud.tencent.com/document/product/598/112089) <!-- page:112089 -->
+    - 云迁移工具 <!-- directory:111593 -->
+      - [云迁移](https://cloud.tencent.com/document/product/598/111594) <!-- page:111594 -->
+  - 物联网 <!-- directory:66394 -->
+    - 物联网 <!-- directory:98151 -->
+      - [物联网通信](https://cloud.tencent.com/document/product/598/67479) <!-- page:67479 -->
+      - [物联网开发平台](https://cloud.tencent.com/document/product/598/98152) <!-- page:98152 -->
+      - [物联网智能视频服务(消费版)](https://cloud.tencent.com/document/product/598/98153) <!-- page:98153 -->
+      - [物联网智能视频服务(行业版)](https://cloud.tencent.com/document/product/598/98154) <!-- page:98154 -->
+  - 云平台服务 <!-- directory:66395 -->
+    - 平台服务 <!-- directory:66490 -->
+      - [费用中心](https://cloud.tencent.com/document/product/598/92835) <!-- page:92835 -->
+      - [云市场](https://cloud.tencent.com/document/product/598/80284) <!-- page:80284 -->
+      - [合同管理](https://cloud.tencent.com/document/product/598/101557) <!-- page:101557 -->
+- 实践教程 · [官方合并 PDF](https://main.qcloudimg.com/raw/document/product/pdf/598_55148_cn.pdf) <!-- directory:55148 -->
+  - [安全实践教程](https://cloud.tencent.com/document/product/598/10592) <!-- page:10592 -->
+  - [授予标签下部分操作权限](https://cloud.tencent.com/document/product/598/55150) <!-- page:55150 -->
+  - [使用 ADFS 进行用户 SSO 的示例](https://cloud.tencent.com/document/product/598/98907) <!-- page:98907 -->
+  - [使用 OneLogin 进行角色 SSO 的示例](https://cloud.tencent.com/document/product/598/98908) <!-- page:98908 -->
+  - 支持员工间资源隔离访问 <!-- directory:74182 -->
+    - [概述](https://cloud.tencent.com/document/product/598/74104) <!-- page:74104 -->
+    - [按照资源 ID 授权](https://cloud.tencent.com/document/product/598/74183) <!-- page:74183 -->
+    - [按照标签授权](https://cloud.tencent.com/document/product/598/74184) <!-- page:74184 -->
+  - 企业多账号权限管理 <!-- directory:74187 -->
+    - [概述](https://cloud.tencent.com/document/product/598/74186) <!-- page:74186 -->
+    - [集团账号](https://cloud.tencent.com/document/product/598/74188) <!-- page:74188 -->
+    - [角色](https://cloud.tencent.com/document/product/598/74189) <!-- page:74189 -->
+    - [协作者](https://cloud.tencent.com/document/product/598/74190) <!-- page:74190 -->
+  - [查看员工腾讯云操作记录](https://cloud.tencent.com/document/product/598/73795) <!-- page:73795 -->
+  - [使用 API 管理企业多账号权限](https://cloud.tencent.com/document/product/598/74677) <!-- page:74677 -->
+  - 使用 ABAC 管理员工资源访问权限 <!-- directory:76304 -->
+    - [ABAC 概述](https://cloud.tencent.com/document/product/598/74876) <!-- page:74876 -->
+    - [应用场景](https://cloud.tencent.com/document/product/598/76175) <!-- page:76175 -->
+  - [按标签鉴权时支持仅匹配标签键](https://cloud.tencent.com/document/product/598/82175) <!-- page:82175 -->
+  - [创建资源时强制绑定固定标签键值](https://cloud.tencent.com/document/product/598/104657) <!-- page:104657 -->
+- 商用案例 · [官方合并 PDF](https://main.qcloudimg.com/raw/document/product/pdf/598_10591_cn.pdf) <!-- directory:10591 -->
+  - MySQL 相关案例 <!-- directory:11065 -->
+    - [允许查看指定标签下的 MySQL 实例](https://cloud.tencent.com/document/product/598/11073) <!-- page:11073 -->
+    - [授权子账号拥有特定地域的cdb操作权限](https://cloud.tencent.com/document/product/598/90195) <!-- page:90195 -->
+  - CLB 相关案例 <!-- directory:11066 -->
+    - [授权子账号拥有 CLB 的所有权限（包含支付权限）](https://cloud.tencent.com/document/product/598/11076) <!-- page:11076 -->
+    - [授权子账号拥有 CLB 的所有权限但不包括支付权限](https://cloud.tencent.com/document/product/598/11529) <!-- page:11529 -->
+  - CMQ 相关案例 <!-- directory:11067 -->
+    - [授权子账号拥有消息服务的所有权限](https://cloud.tencent.com/document/product/598/11080) <!-- page:11080 -->
+    - [授权子账号拥有其创建的消息队列的所有权限](https://cloud.tencent.com/document/product/598/11081) <!-- page:11081 -->
+    - [授权子账号拥有特定的主题模型的消息队列的读权限](https://cloud.tencent.com/document/product/598/11082) <!-- page:11082 -->
+  - COS 相关案例 <!-- directory:11068 -->
+    - [授权子账号对特定目录的所有权限](https://cloud.tencent.com/document/product/598/11084) <!-- page:11084 -->
+    - [授权子账号对特定目录内文件的读权限](https://cloud.tencent.com/document/product/598/11085) <!-- page:11085 -->
+    - [授权子账号对特定文件的读写权限](https://cloud.tencent.com/document/product/598/11086) <!-- page:11086 -->
+    - [授权子账号拥有 COS 资源的读权限](https://cloud.tencent.com/document/product/598/11087) <!-- page:11087 -->
+    - [授权子账号拥有特定目录下除指定文件之外的其他所有文件的读写权限](https://cloud.tencent.com/document/product/598/11088) <!-- page:11088 -->
+    - [授权子账号对指定前缀的文件的读写权限](https://cloud.tencent.com/document/product/598/11090) <!-- page:11090 -->
+    - [跨账号访问：授权主账号访问其他主账号的指定文件](https://cloud.tencent.com/document/product/598/11091) <!-- page:11091 -->
+    - [跨账号访问：授权子账号访问其他主账号的指定文件](https://cloud.tencent.com/document/product/598/11092) <!-- page:11092 -->
+  - CVM 相关案例 <!-- directory:11069 -->
+    - [授权子账号拥有 CVM 的所有权限](https://cloud.tencent.com/document/product/598/11093) <!-- page:11093 -->
+    - [授权子账号拥有 CVM 的只读权限](https://cloud.tencent.com/document/product/598/11094) <!-- page:11094 -->
+    - [授权子账号拥有 CVM 相关资源的只读权限](https://cloud.tencent.com/document/product/598/11095) <!-- page:11095 -->
+    - [授权子账号拥有弹性云盘的操作权限](https://cloud.tencent.com/document/product/598/11096) <!-- page:11096 -->
+    - [授权子账号拥有安全组的操作权限](https://cloud.tencent.com/document/product/598/11097) <!-- page:11097 -->
+    - [授权子账号拥有弹性IP地址的操作权限](https://cloud.tencent.com/document/product/598/11098) <!-- page:11098 -->
+    - [授权子账号拥有特定 CVM 的操作权限](https://cloud.tencent.com/document/product/598/11099) <!-- page:11099 -->
+    - [授权子账号拥有特定地域的 CVM 的操作权限](https://cloud.tencent.com/document/product/598/11100) <!-- page:11100 -->
+    - [授权子账号拥有 CVM 的所有权限但不包括支付权限](https://cloud.tencent.com/document/product/598/11531) <!-- page:11531 -->
+    - [授予子账号拥有项目管理的操作权限](https://cloud.tencent.com/document/product/598/17399) <!-- page:17399 -->
+  - VPC 相关案例 <!-- directory:11070 -->
+    - [授权子账号拥有特定 VPC 的操作权限](https://cloud.tencent.com/document/product/598/11103) <!-- page:11103 -->
+    - [授权子账号拥有 VPC 的操作权限但无路由表操作权限](https://cloud.tencent.com/document/product/598/11104) <!-- page:11104 -->
+    - [授权子账号拥有 VPN 的操作权限](https://cloud.tencent.com/document/product/598/11105) <!-- page:11105 -->
+    - [授权子账号拥有 VPC 的所有权限](https://cloud.tencent.com/document/product/598/11101) <!-- page:11101 -->
+    - [授权子账号拥有 VPC 的所有权限但不包括支付权限](https://cloud.tencent.com/document/product/598/11530) <!-- page:11530 -->
+  - 云点播相关案例 <!-- directory:11071 -->
+    - [授权子账号拥有云点播的所有权限](https://cloud.tencent.com/document/product/598/11106) <!-- page:11106 -->
+  - 其他案例 <!-- directory:11072 -->
+    - [授予指定产品的管理权限或只读权限](https://cloud.tencent.com/document/product/598/11107) <!-- page:11107 -->
+    - [授权子账号管理项目的权限](https://cloud.tencent.com/document/product/598/14023) <!-- page:14023 -->
+- API 文档 · [官方合并 PDF](https://main.qcloudimg.com/raw/document/product/pdf/598_13874_cn.pdf) <!-- directory:13874 -->
+  - [更新历史](https://cloud.tencent.com/document/product/598/33162) <!-- page:33162 -->
+  - [简介](https://cloud.tencent.com/document/product/598/43337) <!-- page:43337 -->
+  - [API 概览](https://cloud.tencent.com/document/product/598/33155) <!-- page:33155 -->
+  - 调用方式 <!-- directory:33156 -->
+    - [请求结构](https://cloud.tencent.com/document/product/598/33157) <!-- page:33157 -->
+    - [公共参数](https://cloud.tencent.com/document/product/598/33158) <!-- page:33158 -->
+    - [签名方法 v3](https://cloud.tencent.com/document/product/598/38504) <!-- page:38504 -->
+    - [签名方法](https://cloud.tencent.com/document/product/598/38505) <!-- page:38505 -->
+    - [返回结果](https://cloud.tencent.com/document/product/598/43332) <!-- page:43332 -->
+    - [参数类型](https://cloud.tencent.com/document/product/598/78436) <!-- page:78436 -->
+  - 用户相关接口 <!-- directory:34581 -->
+    - [用户加入到用户组](https://cloud.tencent.com/document/product/598/34594) <!-- page:34594 -->
+    - [验证自定义多因子Token](https://cloud.tencent.com/document/product/598/36229) <!-- page:36229 -->
+    - [创建访问密钥](https://cloud.tencent.com/document/product/598/82370) <!-- page:82370 -->
+    - [增加子账号登录IP策略](https://cloud.tencent.com/document/product/598/122041) <!-- page:122041 -->
+    - [删除访问密钥](https://cloud.tencent.com/document/product/598/82369) <!-- page:82369 -->
+    - [删除用户组](https://cloud.tencent.com/document/product/598/34593) <!-- page:34593 -->
+    - [删除子用户](https://cloud.tencent.com/document/product/598/34592) <!-- page:34592 -->
+    - [删除用户权限边界](https://cloud.tencent.com/document/product/598/46595) <!-- page:46595 -->
+    - [通过子用户UIN列表查询子用户](https://cloud.tencent.com/document/product/598/53486) <!-- page:53486 -->
+    - [查询账户摘要](https://cloud.tencent.com/document/product/598/58534) <!-- page:58534 -->
+    - [获取自定义多因子Token关联信息](https://cloud.tencent.com/document/product/598/36228) <!-- page:36228 -->
+    - [查询用户组详情](https://cloud.tencent.com/document/product/598/34591) <!-- page:34591 -->
+    - [获取CAM密码设置规则](https://cloud.tencent.com/document/product/598/132012) <!-- page:132012 -->
+    - [获取密钥最近使用情况](https://cloud.tencent.com/document/product/598/58230) <!-- page:58230 -->
+    - [获取用户AppId](https://cloud.tencent.com/document/product/598/70416) <!-- page:70416 -->
+    - [获取用户权限边界](https://cloud.tencent.com/document/product/598/66680) <!-- page:66680 -->
+    - [列出访问密钥](https://cloud.tencent.com/document/product/598/45156) <!-- page:45156 -->
+    - [获取协作者列表](https://cloud.tencent.com/document/product/598/43470) <!-- page:43470 -->
+    - [查询用户组列表](https://cloud.tencent.com/document/product/598/34589) <!-- page:34589 -->
+    - [列出用户关联的用户组](https://cloud.tencent.com/document/product/598/34588) <!-- page:34588 -->
+    - [获取消息接收人列表](https://cloud.tencent.com/document/product/598/110940) <!-- page:110940 -->
+    - [拉取子用户](https://cloud.tencent.com/document/product/598/34587) <!-- page:34587 -->
+    - [查询用户组关联的用户列表](https://cloud.tencent.com/document/product/598/34586) <!-- page:34586 -->
+    - [获取企业微信子用户列表](https://cloud.tencent.com/document/product/598/51774) <!-- page:51774 -->
+    - [设置用户权限边界](https://cloud.tencent.com/document/product/598/46594) <!-- page:46594 -->
+    - [从用户组删除用户](https://cloud.tencent.com/document/product/598/34585) <!-- page:34585 -->
+    - [设置子用户的登录保护和敏感操作校验方式](https://cloud.tencent.com/document/product/598/36227) <!-- page:36227 -->
+    - [更新访问密钥](https://cloud.tencent.com/document/product/598/82368) <!-- page:82368 -->
+    - [更新用户组](https://cloud.tencent.com/document/product/598/34584) <!-- page:34584 -->
+    - [更新CAM密码设置规则](https://cloud.tencent.com/document/product/598/132011) <!-- page:132011 -->
+    - [更新子用户](https://cloud.tencent.com/document/product/598/34583) <!-- page:34583 -->
+    - [创建子用户](https://cloud.tencent.com/document/product/598/34595) <!-- page:34595 -->
+    - [创建用户组](https://cloud.tencent.com/document/product/598/34582) <!-- page:34582 -->
+    - [获取子账号安全设置](https://cloud.tencent.com/document/product/598/48602) <!-- page:48602 -->
+    - [查询子用户](https://cloud.tencent.com/document/product/598/34590) <!-- page:34590 -->
+    - [创建消息接收人](https://cloud.tencent.com/document/product/598/96136) <!-- page:96136 -->
+    - [删除消息接收人](https://cloud.tencent.com/document/product/598/110941) <!-- page:110941 -->
+    - [查询所有账号列表](https://cloud.tencent.com/document/product/598/133082) <!-- page:133082 -->
+  - 策略相关接口 <!-- directory:34568 -->
+    - [绑定策略到用户组](https://cloud.tencent.com/document/product/598/34580) <!-- page:34580 -->
+    - [绑定策略到用户](https://cloud.tencent.com/document/product/598/34579) <!-- page:34579 -->
+    - [新增策略版本接口](https://cloud.tencent.com/document/product/598/43842) <!-- page:43842 -->
+    - [删除策略](https://cloud.tencent.com/document/product/598/34577) <!-- page:34577 -->
+    - [删除策略的策略版本](https://cloud.tencent.com/document/product/598/43841) <!-- page:43841 -->
+    - [解除绑定到用户组的策略](https://cloud.tencent.com/document/product/598/34576) <!-- page:34576 -->
+    - [解除绑定到用户的策略](https://cloud.tencent.com/document/product/598/34575) <!-- page:34575 -->
+    - [查看策略详情](https://cloud.tencent.com/document/product/598/34574) <!-- page:34574 -->
+    - [查询策略版本详情](https://cloud.tencent.com/document/product/598/43840) <!-- page:43840 -->
+    - [查询用户组关联的策略列表](https://cloud.tencent.com/document/product/598/34573) <!-- page:34573 -->
+    - [列出用户关联的策略（包括随组关联）](https://cloud.tencent.com/document/product/598/67728) <!-- page:67728 -->
+    - [查询子账号关联的策略列表](https://cloud.tencent.com/document/product/598/34572) <!-- page:34572 -->
+    - [查询策略关联的实体列表](https://cloud.tencent.com/document/product/598/34571) <!-- page:34571 -->
+    - [查询策略列表](https://cloud.tencent.com/document/product/598/34570) <!-- page:34570 -->
+    - [获取所有已授权服务](https://cloud.tencent.com/document/product/598/58191) <!-- page:58191 -->
+    - [获取策略版本列表](https://cloud.tencent.com/document/product/598/43839) <!-- page:43839 -->
+    - [设置生效的策略版本](https://cloud.tencent.com/document/product/598/43838) <!-- page:43838 -->
+    - [更新策略信息](https://cloud.tencent.com/document/product/598/34569) <!-- page:34569 -->
+    - [创建策略](https://cloud.tencent.com/document/product/598/34578) <!-- page:34578 -->
+  - 角色相关接口 <!-- directory:36217 -->
+    - [创建服务相关角色](https://cloud.tencent.com/document/product/598/43711) <!-- page:43711 -->
+    - [删除角色](https://cloud.tencent.com/document/product/598/36224) <!-- page:36224 -->
+    - [删除角色权限边界](https://cloud.tencent.com/document/product/598/46593) <!-- page:46593 -->
+    - [删除服务相关角色](https://cloud.tencent.com/document/product/598/43710) <!-- page:43710 -->
+    - [获取角色列表](https://cloud.tencent.com/document/product/598/36223) <!-- page:36223 -->
+    - [查询用户安全设置](https://cloud.tencent.com/document/product/598/48426) <!-- page:48426 -->
+    - [查询安全设置(国际站)](https://cloud.tencent.com/document/product/598/58533) <!-- page:58533 -->
+    - [解绑角色的策略](https://cloud.tencent.com/document/product/598/36222) <!-- page:36222 -->
+    - [获取角色详情](https://cloud.tencent.com/document/product/598/36221) <!-- page:36221 -->
+    - [获取角色权限边界](https://cloud.tencent.com/document/product/598/66679) <!-- page:66679 -->
+    - [获取服务相关角色删除状态](https://cloud.tencent.com/document/product/598/43709) <!-- page:43709 -->
+    - [获取角色绑定的策略列表](https://cloud.tencent.com/document/product/598/36220) <!-- page:36220 -->
+    - [设置角色权限边界](https://cloud.tencent.com/document/product/598/46592) <!-- page:46592 -->
+    - [角色绑定标签](https://cloud.tencent.com/document/product/598/74379) <!-- page:74379 -->
+    - [角色解绑标签](https://cloud.tencent.com/document/product/598/74378) <!-- page:74378 -->
+    - [修改角色信任策略](https://cloud.tencent.com/document/product/598/36219) <!-- page:36219 -->
+    - [修改角色是否可登录](https://cloud.tencent.com/document/product/598/43469) <!-- page:43469 -->
+    - [修改角色描述信息](https://cloud.tencent.com/document/product/598/36218) <!-- page:36218 -->
+    - [修改角色会话时长](https://cloud.tencent.com/document/product/598/113746) <!-- page:113746 -->
+    - [绑定权限策略到角色](https://cloud.tencent.com/document/product/598/36226) <!-- page:36226 -->
+    - [创建角色](https://cloud.tencent.com/document/product/598/36225) <!-- page:36225 -->
+  - 身份提供商相关接口 <!-- directory:34562 -->
+    - [创建角色OIDC配置](https://cloud.tencent.com/document/product/598/73473) <!-- page:73473 -->
+    - [创建SAML身份提供商](https://cloud.tencent.com/document/product/598/34567) <!-- page:34567 -->
+    - [创建用户OIDC配置](https://cloud.tencent.com/document/product/598/72091) <!-- page:72091 -->
+    - [创建用户SAML配置](https://cloud.tencent.com/document/product/598/62664) <!-- page:62664 -->
+    - [删除OIDC身份提供商](https://cloud.tencent.com/document/product/598/73472) <!-- page:73472 -->
+    - [删除SAML身份提供商](https://cloud.tencent.com/document/product/598/34566) <!-- page:34566 -->
+    - [查询角色OIDC配置](https://cloud.tencent.com/document/product/598/73471) <!-- page:73471 -->
+    - [查询用户OIDC配置](https://cloud.tencent.com/document/product/598/72090) <!-- page:72090 -->
+    - [查询用户SAML配置](https://cloud.tencent.com/document/product/598/62663) <!-- page:62663 -->
+    - [禁用用户SSO](https://cloud.tencent.com/document/product/598/72089) <!-- page:72089 -->
+    - [查询SAML身份提供商详情](https://cloud.tencent.com/document/product/598/34565) <!-- page:34565 -->
+    - [查询SAML身份提供商列表](https://cloud.tencent.com/document/product/598/34564) <!-- page:34564 -->
+    - [修改角色OIDC配置](https://cloud.tencent.com/document/product/598/73470) <!-- page:73470 -->
+    - [更新SAML身份提供商信息](https://cloud.tencent.com/document/product/598/34563) <!-- page:34563 -->
+    - [修改用户OIDC配置](https://cloud.tencent.com/document/product/598/72088) <!-- page:72088 -->
+    - [修改用户SAML配置](https://cloud.tencent.com/document/product/598/62662) <!-- page:62662 -->
+  - 其他接口 <!-- directory:33165 -->
+    - [获取数据流认证Token](https://cloud.tencent.com/document/product/598/107089) <!-- page:107089 -->
+  - [数据结构](https://cloud.tencent.com/document/product/598/33167) <!-- page:33167 -->
+  - [错误码](https://cloud.tencent.com/document/product/598/33168) <!-- page:33168 -->
+  - 访问管理 API 2017 <!-- directory:33169 -->
+    - [简介](https://cloud.tencent.com/document/product/598/13875) <!-- page:13875 -->
+    - [CAM API 概览](https://cloud.tencent.com/document/product/598/13876) <!-- page:13876 -->
+    - 调用方式 <!-- directory:13877 -->
+      - [请求构造](https://cloud.tencent.com/document/product/598/13878) <!-- page:13878 -->
+      - [公共参数](https://cloud.tencent.com/document/product/598/13879) <!-- page:13879 -->
+      - 返回结果 <!-- directory:13880 -->
+        - [正确返回结果](https://cloud.tencent.com/document/product/598/13881) <!-- page:13881 -->
+        - [错误返回结果](https://cloud.tencent.com/document/product/598/13882) <!-- page:13882 -->
+    - 角色相关接口 <!-- directory:13885 -->
+      - [创建角色](https://cloud.tencent.com/document/product/598/13886) <!-- page:13886 -->
+      - [获取角色列表](https://cloud.tencent.com/document/product/598/13887) <!-- page:13887 -->
+      - [获取角色信息](https://cloud.tencent.com/document/product/598/13888) <!-- page:13888 -->
+      - [绑定策略到角色](https://cloud.tencent.com/document/product/598/13889) <!-- page:13889 -->
+      - [解绑角色的策略](https://cloud.tencent.com/document/product/598/13890) <!-- page:13890 -->
+      - [修改角色描述信息](https://cloud.tencent.com/document/product/598/13891) <!-- page:13891 -->
+      - [修改角色信任策略](https://cloud.tencent.com/document/product/598/13892) <!-- page:13892 -->
+      - [删除角色](https://cloud.tencent.com/document/product/598/13893) <!-- page:13893 -->
+      - [获取角色绑定的策略列表](https://cloud.tencent.com/document/product/598/14406) <!-- page:14406 -->
+    - STS 相关接口 <!-- directory:13894 -->
+      - [申请角色临时凭证](https://cloud.tencent.com/document/product/598/13895) <!-- page:13895 -->
+      - [获取联合身份临时访问凭证](https://cloud.tencent.com/document/product/598/13896) <!-- page:13896 -->
+      - [根据 SAML 断言申请角色临时凭证](https://cloud.tencent.com/document/product/598/30300) <!-- page:30300 -->
+    - 策略管理接口 <!-- directory:15415 -->
+      - [创建策略](https://cloud.tencent.com/document/product/598/15419) <!-- page:15419 -->
+      - [查看策略详情](https://cloud.tencent.com/document/product/598/15422) <!-- page:15422 -->
+      - [更新策略](https://cloud.tencent.com/document/product/598/15421) <!-- page:15421 -->
+      - [查询策略列表](https://cloud.tencent.com/document/product/598/15426) <!-- page:15426 -->
+      - [查询策略关联的实体列表](https://cloud.tencent.com/document/product/598/15425) <!-- page:15425 -->
+      - [查询子账号关联的策略列表](https://cloud.tencent.com/document/product/598/15423) <!-- page:15423 -->
+      - [绑定策略到用户](https://cloud.tencent.com/document/product/598/15427) <!-- page:15427 -->
+      - [解除绑定到用户的策略](https://cloud.tencent.com/document/product/598/15429) <!-- page:15429 -->
+      - [绑定策略到用户组](https://cloud.tencent.com/document/product/598/15428) <!-- page:15428 -->
+      - [查询用户组关联的策略列表](https://cloud.tencent.com/document/product/598/15424) <!-- page:15424 -->
+      - [解除绑定到用户组的策略](https://cloud.tencent.com/document/product/598/15430) <!-- page:15430 -->
+      - [删除策略](https://cloud.tencent.com/document/product/598/15420) <!-- page:15420 -->
+    - 用户组管理接口 <!-- directory:15046 -->
+      - [创建用户组](https://cloud.tencent.com/document/product/598/15048) <!-- page:15048 -->
+      - [将用户加入用户组](https://cloud.tencent.com/document/product/598/15049) <!-- page:15049 -->
+      - [查询用户组关联的用户列表](https://cloud.tencent.com/document/product/598/15050) <!-- page:15050 -->
+      - [查询用户组列表](https://cloud.tencent.com/document/product/598/15051) <!-- page:15051 -->
+      - [查询用户组详情](https://cloud.tencent.com/document/product/598/15052) <!-- page:15052 -->
+      - [列出用户关联的用户组](https://cloud.tencent.com/document/product/598/15053) <!-- page:15053 -->
+      - [更新用户组](https://cloud.tencent.com/document/product/598/15054) <!-- page:15054 -->
+      - [从用户组删除用户](https://cloud.tencent.com/document/product/598/15055) <!-- page:15055 -->
+      - [删除用户组](https://cloud.tencent.com/document/product/598/15056) <!-- page:15056 -->
+    - 子用户管理接口 <!-- directory:15047 -->
+      - [添加子用户](https://cloud.tencent.com/document/product/598/15294) <!-- page:15294 -->
+      - [查询子用户](https://cloud.tencent.com/document/product/598/15295) <!-- page:15295 -->
+      - [更新子用户](https://cloud.tencent.com/document/product/598/15296) <!-- page:15296 -->
+      - [拉取子用户](https://cloud.tencent.com/document/product/598/15297) <!-- page:15297 -->
+      - [删除子用户](https://cloud.tencent.com/document/product/598/15298) <!-- page:15298 -->
+    - 身份供应商接口 <!-- directory:30294 -->
+      - [新建 SAML 身份提供商](https://cloud.tencent.com/document/product/598/30295) <!-- page:30295 -->
+      - [更新 SAML 身份提供商](https://cloud.tencent.com/document/product/598/30296) <!-- page:30296 -->
+      - [查询特定的 SAML 身份提供商信息](https://cloud.tencent.com/document/product/598/30297) <!-- page:30297 -->
+      - [获取 SAML 身份提供商列表](https://cloud.tencent.com/document/product/598/30298) <!-- page:30298 -->
+      - [删除 SAML 身份提供商](https://cloud.tencent.com/document/product/598/30301) <!-- page:30301 -->
+    - [错误码](https://cloud.tencent.com/document/product/598/13884) <!-- page:13884 -->
+- 常见问题 · [官方合并 PDF](https://main.qcloudimg.com/raw/document/product/pdf/598_56393_cn.pdf) <!-- directory:56393 -->
+  - [策略相关问题](https://cloud.tencent.com/document/product/598/18795) <!-- page:18795 -->
+  - [用户相关问题](https://cloud.tencent.com/document/product/598/74572) <!-- page:74572 -->
+  - [角色相关问题](https://cloud.tencent.com/document/product/598/56395) <!-- page:56395 -->
+  - [密钥相关问题](https://cloud.tencent.com/document/product/598/56394) <!-- page:56394 -->
+  - [其他问题](https://cloud.tencent.com/document/product/598/74574) <!-- page:74574 -->
+- [联系我们](https://cloud.tencent.com/document/product/598/59813) <!-- page:59813 -->
+- [词汇表](https://cloud.tencent.com/document/product/598/18564) <!-- page:18564 -->
