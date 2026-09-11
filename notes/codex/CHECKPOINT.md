@@ -9,6 +9,7 @@
 - Pushed verified action-catalog slice: `3b11eb9dbabd70211e665c00e4e665658b461bd1`
 - Pushed policy-core/replica-gate milestone: `273196d2442fd70b6824ec10fcd4ef8ba0f95a38`
 - Pushed atomic-migration/Audit-retry correction: `0f99ec98ef52bdb69017fd16dfe21f1c2cc55177`
+- Pushed policy/attachment relationship contract: `3b370ca2c3ab299ec80b554ef970e70d609e2b29`
 
 ## Resume route
 
@@ -75,8 +76,23 @@ dual-schema/old-chain, Audit HTTP and IAM HTTP/recovery gates pass (5.802s,
 3.100s, 91.862s). Retained upgrade plus independent process passes 57.432s;
 two more fresh-database process runs pass 46.505s and 51.722s. All task-owned
 temporary PG/container/network/volume resources were cleaned. The exact
-0f99ec9 CI run 34569666803 is confirmed live/in_progress; recheck this same run,
-do not infer acceptance or restart it merely because observation is slow.
+0f99ec9 CI run 34569666803 is confirmed completed/success for the exact SHA,
+including go, authority-process and node-process. It is the verified/pushed
+rollback point before the remaining risky storage replacement.
+
+3b370ca defines Policy metadata (SYSTEM/CUSTOMER, owner/scope, ACTIVE/RETIRED,
+default immutable version) and PolicyAttachment (carrier, physical Account,
+sealed platform/probe installation, revision and terminal revocation). Strict
+decoders do not add a management endpoint. EvaluateAttachedPolicies validates
+every current ownership/default-version link before using the sole statement
+evaluator; bad later records cannot leave partial Allow/evidence. Direct
+subjects cannot use unproved group/role inheritance. It returns exact sorted
+attachment ID/revision and policy/version/digest evidence. This is not yet
+called by the old SQL loader/Decide path: do not claim persistence integration.
+API/IAM/architecture no-cache race, vet, stable generation and IAM Linux build
+pass; three repeated API/domain race runs pass. No new runtime fixture or
+schema/profile change was introduced. Its exact CI run 34570914253 is confirmed
+live/in_progress; inspect that same run rather than infer success.
 
 Next required implementation remains IAM/002 persisted policy versions,
 attachments, decision evidence and atomic replacement of old role authority

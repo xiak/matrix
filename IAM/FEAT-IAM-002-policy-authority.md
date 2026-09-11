@@ -49,7 +49,7 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 以上对象/严格解码与关系校验已实现于现有 API/domain owner；尚未替换当前 SQL loader 或发布新的管理路由，也不是新的在线权限入口。其契约测试覆盖跨 Account、错主体、伪造安装、未证明继承、非默认版本、退休/撤销、摘要替换、重复关联、预算和 Deny 证据顺序；真实存储/迁移仍是本 FEAT 的必要剩余项。
 
-2026-09-11 该契约增量通过 API/IAM 全部 owning packages 与 architecture 的无缓存 race、IAM/API vet、生成稳定及 Linux/amd64 IAM 构建；API/domain 连续三次聚焦 race 也通过。默认版本改为另一不可变内容后，同一关联产生对应的新决定与版本证据；坏记录位于有效 Allow 之后仍整体拒绝。没有以 mock、默认跳过 PG 的测试或仅类型存在宣称数据库已接入，也未更改当前 schema/profile。
+2026-09-11 该契约增量通过 API/IAM 全部 owning packages 与 architecture 的无缓存 race、IAM/API vet、生成稳定及 Linux/amd64 IAM 构建；API/domain 连续三次聚焦 race 也通过。默认版本改为另一不可变内容后，同一关联产生对应的新求值结果与版本证据；坏记录位于有效 Allow 之后仍整体拒绝。没有以 mock、默认跳过 PG 的测试或仅类型存在宣称数据库已接入，也未更改当前 schema/profile。
 
 ## 验收
 
