@@ -1,6 +1,6 @@
 # FEAT-IAM-003：主账号、用户与凭据生命周期
 
-- 状态：实现中；Account/RootIdentity/User 命名替换与现有生命周期纵向闭环已有固定回滚点，显式管理能力投影正在验收；资料/删除、签名 Profile 和真实浏览器仍未验收。
+- 状态：实现中；Account/RootIdentity/User 命名替换、现有生命周期纵向闭环和显式管理能力投影已有固定验证；资料/删除、签名 Profile 和真实浏览器仍未验收。
 - 依赖：002。
 - Owner：IAM 账号/身份与安装 primary 的接口协作。
 
@@ -63,6 +63,6 @@ Account 更新以 scope/account 锁序列化；User 安全变更在 principal �
 
 固定回滚点 `79b37949300c686617694f52abff9a08626043e2` 已在独立 `feat/iam` 工作树完成当前管理面的破坏性替换：公开管理 DTO/路由只使用 Account、RootIdentity 和 User，旧 Organization/Principal 管理路由返回 404；Bootstrap、ServiceIdentity、AuthorizationDecision、旧 Audit 事实与 canonical bytes 保持冻结。数据库把旧 `login_index.account_owner` 迁移为强约束的 `account_roots`，并从封存 bootstrap receipt 为实际 9fd/a36 旧状态还原唯一 root；缺失或冲突关系失败关闭。该提交的 Verification `34599945505` 中 go、authority-process、node-process 三项均成功。
 
-当前能力投影候选以同一策略 evaluator 生成 action/resource 对，并以私有目标事实增加 self、installation、system account、disabled 和 must-change 限制；控制台只消费这些值，不读取 policy ID、policy name、role name 或业务 service name。API/OpenAPI、服务、受限 SQL、安装测试消费者和静态页面已原子切换到 `AccountAccess` 与完整能力集合。全仓 Go test/vet/race、API 生成一致性和架构测试通过；前端 type/lint/架构/20 组对比度、87 项测试及 59 个嵌入文件的 2-worker 静态导出一致性通过。独立 PostgreSQL 18.6、2 CPU/768 MiB 下，IAM HTTP 全量 race（67.932s）、策略存储 race、Audit 权威数据库（5.321s）及 IAM/Audit/PaaS 独立进程（35.740s）通过；真实用例覆盖账号读写能力分离、当前 User 自保护、停用/待改密目标、安装权威 User、系统 Account 和错误能力形状失败关闭。
+固定实现 `4201989773b6ca24829506b7e60dc3f9c4f20446` 以同一策略 evaluator 生成 action/resource 对，并以私有目标事实增加 self、installation、system account、disabled 和 must-change 限制；控制台只消费这些值，不读取 policy ID、policy name、role name 或业务 service name。API/OpenAPI、服务、受限 SQL、安装测试消费者和静态页面已原子切换到 `AccountAccess` 与完整能力集合。全仓 Go test/vet/race、API 生成一致性和架构测试通过；前端 type/lint/架构/20 组对比度、87 项测试及 59 个嵌入文件的 2-worker 静态导出一致性通过。独立 PostgreSQL 18.6、2 CPU/768 MiB 下，IAM HTTP 全量 race（67.932s）、策略存储 race、Audit 权威数据库（5.321s）及 IAM/Audit/PaaS 独立进程（35.740s）通过；真实用例覆盖账号读写能力分离、当前 User 自保护、停用/待改密目标、安装权威 User、系统 Account 和错误能力形状失败关闭。[Verification 34605172417](https://github.com/xiak/matrix/actions/runs/34605172417) 已核实精确 SHA，go、authority-process、node-process 全部 `completed/success`。
 
-该候选源码的实际 readiness 为 IAM7/Audit4/PaaS1；安装发布 Profile 仍保持最后已发布值并拒绝这个不匹配组合，未把源码门禁冒充签名发布或跨 profile 兼容。独立 CI、详情/资料/删除、最终 Profile 和真实浏览器仍待后续切片验收。
+该固定源码的实际 readiness 为 IAM7/Audit4/PaaS1；安装发布 Profile 仍保持最后已发布值并拒绝这个不匹配组合，未把源码门禁冒充签名发布或跨 profile 兼容。详情/资料/删除、最终 Profile 和真实浏览器仍待后续切片验收。
