@@ -6,7 +6,7 @@ import { useSession, useSessionCredential } from "./SessionProvider";
 import type { AccountCommand } from "../domain/accounts";
 import type { AccountRepository } from "../repositories/iamRepository";
 import { httpAccountRepository } from "../repositories/httpIamRepository";
-import { buildAccountAccessScene, type AccountAccessScene } from "../scenes/accountAccessScene";
+import { buildAccountAccessScene, findActionCapability, type AccountAccessScene } from "../scenes/accountAccessScene";
 
 type AccountAccess = {
   scene: AccountAccessScene | null;
@@ -61,10 +61,12 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     async function read() {
       const identity = await repository.currentIdentity(credential!);
       if (identity.account.id !== tenantId || identity.user.id !== principalId) throw new Error("INVALID_IAM_IDENTITY");
+      const currentCapability = (action: Parameters<typeof findActionCapability>[1], id = identity.account.id) =>
+        findActionCapability(identity.capabilities, action, "ACCOUNT", id)?.available === true;
       const [users, accounts, tenantPolicies, platformPolicies] = await Promise.all([
-        readWhenAuthorized(() => repository.listUsers(credential!, page.users || undefined)),
-        identity.canCreateAccounts ? readWhenAuthorized(() => repository.listAccounts(credential!, page.accounts || undefined)) : null,
-        readWhenAuthorized(() => repository.listPolicies(credential!, false)),
+        currentCapability("iam.user.list") ? readWhenAuthorized(() => repository.listUsers(credential!, page.users || undefined)) : null,
+        currentCapability("iam.account.read", "accounts") ? readWhenAuthorized(() => repository.listAccounts(credential!, page.accounts || undefined)) : null,
+        currentCapability("iam.policy.list") ? readWhenAuthorized(() => repository.listPolicies(credential!, false)) : null,
         readWhenAuthorized(() => repository.listPolicies(credential!, true))
       ]);
       if (users?.items.some((entry) => entry.user.accountId !== tenantId)) throw new Error("INVALID_IAM_TENANT");

@@ -3,6 +3,39 @@ export type PolicyManagement = "SYSTEM" | "CUSTOMER";
 export type PolicyStatus = "ACTIVE" | "RETIRED";
 export type IdentityKind = "ROOT_IDENTITY" | "USER";
 
+export type IamAction =
+  | "iam.account.create"
+  | "iam.account.read"
+  | "iam.account.set-status"
+  | "iam.account.recover-root-credentials"
+  | "iam.account.alias-set"
+  | "iam.user.list"
+  | "iam.user.create"
+  | "iam.policy.list"
+  | "iam.user.set-status"
+  | "iam.user.reset-password"
+  | "iam.policy-attachment.create"
+  | "iam.platform-policy-attachment.create"
+  | "iam.policy-attachment.revoke"
+  | "iam.platform-policy-attachment.revoke";
+
+export type CapabilityRestriction =
+  | "AUTHORITY_REQUIRED"
+  | "CURRENT_CREDENTIAL_CHANGE_REQUIRED"
+  | "SELF_PROTECTED"
+  | "ROOT_IDENTITY_PROTECTED"
+  | "INSTALLATION_AUTHORITY_PROTECTED"
+  | "SYSTEM_ACCOUNT_PROTECTED"
+  | "TARGET_DISABLED"
+  | "TARGET_CREDENTIAL_CHANGE_REQUIRED";
+
+export type ActionCapability = {
+  action: IamAction;
+  resource: { kind: "ACCOUNT" | "USER" | "POLICY_ATTACHMENT"; id: string };
+  available: boolean;
+  restrictionReason: CapabilityRestriction | null;
+};
+
 export type RootIdentity = {
   principalId: string;
   loginName: string;
@@ -64,10 +97,11 @@ export type AccountIdentity = {
   user: User;
   identityKind: IdentityKind;
   policyAttachments: UserPolicyAttachment[];
-  canCreateAccounts: boolean;
+  capabilities: ActionCapability[];
 };
 
-export type UserAccess = { user: User; policyAttachments: UserPolicyAttachment[] };
+export type UserAccess = { user: User; policyAttachments: UserPolicyAttachment[]; capabilities: ActionCapability[] };
+export type AccountAccess = { account: Account; capabilities: ActionCapability[] };
 export type DirectoryPage<T> = { items: T[]; nextAfter: string | null };
 
 export type AccountCommand =

@@ -1,9 +1,13 @@
 import { requestJSON, requestToken } from "@/infrastructure/http/jsonRequest";
 import type {
   Account,
+  AccountAccess,
   AccountIdentity,
   AccountPolicy,
+  ActionCapability,
+  CapabilityRestriction,
   DirectoryPage,
+  IamAction,
   PolicyDirectory,
   PolicyManagement,
   PolicyScope,
@@ -64,6 +68,59 @@ function accountStatus(value: unknown): "ACTIVE" | "DISABLED" {
 function policyScope(value: unknown): PolicyScope {
   if (value !== "TENANT" && value !== "INSTALLATION") throw new Error("INVALID_IAM_RESPONSE");
   return value;
+}
+
+const capabilityActions = new Set<IamAction>([
+  "iam.account.create", "iam.account.read", "iam.account.set-status", "iam.account.recover-root-credentials",
+  "iam.account.alias-set", "iam.user.list", "iam.user.create", "iam.policy.list", "iam.user.set-status",
+  "iam.user.reset-password", "iam.policy-attachment.create", "iam.platform-policy-attachment.create",
+  "iam.policy-attachment.revoke", "iam.platform-policy-attachment.revoke"
+]);
+
+const capabilityRestrictions = new Set<CapabilityRestriction>([
+  "AUTHORITY_REQUIRED", "CURRENT_CREDENTIAL_CHANGE_REQUIRED", "SELF_PROTECTED", "ROOT_IDENTITY_PROTECTED",
+  "INSTALLATION_AUTHORITY_PROTECTED", "SYSTEM_ACCOUNT_PROTECTED", "TARGET_DISABLED",
+  "TARGET_CREDENTIAL_CHANGE_REQUIRED"
+]);
+
+function capabilityResourceKind(action: IamAction): ActionCapability["resource"]["kind"] {
+  if (action === "iam.user.set-status" || action === "iam.user.reset-password" ||
+      action === "iam.policy-attachment.create" || action === "iam.platform-policy-attachment.create") return "USER";
+  if (action === "iam.policy-attachment.revoke" || action === "iam.platform-policy-attachment.revoke") return "POLICY_ATTACHMENT";
+  return "ACCOUNT";
+}
+
+function parseCapability(value: unknown): ActionCapability {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["action", "resource", "available"], ["restrictionReason"]);
+  if (typeof wire.action !== "string" || !capabilityActions.has(wire.action as IamAction) || typeof wire.available !== "boolean") {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const action = wire.action as IamAction;
+  const resource = accountRecord(wire.resource);
+  exactKeys(resource, ["kind", "id"]);
+  const reason = wire.restrictionReason;
+  if (resource.kind !== capabilityResourceKind(action) || typeof resource.id !== "string" || !resource.id.length ||
+      (wire.available && reason !== undefined) ||
+      (!wire.available && (typeof reason !== "string" || !capabilityRestrictions.has(reason as CapabilityRestriction)))) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return { action, resource: { kind: resource.kind as ActionCapability["resource"]["kind"], id: resource.id }, available: wire.available,
+    restrictionReason: wire.available ? null : reason as CapabilityRestriction };
+}
+
+function capabilityKey(value: Pick<ActionCapability, "action" | "resource">): string {
+  return `${value.action}\u0000${value.resource.kind}\u0000${value.resource.id}`;
+}
+
+function parseCapabilities(value: unknown, expected: Array<Pick<ActionCapability, "action" | "resource">>): ActionCapability[] {
+  if (!Array.isArray(value) || value.length !== expected.length) throw new Error("INVALID_IAM_RESPONSE");
+  const capabilities = value.map(parseCapability);
+  const actual = new Set(capabilities.map(capabilityKey));
+  if (actual.size !== capabilities.length || expected.some((item) => !actual.has(capabilityKey(item)))) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return capabilities;
 }
 
 function exactKeys(wire: Record<string, unknown>, required: string[], optional: string[] = []) {
@@ -157,22 +214,63 @@ function parsePolicyDirectory(value: unknown, expectedScope: PolicyScope): Polic
 
 function parseAccountIdentity(value: unknown): AccountIdentity {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "account", "user", "identityKind", "policyAttachments", "canCreateAccounts"]);
+  exactKeys(wire, ["apiVersion", "kind", "account", "user", "identityKind", "policyAttachments", "capabilities"]);
   requireAccountKind(wire, "CurrentIdentity");
-  if (!Array.isArray(wire.policyAttachments) || wire.policyAttachments.length > 256 || typeof wire.canCreateAccounts !== "boolean" ||
+  if (!Array.isArray(wire.policyAttachments) || wire.policyAttachments.length > 256 ||
       (wire.identityKind !== "ROOT_IDENTITY" && wire.identityKind !== "USER")) throw new Error("INVALID_IAM_RESPONSE");
   const account = parseAccount(wire.account);
   const user = parseUser(wire.user);
   const policyAttachments = wire.policyAttachments.map(parsePolicyAttachment);
+  const accountResource = { kind: "ACCOUNT" as const, id: account.id };
+  const capabilities = parseCapabilities(wire.capabilities, [
+    { action: "iam.account.create", resource: { kind: "ACCOUNT", id: "accounts" } },
+    { action: "iam.account.read", resource: { kind: "ACCOUNT", id: "accounts" } },
+    { action: "iam.account.alias-set", resource: accountResource },
+    { action: "iam.user.list", resource: accountResource },
+    { action: "iam.user.create", resource: accountResource },
+    { action: "iam.policy.list", resource: accountResource }
+  ]);
   if (account.id !== user.accountId ||
       (wire.identityKind === "ROOT_IDENTITY") !== (account.rootIdentity.principalId === user.id) ||
       policyAttachments.some((attachment) => attachment.accountId !== user.accountId || attachment.target.id !== user.id) ||
       new Set(policyAttachments.map((attachment) => attachment.id)).size !== policyAttachments.length ||
-      new Set(policyAttachments.map((attachment) => attachment.policyId)).size !== policyAttachments.length ||
-      (wire.canCreateAccounts && (user.mustChangePassword || !policyAttachments.some((attachment) => attachment.scope === "INSTALLATION")))) {
+      new Set(policyAttachments.map((attachment) => attachment.policyId)).size !== policyAttachments.length) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
-  return { account, user, identityKind: wire.identityKind, policyAttachments, canCreateAccounts: wire.canCreateAccounts };
+  return { account, user, identityKind: wire.identityKind, policyAttachments, capabilities };
+}
+
+function parseUserAccess(value: unknown): UserAccess {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["user", "policyAttachments", "capabilities"]);
+  if (!Array.isArray(wire.policyAttachments) || wire.policyAttachments.length > 256) throw new Error("INVALID_IAM_RESPONSE");
+  const user = parseUser(wire.user);
+  const policyAttachments = wire.policyAttachments.map(parsePolicyAttachment);
+  if (policyAttachments.some((attachment) => attachment.target.id !== user.id || attachment.accountId !== user.accountId) ||
+      new Set(policyAttachments.map((attachment) => attachment.id)).size !== policyAttachments.length ||
+      new Set(policyAttachments.map((attachment) => attachment.policyId)).size !== policyAttachments.length) throw new Error("INVALID_IAM_RESPONSE");
+  const capabilities = parseCapabilities(wire.capabilities, [
+    { action: "iam.user.set-status", resource: { kind: "USER", id: user.id } },
+    { action: "iam.user.reset-password", resource: { kind: "USER", id: user.id } },
+    { action: "iam.policy-attachment.create", resource: { kind: "USER", id: user.id } },
+    { action: "iam.platform-policy-attachment.create", resource: { kind: "USER", id: user.id } },
+    ...policyAttachments.map((attachment) => ({
+      action: attachment.scope === "INSTALLATION" ? "iam.platform-policy-attachment.revoke" as const : "iam.policy-attachment.revoke" as const,
+      resource: { kind: "POLICY_ATTACHMENT" as const, id: attachment.id }
+    }))
+  ]);
+  return { user, policyAttachments, capabilities };
+}
+
+function parseAccountAccess(value: unknown): AccountAccess {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["account", "capabilities"]);
+  const account = parseAccount(wire.account);
+  const capabilities = parseCapabilities(wire.capabilities, [
+    { action: "iam.account.set-status", resource: { kind: "ACCOUNT", id: account.id } },
+    { action: "iam.account.recover-root-credentials", resource: { kind: "ACCOUNT", id: account.id } }
+  ]);
+  return { account, capabilities };
 }
 
 function accountPage<T>(value: unknown, kind: string, parse: (item: unknown) => T): DirectoryPage<T> {
@@ -189,17 +287,7 @@ export const httpAccountRepository: AccountRepository = {
     return parseAccountIdentity(await requestJSON<unknown>("/api/iam/v1/auth/me", { headers: accountHeaders(credential) }));
   },
   async listUsers(credential, after) {
-    return accountPage<UserAccess>(await requestJSON<unknown>(`/api/iam/v1/users${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "UserList", (value) => {
-      const wire = accountRecord(value);
-      exactKeys(wire, ["user", "policyAttachments"]);
-      if (!Array.isArray(wire.policyAttachments) || wire.policyAttachments.length > 256) throw new Error("INVALID_IAM_RESPONSE");
-      const user = parseUser(wire.user);
-      const policyAttachments = wire.policyAttachments.map(parsePolicyAttachment);
-      if (policyAttachments.some((attachment) => attachment.target.id !== user.id || attachment.accountId !== user.accountId) ||
-          new Set(policyAttachments.map((attachment) => attachment.id)).size !== policyAttachments.length ||
-          new Set(policyAttachments.map((attachment) => attachment.policyId)).size !== policyAttachments.length) throw new Error("INVALID_IAM_RESPONSE");
-      return { user, policyAttachments };
-    });
+    return accountPage<UserAccess>(await requestJSON<unknown>(`/api/iam/v1/users${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "UserList", parseUserAccess);
   },
   async listPolicies(credential, platform) {
     return parsePolicyDirectory(await requestJSON<unknown>(
@@ -208,7 +296,7 @@ export const httpAccountRepository: AccountRepository = {
     ), platform ? "INSTALLATION" : "TENANT");
   },
   async listAccounts(credential, after) {
-    return accountPage(await requestJSON<unknown>(`/api/iam/v1/accounts${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "AccountList", parseAccount);
+    return accountPage(await requestJSON<unknown>(`/api/iam/v1/accounts${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "AccountList", parseAccountAccess);
   },
   async execute(credential, command) {
     const requestId = requestToken("ui-account-");

@@ -672,6 +672,9 @@ func TestPolicyMetadataAndAttachmentOwnershipContracts(t *testing.T) {
 
 func TestCurrentIdentityUsesOnlyItsLiveUserPolicyAttachments(t *testing.T) {
 	now := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
+	blocked := func(action Action, kind ResourceKind, id string) ActionCapability {
+		return ActionCapability{Action: action, Resource: ResourceReference{Kind: kind, ID: id}, RestrictionReason: CapabilityAuthorityRequired}
+	}
 	identity := CurrentIdentity{APIVersion: APIVersion, Kind: "CurrentIdentity",
 		Account: Account{APIVersion: APIVersion, Kind: "Account", ID: "account-a", DisplayName: "Account A",
 			Status: AccountActive, RootIdentity: RootIdentity{PrincipalID: "user-a", LoginName: "admin"},
@@ -682,7 +685,15 @@ func TestCurrentIdentityUsesOnlyItsLiveUserPolicyAttachments(t *testing.T) {
 		IdentityKind: IdentityRoot,
 		PolicyAttachments: []PolicyAttachment{{APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "attachment-a",
 			AccountID: "account-a", Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: "user-a"},
-			PolicyID: SystemPolicyAccountAdministrator, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}}}
+			PolicyID: SystemPolicyAccountAdministrator, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}},
+		Capabilities: []ActionCapability{
+			blocked(ActionIAMAccountCreate, ResourceAccount, "accounts"),
+			blocked(ActionIAMAccountRead, ResourceAccount, "accounts"),
+			blocked(ActionIAMAccountAliasSet, ResourceAccount, "account-a"),
+			blocked(ActionIAMUserList, ResourceAccount, "account-a"),
+			blocked(ActionIAMUserCreate, ResourceAccount, "account-a"),
+			blocked(ActionIAMPolicyList, ResourceAccount, "account-a"),
+		}}
 	if ValidateCurrentIdentity(identity) != nil {
 		t.Fatal("current policy identity rejected")
 	}
@@ -696,11 +707,18 @@ func TestCurrentIdentityUsesOnlyItsLiveUserPolicyAttachments(t *testing.T) {
 			v.PolicyAttachments[0].RevokedAt = &now
 			v.PolicyAttachments[0].ResourceVersion = 2
 		},
-		"tenant attachment platform hint": func(v *CurrentIdentity) { v.CanCreateAccounts = true },
+		"missing capability": func(v *CurrentIdentity) { v.Capabilities = v.Capabilities[1:] },
+		"wrong capability target": func(v *CurrentIdentity) {
+			v.Capabilities[0].Resource.ID = "account-a"
+		},
+		"available with restriction": func(v *CurrentIdentity) {
+			v.Capabilities[0].Available = true
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			value := identity
 			value.PolicyAttachments = append([]PolicyAttachment{}, identity.PolicyAttachments...)
+			value.Capabilities = append([]ActionCapability{}, identity.Capabilities...)
 			mutate(&value)
 			if ValidateCurrentIdentity(value) == nil {
 				t.Fatal("invalid current attachment relationship accepted")
@@ -723,6 +741,12 @@ func TestCurrentIdentityUsesOnlyItsLiveUserPolicyAttachments(t *testing.T) {
 	var decoded CurrentIdentity
 	if DecodeRequest(bytes.NewReader(encoded), &decoded) == nil {
 		t.Fatal("old roles field remained as a parallel current identity contract")
+	}
+	delete(wire, "roles")
+	wire["canCreateAccounts"] = json.RawMessage(`true`)
+	encoded, err = json.Marshal(wire)
+	if err != nil || DecodeRequest(bytes.NewReader(encoded), &decoded) == nil {
+		t.Fatal("old account creation hint remained as a parallel capability contract")
 	}
 }
 
@@ -792,7 +816,17 @@ func TestAccountDirectoryContractsRejectCrossTenantAuthority(t *testing.T) {
 	attachment := PolicyAttachment{APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "attachment-directory",
 		AccountID: user.AccountID, Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: string(user.ID)},
 		PolicyID: SystemPolicyPaaSViewer, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: user.CreatedAt, UpdatedAt: user.CreatedAt}
-	list := UserList{APIVersion: APIVersion, Kind: "UserList", Items: []UserAccess{{User: user, PolicyAttachments: []PolicyAttachment{attachment}}}}
+	blocked := func(action Action, kind ResourceKind, id string) ActionCapability {
+		return ActionCapability{Action: action, Resource: ResourceReference{Kind: kind, ID: id}, RestrictionReason: CapabilityAuthorityRequired}
+	}
+	list := UserList{APIVersion: APIVersion, Kind: "UserList", Items: []UserAccess{{User: user, PolicyAttachments: []PolicyAttachment{attachment},
+		Capabilities: []ActionCapability{
+			blocked(ActionIAMUserSetStatus, ResourceUser, string(user.ID)),
+			blocked(ActionIAMUserPasswordReset, ResourceUser, string(user.ID)),
+			blocked(ActionIAMPolicyAttachmentCreate, ResourceUser, string(user.ID)),
+			blocked(ActionIAMPlatformPolicyAttachmentCreate, ResourceUser, string(user.ID)),
+			blocked(ActionIAMPolicyAttachmentRevoke, ResourcePolicyAttachment, string(attachment.ID)),
+		}}}}
 	if err := ValidateUserList(list); err != nil {
 		t.Fatalf("valid directory: %v", err)
 	}

@@ -36,6 +36,39 @@ const platformPolicy = {
   defaultVersionId: "version-platform"
 };
 
+function capability(action: string, kind: "ACCOUNT" | "USER" | "POLICY_ATTACHMENT", id: string, available = true) {
+  return { action, resource: { kind, id }, available, ...(available ? {} : { restrictionReason: "AUTHORITY_REQUIRED" }) };
+}
+
+function currentCapabilities(available = true) {
+  return [
+    capability("iam.account.create", "ACCOUNT", account.id, available),
+    capability("iam.account.read", "ACCOUNT", account.id, available),
+    capability("iam.account.alias-set", "ACCOUNT", account.id, available),
+    capability("iam.user.list", "ACCOUNT", account.id, available),
+    capability("iam.user.create", "ACCOUNT", account.id, available),
+    capability("iam.policy.list", "ACCOUNT", account.id, available)
+  ].map((item) => item.action === "iam.account.create" || item.action === "iam.account.read" ?
+    { ...item, resource: { kind: "ACCOUNT" as const, id: "accounts" } } : item);
+}
+
+function userCapabilities(attachments = [tenantAttachment]) {
+  return [
+    capability("iam.user.set-status", "USER", user.id),
+    capability("iam.user.reset-password", "USER", user.id),
+    capability("iam.policy-attachment.create", "USER", user.id),
+    capability("iam.platform-policy-attachment.create", "USER", user.id),
+    ...attachments.map((item) => capability(item.scope === "INSTALLATION" ? "iam.platform-policy-attachment.revoke" : "iam.policy-attachment.revoke", "POLICY_ATTACHMENT", item.id))
+  ];
+}
+
+function accountAccess(value = account) {
+  return { account: value, capabilities: [
+    capability("iam.account.set-status", "ACCOUNT", value.id),
+    capability("iam.account.recover-root-credentials", "ACCOUNT", value.id)
+  ] };
+}
+
 function reply(body: unknown) {
   const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
   vi.stubGlobal("fetch", fetcher);
@@ -84,38 +117,59 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("parses current attachments without interpreting policy names", async () => {
-    reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policyAttachments: [tenantAttachment, platformAttachment], canCreateAccounts: true });
+    reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policyAttachments: [tenantAttachment, platformAttachment], capabilities: currentCapabilities() });
     const identity = await httpAccountRepository.currentIdentity("bearer");
     expect(identity.policyAttachments.map((item) => item.policyId)).toEqual(["system.paas-viewer", "system.platform-operator"]);
     for (const patch of [
-      { canCreateAccounts: true, policyAttachments: [tenantAttachment] },
+      { capabilities: currentCapabilities().slice(1) },
+      { capabilities: [...currentCapabilities(), capability("iam.user.list", "ACCOUNT", account.id)] },
+      { capabilities: currentCapabilities().map((item) => item.action === "iam.user.list" ? { ...item, action: "iam.principal.list" } : item) },
       { user: { ...user, accountId: "another-account" } },
       { policyAttachments: [{ ...tenantAttachment, accountId: "another-account" }] },
       { policyAttachments: [tenantAttachment, tenantAttachment] },
+      { canCreateAccounts: true },
       { roles: ["PLATFORM_OPERATOR"] },
       { apiVersion: "future/v2" }
     ]) {
-      reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policyAttachments: [], canCreateAccounts: false, ...patch });
+      reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policyAttachments: [], capabilities: currentCapabilities(false), ...patch });
       await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });
 
   it("bounds member pages and rejects foreign, duplicate, revoked, or old role projections", async () => {
-    const fetcher = reply({ apiVersion, kind: "UserList", items: [{ user, policyAttachments: [tenantAttachment] }], nextAfter: user.id });
+    const fetcher = reply({ apiVersion, kind: "UserList", items: [{ user, policyAttachments: [tenantAttachment], capabilities: userCapabilities() }], nextAfter: user.id });
     const page = await httpAccountRepository.listUsers("bearer", "user:first");
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/users?after=user%3Afirst");
     expect(page.items[0]?.policyAttachments[0]?.policyId).toBe("system.paas-viewer");
     for (const item of [
-      { user, policyAttachments: [{ ...tenantAttachment, accountId: "another-account" }] },
-      { user, policyAttachments: [tenantAttachment, tenantAttachment] },
-      { user, policyAttachments: [{ ...tenantAttachment, revokedAt: timestamp }] },
+      { user, policyAttachments: [{ ...tenantAttachment, accountId: "another-account" }], capabilities: userCapabilities() },
+      { user, policyAttachments: [tenantAttachment, tenantAttachment], capabilities: userCapabilities() },
+      { user, policyAttachments: [{ ...tenantAttachment, revokedAt: timestamp }], capabilities: userCapabilities() },
+      { user, policyAttachments: [tenantAttachment], capabilities: userCapabilities().slice(1) },
       { user, roleBindings: [] }
     ]) {
       reply({ apiVersion, kind: "UserList", items: [item] });
       await expect(httpAccountRepository.listUsers("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
-    reply({ apiVersion, kind: "UserList", items: Array.from({ length: 101 }, () => ({ user, policyAttachments: [] })) });
+    reply({ apiVersion, kind: "UserList", items: Array.from({ length: 101 }, () => ({ user, policyAttachments: [], capabilities: userCapabilities([]) })) });
     await expect(httpAccountRepository.listUsers("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("parses account management as per-resource capabilities", async () => {
+    const fetcher = reply({ apiVersion, kind: "AccountList", items: [accountAccess()], nextAfter: account.id });
+    const page = await httpAccountRepository.listAccounts("bearer", "account:first");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/accounts?after=account%3Afirst");
+    expect(page.items[0]?.capabilities.map((item) => item.action)).toEqual([
+      "iam.account.set-status", "iam.account.recover-root-credentials"
+    ]);
+    for (const item of [
+      { account, capabilities: accountAccess().capabilities.slice(1) },
+      { account, capabilities: [...accountAccess().capabilities, capability("iam.account.create", "ACCOUNT", "accounts")] },
+      { account: { ...account, id: "another-account" }, capabilities: accountAccess().capabilities }
+    ]) {
+      reply({ apiVersion, kind: "AccountList", items: [item] });
+      await expect(httpAccountRepository.listAccounts("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 
   it("reads separate complete policy directories with no caller selector", async () => {

@@ -228,6 +228,29 @@ BEGIN
 END
 $function$;
 
+-- Target protection facts remain private to IAM. They let the use case build
+-- an actor-relative capability projection without exposing a database flag or
+-- weakening the command's later lock-time checks.
+CREATE OR REPLACE FUNCTION iam.account_management_snapshot(tenant text)
+RETURNS jsonb LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $function$
+DECLARE result jsonb;
+BEGIN
+    PERFORM set_config('matrix.iam_tenant_id', tenant, true);
+    SELECT jsonb_build_object(
+        'account',iam.account_snapshot(tenant),
+        'systemAccount',EXISTS(SELECT 1 FROM iam.bootstrap_receipts AS receipt
+            WHERE receipt.organization_id=tenant),
+        'rootHasInstallationAuthority',EXISTS(
+            SELECT 1 FROM iam.account_roots AS root
+            JOIN iam.policy_attachments AS attachment
+              ON attachment.tenant_id=root.account_id AND attachment.principal_id=root.principal_id
+            WHERE root.account_id=tenant AND attachment.authority_scope='INSTALLATION'
+              AND attachment.revoked_at IS NULL)
+    ) INTO result FROM iam.accounts AS account WHERE account.id=tenant;
+    RETURN result;
+END
+$function$;
+
 CREATE OR REPLACE FUNCTION iam.user_snapshot(tenant text, user_id text)
 RETURNS jsonb LANGUAGE sql SET search_path = pg_catalog, pg_temp AS $function$
     SELECT jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','User',
@@ -284,7 +307,7 @@ BEGIN
     END IF;
     FOR candidate IN SELECT root.account_id FROM iam.account_roots AS root
         WHERE root.account_id > after_id COLLATE "C" ORDER BY root.account_id LIMIT 101 LOOP
-        result := result || jsonb_build_array(iam.account_snapshot(candidate.account_id));
+        result := result || jsonb_build_array(iam.account_management_snapshot(candidate.account_id));
     END LOOP;
     RETURN result;
 END
@@ -295,8 +318,10 @@ RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg
 DECLARE result jsonb;
 BEGIN
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.read','ACCOUNT',target_tenant);
-    result := iam.account_snapshot(target_tenant);
-    IF result IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable'; END IF;
+    result := iam.account_management_snapshot(target_tenant);
+    IF result IS NULL OR result->'account' IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable';
+    END IF;
     RETURN result;
 END
 $function$;
@@ -530,7 +555,7 @@ DROP FUNCTION IF EXISTS iam.change_subaccount(text,text,text,text,bigint,text,te
 DROP FUNCTION IF EXISTS iam.principal_snapshot(text,text);
 
 REVOKE ALL ON ALL TABLES IN SCHEMA iam FROM PUBLIC, matrix_iam_api, matrix_iam_worker;
-REVOKE ALL ON FUNCTION iam.account_snapshot(text), iam.user_snapshot(text,text),
+REVOKE ALL ON FUNCTION iam.account_snapshot(text), iam.account_management_snapshot(text), iam.user_snapshot(text,text),
     iam.append_account_event(text,text,text,text,text,text,jsonb) FROM PUBLIC, matrix_iam_api, matrix_iam_worker;
 REVOKE ALL ON FUNCTION iam.read_account(text,text), iam.read_account_as_platform(text,text,text,text),
     iam.read_account_root(text,text,text,text), iam.set_account_status(text,text,text,text,text,bigint,jsonb),

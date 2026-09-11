@@ -512,11 +512,70 @@ func ValidateUser(value User) error {
 		validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
 }
 
+func ValidateActionCapability(value ActionCapability) error {
+	if value.Available {
+		if value.RestrictionReason != "" {
+			return errors.New("available capability has a restriction")
+		}
+	} else if !knownCapabilityRestriction(value.RestrictionReason) {
+		return errors.New("unavailable capability has no known restriction")
+	}
+	return validateResourceForAction(value.Action, value.Resource)
+}
+
+func knownCapabilityRestriction(value CapabilityRestriction) bool {
+	switch value {
+	case CapabilityAuthorityRequired,
+		CapabilityCurrentCredentialChangeRequired,
+		CapabilitySelfProtected,
+		CapabilityRootIdentityProtected,
+		CapabilityInstallationAuthorityProtected,
+		CapabilitySystemAccountProtected,
+		CapabilityTargetDisabled,
+		CapabilityTargetCredentialChangeRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+func capabilityKey(action Action, resource ResourceReference) string {
+	return string(action) + "\x00" + string(resource.Kind) + "\x00" + resource.ID
+}
+
+func validateCapabilities(values []ActionCapability, expected map[string]struct{}) error {
+	if values == nil || len(values) != len(expected) {
+		return errors.New("capability set is incomplete")
+	}
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		key := capabilityKey(value.Action, value.Resource)
+		if ValidateActionCapability(value) != nil || seen[key] {
+			return errors.New("capability is invalid or duplicated")
+		}
+		if _, required := expected[key]; !required {
+			return errors.New("capability does not belong to its projection")
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+func expectedCapabilitySet(values ...struct {
+	Action   Action
+	Resource ResourceReference
+}) map[string]struct{} {
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		result[capabilityKey(value.Action, value.Resource)] = struct{}{}
+	}
+	return result
+}
+
 func ValidateCurrentIdentity(value CurrentIdentity) error {
 	if value.APIVersion != APIVersion || value.Kind != "CurrentIdentity" ||
 		value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 ||
-		value.User.AccountID != value.Account.ID ||
-		(value.CanCreateAccounts && value.User.MustChangePassword) {
+		value.User.AccountID != value.Account.ID {
 		return errors.New("current identity is invalid")
 	}
 	expectedKind := IdentityUser
@@ -527,7 +586,6 @@ func ValidateCurrentIdentity(value CurrentIdentity) error {
 		return errors.New("current identity kind is invalid")
 	}
 	seen := map[PolicyAttachmentID]bool{}
-	platform := false
 	for _, attachment := range value.PolicyAttachments {
 		if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil || seen[attachment.ID] ||
 			attachment.AccountID != value.Account.ID || attachment.Target.Kind != PolicyTargetUser ||
@@ -535,10 +593,35 @@ func ValidateCurrentIdentity(value CurrentIdentity) error {
 			return errors.New("current policy attachments are invalid")
 		}
 		seen[attachment.ID] = true
-		platform = platform || attachment.Scope == AuthorityScopeInstallation
 	}
-	if value.CanCreateAccounts && !platform {
-		return errors.New("account opening requires platform authority")
+	expected := expectedCapabilitySet(
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountCreate, ResourceReference{Kind: ResourceAccount, ID: "accounts"}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountRead, ResourceReference{Kind: ResourceAccount, ID: "accounts"}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountAliasSet, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMPolicyList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+	)
+	if validateCapabilities(value.Capabilities, expected) != nil {
+		return errors.New("current identity capabilities are invalid")
 	}
 	return errors.Join(ValidateAccount(value.Account), ValidateUser(value.User))
 }
@@ -570,6 +653,34 @@ func ValidateUserList(value UserList) error {
 			attachments[attachment.ID] = true
 			policies[attachment.PolicyID] = true
 		}
+		expected := expectedCapabilitySet(
+			struct {
+				Action   Action
+				Resource ResourceReference
+			}{ActionIAMUserSetStatus, ResourceReference{Kind: ResourceUser, ID: string(item.User.ID)}},
+			struct {
+				Action   Action
+				Resource ResourceReference
+			}{ActionIAMUserPasswordReset, ResourceReference{Kind: ResourceUser, ID: string(item.User.ID)}},
+			struct {
+				Action   Action
+				Resource ResourceReference
+			}{ActionIAMPolicyAttachmentCreate, ResourceReference{Kind: ResourceUser, ID: string(item.User.ID)}},
+			struct {
+				Action   Action
+				Resource ResourceReference
+			}{ActionIAMPlatformPolicyAttachmentCreate, ResourceReference{Kind: ResourceUser, ID: string(item.User.ID)}},
+		)
+		for _, attachment := range item.PolicyAttachments {
+			action := ActionIAMPolicyAttachmentRevoke
+			if attachment.Scope == AuthorityScopeInstallation {
+				action = ActionIAMPlatformPolicyAttachmentRevoke
+			}
+			expected[capabilityKey(action, ResourceReference{Kind: ResourcePolicyAttachment, ID: string(attachment.ID)})] = struct{}{}
+		}
+		if validateCapabilities(item.Capabilities, expected) != nil {
+			return errors.New("user capabilities are invalid")
+		}
 	}
 	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
 		return errors.New("user page boundary is invalid")
@@ -583,15 +694,29 @@ func ValidateAccountList(value AccountList) error {
 	}
 	var previous string
 	for _, item := range value.Items {
-		if ValidateAccount(item) != nil || string(item.ID) <= previous {
+		if ValidateAccountAccess(item) != nil || string(item.Account.ID) <= previous {
 			return errors.New("account list item is invalid")
 		}
-		previous = string(item.ID)
+		previous = string(item.Account.ID)
 	}
 	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
 		return errors.New("account page boundary is invalid")
 	}
 	return nil
+}
+
+func ValidateAccountAccess(value AccountAccess) error {
+	expected := expectedCapabilitySet(
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountSetStatus, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountRootCredentialsRecover, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+	)
+	return errors.Join(ValidateAccount(value.Account), validateCapabilities(value.Capabilities, expected))
 }
 
 func validateLoginName(value string) error {

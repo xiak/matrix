@@ -550,7 +550,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 6, Audit: 4, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 7, Audit: 4, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -1811,11 +1811,11 @@ func proveTenantAccountProcesses(
 	readAccount := func(id string) iamv1.Account {
 		t.Helper()
 		response := performJSON(t, http.MethodGet, endpoint+"/v1/accounts/"+id, bearer, nil)
-		var account iamv1.Account
-		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &account) != nil || iamv1.ValidateAccount(account) != nil {
+		var access iamv1.AccountAccess
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &access) != nil || iamv1.ValidateAccountAccess(access) != nil || access.Account.ID != iamv1.AccountID(id) {
 			t.Fatalf("platform tenant detail status=%d", response.Status)
 		}
-		return account
+		return access.Account
 	}
 	setStatus := func(id string, status iamv1.AccountStatus, expected int) {
 		t.Helper()

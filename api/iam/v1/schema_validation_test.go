@@ -118,6 +118,16 @@ func TestUserDirectoryUsesBoundedTenantPolicyAttachments(t *testing.T) {
 	attachment := PolicyAttachment{APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "directory-attachment",
 		AccountID: user.AccountID, Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: string(user.ID)},
 		PolicyID: SystemPolicyPaaSViewer, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: user.CreatedAt, UpdatedAt: user.CreatedAt}
+	blocked := func(action Action, kind ResourceKind, id string) ActionCapability {
+		return ActionCapability{Action: action, Resource: ResourceReference{Kind: kind, ID: id}, RestrictionReason: CapabilityAuthorityRequired}
+	}
+	capabilities := []ActionCapability{
+		blocked(ActionIAMUserSetStatus, ResourceUser, string(user.ID)),
+		blocked(ActionIAMUserPasswordReset, ResourceUser, string(user.ID)),
+		blocked(ActionIAMPolicyAttachmentCreate, ResourceUser, string(user.ID)),
+		blocked(ActionIAMPlatformPolicyAttachmentCreate, ResourceUser, string(user.ID)),
+		blocked(ActionIAMPolicyAttachmentRevoke, ResourcePolicyAttachment, string(attachment.ID)),
+	}
 	for _, test := range []struct {
 		name   string
 		mutate func(map[string]any)
@@ -145,7 +155,7 @@ func TestUserDirectoryUsesBoundedTenantPolicyAttachments(t *testing.T) {
 		}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			encoded, err := json.Marshal(UserAccess{User: user, PolicyAttachments: []PolicyAttachment{attachment}})
+			encoded, err := json.Marshal(UserAccess{User: user, PolicyAttachments: []PolicyAttachment{attachment}, Capabilities: capabilities})
 			if err != nil {
 				t.Fatal(err)
 			}

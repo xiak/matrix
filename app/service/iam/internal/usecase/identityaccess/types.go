@@ -58,8 +58,8 @@ type Transaction interface {
 	ReadAccount(context.Context, iamv1.AccountID, iamv1.PrincipalID) (iamv1.Account, error)
 	ListUsers(context.Context, AccountRead) (iamv1.UserList, error)
 	ListPolicies(context.Context, AccountRead, iamv1.AuthorityScope) (iamv1.PolicyList, error)
-	ListAccounts(context.Context, AccountRead) (iamv1.AccountList, error)
-	ReadAccountAsPlatform(context.Context, AccountRead, iamv1.AccountID) (iamv1.Account, error)
+	ListAccounts(context.Context, AccountRead) (AccountManagementPage, error)
+	ReadAccountAsPlatform(context.Context, AccountRead, iamv1.AccountID) (AccountManagementSnapshot, error)
 	ReadAccountRoot(context.Context, AccountRead, iamv1.AccountID) (iamv1.RootIdentity, error)
 	CreateAccount(context.Context, AccountMutation) (iamv1.Account, error)
 	SetAccountStatus(context.Context, AccountStatusMutation) (iamv1.Account, error)
@@ -76,6 +76,20 @@ type AccountRead struct {
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	After            string
+}
+
+// AccountManagementSnapshot carries only target facts required to project
+// management availability. They are not public authorization grants; every
+// command rechecks the same facts under its transaction locks.
+type AccountManagementSnapshot struct {
+	Account                      iamv1.Account
+	SystemAccount                bool
+	RootHasInstallationAuthority bool
+}
+
+type AccountManagementPage struct {
+	Items     []AccountManagementSnapshot
+	NextAfter string
 }
 
 type AccountMutation struct {

@@ -207,6 +207,16 @@ type User struct {
 	UpdatedAt          time.Time       `json:"updatedAt"`
 }
 
+// ActionCapability is an actor-relative, non-authoritative UI projection for
+// one exact action/resource pair. A command must always authenticate,
+// authorize and recheck target invariants again in its own transaction.
+type ActionCapability struct {
+	Action            Action                `json:"action"`
+	Resource          ResourceReference     `json:"resource"`
+	Available         bool                  `json:"available"`
+	RestrictionReason CapabilityRestriction `json:"restrictionReason,omitempty"`
+}
+
 type CurrentIdentity struct {
 	APIVersion        string             `json:"apiVersion"`
 	Kind              string             `json:"kind"`
@@ -214,12 +224,13 @@ type CurrentIdentity struct {
 	User              User               `json:"user"`
 	IdentityKind      IdentityKind       `json:"identityKind"`
 	PolicyAttachments []PolicyAttachment `json:"policyAttachments"`
-	CanCreateAccounts bool               `json:"canCreateAccounts"`
+	Capabilities      []ActionCapability `json:"capabilities"`
 }
 
 type UserAccess struct {
 	User              User               `json:"user"`
 	PolicyAttachments []PolicyAttachment `json:"policyAttachments"`
+	Capabilities      []ActionCapability `json:"capabilities"`
 }
 
 type UserList struct {
@@ -229,11 +240,16 @@ type UserList struct {
 	NextAfter  string       `json:"nextAfter,omitempty"`
 }
 
+type AccountAccess struct {
+	Account      Account            `json:"account"`
+	Capabilities []ActionCapability `json:"capabilities"`
+}
+
 type AccountList struct {
-	APIVersion string    `json:"apiVersion"`
-	Kind       string    `json:"kind"`
-	Items      []Account `json:"items"`
-	NextAfter  string    `json:"nextAfter,omitempty"`
+	APIVersion string          `json:"apiVersion"`
+	Kind       string          `json:"kind"`
+	Items      []AccountAccess `json:"items"`
+	NextAfter  string          `json:"nextAfter,omitempty"`
 }
 
 type CreateAccountRequest struct {

@@ -606,13 +606,14 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 	for index := range value.retainedIAM.Tenants {
 		tenant := &value.retainedIAM.Tenants[index]
 		id := tenant.Account.ID
-		var account iamv1.Account
-		if _, err := value.edge.get(ctx, "/api/iam/v1/accounts/"+string(id), operator, &account); err != nil ||
-			iamv1.ValidateAccount(account) != nil || account.RootIdentity.PrincipalID != tenant.Account.RootIdentity.PrincipalID ||
-			account.RootIdentity.LoginName != tenant.Account.RootIdentity.LoginName || account.Status != tenant.Account.Status ||
-			account.ResourceVersion != tenant.Account.ResourceVersion {
+		var access iamv1.AccountAccess
+		if _, err := value.edge.get(ctx, "/api/iam/v1/accounts/"+string(id), operator, &access); err != nil ||
+			iamv1.ValidateAccountAccess(access) != nil || access.Account.RootIdentity.PrincipalID != tenant.Account.RootIdentity.PrincipalID ||
+			access.Account.RootIdentity.LoginName != tenant.Account.RootIdentity.LoginName || access.Account.Status != tenant.Account.Status ||
+			access.Account.ResourceVersion != tenant.Account.ResourceVersion {
 			return fail("tenant-retained-original-account")
 		}
+		account := access.Account
 		for _, credential := range [][]byte{tenant.OldChildCredential, tenant.OldPrimaryCredential, tenant.TemporaryPrimaryCredential, tenant.TemporaryChildCredential} {
 			response, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/auth/me", credential, nil, nil, http.StatusUnauthorized)
 			clear(response.body)
@@ -665,7 +666,7 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 		var identity iamv1.CurrentIdentity
 		if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", bearer, &identity); err != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
 			identity.User.ID != account.RootIdentity.PrincipalID || !slices.ContainsFunc(identity.PolicyAttachments, accountAdministratorPolicy) ||
-			slices.ContainsFunc(identity.PolicyAttachments, installationPolicy) || identity.CanCreateAccounts {
+			slices.ContainsFunc(identity.PolicyAttachments, installationPolicy) || hasAvailableIAMCapability(identity, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts") {
 			return fail("tenant-primary-became-platform-operator")
 		}
 		if err := value.assertTenantResources(ctx, tenant, bearer, false); err != nil {
@@ -839,10 +840,11 @@ func (value *gate) restorePausedTenant(ctx context.Context) error {
 	defer func() { _ = value.edge.logout(ctx, operator) }()
 	tenant := &value.retainedIAM.Tenants[1]
 	id := tenant.Account.ID
-	var account iamv1.Account
-	if _, err := value.edge.get(ctx, "/api/iam/v1/accounts/"+string(id), operator, &account); err != nil {
+	var access iamv1.AccountAccess
+	if _, err := value.edge.get(ctx, "/api/iam/v1/accounts/"+string(id), operator, &access); err != nil || iamv1.ValidateAccountAccess(access) != nil {
 		return fail("restore-tenant-read")
 	}
+	account := access.Account
 	if err := value.edge.mutateIAM(ctx, "/accounts/"+string(id)+":set-status", operator,
 		iamv1.SetAccountStatusRequest{Status: iamv1.AccountActive, ResourceVersion: account.ResourceVersion, RequestID: "phase1-explicit-tenant-resume"},
 		&account, http.StatusOK); err != nil || account.RootIdentity.PrincipalID != tenant.Account.RootIdentity.PrincipalID {
@@ -870,7 +872,7 @@ func (value *gate) restorePausedTenant(ctx context.Context) error {
 	var identity iamv1.CurrentIdentity
 	if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", bearer, &identity); err != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
 		identity.User.ID != account.RootIdentity.PrincipalID || identity.User.MustChangePassword ||
-		!slices.ContainsFunc(identity.PolicyAttachments, accountAdministratorPolicy) || slices.ContainsFunc(identity.PolicyAttachments, installationPolicy) || identity.CanCreateAccounts {
+		!slices.ContainsFunc(identity.PolicyAttachments, accountAdministratorPolicy) || slices.ContainsFunc(identity.PolicyAttachments, installationPolicy) || hasAvailableIAMCapability(identity, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts") {
 		return fail("recovered-primary-scope")
 	}
 	var principals iamv1.UserList
@@ -1668,6 +1670,12 @@ func installedSecretValues(root string) ([][]byte, error) {
 
 func accountAdministratorPolicy(attachment iamv1.PolicyAttachment) bool {
 	return attachment.PolicyID == iamv1.SystemPolicyAccountAdministrator && attachment.RevokedAt == nil && attachment.Scope == iamv1.AuthorityScopeTenant
+}
+
+func hasAvailableIAMCapability(identity iamv1.CurrentIdentity, action iamv1.Action, kind iamv1.ResourceKind, id string) bool {
+	return slices.ContainsFunc(identity.Capabilities, func(capability iamv1.ActionCapability) bool {
+		return capability.Action == action && capability.Resource.Kind == kind && capability.Resource.ID == id && capability.Available
+	})
 }
 
 func installationPolicy(attachment iamv1.PolicyAttachment) bool {

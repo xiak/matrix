@@ -23,7 +23,7 @@ type Workflow interface {
 	ListUsers(context.Context, iamv1.Secret, string, string) (iamv1.UserList, error)
 	ListPolicies(context.Context, iamv1.Secret, bool, string) (iamv1.PolicyList, error)
 	ListAccounts(context.Context, iamv1.Secret, string, string) (iamv1.AccountList, error)
-	GetAccount(context.Context, iamv1.Secret, iamv1.AccountID, string) (iamv1.Account, error)
+	GetAccount(context.Context, iamv1.Secret, iamv1.AccountID, string) (iamv1.AccountAccess, error)
 	SetAccountStatus(context.Context, iamv1.Secret, iamv1.AccountID, iamv1.SetAccountStatusRequest) (iamv1.Account, error)
 	RecoverRootCredentials(context.Context, iamv1.Secret, iamv1.AccountID, iamv1.RecoverRootCredentialsRequest) (iamv1.Account, error)
 	CreateAccount(context.Context, iamv1.Secret, iamv1.CreateAccountRequest) (iamv1.Account, error)
@@ -545,7 +545,7 @@ func (value *handler) account(response http.ResponseWriter, request *http.Reques
 	if !ok {
 		return
 	}
-	var result iamv1.Account
+	var result any
 	var err error
 	switch suffix {
 	case "":

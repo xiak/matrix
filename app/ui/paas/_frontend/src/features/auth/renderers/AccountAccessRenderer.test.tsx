@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
-import type { Account, AccountIdentity, AccountPolicy, PolicyDirectory, User, UserAccess, UserPolicyAttachment } from "../domain/accounts";
+import type { Account, AccountAccess, AccountIdentity, AccountPolicy, ActionCapability, CapabilityRestriction, PolicyDirectory, User, UserAccess, UserPolicyAttachment } from "../domain/accounts";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LoginRenderer } from "./LoginRenderer";
@@ -22,6 +22,36 @@ function policy(id: string, displayName: string, scope: "TENANT" | "INSTALLATION
   return { id, management: id.startsWith("system.") ? "SYSTEM" : "CUSTOMER", accountId: id.startsWith("system.") ? null : "tenant-a",
     displayName, scope, status: "ACTIVE", defaultVersionId: `version-${id.replaceAll(".", "-")}`, resourceVersion, createdAt: timestamp, updatedAt: timestamp };
 }
+function capability(action: ActionCapability["action"], kind: ActionCapability["resource"]["kind"], id: string,
+  available = true, restrictionReason: CapabilityRestriction = "AUTHORITY_REQUIRED"): ActionCapability {
+  return { action, resource: { kind, id }, available, restrictionReason: available ? null : restrictionReason };
+}
+function currentCapabilities(mode: "all" | "tenant" | "platform" | "none" = "all"): ActionCapability[] {
+  const available = (scope: "tenant" | "platform") => mode === "all" || mode === scope;
+  return [
+    capability("iam.account.create", "ACCOUNT", "accounts", available("platform")),
+    capability("iam.account.read", "ACCOUNT", "accounts", available("platform")),
+    capability("iam.account.alias-set", "ACCOUNT", "tenant-a", available("tenant")),
+    capability("iam.user.list", "ACCOUNT", "tenant-a", available("tenant")),
+    capability("iam.user.create", "ACCOUNT", "tenant-a", available("tenant")),
+    capability("iam.policy.list", "ACCOUNT", "tenant-a", available("tenant"))
+  ];
+}
+function childCapabilities(attachments: UserPolicyAttachment[] = [viewer]): ActionCapability[] {
+  return [
+    capability("iam.user.set-status", "USER", "child-a"),
+    capability("iam.user.reset-password", "USER", "child-a"),
+    capability("iam.policy-attachment.create", "USER", "child-a"),
+    capability("iam.platform-policy-attachment.create", "USER", "child-a"),
+    ...attachments.map((item) => capability(item.scope === "INSTALLATION" ? "iam.platform-policy-attachment.revoke" : "iam.policy-attachment.revoke", "POLICY_ATTACHMENT", item.id))
+  ];
+}
+function accountAccess(value: Account, available = true): AccountAccess {
+  return { account: value, capabilities: [
+    capability("iam.account.set-status", "ACCOUNT", value.id, available, "SYSTEM_ACCOUNT_PROTECTED"),
+    capability("iam.account.recover-root-credentials", "ACCOUNT", value.id, available, "INSTALLATION_AUTHORITY_PROTECTED")
+  ] };
+}
 const tenantAdmin = attachment("attachment-admin", "primary-a", "system.account-administrator");
 const platformOperator = attachment("attachment-platform", "primary-a", "system.platform-operator", "INSTALLATION");
 const viewer = attachment("attachment-viewer", "child-a", "system.paas-viewer");
@@ -33,11 +63,11 @@ const tenantPolicies: PolicyDirectory = { accountId: "tenant-a", scope: "TENANT"
 ] };
 const platformPolicies: PolicyDirectory = { accountId: "tenant-a", scope: "INSTALLATION", installationId: "installation-a",
   items: [policy("system.platform-operator", "平台运营者", "INSTALLATION")] };
-const identity: AccountIdentity = { account, user: rootUser, identityKind: "ROOT_IDENTITY", policyAttachments: [tenantAdmin, platformOperator], canCreateAccounts: true };
-const child: UserAccess = { user: { ...rootUser, id: "child-a", loginName: "developer", displayName: "Developer A" }, policyAttachments: [viewer] };
+const identity: AccountIdentity = { account, user: rootUser, identityKind: "ROOT_IDENTITY", policyAttachments: [tenantAdmin, platformOperator], capabilities: currentCapabilities() };
+const child: UserAccess = { user: { ...rootUser, id: "child-a", loginName: "developer", displayName: "Developer A" }, policyAttachments: [viewer], capabilities: childCapabilities() };
 const customer: Account = { id: "tenant-b", displayName: "Team B", status: "ACTIVE", rootIdentity: { principalId: "primary-b", loginName: "owner-b" }, loginAlias: null, resourceVersion: 4 };
 const platformIdentity: AccountIdentity = { ...identity, user: child.user, identityKind: "USER",
-  policyAttachments: [attachment("attachment-platform-child", "child-a", "system.platform-operator", "INSTALLATION")], canCreateAccounts: true };
+  policyAttachments: [attachment("attachment-platform-child", "child-a", "system.platform-operator", "INSTALLATION")], capabilities: currentCapabilities("platform") };
 
 function forbidden(): Promise<never> { return Promise.reject(new HttpProblem(403, "DENIED")); }
 
@@ -53,7 +83,7 @@ function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository
     currentIdentity: vi.fn().mockResolvedValue(structuredClone(identity)),
     listUsers: vi.fn().mockResolvedValue({ items: [child], nextAfter: null }),
     listPolicies: vi.fn().mockImplementation((_credential: string, platform: boolean) => Promise.resolve(structuredClone(platform ? platformPolicies : tenantPolicies))),
-    listAccounts: vi.fn().mockResolvedValue({ items: [account], nextAfter: null }),
+    listAccounts: vi.fn().mockResolvedValue({ items: [accountAccess(account, false)], nextAfter: null }),
     execute: vi.fn().mockResolvedValue(undefined), ...overrides
   };
 }
@@ -84,7 +114,7 @@ describe("qualified login", () => {
       } }),
       changePassword: vi.fn().mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; }))
     });
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: child.user, identityKind: "USER", policyAttachments: [], canCreateAccounts: false }) });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: child.user, identityKind: "USER", policyAttachments: [], capabilities: currentCapabilities("none") }) });
     const user = userEvent.setup();
     render(<SessionProvider repository={source}><AuthenticatedAccess repository={repository} /></SessionProvider>);
     await user.click(screen.getByRole("button", { name: "IAM 子账号" }));
@@ -126,7 +156,7 @@ describe("account access", () => {
   it.each([true, false])("offers a default-on ordinary password session choice (%s)", async (revokeOtherSessions) => {
     let complete!: () => void;
     const passwordRepository = iam({ changePassword: vi.fn().mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; })) }, "child-a");
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: child.user, identityKind: "USER", policyAttachments: [], canCreateAccounts: false }) });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: child.user, identityKind: "USER", policyAttachments: [], capabilities: currentCapabilities("none") }) });
     const { user, view } = await openAccess(repository, passwordRepository);
     await user.click(await screen.findByRole("button", { name: "用户设置" }));
     const option = screen.getByRole("checkbox", { name: "同时退出其他登录会话（推荐）" }) as HTMLInputElement;
@@ -200,20 +230,35 @@ describe("account access", () => {
   });
 
   it("derives accessible sections from separately authorized reads", async () => {
-    const reader: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", policyAttachments: [], canCreateAccounts: false };
+    const reader: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", policyAttachments: [], capabilities: currentCapabilities("none") };
     const repository = accounts({
       currentIdentity: vi.fn().mockResolvedValue(reader), listUsers: vi.fn().mockImplementation(forbidden),
       listPolicies: vi.fn().mockImplementation(forbidden)
     });
     await openAccess(repository, iam({}, "child-a"));
     await screen.findByText("尚未关联权限策略");
-    expect(repository.listUsers).toHaveBeenCalled();
-    expect(repository.listPolicies).toHaveBeenCalledTimes(2);
+    expect(repository.listUsers).not.toHaveBeenCalled();
+    expect(repository.listPolicies).toHaveBeenCalledTimes(1);
     expect(repository.listAccounts).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "用户" })).toBeNull();
     expect(screen.queryByRole("button", { name: "策略" })).toBeNull();
     expect(screen.queryByRole("button", { name: "租户管理" })).toBeNull();
     expect(screen.queryByRole("button", { name: "保存别名" })).toBeNull();
+  });
+
+  it("keeps account directory read separate from account creation", async () => {
+    const readOnlyCapabilities = currentCapabilities("none").map((item) => item.action === "iam.account.read" ?
+      { ...item, available: true, restrictionReason: null } : item);
+    const repository = accounts({
+      currentIdentity: vi.fn().mockResolvedValue({ ...platformIdentity, capabilities: readOnlyCapabilities }),
+      listAccounts: vi.fn().mockResolvedValue({ items: [accountAccess(customer)], nextAfter: null }),
+      listPolicies: vi.fn().mockImplementation(forbidden)
+    });
+    const { user } = await openAccess(repository, iam({}, "child-a"));
+    await user.click(await screen.findByRole("button", { name: "租户管理" }));
+    expect(await screen.findByText("Team B")).toBeTruthy();
+    expect(repository.listAccounts).toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "开通租户" })).toBeNull();
   });
 
   it("shows actual policy metadata, including customer and retired entries", async () => {
@@ -255,7 +300,7 @@ describe("account access", () => {
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(platformIdentity),
       listUsers: vi.fn().mockImplementation(forbidden),
       listPolicies: vi.fn().mockImplementation((_credential: string, platform: boolean) => platform ? Promise.resolve(platformPolicies) : forbidden()),
-      listAccounts: vi.fn().mockResolvedValueOnce({ items: [customer], nextAfter: null }).mockResolvedValue({ items: [suspended], nextAfter: null }) });
+      listAccounts: vi.fn().mockResolvedValueOnce({ items: [accountAccess(customer)], nextAfter: null }).mockResolvedValue({ items: [accountAccess(suspended)], nextAfter: null }) });
     const { user } = await openAccess(repository, iam({}, "child-a"));
     await user.click(await screen.findByRole("button", { name: "租户管理" }));
     await user.click(await screen.findByRole("button", { name: "管理租户 tenant-b" }));
@@ -268,9 +313,17 @@ describe("account access", () => {
   });
 
   it("does not offer tenant credential changes for an installation-bound member", async () => {
-    const protectedChild: UserAccess = { ...child, user: { ...child.user, status: "DISABLED" },
-      policyAttachments: [...child.policyAttachments, attachment("attachment-platform-child", "child-a", "system.platform-operator", "INSTALLATION")] };
-    const tenantOnlyIdentity: AccountIdentity = { ...identity, policyAttachments: [tenantAdmin], canCreateAccounts: false };
+    const protectedAttachments = [...child.policyAttachments, attachment("attachment-platform-child", "child-a", "system.platform-operator", "INSTALLATION")];
+    const protectedChild: UserAccess = { ...child, user: { ...child.user, status: "DISABLED" }, policyAttachments: protectedAttachments,
+      capabilities: [
+        capability("iam.user.set-status", "USER", "child-a", false, "INSTALLATION_AUTHORITY_PROTECTED"),
+        capability("iam.user.reset-password", "USER", "child-a", false, "INSTALLATION_AUTHORITY_PROTECTED"),
+        capability("iam.policy-attachment.create", "USER", "child-a", false, "TARGET_DISABLED"),
+        capability("iam.platform-policy-attachment.create", "USER", "child-a", false, "TARGET_DISABLED"),
+        capability("iam.policy-attachment.revoke", "POLICY_ATTACHMENT", "attachment-viewer"),
+        capability("iam.platform-policy-attachment.revoke", "POLICY_ATTACHMENT", "attachment-platform-child", false)
+      ] };
+    const tenantOnlyIdentity: AccountIdentity = { ...identity, policyAttachments: [tenantAdmin], capabilities: currentCapabilities("tenant") };
     const repository = accounts({
       currentIdentity: vi.fn().mockResolvedValue(tenantOnlyIdentity),
       listUsers: vi.fn().mockResolvedValue({ items: [protectedChild], nextAfter: null }),
@@ -278,7 +331,7 @@ describe("account access", () => {
     });
     const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "管理 developer" }));
-    expect(screen.getByText(/即使已禁用/)).toBeTruthy();
+    expect(screen.getAllByText(/目标关联安装级权限/).length).toBeGreaterThan(0);
     expect(screen.queryByRole("button", { name: "启用用户" })).toBeNull();
     expect(screen.queryByRole("button", { name: "重置密码" })).toBeNull();
     expect(screen.queryByRole("button", { name: /撤销system\.platform-operator/ })).toBeNull();
@@ -289,7 +342,7 @@ describe("account access", () => {
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(platformIdentity),
       listUsers: vi.fn().mockImplementation(forbidden),
       listPolicies: vi.fn().mockImplementation((_credential: string, platform: boolean) => platform ? Promise.resolve(platformPolicies) : forbidden()),
-      listAccounts: vi.fn().mockResolvedValue({ items: [customer], nextAfter: null }),
+      listAccounts: vi.fn().mockResolvedValue({ items: [accountAccess(customer)], nextAfter: null }),
       execute: vi.fn().mockRejectedValue(new HttpProblem(401, "PRIVATE revoked")) });
     const { user } = await openAccess(repository, iam({}, "child-a"));
     await user.click(await screen.findByRole("button", { name: "租户管理" }));

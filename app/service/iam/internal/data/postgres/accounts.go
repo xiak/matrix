@@ -38,14 +38,33 @@ func decodeAccount(encoded []byte) (iamv1.Account, error) {
 	return result, nil
 }
 
-func (value *transaction) ReadAccountAsPlatform(ctx context.Context, read identityaccess.AccountRead, id iamv1.AccountID) (iamv1.Account, error) {
+type accountManagementWire struct {
+	Account                      iamv1.Account `json:"account"`
+	SystemAccount                *bool         `json:"systemAccount"`
+	RootHasInstallationAuthority *bool         `json:"rootHasInstallationAuthority"`
+}
+
+func decodeAccountManagement(encoded []byte) (identityaccess.AccountManagementSnapshot, error) {
+	var wire accountManagementWire
+	if json.Unmarshal(encoded, &wire) != nil || wire.SystemAccount == nil || wire.RootHasInstallationAuthority == nil {
+		return identityaccess.AccountManagementSnapshot{}, identityaccess.ErrUnavailable
+	}
+	normalizeAccount(&wire.Account)
+	if iamv1.ValidateAccount(wire.Account) != nil {
+		return identityaccess.AccountManagementSnapshot{}, identityaccess.ErrUnavailable
+	}
+	return identityaccess.AccountManagementSnapshot{Account: wire.Account, SystemAccount: *wire.SystemAccount,
+		RootHasInstallationAuthority: *wire.RootHasInstallationAuthority}, nil
+}
+
+func (value *transaction) ReadAccountAsPlatform(ctx context.Context, read identityaccess.AccountRead, id iamv1.AccountID) (identityaccess.AccountManagementSnapshot, error) {
 	var encoded []byte
 	if err := value.tx.QueryRow(ctx, "SELECT iam.read_account_as_platform($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, id).Scan(&encoded); err != nil {
-		return iamv1.Account{}, mapAuthorizationDatabaseError("read IAM account", err)
+		return identityaccess.AccountManagementSnapshot{}, mapAuthorizationDatabaseError("read IAM account", err)
 	}
-	result, err := decodeAccount(encoded)
-	if err != nil || result.ID != id {
-		return iamv1.Account{}, identityaccess.ErrUnavailable
+	result, err := decodeAccountManagement(encoded)
+	if err != nil || result.Account.ID != id {
+		return identityaccess.AccountManagementSnapshot{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }
@@ -118,15 +137,26 @@ func (value *transaction) ListUsers(ctx context.Context, read identityaccess.Acc
 	for i := range result.Items {
 		item := &result.Items[i]
 		normalizeUser(&item.User)
-		if item.User.AccountID != read.AccountID {
+		if iamv1.ValidateUser(item.User) != nil || item.User.AccountID != read.AccountID ||
+			(i > 0 && result.Items[i-1].User.ID >= item.User.ID) {
 			return iamv1.UserList{}, identityaccess.ErrUnavailable
 		}
+		attachments := make(map[iamv1.PolicyAttachmentID]bool, len(item.PolicyAttachments))
+		policies := make(map[iamv1.PolicyID]bool, len(item.PolicyAttachments))
 		for j := range item.PolicyAttachments {
-			item.PolicyAttachments[j].CreatedAt = item.PolicyAttachments[j].CreatedAt.UTC()
-			item.PolicyAttachments[j].UpdatedAt = item.PolicyAttachments[j].UpdatedAt.UTC()
+			attachment := &item.PolicyAttachments[j]
+			attachment.CreatedAt = attachment.CreatedAt.UTC()
+			attachment.UpdatedAt = attachment.UpdatedAt.UTC()
+			if iamv1.ValidatePolicyAttachment(*attachment) != nil || attachment.RevokedAt != nil ||
+				attachment.AccountID != item.User.AccountID || attachment.Target.Kind != iamv1.PolicyTargetUser ||
+				attachment.Target.ID != string(item.User.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
+				return iamv1.UserList{}, identityaccess.ErrUnavailable
+			}
+			attachments[attachment.ID] = true
+			policies[attachment.PolicyID] = true
 		}
 	}
-	if iamv1.ValidateUserList(result) != nil {
+	if result.NextAfter != "" && (len(result.Items) == 0 || result.NextAfter != string(result.Items[len(result.Items)-1].User.ID)) {
 		return iamv1.UserList{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
@@ -151,24 +181,34 @@ func (value *transaction) ListPolicies(ctx context.Context, read identityaccess.
 	return result, nil
 }
 
-func (value *transaction) ListAccounts(ctx context.Context, read identityaccess.AccountRead) (iamv1.AccountList, error) {
+func (value *transaction) ListAccounts(ctx context.Context, read identityaccess.AccountRead) (identityaccess.AccountManagementPage, error) {
 	var encoded []byte
 	if err := value.tx.QueryRow(ctx, "SELECT iam.list_accounts($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, read.After).Scan(&encoded); err != nil {
-		return iamv1.AccountList{}, mapAuthorizationDatabaseError("list IAM accounts", err)
+		return identityaccess.AccountManagementPage{}, mapAuthorizationDatabaseError("list IAM accounts", err)
 	}
-	result := iamv1.AccountList{APIVersion: iamv1.APIVersion, Kind: "AccountList"}
-	if json.Unmarshal(encoded, &result.Items) != nil || len(result.Items) > 101 {
-		return result, identityaccess.ErrUnavailable
+	var rows []json.RawMessage
+	if json.Unmarshal(encoded, &rows) != nil || len(rows) > 101 {
+		return identityaccess.AccountManagementPage{}, identityaccess.ErrUnavailable
+	}
+	result := identityaccess.AccountManagementPage{Items: make([]identityaccess.AccountManagementSnapshot, 0, len(rows))}
+	for _, row := range rows {
+		item, err := decodeAccountManagement(row)
+		if err != nil {
+			return identityaccess.AccountManagementPage{}, err
+		}
+		result.Items = append(result.Items, item)
 	}
 	if len(result.Items) > 100 {
 		result.Items = result.Items[:100]
-		result.NextAfter = string(result.Items[99].ID)
+		result.NextAfter = string(result.Items[99].Account.ID)
 	}
-	for i := range result.Items {
-		normalizeAccount(&result.Items[i])
+	for index := 1; index < len(result.Items); index++ {
+		if result.Items[index-1].Account.ID >= result.Items[index].Account.ID {
+			return identityaccess.AccountManagementPage{}, identityaccess.ErrUnavailable
+		}
 	}
-	if iamv1.ValidateAccountList(result) != nil {
-		return iamv1.AccountList{}, identityaccess.ErrUnavailable
+	if len(result.Items) > 0 && result.NextAfter != "" && result.NextAfter != string(result.Items[len(result.Items)-1].Account.ID) {
+		return result, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }

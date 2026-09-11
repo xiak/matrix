@@ -13,6 +13,7 @@ type ReadinessState string
 type ProductID string
 type AuthorityScope string
 type IdentityKind string
+type CapabilityRestriction string
 
 // ActionDefinition binds a product operation to its only authorization caller,
 // resource kind and authority scope. It describes a registered operation; it
@@ -60,6 +61,17 @@ const (
 const (
 	IdentityRoot IdentityKind = "ROOT_IDENTITY"
 	IdentityUser IdentityKind = "USER"
+)
+
+const (
+	CapabilityAuthorityRequired               CapabilityRestriction = "AUTHORITY_REQUIRED"
+	CapabilityCurrentCredentialChangeRequired CapabilityRestriction = "CURRENT_CREDENTIAL_CHANGE_REQUIRED"
+	CapabilitySelfProtected                   CapabilityRestriction = "SELF_PROTECTED"
+	CapabilityRootIdentityProtected           CapabilityRestriction = "ROOT_IDENTITY_PROTECTED"
+	CapabilityInstallationAuthorityProtected  CapabilityRestriction = "INSTALLATION_AUTHORITY_PROTECTED"
+	CapabilitySystemAccountProtected          CapabilityRestriction = "SYSTEM_ACCOUNT_PROTECTED"
+	CapabilityTargetDisabled                  CapabilityRestriction = "TARGET_DISABLED"
+	CapabilityTargetCredentialChangeRequired  CapabilityRestriction = "TARGET_CREDENTIAL_CHANGE_REQUIRED"
 )
 
 const (

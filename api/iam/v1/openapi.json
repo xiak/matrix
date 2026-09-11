@@ -72,6 +72,26 @@
         ],
         "type": "object"
       },
+      "AccountAccess": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/Account"
+          },
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ActionCapability"
+            },
+            "maxItems": 260,
+            "type": "array"
+          }
+        },
+        "required": [
+          "account",
+          "capabilities"
+        ],
+        "type": "object"
+      },
       "AccountID": {
         "allOf": [
           {
@@ -87,7 +107,7 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/Account"
+              "$ref": "#/components/schemas/AccountAccess"
             },
             "maxItems": 100,
             "type": "array"
@@ -164,6 +184,49 @@
           "installation.verify"
         ],
         "type": "string"
+      },
+      "ActionCapability": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "available": {
+                "const": true
+              },
+              "restrictionReason": false
+            }
+          },
+          {
+            "properties": {
+              "available": {
+                "const": false
+              }
+            },
+            "required": [
+              "restrictionReason"
+            ]
+          }
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceReference"
+          },
+          "restrictionReason": {
+            "$ref": "#/components/schemas/CapabilityRestriction"
+          }
+        },
+        "required": [
+          "action",
+          "available",
+          "resource"
+        ],
+        "type": "object"
       },
       "AuditProducerAuthorization": {
         "additionalProperties": false,
@@ -3497,6 +3560,19 @@
         ],
         "type": "object"
       },
+      "CapabilityRestriction": {
+        "enum": [
+          "AUTHORITY_REQUIRED",
+          "CURRENT_CREDENTIAL_CHANGE_REQUIRED",
+          "SELF_PROTECTED",
+          "ROOT_IDENTITY_PROTECTED",
+          "INSTALLATION_AUTHORITY_PROTECTED",
+          "SYSTEM_ACCOUNT_PROTECTED",
+          "TARGET_DISABLED",
+          "TARGET_CREDENTIAL_CHANGE_REQUIRED"
+        ],
+        "type": "string"
+      },
       "ChangePasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3643,43 +3719,6 @@
       },
       "CurrentIdentity": {
         "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "canCreateAccounts": {
-                  "const": true
-                }
-              },
-              "required": [
-                "canCreateAccounts"
-              ]
-            },
-            "then": {
-              "properties": {
-                "policyAttachments": {
-                  "contains": {
-                    "properties": {
-                      "scope": {
-                        "const": "INSTALLATION"
-                      }
-                    },
-                    "required": [
-                      "scope"
-                    ]
-                  }
-                },
-                "user": {
-                  "properties": {
-                    "mustChangePassword": {
-                      "const": false
-                    }
-                  }
-                }
-              }
-            }
-          }
-        ],
         "properties": {
           "account": {
             "$ref": "#/components/schemas/Account"
@@ -3687,8 +3726,12 @@
           "apiVersion": {
             "const": "iam.matrix.xiak.com/v1"
           },
-          "canCreateAccounts": {
-            "type": "boolean"
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ActionCapability"
+            },
+            "maxItems": 260,
+            "type": "array"
           },
           "identityKind": {
             "$ref": "#/components/schemas/IdentityKind"
@@ -3726,7 +3769,7 @@
         "required": [
           "account",
           "apiVersion",
-          "canCreateAccounts",
+          "capabilities",
           "identityKind",
           "kind",
           "policyAttachments",
@@ -4756,6 +4799,13 @@
       "UserAccess": {
         "additionalProperties": false,
         "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ActionCapability"
+            },
+            "maxItems": 260,
+            "type": "array"
+          },
           "policyAttachments": {
             "items": {
               "allOf": [
@@ -4784,6 +4834,7 @@
           }
         },
         "required": [
+          "capabilities",
           "policyAttachments",
           "user"
         ],
@@ -5043,7 +5094,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Account"
+                  "$ref": "#/components/schemas/AccountAccess"
                 }
               }
             },
@@ -5062,7 +5113,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           }
         },
-        "summary": "Read account metadata as a platform operator"
+        "summary": "Read account metadata and management capabilities as a platform operator"
       }
     },
     "/v1/accounts/{accountId}:recover-root-credentials": {

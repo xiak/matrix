@@ -5,12 +5,26 @@ import { Building2, KeyRound, Plus, RefreshCcw, ShieldCheck, UserRound, Users } 
 import { Badge, Button, Card, Input, Select, Typography } from "@ui/xiak";
 import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
 import { useSession } from "../application/SessionProvider";
+import type { ActionCapability } from "../domain/accounts";
 import type { AccountRepository } from "../repositories/iamRepository";
 import type { AccountAccessScene, AccountUserScene, TenantAccountScene } from "../scenes/accountAccessScene";
 import styles from "./AccountAccessRenderer.module.css";
 
 const loginPattern = "[a-z][a-z0-9._\\-]{2,63}";
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
+
+function restrictionMessage(reason: ActionCapability["restrictionReason"]): string {
+  switch (reason) {
+    case "CURRENT_CREDENTIAL_CHANGE_REQUIRED": return "当前登录凭据必须先完成密码修改。";
+    case "SELF_PROTECTED": return "当前登录用户不能通过子用户管理修改自身状态或重置自身密码。";
+    case "ROOT_IDENTITY_PROTECTED": return "主账号最终控制身份不能加入用户组或被子用户管理替代。";
+    case "INSTALLATION_AUTHORITY_PROTECTED": return "目标关联安装级权限，必须使用受保护的平台恢复或管理流程。";
+    case "SYSTEM_ACCOUNT_PROTECTED": return "安装服务所属的系统账号不能停用。";
+    case "TARGET_DISABLED": return "目标用户已停用，恢复后才能新增策略关联。";
+    case "TARGET_CREDENTIAL_CHANGE_REQUIRED": return "目标用户须先完成初始密码修改，才能取得安装级权限。";
+    default: return "当前身份没有执行此操作所需的权限。";
+  }
+}
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return <label className={styles.field}><span>{label}</span>{children}</label>;
@@ -68,7 +82,9 @@ function UserAccess({ scene, user, onClose }: { scene: AccountAccessScene; user:
   const [resettingPassword, setResettingPassword] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
   const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; resourceVersion: number } | null>(null);
-  const availablePolicies = scene.policies.filter((policy) => policy.status === "ACTIVE" && !user.attachments.some((attachment) => attachment.policyId === policy.id));
+  const availablePolicies = scene.policies.filter((policy) => policy.status === "ACTIVE" &&
+    (policy.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy) &&
+    !user.attachments.some((attachment) => attachment.policyId === policy.id));
   const currentSelection = selectedPolicy ? availablePolicies.find((policy) => policy.id === selectedPolicy.id) : null;
   const selectionChanged = selectedPolicy !== null && currentSelection?.resourceVersion !== selectedPolicy.resourceVersion;
   const disabled = access.busy || access.loading;
@@ -90,7 +106,7 @@ function UserAccess({ scene, user, onClose }: { scene: AccountAccessScene; user:
       <ul className={styles.bindingList}>
         {user.attachments.map((attachment) => <li key={attachment.id}>
           <span>{attachment.label} <Badge status="neutral">{attachment.scope === "INSTALLATION" ? "平台" : "租户"}</Badge></span>
-          {attachment.policyResourceVersion === null ? <span>由另一授权范围管理</span> : revokeId === attachment.id ? <div className={styles.actions}>
+          {!attachment.canRevoke ? <span>{restrictionMessage(attachment.revokeRestrictionReason)}</span> : revokeId === attachment.id ? <div className={styles.actions}>
             <span>立即撤销？</span><Button disabled={disabled} onClick={async () => { if (await access.execute({ kind: "revoke-policy-attachment", attachmentId: attachment.id, resourceVersion: attachment.resourceVersion })) setRevokeId(null); }} size="small" variant="danger">确认撤销</Button>
             <Button disabled={disabled} onClick={() => setRevokeId(null)} size="small" variant="ghost">取消</Button>
           </div> : <Button aria-label={`撤销${attachment.label}`} disabled={disabled} onClick={() => setRevokeId(attachment.id)} size="small" variant="ghost">撤销</Button>}
@@ -109,12 +125,14 @@ function UserAccess({ scene, user, onClose }: { scene: AccountAccessScene; user:
         <Button disabled={disabled || !selectedPolicy || selectionChanged} type="submit" variant="secondary">关联策略</Button>
         {selectionChanged ? <p className={styles.note} role="alert">策略版本已经变化，请重新选择后再提交。</p> : null}
       </form> : null}
+      {!user.canAttachTenantPolicy && !user.canAttachPlatformPolicy ? <p className={styles.note}>{restrictionMessage(user.tenantAttachmentRestrictionReason ?? user.platformAttachmentRestrictionReason)}</p> : null}
       <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>登录与安全</strong></div>
-      {user.credentialProtection ? <p className={styles.note}>{user.credentialProtection === "platform" ? "该用户有未撤销的平台策略关联，即使已禁用，也不能通过租户成员管理启用、禁用或重置密码。平台凭证恢复须走离线流程。" : "不能通过子用户管理禁用或重置当前登录用户。"}</p> : <>
-        <div className={styles.actions}>
-          <Button disabled={disabled} onClick={() => { setConfirmStatus(true); setResettingPassword(false); setPassword(""); }} variant="secondary">{user.enabled ? "禁用用户" : "启用用户"}</Button>
-          <Button disabled={disabled} onClick={() => { setResettingPassword(true); setConfirmStatus(false); }} variant="secondary">重置密码</Button>
-        </div>
+      <div className={styles.actions}>
+        {user.canSetStatus ? <Button disabled={disabled} onClick={() => { setConfirmStatus(true); setResettingPassword(false); setPassword(""); }} variant="secondary">{user.enabled ? "禁用用户" : "启用用户"}</Button> : null}
+        {user.canResetPassword ? <Button disabled={disabled} onClick={() => { setResettingPassword(true); setConfirmStatus(false); }} variant="secondary">重置密码</Button> : null}
+      </div>
+      {!user.canSetStatus ? <p className={styles.note}>状态：{restrictionMessage(user.statusRestrictionReason)}</p> : null}
+      {!user.canResetPassword ? <p className={styles.note}>密码：{restrictionMessage(user.passwordRestrictionReason)}</p> : null}
         {confirmStatus ? <div className={styles.confirmation}>
           <p>{user.enabled ? "禁用将撤销该用户的现有会话，下一次受保护请求即被拒绝；不会删除租户资源或停止已有工作负载。" : "启用后可使用有效密码重新登录；已撤销的会话不会恢复。"}</p>
           <div className={styles.actions}>
@@ -127,7 +145,6 @@ function UserAccess({ scene, user, onClose }: { scene: AccountAccessScene; user:
           <p className={styles.note}>重置将撤销所有现有会话。用户下次登录必须修改初始密码；禁用状态不会被自动解除。</p>
           <div className={styles.actions}><Button disabled={disabled || !password} type="submit">确认重置密码</Button><Button disabled={disabled} onClick={() => { setResettingPassword(false); setPassword(""); }} variant="ghost">取消</Button></div>
         </form> : null}
-      </>}
     </Card.Body>
   </Card>;
 }
@@ -141,7 +158,7 @@ function UserDirectory({ scene }: { scene: AccountAccessScene }) {
     <Card>
       <Card.Header className={styles.cardHeader}>
         <div><Typography.Title as="h2" level={3}>子用户</Typography.Title><Typography.Text tone="muted">独立身份与凭据，按授权访问所属租户的资源</Typography.Text></div>
-        <Button disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />创建用户</Button>
+        {scene.canCreateUsers ? <Button disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />创建用户</Button> : null}
       </Card.Header>
       <div aria-label="租户用户列表" className={styles.tableWrap} role="region" tabIndex={0}>
         <table className={styles.table}>
@@ -225,7 +242,7 @@ function UserSettings({ scene }: { scene: AccountAccessScene }) {
         <div><dt>固定 ID 登录</dt><dd><Typography.Code>username@{scene.accountId}</Typography.Code></dd></div>
         <div><dt>别名登录</dt><dd>{scene.loginAlias ? <Typography.Code>username@{scene.loginAlias}</Typography.Code> : "设置别名后可用"}</dd></div>
       </dl>
-      {scene.canManage ? <form className={styles.form} onSubmit={async (event) => { event.preventDefault(); await access.execute({ kind: "set-alias", alias: alias.trim(), resourceVersion: scene.accountVersion }); }}>
+      {scene.canSetAlias ? <form className={styles.form} onSubmit={async (event) => { event.preventDefault(); await access.execute({ kind: "set-alias", alias: alias.trim(), resourceVersion: scene.accountVersion }); }}>
         <Field label="主账号别名"><Input autoComplete="off" maxLength={63} minLength={3} onChange={(event) => setAlias(event.target.value)} pattern={aliasPattern} placeholder="例如 acme" required value={alias} /><small>3–63 位，以小写字母开头，可包含数字和短横线，结尾不能是短横线。全平台唯一。</small></Field>
         <p className={styles.note}>修改后旧别名不能用于登录，并为本租户保留。现有会话与资源归属不变，租户 ID 登录仍然有效。</p>
         <div><Button disabled={access.busy || access.loading || !alias.trim() || alias.trim() === scene.loginAlias} type="submit">{access.busy ? "正在保存…" : "保存别名"}</Button></div>
@@ -262,9 +279,11 @@ function TenantAccess({ account, onClose }: { account: TenantAccountScene; onClo
       </dl>
       <p className={styles.note}>这里只管理租户元数据，不授予租户资源、Secret 或审计读取权限。安装服务所属租户不能停用，由 IAM 校验。</p>
       <div className={styles.actions}>
-        <Button disabled={disabled} onClick={() => { setConfirmation("status"); setPassword(""); }} variant="secondary">{account.enabled ? "停用租户" : "恢复租户访问"}</Button>
-        <Button disabled={disabled} onClick={() => { setConfirmation("recovery"); setPassword(""); }} variant="secondary">恢复原主账号</Button>
+        {account.canSetStatus ? <Button disabled={disabled} onClick={() => { setConfirmation("status"); setPassword(""); }} variant="secondary">{account.enabled ? "停用租户" : "恢复租户访问"}</Button> : null}
+        {account.canRecoverRoot ? <Button disabled={disabled} onClick={() => { setConfirmation("recovery"); setPassword(""); }} variant="secondary">恢复原主账号</Button> : null}
       </div>
+      {!account.canSetStatus ? <p className={styles.note}>租户状态：{restrictionMessage(account.statusRestrictionReason)}</p> : null}
+      {!account.canRecoverRoot ? <p className={styles.note}>主账号恢复：{restrictionMessage(account.recoveryRestrictionReason)}</p> : null}
       {confirmation === "status" ? <div className={styles.confirmation}>
         <p>{account.enabled ? "确认停用此租户？下一次受保护请求将被拒绝，新变更被冻结，现有会话被撤销。不删除数据、不停止已有工作负载，也不取消已接受的 Operation 或历史审计投递。" : "确认恢复此租户的访问？用户须重新登录；已撤销的会话或策略关联不会恢复。"}</p>
         <div className={styles.actions}>
@@ -292,12 +311,12 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   const selected = scene.accounts.find((account) => account.id === selectedId);
   return <div className={styles.stack}>
     <Card>
-      <Card.Header className={styles.cardHeader}><div><Typography.Title as="h2" level={3}>租户账号</Typography.Title><Typography.Text tone="muted">平台运营者管理租户生命周期；不等于租户管理员</Typography.Text></div><Button disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />开通租户</Button></Card.Header>
+      <Card.Header className={styles.cardHeader}><div><Typography.Title as="h2" level={3}>租户账号</Typography.Title><Typography.Text tone="muted">平台运营者管理租户生命周期；不等于租户管理员</Typography.Text></div>{scene.canCreateAccounts ? <Button disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />开通租户</Button> : null}</Card.Header>
       <div aria-label="租户账号列表" className={styles.tableWrap} role="region" tabIndex={0}>
         <table className={styles.table}><thead><tr><th>租户</th><th>主账号登录名</th><th>主账号别名</th><th>状态</th><th>操作</th></tr></thead>
           <tbody>{scene.accounts.map((account) => <tr key={account.id}><td><strong>{account.name}</strong><small>{account.id}</small></td><td>{account.rootLoginName}</td><td>{account.loginAlias ?? "未设置"}</td><td><Badge status={account.enabled ? "success" : "neutral"}>{account.enabled ? "正常" : "已停用"}</Badge></td><td><Button aria-label={`管理租户 ${account.id}`} disabled={access.busy || access.loading} onClick={() => { setSelectedId(account.id); setCreating(false); }} size="small" variant="ghost">管理</Button></td></tr>)}</tbody>
         </table>
-        {!scene.accounts.length ? <p className={styles.empty}>当前页没有租户。</p> : null}
+        {!scene.accounts.length ? <p className={styles.empty}>{scene.canReadAccounts ? "当前页没有租户。" : "当前身份不能读取租户目录。"}</p> : null}
       </div>
       <Card.Footer><span className={styles.note}>开通不等于跨租户授权</span><div className={styles.actions}><Button disabled={access.busy || access.loading} onClick={() => { setSelectedId(null); setCreating(false); access.accountsPage(""); }} size="small" variant="ghost">首页</Button><Button disabled={access.busy || access.loading || !scene.nextAccountPage} onClick={() => { setSelectedId(null); setCreating(false); access.accountsPage(scene.nextAccountPage!); }} size="small" variant="secondary">下一页</Button></div></Card.Footer>
     </Card>
@@ -325,16 +344,18 @@ function AccountAccessContent() {
   const access = useAccountAccess();
   const scene = access.scene;
   const [selection, setSelection] = useState<"users" | "permissions" | "settings" | "tenants">("users");
-  const fallback = scene?.canManage ? "users" : scene?.canViewPolicies ? "permissions" : scene?.canCreateAccounts ? "tenants" : "settings";
-  const tab = (selection === "users" && !scene?.canManage) || (selection === "permissions" && !scene?.canViewPolicies) ||
-    (selection === "tenants" && !scene?.canCreateAccounts) ? fallback : selection;
+  const canAccessUsers = scene ? scene.canManage || scene.canCreateUsers : false;
+  const canAccessAccounts = scene ? scene.canReadAccounts || scene.canCreateAccounts : false;
+  const fallback = canAccessUsers ? "users" : scene?.canViewPolicies ? "permissions" : canAccessAccounts ? "tenants" : "settings";
+  const tab = (selection === "users" && !canAccessUsers) || (selection === "permissions" && !scene?.canViewPolicies) ||
+    (selection === "tenants" && !canAccessAccounts) ? fallback : selection;
   return <section aria-label="账号与权限" aria-busy={access.loading || access.busy} className={styles.stack}>
     <div className={styles.toolbar}>
       <div aria-label="访问管理页面" className={styles.tabs} role="group">
-        {scene?.canManage ? <Button aria-pressed={tab === "users"} onClick={() => setSelection("users")} variant={tab === "users" ? "secondary" : "ghost"}><Users aria-hidden="true" />用户</Button> : null}
+        {canAccessUsers ? <Button aria-pressed={tab === "users"} onClick={() => setSelection("users")} variant={tab === "users" ? "secondary" : "ghost"}><Users aria-hidden="true" />用户</Button> : null}
         {scene?.canViewPolicies ? <Button aria-pressed={tab === "permissions"} onClick={() => setSelection("permissions")} variant={tab === "permissions" ? "secondary" : "ghost"}><ShieldCheck aria-hidden="true" />策略</Button> : null}
         <Button aria-pressed={tab === "settings"} onClick={() => setSelection("settings")} variant={tab === "settings" ? "secondary" : "ghost"}><UserRound aria-hidden="true" />用户设置</Button>
-        {scene?.canCreateAccounts ? <Button aria-pressed={tab === "tenants"} onClick={() => setSelection("tenants")} variant={tab === "tenants" ? "secondary" : "ghost"}><Building2 aria-hidden="true" />租户管理</Button> : null}
+        {canAccessAccounts ? <Button aria-pressed={tab === "tenants"} onClick={() => setSelection("tenants")} variant={tab === "tenants" ? "secondary" : "ghost"}><Building2 aria-hidden="true" />租户管理</Button> : null}
       </div>
       <Button aria-label="刷新账号信息" disabled={access.loading || access.busy} onClick={access.reload} size="small" variant="ghost"><RefreshCcw aria-hidden="true" />刷新</Button>
     </div>

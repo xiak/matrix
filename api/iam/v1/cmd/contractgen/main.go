@@ -93,7 +93,7 @@ func buildPaths() object {
 			"get":  readOperation("listAccounts", "List accounts as a platform operator", "AccountList", nil, accountPageParameters()),
 			"post": mutationOperation("createAccount", "Create an account and its immutable root identity", "CreateAccountRequest", "Account", "201", nil, nil),
 		},
-		"/v1/accounts/{accountId}":                          object{"get": readOperation("getAccount", "Read account metadata as a platform operator", "Account", nil, []any{openapi31.PathIDParameter("accountId")})},
+		"/v1/accounts/{accountId}":                          object{"get": readOperation("getAccount", "Read account metadata and management capabilities as a platform operator", "AccountAccess", nil, []any{openapi31.PathIDParameter("accountId")})},
 		"/v1/accounts/{accountId}:set-status":               object{"post": mutationOperation("setAccountStatus", "Suspend or restore account access without stopping workloads", "SetAccountStatusRequest", "Account", "200", nil, []any{openapi31.PathIDParameter("accountId")})},
 		"/v1/accounts/{accountId}:recover-root-credentials": object{"post": mutationOperation("recoverRootCredentials", "Recover the account's immutable root identity without transferring ownership", "RecoverRootCredentialsRequest", "Account", "200", nil, []any{openapi31.PathIDParameter("accountId")})},
 		"/v1/account:alias":                                 object{"post": mutationOperation("setAccountAlias", "Set the current account login alias", "SetAccountAliasRequest", "Account", "200", nil, nil)},
@@ -205,12 +205,19 @@ func scalarSchemas() object {
 
 func enumSchemas() map[string][]string {
 	return map[string][]string{
-		"AccountStatus":              {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
-		"PrincipalType":              {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
-		"PrincipalStatus":            {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
-		"SessionStatus":              {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
-		"AuthorityScope":             {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
-		"IdentityKind":               {string(iamv1.IdentityRoot), string(iamv1.IdentityUser)},
+		"AccountStatus":   {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
+		"PrincipalType":   {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
+		"PrincipalStatus": {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
+		"SessionStatus":   {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
+		"AuthorityScope":  {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
+		"IdentityKind":    {string(iamv1.IdentityRoot), string(iamv1.IdentityUser)},
+		"CapabilityRestriction": {
+			string(iamv1.CapabilityAuthorityRequired), string(iamv1.CapabilityCurrentCredentialChangeRequired),
+			string(iamv1.CapabilitySelfProtected), string(iamv1.CapabilityRootIdentityProtected),
+			string(iamv1.CapabilityInstallationAuthorityProtected),
+			string(iamv1.CapabilitySystemAccountProtected), string(iamv1.CapabilityTargetDisabled),
+			string(iamv1.CapabilityTargetCredentialChangeRequired),
+		},
 		"PolicyAttachmentTargetKind": {string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetService), string(iamv1.PolicyTargetGroup), string(iamv1.PolicyTargetRole)},
 		"PolicyManagement":           {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
 		"PolicyStatus":               {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
@@ -262,10 +269,12 @@ func structContracts() map[string]reflect.Type {
 		"RootIdentity":                  openapi31.StructType[iamv1.RootIdentity](),
 		"Account":                       openapi31.StructType[iamv1.Account](),
 		"User":                          openapi31.StructType[iamv1.User](),
+		"ActionCapability":              openapi31.StructType[iamv1.ActionCapability](),
 		"CurrentIdentity":               openapi31.StructType[iamv1.CurrentIdentity](),
 		"PolicyList":                    openapi31.StructType[iamv1.PolicyList](),
 		"UserAccess":                    openapi31.StructType[iamv1.UserAccess](),
 		"UserList":                      openapi31.StructType[iamv1.UserList](),
+		"AccountAccess":                 openapi31.StructType[iamv1.AccountAccess](),
 		"AccountList":                   openapi31.StructType[iamv1.AccountList](),
 		"CreateAccountRequest":          openapi31.StructType[iamv1.CreateAccountRequest](),
 		"SetAccountAliasRequest":        openapi31.StructType[iamv1.SetAccountAliasRequest](),
@@ -319,6 +328,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			"revokedAt": false, "target": object{"properties": object{"kind": object{"const": "USER"}}},
 		}}}}
 	}
+	if (owner == "CurrentIdentity" || owner == "UserAccess" || owner == "AccountAccess") && jsonName == "capabilities" {
+		base["maxItems"] = 260
+	}
 	if field.Type.Name() == "Secret" {
 		base["writeOnly"] = true
 		if owner == "LoginResponse" && jsonName == "credential" {
@@ -353,13 +365,10 @@ func applySemanticOverlays(schemas object) {
 		object{"required": []string{"installationId"}, "properties": object{"scope": object{"const": "INSTALLATION"},
 			"items": object{"items": object{"properties": object{"scope": object{"const": "INSTALLATION"}}}}}},
 	}
-	schemas["CurrentIdentity"].(object)["allOf"] = []any{object{
-		"if": object{"properties": object{"canCreateAccounts": object{"const": true}}, "required": []string{"canCreateAccounts"}},
-		"then": object{"properties": object{
-			"policyAttachments": object{"contains": object{"properties": object{"scope": object{"const": "INSTALLATION"}}, "required": []string{"scope"}}},
-			"user":              object{"properties": object{"mustChangePassword": object{"const": false}}},
-		}},
-	}}
+	schemas["ActionCapability"].(object)["oneOf"] = []any{
+		object{"properties": object{"available": object{"const": true}, "restrictionReason": false}},
+		object{"required": []string{"restrictionReason"}, "properties": object{"available": object{"const": false}}},
+	}
 	schemas["PolicyAttachment"].(object)["oneOf"] = []any{
 		object{"properties": object{"scope": object{"const": "TENANT"}, "installationId": false}},
 		object{"required": []string{"installationId"}, "properties": object{"scope": object{"const": "INSTALLATION"},

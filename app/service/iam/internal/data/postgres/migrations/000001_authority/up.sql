@@ -933,6 +933,10 @@ BEGIN
             AND to_regprocedure('iam.set_account_status(text,text,text,text,text,bigint,jsonb)') IS NOT NULL
             AND to_regprocedure('iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
             AND to_regprocedure('iam.read_account_root(text,text,text,text)') IS NOT NULL
+            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS snapshot
+                WHERE snapshot.oid=to_regprocedure('iam.account_management_snapshot(text)')
+                  AND snapshot.prorettype='jsonb'::regtype AND NOT snapshot.proretset
+                  AND NOT snapshot.prosecdef AND snapshot.proowner='matrix_iam_owner'::regrole)
             AND to_regprocedure('iam.set_organization_status(text,text,text,text,text,bigint,jsonb)') IS NULL
             AND to_regprocedure('iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb)') IS NULL
            AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean)') IS NOT NULL
@@ -980,7 +984,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           6::bigint,
+           7::bigint,
            transaction_timestamp();
 END
 $function$;

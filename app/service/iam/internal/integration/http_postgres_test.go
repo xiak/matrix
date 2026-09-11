@@ -44,6 +44,15 @@ const (
 	iamProducerCredential    = "mx1.IAMHTTPIntegrationCredential0000000000000001"
 )
 
+func findIAMCapability(values []iamv1.ActionCapability, action iamv1.Action, kind iamv1.ResourceKind, id string) (iamv1.ActionCapability, bool) {
+	for _, value := range values {
+		if value.Action == action && value.Resource.Kind == kind && value.Resource.ID == id {
+			return value, true
+		}
+	}
+	return iamv1.ActionCapability{}, false
+}
+
 var removedBuiltinRoleNames = []string{
 	"ORGANIZATION_ADMIN",
 	"PLATFORM_OPERATOR",
@@ -2047,7 +2056,9 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 		}
 	}
 	rootIdentity := identity(root)
-	if !rootIdentity.CanCreateAccounts || rootIdentity.Account.RootIdentity.PrincipalID != "principal-admin" {
+	rootCreate, rootCanCreate := findIAMCapability(rootIdentity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts")
+	rootRead, rootCanRead := findIAMCapability(rootIdentity.Capabilities, iamv1.ActionIAMAccountRead, iamv1.ResourceAccount, "accounts")
+	if !rootCanCreate || !rootCreate.Available || !rootCanRead || !rootRead.Available || rootIdentity.Account.RootIdentity.PrincipalID != "principal-admin" {
 		t.Fatal("bootstrap identity not recognized")
 	}
 	newTenantBody := map[string]any{"id": tenantB, "displayName": "Customer B", "rootLoginName": "customer.admin", "rootDisplayName": "Customer administrator", "initialPassword": primaryBPassword, "requestId": "request-account-create"}
@@ -2058,8 +2069,12 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	}
 	request(http.MethodPost, "/v1/accounts", root, newTenantBody, http.StatusConflict)
 	primaryB := login("customer.admin", primaryBPassword, http.StatusOK)
-	if identity(primaryB).CanCreateAccounts {
+	primaryIdentity := identity(primaryB)
+	if capability, found := findIAMCapability(primaryIdentity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts"); !found || capability.Available {
 		t.Fatal("new primary inherited platform account-opening capability")
+	}
+	if capability, found := findIAMCapability(primaryIdentity.Capabilities, iamv1.ActionIAMAccountRead, iamv1.ResourceAccount, "accounts"); !found || capability.Available {
+		t.Fatal("new primary inherited platform account-directory capability")
 	}
 	passwordChange(primaryB, primaryBPassword, primaryBChanged)
 	t.Run("event-bound historical producer authority", func(t *testing.T) {
@@ -2090,7 +2105,10 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	passwordChange(childSessionA, childPassword, childChangedA)
 	passwordChange(childSessionB, childPassword, childChangedB)
 	login("shared.user@customer-b", childChangedA, http.StatusUnauthorized)
-	if id := identity(childSessionA); id.User.ID != childA.ID || id.Account.ID != tenantA || id.CanCreateAccounts {
+	if id := identity(childSessionA); id.User.ID != childA.ID || id.Account.ID != tenantA || func() bool {
+		capability, found := findIAMCapability(id.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts")
+		return !found || capability.Available
+	}() {
 		t.Fatal("wrong tenant or platform capability in child identity")
 	}
 	if len(identity(childSessionB).PolicyAttachments) != 0 {
@@ -2121,6 +2139,22 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 				t.Fatal("explicit user policy attachment missing")
 			}
 			childBinding = entry.PolicyAttachments[0].ID
+			for _, expected := range []struct {
+				action iamv1.Action
+				kind   iamv1.ResourceKind
+				id     string
+			}{
+				{iamv1.ActionIAMUserSetStatus, iamv1.ResourceUser, string(childA.ID)},
+				{iamv1.ActionIAMUserPasswordReset, iamv1.ResourceUser, string(childA.ID)},
+				{iamv1.ActionIAMPolicyAttachmentCreate, iamv1.ResourceUser, string(childA.ID)},
+				{iamv1.ActionIAMPlatformPolicyAttachmentCreate, iamv1.ResourceUser, string(childA.ID)},
+				{iamv1.ActionIAMPolicyAttachmentRevoke, iamv1.ResourcePolicyAttachment, string(childBinding)},
+			} {
+				capability, found := findIAMCapability(entry.Capabilities, expected.action, expected.kind, expected.id)
+				if !found || !capability.Available || capability.RestrictionReason != "" {
+					t.Fatalf("authorized target capability %s is unavailable", expected.action)
+				}
+			}
 		}
 	}
 	if childBinding == "" {
@@ -2143,11 +2177,32 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	delegated := createUser(root, "delegated.admin", iamv1.SystemPolicyAccountAdministrator, http.StatusCreated)
 	delegatedSession := login("delegated.admin@customer-a", childPassword, http.StatusOK)
 	passwordChange(delegatedSession, childPassword, childChangedA)
-	if identity(delegatedSession).CanCreateAccounts {
+	if capability, found := findIAMCapability(identity(delegatedSession).Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts"); !found || capability.Available {
 		t.Fatal("assignable administrator role granted platform access")
 	}
 	request(http.MethodGet, "/v1/accounts", delegatedSession, nil, http.StatusForbidden)
 	request(http.MethodPost, "/v1/accounts", delegatedSession, newTenantBody, http.StatusForbidden)
+	selfDirectory := request(http.MethodGet, "/v1/users", delegatedSession, nil, http.StatusOK)
+	var selfUsers iamv1.UserList
+	if json.Unmarshal(selfDirectory.Body.Bytes(), &selfUsers) != nil || iamv1.ValidateUserList(selfUsers) != nil {
+		t.Fatal("delegated administrator directory is invalid")
+	}
+	foundSelf := false
+	for _, entry := range selfUsers.Items {
+		if entry.User.ID != delegated.ID {
+			continue
+		}
+		foundSelf = true
+		for _, action := range []iamv1.Action{iamv1.ActionIAMUserSetStatus, iamv1.ActionIAMUserPasswordReset} {
+			capability, found := findIAMCapability(entry.Capabilities, action, iamv1.ResourceUser, string(delegated.ID))
+			if !found || capability.Available || capability.RestrictionReason != iamv1.CapabilitySelfProtected {
+				t.Fatalf("self-protection capability %s is invalid", action)
+			}
+		}
+	}
+	if !foundSelf {
+		t.Fatal("delegated administrator missing from its own user directory")
+	}
 	request(http.MethodPost, "/v1/users/"+string(delegated.ID)+":set-status", delegatedSession, map[string]any{"status": "DISABLED", "resourceVersion": 2, "requestId": "request-self-disable"}, http.StatusForbidden)
 	setAlias(delegatedSession, "customer-a-new", 2, http.StatusOK)
 	login("shared.user@customer-a", childChangedA, http.StatusUnauthorized)
@@ -2177,6 +2232,27 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	request(http.MethodPost, statusPath, root, map[string]any{"status": "DISABLED", "resourceVersion": 2, "requestId": "request-disable"}, http.StatusOK)
 	request(http.MethodGet, "/v1/auth/me", childSessionA, nil, http.StatusUnauthorized)
 	login("shared.user@customer-a", childChangedA, http.StatusUnauthorized)
+	disabledDirectory := request(http.MethodGet, "/v1/users", root, nil, http.StatusOK)
+	var disabledUsers iamv1.UserList
+	if json.Unmarshal(disabledDirectory.Body.Bytes(), &disabledUsers) != nil || iamv1.ValidateUserList(disabledUsers) != nil {
+		t.Fatal("disabled target directory is invalid")
+	}
+	foundDisabled := false
+	for _, entry := range disabledUsers.Items {
+		if entry.User.ID != childA.ID {
+			continue
+		}
+		foundDisabled = true
+		for _, action := range []iamv1.Action{iamv1.ActionIAMPolicyAttachmentCreate, iamv1.ActionIAMPlatformPolicyAttachmentCreate} {
+			capability, found := findIAMCapability(entry.Capabilities, action, iamv1.ResourceUser, string(childA.ID))
+			if !found || capability.Available || capability.RestrictionReason != iamv1.CapabilityTargetDisabled {
+				t.Fatalf("disabled-target capability %s is invalid", action)
+			}
+		}
+	}
+	if !foundDisabled {
+		t.Fatal("disabled target missing from user directory")
+	}
 	request(http.MethodPost, statusPath, root, map[string]any{"status": "ACTIVE", "resourceVersion": 3, "requestId": "request-enable"}, http.StatusOK)
 	request(http.MethodGet, "/v1/auth/me", childSessionA, nil, http.StatusUnauthorized)
 	activeOne := login("shared.user@customer-a", childChangedA, http.StatusOK)
@@ -2189,6 +2265,27 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	resetSession := login("shared.user@customer-a", resetPassword, http.StatusOK)
 	if !identity(resetSession).User.MustChangePassword {
 		t.Fatal("reset password did not restrict the next login")
+	}
+	pendingDirectory := request(http.MethodGet, "/v1/users", root, nil, http.StatusOK)
+	var pendingUsers iamv1.UserList
+	if json.Unmarshal(pendingDirectory.Body.Bytes(), &pendingUsers) != nil || iamv1.ValidateUserList(pendingUsers) != nil {
+		t.Fatal("password-change target directory is invalid")
+	}
+	foundPending := false
+	for _, entry := range pendingUsers.Items {
+		if entry.User.ID != childA.ID {
+			continue
+		}
+		foundPending = true
+		tenantCapability, tenantFound := findIAMCapability(entry.Capabilities, iamv1.ActionIAMPolicyAttachmentCreate, iamv1.ResourceUser, string(childA.ID))
+		platformCapability, platformFound := findIAMCapability(entry.Capabilities, iamv1.ActionIAMPlatformPolicyAttachmentCreate, iamv1.ResourceUser, string(childA.ID))
+		if !tenantFound || !tenantCapability.Available || !platformFound || platformCapability.Available ||
+			platformCapability.RestrictionReason != iamv1.CapabilityTargetCredentialChangeRequired {
+			t.Fatal("credential-change protection did not distinguish tenant and installation authority")
+		}
+	}
+	if !foundPending {
+		t.Fatal("password-change target missing from user directory")
 	}
 	assertPaasDecision(resetSession, iamv1.ActionManagedServiceInstallationRead, false, "")
 	if identity(childSessionB).User.ID != childB.ID {
@@ -2236,8 +2333,23 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	}
 	accountPage := request(http.MethodGet, "/v1/accounts", root, nil, http.StatusOK)
 	var accounts iamv1.AccountList
-	if json.Unmarshal(accountPage.Body.Bytes(), &accounts) != nil || len(accounts.Items) != 2 {
+	if json.Unmarshal(accountPage.Body.Bytes(), &accounts) != nil || iamv1.ValidateAccountList(accounts) != nil || len(accounts.Items) != 2 {
 		t.Fatal("failed onboarding left a partial tenant")
+	}
+	for _, entry := range accounts.Items {
+		statusCapability, statusFound := findIAMCapability(entry.Capabilities, iamv1.ActionIAMAccountSetStatus, iamv1.ResourceAccount, string(entry.Account.ID))
+		recoveryCapability, recoveryFound := findIAMCapability(entry.Capabilities, iamv1.ActionIAMAccountRootCredentialsRecover, iamv1.ResourceAccount, string(entry.Account.ID))
+		if !statusFound || !recoveryFound {
+			t.Fatal("account directory omitted lifecycle capabilities")
+		}
+		if entry.Account.ID == tenantA {
+			if statusCapability.Available || statusCapability.RestrictionReason != iamv1.CapabilitySystemAccountProtected ||
+				recoveryCapability.Available || recoveryCapability.RestrictionReason != iamv1.CapabilityInstallationAuthorityProtected {
+				t.Fatal("system account protection was inferred from a role name or omitted")
+			}
+		} else if !statusCapability.Available || !recoveryCapability.Available {
+			t.Fatal("ordinary account lifecycle was unavailable to its authorized platform actor")
+		}
 	}
 	// Two account administrators cannot acquire the same alias concurrently.
 	startAliasRace := make(chan struct{})
@@ -2333,8 +2445,33 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	request(http.MethodPost, "/v1/policy-attachments", root, map[string]any{"target": iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(operatorUser.ID)}, "policyId": iamv1.SystemPolicyPlatformOperator, "policyResourceVersion": 1, "requestId": "request-lifecycle-platform-grant"}, http.StatusOK)
 	operatorIdentity := request(http.MethodGet, "/v1/auth/me", operator, nil, http.StatusOK)
 	var identity iamv1.CurrentIdentity
-	if json.Unmarshal(operatorIdentity.Body.Bytes(), &identity) != nil || !identity.CanCreateAccounts || len(identity.PolicyAttachments) != 1 || identity.User.ID == identity.Account.RootIdentity.PrincipalID {
+	if json.Unmarshal(operatorIdentity.Body.Bytes(), &identity) != nil {
+		t.Fatal("platform operator identity is invalid")
+	}
+	operatorCreate, operatorCanCreate := findIAMCapability(identity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts")
+	if !operatorCanCreate || !operatorCreate.Available || len(identity.PolicyAttachments) != 1 || identity.User.ID == identity.Account.RootIdentity.PrincipalID {
 		t.Fatal("tenant lifecycle still requires bootstrap/primary or tenant-admin identity")
+	}
+	protectedDirectory := request(http.MethodGet, "/v1/users", root, nil, http.StatusOK)
+	var protectedUsers iamv1.UserList
+	if json.Unmarshal(protectedDirectory.Body.Bytes(), &protectedUsers) != nil || iamv1.ValidateUserList(protectedUsers) != nil {
+		t.Fatal("platform-bound target directory is invalid")
+	}
+	foundProtected := false
+	for _, entry := range protectedUsers.Items {
+		if entry.User.ID != operatorUser.ID {
+			continue
+		}
+		foundProtected = true
+		for _, action := range []iamv1.Action{iamv1.ActionIAMUserSetStatus, iamv1.ActionIAMUserPasswordReset} {
+			capability, found := findIAMCapability(entry.Capabilities, action, iamv1.ResourceUser, string(operatorUser.ID))
+			if !found || capability.Available || capability.RestrictionReason != iamv1.CapabilityInstallationAuthorityProtected {
+				t.Fatalf("installation authority protection capability %s is invalid", action)
+			}
+		}
+	}
+	if !foundProtected {
+		t.Fatal("platform-bound target missing from user directory")
 	}
 	request(http.MethodGet, "/v1/users", operator, nil, http.StatusForbidden)
 	created := request(http.MethodPost, "/v1/accounts", operator, map[string]any{
@@ -2352,11 +2489,11 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	readAccount := func(id string) iamv1.Account {
 		t.Helper()
 		response := request(http.MethodGet, "/v1/accounts/"+id, operator, nil, http.StatusOK)
-		var result iamv1.Account
-		if json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidateAccount(result) != nil {
+		var result iamv1.AccountAccess
+		if json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidateAccountAccess(result) != nil || result.Account.ID != iamv1.AccountID(id) {
 			t.Fatal("invalid platform tenant detail")
 		}
-		return result
+		return result.Account
 	}
 	status := func(id string, next iamv1.AccountStatus, version uint64, expected int) {
 		request(http.MethodPost, "/v1/accounts/"+id+":set-status", operator,
@@ -2455,7 +2592,12 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	login("lifecycle.primary", changed, http.StatusUnauthorized)
 	primary = login("lifecycle.primary", recovered, http.StatusOK)
 	current := request(http.MethodGet, "/v1/auth/me", primary, nil, http.StatusOK)
-	if json.Unmarshal(current.Body.Bytes(), &identity) != nil || !identity.User.MustChangePassword || identity.CanCreateAccounts || len(identity.PolicyAttachments) != 1 || identity.PolicyAttachments[0].PolicyID != iamv1.SystemPolicyAccountAdministrator {
+	if json.Unmarshal(current.Body.Bytes(), &identity) != nil {
+		t.Fatal("recovered root identity is invalid")
+	}
+	recoveredCreate, recoveredCanCreate := findIAMCapability(identity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts")
+	if !identity.User.MustChangePassword || !recoveredCanCreate || recoveredCreate.Available ||
+		recoveredCreate.RestrictionReason != iamv1.CapabilityCurrentCredentialChangeRequired || len(identity.PolicyAttachments) != 1 || identity.PolicyAttachments[0].PolicyID != iamv1.SystemPolicyAccountAdministrator {
 		t.Fatal("primary recovery gained platform access or skipped required password change")
 	}
 	request(http.MethodGet, "/v1/users", primary, nil, http.StatusForbidden)

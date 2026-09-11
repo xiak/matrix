@@ -1,6 +1,6 @@
 DO $verify_accounts$
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 6::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 7::bigint THEN
         RAISE EXCEPTION 'IAM account/proof schema version is incompatible';
     END IF;
     IF NOT EXISTS (
@@ -37,6 +37,9 @@ BEGIN
         OR has_table_privilege('matrix_iam_worker','iam.account_roots','SELECT,INSERT,UPDATE,DELETE')
         OR has_table_privilege('public','iam.account_roots','SELECT,INSERT,UPDATE,DELETE')
         OR has_function_privilege('matrix_iam_api','iam.account_snapshot(text)','EXECUTE')
+        OR has_function_privilege('matrix_iam_api','iam.account_management_snapshot(text)','EXECUTE')
+        OR has_function_privilege('matrix_iam_worker','iam.account_management_snapshot(text)','EXECUTE')
+        OR has_function_privilege('public','iam.account_management_snapshot(text)','EXECUTE')
         OR has_function_privilege('matrix_iam_api','iam.user_snapshot(text,text)','EXECUTE')
         OR has_function_privilege('public','iam.read_audit_evidence(text,text,text,text,jsonb)','EXECUTE')
         OR has_function_privilege('matrix_iam_worker','iam.read_audit_evidence(text,text,text,text,jsonb)','EXECUTE')

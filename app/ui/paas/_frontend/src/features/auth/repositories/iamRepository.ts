@@ -1,5 +1,5 @@
 import type { SessionSummary } from "../domain/session";
-import type { Account, AccountCommand, AccountIdentity, DirectoryPage, PolicyDirectory, UserAccess } from "../domain/accounts";
+import type { AccountAccess, AccountCommand, AccountIdentity, DirectoryPage, PolicyDirectory, UserAccess } from "../domain/accounts";
 
 export type LoginCommand = {
   loginName: string;
@@ -31,6 +31,6 @@ export interface AccountRepository {
   currentIdentity(credential: string): Promise<AccountIdentity>;
   listUsers(credential: string, after?: string): Promise<DirectoryPage<UserAccess>>;
   listPolicies(credential: string, platform: boolean): Promise<PolicyDirectory>;
-  listAccounts(credential: string, after?: string): Promise<DirectoryPage<Account>>;
+  listAccounts(credential: string, after?: string): Promise<DirectoryPage<AccountAccess>>;
   execute(credential: string, command: AccountCommand): Promise<void>;
 }
