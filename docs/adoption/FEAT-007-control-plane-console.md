@@ -12,6 +12,7 @@
 | Complete Discord-style Next.js UI | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Sole architecture and visual-style donor; read only through Git object commands and exclude its worktree. |
 | PaaS product-design record | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Product-boundary reference only; it is not a second UI architecture or style donor. |
 | Matrix shared interaction fixes | `21b469b343d83a190acc0a3bb34a29b5294191ad` | This repository, fixed Git objects; backport bounded behavior to the existing cloud UI owner, not its replacement shell. |
+| IAM product and console contract | `121e68373951a9261754661329a8e4e41bb6206c` | Same repository, inspected as fixed Git objects. Selectively adapt public IAM wire/domain semantics into the existing console; do not cherry-pick its generated UI, styles or backend runtime. |
 
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.
@@ -80,6 +81,22 @@ architecture, package or runtime dependency.
 | `TableToolbar` reset focus and behavioral assertions | `REUSE` | Restore focus to the stable filter trigger after its reset button disappears; preserve the keyword and disclosed conditions. |
 | Platform-shell replacement, narrowed product catalogue and CAM/preview omission | `REJECT` | These changes do not preserve the cloud UX release's approved service discovery, complete MOCK workspaces and one-click preview. |
 | Viewport-only brand breakpoint and suppression of shell actions by every local heading | `REJECT` | This console already owns container-responsive branding; its local commands and global refresh are not interchangeable. |
+
+## IAM fixed-contract integration
+
+The IAM revision is an authority and transport donor, not another visual or
+application-architecture donor. The existing FEAT-007 provider/repository/
+scene/renderer chain and isolated UX preview remain the UI owners.
+
+| Slice at fixed commit | Decision | Rationale |
+| --- | --- | --- |
+| `AccountPolicy`, `PolicyDirectory`, `UserPolicyAttachment`, tenant/installation scope, management owner, lifecycle status and optimistic resource versions | `ADAPT` | These are the accepted public objects needed to present truthful live policy metadata and direct user associations. The console retains its view models and localized presentation. |
+| Separate tenant and installation policy-list routes with a complete, stable-ID sorted maximum of 256 records | `ADAPT` | Fetch and authorize the directories independently. Treat only 403 as a local unavailable section; every other error fails the live scene. Client pagination may make the bounded snapshot easier to scan but must not impersonate backend pagination. |
+| Exact create/revoke policy-attachment commands and organization lifecycle commands | `ADAPT` | Preserve target identity plus policy or attachment revision so stale selections conflict rather than mutating a different revision. Account opening, suspension/recovery and direct user associations remain server-authorized. |
+| Current identity and principal projections with direct, unretracted `USER` attachments | `ADAPT` | Display the primary owner and subusers as separate identity types. New users are ungranted; management ability comes from successful authorized reads, not a display name or local role map. |
+| IAM architecture analysis and fixed FEAT contracts | `REFERENCE` | Use them to explain object relationships, management snapshots and authorization boundaries. FEAT-007 owns only the browser behavior and does not restate IAM's domain contract. |
+| IAM branch UI styles, generated exports, route shell and wholesale commit | `REJECT` | They would replace the approved cloud UX and duplicate its owners. Only bounded contract semantics and tests cross the adoption boundary. |
+| Superseded `BuiltinRole`, `RoleBinding`, role-name-to-authority inference, hidden MOCK fallback and synthesized policy content/effective access | `REJECT` | These projections are not the fixed IAM contract and could overstate authority. Extended group/role/policy simulation survives only behind the explicit one-click preview repository. |
 
 ## Resulting implementation constraints
 

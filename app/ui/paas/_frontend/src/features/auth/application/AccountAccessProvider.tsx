@@ -40,7 +40,7 @@ type AccountAccess = {
 };
 
 const AccountAccessContext = createContext<AccountAccess | null>(null);
-type AccountCapabilities = Pick<AccountAccessScene, "canManage" | "canCreateOrganizations">;
+type AccountCapabilities = Pick<AccountAccessScene, "canManage" | "canCreateOrganizations" | "canViewPolicies"> & { hasPreviewWorkspace: boolean };
 const AccountCapabilitiesContext = createContext<AccountCapabilities | null>(null);
 
 function accountError(error: unknown): AccountError {
@@ -51,6 +51,15 @@ function accountError(error: unknown): AccountError {
     if (error.status === 422 || error.status === 400) return "invalid";
   }
   return "unavailable";
+}
+
+async function readWhenAuthorized<T>(read: () => Promise<T>): Promise<T | null> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof HttpProblem && error.status === 403) return null;
+    throw error;
+  }
 }
 
 export function AccountAccessProvider({ children, repository = httpAccountRepository, active = true }: { children: ReactNode; repository?: AccountRepository; active?: boolean }) {
@@ -85,8 +94,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const clearFeedback = useCallback(() => { setWorkspaceError(null); setSuccess(null); }, []);
   const canManage = Boolean(scene?.canManage);
   const canCreateOrganizations = Boolean(scene?.canCreateOrganizations);
+  const canViewPolicies = Boolean(scene?.canViewPolicies);
+  const hasPreviewWorkspace = Boolean(repository.workspace);
   // Navigation observes permission changes, not every form's pending/error state.
-  const capabilities = useMemo(() => ({ canManage, canCreateOrganizations }), [canManage, canCreateOrganizations]);
+  const capabilities = useMemo(() => ({ canManage, canCreateOrganizations, canViewPolicies, hasPreviewWorkspace }), [canCreateOrganizations, canManage, canViewPolicies, hasPreviewWorkspace]);
 
   useEffect(() => {
     if (!active || !credential || !tenantId) return;
@@ -94,15 +105,20 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     async function read() {
       const identity = await repository.currentIdentity(credential!);
       if (identity.account.organization.id !== tenantId || identity.principal.id !== principalId) throw new Error("INVALID_IAM_IDENTITY");
-      const canManage = identity.roles.includes("ORGANIZATION_ADMIN") && !identity.principal.mustChangePassword;
-      const [users, accounts, extension] = await Promise.all([
-        canManage ? repository.listUsers(credential!, page.users || undefined) : null,
-        identity.canCreateOrganizations ? repository.listAccounts(credential!, page.accounts || undefined) : null,
-        canManage && repository.workspace ? repository.workspace.read(credential!) : null
+      const [users, accounts, tenantPolicies, platformPolicies] = await Promise.all([
+        readWhenAuthorized(() => repository.listUsers(credential!, page.users || undefined)),
+        identity.canCreateOrganizations ? readWhenAuthorized(() => repository.listAccounts(credential!, page.accounts || undefined)) : null,
+        readWhenAuthorized(() => repository.listPolicies(credential!, false)),
+        readWhenAuthorized(() => repository.listPolicies(credential!, true))
       ]);
+      // The advanced workspace is an explicit preview capability. Do not fetch its
+      // larger graph unless the live directory boundary has authorized management.
+      const extension = users !== null && repository.workspace ? await repository.workspace.read(credential!) : null;
       if (users?.items.some((entry) => entry.principal.organizationId !== tenantId)) throw new Error("INVALID_IAM_TENANT");
+      if (tenantPolicies && tenantPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
+      if (platformPolicies && platformPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
       if (extension && (extension.accountId !== tenantId || extension.mode !== "preview")) throw new Error("INVALID_IAM_TENANT");
-      return { scene: { ...buildAccountAccessScene(identity, users, accounts), directoryComplete: !page.users && !users?.nextAfter }, extension };
+      return { scene: { ...buildAccountAccessScene(identity, users, accounts, tenantPolicies, platformPolicies), directoryComplete: !page.users && users !== null && !users.nextAfter }, extension };
     }
     read().then((loaded) => { if (mounted) { setScene(loaded.scene); setWorkspace(loaded.extension); setError(null); } },
       (failure: unknown) => { if (mounted) { setScene(null); setWorkspace(null); setError(accountError(failure)); } })
@@ -155,7 +171,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     accountsPage(after) { setLoading(true); setPage((current) => ({ ...current, accounts: after })); },
     async execute(command) {
       if (!active || !credential || loading || mutationPending.current) return false;
-      if ("principalId" in command && command.principalId === scene?.primaryUser.id) { setError("forbidden"); return false; }
+      const protectedPrimary = (command.kind === "set-status" || command.kind === "reset-password" || command.kind === "create-policy-attachment") && command.principalId === scene?.primaryUser.id;
+      if (protectedPrimary) { setError("forbidden"); return false; }
       mutationPending.current = true;
       setBusy(true); setError(null); setSuccess(null);
       try {

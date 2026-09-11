@@ -39,7 +39,7 @@ function AccountIdentityCard({ scene }: { scene: AccountAccessScene }) {
         <div><dt>{t("signedIn")}</dt><dd>{scene.identityLabel}</dd></div>
         <div><dt>{t("currentLoginName")}</dt><dd>{scene.loginName}</dd></div>
         <div><dt>{t("accountId")}</dt><dd><AccountIdentifier label={t("accountId")} value={scene.accountId} /></dd></div>
-        <div><dt>{t("role")}</dt><dd>{scene.roles.map((role) => t(`roles.${role}`)).join(" · ") || t("noBusinessRoles")}</dd></div>
+        <div><dt>{t("directPolicyAttachments")}</dt><dd>{scene.identityAttachments.map((attachment) => attachment.label).join(" · ") || t("noGrantLabel")}</dd></div>
       </dl>
     </Card.Body>
   </Card>;
@@ -53,15 +53,16 @@ export function AccountOverview({ scene, onNavigate }: { scene: AccountAccessSce
   const workspace = access.workspace;
   const [showEvents, setShowEvents] = useState(false);
   const pending = scene.users.filter((user) => user.state === "passwordChangeRequired").length;
-  const ungranted = scene.users.filter((user) => user.bindings.length === 0).length;
+  const ungranted = scene.users.filter((user) => user.attachments.length === 0).length;
   const highPolicies = workspace?.policies.filter((policy) => {
     const document = policy.versions.find((version) => version.id === policy.defaultVersion)?.document;
     return document && includesPermissionManagement(document);
   }) ?? [];
   const highPolicyIds = new Set(highPolicies.map((policy) => policy.id));
-  const admins = scene.users.filter((user) => user.bindings.some((binding) => binding.role === "ORGANIZATION_ADMIN") ||
-    workspace?.userPolicies[user.id]?.some((id) => highPolicyIds.has(id)) ||
-    workspace?.groups.some((group) => group.memberIds.includes(user.id) && group.policyIds.some((id) => highPolicyIds.has(id)))).length;
+  const elevatedUsers = workspace ? scene.users.filter((user) =>
+    workspace.userPolicies[user.id]?.some((id) => highPolicyIds.has(id)) ||
+    workspace.groups.some((group) => group.memberIds.includes(user.id) && group.policyIds.some((id) => highPolicyIds.has(id)))).length : null;
+  const directlyAttachedUsers = scene.users.filter((user) => user.attachments.length > 0).length;
   const active = scene.users.filter((user) => user.enabled).length;
   const open = (view: AccountAccessView, id?: string) => ({ preventDefault }: { preventDefault(): void }) => { preventDefault(); onNavigate(view, id); };
 if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperations")} onBack={() => setShowEvents(false)}><p className={styles.note}>{w("eventHistoryHint")}</p><WorkspaceCollection embedded title={w("sensitiveOperations")} description={w("eventHistoryHint")} items={workspace.events.map((event) => ({ ...event, name: w(`events.${event.action}`) }))} keywords={(event) => event.target} columns={[w("event"), w("target"), w("time")]} row={(event) => <><td>{event.name}</td><td>{event.target}</td><td><WorkspaceTime value={event.at} /></td></>} /></WorkspaceDetail>;
@@ -92,13 +93,13 @@ if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperatio
             <Card.Header><Typography.Title as="h2" level={3}>{t("accessChecklist")}</Typography.Title><Button asChild size="small" variant="ghost"><Link href="/console/access/users/" onNavigate={open("users")}>{t("viewUsers")}<ArrowRight aria-hidden="true" /></Link></Button></Card.Header>
             <Card.Body className={styles.checklist}>
               <div><span className={styles.checklistIcon}><Users aria-hidden="true" /></span><div><strong>{t("delegateTitle")}</strong><p>{t("delegateHint")}</p></div><Badge status={scene.users.length ? "success" : "neutral"}>{t("userCount", { count: scene.users.length })}</Badge></div>
-              <div><span className={styles.checklistIcon}><ShieldCheck aria-hidden="true" /></span><div><strong>{t("reviewAdmins")}</strong><p>{workspace ? w("reviewPrivilegeHint") : t("reviewAdminsHint")}</p></div><Badge status={admins ? "warning" : "neutral"}>{t("userCount", { count: admins })}</Badge></div>
+              <div><span className={styles.checklistIcon}><ShieldCheck aria-hidden="true" /></span><div><strong>{workspace ? t("reviewAdmins") : t("reviewPolicyAttachments")}</strong><p>{workspace ? w("reviewPrivilegeHint") : t("managementSnapshotHint")}</p></div><Badge status={(elevatedUsers ?? directlyAttachedUsers) ? "warning" : "neutral"}>{t("userCount", { count: elevatedUsers ?? directlyAttachedUsers })}</Badge></div>
               <div><span className={styles.checklistIcon}><KeyRound aria-hidden="true" /></span><div><strong>{t("firstLoginTitle")}</strong><p>{t("firstLoginHint")}</p></div><Badge status={pending ? "warning" : "success"}>{t("pendingCount", { count: pending })}</Badge></div>
             </Card.Body>
           </Card>
         </> : <Alert>{t("ownAccountHint")}</Alert>}
         <Card>
-          <Card.Header><Typography.Title as="h2" level={3}>{t("permissionPrinciples")}</Typography.Title><Button asChild size="small" variant="ghost"><Link href="/console/access/roles/" onNavigate={open("roles")}>{t("viewRoles")}<ArrowRight aria-hidden="true" /></Link></Button></Card.Header>
+          <Card.Header><Typography.Title as="h2" level={3}>{t("permissionPrinciples")}</Typography.Title><Button asChild size="small" variant="ghost"><Link href={workspace ? "/console/access/roles/" : "/console/access/policies/"} onNavigate={open(workspace ? "roles" : "policies")}>{t(workspace ? "viewRoles" : "viewPolicies")}<ArrowRight aria-hidden="true" /></Link></Button></Card.Header>
           <Card.Body><p className={styles.note}>{t("defaultDenyHint")}</p></Card.Body>
         </Card>
         {workspace ? <Card>

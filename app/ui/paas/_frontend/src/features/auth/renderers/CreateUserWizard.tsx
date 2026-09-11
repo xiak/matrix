@@ -3,9 +3,8 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowRight, Check, CheckCircle2, Code2, ShieldCheck, UserRound } from "lucide-react";
-import { ContentPage, Alert, Badge, Button, Checkbox, FormField, Input, PasswordInput, Radio, RadioGroup, Select, TagEditor, Wizard } from "@ui/xiak";
+import { ContentPage, Alert, Badge, Button, Checkbox, FormField, Input, PasswordInput, Radio, RadioGroup, TagEditor, Wizard } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
-import { userRoles, type UserRole } from "../domain/accounts";
 import type { PreviewUserProfile } from "../domain/accessWorkspace";
 import { UserPermissionSelector, type UserPermissions } from "./UserPermissionSelector";
 import { useAccessDraft } from "./useAccessDraft";
@@ -32,7 +31,6 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
   const [passwordMode, setPasswordMode] = useState("auto");
   const [profile, setProfile] = useState<PreviewUserProfile>({ consoleAccess: true, programmaticAccess: false, passwordResetRequired: true, loginProtection: true, tags: [] });
   const [permissions, setPermissions] = useState<UserPermissions>({ policyIds: [], groupIds: [] });
-  const [role, setRole] = useState<UserRole | "">("");
   const [errors, setErrors] = useState<Errors>({});
   const [complete, setComplete] = useState(false);
   const workspace = access.workspace;
@@ -41,7 +39,7 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
   const steps: Step[] = preview ? ["type", "identity", "permissions", "tags", "review"] : ["identity", "permissions", "review"];
   const current = steps[step] ?? "review";
   const busy = access.busy || access.loading;
-  const dirty = Boolean(login || name || password || permissions.policyIds.length || permissions.groupIds.length || profile.tags.length || role || persona !== "person"
+  const dirty = Boolean(login || name || password || permissions.policyIds.length || permissions.groupIds.length || profile.tags.length || persona !== "person"
     || passwordMode !== "auto" || !profile.consoleAccess || profile.programmaticAccess || !profile.passwordResetRequired || !profile.loginProtection);
   const requestLeave = useAccessDraft({ dirty: dirty && !complete, busy: access.busy, title: t("cancelTitle"), description: t("cancelHint"), form });
   useEffect(() => { if (Object.keys(errors).length) form.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(); }, [errors]);
@@ -73,13 +71,13 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
     submitting.current = true;
     const initialPassword = password;
     setPassword("");
-    const accepted = preview ? Boolean(await access.executeWorkspace({ kind: "create-subuser", loginName: login.trim(), displayName: name.trim(), profile, ...permissions })) : await access.execute({ kind: "create-user", loginName: login.trim(), displayName: name.trim(), initialPassword, initialRole: role || undefined });
+    const accepted = preview ? Boolean(await access.executeWorkspace({ kind: "create-subuser", loginName: login.trim(), displayName: name.trim(), profile, ...permissions })) : await access.execute({ kind: "create-user", loginName: login.trim(), displayName: name.trim(), initialPassword });
     submitting.current = false;
     if (accepted) setComplete(true);
     else { setStep(steps.indexOf("identity")); if (!preview || passwordMode === "custom") setErrors({ password: "reenterPassword" }); }
   }
   const policyIds = new Set([...permissions.policyIds, ...workspace?.groups.filter((group) => permissions.groupIds.includes(group.id)).flatMap((group) => group.policyIds) ?? []]);
-  const elevated = role === "ORGANIZATION_ADMIN" || workspace?.policies.some((policy) => policyIds.has(policy.id) && policy.versions.find((version) => version.id === policy.defaultVersion)?.document.statement.some((statement) => statement.effect === "allow" && statement.action.includes("*")));
+  const elevated = Boolean(workspace?.policies.some((policy) => policyIds.has(policy.id) && policy.versions.find((version) => version.id === policy.defaultVersion)?.document.statement.some((statement) => statement.effect === "allow" && statement.action.includes("*"))));
   const errorText = (field: keyof Errors) => errors[field] === "passwordHint" ? a("passwordHint") : errors[field] ? t(errors[field]) : undefined;
   const errorFor = (field: keyof Errors) => errors[field] ? `${id}-${field}-error` : undefined;
   const updateProfile = (next: Partial<PreviewUserProfile>) => setProfile((previous) => ({ ...previous, ...next }));
@@ -107,11 +105,11 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
                 {preview ? <div className={styles.securityOptions}><Checkbox checked={profile.passwordResetRequired} onChange={(event) => updateProfile({ passwordResetRequired: event.target.checked })}>{t("forceReset")}</Checkbox><Checkbox checked={profile.loginProtection} onChange={(event) => updateProfile({ loginProtection: event.target.checked })}>{t("loginProtection")}</Checkbox><p className={styles.muted}>{t("mockSecurity")}</p></div> : <p className={styles.muted}>{a("firstLoginHint")}</p>}
               </div> : null}
             </div> : null}
-            {current === "permissions" ? workspace ? <UserPermissionSelector workspace={workspace} scene={scene} value={permissions} onChange={setPermissions} /> : <div className={styles.livePermissions}><FormField id={`${id}-role`} label={a("initialRole")} hint={a("initialRoleHint")}><Select id={`${id}-role`} value={role} onValueChange={(value) => setRole(value as UserRole | "")} options={[{ value: "", label: a("noGrant") }, ...userRoles.map((value) => ({ value, label: a(`roles.${value}`) }))]} /></FormField><Alert status={elevated ? "warning" : "info"}>{role ? a(`roleDescriptions.${role}`) : a("noRolesHint")}</Alert></div> : null}
+            {current === "permissions" ? workspace ? <UserPermissionSelector workspace={workspace} scene={scene} value={permissions} onChange={setPermissions} /> : <div className={styles.livePermissions}><Alert status="info">{a("liveUserDefaultNoGrant")}</Alert><p className={styles.muted}>{a("livePolicyAfterCreateHint")}</p></div> : null}
             {current === "tags" ? <div className={styles.tags}><p className={styles.muted}>{t("tagHint")}</p><TagEditor value={profile.tags} onChange={(tags) => updateProfile({ tags })} error={errorText("tags")} labels={{ key: (index) => t("tagKey", { index }), value: (index) => t("tagValue", { index }), remove: (index) => t("removeTag", { index }), add: t("addTag"), empty: t("noTagsHint"), count: t("tagCount", { count: profile.tags.length }) }} /></div> : null}
             {current === "review" ? <div className={styles.review}><Alert status={elevated ? "warning" : "info"}>{elevated ? preview ? t("widePermissionWarning") : a("adminGrantWarning") : t("reviewHint")}</Alert>
               <section><div className={styles.reviewHeading}><h3>{t("basicInfo")}</h3><Button size="small" variant="ghost" onClick={() => changeStep(steps.indexOf("identity"))}>{t("editIdentity")}</Button></div><dl><div><dt>{a("userType")}</dt><dd>{a("child")}</dd></div><div><dt>{a("ownership")}</dt><dd>{scene.accountName} · {scene.accountId}</dd></div><div><dt>{a("childLogin")}</dt><dd>{login.trim()}</dd></div><div><dt>{a("displayName")}</dt><dd>{name.trim()}</dd></div><div><dt>{a("qualifiedLogin")}</dt><dd>{login.trim()}@{scene.loginAlias ?? scene.accountId}</dd></div><div><dt>{t("accessMethods")}</dt><dd>{[!preview || profile.consoleAccess ? t("consoleAccess") : "", preview && profile.programmaticAccess ? t("programmaticAccess") : ""].filter(Boolean).join(" · ")}</dd></div>{!preview || profile.consoleAccess ? <div><dt>{a("initialPassword")}</dt><dd>{preview && passwordMode === "auto" ? t("autoPassword") : a("passwordReady")}</dd></div> : null}{preview && profile.consoleAccess ? <><div><dt>{t("forceReset")}</dt><dd>{t(profile.passwordResetRequired ? "enabled" : "disabled")}</dd></div><div><dt>{t("loginProtection")}</dt><dd>{t(profile.loginProtection ? "enabled" : "disabled")}</dd></div></> : null}</dl></section>
-              <section><div className={styles.reviewHeading}><h3>{t("steps.permissions")}</h3><Button size="small" variant="ghost" onClick={() => changeStep(steps.indexOf("permissions"))}>{t("editPermissions")}</Button></div>{workspace ? <dl><div><dt>{t("direct")}</dt><dd>{workspace.policies.filter((policy) => permissions.policyIds.includes(policy.id)).map((policy) => <Badge key={policy.id}>{policy.name}</Badge>)}{!permissions.policyIds.length ? a("noGrantLabel") : null}</dd></div><div><dt>{t("joinGroups")}</dt><dd>{workspace.groups.filter((group) => permissions.groupIds.includes(group.id)).map((group) => <Badge key={group.id}>{group.name}</Badge>)}{!permissions.groupIds.length ? t("none") : null}</dd></div></dl> : <p>{role ? a(`roles.${role}`) : a("noGrantLabel")}</p>}</section>
+              <section><div className={styles.reviewHeading}><h3>{t("steps.permissions")}</h3><Button size="small" variant="ghost" onClick={() => changeStep(steps.indexOf("permissions"))}>{t("editPermissions")}</Button></div>{workspace ? <dl><div><dt>{t("direct")}</dt><dd>{workspace.policies.filter((policy) => permissions.policyIds.includes(policy.id)).map((policy) => <Badge key={policy.id}>{policy.name}</Badge>)}{!permissions.policyIds.length ? a("noGrantLabel") : null}</dd></div><div><dt>{t("joinGroups")}</dt><dd>{workspace.groups.filter((group) => permissions.groupIds.includes(group.id)).map((group) => <Badge key={group.id}>{group.name}</Badge>)}{!permissions.groupIds.length ? t("none") : null}</dd></div></dl> : <p>{a("noGrantLabel")} · {a("livePolicyAfterCreateShort")}</p>}</section>
               {preview ? <section><div className={styles.reviewHeading}><h3>{t("steps.tags")}</h3><Button size="small" variant="ghost" onClick={() => changeStep(steps.indexOf("tags"))}>{t("editTags")}</Button></div><div className={styles.tagActions}>{profile.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}{!profile.tags.length ? <span className={styles.muted}>{t("none")}</span> : null}</div></section> : null}
             </div> : null}
             {access.workspaceError ? <Alert status="danger">{w(`errors.${access.workspaceError}`)}</Alert> : null}{access.error ? <Alert status="danger">{a(`errors.${access.error}`)}</Alert> : null}

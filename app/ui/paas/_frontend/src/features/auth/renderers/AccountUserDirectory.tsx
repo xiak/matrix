@@ -6,7 +6,7 @@ import { Plus } from "lucide-react";
 import { Table, TableActions, TableSelectionCell, TableToolbar, ContentPage, EmptyState, Badge, Button, Card } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
-import { userRoles, type AccountAccessView } from "../domain/accounts";
+import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { UserAccessDialog } from "./AccountUserDialogs";
@@ -34,7 +34,10 @@ function AccountUserRow({ user, principalId, workspace, grants, checked, disable
       {grants!.direct > 0 ? <span>{w("directPolicyCount", { count: grants!.direct })}</span> : null}
       {grants!.inherited > 0 ? <span>{w("groupPolicyCount", { count: grants!.inherited })}</span> : null}
       {!grants!.direct && !grants!.inherited ? w("noPolicyGrants") : null}
-    </div> : <div className={styles.roleTags}>{user.bindings.length ? user.bindings.map((binding) => <Badge key={binding.id}>{t(`roles.${binding.role}`)}</Badge>) : t("noGrantLabel")}</div>}</td>
+    </div> : <div className={styles.roleTags}>{user.attachments.length ? <>
+      {user.attachments.slice(0, 2).map((attachment) => <Badge key={attachment.id} status={attachment.policyStatus === "RETIRED" ? "neutral" : undefined}>{attachment.label}</Badge>)}
+      {user.attachments.length > 2 ? <span>{t("morePolicyAttachments", { count: user.attachments.length - 2 })}</span> : null}
+    </> : t("noGrantLabel")}</div>}</td>
     <td>{user.state ? <Badge status={user.state === "disabled" ? "neutral" : user.state === "passwordChangeRequired" ? "warning" : "success"}>{t(`states.${user.state}`)}</Badge> : t("unknown")}</td>
   </tr>;
 }
@@ -72,7 +75,7 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
     const grants = associations.get(user.id);
     const roleMatches = user.accountType === "primary" ? role === "all" || role === "owner" : role === "owner" ? false : workspace ?
       role === "all" || (role === "ungranted" ? !grants!.direct && !grants!.inherited : role === "direct" ? grants!.direct > 0 : grants!.inherited > 0) :
-      role === "all" || (role === "ungranted" ? !user.bindings.length : user.bindings.some((binding) => binding.role === role));
+      role === "all" || (role === "ungranted" ? !user.attachments.length : role === "direct" ? user.attachments.length > 0 : user.attachments.some((attachment) => attachment.scope === "INSTALLATION"));
     return words.every((word) => text.includes(word)) && (kind === "all" || kind === user.accountType) && (state === "all" || state === user.state) && roleMatches;
   });
   const hasFilters = Boolean(query || kind !== "all" || state !== "all" || role !== "all");
@@ -95,11 +98,11 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
         status={t("userResults", { shown: filtered.length, loaded: identities.length })} filters={[
           { id: "kind", label: t("userType"), value: kind, onChange: (value) => changeFilter(() => setKind(value)), options: [{ value: "all", label: t("allUserTypes") }, { value: "primary", label: t("primary") }, { value: "subuser", label: t("child") }] },
           { id: "state", label: t("filterUserState"), value: state, onChange: (value) => changeFilter(() => setState(value)), options: [{ value: "all", label: t("allStates") }, ...(["active", "passwordChangeRequired", "disabled"] as const).map((value) => ({ value, label: t(`states.${value}`) }))] },
-          { id: "role", label: workspace ? w("filterPolicySource") : t("filterUserRole"), value: role, onChange: (value) => changeFilter(() => setRole(value)), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "owner", label: t("resourceOwner") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: t("allRoles") }, { value: "owner", label: t("resourceOwner") }, { value: "ungranted", label: t("noGrantLabel") }, ...userRoles.map((value) => ({ value, label: t(`roles.${value}`) }))] }
+          { id: "role", label: w("filterPolicySource"), value: role, onChange: (value) => changeFilter(() => setRole(value)), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "owner", label: t("resourceOwner") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: w("allPolicySources") }, { value: "owner", label: t("resourceOwner") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "platform", label: t("platformPolicyAttachments") }] }
         ]} />
       {!access.supportsUserBatch || filtered.length > userBatchLimit ? <p className={styles.selectionHint}>{batch(!access.supportsUserBatch ? "unsupportedHint" : "limitHint", { limit: userBatchLimit })}</p> : null}
       {filtered.length ? <Table aria-label={t("userTable")} className={styles.userTable}>
-          <thead><tr><TableSelectionCell header label={batch("selectPage")} checked={allChecked ? true : checkedUsers.length ? "mixed" : false} disabled={blocked || filtered.length > userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? filtered.map((user) => user.id) : [] })} /><th scope="col">{t("user")}</th><th scope="col">{t("userType")}</th><th scope="col">{t("accessMethods")}</th><th scope="col">{workspace ? w("policyAssociations") : t("role")}</th><th scope="col">{t("status")}</th></tr></thead>
+          <thead><tr><TableSelectionCell header label={batch("selectPage")} checked={allChecked ? true : checkedUsers.length ? "mixed" : false} disabled={blocked || filtered.length > userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? filtered.map((user) => user.id) : [] })} /><th scope="col">{t("user")}</th><th scope="col">{t("userType")}</th><th scope="col">{t("accessMethods")}</th><th scope="col">{w("policyAssociations")}</th><th scope="col">{t("status")}</th></tr></thead>
           <tbody>{filtered.map((user) => <AccountUserRow key={user.id} user={user} principalId={scene.principalId} workspace={workspace} grants={associations.get(user.id)}
             checked={checkedIds.has(user.id)} disabled={blocked || !checkedIds.has(user.id) && checkedUsers.length >= userBatchLimit}
             onSelect={(checked) => setSelection({ scene, ids: checked ? [...checkedIds, user.id] : [...checkedIds].filter((id) => id !== user.id) })}

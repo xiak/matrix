@@ -172,6 +172,10 @@
 .userDirectory { container: user-directory / inline-size; display: grid; gap: var(--xiak-spacing-comfortable); min-width: 0; }
 .directoryActions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--xiak-spacing-tight); min-width: 0; }
 .selectionHint { padding: 0 var(--xiak-spacing-comfortable) var(--xiak-spacing-default); margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.6; }
+.policyDirectoryIntro { display: grid; gap: var(--xiak-spacing-narrow); padding: 0 var(--xiak-panel-padding) var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.65; }
+.policyDirectoryIntro p { margin: 0; }
+.policyMetadataTable { min-width: 820px; }
+.policyMetadataTable td:first-child { min-width: 240px; }
 .batchChoices { margin: 0; padding-inline-start: var(--xiak-spacing-comfortable); overflow-wrap: anywhere; }
 .accessMethods { display: grid; gap: var(--xiak-spacing-narrow); margin: 0; padding: 0; list-style: none; }
 .accessMethods li { display: flex; align-items: baseline; gap: var(--xiak-spacing-tight); font-size: var(--xiak-font-size-small); overflow-wrap: anywhere; }

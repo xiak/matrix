@@ -34,7 +34,7 @@ export function userBatchDisabledReason(action: UserBatchAction, context: UserBa
 
 // One preview transaction spans directory identities and their workspace access.
 // Both results are published by the adapter only after every check succeeds.
-export function applyUserBatch(source: AccessWorkspace, users: AccountUser[], identity: AccountIdentity, command: UserBatchCommand, clock: { id: string; at: string }) {
+export function applyUserBatch(source: AccessWorkspace, users: AccountUser[], identity: AccountIdentity, command: UserBatchCommand, clock: { id: string; at: string; canManage: boolean }) {
   const invalid = () => { throw new AccessWorkspaceError("invalid"); };
   if (source.accountId !== identity.account.organization.id || identity.principal.organizationId !== source.accountId ||
     users.some((user) => user.principal.organizationId !== source.accountId) || !userBatchActions.includes(command.action) ||
@@ -48,8 +48,7 @@ export function applyUserBatch(source: AccessWorkspace, users: AccountUser[], id
     if (target.resourceVersion !== user.principal.resourceVersion) throw new AccessWorkspaceError("staleUsers");
     return { id: target.id, enabled: user.principal.status === "ACTIVE" };
   });
-  const reason = userBatchDisabledReason(command.action, { targets, primaryId, actorId: identity.principal.id, supported: true,
-    canManage: identity.account.organization.status === "ACTIVE" && identity.principal.status === "ACTIVE" && !identity.principal.mustChangePassword && identity.roles.includes("ORGANIZATION_ADMIN") });
+  const reason = userBatchDisabledReason(command.action, { targets, primaryId, actorId: identity.principal.id, supported: true, canManage: clock.canManage });
   if (reason) throw new AccessWorkspaceError("ineligibleUsers");
   const ids = new Set(targets.map((target) => target.id));
   const context = { ...clock, primaryPrincipalId: primaryId, userIds: users.filter((user) => user.principal.id !== primaryId).map((user) => user.principal.id) };

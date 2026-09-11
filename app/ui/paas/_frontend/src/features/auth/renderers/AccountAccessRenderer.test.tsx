@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountCapabilities } from "../application/AccountAccessProvider";
-import type { AccountIdentity, AccountPrincipal, AccountUser, AccountAccessView } from "../domain/accounts";
+import type { AccountIdentity, AccountPolicy, AccountPrincipal, AccountUser, AccountAccessView, PolicyDirectory, UserPolicyAttachment } from "../domain/accounts";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LoginRenderer } from "./LoginRenderer";
@@ -16,12 +16,17 @@ import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
 const credential = "account-test-only-memory-credential";
+const timestamp = "2026-09-11T08:00:00Z";
 const principal: AccountPrincipal = { id: "primary-a", organizationId: "tenant-a", loginName: "admin", displayName: "Account owner", status: "ACTIVE", resourceVersion: 2, mustChangePassword: false };
+const tenantPolicy: AccountPolicy = { id: "system.paas-viewer", management: "SYSTEM", accountId: null, displayName: "ReadOnlyAccess", scope: "TENANT", status: "ACTIVE", defaultVersionId: "version-1", resourceVersion: 3, createdAt: timestamp, updatedAt: timestamp };
+const platformPolicy: AccountPolicy = { ...tenantPolicy, id: "system.platform-admin", displayName: "PlatformAdministrator", scope: "INSTALLATION", resourceVersion: 2 };
+const attachment = (principalId: string, policy: AccountPolicy): UserPolicyAttachment => ({ id: `attachment-${principalId}-${policy.id}`, accountId: "tenant-a", target: { kind: "USER", id: principalId }, policyId: policy.id, scope: policy.scope, installationId: policy.scope === "INSTALLATION" ? "installation-a" : null, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp });
+const directory = (platform: boolean): PolicyDirectory => ({ accountId: "tenant-a", scope: platform ? "INSTALLATION" : "TENANT", installationId: platform ? "installation-a" : null, items: [platform ? platformPolicy : tenantPolicy] });
 const identity: AccountIdentity = {
   account: { organization: { id: "tenant-a", displayName: "Team A", status: "ACTIVE", resourceVersion: 1 }, primaryPrincipalId: "primary-a", primaryLoginName: "admin", loginAlias: null },
-  principal, roles: ["ORGANIZATION_ADMIN"], canCreateOrganizations: true
+  principal, policyAttachments: [attachment("primary-a", platformPolicy)], canCreateOrganizations: true
 };
-const child: AccountUser = { principal: { ...principal, id: "child-a", loginName: "developer", displayName: "Developer A" }, roleBindings: [{ id: "binding-child", organizationId: "tenant-a", principalId: "child-a", role: "PAAS_VIEWER" }] };
+const child: AccountUser = { principal: { ...principal, id: "child-a", loginName: "developer", displayName: "Developer A" }, policyAttachments: [attachment("child-a", tenantPolicy)] };
 
 function iam(overrides: Partial<IamRepository> = {}, id = "primary-a"): IamRepository {
   return {
@@ -33,10 +38,11 @@ function iam(overrides: Partial<IamRepository> = {}, id = "primary-a"): IamRepos
 function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository {
   return {
     currentIdentity: vi.fn().mockResolvedValue(structuredClone(identity)),
-    listUsers: vi.fn().mockResolvedValue({ items: [{ principal, roleBindings: [] }, child], nextAfter: null }),
+    listUsers: vi.fn().mockResolvedValue({ items: [{ principal, policyAttachments: identity.policyAttachments }, child], nextAfter: null }),
+    listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => directory(platform)),
     listAccounts: vi.fn().mockResolvedValue({ items: [identity.account], nextAfter: null }),
     execute: vi.fn().mockResolvedValue(undefined), ...overrides
-  };
+  } as AccountRepository;
 }
 
 function LanguageSwitch() {
@@ -55,7 +61,7 @@ function AuthenticatedAccess({ repository, initialView }: { repository: AccountR
   const session = useSession();
   const [view, setView] = useState(initialView);
   const [entityId, setEntityId] = useState<string>();
-  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository}><CapabilityProbe /><nav>{(["overview", "users", "settings", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} onNavigate={(next, id) => requestLeave(() => { setView(next); setEntityId(id); })} /></AccountAccessProvider> : <LoginRenderer />;
+  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository}><CapabilityProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} onNavigate={(next, id) => requestLeave(() => { setView(next); setEntityId(id); })} /></AccountAccessProvider> : <LoginRenderer />;
 }
 
 async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users") {
@@ -114,14 +120,16 @@ describe("qualified login", () => {
 });
 
 describe("account access", () => {
-  it("keeps owner identity separate from child targets and never infers type from administrator grants", () => {
-    const adminChild: AccountUser = { ...child, roleBindings: [{ ...child.roleBindings[0]!, role: "ORGANIZATION_ADMIN" }] };
-    const scene = buildAccountAccessScene(identity, { items: [{ principal, roleBindings: [] }, adminChild], nextAfter: null }, null);
+  it("keeps owner identity separate from child targets and never infers identity type from policy names", () => {
+    const namedAdministrator = { ...tenantPolicy, id: "customer.administrator", management: "CUSTOMER" as const, accountId: "tenant-a", displayName: "TenantAdministrator" };
+    const adminChild: AccountUser = { ...child, policyAttachments: [attachment("child-a", namedAdministrator)] };
+    const tenantDirectory = { ...directory(false), items: [namedAdministrator, tenantPolicy].sort((left, right) => left.id.localeCompare(right.id)) };
+    const scene = buildAccountAccessScene(identity, { items: [{ principal, policyAttachments: identity.policyAttachments }, adminChild], nextAfter: null }, null, tenantDirectory, directory(true));
     expect(scene.primaryUser).toMatchObject({ id: "primary-a", accountType: "primary", name: "Account owner", state: "active" });
     expect(scene.users).toHaveLength(1);
-    expect(scene.users[0]).toMatchObject({ id: "child-a", accountType: "subuser", bindings: [{ role: "ORGANIZATION_ADMIN" }] });
-    const actingChild = { ...identity, principal: child.principal };
-    const pageWithoutOwner = buildAccountAccessScene(actingChild, { items: [child], nextAfter: "later" }, null);
+    expect(scene.users[0]).toMatchObject({ id: "child-a", accountType: "subuser", attachments: [{ policyId: "customer.administrator" }] });
+    const actingChild = { ...identity, principal: child.principal, policyAttachments: child.policyAttachments, canCreateOrganizations: false };
+    const pageWithoutOwner = buildAccountAccessScene(actingChild, { items: [child], nextAfter: "later" }, null, directory(false), null);
     expect(pageWithoutOwner.primaryUser).toMatchObject({ id: "primary-a", loginName: "admin", name: null, state: null, isCurrent: false });
     expect(pageWithoutOwner.primaryUser.name).not.toBe(actingChild.principal.displayName);
     expect(pageWithoutOwner.users[0]?.protected).toBe(true);
@@ -148,17 +156,17 @@ describe("account access", () => {
     expect(repository.execute).not.toHaveBeenCalled();
   });
 
-  it("filters owner separately from ungranted subusers and keeps an administrator a subuser", async () => {
-    const adminChild: AccountUser = { ...child, roleBindings: [{ ...child.roleBindings[0]!, role: "ORGANIZATION_ADMIN" }] };
-    const ungranted: AccountUser = { principal: { ...child.principal, id: "ungranted", loginName: "new.user" }, roleBindings: [] };
+  it("filters owner separately from ungranted subusers and keeps a broadly named policy separate from identity type", async () => {
+    const adminChild: AccountUser = { ...child, policyAttachments: [attachment("child-a", tenantPolicy)] };
+    const ungranted: AccountUser = { principal: { ...child.principal, id: "ungranted", loginName: "new.user" }, policyAttachments: [] };
     const { user } = await openAccess(accounts({ listUsers: vi.fn().mockResolvedValue({ items: [adminChild, ungranted], nextAfter: null }) }));
     const admin = within((await screen.findByRole("button", { name: "查看用户 developer" })).closest("tr")!);
     expect(admin.getByText("IAM 子用户")).toBeTruthy();
-    expect(admin.getByText("租户管理员")).toBeTruthy();
+    expect(admin.getByText("ReadOnlyAccess")).toBeTruthy();
     expect(admin.queryByText("主账号")).toBeNull();
     await user.click(screen.getByRole("button", { name: "筛选" }));
-    await user.click(screen.getByRole("combobox", { name: "筛选用户角色" }));
-    await user.click(screen.getByRole("option", { name: "未授权" }));
+    await user.click(screen.getByRole("combobox", { name: "筛选策略来源" }));
+    await user.click(screen.getByRole("option", { name: "未关联授权策略" }));
     expect(screen.getByRole("button", { name: "查看用户 new.user" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "查看用户 admin" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "清除筛选" }));
@@ -179,7 +187,7 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "保存别名" }));
     expect(screen.getByRole("button", { name: "正在保存…" })).toBeTruthy();
     expect(capabilityCommit).not.toHaveBeenCalled();
-    vi.mocked(repository.currentIdentity).mockResolvedValue({ ...identity, roles: [] });
+    vi.mocked(repository.listUsers).mockRejectedValue(new HttpProblem(403, "FORBIDDEN"));
     await act(async () => { finish(); });
     await waitFor(() => expect(screen.getByTestId("can-manage").textContent).toBe("false"));
     expect(capabilityCommit).toHaveBeenCalled();
@@ -212,8 +220,8 @@ describe("account access", () => {
     await user.click(trigger);
     const dialog = screen.getByRole("dialog", { name: "Manage Developer A" });
     expect(dialog.textContent).not.toMatch(/\p{Script=Han}/u);
-    expect(within(dialog).getByRole("button", { name: "Revoke Read-only user" })).toBeTruthy();
-    expect((within(dialog).getByRole("button", { name: "Grant role" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(dialog).getByRole("button", { name: "Revoke policy ReadOnlyAccess" })).toBeTruthy();
+    expect((within(dialog).getByRole("button", { name: "Attach policy" }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(within(dialog).getByRole("button", { name: "Reset password" }));
     expect(document.activeElement).toBe(within(dialog).getByLabelText("Initial password"));
     expect(dialog.textContent).not.toMatch(/\p{Script=Han}/u);
@@ -221,7 +229,9 @@ describe("account access", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(trigger);
     await user.click(screen.getByTestId("nav-roles"));
-    expect(screen.getByText("Four built-in, tenant-scoped roles are available")).toBeTruthy();
+    expect(screen.getByText("This capability is not connected")).toBeTruthy();
+    await user.click(screen.getByTestId("nav-policies"));
+    expect(screen.getByRole("table", { name: "Policy metadata directory" })).toBeTruthy();
     await user.click(screen.getByTestId("nav-tenants"));
     expect(screen.getByRole("table", { name: "Tenant accounts" })).toBeTruthy();
   });
@@ -248,12 +258,13 @@ describe("account access", () => {
     await user.type(screen.getByLabelText("用户显示名称"), "New Developer");
     await user.type(screen.getByLabelText(/^初始密码/), "New-Child-Test-Password-49!");
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByRole("combobox", { name: /^初始权限/ }).textContent).toBe("暂不授权（默认）");
+    expect(screen.getByText("新用户将按默认拒绝创建，不在创建请求中捆绑权限。")).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: /^初始权限/ })).toBeNull();
     expect(repository.execute).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.queryByDisplayValue("New-Child-Test-Password-49!")).toBeNull();
     await user.click(screen.getByRole("button", { name: "确认创建用户" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-user", loginName: "new.developer", displayName: "New Developer", initialPassword: "New-Child-Test-Password-49!", initialRole: undefined }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-user", loginName: "new.developer", displayName: "New Developer", initialPassword: "New-Child-Test-Password-49!" }));
     expect(view.container.textContent).not.toContain(credential);
     expect(view.container.innerHTML).not.toContain("New-Child-Test-Password-49!");
   });
@@ -271,36 +282,60 @@ describe("account access", () => {
   });
 
   it("allows an unprivileged user to inspect its own settings without querying admin directories", async () => {
-    const reader: AccountIdentity = { ...identity, principal: child.principal, roles: [], canCreateOrganizations: false };
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(reader) });
+    const reader: AccountIdentity = { ...identity, principal: child.principal, policyAttachments: [], canCreateOrganizations: false };
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(reader), listUsers: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) });
     await openAccess(repository, iam({}, "child-a"), "overview");
-    await screen.findByText("尚未授予业务权限");
-    expect(repository.listUsers).not.toHaveBeenCalled();
+    await screen.findByText("未授权");
+    expect(repository.listUsers).toHaveBeenCalledTimes(1);
     expect(repository.listAccounts).not.toHaveBeenCalled();
     expect(screen.queryByRole("tab", { name: "租户管理" })).toBeNull();
     expect(screen.queryByRole("button", { name: "保存别名" })).toBeNull();
     expect(screen.getByText("username@tenant-a")).toBeTruthy();
   });
 
-  it("requires an explicit role choice for every grant", async () => {
+  it("keeps the tenant policy directory usable when only the platform directory is forbidden", async () => {
+    const listPolicies = vi.fn(async (_credential: string, platform: boolean) => {
+      if (platform) throw new HttpProblem(403, "FORBIDDEN");
+      return directory(false);
+    });
+    const repository = accounts({ listPolicies });
+    await openAccess(repository, iam(), "policies");
+    expect(await screen.findByRole("table", { name: "策略元数据目录" })).toBeTruthy();
+    expect(screen.getByText("ReadOnlyAccess")).toBeTruthy();
+    expect(screen.getByText(/租户策略仍可查看/)).toBeTruthy();
+    expect(listPolicies).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails the live scene without substituting MOCK data when a policy directory has a non-authorization error", async () => {
+    const repository = accounts({ listPolicies: vi.fn(async (_credential: string, platform: boolean) => {
+      if (platform) throw new HttpProblem(503, "UPSTREAM_UNAVAILABLE");
+      return directory(false);
+    }) });
+    await openAccess(repository, iam(), "policies");
+    expect((await screen.findByRole("alert")).textContent).toContain("访问管理暂时不可用");
+    expect(screen.queryByRole("table", { name: "策略元数据目录" })).toBeNull();
+    expect(screen.queryByText("ReadOnlyAccess")).toBeNull();
+  });
+
+  it("requires an explicit current policy revision for every direct attachment", async () => {
     const { user, repository } = await openAccess();
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
-    expect((screen.getByRole("button", { name: "授予角色" }) as HTMLButtonElement).disabled).toBe(true);
-    await user.click(screen.getByRole("combobox", { name: "授予角色" }));
-    await user.click(screen.getByRole("option", { name: "服务开发者" }));
-    await user.click(screen.getByRole("button", { name: "授予角色" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "grant-role", principalId: "child-a", role: "PAAS_DEVELOPER" }));
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "授予角色" }).textContent).toBe("请选择角色"));
-    expect((screen.getByRole("button", { name: "授予角色" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "关联策略" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("combobox", { name: "关联策略" }));
+    await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
+    await user.click(screen.getByRole("button", { name: "关联策略" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-policy-attachment", principalId: "child-a", policyId: "system.platform-admin", policyResourceVersion: 2 }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "关联策略" }).textContent).toBe("选择可关联策略"));
+    expect((screen.getByRole("button", { name: "关联策略" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("requires confirmation for revocation and disabling and clears a submitted reset password", async () => {
     const { user, repository } = await openAccess();
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
-    await user.click(screen.getByRole("button", { name: "撤销只读用户" }));
+    await user.click(screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }));
     expect(repository.execute).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "确认撤销" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "revoke-role", bindingId: "binding-child" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "revoke-policy-attachment", attachmentId: "attachment-child-a-system.paas-viewer", resourceVersion: 1 }));
     await waitFor(() => expect((screen.getByRole("button", { name: "禁用用户" }) as HTMLButtonElement).disabled).toBe(false));
     await user.click(screen.getByRole("button", { name: "禁用用户" }));
     expect(repository.execute).toHaveBeenCalledTimes(1);

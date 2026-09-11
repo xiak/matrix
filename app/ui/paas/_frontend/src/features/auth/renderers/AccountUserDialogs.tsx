@@ -5,7 +5,6 @@ import { useTranslations } from "next-intl";
 import { KeyRound, ShieldCheck } from "lucide-react";
 import { Alert, Dialog, FormField, Badge, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
-import { userRoles, type UserRole } from "../domain/accounts";
 import type { AccountUserScene } from "../scenes/accountAccessScene";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -61,9 +60,12 @@ export function UserAccessDialog({ user, onClose }: { user: AccountUserScene; on
   const [confirmStatus, setConfirmStatus] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
-  const [selectedRole, setSelectedRole] = useState<UserRole | "">("");
-  const availableRoles = userRoles.filter((role) => !user.bindings.some((binding) => binding.role === role));
-  const role = selectedRole && availableRoles.includes(selectedRole) ? selectedRole : "";
+  const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; resourceVersion: number } | null>(null);
+  const policies = access.scene?.policies ?? [];
+  const attached = new Set(user.attachments.map((attachment) => attachment.policyId));
+  const availablePolicies = policies.filter((policy) => policy.status === "ACTIVE" && !attached.has(policy.id));
+  const currentPolicy = selectedPolicy ? policies.find((policy) => policy.id === selectedPolicy.id) : undefined;
+  const policyChanged = Boolean(selectedPolicy && (!currentPolicy || currentPolicy.resourceVersion !== selectedPolicy.resourceVersion));
   const disabled = access.busy || access.loading;
 
   async function resetPassword(event: FormEvent<HTMLFormElement>) {
@@ -79,25 +81,26 @@ export function UserAccessDialog({ user, onClose }: { user: AccountUserScene; on
       <p className={styles.note}>{t("subuserOwnershipHint")}</p>
       {access.error ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
       {access.success ? <Alert status="success">{t(access.success)}</Alert> : null}
-      <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>{t("grantedRoles")}</strong></div>
-      <p className={styles.note}>{t("grantScopeHint")}</p>
+      <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>{t("directPolicyAttachments")}</strong></div>
+      <p className={styles.note}>{t("policyAttachmentHint")}</p>
       <ul className={styles.bindingList}>
-        {user.bindings.map((binding) => <li key={binding.id}>
-          <span>{t(`roles.${binding.role}`)}</span>
-          {revokeId === binding.id ? <div className={styles.actions}>
-            <span>{t("revokePrompt")}</span><Button disabled={disabled} onClick={async () => { if (await access.execute({ kind: "revoke-role", bindingId: binding.id })) setRevokeId(null); }} size="small" variant="danger">{t("confirmRevoke")}</Button>
+        {user.attachments.map((attachment) => <li key={attachment.id}>
+          <div><strong>{attachment.label}</strong><small>{attachment.policyId} · {t(attachment.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}{attachment.policyStatus === "RETIRED" ? ` · ${t("retiredPolicy")}` : ""}</small></div>
+          {revokeId === attachment.id ? <div className={styles.actions}>
+            <span>{t("revokePrompt")}</span><Button disabled={disabled} onClick={async () => { if (await access.execute({ kind: "revoke-policy-attachment", attachmentId: attachment.id, resourceVersion: attachment.resourceVersion })) setRevokeId(null); }} size="small" variant="danger">{t("confirmRevoke")}</Button>
             <Button disabled={disabled} onClick={() => setRevokeId(null)} size="small" variant="ghost">{t("cancel")}</Button>
-          </div> : <Button aria-label={t("revokeRole", { name: t(`roles.${binding.role}`) })} disabled={disabled} onClick={() => setRevokeId(binding.id)} size="small" variant="ghost">{t("revoke")}</Button>}
+          </div> : <Button aria-label={t("revokePolicy", { name: attachment.label })} disabled={disabled} onClick={() => setRevokeId(attachment.id)} size="small" variant="ghost">{t("revoke")}</Button>}
         </li>)}
       </ul>
-      {user.bindings.length === 0 ? <p className={styles.note}>{t("noRolesHint")}</p> : null}
-      {availableRoles.length > 0 ? <form className={styles.inlineForm} onSubmit={async (event) => {
+      {user.attachments.length === 0 ? <p className={styles.note}>{t("noPolicyAttachmentsHint")}</p> : null}
+      {policyChanged ? <Alert status="warning">{t("policyRevisionChanged")} <Button size="small" variant="ghost" onClick={() => setSelectedPolicy(null)}>{t("reselectPolicy")}</Button></Alert> : null}
+      {availablePolicies.length > 0 ? <form className={styles.inlineForm} onSubmit={async (event) => {
         event.preventDefault();
-        if (role && await access.execute({ kind: "grant-role", principalId: user.id, role })) setSelectedRole("");
+        if (selectedPolicy && !policyChanged && await access.execute({ kind: "create-policy-attachment", principalId: user.id, policyId: selectedPolicy.id, policyResourceVersion: selectedPolicy.resourceVersion })) setSelectedPolicy(null);
       }}>
-        <FormField label={t("grantRole")}><Select disabled={disabled} onValueChange={(next) => setSelectedRole(next as UserRole | "")} required value={role} placeholder={t("chooseRole")} options={availableRoles.map((item) => ({ value: item, label: t(`roles.${item}`) }))} /></FormField>
-        <Button disabled={disabled || !role} type="submit" variant="secondary">{t("grantRole")}</Button>
-      </form> : null}
+        <FormField label={t("attachPolicy")}><Select disabled={disabled} onValueChange={(policyId) => { const policy = policies.find((item) => item.id === policyId); setSelectedPolicy(policy ? { id: policy.id, resourceVersion: policy.resourceVersion } : null); }} required value={selectedPolicy?.id ?? ""} placeholder={t("choosePolicy")} options={availablePolicies.map((policy) => ({ value: policy.id, label: `${policy.displayName} · ${t(policy.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}` }))} /></FormField>
+        <Button disabled={disabled || !selectedPolicy || policyChanged} type="submit" variant="secondary">{t("attachPolicy")}</Button>
+      </form> : <p className={styles.note}>{access.scene?.canViewPolicies ? t("allPoliciesAttached") : t("policyDirectoryUnavailable")}</p>}
       <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("loginSecurity")}</strong></div>
       {user.protected ? <p className={styles.note}>{t("protectedHint")}</p> : <>
         <div className={styles.actions}>

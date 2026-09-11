@@ -376,9 +376,13 @@ function ConsoleShell() {
   const ProductContextIcon = activeService ? favoriteIcons[activeService.id] : railIcons[scene.productIcon];
   const productName = activeService ? directory(`services.${activeService.id}.name`) : scene.productId === "console" ? t("consoleName") : directory(`services.${scene.productId}.name`);
   const selectedPage = scene.navigation.find((item) => item.selected);
-  const localNavigation = scene.navigation.filter((item) => scene.section !== "access" ||
-    (["access", "settings", "roles", "tenants"].includes(item.id) || accountCapabilities.canManage) &&
-    (item.id !== "tenants" || accountCapabilities.canCreateOrganizations));
+  const localNavigation = scene.navigation.filter((item) => {
+    if (scene.section !== "access" || item.id === "access" || item.id === "settings") return true;
+    if (item.id === "users") return accountCapabilities.canManage;
+    if (item.id === "policies") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canManage : accountCapabilities.canViewPolicies;
+    if (item.id === "tenants") return accountCapabilities.canCreateOrganizations;
+    return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canManage;
+  });
   const accessTitles = { "create-user": accountText("createUserTitle"), "create-group": iamWorkspaceText("createGroup"), "create-policy": iamWorkspaceText("createPolicy"), "create-role": iamWorkspaceText("createRole"), tenants: accountText("tenantAccounts") };
   const accessView = scene.content.kind === "access" ? scene.content.view : undefined;
   const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : scene.section === "overview" ? dashboard("title") : t(`pages.${scene.section}.title`);

@@ -8,7 +8,7 @@ import type { AccountCommand } from "../domain/accounts";
 import type { AccessWorkspaceCommand } from "../domain/accessWorkspace";
 import { applyUserBatch, userBatchDisabledReason, userBatchLimit, type UserBatchCommand } from "../domain/userBatch";
 
-const context = { id: "new-id", at: "2026-09-09T02:00:00Z", userIds: ["principal-lin", "principal-chen"], primaryPrincipalId: "principal-admin" };
+const context = { id: "new-id", at: "2026-09-09T02:00:00Z", userIds: ["principal-lin", "principal-chen"], primaryPrincipalId: "principal-admin", canManage: true };
 const document = parsePolicyDocument('{"version":"1","statement":[{"effect":"allow","action":["logs:read"],"resource":["matrix:logs:org-xiak:*:topic/production/*"]}]}');
 
 describe("atomic user directory batches", () => {
@@ -63,7 +63,7 @@ describe("atomic user directory batches", () => {
     const f = await fixture();
     const asChild = { ...f.identity, principal: f.users[0]!.principal };
     for (const action of ["enable", "disable", "delete"] as const) expect(() => applyUserBatch(f.workspace, f.users, asChild, { action, targets: f.targets }, context)).toThrow("ineligibleUsers");
-    expect(() => applyUserBatch(f.workspace, f.users, { ...f.identity, roles: [] }, { action: "authorize", targets: f.targets, policyIds: ["policy-read"] }, context)).toThrow("ineligibleUsers");
+    expect(() => applyUserBatch(f.workspace, f.users, f.identity, { action: "authorize", targets: f.targets, policyIds: ["policy-read"] }, { ...context, canManage: false })).toThrow("ineligibleUsers");
     await previewAccountRepository.executeUserBatch!(previewCredential, { action: "disable", targets: [f.targets[0]!] });
     const mixed = (await previewAccountRepository.listUsers(previewCredential)).items;
     const targets = mixed.map(({ principal }) => ({ id: principal.id, resourceVersion: principal.resourceVersion }));
@@ -128,11 +128,12 @@ describe("access workspace preview invariants", () => {
     const beforeUsers = await previewAccountRepository.listUsers(previewCredential);
     const extension = previewAccountRepository.workspace!;
     const beforeWorkspace = await extension.read(previewCredential);
+    const protectedAttachment = beforeIdentity.policyAttachments[0]!;
     const accountCommands: AccountCommand[] = [
       { kind: "set-status", principalId, status: "DISABLED", resourceVersion: 5 },
       { kind: "reset-password", principalId, initialPassword: "Mock-password-only-49!", resourceVersion: 5 },
-      { kind: "grant-role", principalId, role: "PAAS_VIEWER" },
-      { kind: "revoke-role", bindingId: "primary-or-unknown-binding" }
+      { kind: "create-policy-attachment", principalId, policyId: "policy-read", policyResourceVersion: 1 },
+      { kind: "revoke-policy-attachment", attachmentId: protectedAttachment.id, resourceVersion: protectedAttachment.resourceVersion }
     ];
     for (const command of accountCommands) await expect(previewAccountRepository.execute(previewCredential, command)).rejects.toMatchObject({ status: 403 });
     const workspaceCommands: AccessWorkspaceCommand[] = [
@@ -149,11 +150,14 @@ describe("access workspace preview invariants", () => {
     expect(await previewAccountRepository.currentIdentity(previewCredential)).toEqual(beforeIdentity);
     expect(await previewAccountRepository.listUsers(previewCredential)).toEqual(beforeUsers);
     expect(await extension.read(previewCredential)).toEqual(beforeWorkspace);
-    await previewAccountRepository.execute(previewCredential, { kind: "grant-role", principalId: "principal-lin", role: "ORGANIZATION_ADMIN" });
+    const policy = (await previewAccountRepository.listPolicies(previewCredential, false)).items.find((entry) => entry.id === "policy-read")!;
+    await previewAccountRepository.execute(previewCredential, { kind: "create-policy-attachment", principalId: "principal-lin", policyId: policy.id, policyResourceVersion: policy.resourceVersion });
     const promoted = (await previewAccountRepository.listUsers(previewCredential)).items.find((user) => user.principal.id === "principal-lin")!;
-    expect(promoted.roleBindings.some((binding) => binding.role === "ORGANIZATION_ADMIN")).toBe(true);
+    const attachment = promoted.policyAttachments.find((entry) => entry.policyId === policy.id)!;
+    expect(attachment).toBeDefined();
     expect((await previewAccountRepository.currentIdentity(previewCredential)).account.primaryPrincipalId).toBe(principalId);
-    await previewAccountRepository.execute(previewCredential, { kind: "revoke-role", bindingId: promoted.roleBindings.find((binding) => binding.role === "ORGANIZATION_ADMIN")!.id });
+    await previewAccountRepository.execute(previewCredential, { kind: "revoke-policy-attachment", attachmentId: attachment.id, resourceVersion: attachment.resourceVersion });
+    expect((await previewAccountRepository.listUsers(previewCredential)).items.find((user) => user.principal.id === "principal-lin")?.policyAttachments.some((entry) => entry.policyId === policy.id)).toBe(false);
     await previewIamRepository.logout(previewCredential);
   });
   it("allows only the current primary identity to join groups without child policy, credential or ownership changes", () => {
@@ -290,7 +294,7 @@ describe("access workspace preview invariants", () => {
     expect(result.workspace.userProfiles[principalId]?.tags).toEqual([{ key: "team", value: "platform" }]);
     expect(JSON.stringify(result.workspace)).not.toContain("MUST_NOT_BE_RETAINED");
     const created = (await previewAccountRepository.listUsers(previewCredential)).items.find((user) => user.principal.id === principalId)!;
-    expect(created.roleBindings).toEqual([]);
+    expect(created.policyAttachments.map((attachment) => attachment.policyId)).toEqual(["policy-read"]);
     expect(created.principal.mustChangePassword).toBe(true);
     await expect(extension.execute(previewCredential, command)).rejects.toThrow("duplicate");
     const removed = await extension.execute(previewCredential, { kind: "delete-user", principalId });
@@ -504,7 +508,7 @@ describe("access workspace preview invariants", () => {
     await extension.execute(previewCredential, { kind: "import-enterprise-members", id, memberIds: ["dev01"] });
     const imported = (await previewAccountRepository.listUsers(previewCredential)).items.find((user) => user.principal.source === "wecom")!;
     expect(imported.principal.displayName).toBe("Dev Member");
-    expect(imported.roleBindings).toEqual([]);
+    expect(imported.policyAttachments).toEqual([]);
     await expect(extension.execute(previewCredential, { kind: "delete-enterprise", id })).rejects.toThrow("referenced");
     await extension.execute(previewCredential, { kind: "delete-user", principalId: imported.principal.id });
     await extension.execute(previewCredential, { kind: "delete-enterprise", id });

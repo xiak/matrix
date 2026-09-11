@@ -56,8 +56,8 @@ generic provider schemas before a real second implementation exists.
    credential otherwise exists only in page memory and is never placed in a
    URL, cookie, local storage, session storage, log, or rendered DOM.
 10. The access-control view shows the current tenant and login identity, and
-    provides real tenant-scoped subaccount creation, role bindings, status,
-    and password reset. Its user-settings section allows an organization
+    provides real tenant-scoped subaccount creation, direct user-policy
+    attachments, status, and password reset. Its user-settings section allows an organization
     administrator to set/change the separate primary-account login alias and
     shows the stable account ID and both qualified-login forms. Only the
     bootstrap-bound administrator sees tenant
@@ -68,12 +68,19 @@ generic provider schemas before a real second implementation exists.
     identifier input is text, not HTML email, and accepts the IAM-qualified
     identifier grammar. No test fixture or local state substitutes for an IAM
     result, and unavailable backend capabilities are never shown as success.
-    The view separates resource-owning account identity from the current
-    operator. The user directory contains IAM subusers, not independent
-    tenants; primary-account details belong to user settings. Creation defaults
-    to no business authorization. The live platform-role catalog describes
-    tenant-wide built-in roles; it does not imply creator-only resource
-    visibility or a custom-policy authorization engine.
+    The view separates the resource-owning account identity from the current
+    operator. The user directory presents the protected primary identity and
+    IAM subusers as different identity types, not independent tenants. Creation
+    defaults to no business authorization. Live permission management reads
+    current, unretracted direct `USER` policy attachments and separate tenant
+    and installation policy directories. It never derives management authority,
+    identity type or effective access from a policy or role display name.
+    Policy-list metadata is a management snapshot, not policy content, a list
+    of affected subjects or an authorization decision. Tenant and installation
+    directories are independently authorized: a 403 removes only that section;
+    every other failure makes the live scene unavailable without substituting
+    preview data. Attach and revoke commands bind exact policy/attachment
+    resource versions, and a changed directory version requires reselection.
     The service opens an overview followed by bookmarkable user, group,
     policy, role, role-SSO, user-SSO, federated-account, API-key, user-settings
     and tenant-management workspaces. These use grouped service-local
@@ -390,7 +397,7 @@ implemented or that a successful reference submission was exercised.
 | Overview | Identity counts link to directories; high-privilege associations, recent sensitive actions, account identity, login links and security guidance are separate blocks. | Keep the existing overview composition; derive counts and guidance from the same workspace state. Never show simulated protection as real MFA or a real security assessment. |
 | Users | The subuser detail distinguishes access method from permission. An ungranted user is guided to join a group, copy another user's permissions or attach policies. Adding permissions is a content-area selection/review flow. | Reuse the existing user wizard and permission selector; add source-aware effective-permission inspection and cross-links to group/policy details. Copying permissions must describe precisely which direct bindings or memberships are copied; it never clones passwords, keys, boundaries or role sessions. |
 | Groups | Creation is a three-step content page: basic information, policy selection, review. Empty policy selection is allowed. The selector separates available/selected items and states its per-operation limit. | Replace the combined group dialog with this journey. Group details own separate member and permission operations, with an impact review when removing an inherited grant. A group is not a login identity and cannot be assumed. |
-| Policy directory | All/preset views show policy name, product, permission category, description, last modified time and authorization action. Custom-only omits product and permission category. Presets cannot be deleted. | Use these columns with Matrix products. Preset categories are explicit directory metadata (global/product), not read/write classifications or tag conditions. Actual grants remain derived from default policy content. |
+| Policy directory | All/preset views show policy name, product, permission category, description, last modified time and authorization action. Custom-only omits product and permission category. Presets cannot be deleted. | Adopt the directory task and compact search/filter hierarchy, but render only fields supplied by the fixed Matrix contract: stable ID, display name, management owner, tenant/installation scope, lifecycle status, default version and updated time. Product, description, permission category, policy content, affected subjects and effective access are not inferred. The bounded complete snapshot is paged only in the client; it is never presented as backend pagination. |
 | Policy creation | Entry chooser offers generator, policy syntax, tag authorization, and product-feature/project authorization. The fourth entry carries upgrade guidance toward tags and the generator. Name becomes immutable after creation. | Four entry points share one content-area edit/configure/review draft and save contract. The fourth selects registered Matrix product functions; project permissions are explicitly unavailable. Templates copy into custom policies, never mutate presets. Resource-tag conditions remain distinct from policy metadata tags. |
 | Policy editor | Select a service, then read/write/list/other actions, their authorization granularity, all/specific resources, and optional key/operator/value conditions. Structured resource input exposes service, region, owner, type and resource ID. The analyzer separates errors, warnings and suggestions. | Add a code-owned preview capability catalog and structured statement editor. Invalid drafts remain editable; errors block progression, warnings explain broad access. Unsupported syntax cannot be silently dropped when switching modes. |
 | Policy detail | Syntax has readable service/resource/condition summary and JSON. Versions and usage are separate tabs; permission associations and boundary uses are separate sections. | Readable effect/action/resource summary, full JSON, bounded versions, exact linked subjects and separate boundary references are implemented. Group links lead to affected members and their named inherited grants. Previewing an old version never activates it. |
@@ -564,6 +571,32 @@ list and mutation path; hiding a button, a route guard or this simulator is
 not a security boundary. FEAT-006's closed live role/action contract remains
 unchanged by this UX work.
 
+#### Fixed IAM console contract
+
+The live access-management slice adapts the IAM owner revision
+`121e68373951a9261754661329a8e4e41bb6206c`; its provenance decisions are
+owned by the corresponding [adoption review](../adoption/FEAT-007-control-plane-console.md).
+Acceptance at this boundary requires all of the following:
+
+- `AccountPolicy`, `PolicyDirectory` and `UserPolicyAttachment` replace the
+  superseded built-in-role projection. Current identity and user rows contain
+  current direct `USER` associations only. New users are ungranted.
+- Tenant and installation policy directories are independently authorized,
+  stable-ID sorted complete snapshots of at most 256 metadata records. A 403
+  degrades only its directory. Any other read or validation error fails the
+  live scene and never falls back to MOCK.
+- Missing installation policy metadata falls back to the stable policy ID; it
+  does not hide a current direct attachment. The UI never manufactures policy
+  content, subjects, group inheritance, permission-boundary results or a final
+  allow decision from list responses.
+- Create/revoke association requests carry the selected policy revision or
+  current attachment revision. If a policy changes before submission, the
+  selector clears and requires an explicit new choice.
+- Live page visibility follows actual directory authorization and explicit
+  capabilities. The advanced group, role, federation, key, simulator and
+  policy-authoring graph remains an isolated repository capability for the
+  one-click MOCK experience; its state cannot grant live access.
+
 #### CAM implementation slices and acceptance
 
 The scenario-driven preview uses the same pages and repository boundary as
@@ -631,10 +664,13 @@ include direct and inherited candidates once per user. Security guidance shows
 workspace facts and inspection links, never a completed security assessment:
 empty groups are not evidence of distributed permissions, unused keys are not
 encouraged, and saved MOCK protection does not imply real MFA activation.
-The MOCK user directory displays and filters direct/group policy associations,
-not the live adapter's fixed-role bindings. Empty-group membership and a boundary
-alone are not grants. A directory management action opens the same user detail;
-the separately labelled platform-role view preserves the live contract.
+The MOCK user directory displays and filters direct/group policy associations;
+the live directory displays only the fixed IAM contract's direct policy
+attachments. Empty-group membership and a boundary alone are not grants. A
+directory management action opens the same user detail. Role trust, sessions,
+group inheritance and effective-access explanation remain explicit preview
+workspaces until their own fixed live contracts are accepted; no live
+platform-role projection or role-name inference remains.
 
 The existing `auth` workspace domain/repository remains the owner of preview
 invariants and state. Page composites remain in its renderers; shared
@@ -1399,12 +1435,14 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- The current Theme/component, navigation and CAM-style IAM slice has 456 frontend tests across 35 test
+- The current Theme/component, navigation and CAM-style IAM slice has 472 frontend tests across 35 test
   files; the complete suite passes with two workers at the default timeout
   (the long user-selection journey retains its explicit 15s timeout).
-  Separate long IAM runs can still hit the default 5s timeout under development
-  load; the typed-resource journey passed its focused rerun. Functional test
-  success is not a performance acceptance claim.
+  Worker concurrency is bounded in the test owner because simultaneously
+  constructing all jsdom interaction trees exhausted local execution capacity;
+  each formerly timed-out journey passes alone well below five seconds and the
+  bounded full run passes without extending the default timeout. Functional
+  test success is not a browser-performance acceptance claim.
   The policy-directory revision verifies all/preset versus custom-only columns,
   category/filter semantics, retained view context, and actual policy modification
   timestamps. All four creation methods are exercised through reviewed saves
@@ -1502,7 +1540,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   feedback without new warning/error logs. Shared control tests cover required
   semantics, classification/status distinction, controlled paging and dialog
   focus return; existing large-candidate and batch/permission gates remain.
-  All 442 frontend tests and three static-export normalization tests pass,
+  All 472 frontend tests and three static-export normalization tests pass,
   alongside TypeScript, lint, architecture and 228 theme contrast checks.
   All 213 generated production files from 38 static routes match the Go-embedded export, and Go UI
   tests and vet pass. Tables, forms, dialogs, choices,
@@ -1523,6 +1561,15 @@ and `git diff --check` gates must pass on the same committed worktree.
   presentations preserved the active detail and returned no warning/error logs.
   The temporary MOCK membership was removed. These checks do not establish
   live Tencent mutation behavior or live Matrix group authorization.
+  The fixed live IAM projection now replaces built-in-role inference with
+  direct, revisioned USER policy attachments and independent tenant/platform
+  policy metadata directories. Focused contract and renderer verification has
+  189 passing cases, including new-user default deny, missing platform metadata,
+  403 section degradation, non-authorization failure closure, stale policy
+  reselection, exact attach/revoke revisions and preservation of the explicit
+  MOCK workspace. This is management-plane evidence only; it does not claim
+  group inheritance, policy documents or final effective authorization from a
+  directory response.
   Four user-directory integration journeys and ten batch transaction cases
   cover no-selection and current-page/mixed selection, filter/page clearing,
   primary/self protection, additive associations, stale/invalid target atomicity,

@@ -9,6 +9,10 @@ export default defineConfig({
     }
   },
   test: {
+    // The interaction suites use full jsdom trees. Bounding concurrency keeps
+    // event timing deterministic on developer and CI hosts without hiding
+    // regressions behind a longer per-test timeout.
+    maxWorkers: 2,
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     globals: false,

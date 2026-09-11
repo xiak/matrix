@@ -15,6 +15,7 @@ import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { buildAccessReport } from "../scenes/accessReport";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 import { previewAccountRepository, previewCredential, previewIamRepository } from "../repositories/previewIamRepository";
+import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 
 vi.mock("next/link", () => ({
   default: ({ onNavigate, href, children, ...props }: React.ComponentProps<"a"> & { onNavigate?(event: { preventDefault(): void }): void }) => <a {...props} href={href} onClick={(event) => {
@@ -23,9 +24,10 @@ vi.mock("next/link", () => ({
   }}>{children}</a>
 }));
 
-const identity: AccountIdentity = { account: { organization: { id: "org-xiak", displayName: "Example", status: "ACTIVE", resourceVersion: 1 }, primaryPrincipalId: "admin", primaryLoginName: "admin", loginAlias: "example" }, principal: { id: "admin", organizationId: "org-xiak", loginName: "admin", displayName: "Administrator", status: "ACTIVE", mustChangePassword: false, resourceVersion: 1 }, roles: ["ORGANIZATION_ADMIN"], canCreateOrganizations: true };
-const users: AccountUser[] = ["lin", "chen"].map((name) => ({ principal: { ...identity.principal, id: "principal-" + name, loginName: name, displayName: name }, roleBindings: [] }));
-const reviewUsers: AccountUser[] = [...users, ...["qiao", "wu"].map((name) => ({ principal: { ...identity.principal, id: "principal-" + name, loginName: name, displayName: name }, roleBindings: [] }))];
+const platformAttachment = { id: "attachment-admin-platform", accountId: "org-xiak", target: { kind: "USER" as const, id: "admin" }, policyId: "system.platform-admin", scope: "INSTALLATION" as const, installationId: "preview", resourceVersion: 1, createdAt: "2026-09-09T00:00:00Z", updatedAt: "2026-09-09T00:00:00Z" };
+const identity: AccountIdentity = { account: { organization: { id: "org-xiak", displayName: "Example", status: "ACTIVE", resourceVersion: 1 }, primaryPrincipalId: "admin", primaryLoginName: "admin", loginAlias: "example" }, principal: { id: "admin", organizationId: "org-xiak", loginName: "admin", displayName: "Administrator", status: "ACTIVE", mustChangePassword: false, resourceVersion: 1 }, policyAttachments: [platformAttachment], canCreateOrganizations: true };
+const users: AccountUser[] = ["lin", "chen"].map((name) => ({ principal: { ...identity.principal, id: "principal-" + name, loginName: name, displayName: name }, policyAttachments: [] }));
+const reviewUsers: AccountUser[] = [...users, ...["qiao", "wu"].map((name) => ({ principal: { ...identity.principal, id: "principal-" + name, loginName: name, displayName: name }, policyAttachments: [] }))];
 const login: IamRepository = { login: async () => ({ credential: "preview-only", mustChangePassword: false, session: { id: "session", organizationId: "org-xiak", principalId: "admin", status: "ACTIVE", issuedAt: "2026-09-09T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z" } }), changePassword: async () => {}, logout: async () => {} };
 
 function Harness({ repository, initialView, initialEntityId }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string }) {
@@ -43,8 +45,9 @@ async function open(initialView: AccountAccessView, options?: { live?: boolean; 
   const extension = createPreviewAccessWorkspace("org-xiak", () => directoryUsers.map((user) => user.principal.id), identity.account.primaryPrincipalId);
   await options?.seed?.(extension);
   const repository: AccountRepository = {
-    currentIdentity: vi.fn().mockResolvedValue({ ...identity, roles: options?.reader ? [] : identity.roles }),
-    listUsers: vi.fn().mockResolvedValue({ items: directoryUsers, nextAfter: null }),
+    currentIdentity: vi.fn().mockResolvedValue(options?.reader ? { ...identity, policyAttachments: [], canCreateOrganizations: false } : identity),
+    listUsers: options?.reader ? vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) : vi.fn().mockResolvedValue({ items: directoryUsers, nextAfter: null }),
+    listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => ({ accountId: "org-xiak", scope: platform ? "INSTALLATION" : "TENANT", installationId: platform ? "preview" : null, items: [] })),
     listAccounts: vi.fn().mockResolvedValue({ items: [], nextAfter: null }),
     execute: vi.fn().mockResolvedValue(undefined),
     workspace: options?.live ? undefined : { read: vi.fn(extension.read), execute: vi.fn(extension.execute) }
@@ -729,12 +732,13 @@ describe("CAM-style access workspace", () => {
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
 
-  it("keeps role mutation controls unavailable to a read-only viewer", async () => {
+  it("keeps the preview role workspace unavailable to a read-only viewer", async () => {
     const { user, repository } = await open("roles", { reader: true });
-    expect(await screen.findByRole("table", { name: "内置角色与权限范围" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "没有此页面的管理权限" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "新建角色" })).toBeNull();
     await user.click(screen.getByTestId("go-create-role"));
     expect(await screen.findByRole("heading", { name: "没有此页面的管理权限" })).toBeTruthy();
+    expect(repository.workspace!.read).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
   it("creates a role in the content area with explicit trust, no preselected grants and a preserved localized draft", async () => {
@@ -1838,11 +1842,11 @@ describe("CAM-style access workspace", () => {
     expect((await extension.read("preview")).settings.userSsoEnabled).toBe(true);
     expect(repository.execute).not.toHaveBeenCalled();
   });
-  it.each(["groups", "simulator"] as const)("never enables %s or queries it for an unprivileged identity", async (view) => {
+  it.each(["groups", "simulator"] as const)("never loads the %s preview graph after the directory denies management", async (view) => {
     const { repository } = await open(view, { reader: true });
     await screen.findByText("没有此页面的管理权限");
     expect(repository.workspace?.read).not.toHaveBeenCalled();
-    expect(repository.listUsers).not.toHaveBeenCalled();
+    expect(repository.listUsers).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "新建用户组" })).toBeNull();
   });
   it.each(["keys", "create-policy", "simulator"] as const)("shows an honest unavailable state for %s on the live adapter", async (view) => {
@@ -1868,7 +1872,7 @@ describe("CAM-style access workspace", () => {
   it("allowlists report fields instead of exporting a raw account snapshot", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((user) => user.principal.id), identity.account.primaryPrincipalId);
     const workspace = await extension.read("preview");
-    const report = buildAccessReport("security", workspace, buildAccountAccessScene(identity, { items: users, nextAfter: null }, null), "2026-09-09T00:00:00Z");
+    const report = buildAccessReport("security", workspace, buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] }), "2026-09-09T00:00:00Z");
     expect(report.mode).toBe("MOCK");
     expect(JSON.stringify(report)).not.toContain("EntityDescriptor");
     expect(JSON.stringify(report)).not.toContain("preview-only");
