@@ -2,7 +2,7 @@
 
 ## 导航完整性
 
-2026-09-10 从腾讯云访问管理产品详情页解析完整左侧导航。原导航包含 13 个一级节点、202 个目录节点、706 个页面节点，共 908 个唯一节点，最深 5 层。所有节点按原父子关系保存在[腾讯云访问管理完整来源导航](./tencent-cam-navigation.md)。
+2026-09-11 从腾讯云访问管理产品详情页重新解析完整左侧导航。当前导航包含 13 个一级节点、202 个目录节点、705 个页面节点，共 907 个唯一节点，最深 5 层。所有节点按原父子关系保存在[腾讯云访问管理完整来源导航](./tencent-cam-navigation.md)，对象关系、API、界面与运行原理的分析见[腾讯云 CAM 官方资料全量结构与架构推演](./tencent-cam-architecture-analysis.md)。
 
 | 腾讯云一级栏目 | 页面 | 目录 | 本地产品文档归属 |
 | --- | ---: | ---: | --- |
@@ -12,14 +12,14 @@
 | 快速入门 | 3 | 1 | [快速入门](../03-quick-start/README.md) |
 | 用户指南 | 110 | 25 | [用户指南](../04-user-guide/README.md) |
 | 支持角色的业务 | 92 | 59 | [业务角色接入模型](../05-role-enabled-products/role-integration-model.md) |
-| 支持 CAM 的业务接口 | 277 | 85 | [业务授权接入架构](../06-access-management-enabled-apis/product-authorization-integration.md)与[能力声明模型](../06-access-management-enabled-apis/authorization-capability-model.md) |
+| 支持 CAM 的业务接口 | 276 | 85 | [业务授权接入架构](../06-access-management-enabled-apis/product-authorization-integration.md)与[能力声明模型](../06-access-management-enabled-apis/authorization-capability-model.md) |
 | 实践教程 | 17 | 4 | [实践教程](../07-practices/README.md) |
 | 商用案例 | 33 | 9 | [典型业务集成模式](../08-commercial-cases/business-integration-patterns.md) |
 | API 文档 | 156 | 16 | [API 文档](../09-api/README.md) |
 | 常见问题 | 5 | 1 | [常见问题](../10-faq/faq.md) |
 | 联系我们 | 1 | 0 | [支持与安全事件协作](../11-contact/support-and-security-escalation.md) |
 | 词汇表 | 1 | 0 | [访问管理词汇表](../12-glossary/glossary.md) |
-| **合计** | **706** | **202** | **908 个来源节点** |
+| **合计** | **705** | **202** | **907 个来源节点** |
 
 ## 用户指南子树映射
 

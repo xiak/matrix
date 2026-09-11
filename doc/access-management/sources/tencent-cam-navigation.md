@@ -3,11 +3,11 @@
 > 本文件仅记录公开文档的标题、父子层级与原始链接，用于验证产品能力抽象没有遗漏来源栏目。
 
 - 来源：[腾讯云访问管理](https://cloud.tencent.com/document/product/598)
-- 抓取日期：2026-09-10
+- 抓取日期：2026-09-11
 - 一级节点：13
 - 目录节点：202
-- 页面节点：706
-- 总节点：908
+- 页面节点：705
+- 总节点：907
 - 最大层级：5
 
 ## 完整左侧导航树
@@ -473,9 +473,7 @@
       - [Web 应用防火墙](https://cloud.tencent.com/document/product/598/98197) <!-- page:98197 -->
       - [漏洞扫描服务](https://cloud.tencent.com/document/product/598/99255) <!-- page:99255 -->
     - 内容安全 <!-- directory:137849 -->
-      - [音频内容安全](https://cloud.tencent.com/document/product/598/99431) <!-- page:99431 -->
-      - [图片内容安全](https://cloud.tencent.com/document/product/598/137846) <!-- page:137846 -->
-      - [视频内容安全](https://cloud.tencent.com/document/product/598/137847) <!-- page:137847 -->
+      - [视频内容安全](https://cloud.tencent.com/document/product/598/137955) <!-- page:137955 -->
     - 业务风控 <!-- directory:131240 -->
       - [借贷反欺诈](https://cloud.tencent.com/document/product/598/69849) <!-- page:69849 -->
       - [保险反欺诈](https://cloud.tencent.com/document/product/598/69955) <!-- page:69955 -->
@@ -573,10 +571,11 @@
       - [智能硬件 AI 语音助手](https://cloud.tencent.com/document/product/598/84394) <!-- page:84394 -->
       - [人脸核身](https://cloud.tencent.com/document/product/598/98136) <!-- page:98136 -->
       - [对话机器人](https://cloud.tencent.com/document/product/598/98146) <!-- page:98146 -->
-      - [图片内容安全](https://cloud.tencent.com/document/product/598/137851) <!-- page:137851 -->
-      - [视频内容安全](https://cloud.tencent.com/document/product/598/137852) <!-- page:137852 -->
+      - [音频内容安全](https://cloud.tencent.com/document/product/598/99431) <!-- page:99431 -->
       - [腾讯同传](https://cloud.tencent.com/document/product/598/98189) <!-- page:98189 -->
       - [腾讯云智能数智人](https://cloud.tencent.com/document/product/598/109777) <!-- page:109777 -->
+      - [图片内容安全](https://cloud.tencent.com/document/product/598/137961) <!-- page:137961 -->
+      - [视频内容安全](https://cloud.tencent.com/document/product/598/137963) <!-- page:137963 -->
     - AI 基础产品 <!-- directory:98064 -->
       - [语音识别](https://cloud.tencent.com/document/product/598/98096) <!-- page:98096 -->
       - [人脸融合](https://cloud.tencent.com/document/product/598/98135) <!-- page:98135 -->
