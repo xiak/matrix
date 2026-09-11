@@ -9,7 +9,7 @@
   border-end-end-radius: var(--xiak-radius-panel);
 }
 .viewport:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: -2px; }
-.table { width: 100%; min-width: var(--xiak-table-min-width); border-collapse: collapse; text-align: start; font-size: var(--xiak-font-size-body); }
+.table { width: 100%; min-width: var(--xiak-table-min-width); border-collapse: separate; border-spacing: 0; text-align: start; font-size: var(--xiak-font-size-body); }
 .table th, .table td {
   height: var(--xiak-table-row-height);
   min-width: var(--xiak-table-cell-min-width);
@@ -18,17 +18,29 @@
   color: var(--xiak-color-text-base);
   text-align: start;
   vertical-align: middle;
-  line-height: 1.6;
+  line-height: var(--xiak-line-height-body);
   overflow-wrap: anywhere;
 }
 .table th { height: var(--xiak-table-header-height); padding-block: var(--xiak-spacing-tight); background: var(--xiak-color-bg-panel-hover); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-medium); white-space: normal; }
-.table tbody tr:hover { background: var(--xiak-color-bg-panel-hover); }
+.table thead th { position: sticky; top: 0; z-index: 1; }
+.table tbody tr:hover, .table tbody tr:focus-within { background: var(--xiak-color-bg-panel-hover); }
 .table tbody tr:last-child td { border-bottom: 0; }
 .table td strong { display: block; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); }
-.table td small { display: block; margin-top: var(--xiak-spacing-narrow); color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-small); }
+.table td small { display: block; margin-top: var(--xiak-spacing-narrow); color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
 .table td code { white-space: nowrap; }
-.table .selectionCell { width: var(--xiak-control-height); min-width: 0; padding-inline: var(--xiak-spacing-default); text-align: center; }
+.table .selectionCell { width: var(--xiak-table-selection-width); min-width: 0; padding-inline: var(--xiak-spacing-narrow); text-align: center; }
+.table th.selectionCell { padding-block: var(--xiak-spacing-narrow); }
+.selectionCell > label { display: flex; justify-content: center; min-height: var(--xiak-control-height-small); gap: 0; }
+.selectionCell > label > span:empty { display: none; }
 .table tr[data-selected="true"] { background: var(--xiak-color-accent-haze); }
+.table tr[data-selected="true"]:hover, .table tr[data-selected="true"]:focus-within { background: var(--xiak-color-accent-haze-hover); }
+.table [data-numeric] { text-align: end; font-variant-numeric: tabular-nums; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; }
 .selectionSummary { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); overflow-wrap: anywhere; }
+.pagination { display: flex; width: 100%; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); font-size: var(--xiak-font-size-small); color: var(--xiak-color-text-muted); }
+.paginationControls { display: flex; align-items: center; gap: var(--xiak-spacing-tight); }
+.paginationControls > :first-child { width: 76px; }
+.pageSummary { font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) { .actions { display: contents; } }
+@media (pointer: coarse) { .selectionCell > label { min-height: var(--xiak-control-height); } .paginationControls button { min-height: var(--xiak-control-height); min-width: var(--xiak-control-height); } }
 }

@@ -65,7 +65,14 @@ let users: AccountUser[] = [
       organizationId: "org-xiak",
       role: "AUDIT_READER"
     }]
-  }
+  },
+  ...[
+    { loginName: "qiao", displayName: "乔发布工程师" },
+    { loginName: "wu", displayName: "吴新同事" }
+  ].map(({ loginName, displayName }) => ({
+    principal: { id: `principal-${loginName}`, organizationId: "org-xiak", loginName, displayName, status: "ACTIVE" as const, mustChangePassword: false, resourceVersion: 1 },
+    roleBindings: []
+  }))
 ];
 
 let accounts: Account[] = [

@@ -1,14 +1,16 @@
 import { parsePolicyDocument, type PolicyDocument } from "./policyDocument";
 import { AccessWorkspaceError } from "./accessWorkspaceError";
 import { validateRoleTrust, type RoleSessionCaller } from "./roleTrust";
-import { evaluateRoleAssumption } from "./policyEvaluation";
+import { evaluateRoleAssumption, type AccessTestRequest } from "./policyEvaluation";
 
 // Preview-only configuration. The diagnostic evaluator never replaces live IAM.
 export type AccessPolicy = {
   id: string; name: string; description: string; kind: "system" | "custom";
   tags: { key: string; value: string }[];
+  // Directory metadata only; never an input to authorization evaluation.
+  systemCategory?: "global" | "product";
   versions: { id: number; document: PolicyDocument; createdAt: string }[];
-  defaultVersion: number; lastVersion: number; createdAt: string;
+  defaultVersion: number; lastVersion: number; createdAt: string; updatedAt: string;
 };
 export type PolicyTargets = { userIds: string[]; groupIds: string[]; roleIds: string[] };
 export type AccessGroup = { id: string; name: string; description: string; memberIds: string[]; policyIds: string[]; createdAt: string };
@@ -46,6 +48,8 @@ export type AccessWorkspace = {
   userProfiles: Record<string, PreviewUserProfile>;
   userBoundaries: Record<string, string>; roleSessions: AccessRoleSession[];
   testResources: { id: string; reference: string; tags?: Record<string, string> }[];
+  // Synthetic diagnostic inputs, not canned decisions or authorization rules.
+  testRequests: { id: "path" | "duplicate" | "tags" | "deny" | "boundary" | "ungranted"; request: AccessTestRequest }[];
 };
 export type AccessWorkspaceCommand =
   | { kind: "create-subuser"; loginName: string; displayName: string; profile: PreviewUserProfile; policyIds: string[]; groupIds: string[] }
@@ -212,6 +216,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       const current = previous?.versions.find((entry) => entry.id === previous.defaultVersion);
       if (previous && current && JSON.stringify(current.document) === JSON.stringify(document)) {
         if (command.replaceVersion !== undefined) invalid();
+        if (previous.description !== command.description || JSON.stringify(previous.tags) !== JSON.stringify(normalizedTags)) previous.updatedAt = context.at;
         previous.description = command.description;
         previous.tags = normalizedTags;
       } else {
@@ -225,7 +230,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
         if (history.length >= policyVersionLimit) throw new AccessWorkspaceError("versionLimit");
         // The high-water mark survives removal, so identifiers are never reused.
         const version = (previous?.lastVersion ?? 0) + 1;
-        state.policies = put(state.policies, { id, name: command.name.trim(), description: command.description, tags: normalizedTags, kind: "custom", versions: [...history, { id: version, document, createdAt }], defaultVersion: version, lastVersion: version, createdAt: previous?.createdAt ?? createdAt });
+        state.policies = put(state.policies, { id, name: command.name.trim(), description: command.description, tags: normalizedTags, kind: "custom", versions: [...history, { id: version, document, createdAt }], defaultVersion: version, lastVersion: version, createdAt: previous?.createdAt ?? createdAt, updatedAt: context.at });
       }
       if (command.targets) associatePolicy(id, command.targets);
       target = command.name; break;
@@ -234,6 +239,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       const policy = exists(state.policies, id);
       if (policy.kind === "system") throw new AccessWorkspaceError("systemPolicy");
       if (command.description.length > 256) invalid();
+      if (policy.description !== command.description) policy.updatedAt = context.at;
       policy.description = command.description;
       target = policy.name; break;
     }
@@ -241,6 +247,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       const policy = exists(state.policies, id);
       if (policy.kind === "system") throw new AccessWorkspaceError("systemPolicy");
       if (!policy.versions.some((entry) => entry.id === command.version)) invalid();
+      if (policy.defaultVersion !== command.version) policy.updatedAt = context.at;
       policy.defaultVersion = command.version; break;
     }
     case "delete-policy-version": {
@@ -249,6 +256,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       if (!policy.versions.some((entry) => entry.id === command.version)) throw new AccessWorkspaceError("notFound");
       if (policy.defaultVersion === command.version) throw new AccessWorkspaceError("defaultVersion");
       policy.versions = policy.versions.filter((entry) => entry.id !== command.version);
+      policy.updatedAt = context.at;
       target = policy.name; break;
     }
     case "delete-policy":

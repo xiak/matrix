@@ -3,9 +3,8 @@
 import { useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight, ListChecks, X } from "lucide-react";
 import { Button } from "../button/Button";
-import { Checkbox } from "../choice/Choice";
 import { SearchInput } from "../input/SearchInput";
-import { Table } from "../table/Table";
+import { Table, TableSelectionCell } from "../table/Table";
 import styles from "./Transfer.module.css";
 
 export type TransferOption = { id: string; label: string; description?: string; keywords?: string; annotation?: ReactNode; icon?: ReactNode; disabled?: boolean };
@@ -58,13 +57,13 @@ export function Transfer({ options, selected, onSelect, onRemove, onClear, label
       {exceedsLimit ? <p className={styles.limit} id={limitId} role="status">{labels.limit(slots, uncheckedIds.length)}</p> : null}
       <div className={styles.available}>
         <Table key={filterKey} aria-label={labels.available} className={styles.table} viewportRef={list}>
-          <thead><tr><th scope="col" className={styles.checkCell}><Checkbox aria-label={labels.selectPage} title={labels.selectPage} aria-describedby={exceedsLimit ? limitId : undefined} aria-checked={someChecked ? "mixed" : allChecked} ref={(input) => { if (input) input.indeterminate = someChecked; }} checked={allChecked} disabled={!selectable.length || exceedsLimit} onChange={selectPage}>{null}</Checkbox></th><th scope="col">{labels.option ?? labels.available}</th>{labels.annotation ? <th scope="col" className={styles.annotationCell}>{labels.annotation}</th> : null}</tr></thead>
+          <thead><tr><TableSelectionCell header label={labels.selectPage} aria-describedby={exceedsLimit ? limitId : undefined} checked={someChecked ? "mixed" : allChecked} disabled={!selectable.length || exceedsLimit} onChange={selectPage} /><th scope="col">{labels.option ?? labels.available}</th>{labels.annotation ? <th scope="col" className={styles.annotationCell}>{labels.annotation}</th> : null}</tr></thead>
           <tbody>{visible.map((item, index) => {
             const checked = selectedIds.has(item.id);
             const inputId = `${id}-option-${index}`;
             const disabled = !checked && (item.disabled || slots === 0);
             return <tr key={item.id} data-selected={checked || undefined}>
-              <td className={styles.checkCell}><Checkbox id={inputId} aria-label={item.label} checked={checked} disabled={disabled} onChange={(event) => onSelect([item.id], event.target.checked)}>{null}</Checkbox></td>
+              <TableSelectionCell id={inputId} label={item.label} checked={checked} disabled={disabled} onChange={(checked) => onSelect([item.id], checked)} />
               <td><label className={styles.optionCopy} htmlFor={inputId} data-disabled={disabled || undefined}><span className={styles.optionTitle} title={item.label}>{item.label}{!labels.annotation ? item.annotation : null}</span>{item.description ? <span className={styles.description} title={item.description}>{item.description}</span> : null}</label></td>
               {labels.annotation ? <td className={styles.annotationCell}>{item.annotation ?? "—"}</td> : null}
             </tr>;

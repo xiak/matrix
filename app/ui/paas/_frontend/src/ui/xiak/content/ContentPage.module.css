@@ -23,8 +23,8 @@
 }
 
 .headerContent { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
-.headerContent[hidden] { display: none; }
 .headerActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; max-width: 100%; flex: none; }
+.headerActions:empty, .headerActions[hidden] { display: none; }
 .identity { display: flex; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; }
 .parentLink { flex: none; }
 .separator { flex: none; width: var(--xiak-font-size-small); height: var(--xiak-font-size-small); color: var(--xiak-color-text-subtle); }

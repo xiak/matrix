@@ -49,8 +49,6 @@
   grid-template-columns: auto minmax(0, 1fr);
   gap: var(--xiak-spacing-default);
   align-items: center;
-  border-bottom: var(--xiak-border-subtle);
-  padding: var(--xiak-spacing-comfortable);
 }
 
 .panelAvatar {
@@ -91,7 +89,6 @@
   display: grid;
   gap: var(--xiak-spacing-default);
   margin: 0;
-  padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable);
 }
 
 .metadata > div {
@@ -132,12 +129,6 @@
   font-size: var(--xiak-font-size-caption);
 }
 
-.preferences,
-.actionSection {
-  border-top: var(--xiak-border-subtle);
-  padding: var(--xiak-spacing-comfortable);
-}
-
 .actionLabel {
   display: block;
   margin-bottom: var(--xiak-spacing-tight);
@@ -146,18 +137,11 @@
   font-weight: var(--xiak-font-weight-regular);
 }
 
-.menu {
-  display: grid;
-  gap: var(--xiak-spacing-micro);
-  margin: 0 calc(-1 * var(--xiak-spacing-tight));
-  padding: 0;
-  list-style: none;
-}
-
 .menuItem {
   display: grid;
-  width: 100%;
-  min-height: 56px;
+  width: calc(100% + 2 * var(--xiak-spacing-tight));
+  min-height: var(--xiak-control-height-large);
+  margin-inline: calc(-1 * var(--xiak-spacing-tight));
   grid-template-columns: 32px minmax(0, 1fr) 16px;
   gap: var(--xiak-spacing-default);
   align-items: center;
@@ -229,12 +213,6 @@
 
 .chevron {
   color: var(--xiak-color-text-subtle);
-}
-
-.separator {
-  height: var(--xiak-border-width);
-  margin: var(--xiak-spacing-micro) var(--xiak-spacing-tight);
-  background: var(--xiak-color-border-subtle);
 }
 
 .dangerItem {

@@ -329,6 +329,25 @@ readable at 360 CSS pixels without horizontal page scrolling.
 
 ### Unified cloud UX system and preview
 
+#### UX release and live-adapter continuity
+
+The existing `feat/cloud-console-ux` implementation under `app/ui/paas` is
+the UX release baseline. Preserve its approved pages, service navigation,
+public components, themes, locales and complete isolated MOCK journeys.
+Useful fixes from another branch are reviewed as bounded slices through the
+existing adoption record; they do not replace this shell or silently remove
+accepted workspaces.
+
+MOCK acceptance is an intermediate UX release, not production authorization
+or real-runtime acceptance. Subsequent public-API integration adapts the
+existing repository and composition boundaries so the accepted renderers and
+interactions are reused. Contract gaps must be explicit; they do not justify
+a second implementation of the same UI. Installed-product visibility and
+resource authorization still come from the accepted backend authorities,
+never from preview state or the presentation registry. Formal login/API
+verification remains deferred until the other UX acceptance is reviewed;
+the separate one-click MOCK entry remains available meanwhile.
+
 #### CAM UX replication scope and research gate
 
 The current CAM replication goal uses Tencent Cloud as an interaction and
@@ -371,8 +390,8 @@ implemented or that a successful reference submission was exercised.
 | Overview | Identity counts link to directories; high-privilege associations, recent sensitive actions, account identity, login links and security guidance are separate blocks. | Keep the existing overview composition; derive counts and guidance from the same workspace state. Never show simulated protection as real MFA or a real security assessment. |
 | Users | The subuser detail distinguishes access method from permission. An ungranted user is guided to join a group, copy another user's permissions or attach policies. Adding permissions is a content-area selection/review flow. | Reuse the existing user wizard and permission selector; add source-aware effective-permission inspection and cross-links to group/policy details. Copying permissions must describe precisely which direct bindings or memberships are copied; it never clones passwords, keys, boundaries or role sessions. |
 | Groups | Creation is a three-step content page: basic information, policy selection, review. Empty policy selection is allowed. The selector separates available/selected items and states its per-operation limit. | Replace the combined group dialog with this journey. Group details own separate member and permission operations, with an impact review when removing an inherited grant. A group is not a login identity and cannot be assumed. |
-| Policy directory | Preset/custom filters, keyword search, product and permission-level information, and an authorization entry per policy. Presets cannot be deleted. | The existing collection shows and searches localized product/action-level metadata derived from current default content and registered actions. Only Matrix-supported services appear in its presets. |
-| Policy creation | Entry chooser offers generator, JSON and tag-based creation. The generator is a two-step content page: edit policy, then name/description/tags and optional user/group/role associations. Name becomes immutable after creation. | Replace the single-statement modal with a full-page draft supporting multiple statements and optional association review. Templates copy a document into a new custom policy, never edit a preset. Tags used to organize the policy are distinct from resource-tag conditions. |
+| Policy directory | All/preset views show policy name, product, permission category, description, last modified time and authorization action. Custom-only omits product and permission category. Presets cannot be deleted. | Use these columns with Matrix products. Preset categories are explicit directory metadata (global/product), not read/write classifications or tag conditions. Actual grants remain derived from default policy content. |
+| Policy creation | Entry chooser offers generator, policy syntax, tag authorization, and product-feature/project authorization. The fourth entry carries upgrade guidance toward tags and the generator. Name becomes immutable after creation. | Four entry points share one content-area edit/configure/review draft and save contract. The fourth selects registered Matrix product functions; project permissions are explicitly unavailable. Templates copy into custom policies, never mutate presets. Resource-tag conditions remain distinct from policy metadata tags. |
 | Policy editor | Select a service, then read/write/list/other actions, their authorization granularity, all/specific resources, and optional key/operator/value conditions. Structured resource input exposes service, region, owner, type and resource ID. The analyzer separates errors, warnings and suggestions. | Add a code-owned preview capability catalog and structured statement editor. Invalid drafts remain editable; errors block progression, warnings explain broad access. Unsupported syntax cannot be silently dropped when switching modes. |
 | Policy detail | Syntax has readable service/resource/condition summary and JSON. Versions and usage are separate tabs; permission associations and boundary uses are separate sections. | Readable effect/action/resource summary, full JSON, bounded versions, exact linked subjects and separate boundary references are implemented. Group links lead to affected members and their named inherited grants. Previewing an old version never activates it. |
 | Roles | Carrier selection distinguishes account, cloud service and IdP. Account-role creation separates trust, policies, tags and review. Detail separates permissions, carrier summary/trust JSON and sessions. Service-owned roles have different mutation affordances. | Replace the combined role dialog with a content workflow. Keep trust, permission policies and optional boundary separate. Add explicit session simulation/revocation rather than implying that membership in a role works like a group. Do not claim live STS. |
@@ -393,9 +412,12 @@ Matrix preview associations resolve their policy's current default version.
 The policy-mode slice keeps the existing preview domain and replaces its
 directory and review presentation. Acceptance requires:
 
-- A compact policy directory with independent kind, service, action-level and
-  resource-scope filters, keyword search, sorting and pagination. Returning
-  from details retains this view context within the same account session; it
+- A compact policy directory with kind tabs, service/category filters, one
+  keyword search, sorting and pagination. The custom-only view hides and clears
+  preset-only filters and columns. Global presets have no specific product;
+  custom policies have no inferred preset category. Last modified time changes
+  with policy content, metadata or versions, not associations or no-op saves.
+  Returning from details retains view context within the account session; it
   never persists drafts, bindings or credentials to browser storage.
 - A searchable, paginated service summary grouped by Allow/Deny, derived from
   the registered action catalog. Selecting a service opens inline operation
@@ -407,10 +429,22 @@ directory and review presentation. Acceptance requires:
   in creation review and historical inspection without submitting its parent
   workflow. Original wildcard expressions and complete JSON remain unchanged.
   Preset descriptions are localized without translating user-authored content.
-- Generator, JSON and resource-tag starting paths sharing one document draft.
-  Resource-tag conditions are distinct from policy metadata tags. Account-level
-  actions cannot be narrowed by a resource tag or specific resource. No helper
-  flow silently adds unscoped permissions.
+- Generator, JSON, resource-tag and product-feature starting paths share one
+  document draft, validation owner and final save. Going back retains the mode
+  and draft. Editor projection is separate from authorization validity: empty
+  and incomplete representable drafts remain switchable without changing their
+  JSON. Unsupported fields and lossy values stay in JSON; saving and diagnostics
+  continue to use the strict policy validator. Product-feature selection starts
+  empty, uses explicit registered actions and current-account resource scope,
+  and cannot erase Deny, conditions,
+  specific resources or wildcards when converting an existing draft. Project
+  authorization is not simulated by inventing a new project model.
+- The tag path requires resource-tag conditions on every submitted statement;
+  all configured tags must match. Only supported operations are offered, while
+  incompatible prior selections remain visible for correction. Account-level
+  actions cannot be narrowed by tags or specific resources. Request-tag
+  conditions remain unsupported, and no helper flow adds unscoped permissions.
+  Policy metadata tags are organization metadata, not authorization conditions.
 - One validation owner for execution and editor diagnostics. Diagnostics have
   severity and a document path; errors block saving, warnings and suggestions
   are review guidance, never proof that a request will be authorized.
@@ -531,6 +565,61 @@ not a security boundary. FEAT-006's closed live role/action contract remains
 unchanged by this UX work.
 
 #### CAM implementation slices and acceptance
+
+The scenario-driven preview uses the same pages and repository boundary as
+future fixed-contract integration; its one-click DEV entry remains available
+for ongoing UX review. Backend candidates without a fixed, accepted revision
+are not integration evidence and never cause automatic fallback to MOCK.
+
+The independent access-explanation slice uses a coherent synthetic
+set covering an ungranted console user, duplicate direct/group grants,
+resource-path versus resource-tag rules, a matching explicit deny, boundary
+intersection, immutable policy revisions and a same-account assumable role.
+Existing simple examples remain valid; added examples use registered actions
+and synthetic resources, not copied cloud inventory or a fake large catalog.
+Example requests only fill diagnostic inputs: they neither alter associations
+nor supply a canned verdict. Results always resolve current workspace facts.
+
+The simulator keeps a compatible operation when changing resource and clears
+the old result when any request input or workspace truth changes. Initial
+selection comes from the supplied diagnostic inventory, not a service name
+hardcoded in the renderer. It distinguishes policy decision from account,
+credential and real-session availability; checks not performed are explicitly
+not evaluated. Decisive evidence precedes optional nonmatching details, with
+links to the exact policy and group. Local MOCK role expiry/revocation must
+remain explicit and cannot silently fall back to the original user identity.
+Acceptance adds executable fixture cases, input-retention and scope-label
+interaction tests, linked evidence, compact layout and theme verification.
+
+Local UX verification on 2026-09-11: all six seeded request cases resolve from
+the current workspace; removing one of two grant sources, changing a default
+policy revision, a nonmatching deny and a restrictive boundary produce their
+documented distinct results. The user permission table labels these relations
+as grant sources. The scenario picker is limited to user diagnostics so it
+cannot unexpectedly replace a selected role-session identity. Its explanation
+is associated with the labelled control for assistive technology.
+
+The browser on the existing DEV port 4317 verified one-click MOCK entry,
+duplicate-source evidence, resource-tag authorization, explicit denial,
+English/light and Chinese/dark presentation. At 360px, content width remains
+360px and the 640px evidence table scrolls within its own region. An explicit
+same-account MOCK session for the log-review role permitted log search but
+rejected a staging deployment that its caller could perform; revocation then
+rejected that session's diagnostic request. No real credentials, cloud
+mutations, scan flow or payment was used. The temporary session was revoked.
+
+Verification passed: 465 frontend tests with two workers, the subsequent
+five affected interaction regressions, three static-export normalization
+tests, type checking, lint, architecture, 228 theme contrast pairs, production
+static generation, and the existing Go UI-host tests/vet. The initial
+default concurrent test run had five-second harness timeouts; limiting
+workers resolved them without raising timeouts. This evidence verifies the
+local preview slice, not the pending fixed-contract IAM integration or an
+accepted release. The production export was synchronized into the existing Go
+embed owner; a clean follow-up build matched all 213 generated files, and the
+Go UI-host tests/vet passed against that boundary. Product-directory
+provenance and the new backend attachment model still require their own
+aligned integration gate.
 
 Overview shortcuts identify the exact referenced policy. High-privilege review
 uses allowed permission-management actions from the closed catalog, including
@@ -751,7 +840,10 @@ The preview has three distinct navigation responsibilities:
   subgroup, keyword, recent visit, or favorite;
 - the narrow rail contains only the user's favorite services and a stable
   Dashboard shortcut, not an ever-growing product inventory;
-- the adjacent context sidebar contains only the current service's pages.
+- the adjacent context sidebar contains only the current service's pages. Its
+  header shows one localized product name beside its icon, without a duplicate
+  English eyebrow. Pages follow directly, without a generic Service navigation
+  caption; meaningful groups such as identity and permission management remain.
 
 Product discovery exists only in the Header directory; the duplicate products
 page and local-navigation entry are removed. Dashboard discovery actions open
@@ -823,10 +915,16 @@ accessible interaction contract that warrants one owner; feature-specific charts
 summaries remain product composites meanwhile.
 
 The compact information-flow revision uses one page context bar for lists,
-details and creation workflows. Feature-owned title/actions contribute through
-the existing public ContentPage boundary without moving business state into
-the shell or subscribing the shell to filter keystrokes. Parent navigation is
-explicit and direct links remain usable. The content begins with meaningful
+details and creation workflows. ContentPage owns one persistent title element,
+return control and action slot; it does not alternate a shell breadcrumb tree
+with a feature-owned header tree. Same-level pages show only their title;
+details and creation flows add explicit parent navigation. Route identity is
+available before feature data loads, including creation parents and entity
+deep links. Feature metadata updates that same title; contextual actions retain
+their feature providers through an action-only portal. Input does not subscribe
+the shell or title frame to draft changes, while return actions use the current
+draft guard. Pending navigation masks outgoing actions; cancellation restores
+the original context. The content begins with meaningful
 resource summary, tabs or data, not another generic title, return toolbar or
 repeated preview banner. Header MOCK identity and mutation-level limitations
 remain visible; errors, risks and destructive confirmations are never hidden
@@ -841,6 +939,30 @@ removable chips while the controls are closed, with a visible count and reset.
 Search clears independently from structured conditions. Results update with the
 existing local/repository contract; filtering never claims to search unloaded
 backend pages. Sorting and pagination remain distinct from filter conditions.
+The visual hierarchy distinguishes object names, supporting descriptions and
+identifiers without removing those facts. Neutral classification labels do not
+pretend to be status indicators; state uses explicit text as well as color.
+Table headers, selection hit areas, row rhythm and paging controls have one
+public owner. User and policy directory commands use the same select-then-act
+flow in the context bar, without a repeated operation column. Policy kind stays
+visible beside the name, and full descriptions and permission scopes remain
+readable. Existing batch limits, cross-page selection semantics, eligibility
+reasons, review, cancellation and retry remain unchanged. The refinement must
+work in light/mixed/dark and Chinese/English, retain local horizontal scrolling
+on compact screens, and preserve the route/draft rendering-isolation gates.
+The shared form label derives its required marker from the control's native or
+ARIA required semantics, retaining the existing validation and accessible name.
+Wizard spacing prioritizes fields and candidate rows over repeated headings;
+its opaque sticky action bar remains inside the scroll boundary. Narrow Transfer
+tables retain readable names in a local horizontal scroller instead of squeezing
+identifiers into fragments. Resource names have consistent link affordances;
+operation/message metadata uses the small-text token, and collapsed messages
+allow two title lines while expanded messages expose the complete title.
+Clearing structured conditions restores focus to the stable Filter trigger
+without clearing the keyword or closing the disclosed panel. A themed select
+accepts its focused choice and closes on Tab or Shift+Tab; the next Tab
+continues from the trigger in the form's normal order. Escape cancels an
+uncommitted choice and returns focus without dismissing the enclosing form.
 Global search still discovers products/resources/pages; Transfer candidates and
 policy operation explorers retain their own scoped search. They are separate
 collections, not redundant fields to delete. Theme, locale, keyboard/focus,
@@ -871,8 +993,16 @@ Button. Compact variants consume Theme dimensions instead of private style forks
 Console navigation keeps the global Header and shell mounted. One shared route
 transition owner connects console links and global-search results to the actual
 App Router transition. Clicking a destination immediately replaces the outgoing
-content with its page-shaped PageSkeleton and updates the content title and
-breadcrumb; there is no delayed skeleton reveal or minimum artificial wait.
+content with its page-shaped PageSkeleton and updates the same title frame;
+there is no delayed skeleton reveal or minimum artificial wait. A dedicated
+route subscriber renders an indeterminate two-pixel progress track over the
+global Header's bottom divider, without subscribing static Header controls to
+its loading state. Local refresh feedback stays with its content. The public
+indeterminate Progress animates only a clipped, paint-contained child transform,
+not background position or layout dimensions; it owns no animation timer or
+React frame state. The active child alone receives the compositor hint, and
+reduced-motion preference presents a stationary indicator. Determinate task
+progress remains a native element driven by real values.
 Dashboard, table, card, list and access layouts share semantic Theme
 tokens and a single announced loading label. The outgoing content is hidden and
 inert while pending, but its draft remains mounted until the visit commits or is
@@ -1125,7 +1255,11 @@ The interaction contract includes:
   principal identity plus a grouped account-action menu, while product-local
   navigation contains no duplicate account dock. Appearance preferences and
   account actions share the panel surface, section-label typography and
-  horizontal inset, separated by a subtle rule rather than a darker section.
+  horizontal inset. The public `PanelSections` composition owns equal section
+  padding and full-width subtle dividers for login identity, tenant/type,
+  theme/language, account access and logout; it inherits the enclosing surface
+  instead of assigning a background to individual sections. Account access and
+  logout are visually separate sections within the same keyboard menu.
   Preferences remain labelled radio groups; actions remain menu items and
   logout retains its semantic danger treatment. The menu exposes `menu` and
   `menuitem` semantics, a separated dangerous logout action, roving arrow and
@@ -1265,11 +1399,28 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- The current Theme/component, navigation and CAM-style IAM slice has 428 frontend tests across 34 test
-  files; the complete suite passes with two workers and a 20s per-test timeout
-  (the new long user-selection journey retains its explicit 15s timeout).
-  The default 5s run still has timing failures in long IAM/login journeys;
-  functional success with a larger timeout is not a performance acceptance claim.
+- The current Theme/component, navigation and CAM-style IAM slice has 456 frontend tests across 35 test
+  files; the complete suite passes with two workers at the default timeout
+  (the long user-selection journey retains its explicit 15s timeout).
+  Separate long IAM runs can still hit the default 5s timeout under development
+  load; the typed-resource journey passed its focused rerun. Functional test
+  success is not a performance acceptance claim.
+  The policy-directory revision verifies all/preset versus custom-only columns,
+  category/filter semantics, retained view context, and actual policy modification
+  timestamps. All four creation methods are exercised through reviewed saves
+  into the isolated preview store, with no live IAM calls. Tests cover required
+  resource tags, selection retention, mode retention and refusing lossy feature
+  conversion. Empty drafts from all four entries, cleared feature selections and
+  incomplete tag conditions remain editable after JSON round trips; malformed
+  or unrepresentable JSON remains intact. A browser check reproduces the reported
+  template-selection/empty-JSON sequence and verifies all three alternate tabs
+  are clickable without changing the draft or producing warning/error logs.
+  Browser checks verify all four entry routes, tag-error correction,
+  JSON projection, edit/review/return and discard protection. Chinese/English
+  checks at 1475 x 866 and 360 x 800 cover the chooser, light/dark/mixed surfaces,
+  and table-local horizontal scrolling with no page overflow. Project permissions
+  and request-tag conditions remain unavailable; no Tencent authorization was
+  created or changed.
   All 63 Header/shell and appearance regression cases across seven files pass, including
   immediate directory content without a dimming stage and retained compact-panel
   dismissal, shared-trigger Enter/Space activation, expanded/panel semantics and
@@ -1286,7 +1437,8 @@ and `git diff --check` gates must pass on the same committed worktree.
   repeated trigger/X closure and background isolation. Fresh light-theme opening,
   dark/mixed surfaces and compact account-panel motion/backdrop are also checked.
   Account sections are browser-verified in light, dark and mixed with matching
-  muted 14px/regular labels and 16px insets. Desktop and 360px Chinese/English
+  muted small-text/regular labels, shared 16px padding and full-width 1px rules.
+  Desktop and 360px Chinese/English
   layouts retain one panel surface, aligned labels, bounded menu rows, danger
   text for logout and Home/End/Escape focus behavior.
   Shared product/region triggers are browser-verified with equal 40px height,
@@ -1302,9 +1454,24 @@ and `git diff --check` gates must pass on the same committed worktree.
   Escape, repeated product-trigger closure and X closure restore focus.
   The checked local browser interactions return no warning/error logs.
   The compact information-flow revision shares a 56px desktop context bar
-  across collections, details and creation flows. Feature-owned headings and
-  actions retain their providers through a public heading slot; input does not
-  rerender unrelated header tools. Pending navigation hides outgoing actions
+  across collections, details and creation flows. The public ContentPage owns
+  one persistent title/return frame; feature metadata updates that frame and
+  only contextual actions use a provider-preserving portal. Regression tests
+  retain the same title and parent elements through loading and registration,
+  prove draft input causes no title-frame commits, and check that the return
+  action still reads the latest draft. Loading-state tests prove static global
+  Header controls do not rerender when the isolated route progress starts or
+  stops; local refresh feedback stays inside the content header. Browser checks
+  verify the equal 56px context bars for users and federations, detail and
+  creation return controls, immediate destination titles/skeletons, progress
+  inside the global Header, and current-draft leave/cancel protection without
+  creating an account. Sidebar checks retain a 56px header with one complete
+  localized product name for application hosting, no generic navigation caption,
+  and the IAM identity/permission groups. The shell/scene suites cover the
+  Chinese/English identity and navigation behavior. No new warning/error logs
+  were reported for the navigation journeys above. These are
+  render-isolation and UI checks, not a GPU/compositor trace or a claim of zero
+  browser paints. Pending navigation hides outgoing actions
   immediately, cancellation restores the existing draft, and returning to a
   visited collection restores its scroll container position without retaining
   the old page DOM. User and policy queries survive detail navigation; user
@@ -1321,6 +1488,22 @@ and `git diff --check` gates must pass on the same committed worktree.
   log filtering are also verified. After a complete reload, these journeys
   produce no new warning/error logs; transient Turbopack CSS hot-update errors
   during source editing are not treated as runtime or production evidence.
+  The visual refinement is browser-checked at 1475 x 866 and 360 x 800 across
+  user/policy tables, identity details, group dialogs and member selection,
+  the dashboard, resources, operations, messages and user creation. Checks
+  include light Chinese, dark English and mixed English surfaces; 40px table
+  headers, neutral classification, readable object/metadata hierarchy,
+  selected/mixed checkboxes, visible eligibility and stable More-trigger focus
+  after cancelling an association dialog. The compact user and Transfer tables
+  scroll locally without widening the 360px document. Wizard checks preserve
+  required-field errors, page selection counts, opaque footer and guarded
+  cancellation; the temporary draft was discarded without creating an account.
+  Fresh-reload message checks verify full expanded content and read-state
+  feedback without new warning/error logs. Shared control tests cover required
+  semantics, classification/status distinction, controlled paging and dialog
+  focus return; existing large-candidate and batch/permission gates remain.
+  All 442 frontend tests and three static-export normalization tests pass,
+  alongside TypeScript, lint, architecture and 228 theme contrast checks.
   All 213 generated production files from 38 static routes match the Go-embedded export, and Go UI
   tests and vet pass. Tables, forms, dialogs, choices,
   feedback, tabs and metrics use the public controls and shared composition

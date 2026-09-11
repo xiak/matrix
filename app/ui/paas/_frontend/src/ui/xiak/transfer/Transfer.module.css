@@ -2,25 +2,20 @@
 .root { min-width: 0; container: xiak-transfer / inline-size; }
 .transfer { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(240px, 1fr); gap: var(--xiak-spacing-roomy); }
 .pane { display: flex; flex-direction: column; min-width: 0; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); overflow: hidden; }
-.heading { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); min-height: 56px; padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable); border-bottom: var(--xiak-border-subtle); }
+.heading { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); min-height: var(--xiak-control-height-large); padding: var(--xiak-spacing-tight) var(--xiak-spacing-comfortable); border-bottom: var(--xiak-border-subtle); }
 .heading h3 { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); font-weight: var(--xiak-font-weight-semibold); }
 .muted { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
-.search { display: flex; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-comfortable); border-bottom: var(--xiak-border-subtle); }
+.search { display: flex; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable); border-bottom: var(--xiak-border-subtle); }
 .search > :first-child { flex: 1; min-width: 0; }
 .search > :last-child:not(:first-child) { flex: 0 1 132px; }
-.selectionSummary { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-tight); min-height: var(--xiak-control-height-large); padding: var(--xiak-spacing-narrow) var(--xiak-spacing-comfortable); }
+.selectionSummary { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-tight); min-height: var(--xiak-control-height); padding: var(--xiak-spacing-narrow) var(--xiak-spacing-comfortable); }
 .selectionSummary > span { min-width: 0; }
 .selectionSummary > button { flex: none; }
 .limit { margin: 0; padding: var(--xiak-spacing-tight) var(--xiak-spacing-comfortable); border-top: var(--xiak-border-subtle); color: var(--xiak-color-status-warning); background: var(--xiak-color-status-warning-bg); font-size: var(--xiak-font-size-small); line-height: 1.6; overflow-wrap: anywhere; }
 .available { min-width: 0; isolation: isolate; --xiak-table-scroll-max-height: 360px; --xiak-table-min-width: 0px; --xiak-table-cell-min-width: 0px; }
 .table { table-layout: fixed; }
-.table th { position: sticky; top: 0; z-index: var(--xiak-z-header); white-space: normal; }
-.table .checkCell { width: 44px; padding-inline: var(--xiak-spacing-default); }
-.checkCell label { min-height: var(--xiak-control-height-small); gap: 0; }
-th.checkCell label { min-height: calc(var(--xiak-control-height-small) - var(--xiak-spacing-tight)); }
 .table .annotationCell { width: 100px; padding-inline: var(--xiak-spacing-tight); font-size: var(--xiak-font-size-small); }
 .table td.annotationCell { color: var(--xiak-color-text-muted); }
-.table tr[data-selected] { background: var(--xiak-color-accent-haze); }
 .optionCopy { display: block; min-width: 0; cursor: pointer; }
 .optionCopy[data-disabled] { cursor: not-allowed; }
 .optionTitle { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-medium); }
@@ -48,9 +43,6 @@ th.checkCell label { min-height: calc(var(--xiak-control-height-small) - var(--x
 @container xiak-transfer (max-width: 460px) {
   .search { flex-direction: column; }
   .search > :last-child:not(:first-child) { flex: auto; }
-  .available { --xiak-table-cell-padding-inline: var(--xiak-spacing-tight); }
-  .table .checkCell { width: 36px; padding-inline: var(--xiak-spacing-tight); }
-  .table .annotationCell { width: 88px; }
-  .optionTitle { white-space: normal; overflow-wrap: anywhere; }
+  .available { --xiak-table-cell-padding-inline: var(--xiak-spacing-tight); --xiak-table-min-width: 440px; }
 }
 }

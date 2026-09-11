@@ -17,7 +17,8 @@ function Example({ options = sample, initial = [], capacity = Infinity, onBatch,
 it("keeps selections across searches and supports removing and clearing them", async () => {
   const user = userEvent.setup();
   render(<Example options={sample.slice(0, 2)} />);
-  await user.click(screen.getByRole("checkbox", { name: "Alpha" }));
+  await user.click(screen.getByText("Alpha", { exact: true }));
+  expect(screen.getByRole("checkbox", { name: "Alpha" })).toHaveProperty("checked", true);
   await user.type(screen.getByRole("searchbox"), "Beta");
   expect(screen.queryByRole("checkbox", { name: "Alpha" })).toBeNull();
   expect(within(screen.getByRole("region", { name: "Selected" })).getByText("Alpha")).toBeTruthy();
@@ -90,6 +91,7 @@ it("does not partially select an over-capacity page and still permits deselectio
   render(<Example options={sample} initial={["d"]} pageSize={3} capacity={3} onBatch={onBatch} />);
   expect(screen.getByRole("checkbox", { name: labels.selectPage })).toHaveProperty("disabled", true);
   expect(screen.getByText("Space for 2; 3 unselected")).toBeTruthy();
+  expect(document.getElementById(screen.getByRole("checkbox", { name: labels.selectPage }).getAttribute("aria-describedby")!)?.textContent).toBe("Space for 2; 3 unselected");
   await user.click(screen.getByRole("checkbox", { name: labels.selectPage }));
   expect(onBatch).not.toHaveBeenCalled();
   await user.click(screen.getByRole("checkbox", { name: "Alpha" }));

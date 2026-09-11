@@ -89,7 +89,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
   return <span className={styles.root}>
     <Menu.Root modal={false} open={open} onOpenChange={changeOpen}>
       <Menu.Trigger asChild disabled={disabled}>
-        <button {...props} aria-haspopup="listbox" aria-controls={open ? listId : undefined} aria-expanded={open} aria-required={required || undefined}
+        <button {...props} aria-haspopup="listbox" aria-controls={open ? listId : undefined} aria-expanded={open} aria-required={required || props["aria-required"] || undefined}
           aria-invalid={invalid || validationFailed || props["aria-invalid"] || undefined}
           className={classNames(controls.control, styles.trigger, className)} data-size={controlSize}
           data-placeholder={!selected || undefined} disabled={disabled} form={form}
@@ -113,10 +113,16 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
           onCloseAutoFocus={(event) => { event.preventDefault(); if (!interactedOutside.current) trigger.current?.focus(); }}
           onEscapeKeyDown={(event) => { event.preventDefault(); event.stopPropagation(); setOpen(false); }}
           onInteractOutside={() => { interactedOutside.current = true; }}
-          onKeyDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            // Match native select: Tab accepts the focused choice and closes;
+            // the next Tab continues from the control in the form's order.
+            if (event.key === "Tab") { event.preventDefault(); setOpen(false); }
+          }}
           ref={popup} role="listbox" sideOffset={6}>
           {options.map((option) => <Menu.Item aria-selected={option.value === selectedValue}
             className={menu.item} disabled={option.disabled} key={option.value}
+            onKeyDown={(event) => { if (event.key === "Tab" && !option.disabled) choose(option.value); }}
             onSelect={() => choose(option.value)} role="option" textValue={option.label}>
             <span>{option.label}</span>{option.value === selectedValue ? <span className={menu.check}><Check aria-hidden="true" /></span> : null}
           </Menu.Item>)}

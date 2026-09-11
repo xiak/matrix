@@ -73,7 +73,7 @@ function ConditionsEditor({ value, actions, tagMode, onChange }: { value?: Polic
     onChange(Object.keys(result).length ? result : undefined);
   }
   return <section className={styles.section}>
-    <h3>{t("conditions")}</h3><p className={styles.note}>{t("conditionsHint")}</p>
+    <h3>{t(tagMode ? "tagConditions" : "conditions")}</h3><p className={styles.note}>{t("conditionsHint")}</p>
     <p className={styles.note}>{actions.length ? p("supportedConditions", { conditions: supported.map((key) => t(`conditionNames.${key}`)).join(" · ") || t("noConditions") }) : p("selectActionsFirst")}</p>
     {incompatible ? <Alert status="warning">{p("incompatibleConditions")}</Alert> : null}
     <Checkbox disabled={!available("sourceIp") && !value?.sourceIp} checked={value?.sourceIp !== undefined} onChange={(event) => update("sourceIp", event.target.checked ? [""] : undefined)}>{t("useIp")}</Checkbox>
@@ -101,7 +101,7 @@ export function PolicyStatementEditor({ value, index, total, accountId, resource
   const [level, setLevel] = useState("all");
   const [changingService, setChangingService] = useState<string | null>(null);
   const selected = expandPolicyActions(lines(value.actions)).map((action) => action.id);
-  const available = policyActions.filter((action) => action.service === value.service && (level === "all" || action.level === level) && (action.id + " " + t(`actionNames.${action.id}`)).toLowerCase().includes(query.toLowerCase().trim()));
+  const available = policyActions.filter((action) => action.service === value.service && (!tagMode || (action.conditions as readonly PolicyConditionKey[]).includes("resourceTag") || selected.includes(action.id)) && (level === "all" || action.level === level) && (action.id + " " + t(`actionNames.${action.id}`)).toLowerCase().includes(query.toLowerCase().trim()));
   function service(next: string) { onChange({ ...value, service: next, actions: "", resources: "*" }); setQuery(""); setLevel("all"); setChangingService(null); }
   return <section className={styles.statement} tabIndex={-1} data-policy-statement={index} aria-label={w("statementNumber", { number: index + 1 })}>
     <header className={styles.row}><h3>{w("statementNumber", { number: index + 1 })}</h3><div className={styles.actions}>

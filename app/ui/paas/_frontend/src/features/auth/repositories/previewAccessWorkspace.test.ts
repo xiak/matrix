@@ -30,7 +30,7 @@ describe("atomic user directory batches", () => {
     expect((await previewAccountRepository.listUsers(previewCredential)).items).toEqual(f.users);
     expect(await previewAccountRepository.currentIdentity(previewCredential)).toEqual(f.identity);
     await previewAccountRepository.executeUserBatch!(previewCredential, { action: "add-groups", targets, groupIds: ["group-delivery"] });
-    expect((await previewAccountRepository.workspace!.read(previewCredential)).groups[0]?.memberIds).toHaveLength(3);
+    expect((await previewAccountRepository.workspace!.read(previewCredential)).groups[0]?.memberIds).toHaveLength(targets.length);
   });
   it("appends direct policies without replacing group inheritance or permission boundaries", async () => {
     const f = await fixture();
@@ -77,7 +77,7 @@ describe("atomic user directory batches", () => {
     f.workspace.roles[0]!.trustedUserIds = ["principal-lin", "principal-chen"];
     f.workspace.roleSessions = [{ id: "session-lin", roleId: f.workspace.roles[0]!.id, caller: { type: "user", id: "principal-lin" }, createdAt: context.at, expiresAt: "2099-01-01T00:00:00Z" }];
     const result = applyUserBatch(f.workspace, f.users, f.identity, { action: "delete", targets: [f.targets[0]!] }, context);
-    expect(result.users.map((user) => user.principal.id)).toEqual(["principal-chen"]);
+    expect(result.users).toEqual(f.users.filter((user) => user.principal.id !== "principal-lin"));
     expect(result.workspace.groups.flatMap((group) => group.memberIds)).not.toContain("principal-lin");
     expect(result.workspace.keys.some((key) => key.ownerId === "principal-lin")).toBe(false);
     expect(result.workspace.roles[0]!.trustedUserIds).toEqual(["principal-chen"]);
@@ -93,6 +93,30 @@ describe("atomic user directory batches", () => {
     const before = structuredClone(f.workspace);
     expect(() => applyUserBatch(f.workspace, f.users, f.identity, { action: "add-groups", targets: f.targets, groupIds: ["new-group"] }, context)).toThrow("associationLimit");
     expect(f.workspace).toEqual(before);
+  });
+});
+
+describe("policy modification time", () => {
+  it("tracks content, metadata and version changes but not grants, no-ops or failed writes", () => {
+    let state = initialAccessWorkspace("org-xiak");
+    const id = "policy-prod-logs", original = state.policies.find((policy) => policy.id === id)!;
+    const policy = () => state.policies.find((policy) => policy.id === id)!;
+    state = applyAccessWorkspaceCommand(state, { kind: "update-policy-description", id, description: "Updated" }, context);
+    expect(policy().updatedAt).toBe(context.at);
+    expect(policy().createdAt).toBe(original.createdAt);
+    const later = { ...context, at: "2026-09-10T03:00:00Z" };
+    state = applyAccessWorkspaceCommand(state, { kind: "associate-policy", id, userIds: [], groupIds: [], roleIds: [] }, later);
+    state = applyAccessWorkspaceCommand(state, { kind: "update-policy-description", id, description: "Updated" }, later);
+    expect(policy().updatedAt).toBe(context.at);
+    state = applyAccessWorkspaceCommand(state, { kind: "save-policy", id, name: original.name, description: "Updated", document, tags: [{ key: "team", value: "delivery" }] }, later);
+    expect(policy().updatedAt).toBe(later.at);
+    const rollback = { ...context, at: "2026-09-11T04:00:00Z" };
+    state = applyAccessWorkspaceCommand(state, { kind: "set-policy-version", id, version: 1 }, rollback);
+    expect(policy().updatedAt).toBe(rollback.at);
+    const before = structuredClone(state);
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "update-policy-description", id, description: "x".repeat(257) }, context)).toThrow();
+    expect(state).toEqual(before);
+    expect(state.policies.filter((entry) => entry.kind === "system")).toEqual(initialAccessWorkspace("org-xiak").policies.filter((entry) => entry.kind === "system"));
   });
 });
 
@@ -286,7 +310,8 @@ describe("access workspace preview invariants", () => {
   it("creates empty groups atomically, validates policy references and rejects duplicate names", () => {
     const source = initialAccessWorkspace("org-xiak");
     const next = applyAccessWorkspaceCommand(source, { kind: "create-group", name: "New Team", description: "", policyIds: [] }, context);
-    expect(source.groups).toHaveLength(2);
+    expect(next.groups).toHaveLength(source.groups.length + 1);
+    expect(source.groups.some((group) => group.name === "New Team")).toBe(false);
     expect(next.groups.at(-1)?.memberIds).toEqual([]);
     expect(next.groups.at(-1)?.policyIds).toEqual([]);
     expect(() => applyAccessWorkspaceCommand(source, { kind: "create-group", name: "Outside", description: "", policyIds: ["other-account-policy"] }, context)).toThrow("notFound");
@@ -337,7 +362,7 @@ describe("access workspace preview invariants", () => {
     const source = initialAccessWorkspace("org-xiak");
     const policy = source.policies.find((entry) => entry.id === "policy-prod-logs")!;
     const described = applyAccessWorkspaceCommand(source, { kind: "update-policy-description", id: policy.id, description: "New description" }, context);
-    expect(described.policies.find((entry) => entry.id === policy.id)).toEqual({ ...policy, description: "New description" });
+    expect(described.policies.find((entry) => entry.id === policy.id)).toEqual({ ...policy, description: "New description", updatedAt: context.at });
     const unchanged = applyAccessWorkspaceCommand(source, { kind: "save-policy", id: policy.id, name: policy.name, description: "Metadata only", document: policy.versions[0]!.document }, context);
     expect(unchanged.policies.find((entry) => entry.id === policy.id)?.versions).toEqual(policy.versions);
     expect(unchanged.policies.find((entry) => entry.id === policy.id)?.lastVersion).toBe(1);
@@ -388,7 +413,8 @@ describe("access workspace preview invariants", () => {
     expect(() => applyAccessWorkspaceCommand(source, { ...command, targets: { ...targets, roleIds: ["missing-role"] } }, context)).toThrow("notFound");
     expect(() => applyAccessWorkspaceCommand(source, { ...command, tags: [{ key: " team", value: "" }, { key: "team", value: "" }] }, context)).toThrow("invalid");
     expect(() => applyAccessWorkspaceCommand(source, { ...command, targets: { ...targets, userIds: Array(31).fill("principal-lin") } }, context)).toThrow("invalid");
-    expect(source.policies).toHaveLength(5);
+    expect(created.policies).toHaveLength(source.policies.length + 1);
+    expect(source.policies.some((policy) => policy.id === context.id)).toBe(false);
     expect(source.userPolicies["principal-lin"]).not.toContain(context.id);
   });
   it("replaces nominated nondefault history only when the entire save succeeds", () => {
@@ -470,6 +496,7 @@ describe("access workspace preview invariants", () => {
   });
   it("imports visible enterprise members as ungranted preview users and resets them on logout", async () => {
     await previewIamRepository.logout(previewCredential);
+    const originalUsers = (await previewAccountRepository.listUsers(previewCredential)).items;
     const extension = previewAccountRepository.workspace!;
     const connected = await extension.execute(previewCredential, { kind: "save-enterprise", name: "MOCK Enterprise", corporationId: "MOCK_CORP", visibleMemberIds: ["dev01"] });
     const id = connected.workspace.enterprises[0]!.id;
@@ -482,7 +509,7 @@ describe("access workspace preview invariants", () => {
     await extension.execute(previewCredential, { kind: "delete-user", principalId: imported.principal.id });
     await extension.execute(previewCredential, { kind: "delete-enterprise", id });
     await previewIamRepository.logout(previewCredential);
-    expect((await previewAccountRepository.listUsers(previewCredential)).items).toHaveLength(2);
+    expect((await previewAccountRepository.listUsers(previewCredential)).items).toEqual(originalUsers);
     expect((await extension.read(previewCredential)).enterprises).toHaveLength(0);
   });
 });

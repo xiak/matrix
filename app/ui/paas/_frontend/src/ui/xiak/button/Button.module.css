@@ -8,8 +8,8 @@
   border: var(--xiak-border-transparent);
   border-radius: var(--xiak-radius-control);
   font: inherit;
-  font-weight: var(--xiak-font-weight-semibold);
-  line-height: 1.4;
+  font-weight: var(--xiak-font-weight-medium);
+  line-height: var(--xiak-line-height-compact);
   text-align: center;
   cursor: pointer;
   outline: none;
@@ -88,6 +88,7 @@
   background: transparent;
   color: var(--xiak-color-text-muted);
 }
+.ghost:disabled { border-color: transparent; background: transparent; }
 
 .danger {
   border-color: var(--xiak-color-danger);

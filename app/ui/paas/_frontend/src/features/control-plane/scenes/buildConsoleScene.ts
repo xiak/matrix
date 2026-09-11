@@ -203,20 +203,20 @@ function productRail(section: ConsoleSection, experience?: ExperienceSnapshot): 
   return []; // Preview shortcuts are the user\'s favorites, not a fixed product list.
 }
 
-function productContext(section: ConsoleSection, experience?: ExperienceSnapshot): Pick<ConsoleScene, "productId" | "productEyebrow" | "productIcon"> {
+function productContext(section: ConsoleSection, experience?: ExperienceSnapshot): Pick<ConsoleScene, "productId" | "productIcon"> {
   if (!experience) {
     return section === "access"
-      ? { productId: "iam", productEyebrow: "Identity and access", productIcon: "access" }
-      : { productId: "postgresql", productEyebrow: "Managed services", productIcon: "database" };
+      ? { productId: "iam", productIcon: "access" }
+      : { productId: "postgresql", productIcon: "database" };
   }
-  if (isHomeSection(section)) return { productId: "console", productEyebrow: "Unified cloud", productIcon: "overview" };
-  if (section === "regions") return { productId: "regions", productEyebrow: "Cloud foundation", productIcon: "overview" };
-  if (section === "applications") return { productId: "applications", productEyebrow: "Application hosting", productIcon: "overview" };
-  if (section === "logs") return { productId: "logs", productEyebrow: "Log service", productIcon: "observability" };
-  if (isPaaSSection(section)) return { productId: "postgresql", productEyebrow: "PaaS", productIcon: "database" };
-  if (section === "devops") return { productId: "devops", productEyebrow: "DevOps", productIcon: "devops" };
-  if (section === "observability") return { productId: "monitoring", productEyebrow: "Observability", productIcon: "observability" };
-  return { productId: "iam", productEyebrow: "Security & IAM", productIcon: "access" };
+  if (isHomeSection(section)) return { productId: "console", productIcon: "overview" };
+  if (section === "regions") return { productId: "regions", productIcon: "overview" };
+  if (section === "applications") return { productId: "applications", productIcon: "overview" };
+  if (section === "logs") return { productId: "logs", productIcon: "observability" };
+  if (isPaaSSection(section)) return { productId: "postgresql", productIcon: "database" };
+  if (section === "devops") return { productId: "devops", productIcon: "devops" };
+  if (section === "observability") return { productId: "monitoring", productIcon: "observability" };
+  return { productId: "iam", productIcon: "access" };
 }
 
 function globalSearch(experience?: ExperienceSnapshot): ConsoleScene["search"] {

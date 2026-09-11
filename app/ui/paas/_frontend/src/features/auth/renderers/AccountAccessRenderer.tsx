@@ -15,6 +15,7 @@ import { AccessGroups } from "./AccessGroups";
 import { GroupCreationWizard } from "./GroupCreationWizard";
 import { AccessPolicies } from "./AccessPolicies";
 import { PolicyAuthoringWizard } from "./PolicyAuthoringWizard";
+import { policyCreationMethod, type PolicyCreationMethod } from "./PolicyCreationMethods";
 import { AccessSimulator } from "./AccessSimulator";
 import { AccessRoles } from "./AccessRoles";
 import { RoleCreationWizard } from "./RoleCreationWizard";
@@ -80,7 +81,7 @@ function PermissionCatalog() {
 }
 
 
-export function AccountAccessRenderer({ view = "overview", entityId, onNavigate }: { view?: AccountAccessView; entityId?: string; onNavigate(view: AccountAccessView, id?: string): void }) {
+export function AccountAccessRenderer({ view = "overview", entityId, policyMethod, onNavigate }: { view?: AccountAccessView; entityId?: string; policyMethod?: string; onNavigate(view: AccountAccessView, id?: string, method?: PolicyCreationMethod): void }) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const access = useAccountAccess();
@@ -103,12 +104,12 @@ export function AccountAccessRenderer({ view = "overview", entityId, onNavigate 
       view === "settings" ? <><UserSettings key={scene.accountVersion} scene={scene} />{workspace ? <AccessSecuritySettings workspace={workspace} /> : null}</> :
       view === "roles" ? workspace && scene.canManage ? <Tabs.Root defaultValue="roles"><Tabs.List aria-label={w("roles")}><Tabs.Trigger value="roles">{w("roles")}</Tabs.Trigger><Tabs.Trigger value="platform">{w("realRoles")}</Tabs.Trigger></Tabs.List><Tabs.Content value="roles"><AccessRoles key={entityId ?? "roles"} workspace={workspace} scene={scene} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} /></Tabs.Content><Tabs.Content value="platform"><PermissionCatalog /></Tabs.Content></Tabs.Root> : <PermissionCatalog /> :
       !workspace ? <EmptyState title={w("notConnected")} description={w("notConnectedHint")} /> :
-      view === "create-policy" ? <PolicyAuthoringWizard workspace={workspace} scene={scene} doneLabel={w("finishBack")} onBack={() => onNavigate("policies")} onDone={() => onNavigate("policies")} /> :
+      view === "create-policy" ? <PolicyAuthoringWizard method={policyCreationMethod(policyMethod)} workspace={workspace} scene={scene} doneLabel={w("finishBack")} onBack={() => onNavigate("policies")} onDone={() => onNavigate("policies")} /> :
       view === "create-group" ? <GroupCreationWizard workspace={workspace} onBack={() => onNavigate("groups")} onDone={(id) => onNavigate("groups", id)} /> :
       view === "create-role" ? <RoleCreationWizard workspace={workspace} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
       view === "groups" ? <AccessGroups key={entityId ?? "groups"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
-      view === "policies" ? <AccessPolicies key={entityId ?? "policies"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-policy")} onOpen={onNavigate} /> :
-      view === "simulator" ? <AccessSimulator key={entityId ?? "simulator"} workspace={workspace} scene={scene} entityId={entityId} /> :
+      view === "policies" ? <AccessPolicies key={entityId ?? "policies"} entityId={entityId} workspace={workspace} scene={scene} onCreate={(method) => onNavigate("create-policy", undefined, method)} onOpen={onNavigate} /> :
+      view === "simulator" ? <AccessSimulator key={entityId ?? "simulator"} workspace={workspace} scene={scene} entityId={entityId} onOpen={onNavigate} /> :
       view === "providers" ? <Tabs.Root defaultValue="providers"><Tabs.List aria-label={w("providers")}><Tabs.Trigger value="providers">{w("provider")}</Tabs.Trigger><Tabs.Trigger value="identities">{w("federatedIdentities")}</Tabs.Trigger></Tabs.List><Tabs.Content value="providers"><AccessProviders workspace={workspace} /></Tabs.Content><Tabs.Content value="identities"><AccessFederations workspace={workspace} /></Tabs.Content></Tabs.Root> :
       view === "federations" ? <AccessEnterpriseAccounts workspace={workspace} onUsers={() => onNavigate("users")} /> :
       view === "keys" ? <AccessCredentials workspace={workspace} scene={scene} /> :

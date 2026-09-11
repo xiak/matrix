@@ -18,6 +18,67 @@ function withPolicy(condition?: PolicyCondition, effect: "allow" | "deny" = "all
   workspace.policies.find((policy) => policy.id === "policy-prod-logs")!.versions[0]!.document = grant(condition, effect);
   return workspace;
 }
+describe("coherent access-review examples", () => {
+  const ids = ["principal-lin", "principal-chen", "principal-qiao", "principal-wu"];
+  const qiao = { ...request, principalId: "principal-qiao" };
+  it("computes every example from the current policies, not from an expected verdict in the fixture", () => {
+    const workspace = initialAccessWorkspace("org-xiak");
+    expect(workspace.testRequests.map((entry) => [entry.id, evaluateUserAccess(workspace, ids, { ...request, ...entry.request }).decision])).toEqual([
+      ["path", "allow"], ["duplicate", "allow"], ["tags", "allow"], ["deny", "explicitDeny"], ["boundary", "implicitDeny"], ["ungranted", "implicitDeny"]
+    ]);
+    expect(workspace.userProfiles["principal-wu"]?.consoleAccess).toBe(true);
+    expect(evaluateUserAccess(workspace, ids, { ...qiao, principalId: "principal-wu" }).evidence).toEqual([]);
+  });
+  it("distinguishes a resource path from tags and preserves both direct and inherited sources", () => {
+    let workspace = initialAccessWorkspace("org-xiak");
+    const archived = { ...qiao, resourceId: "logs-archive/payment" };
+    expect(evaluateUserAccess(workspace, ids, { ...archived, principalId: "principal-lin" }).decision).toBe("implicitDeny");
+    const tagged = evaluateUserAccess(workspace, ids, archived);
+    expect(tagged.decision).toBe("allow");
+    expect(tagged.evidence.filter((entry) => entry.policyId === "policy-tag-logs").map((entry) => entry.source)).toEqual(["direct", "group"]);
+    const context = { ...roleContext, userIds: ids };
+    workspace = applyAccessWorkspaceCommand(workspace, { kind: "set-user-policies", principalId: qiao.principalId, policyIds: workspace.userPolicies[qiao.principalId]!.filter((id) => id !== "policy-tag-logs") }, context);
+    expect(evaluateUserAccess(workspace, ids, archived).decision).toBe("allow");
+    workspace = applyAccessWorkspaceCommand(workspace, { kind: "change-group-policies", id: "group-operators", added: [], removed: ["policy-tag-logs"] }, context);
+    expect(evaluateUserAccess(workspace, ids, archived).decision).toBe("implicitDeny");
+  });
+  it("recomputes tag grants from the default revision, not policy metadata tags", () => {
+    const workspace = initialAccessWorkspace("org-xiak");
+    const staging = { ...qiao, resourceId: "logs-staging/storefront" };
+    const policy = workspace.policies.find((entry) => entry.id === "policy-tag-logs")!;
+    expect(evaluateUserAccess(workspace, ids, staging).decision).toBe("implicitDeny");
+    policy.tags = [{ key: "environment", value: "staging" }];
+    expect(evaluateUserAccess(workspace, ids, staging).decision).toBe("implicitDeny");
+    const rolled = applyAccessWorkspaceCommand(workspace, { kind: "set-policy-version", id: policy.id, version: 1 }, { ...roleContext, userIds: ids });
+    expect(evaluateUserAccess(rolled, ids, staging).decision).toBe("allow");
+    expect(rolled.userPolicies).toEqual(workspace.userPolicies);
+    expect(rolled.groups).toEqual(workspace.groups);
+  });
+  it("separates a matching deny from a boundary restriction and a nonmatching deny", () => {
+    const workspace = initialAccessWorkspace("org-xiak");
+    const deployment = { ...qiao, action: "paas:deploy", resourceId: "paas-storefront-staging" };
+    expect(evaluateUserAccess(workspace, ids, deployment).decision).toBe("allow");
+    expect(evaluateUserAccess(workspace, ids, { ...deployment, resourceId: "paas-checkout-api" }).decision).toBe("explicitDeny");
+    const deletion = { ...deployment, action: "paas:delete" };
+    expect(evaluateUserAccess(workspace, ids, deletion)).toMatchObject({ decision: "implicitDeny", boundary: { decision: "implicitDeny" } });
+    delete workspace.userBoundaries[qiao.principalId];
+    expect(evaluateUserAccess(workspace, ids, deletion).decision).toBe("allow");
+  });
+  it("supports an explicitly trusted human role without copying personal grants into its session", () => {
+    let workspace = initialAccessWorkspace("org-xiak");
+    const context = { ...roleContext, id: "session-review", userIds: ids };
+    const roleRequest = { roleId: "role-log-reviewer", caller: { type: "user" as const, id: qiao.principalId }, at: request.at! };
+    expect(evaluateRoleAssumption(workspace, ids, roleRequest).allowed).toBe(true);
+    workspace = applyAccessWorkspaceCommand(workspace, { kind: "create-role-session", ...roleRequest, sessionMinutes: 15 }, context);
+    expect(evaluateRoleSessionAccess(workspace, ids, context.id, qiao, request.at!).decision).toBe("allow");
+    const deployment = { ...qiao, action: "paas:deploy", resourceId: "paas-storefront-staging" };
+    expect(evaluateUserAccess(workspace, ids, deployment).decision).toBe("allow");
+    expect(evaluateRoleSessionAccess(workspace, ids, context.id, deployment, request.at!).decision).toBe("implicitDeny");
+    expect(evaluateRoleSessionAccess(workspace, ids, context.id, qiao, "2026-09-09T12:15:00Z").error).toBe("expiredSession");
+    workspace = applyAccessWorkspaceCommand(workspace, { kind: "revoke-role-session", id: context.id }, context);
+    expect(evaluateRoleSessionAccess(workspace, ids, context.id, qiao, request.at!).error).toBe("revokedSession");
+  });
+});
 describe("closed preview policy language", () => {
   it("declares per-operation granularity and condition support independently of action classification", () => {
     expect(policyConditionsForActions([])).toEqual([]);
@@ -84,7 +145,8 @@ describe("role trust, boundaries and temporary session diagnostics", () => {
     let workspace = applyAccessWorkspaceCommand(source, { ...accountRole, policyIds: [], boundaryPolicyId: undefined }, roleContext);
     workspace = applyAccessWorkspaceCommand(workspace, { kind: "update-role-metadata", id: roleContext.id, description: "New description", tags: [] }, roleContext);
     expect(workspace.roles.find((role) => role.id === roleContext.id)).toMatchObject({ name: "LogSupport", description: "New description", policyIds: [], trustedUserIds: ["principal-lin"] });
-    expect(source.roles).toHaveLength(2);
+    expect(workspace.roles).toHaveLength(source.roles.length + 1);
+    expect(source.roles.some((role) => role.id === roleContext.id)).toBe(false);
     expect(workspace.events.some((event) => event.action === "update-role-metadata")).toBe(true);
   });
   it.each([
@@ -140,7 +202,8 @@ describe("role trust, boundaries and temporary session diagnostics", () => {
     workspace.userPolicies = {};
     expect(() => applyAccessWorkspaceCommand(workspace, { kind: "delete-policy", id: "policy-prod-logs" }, roleContext)).toThrow("referenced");
     workspace = applyAccessWorkspaceCommand(workspace, { kind: "delete-user", principalId: "principal-chen" }, roleContext);
-    expect(workspace.userBoundaries).toEqual({});
+    expect(workspace.userBoundaries["principal-chen"]).toBeUndefined();
+    expect(workspace.userBoundaries["principal-qiao"]).toBe("policy-delivery-boundary");
     expect(() => applyAccessWorkspaceCommand(workspace, { kind: "set-user-boundary", principalId: "foreign", policyId: "policy-prod-logs" }, roleContext)).toThrow("invalid");
   });
   it("resolves boundary default revisions immediately and supports rollback without rebinding", () => {

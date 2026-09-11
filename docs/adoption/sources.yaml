@@ -22,3 +22,12 @@ sources:
     paths:
       - docs/paas
     mode: redesign-for-independent-product
+  cloudUxInteractionBackport:
+    repository: this-repository
+    commit: 21b469b343d83a190acc0a3bb34a29b5294191ad
+    paths:
+      - app/ui/platform/_frontend/src/ui/xiak/select/Select.tsx
+      - app/ui/platform/_frontend/src/ui/xiak/table/TableToolbar.tsx
+      - app/ui/platform/_frontend/src/ui/xiak/form/Controls.test.tsx
+      - app/ui/platform/_frontend/src/ui/xiak/table/TableToolbar.test.tsx
+    mode: selective-interaction-backport

@@ -31,6 +31,14 @@ describe("AccountMenu", () => {
     expect(dialog.textContent).toContain("preview-admin");
     expect(dialog.textContent).toContain("principal-admin");
     expect(dialog.textContent).toContain("Xiak 科技");
+    const tenant = screen.getByRole("group", { name: "当前租户" });
+    expect(tenant.textContent).toContain("org-xiak");
+    expect(tenant.textContent).toContain("账号类型");
+    expect(tenant.textContent).toContain("主账号");
+    expect(within(tenant).queryByRole("radio")).toBeNull();
+    const preferences = screen.getByRole("group", { name: "显示偏好" });
+    expect(within(preferences).getAllByRole("group")).toHaveLength(2);
+    expect(within(preferences).queryByRole("menuitem")).toBeNull();
     expect(within(screen.getByRole("group", { name: "主题" })).getAllByRole("radio")).toHaveLength(4);
     expect(within(screen.getByRole("group", { name: "语言" })).getAllByRole("radio")).toHaveLength(2);
     const actions = screen.getByRole("menu", { name: "账号操作" });

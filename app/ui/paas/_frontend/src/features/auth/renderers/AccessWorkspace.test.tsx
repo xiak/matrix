@@ -25,6 +25,7 @@ vi.mock("next/link", () => ({
 
 const identity: AccountIdentity = { account: { organization: { id: "org-xiak", displayName: "Example", status: "ACTIVE", resourceVersion: 1 }, primaryPrincipalId: "admin", primaryLoginName: "admin", loginAlias: "example" }, principal: { id: "admin", organizationId: "org-xiak", loginName: "admin", displayName: "Administrator", status: "ACTIVE", mustChangePassword: false, resourceVersion: 1 }, roles: ["ORGANIZATION_ADMIN"], canCreateOrganizations: true };
 const users: AccountUser[] = ["lin", "chen"].map((name) => ({ principal: { ...identity.principal, id: "principal-" + name, loginName: name, displayName: name }, roleBindings: [] }));
+const reviewUsers: AccountUser[] = [...users, ...["qiao", "wu"].map((name) => ({ principal: { ...identity.principal, id: "principal-" + name, loginName: name, displayName: name }, roleBindings: [] }))];
 const login: IamRepository = { login: async () => ({ credential: "preview-only", mustChangePassword: false, session: { id: "session", organizationId: "org-xiak", principalId: "admin", status: "ACTIVE", issuedAt: "2026-09-09T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z" } }), changePassword: async () => {}, logout: async () => {} };
 
 function Harness({ repository, initialView, initialEntityId }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string }) {
@@ -33,15 +34,17 @@ function Harness({ repository, initialView, initialEntityId }: { repository: Acc
   const locale = useLocalePreference();
   const [view, setView] = useState(initialView);
   const [entityId, setEntityId] = useState(initialEntityId);
+  const [policyMethod, setPolicyMethod] = useState<string>();
   if (!session.current) return <button onClick={() => void session.login("admin", "preview")}>Enter</button>;
-  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "")} view={view} entityId={entityId} onNavigate={(next, id) => requestLeave(() => { setView(next); setEntityId(id); })} /></AccountAccessProvider>;
+  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} onNavigate={(next, id, method) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); })} /></AccountAccessProvider>;
 }
-async function open(initialView: AccountAccessView, options?: { live?: boolean; reader?: boolean; entityId?: string; seed?(extension: ReturnType<typeof createPreviewAccessWorkspace>): Promise<void> }) {
-  const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((user) => user.principal.id), identity.account.primaryPrincipalId);
+async function open(initialView: AccountAccessView, options?: { live?: boolean; reader?: boolean; entityId?: string; users?: AccountUser[]; seed?(extension: ReturnType<typeof createPreviewAccessWorkspace>): Promise<void> }) {
+  const directoryUsers = options?.users ?? users;
+  const extension = createPreviewAccessWorkspace("org-xiak", () => directoryUsers.map((user) => user.principal.id), identity.account.primaryPrincipalId);
   await options?.seed?.(extension);
   const repository: AccountRepository = {
     currentIdentity: vi.fn().mockResolvedValue({ ...identity, roles: options?.reader ? [] : identity.roles }),
-    listUsers: vi.fn().mockResolvedValue({ items: users, nextAfter: null }),
+    listUsers: vi.fn().mockResolvedValue({ items: directoryUsers, nextAfter: null }),
     listAccounts: vi.fn().mockResolvedValue({ items: [], nextAfter: null }),
     execute: vi.fn().mockResolvedValue(undefined),
     workspace: options?.live ? undefined : { read: vi.fn(extension.read), execute: vi.fn(extension.execute) }
@@ -169,7 +172,9 @@ describe("selection-driven user directory", () => {
     expect(screen.getByText("已选 2 位用户")).toBeTruthy();
     await user.click(dialog.getByRole("button", { name: "确认执行" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect((await previewAccountRepository.listUsers(previewCredential)).items.every((user) => user.principal.status === "DISABLED")).toBe(true);
+    const after = (await previewAccountRepository.listUsers(previewCredential)).items;
+    expect(after.filter((user) => ["lin", "chen"].includes(user.principal.loginName)).every((user) => user.principal.status === "DISABLED")).toBe(true);
+    expect(after.filter((user) => !["lin", "chen"].includes(user.principal.loginName)).every((user) => user.principal.status === "ACTIVE")).toBe(true);
     expect(repository.executeUserBatch).toHaveBeenCalledTimes(2);
     expect(repository.execute).not.toHaveBeenCalled();
   });
@@ -268,6 +273,158 @@ describe("service-based policy document exploration", () => {
   });
 });
 
+describe("policy creation entry and directory contract", () => {
+  it.each(["按策略生成器创建", "按策略语法创建", "按标签授权", "按产品功能或项目权限创建"])("keeps empty-draft editor tabs clickable from %s", async (method) => {
+    const { user, repository } = await open("policies");
+    await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
+    await user.click(within(screen.getByRole("dialog", { name: "选择创建策略方式" })).getByRole("button", { name: new RegExp("^" + method) }));
+    // Selecting a template is not applying it: this reproduces the screenshot.
+    await select(user, "从已有策略开始", "ProductionLogReader");
+    for (const name of ["JSON 编辑", "可视化编辑", "JSON 编辑", "按资源标签", "JSON 编辑", "产品功能", "JSON 编辑"]) {
+      const tab = screen.getByRole("tab", { name });
+      expect(tab.hasAttribute("disabled")).toBe(false);
+      await user.click(tab);
+      expect(tab.getAttribute("aria-selected")).toBe("true");
+    }
+    expect(JSON.parse((screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value)).toEqual({ version: "1", statement: [{ effect: "allow", action: [], resource: ["*"] }] });
+    expect(screen.queryByText(/当前 JSON 无法无损转换/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.queryByLabelText("名称", { exact: true })).toBeNull();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("keeps cleared feature selections and incomplete conditions editable across JSON tabs", async () => {
+    const { user, repository } = await open("create-policy");
+    await user.click(screen.getByRole("tab", { name: "产品功能" }));
+    await user.click(screen.getByRole("checkbox", { name: /^检索日志/ }));
+    await user.click(screen.getByRole("checkbox", { name: /^检索日志/ }));
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    expect((screen.getByRole("tab", { name: "可视化编辑" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("tab", { name: "产品功能" }) as HTMLButtonElement).disabled).toBe(false);
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    await user.click(screen.getByRole("button", { name: "添加授权声明" }));
+    await logActions(user, ["logs:search"]);
+    await user.click(screen.getByRole("checkbox", { name: "按资源标签限制" }));
+    await user.type(screen.getByLabelText("标签值 1"), "production");
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    const text = (screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value;
+    expect((screen.getByRole("tab", { name: "可视化编辑" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("tab", { name: "按资源标签" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("tab", { name: "产品功能" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("tab", { name: "按资源标签" }));
+    expect((screen.getByLabelText("标签键 1") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("标签值 1") as HTMLInputElement).value).toBe("production");
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    expect((screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value).toBe(text);
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("leaves malformed or unrepresentable drafts in JSON without discarding their content", async () => {
+    const { user, repository } = await open("create-policy");
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    const editor = screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement;
+    const statement = { effect: "allow", action: [], resource: ["*"] };
+    for (const text of [
+      '{ "version":',
+      JSON.stringify({ version: "1", statement: [statement], principal: "unknown" }),
+      JSON.stringify({ version: "1", statement: [{ ...statement, notAction: ["logs:delete"] }] }),
+      JSON.stringify({ version: "1", statement: [{ ...statement, action: ["logs:unknown"] }] }),
+      JSON.stringify({ version: "1", statement: [{ ...statement, condition: { requestTag: { env: "prod" } } }] }),
+      JSON.stringify({ version: "1", statement: [{ ...statement, condition: { resourceTag: [{ key: "env", value: "prod", other: "retain" }] } }] }),
+      JSON.stringify({ version: "1", statement: [{ ...statement, resource: ["*", "matrix:logs:org-xiak:*:topic/prod/*"] }] }),
+      JSON.stringify({ version: "1", statement: [{ ...statement, condition: { notBefore: "invalid date" } }] })
+    ]) {
+      fireEvent.change(editor, { target: { value: text } });
+      for (const name of ["可视化编辑", "按资源标签", "产品功能"]) expect((screen.getByRole("tab", { name }) as HTMLButtonElement).disabled).toBe(true);
+      expect(editor.value).toBe(text);
+    }
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("matches CAM directory columns, omits preset metadata in custom view and restores chooser focus", async () => {
+    const { user, repository } = await open("policies");
+    const headings = () => within(screen.getByRole("table", { name: "策略" })).getAllByRole("columnheader").map((cell) => cell.textContent).filter(Boolean);
+    expect(headings()).toEqual(["策略名", "所属产品", "权限级别", "描述", "上次修改时间", "操作"]);
+    await select(user, "权限级别", "全局权限");
+    await user.click(screen.getByRole("tab", { name: "自定义策略" }));
+    expect(headings()).toEqual(["策略名", "描述", "上次修改时间", "操作"]);
+    expect(screen.getByRole("button", { name: "ProductionLogReader" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "权限级别" })).toBeNull();
+    const create = screen.getByRole("button", { name: "新建自定义策略" });
+    await user.click(create);
+    const dialog = within(screen.getByRole("dialog", { name: "选择创建策略方式" }));
+    for (const name of [/^按策略生成器创建/, /^按策略语法创建/, /^按标签授权/, /^按产品功能或项目权限创建/]) expect(dialog.getByRole("button", { name })).toBeTruthy();
+    // jsdom does not synthesize the native dialog cancel event for Escape.
+    fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(create);
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["visual", "按策略生成器创建", "可视化编辑"],
+    ["json", "按策略语法创建", "JSON 编辑"],
+    ["tags", "按标签授权", "按资源标签"],
+    ["features", "按产品功能或项目权限创建", "产品功能"]
+  ] as const)("creates via %s with one reviewed document and no live IAM writes", async (method, title, tab) => {
+    const { user, repository, extension } = await open("policies");
+    await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
+    await user.click(within(screen.getByRole("dialog", { name: "选择创建策略方式" })).getByRole("button", { name: new RegExp("^" + title) }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("tab", { name: tab }).getAttribute("aria-selected")).toBe("true");
+    if (method === "json") {
+      fireEvent.change(screen.getByLabelText("策略内容", { selector: "textarea" }), { target: { value: JSON.stringify({ version: "1", statement: [{ effect: "allow", action: ["logs:search"], resource: ["*"] }] }) } });
+    } else if (method === "features") {
+      await user.click(screen.getByRole("checkbox", { name: /^检索日志/ }));
+      const product = screen.getByRole("checkbox", { name: "日志服务" }) as HTMLInputElement;
+      expect(product.indeterminate).toBe(true);
+      await user.type(screen.getByRole("searchbox", { name: "搜索产品或功能" }), "数据库");
+      await user.clear(screen.getByRole("searchbox", { name: "搜索产品或功能" }));
+      expect((screen.getByRole("checkbox", { name: /^检索日志/ }) as HTMLInputElement).checked).toBe(true);
+    } else {
+      await logActions(user, ["logs:search"]);
+      if (method === "tags") {
+        expect(screen.queryByRole("checkbox", { name: "logs:list" })).toBeNull();
+        expect(screen.getByRole("heading", { name: "生效条件（资源标签必填）" })).toBeTruthy();
+        await user.click(screen.getByRole("button", { name: "下一步" }));
+        expect(screen.queryByLabelText("名称", { exact: true })).toBeNull();
+        expect(screen.getByText("请为每条声明开启「按资源标签限制」并填写标签。若不需要标签限制，请切换到可视化编辑。")).toBeTruthy();
+        expect(repository.workspace!.execute).not.toHaveBeenCalled();
+        await user.click(screen.getByRole("checkbox", { name: "按资源标签限制" }));
+        await user.type(screen.getByLabelText("标签键 1"), "environment");
+        await user.type(screen.getByLabelText("标签值 1"), "production");
+      }
+    }
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.type(screen.getByLabelText("名称", { exact: true }), "Method-" + method);
+    await user.click(screen.getByRole("button", { name: "上一步" }));
+    expect(screen.getByRole("tab", { name: tab }).getAttribute("aria-selected")).toBe("true");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "创建策略" }));
+    await screen.findByRole("heading", { name: "策略已保存" });
+    const saved = (await extension.read("preview")).policies.find((policy) => policy.name === "Method-" + method)!;
+    expect(saved.versions[0]?.document.statement).toEqual([{ effect: "allow", action: ["logs:search"], resource: ["*"], ...(method === "tags" ? { condition: { resourceTag: [{ key: "environment", value: "production" }] } } : {}) }]);
+    expect(repository.workspace!.execute).toHaveBeenCalledTimes(1);
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("never converts restricted or wildcard JSON into a broader product-feature grant", async () => {
+    const { user, repository } = await open("create-policy");
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    const editor = screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement;
+    for (const statement of [
+      { effect: "allow", action: ["logs:*"], resource: ["*"] },
+      { effect: "deny", action: ["logs:search"], resource: ["*"] },
+      { effect: "allow", action: ["logs:search"], resource: ["*"], condition: { resourceTag: [{ key: "env", value: "test" }] } },
+      { effect: "allow", action: ["logs:search"], resource: ["matrix:logs:org-xiak:*:topic/prod/*"] }
+    ]) {
+      const text = JSON.stringify({ version: "1", statement: [statement] });
+      fireEvent.change(editor, { target: { value: text } });
+      expect((screen.getByRole("tab", { name: "产品功能" }) as HTMLButtonElement).disabled).toBe(true);
+      expect(editor.value).toBe(text);
+    }
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+});
+
 describe("CAM-style access workspace", () => {
   it("returns to the same user query and criteria without retaining bulk selection", async () => {
     const { user } = await open("users");
@@ -310,17 +467,18 @@ describe("CAM-style access workspace", () => {
       for (let index = 0; index < 13; index++) await extension.execute("preview", { kind: "save-policy", name: "Paged" + String(index).padStart(2, "0"), description: "", document: { version: "1", statement: [{ effect: "allow", action: ["logs:search"], resource: ["*"] }] } });
     } });
     let table = await screen.findByRole("table", { name: "策略" });
+    await user.type(screen.getByRole("searchbox", { name: "搜索策略名称、描述或标签" }), "Paged");
     expect(within(table).getAllByRole("row")).toHaveLength(11);
-    await user.click(within(table).getByRole("checkbox", { name: "选择 MatrixAuditReadOnly" }));
+    await user.click(within(table).getByRole("checkbox", { name: "选择 Paged00" }));
     await user.click(screen.getByRole("button", { name: "下一页" }));
     table = screen.getByRole("table", { name: "策略" });
-    expect(within(table).getAllByRole("row")).toHaveLength(9);
+    expect(within(table).getAllByRole("row")).toHaveLength(4);
     expect(screen.getByText("已选 1 个策略")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Paged12" }));
     await screen.findByRole("heading", { name: "Paged12" });
     await user.click(screen.getByTestId("go-policies"));
     table = await screen.findByRole("table", { name: "策略" });
-    expect(within(table).getAllByRole("row")).toHaveLength(9);
+    expect(within(table).getAllByRole("row")).toHaveLength(4);
     expect(within(table).getByRole("button", { name: "Paged12" })).toBeTruthy();
     expect((screen.getByRole("button", { name: "下一页" }) as HTMLButtonElement).disabled).toBe(true);
   });
@@ -356,29 +514,28 @@ describe("CAM-style access workspace", () => {
   it("retains independent policy directory filters across details and page navigation", async () => {
     const { user } = await open("policies");
     await screen.findByRole("table", { name: "策略" });
-    await user.click(screen.getByRole("tab", { name: "自定义策略" }));
-    await select(user, "产品服务", "日志服务");
-    await select(user, "操作类型", "读取");
-    await select(user, "资源范围", "指定资源");
-    await select(user, "排序方式", "最近创建");
-    await user.type(screen.getByRole("searchbox"), "Production");
-    await user.click(screen.getByRole("button", { name: "ProductionLogReader" }));
-    expect(await screen.findByRole("heading", { name: "ProductionLogReader" })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "预设策略" }));
+    await select(user, "所属产品", "访问管理");
+    await select(user, "权限级别", "云产品权限");
+    await select(user, "排序方式", "最近修改");
+    await user.type(screen.getByRole("searchbox"), "Audit");
+    await user.click(screen.getByRole("button", { name: "MatrixAuditReadOnly" }));
+    expect(await screen.findByRole("heading", { name: "MatrixAuditReadOnly" })).toBeTruthy();
     await user.click(screen.getByTestId("go-policies"));
     expect(await screen.findByRole("table", { name: "策略" })).toBeTruthy();
-    expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("Production");
-    expect(screen.getByRole("tab", { name: "自定义策略" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("button", { name: "移除筛选：产品服务: 日志服务" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "移除筛选：操作类型: 读取" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "移除筛选：资源范围: 指定资源" })).toBeTruthy();
-    expect(screen.getByRole("combobox", { name: "排序方式" }).textContent).toContain("最近创建");
+    expect((screen.getByRole("searchbox") as HTMLInputElement).value).toBe("Audit");
+    expect(screen.getByRole("tab", { name: "预设策略" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "移除筛选：所属产品: 访问管理" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "移除筛选：权限级别: 云产品权限" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "排序方式" }).textContent).toContain("最近修改");
     expect(within(screen.getByRole("table", { name: "策略" })).getAllByRole("row")).toHaveLength(2);
   });
   it("reviews batch attachments, preserves a failed selection and commits only after confirmation", async () => {
     const { user, repository, extension } = await open("policies");
     await user.click(await screen.findByRole("checkbox", { name: "选择 MatrixReadOnlyAccess" }));
     await user.click(screen.getByRole("checkbox", { name: "选择 ProductionLogReader" }));
-    await user.click(screen.getByRole("button", { name: "批量关联" }));
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "批量关联" }));
     let dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("checkbox", { name: /lin/ }));
     await user.click(within(dialog).getByRole("button", { name: "下一步：审阅" }));
@@ -402,7 +559,9 @@ describe("CAM-style access workspace", () => {
     const { user, repository } = await open("policies", { seed: async (extension) => {
       await extension.execute("preview", { kind: "associate-policy", id: "policy-prod-logs", userIds: ["principal-lin"], groupIds: ["group-delivery"], roleIds: [] });
     } });
-    await user.click(await screen.findByRole("button", { name: "关联用户 / 组 / 角色 · ProductionLogReader" }));
+    await user.click(await screen.findByRole("checkbox", { name: "选择 ProductionLogReader" }));
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "关联用户 / 组 / 角色" }));
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: /移除 DeliveryTeam/ }));
     await user.click(within(dialog).getByRole("button", { name: "下一步：审阅" }));
@@ -427,13 +586,13 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText(/包含权限管理操作/)).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
   });
-  it("searches policy service and action-level metadata from the current default version in both languages", async () => {
+  it("searches products and descriptions in both languages without confusing action types with policy categories", async () => {
     const { user } = await open("policies");
     const table = await screen.findByRole("table", { name: "策略" });
     const row = within(table).getByRole("button", { name: "ProductionLogReader" }).closest("tr")!;
-    expect(within(row).getByText("日志服务")).toBeTruthy();
-    expect(within(row).getByText("读取")).toBeTruthy();
-    await user.type(screen.getByRole("searchbox", { name: "搜索名称、ID 或关键字" }), "日志服务 读取");
+    expect(within(row).queryByText("读取")).toBeNull();
+    expect(within(table).getAllByText("全局权限")).toHaveLength(2);
+    await user.type(screen.getByRole("searchbox", { name: "搜索策略名称、描述或标签" }), "日志服务 production");
     expect(screen.getByRole("button", { name: "ProductionLogReader" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "MatrixAuditReadOnly" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Language" }));
@@ -446,6 +605,7 @@ describe("CAM-style access workspace", () => {
     const { user } = await open("overview", { seed: async (extension) => {
       await extension.execute("preview", { kind: "change-group-members", id: "group-delivery", added: [], removed: ["principal-lin"] });
       await extension.execute("preview", { kind: "change-group-policies", id: "group-auditors", added: [], removed: ["policy-audit"] });
+      await extension.execute("preview", { kind: "change-group-policies", id: "group-operators", added: [], removed: ["policy-delivery", "policy-tag-logs"] });
       await extension.execute("preview", { kind: "set-key-status", id: "MOCK-pipeline-key", enabled: false });
       await extension.execute("preview", { kind: "save-settings", settings: { ...(await extension.read("preview")).settings, loginProtection: true } });
     } });
@@ -470,17 +630,19 @@ describe("CAM-style access workspace", () => {
   });
   it("keeps access methods independent of permissions and exposes identity details even without a profile", async () => {
     const { user, repository, extension } = await open("users");
-    const lin = within((await screen.findByRole("button", { name: "查看用户 lin" })).closest("tr")!);
-    expect(lin.getByText("控制台访问 · 已启用")).toBeTruthy();
-    expect(lin.getByText("编程访问 · 已启用")).toBeTruthy();
+    const method = (scope: HTMLElement, name: string) => within(within(scope).getByText(name, { exact: true }).closest("li")!);
+    const row = (await screen.findByRole("button", { name: "查看用户 lin" })).closest("tr")!;
+    const lin = within(row);
+    expect(method(row, "控制台访问").getByText("已启用")).toBeTruthy();
+    expect(method(row, "编程访问").getByText("已启用")).toBeTruthy();
     await user.click(lin.getByRole("button", { name: "查看用户 lin" }));
     expect(screen.getByRole("tab", { name: "身份信息" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByText(/授予管理员权限不会将其变成主账号/)).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "访问方式" }));
-    expect(screen.getByText("编程访问 · 已启用")).toBeTruthy();
+    expect(method(document.body, "编程访问").getByText("已启用")).toBeTruthy();
     expect(screen.getByText(/不代表资源权限/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Language" }));
-    expect(screen.getByText("Programmatic access · Enabled")).toBeTruthy();
+    expect(method(document.body, "Programmatic access").getByText("Enabled")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Back to list" }));
     const extensionRead = repository.workspace!.read;
     vi.mocked(extensionRead).mockImplementationOnce(async () => {
@@ -490,12 +652,12 @@ describe("CAM-style access workspace", () => {
     });
     // A new directory read is requested through the existing page control.
     await user.click(screen.getByRole("button", { name: "First page" }));
-    await screen.findByText("Console access · Configuration not provided");
+    await waitFor(() => expect(method(screen.getByRole("button", { name: "View user chen" }).closest("tr")!, "Console access").getByText("Configuration not provided")).toBeTruthy());
     await user.click(await screen.findByRole("button", { name: "View user chen" }));
     expect(screen.getByRole("tab", { name: "Identity" })).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Access methods" }));
-    expect(screen.getByText("Console access · Configuration not provided")).toBeTruthy();
-    expect(screen.queryByText("Console access · Disabled")).toBeNull();
+    expect(method(document.body, "Console access").getByText("Configuration not provided")).toBeTruthy();
+    expect(method(document.body, "Console access").queryByText("Disabled")).toBeNull();
   });
   it("manages primary membership from users and groups without offering child authorization or lifecycle actions", async () => {
     const { user, repository, extension } = await open("users");
@@ -839,6 +1001,7 @@ describe("CAM-style access workspace", () => {
     expect(session.caller).toEqual({ type: "service", id: "devops.matrix.internal" });
     await user.click(screen.getByRole("button", { name: "模拟访问" }));
     expect(screen.getByRole("combobox", { name: "身份类型" }).textContent).toContain("角色体验会话");
+    expect(screen.queryByRole("combobox", { name: "了解一个授权场景" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "运行模拟" }));
     expect(screen.getByText("默认拒绝", { exact: true })).toBeTruthy();
     await user.click(screen.getByTestId("go-roles"));
@@ -1127,12 +1290,14 @@ describe("CAM-style access workspace", () => {
   it("reports an unknown simulator identity instead of simulating the first available user", async () => {
     const { user } = await open("simulator", { entityId: "missing-user" });
     await user.click(await screen.findByRole("button", { name: "运行模拟" }));
-    expect(screen.queryByText("模拟允许")).toBeNull();
+    expect(screen.queryByText("策略允许")).toBeNull();
     expect(screen.getByText("请求无法模拟")).toBeTruthy();
   });
   it("keeps a visual policy draft editable and creates a version only on save", async () => {
     const { user, extension } = await open("policies");
-    await user.click(await screen.findByRole("button", { name: "新建策略" }));
+    const before = (await extension.read("preview")).policies;
+    await user.click(await screen.findByRole("button", { name: "新建自定义策略" }));
+    await user.click(within(screen.getByRole("dialog", { name: "选择创建策略方式" })).getByRole("button", { name: /^按策略生成器创建/ }));
     expect(screen.queryByRole("dialog")).toBeNull();
     await logActions(user, ["logs:read", "logs:search"]);
     await select(user, "资源授权范围", "指定资源");
@@ -1141,11 +1306,11 @@ describe("CAM-style access workspace", () => {
     expect((screen.getByRole("checkbox", { name: "logs:search" }) as HTMLInputElement).checked).toBe(true);
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
     expect((screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value).toContain("logs:search");
-    expect((await extension.read("preview")).policies).toHaveLength(5);
+    expect((await extension.read("preview")).policies).toEqual(before);
     await user.click(screen.getByRole("button", { name: "下一步" }));
     await user.type(screen.getByLabelText("名称", { exact: true }), "ReadCluster");
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect((await extension.read("preview")).policies).toHaveLength(5);
+    expect((await extension.read("preview")).policies).toEqual(before);
     await user.click(screen.getByRole("button", { name: "创建策略" }));
     expect((await extension.read("preview")).policies.at(-1)?.versions[0]?.document.statement[0]?.action).toEqual(["logs:read", "logs:search"]);
   });
@@ -1241,20 +1406,95 @@ describe("CAM-style access workspace", () => {
   it("explains user grants, clears stale results on input changes and remains preview-only", async () => {
     const { user, repository } = await open("simulator");
     await user.click(await screen.findByRole("button", { name: "运行模拟" }));
-    expect(screen.getByText("模拟允许")).toBeTruthy();
+    expect(screen.getByText("策略允许")).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "模拟结果" }));
     const table = screen.getByRole("table", { name: "策略判断依据" });
     expect(within(table).getByText("直接关联")).toBeTruthy();
+    expect(within(table).queryByText("DeliveryTeam")).toBeNull();
+    await user.click(screen.getByRole("button", { name: /查看其余 \d+ 条判断依据/ }));
     expect(within(table).getByText("用户组继承")).toBeTruthy();
     expect(within(table).getByText("ProductionLogReader")).toBeTruthy();
     expect(within(table).getByText("DeliveryTeam")).toBeTruthy();
     await select(user, "用户", "chen");
-    expect(screen.queryByText("模拟允许")).toBeNull();
+    expect(screen.queryByText("策略允许")).toBeNull();
     await user.click(screen.getByRole("button", { name: "运行模拟" }));
     expect(screen.getByText("默认拒绝")).toBeTruthy();
     expect(screen.getByText("操作不匹配")).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("prefills diagnostic examples without mutation or automatic decisions and links grant sources", async () => {
+    const { user, repository, extension } = await open("simulator", { users: reviewUsers });
+    const before = await extension.read("preview");
+    await select(user, "了解一个授权场景", "直接授权与组继承");
+    const example = screen.getByRole("combobox", { name: "了解一个授权场景" });
+    expect(document.getElementById(example.getAttribute("aria-describedby")!)?.textContent).toContain("查看同一策略的直接和用户组两条来源");
+    expect(screen.getByRole("combobox", { name: "用户" }).textContent).toContain("qiao");
+    expect(screen.queryByRole("heading", { name: "模拟结果" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "运行模拟" }));
+    expect(screen.getByText("策略允许", { exact: true })).toBeTruthy();
+    expect(screen.getByText(/策略允许不代表真实请求一定成功/)).toBeTruthy();
+    const evidence = within(screen.getByRole("table", { name: "策略判断依据" }));
+    expect(evidence.getAllByRole("button", { name: "ProductionLogsByTag" })).toHaveLength(2);
+    expect(evidence.getByText("直接关联")).toBeTruthy();
+    expect(evidence.getByText("用户组继承")).toBeTruthy();
+    expect(await extension.read("preview")).toEqual(before);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    await user.click(evidence.getByRole("button", { name: "ReleaseOperators" }));
+    expect(await screen.findByRole("heading", { name: "ReleaseOperators" })).toBeTruthy();
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("group-operators");
+  });
+  it("retains a compatible action across resources and clears it across services", async () => {
+    const { user } = await open("simulator");
+    await user.click(screen.getByRole("button", { name: "运行模拟" }));
+    await select(user, "测试资源", "archive/payment · cn-shanghai-a");
+    expect(screen.getByRole("combobox", { name: "请求操作" }).textContent).toContain("logs:search");
+    expect(screen.getByRole("button", { name: "运行模拟" }).hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByRole("heading", { name: "模拟结果" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "运行模拟" }));
+    expect(screen.getByText("默认拒绝", { exact: true })).toBeTruthy();
+    await select(user, "测试资源", "account · global");
+    expect(screen.getByRole("combobox", { name: "请求操作" }).textContent).toBe("选择操作");
+    expect(screen.getByRole("button", { name: "运行模拟" }).hasAttribute("disabled")).toBe(true);
+    await select(user, "产品服务", "PostgreSQL 数据库");
+    expect(screen.getByRole("combobox", { name: "请求操作" }).textContent).toBe("选择操作");
+    expect(screen.getByRole("button", { name: "运行模拟" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByRole("heading", { name: "模拟结果" })).toBeNull();
+  });
+  it("prioritizes the matching deny and boundary evidence with links to their policies", async () => {
+    const { user } = await open("simulator", { users: reviewUsers });
+    await select(user, "了解一个授权场景", "命中显式拒绝");
+    await user.click(screen.getByRole("button", { name: "运行模拟" }));
+    expect(screen.getByText("显式拒绝", { exact: true })).toBeTruthy();
+    let evidence = within(screen.getByRole("table", { name: "策略判断依据" }));
+    expect(evidence.getAllByRole("row")).toHaveLength(2);
+    expect(evidence.getByRole("button", { name: "ProtectProductionDeployments" })).toBeTruthy();
+    await select(user, "了解一个授权场景", "权限边界限制");
+    expect(screen.queryByRole("heading", { name: "模拟结果" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "运行模拟" }));
+    expect(screen.getByText("默认拒绝", { exact: true })).toBeTruthy();
+    evidence = within(screen.getByRole("table", { name: "策略判断依据" }));
+    expect(evidence.queryByRole("button", { name: "MatrixDeliveryAccess" })).toBeNull();
+    await user.click(evidence.getAllByRole("button", { name: "ReleaseOperatorBoundary" })[0]!);
+    expect(await screen.findByRole("heading", { name: "ReleaseOperatorBoundary" })).toBeTruthy();
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("policy-delivery-boundary");
+  });
+  it("separates an ungranted login profile and a disabled user from policy evaluation", async () => {
+    const { user } = await open("simulator", { users: reviewUsers.map((entry) => entry.principal.id === "principal-lin" ? { ...entry, principal: { ...entry.principal, status: "DISABLED" } } : entry) });
+    expect(screen.getByText(/此用户已停用/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "运行模拟" }));
+    expect(screen.getByText("策略允许", { exact: true })).toBeTruthy();
+    expect(screen.getByText(/未评估：账号／用户可用性/)).toBeTruthy();
+    await select(user, "了解一个授权场景", "能登录但尚未授权");
+    expect(screen.queryByText(/此用户已停用/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "运行模拟" }));
+    expect(screen.getByText("默认拒绝", { exact: true })).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "策略判断依据" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "查看用户 wu" }));
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-wu");
+    await user.click(screen.getByRole("tab", { name: "访问方式" }));
+    expect(screen.getByText(/访问方式决定如何登录或调用 API，不代表资源权限/)).toBeTruthy();
   });
   it("shows missing context as indeterminate and a conditional explicit deny with current-version evidence", async () => {
     const { user } = await open("simulator", { seed: async (extension) => {
@@ -1320,11 +1560,12 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "继续编辑" }));
     await user.click(screen.getByRole("button", { name: "取消" }));
     await user.click(screen.getByRole("button", { name: "放弃并离开" }));
-    expect(await screen.findByRole("button", { name: "新建策略" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "新建自定义策略" })).toBeTruthy();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
   it("retains metadata and cross-type selections through search, back and a failed save", async () => {
     const { user, repository, extension } = await open("create-policy");
+    const before = (await extension.read("preview")).policies;
     await logActions(user, ["logs:search"]);
     await user.click(screen.getByRole("button", { name: "下一步" }));
     await user.type(screen.getByLabelText("名称", { exact: true }), "AtomicPolicy");
@@ -1347,7 +1588,7 @@ describe("CAM-style access workspace", () => {
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("network unavailable"));
     await user.click(screen.getByRole("button", { name: "创建策略" }));
     expect(await screen.findByText("暂时无法完成操作，请重试。")).toBeTruthy();
-    expect((await extension.read("preview")).policies).toHaveLength(5);
+    expect((await extension.read("preview")).policies).toEqual(before);
     expect(screen.getByText("team : platform")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "创建策略" }));
     await screen.findByRole("heading", { name: "策略已保存" });
@@ -1395,7 +1636,9 @@ describe("CAM-style access workspace", () => {
   });
   it("keeps unsupported policy restrictions in the draft and refuses to save", async () => {
     const { user, repository, extension } = await open("policies");
-    await user.click(await screen.findByRole("button", { name: "新建策略" }));
+    const before = (await extension.read("preview")).policies;
+    await user.click(await screen.findByRole("button", { name: "新建自定义策略" }));
+    await user.click(within(screen.getByRole("dialog", { name: "选择创建策略方式" })).getByRole("button", { name: /^按策略语法创建/ }));
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
     const editor = screen.getByLabelText("策略内容", { selector: "textarea" });
     const text = '{"version":"1","statement":[{"effect":"allow","action":["logs:read"],"resource":["*"],"condition":{"ip":"192.0.2.0/24"}}]}';
@@ -1408,7 +1651,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("alert").textContent).not.toMatch(/\p{Script=Han}/u);
     expect((editor as HTMLTextAreaElement).value).toBe(text);
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
-    expect((await extension.read("preview")).policies).toHaveLength(5);
+    expect((await extension.read("preview")).policies).toEqual(before);
   });
   it("updates description without creating a version or changing policy grants", async () => {
     const { user, extension } = await open("policies");
@@ -1419,7 +1662,9 @@ describe("CAM-style access workspace", () => {
     const editor = screen.getByLabelText("描述");
     await user.clear(editor); await user.paste("Only an updated description");
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
-    expect((await extension.read("preview")).policies.find((policy) => policy.id === before.id)).toEqual({ ...before, description: "Only an updated description" });
+    const saved = (await extension.read("preview")).policies.find((policy) => policy.id === before.id)!;
+    expect(saved).toEqual({ ...before, description: "Only an updated description", updatedAt: expect.any(String) });
+    expect(Date.parse(saved.updatedAt)).toBeGreaterThan(Date.parse(before.updatedAt));
   });
   it("copies a custom policy without copying its identity, history or associations", async () => {
     const { user, extension } = await open("policies");

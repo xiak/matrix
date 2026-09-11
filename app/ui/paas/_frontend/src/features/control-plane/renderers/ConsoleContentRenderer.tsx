@@ -233,8 +233,15 @@ function RegionContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: 
 
 function AccessContent({ view }: { view: Extract<ConsoleContentScene, { kind: "access" }>["view"] }) {
   const { navigate } = useConsoleNavigation();
-  const entityId = useSearchParams().get("id") ?? undefined;
-  return <AccountAccessRenderer key={view + ":" + (entityId ?? "")} view={view} entityId={entityId} onNavigate={(next, id) => navigate((next === "overview" ? "/console/access/" : `/console/access/${next}/`) + (id ? "?id=" + encodeURIComponent(id) : ""))} />;
+  const params = useSearchParams();
+  const entityId = params.get("id") ?? undefined;
+  const policyMethod = view === "create-policy" ? params.get("method") ?? undefined : undefined;
+  return <AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} onNavigate={(next, id, method) => {
+    const query = new URLSearchParams();
+    if (id) query.set("id", id);
+    if (next === "create-policy" && method) query.set("method", method);
+    navigate((next === "overview" ? "/console/access/" : `/console/access/${next}/`) + (query.size ? "?" + query.toString() : ""));
+  }} />;
 }
 
 export function ConsoleContentRenderer({

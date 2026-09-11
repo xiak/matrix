@@ -43,6 +43,9 @@ describe("TableToolbar collection search", () => {
     }
     await user.click(screen.getByRole("button", { name: "Clear filters" }));
     expect(screen.getByRole("status").textContent).toBe("all/all/lin");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Filters" }));
+    expect(screen.getByRole("button", { name: "Filters" }).getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("group", { name: "Filters" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Clear search" }));
     expect(screen.getByRole("status").textContent).toBe("all/all/");
   });

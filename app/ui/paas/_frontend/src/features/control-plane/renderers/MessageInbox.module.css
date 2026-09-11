@@ -18,15 +18,16 @@
 .icon[data-status="success"] { color: var(--xiak-color-status-success); background: var(--xiak-color-status-success-bg); }
 .icon[data-status="warning"] { color: var(--xiak-color-status-warning); background: var(--xiak-color-status-warning-bg); }
 .copy { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
-.copy strong { color: var(--xiak-color-text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.copy strong { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--xiak-color-text-strong); overflow: hidden; overflow-wrap: anywhere; font-weight: var(--xiak-font-weight-semibold); }
+.message[open] .copy strong { -webkit-line-clamp: unset; }
 .message[data-read="true"] .copy strong { font-weight: var(--xiak-font-weight-medium); color: var(--xiak-color-text-muted); }
-.copy small { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-caption); overflow-wrap: anywhere; }
+.copy small { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-small); overflow-wrap: anywhere; }
 .indicators { display: flex; align-items: center; gap: var(--xiak-spacing-tight); }
 .indicators > svg { width: 14px; height: 14px; color: var(--xiak-color-text-subtle); transition: transform var(--xiak-motion-fast) var(--xiak-ease-standard); }
 .message[open] .indicators > svg { transform: rotate(180deg); }
 .unread { width: 6px; height: 6px; border-radius: var(--xiak-radius-pill); background: var(--xiak-color-accent-primary); }
 .detail { display: grid; justify-items: start; gap: var(--xiak-spacing-default); padding: 0 var(--xiak-spacing-default) var(--xiak-spacing-comfortable) 56px; overflow-wrap: anywhere; line-height: 1.7; }
-.hint, .footnote { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-caption); }
+.hint, .footnote { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-small); }
 .footnote { margin: 0; border-top: var(--xiak-border-subtle); padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable); }
 .root[data-compact="true"] .list { max-height: min(400px, calc(100dvh - 300px)); overflow: auto; overscroll-behavior: contain; }
 @media (max-width: 480px) { .toolbar { padding-inline: var(--xiak-spacing-default); } .toolbar > div:not(.readFilter) { flex-basis: 100%; } .tabs { padding-inline: var(--xiak-spacing-tight); } .tabs button { flex: 1; padding-inline: var(--xiak-spacing-tight); } .detail { padding-inline: var(--xiak-spacing-default); } }

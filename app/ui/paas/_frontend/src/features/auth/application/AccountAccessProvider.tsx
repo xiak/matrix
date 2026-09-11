@@ -13,8 +13,8 @@ import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBa
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
 
-export type PolicyDirectoryView = { query: string; kind: string; service: string; level: string; scope: string; sort: string; page: number; pageSize: number };
-export const defaultPolicyDirectoryView: PolicyDirectoryView = { query: "", kind: "all", service: "all", level: "all", scope: "all", sort: "name", page: 1, pageSize: 10 };
+export type PolicyDirectoryView = { query: string; kind: string; service: string; category: string; sort: string; page: number; pageSize: number };
+export const defaultPolicyDirectoryView: PolicyDirectoryView = { query: "", kind: "all", service: "all", category: "all", sort: "name", page: 1, pageSize: 10 };
 export type UserDirectoryView = { query: string; kind: string; state: string; role: string };
 const defaultUserDirectoryView: UserDirectoryView = { query: "", kind: "all", state: "all", role: "all" };
 

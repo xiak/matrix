@@ -10,6 +10,7 @@ import { parsePolicyDocument } from "../domain/policyDocument";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { PolicyDocumentEditor } from "./PolicyDocumentEditor";
+import type { PolicyCreationMethod } from "./PolicyCreationMethods";
 import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import { PolicyTargetSelector } from "./PolicyTargetSelector";
 import { PolicyDocumentChanges } from "./PolicyDocumentChanges";
@@ -20,10 +21,10 @@ import styles from "./PolicyAuthoringWizard.module.css";
 const steps = ["document", "details", "review"] as const;
 const emptyTargets = (): PolicyTargets => ({ userIds: [], groupIds: [], roleIds: [] });
 const policyDocument = (policy: AccessPolicy) => policy.versions.find((entry) => entry.id === policy.defaultVersion)!.document;
-type DraftErrors = { document?: AccessWorkspaceError["code"]; name?: "invalidName" | "duplicate"; tags?: boolean; replacement?: boolean };
+type DraftErrors = { document?: AccessWorkspaceError["code"] | "resourceTagsRequired"; name?: "invalidName" | "duplicate"; tags?: boolean; replacement?: boolean };
 
-export function PolicyAuthoringWizard({ policy, copy = false, workspace, scene, onBack, onDone, doneLabel }: {
-  policy?: AccessPolicy; copy?: boolean; workspace: AccessWorkspace; scene: AccountAccessScene; onBack(): void; onDone(policyId: string): void; doneLabel?: string;
+export function PolicyAuthoringWizard({ policy, copy = false, method = "visual", workspace, scene, onBack, onDone, doneLabel }: {
+  policy?: AccessPolicy; copy?: boolean; method?: PolicyCreationMethod; workspace: AccessWorkspace; scene: AccountAccessScene; onBack(): void; onDone(policyId: string): void; doneLabel?: string;
 }) {
   const access = useAccountAccess();
   const t = useTranslations("PolicyWizard");
@@ -39,6 +40,7 @@ export function PolicyAuthoringWizard({ policy, copy = false, workspace, scene, 
   const [tags, setTags] = useState<AccessPolicy["tags"]>(() => policy?.tags.map((entry) => ({ ...entry })) ?? []);
   const [initialDocument] = useState(() => JSON.stringify(policy ? policyDocument(policy) : { version: "1", statement: [{ effect: "allow", action: [], resource: ["*"] }] }, null, 2));
   const [text, setText] = useState(initialDocument);
+  const [editorMode, setEditorMode] = useState(method);
   const [targets, setTargets] = useState<PolicyTargets>(() => editing && policy ? {
     userIds: Object.entries(workspace.userPolicies).filter(([, ids]) => ids.includes(policy.id)).map(([user]) => user),
     groupIds: workspace.groups.filter((group) => group.policyIds.includes(policy.id)).map((group) => group.id),
@@ -86,6 +88,9 @@ export function PolicyAuthoringWizard({ policy, copy = false, workspace, scene, 
     event.preventDefault();
     if (busy || submitting.current) return;
     if (!validation.document) { setStep(0); setErrors({ document: validation.error ?? "invalid" }); return; }
+    if (editorMode === "tags" && validation.document.statement.some((statement) => !statement.condition?.resourceTag?.length)) {
+      setStep(0); setErrors({ document: "resourceTagsRequired" }); return;
+    }
     if (step > 0) {
       const invalid = metadataErrors();
       if (Object.keys(invalid).length) { setStep(1); setErrors(invalid); return; }
@@ -98,15 +103,15 @@ export function PolicyAuthoringWizard({ policy, copy = false, workspace, scene, 
     if (saved) setComplete(true);
   }
   return <div className={styles.root}>
-    <ContentPage.Heading title={editing ? `${w("edit")} · ${policy?.name}` : w("createPolicy")} back={{ label: t("back"), parentLabel: w("policies"), disabled: busy, onClick: cancel }} />
+    <ContentPage.Heading title={editing ? `${w("edit")} · ${policy?.name}` : t(`methods.${method}.title`)} back={{ label: t("back"), parentLabel: w("policies"), disabled: busy, onClick: cancel }} />
     <Wizard label={editing ? w("editPolicyContent") : w("createPolicy")} steps={steps.map((key) => ({ id: key, label: t(`steps.${key}`) }))} currentStep={step} onStepChange={changeStep} completed={complete} busy={busy} formRef={form} onSubmit={submit}
       title={complete ? t("saved") : t(`steps.${steps[step]!}`)} description={complete ? t("savedHint", { name: name.trim() }) : t(`hints.${steps[step]!}`)} progressLabel={complete ? undefined : u("stepCount", { current: step + 1, total: steps.length })} hint={<><ShieldCheck aria-hidden="true" />{t("mockHint")}</>}
       actions={complete ? <Button onClick={() => { const saved = workspace.policies.find((entry) => entry.name === name.trim()); if (saved) onDone(saved.id); else onBack(); }}>{doneLabel ?? t("viewPolicy")}<ArrowRight aria-hidden="true" /></Button> : <><Button variant="ghost" disabled={busy} onClick={cancel}>{w("cancel")}</Button>{step > 0 ? <Button variant="secondary" disabled={busy} onClick={() => changeStep(step - 1)}>{a("previousStep")}</Button> : null}<Button type="submit" disabled={busy}>{busy ? a("saving") : step < 2 ? a("nextStep") : editing ? t("confirmSave") : t("confirmCreate")}</Button></>}>
       {complete ? <Alert status="success">{t("savedScope")}</Alert> : <>
-        {step === 0 ? <PolicyDocumentEditor accountId={workspace.accountId} resources={workspace.testResources} text={text} hasDocumentChanges={text !== initialDocument} onChange={(next) => { setText(next); setErrors({}); }} policies={workspace.policies} error={errors.document ? w(`errors.${errors.document}`) : undefined} /> : null}
+        {step === 0 ? <PolicyDocumentEditor initialMode={editorMode} onModeChange={setEditorMode} accountId={workspace.accountId} resources={workspace.testResources} text={text} hasDocumentChanges={text !== initialDocument} onChange={(next) => { setText(next); setErrors({}); }} policies={workspace.policies} error={errors.document === "resourceTagsRequired" ? t("resourceTagsRequired") : errors.document ? w(`errors.${errors.document}`) : undefined} /> : null}
         {step === 1 ? <div className={styles.stack}>
           <div className={styles.metadata}><div className={styles.fields}>
-            <FormField id={id + "-name"} label={w("name")} hint={editing ? w("policyNameImmutable") : t("nameHint")} error={errors.name ? errors.name === "duplicate" ? w("errors.duplicate") : t("invalidName") : undefined}><Input id={id + "-name"} readOnly={editing} maxLength={64} value={name} invalid={Boolean(errors.name)} aria-describedby={[id + "-name-hint", errors.name ? id + "-name-error" : ""].filter(Boolean).join(" ")} onChange={(event) => { setName(event.target.value); setErrors({}); }} /></FormField>
+            <FormField id={id + "-name"} label={w("name")} hint={editing ? w("policyNameImmutable") : t("nameHint")} error={errors.name ? errors.name === "duplicate" ? w("errors.duplicate") : t("invalidName") : undefined}><Input id={id + "-name"} aria-required={!editing} readOnly={editing} maxLength={64} value={name} invalid={Boolean(errors.name)} aria-describedby={[id + "-name-hint", errors.name ? id + "-name-error" : ""].filter(Boolean).join(" ")} onChange={(event) => { setName(event.target.value); setErrors({}); }} /></FormField>
             <FormField id={id + "-description"} label={w("description")}><TextArea id={id + "-description"} maxLength={256} rows={2} value={description} onChange={(event) => setDescription(event.target.value)} /></FormField>
           </div><section className={styles.section}><h3>{t("metadataTags")}</h3><p className={styles.note}>{t("tagsHint")}</p><TagEditor value={tags} onChange={(next) => { setTags(next); setErrors({}); }} error={errors.tags ? u("invalidTags") : undefined} labels={{ key: (index) => u("tagKey", { index }), value: (index) => u("tagValue", { index }), remove: (index) => u("removeTag", { index }), add: u("addTag"), empty: u("noTagsHint"), count: u("tagCount", { count: tags.length }) }} /></section></div>
           <section className={styles.section}><h3>{t("optionalTargets")}</h3><p className={styles.note}>{t("targetsHint")}</p><PolicyTargetSelector workspace={workspace} scene={scene} value={targets} onChange={setTargets} /></section>
@@ -118,7 +123,7 @@ export function PolicyAuthoringWizard({ policy, copy = false, workspace, scene, 
           <section className={styles.section}><div className={styles.row}><h3>{w("document")}</h3><Button variant="ghost" size="small" onClick={() => changeStep(0)}>{w("editPolicyContent")}</Button></div><PolicyDocumentViewer document={validation.document} /></section>
           {editing && currentPolicy ? <><Alert>{changedContent ? t("newRevision", { version: currentPolicy.lastVersion + 1 }) : t("metadataOnly")}</Alert><details><summary>{t("inspectCurrent", { version: currentPolicy.defaultVersion })}</summary><PolicyDocumentViewer document={policyDocument(currentPolicy)} /></details></> : null}
           {editing && currentPolicy ? <><PolicyDocumentChanges before={policyDocument(currentPolicy)} after={validation.document} /><PolicyAffectedIdentities policyId={currentPolicy.id} targets={targets} workspace={workspace} scene={scene} /><PolicyAssociationChanges before={policyGrantTargets(workspace, currentPolicy.id)} after={targets} workspace={workspace} scene={scene} /></> : null}
-          {needsReplacement ? <section className={styles.section}><Alert status="warning">{t("historyFull")}</Alert><FormField id={id + "-replacement"} label={t("replacement")} error={errors.replacement ? t("chooseReplacement") : undefined}><Select id={id + "-replacement"} aria-invalid={Boolean(errors.replacement)} value={replaceVersion} onValueChange={(value) => { setReplaceVersion(value); setErrors({}); }} placeholder={t("chooseReplacement")} options={currentPolicy!.versions.filter((entry) => entry.id !== currentPolicy!.defaultVersion).map((entry) => ({ value: String(entry.id), label: `v${entry.id}` }))} /></FormField>{replacement ? <><p className={styles.note}>{t("replacementHint", { version: replacement.id })}</p><PolicyDocumentViewer document={replacement.document} /></> : null}</section> : null}
+          {needsReplacement ? <section className={styles.section}><Alert status="warning">{t("historyFull")}</Alert><FormField id={id + "-replacement"} label={t("replacement")} error={errors.replacement ? t("chooseReplacement") : undefined}><Select id={id + "-replacement"} aria-required="true" aria-invalid={Boolean(errors.replacement)} aria-describedby={errors.replacement ? id + "-replacement-error" : undefined} value={replaceVersion} onValueChange={(value) => { setReplaceVersion(value); setErrors({}); }} placeholder={t("chooseReplacement")} options={currentPolicy!.versions.filter((entry) => entry.id !== currentPolicy!.defaultVersion).map((entry) => ({ value: String(entry.id), label: `v${entry.id}` }))} /></FormField>{replacement ? <><p className={styles.note}>{t("replacementHint", { version: replacement.id })}</p><PolicyDocumentViewer document={replacement.document} /></> : null}</section> : null}
         </div> : null}
         {access.workspaceError ? <Alert status="danger">{w(`errors.${access.workspaceError}`)}</Alert> : null}
       </>}

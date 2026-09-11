@@ -1,13 +1,20 @@
 import { Suspense, useEffect, useRef, useState } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConsoleLink, ConsoleNavigationProvider, useConsoleNavigation } from "./ConsoleNavigation";
 import { parseControlPlanePathname } from "./parseControlPlaneRoute";
 import { useUnsavedChanges } from "@ui/xiak";
+import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { ConsoleHeader } from "../renderers/ConsoleHeader";
 
 const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
+const staticHeaderRender = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
+vi.mock("../renderers/AccountMenu", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../renderers/AccountMenu")>();
+  return { ...actual, AccountMenu: (props: React.ComponentProps<typeof actual.AccountMenu>) => { staticHeaderRender(); return <actual.AccountMenu {...props} />; } };
+});
 vi.mock("next/link", () => ({
   default: ({ onNavigate, onClick, href, children, replace, scroll, ...props }: React.ComponentProps<"a"> & { replace?: boolean; scroll?: boolean; onNavigate?(event: { preventDefault(): void }): void }) => <a {...props} href={href} data-replace={replace} data-scroll={scroll} onClick={(event) => {
     onClick?.(event);
@@ -58,10 +65,16 @@ function DraftProbe() {
   return <form ref={form}><input aria-label="Workflow draft" value={value} onChange={(event) => setValue(event.target.value)} /></form>;
 }
 
-function Harness({ initialHref = "/console/", withDraft = false }: { initialHref?: string; withDraft?: boolean }) {
+const headerProps: React.ComponentProps<typeof ConsoleHeader> = {
+  scene: { preview: true, search: [], scope: null, activeOperationCount: 0, messages: [] },
+  productName: "Console", scope: { regionId: "all", onRegionChange() {} }, identity: { accountType: "Primary", loginName: "preview", principalId: "preview", tenant: { name: "Preview" } }, onLogout() {}, revoking: false
+};
+
+function Harness({ initialHref = "/console/", withDraft = false, withHeader = false }: { initialHref?: string; withDraft?: boolean; withHeader?: boolean }) {
   const [href, setHref] = useState(initialHref);
   router.push.mockImplementation((target: string) => setHref(target));
   return <ConsoleNavigationProvider selection={parseControlPlanePathname(href.split(/[?#]/)[0] ?? "")}>
+    {withHeader ? <ConsoleHeader {...headerProps} /> : null}
     <NavigationControls />
     <Suspense fallback={<span>Route fallback</span>}><RouteContent href={href} />{withDraft && href === initialHref ? <DraftProbe /> : null}</Suspense>
   </ConsoleNavigationProvider>;
@@ -70,6 +83,20 @@ function Harness({ initialHref = "/console/", withDraft = false }: { initialHref
 afterEach(() => { cleanup(); requests.clear(); vi.clearAllMocks(); window.history.replaceState(null, "", "/"); });
 
 describe("Console navigation", () => {
+  it("updates only the header's route-progress subscriber while a destination is pending", async () => {
+    const user = userEvent.setup(), request = hold("/console/resources/");
+    render(<LocaleProvider><Harness withHeader /></LocaleProvider>);
+    const header = screen.getByLabelText("全局导航");
+    expect(within(header).queryByRole("progressbar")).toBeNull();
+    staticHeaderRender.mockClear();
+    await user.click(screen.getByRole("link", { name: "Resources" }));
+    expect(within(header).getByRole("progressbar", { name: "正在打开资源中心…" })).toBeTruthy();
+    expect(staticHeaderRender).not.toHaveBeenCalled();
+    await act(async () => request.release());
+    expect(within(header).queryByRole("progressbar")).toBeNull();
+    expect(staticHeaderRender).not.toHaveBeenCalled();
+  });
+
   it("waits for leave consent before starting a real route transition or changing the destination", async () => {
     const user = userEvent.setup(), request = hold("/console/resources/");
     render(<Harness withDraft />);

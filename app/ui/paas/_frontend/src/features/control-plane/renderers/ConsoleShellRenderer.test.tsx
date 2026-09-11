@@ -16,8 +16,13 @@ import { ConsoleShellRenderer } from "./ConsoleShellRenderer";
 
 const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), query: "" }));
 const contentRender = vi.hoisted(() => vi.fn());
+const accountMenuRender = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({ useRouter: () => navigation, useSearchParams: () => new URLSearchParams(navigation.query) }));
+vi.mock("./AccountMenu", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./AccountMenu")>();
+  return { ...actual, AccountMenu: (props: ComponentProps<typeof actual.AccountMenu>) => { accountMenuRender(); return <actual.AccountMenu {...props} />; } };
+});
 vi.mock("./ConsoleContentRenderer", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./ConsoleContentRenderer")>();
   return {
@@ -129,6 +134,37 @@ afterEach(() => {
 });
 
 describe("ConsoleShellRenderer", () => {
+  it("shows one localized service name and starts its sidebar with useful navigation", async () => {
+    const { user } = await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+    const navigation = await screen.findByRole("navigation", { name: "控制台导航" });
+    const sidebar = navigation.parentElement!;
+    expect(within(sidebar).getAllByText("应用托管")).toHaveLength(1);
+    expect(within(sidebar).queryByText("Application hosting")).toBeNull();
+    expect(within(navigation).queryByText("服务导航")).toBeNull();
+    expect(within(navigation).getByRole("link", { name: /^应用/ }).getAttribute("aria-current")).toBe("page");
+
+    await user.click(screen.getByRole("button", { name: "打开账号菜单，当前用户 admin" }));
+    await user.click(screen.getByRole("radio", { name: "English" }));
+    expect(within(sidebar).getAllByText("Application hosting")).toHaveLength(1);
+    expect(within(sidebar).queryByText("应用托管")).toBeNull();
+    expect(within(navigation).queryByText("Service navigation")).toBeNull();
+    expect(within(navigation).getByRole("link", { name: /^Applications/ }).getAttribute("href")).toMatch(/^\/console\/applications\/?$/);
+  });
+
+  it("keeps data-refresh feedback local without rerendering static global-header controls", async () => {
+    let resolve!: (value: ControlPlaneSnapshot) => void;
+    const load = vi.fn().mockResolvedValueOnce(snapshot).mockImplementation(() => new Promise<ControlPlaneSnapshot>(done => { resolve = done; }));
+    const { user } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot, load });
+    await screen.findByRole("heading", { name: "资源中心", level: 1 });
+    const header = screen.getByLabelText("全局导航");
+    accountMenuRender.mockClear();
+    await user.click(screen.getByRole("button", { name: "刷新" }));
+    expect(screen.getByRole("progressbar", { name: "正在刷新当前页面…" }).closest("header")).not.toBe(header);
+    expect(within(header).queryByRole("progressbar")).toBeNull();
+    expect(accountMenuRender).not.toHaveBeenCalled();
+    await act(async () => resolve(snapshot));
+  });
+
   it("retains entity search parameters through sign-in without accepting a query redirect", async () => {
     navigation.query = "id=resource%2Fexample&returnTo=https%3A%2F%2Foutside.invalid";
     const { loginDestination } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot });

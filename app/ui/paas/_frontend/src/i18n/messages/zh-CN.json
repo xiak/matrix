@@ -1,5 +1,7 @@
 {
   "Collection": {
+    "moreActions": "更多操作",
+    "selectFirst": "请先勾选列表中的对象",
     "resetQuery": "重置查询",
     "filters": "筛选",
     "clearSearch": "清空搜索",
@@ -190,7 +192,6 @@
     }
   },
   "ServiceNavigation": {
-    "title": "服务导航",
     "favorites": "收藏的服务",
     "addFavorite": "添加收藏的服务",
     "dashboard": "控制台首页",
@@ -1433,6 +1434,7 @@
     "memberCount": "{count} 位成员",
     "permissions": "权限策略",
     "associations": "关联对象",
+    "grantSource": "授权来源",
     "associate": "关联策略",
     "associateTargets": "关联用户 / 组 / 角色",
     "selectMembers": "选择成员",
@@ -1649,20 +1651,27 @@
     "importHint": "导入只创建当前体验会话中的模拟用户，默认不授予任何权限。之后在用户或用户组中授权。"
   },
   "PolicyWorkspace": {
+    "createCustomPolicy": "新建自定义策略",
+    "policyName": "策略名",
+    "product": "所属产品",
+    "permissionCategory": "权限级别",
+    "categories": { "global": "全局权限", "product": "云产品权限" },
+    "allCategories": "全部权限级别",
+    "updatedAt": "上次修改时间",
+    "authorize": "授权用户/组/角色",
+    "searchPolicies": "搜索策略名称、描述或标签",
+    "categoryHint": "权限级别是预设策略的分类，不代表读写能力或标签条件；具体授权范围请查看策略详情。",
     "keptDirect": "{user} 仍直接关联此策略。",
     "resourceGranularity": "资源级 · {type}",
     "operationGranularity": "操作级 · 不限定单个资源",
     "attach": "关联",
     "allPolicies": "全部策略",
     "allServices": "全部产品",
-    "allLevels": "全部操作类型",
-    "allScopes": "全部资源范围",
     "scope": "资源范围",
-    "operationLevel": "操作类型",
     "sort": "排序方式",
     "nameSort": "名称 A–Z",
-    "newest": "最近创建",
-    "oldest": "最早创建",
+    "newest": "最近修改",
+    "oldest": "最早修改",
     "allRegisteredServices": "全部服务",
     "scopeAll": "租户内全部",
     "scopeSpecific": "指定资源",
@@ -1676,7 +1685,6 @@
     "batchLimit": "每次最多选择 30 个策略；筛选和分页保留选择。",
     "clearSelected": "清空已选",
     "resultCount": "{count} 个策略",
-    "scopeHint": "操作类型描述 API 能力，资源范围描述策略的适用对象；两者都不是用户的最终权限。",
     "presetDescriptions": {
       "policy-admin": "管理当前租户内所有已注册服务和访问权限。",
       "policy-read": "读取和列出云资源，不授予资源修改权限。",
@@ -1704,7 +1712,7 @@
     "wildcardAction": "使用操作通配符。之后注册的新操作也可能被此策略覆盖；可改用明确的操作列表。",
     "duplicateStatement": "此声明与前面的声明重复，可以合并以减少审阅成本。",
     "tagMethod": "按资源标签",
-    "tagMethodHint": "先选择服务和资源级操作，再填写资源必须满足的标签。不自动补充需要全资源范围的操作。",
+    "tagMethodHint": "每条声明必须选择支持资源标签的操作，并填写资源标签条件。所有标签需同时匹配；不自动授予不支持标签的接口权限。当前模型尚不支持请求标签。",
     "reviewAssociations": "审阅关联变更",
     "review": "下一步：审阅",
     "confirmAssociations": "确认关联",
@@ -1756,6 +1764,18 @@
     "incompatibleConditions": "现有条件不被全部所选操作支持。草稿已保留，请移除不兼容的条件或操作；系统不会自动放宽授权。"
   },
   "PolicyWizard": {
+    "resourceTagsRequired": "请为每条声明开启「按资源标签限制」并填写标签。若不需要标签限制，请切换到可视化编辑。",
+    "chooseMethod": "选择创建策略方式",
+    "methods": {
+      "visual": { "title": "按策略生成器创建", "description": "选择服务、操作、资源和条件，生成策略内容。" },
+      "json": { "title": "按策略语法创建", "description": "编写 JSON 策略，检查语法与授权范围。" },
+      "tags": { "title": "按标签授权", "description": "通过资源标签限定访问范围，再关联用户、用户组或角色。" },
+      "features": { "title": "按产品功能或项目权限创建", "description": "勾选产品功能生成策略。当前支持产品功能，项目权限暂未接入。" }
+    },
+    "featureMethod": "产品功能",
+    "featureSearch": "搜索产品或功能",
+    "featureScopeHint": "按需勾选产品功能，默认不授予权限。选中的功能适用于当前租户内全部相关资源；如需限制资源或标签，请切换策略生成器。项目权限暂未接入。",
+    "featureUnavailable": "当前草稿包含拒绝、条件、指定资源或通配符，不能无损转换为产品功能选择。请继续使用可视化或 JSON 编辑。",
     "cancelTitle": "放弃策略编辑？",
     "back": "返回策略",
     "steps": {
@@ -1842,6 +1862,7 @@
     "resourceTenant": "资源所属租户",
     "resourceHint": "区域可以为 *；资源 ID 可使用结尾的 * 匹配前缀。所有范围仍限定在当前租户内。",
     "conditions": "生效条件（可选）",
+    "tagConditions": "生效条件（资源标签必填）",
     "conditionsHint": "不同条件同时满足才生效；多个 IP 范围任选其一，标签需逐项匹配。",
     "useIp": "限制来源 IP",
     "sourceIp": "来源 IP 范围（CIDR）",
@@ -1962,6 +1983,24 @@
     }
   },
   "AccessSimulator": {
+    "example": "了解一个授权场景",
+    "chooseExample": "选择场景（可选）",
+    "exampleHint": "仅预填请求，不修改策略或成员关系；结果始终按当前体验数据计算。",
+    "examples": {
+      "path": { "label": "资源路径范围", "hint": "对比 production/payment 与 archive/payment：两者都有生产标签，但此用户的授权只匹配 production/ 路径。" },
+      "duplicate": { "label": "直接授权与组继承", "hint": "查看同一策略的直接和用户组两条来源。只移除一条授权来源，另一条仍可能适用。" },
+      "tags": { "label": "按资源标签授权", "hint": "此资源虽然以 archive/ 命名，但具有生产标签；可与预发布主题对比。策略自身的管理标签不参与授权。" },
+      "deny": { "label": "命中显式拒绝", "hint": "检查生产部署保护策略，再对比预发布部署。只有操作、资源和条件都匹配时，拒绝声明才会生效。" },
+      "boundary": { "label": "权限边界限制", "hint": "用户组授予应用操作，但此用户的权限边界不包含删除。可对比同一资源的部署操作。" },
+      "ungranted": { "label": "能登录但尚未授权", "hint": "此用户在 MOCK 中已启用控制台访问，但没有资源授权。访问方式与策略权限是独立的。" }
+    },
+    "disabledUser": "此用户已停用。可以检查其策略，但本工具不验证登录或凭证可用性。",
+    "notEvaluated": "未评估：账号／用户可用性、凭证、真实会话及业务服务鉴权。策略允许不代表真实请求一定成功。",
+    "sessionScope": "额外检查所选 MOCK 会话的到期、撤销及角色／调用身份是否存在；不验证真实 STS 凭证，也不继承原用户的策略。",
+    "inspectUser": "查看用户 {name}",
+    "inspectRole": "查看角色与会话",
+    "showAllEvidence": "查看其余 {count} 条判断依据",
+    "decisiveOnly": "仅看关键依据",
     "scope": "模拟当前租户用户的直接/用户组策略，或角色体验会话的角色策略，并计算权限边界交集。不会访问真实资源、验证外部身份或改变后端授权；不支持跨账号、资源策略及角色链式扮演。",
     "request": "模拟访问请求",
     "user": "用户",
@@ -1985,7 +2024,7 @@
     "noGrants": "没有适用的授权策略",
     "noGrantsHint": "该用户没有直接授权，也未通过用户组获得策略。默认不允许访问。",
     "decisions": {
-      "allow": "模拟允许",
+      "allow": "策略允许",
       "explicitDeny": "显式拒绝",
       "implicitDeny": "默认拒绝",
       "indeterminate": "无法确定",

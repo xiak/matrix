@@ -3,9 +3,8 @@
 .progress::-webkit-progress-bar { border-radius: inherit; background: var(--xiak-color-bg-control-hover); }
 .progress::-webkit-progress-value { border-radius: inherit; background: var(--xiak-color-accent-primary); }
 .progress::-moz-progress-bar { border-radius: inherit; background: var(--xiak-color-accent-primary); }
-.progress:indeterminate { background-image: linear-gradient(var(--xiak-color-accent-primary), var(--xiak-color-accent-primary)); background-size: 35% 100%; background-repeat: no-repeat; animation: pending var(--xiak-motion-loading) var(--xiak-ease-standard) infinite; }
-.progress:indeterminate::-webkit-progress-bar { background: transparent; }
-.progress:indeterminate::-moz-progress-bar { background: transparent; }
-@keyframes pending { from { background-position: -55% 0; } to { background-position: 155% 0; } }
-@media (prefers-reduced-motion: reduce) { .progress:indeterminate { animation: none; background-position: center; } }
+.indeterminate { position: relative; display: block; contain: paint; }
+.indicator { display: block; width: 35%; height: 100%; background: var(--xiak-color-accent-primary); will-change: transform; animation: pending var(--xiak-motion-loading) var(--xiak-ease-standard) infinite; }
+@keyframes pending { from { transform: translateX(-100%); } to { transform: translateX(286%); } }
+@media (prefers-reduced-motion: reduce) { .indicator { animation: none; transform: translateX(93%); will-change: auto; } }
 }

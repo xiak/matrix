@@ -260,6 +260,7 @@
 
 .operationHeading strong {
   color: var(--xiak-color-text-strong);
+  font-weight: var(--xiak-font-weight-semibold);
 }
 
 .operationHeading > div > span {
@@ -275,7 +276,7 @@
   flex-wrap: wrap;
   gap: var(--xiak-spacing-tight) var(--xiak-spacing-comfortable);
   color: var(--xiak-color-text-subtle);
-  font-size: var(--xiak-font-size-caption);
+  font-size: var(--xiak-font-size-small);
 }
 
 .operationDetailCue {
@@ -323,7 +324,7 @@
 
 .operationDetails dt {
   color: var(--xiak-color-text-subtle);
-  font-size: var(--xiak-font-size-caption);
+  font-size: var(--xiak-font-size-small);
 }
 
 .operationDetails dd {
@@ -341,17 +342,14 @@
 }
 
 .resourceLink {
-  color: var(--xiak-color-text-strong);
+  color: var(--xiak-color-accent-text);
   font-weight: var(--xiak-font-weight-semibold);
-}
-
-.resourceLink {
   border-radius: var(--xiak-radius-small);
   outline: none;
 }
 
 .resourceLink:hover {
-  color: var(--xiak-color-accent-text);
+  text-decoration: underline;
 }
 
 .headerHint {

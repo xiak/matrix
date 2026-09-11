@@ -1,6 +1,7 @@
 .wizard { min-width: 0; container: user-wizard / inline-size; }
 .muted { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.7; }
 .stack, .identity, .review, .copyPane { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-roomy); min-width: 0; }
+.stack { gap: var(--xiak-spacing-comfortable); }
 .typeOptions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-roomy); max-width: 920px; margin-top: var(--xiak-spacing-section); }
 .typeOptions > div { border: var(--xiak-border-control); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
 .typeOptions > div[data-selected] { border-color: var(--xiak-color-accent-primary); background: var(--xiak-color-accent-haze); }

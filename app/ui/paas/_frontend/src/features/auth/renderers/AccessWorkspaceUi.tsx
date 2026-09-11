@@ -2,8 +2,8 @@
 
 import { useEffect, useId, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { useFormatter, useTranslations } from "next-intl";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
-import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Select, Table, TableToolbar, Transfer } from "@ui/xiak";
+import { Plus } from "lucide-react";
+import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableToolbar, TablePagination, Transfer } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import styles from "./AccountAccessRenderer.module.css";
@@ -43,7 +43,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
       status={t("count", { count: matches.length })} />
     <Table aria-label={title}><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((item) => <tr key={item.id}>{row(item)}</tr>)}</tbody></Table>
     {!matches.length ? <EmptyState title={items.length ? t("noResults") : t("empty")} description={items.length ? t("noResultsHint") : t("emptyHint")} action={items.length ? <Button onClick={reset} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
-    <Card.Footer><span className={styles.note}>{t("page", { page: currentPage, pages })}</span><div className={styles.actions}><Select aria-label={t("pageSize")} options={[10, 20, 50].map((value) => ({ value: String(value), label: String(value) }))} value={String(pageSize)} onValueChange={(value) => { setPageSize(Number(value)); setPage(1); }} /><Button aria-label={t("previous")} disabled={currentPage <= 1} iconOnly onClick={() => setPage(currentPage - 1)} variant="secondary"><ChevronLeft aria-hidden="true" /></Button><Button aria-label={t("next")} disabled={currentPage >= pages} iconOnly onClick={() => setPage(currentPage + 1)} variant="secondary"><ChevronRight aria-hidden="true" /></Button></div></Card.Footer>
+    <Card.Footer><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Card.Footer>
   </Card>;
 }
 

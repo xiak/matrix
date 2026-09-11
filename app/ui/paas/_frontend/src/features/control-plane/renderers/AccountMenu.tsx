@@ -3,6 +3,7 @@
 import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
 import { useTranslations } from "next-intl";
 import { AppearanceControls } from "@/preferences/AppearanceControls";
+import { PanelSections } from "@ui/xiak";
 import {
   useEffect,
   useRef,
@@ -60,7 +61,7 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking }
     closeAndRestoreFocus();
   }
 
-  function handleMenuKeyDown(event: ReactKeyboardEvent<HTMLUListElement>) {
+  function handleMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     const availableItems = revoking ? [0] : [0, 1];
     const currentPosition = Math.max(0, availableItems.indexOf(activeItem));
     let nextPosition: number | undefined;
@@ -104,28 +105,32 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking }
           onKeyDown={handlePanelKeyDown}
           size="compact"
         >
-          <header className={styles.header}>
-            <span aria-hidden="true" className={styles.panelAvatar}>{initial}</span>
-            <div className={styles.identity}>
-              <small>{t("signedIn")}</small>
-              <strong>{identity.loginName}</strong>
-              <span>{identity.principalId}</span>
-            </div>
-          </header>
+          <PanelSections>
+            <PanelSections.Section aria-label={t("signedIn")} role="group">
+              <header className={styles.header}>
+                <span aria-hidden="true" className={styles.panelAvatar}>{initial}</span>
+                <div className={styles.identity}>
+                  <small>{t("signedIn")}</small>
+                  <strong>{identity.loginName}</strong>
+                  <span>{identity.principalId}</span>
+                </div>
+              </header>
+            </PanelSections.Section>
 
-          <dl className={styles.metadata}>
-            <div>
-              <dt>{t("tenant")}</dt>
-              <dd><strong>{identity.tenant.name}</strong>{identity.tenant.id ? <span>{identity.tenant.id}</span> : null}</dd>
-            </div>
-            <div><dt>{t("type")}</dt><dd>{identity.accountType}</dd></div>
-          </dl>
+            <PanelSections.Section aria-label={t("tenant")} role="group">
+              <dl className={styles.metadata}>
+                <div>
+                  <dt>{t("tenant")}</dt>
+                  <dd><strong>{identity.tenant.name}</strong>{identity.tenant.id ? <span>{identity.tenant.id}</span> : null}</dd>
+                </div>
+                <div><dt>{t("type")}</dt><dd>{identity.accountType}</dd></div>
+              </dl>
+            </PanelSections.Section>
 
-          <div className={styles.preferences}><AppearanceControls variant="panel" /></div>
-          <div className={styles.actionSection}>
-            <span className={styles.actionLabel}>{t("actions")}</span>
-            <ul aria-label={t("actions")} className={styles.menu} onKeyDown={handleMenuKeyDown} role="menu">
-              <li role="none">
+            <PanelSections.Section><AppearanceControls variant="panel" /></PanelSections.Section>
+            <PanelSections aria-label={t("actions")} onKeyDown={handleMenuKeyDown} role="menu">
+              <PanelSections.Section role="none">
+                <span className={styles.actionLabel}>{t("actions")}</span>
                 <Link
                   className={styles.menuItem}
                   href="/console/access/"
@@ -138,9 +143,8 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking }
                   <span className={styles.menuCopy}><strong>{t("access")}</strong><small>{t("accessHint")}</small></span>
                   <ChevronRight aria-hidden="true" className={styles.chevron} />
                 </Link>
-              </li>
-              <li className={styles.separator} role="separator" />
-              <li role="none">
+              </PanelSections.Section>
+              <PanelSections.Section role="none">
                 <button
                   aria-label={t("logoutLabel")}
                   className={`${styles.menuItem} ${styles.dangerItem}`}
@@ -155,9 +159,9 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking }
                   <span className={styles.menuCopy}><strong>{t(revoking ? "loggingOut" : "logout")}</strong><small>{t("logoutHint")}</small></span>
                   <span aria-hidden="true" className={styles.chevronSpace} />
                 </button>
-              </li>
-            </ul>
-          </div>
+              </PanelSections.Section>
+            </PanelSections>
+          </PanelSections>
         </HeaderPopover>
       ) : null}
     </div>

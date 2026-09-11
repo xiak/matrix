@@ -11,6 +11,7 @@ import { WorkspaceDelete, WorkspaceDetail, WorkspaceDialog, WorkspaceTime } from
 import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import { PolicyAuthoringWizard } from "./PolicyAuthoringWizard";
 import { PolicyDirectory, usePolicyDescription } from "./PolicyDirectory";
+import { PolicyCreationMethods, type PolicyCreationMethod } from "./PolicyCreationMethods";
 import { PolicyAssociationEditor, PolicyAffectedIdentities } from "./PolicyAssociationReview";
 import { PolicyDocumentChanges } from "./PolicyDocumentChanges";
 import policyStyles from "./PolicyWorkspace.module.css";
@@ -85,7 +86,7 @@ function PolicyBoundaryUses({ policyId, workspace, scene, onOpen }: { policyId: 
   return <section className={styles.stack}><h3>{t("boundaryUses")}</h3><p className={styles.note}>{t("boundaryHint")}</p><Table aria-label={t("boundaryUses")}><thead><tr><th>{w("name")}</th><th>{w("type")}</th></tr></thead><tbody>{[...users, ...roles].map((subject) => <tr key={subject.view + subject.id}><td><button className={styles.userLink} onClick={() => onOpen(subject.view, subject.id)}>{subject.name}</button></td><td>{w(subject.view === "users" ? "subusers" : "roles")}</td></tr>)}</tbody></Table></section>;
 }
 
-export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
+export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onCreate(method: PolicyCreationMethod): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("IamWorkspace");
   const p = useTranslations("PolicyWizard");
   const summary = useTranslations("PolicyWorkspace");
@@ -95,6 +96,7 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
   const [deleting, setDeleting] = useState<AccessPolicy | null>(null);
   const [associating, setAssociating] = useState<{ policies: AccessPolicy[]; additive?: boolean } | null>(null);
   const [editingDescription, setEditingDescription] = useState(false);
+  const [choosingMethod, setChoosingMethod] = useState(false);
   const selected = workspace.policies.find((policy) => policy.id === entityId);
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("policies")}>{t("back")}</Button>} />;
   if (editing) return <PolicyAuthoringWizard {...editing} workspace={workspace} scene={scene} onBack={() => setEditing(null)} onDone={(id) => { setEditing(null); onOpen("policies", id); }} />;
@@ -116,7 +118,8 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
         <Tabs.Content value="versions"><PolicyVersionHistory policy={selected} associationCount={policyAssociationCount(workspace, selected.id)} workspace={workspace} scene={scene} /></Tabs.Content>
         <Tabs.Content value="associations"><Table aria-label={t("associations")}><thead><tr><th>{t("name")}</th><th>{t("type")}</th></tr></thead><tbody>{scene.users.filter((user) => workspace.userPolicies[user.id]?.includes(selected.id)).map((user) => <tr key={user.id}><td><button className={styles.userLink} onClick={() => onOpen("users", user.id)}>{user.loginName}</button></td><td>{t("subusers")}</td></tr>)}{workspace.groups.filter((group) => group.policyIds.includes(selected.id)).map((group) => <tr key={group.id}><td><button className={styles.userLink} onClick={() => onOpen("groups", group.id)}>{group.name}</button></td><td>{t("groups")}</td></tr>)}{workspace.roles.filter((role) => role.policyIds.includes(selected.id)).map((role) => <tr key={role.id}><td><button className={styles.userLink} onClick={() => onOpen("roles", role.id)}>{role.name}</button></td><td>{t("roles")}</td></tr>)}</tbody></Table>{!policyAssociationCount(workspace, selected.id) ? <p className={styles.note}>{t("empty")}</p> : null}<PolicyBoundaryUses policyId={selected.id} workspace={workspace} scene={scene} onOpen={onOpen} /></Tabs.Content>
       </Tabs.Root>
-    </WorkspaceDetail> : <PolicyDirectory workspace={workspace} onCreate={onCreate} onOpen={(id) => onOpen("policies", id)} onAssociate={(policies, additive) => setAssociating({ policies, additive })} />}
+    </WorkspaceDetail> : <PolicyDirectory workspace={workspace} onCreate={() => setChoosingMethod(true)} onOpen={(id) => onOpen("policies", id)} onAssociate={(policies, additive) => setAssociating({ policies, additive })} />}
+    {choosingMethod ? <PolicyCreationMethods onClose={() => setChoosingMethod(false)} onSelect={(method) => { setChoosingMethod(false); onCreate(method); }} /> : null}
     {associating ? <PolicyAssociationEditor {...associating} workspace={workspace} scene={scene} onClose={() => setAssociating(null)} /> : null}
     {deleting ? <WorkspaceDelete name={deleting.name} onClose={() => setDeleting(null)} onConfirm={async () => { const result = await access.executeWorkspace({ kind: "delete-policy", id: deleting.id }); if (result && entityId === deleting.id) onOpen("policies"); return result; }} /> : null}
     {selected && editingDescription ? <PolicyDescriptionEditor policy={selected} onClose={() => setEditingDescription(false)} /> : null}

@@ -11,7 +11,7 @@ export function Table({ children, className, viewportRef, ...props }: TableHTMLA
   </div>;
 }
 
-export function TableSelectionCell({ header, label, checked, disabled, onChange }: { header?: boolean; label: string; checked: boolean | "mixed"; disabled?: boolean; onChange(checked: boolean): void }) {
+export function TableSelectionCell({ header, id, label, checked, disabled, onChange, "aria-describedby": describedBy }: { header?: boolean; id?: string; label: string; checked: boolean | "mixed"; disabled?: boolean; "aria-describedby"?: string; onChange(checked: boolean): void }) {
   const Cell = header ? "th" : "td";
-  return <Cell scope={header ? "col" : undefined} className={styles.selectionCell}><Checkbox aria-label={label} title={label} checked={checked === true} aria-checked={checked} disabled={disabled} ref={(input) => { if (input) input.indeterminate = checked === "mixed"; }} onChange={(event) => onChange(event.target.checked)}>{null}</Checkbox></Cell>;
+  return <Cell scope={header ? "col" : undefined} className={styles.selectionCell}><Checkbox id={id} aria-label={label} title={label} aria-describedby={describedBy} checked={checked === true} aria-checked={checked} disabled={disabled} ref={(input) => { if (input) input.indeterminate = checked === "mixed"; }} onChange={(event) => onChange(event.target.checked)}>{null}</Checkbox></Cell>;
 }

@@ -1,5 +1,5 @@
 @layer xiak {
-.root { min-width: 0; padding: var(--xiak-spacing-default) var(--xiak-panel-padding); border-bottom: var(--xiak-border-subtle); }
+.root { min-width: 0; padding: var(--xiak-spacing-default) var(--xiak-table-cell-padding-inline); border-bottom: var(--xiak-border-subtle); }
 .bar, .actions, .tools, .conditions { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: var(--xiak-spacing-tight); }
 .bar { gap: var(--xiak-spacing-default); }
 .actions { flex: none; }
@@ -7,6 +7,7 @@
 .status { margin-inline-start: auto; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .tools { max-width: 100%; }
 .count { font-variant-numeric: tabular-nums; color: var(--xiak-color-accent-text); }
+.filterTrigger[aria-expanded="true"] { background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
 .filters { display: flex; flex-wrap: wrap; gap: var(--xiak-spacing-default); align-items: end; padding-top: var(--xiak-spacing-default); }
 .field { display: grid; gap: var(--xiak-spacing-narrow); flex: 1 1 160px; min-width: 0; max-width: 280px; }
 .field > span { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }

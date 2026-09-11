@@ -172,7 +172,7 @@
   --xiak-spacing-generous: 32px;
   --xiak-spacing-section: 40px;
 
-  --xiak-font-sans: "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --xiak-font-sans: "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --xiak-font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --xiak-font-numeric: Arial, "Segoe UI", sans-serif;
   --xiak-font-size-caption: 0.75rem;
@@ -185,6 +185,8 @@
   --xiak-font-weight-medium: 500;
   --xiak-font-weight-semibold: 600;
   --xiak-font-weight-bold: 700;
+  --xiak-line-height-body: 1.5;
+  --xiak-line-height-compact: 1.4;
   --xiak-letter-spacing-heading: -0.025em;
   --xiak-letter-spacing-eyebrow: 0.08em;
 
@@ -209,6 +211,7 @@
   --xiak-table-cell-min-width: 144px;
   --xiak-table-cell-padding-block: var(--xiak-spacing-default);
   --xiak-table-cell-padding-inline: var(--xiak-spacing-comfortable);
+  --xiak-table-selection-width: 44px;
   --xiak-dialog-width: 600px;
   --xiak-dialog-width-wide: 960px;
   --xiak-panel-padding: var(--xiak-spacing-roomy);

@@ -203,7 +203,6 @@ export type ConsoleWorkspaceScene =
 export type ConsoleScene = {
   section: ConsoleSection;
   productId: import("./serviceDirectory").ServiceId | "console";
-  productEyebrow: string;
   productIcon: RailIconKind;
   preview: boolean;
   scope: ConsoleScopeScene | null;

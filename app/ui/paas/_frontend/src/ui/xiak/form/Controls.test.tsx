@@ -2,10 +2,56 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Alert, Button, Checkbox, Dialog, FormField, Input, RadioGroup, SearchInput, Select, Table, TagEditor } from "../index";
+import { Alert, Badge, Button, Checkbox, Dialog, FormField, Input, RadioGroup, SearchInput, Select, Table, TablePagination, TableActions, TableSelectionCell, TagEditor } from "../index";
 
 afterEach(cleanup);
 describe("shared themed controls", () => {
+  it("keeps table selection mixed state keyboard-operable without making the row itself an action", async () => {
+    const user = userEvent.setup(), select = vi.fn();
+    render(<Table aria-label="Users"><thead><tr><TableSelectionCell header label="Select this page" checked="mixed" onChange={select} /><th>Name</th></tr></thead><tbody><tr><td /><td>admin</td></tr></tbody></Table>);
+    const checkbox = screen.getByRole("checkbox", { name: "Select this page" }) as HTMLInputElement;
+    expect(checkbox.indeterminate).toBe(true);
+    expect(checkbox.getAttribute("aria-checked")).toBe("mixed");
+    checkbox.focus();
+    await user.keyboard(" ");
+    expect(select).toHaveBeenCalledWith(true);
+  });
+  it("pages a controlled collection and preserves the caller's size change contract", async () => {
+    const user = userEvent.setup(), size = vi.fn();
+    function Pages() {
+      const [page, setPage] = useState(1);
+      return <TablePagination page={page} pages={2} pageSize={10} onPageChange={setPage} onPageSizeChange={size} labels={{ summary: `Page ${page} of 2`, pageSize: "Page size", previous: "Previous page", next: "Next page" }} />;
+    }
+    render(<Pages />);
+    expect((screen.getByRole("button", { name: "Previous page" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+    expect(screen.getByRole("status").textContent).toBe("Page 2 of 2");
+    expect((screen.getByRole("button", { name: "Next page" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("combobox", { name: "Page size" }));
+    await user.click(screen.getByRole("option", { name: "20" }));
+    expect(size).toHaveBeenCalledWith(20);
+  });
+  it("returns focus to a stable table command after its menu opens a dialog", async () => {
+    const user = userEvent.setup();
+    function Commands() {
+      const [open, setOpen] = useState(false);
+      return <><TableActions label="More actions" hint="Select a row" clearLabel="Clear" onClear={() => {}} actions={[{ id: "review", label: "Review access", onSelect: () => setOpen(true) }]} />
+        <Dialog open={open} title="Review" closeLabel="Close review" onClose={() => setOpen(false)}>Selected policy</Dialog></>;
+    }
+    render(<Commands />);
+    const trigger = screen.getByRole("button", { name: "More actions" });
+    expect(trigger.getAttribute("title")).toBeNull();
+    await user.click(trigger);
+    await user.click(screen.getByRole("menuitem", { name: "Review access" }));
+    expect(screen.getByRole("dialog", { name: "Review" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Close review" }));
+    expect(document.activeElement).toBe(trigger);
+  });
+  it("distinguishes descriptive badges from actual state without dropping their text", () => {
+    render(<><Badge>Custom policy</Badge><Badge status="warning">Needs review</Badge></>);
+    expect(screen.getByText("Custom policy").hasAttribute("data-status")).toBe(false);
+    expect(screen.getByText("Needs review").getAttribute("data-status")).toBe("warning");
+  });
   it("edits bounded metadata tags without losing other rows and exposes validation", async () => {
     const user = userEvent.setup();
     function Tags() {
@@ -36,9 +82,13 @@ describe("shared themed controls", () => {
     const user = userEvent.setup();
     render(<form>
       <FormField id="name" hint="Use a unique name" label="Name"><Input aria-describedby="name-hint" id="name" invalid required /></FormField>
-      <FormField label="Region"><Select defaultValue="a" name="region" options={[{ value: "a", label: "Region A" }, { value: "b", label: "Region B" }]} /></FormField>
+      <FormField id="draft-name" label="Draft name"><Input id="draft-name" aria-required="true" /></FormField>
+      <FormField label="Region"><Select aria-required="true" defaultValue="a" name="region" options={[{ value: "a", label: "Region A" }, { value: "b", label: "Region B" }]} /></FormField>
     </form>);
     const input = screen.getByLabelText("Name") as HTMLInputElement;
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveProperty("required", true);
+    expect(screen.getByRole("textbox", { name: "Draft name" }).getAttribute("aria-required")).toBe("true");
+    expect(screen.getByRole("combobox", { name: "Region" }).getAttribute("aria-required")).toBe("true");
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(document.getElementById(input.getAttribute("aria-describedby")!)?.textContent).toBe("Use a unique name");
     await user.click(screen.getByRole("combobox", { name: "Region" }));
@@ -93,6 +143,35 @@ describe("shared themed controls", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(close).not.toHaveBeenCalled();
     await waitFor(() => expect(document.activeElement).toBe(trigger));
+  });
+  it.each([false, true])("closes a select on Tab (backwards: %s) so keyboard users can continue through the form", async (shift) => {
+    const user = userEvent.setup();
+    render(<><Input aria-label="Before" /><Select aria-label="Region" defaultValue="a" options={[{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }]} /><Input aria-label="After" /></>);
+    const trigger = screen.getByRole("combobox", { name: "Region" });
+    trigger.focus();
+    await user.keyboard("{ArrowDown}");
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("option", { name: "Alpha" })));
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(screen.getByRole("option", { name: "Beta" }));
+    await user.tab({ shift });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(trigger.textContent).toBe("Beta");
+    await user.tab({ shift });
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: shift ? "Before" : "After" }));
+  });
+  it("keeps the committed value when Escape cancels an explored option", async () => {
+    const user = userEvent.setup();
+    const onValueChange = vi.fn();
+    render(<Select aria-label="Region" defaultValue="a" onValueChange={onValueChange} options={[{ value: "a", label: "Alpha" }, { value: "b", label: "Beta" }]} />);
+    const trigger = screen.getByRole("combobox", { name: "Region" });
+    await user.click(trigger);
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("option", { name: "Alpha" })));
+    await user.keyboard("{ArrowDown}{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(trigger.textContent).toBe("Alpha");
+    expect(onValueChange).not.toHaveBeenCalled();
   });
   it("allows outside focus and never opens a disabled dropdown", async () => {
     const user = userEvent.setup();

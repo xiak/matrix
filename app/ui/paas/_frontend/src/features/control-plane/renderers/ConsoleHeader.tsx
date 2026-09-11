@@ -1,11 +1,11 @@
 "use client";
 
-import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
-import { useMemo } from "react";
+import { ConsoleLink as Link, useConsoleNavigation } from "../routes/ConsoleNavigation";
+import { memo, useMemo } from "react";
 import { useTranslations } from "next-intl";
 import { consoleRouteHref } from "../domain/selection";
 import { ChevronRight } from "lucide-react";
-import { Brand, Layout } from "@ui/xiak";
+import { Brand, Layout, Progress } from "@ui/xiak";
 import type { ConsoleScene } from "../scenes/consoleScene";
 import { AccountMenu, type AccountIdentity } from "./AccountMenu";
 import { GlobalSearch } from "./GlobalSearch";
@@ -37,7 +37,15 @@ export function ConsoleBrand({ inactive = false }: { inactive?: boolean }) {
   );
 }
 
-export function ConsoleHeader({ scene, productName, scope, identity, onLogout, revoking }: ConsoleHeaderProps) {
+function RouteProgress() {
+  const { pendingSelection } = useConsoleNavigation();
+  const t = useTranslations("Console");
+  const navigation = useTranslations("ServiceNavigation");
+  if (!pendingSelection) return null;
+  return <Progress className={styles.routeProgress} aria-label={t("openingPage", { name: navigation(`items.${pendingSelection.view ?? pendingSelection.section}.label`) })} />;
+}
+
+export const ConsoleHeader = memo(function ConsoleHeader({ scene, productName, scope, identity, onLogout, revoking }: ConsoleHeaderProps) {
   const t = useTranslations("Console");
   const navigation = useTranslations("ServiceNavigation");
   const resourceKinds = useTranslations("GlobalSearch.resourceKinds");
@@ -76,6 +84,7 @@ export function ConsoleHeader({ scene, productName, scope, identity, onLogout, r
           <AccountMenu identity={identity} onLogout={onLogout} onOpenChange={openPanel("account")} open={activePanel === "account"} revoking={revoking} />
         </div>
       </div>
+      <RouteProgress />
     </Layout.Header>
   );
-}
+});

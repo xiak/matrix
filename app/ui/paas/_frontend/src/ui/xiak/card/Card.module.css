@@ -26,7 +26,8 @@
 .footer {
   border-top: var(--xiak-border-subtle);
   flex-wrap: wrap;
-  background: var(--xiak-color-bg-panel-hover);
+  padding-block: var(--xiak-spacing-default);
+  background: var(--xiak-color-bg-panel);
 }
 
 .body {

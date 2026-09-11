@@ -4,7 +4,13 @@
 
 本页拥有“结论在哪些条件下不能直接使用”的说明。主题的正常语义仍在各自概念、API 或 UX 文档中。来源元数据与实际阅读范围见 [阅读覆盖](reading-map.md)；文档更新时间不是 Matrix 的运行验证时间。
 
-## 需要保留的差异
+## 策略描述与实际规则
+
+2026-09-11 只读观察 [QcloudAccessForAgsCosReadWrite 的当前详情](https://console.cloud.tencent.com/cam/policy/detail/274481109&QcloudAccessForAgsCosReadWrite&2&All)：描述称不包含删除；操作摘要却列出 DeleteObject，JSON 的 action 数组也包含 `cos:DeleteObject`。这是该版本界面中可见的说明与规则差异，不是已经验证了任何真实删除权限，也不代表其他策略存在同样问题。没有创建、关联或执行资源操作。
+
+设计分析：不能从策略名称或描述生成有效权限结论。摘要、风险提示与模拟必须检查实际文档及适用上下文；若元数据与文档冲突，保留差异供检查，不静默改写规则。
+
+## 契约与版本差异
 
 | 主题 | 容易过度概括的结论 | 证据与适用边界 |
 | --- | --- | --- |

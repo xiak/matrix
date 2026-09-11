@@ -11,6 +11,7 @@
 | --- | --- | --- |
 | Complete Discord-style Next.js UI | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Sole architecture and visual-style donor; read only through Git object commands and exclude its worktree. |
 | PaaS product-design record | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Product-boundary reference only; it is not a second UI architecture or style donor. |
+| Matrix shared interaction fixes | `21b469b343d83a190acc0a3bb34a29b5294191ad` | This repository, fixed Git objects; backport bounded behavior to the existing cloud UI owner, not its replacement shell. |
 
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.
@@ -66,6 +67,19 @@ Matrix Phase 1 product.
 | Next.js 16 and React 19 as a proposed baseline | `REFERENCE` | This corroborates the selected framework family, but the fixed complete application owns the adopted App Router pattern. Installation still performs no package-manager or framework-server work. |
 | transport parser -> view model -> page, unknown/stale/error states, server-side authorization, and no provider secrets in UI | `REFERENCE` | These are product constraints. The actual route -> provider -> repository -> scene -> renderer chain is adapted only from the complete UI donor. |
 | legacy component projections, GitLab Provider, current DevOps scripts as source of truth, signed web assertion, and CLI/GitLab escape-hatch roadmap | `REJECT` | Phase 1 now owns application hosting, IAM, Audit, Operations, installation, and Compose execution inside this repository. Reintroducing the legacy execution authority or its compatibility routes would contradict the accepted product boundary. |
+
+## Matrix shared interaction backport
+
+The `cloudUxInteractionBackport` source entry fixes the inspected paths. Its
+controls descend from this console's public UI; they do not introduce another
+architecture, package or runtime dependency.
+
+| Slice at fixed commit | Decision | Rationale |
+| --- | --- | --- |
+| `Select` Tab/Shift+Tab acceptance and close behavior, with Escape cancellation tests | `REUSE` | Correct the existing themed control's keyboard trap while retaining its dialog portal, disabled choices, form submission and theme ownership. |
+| `TableToolbar` reset focus and behavioral assertions | `REUSE` | Restore focus to the stable filter trigger after its reset button disappears; preserve the keyword and disclosed conditions. |
+| Platform-shell replacement, narrowed product catalogue and CAM/preview omission | `REJECT` | These changes do not preserve the cloud UX release's approved service discovery, complete MOCK workspaces and one-click preview. |
+| Viewport-only brand breakpoint and suppression of shell actions by every local heading | `REJECT` | This console already owns container-responsive branding; its local commands and global refresh are not interchangeable. |
 
 ## Resulting implementation constraints
 

@@ -146,7 +146,7 @@
 .contextHeader {
   display: grid;
   min-height: var(--xiak-content-header-height);
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   flex: none;
   gap: var(--xiak-spacing-default);
   align-items: center;
@@ -169,14 +169,12 @@
   height: 17px;
 }
 
-.contextHeader > div {
-  display: grid;
-  min-width: 0;
-  gap: var(--xiak-spacing-narrow);
-}
-
 .contextHeader strong {
+  min-width: 0;
   overflow: hidden;
+  font-size: var(--xiak-font-size-body);
+  font-weight: var(--xiak-font-weight-semibold);
+  line-height: var(--xiak-line-height-body);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -197,12 +195,11 @@
 }
 
 .contextNavigation > p {
-  padding: var(--xiak-spacing-tight);
+  margin: var(--xiak-spacing-tight) 0 0;
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-tight);
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
-  font-weight: var(--xiak-font-weight-bold);
-  letter-spacing: var(--xiak-letter-spacing-eyebrow);
-  text-transform: uppercase;
+  font-weight: var(--xiak-font-weight-medium);
 }
 
 .contextItem {
@@ -223,7 +220,6 @@
   color: var(--xiak-color-text-strong);
 }
 .contextNavigation[data-compact="true"] .contextItem { min-height: var(--xiak-control-height); flex: none; }
-.contextNavigation[data-compact="true"] > p { margin: var(--xiak-spacing-tight) 0 0; padding-block: var(--xiak-spacing-narrow); font-weight: var(--xiak-font-weight-medium); letter-spacing: normal; text-transform: none; }
 
 .contextItem[data-selected="true"] {
   background: var(--xiak-color-accent-haze);
@@ -303,28 +299,11 @@
   font-size: var(--xiak-font-size-caption);
 }
 
-.pageHeading,
 .pageActions {
   display: flex;
   min-width: 0;
   align-items: center;
   gap: var(--xiak-spacing-default);
-}
-
-.pageHeading h1 { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--xiak-font-size-page-context); font-weight: var(--xiak-font-weight-semibold); }
-
-.breadcrumb {
-  display: flex;
-  align-items: center;
-  gap: var(--xiak-spacing-narrow);
-  color: var(--xiak-color-text-subtle);
-  font-size: var(--xiak-font-size-body);
-  white-space: nowrap;
-}
-
-.breadcrumb svg {
-  width: 11px;
-  height: 11px;
 }
 
 .pageActions {
@@ -538,10 +517,6 @@
 
   .pageActions button {
     padding-inline: var(--xiak-spacing-tight);
-  }
-
-  .breadcrumb {
-    display: none;
   }
 
   .workspacePane[data-visible="true"] {

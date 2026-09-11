@@ -1,6 +1,9 @@
 @layer xiak {
 .field, .implicit { display: grid; align-content: start; min-width: 0; gap: var(--xiak-spacing-tight); }
 .field > label:not(.implicit), .implicit > span { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); font-weight: var(--xiak-font-weight-medium); }
+.required { display: none; margin-inline-start: var(--xiak-spacing-narrow); color: var(--xiak-color-danger-text); }
+.required::after { content: "*"; }
+.field:has(:required, [aria-required="true"]) > label .required { display: inline; }
 .hint, .implicit > small { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.6; overflow-wrap: anywhere; }
 .error { color: var(--xiak-color-danger-text); font-size: var(--xiak-font-size-body); line-height: 1.6; }
 }

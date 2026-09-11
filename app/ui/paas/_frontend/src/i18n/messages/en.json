@@ -1,5 +1,7 @@
 {
   "Collection": {
+    "moreActions": "More actions",
+    "selectFirst": "Select items in the table first",
     "resetQuery": "Reset query",
     "filters": "Filters",
     "clearSearch": "Clear search",
@@ -190,7 +192,6 @@
     }
   },
   "ServiceNavigation": {
-    "title": "Service navigation",
     "favorites": "Favorite services",
     "addFavorite": "Add favorite services",
     "dashboard": "Console home",
@@ -1433,6 +1434,7 @@
     "memberCount": "{count, plural, one {# member} other {# members}}",
     "permissions": "Permission policies",
     "associations": "Associations",
+    "grantSource": "Grant source",
     "associate": "Associate policies",
     "associateTargets": "Associate users / groups / roles",
     "selectMembers": "Select members",
@@ -1649,20 +1651,27 @@
     "importHint": "Import creates mock users in this preview session with no permissions. Assign access afterward through users or groups."
   },
   "PolicyWorkspace": {
+    "createCustomPolicy": "Create custom policy",
+    "policyName": "Policy name",
+    "product": "Product",
+    "permissionCategory": "Permission level",
+    "categories": { "global": "Global permissions", "product": "Cloud product permissions" },
+    "allCategories": "All permission levels",
+    "updatedAt": "Last modified",
+    "authorize": "Authorize",
+    "searchPolicies": "Search policy names, descriptions or tags",
+    "categoryHint": "Permission levels classify preset policies, not read/write capabilities or tag conditions. Inspect the policy for its authorization scope.",
     "keptDirect": "{user} still has this policy through a direct attachment.",
     "resourceGranularity": "Resource-level · {type}",
     "operationGranularity": "Operation-level · No individual resource scope",
     "attach": "Attach",
     "allPolicies": "All policies",
     "allServices": "All products",
-    "allLevels": "All action types",
-    "allScopes": "All resource scopes",
     "scope": "Resource scope",
-    "operationLevel": "Action types",
     "sort": "Sort policies",
     "nameSort": "Name A–Z",
-    "newest": "Newest first",
-    "oldest": "Oldest first",
+    "newest": "Recently modified",
+    "oldest": "Least recently modified",
     "allRegisteredServices": "All services",
     "scopeAll": "All in tenant",
     "scopeSpecific": "Specific resources",
@@ -1675,8 +1684,7 @@
     "batchAttach": "Attach policies",
     "batchLimit": "Select up to 30 policies; filters and pagination preserve selection.",
     "clearSelected": "Clear selection",
-    "resultCount": "{count} policies",
-    "scopeHint": "Action types classify API capabilities; resource scope identifies applicable resources. Neither is a user's effective permission.",
+    "resultCount": "{count, plural, one {# policy} other {# policies}}",
     "presetDescriptions": {
       "policy-admin": "Administer all registered services and access permissions in this tenant.",
       "policy-read": "Read and list cloud resources without permission to change them.",
@@ -1704,7 +1712,7 @@
     "wildcardAction": "An action wildcard can include actions registered in the future. Consider an explicit action list.",
     "duplicateStatement": "This duplicates an earlier statement. Consider merging them to simplify review.",
     "tagMethod": "Resource tags",
-    "tagMethodHint": "Select a service and resource-level actions, then required resource tags. Actions that require unrestricted resource scope are not added automatically.",
+    "tagMethodHint": "Every statement requires resource-tag conditions and operations that support them. All tags must match. Unsupported operations never receive unrestricted access automatically. Request tags are not supported by the current model.",
     "reviewAssociations": "Review association changes",
     "review": "Next: review",
     "confirmAssociations": "Confirm associations",
@@ -1756,6 +1764,18 @@
     "incompatibleConditions": "Some selected operations do not support an existing condition. The draft is retained. Remove the incompatible condition or operation; access is never broadened automatically."
   },
   "PolicyWizard": {
+    "resourceTagsRequired": "Enable resource-tag restrictions and enter tags for every statement. Switch to visual editing if tag restrictions are not needed.",
+    "chooseMethod": "Choose a policy creation method",
+    "methods": {
+      "visual": { "title": "Policy generator", "description": "Select services, actions, resources and conditions to generate a policy." },
+      "json": { "title": "Policy syntax", "description": "Write policy JSON and check its syntax and authorization scope." },
+      "tags": { "title": "Tag-based authorization", "description": "Scope access by resource tags, then attach the policy to identities." },
+      "features": { "title": "Product features or project permissions", "description": "Choose product features to generate a policy. Project permissions are not connected yet." }
+    },
+    "featureMethod": "Product features",
+    "featureSearch": "Search products or features",
+    "featureScopeHint": "No permissions are selected by default. Selected features apply to all relevant resources in this tenant. Use the policy generator for resource or tag restrictions. Project permissions are not connected yet.",
+    "featureUnavailable": "This draft contains Deny, conditions, specific resources or wildcards and cannot be converted to feature selection without changing its meaning. Continue with visual or JSON editing.",
     "cancelTitle": "Discard policy changes?",
     "back": "Back to policies",
     "steps": {
@@ -1842,6 +1862,7 @@
     "resourceTenant": "Resource owner tenant",
     "resourceHint": "Region may be *. A trailing * matches an ID prefix. Every scope remains inside the current tenant.",
     "conditions": "Conditions (optional)",
+    "tagConditions": "Conditions (resource tags required)",
     "conditionsHint": "All condition types must match. Any IP range may match; every tag must match.",
     "useIp": "Restrict source IP",
     "sourceIp": "Source IP ranges (CIDR)",
@@ -1962,6 +1983,24 @@
     }
   },
   "AccessSimulator": {
+    "example": "Explore an authorization scenario",
+    "chooseExample": "Choose a scenario (optional)",
+    "exampleHint": "Fills the request only. No policies or memberships change; results use your current preview data.",
+    "examples": {
+      "path": { "label": "Resource path scope", "hint": "Compare production/payment with archive/payment. Both have production tags, but this user's grant matches only the production/ path." },
+      "duplicate": { "label": "Direct and inherited grants", "hint": "Inspect the same policy arriving directly and through a group. Removing just one grant source may leave another applicable source." },
+      "tags": { "label": "Resource-tag authorization", "hint": "This resource has production tags despite its archive/ name. Compare it with a staging topic; policy metadata tags do not control access." },
+      "deny": { "label": "Matching explicit deny", "hint": "Inspect the production deployment guard, then compare a staging deployment. A deny matters only when its action, resource and conditions match." },
+      "boundary": { "label": "Permission boundary", "hint": "The group grants application operations, but this user's boundary excludes deletion. Compare the same resource's deployment operation." },
+      "ungranted": { "label": "Console access without grants", "hint": "The user has console access enabled in MOCK, but no resource grants. Login method and policy permissions are independent." }
+    },
+    "disabledUser": "This user is disabled. You may inspect their policies, but this simulation does not validate login or credentials.",
+    "notEvaluated": "Not evaluated: account/user availability, credentials, real sessions and product-side enforcement. A policy allow is not proof that a real request will succeed.",
+    "sessionScope": "This diagnostic also checks the selected MOCK session's expiry, revocation and role/caller existence. It does not validate real STS credentials or inherit the caller's user policies.",
+    "inspectUser": "View user {name}",
+    "inspectRole": "View role and sessions",
+    "showAllEvidence": "Show {count} other evaluation records",
+    "decisiveOnly": "Show key evidence only",
     "scope": "Simulates current-tenant user grants or a preview role session, intersected with its boundary. No real resources, external identity verification or backend authorization. Cross-account, resource policies and role chaining are unsupported.",
     "request": "Simulated access request",
     "user": "User",
@@ -1985,7 +2024,7 @@
     "noGrants": "No applicable policy grants",
     "noGrantsHint": "This user has no direct policies or inherited group policies. Access is denied by default.",
     "decisions": {
-      "allow": "Simulated allow",
+      "allow": "Policy allows",
       "explicitDeny": "Explicit deny",
       "implicitDeny": "Implicit deny",
       "indeterminate": "Indeterminate",

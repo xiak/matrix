@@ -7,12 +7,37 @@ import { Table, TableActions, TableSelectionCell, TableToolbar, ContentPage, Emp
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { userRoles, type AccountAccessView } from "../domain/accounts";
+import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { UserAccessDialog } from "./AccountUserDialogs";
 import { AccountPrimaryWorkspace, AccountUserAccessMethods, AccountUserWorkspace } from "./AccountUserWorkspace";
 import { UserBatchDialog, type DirectoryUser } from "./UserBatchDialog";
 import { userBatchActions, userBatchDisabledReason, userBatchLimit, type UserBatchAction } from "../domain/userBatch";
 import styles from "./AccountAccessRenderer.module.css";
+
+function AccountUserRow({ user, principalId, workspace, grants, checked, disabled, onSelect, onOpen }: {
+  user: DirectoryUser; principalId: string; workspace: AccessWorkspace | null;
+  grants?: { direct: number; inherited: number }; checked: boolean; disabled: boolean;
+  onSelect(checked: boolean): void; onOpen(): void;
+}) {
+  const t = useTranslations("AccountAccess"), w = useTranslations("IamWorkspace"), batch = useTranslations("UserBatch");
+  return <tr data-selected={checked || undefined}>
+    <TableSelectionCell label={batch("selectUser", { name: user.loginName })} checked={checked} disabled={disabled} onChange={onSelect} />
+    <td><div className={styles.userIdentity}>
+      <button className={styles.userLink} aria-label={t("viewUser", { name: user.loginName })} onClick={onOpen} type="button">{user.loginName}</button>
+      {user.name && user.name !== user.loginName ? <span className={styles.userDisplayName}>{user.name}</span> : null}
+      {user.accountType === "subuser" && user.source === "wecom" ? <Badge>{w("wecom")}</Badge> : null}
+    </div><small className={styles.userIdentifier}>{user.id}</small></td>
+    <td>{t(user.accountType === "primary" ? "primary" : "child")}{user.id === principalId ? <small>{t("signedIn")}</small> : null}</td>
+    <td>{user.accountType === "primary" ? t("primaryConsoleAccess") : <AccountUserAccessMethods user={user} workspace={workspace} />}</td>
+    <td>{user.accountType === "primary" ? <>{t("resourceOwner")}<small>{t("ownerGrantSummary")}</small></> : workspace ? <div className={styles.permissionSources}>
+      {grants!.direct > 0 ? <span>{w("directPolicyCount", { count: grants!.direct })}</span> : null}
+      {grants!.inherited > 0 ? <span>{w("groupPolicyCount", { count: grants!.inherited })}</span> : null}
+      {!grants!.direct && !grants!.inherited ? w("noPolicyGrants") : null}
+    </div> : <div className={styles.roleTags}>{user.bindings.length ? user.bindings.map((binding) => <Badge key={binding.id}>{t(`roles.${binding.role}`)}</Badge>) : t("noGrantLabel")}</div>}</td>
+    <td>{user.state ? <Badge status={user.state === "disabled" ? "neutral" : user.state === "passwordChangeRequired" ? "warning" : "success"}>{t(`states.${user.state}`)}</Badge> : t("unknown")}</td>
+  </tr>;
+}
 
 export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { scene: AccountAccessScene; entityId?: string; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("AccountAccess");
@@ -73,20 +98,12 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
           { id: "role", label: workspace ? w("filterPolicySource") : t("filterUserRole"), value: role, onChange: (value) => changeFilter(() => setRole(value)), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "owner", label: t("resourceOwner") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: t("allRoles") }, { value: "owner", label: t("resourceOwner") }, { value: "ungranted", label: t("noGrantLabel") }, ...userRoles.map((value) => ({ value, label: t(`roles.${value}`) }))] }
         ]} />
       {!access.supportsUserBatch || filtered.length > userBatchLimit ? <p className={styles.selectionHint}>{batch(!access.supportsUserBatch ? "unsupportedHint" : "limitHint", { limit: userBatchLimit })}</p> : null}
-      {filtered.length ? <Table aria-label={t("userTable")}>
+      {filtered.length ? <Table aria-label={t("userTable")} className={styles.userTable}>
           <thead><tr><TableSelectionCell header label={batch("selectPage")} checked={allChecked ? true : checkedUsers.length ? "mixed" : false} disabled={blocked || filtered.length > userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? filtered.map((user) => user.id) : [] })} /><th scope="col">{t("user")}</th><th scope="col">{t("userType")}</th><th scope="col">{t("accessMethods")}</th><th scope="col">{workspace ? w("policyAssociations") : t("role")}</th><th scope="col">{t("status")}</th></tr></thead>
-          <tbody>{filtered.map((user) => <tr key={user.id} data-selected={checkedIds.has(user.id) || undefined}>
-            <TableSelectionCell label={batch("selectUser", { name: user.loginName })} checked={checkedIds.has(user.id)} disabled={blocked || !checkedIds.has(user.id) && checkedUsers.length >= userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? [...checkedIds, user.id] : [...checkedIds].filter((id) => id !== user.id) })} />
-            <td><button className={styles.userLink} aria-label={t("viewUser", { name: user.loginName })} onClick={() => user.accountType === "primary" || workspace ? onOpen("users", user.id) : setSelectedId(user.id)} type="button">{user.loginName}</button>{user.accountType === "subuser" && user.source === "wecom" ? <Badge status="info">{w("wecom")}</Badge> : null}<small>{user.name ?? t("resourceOwner")}</small><small>{user.id}</small></td>
-            <td>{t(user.accountType === "primary" ? "primary" : "child")}{user.id === scene.principalId ? <small>{t("signedIn")}</small> : null}</td>
-            <td>{user.accountType === "primary" ? t("primaryConsoleAccess") : <AccountUserAccessMethods user={user} workspace={workspace} />}</td>
-            <td>{user.accountType === "primary" ? <><strong>{t("resourceOwner")}</strong><small>{t("ownerGrantSummary")}</small></> : workspace ? <div className={styles.roleTags}>
-              {associations.get(user.id)!.direct > 0 ? <Badge>{w("directPolicyCount", { count: associations.get(user.id)!.direct })}</Badge> : null}
-              {associations.get(user.id)!.inherited > 0 ? <Badge>{w("groupPolicyCount", { count: associations.get(user.id)!.inherited })}</Badge> : null}
-              {!associations.get(user.id)!.direct && !associations.get(user.id)!.inherited ? w("noPolicyGrants") : null}
-            </div> : <div className={styles.roleTags}>{user.bindings.length ? user.bindings.map((binding) => <Badge key={binding.id} status="neutral">{t(`roles.${binding.role}`)}</Badge>) : t("noGrantLabel")}</div>}</td>
-            <td>{user.state ? <Badge status={user.state === "disabled" ? "neutral" : "success"}>{t(`states.${user.state}`)}</Badge> : t("unknown")}</td>
-          </tr>)}</tbody>
+          <tbody>{filtered.map((user) => <AccountUserRow key={user.id} user={user} principalId={scene.principalId} workspace={workspace} grants={associations.get(user.id)}
+            checked={checkedIds.has(user.id)} disabled={blocked || !checkedIds.has(user.id) && checkedUsers.length >= userBatchLimit}
+            onSelect={(checked) => setSelection({ scene, ids: checked ? [...checkedIds, user.id] : [...checkedIds].filter((id) => id !== user.id) })}
+            onOpen={() => user.accountType === "primary" || workspace ? onOpen("users", user.id) : setSelectedId(user.id)} />)}</tbody>
         </Table> : <EmptyState title={t(hasFilters ? "noMatchingUsers" : "noUsers")} description={t(hasFilters ? "noMatchingUsersHint" : "noUsersHint")} action={hasFilters ? <Button onClick={clearFilters} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} />}
       <Card.Footer><span className={styles.note}>{t("userPageHint")}</span><div className={styles.actions}><Button disabled={access.busy || access.loading} onClick={() => { setSelectedId(null); clearSelection(); access.usersPage(""); }} size="small" variant="ghost">{t("firstPage")}</Button><Button disabled={access.busy || access.loading || !scene.nextUserPage} onClick={() => { setSelectedId(null); clearSelection(); access.usersPage(scene.nextUserPage!); }} size="small" variant="secondary">{t("nextPage")}</Button></div></Card.Footer>
     </Card>
