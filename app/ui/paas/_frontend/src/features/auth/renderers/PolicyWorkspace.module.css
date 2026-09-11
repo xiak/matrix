@@ -5,13 +5,12 @@
 .directoryHeading [role="tablist"] { border-bottom: 0; }
 .note { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.7; margin: 0; overflow-wrap: anywhere; }
 .actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--xiak-spacing-tight); min-width: 0; }
-.policyTable { table-layout: fixed; min-width: 1020px; }
+.policyTable { table-layout: fixed; min-width: 900px; }
 .policyTable td { padding-block: var(--xiak-spacing-default); }
 .policyTable .nameCell { width: 25%; }
 .policyTable .productCell { width: 14%; }
 .policyTable .categoryCell { width: 108px; }
 .policyTable .timeCell { width: 174px; }
-.policyTable .operationCell { width: 150px; }
 .policyTable[data-custom-only] { min-width: 760px; }
 .description { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; color: var(--xiak-color-text-muted); }
 .policyIdentity { display: flex; align-items: center; flex-wrap: wrap; gap: var(--xiak-spacing-narrow) var(--xiak-spacing-tight); }

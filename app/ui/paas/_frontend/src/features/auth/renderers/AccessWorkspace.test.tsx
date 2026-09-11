@@ -516,7 +516,9 @@ describe("CAM-style access workspace", () => {
   });
   it("retains independent policy directory filters across details and page navigation", async () => {
     const { user } = await open("policies");
-    await screen.findByRole("table", { name: "策略" });
+    const directory = await screen.findByRole("table", { name: "策略" });
+    expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(within(directory).queryByRole("button", { name: "授权用户/组/角色" })).toBeNull();
     await user.click(screen.getByRole("tab", { name: "预设策略" }));
     await select(user, "所属产品", "访问管理");
     await select(user, "权限级别", "云产品权限");

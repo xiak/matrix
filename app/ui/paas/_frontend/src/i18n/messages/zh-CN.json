@@ -1715,7 +1715,6 @@
     "categories": { "global": "全局权限", "product": "云产品权限" },
     "allCategories": "全部权限级别",
     "updatedAt": "上次修改时间",
-    "authorize": "授权用户/组/角色",
     "searchPolicies": "搜索策略名称、描述或标签",
     "categoryHint": "权限级别是预设策略的分类，不代表读写能力或标签条件；具体授权范围请查看策略详情。",
     "keptDirect": "{user} 仍直接关联此策略。",

@@ -1715,7 +1715,6 @@
     "categories": { "global": "Global permissions", "product": "Cloud product permissions" },
     "allCategories": "All permission levels",
     "updatedAt": "Last modified",
-    "authorize": "Authorize",
     "searchPolicies": "Search policy names, descriptions or tags",
     "categoryHint": "Permission levels classify preset policies, not read/write capabilities or tag conditions. Inspect the policy for its authorization scope.",
     "keptDirect": "{user} still has this policy through a direct attachment.",
