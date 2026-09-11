@@ -137,7 +137,7 @@ describe("account access", () => {
 
   it("shows a read-only resource owner with separate identity, access and permission details", async () => {
     const { user, repository } = await openAccess();
-    const owner = within((await screen.findByRole("button", { name: "查看用户 admin" })).closest("tr")!);
+    const owner = within(await screen.findByRole("region", { name: "资源所有者" }));
     expect(owner.getByText("主账号")).toBeTruthy();
     expect(owner.getByText("资源所有者")).toBeTruthy();
     expect(owner.queryByText("未授权")).toBeNull();
@@ -156,7 +156,7 @@ describe("account access", () => {
     expect(repository.execute).not.toHaveBeenCalled();
   });
 
-  it("filters owner separately from ungranted subusers and keeps a broadly named policy separate from identity type", async () => {
+  it("filters subusers without hiding the separately projected account owner", async () => {
     const adminChild: AccountUser = { ...child, policyAttachments: [attachment("child-a", tenantPolicy)] };
     const ungranted: AccountUser = { principal: { ...child.principal, id: "ungranted", loginName: "new.user" }, policyAttachments: [] };
     const { user } = await openAccess(accounts({ listUsers: vi.fn().mockResolvedValue({ items: [adminChild, ungranted], nextAfter: null }) }));
@@ -168,12 +168,9 @@ describe("account access", () => {
     await user.click(screen.getByRole("combobox", { name: "筛选策略来源" }));
     await user.click(screen.getByRole("option", { name: "未关联授权策略" }));
     expect(screen.getByRole("button", { name: "查看用户 new.user" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "查看用户 admin" })).toBeNull();
+    expect(within(screen.getByRole("region", { name: "资源所有者" })).getByRole("button", { name: "查看用户 admin" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "清除筛选" }));
-    await user.click(screen.getByRole("combobox", { name: "用户类型" }));
-    await user.click(screen.getByRole("option", { name: "主账号" }));
-    expect(within(screen.getByRole("table", { name: "租户用户列表" })).getAllByRole("row")).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "查看用户 admin" })).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "租户用户列表" })).getAllByRole("row")).toHaveLength(3);
   });
 
   it("keeps navigation out of mutation renders but updates it when permissions change", async () => {

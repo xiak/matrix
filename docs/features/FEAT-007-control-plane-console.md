@@ -395,7 +395,7 @@ implemented or that a successful reference submission was exercised.
 | Workspace | Verified reference behavior | Matrix target and current gap |
 | --- | --- | --- |
 | Overview | Identity counts link to directories; high-privilege associations, recent sensitive actions, account identity, login links and security guidance are separate blocks. | Keep the existing overview composition; derive counts and guidance from the same workspace state. Never show simulated protection as real MFA or a real security assessment. |
-| Users | The subuser detail distinguishes access method from permission. An ungranted user is guided to join a group, copy another user's permissions or attach policies. Adding permissions is a content-area selection/review flow. | Reuse the existing user wizard and permission selector; add source-aware effective-permission inspection and cross-links to group/policy details. Copying permissions must describe precisely which direct bindings or memberships are copied; it never clones passwords, keys, boundaries or role sessions. |
+| Users | The subuser detail distinguishes access method from permission. The Owner detail exposes group management, while an ungranted user is guided to join a group, copy another user's permissions or attach policies. Adding permissions is a content-area selection/review flow. | Reuse the user wizard and permission selector, but treat the Tencent Owner group affordance as reference only. Matrix projects Account + RootIdentity as a compact owner summary and independent protected detail; only User rows participate in group, grant, credential and lifecycle tasks. Copying permissions must describe precisely which direct bindings or memberships are copied; it never clones passwords, keys, boundaries or role sessions. |
 | Groups | Creation is a three-step content page: basic information, policy selection, review. Empty policy selection is allowed. The selector separates available/selected items and states its per-operation limit. | Replace the combined group dialog with this journey. Group details own separate member and permission operations, with an impact review when removing an inherited grant. A group is not a login identity and cannot be assumed. |
 | Policy directory | All/preset views show policy name, product, permission category, description, last modified time and authorization action. Custom-only omits product and permission category. Presets cannot be deleted. | Adopt the directory task and compact search/filter hierarchy, but render only fields supplied by the fixed Matrix contract: stable ID, display name, management owner, tenant/installation scope, lifecycle status, default version and updated time. Product, description, permission category, policy content, affected subjects and effective access are not inferred. The bounded complete snapshot is paged only in the client; it is never presented as backend pagination. |
 | Policy creation | Entry chooser offers generator, policy syntax, tag authorization, and product-feature/project authorization. The fourth entry carries upgrade guidance toward tags and the generator. Name becomes immutable after creation. | Four entry points share one content-area edit/configure/review draft and save contract. The fourth selects registered Matrix product functions; project permissions are explicitly unavailable. Templates copy into custom policies, never mutate presets. Resource-tag conditions remain distinct from policy metadata tags. |
@@ -1113,35 +1113,35 @@ Public Tabs roots can shrink
 inside grids; only the tab strip scrolls horizontally, without widening nearby
 alerts or the page. All geometry, colors and focus rules use semantic tokens.
 
-The user directory includes the account's primary identity and subusers, with
-independent type, access-method, authorization-source and status columns. The
-primary row comes from the existing tenant-account/primary-principal relation,
-not administrator grants. It is described as the current account's resource
-owner, never as ungranted because it has no child-policy associations. Its
-detail separates read-only identity, access and ownership permissions from
-editable MOCK group membership. Child grant, disable, password-reset and delete
-actions are not offered. Group membership explicitly accepts the current
-account's primary principal; joining/leaving groups does not turn it into a
-subuser or become the source of its owner permissions. Primary metadata stays
-outside the subuser collection consumed by grant, permission-copy and key-owner
-selectors. Only group-member selectors include both types. Application and
-preview-adapter guards reinforce that boundary; the live IAM contract is not
-expanded. Unknown primary display names/statuses or absent child access
-profiles are not fabricated from the current actor or interpreted as disabled.
-Type/status/source filters and keyword search cover the loaded page, explicitly
-including the primary identity on each page. The directory has no trailing
-operation column. Usernames open details; leading checkboxes and a More actions
-menu beside Create user provide one command entry for single/bulk selection.
+The user page projects Account + RootIdentity above the directory as a compact
+resource-owner summary. It comes from the account ownership relation, never
+from administrator grants, and remains discoverable while ordinary-user search
+and filters change. Its detail separates read-only identity, access and
+ownership permissions. RootIdentity is not a User: it does not enter groups,
+receive ordinary permission attachments, own API keys through this workspace,
+or participate in grant, disable, password-reset and delete commands. Protected
+account recovery and settings require their own capabilities. Unknown owner
+display names or statuses and absent user access profiles are not fabricated
+from the current actor or interpreted as disabled.
+
+The directory table contains only daily manageable Users, with independent
+type, access-method, authorization-source and status columns. Status/source
+filters and keyword search cover the loaded user page; the redundant type
+filter is omitted until more than one supported User kind exists. The table has
+no trailing operation column. Usernames open details; leading checkboxes and a
+More actions menu beside Create user provide one command entry for single/bulk
+selection.
 The shared `TableSelectionCell` owns cell geometry and mixed-checkbox semantics;
 `TableActions` owns the menu, selection count, clear action, disabled explanations
 and keyboard behavior. IAM supplies eligibility. Header selection covers only
 the current filtered page, up to thirty users; changing filters, pages or data
-clears selection rather than retaining hidden mutation targets. Primary/child
-mixed selection permits group attachment but blocks child-only commands. Status
+clears selection rather than retaining hidden mutation targets. RootIdentity
+never enters selection; every batch command therefore targets only Users, while
+domain and adapter guards still reject a forged root ID. Status
 changes require compatible states and protect the current actor; unknown,
-stale, unauthorized or ineligible targets reject the entire batch. Primary
-ownership and existing memberships/grants/boundaries are preserved by additive
-group/policy attachment. Review identifies every target; disable/delete require
+stale, unauthorized or ineligible targets reject the entire batch. Existing
+memberships, grants and boundaries are preserved by additive group/policy
+attachment. Review identifies every target; disable/delete require
 explicit acknowledgement. Errors retain the dialog and selection for recovery,
 and pending submission prevents duplicate writes and dismissal. The preview
 adapter commits identities and workspace access atomically; shared single/bulk
@@ -1551,16 +1551,14 @@ and `git diff --check` gates must pass on the same committed worktree.
   enterprise visibility and ungranted member import, one-time MOCK secrets,
   disabled-before-delete keys, reset isolation, safe reports, all registered
   bookmarkable IAM subroutes and IAM navigation independent of PaaS reads.
-  Account-identity regression cases prove the primary row is independent of
+  Account-identity regression cases prove the owner summary is independent of
   administrator grants, unknown facts remain unknown, and access methods do
-  not imply permissions. Primary group membership is covered from both the
-  user and group workspaces, including add/remove round trips and rejection of
-  primary child-grant, credential and lifecycle mutations. A local browser
-  journey verified primary membership changes, user-to-group detail navigation
-  and child identity/access tabs on desktop; Chinese/light and English/dark
-  presentations preserved the active detail and returned no warning/error logs.
-  The temporary MOCK membership was removed. These checks do not establish
-  live Tencent mutation behavior or live Matrix group authorization.
+  not imply permissions. RootIdentity is absent from the user table, select-all,
+  group candidates and ordinary policy/credential/lifecycle commands; forged
+  owner IDs are rejected by both batch and workspace transitions. Ordinary-user
+  group membership and user-to-group detail navigation remain covered. These
+  checks do not establish live Tencent mutation behavior or live Matrix group
+  authorization.
   The fixed live IAM projection now replaces built-in-role inference with
   direct, revisioned USER policy attachments and independent tenant/platform
   policy metadata directories. Focused contract and renderer verification has

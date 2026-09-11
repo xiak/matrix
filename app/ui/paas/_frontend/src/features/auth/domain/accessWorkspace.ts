@@ -134,10 +134,11 @@ export function withoutUserAccess(source: AccessWorkspace, principalIds: readonl
 export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: AccessWorkspaceCommand, context: { id: string; at: string; userIds: string[]; primaryPrincipalId: string }): AccessWorkspace {
   const state = command.kind === "delete-user" ? withoutUserAccess(source, [command.principalId], context.at) : structuredClone(source);
   const invalid = () => { throw new AccessWorkspaceError("invalid"); };
-  // Only membership accepts the owner. Child grants, keys and lifecycle stay
-  // constrained to child identities, even if an adapter supplies a bad list.
+  // RootIdentity is the account's protected ownership relation, not a User.
+  // Every user relation stays constrained to the authoritative User directory,
+  // even if an adapter supplies the root ID or a foreign identity.
   if (!context.primaryPrincipalId || context.userIds.includes(context.primaryPrincipalId)) invalid();
-  const canJoinGroup = (principalId: string) => principalId === context.primaryPrincipalId || context.userIds.includes(principalId);
+  const canJoinGroup = (principalId: string) => context.userIds.includes(principalId);
   const exists = <T extends { id: string }>(items: T[], id: string): T => {
     const item = items.find((entry) => entry.id === id);
     if (!item) throw new AccessWorkspaceError("notFound");

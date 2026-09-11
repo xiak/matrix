@@ -38,17 +38,16 @@ function GroupAssociationEditor({ group, workspace, scene, change, onClose }: { 
     reviewHeading.current?.scrollIntoView?.({ block: "center" });
   }, [review]);
   const attached = change.kind === "members" ? group.memberIds : group.policyIds;
-  const memberDirectory = [scene.primaryUser, ...scene.users];
-  const source = change.kind === "members" ? memberDirectory.map((user) => ({ id: user.id, name: user.loginName, description: [a(user.accountType === "primary" ? "primary" : "child"), user.name].filter(Boolean).join(" · ") })) : workspace.policies;
+  const memberDirectory = scene.users;
+  const source = change.kind === "members" ? memberDirectory.map((user) => ({ id: user.id, name: user.loginName, description: [a("child"), user.name].filter(Boolean).join(" · ") })) : workspace.policies;
   const options = change.mode === "add" ? source.filter((item) => !attached.includes(item.id)) : attached.map((id) => source.find((item) => item.id === id) ?? { id, name: id });
   const label = t(`${change.mode}${change.kind === "members" ? "Members" : "Policies"}`);
-  const affected = change.kind === "members" ? selection : group.memberIds.filter((id) => id !== scene.primaryUser.id);
+  const affected = change.kind === "members" ? selection : group.memberIds;
   return <WorkspaceDialog size="wide" title={label + " · " + group.name} onClose={onClose} submitLabel={t(review ? "confirmChange" : "reviewChange")} submitDisabled={!selection.length} onSubmit={async () => {
     if (!selection.length) return false;
     if (!review) { setReview(true); return false; }
     return Boolean(await access.executeWorkspace({ kind: change.kind === "members" ? "change-group-members" : "change-group-policies", id: group.id, added: change.mode === "add" ? selection : [], removed: change.mode === "remove" ? selection : [] }));
   }}>
-    {selection.includes(scene.primaryUser.id) || group.memberIds.includes(scene.primaryUser.id) ? <p className={styles.note}>{a("primaryGroupsHint")}</p> : null}
     {review ? <>
       <Alert status={change.mode === "remove" ? "warning" : "info"}>{t("impact", { count: affected.length })} {change.mode === "remove" ? t("remainingSources") : null}</Alert>
       <section className={styles.stack}><h3 ref={reviewHeading} tabIndex={-1} className={styles.detailTitle}>{label} ({selection.length})</h3><div className={styles.roleTags}>{selection.map((id) => <Badge key={id}>{options.find((entry) => entry.id === id)?.name ?? id}</Badge>)}</div></section>
@@ -71,7 +70,7 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
   const [change, setChange] = useState<GroupChange | null>(null);
   const selected = workspace.groups.find((group) => group.id === entityId);
   const changing = workspace.groups.find((group) => group.id === change?.groupId);
-  const memberDirectory = [scene.primaryUser, ...scene.users];
+  const memberDirectory = scene.users;
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("groups")}>{t("back")}</Button>} />;
   return <>
     {selected ? <WorkspaceDetail title={selected.name} onBack={() => onOpen("groups")} actions={<><Button onClick={() => setEditing(selected)} variant="secondary">{t("edit")}</Button><Button onClick={() => setDeleting(selected)} variant="ghost">{t("delete")}</Button></>}>
@@ -80,7 +79,7 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
       <Tabs.Root defaultValue="members"><Tabs.List aria-label={selected.name}><Tabs.Trigger value="members">{t("members")} ({selected.memberIds.length})</Tabs.Trigger><Tabs.Trigger value="policies">{t("permissions")} ({selected.policyIds.length})</Tabs.Trigger></Tabs.List>
         <Tabs.Content className={styles.stack} value="members">
           <div className={styles.actions}><Button onClick={() => setChange({ groupId: selected.id, kind: "members", mode: "add" })}>{g("addMembers")}</Button><Button variant="secondary" disabled={!selected.memberIds.length} onClick={() => setChange({ groupId: selected.id, kind: "members", mode: "remove" })}>{g("removeMembers")}</Button></div>
-          {selected.memberIds.length ? <Table aria-label={t("members")}><thead><tr><th>{t("name")}</th><th>{a("userType")}</th><th>{t("state")}</th><th>{t("actions")}</th></tr></thead><tbody>{selected.memberIds.map((id) => { const user = memberDirectory.find((entry) => entry.id === id); return <tr key={id}><td><button className={styles.userLink} onClick={() => onOpen("users", id)}>{user?.loginName ?? id}</button><small>{user?.name}</small></td><td>{user ? a(user.accountType === "primary" ? "primary" : "child") : a("unknown")}</td><td>{user?.state ? <Badge status={user.state === "disabled" ? "neutral" : "success"}>{a(`states.${user.state}`)}</Badge> : "—"}</td><td><Button size="small" variant="ghost" aria-label={g("removeMember", { name: user?.loginName ?? id })} onClick={() => setChange({ groupId: selected.id, kind: "members", mode: "remove", initial: id })}>{g("remove")}</Button></td></tr>; })}</tbody></Table> : <EmptyState title={g("noMembers")} description={g("noMembersHint")} />}
+          {selected.memberIds.length ? <Table aria-label={t("members")}><thead><tr><th>{t("name")}</th><th>{a("userType")}</th><th>{t("state")}</th><th>{t("actions")}</th></tr></thead><tbody>{selected.memberIds.map((id) => { const user = memberDirectory.find((entry) => entry.id === id); return <tr key={id}><td><button className={styles.userLink} onClick={() => onOpen("users", id)}>{user?.loginName ?? id}</button><small>{user?.name}</small></td><td>{user ? a("child") : a("unknown")}</td><td>{user?.state ? <Badge status={user.state === "disabled" ? "neutral" : "success"}>{a(`states.${user.state}`)}</Badge> : "—"}</td><td><Button size="small" variant="ghost" aria-label={g("removeMember", { name: user?.loginName ?? id })} onClick={() => setChange({ groupId: selected.id, kind: "members", mode: "remove", initial: id })}>{g("remove")}</Button></td></tr>; })}</tbody></Table> : <EmptyState title={g("noMembers")} description={g("noMembersHint")} />}
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="policies">
           <div className={styles.actions}><Button onClick={() => setChange({ groupId: selected.id, kind: "policies", mode: "add" })}>{g("addPolicies")}</Button><Button variant="secondary" disabled={!selected.policyIds.length} onClick={() => setChange({ groupId: selected.id, kind: "policies", mode: "remove" })}>{g("removePolicies")}</Button></div><Alert>{g("policyChangeHint")}</Alert>

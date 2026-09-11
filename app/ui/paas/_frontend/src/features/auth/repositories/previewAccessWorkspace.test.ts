@@ -19,12 +19,13 @@ describe("atomic user directory batches", () => {
     const workspace = await previewAccountRepository.workspace!.read(previewCredential);
     return { identity, users, workspace, targets: users.map(({ principal }) => ({ id: principal.id, resourceVersion: principal.resourceVersion })) };
   }
-  it("appends mixed primary/child memberships without replacing existing memberships or grants", async () => {
+  it("appends user memberships without replacing existing memberships or grants", async () => {
     const f = await fixture();
-    const targets = [...f.targets, { id: f.identity.account.primaryPrincipalId, resourceVersion: null }];
+    const targets = f.targets;
     await previewAccountRepository.executeUserBatch!(previewCredential, { action: "add-groups", targets, groupIds: ["group-delivery"] });
     const after = await previewAccountRepository.workspace!.read(previewCredential);
     expect(after.groups[0]?.memberIds).toEqual(expect.arrayContaining(targets.map((target) => target.id)));
+    expect(after.groups[0]?.memberIds).not.toContain(f.identity.account.primaryPrincipalId);
     expect(after.groups[1]?.memberIds).toEqual(f.workspace.groups[1]?.memberIds);
     expect(after.userPolicies).toEqual(f.workspace.userPolicies);
     expect((await previewAccountRepository.listUsers(previewCredential)).items).toEqual(f.users);
@@ -42,9 +43,9 @@ describe("atomic user directory batches", () => {
     expect(result.workspace.userBoundaries).toEqual(f.workspace.userBoundaries);
     expect(f.workspace.userPolicies["principal-chen"]).toBeUndefined();
   });
-  it.each(["authorize", "enable", "disable", "delete"] as const)("blocks the entire %s batch when the primary account is selected", async (action) => {
+  it.each(["add-groups", "authorize", "enable", "disable", "delete"] as const)("blocks the entire %s batch when the primary account is selected", async (action) => {
     const f = await fixture();
-    const command = { action, targets: [...f.targets, { id: f.identity.account.primaryPrincipalId, resourceVersion: null }], policyIds: ["policy-read"] } as UserBatchCommand;
+    const command = { action, targets: [...f.targets, { id: f.identity.account.primaryPrincipalId, resourceVersion: null }], policyIds: ["policy-read"], groupIds: ["group-delivery"] } as UserBatchCommand;
     await expect(previewAccountRepository.executeUserBatch!(previewCredential, command)).rejects.toThrow("ineligibleUsers");
     expect((await previewAccountRepository.listUsers(previewCredential)).items).toEqual(f.users);
     expect(await previewAccountRepository.workspace!.read(previewCredential)).toEqual(f.workspace);
@@ -160,18 +161,11 @@ describe("access workspace preview invariants", () => {
     expect((await previewAccountRepository.listUsers(previewCredential)).items.find((user) => user.principal.id === "principal-lin")?.policyAttachments.some((entry) => entry.policyId === policy.id)).toBe(false);
     await previewIamRepository.logout(previewCredential);
   });
-  it("allows only the current primary identity to join groups without child policy, credential or ownership changes", () => {
+  it("keeps the primary identity outside user groups and other user relations", () => {
     const original = initialAccessWorkspace("org-xiak");
     const principalId = context.primaryPrincipalId;
-    const joined = applyAccessWorkspaceCommand(original, { kind: "set-user-groups", principalId, groupIds: ["group-delivery"] }, context);
-    expect(joined.groups[0]?.memberIds).toContain(principalId);
-    expect(joined.userPolicies).toEqual(original.userPolicies);
-    expect(joined.userProfiles).toEqual(original.userProfiles);
-    expect(joined.userBoundaries).toEqual(original.userBoundaries);
-    expect(joined.keys).toEqual(original.keys);
-    expect(joined.accountId).toBe(original.accountId);
-    const removed = applyAccessWorkspaceCommand(joined, { kind: "change-group-members", id: "group-delivery", added: [], removed: [principalId] }, context);
-    expect(removed.groups[0]?.memberIds).not.toContain(principalId);
+    expect(() => applyAccessWorkspaceCommand(original, { kind: "set-user-groups", principalId, groupIds: ["group-delivery"] }, context)).toThrow("invalid");
+    expect(() => applyAccessWorkspaceCommand(original, { kind: "change-group-members", id: "group-delivery", added: [principalId], removed: [] }, context)).toThrow("invalid");
     expect(original.groups[0]?.memberIds).not.toContain(principalId);
     expect(() => applyAccessWorkspaceCommand(original, { kind: "set-user-groups", principalId: "foreign-primary", groupIds: ["group-delivery"] }, context)).toThrow("invalid");
     expect(() => applyAccessWorkspaceCommand(original, { kind: "set-user-policies", principalId, policyIds: ["policy-admin"] }, { ...context, userIds: [...context.userIds, principalId] })).toThrow("invalid");

@@ -23,8 +23,8 @@ export function userBatchDisabledReason(action: UserBatchAction, context: UserBa
   if (!context.supported) return "unsupported";
   if (!context.targets.length) return "empty";
   if (context.targets.length > userBatchLimit) return "limit";
-  if (action === "add-groups") return null;
   if (context.targets.some((target) => target.id === context.primaryId)) return "primary";
+  if (action === "add-groups") return null;
   if (action === "authorize") return null;
   if (context.targets.some((target) => target.id === context.actorId)) return "self";
   if (action === "enable" && context.targets.some((target) => target.enabled !== false)) return "notDisabled";

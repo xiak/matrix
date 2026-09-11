@@ -15,8 +15,8 @@ type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavaila
 
 export type PolicyDirectoryView = { query: string; kind: string; service: string; category: string; sort: string; page: number; pageSize: number };
 export const defaultPolicyDirectoryView: PolicyDirectoryView = { query: "", kind: "all", service: "all", category: "all", sort: "name", page: 1, pageSize: 10 };
-export type UserDirectoryView = { query: string; kind: string; state: string; role: string };
-const defaultUserDirectoryView: UserDirectoryView = { query: "", kind: "all", state: "all", role: "all" };
+export type UserDirectoryView = { query: string; state: string; role: string };
+const defaultUserDirectoryView: UserDirectoryView = { query: "", state: "all", role: "all" };
 
 type AccountAccess = {
   supportsUserBatch: boolean;
@@ -150,7 +150,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     clearWorkspaceError, clearFeedback,
     async executeWorkspace(command) {
       if (!active || !credential || !scene?.canManage || !repository.workspace || loading || mutationPending.current) return null;
-      if ("principalId" in command && command.principalId === scene.primaryUser.id && command.kind !== "set-user-groups") { setWorkspaceError("forbidden"); return null; }
+      if ("principalId" in command && command.principalId === scene.primaryUser.id) { setWorkspaceError("forbidden"); return null; }
       mutationPending.current = true;
       setBusy(true); setWorkspaceError(null); setSuccess(null);
       try {

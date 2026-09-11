@@ -22,16 +22,14 @@ export function AccountUserAccessMethods({ user, workspace }: { user: AccountUse
   </ul>;
 }
 
-export function AccountPrimaryWorkspace({ scene, workspace, onBack, onOpen }: { scene: AccountAccessScene; workspace: AccessWorkspace | null; onBack(): void; onOpen(view: AccountAccessView, id?: string): void }) {
+export function AccountPrimaryWorkspace({ scene, onBack, onOpen }: { scene: AccountAccessScene; onBack(): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
-  const [editingGroups, setEditingGroups] = useState(false);
   const primary = scene.primaryUser;
-  const groups = workspace?.groups.filter((group) => group.memberIds.includes(primary.id)) ?? [];
-  return <><WorkspaceDetail title={primary.loginName} onBack={onBack} actions={<Button variant="secondary" onClick={() => onOpen("settings")}>{t("settings")}</Button>}>
+  return <WorkspaceDetail title={primary.loginName} onBack={onBack} actions={<Button variant="secondary" onClick={() => onOpen("settings")}>{t("settings")}</Button>}>
     <div className={styles.userSummary}><div><strong>{primary.name ?? t("resourceOwner")}</strong><span className={styles.note}>{scene.accountName}</span></div><Badge>{t("primary")}</Badge></div>
 
-    <Tabs.Root defaultValue="identity"><Tabs.List aria-label={primary.loginName}><Tabs.Trigger value="identity">{t("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{t("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="permissions">{w("permissions")}</Tabs.Trigger>{workspace ? <Tabs.Trigger value="groups">{w("userGroups")}</Tabs.Trigger> : null}</Tabs.List>
+    <Tabs.Root defaultValue="identity"><Tabs.List aria-label={primary.loginName}><Tabs.Trigger value="identity">{t("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{t("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="permissions">{w("permissions")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content className={styles.stack} value="identity"><dl className={styles.facts}>
         <div><dt>{t("userType")}</dt><dd>{t("primary")}{primary.isCurrent ? ` · ${t("signedIn")}` : ""}</dd></div>
         <div><dt>{t("ownership")}</dt><dd>{scene.accountName}</dd></div>
@@ -41,19 +39,16 @@ export function AccountPrimaryWorkspace({ scene, workspace, onBack, onOpen }: { 
         <div><dt>{t("status")}</dt><dd>{primary.state ? t(`states.${primary.state}`) : t("unknown")}</dd></div>
       </dl></Tabs.Content>
       <Tabs.Content className={styles.stack} value="access"><dl className={styles.facts}><div><dt>{t("accessMethods")}</dt><dd>{t("primaryConsoleAccess")}</dd></div></dl><p className={styles.note}>{t("primaryCredentialsHint")}</p></Tabs.Content>
-      <Tabs.Content className={styles.stack} value="permissions"><section className={styles.identitySection}><h3>{t("resourceOwner")}</h3><p className={styles.note}>{t("ownerPermissionsHint")}</p></section><p className={styles.note}>{t("primaryGroupsHint")}</p></Tabs.Content>
-      {workspace ? <Tabs.Content className={styles.stack} value="groups"><p className={styles.note}>{t("primaryGroupsHint")}</p><div><Button variant="secondary" onClick={() => setEditingGroups(true)}>{t("manageGroups")}</Button></div>{groups.length ? <Table aria-label={w("userGroups")}><thead><tr><th>{w("name")}</th><th>{w("description")}</th></tr></thead><tbody>{groups.map((group) => <tr key={group.id}><td><button className={styles.userLink} onClick={() => onOpen("groups", group.id)}>{group.name}</button></td><td>{group.description || w("none")}</td></tr>)}</tbody></Table> : <p className={styles.note}>{w("empty")}</p>}</Tabs.Content> : null}
+      <Tabs.Content className={styles.stack} value="permissions"><section className={styles.identitySection}><h3>{t("resourceOwner")}</h3><p className={styles.note}>{t("ownerPermissionsHint")}</p><p className={styles.note}>{t("rootIdentityBoundaryHint")}</p></section></Tabs.Content>
     </Tabs.Root>
-  </WorkspaceDetail>{workspace && editingGroups ? <UserAssociations user={primary} workspace={workspace} kind="groups" onClose={() => setEditingGroups(false)} /> : null}</>;
+  </WorkspaceDetail>;
 }
 
 export function UserAssociations({ user, workspace, kind, onClose }: { user: Pick<AccountUserScene, "id" | "loginName">; workspace: AccessWorkspace; kind: "groups" | "policies"; onClose(): void }) {
   const t = useTranslations("IamWorkspace");
-  const a = useTranslations("AccountAccess");
   const access = useAccountAccess();
   const [selection, setSelection] = useState(kind === "groups" ? workspace.groups.filter((group) => group.memberIds.includes(user.id)).map((group) => group.id) : workspace.userPolicies[user.id] ?? []);
   return <WorkspaceDialog title={t(kind === "groups" ? "userGroups" : "userPolicies") + " · " + user.loginName} onClose={onClose} onSubmit={async () => Boolean(await access.executeWorkspace(kind === "groups" ? { kind: "set-user-groups", principalId: user.id, groupIds: selection } : { kind: "set-user-policies", principalId: user.id, policyIds: selection }))}>
-    {user.id === access.scene?.primaryUser.id ? <p className={styles.note}>{a("primaryGroupsHint")}</p> : null}
     <WorkspaceSelection label={t(kind)} options={workspace[kind]} value={selection} onChange={setSelection} />
   </WorkspaceDialog>;
 }

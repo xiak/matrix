@@ -171,6 +171,10 @@
 .copyFeedback { font-size: var(--xiak-font-size-small); color: var(--xiak-color-text-muted); }
 .userDirectory { container: user-directory / inline-size; display: grid; gap: var(--xiak-spacing-comfortable); min-width: 0; }
 .directoryActions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--xiak-spacing-tight); min-width: 0; }
+.accountOwner { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); min-width: 0; padding: var(--xiak-spacing-default) var(--xiak-panel-padding); border-block: var(--xiak-border-subtle); background: var(--xiak-color-bg-panel-hover); }
+.accountOwnerIdentity { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.accountOwnerLabel { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.accountOwnerMeta { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--xiak-spacing-tight); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); text-align: right; }
 .selectionHint { padding: 0 var(--xiak-spacing-comfortable) var(--xiak-spacing-default); margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.6; }
 .policyDirectoryIntro { display: grid; gap: var(--xiak-spacing-narrow); padding: 0 var(--xiak-panel-padding) var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.65; }
 .policyDirectoryIntro p { margin: 0; }
@@ -198,5 +202,6 @@
 
 @container account-access (max-width: 860px) { .overviewGrid { grid-template-columns: minmax(0, 1fr); } }
 @container account-access (max-width: 540px) { .overviewMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container user-directory (max-width: 540px) { .accountOwner { align-items: flex-start; flex-direction: column; } .accountOwnerMeta { justify-content: flex-start; text-align: left; } }
 .stepTitle { margin: 0; font-size: var(--xiak-font-size-body); color: var(--xiak-color-text-strong); }
 .stepTitle:focus { outline: none; }

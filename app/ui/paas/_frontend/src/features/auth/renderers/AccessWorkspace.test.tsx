@@ -91,7 +91,7 @@ describe("selection-driven user directory", () => {
   it("keeps criteria distinct from an empty-result reset and clears batch targets across details", async () => {
     const { user } = await openBatch();
     await user.type(screen.getByRole("searchbox", { name: "搜索用户" }), "lin");
-    await select(user, "用户类型", "主账号");
+    await select(user, "筛选用户状态", "已禁用");
     expect(screen.getByText("没有匹配的用户")).toBeTruthy();
     expect(screen.getAllByRole("button", { name: "清除筛选" })).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "重置查询" }));
@@ -118,8 +118,7 @@ describe("selection-driven user directory", () => {
     await user.click(screen.getByRole("button", { name: "更多操作" }));
     const menu = within(screen.getByRole("menu", { name: "更多操作" }));
     expect(menu.getByRole("menuitem", { name: "添加到用户组" }).getAttribute("aria-disabled")).not.toBe("true");
-    expect(menu.getByRole("menuitem", { name: /删除用户/ }).getAttribute("aria-disabled")).toBe("true");
-    expect(menu.getByText("包含主账号，不支持此操作。")).toBeTruthy();
+    expect(menu.getByRole("menuitem", { name: /删除用户/ }).getAttribute("aria-disabled")).not.toBe("true");
     await user.keyboard("{Escape}");
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "更多操作" }));
     await user.type(screen.getByRole("searchbox", { name: "搜索用户" }), "lin");
@@ -130,7 +129,7 @@ describe("selection-driven user directory", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "更多操作" }).hasAttribute("disabled")).toBe(true));
     expect(repository.executeUserBatch).not.toHaveBeenCalled();
   });
-  it("reviews additive mixed memberships and retains existing associations", async () => {
+  it("reviews additive user memberships and retains existing associations", async () => {
     const { user, repository } = await openBatch();
     await user.click(screen.getByRole("checkbox", { name: "选择当前筛选页的全部用户" }));
     await action(user, "添加到用户组");
@@ -141,15 +140,16 @@ describe("selection-driven user directory", () => {
     expect(repository.executeUserBatch).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Language" }));
     dialog = within(screen.getByRole("dialog"));
-    expect(dialog.getByText(/Append group memberships/)).toBeTruthy();
+    expect(dialog.getByText(/The account owner is not a group member/)).toBeTruthy();
     await user.click(dialog.getByRole("button", { name: "Confirm action" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(repository.executeUserBatch).toHaveBeenCalledTimes(1);
     expect(repository.execute).not.toHaveBeenCalled();
     const state = await previewAccountRepository.workspace!.read(previewCredential);
-    expect(state.groups[0]?.memberIds).toEqual(expect.arrayContaining(["principal-admin", "principal-lin", "principal-chen"]));
+    expect(state.groups[0]?.memberIds).toEqual(expect.arrayContaining(["principal-lin", "principal-chen"]));
+    expect(state.groups[0]?.memberIds).not.toContain("admin");
     expect(state.groups[1]?.memberIds).toContain("principal-chen");
-    expect(within(screen.getByRole("button", { name: "View user admin" }).closest("tr")!).getByText("Resource owner")).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "Resource owner" })).getByRole("button", { name: "View user admin" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "More actions" }).hasAttribute("disabled")).toBe(true);
   });
   it("preserves targets on failure, locks duplicate submissions and requires explicit destructive acknowledgement", async () => {
@@ -432,12 +432,12 @@ describe("CAM-style access workspace", () => {
   it("returns to the same user query and criteria without retaining bulk selection", async () => {
     const { user } = await open("users");
     await user.type(screen.getByRole("searchbox", { name: "搜索用户" }), "lin");
-    await select(user, "用户类型", "IAM 子用户");
+    await select(user, "筛选用户状态", "正常");
     await user.click(screen.getByRole("button", { name: "查看用户 lin" }));
     expect(screen.getByRole("heading", { name: "lin" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "返回列表" }));
     expect((screen.getByRole("searchbox", { name: "搜索用户" }) as HTMLInputElement).value).toBe("lin");
-    expect(screen.getByRole("button", { name: "移除筛选：用户类型: IAM 子用户" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "移除筛选：筛选用户状态: 正常" })).toBeTruthy();
     expect(within(screen.getByRole("table", { name: "租户用户列表" })).getAllByRole("row")).toHaveLength(2);
     expect(screen.getByRole("button", { name: "更多操作" }).hasAttribute("disabled")).toBe(true);
   });
@@ -662,34 +662,21 @@ describe("CAM-style access workspace", () => {
     expect(method(document.body, "Console access").getByText("Configuration not provided")).toBeTruthy();
     expect(method(document.body, "Console access").queryByText("Disabled")).toBeNull();
   });
-  it("manages primary membership from users and groups without offering child authorization or lifecycle actions", async () => {
+  it("presents the account owner outside user selection and group membership", async () => {
     const { user, repository, extension } = await open("users");
-    await user.click(await screen.findByRole("button", { name: "查看用户 admin" }));
-    await user.click(screen.getByRole("tab", { name: "所属用户组" }));
-    await user.click(screen.getByRole("button", { name: "管理用户组" }));
-    let dialog = screen.getByRole("dialog");
-    expect(within(dialog).getByText(/主账号的默认权限不依赖组策略/)).toBeTruthy();
-    await user.click(within(dialog).getByRole("checkbox", { name: "DeliveryTeam" }));
-    await user.click(within(dialog).getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect((await extension.read("preview")).groups[0]?.memberIds).toContain("admin");
-    await user.click(screen.getByRole("button", { name: "返回列表" }));
-    const owner = within(screen.getByRole("button", { name: "查看用户 admin" }).closest("tr")!);
+    const owner = within(await screen.findByRole("region", { name: "资源所有者" }));
     expect(owner.getByText("资源所有者")).toBeTruthy();
-    expect(owner.queryByText("用户组 1 项")).toBeNull();
+    expect(within(screen.getByRole("table", { name: "租户用户列表" })).queryByRole("button", { name: "查看用户 admin" })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: "选择用户 admin" })).toBeNull();
     await user.click(owner.getByRole("button", { name: "查看用户 admin" }));
-    await user.click(screen.getByRole("tab", { name: "所属用户组" }));
-    await user.click(screen.getByRole("button", { name: "DeliveryTeam" }));
-    const member = within(screen.getByRole("button", { name: "admin" }).closest("tr")!);
-    expect(member.getByText("主账号")).toBeTruthy();
-    await user.click(member.getByRole("button", { name: "从用户组移除 admin" }));
-    dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getByRole("button", { name: "审阅变更" }));
-    await user.click(within(dialog).getByRole("button", { name: "确认变更" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    expect((await extension.read("preview")).groups[0]?.memberIds).not.toContain("admin");
+    expect(screen.queryByRole("tab", { name: "所属用户组" })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "权限策略" }));
+    expect(screen.getByText(/根身份不是普通用户，不加入用户组/)).toBeTruthy();
+    await user.click(screen.getByTestId("go-groups"));
+    await user.click(await screen.findByRole("button", { name: "DeliveryTeam" }));
     await user.click(screen.getByRole("button", { name: "添加成员" }));
-    expect(within(screen.getByRole("dialog")).getByRole("checkbox", { name: "admin" })).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).queryByRole("checkbox", { name: "admin" })).toBeNull();
+    expect((await extension.read("preview")).groups[0]?.memberIds).not.toContain("admin");
     expect((await extension.read("preview")).userPolicies["admin"]).toBeUndefined();
     expect(repository.execute).not.toHaveBeenCalled();
   });
