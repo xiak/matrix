@@ -300,7 +300,9 @@ func assertAuditContractCatalog(
 		// hash mismatch rejection. The authorized migration identity only calls
 		// validation here; no invalid record is inserted or encoder duplicated.
 		forgedTarget := event
-		if action == auditv1.ActionIAMTenantAdministratorRecovered || action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
+		if action == auditv1.ActionIAMAccountRootCredentialsRecovered ||
+			action == auditv1.ActionIAMTenantAdministratorRecovered ||
+			action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
 			forgedTarget.Target.TenantID = ""
 		} else {
 			forgedTarget.Target.TenantID = "organization-forged"
@@ -1725,7 +1727,7 @@ func assertIAMAuthorizationCatalog(
 		_ = passwordTransaction.Rollback(ctx)
 		t.Fatal(err)
 	}
-	passwordEvent := authorityAuditEvent("event-catalog-password", fixture.TenantID, fixture.Administrator, auditv1.ActionIAMPasswordChanged)
+	passwordEvent := authorityAuditEvent("event-catalog-password", fixture.TenantID, fixture.Administrator, auditv1.ActionIAMUserPasswordChanged)
 	passwordEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
 	passwordEvent.OccurredAt = passwordTime.UTC()
 	sessionEvent := authorityAuditEvent("event-catalog-session", fixture.TenantID, "session-catalog", auditv1.ActionIAMSessionIssued)
@@ -2082,7 +2084,9 @@ func authorityAuditEvent(
 	if action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
 		event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "iam-local-recovery"}
 	}
-	if action == auditv1.ActionIAMTenantAdministratorRecovered || action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
+	if action == auditv1.ActionIAMAccountRootCredentialsRecovered ||
+		action == auditv1.ActionIAMTenantAdministratorRecovered ||
+		action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
 		event.Target.TenantID = "organization-recovered"
 	}
 	return event

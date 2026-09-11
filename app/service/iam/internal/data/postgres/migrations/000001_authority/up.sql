@@ -1003,18 +1003,8 @@ AS $function$
         WHEN 'iam.user.reset-password' THEN 'USER'
         WHEN 'iam.user.create' THEN 'ACCOUNT'
         WHEN 'iam.user.read' THEN 'USER'
-        WHEN 'iam.organization.create' THEN 'ORGANIZATION'
-        WHEN 'iam.organization.read' THEN 'ORGANIZATION'
-        WHEN 'iam.organization.set-status' THEN 'ORGANIZATION'
-        WHEN 'iam.organization-administrator.recover' THEN 'PRINCIPAL'
-        WHEN 'iam.account-alias.set' THEN 'ORGANIZATION'
-        WHEN 'iam.principal.list' THEN 'ORGANIZATION'
         WHEN 'iam.policy.list' THEN 'ACCOUNT'
         WHEN 'iam.platform-policy.list' THEN 'INSTALLATION'
-        WHEN 'iam.principal.set-status' THEN 'PRINCIPAL'
-        WHEN 'iam.password.reset' THEN 'PRINCIPAL'
-        WHEN 'iam.principal.create' THEN 'ORGANIZATION'
-        WHEN 'iam.principal.read' THEN 'PRINCIPAL'
         WHEN 'iam.policy-attachment.create' THEN 'USER'
         WHEN 'iam.policy-attachment.revoke' THEN 'POLICY_ATTACHMENT'
         WHEN 'iam.platform-policy-attachment.create' THEN 'USER'
@@ -1064,8 +1054,6 @@ AS $function$
     SELECT COALESCE(submitted_action IN (
         'iam.account.create', 'iam.account.read',
         'iam.account.set-status', 'iam.account.recover-root-credentials',
-        'iam.organization.create', 'iam.organization.read',
-        'iam.organization.set-status', 'iam.organization-administrator.recover',
         'iam.platform-policy-attachment.create', 'iam.platform-policy-attachment.revoke', 'iam.platform-policy.list',
         'paas.execution-pool.create', 'paas.execution-pool.read',
         'paas.execution-target.register', 'paas.execution-target.read',

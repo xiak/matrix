@@ -242,8 +242,15 @@ BEGIN
        OR iam.is_platform_action('iam.policy-attachment.create')
        OR iam.is_platform_action('iam.policy-attachment.revoke')
        OR EXISTS (
-           SELECT 1 FROM unnest(ARRAY['iam.role-binding.put', 'iam.role-binding.revoke',
-               'iam.platform-role-binding.put', 'iam.platform-role-binding.revoke']) AS retired(action)
+           SELECT 1 FROM unnest(ARRAY[
+               'iam.organization.create', 'iam.organization.read',
+               'iam.organization.set-status', 'iam.organization-administrator.recover',
+               'iam.account-alias.set', 'iam.principal.list',
+               'iam.principal.set-status', 'iam.password.reset',
+               'iam.principal.create', 'iam.principal.read',
+               'iam.role-binding.put', 'iam.role-binding.revoke',
+               'iam.platform-role-binding.put', 'iam.platform-role-binding.revoke'
+           ]) AS retired(action)
            WHERE iam.resource_kind_for_action(retired.action) IS NOT NULL OR iam.is_platform_action(retired.action)
        )
        OR iam.resource_kind_for_action('unsupported') IS NOT NULL

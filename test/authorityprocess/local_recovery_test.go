@@ -106,10 +106,10 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	old := start(oldBinary)
 	primary := loginIAM(t, endpoint, "admin", initialAdminPassword, "schema3-primary-login")
 	changePasswordIAM(t, endpoint, primary.Credential, initialAdminPassword, changedAdminPassword, "schema3-primary-change")
-	member := createIAMUser(t, endpoint, primary.Credential, "retained.local.viewer", "Retained local viewer", initialReaderPassword, "schema3-member-create")
+	memberID := createLegacyIAMUser(t, endpoint, primary.Credential, "retained.local.viewer", "Retained local viewer", initialReaderPassword, "schema3-member-create")
 	memberSession := loginIAM(t, endpoint, "retained.local.viewer@organization-process", initialReaderPassword, "schema3-member-login")
 	changePasswordIAM(t, endpoint, memberSession.Credential, initialReaderPassword, changedReaderPassword, "schema3-member-change")
-	binding := putLegacyIAMBinding(t, endpoint, primary.Credential, member.ID, legacyRolePaaSViewer, "schema3-member-grant")
+	binding := putLegacyIAMBinding(t, endpoint, primary.Credential, memberID, legacyRolePaaSViewer, "schema3-member-grant")
 	revokeLegacyIAMBinding(t, endpoint, primary.Credential, binding.ID, "schema3-member-revoke")
 	retired := loginIAM(t, endpoint, "admin", changedAdminPassword, "schema3-retired-login")
 	revokeIAMSession(t, endpoint, primary.Credential, retired.Session.ID, "schema3-retired-revoke")
@@ -156,8 +156,8 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
             THEN (SELECT installation_id FROM iam.bootstrap_receipts WHERE singleton) END,
         'revision',b.resource_version,'created',b.created_at,'updated',b.updated_at,'revoked',b.revoked_at)
         ORDER BY b.tenant_id,b.id)
-        FROM iam.role_bindings b JOIN iam.principals p ON (p.tenant_id,p.id)=(b.tenant_id,b.principal_id)`).Scan(&expectedAttachments); err != nil {
-		t.Fatal("read actual old executable permission history")
+		FROM iam.role_bindings b JOIN iam.principals p ON (p.tenant_id,p.id)=(b.tenant_id,b.principal_id)`).Scan(&expectedAttachments); err != nil {
+		t.Fatalf("read actual old executable permission history: %v", err)
 	}
 	old.stop()
 	assertIAMMigrationFailureAtomic(t, ctx, admin, false)
@@ -339,7 +339,7 @@ DROP FUNCTION public.matrix_iam_cutover_fault(); DROP SEQUENCE public.matrix_iam
 		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
             'readinessVersion',(SELECT schema_version FROM iam.readiness()),
             'receipt',(SELECT jsonb_agg(to_jsonb(r) ORDER BY organization_id) FROM iam.bootstrap_receipts r),
-            'organizations',(SELECT jsonb_agg(to_jsonb(o) ORDER BY id) FROM iam.accounts o),
+            'organizations',(SELECT jsonb_agg(to_jsonb(o) ORDER BY id) FROM iam.organizations o),
             'principals',(SELECT jsonb_agg(to_jsonb(p) ORDER BY tenant_id,id) FROM iam.principals p),
             'bindings',(SELECT jsonb_agg(to_jsonb(b) ORDER BY tenant_id,id) FROM iam.role_bindings b),
             'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.user_credentials c),
