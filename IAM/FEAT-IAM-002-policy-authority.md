@@ -71,4 +71,14 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 当前旧恢复事务按 platform binding → organization → principal → credential 加锁，旧 revoke 也先锁实际 binding。目标的新锁序必须在 grant/revoke/reset/status/recover 全部路径中一起切换并做双向竞争门禁；不能只按本文件的目标顺序改一个函数。
 
+### 下一切换片的数据库边界
+
+`policies` 保存稳定身份、管理者类别、所属 Account（自定义策略必填，系统策略无用户所有者）、scope、默认版本及修订；`policy_versions` 保存不可变文档/语言版本/digest；`policy_attachments` 保存准确主体、权威范围、policy ID、原关联 ID/RV/时间与撤销状态。版本归属必须由复合外键和受限读取验证，不能以任意 version ID 拼接另一 Account 的策略。系统策略可复用内容不等于附件可跨 Account 生效。
+
+种子文档使用现有 Go 策略编码拥有者生成，SQL 不复制第二套 Action 权限集合或摘要编码。第一次迁移显式确定每种旧绑定对应版本；后续发布新版本不因重放种子而切换已有默认版本。历史附件/决定引用的版本不能下架后物理删除；当前有效来源读取不能返回撤销附件或多个冲突默认版本。
+
+已检查当前 `migrations.Source()` 直接串接多个各自 BEGIN/COMMIT 的 SQL 文件，现有执行器不自动把它们包成一个事务。新切换不能沿用该形状却宣称“原子迁移”：IAM owner 要将本次权威结构/数据映射/函数替换/readiness 更新纳入同一实际事务，并以中途失败注入证明无部分切换。等值重放不能重建可写旧 RoleBinding 权威或导入迁移后才出现的旧写入；旧 executable/readiness 需失败关闭。不要修改共享 migration executor 来掩盖服务自己的事务边界。
+
+原 `local_credential_recoveries.expected_state` 保存了精确 `platformBindingId` 与版本，但没有指向旧 role_bindings 的外键；这是已发布完成证据，不是可删除字段。新附件继承原 ID/RV，当前恢复检查查询附件，历史 receipt 仍按原 bytes 独立返回，不重签已完成意图。SQL 保留数据资格不等于跨完整 release profile 的安装准入。
+
 删除的是旧在线 RoleBinding 权限权威，不是不可变历史词汇。旧 Audit action/target、authorizations 和 receipt 的严格读取由原历史契约继续验证，不重编码、不新增授予能力。活跃请求不得调用已退役的 role-management 动作；历史校验不能作为第二条当前授权入口。具体 catalogue/record schema 的区分须由 API 与 SQL 同一候选实现，不能以放宽 unknown action 校验兼容旧记录。
