@@ -1,6 +1,6 @@
 # FEAT-006: Platform IAM and Audit authorities
 
-- Status: Accepted foundation; minimal multi-tenant slice accepted on `feat/iam-xxx`
+- Status: Accepted foundation; minimal multi-tenant slice accepted on `feat/iam-xxx`; self-developed account/policy/role refactor architecture analyzed, implementation not started
 - Target release: Private Application PaaS v0.1 multi-tenant extension
 - Target design date: 2026-08-25
 - IAM API contract: `iam.matrix.xiak.com/v1`
@@ -8,6 +8,7 @@
 - Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
 - Multi-tenant extension: accounts, primary/platform credential protection, historical producer proof, tenant lifecycle, original-primary recovery and password-session policy pass backend, signed lifecycle and installed-browser gates; keyboard-only usability verification is deferred by the user in FEAT-007
 - Follow-up: original installation-primary local credential recovery passes the IAM/Audit backend gates; signed installation/CLI integration remains separate and unaccepted, without reopening the accepted multi-tenant evidence
+- IAM refactor source baseline: fixed product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, independently checked against the public access-management documentation on 2026-09-11
 
 ## Outcome
 
@@ -23,6 +24,139 @@ This is the smallest real authority slice required by
 the two authorities in one vertical FEAT so their cross-service proof is owned
 once, while their code, schemas, credentials, processes, and source-of-truth
 boundaries remain separate. The target is fixed before donor inspection.
+
+## Self-developed account and policy architecture
+
+The accepted fixed-role implementation remains the current authority until a
+replacement slice passes its migration, security, process and signed-release
+gates. The target below is the architecture for that replacement; recording it
+does not claim that policies, groups, assumable roles or STS already exist.
+
+The user-facing product model is owned by the Markdown documentation under
+[`doc/access-management`](../../doc/access-management/README.md). Public cloud
+documentation is used to identify product concepts and externally observable
+authorization semantics, not to infer a provider's undisclosed deployment
+topology. Matrix owns its service boundaries, contracts, persistence,
+consistency and failure behavior.
+
+### Account, root identity and principals
+
+| Target object | Matrix meaning and invariant |
+| --- | --- |
+| Tenant account | The existing `Organization` is the tenant account. Its immutable `Organization.ID` remains the exact `TenantID` and the ownership namespace for applications, databases, quotas, Operations and tenant Audit. No one-to-one `Account` wrapper or second tenant aggregate is introduced. |
+| Root identity | Exactly one non-transferable ownership identity is anchored by the existing `primary_principal_id`. It is not an ordinary member, cannot join groups, cannot assume daily membership semantics and cannot receive tenant policy attachments. It retains final authority inside its own tenant for account security and administrator recovery, but never receives `PLATFORM_OPERATOR` or installation authority. Migration must preserve its stable ID, login and credential lineage atomically. |
+| User | A tenant-local, independently credentialed subaccount. Users receive permissions through managed-policy attachments, group membership or role assumption. A tenant administrator is an ordinary user with a revocable system-managed administrator policy, not the root identity. |
+| Service principal | A non-human workload identity with a distinct credential lifecycle. It cannot use a user password or be silently converted into a user, root identity or platform operator. Long-term service credentials remain a compatibility mechanism; workload roles and short-term credentials are the target. |
+| Group | A non-authenticating collection of users used only for bulk policy attachment. A group owns no tenant resources and cannot be used as a session subject. |
+| Role | An assumable virtual identity with a trust policy and attached permission policies. A role has no password or permanent access key. Its trust relation answers who may assume it; its permission policies answer what a resulting role session may do. |
+| Session | A bounded authentication result. User sessions retain credential generation; role sessions additionally retain the role, direct assumer, original principal, trust revision, optional session restriction and absolute expiry. |
+
+The root identity and an administrator are deliberately different. The root
+identity is the account's non-transferable ownership and recovery authority;
+an administrator is a replaceable subaccount permission set used for daily
+work. Root authority is confined to the root's tenant and is still subject to
+tenant suspension, authentication strength and protected-operation rules. It
+is not a route around installation/platform separation.
+
+### Policies and product vocabulary
+
+`ManagedPolicy` is a stable tenant-owned or platform-owned container.
+`PolicyVersion` is immutable and one version is selected as the effective
+version. Each statement contains an `allow` or `deny` effect, registered
+actions, registered resources and optional typed conditions. System-managed
+policies replace the current built-in role names as reusable permission
+bundles; customer-managed policies are a later vertical slice, not a second
+evaluator.
+
+Policies attach to users, groups and roles. A permission boundary can attach
+to a user or role but only limits candidate permission; it never creates an
+allow. Trust policies attach only to roles. Session restrictions attach only
+to a role session and can only narrow that role's permission. Resource policies
+and organization guardrails fit the same statement model but remain deferred
+until a consuming resource owner and acceptance path exist.
+
+Every product owns a versioned `AuthorizationProfile` that declares its stable
+product ID, actions, resource kinds and ownership rules, supported conditions,
+authorization granularity and list/batch semantics. IAM owns the schema and
+policy evaluator; the product owns the truth of its resources and resolves the
+actual action, resource IDs, tenant ownership and product attributes before
+asking IAM. A client-supplied tenant, subject, resource owner, role, tag or
+condition value is never authoritative merely because it is present in a
+request.
+
+### Authorization execution
+
+For an ordinary subject, applicable identity permissions are the union of
+direct, group and current-role policy allows. A request is allowed only when a
+matching allow exists, no matching explicit deny exists, and every applicable
+permission boundary or session restriction also permits it. Unknown products,
+actions, resource kinds, condition keys, profile revisions or authority state
+fail closed. Root requests use a separate closed tenant-owner capability
+catalog rather than a wildcard policy or platform-role binding.
+
+The execution order is:
+
+1. Authenticate the user's, service principal's or short-term role-session
+   credential and derive its current tenant and original identity.
+2. Authenticate the calling product and load the exact compatible
+   `AuthorizationProfile` revision.
+3. Let the product resolve the real action, resources, ownership and trusted
+   product attributes; IAM supplies identity and session attributes.
+4. Evaluate all applicable immutable policy versions with default deny and
+   explicit-deny precedence.
+5. Return an immutable decision binding subject, original subject, action,
+   resources, condition digest, policy versions and product-profile revision.
+6. Let the product enforce the decision before its effect and correlate the
+   decision with its transaction/outbox and immutable Audit fact.
+
+List APIs must declare whole-list authorization, server-side resource
+filtering, or a non-enumerating summary. Batch APIs must return per-resource
+decisions or fail the atomic batch when any resource is denied. UI visibility
+is only a projection of these server decisions and is never enforcement.
+
+### Replacement map
+
+| Current slice | Decision | Target |
+| --- | --- | --- |
+| `Organization.ID == TenantID`, tenant suspension and tenant-owned resources | `REUSE` | Tenant account ownership boundary remains unchanged. |
+| `tenant_accounts.primary_principal_id` and protected primary login | `ADAPT` | Materialize explicit root-identity semantics without changing the stable owner, credential lineage or login realm. |
+| `USER` and `SERVICE_ACCOUNT` principals, credential generation and fail-closed session reload | `ADAPT` | Keep long-lived identity separation; add explicit role-session/original-principal context later. |
+| `BuiltinRole` and `RoleBinding` | `REPLACE` | Migrate each built-in role to a system-managed immutable policy and each binding to a policy attachment in one profile-bound transition. The old binding model must not survive as a second authority. |
+| `authority.RoleAllows` | `REPLACE` | One deterministic policy evaluator consumes registered product vocabulary and immutable policy versions. There is no local fallback or dual evaluator. |
+| `ServiceCanRequest` and the code-owned global action list | `ADAPT` | Preserve caller-purpose confinement, expressed by the product's registered profile rather than string-prefix inference. |
+| `POST /v1/authorize` and `AuthorizationDecision` | `ADAPT` | Continue deriving subject and tenant from current credentials; bind decisions to product/profile, resource set, original principal, policy versions and condition digest. |
+| tenant/installation Audit chains, event-bound producer proof and local platform-credential recovery | `REUSE` | They remain evidence and recovery boundaries. Audit is never queried as an online permission source, and tenant root recovery never grants installation authority. |
+
+### Independently accepted replacement slices
+
+1. **System-policy parity.** Register the existing IAM, PaaS, Audit and
+   installation action/resource vocabulary; seed immutable system-managed
+   policies corresponding to the six current built-in roles; migrate existing
+   role bindings to policy attachments; and replace `RoleAllows` without
+   changing any currently accepted allow/deny result. This slice exposes no
+   customer policy editor, group, assumable role or STS endpoint.
+2. **Tenant root separation.** Reclassify the existing primary identity as the
+   tenant root while preserving ID, login, password generation, sessions and
+   recovery evidence. Make tenant administrators ordinary policy-authorized
+   users. Prove that root never gains platform authority and that a revoked
+   administrator cannot recover itself.
+3. **Groups and managed-policy administration.** Add user membership and
+   policy attachment with tenant-confined, concurrent, immediately revocable
+   behavior. Start with system-managed policies; direct and group attachment
+   must use the same evaluator.
+4. **Customer policy versions.** Add immutable customer-managed versions,
+   default-version switching, explicit deny, resource matching, a small typed
+   condition catalog and permission boundaries. Each supported product action
+   must declare its actual resource/list semantics before it can be referenced.
+5. **Roles and short-term sessions.** Add trust policies, `AssumeRole`, bounded
+   role sessions and original-principal Audit linkage. Service/resource roles
+   are added only with a real product consumer and `PassRole`-equivalent
+   protection.
+
+SAML/OIDC SSO, cross-account roles, resource policies/ACLs, organization trees,
+arbitrary ABAC keys, approval workflows and public-cloud-scale regional policy
+replication are intentionally outside these first slices. Their extension
+points are retained, but none is claimed by the initial refactor.
 
 ## Ownership and non-ownership
 

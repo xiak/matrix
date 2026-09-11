@@ -1,8 +1,9 @@
 # FEAT-006 adoption review: Platform IAM and Audit authorities
 
-- Status: Complete
+- Status: Complete for the accepted foundation and the 2026-09-11 account/policy/role refactor review
 - Target: [`FEAT-006 Platform IAM and Audit authorities`](../features/FEAT-006-platform-authorities.md)
 - Review date: 2026-08-25
+- Refactor review date: 2026-09-11
 - Direct donor dependency allowed: No
 
 ## Fixed baselines
@@ -15,6 +16,7 @@
 | Matrix platform-authority baseline | `9fd45b03ea398828fa3e74bf99961d2348c68299` | Existing target implementation; preserve its accepted installation/tenant authority separation. |
 | Matrix Phase 2 tenant/account slice | `6a0f417743948a5303d3a3342cb1e8902c9d17f2` | Same-repository fixed functional patch; selective adaptation only, excluding its task checkpoint and other branch state. |
 | Matrix installation Audit slice | `6401e9602d2a5313cdc31f38363b86f404505894` | Confirmed fixed public contract and storage patch; selective adaptation only, preserving this branch's accounts and FEAT evidence. |
+| Access-management product reference | `1ad6884ff1f844429b477d5578a039ec809211d7` | Same-repository Markdown-only fixed source synthesized from the public Tencent Cloud CAM navigation on 2026-09-10; use for product vocabulary and source traceability, never as executable evidence or a runtime dependency. |
 
 The independent authority target, closed Phase 1 roles and actions, bootstrap
 contract, opaque credentials, Audit event union, indefinite retention, and
@@ -114,9 +116,12 @@ or add any legacy build/runtime dependency.
    it does not select the tenant of an authenticated operation. Reject
    tenant/subject headers, post-login organization selectors, caller-supplied permission
    subjects, ABAC maps, and all failure-time local fallback.
-3. Use fixed code-owned roles/actions, opaque hashed sessions and service
-   credentials, database time, exact bootstrap replay, and transactionally
-   coupled IAM Audit outbox facts.
+3. The accepted foundation uses fixed code-owned roles/actions, opaque hashed
+   sessions and service credentials, database time, exact bootstrap replay,
+   and transactionally coupled IAM Audit outbox facts. The refactor reviewed
+   below replaces only the role/action authorization representation through
+   independently accepted, profile-bound slices; it does not weaken the
+   credential, bootstrap or outbox invariants.
 4. Admit a closed sanitized Audit event union authenticated by service
    identity derived by IAM from the producer's own current credential; do not
    accept a source selector or shared producer credential. Canonicalize once,
@@ -144,3 +149,47 @@ Its UUIDv7 value-object closure, social identity models, and absent qualified
 password login do not implement Matrix account aliases, tenant onboarding, or
 subaccount management. Those workflows extend the existing target IAM owner;
 no additional donor implementation or dependency is adopted.
+
+## Public CAM architecture comparison
+
+The fixed product reference is a supplier-neutral synthesis. The following
+decisions were independently checked against Tencent Cloud's public CAM
+documentation on 2026-09-11. These sources describe product objects and
+observable authorization behavior; they do not disclose or constrain Matrix's
+internal process topology.
+
+| Publicly documented slice | Decision | Matrix rationale |
+| --- | --- | --- |
+| A main account owns its resources while users belong to one account; routine work uses separately authorized subusers or roles | `ADAPT` | Keep `Organization.ID == TenantID`, qualified tenant-local login and independent user credentials. Model the existing primary as a non-transferable tenant root identity, not a child tenant or a platform operator. The root and a revocable administrator user are different authorities. Sources: [CAM overview](https://cloud.tencent.com/document/product/598/10583), [user types](https://cloud.tencent.com/document/product/598/13665), [main account tasks](https://cloud.tencent.com/document/product/598/41656). |
+| Users can inherit policies through groups for bulk authorization | `ADAPT` | Add tenant-confined user membership and group policy attachments after system-policy parity. Groups cannot authenticate, own resources or contain service principals. Source: [user groups](https://cloud.tencent.com/document/product/598/14985). |
+| Identity policies, resource policies and ACLs use action/resource semantics; policy statements support effect, action, resource and typed conditions | `ADAPT` for the common policy core; `REFERENCE` for deferred resource policies/ACLs | Replace hard-coded role checks with one compiled policy evaluator. Start with system-managed identity policies and current resources; add customer versions and a bounded condition catalog in a later slice. Do not copy QCS/UIN identifiers or COS-specific ACL behavior. Sources: [policy overview](https://cloud.tencent.com/document/product/598/38503), [policy syntax](https://cloud.tencent.com/document/product/598/10604). |
+| Requests default to deny; a matching explicit deny takes precedence over matching allows | `ADAPT` | This becomes the single evaluator invariant. Unknown vocabulary, revisions and authority failures remain deny. Source: [evaluation logic](https://cloud.tencent.com/document/product/598/10605). |
+| Custom policy edits create versions and a selected default version controls effective permission | `ADAPT` | Use immutable policy versions, content digests and an atomic effective-version pointer. Tencent's exact five-version quota is `REFERENCE`, not a Matrix invariant. Source: [policy version control](https://cloud.tencent.com/document/product/598/37301). |
+| A user/role permission boundary limits the intersection of otherwise granted permissions and grants nothing by itself | `ADAPT` in the customer-policy slice | Preserve the maximum-permission invariant and explicit-deny precedence. Do not add a boundary API before the common evaluator and a real delegated-administration gate exist. Source: [permission boundaries](https://cloud.tencent.com/document/product/598/48770). |
+| A role is a virtual identity with a separate trust policy and permission policies, no persistent password/access key, and STS issues bounded temporary credentials | `ADAPT` in a later vertical slice | Introduce `Role` and `RoleSession` only after policies exist. Require both caller permission and target trust, preserve the original principal, and keep long-lived user/service credentials distinct. Sources: [role concepts](https://cloud.tencent.com/document/product/598/19421), [AssumeRole](https://cloud.tencent.com/document/product/1312/48197). |
+| Role operations retain the assumer/session identity in operation audit | `ADAPT` | Extend the existing immutable decision and Audit correlation with direct and original principals; Audit remains evidence, never an online authorization source. Source: [role audit](https://cloud.tencent.com/document/product/598/115890). |
+| Each product documents whether it supports service-, action- or resource-level authorization and which resources each API accepts | `ADAPT` | Matrix products publish a versioned `AuthorizationProfile` used by both static analysis and runtime validation. This machine-readable signed profile is a Matrix design, not a claim about Tencent's internal implementation. Sources: [supported products](https://cloud.tencent.com/document/product/598/67350), [product API example](https://cloud.tencent.com/document/product/598/70005). |
+| SAML/OIDC user and role SSO, cross-account roles, ABAC/tag authorization and regionally replicated policy state | `REFERENCE` and defer | Retain extension boundaries, but do not put IdP, cross-account trust, arbitrary tag conditions or regional replication into the first private-deployment slices. Sources: [SSO overview](https://cloud.tencent.com/document/product/598/96014), [ABAC overview](https://cloud.tencent.com/document/product/598/74876), [product consistency](https://cloud.tencent.com/document/product/598/10586). |
+| Main-account keys, provider-specific user categories, account numbers, resource strings, console routes, quotas and API names | `REJECT` as Matrix contracts | Preserve the security lessons—secrets returned once, disable/rotate/delete lifecycle and least privilege—but do not clone Tencent identifiers, product-specific exceptions or UI wording. Source: [access-key lifecycle](https://cloud.tencent.com/document/product/598/40488). |
+
+## Refactor decisions against the current Matrix implementation
+
+| Current owner at `4c9cf650530be04e401bb6a76ce3a4946b8c6251` | Decision | Replacement boundary |
+| --- | --- | --- |
+| `Organization`, tenant lifecycle and resource ownership | `REUSE` | The organization remains the tenant account; no parallel `Account` aggregate or service is added. |
+| `tenant_accounts.primary_principal_id`, primary login and original-primary recovery | `ADAPT` | Preserve the stable identity and credential lineage while making root ownership explicit and distinct from ordinary administrator permissions. Tenant root can never imply installation/platform authority. |
+| `Principal` types `USER` and `SERVICE_ACCOUNT`, credential generation and current-state session checks | `ADAPT` | Keep long-lived human/workload separation and fail-closed reload. Add role-session/original-principal context only with the STS slice. |
+| `BuiltinRole`, `RoleBinding` and role-management endpoints | `ADAPT` for data migration; `REJECT` as the final authorization model | Seed equivalent system-managed policies and migrate each binding to a policy attachment in one release-profile transaction. Do not preserve the old table/API as a second authority. |
+| `authority.RoleAllows` | `REJECT` after parity replacement | One policy evaluator must reproduce the complete old role/action matrix before the switch, then own system and customer policies alike. |
+| `ServiceCanRequest` and the IAM-global action enum | `ADAPT` | Preserve authenticated producer confinement but move product action/resource ownership into registered product profiles; do not infer ownership only from string prefixes. |
+| credential-derived `POST /v1/authorize` | `ADAPT` | Keep caller and subject authentication; extend the request/decision with exact product profile, resource set, policy versions, original identity and condition digest. Caller-supplied tenant/subject remains forbidden. |
+| immutable tenant/installation Audit, event-bound producer proof and local platform recovery | `REUSE` | Preserve canonical bytes, chain identity, seven-column claim and closed recovery facts. Policy refactoring cannot reclassify old events, revive credentials or grant platform roles. |
+| The paused global `allowedActions`/action-availability proposal | `REJECT` as an authorization contract; `REFERENCE` for a future UI hint | Resource- and condition-sensitive permission cannot be represented as a globally authoritative action list. A later UI capability endpoint must be context-bound, revision-bound and conservative; the server still authorizes every request. |
+
+The first executable slice is therefore system-policy parity, not a full cloud
+IAM rollout: register only today's product vocabulary, create system-managed
+policy versions equivalent to the six built-in roles, migrate existing
+bindings atomically, replace `RoleAllows`, and prove identical decisions plus
+retained-data upgrade and rollback. Root separation, groups, customer policy
+versions, permission boundaries, roles/STS and SSO remain subsequent slices
+owned by FEAT-006.
