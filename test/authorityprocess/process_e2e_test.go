@@ -546,21 +546,29 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	assertIAMEventsStoredOnce(t, ctx, admin)
 	paasProcess := start(binaries.paas, paasEnvironment)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
-	profile := installationrelease.CurrentDatabaseProfile().Authorities
+	// This source tree intentionally leads the last accepted release profile.
+	// Exercise the exact source services together without weakening install
+	// admission: the workflow separately proves the published installer rejects
+	// this unmatched database shape before effects.
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 6, Audit: 4, PaaS: 1}
+	publishedProfile := installationrelease.CurrentDatabaseProfile()
+	if publishedProfile.Authorities == sourceProfile {
+		t.Fatal("unreleased authority source shape was published without a final profile gate")
+	}
 	for _, authority := range []struct {
 		name, endpoint string
 		version        uint64
 	}{
-		{"IAM", iamEndpoint, profile.IAM},
-		{"Audit", auditEndpoint, profile.Audit},
-		{"PaaS", paasEndpoint, profile.PaaS},
+		{"IAM", iamEndpoint, sourceProfile.IAM},
+		{"Audit", auditEndpoint, sourceProfile.Audit},
+		{"PaaS", paasEndpoint, sourceProfile.PaaS},
 	} {
 		response := performJSON(t, http.MethodGet, authority.endpoint+"/ready", "", nil)
 		var readiness struct {
 			SchemaVersion uint64 `json:"schemaVersion"`
 		}
 		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &readiness) != nil || readiness.SchemaVersion != authority.version {
-			t.Fatalf("%s runtime schema=%d does not match release profile=%d (status=%d)", authority.name, readiness.SchemaVersion, authority.version, response.Status)
+			t.Fatalf("%s runtime schema=%d does not match source shape=%d (status=%d)", authority.name, readiness.SchemaVersion, authority.version, response.Status)
 		}
 	}
 	paasDispatcher := start(

@@ -41,9 +41,9 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 `PolicyList` 返回权威 accountId/scope（平台另有封存 installationId）和稳定 ID 排序的完整元数据列表，包含退休记录但不返回策略内容或授权许可。当前单次读取预算为 256 项，SQL 取 257 项检测超限；溢出整体失败，不提供伪造的完整目录或静默截断。大目录搜索/分页在 005 的策略管理读取面接入真实游标后扩充，当前不声称此目录满足无限容量。UI 仅允许选择 ACTIVE 条目，提交其真实 policyId/resourceVersion；未读取到目录时不硬编码版本或回退到旧角色菜单。新目录动作只显式加入对应系统管理策略的新不可变内容，种子重放不替换已有默认指针。
 
-目录 API、用例、SQL 和生成 OpenAPI 已接通，仍属于未提交的整体替换候选。现有 `TestIAMPolicyAuthorityStoragePostgres` 在新建、1 CPU/768 MiB 的 PostgreSQL 18.4 数据库通过完整 race（32.31s）；目录子项 3.28s，补齐撤权及 outbox 断言后在另一新库专项复验 3.64s。真实受限 API 登录证明双租户同名自定义策略隔离、普通服务凭据不能作为 USER 读取、平台/租户目录分权、只读策略不能创建关联、退休策略仍返回当前元数据且不再授予读取权限、平台关联撤销后的下一请求拒绝。256 项完整返回，257 项整体 503，决定及 outbox 均无部分新增，另一账号不受该容量影响；旧决定不能作为下一事务或另一 scope 的读取许可，worker/本地恢复角色没有执行权限。HTTP 拒绝 query/body selector，严格输出 schema 排除内容、主体集合及 permit；账号 header 不改变权威结果。
+目录 API、用例、SQL 和生成 OpenAPI 已接通，并固定在可回滚候选 `121e68373951a9261755661329a8e4e41bb6206c`。现有 `TestIAMPolicyAuthorityStoragePostgres` 在新建、1 CPU/768 MiB 的 PostgreSQL 18.4 数据库通过完整 race（32.31s）；目录子项 3.28s，补齐撤权及 outbox 断言后在另一新库专项复验 3.64s。真实受限 API 登录证明双租户同名自定义策略隔离、普通服务凭据不能作为 USER 读取、平台/租户目录分权、只读策略不能创建关联、退休策略仍返回当前元数据且不再授予读取权限、平台关联撤销后的下一请求拒绝。256 项完整返回，257 项整体 503，决定及 outbox 均无部分新增，另一账号不受该容量影响；旧决定不能作为下一事务或另一 scope 的读取许可，worker/本地恢复角色没有执行权限。HTTP 拒绝 query/body selector，严格输出 schema 排除内容、主体集合及 permit；账号 header 不改变权威结果。
 
-目录增量后的 API/IAM/Audit owning packages 与架构默认无缓存 race、对应 vet、生成一致性及 diff 检查通过。真实固定 `5721b7b` executable 的保留数据升级/本地恢复/重启复验 20.37s，原权限与撤销历史不复活；这不证明跨 release-profile 安装准入。上述默认测试跳过的数据库用例不计作实跑。本轮专属 PG 容器、网络和一次性数据卷已核对归属后清理；其他 Phase、远端及 UX 的 MOCK 实例未改变。控制台源码已消费新目录和精确策略修订；真实浏览器、独立多服务和签名完整 Profile 门禁仍待完成。
+目录增量后的 API/IAM/Audit owning packages 与架构默认无缓存 race、对应 vet、生成一致性及 diff 检查通过。真实固定 `5721b7b` executable 的保留数据升级/本地恢复/重启复验 20.37s，原权限与撤销历史不复活；这不证明跨 release-profile 安装准入。上述默认测试跳过的数据库用例不计作实跑。本轮专属 PG 容器、网络和一次性数据卷已核对归属后清理；其他 Phase、远端及 UX 的 MOCK 实例未改变。控制台源码已消费新目录和精确策略修订；当前源码的独立多服务门禁已通过，真实浏览器和签名完整 Profile 门禁仍待完成。
 
 直接 USER 关联管理使用 `POST /v1/policy-attachments` 与 `POST /v1/policy-attachments/{id}:revoke`；不保留旧 RoleBinding 路由。创建关联 ID 由账号、操作者及 requestId 的域分离摘要稳定生成，策略 ID/目标/预期策略版本进入输入摘要。仅相同未撤销关联和原输入可重放返回；改变输入、已撤销关联或另一现存有效关联冲突，不因重试分配新 ID 而复权。撤销检查预期关联版本；完成后仅原版本加一、相同输入和操作者的事实可精确重放，其余陈旧版本冲突。两种写入都在当前授权事务内验证目标 USER 与策略 scope、封存 installation、策略/关联修订和原 primary 保护。
 
@@ -89,9 +89,9 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 策略语言、规范编码/摘要、不可变内容版本与唯一 deny-first 求值器已实现。当前候选的实际授权决定读取持久化策略及当前默认版本，已删除 `RoleAllows` 和旧绑定名到内容的运行时映射；在线管理 API、成员目录、进程测试客户端和控制台已切换到策略关联，旧公开请求 DTO 已删除。真实组合和发布消费者仍须门禁确认，不能仅凭源码切换声称整个代码库已完成替换。求值器不限制策略数量为六种，也不按策略名称判断权限。系统策略列出显式 Action 集合，新增目录动作不会自动加入。
 
-当前 policies/versions/attachments 持久化、旧绑定迁移、实际读取求值和关联/内容版本证据落库已有未提交候选；控制台源码、严格 repository adapter、85 项前端测试及 59 个内嵌文件已完成替换并通过 2-worker 双次构建一致性检查。真实浏览器、完整产品 Profile 证据及组合回归仍未完成，因此本 FEAT 未 Accepted。候选服务与 SQL/readiness 为 IAM6/Audit4，发布 profile 尚未切换，不能将该混合中间态发布或启动作交付版本；最后已验证发布边界仍为原 4/3/1+r4，没有声明最终组合或签名发布可用。
+当前 policies/versions/attachments 持久化、旧绑定迁移、实际读取求值和关联/内容版本证据落库已有固定候选；控制台源码、严格 repository adapter、85 项前端测试及 59 个内嵌文件已完成替换并通过 2-worker 双次构建一致性检查。真实浏览器、完整产品 Profile 证据及组合回归仍未完成，因此本 FEAT 未 Accepted。候选服务与 SQL/readiness 为 IAM6/Audit4，发布 profile 尚未切换，不能将该混合中间态发布或启动作交付版本；最后已验证发布边界仍为原 4/3/1+r4，没有声明最终组合或签名发布可用。
 
-既有完整 `TestIAMHTTPPostgresVerticalSlice` 已迁移到新关联管理和目录投影，在新的受限 PostgreSQL 18 数据库通过 race（88.28s）。成员创建不附带权限，测试必须另发显式策略关联命令；旧 initialRole 仍严格拒绝。实际覆盖两个租户同名用户/别名竞争、100 条目录分页、跨账号主体/关联 ID 拒绝、原 primary 保护及恢复、租户暂停/恢复、撤权后下一请求拒绝、密码/会话策略与并发、平台授予/凭据保护、IAM/PaaS/Audit 历史 producer 证明及物理 outbox owner/封存链分离。新 IAM 关联事实经过真实 HTTP producer 校验，摘要替换拒绝。安装 verifier 的服务关联不能通过 USER 管理路由撤销；后续存储撤销 fixture 只证明当前服务鉴权拒绝，不声明新的服务身份在线管理 API 已交付。独立服务进程、安装测试客户端和 UI 静态消费者已适配新接口，但完整组合尚未实跑；此结果不包含签名发布或真实浏览器。
+既有完整 `TestIAMHTTPPostgresVerticalSlice` 已迁移到新关联管理和目录投影，在新的受限 PostgreSQL 18 数据库通过 race（88.28s）。成员创建不附带权限，测试必须另发显式策略关联命令；旧 initialRole 仍严格拒绝。实际覆盖两个租户同名用户/别名竞争、100 条目录分页、跨账号主体/关联 ID 拒绝、原 primary 保护及恢复、租户暂停/恢复、撤权后下一请求拒绝、密码/会话策略与并发、平台授予/凭据保护、IAM/PaaS/Audit 历史 producer 证明及物理 outbox owner/封存链分离。新 IAM 关联事实经过真实 HTTP producer 校验，摘要替换拒绝。安装 verifier 的服务关联不能通过 USER 管理路由撤销；后续存储撤销 fixture 只证明当前服务鉴权拒绝，不声明新的服务身份在线管理 API 已交付。两个 IAM 实例、Audit、PaaS 与双 dispatcher 在当前源码 6/4/1 形状下的独立进程门禁通过（35.03s）；它核对源码服务，不改变最后已发布 4/3/1+r4。工作流另以真实旧 installer 在效果前拒绝不匹配数据库形状；因此该结果不包含签名发布或真实浏览器。
 
 现有 IAM integration owner 的 `TestIAMPolicyAuthorityStoragePostgres` 在专属 PostgreSQL 18.4、1 CPU/768 MiB、独立数据库和动态回环端口通过 race（末次 2.24s 用例时间）。它实际执行空库迁移、多次 Up、安装 bootstrap/等值重放、HTTP 登录/改密/当前身份和受限 API 登录下的 HTTP 鉴权，逐次核对实际持久化的关联/版本证据。验证不可变版本/决定、默认版本所属关系、默认切换后的 Deny 与重放保留、退休/撤销不复活、跨 Account 元数据/版本 RLS、伪造关联/决定证据及 runtime 角色拒绝直接读表。256 条当前关联仍能正常鉴权，第 257 条刻意放在最后且包含 Deny 时返回 503，不产生部分决定，不会截掉 Deny 后错误 Allow。测试中的管理状态变化由隔离数据库 fixture owner 构造，不证明新的在线策略 API 已实现；撤销前恢复可 Allow 的默认版本再验证拒绝，避免退休或 Deny 掩盖撤销缺陷。
 
@@ -139,7 +139,7 @@ Audit 既有 `TestPostgresAuthorityIntegration` 已适配新 session 关系投�
 
 既有 `TestIAMLocalCredentialRecoveryPostgres` 已替换旧角色调用/状态读取，真实受限恢复角色与 API 登录使用当前策略关联。原 `platformBindingId`/修订仍是已发布私有 expected/receipt 的字段，内容指向保留原 ID 的附件，不重命名或重签历史记录。新请求对已经有效的同策略关联返回冲突，不伪装成等值授予；恢复先完成时目标处于强制改密状态，新授予拒绝。负向 SQL 事实使用事务内撤销附件证明资格失效，不删除受保护历史。
 
-在专属 PG18、1 CPU/768 MiB 环境，两次新库整项 race 通过（19.59s、37.91s），涵盖实际恢复、严格能力/来源/目标及版本攻击、API/worker 越权拒绝、重复/不同意图并发、在线重置/租户恢复/授予/旧密码登录/改密/退出竞争。通过实际数据库等待观测控制恢复先和撤权先两种顺序；撤权先不得改变凭据，恢复先只执行一次凭据变更。bootstrap/迁移重放及原完成 receipt 重放不恢复撤权，也不覆盖后续密码。两个顺序之间仅通过真实强制改密和独立平台操作者的新显式关联重置前提，不复活旧附件。对应 integration vet 和 diff 检查通过；本轮独占 PG 容器、网络及卷已核对后删除。本门禁不证明跨 release profile 的安装升级许可，也不替代尚未实跑的完整多进程/真实浏览器门禁。
+在专属 PG18、1 CPU/768 MiB 环境，两次新库整项 race 通过（19.59s、37.91s），涵盖实际恢复、严格能力/来源/目标及版本攻击、API/worker 越权拒绝、重复/不同意图并发、在线重置/租户恢复/授予/旧密码登录/改密/退出竞争。通过实际数据库等待观测控制恢复先和撤权先两种顺序；撤权先不得改变凭据，恢复先只执行一次凭据变更。bootstrap/迁移重放及原完成 receipt 重放不恢复撤权，也不覆盖后续密码。两个顺序之间仅通过真实强制改密和独立平台操作者的新显式关联重置前提，不复活旧附件。对应 integration vet 和 diff 检查通过；本轮独占 PG 容器、网络及卷已核对后删除。本门禁不证明跨 release profile 的安装升级许可；真实浏览器与签名组合仍须独立验收。
 
 2026-09-11 同一 policy storage owner 在新的限额 PG18 库复用既有五组真实 HTTP 凭据竞争矩阵（change/reset/original-primary recovery/logout/old-password login），连同策略存储与拒绝门禁通过 race，整项 18.95s、竞争子项 13.60s。额外原生 fixture 系统策略采用不同于 PlatformOperator 的 ID，实际状态/重置 API 在其 ACTIVE、策略 RETIRED、USER DISABLED 三种情况下均拒绝且密码、generation、会话和成功事实无部分变化；撤销该附件后正常成员启用成功。锁序调整后的实际旧 5721 binary 保留数据升级/本地恢复/重启整项 race 复验 16.78s，IAM/Audit 双 schema 门禁复验 4.74s，相关 vet/diff 检查通过；本轮专属临时数据库容器、网络和卷已清理。此片不新增在线系统策略发布能力，不代表新的关联 HTTP API 或完整 HA 已验收。
 
