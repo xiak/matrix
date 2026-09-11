@@ -8,6 +8,7 @@
 - Pushed design baseline: `38f348e6b4e00fcd4961abebb91cacbb9e28442a`
 - Pushed verified action-catalog slice: `3b11eb9dbabd70211e665c00e4e665658b461bd1`
 - Pushed policy-core/replica-gate milestone: `273196d2442fd70b6824ec10fcd4ef8ba0f95a38`
+- Pushed atomic-migration/Audit-retry correction: `0f99ec98ef52bdb69017fd16dfe21f1c2cc55177`
 
 ## Resume route
 
@@ -51,11 +52,36 @@ Linux builds, focused race/fuzz, isolated PG18 IAM HTTP/local recovery and the
 independent-process/actual 5721 retained upgrade gates. The real process gate
 now exercises two IAM instances, cross-instance authority/session revocation,
 surviving-peer access and fail-closed database disconnection using separate
-restricted logins. Its exact CI run 34567733186 was still in progress at this
-checkpoint; do not infer success. The task's new temporary PG/network/volume
-were cleaned. IAM/000 and 011 own availability/capacity design and the remaining
+restricted logins. Its exact CI run 34567733186 failed authority-process:
+five immediate Audit serialization retries collided with an ongoing chain
+writer and returned 503. Go and node-process succeeded, not the whole candidate.
+IAM/000 and 011 own availability/capacity design and the remaining
 load-balancing, fairness, capacity and database-HA evidence gaps; two IAM
 processes sharing one database are not full HA acceptance.
+
+0f99ec9 replaces per-fragment IAM commits with one context-owned transaction
+including final verification. The actual 5721 retained-state gate injects both
+a late DDL failure and invalid RLS rejected by the final verifier; both roll
+back without changing retained authority or exposing the new recovery table.
+The DDL failure was observed red before the fix, then both cases passed
+(15.386s including normal upgrade/recovery/restart). This is schema3-to-4
+atomicity evidence, not the still-unimplemented IAM6 policy cutover.
+
+The same correction paces only known rolled-back Audit conflicts with bounded,
+cancellable exponential jitter. Default attempts remain five; no client retry
+was added, unknown commit outcomes and denials are not retried. Local full
+race/vet/module checks, stable generation and Linux builds pass. Isolated PG18
+dual-schema/old-chain, Audit HTTP and IAM HTTP/recovery gates pass (5.802s,
+3.100s, 91.862s). Retained upgrade plus independent process passes 57.432s;
+two more fresh-database process runs pass 46.505s and 51.722s. All task-owned
+temporary PG/container/network/volume resources were cleaned. The exact
+0f99ec9 CI run 34569666803 is confirmed live/in_progress; recheck this same run,
+do not infer acceptance or restart it merely because observation is slow.
+
+Next required implementation remains IAM/002 persisted policy versions,
+attachments, decision evidence and atomic replacement of old role authority
+across management API/UI and sealed recovery consumers. Keep the whole IAM
+goal active; neither this safety prerequisite nor the pure evaluator accepts it.
 
 ## Integration boundary
 
