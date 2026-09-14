@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
+	"github.com/xiak/matrix/api/contractjson"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
@@ -209,6 +210,7 @@ func (value *transaction) LookupSession(
 		sessionRevokedAt                                            *time.Time
 		verificationDigest                                          string
 		policies                                                    []byte
+		boundary                                                    []byte
 	)
 	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.lookup_session($1)", lookupDigest).Scan(
 		&organizationID,
@@ -233,6 +235,7 @@ func (value *transaction) LookupSession(
 		&sessionRevokedAt,
 		&verificationDigest,
 		&policies,
+		&boundary,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.SessionCredential{}, false, nil
@@ -289,6 +292,18 @@ func (value *transaction) LookupSession(
 	subject.Policies, err = decodeAttachedPolicies(policies)
 	if err != nil {
 		return identityaccess.SessionCredential{}, false, err
+	}
+	defer clear(boundary)
+	var resolved authority.ResolvedUserBoundary
+	if contractjson.DecodeObjectBytes(boundary, 2*iamv1.MaxPolicyBytes, &resolved) != nil {
+		return identityaccess.SessionCredential{}, false, identityaccess.ErrUnavailable
+	}
+	if resolved.Policy != nil {
+		resolved.Policy.CreatedAt, resolved.Policy.UpdatedAt = resolved.Policy.CreatedAt.UTC(), resolved.Policy.UpdatedAt.UTC()
+	}
+	subject.Boundary = &resolved
+	if authority.ValidateUserBoundary(subject.Boundary, subject.Organization.ID, subject.Principal.ID, subject.Principal.ResourceVersion) != nil {
+		return identityaccess.SessionCredential{}, false, identityaccess.ErrUnavailable
 	}
 	if iamv1.ValidateOrganization(subject.Organization) != nil ||
 		iamv1.ValidatePrincipal(subject.Principal) != nil ||
@@ -492,14 +507,23 @@ func (value *transaction) RecordAuthorization(
 		clear(event)
 		return identityaccess.ErrUnavailable
 	}
+	boundary, err := json.Marshal(mutation.BoundaryEvidence)
+	if err != nil {
+		clear(decision)
+		clear(event)
+		clear(evidence)
+		return identityaccess.ErrUnavailable
+	}
+	defer clear(boundary)
 	_, err = value.tx.Exec(
 		ctx,
-		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb)",
+		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb)",
 		string(mutation.AccountID),
 		string(mutation.PrincipalID),
 		decision,
 		event,
 		evidence,
+		boundary,
 	)
 	clear(decision)
 	clear(event)

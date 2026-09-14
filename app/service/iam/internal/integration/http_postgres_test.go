@@ -423,6 +423,8 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		})
 	}
 	runFlow("policy directories isolate metadata and permissions", provePolicyDirectories)
+	runFlow("user_permission_boundaries", proveUserPermissionBoundaries)
+	runFlow("user_boundary_policy_competition", proveUserBoundaryPolicyRaces)
 	runFlow("direct policy attachment management", proveDirectPolicyAttachments)
 	runFlow("group inheritance and terminal membership", proveGroupInheritance)
 	runFlow("customer policy publication and current authority", proveCustomerPolicyPublication)
@@ -462,6 +464,20 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	assertRejected("immutable-version-update", `UPDATE iam.policy_versions SET content_digest=content_digest`, "42501")
 	assertRejected("immutable-version-delete", `DELETE FROM iam.policy_versions`, "42501")
 	assertRejected("immutable-decision-evidence", `UPDATE iam.authorization_decisions SET policy_evidence='[]'::jsonb`, "42501")
+	assertRejected("immutable-boundary-evidence", `UPDATE iam.authorization_decisions SET boundary_evidence='{}'::jsonb`, "42501")
+	for _, attack := range []struct{ name, evidence string }{
+		{"boundary-evidence-missing", `NULL::jsonb`},
+		{"boundary-evidence-empty", `'{}'::jsonb`},
+		{"boundary-evidence-wrong-scope", `'{"state":"NOT_APPLICABLE"}'::jsonb`},
+		{"boundary-evidence-stale-user", `jsonb_set(boundary_evidence,'{userResourceVersion}','9007199254740991'::jsonb)`},
+	} {
+		assertRejected(attack.name, `SELECT iam.record_authorization($1,$2,
+			document||jsonb_build_object('id','forged-boundary-decision','decidedAt',
+			to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')),
+			'{}'::jsonb,policy_evidence,`+attack.evidence+`) FROM iam.authorization_decisions
+			WHERE principal_id=$2 AND action_name='paas.application.read' AND allowed ORDER BY decided_at,id LIMIT 1`,
+			"42501", document.Organization.ID, document.Administrator.ID)
+	}
 	for _, attack := range []struct{ name, evidence, code string }{
 		{"allowed-without-policy-evidence", `'[]'::jsonb`, "22023"},
 		{"decision-with-forged-version-digest", `jsonb_set(policy_evidence,'{0,version,contentDigest}',to_jsonb('sha256:'||repeat('0',64)))`, "42501"},
@@ -474,7 +490,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		assertRejected(attack.name, `SELECT iam.record_authorization($1,$2,
 			document||jsonb_build_object('id','forged-policy-decision','decidedAt',
 			to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')),
-			'{}'::jsonb,`+attack.evidence+`) FROM iam.authorization_decisions WHERE allowed ORDER BY decided_at,id LIMIT 1`,
+			'{}'::jsonb,`+attack.evidence+`,boundary_evidence) FROM iam.authorization_decisions WHERE allowed ORDER BY decided_at,id LIMIT 1`,
 			attack.code, document.Organization.ID, document.Administrator.ID)
 	}
 	assertRejected("immutable-version-truncate", `TRUNCATE iam.policy_versions`, "0A000") // Referenced defaults also prohibit truncation.
@@ -667,6 +683,534 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if identity.Code != http.StatusOK || json.Unmarshal(identity.Body.Bytes(), &service) != nil ||
 		service.Purpose != iamv1.ServiceInstallationVerifier || service.InstallationID != document.InstallationID {
 		t.Fatal("policy migration changed sealed verifier purpose or installation")
+	}
+}
+
+func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	call := func(method, path, bearer string, body any, want int, destination any) {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != want {
+			t.Fatalf("boundary %s %s status=%d want=%d body=%s", method, path, response.Code, want, response.Body.String())
+		}
+		if destination != nil && json.Unmarshal(response.Body.Bytes(), destination) != nil {
+			t.Fatal("invalid boundary HTTP response")
+		}
+	}
+	var member iamv1.User
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "boundary-member", "displayName": "Boundary member", "initialPassword": initialDeveloperPassword, "requestId": "boundary-member-create"}, http.StatusCreated, &member)
+	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
+	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+	path := "/v1/users/" + string(member.ID) + "/permission-boundary"
+	var view iamv1.UserPermissionBoundary
+	call(http.MethodGet, path, root, nil, http.StatusOK, &view)
+	if iamv1.ValidateUserPermissionBoundary(view) != nil || view.Policy != nil {
+		t.Fatal("initial user has an implicit boundary")
+	}
+	var policy iamv1.PolicyDetail
+	creation := iamv1.CreatePolicyRequest{DisplayName: "Boundary selected application", RequestID: "boundary-policy-create", Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "selected", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "application-boundary-allowed"}}}}}}
+	call(http.MethodPost, "/v1/policies", root, creation, http.StatusCreated, &policy)
+	set := iamv1.SetUserPermissionBoundaryRequest{PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion, ResourceVersion: view.ResourceVersion, RequestID: "boundary-set"}
+	call(http.MethodPut, path, root, set, http.StatusOK, &view)
+	var replay iamv1.UserPermissionBoundary
+	call(http.MethodPut, path, root, set, http.StatusOK, &replay)
+	if !bytes.Equal(mustIAMJSON(t, view), mustIAMJSON(t, replay)) {
+		t.Fatal("boundary replay changed its result")
+	}
+	authorize := func(id string, want bool) iamv1.AuthorizationDecision {
+		t.Helper()
+		request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: id}, RequestID: "boundary-read", CorrelationID: "boundary-read"}
+		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, bearer)
+		var result iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil || result.Allowed != want {
+			t.Fatalf("boundary authorization status=%d allowed=%v want=%v", response.Code, result.Allowed, want)
+		}
+		var encoded []byte
+		var evidence authority.UserBoundaryEvidence
+		if err := database.QueryRow(ctx, `SELECT boundary_evidence FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, member.AccountID, result.ID).Scan(&encoded); err != nil || json.Unmarshal(encoded, &evidence) != nil || evidence.State != "BOUND" || evidence.Version == nil || evidence.Version.PolicyID != policy.Policy.ID || evidence.Version.VersionID != policy.Policy.DefaultVersionID {
+			t.Fatal("actual boundary decision lost independent version proof")
+		}
+		return result
+	}
+	authorize("application-boundary-allowed", false)
+	// With no positive attachment to this Policy, only the boundary reference
+	// can prevent deletion. Do not let a later attachment mask this invariant.
+	call(http.MethodDelete, "/v1/policies/"+string(policy.Policy.ID), root, iamv1.DeletePolicyRequest{ResourceVersion: policy.Policy.ResourceVersion, RequestID: "boundary-only-policy-delete"}, http.StatusConflict, nil)
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: "boundary-developer-grant"}, http.StatusOK, nil)
+	authorize("application-boundary-allowed", true)
+	authorize("application-boundary-other", false)
+	var identity iamv1.CurrentIdentity
+	call(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusOK, &identity)
+	if iamv1.ValidateCurrentIdentity(identity) != nil || identity.PermissionBoundary.Policy == nil || identity.PermissionBoundary.Policy.PolicyID != policy.Policy.ID || len(identity.PolicySources) != 1 {
+		t.Fatal("current identity mixed boundary with positive grants")
+	}
+	var inheritedGroups []iamv1.Group
+	var inheritedMemberships []iamv1.GroupMembership
+	for index := range 2 {
+		var group iamv1.Group
+		var membership iamv1.GroupMembership
+		call(http.MethodPost, "/v1/groups", root, iamv1.CreateGroupRequest{Name: fmt.Sprintf("Boundary source %d", index), RequestID: fmt.Sprintf("boundary-group-%d", index)}, http.StatusCreated, &group)
+		call(http.MethodPost, "/v1/groups/"+string(group.ID)+"/memberships", root, iamv1.CreateGroupMembershipRequest{UserID: member.ID, RequestID: fmt.Sprintf("boundary-join-%d", index)}, http.StatusOK, &membership)
+		call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: fmt.Sprintf("boundary-group-grant-%d", index)}, http.StatusOK, nil)
+		inheritedGroups = append(inheritedGroups, group)
+		inheritedMemberships = append(inheritedMemberships, membership)
+	}
+	mixedDecision := authorize("application-boundary-allowed", true)
+	authorize("application-boundary-other", false)
+	var mixedEvidence []authority.PolicyAttachmentEvidence
+	var mixedRaw []byte
+	if err := database.QueryRow(ctx, `SELECT policy_evidence FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, member.AccountID, mixedDecision.ID).Scan(&mixedRaw); err != nil || json.Unmarshal(mixedRaw, &mixedEvidence) != nil {
+		t.Fatal("read mixed boundary sources")
+	}
+	for _, membership := range inheritedMemberships {
+		if !slices.ContainsFunc(mixedEvidence, func(e authority.PolicyAttachmentEvidence) bool {
+			return e.MembershipID == membership.ID && e.MembershipResourceVersion == membership.ResourceVersion
+		}) {
+			t.Fatal("boundary intersection lost a current group inheritance source")
+		}
+	}
+	// Ordinary group Deny defeats both an Allow boundary and every Allow source.
+	ordinaryDeny := creation.Document
+	ordinaryDeny.Statements = append([]iamv1.PolicyStatement(nil), creation.Document.Statements...)
+	ordinaryDeny.Statements[0].Effect = iamv1.PolicyDeny
+	var deniedPolicy iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Boundary ordinary group deny", Document: ordinaryDeny, RequestID: "boundary-ordinary-deny-policy"}, http.StatusCreated, &deniedPolicy)
+	var denyAttachment iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(inheritedGroups[0].ID)}, PolicyID: deniedPolicy.Policy.ID, PolicyResourceVersion: 1, RequestID: "boundary-ordinary-deny-grant"}, http.StatusOK, &denyAttachment)
+	authorize("application-boundary-allowed", false)
+	call(http.MethodPost, "/v1/policy-attachments/"+string(denyAttachment.ID)+":revoke", root, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: denyAttachment.ResourceVersion, RequestID: "boundary-ordinary-deny-revoke"}, http.StatusOK, nil)
+	authorize("application-boundary-allowed", true)
+	// Referencing one Policy on both sides does not collapse its two purposes.
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion, RequestID: "boundary-same-policy-grant"}, http.StatusOK, nil)
+	decision := authorize("application-boundary-allowed", true)
+	var attachmentEvidence []authority.PolicyAttachmentEvidence
+	var encodedEvidence []byte
+	if err := database.QueryRow(ctx, `SELECT policy_evidence FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, member.AccountID, decision.ID).Scan(&encodedEvidence); err != nil || json.Unmarshal(encodedEvidence, &attachmentEvidence) != nil {
+		t.Fatal("read boundary positive provenance")
+	}
+	if !slices.ContainsFunc(attachmentEvidence, func(e authority.PolicyAttachmentEvidence) bool { return e.Version.PolicyID == policy.Policy.ID }) {
+		t.Fatal("same Policy lost its independent positive attachment")
+	}
+	originalVersion := policy.Version.ID
+	deny := creation.Document
+	deny.Statements = append([]iamv1.PolicyStatement(nil), deny.Statements...)
+	deny.Statements[0].Effect = iamv1.PolicyDeny
+	var published iamv1.PolicyVersionDetail
+	policyPath := "/v1/policies/" + string(policy.Policy.ID)
+	call(http.MethodPost, policyPath+"/versions", root, iamv1.CreatePolicyVersionRequest{Document: deny, ResourceVersion: policy.Policy.ResourceVersion, RequestID: "boundary-publish-deny"}, http.StatusCreated, &published)
+	policy.Policy = published.Policy
+	authorize("application-boundary-allowed", true)
+	call(http.MethodPost, policyPath+":set-default-version", root, iamv1.SetDefaultPolicyVersionRequest{VersionID: published.Version.ID, ResourceVersion: policy.Policy.ResourceVersion, RequestID: "boundary-select-deny"}, http.StatusOK, &policy)
+	authorize("application-boundary-allowed", false)
+	call(http.MethodPost, policyPath+":set-default-version", root, iamv1.SetDefaultPolicyVersionRequest{VersionID: originalVersion, ResourceVersion: policy.Policy.ResourceVersion, RequestID: "boundary-select-original"}, http.StatusOK, &policy)
+	authorize("application-boundary-allowed", true)
+	call(http.MethodPut, path, root, set, http.StatusConflict, nil)
+	call(http.MethodDelete, "/v1/policies/"+string(policy.Policy.ID), root, iamv1.DeletePolicyRequest{ResourceVersion: policy.Policy.ResourceVersion, RequestID: "boundary-policy-delete"}, http.StatusConflict, nil)
+	call(http.MethodGet, path, root, nil, http.StatusOK, &view)
+	variant := set
+	variant.ResourceVersion = view.ResourceVersion
+	variant.PolicyID = iamv1.SystemPolicyPlatformOperator
+	variant.RequestID = "boundary-platform-attack"
+	call(http.MethodPut, path, root, variant, http.StatusForbidden, nil)
+	var rootIdentity iamv1.CurrentIdentity
+	call(http.MethodGet, "/v1/auth/me", root, nil, http.StatusOK, &rootIdentity)
+	variant.PolicyID = policy.Policy.ID
+	variant.ResourceVersion = rootIdentity.User.ResourceVersion
+	variant.RequestID = "boundary-root-attack"
+	call(http.MethodPut, "/v1/users/"+string(rootIdentity.User.ID)+"/permission-boundary", root, variant, http.StatusForbidden, nil)
+	// Even an explicitly authorized administrator bounded by AccountAdministrator
+	// cannot use the management action to remove its own maximum permission.
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "boundary-admin-grant"}, http.StatusOK, nil)
+	call(http.MethodGet, path, root, nil, http.StatusOK, &view)
+	variant = iamv1.SetUserPermissionBoundaryRequest{PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, ResourceVersion: view.ResourceVersion, RequestID: "boundary-system-set"}
+	call(http.MethodPut, path, root, variant, http.StatusOK, &view)
+	call(http.MethodDelete, path, bearer, iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: view.ResourceVersion, RequestID: "boundary-self-remove"}, http.StatusForbidden, nil)
+	call(http.MethodPost, "/v1/users/"+string(member.ID)+":set-status", root, iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: view.ResourceVersion, RequestID: "boundary-disable"}, http.StatusOK, &member)
+	remove := iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: member.ResourceVersion, RequestID: "boundary-remove"}
+	call(http.MethodDelete, path, root, remove, http.StatusOK, &view)
+	call(http.MethodDelete, path, root, remove, http.StatusOK, &replay)
+	if view.Policy != nil || !bytes.Equal(mustIAMJSON(t, view), mustIAMJSON(t, replay)) {
+		t.Fatal("boundary removal replay differs")
+	}
+	call(http.MethodPut, path, root, set, http.StatusConflict, nil)
+	call(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized, nil)
+	var state string
+	var facts int
+	if err := database.QueryRow(ctx, `SELECT status,(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{target,id}'=$2 AND event_document->>'action' IN ('iam.user.permission-boundary.set','iam.user.permission-boundary.removed')) FROM iam.principals WHERE tenant_id=$1 AND id=$2`, member.AccountID, member.ID).Scan(&state, &facts); err != nil || state != "DISABLED" || facts != 3 {
+		t.Fatal("boundary workflow enabled user or duplicated success facts")
+	}
+	// A late outbox failure must roll back the relationship, User revision,
+	// authorization evidence and success fact together, even for a disabled User.
+	before := view
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_boundary_outbox_fault() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.event_document->>'action'='iam.user.permission-boundary.set' AND NEW.event_document->>'requestId'='boundary-injected-failure'
+		THEN RAISE EXCEPTION 'injected boundary outbox failure'; END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_boundary_outbox_fault BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_boundary_outbox_fault()`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := database.Exec(context.Background(), `DROP TRIGGER IF EXISTS matrix_boundary_outbox_fault ON iam.audit_outbox; DROP FUNCTION IF EXISTS public.matrix_boundary_outbox_fault()`); err != nil {
+			t.Error("remove isolated boundary fault")
+		}
+	}()
+	variant = iamv1.SetUserPermissionBoundaryRequest{PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion, ResourceVersion: view.ResourceVersion, RequestID: "boundary-injected-failure"}
+	call(http.MethodPut, path, root, variant, http.StatusServiceUnavailable, nil)
+	call(http.MethodGet, path, root, nil, http.StatusOK, &view)
+	if !bytes.Equal(mustIAMJSON(t, before), mustIAMJSON(t, view)) {
+		t.Fatal("failed boundary mutation changed the User or boundary")
+	}
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'='boundary-injected-failure')+
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND document->>'requestId'='boundary-injected-failure')+
+		(SELECT count(*) FROM iam.user_permission_boundaries WHERE tenant_id=$1 AND user_id=$2 AND revoked_at IS NULL)`, member.AccountID, member.ID).Scan(&facts); err != nil || facts != 0 {
+		t.Fatal("failed boundary mutation left a relationship or authority facts")
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER matrix_boundary_outbox_fault ON iam.audit_outbox; DROP FUNCTION public.matrix_boundary_outbox_fault()`); err != nil {
+		t.Fatal(err)
+	}
+	// Two valid set intents at the same User revision cannot overwrite each other.
+	completed := make(chan *httptest.ResponseRecorder, 2)
+	for index, policyID := range []iamv1.PolicyID{policy.Policy.ID, iamv1.SystemPolicyAccountAdministrator} {
+		policyRevision := uint64(1)
+		if policyID == policy.Policy.ID {
+			policyRevision = policy.Policy.ResourceVersion
+		}
+		body := mustIAMJSON(t, iamv1.SetUserPermissionBoundaryRequest{PolicyID: policyID, PolicyResourceVersion: policyRevision, ResourceVersion: view.ResourceVersion, RequestID: fmt.Sprintf("boundary-set-race-%d", index)})
+		go func() { completed <- performIAMRequest(handler, http.MethodPut, path, root, body) }()
+	}
+	winners, conflicts := 0, 0
+	for range 2 {
+		select {
+		case response := <-completed:
+			switch response.Code {
+			case http.StatusOK:
+				winners++
+				if json.Unmarshal(response.Body.Bytes(), &view) != nil {
+					t.Fatal("decode boundary race result")
+				}
+			case http.StatusConflict:
+				conflicts++
+			default:
+				t.Fatalf("boundary race status=%d", response.Code)
+			}
+		case <-ctx.Done():
+			t.Fatal("boundary race deadline")
+		}
+	}
+	if winners != 1 || conflicts != 1 || view.ResourceVersion != before.ResourceVersion+1 || view.Policy == nil {
+		t.Fatal("boundary race lost optimistic concurrency")
+	}
+	// Historical IAM-source proof remains valid after replacement, removal and
+	// identity disable; it does not use the user's current effective permissions.
+	var event auditv1.Event
+	var raw []byte
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'='boundary-set' AND event_document->>'action'='iam.user.permission-boundary.set'`, member.AccountID).Scan(&raw); err != nil || json.Unmarshal(raw, &event) != nil {
+		t.Fatal("read original boundary fact")
+	}
+	call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
+	// Equal names never make a foreign policy or User local to the caller.
+	call(http.MethodPost, "/v1/accounts", root, map[string]any{"id": "boundary-other-account", "displayName": "Boundary other", "rootLoginName": "boundary-other-root", "rootDisplayName": "Other root", "initialPassword": initialDeveloperPassword, "requestId": "boundary-other-create"}, http.StatusCreated, nil)
+	other := localRecoveryLogin(t, handler, "boundary-other-root", initialDeveloperPassword, true)
+	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
+	var foreign iamv1.PolicyDetail
+	creation.RequestID = "boundary-foreign-policy"
+	call(http.MethodPost, "/v1/policies", other, creation, http.StatusCreated, &foreign)
+	variant = iamv1.SetUserPermissionBoundaryRequest{PolicyID: foreign.Policy.ID, PolicyResourceVersion: foreign.Policy.ResourceVersion, ResourceVersion: view.ResourceVersion, RequestID: "boundary-foreign-policy-attack"}
+	call(http.MethodPut, path, root, variant, http.StatusForbidden, nil)
+	call(http.MethodPut, path, other, variant, http.StatusForbidden, nil)
+	call(http.MethodGet, path, other, nil, http.StatusForbidden, nil)
+	call(http.MethodGet, path, paasCredential, nil, http.StatusUnauthorized, nil)
+	call(http.MethodGet, path+"?accountId=boundary-other-account", root, nil, http.StatusBadRequest, nil)
+	call(http.MethodPut, path, root, map[string]any{"policyId": policy.Policy.ID, "policyResourceVersion": 1, "resourceVersion": view.ResourceVersion, "requestId": "boundary-selector-attack", "accountId": "boundary-other-account"}, http.StatusBadRequest, nil)
+	call(http.MethodGet, path, root, nil, http.StatusOK, &replay)
+	if !bytes.Equal(mustIAMJSON(t, view), mustIAMJSON(t, replay)) {
+		t.Fatal("rejected boundary attacks changed current state")
+	}
+	// Pause after authentication/PDP but before mutation locks, using an actual
+	// database lock rather than a timing sleep. Logout of this exact bearer must
+	// finish first, and the pending write must not persist stale authority.
+	blockedBearer := localRecoveryLogin(t, handler, rootIdentity.User.LoginName, changedAdminPassword, false)
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_boundary_auth_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.request_id='boundary-after-logout'
+		THEN PERFORM pg_advisory_xact_lock(54831,18); END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_boundary_auth_barrier BEFORE INSERT ON iam.authorization_decisions FOR EACH ROW EXECUTE FUNCTION public.matrix_boundary_auth_barrier();
+		SELECT pg_advisory_lock(54831,18)`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := database.Exec(context.Background(), `SELECT pg_advisory_unlock(54831,18);
+			DROP TRIGGER IF EXISTS matrix_boundary_auth_barrier ON iam.authorization_decisions; DROP FUNCTION IF EXISTS public.matrix_boundary_auth_barrier()`); err != nil {
+			t.Error("remove isolated boundary authentication barrier")
+		}
+	}()
+	blockedContext, cancelBlocked := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelBlocked()
+	blockedBody := mustIAMJSON(t, iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: view.ResourceVersion, RequestID: "boundary-after-logout"})
+	go func() {
+		request := httptest.NewRequest(http.MethodDelete, path, bytes.NewReader(blockedBody)).WithContext(blockedContext)
+		request.Header.Set("Authorization", "Bearer "+blockedBearer)
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		completed <- response
+	}()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(blockedContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid=18)`).Scan(&waiting); err != nil {
+			t.Fatal("observe boundary authentication barrier")
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-blockedContext.Done():
+				t.Fatal("boundary never reached authentication barrier")
+			}
+		}
+	}
+	call(http.MethodPost, "/v1/auth/logout", blockedBearer, map[string]any{"requestId": "boundary-blocked-session-logout"}, http.StatusOK, nil)
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,18)`); err != nil {
+		t.Fatal("release boundary barrier")
+	}
+	select {
+	case response := <-completed:
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("boundary pending on revoked bearer status=%d", response.Code)
+		}
+	case <-blockedContext.Done():
+		t.Fatal("boundary pending request did not finish")
+	}
+	call(http.MethodGet, path, root, nil, http.StatusOK, &replay)
+	if !bytes.Equal(mustIAMJSON(t, view), mustIAMJSON(t, replay)) {
+		t.Fatal("pending revoked bearer changed boundary")
+	}
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'='boundary-after-logout'`, member.AccountID).Scan(&facts); err != nil || facts != 0 {
+		t.Fatal("pending revoked bearer persisted stale authority")
+	}
+	for _, role := range []string{"matrix_iam_api", "matrix_iam_worker", "matrix_iam_credential_recovery", "matrix_iam_owner"} {
+		attacks := []string{
+			`DELETE FROM iam.user_permission_boundaries WHERE tenant_id=$1 AND user_id=$2`,
+			`UPDATE iam.user_permission_boundaries SET revoked_at=NULL WHERE tenant_id=$1 AND user_id=$2 AND revoked_at IS NOT NULL`,
+		}
+		if role != "matrix_iam_owner" {
+			attacks = append(attacks, `SELECT * FROM iam.user_permission_boundaries WHERE tenant_id=$1 AND user_id=$2`)
+		}
+		for _, attack := range attacks {
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Role names are the fixed test catalog above, never request input.
+			if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+role); err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal("select boundary attack role")
+			}
+			if _, err := tx.Exec(ctx, `SELECT set_config('matrix.iam_tenant_id',$1,true)`, member.AccountID); err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal("set isolated boundary attack scope")
+			}
+			_, attackErr := tx.Exec(ctx, attack, member.AccountID, member.ID)
+			_ = tx.Rollback(ctx)
+			var pgError *pgconn.PgError
+			if !errors.As(attackErr, &pgError) || pgError.Code != "42501" {
+				t.Fatalf("boundary history attack role=%s was not forbidden", role)
+			}
+		}
+	}
+	// Deletion and removal share the User revision. A losing command cannot
+	// leave a live bound behind a deleted user, nor erase relationship history.
+	var relationshipsBefore int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.user_permission_boundaries WHERE tenant_id=$1 AND user_id=$2`, member.AccountID, member.ID).Scan(&relationshipsBefore); err != nil {
+		t.Fatal("read pre-deletion boundary history")
+	}
+	type deletionRaceResult struct {
+		deletion bool
+		response *httptest.ResponseRecorder
+	}
+	race := make(chan deletionRaceResult, 2)
+	removeBody := mustIAMJSON(t, iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: view.ResourceVersion, RequestID: "boundary-remove-delete-race"})
+	deleteBody := mustIAMJSON(t, iamv1.DeleteUserRequest{ResourceVersion: view.ResourceVersion, RequestID: "boundary-delete-remove-race"})
+	go func() {
+		race <- deletionRaceResult{false, performIAMRequest(handler, http.MethodDelete, path, root, removeBody)}
+	}()
+	go func() {
+		race <- deletionRaceResult{true, performIAMRequest(handler, http.MethodPost, "/v1/users/"+string(member.ID)+":delete", root, deleteBody)}
+	}()
+	winners, conflicts = 0, 0
+	deleted := false
+	for range 2 {
+		select {
+		case result := <-race:
+			switch result.response.Code {
+			case http.StatusOK:
+				winners++
+				deleted = result.deletion
+			case http.StatusConflict, http.StatusForbidden:
+				conflicts++
+			default:
+				t.Fatalf("boundary remove/delete race status=%d", result.response.Code)
+			}
+		case <-ctx.Done():
+			t.Fatal("boundary remove/delete race deadline")
+		}
+	}
+	if winners != 1 || conflicts != 1 {
+		t.Fatal("boundary remove/delete did not have one winner")
+	}
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1
+		AND event_document->>'requestId' IN ('boundary-remove-delete-race','boundary-delete-remove-race')
+		AND event_document->>'action' IN ('iam.user.permission-boundary.removed','iam.user.deleted')`, member.AccountID).Scan(&facts); err != nil || facts != 1 {
+		t.Fatal("boundary remove/delete race persisted wrong completion facts")
+	}
+	if !deleted {
+		call(http.MethodGet, path, root, nil, http.StatusOK, &view)
+		call(http.MethodPost, "/v1/users/"+string(member.ID)+":delete", root, iamv1.DeleteUserRequest{ResourceVersion: view.ResourceVersion, RequestID: "boundary-delete-after-removal"}, http.StatusOK, nil)
+	}
+	var relationships, activeRelationships, credentials int
+	if err := database.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE revoked_at IS NULL),
+		(SELECT count(*) FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2)
+		FROM iam.user_permission_boundaries WHERE tenant_id=$1 AND user_id=$2`, member.AccountID, member.ID).Scan(&relationships, &activeRelationships, &credentials); err != nil || relationships != relationshipsBefore || activeRelationships != 0 || credentials != 0 {
+		t.Fatal("user deletion erased boundary history or retained live authority")
+	}
+	for index, group := range inheritedGroups {
+		var access iamv1.GroupAccess
+		call(http.MethodGet, "/v1/groups/"+string(group.ID), root, nil, http.StatusOK, &access)
+		call(http.MethodPost, "/v1/groups/"+string(group.ID)+":delete", root, iamv1.DeleteGroupRequest{ResourceVersion: access.Group.ResourceVersion, RequestID: fmt.Sprintf("boundary-group-delete-%d", index)}, http.StatusOK, nil)
+	}
+	call(http.MethodPut, path, root, set, http.StatusForbidden, nil)
+	call(http.MethodGet, path, root, nil, http.StatusForbidden, nil)
+	call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
+}
+
+func proveUserBoundaryPolicyRaces(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	call := func(method, path string, body any, want int, destination any) {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, root, encoded)
+		if response.Code != want {
+			t.Fatalf("boundary policy competition %s status=%d want=%d", path, response.Code, want)
+		}
+		if destination != nil && json.Unmarshal(response.Body.Bytes(), destination) != nil {
+			t.Fatal("decode boundary competition result")
+		}
+	}
+	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "upper-bound", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+	for _, mode := range []string{"replace-remove", "default", "delete"} {
+		t.Run(mode, func(t *testing.T) {
+			prefix := "boundary-compete-" + mode
+			var user iamv1.User
+			call(http.MethodPost, "/v1/users", map[string]any{"loginName": prefix, "displayName": prefix, "initialPassword": initialDeveloperPassword, "requestId": prefix + "-user"}, http.StatusCreated, &user)
+			path := "/v1/users/" + string(user.ID) + "/permission-boundary"
+			var policy iamv1.PolicyDetail
+			call(http.MethodPost, "/v1/policies", iamv1.CreatePolicyRequest{DisplayName: prefix, Document: document, RequestID: prefix + "-policy"}, http.StatusCreated, &policy)
+			policyPath := "/v1/policies/" + string(policy.Policy.ID)
+			var view iamv1.UserPermissionBoundary
+			call(http.MethodGet, path, nil, http.StatusOK, &view)
+			peerMethod, peerPath := http.MethodDelete, policyPath
+			var peerBody any = iamv1.DeletePolicyRequest{ResourceVersion: policy.Policy.ResourceVersion, RequestID: prefix + "-peer"}
+			if mode == "replace-remove" {
+				call(http.MethodPut, path, iamv1.SetUserPermissionBoundaryRequest{PolicyID: policy.Policy.ID, PolicyResourceVersion: 1, ResourceVersion: view.ResourceVersion, RequestID: prefix + "-initial"}, http.StatusOK, &view)
+				call(http.MethodPost, "/v1/policies", iamv1.CreatePolicyRequest{DisplayName: prefix + "-replacement", Document: document, RequestID: prefix + "-replacement"}, http.StatusCreated, &policy)
+				peerPath, peerBody = path, iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: view.ResourceVersion, RequestID: prefix + "-peer"}
+			} else if mode == "default" {
+				deny := document
+				deny.Statements = append([]iamv1.PolicyStatement(nil), document.Statements...)
+				deny.Statements[0].Effect = iamv1.PolicyDeny
+				var version iamv1.PolicyVersionDetail
+				call(http.MethodPost, policyPath+"/versions", iamv1.CreatePolicyVersionRequest{Document: deny, ResourceVersion: 1, RequestID: prefix + "-version"}, http.StatusCreated, &version)
+				policy.Policy = version.Policy
+				peerMethod, peerPath = http.MethodPost, policyPath+":set-default-version"
+				peerBody = iamv1.SetDefaultPolicyVersionRequest{VersionID: version.Version.ID, ResourceVersion: version.Policy.ResourceVersion, RequestID: prefix + "-peer"}
+			}
+			set := iamv1.SetUserPermissionBoundaryRequest{PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion, ResourceVersion: view.ResourceVersion, RequestID: prefix + "-set"}
+			type outcome struct {
+				set      bool
+				response *httptest.ResponseRecorder
+			}
+			results := make(chan outcome, 2)
+			setBytes, peerBytes := mustIAMJSON(t, set), mustIAMJSON(t, peerBody)
+			go func() { results <- outcome{true, performIAMRequest(handler, http.MethodPut, path, root, setBytes)} }()
+			go func() { results <- outcome{false, performIAMRequest(handler, peerMethod, peerPath, root, peerBytes)} }()
+			setStatus, peerStatus := 0, 0
+			for range 2 {
+				select {
+				case result := <-results:
+					if result.set {
+						setStatus = result.response.Code
+					} else {
+						peerStatus = result.response.Code
+					}
+				case <-ctx.Done():
+					t.Fatal("boundary policy competition deadline")
+				}
+			}
+			call(http.MethodGet, path, nil, http.StatusOK, &view)
+			if mode == "default" {
+				// Set before the default switch may legitimately succeed: a bound
+				// follows defaults. A set ordered after it must reject stale input.
+				if peerStatus != http.StatusOK || (setStatus != http.StatusOK && setStatus != http.StatusConflict) {
+					t.Fatalf("set/default outcomes=%d/%d", setStatus, peerStatus)
+				}
+				var current iamv1.PolicyDetail
+				call(http.MethodGet, policyPath, nil, http.StatusOK, &current)
+				if current.Version.Document.Statements[0].Effect != iamv1.PolicyDeny ||
+					(setStatus == http.StatusOK && (view.Policy == nil || view.Policy.VersionID != current.Version.ID)) ||
+					(setStatus != http.StatusOK && view.Policy != nil) {
+					t.Fatal("set/default retained an obsolete bound or partial relationship")
+				}
+			} else {
+				if (setStatus == http.StatusOK) == (peerStatus == http.StatusOK) ||
+					(setStatus != http.StatusOK && setStatus != http.StatusConflict && setStatus != http.StatusForbidden) ||
+					(peerStatus != http.StatusOK && peerStatus != http.StatusConflict) {
+					t.Fatalf("boundary competition outcomes=%d/%d", setStatus, peerStatus)
+				}
+				if (view.Policy != nil) != (setStatus == http.StatusOK) || (view.Policy != nil && view.Policy.PolicyID != policy.Policy.ID) {
+					t.Fatal("boundary competition state differs from winner")
+				}
+			}
+			var invalidReferences, setFacts int
+			if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.user_permission_boundaries b JOIN iam.policies p ON p.id=b.policy_id
+				WHERE b.tenant_id=$1 AND b.user_id=$2 AND b.revoked_at IS NULL AND p.status<>'ACTIVE'),
+				(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.user.permission-boundary.set' AND event_document->>'requestId'=$3)`, user.AccountID, user.ID, set.RequestID).Scan(&invalidReferences, &setFacts); err != nil || invalidReferences != 0 || (setFacts == 1) != (setStatus == http.StatusOK) || setFacts > 1 {
+				t.Fatal("boundary competition left invalid reference or completion")
+			}
+			if mode == "replace-remove" {
+				// Re-establish a real bound if removal won, then use two temporary
+				// sessions to prove forced change is independent of business Allow.
+				if view.Policy == nil {
+					call(http.MethodPut, path, iamv1.SetUserPermissionBoundaryRequest{PolicyID: policy.Policy.ID, PolicyResourceVersion: 1, ResourceVersion: view.ResourceVersion, RequestID: prefix + "-forced-bound"}, http.StatusOK, &view)
+				}
+				first := localRecoveryLogin(t, handler, user.LoginName+"@"+string(user.AccountID), initialDeveloperPassword, true)
+				other := localRecoveryLogin(t, handler, user.LoginName+"@"+string(user.AccountID), initialDeveloperPassword, true)
+				response := performIAMRequest(handler, http.MethodPost, "/v1/auth/password", first, mustIAMJSON(t, map[string]any{"currentPassword": initialDeveloperPassword, "newPassword": changedDeveloperPassword, "revokeOtherSessions": false, "requestId": prefix + "-forced-change"}))
+				if response.Code != http.StatusOK {
+					t.Fatalf("bounded forced password change status=%d", response.Code)
+				}
+				var identity iamv1.CurrentIdentity
+				response = performIAMRequest(handler, http.MethodGet, "/v1/auth/me", first, nil)
+				if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &identity) != nil || iamv1.ValidateCurrentIdentity(identity) != nil || identity.User.MustChangePassword || identity.PermissionBoundary.Policy == nil || identity.PermissionBoundary.Policy.PolicyID != policy.Policy.ID || len(identity.PolicySources) != 0 {
+					t.Fatal("forced change lost bound or acquired permissions")
+				}
+				if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", other, nil); response.Code != http.StatusUnauthorized {
+					t.Fatal("bounded forced change retained another temporary session")
+				}
+				if response := performIAMRequest(handler, http.MethodPost, "/v1/auth/logout", first, mustIAMJSON(t, iamv1.LogoutRequest{RequestID: prefix + "-logout"})); response.Code != http.StatusOK {
+					t.Fatal("boundary prevented self logout")
+				}
+			}
+		})
 	}
 }
 
@@ -2375,7 +2919,7 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 		if _, err = tx.Exec(ctx, `SET LOCAL ROLE matrix_iam_owner; SELECT set_config('matrix.iam_tenant_id',$1,true)`, member.AccountID); err != nil {
 			t.Fatal(err)
 		}
-		_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,document||jsonb_build_object('id','forged-group-decision','decidedAt',to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')),'{}'::jsonb,`+expression+`) FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$3`, member.AccountID, member.ID, decision.ID)
+		_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,document||jsonb_build_object('id','forged-group-decision','decidedAt',to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')),'{}'::jsonb,`+expression+`,boundary_evidence) FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$3`, member.AccountID, member.ID, decision.ID)
 		var databaseError *pgconn.PgError
 		if !errors.As(err, &databaseError) || databaseError.Code != code {
 			t.Fatalf("group evidence attack: %v want=%s", err, code)
@@ -2603,6 +3147,44 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 	post("/v1/policy-attachments", operator, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(delegate.ID)}, PolicyID: iamv1.SystemPolicyAuditReader, PolicyResourceVersion: 1, RequestID: "cursor-delegate-extra-regrant"}, http.StatusOK, nil)
 	get("/v1/groups?after="+delegatedPage.NextAfter, delegateBearer, http.StatusUnprocessableEntity, nil)
 	var pagedGroup iamv1.Group
+	// Boundary transitions invalidate the whole authority snapshot, even when
+	// the old and new defaults both still allow listing this exact directory.
+	boundaryPath := "/v1/users/" + string(delegate.ID) + "/permission-boundary"
+	var boundaryView iamv1.UserPermissionBoundary
+	get(boundaryPath, operator, http.StatusOK, &boundaryView)
+	var directoryBound iamv1.PolicyDetail
+	directoryDocument := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "list-before", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMGroupList},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+	post("/v1/policies", operator, iamv1.CreatePolicyRequest{DisplayName: "Directory boundary", Document: directoryDocument, RequestID: "cursor-boundary-policy"}, http.StatusCreated, &directoryBound)
+	get("/v1/groups", delegateBearer, http.StatusOK, &delegatedPage)
+	boundaryResponse := performIAMRequest(handler, http.MethodPut, boundaryPath, operator, mustIAMJSON(t, iamv1.SetUserPermissionBoundaryRequest{
+		PolicyID: directoryBound.Policy.ID, PolicyResourceVersion: 1, ResourceVersion: boundaryView.ResourceVersion, RequestID: "cursor-boundary-set"}))
+	if boundaryResponse.Code != http.StatusOK {
+		t.Fatalf("directory boundary set status=%d", boundaryResponse.Code)
+	}
+	get("/v1/groups?after="+delegatedPage.NextAfter, delegateBearer, http.StatusUnprocessableEntity, nil)
+	directoryDocument.Statements[0].SID = "list-after"
+	var directoryVersion iamv1.PolicyVersionDetail
+	post("/v1/policies/"+string(directoryBound.Policy.ID)+"/versions", operator, iamv1.CreatePolicyVersionRequest{
+		Document: directoryDocument, ResourceVersion: 1, RequestID: "cursor-boundary-version"}, http.StatusCreated, &directoryVersion)
+	get("/v1/groups", delegateBearer, http.StatusOK, &delegatedPage)
+	if len(delegatedPage.Items) != 100 || delegatedPage.NextAfter == "" {
+		t.Fatal("bounded directory did not produce a real continuation")
+	}
+	post("/v1/policies/"+string(directoryBound.Policy.ID)+":set-default-version", operator, iamv1.SetDefaultPolicyVersionRequest{
+		VersionID: directoryVersion.Version.ID, ResourceVersion: directoryVersion.Policy.ResourceVersion, RequestID: "cursor-boundary-default"}, http.StatusOK, nil)
+	get("/v1/groups?after="+delegatedPage.NextAfter, delegateBearer, http.StatusUnprocessableEntity, nil)
+	get("/v1/groups", delegateBearer, http.StatusOK, &delegatedPage)
+	get("/v1/groups?after="+delegatedPage.NextAfter, delegateBearer, http.StatusOK, nil)
+	get(boundaryPath, operator, http.StatusOK, &boundaryView)
+	boundaryResponse = performIAMRequest(handler, http.MethodDelete, boundaryPath, operator, mustIAMJSON(t, iamv1.RemoveUserPermissionBoundaryRequest{
+		ResourceVersion: boundaryView.ResourceVersion, RequestID: "cursor-boundary-remove"}))
+	if boundaryResponse.Code != http.StatusOK {
+		t.Fatal("directory boundary removal failed")
+	}
+	get("/v1/groups?after="+delegatedPage.NextAfter, delegateBearer, http.StatusUnprocessableEntity, nil)
+	get("/v1/groups", delegateBearer, http.StatusOK, nil)
 	post("/v1/groups", operator, iamv1.CreateGroupRequest{Name: "Paged members", RequestID: "cursor-many-members-group"}, http.StatusCreated, &pagedGroup)
 	memberPath := "/v1/groups/" + string(pagedGroup.ID) + "/memberships"
 	for index := 0; index < 101; index++ {

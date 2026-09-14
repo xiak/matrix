@@ -519,6 +519,11 @@ CREATE TABLE IF NOT EXISTS iam.authorization_decisions (
 -- Historical decisions retain NULL provenance; it is never guessed from
 -- current permissions. Every new record must use the evidence-bound function.
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS policy_evidence jsonb;
+ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS boundary_evidence jsonb;
+ALTER TABLE iam.authorization_decisions DROP CONSTRAINT IF EXISTS authorization_boundary_evidence_valid;
+ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_boundary_evidence_valid CHECK (
+    boundary_evidence IS NULL OR jsonb_typeof(boundary_evidence)='object'
+);
 ALTER TABLE iam.authorization_decisions DROP CONSTRAINT IF EXISTS authorization_policy_evidence_valid;
 ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_policy_evidence_valid CHECK (
     policy_evidence IS NULL OR (jsonb_typeof(policy_evidence)='array' AND jsonb_array_length(policy_evidence)<=256)
@@ -750,6 +755,7 @@ BEGIN
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
             'iam.account-root.credentials-recovered', 'iam.account.alias-set',
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
+            'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
@@ -1032,15 +1038,28 @@ BEGIN
                   AND directory.prorettype='jsonb'::regtype AND NOT directory.proretset
                   AND directory.prosecdef AND directory.proowner='matrix_iam_owner'::regrole)
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS recorder
-                WHERE recorder.oid=to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb)')
+                WHERE recorder.oid=to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb)')
                   AND recorder.prosecdef AND recorder.proowner='matrix_iam_owner'::regrole)
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS lookup
                 WHERE lookup.oid=to_regprocedure('iam.lookup_session(text)')
-                  AND cardinality(lookup.proallargtypes)=23 AND lookup.proargnames[23]='policies'
-                  AND lookup.proallargtypes[23]='jsonb'::regtype::oid)
+                  AND cardinality(lookup.proallargtypes)=24 AND lookup.proargnames[23:24]=ARRAY['policies','boundary']
+                  AND lookup.proallargtypes[23:24]=ARRAY['jsonb'::regtype::oid,'jsonb'::regtype::oid])
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_attribute AS evidence
                 WHERE evidence.attrelid='iam.authorization_decisions'::regclass AND evidence.attname='policy_evidence'
                   AND evidence.atttypid='jsonb'::regtype AND NOT evidence.attisdropped)
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_attribute AS evidence
+                WHERE evidence.attrelid='iam.authorization_decisions'::regclass AND evidence.attname='boundary_evidence'
+                  AND evidence.atttypid='jsonb'::regtype AND NOT evidence.attisdropped)
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_class AS boundary_table
+                WHERE boundary_table.oid=to_regclass('iam.user_permission_boundaries')
+                  AND boundary_table.relrowsecurity AND boundary_table.relforcerowsecurity
+                  AND boundary_table.relowner='matrix_iam_owner'::regrole)
+           AND (SELECT count(*) FROM pg_catalog.pg_proc AS boundary_entry
+                WHERE boundary_entry.oid IN (
+                    to_regprocedure('iam.read_user_permission_boundary(text,text,text,text)'),
+                    to_regprocedure('iam.change_user_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text)'))
+                  AND boundary_entry.prorettype='jsonb'::regtype AND NOT boundary_entry.proretset
+                  AND boundary_entry.prosecdef AND boundary_entry.proowner='matrix_iam_owner'::regrole)=2
            AND (SELECT count(*) FROM pg_catalog.pg_class AS policy_table
                 WHERE policy_table.oid IN (to_regclass('iam.policies'),to_regclass('iam.policy_versions'),to_regclass('iam.policy_attachments'))
                   AND policy_table.relrowsecurity AND policy_table.relforcerowsecurity
@@ -1114,7 +1133,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           17::bigint,
+           18::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1156,6 +1175,8 @@ AS $function$
         WHEN 'iam.policy-version.read' THEN 'POLICY'
         WHEN 'iam.policy-version.create' THEN 'POLICY'
         WHEN 'iam.policy-version.delete' THEN 'POLICY'
+        WHEN 'iam.user.permission-boundary.set' THEN 'USER'
+        WHEN 'iam.user.permission-boundary.remove' THEN 'USER'
         WHEN 'iam.policy.set-default-version' THEN 'POLICY'
         WHEN 'iam.policy.update' THEN 'POLICY'
         WHEN 'iam.policy.delete' THEN 'POLICY'
@@ -1382,7 +1403,8 @@ RETURNS TABLE (
     session_expires_at timestamptz,
     session_revoked_at timestamptz,
     verification_digest text,
-    policies jsonb
+    policies jsonb,
+    boundary jsonb
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -1408,7 +1430,8 @@ BEGIN
            principal.created_at, principal.updated_at,
            session.id, session.status, session.issued_at, session.expires_at,
            session.revoked_at, session.verification_digest,
-           iam.current_policy_snapshot(principal.tenant_id,principal.id)
+           iam.current_policy_snapshot(principal.tenant_id,principal.id),
+           iam.current_user_boundary(principal.tenant_id,principal.id)
       FROM iam.sessions AS session
       JOIN iam.accounts AS organization ON organization.id = session.tenant_id
       JOIN iam.principals AS principal
@@ -1508,12 +1531,14 @@ END
 $function$;
 
 DROP FUNCTION IF EXISTS iam.record_authorization(text,text,jsonb,jsonb);
+DROP FUNCTION IF EXISTS iam.record_authorization(text,text,jsonb,jsonb,jsonb);
 CREATE OR REPLACE FUNCTION iam.record_authorization(
     submitted_tenant_id text,
     submitted_principal_id text,
     submitted_decision jsonb,
     submitted_audit_event jsonb,
-    submitted_policy_evidence jsonb
+    submitted_policy_evidence jsonb,
+    submitted_boundary_evidence jsonb
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -1645,6 +1670,8 @@ BEGIN
         END IF;
         previous_attachment := evidence->>'attachmentId';
     END LOOP;
+    PERFORM iam.assert_current_user_boundary_evidence(submitted_tenant_id,submitted_principal_id,
+        submitted_decision->>'action',submitted_boundary_evidence);
     expected_result := CASE WHEN decision_allowed THEN 'ALLOWED' ELSE 'DENIED' END;
     IF submitted_decision->>'reason' IS DISTINCT FROM expected_result
        OR (decision_allowed AND (
@@ -1709,7 +1736,7 @@ BEGIN
 
     INSERT INTO iam.authorization_decisions (
         tenant_id, id, principal_id, allowed, action_name, target_kind,
-        target_id, request_id, decided_at, document, policy_evidence
+        target_id, request_id, decided_at, document, policy_evidence, boundary_evidence
     ) VALUES (
         submitted_tenant_id,
         submitted_decision->>'id',
@@ -1721,7 +1748,8 @@ BEGIN
         submitted_decision->>'requestId',
         effective_now,
         submitted_decision,
-        submitted_policy_evidence
+        submitted_policy_evidence,
+        submitted_boundary_evidence
     );
     INSERT INTO iam.audit_outbox (
         tenant_id, event_id, event_document, next_attempt_at,
@@ -2547,7 +2575,7 @@ GRANT EXECUTE ON FUNCTION iam.lookup_service(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_service_policies(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_password(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.record_authorization(
-    text, text, jsonb, jsonb, jsonb
+    text, text, jsonb, jsonb, jsonb, jsonb
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.change_password(
     text, text, text, text, jsonb, text, boolean

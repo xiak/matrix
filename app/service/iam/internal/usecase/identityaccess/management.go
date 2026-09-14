@@ -616,11 +616,12 @@ func (service *Authority) managementDecision(
 		return iamv1.AuthorizationDecision{}, err
 	}
 	if err := transaction.RecordAuthorization(ctx, AuthorizationMutation{
-		AccountID:      subject.Subject.Organization.ID,
-		PrincipalID:    subject.Subject.Principal.ID,
-		Decision:       decision.AuthorizationDecision,
-		PolicyEvidence: decision.PolicyEvidence,
-		AuditEvent:     event,
+		AccountID:        subject.Subject.Organization.ID,
+		PrincipalID:      subject.Subject.Principal.ID,
+		Decision:         decision.AuthorizationDecision,
+		PolicyEvidence:   decision.PolicyEvidence,
+		BoundaryEvidence: decision.BoundaryEvidence,
+		AuditEvent:       event,
 	}); err != nil {
 		return iamv1.AuthorizationDecision{}, err
 	}

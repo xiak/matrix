@@ -251,13 +251,14 @@ type ActionCapability struct {
 }
 
 type CurrentIdentity struct {
-	APIVersion    string              `json:"apiVersion"`
-	Kind          string              `json:"kind"`
-	Account       Account             `json:"account"`
-	User          User                `json:"user"`
-	IdentityKind  IdentityKind        `json:"identityKind"`
-	PolicySources []PolicyGrantSource `json:"policySources"`
-	Capabilities  []ActionCapability  `json:"capabilities"`
+	APIVersion         string                 `json:"apiVersion"`
+	Kind               string                 `json:"kind"`
+	Account            Account                `json:"account"`
+	User               User                   `json:"user"`
+	IdentityKind       IdentityKind           `json:"identityKind"`
+	PolicySources      []PolicyGrantSource    `json:"policySources"`
+	PermissionBoundary UserPermissionBoundary `json:"permissionBoundary"`
+	Capabilities       []ActionCapability     `json:"capabilities"`
 }
 
 type UserAccess struct {

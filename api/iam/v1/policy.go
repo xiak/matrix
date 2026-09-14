@@ -548,6 +548,57 @@ type PolicyVersionReference struct {
 	ContentDigest string          `json:"contentDigest"`
 }
 
+// UserPermissionBoundary describes a limit, never a positive grant. A null
+// Policy explicitly means no tenant boundary at this User revision.
+type UserPermissionBoundary struct {
+	APIVersion      string                  `json:"apiVersion"`
+	Kind            string                  `json:"kind"`
+	AccountID       AccountID               `json:"accountId"`
+	UserID          PrincipalID             `json:"userId"`
+	ResourceVersion uint64                  `json:"resourceVersion"`
+	Policy          *PolicyVersionReference `json:"policy"`
+}
+
+type SetUserPermissionBoundaryRequest struct {
+	PolicyID              PolicyID `json:"policyId"`
+	PolicyResourceVersion uint64   `json:"policyResourceVersion"`
+	ResourceVersion       uint64   `json:"resourceVersion"`
+	RequestID             string   `json:"requestId"`
+}
+
+type RemoveUserPermissionBoundaryRequest struct {
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+func ValidateSetUserPermissionBoundaryRequest(value SetUserPermissionBoundaryRequest) error {
+	if validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
+		return ErrInvalidPolicy
+	}
+	return errors.Join(ValidateID("policyId", string(value.PolicyID)),
+		validatePositiveVersion(value.PolicyResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateRemoveUserPermissionBoundaryRequest(value RemoveUserPermissionBoundaryRequest) error {
+	if validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
+		return ErrInvalidPolicy
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateUserPermissionBoundary(value UserPermissionBoundary) error {
+	if value.APIVersion != APIVersion || value.Kind != "UserPermissionBoundary" ||
+		ValidateID("accountId", string(value.AccountID)) != nil || ValidateID("userId", string(value.UserID)) != nil ||
+		validatePositiveVersion(value.ResourceVersion) != nil {
+		return ErrInvalidPolicy
+	}
+	if value.Policy != nil {
+		return errors.Join(ValidateID("policyId", string(value.Policy.PolicyID)),
+			ValidateID("versionId", string(value.Policy.VersionID)), ValidateDigest("contentDigest", value.Policy.ContentDigest))
+	}
+	return nil
+}
+
 func DecodePolicyDocument(reader io.Reader) (PolicyDocument, error) {
 	var document PolicyDocument
 	if err := contractjson.DecodeObject(reader, MaxPolicyBytes, &document); err != nil {

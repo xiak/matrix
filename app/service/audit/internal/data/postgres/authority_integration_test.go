@@ -895,7 +895,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 17 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 18 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
@@ -976,7 +976,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 17 || checkedAt.IsZero() {
+	if ready || schemaVersion != 18 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -1772,6 +1772,14 @@ func assertIAMAuthorizationCatalog(
 	}
 	tenantEvidence := evidenceFor(fixture.Administrator, iamv1.SystemPolicyAccountAdministrator)
 	platformEvidence := evidenceFor(fixture.Administrator, iamv1.SystemPolicyPlatformOperator)
+	var tenantBoundary json.RawMessage
+	if err := admin.QueryRow(ctx, `SELECT jsonb_build_object('state','NONE','userResourceVersion',p.resource_version)
+		FROM iam.principals p WHERE p.tenant_id=$1 AND p.id=$2 AND p.principal_type='USER'
+		AND NOT EXISTS(SELECT 1 FROM iam.user_permission_boundaries b WHERE b.tenant_id=p.tenant_id AND b.user_id=p.id AND b.revoked_at IS NULL)`,
+		string(fixture.TenantID), fixture.Administrator).Scan(&tenantBoundary); err != nil {
+		t.Fatal("read explicit current fixture boundary absence")
+	}
+	notApplicableBoundary := json.RawMessage(`{"state":"NOT_APPLICABLE"}`)
 	var verifier string
 	for _, service := range fixture.Services {
 		if service.Purpose == string(iamv1.ServiceInstallationVerifier) {
@@ -1817,11 +1825,14 @@ func assertIAMAuthorizationCatalog(
 			decision.TenantID, decision.InstallationID = "", fixture.InstallationID
 		}
 		evidence, actorID, actorType := tenantEvidence, fixture.Administrator, auditv1.ActorUser
+		boundary := tenantBoundary
 		if iamv1.IsPlatformAction(action) {
 			evidence = platformEvidence
+			boundary = notApplicableBoundary
 		}
 		if action == iamv1.ActionInstallationVerify {
 			evidence, actorID, actorType = probeEvidence, verifier, auditv1.ActorServiceAccount
+			boundary = notApplicableBoundary
 			decision.Subject = &iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: iamv1.PrincipalID(verifier)}
 			decision.Resource.ID = fixture.InstallationID
 		}
@@ -1849,12 +1860,13 @@ func assertIAMAuthorizationCatalog(
 		}
 		_, err = tx.Exec(
 			ctx,
-			"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb)",
+			"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb)",
 			string(fixture.TenantID),
 			actorID,
 			authorityJSON(t, decision),
 			authorityJSON(t, event),
 			string(evidence),
+			string(boundary),
 		)
 		if err != nil {
 			_ = tx.Rollback(context.Background())
@@ -1864,9 +1876,9 @@ func assertIAMAuthorizationCatalog(
 			t.Fatalf("commit IAM authorization action %q: %v", action, err)
 		}
 		var matches bool
-		if err := admin.QueryRow(ctx, `SELECT document=$3::jsonb AND policy_evidence=$4::jsonb
+		if err := admin.QueryRow(ctx, `SELECT document=$3::jsonb AND policy_evidence=$4::jsonb AND boundary_evidence=$5::jsonb
 			FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, string(fixture.TenantID), decisionID,
-			authorityJSON(t, decision), string(evidence)).Scan(&matches); err != nil || !matches {
+			authorityJSON(t, decision), string(evidence), string(boundary)).Scan(&matches); err != nil || !matches {
 			t.Fatalf("persisted catalog decision lost its exact policy evidence: %v", err)
 		}
 	}
@@ -1894,8 +1906,10 @@ func assertIAMAuthorizationCatalog(
 				Action: definition.Action, Resource: iamv1.ResourceReference{Kind: definition.ResourceKind, ID: "retired-target"},
 				RequestID: "retired-action-request", DecidedAt: now.UTC()}
 			evidence := tenantEvidence
+			boundary := tenantBoundary
 			if definition.AuthorityScope == iamv1.AuthorityScopeInstallation {
 				decision.TenantID, decision.InstallationID, evidence = "", fixture.InstallationID, platformEvidence
+				boundary = notApplicableBoundary
 			}
 			event := authorityAuditEvent("event-retired-action", fixture.TenantID, string(decision.ID), auditv1.ActionIAMAuthorizationDecided)
 			event.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
@@ -1909,8 +1923,8 @@ func assertIAMAuthorizationCatalog(
 				_ = tx.Rollback(ctx)
 				t.Fatal("retired action fixture is not a valid historical document")
 			}
-			_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb)",
-				string(fixture.TenantID), fixture.Administrator, authorityJSON(t, decision), authorityJSON(t, event), string(evidence))
+			_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb)",
+				string(fixture.TenantID), fixture.Administrator, authorityJSON(t, decision), authorityJSON(t, event), string(evidence), string(boundary))
 			_ = tx.Rollback(ctx)
 			assertAuthorityPostgresCode(t, err, "22023")
 		}
@@ -1964,12 +1978,13 @@ func assertIAMAuthorizationCatalog(
 	event.OccurredAt = databaseTime.UTC()
 	_, err = transaction.Exec(
 		ctx,
-		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb)",
+		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb)",
 		string(fixture.TenantID),
 		fixture.Administrator,
 		authorityJSON(t, decision),
 		authorityJSON(t, event),
 		string(tenantEvidence),
+		string(tenantBoundary),
 	)
 	assertAuthorityPostgresCode(t, err, "22023")
 	if err := transaction.Rollback(ctx); err != nil {
@@ -2001,8 +2016,8 @@ func assertIAMAuthorizationCatalog(
 		if attack == "wrong installation" {
 			decision.InstallationID = "installation-other"
 		}
-		_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb)",
-			string(fixture.TenantID), fixture.Administrator, authorityJSON(t, decision), authorityJSON(t, event), string(platformEvidence))
+		_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb)",
+			string(fixture.TenantID), fixture.Administrator, authorityJSON(t, decision), authorityJSON(t, event), string(platformEvidence), string(notApplicableBoundary))
 		_ = tx.Rollback(ctx)
 		code := "22023"
 		if attack == "revoked platform attachment" {

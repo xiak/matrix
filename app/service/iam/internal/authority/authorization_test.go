@@ -304,6 +304,123 @@ func policyVersionForTest(t *testing.T, id iamv1.PolicyID, effect iamv1.PolicyEf
 	return iamv1.PolicyVersion{PolicyID: id, ID: "version-one", Document: document, ContentDigest: digest}
 }
 
+func TestUserBoundaryIntersectsAllGrantsWithoutGrantingAuthority(t *testing.T) {
+	now := authorityTestTime()
+	request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-prod"}, RequestID: "boundary-test", CorrelationID: "boundary-test"}
+	for _, test := range []struct {
+		name     string
+		grants   bool
+		boundary bool
+		effect   iamv1.PolicyEffect
+		resource string
+		want     bool
+	}{
+		{"no grants and no boundary", false, false, iamv1.PolicyAllow, "application-prod", false},
+		{"boundary alone", false, true, iamv1.PolicyAllow, "application-prod", false},
+		{"unbounded grants", true, false, iamv1.PolicyAllow, "application-prod", true},
+		{"intersection", true, true, iamv1.PolicyAllow, "application-prod", true},
+		{"different resource", true, true, iamv1.PolicyAllow, "application-other", false},
+		{"explicit boundary deny", true, true, iamv1.PolicyDeny, "application-prod", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			subject := authoritySubject(now)
+			if test.grants {
+				subject.Policies = authoritySubject(now, iamv1.SystemPolicyPaaSDeveloper, iamv1.SystemPolicyPaaSViewer).Policies
+			}
+			if test.boundary {
+				version := policyVersionForTest(t, "policy-boundary", test.effect, request.Action, iamv1.PolicyResourceExact, test.resource)
+				subject.Boundary = userBoundaryForTest(subject, version)
+			}
+			decision, err := Decide(subject, iamv1.ServicePaaS, request, "decision-boundary", now)
+			if err != nil || decision.Allowed != test.want {
+				t.Fatalf("allowed=%v err=%v", decision.Allowed, err)
+			}
+			if !test.grants && len(decision.PolicyEvidence) != 0 {
+				t.Fatal("boundary synthesized a positive attachment")
+			}
+			if test.boundary && (decision.BoundaryEvidence.Version == nil || decision.BoundaryEvidence.Version.PolicyID != "policy-boundary") {
+				t.Fatal("nonmatching boundary lost its version proof")
+			}
+			encoded, err := json.Marshal(decision)
+			if err != nil || bytes.Contains(encoded, []byte("boundaryId")) || bytes.Contains(encoded, []byte("policy-boundary")) {
+				t.Fatal("private boundary evidence leaked")
+			}
+		})
+	}
+}
+
+func TestUserBoundarySeparatesPlatformAuthorityAndEvaluatesCurrentConditions(t *testing.T) {
+	now := authorityTestTime()
+	subject := authoritySubject(now, iamv1.SystemPolicyPaaSDeveloper, iamv1.SystemPolicyPlatformOperator)
+	version := policyVersionForTest(t, "policy-boundary", iamv1.PolicyAllow, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourcePrefixInAuthority, "application-prod")
+	version.Document.Statements[0].Conditions = []iamv1.PolicyCondition{
+		{Key: iamv1.ConditionIAMPrincipalID, Operator: iamv1.PolicyStringEquals, Values: []string{string(subject.Principal.ID)}},
+		{Key: iamv1.ConditionIAMCurrentTime, Operator: iamv1.PolicyDateLessThan, Values: []string{now.Add(time.Minute).Format(time.RFC3339)}},
+	}
+	var err error
+	_, version.ContentDigest, err = iamv1.CanonicalizePolicyDocument(version.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject.Boundary = userBoundaryForTest(subject, version)
+	request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-prod-api"}, RequestID: "boundary-condition", CorrelationID: "boundary-condition"}
+	for _, offset := range []time.Duration{0, time.Minute} {
+		result, err := Decide(subject, iamv1.ServicePaaS, request, "decision-condition", now.Add(offset))
+		if err != nil || result.Allowed != (offset == 0) || result.BoundaryEvidence.Version == nil {
+			t.Fatal("boundary condition/time proof differs")
+		}
+	}
+	request.Action, request.Resource = iamv1.ActionPaaSExecutionTargetRead, iamv1.ResourceReference{Kind: iamv1.ResourceExecutionTarget, ID: "target-example"}
+	result, err := Decide(subject, iamv1.ServicePaaS, request, "decision-platform", now.Add(time.Minute))
+	if err != nil || !result.Allowed || result.BoundaryEvidence.State != "NOT_APPLICABLE" {
+		t.Fatal("tenant boundary restricted independent platform authority")
+	}
+	subject.Boundary.AccountID = "foreign"
+	if result, err := Decide(subject, iamv1.ServicePaaS, request, "decision-corrupt", now); !errors.Is(err, ErrAuthorityUnavailable) || result.Allowed {
+		t.Fatal("platform decision bypassed identity integrity")
+	}
+}
+
+func TestUserBoundaryCorruptionCannotBecomeUnbounded(t *testing.T) {
+	now := authorityTestTime()
+	request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-prod"}, RequestID: "boundary-invalid", CorrelationID: "boundary-invalid"}
+	for _, test := range []struct {
+		name   string
+		mutate func(*SubjectContext)
+	}{
+		{"missing", func(s *SubjectContext) { s.Boundary = nil }},
+		{"unknown state", func(s *SubjectContext) { s.Boundary.State = "UNKNOWN" }},
+		{"foreign account", func(s *SubjectContext) { s.Boundary.AccountID = "other" }},
+		{"foreign user", func(s *SubjectContext) { s.Boundary.UserID = "other" }},
+		{"stale user revision", func(s *SubjectContext) { s.Boundary.UserResourceVersion++ }},
+		{"false none", func(s *SubjectContext) { s.Boundary.State = "NONE" }},
+		{"missing policy", func(s *SubjectContext) { s.Boundary.Policy = nil }},
+		{"wrong default", func(s *SubjectContext) { s.Boundary.Policy.DefaultVersionID = "different" }},
+		{"foreign policy", func(s *SubjectContext) { s.Boundary.Policy.AccountID = "other" }},
+		{"retired policy", func(s *SubjectContext) { s.Boundary.Policy.Status = iamv1.PolicyRetired }},
+		{"corrupt digest", func(s *SubjectContext) { s.Boundary.Version.ContentDigest = "sha256:" + strings.Repeat("0", 64) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := authoritySubject(now, iamv1.SystemPolicyPaaSDeveloper)
+			s.Boundary = userBoundaryForTest(s, policyVersionForTest(t, "policy-boundary", iamv1.PolicyAllow, request.Action, iamv1.PolicyResourceAnyInAuthority, ""))
+			test.mutate(&s)
+			result, err := Decide(s, iamv1.ServicePaaS, request, "decision-invalid", now)
+			if !errors.Is(err, ErrAuthorityUnavailable) || result.Allowed {
+				t.Fatal("corrupt boundary allowed or silently denied instead of failing closed")
+			}
+		})
+	}
+}
+
+func userBoundaryForTest(subject SubjectContext, version iamv1.PolicyVersion) *ResolvedUserBoundary {
+	policy := iamv1.Policy{APIVersion: iamv1.APIVersion, Kind: "Policy", ID: version.PolicyID, Management: iamv1.PolicyCustomerManaged,
+		AccountID: subject.Organization.ID, DisplayName: "Boundary", Scope: iamv1.AuthorityScopeTenant, Status: iamv1.PolicyActive,
+		DefaultVersionID: version.ID, ResourceVersion: 1, CreatedAt: subject.Principal.CreatedAt, UpdatedAt: subject.Principal.UpdatedAt}
+	return &ResolvedUserBoundary{State: "BOUND", AccountID: subject.Organization.ID, UserID: subject.Principal.ID, UserResourceVersion: subject.Principal.ResourceVersion,
+		BoundaryID: "boundary-example", ResourceVersion: 1, Policy: &policy, Version: &version}
+}
+
 func TestIdentityConditionsUseTheAuthenticatedSubjectAndExactSetSemantics(t *testing.T) {
 	now := authorityTestTime()
 	for _, test := range []struct {
@@ -950,6 +1067,7 @@ func authoritySubject(now time.Time, policyIDs ...iamv1.PolicyID) SubjectContext
 			Status: iamv1.SessionActive, IssuedAt: createdAt, ExpiresAt: now.Add(time.Hour),
 		},
 		Policies:       authorityPolicies(now, "organization-example", iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"}, "installation-example", policyIDs...),
+		Boundary:       &ResolvedUserBoundary{State: "NONE", AccountID: "organization-example", UserID: "principal-developer", UserResourceVersion: 1},
 		InstallationID: "installation-example",
 	}
 }

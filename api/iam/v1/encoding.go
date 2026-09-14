@@ -30,6 +30,26 @@ func DecodeRequest(reader io.Reader, destination any) error {
 	return contractjson.DecodeObject(reader, MaxRequestBytes, destination)
 }
 
+func (value *UserPermissionBoundary) UnmarshalJSON(source []byte) error {
+	type wire UserPermissionBoundary
+	var decoded wire
+	if err := contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded); err != nil {
+		return err
+	}
+	var fields struct {
+		Policy json.RawMessage `json:"policy"`
+	}
+	if err := json.Unmarshal(source, &fields); err != nil || len(fields.Policy) == 0 {
+		return contractjson.ErrInvalidDocument
+	}
+	result := UserPermissionBoundary(decoded)
+	if err := ValidateUserPermissionBoundary(result); err != nil {
+		return err
+	}
+	*value = result
+	return nil
+}
+
 func (request *ChangePasswordRequest) UnmarshalJSON(source []byte) error {
 	// A missing policy defaults to true; explicit null is not a boolean choice.
 	// Reuse the strict decoder rather than bypassing its field/duplicate checks.

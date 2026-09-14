@@ -880,6 +880,7 @@ func (transaction *coreTransaction) LookupSession(
 	}
 	binding.Subject.Principal = principal
 	binding.Subject.Policies = transaction.attachedPolicies(principal.ID)
+	binding.Subject.Boundary = &authority.ResolvedUserBoundary{State: "NONE", AccountID: principal.AccountID, UserID: principal.ID, UserResourceVersion: principal.ResourceVersion}
 	return binding, true, nil
 }
 

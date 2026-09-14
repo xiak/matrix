@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 
@@ -8,6 +9,45 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 )
+
+func (value *transaction) ReadUserPermissionBoundary(ctx context.Context, read identityaccess.AccountRead, user iamv1.PrincipalID) (iamv1.UserPermissionBoundary, error) {
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.read_user_permission_boundary($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, user).Scan(&encoded); err != nil {
+		return iamv1.UserPermissionBoundary{}, mapAuthorizationDatabaseError("read IAM user boundary", err)
+	}
+	return decodeUserPermissionBoundary(encoded, read.AccountID, user)
+}
+
+func (value *transaction) ChangeUserPermissionBoundary(ctx context.Context, mutation identityaccess.UserBoundaryMutation) (iamv1.UserPermissionBoundary, error) {
+	if auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		return iamv1.UserPermissionBoundary{}, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.UserPermissionBoundary{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	var encoded []byte
+	if err = value.tx.QueryRow(ctx, "SELECT iam.change_user_permission_boundary($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)",
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.UserID, mutation.ResourceVersion, mutation.PolicyID, mutation.PolicyResourceVersion, mutation.BoundaryID, event, mutation.SessionID).Scan(&encoded); err != nil {
+		return iamv1.UserPermissionBoundary{}, mapAuthorizationDatabaseError("change IAM user boundary", err)
+	}
+	result, err := decodeUserPermissionBoundary(encoded, mutation.AccountID, mutation.UserID)
+	if err != nil || result.ResourceVersion != mutation.ResourceVersion+1 || (mutation.PolicyID == "") != (result.Policy == nil) ||
+		(result.Policy != nil && result.Policy.PolicyID != mutation.PolicyID) {
+		return iamv1.UserPermissionBoundary{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func decodeUserPermissionBoundary(encoded []byte, account iamv1.AccountID, user iamv1.PrincipalID) (iamv1.UserPermissionBoundary, error) {
+	defer clear(encoded)
+	var result iamv1.UserPermissionBoundary
+	if iamv1.DecodeRequest(bytes.NewReader(encoded), &result) != nil || iamv1.ValidateUserPermissionBoundary(result) != nil || result.AccountID != account || result.UserID != user {
+		return iamv1.UserPermissionBoundary{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
 
 func normalizeAccount(value *iamv1.Account) {
 	value.CreatedAt = value.CreatedAt.UTC()

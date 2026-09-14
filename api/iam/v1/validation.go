@@ -653,6 +653,11 @@ func expectedCapabilitySet(values ...struct {
 }
 
 func ValidateCurrentIdentity(value CurrentIdentity) error {
+	if ValidateUserPermissionBoundary(value.PermissionBoundary) != nil || value.PermissionBoundary.AccountID != value.Account.ID ||
+		value.PermissionBoundary.UserID != value.User.ID || value.PermissionBoundary.ResourceVersion != value.User.ResourceVersion ||
+		(value.IdentityKind == IdentityRoot && value.PermissionBoundary.Policy != nil) {
+		return errors.New("current identity boundary is invalid")
+	}
 	if value.APIVersion != APIVersion || value.Kind != "CurrentIdentity" ||
 		value.PolicySources == nil || len(value.PolicySources) > 256 ||
 		value.User.AccountID != value.Account.ID {

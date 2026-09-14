@@ -198,11 +198,12 @@ func (service *Authority) decideAndRecord(
 		return iamv1.AuthorizationDecision{}, err
 	}
 	if err := transaction.RecordAuthorization(ctx, AuthorizationMutation{
-		AccountID:      actor.organizationID,
-		PrincipalID:    actor.principalID,
-		Decision:       decision.AuthorizationDecision,
-		PolicyEvidence: decision.PolicyEvidence,
-		AuditEvent:     event,
+		AccountID:        actor.organizationID,
+		PrincipalID:      actor.principalID,
+		Decision:         decision.AuthorizationDecision,
+		PolicyEvidence:   decision.PolicyEvidence,
+		BoundaryEvidence: decision.BoundaryEvidence,
+		AuditEvent:       event,
 	}); err != nil {
 		return iamv1.AuthorizationDecision{}, err
 	}

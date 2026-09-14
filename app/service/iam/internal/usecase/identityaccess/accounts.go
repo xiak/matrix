@@ -48,6 +48,10 @@ func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.
 		}
 		result = iamv1.CurrentIdentity{APIVersion: iamv1.APIVersion, Kind: "CurrentIdentity", Account: account,
 			User: user, IdentityKind: identityKind, PolicySources: sources, Capabilities: capabilities}
+		result.PermissionBoundary = iamv1.UserPermissionBoundary{APIVersion: iamv1.APIVersion, Kind: "UserPermissionBoundary", AccountID: account.ID, UserID: user.ID, ResourceVersion: user.ResourceVersion}
+		if subject.Boundary.Version != nil {
+			result.PermissionBoundary.Policy = &iamv1.PolicyVersionReference{PolicyID: subject.Boundary.Version.PolicyID, VersionID: subject.Boundary.Version.ID, ContentDigest: subject.Boundary.Version.ContentDigest}
+		}
 		return nil
 	})
 	if err != nil {
@@ -354,6 +358,71 @@ func (service *Authority) GetPolicy(ctx context.Context, credential iamv1.Secret
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
 			return tx.ReadPolicy(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
 				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id)
+		})
+}
+
+func (service *Authority) GetUserPermissionBoundary(ctx context.Context, credential iamv1.Secret, user iamv1.PrincipalID, requestID string) (iamv1.UserPermissionBoundary, error) {
+	if iamv1.ValidateID("userId", string(user)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.UserPermissionBoundary{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserRead, iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(user)}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.UserPermissionBoundary, error) {
+			return tx.ReadUserPermissionBoundary(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, user)
+		})
+}
+
+func (service *Authority) SetUserPermissionBoundary(ctx context.Context, credential iamv1.Secret, user iamv1.PrincipalID, request iamv1.SetUserPermissionBoundaryRequest) (iamv1.UserPermissionBoundary, error) {
+	if iamv1.ValidateSetUserPermissionBoundaryRequest(request) != nil {
+		return iamv1.UserPermissionBoundary{}, ErrInvalidArgument
+	}
+	return service.changeUserPermissionBoundary(ctx, credential, user, request)
+}
+
+func (service *Authority) RemoveUserPermissionBoundary(ctx context.Context, credential iamv1.Secret, user iamv1.PrincipalID, request iamv1.RemoveUserPermissionBoundaryRequest) (iamv1.UserPermissionBoundary, error) {
+	if iamv1.ValidateRemoveUserPermissionBoundaryRequest(request) != nil {
+		return iamv1.UserPermissionBoundary{}, ErrInvalidArgument
+	}
+	return service.changeUserPermissionBoundary(ctx, credential, user, iamv1.SetUserPermissionBoundaryRequest{ResourceVersion: request.ResourceVersion, RequestID: request.RequestID})
+}
+
+func (service *Authority) changeUserPermissionBoundary(ctx context.Context, credential iamv1.Secret, user iamv1.PrincipalID, request iamv1.SetUserPermissionBoundaryRequest) (iamv1.UserPermissionBoundary, error) {
+	if iamv1.ValidateID("userId", string(user)) != nil {
+		return iamv1.UserPermissionBoundary{}, ErrInvalidArgument
+	}
+	action, fact := iamv1.ActionIAMUserPermissionBoundarySet, auditv1.ActionIAMUserPermissionBoundarySet
+	if request.PolicyID == "" {
+		action, fact = iamv1.ActionIAMUserPermissionBoundaryRemove, auditv1.ActionIAMUserPermissionBoundaryRemoved
+	}
+	requestDigest, err := digestSanitized(string(action), struct {
+		UserID  iamv1.PrincipalID                      `json:"userId"`
+		Request iamv1.SetUserPermissionBoundaryRequest `json:"request"`
+	}{user, request})
+	if err != nil {
+		return iamv1.UserPermissionBoundary{}, err
+	}
+	return withAccountAuthorization(service, ctx, credential, action, iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(user)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.UserPermissionBoundary, error) {
+			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
+				return iamv1.UserPermissionBoundary{}, err
+			}
+			boundaryID := ""
+			if request.PolicyID != "" {
+				digest, err := digestSanitized("user-boundary-identity", struct {
+					AccountID iamv1.AccountID   `json:"accountId"`
+					ActorID   iamv1.PrincipalID `json:"actorId"`
+					RequestID string            `json:"requestId"`
+				}{subject.Subject.Organization.ID, subject.Subject.Principal.ID, request.RequestID})
+				if err != nil {
+					return iamv1.UserPermissionBoundary{}, err
+				}
+				boundaryID = "boundary-" + digest[len("sha256:"):]
+			}
+			event, err := service.newManagementEvent(subject, fact, auditv1.TargetUser, string(user), decision.ID, requestDigest, request.RequestID, now)
+			if err != nil {
+				return iamv1.UserPermissionBoundary{}, err
+			}
+			return tx.ChangeUserPermissionBoundary(ctx, UserBoundaryMutation{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				SessionID: subject.Subject.Session.ID, DecisionID: decision.ID, UserID: user, ResourceVersion: request.ResourceVersion, PolicyID: request.PolicyID, PolicyResourceVersion: request.PolicyResourceVersion, BoundaryID: boundaryID, AuditEvent: event})
 		})
 }
 

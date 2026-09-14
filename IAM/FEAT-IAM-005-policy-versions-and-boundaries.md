@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串条件及资源前缀已有固定 CI，最新验证点为 `b342e9d`。User 权限边界已细化设计，未实施；动作通配、IP 条件、完整边界/委派和 UI 闭环未完成，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串条件及资源前缀已有固定 CI，此前验证点为 `b342e9d`。User 权限边界后端的本地真库、独立多进程、竞争/撤销、混合授权与分页门禁已通过，本片独立 CI 待确认。边界 UI、动作通配、IP 条件、Role 边界及完整委派未完成，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -118,7 +118,7 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 #### 权限边界：User 纵向闭环
 
-本节是下一实现片的设计与验收契约，不是已存在 API 或验收证据。先使普通 User 的真实管理、鉴权、分页、历史证明闭合；Role 的边界随 006 的真实 RoleSession 接入，不制造临时 Role 别名或在本片后删除 Role 需求。边界用于限制主体，不是第二种正向附件、单独的 Deny 策略或 Group 的属性。
+本节拥有 User 边界后端的设计与验收契约，真实运行证据见本 FEAT 验收节；它不等于完整 LANG-05/08 或控制台验收。Role 的边界随 006 的真实 RoleSession 接入，不制造临时 Role 别名或删除 Role 需求。边界用于限制主体，不是第二种正向附件、单独的 Deny 策略或 Group 的属性。
 
 **权限合成。** 每个普通 User 最多一个当前 TENANT 边界，引用已有 ACTIVE/TENANT Policy；CUSTOMER 必须属于当前 Account，SYSTEM 必须是本账号可见的租户策略。边界跟随该 Policy 的当前默认版本，不另开版本 pin 或复制策略内容。普通直接/组授权先按现有唯一求值器求并集并处理显式 Deny，再与边界的 Allow 求交；两边任一匹配 Deny 均拒绝。边界使用同一次 IAM 身份、数据库时间和资源上下文，不能引用另一账号、组身份或请求属性。
 
@@ -145,7 +145,7 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 **事务和存储。** 仍由 identityaccess 用例协调 SERIALIZABLE 事务、当前 PDP、受限数据库函数与 outbox。在既有 principal/user 修订上做并发控制，不引入与 User 脱节的可独立授权聚合。现有 policy authority 迁移 owner 增加按 tenant+USER 归属的边界关系及不可丢弃的设置/撤销历史；一个 User 至多一个未撤销关系，复设形成新关系身份而非恢复旧关系。关系不是 `policy_attachments` 的另一种 target。首次没有关系必须由权威查询明确输出 NONE；数据库/解码错误、缺少查询结果或内连接漏行不能输出 NONE。
 
-锁顺序为 Account → actor/目标 USER（同类按稳定 ID 顺序）→ 原 root 关系 → 涉及的 Policy（旧/新按稳定 ID 顺序）→ 当前边界关系。写入重检活跃 Account/actor、目标为本账号未删除的普通 USER、原 root 关系、当前会话和预期 User/Policy 修订；允许为停用的普通 User 管理边界，但不得顺带启用它。User resourceVersion 与关系更新、单一成功事实在同事务提交。set/remove 与 User 状态/删除、Policy 默认切换/删除、另一边界命令的锁序必须与既有函数逐项对齐，真实竞争只允许一个符合预期修订的赢家或有界失败关闭。
+锁顺序为 Account → actor/目标 USER（同类按稳定 ID 顺序）→ 原 root 关系 → actor 凭据/当前会话 → 涉及的 Policy（旧/新按稳定 ID 顺序）→ 当前边界关系。私有 mutation 的 SessionID 只能取本次认证 bearer，公共请求不接受该字段；锁内检查该会话仍属于 actor、未撤销/未到期且凭据代际相同，和改密/退出共享 principal-first 顺序。写入重检活跃 Account/actor、目标为本账号未删除的普通 USER、原 root 关系和预期 User/Policy 修订；允许为停用的普通 User 管理边界，但不得顺带启用它。User resourceVersion 与关系更新、单一成功事实在同事务提交。set/remove 与 User 状态/删除、Policy 默认切换/删除、另一边界命令的锁序必须逐项对齐。同一 User 修订的竞争只有一个赢家；set 与 Policy 删除不能留下活跃的退休策略引用。set 若先于默认切换提交，两项可以合法成功，边界必须跟随新默认；若默认切换先提交，set 的旧 policyResourceVersion 必须冲突。不能为了强行得到单一赢家而把默认跟随改成版本 pin。
 
 任何当前边界引用都阻止 Policy 删除，包括停用 User 的引用；不能因没有普通附件而误判无引用。边界跟随默认，因此只阻止当前默认版本退休，旧非默认版本可依既有规则退休但必须保留内容与历史证明。User 删除在其既有事务内终结当前边界并保留历史；停用/恢复不移除边界、不复活旧关系。末尾 outbox 故障不得留下 User 修订、边界状态或完成事实的部分变更。
 
@@ -169,6 +169,32 @@ CurrentIdentity/capabilities 与所有目录每页重新调用当前 PDP；curso
 ## 验收
 
 Allow/Deny/边界交集表、条件缺失/类型/大小攻击、跨账号资源与 namespace、未知版本/Action、显式 Deny 全来源优先；真实数据库改版/附件/边界并发，旧 session 下次请求立即反映；旧事实仍可验证投递；UI 与 API 使用同一文档。fuzz 只证明当前 grammar 不崩溃且失败关闭，不快照实现细节。
+
+### User 边界后端证据：独立 CI 待确认
+
+契约、唯一 statement evaluator 的交集、独立 provenance 和 cursor 当前边界/default 摘要已进入当前工作树。严格响应 decoder 不将缺失 policy 当成显式 null；生成 schema 的 nullable/required 缺失由正向测试发现并修正。API schema/Go 验证、边界不授予权限、时间/身份/前缀条件、损坏快照失败关闭、平台不求租户交集及 cursor 旧默认拒绝的聚焦 race 通过；相关 usecase/架构与 vet 通过。它们不证明管理写入或安全委派已完成。
+
+2026-09-14，专属 PostgreSQL 18（1 CPU、768 MiB、PIDs128、最多64连接）新库的原版本/条件门禁通过，最后子流程11.95s、父流程16.27s、包18.891s；它仅证明既有行为能消费新 snapshot/recorder。随后现有 HTTP/PG owner 新增 User 边界流程，最终聚焦包9.406s、父流程6.65s、边界流程2.11s通过：无授权时边界不授予权限、多授权求交、精确重放、SYSTEM 替换、停用 User 移除不启用、原命令不能恢复旧状态；同一 Policy 的正向附件与边界证据独立，发布不改默认，显式切换后原 bearer 下一请求改变权限。没有普通附件时的边界引用独立阻止 Policy 删除；两个同名策略的真实账号不能互换归属，平台策略/root/跨账号目标、服务凭据与 caller selector 拒绝。
+
+同修订两个 set 只有一项成功；成功事实的 outbox 最后故障回滚 User 修订、关系、决定及事实。数据库锁屏障证明请求已鉴权但尚未写入时，对准确 bearer 的退出先完成，放行后的请求拒绝且无边界/成功事实变化。初始屏障放在决定插入之后，已有外键锁会阻塞退出，导致测试请求截止而非预期竞争；改为决定插入前的锁屏障后真实通过，没有增大超时或放宽生产鉴权。API/worker/recovery 不能直接读写关系，owner 也不能删除/复活历史；新 recorder 省略、空、错误 scope 和陈旧 User 修订证据均拒绝，已提交证据不可修改。旧 set 事实在换版、替换、移除和停用后仍通过 IAM-source 精确 proof。
+
+Audit 原双 schema/受限 recorder/封闭 action/不可变链真库门禁5.324s通过；其旧五参数测试消费者已改为六参数，从实际主体修订和真实无边界状态构造 NONE，平台/服务使用 NOT_APPLICABLE，并核对存储的独立证据。不保留旧 overload 或空证据兼容入口。生成 schema 对响应 kind/apiVersion 的遗漏经负向门禁先失败后修正，严格 codec 与 OpenAPI 同步拒绝伪类型。
+
+完整 `TestIAMPolicyAuthorityStoragePostgres` 在本片新数据库串行 race 通过87.05s（包89.626s），User 边界2.64s，保留原真实组规模/分页、版本/条件/元数据/终态、凭据并发、受限存储攻击和最后 schema/bootstrap 带数据重放。相关 API/IAM/Audit/架构 race 回归通过；默认跳过数据库的包结果不是额外真库证据。随后补充 remove/User 删除的同修订竞争，在另一个新库聚焦通过2.19s（父6.88s、包9.594s）：只有一条成功完成事实，删除后无当前边界/凭据，全部关系历史仍在，旧 set 不能复活，原事实继续通过 proof。首轮测试误用了 DELETE User 路由，改为已有 POST `:delete` 后通过，没有另造删除接口。
+
+新增真实边界场景后的独立 `TestIndependentIAMAuditAndPaaSProcesses` 串行 race 通过45.79s（包48.451s）：原流程先创建两个真实 PaaS 应用；只有边界时两个 IAM 实例及 PaaS 均拒绝，随后显式普通授权只能读取被边界选中的应用。两实例 CurrentIdentity 保持边界与正向来源分离；发布新版本不立即改变上限，另一实例显式选择 Deny 默认后，同一 bearer 的下一请求拒绝。移除边界恢复普通授权覆盖的两个应用，撤销普通附件再全部拒绝。实际 IAM dispatcher 投递单一 set/removed 租户事实，真实 Audit 查询核对目标 USER、decision 关联并完成链验证；原受限运行身份、跨账号资源/Operation/outbox 和失联回归保留。这是本次新增运行证据，不继承旧进程结论，也不作为 UI、容量或完整 LANG-05/08 验收。
+
+本轮专属 PG 容器、网络和合成数据卷在精确 ID/标签与零客户端核对后清理；没有用户数据或其他任务环境变更。
+
+边界与 Policy 竞争的新增真库子流程通过3.69s（父8.02s、包10.584s）：replace/remove 同 User 修订单一赢家，set/default 按合法提交顺序观察当前默认或拒绝旧修订，set/Policy 删除没有退休策略的活跃引用，成功事实精确对应已提交关系。受边界约束的初始 User 通过真实登录产生两个临时会话，强制改密即使提交 revokeOtherSessions=false 也撤销其他临时会话，只保留调用会话；新 CurrentIdentity 保留边界、清除 must-change 而不产生正向授权，之后自助退出仍成功。
+
+现有组/成员容量门禁复用真实百条 HTTP 数据补边界分页后通过32.63s（父36.62s、包39.201s）：设置、默认切换、移除均拒绝旧 cursor；两默认版本都允许列表时也不复用旧快照，新 cursor 仍能翻到下一页。没有新建分页框架、批量伪造权限数据或扩大页面上限。
+
+以上竞争/分页测试增量后的全仓 Go race 测试与 vet、模块校验、API 生成字节稳定及 Linux amd64 全仓构建通过。默认跳过的外部环境测试没有记作真实运行；最终独立 CI 尚待固定提交。
+
+最终混合授权聚焦通过3.05s（父7.42s、包9.969s）：同一 USER 的直接授权与两个真实 Group 继承均不能绕过边界，决定保存两个精确 Membership 证明；普通 Group 中的 Deny 在边界 Allow 时仍拒绝，撤销该 Deny 后恢复交集内访问。随后最终源码的完整串行 PG18 回归通过：IAM integration172.824s、Audit 数据5.412s、Audit HTTP2.650s、独立双 IAM/PaaS/Audit45.400s、PaaS 数据4.310s。该轮包含现有凭据/恢复、schema/bootstrap 带数据重放、真实运行身份、资源/Operation/outbox 隔离及全部新边界测试，不扩展未发布历史升级矩阵。
+
+当前源码 readiness 为 IAM18/Audit12/PaaS1，反映新增快照/六参数 recorder、带私有 session 参数的边界写入口和两个封闭成功事实；实际 lookup_session 末尾为 policies/boundary 两个 jsonb。没有修改安装 profile，不授权旧 binary 使用新函数形状。两个新 IAM 管理 Action 进入显式目录，但发行策略的新内容不会借 schema/bootstrap 等值重放偷偷切换已存在默认指针；首版策略由最终发行基线冻结。独立 CI 尚待提交绑定确认，UI、Role 边界、安全委派及其他语言需求仍未验收；不能将本片后端门禁作为整 FEAT 完成。
 
 ### 当前首片证据与未完成边界
 

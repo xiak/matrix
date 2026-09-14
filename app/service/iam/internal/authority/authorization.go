@@ -18,6 +18,7 @@ type SubjectContext struct {
 	Principal    iamv1.Principal
 	Session      iamv1.Session
 	Policies     []AttachedPolicy
+	Boundary     *ResolvedUserBoundary
 	// InstallationID is read from the sealed IAM bootstrap receipt, not a
 	// request field or an organization ID. Empty context cannot grant platform
 	// authority even when an attachment has been supplied.
@@ -28,7 +29,8 @@ type SubjectContext struct {
 // sanitized public decision. Only the decision is returned to a caller.
 type AuthorizationEvaluation struct {
 	iamv1.AuthorizationDecision
-	PolicyEvidence []PolicyAttachmentEvidence `json:"-"`
+	PolicyEvidence   []PolicyAttachmentEvidence `json:"-"`
+	BoundaryEvidence UserBoundaryEvidence       `json:"-"`
 }
 
 func AuthenticateSession(
@@ -74,6 +76,7 @@ func Decide(
 		iamv1.Subject{Type: context.Principal.Type, ID: context.Principal.ID},
 		context.Principal.MustChangePassword,
 		context.Policies,
+		context.Boundary,
 		callingService,
 		request,
 		decisionID,
@@ -100,6 +103,7 @@ func DecideService(
 		iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: identity.PrincipalID},
 		false,
 		policies,
+		nil,
 		identity.Purpose,
 		request,
 		decisionID,
@@ -113,6 +117,7 @@ func decide(
 	subject iamv1.Subject,
 	mustChangePassword bool,
 	policies []AttachedPolicy,
+	boundary *ResolvedUserBoundary,
 	callingService iamv1.ServicePurpose,
 	request iamv1.AuthorizationRequest,
 	decisionID iamv1.DecisionID,
@@ -130,6 +135,16 @@ func decide(
 	evaluation, evidence, err := EvaluateAttachedPolicies(databaseTime, tenantID, installationID, subject, policies, request.Action, request.Resource)
 	if err != nil {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
+	}
+	boundaryEvidence := UserBoundaryEvidence{State: "NOT_APPLICABLE"}
+	definition, _ := iamv1.LookupActionDefinition(request.Action)
+	if subject.Type == iamv1.PrincipalUser && definition.AuthorityScope == iamv1.AuthorityScopeTenant {
+		limit, proof, err := evaluateUserBoundary(boundary, policyEvaluationContext{databaseTime, tenantID, subject}, request.Action, request.Resource)
+		if err != nil {
+			return AuthorizationEvaluation{}, ErrAuthorityUnavailable
+		}
+		evaluation.Allowed = evaluation.Allowed && limit.Allowed
+		boundaryEvidence = proof
 	}
 	platform := iamv1.IsPlatformAction(request.Action)
 	platformContext := !platform || subject.Type == iamv1.PrincipalUser && iamv1.ValidateID("installationId", installationID) == nil
@@ -159,7 +174,7 @@ func decide(
 	if err := iamv1.ValidateAuthorizationDecision(decision); err != nil {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
-	return AuthorizationEvaluation{AuthorizationDecision: decision, PolicyEvidence: evidence}, nil
+	return AuthorizationEvaluation{AuthorizationDecision: decision, PolicyEvidence: evidence, BoundaryEvidence: boundaryEvidence}, nil
 }
 
 // ServiceCanRequest confines each authorization action to the service that
@@ -180,6 +195,9 @@ func validateSubjectContext(context SubjectContext, databaseTime time.Time) erro
 	if context.Principal.AccountID != context.Organization.ID ||
 		context.Session.AccountID != context.Organization.ID ||
 		context.Session.PrincipalID != context.Principal.ID {
+		return ErrAuthorityUnavailable
+	}
+	if ValidateUserBoundary(context.Boundary, context.Organization.ID, context.Principal.ID, context.Principal.ResourceVersion) != nil {
 		return ErrAuthorityUnavailable
 	}
 	if context.Organization.Status != iamv1.AccountActive ||

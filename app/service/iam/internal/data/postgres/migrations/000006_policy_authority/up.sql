@@ -63,6 +63,123 @@ CREATE INDEX IF NOT EXISTS policy_attachments_live_policy_idx
 CREATE INDEX IF NOT EXISTS policy_versions_active_inventory_idx
     ON iam.policy_versions(policy_id,id) WHERE retired_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS iam.user_permission_boundaries (
+    tenant_id text COLLATE "C" NOT NULL,
+    id text COLLATE "C" NOT NULL,
+    user_id text COLLATE "C" NOT NULL,
+    policy_id text COLLATE "C" NOT NULL REFERENCES iam.policies(id),
+    resource_version bigint NOT NULL,
+    created_at timestamptz(6) NOT NULL,
+    updated_at timestamptz(6) NOT NULL,
+    revoked_at timestamptz(6),
+    PRIMARY KEY(tenant_id,id),
+    FOREIGN KEY(tenant_id,user_id) REFERENCES iam.principals(tenant_id,id),
+    CONSTRAINT user_permission_boundaries_values_valid CHECK (
+        id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND user_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND resource_version BETWEEN 1 AND 9007199254740991
+        AND updated_at>=created_at
+        AND (revoked_at IS NULL OR (revoked_at=updated_at AND resource_version=2)))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS user_permission_boundaries_current_user_uq
+    ON iam.user_permission_boundaries(tenant_id,user_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS user_permission_boundaries_current_policy_idx
+    ON iam.user_permission_boundaries(policy_id) WHERE revoked_at IS NULL;
+ALTER TABLE iam.user_permission_boundaries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.user_permission_boundaries FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON iam.user_permission_boundaries;
+CREATE POLICY tenant_isolation ON iam.user_permission_boundaries
+    USING(tenant_id=iam.current_tenant_id()) WITH CHECK(tenant_id=iam.current_tenant_id());
+REVOKE ALL ON iam.user_permission_boundaries FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+
+CREATE OR REPLACE FUNCTION iam.guard_user_permission_boundary_change()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF TG_OP='INSERT' THEN
+        IF NEW.resource_version<>1 OR NEW.revoked_at IS NOT NULL OR NEW.created_at<>transaction_timestamp() OR NEW.updated_at<>NEW.created_at
+           OR NOT EXISTS(SELECT 1 FROM iam.principals p WHERE p.tenant_id=NEW.tenant_id AND p.id=NEW.user_id
+                AND p.principal_type='USER' AND p.deleted_at IS NULL)
+           OR EXISTS(SELECT 1 FROM iam.account_roots r WHERE r.account_id=NEW.tenant_id AND r.principal_id=NEW.user_id)
+           OR NOT EXISTS(SELECT 1 FROM iam.policies p WHERE p.id=NEW.policy_id AND p.authority_scope='TENANT' AND p.status='ACTIVE'
+                AND (p.owner_tenant_id IS NULL OR p.owner_tenant_id=NEW.tenant_id)) THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user boundary identity is invalid';
+        END IF;
+    ELSIF ROW(NEW.tenant_id,NEW.id,NEW.user_id,NEW.policy_id,NEW.created_at)
+            IS DISTINCT FROM ROW(OLD.tenant_id,OLD.id,OLD.user_id,OLD.policy_id,OLD.created_at)
+       OR OLD.revoked_at IS NOT NULL OR NEW.resource_version<>OLD.resource_version+1
+       OR NEW.revoked_at IS DISTINCT FROM transaction_timestamp() OR NEW.updated_at IS DISTINCT FROM NEW.revoked_at THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user boundary history is immutable';
+    END IF;
+    RETURN NEW;
+END $function$;
+DROP TRIGGER IF EXISTS user_boundary_transitions ON iam.user_permission_boundaries;
+CREATE TRIGGER user_boundary_transitions BEFORE INSERT OR UPDATE ON iam.user_permission_boundaries
+    FOR EACH ROW EXECUTE FUNCTION iam.guard_user_permission_boundary_change();
+DROP TRIGGER IF EXISTS user_boundaries_cannot_be_deleted ON iam.user_permission_boundaries;
+CREATE TRIGGER user_boundaries_cannot_be_deleted BEFORE DELETE ON iam.user_permission_boundaries
+    FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+DROP TRIGGER IF EXISTS user_boundaries_cannot_be_truncated ON iam.user_permission_boundaries;
+CREATE TRIGGER user_boundaries_cannot_be_truncated BEFORE TRUNCATE ON iam.user_permission_boundaries
+    FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.user_permission_boundaries ENABLE ALWAYS TRIGGER user_boundary_transitions;
+ALTER TABLE iam.user_permission_boundaries ENABLE ALWAYS TRIGGER user_boundaries_cannot_be_deleted;
+ALTER TABLE iam.user_permission_boundaries ENABLE ALWAYS TRIGGER user_boundaries_cannot_be_truncated;
+
+CREATE OR REPLACE FUNCTION iam.current_user_boundary(tenant text,user_id text)
+RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE subject iam.principals%ROWTYPE; binding iam.user_permission_boundaries%ROWTYPE;
+    policy iam.policies%ROWTYPE; version iam.policy_versions%ROWTYPE;
+BEGIN
+    SELECT * INTO subject FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=user_id
+        AND p.principal_type='USER' AND p.deleted_at IS NULL;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary subject is unavailable'; END IF;
+    SELECT * INTO binding FROM iam.user_permission_boundaries b WHERE b.tenant_id=tenant AND b.user_id=current_user_boundary.user_id AND b.revoked_at IS NULL;
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('state','NONE','accountId',tenant,'userId',user_id,'userResourceVersion',subject.resource_version);
+    END IF;
+    SELECT * INTO policy FROM iam.policies p WHERE p.id=binding.policy_id AND p.status='ACTIVE'
+        AND p.authority_scope='TENANT' AND (p.owner_tenant_id IS NULL OR p.owner_tenant_id=tenant);
+    IF NOT FOUND OR EXISTS(SELECT 1 FROM iam.account_roots r WHERE r.account_id=tenant AND r.principal_id=user_id) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary policy is unavailable';
+    END IF;
+    SELECT * INTO version FROM iam.policy_versions v WHERE v.policy_id=policy.id AND v.id=policy.default_version_id AND v.retired_at IS NULL;
+    IF NOT FOUND OR version.authority_scope<>'TENANT' THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary version is unavailable'; END IF;
+    RETURN jsonb_build_object('state','BOUND','accountId',tenant,'userId',user_id,'userResourceVersion',subject.resource_version,
+        'boundaryId',binding.id,'resourceVersion',binding.resource_version,
+        'policy',jsonb_strip_nulls(jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','Policy',
+            'id',policy.id,'management',policy.management,'accountId',policy.owner_tenant_id,'displayName',policy.display_name,
+            'scope',policy.authority_scope,'status',policy.status,'defaultVersionId',policy.default_version_id,
+            'resourceVersion',policy.resource_version,'createdAt',policy.created_at,'updatedAt',policy.updated_at)),
+        'version',jsonb_build_object('policyId',version.policy_id,'versionId',version.id,'document',version.document,'contentDigest',version.content_digest));
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.assert_current_user_boundary_evidence(tenant text,actor text,action_name text,evidence jsonb)
+RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE actor_type text; boundary jsonb; expected jsonb;
+BEGIN
+    SELECT principal_type INTO actor_type FROM iam.principals WHERE tenant_id=tenant AND id=actor;
+    IF actor_type IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary actor is unavailable'; END IF;
+    IF actor_type='USER' THEN
+        boundary:=iam.current_user_boundary(tenant,actor);
+    END IF;
+    IF actor_type<>'USER' OR iam.is_platform_action(action_name) OR action_name='installation.verify' THEN
+        expected:=jsonb_build_object('state','NOT_APPLICABLE');
+    ELSE
+        expected:=jsonb_build_object('state',boundary->>'state','userResourceVersion',boundary->'userResourceVersion');
+        IF boundary->>'state'='BOUND' THEN
+            expected:=expected||jsonb_build_object('boundaryId',boundary->>'boundaryId','resourceVersion',boundary->'resourceVersion',
+                'version',jsonb_build_object('policyId',boundary#>>'{version,policyId}','versionId',boundary#>>'{version,versionId}',
+                    'contentDigest',boundary#>>'{version,contentDigest}'));
+        END IF;
+    END IF;
+    IF evidence IS DISTINCT FROM expected THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='authorization boundary evidence is not current';
+    END IF;
+END $function$;
+REVOKE ALL ON FUNCTION iam.guard_user_permission_boundary_change(),iam.current_user_boundary(text,text),
+    iam.assert_current_user_boundary_evidence(text,text,text,jsonb)
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+
 CREATE OR REPLACE FUNCTION iam.assert_customer_policy_document(canonical text,content_digest text)
 RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE document jsonb; statement jsonb; selected_action jsonb; selector jsonb; seen_sids text[]:='{}'; expected_kind text;
@@ -469,7 +586,8 @@ BEGIN
         RETURN iam.lookup_policy(tenant,policy_id);
     END IF;
     IF policy.status<>'ACTIVE' OR policy.resource_version<>expected_version OR EXISTS(
-        SELECT 1 FROM iam.policy_attachments AS a WHERE a.policy_id=delete_policy.policy_id AND a.revoked_at IS NULL) THEN
+        SELECT 1 FROM iam.policy_attachments AS a WHERE a.policy_id=delete_policy.policy_id AND a.revoked_at IS NULL)
+        OR EXISTS(SELECT 1 FROM iam.user_permission_boundaries AS b WHERE b.policy_id=delete_policy.policy_id AND b.revoked_at IS NULL) THEN
         RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy revision or live reference conflicts';
     END IF;
     UPDATE iam.policies AS p SET status='RETIRED',resource_version=resource_version+1,updated_at=effective_now WHERE p.id=policy_id;
@@ -512,3 +630,107 @@ BEGIN
 END $function$;
 REVOKE ALL ON FUNCTION iam.delete_policy_version(text,text,text,text,text,bigint,jsonb) FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.delete_policy_version(text,text,text,text,text,bigint,jsonb) TO matrix_iam_api;
+
+CREATE OR REPLACE FUNCTION iam.user_permission_boundary_snapshot(tenant text,user_id text)
+RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE boundary jsonb; reference jsonb;
+BEGIN
+    boundary:=iam.current_user_boundary(tenant,user_id);
+    IF boundary->>'state'='BOUND' THEN
+        reference:=jsonb_build_object('policyId',boundary#>>'{version,policyId}','versionId',boundary#>>'{version,versionId}','contentDigest',boundary#>>'{version,contentDigest}');
+    END IF;
+    RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','UserPermissionBoundary',
+        'accountId',tenant,'userId',user_id,'resourceVersion',boundary->'userResourceVersion','policy',reference);
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.read_user_permission_boundary(tenant text,actor text,decision text,user_id text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.read','USER',user_id);
+    RETURN iam.user_permission_boundary_snapshot(tenant,user_id);
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.change_user_permission_boundary(tenant text,actor text,decision text,user_id text,
+    expected_version bigint,policy_id text,expected_policy_version bigint,boundary_id text,event jsonb,actor_session_id text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE subject iam.principals%ROWTYPE; current_binding iam.user_permission_boundaries%ROWTYPE; policy iam.policies%ROWTYPE;
+    previous jsonb; action_name text; fact_name text; effective_now timestamptz(6):=transaction_timestamp();
+BEGIN
+    IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990
+        OR COALESCE(actor_session_id,'') !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR policy_id IS NULL OR boundary_id IS NULL OR expected_policy_version IS NULL
+        OR (policy_id='' AND (boundary_id<>'' OR expected_policy_version<>0))
+        OR (policy_id<>'' AND (policy_id !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            OR boundary_id !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' OR expected_policy_version NOT BETWEEN 1 AND 9007199254740991)) THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='user boundary mutation is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts WHERE id=tenant AND status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary account is unavailable'; END IF;
+    PERFORM 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id IN(actor,user_id) ORDER BY p.id FOR UPDATE;
+    PERFORM 1 FROM iam.principals p JOIN iam.account_roots r ON r.account_id=p.tenant_id AND r.principal_id=p.id
+        WHERE p.tenant_id=tenant AND p.id=actor AND p.principal_type='USER' AND p.status='ACTIVE'
+          AND p.deleted_at IS NULL AND NOT p.must_change_password FOR SHARE OF r;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary publisher is unavailable'; END IF;
+    -- Only the authenticated bearer supplies this private session reference.
+    -- Credential/logout writers take the same principal lock first; locking
+    -- the current rows forces stale SERIALIZABLE snapshots to retry, not apply.
+    PERFORM 1 FROM iam.user_credentials c JOIN iam.sessions s
+        ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id
+        WHERE c.tenant_id=tenant AND c.principal_id=actor AND s.id=actor_session_id
+          AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>effective_now
+          AND s.credential_version=c.credential_version FOR SHARE OF c,s;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary session is unavailable'; END IF;
+    SELECT * INTO subject FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=user_id AND p.principal_type='USER' AND p.deleted_at IS NULL;
+    IF NOT FOUND OR EXISTS(SELECT 1 FROM iam.account_roots r WHERE r.account_id=tenant AND r.principal_id=user_id) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary target is unavailable';
+    END IF;
+    action_name:=CASE WHEN policy_id='' THEN 'iam.user.permission-boundary.remove' ELSE 'iam.user.permission-boundary.set' END;
+    fact_name:=CASE WHEN policy_id='' THEN 'iam.user.permission-boundary.removed' ELSE 'iam.user.permission-boundary.set' END;
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,action_name,'USER',user_id);
+    PERFORM iam.assert_audit_event(event,tenant,fact_name,'USER',user_id,'SUCCEEDED');
+    PERFORM iam.assert_user_audit_actor(tenant,actor,event);
+    IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='boundary decision is invalid'; END IF;
+    SELECT * INTO current_binding FROM iam.user_permission_boundaries b
+        WHERE b.tenant_id=tenant AND b.user_id=change_user_permission_boundary.user_id AND b.revoked_at IS NULL;
+    PERFORM 1 FROM iam.policies p WHERE p.id IN(policy_id,current_binding.policy_id) ORDER BY p.id FOR UPDATE;
+    IF policy_id<>'' THEN
+        SELECT * INTO policy FROM iam.policies p WHERE p.id=change_user_permission_boundary.policy_id
+            AND p.status='ACTIVE' AND p.authority_scope='TENANT' AND (p.owner_tenant_id IS NULL OR p.owner_tenant_id=tenant);
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary policy is unavailable'; END IF;
+        IF policy.resource_version<>expected_policy_version THEN RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='boundary policy revision conflicts'; END IF;
+    END IF;
+    PERFORM 1 FROM iam.user_permission_boundaries b WHERE b.tenant_id=tenant AND b.id=current_binding.id FOR UPDATE;
+    SELECT event_document INTO previous FROM iam.audit_outbox o WHERE o.tenant_id=tenant AND o.event_document->>'action'=fact_name
+        AND o.event_document#>>'{actor,id}'=actor AND o.event_document->>'requestId'=event->>'requestId';
+    IF FOUND THEN
+        IF previous->>'requestDigest' IS DISTINCT FROM event->>'requestDigest' OR previous->'target' IS DISTINCT FROM event->'target'
+            OR subject.resource_version<>expected_version+1
+            OR (policy_id='' AND current_binding.id IS NOT NULL)
+            OR (policy_id<>'' AND (current_binding.id IS DISTINCT FROM boundary_id OR current_binding.policy_id IS DISTINCT FROM policy_id)) THEN
+            RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='boundary command replay conflicts';
+        END IF;
+        RETURN iam.user_permission_boundary_snapshot(tenant,user_id);
+    END IF;
+    IF subject.resource_version<>expected_version OR (policy_id='' AND current_binding.id IS NULL)
+        OR (policy_id<>'' AND current_binding.policy_id=policy_id) THEN
+        RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='boundary user revision or state conflicts';
+    END IF;
+    IF current_binding.id IS NOT NULL THEN
+        UPDATE iam.user_permission_boundaries b SET resource_version=b.resource_version+1,updated_at=effective_now,revoked_at=effective_now
+            WHERE b.tenant_id=tenant AND b.id=current_binding.id;
+    END IF;
+    IF policy_id<>'' THEN
+        INSERT INTO iam.user_permission_boundaries(tenant_id,id,user_id,policy_id,resource_version,created_at,updated_at)
+            VALUES(tenant,boundary_id,user_id,policy_id,1,effective_now,effective_now);
+    END IF;
+    UPDATE iam.principals p SET resource_version=p.resource_version+1,updated_at=effective_now WHERE p.tenant_id=tenant AND p.id=user_id;
+    PERFORM iam.append_account_event(tenant,actor,decision,fact_name,'USER',user_id,event);
+    RETURN iam.user_permission_boundary_snapshot(tenant,user_id);
+END $function$;
+REVOKE ALL ON FUNCTION iam.user_permission_boundary_snapshot(text,text),iam.read_user_permission_boundary(text,text,text,text),
+    iam.change_user_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text)
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+GRANT EXECUTE ON FUNCTION iam.read_user_permission_boundary(text,text,text,text),
+    iam.change_user_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text) TO matrix_iam_api;

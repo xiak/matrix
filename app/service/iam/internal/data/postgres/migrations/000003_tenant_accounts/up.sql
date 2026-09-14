@@ -635,6 +635,9 @@ BEGIN
        SET resource_version=membership.resource_version+1,updated_at=effective_now,
            removed_at=effective_now,removed_by=actor
      WHERE membership.tenant_id=tenant AND membership.user_id=delete_user.user_id AND membership.removed_at IS NULL;
+    UPDATE iam.user_permission_boundaries AS boundary
+       SET resource_version=boundary.resource_version+1,updated_at=effective_now,revoked_at=effective_now
+     WHERE boundary.tenant_id=tenant AND boundary.user_id=delete_user.user_id AND boundary.revoked_at IS NULL;
     PERFORM iam.append_account_event(tenant,actor,decision,'iam.user.deleted','USER',user_id,event);
     RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','UserDeletion',
         'accountId',tenant,'id',user_id,'loginName',stored.login_name,

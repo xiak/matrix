@@ -33,6 +33,73 @@ type PolicyAttachmentEvidence struct {
 	Version                   iamv1.PolicyVersionReference `json:"version"`
 }
 
+// ResolvedUserBoundary is a current database snapshot, never a request field
+// or an attachment. NONE is explicit so a missing row/decoder result fails
+// closed rather than silently dropping an upper bound.
+type ResolvedUserBoundary struct {
+	State               string               `json:"state"`
+	AccountID           iamv1.AccountID      `json:"accountId"`
+	UserID              iamv1.PrincipalID    `json:"userId"`
+	UserResourceVersion uint64               `json:"userResourceVersion"`
+	BoundaryID          string               `json:"boundaryId,omitempty"`
+	ResourceVersion     uint64               `json:"resourceVersion,omitempty"`
+	Policy              *iamv1.Policy        `json:"policy,omitempty"`
+	Version             *iamv1.PolicyVersion `json:"version,omitempty"`
+}
+
+type UserBoundaryEvidence struct {
+	State               string                        `json:"state"`
+	UserResourceVersion uint64                        `json:"userResourceVersion,omitempty"`
+	BoundaryID          string                        `json:"boundaryId,omitempty"`
+	ResourceVersion     uint64                        `json:"resourceVersion,omitempty"`
+	Version             *iamv1.PolicyVersionReference `json:"version,omitempty"`
+}
+
+func ValidateUserBoundary(value *ResolvedUserBoundary, account iamv1.AccountID, user iamv1.PrincipalID, revision uint64) error {
+	if iamv1.ValidateID("accountId", string(account)) != nil || iamv1.ValidateID("userId", string(user)) != nil ||
+		value == nil || value.AccountID != account || value.UserID != user ||
+		value.UserResourceVersion != revision || revision == 0 || revision > 9007199254740991 {
+		return ErrInvalidPolicyState
+	}
+	switch value.State {
+	case "NONE":
+		if value.BoundaryID != "" || value.ResourceVersion != 0 || value.Policy != nil || value.Version != nil {
+			return ErrInvalidPolicyState
+		}
+	case "BOUND":
+		if iamv1.ValidateID("boundaryId", value.BoundaryID) != nil || value.ResourceVersion == 0 || value.ResourceVersion > 9007199254740991 ||
+			value.Policy == nil || value.Version == nil || iamv1.ValidatePolicy(*value.Policy) != nil ||
+			iamv1.ValidatePolicyVersion(*value.Version) != nil {
+			return ErrInvalidPolicyState
+		}
+		policy, version := value.Policy, value.Version
+		if policy.Status != iamv1.PolicyActive || policy.Scope != iamv1.AuthorityScopeTenant ||
+			(policy.Management == iamv1.PolicyCustomerManaged && policy.AccountID != account) ||
+			version.PolicyID != policy.ID || version.ID != policy.DefaultVersionID || version.Document.Scope != policy.Scope {
+			return ErrInvalidPolicyState
+		}
+	default:
+		return ErrInvalidPolicyState
+	}
+	return nil
+}
+
+// Boundary statements use the same evaluator and current typed context as
+// grants; their result and provenance must not be merged into grant sources.
+func evaluateUserBoundary(value *ResolvedUserBoundary, context policyEvaluationContext, action iamv1.Action, resource iamv1.ResourceReference) (PolicyEvaluation, UserBoundaryEvidence, error) {
+	evidence := UserBoundaryEvidence{State: value.State, UserResourceVersion: value.UserResourceVersion}
+	if value.State == "NONE" {
+		return PolicyEvaluation{Allowed: true}, evidence, nil
+	}
+	result, err := evaluatePolicies(context, []iamv1.PolicyVersion{*value.Version}, action, resource)
+	if err != nil {
+		return PolicyEvaluation{}, UserBoundaryEvidence{}, err
+	}
+	evidence.BoundaryID, evidence.ResourceVersion = value.BoundaryID, value.ResourceVersion
+	evidence.Version = &iamv1.PolicyVersionReference{PolicyID: value.Policy.ID, VersionID: value.Version.ID, ContentDigest: value.Version.ContentDigest}
+	return result, evidence, nil
+}
+
 type PolicyEvaluation struct {
 	Allowed         bool
 	ExplicitDeny    bool
@@ -275,6 +342,7 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 			iamv1.ActionIAMUserSetStatus, iamv1.ActionIAMUserPasswordReset,
 			iamv1.ActionIAMUserCreate, iamv1.ActionIAMUserRead,
 			iamv1.ActionIAMUserUpdate, iamv1.ActionIAMUserDelete,
+			iamv1.ActionIAMUserPermissionBoundarySet, iamv1.ActionIAMUserPermissionBoundaryRemove,
 			iamv1.ActionIAMPolicyAttachmentCreate, iamv1.ActionIAMPolicyAttachmentRevoke,
 			iamv1.ActionIAMGroupList, iamv1.ActionIAMGroupCreate, iamv1.ActionIAMGroupRead,
 			iamv1.ActionIAMGroupUpdate, iamv1.ActionIAMGroupDelete,

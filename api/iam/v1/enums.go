@@ -161,6 +161,8 @@ const (
 	ActionIAMUserRead                       Action = "iam.user.read"
 	ActionIAMUserUpdate                     Action = "iam.user.update"
 	ActionIAMUserDelete                     Action = "iam.user.delete"
+	ActionIAMUserPermissionBoundarySet      Action = "iam.user.permission-boundary.set"
+	ActionIAMUserPermissionBoundaryRemove   Action = "iam.user.permission-boundary.remove"
 	ActionIAMGroupList                      Action = "iam.group.list"
 	ActionIAMGroupCreate                    Action = "iam.group.create"
 	ActionIAMGroupRead                      Action = "iam.group.read"
@@ -375,6 +377,8 @@ var actionDefinitions = [...]ActionDefinition{
 	{ActionIAMUserRead, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant, false},
 	{ActionIAMUserUpdate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant, false},
 	{ActionIAMUserDelete, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant, false},
+	{ActionIAMUserPermissionBoundarySet, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant, false},
+	{ActionIAMUserPermissionBoundaryRemove, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant, false},
 	{ActionIAMGroupList, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant, false},
 	{ActionIAMGroupCreate, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant, false},
 	{ActionIAMGroupRead, ProductIAM, ServiceIAM, ResourceGroup, AuthorityScopeTenant, false},

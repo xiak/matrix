@@ -81,6 +81,38 @@ func TestResourcePrefixCannotGrantDirectoryAccessOrPreserveStaleCursor(t *testin
 	}
 }
 
+func TestDirectoryCursorRechecksBoundaryAndBindsItsDefaultRevision(t *testing.T) {
+	now := authorityTestTime()
+	codec, err := NewCursorCodec(bytes.Repeat([]byte{0x45}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := authoritySubject(now, iamv1.SystemPolicyAccountAdministrator)
+	query := DirectoryQuery{InstallationID: subject.InstallationID, Action: iamv1.ActionIAMGroupList, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Organization.ID)}}
+	subject.Boundary = userBoundaryForTest(subject, policyVersionForTest(t, "policy-boundary", iamv1.PolicyAllow, query.Action, iamv1.PolicyResourceAnyInAuthority, ""))
+	cursor, err := codec.Encode(subject, query, "group-last", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject.Boundary.Policy.ResourceVersion++
+	subject.Boundary.Policy.DefaultVersionID = "version-next"
+	subject.Boundary.Version.ID = "version-next"
+	if _, err := codec.Decode(cursor, subject, query, now); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("old cursor retained changed boundary default")
+	}
+	if _, err := codec.Encode(subject, query, "group-last", now); err != nil {
+		t.Fatal("equally allowed new snapshot rejected")
+	}
+	subject.Boundary.Version.Document.Statements[0].Effect = iamv1.PolicyDeny
+	_, subject.Boundary.Version.ContentDigest, err = iamv1.CanonicalizePolicyDocument(subject.Boundary.Version.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codec.Encode(subject, query, "group-last", now); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("directory bypassed boundary deny")
+	}
+}
+
 func TestDirectoryCursorRechecksIdentityConditionsAfterDefaultChange(t *testing.T) {
 	now := authorityTestTime()
 	codec, err := NewCursorCodec(bytes.Repeat([]byte{0x37}, 32))
@@ -155,9 +187,11 @@ func TestDirectoryCursorBindsCurrentAuthorityAndQuery(t *testing.T) {
 			switch kind {
 			case "principal":
 				other.Principal.ID, other.Session.PrincipalID, other.Session.ID = "principal-other", "principal-other", "session-other"
+				other.Boundary.UserID = "principal-other"
 				other.Policies[0].Attachment.Target.ID = "principal-other"
 			case "account":
 				other.Organization.ID, other.Principal.AccountID, other.Session.AccountID = "account-other", "account-other", "account-other"
+				other.Boundary.AccountID = "account-other"
 				other.Policies[0].Attachment.AccountID = "account-other"
 				changedQuery.Resource.ID = "account-other"
 			case "installation":
@@ -172,11 +206,14 @@ func TestDirectoryCursorBindsCurrentAuthorityAndQuery(t *testing.T) {
 		})
 	}
 	for name, change := range map[string]func(*SubjectContext, *DirectoryQuery){
-		"installation":       func(s *SubjectContext, _ *DirectoryQuery) { s.InstallationID = "another-installation" },
-		"account revision":   func(s *SubjectContext, _ *DirectoryQuery) { s.Organization.ResourceVersion++ },
-		"credential lineage": func(s *SubjectContext, _ *DirectoryQuery) { s.Principal.ResourceVersion++ },
-		"another session":    func(s *SubjectContext, _ *DirectoryQuery) { s.Session.ID = "another-session" },
-		"session expiry":     func(s *SubjectContext, _ *DirectoryQuery) { s.Session.ExpiresAt = s.Session.ExpiresAt.Add(time.Minute) },
+		"installation":     func(s *SubjectContext, _ *DirectoryQuery) { s.InstallationID = "another-installation" },
+		"account revision": func(s *SubjectContext, _ *DirectoryQuery) { s.Organization.ResourceVersion++ },
+		"credential lineage": func(s *SubjectContext, _ *DirectoryQuery) {
+			s.Principal.ResourceVersion++
+			s.Boundary.UserResourceVersion = s.Principal.ResourceVersion
+		},
+		"another session": func(s *SubjectContext, _ *DirectoryQuery) { s.Session.ID = "another-session" },
+		"session expiry":  func(s *SubjectContext, _ *DirectoryQuery) { s.Session.ExpiresAt = s.Session.ExpiresAt.Add(time.Minute) },
 		"session revoked": func(s *SubjectContext, _ *DirectoryQuery) {
 			s.Session.Status = iamv1.SessionRevoked
 			s.Session.RevokedAt = &now

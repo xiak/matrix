@@ -134,8 +134,9 @@ func (codec CursorCodec) binding(subject SubjectContext, query DirectoryQuery, n
 	if !validQuery {
 		return nil, ErrInvalidCursor
 	}
-	evaluation, _, err := EvaluateAttachedPolicies(now, subject.Organization.ID, subject.InstallationID,
-		iamv1.Subject{Type: subject.Principal.Type, ID: subject.Principal.ID}, subject.Policies, query.Action, query.Resource)
+	evaluation, err := Decide(subject, iamv1.ServiceIAM, iamv1.AuthorizationRequest{
+		Action: query.Action, Resource: query.Resource, RequestID: "cursor-authorization", CorrelationID: "cursor-authorization",
+	}, "cursor-authorization", now)
 	if err != nil || !evaluation.Allowed {
 		return nil, ErrInvalidCursor
 	}
@@ -157,6 +158,18 @@ func (codec CursorCodec) binding(subject SubjectContext, query DirectoryQuery, n
 			row.Policy.ID, row.Policy.ResourceVersion, row.Version.ID, row.Version.ContentDigest, row.Membership})
 	}
 	slices.SortFunc(sources, func(left, right sourceRevision) int { return cmp.Compare(left.AttachmentID, right.AttachmentID) })
+	type boundaryRevision struct {
+		State          string
+		ID             string
+		Revision       uint64
+		PolicyRevision uint64
+		Version        *iamv1.PolicyVersionReference
+	}
+	boundary := boundaryRevision{State: subject.Boundary.State, ID: subject.Boundary.BoundaryID, Revision: subject.Boundary.ResourceVersion}
+	if subject.Boundary.Policy != nil {
+		boundary.PolicyRevision = subject.Boundary.Policy.ResourceVersion
+		boundary.Version = &iamv1.PolicyVersionReference{PolicyID: subject.Boundary.Policy.ID, VersionID: subject.Boundary.Version.ID, ContentDigest: subject.Boundary.Version.ContentDigest}
+	}
 	projection := struct {
 		InstallationID   string
 		AccountID        iamv1.AccountID
@@ -168,8 +181,9 @@ func (codec CursorCodec) binding(subject SubjectContext, query DirectoryQuery, n
 		Order            string
 		PageSize         int
 		Sources          []sourceRevision
+		Boundary         boundaryRevision
 	}{query.InstallationID, subject.Organization.ID, subject.Organization.ResourceVersion,
-		subject.Principal.ID, subject.Principal.ResourceVersion, subject.Session, query, "id:asc", iamv1.DirectoryPageSize, sources}
+		subject.Principal.ID, subject.Principal.ResourceVersion, subject.Session, query, "id:asc", iamv1.DirectoryPageSize, sources, boundary}
 	encoded, err := json.Marshal(projection)
 	if err != nil {
 		return nil, ErrInvalidCursor

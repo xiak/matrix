@@ -23,6 +23,69 @@ func TestEveryIAMOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
 	}
 }
 
+func TestUserPermissionBoundarySchemaAgreesWithStrictCodec(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	for _, name := range []string{"UserPermissionBoundary", "SetUserPermissionBoundaryRequest", "RemoveUserPermissionBoundaryRequest"} {
+		t.Run(name, func(t *testing.T) {
+			schema := compileIAMOpenAPISchema(t, document, name)
+			var valid string
+			switch name {
+			case "UserPermissionBoundary":
+				valid = `{"apiVersion":"` + APIVersion + `","kind":"UserPermissionBoundary","accountId":"account-example","userId":"user-example","resourceVersion":3,"policy":null}`
+			case "SetUserPermissionBoundaryRequest":
+				valid = `{"policyId":"policy-example","policyResourceVersion":2,"resourceVersion":3,"requestId":"request-example"}`
+			default:
+				valid = `{"resourceVersion":3,"requestId":"request-example"}`
+			}
+			check := func(source string, want bool) {
+				t.Helper()
+				instance, err := jsonschema.UnmarshalJSON(strings.NewReader(source))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var codecErr error
+				switch name {
+				case "UserPermissionBoundary":
+					var value UserPermissionBoundary
+					codecErr = DecodeRequest(strings.NewReader(source), &value)
+					if codecErr == nil {
+						codecErr = ValidateUserPermissionBoundary(value)
+					}
+				case "SetUserPermissionBoundaryRequest":
+					var value SetUserPermissionBoundaryRequest
+					codecErr = DecodeRequest(strings.NewReader(source), &value)
+					if codecErr == nil {
+						codecErr = ValidateSetUserPermissionBoundaryRequest(value)
+					}
+				default:
+					var value RemoveUserPermissionBoundaryRequest
+					codecErr = DecodeRequest(strings.NewReader(source), &value)
+					if codecErr == nil {
+						codecErr = ValidateRemoveUserPermissionBoundaryRequest(value)
+					}
+				}
+				if (schema.Validate(instance) == nil) != want || (codecErr == nil) != want {
+					t.Fatalf("boundary schema/codec disagrees with expected acceptance=%v", want)
+				}
+			}
+			check(valid, true)
+			check(strings.Replace(valid, `"resourceVersion":3`, `"resourceVersion":0`, 1), false)
+			check(strings.Replace(valid, `"resourceVersion":3`, `"resourceVersion":9007199254740992`, 1), false)
+			check(`{"scope":"INSTALLATION",`+valid[1:], false)
+			if name == "UserPermissionBoundary" {
+				check(strings.Replace(valid, APIVersion, "untrusted/v1", 1), false)
+				check(strings.Replace(valid, `"kind":"UserPermissionBoundary"`, `"kind":"PolicyAttachment"`, 1), false)
+				check(strings.Replace(valid, `,"policy":null`, "", 1), false)
+				check(strings.Replace(valid, `"policy":null`, `"policy":{}`, 1), false)
+				check(strings.Replace(valid, `"policy":null`, `"policy":{"policyId":"policy-example","versionId":"version-example","contentDigest":"sha256:`+strings.Repeat("a", 64)+`"}`, 1), true)
+			} else {
+				check(strings.Replace(valid, `"resourceVersion":3`, `"resourceVersion":9007199254740991`, 1), false)
+				check(`{"userId":"other",`+valid[1:], false)
+			}
+		})
+	}
+}
+
 func TestPolicyConditionSchemaRejectsUntrustedShape(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "CreatePolicyRequest")
 	value := CreatePolicyRequest{DisplayName: "Timed read", RequestID: "timed-create", Document: policyDocumentFixture()}

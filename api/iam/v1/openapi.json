@@ -164,6 +164,8 @@
           "iam.user.read",
           "iam.user.update",
           "iam.user.delete",
+          "iam.user.permission-boundary.set",
+          "iam.user.permission-boundary.remove",
           "iam.group.list",
           "iam.group.create",
           "iam.group.read",
@@ -1019,6 +1021,58 @@
               "properties": {
                 "action": {
                   "const": "iam.user.delete"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "USER"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.user.permission-boundary.set"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "USER"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.user.permission-boundary.remove"
                 }
               },
               "required": [
@@ -2601,6 +2655,8 @@
               "iam.user.read",
               "iam.user.update",
               "iam.user.delete",
+              "iam.user.permission-boundary.set",
+              "iam.user.permission-boundary.remove",
               "iam.group.list",
               "iam.group.create",
               "iam.group.read",
@@ -3290,6 +3346,58 @@
               "properties": {
                 "action": {
                   "const": "iam.user.delete"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "USER"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.user.permission-boundary.set"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "USER"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.user.permission-boundary.remove"
                 }
               },
               "required": [
@@ -5000,6 +5108,9 @@
           "kind": {
             "const": "CurrentIdentity"
           },
+          "permissionBoundary": {
+            "$ref": "#/components/schemas/UserPermissionBoundary"
+          },
           "policySources": {
             "items": {
               "$ref": "#/components/schemas/PolicyGrantSource"
@@ -5017,6 +5128,7 @@
           "capabilities",
           "identityKind",
           "kind",
+          "permissionBoundary",
           "policySources",
           "user"
         ],
@@ -5959,6 +6071,8 @@
                             "iam.user.read",
                             "iam.user.update",
                             "iam.user.delete",
+                            "iam.user.permission-boundary.set",
+                            "iam.user.permission-boundary.remove",
                             "iam.group.list",
                             "iam.group.create",
                             "iam.group.read",
@@ -7121,6 +7235,8 @@
                         "iam.user.read",
                         "iam.user.update",
                         "iam.user.delete",
+                        "iam.user.permission-boundary.set",
+                        "iam.user.permission-boundary.remove",
                         "iam.policy-attachment.create",
                         "iam.platform-policy-attachment.create"
                       ]
@@ -7154,6 +7270,8 @@
                       "iam.user.read",
                       "iam.user.update",
                       "iam.user.delete",
+                      "iam.user.permission-boundary.set",
+                      "iam.user.permission-boundary.remove",
                       "iam.policy-attachment.create",
                       "iam.platform-policy-attachment.create"
                     ]
@@ -7264,6 +7382,54 @@
                 "actions": {
                   "contains": {
                     "const": "iam.user.delete"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "USER"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.user.permission-boundary.set"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "USER"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.user.permission-boundary.remove"
                   }
                 }
               }
@@ -9899,6 +10065,27 @@
         ],
         "type": "object"
       },
+      "PolicyVersionReference": {
+        "additionalProperties": false,
+        "properties": {
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "policyId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "versionId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "contentDigest",
+          "policyId",
+          "versionId"
+        ],
+        "type": "object"
+      },
       "PrincipalID": {
         "allOf": [
           {
@@ -10021,6 +10208,24 @@
           },
           "resourceVersion": {
             "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requestId",
+          "resourceVersion"
+        ],
+        "type": "object"
+      },
+      "RemoveUserPermissionBoundaryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740990,
             "minimum": 1,
             "type": "integer"
           }
@@ -10396,6 +10601,34 @@
         ],
         "type": "object"
       },
+      "SetUserPermissionBoundaryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "policyId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "policyResourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policyId",
+          "policyResourceVersion",
+          "requestId",
+          "resourceVersion"
+        ],
+        "type": "object"
+      },
       "SetUserStatusRequest": {
         "additionalProperties": false,
         "properties": {
@@ -10687,6 +10920,47 @@
           "apiVersion",
           "items",
           "kind"
+        ],
+        "type": "object"
+      },
+      "UserPermissionBoundary": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "UserPermissionBoundary"
+          },
+          "policy": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PolicyVersionReference"
+              }
+            ]
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "userId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "accountId",
+          "userId",
+          "resourceVersion",
+          "policy"
         ],
         "type": "object"
       }
@@ -12938,6 +13212,181 @@
           }
         },
         "summary": "Read one manageable account user and target capabilities"
+      }
+    },
+    "/v1/users/{userId}/permission-boundary": {
+      "delete": {
+        "operationId": "removeUserPermissionBoundary",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveUserPermissionBoundaryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPermissionBoundary"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Root explicitly removes the tenant user permission limit"
+      },
+      "get": {
+        "operationId": "getUserPermissionBoundary",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPermissionBoundary"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read the current user permission limit, not a grant"
+      },
+      "put": {
+        "operationId": "setUserPermissionBoundary",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetUserPermissionBoundaryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPermissionBoundary"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Root sets or replaces the tenant user permission limit"
       }
     },
     "/v1/users/{userId}:delete": {

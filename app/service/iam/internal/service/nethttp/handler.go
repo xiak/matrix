@@ -22,6 +22,9 @@ type Workflow interface {
 	CurrentIdentity(context.Context, iamv1.Secret) (iamv1.CurrentIdentity, error)
 	ListUsers(context.Context, iamv1.Secret, string, string) (iamv1.UserList, error)
 	GetUser(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserAccess, error)
+	GetUserPermissionBoundary(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserPermissionBoundary, error)
+	SetUserPermissionBoundary(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.SetUserPermissionBoundaryRequest) (iamv1.UserPermissionBoundary, error)
+	RemoveUserPermissionBoundary(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.RemoveUserPermissionBoundaryRequest) (iamv1.UserPermissionBoundary, error)
 	ListGroups(context.Context, iamv1.Secret, string, string) (iamv1.GroupList, error)
 	GetGroup(context.Context, iamv1.Secret, iamv1.GroupID, string) (iamv1.GroupAccess, error)
 	CreateGroup(context.Context, iamv1.Secret, iamv1.CreateGroupRequest) (iamv1.Group, error)
@@ -797,6 +800,10 @@ func (value *handler) account(response http.ResponseWriter, request *http.Reques
 }
 
 func (value *handler) user(response http.ResponseWriter, request *http.Request) {
+	if strings.HasSuffix(request.URL.Path, "/permission-boundary") {
+		value.userPermissionBoundary(response, request)
+		return
+	}
 	suffix := ""
 	if request.Method == http.MethodPost {
 		for _, candidate := range []string{":update", ":delete", ":set-status", ":reset-password"} {
@@ -854,6 +861,47 @@ func (value *handler) user(response http.ResponseWriter, request *http.Request) 
 			return
 		}
 		result, err = value.workflow.SetUserStatus(request.Context(), credential, iamv1.PrincipalID(id), body)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) userPermissionBoundary(response http.ResponseWriter, request *http.Request) {
+	id, ok := commandPathID(response, request, "/v1/users/", "/permission-boundary", "userId")
+	if !ok || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	var result iamv1.UserPermissionBoundary
+	var err error
+	switch request.Method {
+	case http.MethodGet:
+		if !rejectQueryAndBody(response, request) {
+			return
+		}
+		result, err = value.workflow.GetUserPermissionBoundary(request.Context(), credential, iamv1.PrincipalID(id), requestID(request))
+	case http.MethodPut:
+		body, ok := decodeJSON[iamv1.SetUserPermissionBoundaryRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.SetUserPermissionBoundary(request.Context(), credential, iamv1.PrincipalID(id), body)
+	case http.MethodDelete:
+		body, ok := decodeJSON[iamv1.RemoveUserPermissionBoundaryRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.RemoveUserPermissionBoundary(request.Context(), credential, iamv1.PrincipalID(id), body)
+	default:
+		response.Header().Set("Allow", "GET, PUT, DELETE")
+		writeProblem(response, requestID(request), http.StatusMethodNotAllowed, "iam.method.invalid", "IAM method not allowed")
+		return
 	}
 	if err != nil {
 		value.writeError(response, request, err)

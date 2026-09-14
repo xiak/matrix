@@ -32,6 +32,8 @@ const (
 	ActionIAMUserCreated                     Action = "iam.user.created"
 	ActionIAMUserUpdated                     Action = "iam.user.updated"
 	ActionIAMUserDeleted                     Action = "iam.user.deleted"
+	ActionIAMUserPermissionBoundarySet       Action = "iam.user.permission-boundary.set"
+	ActionIAMUserPermissionBoundaryRemoved   Action = "iam.user.permission-boundary.removed"
 	ActionIAMUserStatusSet                   Action = "iam.user.status-set"
 	ActionIAMUserPasswordReset               Action = "iam.user.password-reset"
 	ActionIAMUserPasswordChanged             Action = "iam.user.password-changed"
@@ -178,6 +180,8 @@ var allActions = []Action{
 	ActionIAMUserCreated,
 	ActionIAMUserUpdated,
 	ActionIAMUserDeleted,
+	ActionIAMUserPermissionBoundarySet,
+	ActionIAMUserPermissionBoundaryRemoved,
 	ActionIAMUserStatusSet,
 	ActionIAMUserPasswordReset,
 	ActionIAMUserPasswordChanged,
@@ -255,6 +259,12 @@ var actionContracts = map[Action]ActionContract{
 		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
 	ActionIAMUserDeleted: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserPermissionBoundarySet: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserPermissionBoundaryRemoved: {
 		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
 	ActionIAMUserStatusSet: {

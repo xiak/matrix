@@ -69,6 +69,8 @@ type Transaction interface {
 	RemoveGroupMembership(context.Context, GroupMembershipRemovalMutation) (iamv1.GroupMembership, bool, error)
 	ListPolicies(context.Context, AccountRead, iamv1.AuthorityScope) (iamv1.PolicyList, error)
 	ReadPolicy(context.Context, AccountRead, iamv1.PolicyID) (iamv1.PolicyDetail, error)
+	ReadUserPermissionBoundary(context.Context, AccountRead, iamv1.PrincipalID) (iamv1.UserPermissionBoundary, error)
+	ChangeUserPermissionBoundary(context.Context, UserBoundaryMutation) (iamv1.UserPermissionBoundary, error)
 	CreatePolicy(context.Context, PolicyCreation) (iamv1.PolicyDetail, error)
 	ListPolicyVersions(context.Context, AccountRead, iamv1.PolicyID) (iamv1.PolicyVersionList, error)
 	ReadPolicyVersion(context.Context, AccountRead, iamv1.PolicyID, iamv1.PolicyVersionID) (iamv1.PolicyVersionDetail, error)
@@ -293,11 +295,25 @@ type ServiceCredential struct {
 }
 
 type AuthorizationMutation struct {
-	AccountID      iamv1.AccountID
-	PrincipalID    iamv1.PrincipalID
-	Decision       iamv1.AuthorizationDecision
-	PolicyEvidence []authority.PolicyAttachmentEvidence
-	AuditEvent     auditv1.Event
+	AccountID        iamv1.AccountID
+	PrincipalID      iamv1.PrincipalID
+	Decision         iamv1.AuthorizationDecision
+	PolicyEvidence   []authority.PolicyAttachmentEvidence
+	BoundaryEvidence authority.UserBoundaryEvidence
+	AuditEvent       auditv1.Event
+}
+
+type UserBoundaryMutation struct {
+	AccountID             iamv1.AccountID
+	ActorPrincipalID      iamv1.PrincipalID
+	SessionID             iamv1.SessionID
+	DecisionID            iamv1.DecisionID
+	UserID                iamv1.PrincipalID
+	ResourceVersion       uint64
+	PolicyID              iamv1.PolicyID
+	PolicyResourceVersion uint64
+	BoundaryID            string
+	AuditEvent            auditv1.Event
 }
 
 type PasswordMutation struct {

@@ -1022,6 +1022,7 @@ func TestCurrentIdentityUsesOnlyItsLivePolicyGrantSources(t *testing.T) {
 		return ActionCapability{Action: action, Resource: ResourceReference{Kind: kind, ID: id}, RestrictionReason: CapabilityAuthorityRequired}
 	}
 	identity := CurrentIdentity{APIVersion: APIVersion, Kind: "CurrentIdentity",
+		PermissionBoundary: UserPermissionBoundary{APIVersion: APIVersion, Kind: "UserPermissionBoundary", AccountID: "account-a", UserID: "user-a", ResourceVersion: 1},
 		Account: Account{APIVersion: APIVersion, Kind: "Account", ID: "account-a", DisplayName: "Account A",
 			Status: AccountActive, RootIdentity: RootIdentity{PrincipalID: "user-a", LoginName: "admin"},
 			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
@@ -1047,11 +1048,14 @@ func TestCurrentIdentityUsesOnlyItsLivePolicyGrantSources(t *testing.T) {
 		t.Fatal("current policy identity rejected")
 	}
 	for name, mutate := range map[string]func(*CurrentIdentity){
-		"missing snapshot":     func(v *CurrentIdentity) { v.PolicySources = nil },
-		"another account":      func(v *CurrentIdentity) { v.PolicySources[0].Attachment.AccountID = "account-b" },
-		"another user":         func(v *CurrentIdentity) { v.PolicySources[0].Attachment.Target.ID = "user-b" },
-		"service carrier":      func(v *CurrentIdentity) { v.PolicySources[0].Attachment.Target.Kind = PolicyTargetService },
-		"duplicate attachment": func(v *CurrentIdentity) { v.PolicySources = append(v.PolicySources, v.PolicySources[0]) },
+		"missing snapshot":        func(v *CurrentIdentity) { v.PolicySources = nil },
+		"missing boundary":        func(v *CurrentIdentity) { v.PermissionBoundary = UserPermissionBoundary{} },
+		"foreign boundary":        func(v *CurrentIdentity) { v.PermissionBoundary.AccountID = "account-b" },
+		"stale boundary revision": func(v *CurrentIdentity) { v.PermissionBoundary.ResourceVersion++ },
+		"another account":         func(v *CurrentIdentity) { v.PolicySources[0].Attachment.AccountID = "account-b" },
+		"another user":            func(v *CurrentIdentity) { v.PolicySources[0].Attachment.Target.ID = "user-b" },
+		"service carrier":         func(v *CurrentIdentity) { v.PolicySources[0].Attachment.Target.Kind = PolicyTargetService },
+		"duplicate attachment":    func(v *CurrentIdentity) { v.PolicySources = append(v.PolicySources, v.PolicySources[0]) },
 		"revoked attachment": func(v *CurrentIdentity) {
 			v.PolicySources[0].Attachment.RevokedAt = &now
 			v.PolicySources[0].Attachment.ResourceVersion = 2
@@ -1503,6 +1507,68 @@ func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 		}
 	}
 	assertNoAuthoritySelectorHeader(t, document)
+}
+
+func TestUserPermissionBoundaryContractIsExplicitAndRevisionBound(t *testing.T) {
+	set := SetUserPermissionBoundaryRequest{PolicyID: "policy-boundary", PolicyResourceVersion: 2, ResourceVersion: 3, RequestID: "set-boundary"}
+	if err := ValidateSetUserPermissionBoundaryRequest(set); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*SetUserPermissionBoundaryRequest){
+		func(v *SetUserPermissionBoundaryRequest) { v.PolicyID = "" },
+		func(v *SetUserPermissionBoundaryRequest) { v.PolicyResourceVersion = 0 },
+		func(v *SetUserPermissionBoundaryRequest) { v.ResourceVersion = 0 },
+		func(v *SetUserPermissionBoundaryRequest) { v.ResourceVersion = 9007199254740991 },
+		func(v *SetUserPermissionBoundaryRequest) { v.RequestID = "" },
+	} {
+		invalid := set
+		mutate(&invalid)
+		if ValidateSetUserPermissionBoundaryRequest(invalid) == nil {
+			t.Fatal("invalid boundary mutation accepted")
+		}
+	}
+	remove := RemoveUserPermissionBoundaryRequest{ResourceVersion: 3, RequestID: "remove-boundary"}
+	if ValidateRemoveUserPermissionBoundaryRequest(remove) != nil {
+		t.Fatal("valid removal rejected")
+	}
+	remove.ResourceVersion = 9007199254740991
+	if ValidateRemoveUserPermissionBoundaryRequest(remove) == nil {
+		t.Fatal("nonincrementable removal revision accepted")
+	}
+	encoded, err := json.Marshal(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{`"accountId":"other",`, `"userId":"other",`, `"scope":"INSTALLATION",`, `"versionId":"other",`, `"policyId":"duplicate",`} {
+		var decoded SetUserPermissionBoundaryRequest
+		if DecodeRequest(strings.NewReader("{"+field+string(encoded[1:])), &decoded) == nil {
+			t.Fatal("boundary selector or duplicate accepted")
+		}
+	}
+	view := UserPermissionBoundary{APIVersion: APIVersion, Kind: "UserPermissionBoundary", AccountID: "account-example", UserID: "user-example", ResourceVersion: 3}
+	for _, reference := range []*PolicyVersionReference{nil, {PolicyID: "policy-boundary", VersionID: "version-boundary", ContentDigest: "sha256:" + strings.Repeat("a", 64)}} {
+		view.Policy = reference
+		if ValidateUserPermissionBoundary(view) != nil {
+			t.Fatal("valid boundary projection rejected")
+		}
+		encoded, err := json.Marshal(view)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded UserPermissionBoundary
+		if DecodeRequest(bytes.NewReader(encoded), &decoded) != nil || ValidateUserPermissionBoundary(decoded) != nil {
+			t.Fatal("boundary round trip failed")
+		}
+	}
+	for _, invalid := range []string{
+		`{"apiVersion":"` + APIVersion + `","kind":"UserPermissionBoundary","accountId":"account-example","userId":"user-example","resourceVersion":3}`,
+		`{"apiVersion":"` + APIVersion + `","kind":"UserPermissionBoundary","accountId":"account-example","userId":"user-example","resourceVersion":3,"policy":{}}`,
+	} {
+		var decoded UserPermissionBoundary
+		if DecodeRequest(strings.NewReader(invalid), &decoded) == nil && ValidateUserPermissionBoundary(decoded) == nil {
+			t.Fatal("missing or corrupt boundary projection treated as unbounded")
+		}
+	}
 }
 
 func validIAMExample[T any](path string, validate func(T) error) func(*testing.T) {

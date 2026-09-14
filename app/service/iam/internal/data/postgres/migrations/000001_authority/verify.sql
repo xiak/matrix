@@ -123,7 +123,7 @@ BEGIN
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_password(text,text)', 'EXECUTE')
        OR NOT has_function_privilege(
             'matrix_iam_api',
-            'iam.record_authorization(text,text,jsonb,jsonb,jsonb)',
+            'iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(

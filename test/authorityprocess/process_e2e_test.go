@@ -777,7 +777,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 17, Audit: 11, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 18, Audit: 12, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -1117,6 +1117,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
 	revokeIAMPolicyAttachment(t, replicaEndpoint, adminLogin.Credential, timedAttachment.ID, timedAttachment.ResourceVersion, "request-process-time-revoke")
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
+	proveUserBoundaryProcesses(t, ctx, admin, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, developerLogin.Credential, developer.ID)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	deniedBefore := countAuditFacts(
 		t,
@@ -1808,6 +1809,113 @@ func assertIAMWeakLoginRejected(t *testing.T, endpoint string) {
 	if response.Status != http.StatusUnauthorized ||
 		bytes.Contains(response.Body, []byte(weakPassword)) {
 		t.Fatalf("weak IAM login status=%d body=%s", response.Status, response.Body)
+	}
+}
+
+func proveUserBoundaryProcesses(t *testing.T, ctx context.Context, database *pgx.Conn, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, root, bearer string, user iamv1.PrincipalID) {
+	t.Helper()
+	path := "/v1/users/" + string(user) + "/permission-boundary"
+	var boundary iamv1.UserPermissionBoundary
+	read := func(endpoint string) {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, endpoint+path, root, nil)
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &boundary) != nil || iamv1.ValidateUserPermissionBoundary(boundary) != nil || boundary.UserID != user {
+			t.Fatal("process boundary read lost current user authority")
+		}
+	}
+	read(replicaEndpoint)
+	if boundary.Policy != nil {
+		t.Fatal("process user unexpectedly bounded before explicit command")
+	}
+	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "boundary-selected", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "application-process"}}}}}
+	var policy iamv1.PolicyDetail
+	publication := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", root,
+		iamv1.CreatePolicyRequest{DisplayName: "Process user upper bound", Document: document, RequestID: "process-boundary-policy"})
+	if publication.Status != http.StatusCreated || json.Unmarshal(publication.Body, &policy) != nil || iamv1.ValidatePolicyDetail(policy) != nil {
+		t.Fatal("process boundary policy publication failed")
+	}
+	response := performJSON(t, http.MethodPut, replicaEndpoint+path, root,
+		iamv1.SetUserPermissionBoundaryRequest{PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion, ResourceVersion: boundary.ResourceVersion, RequestID: "process-boundary-set"})
+	if response.Status != http.StatusOK {
+		t.Fatalf("process boundary set status=%d", response.Status)
+	}
+	assertPermissions := func(selected, other bool) {
+		t.Helper()
+		for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+			for _, candidate := range []struct {
+				id      string
+				allowed bool
+			}{{"application-process", selected}, {"application-nonprefix", other}} {
+				request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+					Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: candidate.id}, RequestID: "process-boundary-read", CorrelationID: "process-boundary-read"}
+				response := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "", request, map[string]string{"Matrix-Subject-Credential": bearer})
+				var decision iamv1.AuthorizationDecision
+				if response.Status != http.StatusOK || json.Unmarshal(response.Body, &decision) != nil || iamv1.ValidateAuthorizationDecision(decision) != nil || decision.Allowed != candidate.allowed {
+					t.Fatalf("process replica boundary allowed=%v want=%v status=%d", decision.Allowed, candidate.allowed, response.Status)
+				}
+			}
+		}
+		for _, candidate := range []struct {
+			id      string
+			allowed bool
+		}{{"application-process", selected}, {"application-nonprefix", other}} {
+			status := http.StatusForbidden
+			if candidate.allowed {
+				status = http.StatusOK
+			}
+			getPaaSApplication(t, paasEndpoint, bearer, paasv1.ResourceID(candidate.id), status)
+		}
+	}
+	assertPermissions(false, false) // A boundary alone is never a grant.
+	grant := createIAMPolicyAttachment(t, iamEndpoint, root, user, iamv1.SystemPolicyPaaSDeveloper, "process-boundary-positive-grant")
+	assertPermissions(true, false)
+	// Both real IAM processes project the same current bound, not an attachment.
+	for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", bearer, nil)
+		var identity iamv1.CurrentIdentity
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &identity) != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
+			identity.PermissionBoundary.Policy == nil || identity.PermissionBoundary.Policy.PolicyID != policy.Policy.ID || len(identity.PolicySources) != 1 {
+			t.Fatal("replica identity lost independent permission boundary")
+		}
+	}
+	document.Statements[0].Effect = iamv1.PolicyDeny
+	var version iamv1.PolicyVersionDetail
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies/"+string(policy.Policy.ID)+"/versions", root,
+		iamv1.CreatePolicyVersionRequest{Document: document, ResourceVersion: 1, RequestID: "process-boundary-deny-version"})
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &version) != nil || iamv1.ValidatePolicyVersionDetail(version) != nil {
+		t.Fatal("process boundary version publication failed")
+	}
+	assertPermissions(true, false)
+	response = performJSON(t, http.MethodPost, replicaEndpoint+"/v1/policies/"+string(policy.Policy.ID)+":set-default-version", root,
+		iamv1.SetDefaultPolicyVersionRequest{VersionID: version.Version.ID, ResourceVersion: version.Policy.ResourceVersion, RequestID: "process-boundary-deny-default"})
+	if response.Status != http.StatusOK {
+		t.Fatal("process boundary default selection failed")
+	}
+	assertPermissions(false, false)
+	read(iamEndpoint)
+	response = performJSON(t, http.MethodDelete, iamEndpoint+path, root,
+		iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: boundary.ResourceVersion, RequestID: "process-boundary-remove"})
+	if response.Status != http.StatusOK {
+		t.Fatal("process boundary removal failed")
+	}
+	read(replicaEndpoint)
+	if boundary.Policy != nil {
+		t.Fatal("replica retained removed boundary")
+	}
+	assertPermissions(true, true)
+	revokeIAMPolicyAttachment(t, replicaEndpoint, root, grant.ID, grant.ResourceVersion, "process-boundary-positive-revoke")
+	assertPermissions(false, false)
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	for _, action := range []auditv1.Action{auditv1.ActionIAMUserPermissionBoundarySet, auditv1.ActionIAMUserPermissionBoundaryRemoved} {
+		records := queryAudit(t, auditEndpoint, root, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
+		if len(records.Records) != 1 || records.TenantID != auditv1.TenantID(boundary.AccountID) || records.Records[0].Event.Target.ID != string(user) || records.Records[0].Event.IAMDecisionID == "" {
+			t.Fatal("dispatcher lost single correlated tenant boundary fact")
+		}
+	}
+	if chain := verifyAudit(t, auditEndpoint, root); !chain.Complete || chain.TenantID != auditv1.TenantID(boundary.AccountID) {
+		t.Fatal("process boundary mutation broke tenant audit chain")
 	}
 }
 

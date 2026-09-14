@@ -309,6 +309,8 @@ BEGIN
         ('iam.policy.created', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
         ('iam.policy-version.created', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
         ('iam.policy-version.deleted', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
+        ('iam.user.permission-boundary.set', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.user.permission-boundary.removed', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.policy.default-version-set', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
         ('iam.policy.updated', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
         ('iam.policy.deleted', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
@@ -442,6 +444,7 @@ BEGIN
        OR submitted_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT', 'SYSTEM')
         OR (action_name IN ('iam.account.alias-set','iam.user.created','iam.user.updated','iam.user.deleted','iam.user.status-set',
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted','iam.group-membership.created','iam.group-membership.removed',
+            'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.user.password-reset','iam.user.password-changed',
             'iam.policy-attachment.created','iam.policy-attachment.revoked')
             AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
@@ -494,7 +497,7 @@ AS $function$
         to_regclass('audit.chain_heads') IS NOT NULL
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL,
-        11::bigint,
+        12::bigint,
         transaction_timestamp()
 $function$;
 
@@ -798,6 +801,7 @@ BEGIN
             'iam.account-root.credentials-recovered', 'iam.account.alias-set',
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
+            'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
             'iam.user.password-changed',

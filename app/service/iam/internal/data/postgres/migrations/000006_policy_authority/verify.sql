@@ -6,12 +6,12 @@ BEGIN
     END IF;
     FOREACH function_name IN ARRAY ARRAY['iam.put_role_binding(text,text,text,text,text,text,jsonb)',
         'iam.lookup_role_binding_role(text,text)','iam.revoke_role_binding(text,text,text,text,jsonb)',
-        'iam.lookup_service_roles(text,text)','iam.record_authorization(text,text,jsonb,jsonb)'] LOOP
+        'iam.lookup_service_roles(text,text)','iam.record_authorization(text,text,jsonb,jsonb)','iam.record_authorization(text,text,jsonb,jsonb,jsonb)'] LOOP
         IF to_regprocedure(function_name) IS NOT NULL THEN
             RAISE EXCEPTION 'IAM legacy permission entrypoint remains present';
         END IF;
     END LOOP;
-    FOREACH table_name IN ARRAY ARRAY['policies','policy_versions','policy_attachments'] LOOP
+    FOREACH table_name IN ARRAY ARRAY['policies','policy_versions','policy_attachments','user_permission_boundaries'] LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_class AS relation
             WHERE relation.oid=to_regclass('iam.'||table_name) AND relation.relrowsecurity AND relation.relforcerowsecurity
             AND relation.relowner='matrix_iam_owner'::regrole) THEN
@@ -19,6 +19,8 @@ BEGIN
         END IF;
     END LOOP;
     FOR protection IN SELECT * FROM (VALUES
+        ('user_permission_boundaries','user_boundary_transitions'),('user_permission_boundaries','user_boundaries_cannot_be_deleted'),
+        ('user_permission_boundaries','user_boundaries_cannot_be_truncated'),
         ('policies','policy_metadata_transitions'),('policies','policy_metadata_cannot_be_deleted'),
         ('policies','policy_metadata_cannot_be_truncated'),('policy_versions','policy_versions_are_immutable'),
         ('policy_versions','policy_versions_cannot_be_truncated'),('policy_attachments','policy_attachment_transitions'),
@@ -39,15 +41,15 @@ BEGIN
     END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS lookup
         WHERE lookup.oid=to_regprocedure('iam.lookup_session(text)')
-        AND cardinality(lookup.proallargtypes)=23 AND lookup.proargnames[23]='policies'
-        AND lookup.proallargtypes[23]='jsonb'::regtype::oid) THEN
+        AND cardinality(lookup.proallargtypes)=24 AND lookup.proargnames[23:24]=ARRAY['policies','boundary']
+        AND lookup.proallargtypes[23:24]=ARRAY['jsonb'::regtype::oid,'jsonb'::regtype::oid]) THEN
         RAISE EXCEPTION 'IAM session policy snapshot shape is invalid';
     END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute AS evidence
         WHERE evidence.attrelid='iam.authorization_decisions'::regclass AND evidence.attname='policy_evidence'
           AND evidence.atttypid='jsonb'::regtype AND NOT evidence.attisdropped)
         OR NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS recorder
-            WHERE recorder.oid=to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb)')
+            WHERE recorder.oid=to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb)')
               AND recorder.prosecdef AND recorder.proowner='matrix_iam_owner'::regrole) THEN
         RAISE EXCEPTION 'IAM decision provenance contract is invalid';
     END IF;
@@ -56,6 +58,14 @@ BEGIN
         OR has_function_privilege('public','iam.current_policy_snapshot(text,text)','EXECUTE') THEN
         RAISE EXCEPTION 'IAM internal policy projection is public';
     END IF;
+    FOREACH function_name IN ARRAY ARRAY['iam.current_user_boundary(text,text)','iam.assert_current_user_boundary_evidence(text,text,text,jsonb)'] LOOP
+        IF to_regprocedure(function_name) IS NULL OR has_function_privilege('matrix_iam_api',function_name,'EXECUTE')
+            OR has_function_privilege('matrix_iam_worker',function_name,'EXECUTE')
+            OR has_function_privilege('matrix_iam_credential_recovery',function_name,'EXECUTE')
+            OR has_function_privilege('public',function_name,'EXECUTE') THEN
+            RAISE EXCEPTION 'IAM internal boundary authority is public or missing';
+        END IF;
+    END LOOP;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS directory
         WHERE directory.oid=to_regprocedure('iam.list_policies(text,text,text,text)')
           AND directory.prorettype='jsonb'::regtype AND NOT directory.proretset
@@ -67,7 +77,7 @@ END $verify_policy_authority$;
 DO $verify_customer_policy_publication$
 DECLARE function_name text;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 17::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 18::bigint THEN
         RAISE EXCEPTION 'IAM policy publication schema version is invalid';
     END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='iam.policy_versions'::regclass
@@ -78,6 +88,8 @@ BEGIN
         RAISE EXCEPTION 'IAM policy version retirement shape or default is invalid';
     END IF;
     FOREACH function_name IN ARRAY ARRAY['iam.read_policy(text,text,text,text)',
+        'iam.read_user_permission_boundary(text,text,text,text)',
+        'iam.change_user_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text)',
         'iam.create_policy(text,text,text,text,text,text,text,text,jsonb)',
         'iam.list_policy_versions(text,text,text,text)','iam.read_policy_version(text,text,text,text,text)',
         'iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb)','iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)',
