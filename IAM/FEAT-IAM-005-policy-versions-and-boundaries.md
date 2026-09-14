@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期及 IAM 权威时间条件已有固定 CI；时间条件以修复原别名竞争后的 `581ce75` 为最终验证点。身份字符串条件的本地真实闭环已通过、独立 CI 待确认；IP 条件、边界和 UI 闭环未完成，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期及 IAM 权威时间条件已有固定 CI；时间条件以修复原别名竞争后的 `581ce75` 为最终验证点。身份字符串条件的本地真实闭环已通过，但 `b208ab0` 独立 CI 的原 SSH 测试失败，修复后须重新确认；IP 条件、边界和 UI 闭环未完成，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -184,6 +184,10 @@ PG18 聚焦 `customer_policy_terminal_deletion` 最终通过，3.18s（含父门
 
 完整串行 PG18 回归通过：Audit 数据层 5.449s、Audit HTTP 3.060s、IAM integration race 172.276s、独立双 IAM/PaaS/Audit 45.125s、PaaS 数据层 4.427s。实际 PaaS 同一 bearer 使用账号/主体/时间组合条件，窗口后拒绝；发布不切换默认，显式切换到否定集合后按当前主体允许或拒绝，撤销附件再次拒绝。真实 dispatcher、受限 runtime 登录、跨账号资源/Operation/outbox、历史链与当前状态重放门禁保留。随后补充的服务凭据冒充 USER 攻击在新库聚焦复验通过，11.31s（父门禁 15.80s、包 18.343s）；没有用默认跳过数据库的测试代替真实验收。
 
-当前开发源码/SQL readiness 为 IAM16/Audit11/PaaS1；IAM 仅反映新增字符串发布验证和当前权威求值，安装发布 profile、ServiceIdentity、lookup_service、七列 claim 与 Audit canonical 未改。独立 CI 尚待固定提交后确认；UI、签名安装、IP 条件和完整 LANG-04 未验收。专属 PG 的容器/网络/合成数据卷在精确身份与标签核对、确认无客户端后清理，未动用户数据或其他任务资源。
+当前开发源码/SQL readiness 为 IAM16/Audit11/PaaS1；IAM 仅反映新增字符串发布验证和当前权威求值，安装发布 profile、ServiceIdentity、lookup_service、七列 claim 与 Audit canonical 未改。UI、签名安装、IP 条件和完整 LANG-04 未验收。专属 PG 的容器/网络/合成数据卷在精确身份与标签核对、确认无客户端后清理，未动用户数据或其他任务资源。
 
 最终全仓 Go race/vet、模块校验、稳定 API 生成及 Linux amd64 全仓构建通过。现有 canonical round-trip fuzz 加身份否定集合种子，15 秒/2 workers/1 秒样本最小化预算通过 549,059 次执行；该数字仅是有界随机验证，不是容量或完整语言证明。真实 PG 与广域构建/fuzz 串行，未增加共享资源或放宽生产权限。
+
+固定候选 `b208ab081ac2f08aab81f63b8cfefb17ebdc6c82` / [Verification 34836760785](https://github.com/xiak/matrix/actions/runs/34836760785) 不作为 CI 成功点：Go 作业的既有 `TestPinnedSSHExecutorHonorsCancellationDuringHandshake` 期望 `ssh-handshake`，实际为 `ssh-connect`（两者均 UNAVAILABLE）。测试在服务端 TCP Accept 后立即取消，不能证明客户端 DialContext 已完成；本地原测试 200 次未复现，不将其称为确定的本地 red。取得该 owner 的窄测试窗口后，以有界读取客户端完整 SSH 版本行作为真实协议屏障，仍不发送服务端版本，严格保留握手阶段、500ms 退出和连接/goroutine 清理断言；生产 SSH 行为和错误分类不变。修复后的同测试 race 200 次、整个 adapter 与架构检查、vet 通过；新固定组合仍需独立 CI，不能将本地字符串证据或其他 job 成功冒充整次成功。
+
+34836760785 已结束为 failure：authority-process/node-process 均 success，Go 仅上述 SSH 测试失败。窄测试修复后全仓 `go test -race -p 2 -count=1 ./...`、全仓 vet 与 Linux amd64 构建通过；本轮未改 IAM 生产代码、SQL 或 schema/profile，不重启真实数据库或重跑未发布历史升级链。新提交必须重新核实完整 CI，修复后的成功不能回填到 b208 候选。
