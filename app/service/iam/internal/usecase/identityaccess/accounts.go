@@ -2,6 +2,7 @@ package identityaccess
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
@@ -469,9 +470,36 @@ func (service *Authority) CreatePolicyVersion(ctx context.Context, credential ia
 			if err != nil {
 				return iamv1.PolicyVersionDetail{}, err
 			}
-			version := iamv1.PolicyVersion{PolicyID: id, ID: iamv1.PolicyVersionID("version-" + digest[len("sha256:"):]), Document: request.Document, ContentDigest: digest}
+			// A publication is distinct from its content. Re-publishing retired
+			// content must not revive the old version identity.
+			version := iamv1.PolicyVersion{PolicyID: id, ID: iamv1.PolicyVersionID("version-" + digest[len("sha256:"):] + "-" + strconv.FormatUint(request.ResourceVersion+1, 10)), Document: request.Document, ContentDigest: digest}
 			return tx.CreatePolicyVersion(ctx, PolicyVersionCreation{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
 				DecisionID: decision.ID, Version: version, ResourceVersion: request.ResourceVersion, AuditEvent: event})
+		})
+}
+
+func (service *Authority) DeletePolicyVersion(ctx context.Context, credential iamv1.Secret, id iamv1.PolicyID, version iamv1.PolicyVersionID, request iamv1.DeletePolicyVersionRequest) (iamv1.PolicyDetail, error) {
+	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateID("versionId", string(version)) != nil || iamv1.ValidateDeletePolicyVersionRequest(request) != nil {
+		return iamv1.PolicyDetail{}, ErrInvalidArgument
+	}
+	requestDigest, err := digestSanitized("policy-version-delete", struct {
+		PolicyID  iamv1.PolicyID                   `json:"policyId"`
+		VersionID iamv1.PolicyVersionID            `json:"versionId"`
+		Request   iamv1.DeletePolicyVersionRequest `json:"request"`
+	}{id, version, request})
+	if err != nil {
+		return iamv1.PolicyDetail{}, err
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionDelete, iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
+			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
+				return iamv1.PolicyDetail{}, err
+			}
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMPolicyVersionDeleted, auditv1.TargetPolicy, string(id), decision.ID, requestDigest, request.RequestID, now)
+			if err != nil {
+				return iamv1.PolicyDetail{}, err
+			}
+			return tx.DeletePolicyVersion(ctx, PolicyVersionDeletion{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, PolicyID: id, VersionID: version, ResourceVersion: request.ResourceVersion, AuditEvent: event})
 		})
 }
 

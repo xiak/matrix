@@ -130,6 +130,18 @@ type SetDefaultPolicyVersionRequest struct {
 	RequestID       string          `json:"requestId"`
 }
 
+type DeletePolicyVersionRequest struct {
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+func ValidateDeletePolicyVersionRequest(value DeletePolicyVersionRequest) error {
+	if validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
+		return ErrInvalidPolicy
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
 func ValidateCreatePolicyVersionRequest(value CreatePolicyVersionRequest) error {
 	if value.Document.Scope != AuthorityScopeTenant || validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
 		return ErrInvalidPolicy

@@ -168,6 +168,7 @@ CREATE TABLE IF NOT EXISTS iam.policy_versions (
     canonical_document text NOT NULL,
     content_digest text COLLATE "C" NOT NULL,
     created_at timestamptz(6) NOT NULL,
+    retired_at timestamptz(6),
     PRIMARY KEY (policy_id,id),
     FOREIGN KEY (policy_id,authority_scope) REFERENCES iam.policies(id,authority_scope),
     CONSTRAINT policy_versions_content_valid CHECK (
@@ -184,6 +185,10 @@ CREATE TABLE IF NOT EXISTS iam.policy_versions (
             convert_to('matrix.iam.policy.v1','UTF8') || decode('00','hex') || convert_to(canonical_document,'UTF8')), 'hex')
     )
 );
+
+ALTER TABLE iam.policy_versions ADD COLUMN IF NOT EXISTS retired_at timestamptz(6);
+ALTER TABLE iam.policy_versions DROP CONSTRAINT IF EXISTS policy_versions_retirement_valid;
+ALTER TABLE iam.policy_versions ADD CONSTRAINT policy_versions_retirement_valid CHECK (retired_at IS NULL OR retired_at>=created_at);
 
 ALTER TABLE iam.policies DROP CONSTRAINT IF EXISTS policies_default_version_fk;
 ALTER TABLE iam.policies ADD CONSTRAINT policies_default_version_fk
@@ -252,9 +257,28 @@ BEGIN
     IF ROW(NEW.id,NEW.management,NEW.owner_tenant_id,NEW.authority_scope,NEW.created_at)
         IS DISTINCT FROM ROW(OLD.id,OLD.management,OLD.owner_tenant_id,OLD.authority_scope,OLD.created_at)
         OR OLD.status='RETIRED' OR NEW.resource_version <> OLD.resource_version+1
-        OR NEW.updated_at <> transaction_timestamp() THEN
+        OR NEW.updated_at <> transaction_timestamp()
+        OR EXISTS(SELECT 1 FROM iam.policy_versions v WHERE v.policy_id=NEW.id AND v.id=NEW.default_version_id AND v.retired_at IS NOT NULL) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='IAM policy metadata transition is invalid';
     END IF;
+    RETURN NEW;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.guard_policy_version_change()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF TG_OP='INSERT' THEN
+        IF NEW.retired_at IS NOT NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='IAM policy version must begin active'; END IF;
+        RETURN NEW;
+    END IF;
+    IF TG_OP='DELETE' THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='IAM policy content cannot be deleted'; END IF;
+    IF to_jsonb(NEW)-'retired_at' IS DISTINCT FROM to_jsonb(OLD)-'retired_at'
+       OR OLD.retired_at IS NOT NULL OR NEW.retired_at IS NULL OR NEW.retired_at<>transaction_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='IAM policy content is immutable except terminal retirement';
+    END IF;
+    PERFORM 1 FROM iam.policies p WHERE p.id=OLD.policy_id AND p.management='CUSTOMER'
+       AND p.status='ACTIVE' AND p.default_version_id<>OLD.id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='IAM policy version cannot be retired'; END IF;
     RETURN NEW;
 END $function$;
 
@@ -323,8 +347,8 @@ DROP TRIGGER IF EXISTS policy_metadata_cannot_be_truncated ON iam.policies;
 CREATE TRIGGER policy_metadata_cannot_be_truncated BEFORE TRUNCATE ON iam.policies
     FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
 DROP TRIGGER IF EXISTS policy_versions_are_immutable ON iam.policy_versions;
-CREATE TRIGGER policy_versions_are_immutable BEFORE UPDATE OR DELETE ON iam.policy_versions
-    FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+CREATE TRIGGER policy_versions_are_immutable BEFORE INSERT OR UPDATE OR DELETE ON iam.policy_versions
+    FOR EACH ROW EXECUTE FUNCTION iam.guard_policy_version_change();
 DROP TRIGGER IF EXISTS policy_versions_cannot_be_truncated ON iam.policy_versions;
 CREATE TRIGGER policy_versions_cannot_be_truncated BEFORE TRUNCATE ON iam.policy_versions
     FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
@@ -726,7 +750,7 @@ BEGIN
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
             'iam.account-root.credentials-recovered', 'iam.account.alias-set',
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
-            'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
+            'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',
@@ -987,9 +1011,15 @@ BEGIN
                     to_regprocedure('iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb)'),
                     to_regprocedure('iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)'),
                     to_regprocedure('iam.update_policy(text,text,text,text,bigint,text,jsonb)'),
-                    to_regprocedure('iam.delete_policy(text,text,text,text,bigint,jsonb)'))
+                    to_regprocedure('iam.delete_policy(text,text,text,text,bigint,jsonb)'),
+                    to_regprocedure('iam.delete_policy_version(text,text,text,text,text,bigint,jsonb)'))
                   AND policy_entry.prorettype='jsonb'::regtype AND NOT policy_entry.proretset
-                  AND policy_entry.prosecdef AND policy_entry.proowner='matrix_iam_owner'::regrole)=8
+                  AND policy_entry.prosecdef AND policy_entry.proowner='matrix_iam_owner'::regrole)=9
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='iam.policy_versions'::regclass
+                AND attname='retired_at' AND atttypid='timestamptz'::regtype AND NOT attnotnull AND NOT attisdropped)
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_trigger WHERE tgrelid='iam.policy_versions'::regclass
+                AND tgname='policy_versions_are_immutable' AND tgenabled='A'
+                AND tgfoid=to_regprocedure('iam.guard_policy_version_change()'))
            AND to_regprocedure('iam.create_group_membership(text,text,text,text,text,text,jsonb)') IS NOT NULL
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS removal
                 WHERE removal.oid=to_regprocedure('iam.remove_group_membership(text,text,text,text,text,bigint,jsonb)')
@@ -1084,7 +1114,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           13::bigint,
+           14::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1125,6 +1155,7 @@ AS $function$
         WHEN 'iam.policy-version.list' THEN 'POLICY'
         WHEN 'iam.policy-version.read' THEN 'POLICY'
         WHEN 'iam.policy-version.create' THEN 'POLICY'
+        WHEN 'iam.policy-version.delete' THEN 'POLICY'
         WHEN 'iam.policy.set-default-version' THEN 'POLICY'
         WHEN 'iam.policy.update' THEN 'POLICY'
         WHEN 'iam.policy.delete' THEN 'POLICY'
@@ -1323,7 +1354,7 @@ BEGIN
         WHERE member.tenant_id=tenant AND member.user_id=principal AND member.removed_at IS NULL
     ) AS sources ORDER BY sources.id LIMIT 257) AS a
     JOIN iam.policies AS p ON p.id=a.policy_id
-    JOIN iam.policy_versions AS v ON v.policy_id=p.id AND v.id=p.default_version_id);
+    JOIN iam.policy_versions AS v ON v.policy_id=p.id AND v.id=p.default_version_id AND v.retired_at IS NULL);
 END
 $function$;
 
@@ -1592,7 +1623,7 @@ BEGIN
         END IF;
         IF NOT EXISTS(SELECT 1 FROM iam.policy_attachments AS attachment
             JOIN iam.policies AS policy ON policy.id=attachment.policy_id
-            JOIN iam.policy_versions AS version ON version.policy_id=policy.id AND version.id=policy.default_version_id
+            JOIN iam.policy_versions AS version ON version.policy_id=policy.id AND version.id=policy.default_version_id AND version.retired_at IS NULL
             WHERE attachment.tenant_id=submitted_tenant_id AND attachment.id=evidence->>'attachmentId'
               AND ((NOT evidence ? 'membershipId' AND attachment.target_id=submitted_principal_id AND attachment.target_kind=actor_type)
                 OR (actor_type='USER' AND attachment.target_kind='GROUP' AND attachment.authority_scope='TENANT'

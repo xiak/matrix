@@ -82,6 +82,7 @@ func TestPolicyVersionCommandsBindOwnerRevisionAndImmutableContent(t *testing.T)
 	selectSchema := compileIAMOpenAPISchema(t, openapi, "SetDefaultPolicyVersionRequest")
 	updateSchema := compileIAMOpenAPISchema(t, openapi, "UpdatePolicyRequest")
 	deleteSchema := compileIAMOpenAPISchema(t, openapi, "DeletePolicyRequest")
+	deleteVersionSchema := compileIAMOpenAPISchema(t, openapi, "DeletePolicyVersionRequest")
 	instance := func(value any) any {
 		t.Helper()
 		encoded, err := json.Marshal(value)
@@ -98,6 +99,10 @@ func TestPolicyVersionCommandsBindOwnerRevisionAndImmutableContent(t *testing.T)
 	selection := SetDefaultPolicyVersionRequest{VersionID: "version-one", ResourceVersion: 2, RequestID: "version-select"}
 	update := UpdatePolicyRequest{DisplayName: "Renamed policy", ResourceVersion: 2, RequestID: "policy-rename"}
 	deletion := DeletePolicyRequest{ResourceVersion: 2, RequestID: "policy-delete"}
+	versionDeletion := DeletePolicyVersionRequest{ResourceVersion: 2, RequestID: "version-delete"}
+	if ValidateDeletePolicyVersionRequest(versionDeletion) != nil || deleteVersionSchema.Validate(instance(versionDeletion)) != nil {
+		t.Fatal("valid version deletion rejected")
+	}
 	if ValidateDeletePolicyRequest(deletion) != nil || deleteSchema.Validate(instance(deletion)) != nil {
 		t.Fatal("valid policy deletion rejected")
 	}
@@ -112,6 +117,11 @@ func TestPolicyVersionCommandsBindOwnerRevisionAndImmutableContent(t *testing.T)
 		}
 	}
 	for _, field := range []string{"accountId", "management", "scope", "document", "defaultVersionId", "id"} {
+		versionAttack := instance(versionDeletion).(map[string]any)
+		versionAttack[field] = "injected"
+		if deleteVersionSchema.Validate(versionAttack) == nil {
+			t.Fatal("version deletion admitted selector")
+		}
 		deleteAttack := instance(deletion).(map[string]any)
 		deleteAttack[field] = "injected"
 		if deleteSchema.Validate(deleteAttack) == nil {
@@ -127,6 +137,10 @@ func TestPolicyVersionCommandsBindOwnerRevisionAndImmutableContent(t *testing.T)
 		t.Fatal("valid version command rejected")
 	}
 	for _, revision := range []uint64{0, 9007199254740991, 9007199254740992} {
+		versionDeletion.ResourceVersion = revision
+		if ValidateDeletePolicyVersionRequest(versionDeletion) == nil || deleteVersionSchema.Validate(instance(versionDeletion)) == nil {
+			t.Fatal("invalid version deletion revision admitted")
+		}
 		deletion.ResourceVersion = revision
 		if ValidateDeletePolicyRequest(deletion) == nil || deleteSchema.Validate(instance(deletion)) == nil {
 			t.Fatal("invalid deletion revision admitted")

@@ -110,6 +110,7 @@ const (
 	ActionIAMPolicyVersionList             Action = "iam.policy-version.list"
 	ActionIAMPolicyVersionRead             Action = "iam.policy-version.read"
 	ActionIAMPolicyVersionCreate           Action = "iam.policy-version.create"
+	ActionIAMPolicyVersionDelete           Action = "iam.policy-version.delete"
 	ActionIAMPolicySetDefaultVersion       Action = "iam.policy.set-default-version"
 	ActionIAMPolicyUpdate                  Action = "iam.policy.update"
 	ActionIAMPolicyDelete                  Action = "iam.policy.delete"
@@ -324,6 +325,7 @@ var actionDefinitions = [...]ActionDefinition{
 	{ActionIAMPolicyVersionList, ProductIAM, ServiceIAM, ResourcePolicy, AuthorityScopeTenant},
 	{ActionIAMPolicyVersionRead, ProductIAM, ServiceIAM, ResourcePolicy, AuthorityScopeTenant},
 	{ActionIAMPolicyVersionCreate, ProductIAM, ServiceIAM, ResourcePolicy, AuthorityScopeTenant},
+	{ActionIAMPolicyVersionDelete, ProductIAM, ServiceIAM, ResourcePolicy, AuthorityScopeTenant},
 	{ActionIAMPolicySetDefaultVersion, ProductIAM, ServiceIAM, ResourcePolicy, AuthorityScopeTenant},
 	{ActionIAMPolicyUpdate, ProductIAM, ServiceIAM, ResourcePolicy, AuthorityScopeTenant},
 	{ActionIAMPolicyDelete, ProductIAM, ServiceIAM, ResourcePolicy, AuthorityScopeTenant},

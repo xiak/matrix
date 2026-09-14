@@ -36,6 +36,7 @@ type Workflow interface {
 	ListPolicyVersions(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyVersionList, error)
 	GetPolicyVersion(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.PolicyVersionID, string) (iamv1.PolicyVersionDetail, error)
 	CreatePolicyVersion(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.CreatePolicyVersionRequest) (iamv1.PolicyVersionDetail, error)
+	DeletePolicyVersion(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.PolicyVersionID, iamv1.DeletePolicyVersionRequest) (iamv1.PolicyDetail, error)
 	SetDefaultPolicyVersion(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.SetDefaultPolicyVersionRequest) (iamv1.PolicyDetail, error)
 	UpdatePolicy(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.UpdatePolicyRequest) (iamv1.PolicyDetail, error)
 	DeletePolicy(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.DeletePolicyRequest) (iamv1.Policy, error)
@@ -272,6 +273,9 @@ func (value *handler) policyVersion(response http.ResponseWriter, request *http.
 	if setDefault || (collection && request.Method == http.MethodPost) {
 		method = http.MethodPost
 	}
+	if item && request.Method == http.MethodDelete {
+		method = http.MethodDelete
+	}
 	if !value.requireMethod(response, request, method) || !rejectQuery(response, request) {
 		return
 	}
@@ -286,6 +290,12 @@ func (value *handler) policyVersion(response http.ResponseWriter, request *http.
 	var err error
 	status := http.StatusOK
 	switch {
+	case item && method == http.MethodDelete:
+		body, ok := decodeJSON[iamv1.DeletePolicyVersionRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.DeletePolicyVersion(request.Context(), credential, iamv1.PolicyID(id), iamv1.PolicyVersionID(parts[2]), body)
 	case setDefault:
 		body, ok := decodeJSON[iamv1.SetDefaultPolicyVersionRequest](value, response, request)
 		if !ok {

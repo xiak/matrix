@@ -100,9 +100,12 @@ func buildPaths() object {
 			"get":  readOperation("listPolicyVersions", "Read the bounded customer policy version inventory", "PolicyVersionList", nil, []any{openapi31.PathIDParameter("policyId")}),
 			"post": mutationOperation("createPolicyVersion", "Create immutable content without changing the default policy version", "CreatePolicyVersionRequest", "PolicyVersionDetail", "201", nil, []any{openapi31.PathIDParameter("policyId")}),
 		},
-		"/v1/policies/{policyId}/versions/{versionId}": object{"get": readOperation("getPolicyVersion", "Read one immutable customer policy version", "PolicyVersionDetail", nil, []any{openapi31.PathIDParameter("policyId"), openapi31.PathIDParameter("versionId")})},
-		"/v1/policies/{policyId}:set-default-version":  object{"post": mutationOperation("setDefaultPolicyVersion", "Atomically select an existing default version using the current policy revision", "SetDefaultPolicyVersionRequest", "PolicyDetail", "200", nil, []any{openapi31.PathIDParameter("policyId")})},
-		"/v1/platform-policies":                        object{"get": readOperation("listPlatformPolicies", "Read the separately authorized sealed installation policy metadata directory", "PolicyList", nil, nil)},
+		"/v1/policies/{policyId}/versions/{versionId}": object{
+			"get":    readOperation("getPolicyVersion", "Read one immutable customer policy version", "PolicyVersionDetail", nil, []any{openapi31.PathIDParameter("policyId"), openapi31.PathIDParameter("versionId")}),
+			"delete": mutationOperation("deletePolicyVersion", "Retire a nondefault version without erasing historical content", "DeletePolicyVersionRequest", "PolicyDetail", "200", nil, []any{openapi31.PathIDParameter("policyId"), openapi31.PathIDParameter("versionId")}),
+		},
+		"/v1/policies/{policyId}:set-default-version": object{"post": mutationOperation("setDefaultPolicyVersion", "Atomically select an existing default version using the current policy revision", "SetDefaultPolicyVersionRequest", "PolicyDetail", "200", nil, []any{openapi31.PathIDParameter("policyId")})},
+		"/v1/platform-policies":                       object{"get": readOperation("listPlatformPolicies", "Read the separately authorized sealed installation policy metadata directory", "PolicyList", nil, nil)},
 		"/v1/accounts": object{
 			"get":  readOperation("listAccounts", "List accounts as a platform operator", "AccountList", nil, accountPageParameters()),
 			"post": mutationOperation("createAccount", "Create an account and its immutable root identity", "CreateAccountRequest", "Account", "201", nil, nil),
@@ -293,6 +296,7 @@ func structContracts() map[string]reflect.Type {
 		"SetDefaultPolicyVersionRequest": openapi31.StructType[iamv1.SetDefaultPolicyVersionRequest](),
 		"UpdatePolicyRequest":            openapi31.StructType[iamv1.UpdatePolicyRequest](),
 		"DeletePolicyRequest":            openapi31.StructType[iamv1.DeletePolicyRequest](),
+		"DeletePolicyVersionRequest":     openapi31.StructType[iamv1.DeletePolicyVersionRequest](),
 		"PolicyAttachmentTarget":         openapi31.StructType[iamv1.PolicyAttachmentTarget](),
 		"CreatePolicyAttachmentRequest":  openapi31.StructType[iamv1.CreatePolicyAttachmentRequest](),
 		"RevokePolicyAttachmentRequest":  openapi31.StructType[iamv1.RevokePolicyAttachmentRequest](),
@@ -680,7 +684,7 @@ func applyPolicyLanguageOverlays(schemas object) {
 		"policy":  object{"properties": object{"scope": object{"const": "TENANT"}, "status": object{"const": "ACTIVE"}}},
 		"version": object{"properties": object{"document": object{"properties": object{"scope": object{"const": "TENANT"}}}}},
 	}}}
-	for _, name := range []string{"CreatePolicyVersionRequest", "SetDefaultPolicyVersionRequest", "UpdatePolicyRequest", "DeletePolicyRequest"} {
+	for _, name := range []string{"CreatePolicyVersionRequest", "SetDefaultPolicyVersionRequest", "UpdatePolicyRequest", "DeletePolicyRequest", "DeletePolicyVersionRequest"} {
 		schemas[name].(object)["properties"].(object)["resourceVersion"].(object)["maximum"] = 9007199254740990
 	}
 	schemas["CreatePolicyVersionRequest"].(object)["allOf"] = schemas["CreatePolicyRequest"].(object)["allOf"]

@@ -60,6 +60,8 @@ CREATE INDEX IF NOT EXISTS policies_active_directory_idx
     ON iam.policies(authority_scope,owner_tenant_id,id) WHERE status='ACTIVE';
 CREATE INDEX IF NOT EXISTS policy_attachments_live_policy_idx
     ON iam.policy_attachments(policy_id) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS policy_versions_active_inventory_idx
+    ON iam.policy_versions(policy_id,id) WHERE retired_at IS NULL;
 
 CREATE OR REPLACE FUNCTION iam.assert_customer_policy_document(canonical text,content_digest text)
 RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
@@ -130,7 +132,7 @@ BEGIN
     policy:=iam.lookup_policy(tenant,policy_id);
     IF policy IS NULL OR policy->>'scope'<>'TENANT' OR policy->>'status'<>'ACTIVE' THEN RETURN NULL; END IF;
     SELECT jsonb_build_object('policyId',v.policy_id,'versionId',v.id,'document',v.document,'contentDigest',v.content_digest)
-      INTO version FROM iam.policy_versions AS v WHERE v.policy_id=policy_detail_snapshot.policy_id AND v.id=policy->>'defaultVersionId';
+      INTO version FROM iam.policy_versions AS v WHERE v.policy_id=policy_detail_snapshot.policy_id AND v.id=policy->>'defaultVersionId' AND v.retired_at IS NULL;
     IF version IS NULL THEN RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='policy version is unavailable'; END IF;
     RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','PolicyDetail','policy',policy,'version',version);
 END $function$;
@@ -214,7 +216,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy is unavailable';
     END IF;
     SELECT jsonb_build_object('policyId',v.policy_id,'versionId',v.id,'document',v.document,'contentDigest',v.content_digest)
-      INTO version FROM iam.policy_versions AS v WHERE v.policy_id=policy_version_detail.policy_id AND v.id=version_id;
+      INTO version FROM iam.policy_versions AS v WHERE v.policy_id=policy_version_detail.policy_id AND v.id=version_id AND v.retired_at IS NULL;
     IF version IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy version is unavailable'; END IF;
     RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','PolicyVersionDetail','policy',policy,'version',version);
 END $function$;
@@ -230,7 +232,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy is unavailable';
     END IF;
     SELECT jsonb_agg(jsonb_build_object('policyId',v.policy_id,'versionId',v.id,'document',v.document,'contentDigest',v.content_digest) ORDER BY v.id)
-      INTO versions FROM (SELECT * FROM iam.policy_versions AS stored WHERE stored.policy_id=list_policy_versions.policy_id ORDER BY stored.id LIMIT 6) v;
+      INTO versions FROM (SELECT * FROM iam.policy_versions AS stored WHERE stored.policy_id=list_policy_versions.policy_id AND stored.retired_at IS NULL ORDER BY stored.id LIMIT 6) v;
     IF versions IS NULL OR jsonb_array_length(versions)>5 THEN RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='policy version inventory is unavailable'; END IF;
     RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','PolicyVersionList','policy',policy,'items',versions);
 END $function$;
@@ -287,7 +289,7 @@ DECLARE policy iam.policies%ROWTYPE; replayed boolean; effective_now timestamptz
 BEGIN
     PERFORM iam.assert_customer_policy_document(canonical,content_digest);
     IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990
-       OR version_id IS DISTINCT FROM 'version-'||substring(content_digest FROM 8) THEN
+       OR version_id IS DISTINCT FROM 'version-'||substring(content_digest FROM 8)||'-'||(expected_version+1)::text THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy version input is invalid';
     END IF;
     policy:=iam.lock_customer_policy_publisher(tenant,actor,policy_id);
@@ -298,13 +300,13 @@ BEGIN
     replayed:=iam.policy_version_intent_replayed(tenant,actor,event);
     IF replayed THEN
         IF policy.resource_version<>expected_version+1 OR NOT EXISTS(SELECT 1 FROM iam.policy_versions AS v
-            WHERE v.policy_id=create_policy_version.policy_id AND v.id=version_id AND v.canonical_document=canonical AND v.content_digest=create_policy_version.content_digest) THEN
+            WHERE v.policy_id=create_policy_version.policy_id AND v.id=version_id AND v.canonical_document=canonical AND v.content_digest=create_policy_version.content_digest AND v.retired_at IS NULL) THEN
             RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy version replay conflicts';
         END IF;
         RETURN iam.policy_version_detail(tenant,policy_id,version_id);
     END IF;
-    IF policy.resource_version<>expected_version OR EXISTS(SELECT 1 FROM iam.policy_versions AS v WHERE v.policy_id=create_policy_version.policy_id AND v.id=version_id)
-       OR (SELECT count(*) FROM iam.policy_versions AS v WHERE v.policy_id=create_policy_version.policy_id)>=5 THEN
+    IF policy.resource_version<>expected_version OR EXISTS(SELECT 1 FROM iam.policy_versions AS v WHERE v.policy_id=create_policy_version.policy_id AND (v.id=version_id OR (v.retired_at IS NULL AND v.content_digest=create_policy_version.content_digest)))
+       OR (SELECT count(*) FROM iam.policy_versions AS v WHERE v.policy_id=create_policy_version.policy_id AND v.retired_at IS NULL)>=5 THEN
         RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy version revision or inventory conflicts';
     END IF;
     INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
@@ -327,7 +329,7 @@ BEGIN
     PERFORM iam.assert_audit_event(event,tenant,'iam.policy.default-version-set','POLICY',policy_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy version decision is invalid'; END IF;
-    IF NOT EXISTS(SELECT 1 FROM iam.policy_versions AS v WHERE v.policy_id=set_default_policy_version.policy_id AND v.id=version_id) THEN
+    IF NOT EXISTS(SELECT 1 FROM iam.policy_versions AS v WHERE v.policy_id=set_default_policy_version.policy_id AND v.id=version_id AND v.retired_at IS NULL) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy version is unavailable';
     END IF;
     replayed:=iam.policy_version_intent_replayed(tenant,actor,event);
@@ -417,3 +419,35 @@ END $function$;
 REVOKE ALL ON FUNCTION iam.lock_policy_publisher(text,text),iam.delete_policy(text,text,text,text,bigint,jsonb)
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.delete_policy(text,text,text,text,bigint,jsonb) TO matrix_iam_api;
+
+CREATE OR REPLACE FUNCTION iam.delete_policy_version(tenant text,actor text,decision text,policy_id text,version_id text,expected_version bigint,event jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE policy iam.policies%ROWTYPE; version iam.policy_versions%ROWTYPE; effective_now timestamptz(6):=transaction_timestamp();
+BEGIN
+    IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990 THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy revision is invalid';
+    END IF;
+    policy:=iam.lock_customer_policy_publisher(tenant,actor,policy_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy-version.delete','POLICY',policy_id);
+    PERFORM iam.assert_audit_event(event,tenant,'iam.policy-version.deleted','POLICY',policy_id,'SUCCEEDED');
+    PERFORM iam.assert_user_audit_actor(tenant,actor,event);
+    IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy version decision is invalid'; END IF;
+    SELECT * INTO version FROM iam.policy_versions v WHERE v.policy_id=delete_policy_version.policy_id AND v.id=version_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy version is unavailable'; END IF;
+    IF iam.policy_version_intent_replayed(tenant,actor,event) THEN
+        IF policy.resource_version<>expected_version+1 OR version.retired_at IS NULL THEN
+            RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy version deletion replay conflicts';
+        END IF;
+        RETURN iam.policy_detail_snapshot(tenant,policy_id);
+    END IF;
+    IF policy.resource_version<>expected_version OR version.retired_at IS NOT NULL OR policy.default_version_id=version_id THEN
+        RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy version revision or default conflicts';
+    END IF;
+    UPDATE iam.policy_versions v SET retired_at=effective_now WHERE v.policy_id=delete_policy_version.policy_id AND v.id=version_id;
+    UPDATE iam.policies p SET resource_version=resource_version+1,updated_at=effective_now WHERE p.id=policy_id;
+    INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
+      VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
+    RETURN iam.policy_detail_snapshot(tenant,policy_id);
+END $function$;
+REVOKE ALL ON FUNCTION iam.delete_policy_version(text,text,text,text,text,bigint,jsonb) FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+GRANT EXECUTE ON FUNCTION iam.delete_policy_version(text,text,text,text,text,bigint,jsonb) TO matrix_iam_api;

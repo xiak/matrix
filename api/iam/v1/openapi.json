@@ -153,6 +153,7 @@
           "iam.policy-version.list",
           "iam.policy-version.read",
           "iam.policy-version.create",
+          "iam.policy-version.delete",
           "iam.policy.set-default-version",
           "iam.policy.update",
           "iam.policy.delete",
@@ -732,6 +733,32 @@
               "properties": {
                 "action": {
                   "const": "iam.policy-version.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy-version.delete"
                 }
               },
               "required": [
@@ -2563,6 +2590,7 @@
               "iam.policy-version.list",
               "iam.policy-version.read",
               "iam.policy-version.create",
+              "iam.policy-version.delete",
               "iam.policy.set-default-version",
               "iam.policy.update",
               "iam.policy.delete",
@@ -2976,6 +3004,32 @@
               "properties": {
                 "action": {
                   "const": "iam.policy-version.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy-version.delete"
                 }
               },
               "required": [
@@ -5010,6 +5064,24 @@
         ],
         "type": "object"
       },
+      "DeletePolicyVersionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requestId",
+          "resourceVersion"
+        ],
+        "type": "object"
+      },
       "DeleteUserRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5788,6 +5860,7 @@
                             "iam.policy-version.list",
                             "iam.policy-version.read",
                             "iam.policy-version.create",
+                            "iam.policy-version.delete",
                             "iam.policy.set-default-version",
                             "iam.policy.update",
                             "iam.policy.delete",
@@ -6459,6 +6532,7 @@
                       "iam.policy-version.list",
                       "iam.policy-version.read",
                       "iam.policy-version.create",
+                      "iam.policy-version.delete",
                       "iam.policy.set-default-version",
                       "iam.policy.update",
                       "iam.policy.delete"
@@ -6522,6 +6596,30 @@
                 "actions": {
                   "contains": {
                     "const": "iam.policy-version.create"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.policy-version.delete"
                   }
                 }
               }
@@ -11072,6 +11170,83 @@
       }
     },
     "/v1/policies/{policyId}/versions/{versionId}": {
+      "delete": {
+        "operationId": "deletePolicyVersion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policyId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "versionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeletePolicyVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyDetail"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Retire a nondefault version without erasing historical content"
+      },
       "get": {
         "operationId": "getPolicyVersion",
         "parameters": [

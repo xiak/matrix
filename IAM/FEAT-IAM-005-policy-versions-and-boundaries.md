@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略创建/读取/显式关联及版本查询/创建/默认切换已有固定 CI；策略改名、删除及旧分页门禁修复有本地真库和独立进程证据，等待本片独立 CI。版本删除、条件、边界和 UI 闭环未完成，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联及版本查询/创建/默认切换已有固定 CI；版本退休和容量复用已通过本地完整真库/进程回归，待本片独立 CI。条件、边界和 UI 闭环未完成，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -37,20 +37,21 @@
 - 同账号 ACTIVE/CUSTOMER displayName 精确唯一，不以显示名派生 Policy ID；不同账号可以同名。创建上限为每账号 128 个活跃自定义策略，已有完整目录上限仍为 256 项。整个 HTTP 请求沿用 64 KiB 预算，不能因为策略文档本身有预算就无限扩大外层请求。创建使用现有 requestId 幂等身份，不新增平行的 Idempotency-Key 别名。
 - `iam.policy.created` 是租户链的 IAM/USER 成功事实，target 为 POLICY，绑定真实 decision、request digest 和策略 ID。策略、初始版本与 outbox 同事务，非法文档、跨域或并发冲突不得留下半套对象。该路径不改 Audit canonical 编码或恢复能力。
 
-JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/digest 记录内容。对象最多五个管理可见版本作为初始产品容量，可在真实容量门禁后调大；当前有效/被边界与历史证明引用版本不能直接物理删除。五个不是策略终生发布次数：版本删除片必须在保留历史内容与证明的同时释放管理名额，不能让已有五个历史版本永久阻断演进。当前尚未实现版本删除，所有已创建版本均在管理视图。默认指针以 resourceVersion 原子切换，不就地改 JSON。
+JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/digest 记录内容。对象最多五个管理可见版本（包括一个默认版本）作为初始产品容量，可在真实容量门禁后调大；当前有效/被边界与历史证明引用版本不能直接物理删除。五个不是策略终生发布次数：非默认版本逻辑退休后保留历史内容与证明，但退出管理集合并释放一个名额。当前没有精确 version pin；普通附件引用 Policy 并跟随默认，不冒充非默认版本 pin。默认指针以 resourceVersion 原子切换，不就地改 JSON。
 
 #### 版本发布事务
 
-版本集合由所属 Policy 管理，不新增可脱离 Policy 授权的 version 资源命名空间。初始 CUSTOMER 版本已有 canonical digest 身份；后续版本沿用 `version-<digest>`，同一策略中相同内容不是另一份可变副本。所有版本写入先经当前 PDP，再锁内检查原 root、活跃 Account/USER 与该账号 CUSTOMER Policy；SYSTEM 策略不接受这些用户写入。
+版本集合由所属 Policy 管理，不新增可脱离 Policy 授权的 version 资源命名空间。初始 CUSTOMER 版本保留已有 `version-<digest>` 身份；后续发布使用 `version-<digest>-<Policy结果修订>`，使相同内容的再次发布不复用已退休身份。内容仍不可变，ID 对客户端不透明，不能以名称/后缀推导权限。所有版本写入先经当前 PDP，再锁内检查原 root、活跃 Account/USER 与该账号 CUSTOMER Policy；SYSTEM 策略不接受这些用户写入。
 
 | 路由 | Action / 授权资源 | 行为 |
 | --- | --- | --- |
 | `GET /v1/policies/{policyId}/versions` | `iam.policy-version.list` / POLICY | 当前 CUSTOMER Policy 的最多五个不可变版本及当前元数据；不是可复用 permit |
 | `GET /v1/policies/{policyId}/versions/{versionId}` | `iam.policy-version.read` / POLICY | 精确 owner+version 内容与同一快照元数据；版本不必是默认版本 |
+| `DELETE /v1/policies/{policyId}/versions/{versionId}` | `iam.policy-version.delete` / POLICY | resourceVersion、requestId；退休非默认版本，释放一个管理名额，返回默认内容不变的 PolicyDetail |
 | `POST /v1/policies/{policyId}/versions` | `iam.policy-version.create` / POLICY | document、resourceVersion、requestId；新增版本，Policy 修订 +1，不自动切换默认值或关联主体 |
 | `POST /v1/policies/{policyId}:set-default-version` | `iam.policy.set-default-version` / POLICY | versionId、resourceVersion、requestId；显式原子切换并使 Policy 修订 +1，不修改版本文档 |
 
-同意图重放只在该命令结果仍是当前 Policy 修订时返回原结果；变体、过时 resourceVersion 或命令后已有其他修订均冲突，不能把历史命令重放成新的切换。新 requestId 重复创建已存在内容，或选择当前默认版本，均冲突而不是悄悄制造新修订。并发操作按同一 Policy 锁和预期修订只产生一个有效结果。
+同意图重放只在该命令结果仍是当前 Policy 修订时返回原结果；变体、过时 resourceVersion 或命令后已有其他修订均冲突，不能把历史命令重放成新的切换。新 requestId 重复创建管理集合中仍存在的内容，或选择当前默认版本，均冲突而不是悄悄制造新修订。退休内容再次发布是新意图、新身份，不恢复旧版本；普通精确读取和默认选择都拒绝退休版本。并发操作按同一 Policy 锁和预期修订只产生一个有效结果。
 
 成功事实分别为租户链 `iam.policy-version.created`、`iam.policy.default-version-set`，target 为所属 POLICY；原 request digest 绑定目标策略、预期修订及新 versionId/contentDigest，不记录策略正文。新增版本与 Policy 修订、历史决定、单一 outbox 同事务；切换后的新请求重读实际默认版本，已提交的旧决定仍使用其原版本证据。版本列表/精确版本读取的结果不能绕过另一次写入的当前授权与修订检查。
 
@@ -62,14 +63,14 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 普通管理目录只列 ACTIVE 策略，删除释放活跃 CUSTOMER 名额和显示名；原创建意图不能复用，但新创建意图可以使用相同显示名并得到新稳定 ID。删除后的普通内容读取、改名、发布/切换与重新关联均拒绝，历史事实按其原证据投递，不从当前目录反推历史是否存在。目录不提供未声明的回收站或历史查询 API；原始内容仍受不可变存储保护。真实门禁必须证明有超过目录预算的历史退休记录时仍能列出/创建当前策略，不能以扩大预算掩盖终生容量问题。附件创建与删除在同一 Policy 锁序列化；只有创建关联成功或策略终态成功之一，不能留下活跃的退休策略附件。
 
-#### 版本删除与再次发布（下一实现片）
+#### 版本删除与再次发布
 
-版本删除退出管理集合并释放五版本名额，但不得物理移除旧授权证明内容。当前没有版本删除入口；以下是下一片的目标，不将策略 CRUD 当作完整 LANG-01 验收。
+版本删除退出管理集合并释放五版本名额，但不得物理移除旧授权证明内容。接口/事务与本地组合回归已完成，尚待独立 CI 与实际 UI 消费，不将该后端切片当作完整 LANG-01 验收。
 
 - `DELETE /v1/policies/{policyId}/versions/{versionId}` 使用 `iam.policy-version.delete` / 所属 POLICY；请求只有 resourceVersion、requestId，版本 ID 来自路径，账号仍从当前身份推导。成功返回默认内容不变的 `PolicyDetail`，Policy 修订 +1。SYSTEM、跨账号、非原 root、退休 Policy 拒绝；当前默认版本不得删除，必须先显式切换。
 - 在现有 `policy_versions` 加终态退休时间，保留原 ID、scope、document、canonical、digest 和创建时间不变，不新建平行内容库。该表的更新保护只允许一次 NULL→退休时间，禁止内容变更、取消退休、物理删除及 truncate；共享的决定/附件历史保护函数不放宽。默认指针不能指向退休版本。列表、普通精确读取、默认选择和五版本预算只使用未退休内容；历史决定/proof 继续读取原精确版本，不能加当前活跃过滤而丢掉旧证据。
 - 同请求精确重放仅在其原结果修订仍当前时返回；错误版本、变体、后来已有其他修订或其他命令再次删除均冲突。成功事实为租户链 `iam.policy-version.deleted`，target 为所属 POLICY，原 request digest 绑定准确 versionId、Policy ID 和预期修订；退休、修订、授权决定与 outbox 同事务。
-- 再次提交仍在管理集合的相同内容继续冲突；已退休的内容可用新请求重新发布，但必须形成新 versionId，不能清除旧退休状态。当前 digest-only 的初始 ID 原样保留；下一片的新版本发布 ID 绑定 contentDigest 与本次 Policy 结果修订（单调 resourceVersion），不再将“内容相同”误当成“同一次发布”。ID 对客户端始终是不透明值，不允许客户端拼接或推导授权。内容 digest/canonical 算法不变，新发布不会自动成为默认或产生附件。
+- 再次提交仍在管理集合的相同内容继续冲突；已退休的内容可用新请求重新发布，但必须形成新 versionId，不能清除旧退休状态。digest-only 的初始 ID 原样保留；新版本发布 ID 绑定 contentDigest 与本次 Policy 结果修订（单调 resourceVersion），不再将“内容相同”误当成“同一次发布”。ID 对客户端始终是不透明值，不允许客户端拼接或推导授权。内容 digest/canonical 算法不变，新发布不会自动成为默认或产生附件。
 - 真实门禁：五项满额→退休非默认项→创建新内容以及再次发布已退休内容；活跃重复拒绝；退休版本的旧决定和 Audit proof 保留；旧创建/删除重放及 schema/bootstrap 重放不复活；删除与默认切换/新建/Policy 删除同修订竞争只有确定赢家；末尾 outbox 故障没有部分退休或名额变化。现有默认版本始终可读、目录只含最多五个可管理版本。后续 boundary 若引入精确版本引用，须在其 owning slice 将该活跃引用加入同锁删除约束，不能只依赖历史存在或静态检查。
 
 评估器处理类型化 Statement。条件缺失对匹配为 false；显式 Null 存在检查单独定义；否定条件也不能因属性缺失自动放行。多个条件同时满足，多值规则明确为 any/all；禁止隐式字符串类型转换。资源列表中每个必要资源都要通过，不以某个资源成功代替全部。
@@ -120,4 +121,14 @@ PG18 聚焦 `customer_policy_terminal_deletion` 最终通过，3.18s（含父门
 
 最终 IAM 集成包 race 串行复验共 199.938s，通过上述策略权威、真实 IAM HTTP 94.02s、专用本地凭据恢复 16.52s，保留当前版本的改密/重置/恢复/退出/撤权并发与原意图重放。相关 API/IAM/Audit/architecture race、全仓 Go 测试/vet、模块校验、OpenAPI 稳定生成和 Linux IAM/Audit 构建均通过；本片独立 CI 仍须绑定提交核实。
 
-当前删除增量开发 readiness 为 IAM13/Audit10/PaaS1，仅反映实际函数与封闭 action 契约；改名候选为 12/9/1。安装发布 profile 未修改，不能据此组装或宣称跨版本可升级。当前没有对外诊断 endpoint、版本管理 capability 条目或自定义策略 UI 验收。LANG-01 的版本删除、LANG-03 的受限通配、LANG-04 条件、LANG-05 边界、LANG-07 编辑器以及 LANG-08 完整委派仍必须继续实现，不能将策略 CRUD 当作 FEAT Accepted。
+策略删除固定 `0ac6445a33fb2e592fe94d2787a87cd7460ec4ae` 的 [Verification 34823234061](https://github.com/xiak/matrix/actions/runs/34823234061) 已核实精确 SHA，Go/authority-process/node-process 全部 completed/success，包含 02fed 旧后页门禁修复，不包含后续版本退休。该固定源码为 IAM13/Audit10/PaaS1，安装发布 profile 未修改。
+
+### 版本退休与容量复用证据
+
+2026-09-14，本分支新建专属受限 PG18（1 CPU、768 MiB、128 PIDs、64 连接），现有 `customer_immutable_versions_and_default_selection` 聚焦通过，6.19s（父门禁 11.33s）：五项满额、默认禁止删除、非默认退休释放槽位、活跃重复内容拒绝、退休内容新 ID 再次发布、新内容继续复用槽位、末尾 outbox 失败全回滚、旧命令不复活、历史 canonical/digest/proof 保留，及退休/默认切换/新版本/整策略删除四路同修订竞争单一赢家。原父门禁再次 apply/bootstrap 后比较真实退休内容、ID 和终态均不变。最终完整真库复验还包含“新内容不能以退休态插入”的存储攻击拒绝与严格响应校验。
+
+当前版本退休开发 readiness 为 IAM14/Audit11/PaaS1，仅反映实际函数、退休列/保护与封闭 action 契约；安装发布 profile 未修改，不能据此组装或宣称跨版本可升级。当前没有对外诊断 endpoint、版本管理 capability 条目或自定义策略 UI 验收。LANG-03 的受限通配、LANG-04 条件、LANG-05 边界、LANG-07 编辑器以及 LANG-08 完整委派仍必须继续实现，不能将策略 CRUD 当作 FEAT Accepted。
+
+完整回归中的 Audit 数据层 11.447s、Audit HTTP 3.286s、实际双 IAM/PaaS/Audit 进程 137.207s、PaaS 数据层 18.719s 通过；真实 PaaS 在非默认版本退休后保持原授权，版本退休/策略删除事实均经实际 dispatcher 入链。该次 IAM 包没有通过：十组串行流程共用的两分钟 context 在末尾凭据并发耗尽（策略父门禁 122.72s），后续保护检查因同一已过期 context 不能执行，不计为成功。现有测试 owner 改为每组两分钟、共享数据综合门禁四分钟，HTTP 请求也继承对应截止时间与取消；没有删除规模、并发或攻击用例，没有改变生产超时、资源上限和 CI 作业总上限。
+
+上述调整后的新库完整 IAM integration race 最终通过，320.659s，包含完整策略存储/版本/组/凭据保护、IAM HTTP 155.29s 与本地原平台凭据恢复 37.59s，未跳过原有并发、撤权及重放检查。这是功能/隔离验收，不是容量/性能 SLO。相关 API/IAM/Audit/architecture race、全仓 Go 测试/vet、模块校验、OpenAPI 稳定生成与 Linux IAM/Audit 构建通过；最终测试预算与响应校验增量另经完整真库与聚焦 vet 验证。发布 profile、签名安装与 UI 仍未作为本片证据。

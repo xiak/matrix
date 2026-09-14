@@ -226,7 +226,9 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// This retained-data fixture now runs ten serial protocol flows. Bound
+	// their aggregate separately from each flow; it is not an operation SLO.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_policy_") {
@@ -377,34 +379,31 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		}
 	}
 	assertDecision(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"}, true)
-	t.Run("policy directories isolate metadata and permissions", func(t *testing.T) {
-		provePolicyDirectories(t, ctx, handler, admin, primary)
-	})
-	t.Run("direct policy attachment management", func(t *testing.T) {
-		proveDirectPolicyAttachments(t, ctx, handler, admin, primary)
-	})
-	t.Run("group inheritance and terminal membership", func(t *testing.T) {
-		proveGroupInheritance(t, ctx, handler, admin, primary)
-	})
-	t.Run("customer policy publication and current authority", func(t *testing.T) {
-		proveCustomerPolicyPublication(t, ctx, handler, admin, primary)
-	})
-	t.Run("customer immutable versions and default selection", func(t *testing.T) {
-		proveCustomerPolicyVersions(t, ctx, handler, admin, primary)
-	})
-	t.Run("customer policy metadata lifecycle", func(t *testing.T) {
-		proveCustomerPolicyMetadata(t, ctx, handler, admin, primary)
-	})
-	t.Run("customer policy terminal deletion", func(t *testing.T) { proveCustomerPolicyDeletion(t, ctx, handler, admin, primary) })
-	t.Run("policy publication versus attachment revision", func(t *testing.T) {
-		provePolicyDefaultAttachmentRaces(t, ctx, handler, admin, primary)
-	})
-	t.Run("policy-backed credential transaction races", func(t *testing.T) {
-		provePasswordSessionRaces(t, ctx, handler, admin, primary)
-	})
-	t.Run("platform scope protects credentials independently of policy name", func(t *testing.T) {
-		provePolicyScopeCredentialProtection(t, ctx, handler, admin, primary)
-	})
+	runFlow := func(name string, prove func(*testing.T, context.Context, http.Handler, *pgx.Conn, string)) {
+		t.Run(name, func(t *testing.T) {
+			flowContext, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			defer cancel()
+			deadline, _ := flowContext.Deadline()
+			boundedHandler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				requestContext, cancelRequest := context.WithDeadline(request.Context(), deadline)
+				defer cancelRequest()
+				stop := context.AfterFunc(flowContext, cancelRequest)
+				defer stop()
+				handler.ServeHTTP(response, request.WithContext(requestContext))
+			})
+			prove(t, flowContext, boundedHandler, admin, primary)
+		})
+	}
+	runFlow("policy directories isolate metadata and permissions", provePolicyDirectories)
+	runFlow("direct policy attachment management", proveDirectPolicyAttachments)
+	runFlow("group inheritance and terminal membership", proveGroupInheritance)
+	runFlow("customer policy publication and current authority", proveCustomerPolicyPublication)
+	runFlow("customer immutable versions and default selection", proveCustomerPolicyVersions)
+	runFlow("customer policy metadata lifecycle", proveCustomerPolicyMetadata)
+	runFlow("customer policy terminal deletion", proveCustomerPolicyDeletion)
+	runFlow("policy publication versus attachment revision", provePolicyDefaultAttachmentRaces)
+	runFlow("policy-backed credential transaction races", provePasswordSessionRaces)
+	runFlow("platform scope protects credentials independently of policy name", provePolicyScopeCredentialProtection)
 	var accountAttachment iamv1.PolicyAttachment
 	for _, row := range initial {
 		if row.Policy.ID == iamv1.SystemPolicyAccountAdministrator {
@@ -575,6 +574,17 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertDecision(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"}, false)
+	retiredContent := func() []byte {
+		t.Helper()
+		var encoded []byte
+		if err := admin.QueryRow(ctx, `SELECT COALESCE(jsonb_agg(jsonb_build_object('policyId',policy_id,'versionId',id,
+			'document',document,'canonical',canonical_document,'digest',content_digest,'createdAt',created_at,'retiredAt',retired_at)
+			ORDER BY policy_id,id),'[]'::jsonb) FROM iam.policy_versions WHERE retired_at IS NOT NULL`).Scan(&encoded); err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	beforeRetiredContent := retiredContent()
 	applyIAMSchema(t, ctx, admin)
 	assertDecision(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"}, false)
 	for _, row := range readSnapshot() {
@@ -608,6 +618,9 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	applyIAMSchema(t, ctx, admin)
 	if rows := readSnapshot(); len(rows) != 0 {
 		t.Fatal("retired policy or revoked attachment was reactivated by migration")
+	}
+	if !bytes.Equal(beforeRetiredContent, retiredContent()) {
+		t.Fatal("schema/bootstrap replay altered retired version identity, content or terminal state")
 	}
 	var retainedVersions int
 	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.policy_versions WHERE policy_id='system.account-administrator'`).Scan(&retainedVersions); err != nil || retainedVersions != 2 {
@@ -1093,6 +1106,217 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 	get(path+"/versions/"+string(initial.Version.ID), other, http.StatusForbidden, nil)
 	post(path+"/versions", other, create, http.StatusForbidden, nil)
 	post(path+":set-default-version", other, selection, http.StatusForbidden, nil)
+	// The default counts toward the five-version inventory. Retiring an old
+	// nondefault publication must free capacity without destroying its proof.
+	deleteVersion := func(id iamv1.PolicyVersionID, principal string, command iamv1.DeletePolicyVersionRequest, want int, result any) {
+		t.Helper()
+		request(http.MethodDelete, path+"/versions/"+string(id), principal, command, want, result)
+	}
+	retirement := iamv1.DeletePolicyVersionRequest{ResourceVersion: inventory.Policy.ResourceVersion, RequestID: "version-retire-original"}
+	deleteVersion(initial.Version.ID, root, retirement, http.StatusConflict, nil)
+	deleteVersion(initial.Version.ID, bearer, retirement, http.StatusForbidden, nil)
+	deleteVersion(initial.Version.ID, other, retirement, http.StatusForbidden, nil)
+	deleteVersion(initial.Version.ID, paasCredential, retirement, http.StatusUnauthorized, nil)
+	deleteVersion("missing-version", root, retirement, http.StatusForbidden, nil)
+	request(http.MethodDelete, "/v1/policies/"+string(iamv1.SystemPolicyAccountAdministrator)+"/versions/"+string(initial.Version.ID), root, retirement, http.StatusForbidden, nil)
+	for _, field := range []string{"accountId", "versionId", "scope", "force", "document"} {
+		request(http.MethodDelete, path+"/versions/"+string(initial.Version.ID), root, map[string]any{"resourceVersion": retirement.ResourceVersion, "requestId": retirement.RequestID, field: "injected"}, http.StatusBadRequest, nil)
+	}
+	request(http.MethodDelete, path+"/versions/"+string(initial.Version.ID)+"?accountId=other", root, retirement, http.StatusBadRequest, nil)
+	post(path+":set-default-version", root, iamv1.SetDefaultPolicyVersionRequest{VersionID: version.Version.ID, ResourceVersion: inventory.Policy.ResourceVersion, RequestID: "version-select-before-retire"}, http.StatusOK, &selected)
+	retirement.ResourceVersion = selected.Policy.ResourceVersion
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_version_retirement_fault() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.event_document->>'action'='iam.policy-version.deleted' THEN RAISE EXCEPTION 'injected retirement outbox failure'; END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_version_retirement_fault BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_version_retirement_fault()`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := database.Exec(context.Background(), `DROP TRIGGER IF EXISTS matrix_version_retirement_fault ON iam.audit_outbox; DROP FUNCTION IF EXISTS public.matrix_version_retirement_fault()`); err != nil {
+			t.Error("remove retirement fault")
+		}
+	}()
+	deleteVersion(initial.Version.ID, root, retirement, http.StatusServiceUnavailable, nil)
+	get(path+"/versions", root, http.StatusOK, &inventory)
+	if len(inventory.Items) != iamv1.MaxPolicyVersions || inventory.Policy != selected.Policy {
+		t.Fatal("failed retirement changed inventory or default")
+	}
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2)+(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$2)`, initial.Policy.AccountID, retirement.RequestID).Scan(&faultFacts); err != nil || faultFacts != 0 {
+		t.Fatal("failed retirement left decision or fact")
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER matrix_version_retirement_fault ON iam.audit_outbox; DROP FUNCTION public.matrix_version_retirement_fault()`); err != nil {
+		t.Fatal(err)
+	}
+	var retired, retiredReplay iamv1.PolicyDetail
+	deleteVersion(initial.Version.ID, root, retirement, http.StatusOK, &retired)
+	deleteVersion(initial.Version.ID, root, retirement, http.StatusOK, &retiredReplay)
+	if iamv1.ValidatePolicyDetail(retired) != nil || retired.Policy.ResourceVersion != retirement.ResourceVersion+1 ||
+		retired.Version.ID != selected.Version.ID || !bytes.Equal(mustIAMJSON(t, retired), mustIAMJSON(t, retiredReplay)) {
+		t.Fatal("retirement changed default or replay result")
+	}
+	get(path+"/versions/"+string(initial.Version.ID), root, http.StatusForbidden, nil)
+	post(path+":set-default-version", root, iamv1.SetDefaultPolicyVersionRequest{VersionID: initial.Version.ID, ResourceVersion: retired.Policy.ResourceVersion, RequestID: "version-select-retired"}, http.StatusForbidden, nil)
+	variantDeletion := retirement
+	variantDeletion.ResourceVersion++
+	deleteVersion(initial.Version.ID, root, variantDeletion, http.StatusConflict, nil)
+	variantDeletion.RequestID = "version-retire-again"
+	deleteVersion(initial.Version.ID, root, variantDeletion, http.StatusConflict, nil)
+	get(path+"/versions", root, http.StatusOK, &inventory)
+	if len(inventory.Items) != iamv1.MaxPolicyVersions-1 {
+		t.Fatal("retirement did not release one slot")
+	}
+	post(path+"/versions", root, iamv1.CreatePolicyVersionRequest{Document: selected.Version.Document, ResourceVersion: retired.Policy.ResourceVersion, RequestID: "version-active-duplicate"}, http.StatusConflict, nil)
+	var republished iamv1.PolicyVersionDetail
+	post(path+"/versions", root, iamv1.CreatePolicyVersionRequest{Document: initial.Version.Document, ResourceVersion: retired.Policy.ResourceVersion, RequestID: "version-republish-original"}, http.StatusCreated, &republished)
+	if republished.Version.ID == initial.Version.ID || republished.Version.ContentDigest != initial.Version.ContentDigest || republished.Policy.DefaultVersionID != selected.Version.ID {
+		t.Fatal("same-content publication revived an identity or changed default")
+	}
+	deleteVersion(initial.Version.ID, root, retirement, http.StatusConflict, nil)
+	post(path+"/versions", root, create, http.StatusConflict, nil)
+	get(path+"/versions", root, http.StatusOK, &inventory)
+	if len(inventory.Items) != iamv1.MaxPolicyVersions {
+		t.Fatal("republished content did not use exactly one slot")
+	}
+	var removable iamv1.PolicyVersion
+	for _, item := range inventory.Items {
+		if item.ID != inventory.Policy.DefaultVersionID && item.ID != republished.Version.ID {
+			removable = item
+			break
+		}
+	}
+	if removable.ID == "" {
+		t.Fatal("missing nondefault version")
+	}
+	deleteVersion(removable.ID, root, iamv1.DeletePolicyVersionRequest{ResourceVersion: inventory.Policy.ResourceVersion, RequestID: "version-release-another-slot"}, http.StatusOK, &retired)
+	fresh := initial.Version.Document
+	fresh.Statements = append([]iamv1.PolicyStatement(nil), fresh.Statements...)
+	fresh.Statements[0].SID = "new-content-after-retirement"
+	post(path+"/versions", root, iamv1.CreatePolicyVersionRequest{Document: fresh, ResourceVersion: retired.Policy.ResourceVersion, RequestID: "version-use-released-slot"}, http.StatusCreated, &version)
+	get(path+"/versions", root, http.StatusOK, &inventory)
+	if len(inventory.Items) != iamv1.MaxPolicyVersions || inventory.Policy.DefaultVersionID != selected.Version.ID {
+		t.Fatal("new content failed to reuse management capacity")
+	}
+	var retainedCanonical, retainedDigest string
+	var isRetired bool
+	if err := database.QueryRow(ctx, `SELECT canonical_document,content_digest,retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$1 AND id=$2`, initial.Policy.ID, initial.Version.ID).Scan(&retainedCanonical, &retainedDigest, &isRetired); err != nil || !isRetired || retainedDigest != initial.Version.ContentDigest {
+		t.Fatal("retired content disappeared")
+	}
+	wantCanonical, _, err := iamv1.CanonicalizePolicyDocument(initial.Version.Document)
+	if err != nil || retainedCanonical != wantCanonical {
+		t.Fatal("retirement rewrote canonical history")
+	}
+	post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: oldEvent}, http.StatusOK, nil)
+	var retirementEvent auditv1.Event
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy-version.deleted' AND event_document->>'requestId'=$2`, initial.Policy.AccountID, retirement.RequestID).Scan(&raw); err != nil || json.Unmarshal(raw, &retirementEvent) != nil {
+		t.Fatal("read retirement fact")
+	}
+	post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: retirementEvent}, http.StatusOK, nil)
+	for _, attack := range []string{
+		`INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at,retired_at)
+		 SELECT policy_id,'forged-retired-version',authority_scope,document,canonical_document,content_digest,transaction_timestamp(),transaction_timestamp()
+		 FROM iam.policy_versions WHERE policy_id=$1 AND id=$2`,
+		`UPDATE iam.policy_versions SET retired_at=NULL WHERE policy_id=$1 AND id=$2`,
+		`UPDATE iam.policy_versions SET canonical_document='{}' WHERE policy_id=$1 AND id=$2`,
+		`DELETE FROM iam.policy_versions WHERE policy_id=$1 AND id=$2`,
+		`UPDATE iam.policies SET default_version_id=$2,resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE id=$1`,
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, attack, initial.Policy.ID, initial.Version.ID)
+		var pgError *pgconn.PgError
+		if !errors.As(err, &pgError) || pgError.Code != "42501" {
+			t.Fatalf("retired history attack was not rejected: %v", err)
+		}
+		if err := tx.Rollback(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// This policy is deliberately unattached so whole-policy deletion is a
+	// real competitor, not a request that always loses to a live reference.
+	var racePolicy iamv1.PolicyDetail
+	post("/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Version retirement race", Document: allow, RequestID: "version-retirement-race-create"}, http.StatusCreated, &racePolicy)
+	racePath := "/v1/policies/" + string(racePolicy.Policy.ID)
+	var raceVersion iamv1.PolicyVersionDetail
+	post(racePath+"/versions", root, iamv1.CreatePolicyVersionRequest{Document: fresh, ResourceVersion: 1, RequestID: "version-retirement-race-content"}, http.StatusCreated, &raceVersion)
+	fresh.Statements[0].SID = "concurrent-publication"
+	operations := []struct {
+		method, path, requestID string
+		body                    any
+		action                  auditv1.Action
+	}{
+		{http.MethodDelete, racePath + "/versions/" + string(raceVersion.Version.ID), "version-retirement-race-retire", iamv1.DeletePolicyVersionRequest{ResourceVersion: 2, RequestID: "version-retirement-race-retire"}, auditv1.ActionIAMPolicyVersionDeleted},
+		{http.MethodPost, racePath + ":set-default-version", "version-retirement-race-default", iamv1.SetDefaultPolicyVersionRequest{VersionID: raceVersion.Version.ID, ResourceVersion: 2, RequestID: "version-retirement-race-default"}, auditv1.ActionIAMPolicyDefaultVersionSet},
+		{http.MethodPost, racePath + "/versions", "version-retirement-race-publish", iamv1.CreatePolicyVersionRequest{Document: fresh, ResourceVersion: 2, RequestID: "version-retirement-race-publish"}, auditv1.ActionIAMPolicyVersionCreated},
+		{http.MethodDelete, racePath, "version-retirement-race-policy", iamv1.DeletePolicyRequest{ResourceVersion: 2, RequestID: "version-retirement-race-policy"}, auditv1.ActionIAMPolicyDeleted},
+	}
+	type outcome struct {
+		index    int
+		response *httptest.ResponseRecorder
+	}
+	outcomes := make(chan outcome, len(operations))
+	for index, operation := range operations {
+		body := mustIAMJSON(t, operation.body)
+		go func() {
+			outcomes <- outcome{index, performIAMRequest(handler, operation.method, operation.path, root, body)}
+		}()
+	}
+	winner, losers := -1, 0
+	for range operations {
+		select {
+		case result := <-outcomes:
+			switch result.response.Code {
+			case http.StatusOK, http.StatusCreated:
+				if winner != -1 {
+					t.Fatal("multiple version lifecycle winners")
+				}
+				winner = result.index
+			case http.StatusConflict, http.StatusForbidden:
+				losers++
+			default:
+				t.Fatalf("version lifecycle race status=%d", result.response.Code)
+			}
+		case <-ctx.Done():
+			t.Fatal("version lifecycle race timed out")
+		}
+	}
+	if winner < 0 || losers != 3 {
+		t.Fatal("version lifecycle race did not have exactly one winner")
+	}
+	var raceStored iamv1.Policy
+	var allVersions, activeVersions int
+	var candidateRetired bool
+	if err := database.QueryRow(ctx, `SELECT iam.lookup_policy($1,$2),(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$2),
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$2 AND retired_at IS NULL),
+		(SELECT retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$2 AND id=$3)`, racePolicy.Policy.AccountID, racePolicy.Policy.ID, raceVersion.Version.ID).Scan(&raw, &allVersions, &activeVersions, &candidateRetired); err != nil || json.Unmarshal(raw, &raceStored) != nil {
+		t.Fatal("read version lifecycle winner")
+	}
+	wantStatus, wantDefault, wantTotal, wantActive := iamv1.PolicyActive, racePolicy.Version.ID, 2, 2
+	if winner == 0 {
+		wantActive = 1
+	}
+	if winner == 1 {
+		wantDefault = raceVersion.Version.ID
+	}
+	if winner == 2 {
+		wantTotal = 3
+		wantActive = 3
+	}
+	if winner == 3 {
+		wantStatus = iamv1.PolicyRetired
+	}
+	if raceStored.ResourceVersion != 3 || raceStored.Status != wantStatus || raceStored.DefaultVersionID != wantDefault ||
+		allVersions != wantTotal || activeVersions != wantActive || candidateRetired != (winner == 0) {
+		t.Fatal("losing version mutation changed state or capacity")
+	}
+	var lifecycleCount, matched int
+	if err := database.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE event_document->>'action'=$3 AND event_document->>'requestId'=$4
+		AND EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=o.tenant_id AND d.id=o.event_document->>'iamDecisionId' AND d.allowed AND d.request_id=$4))
+		FROM iam.audit_outbox o WHERE tenant_id=$1 AND event_document#>>'{target,id}'=$2
+		AND event_document->>'requestId' IN ('version-retirement-race-retire','version-retirement-race-default','version-retirement-race-publish','version-retirement-race-policy')
+		AND event_document->>'action' IN ('iam.policy-version.deleted','iam.policy.default-version-set','iam.policy-version.created','iam.policy.deleted')`, racePolicy.Policy.AccountID, racePolicy.Policy.ID, operations[winner].action, operations[winner].requestID).Scan(&lifecycleCount, &matched); err != nil || lifecycleCount != 1 || matched != 1 {
+		t.Fatal("version lifecycle race has no single winner-bound success fact")
+	}
 }
 
 func proveCustomerPolicyMetadata(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {

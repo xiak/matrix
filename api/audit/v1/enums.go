@@ -38,6 +38,7 @@ const (
 	ActionIAMGroupCreated                    Action = "iam.group.created"
 	ActionIAMPolicyCreated                   Action = "iam.policy.created"
 	ActionIAMPolicyVersionCreated            Action = "iam.policy-version.created"
+	ActionIAMPolicyVersionDeleted            Action = "iam.policy-version.deleted"
 	ActionIAMPolicyDefaultVersionSet         Action = "iam.policy.default-version-set"
 	ActionIAMPolicyUpdated                   Action = "iam.policy.updated"
 	ActionIAMPolicyDeleted                   Action = "iam.policy.deleted"
@@ -183,6 +184,7 @@ var allActions = []Action{
 	ActionIAMGroupCreated,
 	ActionIAMPolicyCreated,
 	ActionIAMPolicyVersionCreated,
+	ActionIAMPolicyVersionDeleted,
 	ActionIAMPolicyDefaultVersionSet,
 	ActionIAMPolicyUpdated,
 	ActionIAMPolicyDeleted,
@@ -271,6 +273,9 @@ var actionContracts = map[Action]ActionContract{
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
 	ActionIAMPolicyVersionCreated: {
+		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPolicyVersionDeleted: {
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
 	ActionIAMPolicyDefaultVersionSet: {

@@ -73,6 +73,7 @@ type Transaction interface {
 	ListPolicyVersions(context.Context, AccountRead, iamv1.PolicyID) (iamv1.PolicyVersionList, error)
 	ReadPolicyVersion(context.Context, AccountRead, iamv1.PolicyID, iamv1.PolicyVersionID) (iamv1.PolicyVersionDetail, error)
 	CreatePolicyVersion(context.Context, PolicyVersionCreation) (iamv1.PolicyVersionDetail, error)
+	DeletePolicyVersion(context.Context, PolicyVersionDeletion) (iamv1.PolicyDetail, error)
 	SetDefaultPolicyVersion(context.Context, PolicyDefaultSelection) (iamv1.PolicyDetail, error)
 	UpdatePolicy(context.Context, PolicyUpdate) (iamv1.PolicyDetail, error)
 	DeletePolicy(context.Context, PolicyDeletion) (iamv1.Policy, error)
@@ -343,6 +344,16 @@ type PolicyVersionCreation struct {
 }
 
 type PolicyDefaultSelection struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	PolicyID         iamv1.PolicyID
+	VersionID        iamv1.PolicyVersionID
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type PolicyVersionDeletion struct {
 	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
