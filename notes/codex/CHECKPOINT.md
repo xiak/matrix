@@ -5,18 +5,18 @@
 - Updated: 2026-09-14
 - Repository: https://github.com/xiak/matrix.git
 - Branch: `feat/iam`
-- Latest pushed implementation: `4f22e223398fbe4523bc09d6a369677cb23767db`,
-  handshake-cancellation test synchronization on top of identity conditions.
-- Exact [Verification 34837563263](https://github.com/xiak/matrix/actions/runs/34837563263)
-  matches this SHA and is queued; final CI is NOT yet confirmed.
+- Latest pushed implementation: `b342e9da08515f9172b29d1ac237a088171c9e53`,
+  literal resource prefixes constrained by explicit action capability.
+- Exact [Verification 34839955131](https://github.com/xiak/matrix/actions/runs/34839955131)
+  matches this SHA and is in_progress; final CI is NOT yet confirmed.
 - Identity implementation `b208ab081ac2f08aab81f63b8cfefb17ebdc6c82` /
   [34836760785](https://github.com/xiak/matrix/actions/runs/34836760785) FAILED:
   authority-process/node-process succeeded; Go failed the preexisting
   TestPinnedSSHExecutorHonorsCancellationDuringHandshake stage expectation.
   Do not treat b208 as an independently successful candidate.
 - Last fully CI-verified rollback point:
-  `581ce7584527470e1fe377040eb98ffe161e83de`,
-  [34833032924](https://github.com/xiak/matrix/actions/runs/34833032924);
+  `4f22e223398fbe4523bc09d6a369677cb23767db`,
+  [34837563263](https://github.com/xiak/matrix/actions/runs/34837563263);
   exact SHA and Go/authority-process/node-process completed/success.
 - Earlier time candidate7218 failed alias competition; do not inherit581 success
   backwards. Existing FEAT evidence owns details.
@@ -29,8 +29,8 @@ IAM/FEAT-IAM-005-policy-versions-and-boundaries.md, then owning code/tests.
 release/capacity/HA gates. The user reaffirmed prelaunch development versions
 do not require a complete schema1 history chain on every FEAT.
 
-First verify4f22e22's exact live CI. No local test handle remains.
-Then continue005: bounded action/resource wildcards, trusted IP conditions,
+First verifyb342e9d's exact live CI. No local test handle remains.
+Then continue005: action wildcards with pinned Profile/catalog semantics, trusted IP conditions,
 User/Role permission boundaries, safe delegation and editor/capabilities.
 Current time plus identity strings do NOT complete LANG-04 or005.
 006 roles/STS,007 programmatic credentials,008 product/service-role/ABAC,
@@ -38,6 +38,45 @@ Current time plus identity strings do NOT complete LANG-04 or005.
 remain as specified. Do not redefine completion around policy CRUD/conditions.
 
 ## Current pushed implementation
+
+b342e9d adds PREFIX_IN_AUTHORITY to the existing kind/match/id selector.
+ID is a literal nonempty ASCII stable-ID prefix<=128bytes, not a star/glob/regex,
+path or name. Matching is bounded strings.HasPrefix, current tenant and exact
+kind still required. ActionDefinition.ResourcePrefixAllowed defaultsfalse,
+only paas.application.read declarestrue after checking its exact applicationId
+PEP. Create/list/collection/platform/probe/unknown/future actions do not gain it.
+All same-kind actions in a statement must support PREFIX. API validation and
+generated schema consume that one catalog; SQL storage constraints are checked
+against every catalog action in the real PG gate. No evaluator product-name
+branch. Existing EXACT/ANY and canonical/decision history retained.
+Final validator aggregates unsupported kinds once per statement, not scanning
+the entire catalog again per resource. Current sourceIAM17/Audit11/PaaS1;
+installation profile, ServiceIdentity, lookup_service, seven-column claim,
+Audit canonical and PaaS production code unchanged. Full CAT05/008 not done.
+
+Contract/schema/evaluator positives first failed, then passed. Prefix grammar,
+scope, mixedread/create, full action acceptance matrix, Deny/source ordering,
+max-length comparison and cursor snapshot tests pass. Actual two-account/group
+HTTP gate with same resource IDs/prefixes, foreign attachment refusal, exact
+membership/version evidence, default/revoke and retained proof passed11.64s
+(parent16.38/package19.111). Initial malformed-input fixture replaced a prefix
+substring inside another valid ID; actual stored canonical proved the mistake;
+fixed exact-field mutation, no production relaxation.
+Full serialPG18 passed Audit data5.434s, AuditHTTP2.620s, IAM164.055s,
+dualIAM/PaaS/Audit46.279s, PaaSdata5.044s. PaaS creates two real apps before
+revocation; sole prefix+time+identity grant allows matching and denies actual
+nonmatching app. Original default/revoke, restricted runtime identities,
+cross-tenant resources/Operation/outbox and historical chains remain.
+Full Go race/vet/modules/stable generation/Linuxbuild passed, then final pure
+validation loop aggregation passed API/authority/usecase/architecture race,
+fullvet/Linuxbuild and fuzz15s/2workers/1s minimization634172executions.
+Exact final code's full PG is pending new independentCI, not claimed inherited
+from the pre-aggregation local tree. No capacity/UI/install acceptance implied.
+Own PG18 used1CPU/768MiB/PIDs128/64connections. Default Docker subnet pools were
+exhausted; read-only subnet inventory established an unused explicit /28 for
+only this fixture. No network pruning or shared configuration changes. Exact
+IDs/labels and zero clients confirmed before removing container/network and
+synthetic volume. No local resource or process handle survives.
 
 4f22e22 changes only the existing SSH test and005's CI evidence. Server Accept
 does not prove client DialContext completed, so cancel there can legitimately
@@ -48,7 +87,8 @@ cancel. Preserve500ms exit and exactstage, check connectionEOF and accept
 goroutine cleanup. No production/error classification changes. Original test
 passed locally200 times (not a local red); CI provided actual failure evidence.
 Corrected test passedrace200; full adapter/architecture/vet and uncached full
-Go race-count1/vet/Linux amd64 build passed. No local PG or remote operation.
+Go race-count1/vet/Linux amd64 build passed. Its exact three-job CI now SUCCESS.
+No local PG or remote operation in that correction.
 
 b208ab0 adds iam.account-id and iam.principal-id, STRING with
 IAM_AUTHENTICATED_IDENTITY source, only declared TENANT/USER authorization.
@@ -65,9 +105,9 @@ The sole private evaluator receives typed policyEvaluationContext through
 EvaluateAttachedPolicies. No exported bypass or parallel evaluator retained.
 Existing canonical owner copies/sorts values; reordering preserves digest and
 request replay. Old absent-condition/single-time bytes remain unchanged.
-Go, generated OpenAPI and current SQL publisher validate bounded semantics;
+Go, generated OpenAPI and SQL publisher validate bounded semantics;
 schema maxContains rules also reject duplicate key/op with different values.
-No second canonical encoder. Current source IAM16/Audit11/PaaS1; installation
+No second canonical encoder. Identity fixed baseline IAM16/Audit11/PaaS1; installation
 release profile unchanged. ServiceIdentity, lookup_service, seven-column claim,
 Audit canonical and sealed recovery remain untouched. This source combination
 is not a signed install/profile compatibility assertion.
