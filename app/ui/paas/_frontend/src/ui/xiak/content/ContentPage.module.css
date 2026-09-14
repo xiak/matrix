@@ -1,5 +1,6 @@
 @layer xiak {
 .page {
+  container: matrix-content-frame / inline-size;
   display: flex;
   width: 100%;
   height: 100%;
@@ -25,15 +26,15 @@
 .headerContent { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
 .headerActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; max-width: 100%; flex: none; }
 .headerActions:empty, .headerActions[hidden] { display: none; }
-.actionBar, .contextualActions, .primaryActions { display: flex; min-width: 0; align-items: center; gap: var(--xiak-spacing-tight); }
-.actionBar { justify-content: flex-end; }
-.contextualActions { flex: 0 1 auto; }
-.primaryActions { flex: none; }
-.identity { display: flex; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; }
+.commandBar, .expandedCommands { display: flex; min-width: 0; align-items: center; gap: var(--xiak-spacing-tight); }
+.expandedCommands > button { flex: none; }
+.expandedCommands > [data-danger="true"]:not(:disabled) { color: var(--xiak-color-danger-text); }
+.commandBar > .overflowCommand { display: none; }
+.identity { display: flex; flex: 1; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; }
 .parentLink { flex: none; }
 .separator { flex: none; width: var(--xiak-font-size-small); height: var(--xiak-font-size-small); color: var(--xiak-color-text-subtle); }
 .title { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-page-context); font-weight: var(--xiak-font-weight-semibold); outline: none; }
-.standaloneHeading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--xiak-spacing-default); }
+.standaloneHeading { display: flex; min-width: 0; justify-content: space-between; align-items: center; gap: var(--xiak-spacing-default); }
 
 .body {
   --xiak-scroll-inset: var(--xiak-spacing-roomy);
@@ -54,15 +55,24 @@
   .header {
     min-height: var(--xiak-content-header-height-compact);
     padding-inline: var(--xiak-spacing-default);
+    padding-block: 0;
+    gap: var(--xiak-spacing-tight);
   }
 
-  .headerContent { flex-wrap: wrap; padding-block: var(--xiak-spacing-tight); gap: var(--xiak-spacing-tight); }
-  .headerActions { flex-wrap: wrap; }
-  .actionBar, .contextualActions { flex-wrap: wrap; justify-content: flex-end; }
-  .identity { flex: 1 1 auto; }
+  .headerContent { gap: var(--xiak-spacing-tight); }
+  .commandBar > .expandedCommands { display: none; }
+  .commandBar > .overflowCommand { display: inline-flex; }
 
   .body {
     --xiak-scroll-inset: var(--xiak-spacing-default);
   }
+}
+@container matrix-content-frame (max-width: 960px) {
+  .commandBar > .expandedCommands { display: none; }
+  .commandBar > .overflowCommand { display: inline-flex; }
+}
+@media (max-width: 480px) {
+  .parentLink { width: var(--xiak-control-height-small); padding-inline: 0; }
+  .parentLink > span, .separator { display: none; }
 }
 }

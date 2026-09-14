@@ -159,10 +159,10 @@ export function GroupDetail({ group, controls, onBack, onOpenMember, onOpenPolic
   return <WorkspaceDetail
     title={group.name}
     onBack={onBack}
-    actions={<>
-      <GroupActionButton control={controls.edit} variant="secondary">{t("edit")}</GroupActionButton>
-      <GroupActionButton control={controls.delete} variant="ghost">{t("delete")}</GroupActionButton>
-    </>}
+    actions={{
+      primary: controls.edit ? { id: "edit", label: t("edit"), variant: "secondary", disabled: controls.edit.disabled, disabledReason: controls.edit.disabled ? controls.edit.reason : undefined, onSelect: controls.edit.onInvoke } : undefined,
+      secondary: controls.delete ? [{ id: "delete", label: t("delete"), danger: true, disabled: controls.delete.disabled, disabledReason: controls.delete.disabled ? controls.delete.reason : undefined, onSelect: controls.delete.onInvoke }] : undefined
+    }}
   >
     <p className={styles.note}>{group.description || t("none")}</p>
     <Alert>{g("groupIdentityHint")}</Alert>

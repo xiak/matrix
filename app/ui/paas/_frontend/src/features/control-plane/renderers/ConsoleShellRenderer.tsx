@@ -246,6 +246,7 @@ function loopOverlayFocus(
 
 function ConsoleShell() {
   const t = useTranslations("Console");
+  const collection = useTranslations("Collection");
   const authErrors = useTranslations("Auth.errors");
   const accountMessages = useTranslations("AccountMenu");
   const accountText = useTranslations("AccountAccess");
@@ -266,7 +267,7 @@ function ConsoleShell() {
   const sidebarTrigger = useRef<HTMLButtonElement>(null);
   const sidebarCloseButton = useRef<HTMLButtonElement>(null);
   const workspacePanel = useRef<HTMLElement>(null);
-  const workspaceTrigger = useRef<HTMLButtonElement>(null);
+  const workspaceTrigger = useRef<{ focus(): void }>(null);
   const workspaceCloseButton = useRef<HTMLButtonElement>(null);
   const workspaceFocusRequested = useRef(false);
   const sidebarOverlayOpen = useConsoleUiStore((state) => state.sidebarOverlayOpen);
@@ -507,9 +508,9 @@ function ConsoleShell() {
 
             <Layout.Content>
               <ContentPage parentLabel={pageTitle} pending={Boolean(pendingSelection)} fallback={contentFallbackVisible} data-navigating={pendingSelection ? "true" : undefined}>
-                <Suspense fallback={<ContentPage.Header title={visiblePageTitle} />}><ConsolePageHeader title={visiblePageTitle} selection={contentFallbackVisible && pendingSelection ? pendingSelection : navigation.selection} pendingHref={contentFallbackVisible ? navigation.pendingHref : null} className={styles.pageHeader} data-workflow={workspaceAction ? "true" : undefined}
+                <Suspense fallback={<ContentPage.Header title={visiblePageTitle} />}><ConsolePageHeader title={visiblePageTitle} selection={contentFallbackVisible && pendingSelection ? pendingSelection : navigation.selection} pendingHref={contentFallbackVisible ? navigation.pendingHref : null} className={styles.pageHeader}
                   leading={<Button aria-controls="console-product-navigation" aria-expanded={sidebarOverlayOpen} aria-label={t("openNavigation")} className={styles.mobileMenuButton} onClick={openSidebar} ref={sidebarTrigger} iconOnly size="small" variant="ghost"><Menu aria-hidden="true" /></Button>}
-                  trailing={workspaceAction && WorkspaceActionIcon ? <div className={styles.pageActions}><Button disabled={Boolean(pendingSelection)} data-workflow-action="" aria-controls="console-workspace" aria-expanded={workspaceVisible} aria-label={t(`workspaceActions.${scene.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`)} onClick={toggleWorkspaceWithFocus} ref={workspaceTrigger} size="small" variant={workspaceVisible || !workspaceAction.primary ? "secondary" : "primary"}>{workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />}<span>{t(`workspaceActions.${scene.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`)}</span></Button></div> : undefined}
+                  trailing={workspaceAction && WorkspaceActionIcon ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={{ id: "workspace", label: t(`workspaceActions.${scene.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`), icon: workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />, disabled: Boolean(pendingSelection), controls: "console-workspace", expanded: workspaceVisible, onSelect: toggleWorkspaceWithFocus, variant: workspaceVisible || !workspaceAction.primary ? "secondary" : "primary" }} /> : undefined}
                   progress={!pendingSelection && controlPlane.loading && scene.section !== "access" ? <Progress aria-label={loadingLabel} className={styles.navigationProgress} /> : null} /></Suspense>
                 <ContentPage.Body transitionKey={navigation.currentHref} pending={Boolean(pendingSelection)} loading={contentFallbackVisible && pendingSelection ? <div className={styles.pageCanvas}><PageSkeleton label={loadingLabel} layout={pageSkeletonLayout(pendingSelection)} /></div> : undefined}>
                   <div aria-busy={controlPlane.loading && scene.section !== "access"} className={styles.pageCanvas}>

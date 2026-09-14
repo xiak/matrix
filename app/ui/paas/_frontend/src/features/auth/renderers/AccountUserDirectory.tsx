@@ -3,7 +3,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Table, TableActions, TableSelectionCell, TableToolbar, TablePagination, ContentPage, EmptyState, Badge, Button, Card } from "@ui/xiak";
+import { Table, TableSelectionCell, TableToolbar, TablePagination, ContentPage, EmptyState, Badge, Button, Card } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
@@ -64,6 +64,7 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const batch = useTranslations("UserBatch");
+  const collection = useTranslations("Collection");
   const toolbarLabels = useTableToolbarLabels();
   const access = useAccountAccess();
   const workspace = access.workspace;
@@ -123,15 +124,15 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   if (detail) return detail.canRead ? <AccountLiveUserWorkspace key={`${detail.id}:${detail.resourceVersion}`} summary={detail} onBack={() => onOpen("users")} /> : <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
   return <div className={styles.userDirectory}>
     <Card>
-      <ContentPage.Heading title={t("usersTitle")} actions={<ContentPage.Actions
-        contextual={<TableActions label={batch("more")} disabled={blocked || !checkedUsers.length} hint={batch(access.supportsUserBatch ? "selectHint" : "unsupportedHint")}
-            selectionLabel={checkedUsers.length ? batch("selected", { count: checkedUsers.length }) : undefined} clearLabel={batch("clear")} onClear={clearSelection}
-            actions={userBatchActions.map((action) => { const reason = userBatchDisabledReason(action, batchContext); return { id: action, label: batch(`actions.${action}`), danger: action === "delete", disabledReason: reason ? batch(`reasons.${reason}`) : undefined, onSelect: () => setBatchDialog({ action, users: checkedUsers }) }; })} />}
-        primary={scene.canCreateUsers ? <Button ref={createRef} disabled={access.busy || access.loading} onClick={onCreate} size="small"><Plus aria-hidden="true" />{t("createUser")}</Button> : undefined}
+      <ContentPage.Heading title={t("usersTitle")} actions={<ContentPage.Commands label={collection("pageActions")} primaryRef={createRef}
+        selection={{ label: batch("more"), disabled: blocked || !checkedUsers.length, hint: batch(access.supportsUserBatch ? "selectHint" : "unsupportedHint"),
+          selectionLabel: checkedUsers.length ? batch("selected", { count: checkedUsers.length }) : undefined, clearLabel: batch("clear"), onClear: clearSelection,
+          actions: userBatchActions.map((action) => { const reason = userBatchDisabledReason(action, batchContext); return { id: action, label: batch(`actions.${action}`), danger: action === "delete", disabledReason: reason ? batch(`reasons.${reason}`) : undefined, onSelect: () => setBatchDialog({ action, users: checkedUsers }) }; }) }}
+        primary={scene.canCreateUsers ? { id: "create", label: t("createUser"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: onCreate } : undefined}
       />} />
       <AccountOwnerSummary scene={scene} onOpen={() => onOpen("users", scene.accountOwner.id)} />
       <TableToolbar labels={toolbarLabels} search={{ label: t("searchUsers"), placeholder: t("searchUsersPlaceholder"), value: query, onChange: (value) => changeFilter(() => setQuery(value)) }}
-        status={t("userResults", { shown: filtered.length, loaded: scene.users.length })} filters={[
+        status={[t("userResults", { shown: filtered.length, loaded: scene.users.length }), ...(checkedUsers.length ? [batch("selected", { count: checkedUsers.length })] : [])].join(" · ")} filters={[
           { id: "state", label: t("filterUserState"), value: state, onChange: (value) => changeFilter(() => setState(value)), options: [{ value: "all", label: t("allStates") }, ...(["active", "passwordChangeRequired", "disabled"] as const).map((value) => ({ value, label: t(`states.${value}`) }))] },
           { id: "role", label: w("filterPolicySource"), value: role, onChange: (value) => changeFilter(() => setRole(value)), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "platform", label: t("platformPolicyAttachments") }] }
         ]} />

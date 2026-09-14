@@ -1,5 +1,6 @@
 {
   "Collection": {
+    "pageActions": "Page actions",
     "moreActions": "More actions",
     "selectFirst": "Select items in the table first",
     "resetQuery": "Reset query",

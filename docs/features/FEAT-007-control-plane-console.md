@@ -961,7 +961,7 @@ reference dimensions are:
 | Favorite-service rail | `64px` wide; `40px` targets | User-selected service shortcuts, synchronized with directory stars; overflow scrolls within the rail |
 | Service directory | Full viewport below the `64px` header; `224px` desktop category pane; `44px` search and close targets | Three-column grouped discovery, two/single columns as available width falls, horizontal category strip on small screens |
 | Product context navigation | `240px` wide; `48px` minimum item height | Product-local IA with label, description, and actionable count |
-| Page context bar | `56px` minimum, one reading line on desktop; actions wrap at compact widths | One current page/object title, parent navigation and contextual actions; no repeated title/action band in the body |
+| Page context bar | `56px` minimum; one reading line, with a `40px` trailing action-menu target at compact widths | One current page/object title, parent navigation and contextual actions; no repeated title/action band in the body |
 | Primary controls | `32px` small, `40px` default, `44px` large | Predictable density and touch/click targeting by task importance |
 | Status badge | `24px` high | Comparable state language without changing row geometry |
 | Resource table | `40px` header; `56px` minimum data row; `12 × 16px` cell padding; `144px` minimum cell width | Rich cells may grow; a labelled, keyboard-focusable region owns horizontal scrolling below the greater of `640px` and its column/content requirements |
@@ -1004,7 +1004,10 @@ resource summary, tabs or data, not another generic title, return toolbar or
 repeated preview banner. Header MOCK identity and mutation-level limitations
 remain visible; errors, risks and destructive confirmations are never hidden
 as optional help. Details use aligned multi-column facts when space permits,
-with a single-column compact layout and full readable values.
+with a single-column compact layout and full readable values. The policy
+overview separates its readable `16px` description from `12px` muted field
+labels and `14px` semibold values; identifiers retain `13px` monospace text.
+Classification badges keep intrinsic width instead of becoming a mobile banner.
 
 Collection search uses one keyword field per independently searched collection.
 The shared TableToolbar separates commands, query, structured filters and result
@@ -1117,12 +1120,22 @@ unlayered public-control CSS and missing CSS-module bindings. Feature selectors
 target their own label wrappers instead of recoloring descendant status badges
 or other shared controls.
 
-Content-page actions have two explicit shared slots. Selection-dependent context
-(count, clear and batch commands) grows toward the title; the primary create
-action is the trailing anchor and therefore does not move when rows are selected.
-`TableActions` keeps its stable command trigger after the dynamic selection
-summary. User and policy directories use this same composition instead of local
-header flex rules. The removed universal Refresh button must not be recreated per
+`ContentPage.Commands` owns responsive commands for every page-context bar:
+IAM lists/details and platform-status, quota and installation workspaces. One
+command definition drives direct desktop buttons and a trailing ellipsis menu
+when the available content frame is at most `960px` wide (also below a `760px`
+viewport for standalone headings). Single commands use that same compact entry;
+pages without commands show no empty menu. Titles keep their typography and
+truncate within their own slot; commands never wrap into another title band.
+On desktop, selection-dependent count, clear and batch commands grow toward
+the title, with Create anchored at the trailing edge. Compact menus contain
+Create and the same eligible batch commands plus Clear selection; selected
+counts remain visible beside table results. `ActionMenu` shares themed surfaces,
+keyboard handling, disabled reasons and destructive separators with `TableActions`.
+Feature callbacks and access checks do not change. CSS selects the presentation
+before paint without viewport subscriptions or shell remounts; closing a context
+workspace restores the currently visible command even after a viewport change.
+The removed universal Refresh button must not be recreated per
 page; a future refresh control requires a scoped stale-data case, a visible
 freshness contract and a repository operation that does not reload unrelated IAM
 directories.
@@ -2041,7 +2054,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   Dashboard, resource/region views, operations, DevOps and monitoring. At
   `1440 × 900px`, metrics and service tables share density and status colors;
   at `840 × 600px`, collection tables scroll internally; at `360 × 600px`,
-  named workflow actions remain visible, instance lists precede their forms,
+  workflow commands remain available in the page-action menu, instance lists precede their forms,
   reopening retains the installation draft, and health/detail layouts stack
   without horizontal page overflow. Table cells retain a readable minimum
   width instead of compressing names character by character. IAM's `600px`
@@ -2088,6 +2101,18 @@ and `git diff --check` gates must pass on the same committed worktree.
   performed for these component checks. A development CSS hot-update cache
   error cleared after reload; the refreshed interaction checks produced no
   new runtime errors. Production assets are verified separately from HMR.
+  The responsive page-command regression passes all 510 frontend tests plus
+  three static-export normalization tests. Type, lint, architecture and 228
+  semantic contrast checks pass. Fresh development-browser checks at `360px`
+  confirm a `56px` title bar and an identical trailing menu position on Users,
+  Groups, Roles, Role SSO, API keys and tenant directories. Policy selection
+  leaves the title/trigger in place; menu-triggered association opens the
+  existing dialog and Cancel restores the menu trigger. English/dark and
+  Chinese/light policy menus stay within the viewport with separated destructive
+  commands. Installation-workspace checks restore the visible trigger when
+  closing after both compact-to-desktop and desktop-to-compact resizes.
+  The production static export, 213-file embed comparison and Go UI host tests
+  pass for this slice; this is not an IAM backend release acceptance.
 - The branded login slice uses the approved full-size horizontal signature on
   desktop and a compact lockup on mobile, with no abstract decorative diagram.
   The signature is byte-identical to the approved local brand kit and its

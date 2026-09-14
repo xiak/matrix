@@ -57,6 +57,7 @@ function UserSettings({ scene }: { scene: AccountAccessScene }) {
 function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
+  const collection = useTranslations("Collection");
   const access = useAccountAccess();
   const [creating, setCreating] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -65,7 +66,7 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   if (selected) return <AccountTenantWorkspace account={selected} key={`${selected.id}:${selected.resourceVersion}`} onBack={() => setSelectedId(null)} />;
   return <div className={styles.stack}>
     <Card>
-      <ContentPage.Heading title={t("tenantAccounts")} actions={scene.canCreateAccounts ? <Button disabled={access.busy || access.loading} onClick={() => { setCreating(true); setSelectedId(null); }} size="small"><Plus aria-hidden="true" />{t("openTenant")}</Button> : undefined} />
+      <ContentPage.Heading title={t("tenantAccounts")} actions={scene.canCreateAccounts ? <ContentPage.Commands label={collection("pageActions")} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
       <Table aria-label={t("tenantTable")}><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
           <tbody>{scene.accounts.map((account) => <tr key={account.id}><td><button className={styles.userLink} onClick={() => { setSelectedId(account.id); setCreating(false); }} type="button">{account.name}</button><small>{account.id}</small></td><td>{account.rootLoginName}</td><td>{account.loginAlias ?? t("aliasUnset")}</td><td><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
         </Table>

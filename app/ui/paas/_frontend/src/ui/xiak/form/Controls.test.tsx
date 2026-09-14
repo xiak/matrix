@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Alert, Badge, Button, Checkbox, Dialog, FormField, Input, RadioGroup, SearchInput, Select, Table, TablePagination, TableActions, TableSelectionCell, TagEditor } from "../index";
+import { ActionMenu, Alert, Badge, Button, Checkbox, Dialog, FormField, Input, RadioGroup, SearchInput, Select, Table, TablePagination, TableActions, TableSelectionCell, TagEditor } from "../index";
 
 afterEach(cleanup);
 describe("shared themed controls", () => {
@@ -59,6 +59,27 @@ describe("shared themed controls", () => {
     expect(screen.getByRole("dialog", { name: "Review" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Close review" }));
     expect(document.activeElement).toBe(trigger);
+  });
+  it("keeps compact page actions keyboard accessible with disabled reasons and separated destructive commands", async () => {
+    const user = userEvent.setup(), edit = vi.fn(), remove = vi.fn();
+    render(<ActionMenu label="Page actions" iconOnly actions={[
+      { id: "edit", label: "Edit", disabledReason: "Read-only policy", onSelect: edit },
+      { id: "copy", label: "Copy", onSelect: edit },
+      { id: "delete", label: "Delete", danger: true, onSelect: remove },
+    ]} />);
+    const trigger = screen.getByRole("button", { name: "Page actions" });
+    trigger.focus();
+    await user.keyboard("{ArrowDown}");
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("menuitem", { name: "Copy" })));
+    expect(screen.getByRole("menuitem", { name: "Edit" }).getAttribute("aria-disabled")).toBe("true");
+    const danger = screen.getByRole("menuitem", { name: "Delete" });
+    expect(danger.getAttribute("data-danger")).toBe("true");
+    expect(danger.previousElementSibling?.getAttribute("role")).toBe("separator");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(edit).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
   });
   it("distinguishes descriptive badges from actual state without dropping their text", () => {
     render(<><Badge>Custom policy</Badge><Badge status="warning">Needs review</Badge></>);

@@ -3,7 +3,7 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Badge, Button, Card, ContentPage, EmptyState, TableActions, TableSelectionCell, TablePagination, TableToolbar, Select, Table, Tabs } from "@ui/xiak";
+import { Badge, Button, Card, ContentPage, EmptyState, TableSelectionCell, TablePagination, TableToolbar, Select, Table, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { defaultPolicyDirectoryView, useAccountAccess, type PolicyDirectoryView } from "../application/AccountAccessProvider";
 import { type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
@@ -62,11 +62,11 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate }: {
   const reset = () => setView({ ...defaultPolicyDirectoryView, pageSize: view.pageSize, sort: view.sort });
   const customOnly = view.kind === "custom";
   return <Tabs.Root className={styles.directory} value={view.kind} onValueChange={(kind) => change({ kind, service: "all", category: "all" })}>
-    <ContentPage.Heading title={w("policies")} actions={<ContentPage.Actions
-      contextual={<TableActions label={collection("moreActions")} disabled={busy || !selected.length} hint={collection("selectFirst")}
-        selectionLabel={selected.length ? t("selected", { count: selected.length }) : undefined} clearLabel={t("clearSelected")} onClear={() => setSelection([])}
-        actions={[{ id: "associate", label: selected.length > 1 ? t("batchAttach") : w("associateTargets"), onSelect: () => onAssociate(selected, selected.length > 1) }]} />}
-      primary={<Button size="small" disabled={busy} onClick={onCreate}><Plus aria-hidden="true" />{t("createCustomPolicy")}</Button>}
+    <ContentPage.Heading title={w("policies")} actions={<ContentPage.Commands label={collection("pageActions")}
+      selection={{ label: collection("moreActions"), disabled: busy || !selected.length, hint: !selected.length ? collection("selectFirst") : undefined,
+        selectionLabel: selected.length ? t("selected", { count: selected.length }) : undefined, clearLabel: t("clearSelected"), onClear: () => setSelection([]),
+        actions: [{ id: "associate", label: selected.length > 1 ? t("batchAttach") : w("associateTargets"), onSelect: () => onAssociate(selected, selected.length > 1) }] }}
+      primary={{ id: "create", label: t("createCustomPolicy"), icon: <Plus aria-hidden="true" />, disabled: busy, onSelect: onCreate }}
     />} />
     <Card>
       <div className={styles.directoryHeading}>
@@ -76,7 +76,7 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate }: {
       </div>
       <Tabs.Content className={styles.directoryContent} value={view.kind}>
       <TableToolbar labels={toolbarLabels} search={{ label: t("searchPolicies"), value: view.query, onChange: (query) => change({ query }) }}
-        status={t("resultCount", { count: matches.length })} filters={customOnly ? [] : [
+        status={[t("resultCount", { count: matches.length }), ...(selected.length ? [t("selected", { count: selected.length })] : [])].join(" · ")} filters={customOnly ? [] : [
           { id: "service", label: t("product"), value: view.service, onChange: (service) => change({ service }), options: [{ value: "all", label: t("allServices") }, ...policyServices.map((value) => ({ value, label: r(`services.${value}`) }))] },
           { id: "category", label: t("permissionCategory"), value: view.category, onChange: (category) => change({ category }), options: [{ value: "all", label: t("allCategories") }, ...(["global", "product"] as const).map((value) => ({ value, label: t(`categories.${value}`) }))] }
         ]} tools={<Select controlSize="small" aria-label={t("sort")} value={view.sort} onValueChange={(sort) => change({ sort })} options={[{ value: "name", label: t("nameSort") }, { value: "newest", label: t("newest") }, { value: "oldest", label: t("oldest") }]} />} />

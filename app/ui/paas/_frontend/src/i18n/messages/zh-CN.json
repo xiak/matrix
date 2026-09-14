@@ -1,5 +1,6 @@
 {
   "Collection": {
+    "pageActions": "页面操作",
     "moreActions": "更多操作",
     "selectFirst": "请先勾选列表中的对象",
     "resetQuery": "重置查询",

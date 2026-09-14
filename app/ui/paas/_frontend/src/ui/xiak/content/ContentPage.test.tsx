@@ -42,9 +42,70 @@ describe("ContentPage context heading", () => {
     expect(toolsRendered).toHaveBeenCalledTimes(count);
   });
 
-  it("keeps contextual commands before a stable trailing primary action", () => {
-    render(<ContentPage.Actions contextual={<button>More actions</button>} primary={<button>Create user</button>} />);
-    expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["More actions", "Create user"]);
+  it("shares current page callbacks between direct buttons and the compact menu without subscribing the title frame", async () => {
+    const user = userEvent.setup(), invoke = vi.fn(), rendered = vi.fn();
+    function Detail() {
+      const [draft, setDraft] = useState("");
+      return <><ContentPage.Heading title="Policy" actions={<ContentPage.Commands label="Page actions"
+        primary={{ id: "save", label: "Save policy", onSelect: () => invoke(draft) }}
+        secondary={[{ id: "delete", label: "Delete policy", danger: true, disabledReason: "In use", onSelect: invoke }]} />} />
+        <input aria-label="Description" value={draft} onChange={(event) => setDraft(event.target.value)} /></>;
+    }
+    render(<ContentPage><Profiler id="title" onRender={rendered}><ContentPage.Header title="Policy" /></Profiler><ContentPage.Body><Detail /></ContentPage.Body></ContentPage>);
+    const commits = rendered.mock.calls.length;
+    await user.type(screen.getByRole("textbox"), "Latest description");
+    expect(rendered).toHaveBeenCalledTimes(commits);
+    await user.click(screen.getByRole("button", { name: "Save policy" }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    const menu = within(screen.getByRole("menu", { name: "Page actions" }));
+    const unavailable = menu.getByRole("menuitem", { name: "Delete policy" });
+    expect(unavailable.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(unavailable.getAttribute("aria-describedby")!)?.textContent).toBe("In use");
+    await user.click(unavailable);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    await user.click(menu.getByRole("menuitem", { name: "Save policy" }));
+    expect(invoke.mock.calls).toEqual([["Latest description"], ["Latest description"]]);
+  });
+
+  it("keeps creation available with no selection, then exposes eligible batch commands and clear through the same compact trigger", async () => {
+    const user = userEvent.setup(), create = vi.fn(), associate = vi.fn();
+    function Directory() {
+      const [selected, setSelected] = useState(false);
+      return <><ContentPage.Commands label="Page actions" primary={{ id: "create", label: "Create user", onSelect: create }}
+        selection={{ label: "More actions", disabled: !selected, hint: "Select a row", selectionLabel: selected ? "1 user selected" : undefined,
+          clearLabel: "Clear selection", onClear: () => setSelected(false), actions: [{ id: "associate", label: "Add to group", onSelect: associate }] }} />
+        <button onClick={() => setSelected(true)}>Select user</button></>;
+    }
+    render(<Directory />);
+    const compact = screen.getByRole("button", { name: "Page actions" });
+    const primary = screen.getByRole("button", { name: "Create user" });
+    await user.click(compact);
+    expect(screen.getByRole("menuitem", { name: "Add to group" }).getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByText("Select a row")).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: "Clear selection" })).toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Create user" }));
+    expect(create).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Select user" }));
+    expect(screen.getByRole("button", { name: "Page actions" })).toBe(compact);
+    expect(screen.getByRole("button", { name: "Create user" })).toBe(primary);
+    await user.click(compact);
+    expect(within(screen.getByRole("menu")).getByText("1 user selected")).toBeTruthy();
+    await user.click(screen.getByRole("menuitem", { name: "Add to group" }));
+    expect(associate).toHaveBeenCalledOnce();
+    await user.click(compact);
+    await user.click(screen.getByRole("menuitem", { name: "Clear selection" }));
+    expect(screen.getByRole("button", { name: "More actions" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("uses the same compact entry for a single command and does not create an empty menu", async () => {
+    const user = userEvent.setup(), create = vi.fn();
+    const view = render(<ContentPage.Commands label="Page actions" primary={{ id: "create", label: "Create group", onSelect: create }} />);
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Create group" }));
+    expect(create).toHaveBeenCalledOnce();
+    view.rerender(<ContentPage.Commands label="Page actions" />);
+    expect(screen.queryByRole("button")).toBeNull();
   });
 
   it("hides outgoing actions while pending and restores them on cancellation; cleans up on exit", () => {

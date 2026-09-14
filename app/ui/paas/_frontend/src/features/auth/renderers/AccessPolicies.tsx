@@ -123,14 +123,25 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
   if (editing) return <PolicyAuthoringWizard {...editing} workspace={workspace} scene={scene} onBack={() => setEditing(null)} onDone={(id) => { setEditing(null); onOpen("policies", id); }} />;
   return <>
     {access.workspaceError && !associating && !deleting && !editingDescription ? <Alert status="danger">{t(`errors.${access.workspaceError}`)}</Alert> : null}
-    {selected ? <WorkspaceDetail title={selected.name} onBack={() => onOpen("policies")} actions={<>
-      <Button onClick={() => setAssociating({ policies: [selected] })}>{t("associateTargets")}</Button>
-      {selected.kind === "custom" ? <Button onClick={() => setEditing({ policy: selected })} variant="secondary">{t("edit")}</Button> : null}
-      <Button onClick={() => setEditing({ policy: selected, copy: true })} variant="secondary">{t("copyPolicy")}</Button>
-      {selected.kind === "custom" ? <Button onClick={() => setDeleting(selected)} variant="ghost">{t("delete")}</Button> : null}
-    </>}>
-      <div className={styles.actions}><Badge>{t(selected.kind)}</Badge><p className={styles.note}>{describe(selected)}</p>{selected.kind === "custom" ? <Button variant="ghost" size="small" onClick={() => setEditingDescription(true)}>{t("editDescription")}</Button> : null}</div>
-      <dl className={policyStyles.facts}><div><dt>{summary("policyId")}</dt><dd>{selected.id}</dd></div><div><dt>{summary("defaultVersion")}</dt><dd>v{selected.defaultVersion}</dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl>
+    {selected ? <WorkspaceDetail title={selected.name} onBack={() => onOpen("policies")} actions={{
+      primary: { id: "associate", label: t("associateTargets"), onSelect: () => setAssociating({ policies: [selected] }) },
+      secondary: [
+        ...(selected.kind === "custom" ? [{ id: "edit", label: t("edit"), onSelect: () => setEditing({ policy: selected }) }] : []),
+        { id: "copy", label: t("copyPolicy"), onSelect: () => setEditing({ policy: selected, copy: true }) },
+        ...(selected.kind === "custom" ? [{ id: "delete", label: t("delete"), danger: true, onSelect: () => setDeleting(selected) }] : [])
+      ]
+    }}>
+      <div className={policyStyles.policyOverview}>
+        <div className={policyStyles.policyIntro}>
+          <div className={policyStyles.policyLead}><Badge>{t(selected.kind)}</Badge><p className={policyStyles.policyDescription}>{describe(selected) || "—"}</p></div>
+          {selected.kind === "custom" ? <Button className={policyStyles.policyEditAction} variant="ghost" size="small" onClick={() => setEditingDescription(true)}>{t("editDescription")}</Button> : null}
+        </div>
+        <dl className={policyStyles.policyFacts}>
+          <div><dt>{summary("policyId")}</dt><dd><code className={policyStyles.policyIdentifier}>{selected.id}</code></dd></div>
+          <div><dt>{summary("defaultVersion")}</dt><dd>v{selected.defaultVersion}</dd></div>
+          <div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div>
+        </dl>
+      </div>
       {selected.tags.length ? <section aria-label={p("metadataTags")} className={styles.actions}><span className={styles.note}>{p("metadataTags")}</span>{selected.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}</section> : null}
       {selected.kind === "system" ? <p className={styles.note}>{t("systemReadOnly")}</p> : null}
       {includesPermissionManagement(currentDocument(selected)) ? <Alert status="warning">{t("highPrivilege")}</Alert> : null}

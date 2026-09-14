@@ -46,7 +46,7 @@ export function AccountPrimaryWorkspace({ scene, onBack, onOpen }: { scene: Acco
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const primary = scene.accountOwner;
-  return <WorkspaceDetail title={primary.loginName} onBack={onBack} actions={<Button variant="secondary" onClick={() => onOpen("settings")}>{t("settings")}</Button>}>
+  return <WorkspaceDetail title={primary.loginName} onBack={onBack} actions={{ primary: { id: "settings", label: t("settings"), variant: "secondary", onSelect: () => onOpen("settings") } }}>
     <div className={styles.userSummary}><div><strong>{primary.name ?? t("resourceOwner")}</strong><span className={styles.note}>{scene.accountName}</span></div><Badge>{t("primary")}</Badge></div>
 
     <Tabs.Root defaultValue="identity"><Tabs.List aria-label={primary.loginName}><Tabs.Trigger value="identity">{t("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{t("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="permissions">{w("permissions")}</Tabs.Trigger></Tabs.List>
@@ -91,7 +91,7 @@ export function AccountUserWorkspace({ user, scene, workspace, onBack, onOpen }:
   const direct = workspace.userPolicies[user.id] ?? [];
   const inherited = [...new Set(groups.flatMap((group) => group.policyIds))];
   const profile = workspace.userProfiles[user.id];
-  return <><WorkspaceDetail title={user.loginName} onBack={onBack} actions={<><Button variant="secondary" onClick={() => setDialog("edit")}>{t("edit")}</Button><Button disabled={user.protected} variant="ghost" onClick={() => setDialog("delete")}>{t("delete")}</Button></>}>
+  return <><WorkspaceDetail title={user.loginName} onBack={onBack} actions={{ primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setDialog("edit") }, secondary: [{ id: "delete", label: t("delete"), danger: true, disabled: user.protected, disabledReason: user.protected ? a("protectedHint") : undefined, onSelect: () => setDialog("delete") }] }}>
     <div className={styles.userSummary}><div><strong>{user.name}</strong><span className={styles.note}>{user.qualifiedName}</span></div><div className={styles.roleTags}><Badge>{a("child")}</Badge><Badge status={user.enabled ? "success" : "neutral"}>{a(`states.${user.state}`)}</Badge></div></div>
     <Tabs.Root defaultValue="identity"><Tabs.List aria-label={user.loginName}><Tabs.Trigger value="identity">{a("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{a("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("userGroups")}</Tabs.Trigger><Tabs.Trigger value="security">{t("securitySettings")}</Tabs.Trigger><Tabs.Trigger value="keys">{t("keys")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content className={styles.stack} value="identity"><dl className={styles.facts}>

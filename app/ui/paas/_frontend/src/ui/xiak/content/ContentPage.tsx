@@ -1,13 +1,17 @@
 "use client";
 
-import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type ReactNode, type Ref } from "react";
+import { createContext, useCallback, useContext, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type ReactNode, type Ref, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { ArrowLeft, ChevronRight } from "lucide-react";
 import { Button } from "../button/Button";
+import { ActionMenu, type ActionMenuItem } from "../action-menu/ActionMenu";
+import { TableActions } from "../table/TableActions";
 import { classNames } from "../utils";
 import styles from "./ContentPage.module.css";
 
 type BackAction = { label: string; parentLabel?: string; disabled?: boolean; onClick(): void };
+export type PageCommand = ActionMenuItem & { variant?: "primary" | "secondary" | "ghost"; icon?: ReactNode };
+type PageSelection = Omit<ComponentPropsWithoutRef<typeof TableActions>, "triggerRef">;
 type PageHeading = { title: string; back?: BackAction; focus?: boolean };
 type HeadingContribution = PageHeading & { owner: string };
 type HeadingSlot = { target: HTMLDivElement | null; parentLabel?: string; update(value: HeadingContribution): void; remove(owner: string): void };
@@ -82,12 +86,35 @@ function Heading({ title, back, actions, focus = false }: PageHeading & { action
   return target && actions ? createPortal(actions, target) : null;
 }
 
-// Contextual controls may grow with table selection; primary controls remain
-// the trailing anchor so their position does not jump when that context appears.
-function Actions({ contextual, primary, className, ...props }: Omit<ComponentPropsWithoutRef<"div">, "children"> & { contextual?: ReactNode; primary?: ReactNode }) {
-  return <div className={classNames(styles.actionBar, className)} {...props}>
-    {contextual ? <div className={styles.contextualActions}>{contextual}</div> : null}
-    {primary ? <div className={styles.primaryActions}>{primary}</div> : null}
+// Both presentations use one command list. CSS switches the composition before
+// first paint; resizing never subscribes the shell or remounts the feature.
+function Commands({ label, primary, secondary = [], selection, primaryRef, focusRef }: {
+  label: string; primary?: PageCommand; secondary?: readonly PageCommand[];
+  selection?: PageSelection; primaryRef?: RefObject<HTMLButtonElement | null>; focusRef?: Ref<{ focus(): void }>;
+}) {
+  const desktopAction = useRef<HTMLButtonElement>(null);
+  const desktopCommands = useRef<HTMLDivElement>(null);
+  const compactAction = useRef<HTMLButtonElement>(null);
+  useImperativeHandle(focusRef, () => ({ focus() {
+    const compact = desktopCommands.current && getComputedStyle(desktopCommands.current).display === "none";
+    (compact ? compactAction.current : desktopAction.current)?.focus({ preventScroll: true });
+  } }), []);
+  const items = primary ? [primary, ...secondary] : secondary;
+  const firstAvailable = items.find((item) => !item.disabled && !item.disabledReason);
+  const compactItems: ActionMenuItem[] = [...items, ...(selection?.actions.map((action, index) => ({
+    ...action, separatorBefore: index === 0, disabled: selection.disabled || action.disabled,
+    disabledReason: action.disabledReason ?? (selection.disabled ? selection.hint : undefined),
+  })) ?? []), ...(selection?.selectionLabel ? [{ id: "clear-selection", label: selection.clearLabel, separatorBefore: true, disabled: selection.disabled, onSelect: selection.onClear }] : [])];
+  if (!compactItems.length) return null;
+  return <div className={styles.commandBar}>
+    <div className={styles.expandedCommands} ref={desktopCommands}>
+      {selection ? <TableActions {...selection} /> : null}
+      {items.map((action) => <Button key={action.id} ref={(element) => {
+        if (action.id === firstAvailable?.id) desktopAction.current = element;
+        if (action === primary && primaryRef) primaryRef.current = element;
+      }} size={selection || action.icon ? "small" : "default"} variant={action.variant ?? (action.danger ? "ghost" : action === primary ? "primary" : "secondary")} data-danger={action.danger || undefined} disabled={action.disabled || Boolean(action.disabledReason)} aria-controls={action.controls} aria-expanded={action.expanded} title={action.disabledReason} onClick={action.onSelect}>{action.icon}{action.label}</Button>)}
+    </div>
+    <ActionMenu className={styles.overflowCommand} label={label} actions={compactItems} summary={selection?.selectionLabel} triggerRef={compactAction} fallbackFocusRef={desktopAction} iconOnly />
   </div>;
 }
 
@@ -119,4 +146,4 @@ function Body({ children, className, pending = false, loading, transitionKey, ..
   </div>;
 }
 
-export const ContentPage = Object.assign(ContentPageRoot, { Header, Heading, Actions, Body });
+export const ContentPage = Object.assign(ContentPageRoot, { Header, Heading, Commands, Body });
