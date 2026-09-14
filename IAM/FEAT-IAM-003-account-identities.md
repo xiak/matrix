@@ -83,4 +83,6 @@ Account 更新以 scope/account 锁序列化；User 安全变更在 principal �
 
 专属受限 PG18（1 CPU、768 MiB、128 PIDs、64 连接）的原账号 HTTP 门禁扩为八轮不同账号争用同一个新别名：每轮严格一个 200、一个 409；失败方 Account/资源版本和别名保留记录不变，双方原 USER 与登录索引不变，赢家精确一条成功事实、失败方零条。原版本/requestId 重放返回 409，状态及成功事实数量不再改变；该 CAS 路由不承诺成功收据重放。测试连接只记录 `40001`/`40P01` 计数，不保留 SQL、参数或错误细节。聚焦门禁 70.43s（父门禁 73.33s、包 76.342s）通过，八轮中的七轮实际遇到 `40001` 并收敛，未放宽 503 为合格结果。
 
-最终新增 USER/登录索引和 CAS 重放检查经完整串行真库回归通过：Audit 数据层 7.611s、Audit HTTP 3.083s、IAM integration race 233.732s、双 IAM/PaaS/Audit 独立进程 55.976s、PaaS 数据层 7.149s；保留现有时间策略、凭据并发、历史 proof、受限 runtime 身份和多租户隔离门禁。全仓 Go race/vet、模块校验、API 稳定生成及 Linux amd64 构建通过；默认跳过数据库的测试不替代前述真实门禁。未运行未发布 schema 全历史链，也不据此宣称容量 SLO、签名安装或新 UI 验收。全部本地测试客户端结束后，任务专属 PG 容器、网络和合成数据卷已按精确 ID/标签清理；独立 CI 尚待新的固定提交核实。
+最终新增 USER/登录索引和 CAS 重放检查经完整串行真库回归通过：Audit 数据层 7.611s、Audit HTTP 3.083s、IAM integration race 233.732s、双 IAM/PaaS/Audit 独立进程 55.976s、PaaS 数据层 7.149s；保留现有时间策略、凭据并发、历史 proof、受限 runtime 身份和多租户隔离门禁。全仓 Go race/vet、模块校验、API 稳定生成及 Linux amd64 构建通过；默认跳过数据库的测试不替代前述真实门禁。未运行未发布 schema 全历史链，也不据此宣称容量 SLO、签名安装或新 UI 验收。全部本地测试客户端结束后，任务专属 PG 容器、网络和合成数据卷已按精确 ID/标签清理。
+
+固定 `581ce7584527470e1fe377040eb98ffe161e83de` 的 [Verification 34833032924](https://github.com/xiak/matrix/actions/runs/34833032924) 已核实精确 SHA，Go/authority-process/node-process 全部 completed/success；该固定对象包含 005 的时间条件及本次事务竞争修复，不包含计划中的字符串条件。

@@ -5,17 +5,17 @@
 - Updated: 2026-09-14
 - Repository: https://github.com/xiak/matrix.git
 - Branch: `feat/iam`
-- Latest pushed, locally verified transaction-contention fix (including time conditions):
+- Latest pushed and independently CI-verified transaction-contention fix (including time conditions):
   `581ce7584527470e1fe377040eb98ffe161e83de`.
 - Exact [Verification 34833032924](https://github.com/xiak/matrix/actions/runs/34833032924)
-  is queued. Poll this same run; observation timeout is not terminal.
+  exact SHA and Go/authority-process/node-process are completed/success.
 - Time candidate `7218e1671378a227d78d020686a68d164982e2ac` /
   [34830294815](https://github.com/xiak/matrix/actions/runs/34830294815) FAILED.
   Go/node succeeded; authority-process failed alias competition503/200.
   PG logs prove five40001 on one backend in36ms, exhausting immediate retries
   before the winner committed. Time-condition/process subgates passed, but
   this candidate must not be treated as CI-successful.
-- Last fully CI-verified code is version-retirement
+- Earlier fully CI-verified code is version-retirement
   `b99e082fa9ba8a6412eeb766387f4fbeb5df0aa3` /
   [Verification 34827144713](https://github.com/xiak/matrix/actions/runs/34827144713);
   exact SHA and Go/authority-process/node-process completed/success.
@@ -33,8 +33,9 @@ source declarations. [011](../../IAM/FEAT-IAM-011-acceptance.md) owns prelaunch
 schema baseline and final release/capacity/HA gates. Unpublished numbered
 schemas do not automatically require a complete upgrade chain from1.
 
-First resolve581ce75's exact CI. If failed, inspect actual failure before
-changing code/fixtures. GitHub credentials remain in RAM only; never print
+581ce75's CI is confirmed success. Continue005's typed string condition slice,
+whose requirements/source declarations are now in005/001 and fixed adoption.
+No string implementation is present at this checkpoint. GitHub credentials remain in RAM only; never print
 headers, credentials or full post-job PostgreSQL cleanup logs.
 
 ## Current fixed behavior and scope
@@ -132,8 +133,7 @@ builds/fuzz with the bounded real PostgreSQL suite.
 
 ## Next implementation
 
-After exact CI, record final confirmation in003/005 and notify existing peers.
-Then continue full005: bounded wildcards, typed string/IP conditions and their
+003/005 now record exact581ce75 success. Continue full005: bounded wildcards, typed string/IP conditions and their
 declared trusted sources, User/Role permission boundaries, safe delegation,
 editor and capabilities. Current time support is NOT full LANG-04.
 Source IP cannot come from an untrusted forwarding header; product tags
@@ -148,13 +148,13 @@ deferred integrations. Do not redefine the goal around policy CRUD/time.
 
 UX/UI task01a07b21-9a0d-7fd0-b090-7827ce18262e and installation task
 01a04149-5dbb-7300-9e4c-31d9e85c8ada received b99 final success,7218 failure,
-and581ce75 pending CI candidate semantics/evidence. No new UI capability or installation profile
+and581ce75 final CI success semantics/evidence. No new UI capability or installation profile
 was published; names/root labels/mock grammar never authorize writes.
 Only fixed objects are exchanged; peers do not inherit this branch's gates.
 
 All local test handles are terminal. Time/alias-slice PostgreSQL container/network/
 synthetic volumes were exact-ID/label checked, found client count0, stopped
-and removed. No local fixture survives. Only CI34833032924 is known queued.
+and removed. No local fixture or live test/CI handle survives.
 Do not reuse old database names as if data survives.
 
 Only own worktree/branch is writable. No other Phase WIP, remote/shared
