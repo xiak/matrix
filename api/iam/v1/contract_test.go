@@ -457,6 +457,69 @@ func policyDocumentFixture() PolicyDocument {
 	}}
 }
 
+func TestPolicyIdentityStringConditionsAreBoundedSets(t *testing.T) {
+	plain, _, err := CanonicalizePolicyDocument(policyDocumentFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	withConditions := func(value string) string {
+		return strings.Replace(plain, `"resources":`, `"conditions":`+value+`,"resources":`, 1)
+	}
+	valid := `[{"key":"iam.account-id","operator":"STRING_EQUALS","values":["account-b","account-a"]},{"key":"iam.principal-id","operator":"STRING_EQUALS","values":["principal-z","principal-a"]},{"key":"iam.principal-id","operator":"STRING_NOT_EQUALS","values":["principal-denied"]}]`
+	document, err := DecodePolicyDocument(strings.NewReader(withConditions(valid)))
+	if err != nil {
+		t.Fatal("declared identity conditions rejected", err)
+	}
+	before, _ := json.Marshal(document)
+	canonical, digest, err := CanonicalizePolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := json.Marshal(document)
+	if !bytes.Equal(before, after) {
+		t.Fatal("string set normalization mutated caller input")
+	}
+	reordered, err := DecodePolicyDocument(strings.NewReader(withConditions(strings.ReplaceAll(strings.ReplaceAll(valid, `"account-b","account-a"`, `"account-a","account-b"`), `"principal-z","principal-a"`, `"principal-a","principal-z"`))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other, otherDigest, err := CanonicalizePolicyDocument(reordered); err != nil || canonical != other || digest != otherDigest {
+		t.Fatal("string set order changed canonical permission content")
+	}
+	tooMany := make([]string, 17)
+	for index := range tooMany {
+		tooMany[index] = fmt.Sprintf("principal-%d", index)
+	}
+	tooManyJSON, _ := json.Marshal(tooMany)
+	for _, invalid := range []string{
+		strings.Replace(valid, "iam.account-id", "caller.account-id", 1),
+		strings.Replace(valid, "iam.account-id", "iam.principal-id", 1),
+		strings.Replace(valid, "STRING_NOT_EQUALS", "STRING_EQUALS", 1),
+		strings.Replace(valid, "STRING_NOT_EQUALS", "DATE_LESS_THAN", 1),
+		strings.Replace(valid, `"values":["principal-denied"]`, `"values":[]`, 1),
+		strings.Replace(valid, `"values":["principal-denied"]`, `"values":null`, 1),
+		strings.Replace(valid, `"values":["principal-denied"]`, `"values":[1]`, 1),
+		strings.Replace(valid, `"values":["principal-denied"]`, `"values":[""]`, 1),
+		strings.Replace(valid, `"values":["principal-denied"]`, `"values":["principal-*"]`, 1),
+		strings.Replace(valid, `"values":["principal-denied"]`, `"values":[" principal-denied"]`, 1),
+		strings.Replace(valid, `"values":["principal-denied"]`, `"values":["principal-denied","principal-denied"]`, 1),
+		strings.Replace(valid, `"values":["principal-denied"]`, `"values":`+string(tooManyJSON), 1),
+		strings.Replace(valid, `"key":`, `"source":"CALLER","key":`, 1),
+	} {
+		if _, err := DecodePolicyDocument(strings.NewReader(withConditions(invalid))); !errors.Is(err, ErrInvalidPolicy) {
+			t.Fatal("invalid identity condition admitted")
+		}
+	}
+	for _, action := range AllActionDefinitions() {
+		for _, key := range []ConditionKey{"iam.account-id", "iam.principal-id"} {
+			definition, found := LookupActionConditionDefinition(action.Action, key)
+			if found != (action.AuthorityScope == AuthorityScopeTenant) || found && (definition.Source != "IAM_AUTHENTICATED_IDENTITY" || definition.ValueType != "STRING") {
+				t.Fatal("identity condition source crossed a scope")
+			}
+		}
+	}
+}
+
 func TestPolicyTimeConditionsAreStrictAndPreserveUnconditionalContent(t *testing.T) {
 	for _, action := range AllActionDefinitions() {
 		definition, found := LookupActionConditionDefinition(action.Action, ConditionIAMCurrentTime)
@@ -739,6 +802,13 @@ func FuzzPolicyDocumentCanonicalRoundTrip(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Add(timedCanonical)
+	identity := policyDocumentFixture()
+	identity.Statements[0].Conditions = []PolicyCondition{{Key: ConditionIAMPrincipalID, Operator: PolicyStringNotEquals, Values: []string{"user-z", "user-a"}}}
+	identityCanonical, _, err := CanonicalizePolicyDocument(identity)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(identityCanonical)
 	f.Add(`{"languageVersion":"1","scope":"TENANT","statements":[]}`)
 	f.Add(`{"statements":null}`)
 	f.Fuzz(func(t *testing.T, source string) {

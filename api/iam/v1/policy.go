@@ -29,7 +29,10 @@ type PolicyConditionOperator string
 const (
 	PolicyDateGreaterThanEquals PolicyConditionOperator = "DATE_GREATER_THAN_EQUALS"
 	PolicyDateLessThan          PolicyConditionOperator = "DATE_LESS_THAN"
+	PolicyStringEquals          PolicyConditionOperator = "STRING_EQUALS"
+	PolicyStringNotEquals       PolicyConditionOperator = "STRING_NOT_EQUALS"
 	MaxStatementConditions                              = 16
+	MaxStringConditionValues                            = 16
 )
 
 const (
@@ -658,11 +661,14 @@ func validatePolicyConditions(statement PolicyStatement, pointer string) error {
 	if statement.Conditions != nil && (len(statement.Conditions) == 0 || len(statement.Conditions) > MaxStatementConditions) {
 		return invalidPolicyAt(PolicyLimitExceeded, pointer+"/conditions")
 	}
-	seen := make(map[PolicyConditionOperator]bool)
+	seen := make(map[struct {
+		key      ConditionKey
+		operator PolicyConditionOperator
+	}]bool)
 	var start, end time.Time
 	for index, condition := range statement.Conditions {
 		location := pointer + "/conditions/" + strconv.Itoa(index)
-		if condition.Key != ConditionIAMCurrentTime {
+		if condition.Key != ConditionIAMCurrentTime && condition.Key != ConditionIAMAccountID && condition.Key != ConditionIAMPrincipalID {
 			return invalidPolicyAt(PolicyUnsupported, location+"/key")
 		}
 		for _, action := range statement.Actions {
@@ -670,13 +676,37 @@ func validatePolicyConditions(statement PolicyStatement, pointer string) error {
 				return invalidPolicyAt(PolicyUnsupported, location+"/key")
 			}
 		}
+		identity := struct {
+			key      ConditionKey
+			operator PolicyConditionOperator
+		}{condition.Key, condition.Operator}
+		if seen[identity] {
+			return invalidPolicyAt(PolicyDuplicate, location)
+		}
+		seen[identity] = true
+		if condition.Key != ConditionIAMCurrentTime {
+			if condition.Operator != PolicyStringEquals && condition.Operator != PolicyStringNotEquals {
+				return invalidPolicyAt(PolicyUnsupported, location+"/operator")
+			}
+			if len(condition.Values) < 1 || len(condition.Values) > MaxStringConditionValues {
+				return invalidPolicyAt(PolicyLimitExceeded, location+"/values")
+			}
+			values := make(map[string]bool, len(condition.Values))
+			for valueIndex, value := range condition.Values {
+				valuePointer := location + "/values/" + strconv.Itoa(valueIndex)
+				if ValidateID("condition.value", value) != nil {
+					return invalidPolicyAt(PolicyInvalidValue, valuePointer)
+				}
+				if values[value] {
+					return invalidPolicyAt(PolicyDuplicate, valuePointer)
+				}
+				values[value] = true
+			}
+			continue
+		}
 		if condition.Operator != PolicyDateGreaterThanEquals && condition.Operator != PolicyDateLessThan {
 			return invalidPolicyAt(PolicyUnsupported, location+"/operator")
 		}
-		if seen[condition.Operator] {
-			return invalidPolicyAt(PolicyDuplicate, location)
-		}
-		seen[condition.Operator] = true
 		if len(condition.Values) != 1 {
 			return invalidPolicyAt(PolicyLimitExceeded, location+"/values")
 		}
@@ -709,6 +739,11 @@ func CanonicalizePolicyDocument(document PolicyDocument) (string, string, error)
 		statement.Actions = append([]Action(nil), statement.Actions...)
 		statement.Resources = append([]PolicyResourceSelector(nil), statement.Resources...)
 		statement.Conditions = append([]PolicyCondition(nil), statement.Conditions...)
+		for index := range statement.Conditions {
+			condition := &statement.Conditions[index]
+			condition.Values = append([]string(nil), condition.Values...)
+			slices.Sort(condition.Values)
+		}
 		slices.SortFunc(statement.Conditions, func(left, right PolicyCondition) int {
 			if order := cmp.Compare(left.Key, right.Key); order != 0 {
 				return order

@@ -20,12 +20,16 @@ type ConditionSource string
 
 const (
 	ConditionIAMCurrentTime     ConditionKey       = "iam.current-time"
+	ConditionIAMAccountID       ConditionKey       = "iam.account-id"
+	ConditionIAMPrincipalID     ConditionKey       = "iam.principal-id"
 	ConditionTime               ConditionValueType = "TIME"
+	ConditionString             ConditionValueType = "STRING"
 	ConditionIAMTransactionTime ConditionSource    = "IAM_TRANSACTION_TIME"
+	ConditionIAMIdentity        ConditionSource    = "IAM_AUTHENTICATED_IDENTITY"
 )
 
 // This is a source declaration, not caller-supplied context or a complete
-// AuthorizationProfile. Current tenant actions support IAM's own clock only.
+// AuthorizationProfile. Tenant conditions use IAM's own authoritative sources.
 type ConditionKeyDefinition struct {
 	Key       ConditionKey
 	ValueType ConditionValueType
@@ -34,10 +38,17 @@ type ConditionKeyDefinition struct {
 
 func LookupActionConditionDefinition(action Action, key ConditionKey) (ConditionKeyDefinition, bool) {
 	definition, known := LookupActionDefinition(action)
-	if !known || definition.AuthorityScope != AuthorityScopeTenant || key != ConditionIAMCurrentTime {
+	if !known || definition.AuthorityScope != AuthorityScopeTenant {
 		return ConditionKeyDefinition{}, false
 	}
-	return ConditionKeyDefinition{ConditionIAMCurrentTime, ConditionTime, ConditionIAMTransactionTime}, true
+	switch key {
+	case ConditionIAMCurrentTime:
+		return ConditionKeyDefinition{key, ConditionTime, ConditionIAMTransactionTime}, true
+	case ConditionIAMAccountID, ConditionIAMPrincipalID:
+		return ConditionKeyDefinition{key, ConditionString, ConditionIAMIdentity}, true
+	default:
+		return ConditionKeyDefinition{}, false
+	}
 }
 
 // ActionDefinition binds a product operation to its only authorization caller,

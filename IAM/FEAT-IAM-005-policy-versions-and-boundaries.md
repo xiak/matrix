@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期及 IAM 权威时间条件已有固定 CI；时间条件以修复原别名竞争后的 `581ce75` 为最终验证点。字符串/IP 条件、边界和 UI 闭环未完成，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期及 IAM 权威时间条件已有固定 CI；时间条件以修复原别名竞争后的 `581ce75` 为最终验证点。身份字符串条件的本地真实闭环已通过、独立 CI 待确认；IP 条件、边界和 UI 闭环未完成，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -87,7 +87,7 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 #### 字符串条件：当前权威身份
 
-下一纵向切片尚未实现。沿用同一 `conditions` 结构，首先支持 IAM 自身持有的账号与当前主体稳定 ID；不是调用者属性、业务资源属性或完整 ABAC。可信键的目录定义由 001 拥有。
+本纵向切片实施中，已接入契约、生成 schema、受限数据库发布和唯一求值器，完整验收尚未完成。沿用同一 `conditions` 结构，首先支持 IAM 自身持有的账号与当前主体稳定 ID；不是调用者属性、业务资源属性或完整 ABAC。可信键的目录定义由 001 拥有。
 
 - `iam.account-id` 取当前认证主体的唯一 Account ID；`iam.principal-id` 取当前有效 USER 的稳定主体 ID。不能取目标资源 ID、Group ID、策略拥有者、别名、登录名或请求中的 tenant/account/principal selector。当前仍只启用已声明支持键的 TENANT/USER 授权；Role/STS 和产品服务主体的条件语义须在其 owner 接入时另证，不能复用原调用者 ID 冒充被扮演身份。
 - 两键类型为 STRING，支持 `STRING_EQUALS` 和 `STRING_NOT_EQUALS`。当前值是一个标量；条件 `values` 是 1–16 个互异、合法的稳定 ID，精确、区分大小写比较，不 trim、不做大小写折叠、通配或隐式类型转换。等值为任一候选匹配，否定为全部候选均不匹配；多个条件继续 AND，匹配 Deny 继续跨来源优先。不同键可使用相同算子；仅相同 key/operator 重复拒绝。互相矛盾的等值/否定条件不匹配，不能以最后一项覆盖前项。
@@ -98,7 +98,7 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 后续 IP 条件仍使用同一条件结构，但必须先冻结可信来源、支持算子和缺失/多值规则。来源 IP 不从未经信任的转发 header 或任意 PEP 字段取得；产品标签按 008 从已认证产品与真实业务对象提供。
 
-评估器处理类型化 Statement。条件缺失对匹配为 false；显式 Null 存在检查单独定义；否定条件也不能因属性缺失自动放行。多个条件同时满足，多值规则明确为 any/all；禁止隐式字符串类型转换。资源列表中每个必要资源都要通过，不以某个资源成功代替全部。
+评估器处理类型化 Statement。必需的 IAM 身份/时间上下文缺失使整个决定失败关闭；未来可选业务属性缺失时条件不匹配，否定条件也不能因此自动放行。显式 Null 存在检查尚未启用，不能把 null 输入当成受支持算子。多个条件同时满足，多值规则明确为 any/all；禁止隐式字符串类型转换。资源列表中每个必要资源都要通过，不以某个资源成功代替全部。
 
 变更在 account → principal → policy → default pointer/attachment 锁顺序内检查管理者当前委派上限。首版可把高风险自定义授权限定为 root/明确 PolicyAdministrator 系统策略，不能用通用子集推理的假实现宣称安全委派。非 root 不得去除自身强制边界或为自己授予不可委派系统策略。
 
@@ -152,7 +152,7 @@ PG18 聚焦 `customer_policy_terminal_deletion` 最终通过，3.18s（含父门
 
 2026-09-14，本分支新建专属受限 PG18（1 CPU、768 MiB、128 PIDs、64 连接），现有 `customer_immutable_versions_and_default_selection` 聚焦通过，6.19s（父门禁 11.33s）：五项满额、默认禁止删除、非默认退休释放槽位、活跃重复内容拒绝、退休内容新 ID 再次发布、新内容继续复用槽位、末尾 outbox 失败全回滚、旧命令不复活、历史 canonical/digest/proof 保留，及退休/默认切换/新版本/整策略删除四路同修订竞争单一赢家。原父门禁再次 apply/bootstrap 后比较真实退休内容、ID 和终态均不变。最终完整真库复验还包含“新内容不能以退休态插入”的存储攻击拒绝与严格响应校验。
 
-当前版本退休开发 readiness 为 IAM14/Audit11/PaaS1，仅反映实际函数、退休列/保护与封闭 action 契约；安装发布 profile 未修改，不能据此组装或宣称跨版本可升级。当前没有对外诊断 endpoint、版本管理 capability 条目或自定义策略 UI 验收。LANG-03 的受限通配、LANG-04 条件、LANG-05 边界、LANG-07 编辑器以及 LANG-08 完整委派仍必须继续实现，不能将策略 CRUD 当作 FEAT Accepted。
+版本退休固定基线 readiness 为 IAM14/Audit11/PaaS1，仅反映该片函数、退休列/保护与封闭 action 契约；安装发布 profile 未修改，不能据此组装或宣称跨版本可升级。当前没有对外诊断 endpoint、版本管理 capability 条目或自定义策略 UI 验收。LANG-03 的受限通配、LANG-04 条件、LANG-05 边界、LANG-07 编辑器以及 LANG-08 完整委派仍必须继续实现，不能将策略 CRUD 当作 FEAT Accepted。
 
 完整回归中的 Audit 数据层 11.447s、Audit HTTP 3.286s、实际双 IAM/PaaS/Audit 进程 137.207s、PaaS 数据层 18.719s 通过；真实 PaaS 在非默认版本退休后保持原授权，版本退休/策略删除事实均经实际 dispatcher 入链。该次 IAM 包没有通过：十组串行流程共用的两分钟 context 在末尾凭据并发耗尽（策略父门禁 122.72s），后续保护检查因同一已过期 context 不能执行，不计为成功。现有测试 owner 改为每组两分钟、共享数据综合门禁四分钟，HTTP 请求也继承对应截止时间与取消；没有删除规模、并发或攻击用例，没有改变生产超时、资源上限和 CI 作业总上限。
 
@@ -172,6 +172,18 @@ PG18 聚焦 `customer_policy_terminal_deletion` 最终通过，3.18s（含父门
 
 最终带时间条件种子的诊断/canonical fuzz 通过：15 秒、2 workers、每次样本最小化限 1 秒，132,238 次执行；不以此声称性能或未实现语法正确。OpenAPI 重生成字节稳定，最终 API/authority race 与 Linux IAM/Audit 构建通过。全部本地进程结束后，专属 PG 容器、网络和合成数据卷按精确身份检查并清理，没有用户或其他任务数据变更。
 
-时间条件当前源码 readiness 为 IAM15/Audit11/PaaS1；IAM 版本反映新的策略文档/发布验证语义，Audit 编码、ServiceIdentity、lookup_service、七列 claim 和安装发布 profile 未变。固定 `7218e1671378a227d78d020686a68d164982e2ac` 的 [Verification 34830294815](https://github.com/xiak/matrix/actions/runs/34830294815) 最终失败：Go/node-process 成功，authority-process 中时间条件和独立进程通过，但原账号别名竞争返回 503/200 而非 409/200。PG 日志证明同一 backend 的五次 `40001` 相隔约 9ms，原无等待整事务重试在竞争提交前耗尽；修复与竞争验收归 003。本地时间条件证据保留，但该候选不得作为 CI 成功对象，不继承 b99e082 的结论。
+时间条件固定基线 readiness 为 IAM15/Audit11/PaaS1；IAM 版本反映该片策略文档/发布验证语义，Audit 编码、ServiceIdentity、lookup_service、七列 claim 和安装发布 profile 未变。固定 `7218e1671378a227d78d020686a68d164982e2ac` 的 [Verification 34830294815](https://github.com/xiak/matrix/actions/runs/34830294815) 最终失败：Go/node-process 成功，authority-process 中时间条件和独立进程通过，但原账号别名竞争返回 503/200 而非 409/200。PG 日志证明同一 backend 的五次 `40001` 相隔约 9ms，原无等待整事务重试在竞争提交前耗尽；修复与竞争验收归 003。本地时间条件证据保留，但该候选不得作为 CI 成功对象，不继承 b99e082 的结论。
 
 时间条件及竞争修复的固定 `581ce7584527470e1fe377040eb98ffe161e83de` / [Verification 34833032924](https://github.com/xiak/matrix/actions/runs/34833032924) 已核实精确 SHA，Go/authority-process/node-process 全部 completed/success。以此为后续条件实现的已验证回滚点；并不把时间子集视为完整 LANG-04 或整个 FEAT 的验收。
+
+### 字符串身份条件增量证据
+
+2026-09-14，现有严格契约和真实 `Decide` 的正向条件门禁先因不支持身份条件失败，实现后通过；覆盖等于的任一匹配、不等于的全部不匹配、大小写、同语句账号/主体/时间 AND、Group 仍绑定当前 USER、全来源 Deny、缺失/非法身份和服务主体失败关闭。值集合重排保持 canonical/digest 和原请求幂等身份，不修改输入；原无条件/单值时间编码保持。OpenAPI 对相同 key/operator、不同 values 的重复项也有数量限制，其缺失回归先失败后通过，避免只依赖整个 JSON 对象的 uniqueItems。
+
+专属 PG18（1 CPU、768 MiB、128 PIDs、64 连接）的版本/条件聚焦门禁通过，11.29s（父门禁 15.57s、包 18.454s）：两个账号中同名 User/Group/Policy、同资源 ID 隔离；Group 内两个普通 User 的条件选择、显式默认切换、移除/重新加入成员、附件撤销；输入字段和 header 不能改当前身份；存储层未知来源、非法值、重复键/算子/值拒绝；旧决定在换版/撤销后仍通过 producer proof。首轮误要求公开 Denied 返回身份，真实存储已证明正确允许/拒绝，测试改为核对私有决定归属并保留公开拒绝不泄露身份；另一轮按现有契约修正为 root 使用全局登录名、普通 User 使用 qualified realm，没有放宽生产登录规则。
+
+完整串行 PG18 回归通过：Audit 数据层 5.449s、Audit HTTP 3.060s、IAM integration race 172.276s、独立双 IAM/PaaS/Audit 45.125s、PaaS 数据层 4.427s。实际 PaaS 同一 bearer 使用账号/主体/时间组合条件，窗口后拒绝；发布不切换默认，显式切换到否定集合后按当前主体允许或拒绝，撤销附件再次拒绝。真实 dispatcher、受限 runtime 登录、跨账号资源/Operation/outbox、历史链与当前状态重放门禁保留。随后补充的服务凭据冒充 USER 攻击在新库聚焦复验通过，11.31s（父门禁 15.80s、包 18.343s）；没有用默认跳过数据库的测试代替真实验收。
+
+当前开发源码/SQL readiness 为 IAM16/Audit11/PaaS1；IAM 仅反映新增字符串发布验证和当前权威求值，安装发布 profile、ServiceIdentity、lookup_service、七列 claim 与 Audit canonical 未改。独立 CI 尚待固定提交后确认；UI、签名安装、IP 条件和完整 LANG-04 未验收。专属 PG 的容器/网络/合成数据卷在精确身份与标签核对、确认无客户端后清理，未动用户数据或其他任务资源。
+
+最终全仓 Go race/vet、模块校验、稳定 API 生成及 Linux amd64 全仓构建通过。现有 canonical round-trip fuzz 加身份否定集合种子，15 秒/2 workers/1 秒样本最小化预算通过 549,059 次执行；该数字仅是有界随机验证，不是容量或完整语言证明。真实 PG 与广域构建/fuzz 串行，未增加共享资源或放宽生产权限。

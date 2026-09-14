@@ -25,7 +25,7 @@
 
 005 的时间条件增量在本 owner 声明 `iam.current-time`：类型 TIME，来源 IAM_TRANSACTION_TIME。当前目录中 TENANT 动作声明该键，INSTALLATION 与 INSTALLATION_PROBE 不声明；未知动作/键无能力。只读 `LookupActionConditionDefinition` 返回值副本，静态校验、生成 schema 与唯一评估器使用同一来源定义；没有通用调用者属性 map。该局部来源声明不等于已交付完整签名 AuthorizationProfile、revision/digest、资源粒度或业务属性接入，CAT-05 仍未完成。时间算子、窗口与事务/历史语义由 005 唯一规定。
 
-005 下一字符串切片的目标来源声明（尚未实现）为 `iam.account-id` 与 `iam.principal-id`：类型 STRING，来源 IAM_AUTHENTICATED_IDENTITY。分别绑定当前 IAM 权威身份的 Account 和主体稳定 ID，仅对 TENANT/USER 启用；不接受产品请求自报的值，不将 Group/策略/资源的归属误作当前调用者身份。它们是 IAM 内置身份条件，不按产品名称分叉，也不开放租户自行注册来源。算子、集合、缺失和 canonical 行为归 005；完整 Profile 与业务条件仍按 CAT-05/008 验收。
+005 字符串切片在同一目录增加 `iam.account-id` 与 `iam.principal-id`：类型 STRING，来源 IAM_AUTHENTICATED_IDENTITY。分别绑定当前 IAM 权威身份的 Account 和主体稳定 ID，仅对 TENANT/USER 启用；不接受产品请求自报的值，不将 Group/策略/资源的归属误作当前调用者身份。它们是 IAM 内置身份条件，不按产品名称分叉，也不开放租户自行注册来源。契约与唯一求值器已经接入，运行证据、算子、集合、缺失和 canonical 行为归 005；完整 Profile 与业务条件仍按 CAT-05/008 验收。
 
 ## 事务与权限
 

@@ -38,6 +38,14 @@ type PolicyEvaluation struct {
 	MatchedVersions []iamv1.PolicyVersionReference
 }
 
+// Constructed from the owner-validated snapshot, never decoded from a request.
+// Keep condition sources typed rather than admitting a caller attribute map.
+type policyEvaluationContext struct {
+	databaseTime time.Time
+	accountID    iamv1.AccountID
+	subject      iamv1.Subject
+}
+
 // EvaluateAttachedPolicies joins current policy metadata, immutable content and
 // a live attachment inside an already authenticated authority snapshot. It
 // invokes the sole statement evaluator only after every ownership link agrees.
@@ -82,7 +90,7 @@ func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID,
 		}
 		versions = append(versions, row.Version)
 	}
-	result, err := EvaluatePolicies(databaseTime, versions, action, resource)
+	result, err := evaluatePolicies(policyEvaluationContext{databaseTime, accountID, subject}, versions, action, resource)
 	if err != nil {
 		return PolicyEvaluation{}, nil, err
 	}
@@ -108,11 +116,13 @@ func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID,
 	return result, evidence, nil
 }
 
-// EvaluatePolicies evaluates a current, owner-validated policy snapshot. It
+// evaluatePolicies evaluates a current, owner-validated policy snapshot. It
 // does not authenticate a subject, resolve ownership, or authorize attachment
 // management. Those checks surround it in the existing authority transaction.
-func EvaluatePolicies(databaseTime time.Time, versions []iamv1.PolicyVersion, action iamv1.Action, resource iamv1.ResourceReference) (PolicyEvaluation, error) {
-	if validateAuthorityTime(databaseTime) != nil {
+func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVersion, action iamv1.Action, resource iamv1.ResourceReference) (PolicyEvaluation, error) {
+	if validateAuthorityTime(context.databaseTime) != nil || iamv1.ValidateID("accountId", string(context.accountID)) != nil ||
+		iamv1.ValidateID("subject.id", string(context.subject.ID)) != nil ||
+		(context.subject.Type != iamv1.PrincipalUser && context.subject.Type != iamv1.PrincipalServiceAccount) {
 		return PolicyEvaluation{}, ErrInvalidPolicyState
 	}
 	definition, known := iamv1.LookupActionDefinition(action)
@@ -147,7 +157,7 @@ func EvaluatePolicies(databaseTime time.Time, versions []iamv1.PolicyVersion, ac
 			if !slices.Contains(statement.Actions, action) {
 				continue
 			}
-			conditionMatch, err := policyConditionsMatch(statement.Conditions, action, databaseTime)
+			conditionMatch, err := policyConditionsMatch(statement.Conditions, action, context)
 			if err != nil {
 				return PolicyEvaluation{}, err
 			}
@@ -178,11 +188,41 @@ func EvaluatePolicies(databaseTime time.Time, versions []iamv1.PolicyVersion, ac
 	return result, nil
 }
 
-func policyConditionsMatch(conditions []iamv1.PolicyCondition, action iamv1.Action, databaseTime time.Time) (bool, error) {
+func policyConditionsMatch(conditions []iamv1.PolicyCondition, action iamv1.Action, context policyEvaluationContext) (bool, error) {
 	matched := true
 	for _, condition := range conditions {
 		definition, supported := iamv1.LookupActionConditionDefinition(action, condition.Key)
-		if !supported || definition.Source != iamv1.ConditionIAMTransactionTime || definition.ValueType != iamv1.ConditionTime || len(condition.Values) != 1 {
+		if !supported || context.subject.Type != iamv1.PrincipalUser {
+			return false, ErrInvalidPolicyState
+		}
+		if definition.Source == iamv1.ConditionIAMIdentity {
+			if definition.ValueType != iamv1.ConditionString || len(condition.Values) < 1 || len(condition.Values) > iamv1.MaxStringConditionValues {
+				return false, ErrInvalidPolicyState
+			}
+			var actual string
+			switch condition.Key {
+			case iamv1.ConditionIAMAccountID:
+				actual = string(context.accountID)
+			case iamv1.ConditionIAMPrincipalID:
+				actual = string(context.subject.ID)
+			default:
+				return false, ErrInvalidPolicyState
+			}
+			if iamv1.ValidateID("condition.actual", actual) != nil {
+				return false, ErrInvalidPolicyState
+			}
+			equals := slices.Contains(condition.Values, actual)
+			switch condition.Operator {
+			case iamv1.PolicyStringEquals:
+				matched = matched && equals
+			case iamv1.PolicyStringNotEquals:
+				matched = matched && !equals
+			default:
+				return false, ErrInvalidPolicyState
+			}
+			continue
+		}
+		if definition.Source != iamv1.ConditionIAMTransactionTime || definition.ValueType != iamv1.ConditionTime || len(condition.Values) != 1 {
 			return false, ErrInvalidPolicyState
 		}
 		boundary, err := iamv1.ParsePolicyTime(condition.Values[0])
@@ -191,9 +231,9 @@ func policyConditionsMatch(conditions []iamv1.PolicyCondition, action iamv1.Acti
 		}
 		switch condition.Operator {
 		case iamv1.PolicyDateGreaterThanEquals:
-			matched = matched && !databaseTime.Before(boundary)
+			matched = matched && !context.databaseTime.Before(boundary)
 		case iamv1.PolicyDateLessThan:
-			matched = matched && databaseTime.Before(boundary)
+			matched = matched && context.databaseTime.Before(boundary)
 		default:
 			return false, ErrInvalidPolicyState
 		}

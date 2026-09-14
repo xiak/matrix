@@ -1431,6 +1431,171 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 			t.Fatalf("storage admitted malformed conditions: %v", err)
 		}
 	}
+	proveIdentityStringConditions(t, ctx, handler, database, root, member, bearer)
+}
+
+func proveIdentityStringConditions(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string, member iamv1.User, bearer string) {
+	t.Helper()
+	post := func(path, credential string, body any, want int, result any) {
+		t.Helper()
+		response := performIAMRequest(handler, http.MethodPost, path, credential, mustIAMJSON(t, body))
+		if response.Code != want {
+			t.Fatalf("identity condition %s: status=%d want=%d", path, response.Code, want)
+		}
+		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+			t.Fatal("decode identity condition response")
+		}
+	}
+	var other iamv1.User
+	post("/v1/users", root, map[string]any{"loginName": "string-other", "displayName": "Other group member", "initialPassword": initialDeveloperPassword, "requestId": "string-other-create"}, http.StatusCreated, &other)
+	otherBearer := localRecoveryLogin(t, handler, other.LoginName+"@"+string(other.AccountID), initialDeveloperPassword, true)
+	otherBearer = localRecoveryChangePassword(t, handler, otherBearer, initialDeveloperPassword, changedDeveloperPassword)
+	var group iamv1.Group
+	post("/v1/groups", root, iamv1.CreateGroupRequest{Name: "Identity readers", RequestID: "identity-group-create"}, http.StatusCreated, &group)
+	var memberships [2]iamv1.GroupMembership
+	for index, user := range []iamv1.User{member, other} {
+		post("/v1/groups/"+string(group.ID)+"/memberships", root, iamv1.CreateGroupMembershipRequest{UserID: user.ID, RequestID: "identity-join-" + string(user.ID)}, http.StatusOK, &memberships[index])
+	}
+	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "identity", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "identity-application"}},
+			Conditions: []iamv1.PolicyCondition{
+				{Key: iamv1.ConditionIAMAccountID, Operator: iamv1.PolicyStringEquals, Values: []string{string(member.AccountID)}},
+				{Key: iamv1.ConditionIAMPrincipalID, Operator: iamv1.PolicyStringEquals, Values: []string{"unrelated-user", string(member.ID)}},
+				{Key: iamv1.ConditionIAMPrincipalID, Operator: iamv1.PolicyStringNotEquals, Values: []string{string(other.ID), "another-excluded-user"}},
+			}}}}
+	var policy, replay iamv1.PolicyDetail
+	creation := iamv1.CreatePolicyRequest{DisplayName: "Identity selected application", Document: document, RequestID: "identity-policy-create"}
+	post("/v1/policies", root, creation, http.StatusCreated, &policy)
+	// Reordering the candidate set is the same canonical creation intent.
+	creation.Document.Statements[0].Conditions[1].Values = []string{string(member.ID), "unrelated-user"}
+	post("/v1/policies", root, creation, http.StatusCreated, &replay)
+	if iamv1.ValidatePolicyDetail(policy) != nil || !bytes.Equal(mustIAMJSON(t, policy), mustIAMJSON(t, replay)) {
+		t.Fatal("reordered identity set changed the publication intent")
+	}
+	var attachment iamv1.PolicyAttachment
+	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}, PolicyID: policy.Policy.ID, PolicyResourceVersion: 1, RequestID: "identity-policy-attach"}, http.StatusOK, &attachment)
+	authorize := func(credential string, user iamv1.User, want bool, version iamv1.PolicyVersionID, membership iamv1.GroupMembershipID) iamv1.AuthorizationDecision {
+		t.Helper()
+		request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "identity-application"}, RequestID: "identity-read", CorrelationID: "identity-read"}
+		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, credential)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || decision.Allowed != want ||
+			want && (decision.TenantID != user.AccountID || decision.Subject == nil || decision.Subject.ID != user.ID) ||
+			!want && (decision.TenantID != "" || decision.Subject != nil) {
+			t.Fatalf("identity decision status=%d allowed=%t want=%t or public scope differs", response.Code, decision.Allowed, want)
+		}
+		var raw []byte
+		var evidence []authority.PolicyAttachmentEvidence
+		var storedPrincipal iamv1.PrincipalID
+		if err := database.QueryRow(ctx, `SELECT principal_id,policy_evidence FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, user.AccountID, decision.ID).Scan(&storedPrincipal, &raw); err != nil || storedPrincipal != user.ID || json.Unmarshal(raw, &evidence) != nil {
+			t.Fatal("read identity condition evidence")
+		}
+		if want && (len(evidence) != 1 || evidence[0].Version.VersionID != version || evidence[0].MembershipID != membership) || !want && len(evidence) != 0 {
+			t.Fatal("identity condition lost its precise inherited version")
+		}
+		return decision
+	}
+	original := authorize(bearer, member, true, policy.Version.ID, memberships[0].ID)
+	authorize(otherBearer, other, false, "", "")
+	serviceAsUser := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "identity-application"}, RequestID: "identity-service-as-user", CorrelationID: "identity-service-as-user"}
+	if response := performIAMRequestWithSubject(handler, mustIAMJSON(t, serviceAsUser), paasCredential, paasCredential); response.Code != http.StatusUnauthorized {
+		t.Fatal("service credential supplied USER identity conditions")
+	}
+	var event auditv1.Event
+	var raw []byte
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'iamDecisionId'=$2 AND event_document->>'action'='iam.authorization.decided'`, member.AccountID, original.ID).Scan(&raw); err != nil || json.Unmarshal(raw, &event) != nil {
+		t.Fatal("read identity authority fact")
+	}
+	for _, field := range []string{"accountId", "principalId", "attributes", "context"} {
+		request := map[string]any{"action": iamv1.ActionPaaSApplicationRead, "resource": map[string]any{"kind": iamv1.ResourceApplication, "id": "identity-application"}, "requestId": "identity-forged", "correlationId": "identity-forged", field: string(member.ID)}
+		if response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, otherBearer); response.Code != http.StatusBadRequest {
+			t.Fatal("caller supplied an identity condition source")
+		}
+	}
+	canonical, _, err := iamv1.CanonicalizePolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, malformed := range []string{
+		strings.Replace(canonical, "iam.account-id", "caller.account-id", 1),
+		strings.Replace(canonical, "STRING_NOT_EQUALS", "STRING_EQUALS", 1),
+		strings.Replace(canonical, "STRING_NOT_EQUALS", "DATE_LESS_THAN", 1),
+		strings.Replace(canonical, "unrelated-user", string(member.ID), 1),
+		strings.Replace(canonical, "unrelated-user", "user-*", 1),
+	} {
+		_, err := database.Exec(ctx, `SELECT iam.assert_customer_policy_document($1,'sha256:'||encode(sha256(convert_to('matrix.iam.policy.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'))`, malformed)
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != "22023" {
+			t.Fatal("storage admitted malformed identity conditions")
+		}
+	}
+	document.Statements[0].Conditions[1].Values = []string{string(other.ID)}
+	document.Statements[0].Conditions[2].Values = []string{string(member.ID)}
+	var version iamv1.PolicyVersionDetail
+	path := "/v1/policies/" + string(policy.Policy.ID)
+	post(path+"/versions", root, iamv1.CreatePolicyVersionRequest{Document: document, ResourceVersion: 1, RequestID: "identity-new-version"}, http.StatusCreated, &version)
+	authorize(bearer, member, true, policy.Version.ID, memberships[0].ID)
+	authorize(otherBearer, other, false, "", "")
+	post(path+":set-default-version", root, iamv1.SetDefaultPolicyVersionRequest{VersionID: version.Version.ID, ResourceVersion: 2, RequestID: "identity-select-version"}, http.StatusOK, nil)
+	authorize(bearer, member, false, "", "")
+	authorize(otherBearer, other, true, version.Version.ID, memberships[1].ID)
+	post("/v1/groups/"+string(group.ID)+"/memberships/"+string(memberships[1].ID)+":remove", root,
+		iamv1.RemoveGroupMembershipRequest{ResourceVersion: memberships[1].ResourceVersion, RequestID: "identity-remove-member"}, http.StatusOK, nil)
+	authorize(otherBearer, other, false, "", "")
+	post("/v1/groups/"+string(group.ID)+"/memberships", root, iamv1.CreateGroupMembershipRequest{UserID: other.ID, RequestID: "identity-rejoin-member"}, http.StatusOK, &memberships[1])
+	authorize(otherBearer, other, true, version.Version.ID, memberships[1].ID)
+	post("/v1/policy-attachments/"+string(attachment.ID)+":revoke", root, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: "identity-revoke"}, http.StatusOK, nil)
+	authorize(otherBearer, other, false, "", "")
+	post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
+	// A separate account may use the same user/group/policy names and resource
+	// ID. Its current subject, not the producer's home or a supplied selector,
+	// provides the identity values.
+	var foreignAccount iamv1.Account
+	post("/v1/accounts", root, map[string]any{"id": "organization-identity-conditions-b", "displayName": "Identity condition account B",
+		"rootLoginName": "identity.conditions.root", "rootDisplayName": "Identity root B", "initialPassword": initialDeveloperPassword, "requestId": "identity-account-b"}, http.StatusCreated, &foreignAccount)
+	foreignRoot := localRecoveryLogin(t, handler, foreignAccount.RootIdentity.LoginName, initialDeveloperPassword, true)
+	foreignRoot = localRecoveryChangePassword(t, handler, foreignRoot, initialDeveloperPassword, changedDeveloperPassword)
+	var foreignMember iamv1.User
+	post("/v1/users", foreignRoot, map[string]any{"loginName": member.LoginName, "displayName": "Same named member B", "initialPassword": initialDeveloperPassword, "requestId": "identity-member-b"}, http.StatusCreated, &foreignMember)
+	foreignBearer := localRecoveryLogin(t, handler, foreignMember.LoginName+"@"+string(foreignMember.AccountID), initialDeveloperPassword, true)
+	foreignBearer = localRecoveryChangePassword(t, handler, foreignBearer, initialDeveloperPassword, changedDeveloperPassword)
+	var foreignGroup iamv1.Group
+	var foreignMembership iamv1.GroupMembership
+	post("/v1/groups", foreignRoot, iamv1.CreateGroupRequest{Name: group.Name, RequestID: "identity-group-b"}, http.StatusCreated, &foreignGroup)
+	post("/v1/groups/"+string(foreignGroup.ID)+"/memberships", foreignRoot, iamv1.CreateGroupMembershipRequest{UserID: foreignMember.ID, RequestID: "identity-join-b"}, http.StatusOK, &foreignMembership)
+	var foreignPolicy iamv1.PolicyDetail
+	post("/v1/policies", foreignRoot, iamv1.CreatePolicyRequest{DisplayName: creation.DisplayName, Document: document, RequestID: "identity-policy-b"}, http.StatusCreated, &foreignPolicy)
+	post("/v1/policy-attachments", foreignRoot, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(foreignGroup.ID)}, PolicyID: foreignPolicy.Policy.ID, PolicyResourceVersion: 1, RequestID: "identity-attach-b"}, http.StatusOK, nil)
+	authorize(foreignBearer, foreignMember, false, "", "")
+	forgedRequest := httptest.NewRequest(http.MethodPost, "/v1/authorize", bytes.NewReader(mustIAMJSON(t, iamv1.AuthorizationRequest{
+		Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "identity-application"}, RequestID: "identity-header-forged", CorrelationID: "identity-header-forged"})))
+	forgedRequest.Header.Set("Content-Type", "application/json")
+	forgedRequest.Header.Set("Authorization", "Bearer "+paasCredential)
+	forgedRequest.Header.Set("Matrix-Subject-Credential", foreignBearer)
+	forgedRequest.Header.Set("X-Tenant-ID", string(member.AccountID))
+	forgedRequest.Header.Set("X-Principal-ID", string(other.ID))
+	forgedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(forgedResponse, forgedRequest)
+	var forgedDecision iamv1.AuthorizationDecision
+	if forgedResponse.Code != http.StatusOK || json.Unmarshal(forgedResponse.Body.Bytes(), &forgedDecision) != nil || forgedDecision.Allowed || forgedDecision.TenantID != "" || forgedDecision.Subject != nil {
+		t.Fatal("caller header replaced authoritative identity")
+	}
+	var retainedIdentity bool
+	if err := database.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND id=$3)`, foreignMember.AccountID, foreignMember.ID, forgedDecision.ID).Scan(&retainedIdentity); err != nil || !retainedIdentity {
+		t.Fatal("forged header changed private decision ownership")
+	}
+	document.Statements[0].Conditions[0].Values = []string{string(foreignMember.AccountID)}
+	document.Statements[0].Conditions[1].Values = []string{string(foreignMember.ID)}
+	var foreignVersion iamv1.PolicyVersionDetail
+	foreignPath := "/v1/policies/" + string(foreignPolicy.Policy.ID)
+	post(foreignPath+"/versions", foreignRoot, iamv1.CreatePolicyVersionRequest{Document: document, ResourceVersion: 1, RequestID: "identity-version-b"}, http.StatusCreated, &foreignVersion)
+	post(foreignPath+":set-default-version", foreignRoot, iamv1.SetDefaultPolicyVersionRequest{VersionID: foreignVersion.Version.ID, ResourceVersion: 2, RequestID: "identity-default-b"}, http.StatusOK, nil)
+	authorize(foreignBearer, foreignMember, true, foreignVersion.Version.ID, foreignMembership.ID)
+	authorize(bearer, member, false, "", "")
+	if response := performIAMRequest(handler, http.MethodGet, path, foreignRoot, nil); response.Code != http.StatusForbidden {
+		t.Fatal("foreign root read another account's conditional policy")
+	}
 }
 
 func proveCustomerPolicyMetadata(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {

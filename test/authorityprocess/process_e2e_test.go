@@ -777,7 +777,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 15, Audit: 11, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 16, Audit: 11, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -1052,6 +1052,8 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	timedRequest.DisplayName, timedRequest.RequestID = "Time bound process application", "request-process-time-policy"
 	timedRequest.Document.Statements = append([]iamv1.PolicyStatement(nil), customRequest.Document.Statements...)
 	timedRequest.Document.Statements[0].Conditions = []iamv1.PolicyCondition{
+		{Key: iamv1.ConditionIAMAccountID, Operator: iamv1.PolicyStringEquals, Values: []string{string(developer.AccountID)}},
+		{Key: iamv1.ConditionIAMPrincipalID, Operator: iamv1.PolicyStringEquals, Values: []string{"another-principal", string(developer.ID)}},
 		{Key: iamv1.ConditionIAMCurrentTime, Operator: iamv1.PolicyDateGreaterThanEquals, Values: []string{policyClock.Add(-time.Minute).Format(time.RFC3339Nano)}},
 		{Key: iamv1.ConditionIAMCurrentTime, Operator: iamv1.PolicyDateLessThan, Values: []string{policyExpiry.Format(time.RFC3339Nano)}},
 	}
@@ -1076,8 +1078,14 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	// Publishing a replacement is not a default change. Only the explicit
 	// switch opens a new request; historical timed decisions remain intact.
 	var untimedVersion iamv1.PolicyVersionDetail
+	untimedDocument := customRequest.Document
+	untimedDocument.Statements = append([]iamv1.PolicyStatement(nil), customRequest.Document.Statements...)
+	untimedDocument.Statements[0].Conditions = []iamv1.PolicyCondition{
+		{Key: iamv1.ConditionIAMAccountID, Operator: iamv1.PolicyStringEquals, Values: []string{string(developer.AccountID)}},
+		{Key: iamv1.ConditionIAMPrincipalID, Operator: iamv1.PolicyStringNotEquals, Values: []string{"excluded-principal-a", "excluded-principal-b"}},
+	}
 	untimedResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies/"+string(timedPolicy.Policy.ID)+"/versions", adminLogin.Credential,
-		iamv1.CreatePolicyVersionRequest{Document: customRequest.Document, ResourceVersion: 1, RequestID: "request-process-untimed-version"})
+		iamv1.CreatePolicyVersionRequest{Document: untimedDocument, ResourceVersion: 1, RequestID: "request-process-untimed-version"})
 	if untimedResponse.Status != http.StatusCreated || json.Unmarshal(untimedResponse.Body, &untimedVersion) != nil || iamv1.ValidatePolicyVersionDetail(untimedVersion) != nil {
 		t.Fatal("untimed replacement publication failed")
 	}
@@ -1088,6 +1096,22 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		t.Fatal("explicit untimed default failed")
 	}
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
+	// Excluding any one actual identity value makes NOT_EQUALS false; publishing
+	// alone does not change authority, selecting its default does, on the same bearer.
+	untimedDocument.Statements[0].Conditions[1].Values = []string{"unrelated-principal", string(developer.ID)}
+	var excludedVersion iamv1.PolicyVersionDetail
+	excludedResponse := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/policies/"+string(timedPolicy.Policy.ID)+"/versions", adminLogin.Credential,
+		iamv1.CreatePolicyVersionRequest{Document: untimedDocument, ResourceVersion: 3, RequestID: "request-process-identity-excluded"})
+	if excludedResponse.Status != http.StatusCreated || json.Unmarshal(excludedResponse.Body, &excludedVersion) != nil || iamv1.ValidatePolicyVersionDetail(excludedVersion) != nil {
+		t.Fatal("identity exclusion version failed")
+	}
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
+	excludedDefault := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies/"+string(timedPolicy.Policy.ID)+":set-default-version", adminLogin.Credential,
+		iamv1.SetDefaultPolicyVersionRequest{VersionID: excludedVersion.Version.ID, ResourceVersion: 4, RequestID: "request-process-identity-default"})
+	if excludedDefault.Status != http.StatusOK {
+		t.Fatal("identity exclusion default failed")
+	}
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
 	revokeIAMPolicyAttachment(t, replicaEndpoint, adminLogin.Credential, timedAttachment.ID, timedAttachment.ResourceVersion, "request-process-time-revoke")
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
 	waitAllIAMOutboxDelivered(t, ctx, admin)

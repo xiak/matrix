@@ -66,7 +66,8 @@ CREATE INDEX IF NOT EXISTS policy_versions_active_inventory_idx
 CREATE OR REPLACE FUNCTION iam.assert_customer_policy_document(canonical text,content_digest text)
 RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE document jsonb; statement jsonb; selected_action jsonb; selector jsonb; seen_sids text[]:='{}'; expected_kind text;
-    condition jsonb; seen_operators text[]; boundary timestamptz; starts_at timestamptz; ends_at timestamptz;
+    condition jsonb; condition_value jsonb; condition_identity text; seen_conditions text[];
+    boundary timestamptz; starts_at timestamptz; ends_at timestamptz;
 BEGIN
     IF canonical IS NULL OR octet_length(canonical) NOT BETWEEN 1 AND 65536
        OR NOT (canonical IS JSON OBJECT WITH UNIQUE KEYS)
@@ -103,15 +104,35 @@ BEGIN
             IF jsonb_array_length(statement->'conditions') NOT BETWEEN 1 AND 16 THEN
                 RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy condition limit exceeded';
             END IF;
-            seen_operators:='{}'; starts_at:=NULL; ends_at:=NULL;
+            seen_conditions:='{}'; starts_at:=NULL; ends_at:=NULL;
             FOR condition IN SELECT value FROM jsonb_array_elements(statement->'conditions') LOOP
                 IF jsonb_typeof(condition) IS DISTINCT FROM 'object' OR NOT(condition ?& ARRAY['key','operator','values'])
                    OR condition-ARRAY['key','operator','values']<>'{}'::jsonb
-                   OR condition->>'key' IS DISTINCT FROM 'iam.current-time'
-                   OR COALESCE(condition->>'operator','') NOT IN ('DATE_GREATER_THAN_EQUALS','DATE_LESS_THAN')
-                   OR condition->>'operator'=ANY(seen_operators)
+                   OR COALESCE(condition->>'key','') NOT IN ('iam.current-time','iam.account-id','iam.principal-id')
                    OR jsonb_typeof(condition->'values') IS DISTINCT FROM 'array' THEN
                     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy condition is invalid';
+                END IF;
+                condition_identity:=(condition->>'key')||'/'||(condition->>'operator');
+                IF condition_identity IS NULL OR condition_identity=ANY(seen_conditions) THEN
+                    RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy condition is invalid';
+                END IF;
+                seen_conditions:=array_append(seen_conditions,condition_identity);
+                IF condition->>'key' IN ('iam.account-id','iam.principal-id') THEN
+                    IF COALESCE(condition->>'operator','') NOT IN ('STRING_EQUALS','STRING_NOT_EQUALS')
+                       OR jsonb_array_length(condition->'values') NOT BETWEEN 1 AND 16
+                       OR (SELECT count(DISTINCT value) FROM jsonb_array_elements(condition->'values'))<>jsonb_array_length(condition->'values') THEN
+                        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy identity condition is invalid';
+                    END IF;
+                    FOR condition_value IN SELECT value FROM jsonb_array_elements(condition->'values') LOOP
+                        IF jsonb_typeof(condition_value) IS DISTINCT FROM 'string'
+                           OR (condition_value#>>'{}') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+                            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy identity value is invalid';
+                        END IF;
+                    END LOOP;
+                    CONTINUE;
+                END IF;
+                IF COALESCE(condition->>'operator','') NOT IN ('DATE_GREATER_THAN_EQUALS','DATE_LESS_THAN') THEN
+                    RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy condition operator is invalid';
                 END IF;
                 IF jsonb_array_length(condition->'values')<>1 OR jsonb_typeof(condition#>'{values,0}') IS DISTINCT FROM 'string'
                    OR COALESCE(condition#>>'{values,0}','') COLLATE "C" !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{0,5}[1-9])?Z$' THEN
@@ -126,7 +147,6 @@ BEGIN
                    OR to_char(boundary AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS')<>substring(condition#>>'{values,0}' FROM 1 FOR 19) THEN
                     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy condition time is invalid';
                 END IF;
-                seen_operators:=array_append(seen_operators,condition->>'operator');
                 IF condition->>'operator'='DATE_GREATER_THAN_EQUALS' THEN starts_at:=boundary; ELSE ends_at:=boundary; END IF;
                 IF starts_at IS NOT NULL AND ends_at IS NOT NULL AND starts_at>=ends_at THEN
                     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy time window is invalid';

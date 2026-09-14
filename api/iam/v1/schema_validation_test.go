@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -61,6 +62,57 @@ func TestPolicyConditionSchemaRejectsUntrustedShape(t *testing.T) {
 		document.Statements[0].Resources = []PolicyResourceSelector{{Kind: definition.ResourceKind, Match: PolicyResourceAnyInAuthority}}
 		if ValidatePolicyDocument(document) == nil {
 			t.Fatal("undeclared platform/probe time condition accepted")
+		}
+	}
+}
+
+func TestIdentityConditionSchemaUsesKeySpecificOperatorsAndBoundedIDs(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "CreatePolicyRequest")
+	for _, key := range []ConditionKey{ConditionIAMAccountID, ConditionIAMPrincipalID} {
+		for _, operator := range []PolicyConditionOperator{PolicyStringEquals, PolicyStringNotEquals} {
+			value := CreatePolicyRequest{DisplayName: "Identity read", RequestID: "identity-create", Document: policyDocumentFixture()}
+			value.Document.Statements[0].Conditions = []PolicyCondition{{Key: key, Operator: operator, Values: []string{"identity-b", "identity-a"}}}
+			check := func(want bool) {
+				t.Helper()
+				encoded, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if (schema.Validate(instance) == nil) != want || (ValidateCreatePolicyRequest(value) == nil) != want {
+					t.Fatal("identity schema/validator acceptance differs")
+				}
+			}
+			check(true)
+			duplicate := value.Document.Statements[0].Conditions[0]
+			duplicate.Values = []string{"identity-c"}
+			value.Document.Statements[0].Conditions = append(value.Document.Statements[0].Conditions, duplicate)
+			check(false)
+			otherKey := ConditionIAMAccountID
+			if key == otherKey {
+				otherKey = ConditionIAMPrincipalID
+			}
+			value.Document.Statements[0].Conditions[1].Key = otherKey
+			check(true)
+			value.Document.Statements[0].Conditions = value.Document.Statements[0].Conditions[:1]
+			condition := &value.Document.Statements[0].Conditions[0]
+			condition.Operator = PolicyDateLessThan
+			check(false)
+			condition.Operator = operator
+			for _, values := range [][]string{nil, {}, {""}, {"identity-*"}, {"identity-a", "identity-a"}, {"2026-09-15T00:00:00Z"}} {
+				// A time-looking value still follows the ID grammar, not its label;
+				// ':' is a valid opaque ID character.
+				condition.Values = values
+				check(len(values) == 1 && values[0] == "2026-09-15T00:00:00Z")
+			}
+			condition.Values = make([]string, MaxStringConditionValues+1)
+			for index := range condition.Values {
+				condition.Values[index] = fmt.Sprintf("id-%d", index)
+			}
+			check(false)
 		}
 	}
 }

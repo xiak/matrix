@@ -255,8 +255,8 @@ func enumSchemas() map[string][]string {
 		"PolicyManagement":           {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
 		"PolicyStatus":               {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
 		"PolicyEffect":               {string(iamv1.PolicyAllow), string(iamv1.PolicyDeny)},
-		"ConditionKey":               {string(iamv1.ConditionIAMCurrentTime)},
-		"PolicyConditionOperator":    {string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan)},
+		"ConditionKey":               {string(iamv1.ConditionIAMCurrentTime), string(iamv1.ConditionIAMAccountID), string(iamv1.ConditionIAMPrincipalID)},
+		"PolicyConditionOperator":    {string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan), string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals)},
 		"PolicyResourceMatch":        {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority)},
 		"Action":                     openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
@@ -631,10 +631,37 @@ func applyPolicyLanguageOverlays(schemas object) {
 	statementProperties["conditions"].(object)["minItems"] = 1
 	statementProperties["conditions"].(object)["maxItems"] = iamv1.MaxStatementConditions
 	statementProperties["conditions"].(object)["uniqueItems"] = true
-	schemas["PolicyCondition"].(object)["properties"].(object)["values"] = object{
-		"type": "array", "minItems": 1, "maxItems": 1,
-		"items": object{"type": "string", "format": "date-time", "maxLength": 27,
-			"pattern": `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{0,5}[1-9])?Z$`},
+	var uniqueConditions []any
+	for _, key := range []iamv1.ConditionKey{iamv1.ConditionIAMCurrentTime, iamv1.ConditionIAMAccountID, iamv1.ConditionIAMPrincipalID} {
+		operators := []iamv1.PolicyConditionOperator{iamv1.PolicyStringEquals, iamv1.PolicyStringNotEquals}
+		if key == iamv1.ConditionIAMCurrentTime {
+			operators = []iamv1.PolicyConditionOperator{iamv1.PolicyDateGreaterThanEquals, iamv1.PolicyDateLessThan}
+		}
+		for _, operator := range operators {
+			uniqueConditions = append(uniqueConditions, object{
+				"contains":    object{"required": []string{"key", "operator"}, "properties": object{"key": object{"const": string(key)}, "operator": object{"const": string(operator)}}},
+				"minContains": 0, "maxContains": 1,
+			})
+		}
+	}
+	statementProperties["conditions"].(object)["allOf"] = uniqueConditions
+	condition := schemas["PolicyCondition"].(object)
+	condition["properties"].(object)["values"] = object{
+		"type": "array", "minItems": 1, "maxItems": iamv1.MaxStringConditionValues, "uniqueItems": true,
+		"items": object{"type": "string", "maxLength": 128},
+	}
+	condition["oneOf"] = []any{
+		object{"properties": object{
+			"key":      object{"const": string(iamv1.ConditionIAMCurrentTime)},
+			"operator": object{"enum": []string{string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan)}},
+			"values": object{"maxItems": 1, "items": object{"type": "string", "format": "date-time", "maxLength": 27,
+				"pattern": `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{0,5}[1-9])?Z$`}},
+		}},
+		object{"properties": object{
+			"key":      object{"enum": []string{string(iamv1.ConditionIAMAccountID), string(iamv1.ConditionIAMPrincipalID)}},
+			"operator": object{"enum": []string{string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals)}},
+			"values":   object{"items": openapi31.Ref("ID")},
+		}},
 	}
 	for field, maximum := range map[string]int{"actions": iamv1.MaxStatementActions, "resources": iamv1.MaxStatementResources} {
 		items := statementProperties[field].(object)

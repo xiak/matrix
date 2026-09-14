@@ -42,6 +42,44 @@ func TestDirectoryCursorCannotBypassExpiredPolicyConditions(t *testing.T) {
 	}
 }
 
+func TestDirectoryCursorRechecksIdentityConditionsAfterDefaultChange(t *testing.T) {
+	now := authorityTestTime()
+	codec, err := NewCursorCodec(bytes.Repeat([]byte{0x37}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := authoritySubject(now, iamv1.SystemPolicyAccountAdministrator)
+	row := &subject.Policies[0]
+	row.Policy.ID, row.Version.PolicyID, row.Attachment.PolicyID = "identity-directory-policy", "identity-directory-policy", "identity-directory-policy"
+	row.Policy.Management, row.Policy.AccountID = iamv1.PolicyCustomerManaged, subject.Organization.ID
+	row.Version.Document.Statements[0].Conditions = []iamv1.PolicyCondition{{Key: iamv1.ConditionIAMPrincipalID, Operator: iamv1.PolicyStringEquals, Values: []string{string(subject.Principal.ID)}}}
+	_, row.Version.ContentDigest, err = iamv1.CanonicalizePolicyDocument(row.Version.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query := DirectoryQuery{InstallationID: subject.InstallationID, Action: iamv1.ActionIAMGroupList, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Organization.ID)}}
+	cursor, err := codec.Encode(subject, query, "group-last", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after, err := codec.Decode(cursor, subject, query, now); err != nil || after != "group-last" {
+		t.Fatal("matching identity cursor rejected")
+	}
+	row.Version.ID, row.Policy.DefaultVersionID = "version-identity-excluded", "version-identity-excluded"
+	row.Policy.ResourceVersion++
+	row.Version.Document.Statements[0].Conditions[0].Operator = iamv1.PolicyStringNotEquals
+	_, row.Version.ContentDigest, err = iamv1.CanonicalizePolicyDocument(row.Version.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codec.Encode(subject, query, "group-last", now); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("excluded identity issued a cursor")
+	}
+	if _, err := codec.Decode(cursor, subject, query, now); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("old cursor bypassed current identity conditions")
+	}
+}
+
 func TestDirectoryCursorBindsCurrentAuthorityAndQuery(t *testing.T) {
 	now := authorityTestTime()
 	key := bytes.Repeat([]byte{0x35}, 32)
