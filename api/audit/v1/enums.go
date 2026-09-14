@@ -35,6 +35,11 @@ const (
 	ActionIAMUserStatusSet                   Action = "iam.user.status-set"
 	ActionIAMUserPasswordReset               Action = "iam.user.password-reset"
 	ActionIAMUserPasswordChanged             Action = "iam.user.password-changed"
+	ActionIAMGroupCreated                    Action = "iam.group.created"
+	ActionIAMGroupUpdated                    Action = "iam.group.updated"
+	ActionIAMGroupDeleted                    Action = "iam.group.deleted"
+	ActionIAMGroupMembershipCreated          Action = "iam.group-membership.created"
+	ActionIAMGroupMembershipRemoved          Action = "iam.group-membership.removed"
 
 	// Published historical facts remain decodable and hash-stable. New writes
 	// use the Account/User facts above so their target contracts cannot drift.
@@ -83,6 +88,8 @@ const (
 const (
 	TargetAccount               TargetKind = "ACCOUNT"
 	TargetUser                  TargetKind = "USER"
+	TargetGroup                 TargetKind = "GROUP"
+	TargetGroupMembership       TargetKind = "GROUP_MEMBERSHIP"
 	TargetOrganization          TargetKind = "ORGANIZATION"
 	TargetInstallation          TargetKind = "INSTALLATION"
 	TargetPrincipal             TargetKind = "PRINCIPAL"
@@ -167,6 +174,11 @@ var allActions = []Action{
 	ActionIAMUserStatusSet,
 	ActionIAMUserPasswordReset,
 	ActionIAMUserPasswordChanged,
+	ActionIAMGroupCreated,
+	ActionIAMGroupUpdated,
+	ActionIAMGroupDeleted,
+	ActionIAMGroupMembershipCreated,
+	ActionIAMGroupMembershipRemoved,
 	ActionIAMOrganizationCreated,
 	ActionIAMTenantCreated,
 	ActionIAMTenantDisabled,
@@ -240,6 +252,21 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionIAMUserPasswordChanged: {
 		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true,
+	},
+	ActionIAMGroupCreated: {
+		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMGroupUpdated: {
+		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMGroupDeleted: {
+		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMGroupMembershipCreated: {
+		Source: SourceIAM, Target: TargetGroupMembership, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMGroupMembershipRemoved: {
+		Source: SourceIAM, Target: TargetGroupMembership, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
 	ActionIAMTenantCreated: {
 		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,

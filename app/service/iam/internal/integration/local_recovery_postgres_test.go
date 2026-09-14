@@ -706,7 +706,7 @@ func readLocalRecoveryState(t *testing.T, ctx context.Context, database *pgx.Con
         (SELECT jsonb_agg(jsonb_build_array(principal_id,purpose,lookup_digest,verification_digest,revoked_at) ORDER BY principal_id)::text FROM iam.service_credentials sc WHERE sc.tenant_id=p.tenant_id),
         (SELECT count(*) FROM iam.sessions s WHERE s.tenant_id=p.tenant_id AND s.principal_id=p.id AND s.status='ACTIVE'),
         (SELECT COALESCE(jsonb_agg(jsonb_build_array(id,status,resource_version,credential_version,revoked_at) ORDER BY id),'[]'::jsonb)::text FROM iam.sessions s WHERE s.tenant_id=p.tenant_id AND s.principal_id=p.id),
-        (SELECT COALESCE(jsonb_agg(jsonb_build_array(id,policy_id,authority_scope,installation_id,resource_version,revoked_at) ORDER BY id),'[]'::jsonb)::text FROM iam.policy_attachments b WHERE b.tenant_id=p.tenant_id AND b.principal_id=p.id),
+        (SELECT COALESCE(jsonb_agg(jsonb_build_array(id,policy_id,authority_scope,installation_id,resource_version,revoked_at) ORDER BY id),'[]'::jsonb)::text FROM iam.policy_attachments b WHERE b.tenant_id=p.tenant_id AND b.target_id=p.id),
         (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action'=$3),
         (SELECT count(*) FROM iam.local_credential_recoveries)
         FROM iam.principals p JOIN iam.user_credentials c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id

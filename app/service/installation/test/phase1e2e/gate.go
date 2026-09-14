@@ -653,7 +653,7 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 		if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", tenant.RetainedPrimaryCredential, &retainedIdentity); err != nil ||
 			iamv1.ValidateCurrentIdentity(retainedIdentity) != nil || retainedIdentity.User.ID != account.RootIdentity.PrincipalID ||
 			retainedIdentity.User.AccountID != id || retainedIdentity.User.MustChangePassword ||
-			!slices.ContainsFunc(retainedIdentity.PolicyAttachments, accountAdministratorPolicy) || slices.ContainsFunc(retainedIdentity.PolicyAttachments, installationPolicy) {
+			!slices.ContainsFunc(retainedIdentity.PolicySources, accountAdministratorPolicySource) || slices.ContainsFunc(retainedIdentity.PolicySources, installationPolicySource) {
 			return fail("tenant-valid-password-session-not-retained")
 		}
 		primary, err := value.edge.loginNamed(ctx, account.RootIdentity.LoginName, tenant.PrimaryPassword, id, account.RootIdentity.PrincipalID, "phase1-retained-primary")
@@ -665,8 +665,8 @@ func (value *gate) assertTenantRetention(ctx context.Context) error {
 		value.edge.addForbidden(bearer)
 		var identity iamv1.CurrentIdentity
 		if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", bearer, &identity); err != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
-			identity.User.ID != account.RootIdentity.PrincipalID || !slices.ContainsFunc(identity.PolicyAttachments, accountAdministratorPolicy) ||
-			slices.ContainsFunc(identity.PolicyAttachments, installationPolicy) || hasAvailableIAMCapability(identity, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts") {
+			identity.User.ID != account.RootIdentity.PrincipalID || !slices.ContainsFunc(identity.PolicySources, accountAdministratorPolicySource) ||
+			slices.ContainsFunc(identity.PolicySources, installationPolicySource) || hasAvailableIAMCapability(identity, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts") {
 			return fail("tenant-primary-became-platform-operator")
 		}
 		if err := value.assertTenantResources(ctx, tenant, bearer, false); err != nil {
@@ -872,7 +872,7 @@ func (value *gate) restorePausedTenant(ctx context.Context) error {
 	var identity iamv1.CurrentIdentity
 	if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", bearer, &identity); err != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
 		identity.User.ID != account.RootIdentity.PrincipalID || identity.User.MustChangePassword ||
-		!slices.ContainsFunc(identity.PolicyAttachments, accountAdministratorPolicy) || slices.ContainsFunc(identity.PolicyAttachments, installationPolicy) || hasAvailableIAMCapability(identity, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts") {
+		!slices.ContainsFunc(identity.PolicySources, accountAdministratorPolicySource) || slices.ContainsFunc(identity.PolicySources, installationPolicySource) || hasAvailableIAMCapability(identity, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts") {
 		return fail("recovered-primary-scope")
 	}
 	var principals iamv1.UserList
@@ -1672,6 +1672,10 @@ func accountAdministratorPolicy(attachment iamv1.PolicyAttachment) bool {
 	return attachment.PolicyID == iamv1.SystemPolicyAccountAdministrator && attachment.RevokedAt == nil && attachment.Scope == iamv1.AuthorityScopeTenant
 }
 
+func accountAdministratorPolicySource(source iamv1.PolicyGrantSource) bool {
+	return source.Kind == iamv1.PolicyGrantDirect && accountAdministratorPolicy(source.Attachment)
+}
+
 func hasAvailableIAMCapability(identity iamv1.CurrentIdentity, action iamv1.Action, kind iamv1.ResourceKind, id string) bool {
 	return slices.ContainsFunc(identity.Capabilities, func(capability iamv1.ActionCapability) bool {
 		return capability.Action == action && capability.Resource.Kind == kind && capability.Resource.ID == id && capability.Available
@@ -1680,4 +1684,8 @@ func hasAvailableIAMCapability(identity iamv1.CurrentIdentity, action iamv1.Acti
 
 func installationPolicy(attachment iamv1.PolicyAttachment) bool {
 	return attachment.Scope == iamv1.AuthorityScopeInstallation && attachment.RevokedAt == nil
+}
+
+func installationPolicySource(source iamv1.PolicyGrantSource) bool {
+	return source.Kind == iamv1.PolicyGrantDirect && installationPolicy(source.Attachment)
 }

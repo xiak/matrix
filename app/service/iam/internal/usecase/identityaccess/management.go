@@ -302,11 +302,17 @@ func (service *Authority) CreatePolicyAttachment(ctx context.Context, credential
 			return ErrForbidden
 		}
 		action, fact := iamv1.ActionIAMPolicyAttachmentCreate, auditv1.ActionIAMPolicyAttachmentCreated
-		if policy.Scope == iamv1.AuthorityScopeInstallation {
+		resourceKind := iamv1.ResourceUser
+		if request.Target.Kind == iamv1.PolicyTargetGroup {
+			if policy.Scope != iamv1.AuthorityScopeTenant {
+				return ErrForbidden
+			}
+			action, resourceKind = iamv1.ActionIAMGroupPolicyAttachmentCreate, iamv1.ResourceGroup
+		} else if policy.Scope == iamv1.AuthorityScopeInstallation {
 			action, fact = iamv1.ActionIAMPlatformPolicyAttachmentCreate, auditv1.ActionIAMPlatformPolicyAttachmentCreated
 		}
 		decision, err := service.managementDecision(ctx, tx, subject, action,
-			iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: request.Target.ID}, request.RequestID, now)
+			iamv1.ResourceReference{Kind: resourceKind, ID: request.Target.ID}, request.RequestID, now)
 		if err != nil {
 			return err
 		}
@@ -384,11 +390,17 @@ func (service *Authority) RevokePolicyAttachment(ctx context.Context, credential
 		if iamv1.ValidatePolicyAttachment(attachment) != nil {
 			return ErrUnavailable
 		}
-		if attachment.AccountID != subject.Subject.Organization.ID || attachment.Target.Kind != iamv1.PolicyTargetUser {
+		if attachment.AccountID != subject.Subject.Organization.ID ||
+			(attachment.Target.Kind != iamv1.PolicyTargetUser && attachment.Target.Kind != iamv1.PolicyTargetGroup) {
 			return ErrForbidden
 		}
 		action, fact := iamv1.ActionIAMPolicyAttachmentRevoke, auditv1.ActionIAMPolicyAttachmentRevoked
-		if attachment.Scope == iamv1.AuthorityScopeInstallation {
+		if attachment.Target.Kind == iamv1.PolicyTargetGroup {
+			if attachment.Scope != iamv1.AuthorityScopeTenant {
+				return ErrForbidden
+			}
+			action = iamv1.ActionIAMGroupPolicyAttachmentRevoke
+		} else if attachment.Scope == iamv1.AuthorityScopeInstallation {
 			action, fact = iamv1.ActionIAMPlatformPolicyAttachmentRevoke, auditv1.ActionIAMPlatformPolicyAttachmentRevoked
 			if attachment.InstallationID != subject.Subject.InstallationID {
 				return ErrForbidden

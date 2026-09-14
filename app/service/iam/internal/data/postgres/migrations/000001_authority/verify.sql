@@ -136,7 +136,7 @@ BEGIN
             'matrix_iam_api', 'iam.create_user(text,text,text,text,text,text,text,jsonb)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.create_policy_attachment(text,text,text,text,bigint,text,text,jsonb)', 'EXECUTE'
+            'matrix_iam_api', 'iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb)', 'EXECUTE'
        )
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_policy(text,text)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_iam_api', 'iam.list_policies(text,text,text,text)', 'EXECUTE')

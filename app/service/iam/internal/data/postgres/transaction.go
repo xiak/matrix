@@ -427,6 +427,16 @@ func decodeAttachedPolicies(encoded []byte) ([]authority.AttachedPolicy, error) 
 			revoked := row.Attachment.RevokedAt.UTC()
 			row.Attachment.RevokedAt = &revoked
 		}
+		if row.Membership != nil {
+			row.Membership.CreatedAt, row.Membership.UpdatedAt = row.Membership.CreatedAt.UTC(), row.Membership.UpdatedAt.UTC()
+			if row.Membership.RemovedAt != nil {
+				removed := row.Membership.RemovedAt.UTC()
+				row.Membership.RemovedAt = &removed
+			}
+			if iamv1.ValidateGroupMembership(*row.Membership) != nil {
+				return nil, identityaccess.ErrUnavailable
+			}
+		}
 		if iamv1.ValidatePolicy(row.Policy) != nil || iamv1.ValidatePolicyAttachment(row.Attachment) != nil || iamv1.ValidatePolicyVersion(row.Version) != nil {
 			return nil, identityaccess.ErrUnavailable
 		}
@@ -696,8 +706,8 @@ func (value *transaction) CreatePolicyAttachment(ctx context.Context, mutation i
 		return iamv1.PolicyAttachment{}, identityaccess.ErrUnavailable
 	}
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.create_policy_attachment($1,$2,$3,$4,$5,$6,$7,$8::jsonb)",
-		string(attachment.AccountID), string(attachment.ID), attachment.Target.ID, string(attachment.PolicyID), mutation.PolicyResourceVersion,
+	err = value.tx.QueryRow(ctx, "SELECT iam.create_policy_attachment($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
+		string(attachment.AccountID), string(attachment.ID), string(attachment.Target.Kind), attachment.Target.ID, string(attachment.PolicyID), mutation.PolicyResourceVersion,
 		string(mutation.ActorPrincipalID), string(mutation.DecisionID), event).Scan(&encoded)
 	if err != nil {
 		return iamv1.PolicyAttachment{}, mapAuthorizationDatabaseError("create IAM policy attachment", err)

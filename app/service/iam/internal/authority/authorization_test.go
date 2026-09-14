@@ -350,8 +350,48 @@ func TestAttachedPolicyEvaluationRequiresCurrentOwnedRelationships(t *testing.T)
 	resource := iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-a"}
 	result, evidence, err := EvaluateAttachedPolicies("account-a", "installation-a", subject, []AttachedPolicy{row}, iamv1.ActionPaaSApplicationRead, resource)
 	if err != nil || !result.Allowed || len(evidence) != 1 || evidence[0].AttachmentID != row.Attachment.ID ||
-		evidence[0].ResourceVersion != 7 || evidence[0].Version.ContentDigest != version.ContentDigest {
+		evidence[0].ResourceVersion != 7 || evidence[0].MembershipID != "" || evidence[0].MembershipResourceVersion != 0 ||
+		evidence[0].Version.ContentDigest != version.ContentDigest {
 		t.Fatal("valid attachment lost its authority evidence")
+	}
+	membership := iamv1.GroupMembership{APIVersion: iamv1.APIVersion, Kind: "GroupMembership", ID: "membership-a",
+		AccountID: "account-a", GroupID: "group-a", UserID: subject.ID, CreatedBy: "user-admin",
+		ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+	groupRow := row
+	groupRow.Attachment.ID = "attachment-group"
+	groupRow.Attachment.Target = iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(membership.GroupID)}
+	groupRow.Membership = &membership
+	result, evidence, err = EvaluateAttachedPolicies("account-a", "installation-a", subject, []AttachedPolicy{groupRow}, iamv1.ActionPaaSApplicationRead, resource)
+	if err != nil || !result.Allowed || len(evidence) != 1 || evidence[0].AttachmentID != groupRow.Attachment.ID ||
+		evidence[0].MembershipID != membership.ID || evidence[0].MembershipResourceVersion != membership.ResourceVersion {
+		t.Fatal("valid group inheritance lost its membership evidence")
+	}
+	for name, mutate := range map[string]func(*AttachedPolicy){
+		"foreign membership account": func(v *AttachedPolicy) { v.Membership.AccountID = "account-b" },
+		"foreign membership user":    func(v *AttachedPolicy) { v.Membership.UserID = "user-b" },
+		"foreign membership group":   func(v *AttachedPolicy) { v.Membership.GroupID = "group-b" },
+		"removed membership": func(v *AttachedPolicy) {
+			v.Membership.RemovedAt, v.Membership.RemovedBy = &now, "user-admin"
+			v.Membership.ResourceVersion, v.Membership.UpdatedAt = 2, now
+		},
+		"group platform scope": func(v *AttachedPolicy) {
+			v.Attachment.Scope, v.Attachment.InstallationID = iamv1.AuthorityScopeInstallation, "installation-a"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := groupRow
+			membershipCopy := *groupRow.Membership
+			changed.Membership = &membershipCopy
+			mutate(&changed)
+			result, evidence, err := EvaluateAttachedPolicies("account-a", "installation-a", subject, []AttachedPolicy{changed}, iamv1.ActionPaaSApplicationRead, resource)
+			if !errors.Is(err, ErrInvalidPolicyState) || result.Allowed || len(evidence) != 0 {
+				t.Fatal("invalid group relationship produced a partial decision")
+			}
+		})
+	}
+	serviceSubject := iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: subject.ID}
+	if result, evidence, err := EvaluateAttachedPolicies("account-a", "installation-a", serviceSubject, []AttachedPolicy{groupRow}, iamv1.ActionPaaSApplicationRead, resource); !errors.Is(err, ErrInvalidPolicyState) || result.Allowed || len(evidence) != 0 {
+		t.Fatal("service identity inherited a user group policy")
 	}
 	for name, mutate := range map[string]func(*AttachedPolicy){
 		"foreign attachment account": func(v *AttachedPolicy) { v.Attachment.AccountID = "account-b" },

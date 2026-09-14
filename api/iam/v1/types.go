@@ -8,6 +8,8 @@ import (
 
 type AccountID string
 type PrincipalID string
+type GroupID string
+type GroupMembershipID string
 type RoleBindingID string
 type SessionID string
 type DecisionID string
@@ -207,6 +209,37 @@ type User struct {
 	UpdatedAt          time.Time       `json:"updatedAt"`
 }
 
+// Group is an account-local collection of users. It never authenticates,
+// owns resources, or becomes an authorization subject by itself.
+type Group struct {
+	APIVersion      string    `json:"apiVersion"`
+	Kind            string    `json:"kind"`
+	ID              GroupID   `json:"id"`
+	AccountID       AccountID `json:"accountId"`
+	Name            string    `json:"name"`
+	Description     string    `json:"description,omitempty"`
+	ResourceVersion uint64    `json:"resourceVersion"`
+	CreatedAt       time.Time `json:"createdAt"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+}
+
+// GroupMembership is one versioned, account-confined USER-to-Group relation.
+// Removal is terminal; re-adding the user creates a new relation identity.
+type GroupMembership struct {
+	APIVersion      string            `json:"apiVersion"`
+	Kind            string            `json:"kind"`
+	ID              GroupMembershipID `json:"id"`
+	AccountID       AccountID         `json:"accountId"`
+	GroupID         GroupID           `json:"groupId"`
+	UserID          PrincipalID       `json:"userId"`
+	CreatedBy       PrincipalID       `json:"createdBy"`
+	RemovedBy       PrincipalID       `json:"removedBy,omitempty"`
+	ResourceVersion uint64            `json:"resourceVersion"`
+	CreatedAt       time.Time         `json:"createdAt"`
+	UpdatedAt       time.Time         `json:"updatedAt"`
+	RemovedAt       *time.Time        `json:"removedAt,omitempty"`
+}
+
 // ActionCapability is an actor-relative, non-authoritative UI projection for
 // one exact action/resource pair. A command must always authenticate,
 // authorize and recheck target invariants again in its own transaction.
@@ -218,13 +251,13 @@ type ActionCapability struct {
 }
 
 type CurrentIdentity struct {
-	APIVersion        string             `json:"apiVersion"`
-	Kind              string             `json:"kind"`
-	Account           Account            `json:"account"`
-	User              User               `json:"user"`
-	IdentityKind      IdentityKind       `json:"identityKind"`
-	PolicyAttachments []PolicyAttachment `json:"policyAttachments"`
-	Capabilities      []ActionCapability `json:"capabilities"`
+	APIVersion    string              `json:"apiVersion"`
+	Kind          string              `json:"kind"`
+	Account       Account             `json:"account"`
+	User          User                `json:"user"`
+	IdentityKind  IdentityKind        `json:"identityKind"`
+	PolicySources []PolicyGrantSource `json:"policySources"`
+	Capabilities  []ActionCapability  `json:"capabilities"`
 }
 
 type UserAccess struct {
@@ -238,6 +271,33 @@ type UserList struct {
 	Kind       string       `json:"kind"`
 	Items      []UserAccess `json:"items"`
 	NextAfter  string       `json:"nextAfter,omitempty"`
+}
+
+type GroupAccess struct {
+	Group             Group              `json:"group"`
+	PolicyAttachments []PolicyAttachment `json:"policyAttachments"`
+	Capabilities      []ActionCapability `json:"capabilities"`
+}
+
+type GroupList struct {
+	APIVersion string        `json:"apiVersion"`
+	Kind       string        `json:"kind"`
+	Items      []GroupAccess `json:"items"`
+	NextAfter  string        `json:"nextAfter,omitempty"`
+}
+
+type GroupMembershipAccess struct {
+	Membership   GroupMembership    `json:"membership"`
+	Capabilities []ActionCapability `json:"capabilities"`
+}
+
+type GroupMembershipList struct {
+	APIVersion string                  `json:"apiVersion"`
+	Kind       string                  `json:"kind"`
+	AccountID  AccountID               `json:"accountId"`
+	GroupID    GroupID                 `json:"groupId"`
+	Items      []GroupMembershipAccess `json:"items"`
+	NextAfter  string                  `json:"nextAfter,omitempty"`
 }
 
 type AccountAccess struct {
@@ -280,6 +340,46 @@ type UpdateUserRequest struct {
 }
 
 type DeleteUserRequest struct {
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+type CreateGroupRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	RequestID   string `json:"requestId"`
+}
+
+type UpdateGroupRequest struct {
+	Name            string `json:"name"`
+	Description     string `json:"description,omitempty"`
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+type DeleteGroupRequest struct {
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+type GroupDeletion struct {
+	APIVersion               string    `json:"apiVersion"`
+	Kind                     string    `json:"kind"`
+	AccountID                AccountID `json:"accountId"`
+	ID                       GroupID   `json:"id"`
+	Name                     string    `json:"name"`
+	ResourceVersion          uint64    `json:"resourceVersion"`
+	RemovedMemberships       uint32    `json:"removedMemberships"`
+	RevokedPolicyAttachments uint32    `json:"revokedPolicyAttachments"`
+	DeletedAt                time.Time `json:"deletedAt"`
+}
+
+type CreateGroupMembershipRequest struct {
+	UserID    PrincipalID `json:"userId"`
+	RequestID string      `json:"requestId"`
+}
+
+type RemoveGroupMembershipRequest struct {
 	ResourceVersion uint64 `json:"resourceVersion"`
 	RequestID       string `json:"requestId"`
 }

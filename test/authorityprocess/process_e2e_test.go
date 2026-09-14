@@ -85,6 +85,168 @@ func TestIAMRetainedSessionProcessUpgrade(t *testing.T) {
 	testIAMRetainedProcessUpgrade(t, "MATRIX_IAM_SESSION_UPGRADE_POSTGRES_TEST_DSN", "a36cf9817f522549b995ea9c1f0d873499b4fe62", true)
 }
 
+func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
+	const variable = "MATRIX_IAM_POLICY_UPGRADE_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(variable)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_upgrade_") {
+		t.Fatal("policy upgrade requires its own matrix_iam_upgrade_ database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	admin, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect retained policy database")
+	}
+	defer admin.Close(context.Background())
+	assertPostgres18(t, ctx, admin)
+	assertCleanSchemas(t, ctx, admin)
+	root, temporary := repositoryRoot(t), t.TempDir()
+	baseline := extractFixedIAMSource(t, ctx, root, temporary, "384d6d76b65498ed6b428ba9a2905ef67831b919")
+	oldMigrator := buildAuthorityBinary(t, ctx, baseline, temporary, "matrix-iam-schema8-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "matrix-iam-schema8", "./app/service/iam/cmd/matrix-iam")
+	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-iam-groups", "./app/service/iam/cmd/matrix-iam")
+	apiDSN := runtimeDSN(t, config, "matrix_iam_api_login", processDBPassword)
+	workerDSN := runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword)
+	recoveryDSN := runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword)
+	migrationEnvironment := []string{}
+	for _, value := range []struct{ name, dsn string }{
+		{"MATRIX_MIGRATION_DATABASE_DSN_FILE", dsn},
+		{"MATRIX_MIGRATION_IAM_API_DSN_FILE", localRecoveryMigrationDSN(t, apiDSN)},
+		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", localRecoveryMigrationDSN(t, workerDSN)},
+		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, recoveryDSN)},
+	} {
+		migrationEnvironment = append(migrationEnvironment, value.name+"="+writeProtectedFile(t, temporary, value.name, []byte(value.dsn)))
+	}
+	var children []*childProcess
+	defer func() {
+		for _, child := range children {
+			child.stop()
+		}
+		assertProcessOutputsSanitized(t, children, initialAdminPassword, changedAdminPassword, initialReaderPassword, changedReaderPassword, processDBPassword)
+	}()
+	for _, action := range []string{"apply", "verify"} {
+		child := startChild(t, baseline, oldMigrator, migrationEnvironment, action)
+		children = append(children, child)
+		if err := child.wait(30 * time.Second); err != nil {
+			t.Fatal("actual fixed schema8 migrator failed")
+		}
+	}
+	encoded, err := iamv1.EncodeBootstrapDocument(processBootstrap(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrapPath := writeProtectedFile(t, temporary, "iam-bootstrap.json", encoded)
+	clear(encoded)
+	address := freeAddress(t)
+	endpoint := "http://" + address
+	environment := []string{
+		"MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-api-dsn", []byte(apiDSN)),
+		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
+	}
+	start := func(binary string) *childProcess {
+		child := startChild(t, root, binary, environment)
+		children = append(children, child)
+		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
+		assertRuntimeProcessLogins(t, ctx, admin, "matrix_iam_api_login")
+		return child
+	}
+	old := start(oldBinary)
+	primary := loginIAM(t, endpoint, "admin", initialAdminPassword, "policy-upgrade-primary-login")
+	changePasswordIAM(t, endpoint, primary.Credential, initialAdminPassword, changedAdminPassword, "policy-upgrade-primary-change")
+	user := createIAMUser(t, endpoint, primary.Credential, "retained.policy", "Retained policy user", initialReaderPassword, "policy-upgrade-user-create")
+	member := loginIAM(t, endpoint, "retained.policy@organization-process", initialReaderPassword, "policy-upgrade-member-login")
+	changePasswordIAM(t, endpoint, member.Credential, initialReaderPassword, changedReaderPassword, "policy-upgrade-member-change")
+	active := createIAMPolicyAttachment(t, endpoint, primary.Credential, user.ID, iamv1.SystemPolicyPaaSViewer, "policy-upgrade-active-attachment")
+	revoked := createIAMPolicyAttachment(t, endpoint, primary.Credential, user.ID, iamv1.SystemPolicyPaaSDeveloper, "policy-upgrade-revoked-attachment")
+	revokeIAMPolicyAttachment(t, endpoint, primary.Credential, revoked.ID, revoked.ResourceVersion, "policy-upgrade-attachment-revoke")
+	revokeIAMPolicyAttachment(t, endpoint, primary.Credential, "bootstrap-platform-operator-binding", 1, "policy-upgrade-platform-revoke")
+	retired := loginIAM(t, endpoint, "retained.policy@organization-process", changedReaderPassword, "policy-upgrade-retired-login")
+	revokeIAMSession(t, endpoint, primary.Credential, retired.Session.ID, "policy-upgrade-session-revoke")
+	old.stop()
+	// Compare durable authority values, not SQL text or a generated schema
+	// inventory. Only the target-column name changes; seed replay may append a
+	// new immutable policy version but must preserve the old default pointer.
+	snapshot := func(targetColumn string) []byte {
+		t.Helper()
+		var state []byte
+		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
+			'attachments',(SELECT jsonb_agg((to_jsonb(a)-'principal_id'-'target_id') ||
+				jsonb_build_object('target_id',to_jsonb(a)->$1::text) ORDER BY tenant_id,id) FROM iam.policy_attachments a),
+			'policies',(SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM iam.policies p),
+			'receipt',(SELECT jsonb_agg(to_jsonb(r)) FROM iam.bootstrap_receipts r),
+			'principals',(SELECT jsonb_agg(to_jsonb(p) ORDER BY tenant_id,id) FROM iam.principals p),
+			'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.user_credentials c),
+			'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY tenant_id,id) FROM iam.sessions s),
+			'decisions',(SELECT jsonb_agg(to_jsonb(d) ORDER BY tenant_id,id) FROM iam.authorization_decisions d),
+			'outbox',(SELECT jsonb_agg(to_jsonb(e) ORDER BY tenant_id,event_id) FROM iam.audit_outbox e))`, targetColumn).Scan(&state); err != nil {
+			t.Fatal("read retained policy authority")
+		}
+		return state
+	}
+	before := snapshot("principal_id")
+	var historicalEvidence bool
+	if err := admin.QueryRow(ctx, "SELECT count(*)>0 AND bool_and(policy_evidence IS NOT NULL) FROM iam.authorization_decisions").Scan(&historicalEvidence); err != nil || !historicalEvidence {
+		t.Fatal("old executable did not create real version-bound decisions")
+	}
+	if _, err := admin.Exec(ctx, `CREATE FUNCTION public.matrix_group_upgrade_fault() RETURNS event_trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF EXISTS(SELECT 1 FROM pg_event_trigger_ddl_commands() WHERE object_identity='iam.group_memberships')
+		THEN RAISE EXCEPTION 'injected late group migration failure'; END IF; END $body$;
+		CREATE EVENT TRIGGER matrix_group_upgrade_fault ON ddl_command_end EXECUTE FUNCTION public.matrix_group_upgrade_fault()`); err != nil {
+		t.Fatal("install isolated late group migration fault")
+	}
+	if err := iammigration.Up(ctx, admin); err == nil {
+		t.Fatal("injected group migration unexpectedly succeeded")
+	}
+	if _, err := admin.Exec(ctx, "ROLLBACK; DROP EVENT TRIGGER matrix_group_upgrade_fault; DROP FUNCTION public.matrix_group_upgrade_fault()"); err != nil {
+		t.Fatal("finish isolated migration failure")
+	}
+	var unchangedShape bool
+	if err := admin.QueryRow(ctx, "SELECT schema_version=8 AND to_regclass('iam.groups') IS NULL AND to_regclass('iam.group_memberships') IS NULL FROM iam.readiness()").Scan(&unchangedShape); err != nil || !unchangedShape || !bytes.Equal(before, snapshot("principal_id")) {
+		t.Fatal("failed group migration partially renamed authority or changed retained data")
+	}
+	unmigrated := startChild(t, root, currentBinary, environment)
+	children = append(children, unmigrated)
+	if err := unmigrated.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
+		t.Fatal("current IAM accepted an unmigrated policy database")
+	}
+	for range 2 {
+		if err := iammigration.Up(ctx, admin); err != nil {
+			t.Fatalf("upgrade actual schema8 policy data: %v", err)
+		}
+		if err := iammigration.Verify(ctx, admin); err != nil || !bytes.Equal(before, snapshot("target_id")) {
+			t.Fatal("group migration changed direct attachment, default policy, session, decision or outbox history")
+		}
+	}
+	obsolete := startChild(t, root, oldBinary, environment)
+	children = append(children, obsolete)
+	if err := obsolete.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
+		t.Fatal("old principal-only executable accepted group authority")
+	}
+	for range 2 {
+		current := start(currentBinary)
+		identityResponse := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", member.Credential, nil)
+		var identity iamv1.CurrentIdentity
+		if identityResponse.Status != http.StatusOK || json.Unmarshal(identityResponse.Body, &identity) != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
+			len(identity.PolicySources) != 1 || identity.PolicySources[0].Kind != iamv1.PolicyGrantDirect || identity.PolicySources[0].Attachment.ID != active.ID {
+			t.Fatal("retained session lost its exact direct source or revived revoked permission")
+		}
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", retired.Credential, nil); response.Status != http.StatusUnauthorized {
+			t.Fatal("upgrade or bootstrap restart revived a revoked session")
+		}
+		assertPlatformAuthorization(t, endpoint, primary.Credential, "principal-admin", "policy-upgrade-platform-denied", false)
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/groups", primary.Credential, nil); response.Status != http.StatusForbidden {
+			t.Fatal("seed replay silently expanded the existing account administrator default policy")
+		}
+		current.stop()
+	}
+	t.Log("actual IAM8 executable/migrator retained history and credential-bound sessions; late group DDL rolls back, old binary rejected, defaults never auto-expand")
+}
+
 func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, qualifiedChild bool) {
 	t.Helper()
 	dsn := os.Getenv(variable)
@@ -289,7 +451,7 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 		if err := admin.QueryRow(ctx, `SELECT principal.deleted_at IS NOT NULL,
 			(SELECT count(*) FROM iam.user_credentials AS credential WHERE credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id),
 			(SELECT count(*) FROM iam.sessions AS session WHERE session.tenant_id=principal.tenant_id AND session.principal_id=principal.id AND session.status='ACTIVE'),
-			(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.principal_id=principal.id AND attachment.revoked_at IS NULL),
+			(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.target_id=principal.id AND attachment.revoked_at IS NULL),
 			(SELECT count(*) FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=principal.tenant_id AND outbox.event_document->>'action'='iam.user.deleted' AND outbox.event_document#>>'{target,id}'=principal.id)
 			FROM iam.principals AS principal WHERE principal.tenant_id='organization-process' AND principal.id=$1`, deleteCandidateID).
 			Scan(&tombstoned, &credentials, &activeSessions, &activeAttachments, &deleteFacts); err != nil || !tombstoned || credentials != 0 || activeSessions != 0 || activeAttachments != 0 || deleteFacts != 1 {
@@ -299,7 +461,7 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 		child := loginIAM(t, endpoint, "retained.viewer@organization-process", retainedReaderPassword, "request-upgrade-retained-child")
 		childResponse := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", child.Credential, nil)
 		var childIdentity iamv1.CurrentIdentity
-		if childResponse.Status != http.StatusOK || json.Unmarshal(childResponse.Body, &childIdentity) != nil || childIdentity.User.ID != userID || len(childIdentity.PolicyAttachments) != 0 {
+		if childResponse.Status != http.StatusOK || json.Unmarshal(childResponse.Body, &childIdentity) != nil || childIdentity.User.ID != userID || len(childIdentity.PolicySources) != 0 {
 			t.Fatal("upgrade changed member identity or revived a revoked role")
 		}
 		if attempt == 0 {
@@ -611,7 +773,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 8, Audit: 5, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 9, Audit: 6, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -698,7 +860,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	assertRuntimeProcessLogins(t, ctx, admin, replicaLogin)
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, replicaEndpoint, adminLogin.Credential, "principal-admin", "request-replica-existing-session", true))
-	sensitive = append(sensitive, proveTenantAccountProcesses(t, ctx, admin, iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential,
+	sensitive = append(sensitive, proveTenantAccountProcesses(t, ctx, admin, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential,
 		func(admit func()) {
 			auditProcess.stop()
 			admit()
@@ -1784,6 +1946,7 @@ func proveTenantAccountProcesses(
 	ctx context.Context,
 	admin *pgx.Conn,
 	endpoint string,
+	replicaEndpoint string,
 	auditEndpoint string,
 	paasEndpoint string,
 	bearer string,
@@ -1836,7 +1999,7 @@ func proveTenantAccountProcesses(
 	}
 	var unauthorizedBindings int
 	if err := admin.QueryRow(ctx,
-		"SELECT count(*) FROM iam.policy_attachments WHERE principal_id=$1 AND policy_id='system.audit-reader'",
+		"SELECT count(*) FROM iam.policy_attachments WHERE target_id=$1 AND policy_id='system.audit-reader'",
 		child.ID).Scan(&unauthorizedBindings); err != nil || unauthorizedBindings != 0 {
 		t.Fatalf("cross-tenant IAM attack created bindings=%d err=%v", unauthorizedBindings, err)
 	}
@@ -1869,6 +2032,7 @@ func proveTenantAccountProcesses(
 	}
 	retainedQuota, retainedDatabase, resourceSecrets := proveTenantResourceProcesses(t, ctx, admin, endpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, childLogin)
 	sensitive := append(resourceSecrets, initial, changed, primary.Credential, childLogin.Credential)
+	sensitive = append(sensitive, proveGroupResourceProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
 	readAccount := func(id string) iamv1.Account {
 		t.Helper()
 		response := performJSON(t, http.MethodGet, endpoint+"/v1/accounts/"+id, bearer, nil)
@@ -2012,6 +2176,166 @@ func proveTenantAccountProcesses(
 
 // These are real application resources, database-service records and reserved
 // quota. The local provisioner gate separately proves a running engine.
+func proveGroupResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, ownerBearer string,
+	withAuditOutage func(func()), restartIAM func()) []string {
+	t.Helper()
+	const tenant = "organization-process-customer"
+	createGroup := func(bearer string) iamv1.Group {
+		t.Helper()
+		response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups", bearer,
+			iamv1.CreateGroupRequest{Name: "Application operators", RequestID: "process-group-create"})
+		var group iamv1.Group
+		if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &group) != nil || iamv1.ValidateGroup(group) != nil {
+			t.Fatalf("process group create status=%d", response.Status)
+		}
+		return group
+	}
+	homeGroup, group := createGroup(homeBearer), createGroup(ownerBearer)
+	if group.AccountID != tenant || homeGroup.AccountID != "organization-process" || homeGroup.ID == group.ID || homeGroup.Name != group.Name {
+		t.Fatal("same-name groups lost their exact account identity")
+	}
+	for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/groups/"+string(group.ID), homeBearer, nil); response.Status != http.StatusForbidden {
+			t.Fatal("home owner read another account group")
+		}
+	}
+	user := createIAMUser(t, iamEndpoint, ownerBearer, "group.operator", "Group operator", initialDeveloperPassword, "process-group-user")
+	member := loginIAM(t, iamEndpoint, "group.operator@organization-process-customer", initialDeveloperPassword, "process-group-login")
+	changePasswordIAM(t, iamEndpoint, member.Credential, initialDeveloperPassword, changedDeveloperPassword, "process-group-password")
+	join := func(requestID string) iamv1.GroupMembership {
+		t.Helper()
+		response := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/groups/"+string(group.ID)+"/memberships", ownerBearer,
+			iamv1.CreateGroupMembershipRequest{UserID: user.ID, RequestID: requestID})
+		var membership iamv1.GroupMembership
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &membership) != nil || iamv1.ValidateGroupMembership(membership) != nil ||
+			membership.UserID != user.ID || membership.AccountID != tenant || membership.GroupID != group.ID {
+			t.Fatalf("process group membership status=%d", response.Status)
+		}
+		return membership
+	}
+	membership := join("process-group-join")
+	request := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: "process-group-policy"}
+	response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policy-attachments", ownerBearer, request)
+	var attachment iamv1.PolicyAttachment
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &attachment) != nil || iamv1.ValidatePolicyAttachment(attachment) != nil || attachment.Target != request.Target {
+		t.Fatalf("process group policy status=%d", response.Status)
+	}
+	request.PolicyID, request.RequestID = iamv1.SystemPolicyPlatformOperator, "process-group-platform-denied"
+	if response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policy-attachments", ownerBearer, request); response.Status != http.StatusForbidden {
+		t.Fatal("group acquired installation policy")
+	}
+	for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+		identityResponse := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", member.Credential, nil)
+		var identity iamv1.CurrentIdentity
+		if identityResponse.Status != http.StatusOK || json.Unmarshal(identityResponse.Body, &identity) != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
+			len(identity.PolicySources) != 1 || identity.PolicySources[0].Kind != iamv1.PolicyGrantGroup || identity.PolicySources[0].Membership == nil ||
+			identity.PolicySources[0].Membership.ID != membership.ID || identity.PolicySources[0].Attachment.ID != attachment.ID {
+			t.Fatal("replicas did not agree on live group/attachment provenance")
+		}
+	}
+	assertPlatformAuthorization(t, iamEndpoint, member.Credential, string(user.ID), "process-group-platform-action-denied", false)
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/groups", member.Credential, nil); response.Status != http.StatusForbidden {
+		t.Fatal("PaaS group permission implied IAM group administration")
+	}
+	var operation paasv1.Operation
+	withAuditOutage(func() {
+		operation = createPaaSApplication(t, paasEndpoint, member.Credential, "application-group-only", "group-only", "process-group-application", http.StatusCreated)
+		if operation.Scope.TenantID != tenant || operation.RequestedBy.ID != string(user.ID) {
+			t.Fatal("group permission replaced tenant resource ownership or original actor")
+		}
+		getPaaSApplication(t, paasEndpoint, member.Credential, operation.Target.ID, http.StatusOK)
+		removal := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/groups/"+string(group.ID)+"/memberships/"+string(membership.ID)+":remove", ownerBearer,
+			iamv1.RemoveGroupMembershipRequest{ResourceVersion: membership.ResourceVersion, RequestID: "process-group-remove"})
+		var removed iamv1.GroupMembership
+		if removal.Status != http.StatusOK || json.Unmarshal(removal.Body, &removed) != nil || iamv1.ValidateGroupMembership(removed) != nil || removed.RemovedAt == nil || removed.ID != membership.ID {
+			t.Fatalf("process group removal status=%d", removal.Status)
+		}
+		getPaaSApplication(t, paasEndpoint, member.Credential, operation.Target.ID, http.StatusForbidden)
+		if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/operations/"+string(operation.ID), member.Credential, nil); response.Status != http.StatusForbidden {
+			t.Fatal("removed group member retained Operation read permission")
+		}
+		createPaaSApplication(t, paasEndpoint, member.Credential, "application-group-denied", "group-denied", "process-group-application-denied", http.StatusForbidden)
+		assertPaaSApplicationAbsent(t, ctx, admin, "application-group-denied")
+	})
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	_, historical := findPaaSEvent(t, ctx, admin, auditv1.ActionPaaSApplicationCreated, string(operation.Target.ID))
+	var exactEvidence bool
+	if err := admin.QueryRow(ctx, `SELECT policy_evidence @> jsonb_build_array(jsonb_build_object(
+		'attachmentId',$2::text,'resourceVersion',1,'membershipId',$3::text,'membershipResourceVersion',1))
+		FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$4`, tenant, attachment.ID, membership.ID, historical.IAMDecisionID).Scan(&exactEvidence); err != nil || !exactEvidence {
+		t.Fatal("PaaS group decision did not bind the exact historical membership and attachment")
+	}
+	replay := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", paasServiceCredential, historical)
+	var ingestion auditv1.IngestionResult
+	if replay.Status != http.StatusOK || json.Unmarshal(replay.Body, &ingestion) != nil || ingestion.Outcome != auditv1.IngestionDuplicate {
+		t.Fatal("committed group-authorized PaaS history could not deliver/replay after membership removal")
+	}
+	assertPaaSAuditFact(t, ctx, admin, auditv1.ActionPaaSApplicationCreated, string(operation.Target.ID), string(user.ID))
+	forged := historical
+	forged.EventID, forged.TenantID = "event-group-forged-tenant", "organization-process"
+	if response := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", paasServiceCredential, forged); response.Status != http.StatusForbidden {
+		t.Fatal("historical group decision authorized a forged tenant fact")
+	}
+	getPaaSApplication(t, paasEndpoint, ownerBearer, operation.Target.ID, http.StatusOK)
+	getPaaSApplication(t, paasEndpoint, homeBearer, operation.Target.ID, http.StatusNotFound)
+	direct := createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, user.ID, iamv1.SystemPolicyPaaSViewer, "process-group-direct-viewer")
+	getPaaSApplication(t, paasEndpoint, member.Credential, operation.Target.ID, http.StatusOK)
+	rejoined := join("process-group-rejoin")
+	if rejoined.ID == membership.ID {
+		t.Fatal("rejoin revived the removed relationship")
+	}
+	deletionResponse := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/groups/"+string(group.ID)+":delete", ownerBearer,
+		iamv1.DeleteGroupRequest{ResourceVersion: group.ResourceVersion, RequestID: "process-group-delete"})
+	var deletion iamv1.GroupDeletion
+	if deletionResponse.Status != http.StatusOK || json.Unmarshal(deletionResponse.Body, &deletion) != nil || iamv1.ValidateGroupDeletion(deletion) != nil ||
+		deletion.RemovedMemberships != 1 || deletion.RevokedPolicyAttachments != 1 {
+		t.Fatalf("process group deletion status=%d", deletionResponse.Status)
+	}
+	getPaaSApplication(t, paasEndpoint, member.Credential, operation.Target.ID, http.StatusOK)
+	revokeIAMPolicyAttachment(t, iamEndpoint, ownerBearer, direct.ID, direct.ResourceVersion, "process-group-direct-revoke")
+	restartIAM()
+	getPaaSApplication(t, paasEndpoint, member.Credential, operation.Target.ID, http.StatusForbidden)
+	getPaaSApplication(t, paasEndpoint, ownerBearer, operation.Target.ID, http.StatusOK)
+	retained := performJSON(t, http.MethodGet, paasEndpoint+"/v1/operations/"+string(operation.ID), ownerBearer, nil)
+	var retainedOperation paasv1.Operation
+	if retained.Status != http.StatusOK || json.Unmarshal(retained.Body, &retainedOperation) != nil || retainedOperation.Scope != operation.Scope || retainedOperation.RequestedBy != operation.RequestedBy {
+		t.Fatal("group deletion or restart changed accepted resource/Operation ownership")
+	}
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/groups/"+string(homeGroup.ID), homeBearer, nil); response.Status != http.StatusOK {
+		t.Fatal("deleting customer group affected home group")
+	}
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	for _, item := range []struct {
+		action auditv1.Action
+		count  int
+	}{
+		{auditv1.ActionIAMGroupCreated, 1}, {auditv1.ActionIAMGroupMembershipCreated, 2},
+		{auditv1.ActionIAMGroupMembershipRemoved, 1}, {auditv1.ActionIAMGroupDeleted, 1},
+	} {
+		page := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: item.action}, http.StatusOK)
+		if page.TenantID != tenant || len(page.Records) != item.count {
+			t.Fatalf("group fact action=%s tenant=%s count=%d", item.action, page.TenantID, len(page.Records))
+		}
+		for _, record := range page.Records {
+			if record.Source != auditv1.SourceIAM || record.Event.IAMDecisionID == "" || record.Event.TenantID != tenant {
+				t.Fatal("group fact lost its source, decision or account")
+			}
+		}
+	}
+	page := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{PageSize: 1, Action: auditv1.ActionIAMGroupMembershipCreated}, http.StatusOK)
+	if page.NextCursor == "" {
+		t.Fatal("group facts did not exercise a continuation")
+	}
+	queryAudit(t, auditEndpoint, homeBearer, auditv1.QueryRecordsRequest{PageSize: 1, Action: auditv1.ActionIAMGroupMembershipCreated, Cursor: page.NextCursor}, http.StatusUnprocessableEntity)
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.TenantID != tenant || chain.State != auditv1.VerificationVerified || !chain.Complete {
+		t.Fatal("group lifecycle changed tenant chain integrity")
+	}
+	return []string{member.Credential}
+}
+
 func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, auditEndpoint, paasEndpoint, homeBearer, customerBearer string, customer loginResult) (managedservicev1.QuotaEntitlement, managedservicev1.ServiceInstallation, []string) {
 	t.Helper()
 	base := paasEndpoint + "/managed-services/v1"

@@ -190,10 +190,22 @@ ALTER TABLE iam.policies ADD CONSTRAINT policies_default_version_fk
     FOREIGN KEY (id,default_version_id) REFERENCES iam.policy_versions(policy_id,id)
     DEFERRABLE INITIALLY DEFERRED;
 
+DO $policy_attachment_target_upgrade$
+BEGIN
+    IF to_regclass('iam.policy_attachments') IS NOT NULL THEN
+        IF EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='iam' AND table_name='policy_attachments' AND column_name='principal_id')
+           AND EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='iam' AND table_name='policy_attachments' AND column_name='target_id') THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='IAM attachment target columns conflict';
+        ELSIF EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='iam' AND table_name='policy_attachments' AND column_name='principal_id') THEN
+            ALTER TABLE iam.policy_attachments RENAME COLUMN principal_id TO target_id;
+        END IF;
+    END IF;
+END $policy_attachment_target_upgrade$;
+
 CREATE TABLE IF NOT EXISTS iam.policy_attachments (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
-    principal_id text COLLATE "C" NOT NULL,
+    target_id text COLLATE "C" NOT NULL,
     target_kind text COLLATE "C" NOT NULL,
     policy_id text COLLATE "C" NOT NULL,
     authority_scope text COLLATE "C" NOT NULL,
@@ -203,20 +215,21 @@ CREATE TABLE IF NOT EXISTS iam.policy_attachments (
     updated_at timestamptz(6) NOT NULL,
     revoked_at timestamptz(6),
     PRIMARY KEY (tenant_id, id),
-    CONSTRAINT policy_attachments_principal_fk FOREIGN KEY (tenant_id, principal_id)
-        REFERENCES iam.principals (tenant_id, id),
     FOREIGN KEY (policy_id,authority_scope) REFERENCES iam.policies(id,authority_scope)
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS policy_attachments_active_uq ON iam.policy_attachments
-    (tenant_id,principal_id,policy_id) WHERE revoked_at IS NULL;
+ALTER TABLE iam.policy_attachments DROP CONSTRAINT IF EXISTS policy_attachments_principal_fk;
+ALTER TABLE iam.policy_attachments DROP CONSTRAINT IF EXISTS policy_attachments_target_fk;
+DROP INDEX IF EXISTS iam.policy_attachments_active_uq;
+CREATE UNIQUE INDEX policy_attachments_active_uq ON iam.policy_attachments
+    (tenant_id,target_kind,target_id,policy_id) WHERE revoked_at IS NULL;
 
 ALTER TABLE iam.policy_attachments DROP CONSTRAINT IF EXISTS policy_attachments_values_valid;
 ALTER TABLE iam.policy_attachments ADD CONSTRAINT policy_attachments_values_valid CHECK (
         id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND policy_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND target_kind IN ('USER','SERVICE_ACCOUNT')
+        AND target_kind IN ('USER','SERVICE_ACCOUNT','GROUP')
         AND ((authority_scope='TENANT' AND installation_id IS NULL)
           OR (authority_scope='INSTALLATION' AND target_kind='USER'
               AND installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' AND installation_id IS NOT NULL)
@@ -250,8 +263,8 @@ RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function
 DECLARE subject_kind text; policy_scope text; policy_owner text; sealed_installation text;
 BEGIN
     IF TG_OP='UPDATE' THEN
-        IF ROW(NEW.tenant_id,NEW.id,NEW.principal_id,NEW.target_kind,NEW.policy_id,NEW.authority_scope,NEW.installation_id,NEW.created_at)
-            IS DISTINCT FROM ROW(OLD.tenant_id,OLD.id,OLD.principal_id,OLD.target_kind,OLD.policy_id,OLD.authority_scope,OLD.installation_id,OLD.created_at)
+        IF ROW(NEW.tenant_id,NEW.id,NEW.target_id,NEW.target_kind,NEW.policy_id,NEW.authority_scope,NEW.installation_id,NEW.created_at)
+            IS DISTINCT FROM ROW(OLD.tenant_id,OLD.id,OLD.target_id,OLD.target_kind,OLD.policy_id,OLD.authority_scope,OLD.installation_id,OLD.created_at)
             OR OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL
             OR NEW.resource_version <> OLD.resource_version+1 OR NEW.updated_at <> transaction_timestamp()
             OR NEW.revoked_at <> NEW.updated_at THEN
@@ -260,8 +273,18 @@ BEGIN
         RETURN NEW;
     END IF;
     PERFORM set_config('matrix.iam_tenant_id',NEW.tenant_id,true);
-    SELECT principal.principal_type INTO subject_kind FROM iam.principals AS principal
-        WHERE principal.tenant_id=NEW.tenant_id AND principal.id=NEW.principal_id;
+    IF NEW.target_kind='GROUP' THEN
+        PERFORM 1 FROM iam.groups AS target_group
+         WHERE target_group.tenant_id=NEW.tenant_id AND target_group.id=NEW.target_id AND target_group.deleted_at IS NULL
+         FOR KEY SHARE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING ERRCODE='23503', MESSAGE='IAM attachment group is unavailable';
+        END IF;
+        subject_kind := 'GROUP';
+    ELSE
+        SELECT principal.principal_type INTO subject_kind FROM iam.principals AS principal
+            WHERE principal.tenant_id=NEW.tenant_id AND principal.id=NEW.target_id;
+    END IF;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING ERRCODE='23503', MESSAGE='IAM attachment subject is unavailable';
     END IF;
@@ -703,6 +726,8 @@ BEGIN
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
             'iam.account-root.credentials-recovered', 'iam.account.alias-set',
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
+            'iam.group.created','iam.group.updated','iam.group.deleted',
+            'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',
             'iam.platform-policy-attachment.created', 'iam.platform-policy-attachment.revoked',
@@ -825,7 +850,7 @@ BEGIN
         submitted_organization_id, submitted_administrator_id, effective_now
     );
     INSERT INTO iam.policy_attachments (
-        tenant_id, id, principal_id, policy_id, resource_version,
+        tenant_id, id, target_id, policy_id, resource_version,
         created_at, updated_at
     ) VALUES (
         submitted_organization_id, 'bootstrap-admin-binding',
@@ -833,7 +858,7 @@ BEGIN
         effective_now, effective_now
     );
     INSERT INTO iam.policy_attachments (
-        tenant_id, id, principal_id, policy_id, resource_version,
+        tenant_id, id, target_id, policy_id, resource_version,
         created_at, updated_at
     ) VALUES (
         submitted_organization_id, 'bootstrap-platform-operator-binding',
@@ -884,7 +909,7 @@ BEGIN
         ) VALUES (lookup_digest, submitted_organization_id, service_id);
         IF expected_purpose = 'INSTALLATION_VERIFIER' THEN
             INSERT INTO iam.policy_attachments (
-                tenant_id, id, principal_id, policy_id, resource_version,
+                tenant_id, id, target_id, policy_id, resource_version,
                 created_at, updated_at
             ) VALUES (
                 submitted_organization_id, 'bootstrap-verifier-binding',
@@ -943,6 +968,23 @@ BEGIN
                 WHERE receipt.singleton
            ) AND to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)') IS NOT NULL
            AND to_regclass('iam.role_bindings') IS NULL
+           AND (SELECT count(*) FROM pg_catalog.pg_class AS group_table
+                WHERE group_table.oid IN (to_regclass('iam.groups'),to_regclass('iam.group_memberships'))
+                  AND group_table.relrowsecurity AND group_table.relforcerowsecurity
+                  AND group_table.relowner='matrix_iam_owner'::regrole)=2
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='iam.policy_attachments'::regclass
+                AND attname='target_id' AND atttypid='text'::regtype AND attnotnull AND NOT attisdropped)
+           AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='iam.policy_attachments'::regclass
+                AND attname='principal_id' AND NOT attisdropped)
+           AND to_regprocedure('iam.create_policy_attachment(text,text,text,text,bigint,text,text,jsonb)') IS NULL
+           AND to_regprocedure('iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
+           AND to_regprocedure('iam.create_group(text,text,text,text,text,text,jsonb)') IS NOT NULL
+           AND to_regprocedure('iam.create_group_membership(text,text,text,text,text,text,jsonb)') IS NOT NULL
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS removal
+                WHERE removal.oid=to_regprocedure('iam.remove_group_membership(text,text,text,text,text,bigint,jsonb)')
+                  AND removal.prosecdef AND removal.proowner='matrix_iam_owner'::regrole AND removal.proretset
+                  AND removal.proargnames[8:9]=ARRAY['membership','applied']
+                  AND removal.proallargtypes[8:9]=ARRAY['jsonb'::regtype::oid,'boolean'::regtype::oid])
            AND to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb)') IS NULL
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS directory
                 WHERE directory.oid=to_regprocedure('iam.list_policies(text,text,text,text)')
@@ -1031,7 +1073,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           8::bigint,
+           9::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1050,6 +1092,16 @@ AS $function$
         WHEN 'iam.account.recover-root-credentials' THEN 'ACCOUNT'
         WHEN 'iam.account.alias-set' THEN 'ACCOUNT'
         WHEN 'iam.user.list' THEN 'ACCOUNT'
+        WHEN 'iam.group.list' THEN 'ACCOUNT'
+        WHEN 'iam.group.create' THEN 'ACCOUNT'
+        WHEN 'iam.group.read' THEN 'GROUP'
+        WHEN 'iam.group.update' THEN 'GROUP'
+        WHEN 'iam.group.delete' THEN 'GROUP'
+        WHEN 'iam.group-membership.list' THEN 'GROUP'
+        WHEN 'iam.group-membership.create' THEN 'GROUP'
+        WHEN 'iam.group-membership.remove' THEN 'GROUP_MEMBERSHIP'
+        WHEN 'iam.group-policy-attachment.create' THEN 'GROUP'
+        WHEN 'iam.group-policy-attachment.revoke' THEN 'POLICY_ATTACHMENT'
         WHEN 'iam.user.set-status' THEN 'USER'
         WHEN 'iam.user.reset-password' THEN 'USER'
         WHEN 'iam.user.create' THEN 'ACCOUNT'
@@ -1221,23 +1273,39 @@ END
 $function$;
 
 CREATE OR REPLACE FUNCTION iam.current_policy_snapshot(tenant text, principal text)
-RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
-    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    RETURN (SELECT COALESCE(jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
         'policy',jsonb_strip_nulls(jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','Policy',
             'id',p.id,'management',p.management,'accountId',p.owner_tenant_id,'displayName',p.display_name,
             'scope',p.authority_scope,'status',p.status,'defaultVersionId',p.default_version_id,
             'resourceVersion',p.resource_version,'createdAt',p.created_at,'updatedAt',p.updated_at)),
         'version',jsonb_build_object('policyId',v.policy_id,'versionId',v.id,'document',v.document,'contentDigest',v.content_digest),
         'attachment',jsonb_strip_nulls(jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','PolicyAttachment',
-            'id',a.id,'accountId',a.tenant_id,'target',jsonb_build_object('kind',a.target_kind,'id',a.principal_id),
+            'id',a.id,'accountId',a.tenant_id,'target',jsonb_build_object('kind',a.target_kind,'id',a.target_id),
             'policyId',a.policy_id,'scope',a.authority_scope,'installationId',a.installation_id,
-            'resourceVersion',a.resource_version,'createdAt',a.created_at,'updatedAt',a.updated_at))) ORDER BY a.id), '[]'::jsonb)
-    FROM (SELECT attachment.* FROM iam.policy_attachments AS attachment
+            'resourceVersion',a.resource_version,'createdAt',a.created_at,'updatedAt',a.updated_at)),
+        'membership',a.membership)) ORDER BY a.id), '[]'::jsonb)
+    FROM (SELECT sources.* FROM (
+        SELECT attachment.*,NULL::jsonb AS membership FROM iam.policy_attachments AS attachment
+        JOIN iam.principals AS subject ON subject.tenant_id=attachment.tenant_id
+            AND subject.id=attachment.target_id AND subject.principal_type=attachment.target_kind
         JOIN iam.policies AS available ON available.id=attachment.policy_id AND available.status='ACTIVE'
-        WHERE attachment.tenant_id=tenant AND attachment.principal_id=principal AND attachment.revoked_at IS NULL
-        ORDER BY attachment.id LIMIT 257) AS a
+        WHERE attachment.tenant_id=tenant AND subject.id=principal AND attachment.revoked_at IS NULL
+        UNION ALL
+        SELECT attachment.*,iam.group_membership_snapshot(tenant,member.id) AS membership
+        FROM iam.group_memberships AS member
+        JOIN iam.principals AS subject ON subject.tenant_id=member.tenant_id AND subject.id=member.user_id
+            AND subject.principal_type='USER' AND subject.status='ACTIVE' AND subject.deleted_at IS NULL
+        JOIN iam.groups AS g ON g.tenant_id=member.tenant_id AND g.id=member.group_id AND g.deleted_at IS NULL
+        JOIN iam.policy_attachments AS attachment ON attachment.tenant_id=member.tenant_id
+            AND attachment.target_kind='GROUP' AND attachment.target_id=g.id AND attachment.revoked_at IS NULL
+        JOIN iam.policies AS available ON available.id=attachment.policy_id AND available.status='ACTIVE'
+        WHERE member.tenant_id=tenant AND member.user_id=principal AND member.removed_at IS NULL
+    ) AS sources ORDER BY sources.id LIMIT 257) AS a
     JOIN iam.policies AS p ON p.id=a.policy_id
-    JOIN iam.policy_versions AS v ON v.policy_id=p.id AND v.id=p.default_version_id
+    JOIN iam.policy_versions AS v ON v.policy_id=p.id AND v.id=p.default_version_id);
+END
 $function$;
 
 DROP FUNCTION IF EXISTS iam.lookup_session(text);
@@ -1487,21 +1555,35 @@ BEGIN
     FOR evidence IN SELECT value FROM jsonb_array_elements(submitted_policy_evidence) LOOP
         IF jsonb_typeof(evidence) IS DISTINCT FROM 'object'
             OR NOT evidence ?& ARRAY['attachmentId','resourceVersion','version']
-            OR (evidence-ARRAY['attachmentId','resourceVersion','version']) <> '{}'::jsonb
+            OR (evidence-ARRAY['attachmentId','resourceVersion','version','membershipId','membershipResourceVersion']) <> '{}'::jsonb
             OR COALESCE(evidence->>'attachmentId','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
             OR evidence->>'attachmentId' COLLATE "C" <= previous_attachment
             OR jsonb_typeof(evidence->'resourceVersion') IS DISTINCT FROM 'number'
             OR COALESCE(evidence->>'resourceVersion','') !~ '^[1-9][0-9]{0,15}$'
             OR jsonb_typeof(evidence->'version') IS DISTINCT FROM 'object'
             OR NOT (evidence->'version') ?& ARRAY['policyId','versionId','contentDigest']
-            OR ((evidence->'version')-ARRAY['policyId','versionId','contentDigest']) <> '{}'::jsonb THEN
+            OR ((evidence->'version')-ARRAY['policyId','versionId','contentDigest']) <> '{}'::jsonb
+            OR (evidence ? 'membershipId')<>(evidence ? 'membershipResourceVersion')
+            OR (evidence ? 'membershipId' AND (
+                jsonb_typeof(evidence->'membershipId') IS DISTINCT FROM 'string'
+                OR COALESCE(evidence->>'membershipId','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+                OR jsonb_typeof(evidence->'membershipResourceVersion') IS DISTINCT FROM 'number'
+                OR COALESCE(evidence->>'membershipResourceVersion','') !~ '^[1-9][0-9]{0,15}$')) THEN
             RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization policy evidence shape is invalid';
         END IF;
         IF NOT EXISTS(SELECT 1 FROM iam.policy_attachments AS attachment
             JOIN iam.policies AS policy ON policy.id=attachment.policy_id
             JOIN iam.policy_versions AS version ON version.policy_id=policy.id AND version.id=policy.default_version_id
-            WHERE attachment.tenant_id=submitted_tenant_id AND attachment.principal_id=submitted_principal_id
-              AND attachment.target_kind=actor_type AND attachment.id=evidence->>'attachmentId'
+            WHERE attachment.tenant_id=submitted_tenant_id AND attachment.id=evidence->>'attachmentId'
+              AND ((NOT evidence ? 'membershipId' AND attachment.target_id=submitted_principal_id AND attachment.target_kind=actor_type)
+                OR (actor_type='USER' AND attachment.target_kind='GROUP' AND attachment.authority_scope='TENANT'
+                    AND evidence ? 'membershipId' AND EXISTS(
+                        SELECT 1 FROM iam.group_memberships AS membership
+                        JOIN iam.groups AS g ON g.tenant_id=membership.tenant_id AND g.id=membership.group_id AND g.deleted_at IS NULL
+                        WHERE membership.tenant_id=submitted_tenant_id AND membership.id=evidence->>'membershipId'
+                          AND membership.group_id=attachment.target_id AND membership.user_id=submitted_principal_id
+                          AND membership.resource_version=(evidence->>'membershipResourceVersion')::bigint
+                          AND membership.removed_at IS NULL)))
               AND attachment.resource_version=(evidence->>'resourceVersion')::bigint
               AND attachment.revoked_at IS NULL AND policy.status='ACTIVE'
               AND (policy.owner_tenant_id IS NULL OR policy.owner_tenant_id=submitted_tenant_id)
@@ -1538,9 +1620,9 @@ BEGIN
                 OR NOT EXISTS (
                     SELECT 1 FROM iam.policy_attachments AS binding
                     JOIN iam.principals AS principal
-                      ON principal.tenant_id = binding.tenant_id AND principal.id = binding.principal_id
+                      ON principal.tenant_id = binding.tenant_id AND principal.id = binding.target_id
                      WHERE binding.tenant_id = submitted_tenant_id
-                       AND binding.principal_id = submitted_principal_id
+                       AND binding.target_id = submitted_principal_id
                        AND binding.authority_scope = 'INSTALLATION'
                        AND binding.revoked_at IS NULL
                        AND NOT principal.must_change_password
@@ -2024,7 +2106,7 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id',submitted_tenant_id,true);
     SELECT jsonb_strip_nulls(jsonb_build_object(
         'apiVersion','iam.matrix.xiak.com/v1','kind','PolicyAttachment','id',a.id,'accountId',a.tenant_id,
-        'target',jsonb_build_object('kind',a.target_kind,'id',a.principal_id),'policyId',a.policy_id,
+        'target',jsonb_build_object('kind',a.target_kind,'id',a.target_id),'policyId',a.policy_id,
         'scope',a.authority_scope,'installationId',a.installation_id,'resourceVersion',a.resource_version,
         'createdAt',a.created_at,'updatedAt',a.updated_at,'revokedAt',a.revoked_at))
       INTO result FROM iam.policy_attachments AS a
@@ -2077,8 +2159,9 @@ BEGIN
         'accountId',submitted_tenant_id,'scope',submitted_scope,'installationId',installation,'items',items));
 END $function$;
 
+DROP FUNCTION IF EXISTS iam.create_policy_attachment(text,text,text,text,bigint,text,text,jsonb);
 CREATE OR REPLACE FUNCTION iam.create_policy_attachment(
-    submitted_tenant_id text, submitted_attachment_id text, submitted_principal_id text,
+    submitted_tenant_id text, submitted_attachment_id text, submitted_target_kind text, submitted_target_id text,
     submitted_policy_id text, submitted_policy_version bigint, submitted_actor_principal_id text,
     submitted_decision_id text, submitted_audit_event jsonb
 )
@@ -2089,13 +2172,14 @@ DECLARE
     effective_now timestamptz(6) := transaction_timestamp();
     stored iam.policy_attachments%ROWTYPE;
     policy iam.policies%ROWTYPE;
-    target iam.principals%ROWTYPE;
+    target_user iam.principals%ROWTYPE;
     action_name text;
     event_action text;
 BEGIN
     IF COALESCE(submitted_tenant_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_attachment_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR COALESCE(submitted_principal_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_target_kind NOT IN ('USER','GROUP')
+       OR COALESCE(submitted_target_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_policy_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_policy_version IS NULL OR submitted_policy_version NOT BETWEEN 1 AND 9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy attachment input is invalid';
@@ -2103,27 +2187,36 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id',submitted_tenant_id,true);
     PERFORM 1 FROM iam.accounts WHERE id=submitted_tenant_id AND status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable'; END IF;
-    SELECT * INTO target FROM iam.principals
-     WHERE tenant_id=submitted_tenant_id AND id=submitted_principal_id AND principal_type='USER' AND status='ACTIVE' FOR UPDATE;
-    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment target is unavailable'; END IF;
+    IF submitted_target_kind='USER' THEN
+        SELECT * INTO target_user FROM iam.principals
+         WHERE tenant_id=submitted_tenant_id AND id=submitted_target_id AND principal_type='USER' AND status='ACTIVE'
+           AND deleted_at IS NULL FOR UPDATE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment target is unavailable'; END IF;
+    ELSE
+        PERFORM 1 FROM iam.groups
+         WHERE tenant_id=submitted_tenant_id AND id=submitted_target_id AND deleted_at IS NULL FOR UPDATE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment group is unavailable'; END IF;
+    END IF;
     SELECT * INTO policy FROM iam.policies
      WHERE id=submitted_policy_id AND status='ACTIVE'
        AND (owner_tenant_id IS NULL OR owner_tenant_id=submitted_tenant_id) FOR SHARE;
-    IF NOT FOUND OR policy.authority_scope NOT IN ('TENANT','INSTALLATION') THEN
+    IF NOT FOUND OR policy.authority_scope NOT IN ('TENANT','INSTALLATION')
+       OR (submitted_target_kind='GROUP' AND policy.authority_scope<>'TENANT') THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment policy is unavailable';
     END IF;
     IF policy.resource_version <> submitted_policy_version THEN
         RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy revision conflicts';
     END IF;
-    IF policy.authority_scope='INSTALLATION' AND (target.must_change_password OR NOT EXISTS (
+    IF policy.authority_scope='INSTALLATION' AND (target_user.must_change_password OR NOT EXISTS (
         SELECT 1 FROM iam.bootstrap_receipts WHERE organization_id=submitted_tenant_id
     )) THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='platform target is unavailable'; END IF;
-    action_name := CASE policy.authority_scope WHEN 'INSTALLATION' THEN 'iam.platform-policy-attachment.create'
+    action_name := CASE WHEN submitted_target_kind='GROUP' THEN 'iam.group-policy-attachment.create'
+                   WHEN policy.authority_scope='INSTALLATION' THEN 'iam.platform-policy-attachment.create'
                    ELSE 'iam.policy-attachment.create' END;
     event_action := CASE policy.authority_scope WHEN 'INSTALLATION' THEN 'iam.platform-policy-attachment.created'
                     ELSE 'iam.policy-attachment.created' END;
     PERFORM iam.assert_allowed_decision(submitted_tenant_id,submitted_actor_principal_id,submitted_decision_id,
-        action_name,'USER',submitted_principal_id);
+        action_name,submitted_target_kind,submitted_target_id);
     PERFORM iam.assert_audit_event(submitted_audit_event,submitted_tenant_id,event_action,'POLICY_ATTACHMENT',submitted_attachment_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_actor_principal_id,submitted_audit_event);
     IF submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM submitted_decision_id THEN
@@ -2132,7 +2225,8 @@ BEGIN
     SELECT * INTO stored FROM iam.policy_attachments
      WHERE tenant_id=submitted_tenant_id AND id=submitted_attachment_id FOR UPDATE;
     IF FOUND THEN
-        IF stored.principal_id<>submitted_principal_id OR stored.policy_id<>submitted_policy_id OR stored.revoked_at IS NOT NULL
+        IF stored.target_kind<>submitted_target_kind OR stored.target_id<>submitted_target_id
+           OR stored.policy_id<>submitted_policy_id OR stored.revoked_at IS NOT NULL
            OR NOT EXISTS (SELECT 1 FROM iam.audit_outbox WHERE tenant_id=submitted_tenant_id
                AND event_document->>'action'=event_action AND event_document#>>'{target,id}'=stored.id
                AND event_document->>'requestId'=submitted_audit_event->>'requestId'
@@ -2142,8 +2236,8 @@ BEGIN
         END IF;
         RETURN iam.lookup_policy_attachment(submitted_tenant_id,stored.id);
     END IF;
-    INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at)
-    VALUES(submitted_tenant_id,submitted_attachment_id,submitted_principal_id,submitted_policy_id,1,effective_now,effective_now);
+    INSERT INTO iam.policy_attachments(tenant_id,id,target_kind,target_id,policy_id,resource_version,created_at,updated_at)
+    VALUES(submitted_tenant_id,submitted_attachment_id,submitted_target_kind,submitted_target_id,submitted_policy_id,1,effective_now,effective_now);
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
     VALUES(submitted_tenant_id,submitted_audit_event->>'eventId',submitted_audit_event,effective_now,effective_now,effective_now);
     RETURN iam.lookup_policy_attachment(submitted_tenant_id,submitted_attachment_id);
@@ -2174,21 +2268,27 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable'; END IF;
     SELECT * INTO stored FROM iam.policy_attachments
      WHERE tenant_id=submitted_tenant_id AND id=submitted_attachment_id;
-    IF NOT FOUND OR stored.target_kind<>'USER' OR stored.authority_scope NOT IN ('TENANT','INSTALLATION') THEN
+    IF NOT FOUND OR stored.target_kind NOT IN ('USER','GROUP') OR stored.authority_scope NOT IN ('TENANT','INSTALLATION')
+       OR (stored.target_kind='GROUP' AND stored.authority_scope<>'TENANT') THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment is unavailable';
     END IF;
-    PERFORM 1 FROM iam.principals WHERE tenant_id=submitted_tenant_id AND id=stored.principal_id FOR UPDATE;
+    IF stored.target_kind='GROUP' THEN
+        PERFORM 1 FROM iam.groups WHERE tenant_id=submitted_tenant_id AND id=stored.target_id FOR UPDATE;
+    ELSE
+        PERFORM 1 FROM iam.principals WHERE tenant_id=submitted_tenant_id AND id=stored.target_id FOR UPDATE;
+    END IF;
     PERFORM 1 FROM iam.policies WHERE id=stored.policy_id FOR SHARE;
     SELECT * INTO stored FROM iam.policy_attachments
      WHERE tenant_id=submitted_tenant_id AND id=submitted_attachment_id FOR UPDATE;
-    action_name := CASE stored.authority_scope WHEN 'INSTALLATION' THEN 'iam.platform-policy-attachment.revoke'
+    action_name := CASE WHEN stored.target_kind='GROUP' THEN 'iam.group-policy-attachment.revoke'
+                   WHEN stored.authority_scope='INSTALLATION' THEN 'iam.platform-policy-attachment.revoke'
                    ELSE 'iam.policy-attachment.revoke' END;
     event_action := CASE stored.authority_scope WHEN 'INSTALLATION' THEN 'iam.platform-policy-attachment.revoked'
                     ELSE 'iam.policy-attachment.revoked' END;
     PERFORM iam.assert_allowed_decision(submitted_tenant_id,submitted_actor_principal_id,submitted_decision_id,
         action_name,'POLICY_ATTACHMENT',submitted_attachment_id);
-    IF stored.policy_id='system.account-administrator' AND EXISTS (
-        SELECT 1 FROM iam.account_roots WHERE account_id=submitted_tenant_id AND principal_id=stored.principal_id
+    IF stored.target_kind='USER' AND stored.policy_id='system.account-administrator' AND EXISTS (
+        SELECT 1 FROM iam.account_roots WHERE account_id=submitted_tenant_id AND principal_id=stored.target_id
     ) THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='primary authority is protected'; END IF;
     PERFORM iam.assert_audit_event(submitted_audit_event,submitted_tenant_id,event_action,'POLICY_ATTACHMENT',submitted_attachment_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_actor_principal_id,submitted_audit_event);
@@ -2409,7 +2509,7 @@ GRANT EXECUTE ON FUNCTION iam.create_user(
     text, text, text, text, text, text, text, jsonb
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.create_policy_attachment(
-    text, text, text, text, bigint, text, text, jsonb
+    text, text, text, text, text, bigint, text, text, jsonb
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_policy(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.list_policies(text, text, text, text) TO matrix_iam_api;

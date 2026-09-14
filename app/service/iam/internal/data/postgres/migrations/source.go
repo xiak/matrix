@@ -29,6 +29,10 @@ var (
 	policyUpSQL string
 	//go:embed 000006_policy_authority/verify.sql
 	policyVerifySQL string
+	//go:embed 000009_groups/up.sql
+	groupsUpSQL string
+	//go:embed 000009_groups/verify.sql
+	groupsVerifySQL string
 )
 
 func Source() postgresmigration.Source {
@@ -37,12 +41,12 @@ func Source() postgresmigration.Source {
 		// A corrupt code-owned policy must stop bootstrap/apply, never omit a seed.
 		return postgresmigration.Source{Context: "iam"}
 	}
-	verification := authorityVerifySQL + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL + "\n" + policyVerifySQL
+	verification := authorityVerifySQL + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL + "\n" + policyVerifySQL + "\n" + groupsVerifySQL
 	return postgresmigration.Source{
 		Context: "iam", BootstrapSQL: bootstrapSQL,
 		// IAM owns one commit boundary across schema, retained-state changes and
 		// its final invariant verification. A late failure exposes none of them.
-		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authorityUpSQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + verification + "\nCOMMIT;",
+		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authorityUpSQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + verification + "\nCOMMIT;",
 		VerifySQL:     verification,
 		ExecutionRole: "matrix_iam_migrator",
 	}

@@ -19,7 +19,7 @@ export function buildAccountAccessScene(
   const byID = new Map(policies.map((policy) => [policy.id, policy]));
   const identityCapability = (action: IamAction, id = account.id) =>
     findActionCapability(identity.capabilities, action, "ACCOUNT", id);
-  const describeAttachment = (attachment: AccountIdentity["policyAttachments"][number]) => {
+  const describeAttachment = (attachment: AccountIdentity["policySources"][number]["attachment"]) => {
     const policy = byID.get(attachment.policyId);
     return {
       ...attachment,
@@ -36,7 +36,10 @@ export function buildAccountAccessScene(
     rootLoginName: account.rootIdentity.loginName,
     identityLabel: identity.user.displayName,
     isRoot: identity.identityKind === "ROOT_IDENTITY",
-    identityAttachments: identity.policyAttachments.map(describeAttachment),
+    identityAttachments: identity.policySources.map((source) => {
+      const attachment = describeAttachment(source.attachment);
+      return { ...attachment, label: `${attachment.label}（${source.kind === "GROUP" ? `用户组 ${source.membership.groupId} 继承` : "直接授权"}）` };
+    }),
     canManage: identityCapability("iam.user.list")?.available === true && users !== null,
     canCreateUsers: identityCapability("iam.user.create")?.available === true,
     canSetAlias: identityCapability("iam.account.alias-set")?.available === true,

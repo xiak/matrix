@@ -670,7 +670,7 @@ func TestPolicyMetadataAndAttachmentOwnershipContracts(t *testing.T) {
 	}
 }
 
-func TestCurrentIdentityUsesOnlyItsLiveUserPolicyAttachments(t *testing.T) {
+func TestCurrentIdentityUsesOnlyItsLivePolicyGrantSources(t *testing.T) {
 	now := time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC)
 	blocked := func(action Action, kind ResourceKind, id string) ActionCapability {
 		return ActionCapability{Action: action, Resource: ResourceReference{Kind: kind, ID: id}, RestrictionReason: CapabilityAuthorityRequired}
@@ -683,9 +683,10 @@ func TestCurrentIdentityUsesOnlyItsLiveUserPolicyAttachments(t *testing.T) {
 			LoginName: "admin", DisplayName: "Administrator", Status: PrincipalActive,
 			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
 		IdentityKind: IdentityRoot,
-		PolicyAttachments: []PolicyAttachment{{APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "attachment-a",
+		PolicySources: []PolicyGrantSource{{Kind: PolicyGrantDirect, Attachment: PolicyAttachment{
+			APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "attachment-a",
 			AccountID: "account-a", Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: "user-a"},
-			PolicyID: SystemPolicyAccountAdministrator, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}},
+			PolicyID: SystemPolicyAccountAdministrator, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}}},
 		Capabilities: []ActionCapability{
 			blocked(ActionIAMAccountCreate, ResourceAccount, "accounts"),
 			blocked(ActionIAMAccountRead, ResourceAccount, "accounts"),
@@ -693,19 +694,21 @@ func TestCurrentIdentityUsesOnlyItsLiveUserPolicyAttachments(t *testing.T) {
 			blocked(ActionIAMUserList, ResourceAccount, "account-a"),
 			blocked(ActionIAMUserCreate, ResourceAccount, "account-a"),
 			blocked(ActionIAMPolicyList, ResourceAccount, "account-a"),
+			blocked(ActionIAMGroupList, ResourceAccount, "account-a"),
+			blocked(ActionIAMGroupCreate, ResourceAccount, "account-a"),
 		}}
 	if ValidateCurrentIdentity(identity) != nil {
 		t.Fatal("current policy identity rejected")
 	}
 	for name, mutate := range map[string]func(*CurrentIdentity){
-		"missing snapshot":     func(v *CurrentIdentity) { v.PolicyAttachments = nil },
-		"another account":      func(v *CurrentIdentity) { v.PolicyAttachments[0].AccountID = "account-b" },
-		"another user":         func(v *CurrentIdentity) { v.PolicyAttachments[0].Target.ID = "user-b" },
-		"service carrier":      func(v *CurrentIdentity) { v.PolicyAttachments[0].Target.Kind = PolicyTargetService },
-		"duplicate attachment": func(v *CurrentIdentity) { v.PolicyAttachments = append(v.PolicyAttachments, v.PolicyAttachments[0]) },
+		"missing snapshot":     func(v *CurrentIdentity) { v.PolicySources = nil },
+		"another account":      func(v *CurrentIdentity) { v.PolicySources[0].Attachment.AccountID = "account-b" },
+		"another user":         func(v *CurrentIdentity) { v.PolicySources[0].Attachment.Target.ID = "user-b" },
+		"service carrier":      func(v *CurrentIdentity) { v.PolicySources[0].Attachment.Target.Kind = PolicyTargetService },
+		"duplicate attachment": func(v *CurrentIdentity) { v.PolicySources = append(v.PolicySources, v.PolicySources[0]) },
 		"revoked attachment": func(v *CurrentIdentity) {
-			v.PolicyAttachments[0].RevokedAt = &now
-			v.PolicyAttachments[0].ResourceVersion = 2
+			v.PolicySources[0].Attachment.RevokedAt = &now
+			v.PolicySources[0].Attachment.ResourceVersion = 2
 		},
 		"missing capability": func(v *CurrentIdentity) { v.Capabilities = v.Capabilities[1:] },
 		"wrong capability target": func(v *CurrentIdentity) {
@@ -717,13 +720,35 @@ func TestCurrentIdentityUsesOnlyItsLiveUserPolicyAttachments(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			value := identity
-			value.PolicyAttachments = append([]PolicyAttachment{}, identity.PolicyAttachments...)
+			value.PolicySources = append([]PolicyGrantSource{}, identity.PolicySources...)
 			value.Capabilities = append([]ActionCapability{}, identity.Capabilities...)
 			mutate(&value)
 			if ValidateCurrentIdentity(value) == nil {
 				t.Fatal("invalid current attachment relationship accepted")
 			}
 		})
+	}
+	membership := GroupMembership{APIVersion: APIVersion, Kind: "GroupMembership", ID: "membership-a",
+		AccountID: "account-a", GroupID: "group-a", UserID: "user-a", CreatedBy: "user-admin",
+		ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+	groupIdentity := identity
+	groupIdentity.PolicySources = []PolicyGrantSource{{Kind: PolicyGrantGroup, Attachment: PolicyAttachment{
+		APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "attachment-group", AccountID: "account-a",
+		Target: PolicyAttachmentTarget{Kind: PolicyTargetGroup, ID: "group-a"}, PolicyID: SystemPolicyPaaSViewer,
+		Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}, Membership: &membership}}
+	if ValidateCurrentIdentity(groupIdentity) == nil {
+		t.Fatal("root identity accepted a group inheritance path")
+	}
+	groupIdentity.Account.RootIdentity = RootIdentity{PrincipalID: "root-user", LoginName: "owner"}
+	groupIdentity.IdentityKind = IdentityUser
+	if ValidateCurrentIdentity(groupIdentity) != nil {
+		t.Fatal("current group policy source rejected")
+	}
+	wrongMembership := membership
+	wrongMembership.UserID = "user-b"
+	groupIdentity.PolicySources[0].Membership = &wrongMembership
+	if ValidateCurrentIdentity(groupIdentity) == nil {
+		t.Fatal("group source for another user accepted")
 	}
 	encoded, err := json.Marshal(identity)
 	if err != nil {
@@ -743,10 +768,95 @@ func TestCurrentIdentityUsesOnlyItsLiveUserPolicyAttachments(t *testing.T) {
 		t.Fatal("old roles field remained as a parallel current identity contract")
 	}
 	delete(wire, "roles")
+	wire["policyAttachments"] = json.RawMessage(`[]`)
+	encoded, err = json.Marshal(wire)
+	if err != nil || DecodeRequest(bytes.NewReader(encoded), &decoded) == nil {
+		t.Fatal("old direct-only policy attachments remained as a parallel current identity contract")
+	}
+	delete(wire, "policyAttachments")
 	wire["canCreateAccounts"] = json.RawMessage(`true`)
 	encoded, err = json.Marshal(wire)
 	if err != nil || DecodeRequest(bytes.NewReader(encoded), &decoded) == nil {
 		t.Fatal("old account creation hint remained as a parallel capability contract")
+	}
+}
+
+func TestGroupAccessRequiresExactRelationsAndCapabilities(t *testing.T) {
+	now := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	group := Group{APIVersion: APIVersion, Kind: "Group", AccountID: "account-a", ID: "group-a", Name: "Operators",
+		ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+	attachment := PolicyAttachment{APIVersion: APIVersion, Kind: "PolicyAttachment", ID: "attachment-a", AccountID: group.AccountID,
+		Target: PolicyAttachmentTarget{Kind: PolicyTargetGroup, ID: string(group.ID)}, PolicyID: SystemPolicyPaaSViewer,
+		Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+	access := GroupAccess{Group: group, PolicyAttachments: []PolicyAttachment{attachment}}
+	for _, action := range []Action{ActionIAMGroupDelete, ActionIAMGroupMembershipCreate, ActionIAMGroupMembershipList,
+		ActionIAMGroupPolicyAttachmentCreate, ActionIAMGroupRead, ActionIAMGroupUpdate} {
+		access.Capabilities = append(access.Capabilities, ActionCapability{Action: action, Resource: ResourceReference{Kind: ResourceGroup, ID: string(group.ID)}, Available: true})
+	}
+	access.Capabilities = append(access.Capabilities, ActionCapability{Action: ActionIAMGroupPolicyAttachmentRevoke,
+		Resource: ResourceReference{Kind: ResourcePolicyAttachment, ID: string(attachment.ID)}, RestrictionReason: CapabilityAuthorityRequired})
+	if ValidateGroupAccess(access) != nil {
+		t.Fatal("valid mixed available/unavailable group capabilities rejected")
+	}
+	for name, mutate := range map[string]func(*GroupAccess){
+		"missing capability":          func(v *GroupAccess) { v.Capabilities = v.Capabilities[1:] },
+		"duplicate capability":        func(v *GroupAccess) { v.Capabilities = append(v.Capabilities, v.Capabilities[0]) },
+		"unrelated capability":        func(v *GroupAccess) { v.Capabilities[0].Action = ActionIAMUserDelete },
+		"wrong target":                func(v *GroupAccess) { v.Capabilities[0].Resource.ID = "other-group" },
+		"missing restriction":         func(v *GroupAccess) { v.Capabilities[len(v.Capabilities)-1].RestrictionReason = "" },
+		"missing attachment snapshot": func(v *GroupAccess) { v.PolicyAttachments = nil },
+		"foreign attachment":          func(v *GroupAccess) { v.PolicyAttachments[0].AccountID = "account-b" },
+		"user attachment":             func(v *GroupAccess) { v.PolicyAttachments[0].Target.Kind = PolicyTargetUser },
+		"different group":             func(v *GroupAccess) { v.PolicyAttachments[0].Target.ID = "group-b" },
+		"revoked attachment": func(v *GroupAccess) {
+			v.PolicyAttachments[0].RevokedAt = &now
+			v.PolicyAttachments[0].ResourceVersion = 2
+		},
+		"platform attachment": func(v *GroupAccess) {
+			v.PolicyAttachments[0].Scope = AuthorityScopeInstallation
+			v.PolicyAttachments[0].InstallationID = "installation-a"
+		},
+		"invalid group revision": func(v *GroupAccess) { v.Group.ResourceVersion = 0 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := access
+			value.PolicyAttachments = append([]PolicyAttachment{}, access.PolicyAttachments...)
+			value.Capabilities = append([]ActionCapability{}, access.Capabilities...)
+			mutate(&value)
+			if ValidateGroupAccess(value) == nil {
+				t.Fatal("invalid group authority projection accepted")
+			}
+		})
+	}
+	membership := GroupMembership{APIVersion: APIVersion, Kind: "GroupMembership", AccountID: group.AccountID,
+		ID: "membership-a", GroupID: group.ID, UserID: "user-a", CreatedBy: "user-admin", ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+	page := GroupMembershipList{APIVersion: APIVersion, Kind: "GroupMembershipList", AccountID: group.AccountID, GroupID: group.ID,
+		Items: []GroupMembershipAccess{{Membership: membership, Capabilities: []ActionCapability{{Action: ActionIAMGroupMembershipRemove,
+			Resource: ResourceReference{Kind: ResourceGroupMembership, ID: string(membership.ID)}, Available: true}}}}}
+	if ValidateGroupMembershipList(page) != nil {
+		t.Fatal("valid membership page rejected")
+	}
+	for name, mutate := range map[string]func(*GroupMembershipList){
+		"foreign account": func(v *GroupMembershipList) { v.AccountID = "account-b" },
+		"different group": func(v *GroupMembershipList) { v.GroupID = "group-b" },
+		"removed relation": func(v *GroupMembershipList) {
+			v.Items[0].Membership.RemovedAt = &now
+			v.Items[0].Membership.ResourceVersion = 2
+		},
+		"wrong continuation": func(v *GroupMembershipList) { v.NextAfter = "membership-b" },
+		"user as removal target": func(v *GroupMembershipList) {
+			v.Items[0].Capabilities[0].Resource = ResourceReference{Kind: ResourceUser, ID: "user-a"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := page
+			value.Items = append([]GroupMembershipAccess{}, page.Items...)
+			value.Items[0].Capabilities = append([]ActionCapability{}, page.Items[0].Capabilities...)
+			mutate(&value)
+			if ValidateGroupMembershipList(value) == nil {
+				t.Fatal("invalid membership page accepted")
+			}
+		})
 	}
 }
 

@@ -113,6 +113,16 @@ const (
 	ActionIAMUserRead                       Action = "iam.user.read"
 	ActionIAMUserUpdate                     Action = "iam.user.update"
 	ActionIAMUserDelete                     Action = "iam.user.delete"
+	ActionIAMGroupList                      Action = "iam.group.list"
+	ActionIAMGroupCreate                    Action = "iam.group.create"
+	ActionIAMGroupRead                      Action = "iam.group.read"
+	ActionIAMGroupUpdate                    Action = "iam.group.update"
+	ActionIAMGroupDelete                    Action = "iam.group.delete"
+	ActionIAMGroupMembershipList            Action = "iam.group-membership.list"
+	ActionIAMGroupMembershipCreate          Action = "iam.group-membership.create"
+	ActionIAMGroupMembershipRemove          Action = "iam.group-membership.remove"
+	ActionIAMGroupPolicyAttachmentCreate    Action = "iam.group-policy-attachment.create"
+	ActionIAMGroupPolicyAttachmentRevoke    Action = "iam.group-policy-attachment.revoke"
 	ActionIAMSessionRevoke                  Action = "iam.session.revoke"
 	ActionIAMPolicyAttachmentCreate         Action = "iam.policy-attachment.create"
 	ActionIAMPolicyAttachmentRevoke         Action = "iam.policy-attachment.revoke"
@@ -176,6 +186,8 @@ const (
 const (
 	ResourceAccount               ResourceKind = "ACCOUNT"
 	ResourceUser                  ResourceKind = "USER"
+	ResourceGroup                 ResourceKind = "GROUP"
+	ResourceGroupMembership       ResourceKind = "GROUP_MEMBERSHIP"
 	ResourceOrganization          ResourceKind = "ORGANIZATION"
 	ResourcePrincipal             ResourceKind = "PRINCIPAL"
 	ResourceRoleBinding           ResourceKind = "ROLE_BINDING"
@@ -305,6 +317,16 @@ var actionDefinitions = [...]ActionDefinition{
 	{ActionIAMUserRead, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
 	{ActionIAMUserUpdate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
 	{ActionIAMUserDelete, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
+	{ActionIAMGroupList, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
+	{ActionIAMGroupCreate, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
+	{ActionIAMGroupRead, ProductIAM, ServiceIAM, ResourceGroup, AuthorityScopeTenant},
+	{ActionIAMGroupUpdate, ProductIAM, ServiceIAM, ResourceGroup, AuthorityScopeTenant},
+	{ActionIAMGroupDelete, ProductIAM, ServiceIAM, ResourceGroup, AuthorityScopeTenant},
+	{ActionIAMGroupMembershipList, ProductIAM, ServiceIAM, ResourceGroup, AuthorityScopeTenant},
+	{ActionIAMGroupMembershipCreate, ProductIAM, ServiceIAM, ResourceGroup, AuthorityScopeTenant},
+	{ActionIAMGroupMembershipRemove, ProductIAM, ServiceIAM, ResourceGroupMembership, AuthorityScopeTenant},
+	{ActionIAMGroupPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourceGroup, AuthorityScopeTenant},
+	{ActionIAMGroupPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeTenant},
 	{ActionIAMPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
 	{ActionIAMPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeTenant},
 	{ActionIAMSessionRevoke, ProductIAM, ServiceIAM, ResourceSession, AuthorityScopeTenant},

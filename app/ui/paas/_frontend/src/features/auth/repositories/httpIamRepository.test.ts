@@ -36,7 +36,7 @@ const platformPolicy = {
   defaultVersionId: "version-platform"
 };
 
-function capability(action: string, kind: "ACCOUNT" | "USER" | "POLICY_ATTACHMENT", id: string, available = true) {
+function capability(action: string, kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT", id: string, available = true) {
   return { action, resource: { kind, id }, available, ...(available ? {} : { restrictionReason: "AUTHORITY_REQUIRED" }) };
 }
 
@@ -47,7 +47,9 @@ function currentCapabilities(available = true) {
     capability("iam.account.alias-set", "ACCOUNT", account.id, available),
     capability("iam.user.list", "ACCOUNT", account.id, available),
     capability("iam.user.create", "ACCOUNT", account.id, available),
-    capability("iam.policy.list", "ACCOUNT", account.id, available)
+    capability("iam.policy.list", "ACCOUNT", account.id, available),
+    capability("iam.group.list", "ACCOUNT", account.id, available),
+    capability("iam.group.create", "ACCOUNT", account.id, available)
   ].map((item) => item.action === "iam.account.create" || item.action === "iam.account.read" ?
     { ...item, resource: { kind: "ACCOUNT" as const, id: "accounts" } } : item);
 }
@@ -78,6 +80,10 @@ function reply(body: unknown) {
   return fetcher;
 }
 
+function directSources(...attachments: Array<typeof tenantAttachment>) {
+  return attachments.map((attachment) => ({ kind: "DIRECT", attachment })).sort((left, right) => left.attachment.id.localeCompare(right.attachment.id));
+}
+
 function requestBody(fetcher: ReturnType<typeof reply>) {
   return JSON.parse(firstRequest(fetcher)[1].body) as Record<string, unknown>;
 }
@@ -89,6 +95,177 @@ function firstRequest(fetcher: ReturnType<typeof reply>) {
 }
 
 afterEach(() => { vi.unstubAllGlobals(); });
+
+const group = { apiVersion, kind: "Group", id: "group-build", accountId: account.id, name: "Build operators", resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };
+const groupAttachment = { ...tenantAttachment, id: "attachment-group", target: { kind: "GROUP", id: group.id } };
+const membership = { apiVersion, kind: "GroupMembership", id: "membership-alex", accountId: account.id, groupId: group.id,
+  userId: user.id, createdBy: account.rootIdentity.principalId, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };
+function groupAccess(value = group) {
+  return { group: value, policyAttachments: [{ ...groupAttachment, target: { kind: "GROUP", id: value.id } }], capabilities: [
+    ...["iam.group.read", "iam.group.update", "iam.group.delete", "iam.group-membership.list", "iam.group-membership.create", "iam.group-policy-attachment.create"].map((action) => capability(action, "GROUP", value.id)),
+    capability("iam.group-policy-attachment.revoke", "POLICY_ATTACHMENT", groupAttachment.id, false)
+  ] };
+}
+function membershipPage() {
+  return { apiVersion, kind: "GroupMembershipList", accountId: account.id, groupId: group.id, items: [{ membership,
+    capabilities: [capability("iam.group-membership.remove", "GROUP_MEMBERSHIP", membership.id)] }] };
+}
+
+describe("IAM HTTP group boundary", () => {
+  it("reads group detail and direct attachments without caller account selectors", async () => {
+    const fetcher = reply(groupAccess());
+    const access = await httpAccountRepository.getGroup("bearer", account.id, group.id);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/groups/${group.id}`);
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(access.group).toMatchObject({ id: group.id, accountId: account.id, description: "" });
+    expect(access.policyAttachments[0]).toMatchObject({ id: groupAttachment.id, target: { kind: "GROUP", id: group.id }, scope: "TENANT", installationId: null });
+    expect(access.capabilities.at(-1)).toMatchObject({ available: false, restrictionReason: "AUTHORITY_REQUIRED" });
+  });
+
+  it("fails closed on incomplete capabilities and foreign or malformed group relations", async () => {
+    const access = groupAccess();
+    for (const invalid of [
+      { ...access, group: { ...group, accountId: "other-account" } },
+      { ...access, group: { ...group, id: "other-group" } },
+      { ...access, group: { ...group, updatedAt: "2026-02-30T08:00:00Z" } },
+      { ...access, group: { ...group, createdAt: "2026-09-11T08:00:00.000002Z", updatedAt: "2026-09-11T08:00:00.000001Z" } },
+      { ...access, capabilities: access.capabilities.slice(1) },
+      { ...access, capabilities: [...access.capabilities.slice(1), access.capabilities[1]] },
+      { ...access, capabilities: [...access.capabilities, capability("iam.user.delete", "USER", user.id)] },
+      { ...access, policyAttachments: [{ ...groupAttachment, accountId: "other-account" }] },
+      { ...access, policyAttachments: [{ ...groupAttachment, target: { kind: "GROUP", id: "other-group" } }] },
+      { ...access, policyAttachments: [tenantAttachment] },
+      { ...access, policyAttachments: [{ ...groupAttachment, revokedAt: timestamp, resourceVersion: 2 }] },
+      { ...access, policyAttachments: [{ ...groupAttachment, scope: "INSTALLATION", installationId: "installation-a" }] },
+      { ...access, inheritedPolicies: [] }
+    ]) {
+      reply(invalid);
+      await expect(httpAccountRepository.getGroup("bearer", account.id, group.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("checks group page order, account and exact continuation without reading all members", async () => {
+    const items = Array.from({ length: 100 }, (_, index) => groupAccess({ ...group, id: `group-${index.toString().padStart(3, "0")}` }));
+    const fetcher = reply({ apiVersion, kind: "GroupList", items, nextAfter: "group-099" });
+    const page = await httpAccountRepository.listGroups("bearer", account.id);
+    expect(page.items).toHaveLength(100);
+    expect(page.nextAfter).toBe("group-099");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    for (const invalid of [
+      { apiVersion, kind: "GroupList", items, nextAfter: "group-999" },
+      { apiVersion, kind: "GroupList", items: [...items, items[0]] },
+      { apiVersion, kind: "GroupList", items: [items[1], items[0]] },
+      { apiVersion, kind: "GroupList", items: [items[0], items[0]] },
+      { apiVersion, kind: "GroupList", items: [groupAccess({ ...group, accountId: "other" })] },
+      { apiVersion, kind: "GroupList", items: [], accountId: "injected" }
+    ]) {
+      reply(invalid);
+      await expect(httpAccountRepository.listGroups("bearer", account.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    reply({ apiVersion, kind: "GroupList", items: [groupAccess()] });
+    await expect(httpAccountRepository.listGroups("bearer", account.id, group.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("reads membership relations and keys removal capabilities by membership ID", async () => {
+    const fetcher = reply(membershipPage());
+    const page = await httpAccountRepository.listGroupMemberships("bearer", account.id, group.id, "member:after");
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/groups/${group.id}/memberships?after=member%3Aafter`);
+    expect(page.items[0]?.membership).toMatchObject({ id: membership.id, userId: user.id, groupId: group.id });
+    expect(page.items[0]?.capabilities[0]?.resource).toEqual({ kind: "GROUP_MEMBERSHIP", id: membership.id });
+    const valid = membershipPage();
+    for (const invalid of [
+      { ...valid, accountId: "other-account" }, { ...valid, groupId: "other-group" },
+      { ...valid, items: [{ ...valid.items[0], membership: { ...membership, accountId: "other-account" } }] },
+      { ...valid, items: [{ ...valid.items[0], membership: { ...membership, groupId: "other-group" } }] },
+      { ...valid, items: [{ ...valid.items[0], membership: { ...membership, removedAt: timestamp, resourceVersion: 2 } }] },
+      { ...valid, items: [{ ...valid.items[0], capabilities: [capability("iam.group-membership.remove", "USER", user.id)] }] },
+      { ...valid, nextAfter: "membership-other" }, { ...valid, items: [valid.items[0], valid.items[0]] }
+    ]) {
+      reply(invalid);
+      await expect(httpAccountRepository.listGroupMemberships("bearer", account.id, group.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("creates only an empty group and retains caller-owned idempotency input", async () => {
+    const fetcher = reply(group);
+    fetcher.mockImplementation(() => Promise.resolve(new Response(JSON.stringify(group), { status: 201 })));
+    const command = { name: group.name, requestId: "retained-group-intent", accountId: "forged", policyIds: [tenantPolicy.id], members: [user.id] };
+    const before = structuredClone(command);
+    const first = await httpAccountRepository.createGroup("bearer", account.id, command);
+    const second = await httpAccountRepository.createGroup("bearer", account.id, command);
+    expect(first).toEqual(second);
+    expect(command).toEqual(before);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    for (const [, options] of fetcher.mock.calls) expect(JSON.parse(options.body)).toEqual({ name: group.name, requestId: command.requestId });
+  });
+
+  it("does not retry unknown outcomes or replace an intent after 409", async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error("Disconnected"));
+    vi.stubGlobal("fetch", fetcher);
+    const command = { name: group.name, requestId: "one-group-intent" };
+    await expect(httpAccountRepository.createGroup("bearer", account.id, command)).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    fetcher.mockResolvedValue(new Response(JSON.stringify({ code: "iam.conflict", title: "Conflict" }), { status: 409 }));
+    await expect(httpAccountRepository.createGroup("bearer", account.id, command)).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    for (const [, options] of fetcher.mock.calls) expect(JSON.parse(options.body).requestId).toBe(command.requestId);
+  });
+
+  it("checks exact profile and deletion revisions and returns the cascade receipt", async () => {
+    let fetcher = reply({ ...group, name: "Renamed", description: "", resourceVersion: 2 });
+    const updated = await httpAccountRepository.updateGroup("bearer", account.id, group.id, { name: "Renamed", description: "", resourceVersion: 1, requestId: "rename-group" });
+    expect(updated.resourceVersion).toBe(2);
+    expect(requestBody(fetcher)).toEqual({ name: "Renamed", description: "", resourceVersion: 1, requestId: "rename-group" });
+    fetcher = reply({ apiVersion, kind: "GroupDeletion", accountId: account.id, id: group.id, name: "Renamed", resourceVersion: 3, removedMemberships: 4, revokedPolicyAttachments: 2, deletedAt: timestamp });
+    const deleted = await httpAccountRepository.deleteGroup("bearer", account.id, group.id, { resourceVersion: 2, requestId: "delete-group" });
+    expect(deleted).toMatchObject({ id: group.id, removedMemberships: 4, revokedPolicyAttachments: 2 });
+    expect(requestBody(fetcher)).toEqual({ resourceVersion: 2, requestId: "delete-group" });
+    reply({ ...group, name: "Renamed", resourceVersion: 4 });
+    await expect(httpAccountRepository.updateGroup("bearer", account.id, group.id, { name: "Renamed", resourceVersion: 1, requestId: "rename-group" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    for (const override of [{ resourceVersion: 4 }, { id: "other-group" }, { accountId: "other-account" }, { removedMemberships: -1 }]) {
+      reply({ apiVersion, kind: "GroupDeletion", accountId: account.id, id: group.id, name: group.name, resourceVersion: 2, removedMemberships: 1, revokedPolicyAttachments: 0, deletedAt: timestamp, ...override });
+      await expect(httpAccountRepository.deleteGroup("bearer", account.id, group.id, { resourceVersion: 1, requestId: "delete-group" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("uses one membership command and returns a terminal removal without reviving it", async () => {
+    let fetcher = reply(membership);
+    await httpAccountRepository.createGroupMembership("bearer", account.id, group.id, { userId: user.id, requestId: "add-member" });
+    expect(requestBody(fetcher)).toEqual({ userId: user.id, requestId: "add-member" });
+    fetcher = reply({ ...membership, resourceVersion: 2, removedAt: timestamp, removedBy: account.rootIdentity.principalId });
+    const removed = await httpAccountRepository.removeGroupMembership("bearer", account.id, group.id, membership.id, { resourceVersion: 1, requestId: "remove-member" });
+    expect(removed.removedAt).toBe(timestamp);
+    expect(removed.removedBy).toBe(account.rootIdentity.principalId);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/groups/${group.id}/memberships/${membership.id}:remove`);
+    expect(requestBody(fetcher)).toEqual({ resourceVersion: 1, requestId: "remove-member" });
+    for (const override of [{ groupId: "other-group" }, { accountId: "other-account" }, { userId: "other-user" }, { removedAt: timestamp, resourceVersion: 2 }]) {
+      reply({ ...membership, ...override });
+      await expect(httpAccountRepository.createGroupMembership("bearer", account.id, group.id, { userId: user.id, requestId: "add-member" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    for (const invalid of [membership,
+      { ...membership, removedBy: account.rootIdentity.principalId },
+      { ...membership, resourceVersion: 2, removedAt: timestamp },
+      { ...membership, resourceVersion: 2, removedAt: timestamp, removedBy: "" }]) {
+      reply(invalid);
+      await expect(httpAccountRepository.removeGroupMembership("bearer", account.id, group.id, membership.id, { resourceVersion: 1, requestId: "remove-member" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("uses generic attachment routes while checking the exact GROUP target", async () => {
+    let fetcher = reply(groupAttachment);
+    const attachment = await httpAccountRepository.createGroupPolicyAttachment("bearer", account.id, group.id, { policyId: groupAttachment.policyId, policyResourceVersion: 3, requestId: "attach-group" });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policy-attachments");
+    expect(requestBody(fetcher)).toEqual({ target: { kind: "GROUP", id: group.id }, policyId: groupAttachment.policyId, policyResourceVersion: 3, requestId: "attach-group" });
+    expect(attachment.target.kind).toBe("GROUP");
+    fetcher = reply({ apiVersion, kind: "Revocation", id: groupAttachment.id, resourceVersion: 2, revokedAt: timestamp });
+    await httpAccountRepository.revokePolicyAttachment("bearer", groupAttachment.id, { resourceVersion: 1, requestId: "revoke-group-policy" });
+    expect(requestBody(fetcher)).toEqual({ resourceVersion: 1, requestId: "revoke-group-policy" });
+    for (const invalid of [tenantAttachment, { ...groupAttachment, accountId: "other" }, { ...groupAttachment, policyId: "other-policy" }, { ...groupAttachment, scope: "INSTALLATION", installationId: "installation-a" }]) {
+      reply(invalid);
+      await expect(httpAccountRepository.createGroupPolicyAttachment("bearer", account.id, group.id, { policyId: groupAttachment.policyId, policyResourceVersion: 1, requestId: "attach-group" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+});
 
 describe("IAM HTTP account boundary", () => {
   it.each([undefined, true, false])("sends only the password session policy %s, never a retained-session selector", async (revokeOtherSessions) => {
@@ -120,21 +297,48 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("parses current attachments without interpreting policy names", async () => {
-    reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policyAttachments: [tenantAttachment, platformAttachment], capabilities: currentCapabilities() });
+    reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policySources: directSources(tenantAttachment, platformAttachment), capabilities: currentCapabilities() });
     const identity = await httpAccountRepository.currentIdentity("bearer");
-    expect(identity.policyAttachments.map((item) => item.policyId)).toEqual(["system.paas-viewer", "system.platform-operator"]);
+    expect(identity.policySources.map((item) => item.attachment.policyId)).toEqual(["system.platform-operator", "system.paas-viewer"]);
     for (const patch of [
       { capabilities: currentCapabilities().slice(1) },
       { capabilities: [...currentCapabilities(), capability("iam.user.list", "ACCOUNT", account.id)] },
       { capabilities: currentCapabilities().map((item) => item.action === "iam.user.list" ? { ...item, action: "iam.principal.list" } : item) },
       { user: { ...user, accountId: "another-account" } },
-      { policyAttachments: [{ ...tenantAttachment, accountId: "another-account" }] },
-      { policyAttachments: [tenantAttachment, tenantAttachment] },
+      { policySources: directSources({ ...tenantAttachment, accountId: "another-account" }) },
+      { policySources: directSources(tenantAttachment, tenantAttachment) },
+      { policyAttachments: [] },
       { canCreateAccounts: true },
       { roles: ["PLATFORM_OPERATOR"] },
       { apiVersion: "future/v2" }
     ]) {
-      reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policyAttachments: [], capabilities: currentCapabilities(false), ...patch });
+      reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policySources: [], capabilities: currentCapabilities(false), ...patch });
+      await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("binds every inherited source to its live membership and permits the same policy through distinct sources", async () => {
+    const membership = { apiVersion, kind: "GroupMembership", id: "membership-a", accountId: account.id,
+      groupId: "group-a", userId: user.id, createdBy: account.rootIdentity.principalId, resourceVersion: 1,
+      createdAt: timestamp, updatedAt: timestamp };
+    const inherited = { kind: "GROUP", attachment: { ...tenantAttachment, id: "attachment-group", target: { kind: "GROUP", id: membership.groupId } }, membership };
+    const base = { apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", capabilities: currentCapabilities(false) };
+    reply({ ...base, policySources: [inherited, ...directSources(tenantAttachment)] });
+    const identity = await httpAccountRepository.currentIdentity("bearer");
+    expect(identity.policySources.map((source) => source.kind)).toEqual(["GROUP", "DIRECT"]);
+    for (const source of [
+      { ...inherited, membership: undefined },
+      { ...inherited, membership: { ...membership, userId: "another-user" } },
+      { ...inherited, membership: { ...membership, groupId: "another-group" } },
+      { ...inherited, membership: { ...membership, accountId: "another-account" } },
+      { ...inherited, membership: { ...membership, resourceVersion: 2 } },
+      { ...inherited, membership: { ...membership, removedAt: timestamp, removedBy: user.id } },
+      { ...inherited, attachment: { ...inherited.attachment, scope: "INSTALLATION", installationId: "installation-a" } },
+      { ...inherited, kind: "DIRECT" },
+      { ...inherited, kind: "ROLE" },
+      { ...inherited, permit: true }
+    ]) {
+      reply({ ...base, policySources: [source] });
       await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });

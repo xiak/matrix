@@ -529,6 +529,76 @@ func ValidateUser(value User) error {
 		validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
 }
 
+func ValidateGroup(value Group) error {
+	var descriptionError error
+	if value.Description != "" {
+		descriptionError = validateText("group.description", value.Description, 1, 512)
+	}
+	if value.APIVersion != APIVersion || value.Kind != "Group" {
+		return errors.New("group is invalid")
+	}
+	return errors.Join(ValidateID("group.id", string(value.ID)), ValidateID("group.accountId", string(value.AccountID)),
+		validateText("group.name", value.Name, 1, 64), descriptionError,
+		validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
+}
+
+func ValidateGroupMembership(value GroupMembership) error {
+	if value.APIVersion != APIVersion || value.Kind != "GroupMembership" {
+		return errors.New("group membership is invalid")
+	}
+	problems := []error{
+		ValidateID("membership.id", string(value.ID)), ValidateID("membership.accountId", string(value.AccountID)),
+		ValidateID("membership.groupId", string(value.GroupID)), ValidateID("membership.userId", string(value.UserID)),
+		ValidateID("membership.createdBy", string(value.CreatedBy)), validatePositiveVersion(value.ResourceVersion),
+		validateChronology(value.CreatedAt, value.UpdatedAt),
+	}
+	if value.RemovedAt == nil {
+		if value.RemovedBy != "" || value.ResourceVersion != 1 || !value.UpdatedAt.Equal(value.CreatedAt) {
+			problems = append(problems, errors.New("active membership contains removal state"))
+		}
+	} else {
+		problems = append(problems, ValidateID("membership.removedBy", string(value.RemovedBy)), validateTime("membership.removedAt", *value.RemovedAt))
+		if value.ResourceVersion < 2 || !value.RemovedAt.Equal(value.UpdatedAt) || value.RemovedAt.Before(value.CreatedAt) {
+			problems = append(problems, errors.New("removed membership chronology is invalid"))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateCreateGroupRequest(value CreateGroupRequest) error {
+	var descriptionError error
+	if value.Description != "" {
+		descriptionError = validateText("description", value.Description, 1, 512)
+	}
+	return errors.Join(validateText("name", value.Name, 1, 64), descriptionError, ValidateID("requestId", value.RequestID))
+}
+
+func ValidateUpdateGroupRequest(value UpdateGroupRequest) error {
+	return errors.Join(ValidateCreateGroupRequest(CreateGroupRequest{Name: value.Name, Description: value.Description, RequestID: value.RequestID}),
+		validatePositiveVersion(value.ResourceVersion))
+}
+
+func ValidateDeleteGroupRequest(value DeleteGroupRequest) error {
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateGroupDeletion(value GroupDeletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "GroupDeletion" {
+		return errors.New("group deletion is invalid")
+	}
+	return errors.Join(ValidateID("groupDeletion.accountId", string(value.AccountID)), ValidateID("groupDeletion.id", string(value.ID)),
+		validateText("groupDeletion.name", value.Name, 1, 64), validatePositiveVersion(value.ResourceVersion),
+		validateTime("groupDeletion.deletedAt", value.DeletedAt))
+}
+
+func ValidateCreateGroupMembershipRequest(value CreateGroupMembershipRequest) error {
+	return errors.Join(ValidateID("userId", string(value.UserID)), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateRemoveGroupMembershipRequest(value RemoveGroupMembershipRequest) error {
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
 func ValidateActionCapability(value ActionCapability) error {
 	if value.Available {
 		if value.RestrictionReason != "" {
@@ -584,7 +654,7 @@ func expectedCapabilitySet(values ...struct {
 
 func ValidateCurrentIdentity(value CurrentIdentity) error {
 	if value.APIVersion != APIVersion || value.Kind != "CurrentIdentity" ||
-		value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 ||
+		value.PolicySources == nil || len(value.PolicySources) > 256 ||
 		value.User.AccountID != value.Account.ID {
 		return errors.New("current identity is invalid")
 	}
@@ -596,13 +666,17 @@ func ValidateCurrentIdentity(value CurrentIdentity) error {
 		return errors.New("current identity kind is invalid")
 	}
 	seen := map[PolicyAttachmentID]bool{}
-	for _, attachment := range value.PolicyAttachments {
-		if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil || seen[attachment.ID] ||
-			attachment.AccountID != value.Account.ID || attachment.Target.Kind != PolicyTargetUser ||
-			attachment.Target.ID != string(value.User.ID) {
-			return errors.New("current policy attachments are invalid")
+	var previous PolicyAttachmentID
+	for _, source := range value.PolicySources {
+		attachment := source.Attachment
+		if ValidatePolicyGrantSource(source) != nil || seen[attachment.ID] || attachment.ID <= previous ||
+			attachment.AccountID != value.Account.ID ||
+			(source.Kind == PolicyGrantDirect && attachment.Target.ID != string(value.User.ID)) ||
+			(source.Kind == PolicyGrantGroup && (value.IdentityKind == IdentityRoot || source.Membership.AccountID != value.Account.ID || source.Membership.UserID != value.User.ID)) {
+			return errors.New("current policy sources are invalid")
 		}
 		seen[attachment.ID] = true
+		previous = attachment.ID
 	}
 	expected := expectedCapabilitySet(
 		struct {
@@ -629,6 +703,14 @@ func ValidateCurrentIdentity(value CurrentIdentity) error {
 			Action   Action
 			Resource ResourceReference
 		}{ActionIAMPolicyList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
 	)
 	if validateCapabilities(value.Capabilities, expected) != nil {
 		return errors.New("current identity capabilities are invalid")
@@ -712,6 +794,105 @@ func ValidateUserAccess(value UserAccess) error {
 	}
 	if validateCapabilities(value.Capabilities, expected) != nil {
 		return errors.New("user capabilities are invalid")
+	}
+	return nil
+}
+
+func ValidateGroupAccess(value GroupAccess) error {
+	if ValidateGroup(value.Group) != nil || value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 {
+		return errors.New("group access is invalid")
+	}
+	attachments := map[PolicyAttachmentID]bool{}
+	policies := map[PolicyID]bool{}
+	expected := expectedCapabilitySet(
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupRead, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupUpdate, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupDelete, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupMembershipList, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupMembershipCreate, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupPolicyAttachmentCreate, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+	)
+	for _, attachment := range value.PolicyAttachments {
+		if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil || attachment.Scope != AuthorityScopeTenant ||
+			attachment.AccountID != value.Group.AccountID || attachment.Target.Kind != PolicyTargetGroup ||
+			attachment.Target.ID != string(value.Group.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
+			return errors.New("group policy attachment is invalid")
+		}
+		attachments[attachment.ID] = true
+		policies[attachment.PolicyID] = true
+		expected[capabilityKey(ActionIAMGroupPolicyAttachmentRevoke,
+			ResourceReference{Kind: ResourcePolicyAttachment, ID: string(attachment.ID)})] = struct{}{}
+	}
+	return validateCapabilities(value.Capabilities, expected)
+}
+
+func ValidateGroupList(value GroupList) error {
+	if value.APIVersion != APIVersion || value.Kind != "GroupList" || value.Items == nil || len(value.Items) > 100 {
+		return errors.New("group list is invalid")
+	}
+	var previous GroupID
+	var account AccountID
+	for _, item := range value.Items {
+		if ValidateGroupAccess(item) != nil || item.Group.ID <= previous || (account != "" && item.Group.AccountID != account) {
+			return errors.New("group list item is invalid")
+		}
+		previous, account = item.Group.ID, item.Group.AccountID
+	}
+	if value.NextAfter != "" && (previous == "" || value.NextAfter != string(previous)) {
+		return errors.New("group page boundary is invalid")
+	}
+	return nil
+}
+
+func ValidateGroupMembershipAccess(value GroupMembershipAccess) error {
+	if ValidateGroupMembership(value.Membership) != nil || value.Membership.RemovedAt != nil {
+		return errors.New("group membership access is invalid")
+	}
+	expected := expectedCapabilitySet(struct {
+		Action   Action
+		Resource ResourceReference
+	}{ActionIAMGroupMembershipRemove, ResourceReference{Kind: ResourceGroupMembership, ID: string(value.Membership.ID)}})
+	if validateCapabilities(value.Capabilities, expected) != nil {
+		return errors.New("group membership capabilities are invalid")
+	}
+	return nil
+}
+
+func ValidateGroupMembershipList(value GroupMembershipList) error {
+	if value.APIVersion != APIVersion || value.Kind != "GroupMembershipList" ||
+		ValidateID("accountId", string(value.AccountID)) != nil || ValidateID("groupId", string(value.GroupID)) != nil ||
+		value.Items == nil || len(value.Items) > 100 {
+		return errors.New("group membership list is invalid")
+	}
+	var previous GroupMembershipID
+	for _, item := range value.Items {
+		membership := item.Membership
+		if ValidateGroupMembershipAccess(item) != nil || membership.AccountID != value.AccountID ||
+			membership.GroupID != value.GroupID || membership.ID <= previous {
+			return errors.New("group membership list item is invalid")
+		}
+		previous = membership.ID
+	}
+	if value.NextAfter != "" && (previous == "" || value.NextAfter != string(previous)) {
+		return errors.New("group membership page boundary is invalid")
 	}
 	return nil
 }

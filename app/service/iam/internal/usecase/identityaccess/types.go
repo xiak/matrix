@@ -58,6 +58,14 @@ type Transaction interface {
 	ReadAccount(context.Context, iamv1.AccountID, iamv1.PrincipalID) (iamv1.Account, error)
 	ListUsers(context.Context, AccountRead) (iamv1.UserList, error)
 	ReadUser(context.Context, AccountRead, iamv1.PrincipalID) (iamv1.UserAccess, error)
+	ListGroups(context.Context, AccountRead) (iamv1.GroupList, error)
+	ReadGroup(context.Context, GroupRead) (iamv1.GroupAccess, error)
+	CreateGroup(context.Context, GroupMutation) (iamv1.Group, error)
+	UpdateGroup(context.Context, GroupProfileMutation) (iamv1.Group, error)
+	DeleteGroup(context.Context, GroupDeletionMutation) (iamv1.GroupDeletion, error)
+	ListGroupMemberships(context.Context, GroupRead) (iamv1.GroupMembershipList, error)
+	CreateGroupMembership(context.Context, GroupMembershipMutation) (iamv1.GroupMembership, error)
+	RemoveGroupMembership(context.Context, GroupMembershipRemovalMutation) (iamv1.GroupMembership, bool, error)
 	ListPolicies(context.Context, AccountRead, iamv1.AuthorityScope) (iamv1.PolicyList, error)
 	ListAccounts(context.Context, AccountRead) (AccountManagementPage, error)
 	ReadAccountAsPlatform(context.Context, AccountRead, iamv1.AccountID) (AccountManagementSnapshot, error)
@@ -79,6 +87,11 @@ type AccountRead struct {
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	After            string
+}
+
+type GroupRead struct {
+	AccountRead
+	GroupID iamv1.GroupID
 }
 
 // AccountManagementSnapshot carries only target facts required to project
@@ -173,6 +186,50 @@ type UserDeletionMutation struct {
 	PrincipalID      iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type GroupMutation struct {
+	Group            iamv1.Group
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+type GroupProfileMutation struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	GroupID          iamv1.GroupID
+	Name             string
+	Description      string
+	ResourceVersion  uint64
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+type GroupDeletionMutation struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	GroupID          iamv1.GroupID
+	ResourceVersion  uint64
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+type GroupMembershipMutation struct {
+	Membership       iamv1.GroupMembership
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+type GroupMembershipRemovalMutation struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	GroupID          iamv1.GroupID
+	MembershipID     iamv1.GroupMembershipID
+	ResourceVersion  uint64
+	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
 }
 

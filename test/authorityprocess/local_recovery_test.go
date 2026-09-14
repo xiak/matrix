@@ -180,7 +180,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	}
 	var actualAttachments []byte
 	if err := admin.QueryRow(ctx, `SELECT jsonb_agg(jsonb_build_object(
-        'account',a.tenant_id,'id',a.id,'principal',a.principal_id,'targetKind',a.target_kind,
+        'account',a.tenant_id,'id',a.id,'principal',a.target_id,'targetKind',a.target_kind,
         'policy',a.policy_id,'scope',a.authority_scope,'installation',a.installation_id,
         'revision',a.resource_version,'created',a.created_at,'updated',a.updated_at,'revoked',a.revoked_at)
         ORDER BY a.tenant_id,a.id) FROM iam.policy_attachments a`).Scan(&actualAttachments); err != nil ||
@@ -267,7 +267,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		}
 		memberIdentity := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", memberSession.Credential, nil)
 		var memberState iamv1.CurrentIdentity
-		if memberIdentity.Status != http.StatusOK || json.Unmarshal(memberIdentity.Body, &memberState) != nil || len(memberState.PolicyAttachments) != 0 {
+		if memberIdentity.Status != http.StatusOK || json.Unmarshal(memberIdentity.Body, &memberState) != nil || len(memberState.PolicySources) != 0 {
 			t.Fatal("primary recovery changed the retained member or repaired its revoked binding")
 		}
 		if attempt == 0 {

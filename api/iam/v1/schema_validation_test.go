@@ -282,7 +282,7 @@ func TestPolicyAttachmentMutationSchemaMatchesStrictRequests(t *testing.T) {
 		{"installation selector", "CreatePolicyAttachmentRequest", `{"target":{"kind":"USER","id":"user-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a","installationId":"installation-b"}`, false},
 		{"scope selector", "CreatePolicyAttachmentRequest", `{"target":{"kind":"USER","id":"user-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a","scope":"TENANT"}`, false},
 		{"role carrier unavailable", "CreatePolicyAttachmentRequest", `{"target":{"kind":"ROLE","id":"role-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a"}`, false},
-		{"group carrier unavailable", "CreatePolicyAttachmentRequest", `{"target":{"kind":"GROUP","id":"group-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a"}`, false},
+		{"direct group", "CreatePolicyAttachmentRequest", `{"target":{"kind":"GROUP","id":"group-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a"}`, true},
 		{"service workflow unavailable", "CreatePolicyAttachmentRequest", `{"target":{"kind":"SERVICE_ACCOUNT","id":"service-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a"}`, false},
 		{"revoke exact revision", "RevokePolicyAttachmentRequest", `{"resourceVersion":1,"requestId":"revoke-a"}`, true},
 		{"revoke maximal revision", "RevokePolicyAttachmentRequest", `{"resourceVersion":9007199254740991,"requestId":"revoke-a"}`, true},

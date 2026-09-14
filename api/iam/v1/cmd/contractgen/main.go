@@ -111,8 +111,22 @@ func buildPaths() object {
 		"/v1/users": object{"get": readOperation("listUsers", "List manageable users and their bounded direct policy attachments in the current account", "UserList", nil, accountPageParameters()), "post": mutationOperation(
 			"createUser", "Create an account user", "CreateUserRequest", "User", "201", nil, nil,
 		)},
+		"/v1/groups": object{"get": readOperation("listGroups", "List groups and their bounded direct policy attachments in the current account", "GroupList", nil, accountPageParameters()), "post": mutationOperation(
+			"createGroup", "Create an account group", "CreateGroupRequest", "Group", "201", nil, nil,
+		)},
+		"/v1/groups/{groupId}":        object{"get": readOperation("getGroup", "Read one group and its target capabilities", "GroupAccess", nil, []any{openapi31.PathIDParameter("groupId")})},
+		"/v1/groups/{groupId}:update": object{"post": mutationOperation("updateGroup", "Update a group name and description", "UpdateGroupRequest", "Group", "200", nil, []any{openapi31.PathIDParameter("groupId")})},
+		"/v1/groups/{groupId}:delete": object{"post": mutationOperation("deleteGroup", "Tombstone a group and close its active relationships", "DeleteGroupRequest", "GroupDeletion", "200", nil, []any{openapi31.PathIDParameter("groupId")})},
+		"/v1/groups/{groupId}/memberships": object{
+			"get":  readOperation("listGroupMemberships", "List current user memberships in a group", "GroupMembershipList", nil, append([]any{openapi31.PathIDParameter("groupId")}, accountPageParameters()...)),
+			"post": mutationOperation("createGroupMembership", "Add one user to a group", "CreateGroupMembershipRequest", "GroupMembership", "200", nil, []any{openapi31.PathIDParameter("groupId")}),
+		},
+		"/v1/groups/{groupId}/memberships/{membershipId}:remove": object{"post": mutationOperation(
+			"removeGroupMembership", "Remove one exact user membership from a group", "RemoveGroupMembershipRequest", "GroupMembership", "200", nil,
+			[]any{openapi31.PathIDParameter("groupId"), openapi31.PathIDParameter("membershipId")},
+		)},
 		"/v1/policy-attachments": object{"post": mutationOperation(
-			"createPolicyAttachment", "Create a direct user policy attachment", "CreatePolicyAttachmentRequest", "PolicyAttachment", "200", nil, nil,
+			"createPolicyAttachment", "Create a direct user or group policy attachment", "CreatePolicyAttachmentRequest", "PolicyAttachment", "200", nil, nil,
 		)},
 		"/v1/policy-attachments/{attachmentId}:revoke": object{"post": mutationOperation(
 			"revokePolicyAttachment", "Revoke a policy attachment", "RevokePolicyAttachmentRequest", "Revocation", "200", nil,
@@ -198,7 +212,7 @@ func scalarSchemas() object {
 		},
 	}
 	for _, name := range []string{
-		"AccountID", "PrincipalID", "RoleBindingID", "SessionID", "DecisionID",
+		"AccountID", "PrincipalID", "GroupID", "GroupMembershipID", "RoleBindingID", "SessionID", "DecisionID",
 		"PolicyID", "PolicyVersionID", "PolicyAttachmentID",
 	} {
 		result[name] = object{"allOf": []any{openapi31.Ref("ID")}}
@@ -216,12 +230,13 @@ func enumSchemas() map[string][]string {
 		"IdentityKind":               {string(iamv1.IdentityRoot), string(iamv1.IdentityUser)},
 		"CapabilityRestriction":      openapi31.StringValues(iamv1.AllCapabilityRestrictions()),
 		"PolicyAttachmentTargetKind": {string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetService), string(iamv1.PolicyTargetGroup), string(iamv1.PolicyTargetRole)},
+		"PolicyGrantSourceKind":      {string(iamv1.PolicyGrantDirect), string(iamv1.PolicyGrantGroup)},
 		"PolicyManagement":           {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
 		"PolicyStatus":               {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
 		"Action":                     openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
 			string(iamv1.ResourceAccount), string(iamv1.ResourceUser),
-			string(iamv1.ResourceOrganization), string(iamv1.ResourcePrincipal), string(iamv1.ResourceRoleBinding), string(iamv1.ResourcePolicyAttachment),
+			string(iamv1.ResourceOrganization), string(iamv1.ResourcePrincipal), string(iamv1.ResourceGroup), string(iamv1.ResourceGroupMembership), string(iamv1.ResourceRoleBinding), string(iamv1.ResourcePolicyAttachment),
 			string(iamv1.ResourceSession), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
 			string(iamv1.ResourceConfigurationRevision), string(iamv1.ResourceApplicationRevision),
 			string(iamv1.ResourceDeployment), string(iamv1.ResourceOperation),
@@ -243,6 +258,7 @@ func structContracts() map[string]reflect.Type {
 		"Subject":                       openapi31.StructType[iamv1.Subject](),
 		"ResourceReference":             openapi31.StructType[iamv1.ResourceReference](),
 		"PolicyAttachment":              openapi31.StructType[iamv1.PolicyAttachment](),
+		"PolicyGrantSource":             openapi31.StructType[iamv1.PolicyGrantSource](),
 		"Policy":                        openapi31.StructType[iamv1.Policy](),
 		"PolicyAttachmentTarget":        openapi31.StructType[iamv1.PolicyAttachmentTarget](),
 		"CreatePolicyAttachmentRequest": openapi31.StructType[iamv1.CreatePolicyAttachmentRequest](),
@@ -266,11 +282,17 @@ func structContracts() map[string]reflect.Type {
 		"RootIdentity":                  openapi31.StructType[iamv1.RootIdentity](),
 		"Account":                       openapi31.StructType[iamv1.Account](),
 		"User":                          openapi31.StructType[iamv1.User](),
+		"Group":                         openapi31.StructType[iamv1.Group](),
+		"GroupMembership":               openapi31.StructType[iamv1.GroupMembership](),
 		"ActionCapability":              openapi31.StructType[iamv1.ActionCapability](),
 		"CurrentIdentity":               openapi31.StructType[iamv1.CurrentIdentity](),
 		"PolicyList":                    openapi31.StructType[iamv1.PolicyList](),
 		"UserAccess":                    openapi31.StructType[iamv1.UserAccess](),
 		"UserList":                      openapi31.StructType[iamv1.UserList](),
+		"GroupAccess":                   openapi31.StructType[iamv1.GroupAccess](),
+		"GroupList":                     openapi31.StructType[iamv1.GroupList](),
+		"GroupMembershipAccess":         openapi31.StructType[iamv1.GroupMembershipAccess](),
+		"GroupMembershipList":           openapi31.StructType[iamv1.GroupMembershipList](),
 		"AccountAccess":                 openapi31.StructType[iamv1.AccountAccess](),
 		"AccountList":                   openapi31.StructType[iamv1.AccountList](),
 		"CreateAccountRequest":          openapi31.StructType[iamv1.CreateAccountRequest](),
@@ -279,6 +301,12 @@ func structContracts() map[string]reflect.Type {
 		"UpdateUserRequest":             openapi31.StructType[iamv1.UpdateUserRequest](),
 		"DeleteUserRequest":             openapi31.StructType[iamv1.DeleteUserRequest](),
 		"UserDeletion":                  openapi31.StructType[iamv1.UserDeletion](),
+		"CreateGroupRequest":            openapi31.StructType[iamv1.CreateGroupRequest](),
+		"UpdateGroupRequest":            openapi31.StructType[iamv1.UpdateGroupRequest](),
+		"DeleteGroupRequest":            openapi31.StructType[iamv1.DeleteGroupRequest](),
+		"GroupDeletion":                 openapi31.StructType[iamv1.GroupDeletion](),
+		"CreateGroupMembershipRequest":  openapi31.StructType[iamv1.CreateGroupMembershipRequest](),
+		"RemoveGroupMembershipRequest":  openapi31.StructType[iamv1.RemoveGroupMembershipRequest](),
 		"SetAccountStatusRequest":       openapi31.StructType[iamv1.SetAccountStatusRequest](),
 		"RecoverRootCredentialsRequest": openapi31.StructType[iamv1.RecoverRootCredentialsRequest](),
 		"ResetUserPasswordRequest":      openapi31.StructType[iamv1.ResetUserPasswordRequest](),
@@ -294,6 +322,12 @@ func structContracts() map[string]reflect.Type {
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
 	if (owner == "Policy" || owner == "UpdateUserRequest") && jsonName == "displayName" {
 		base["minLength"], base["maxLength"] = 1, 128
+	}
+	if (owner == "Group" || owner == "GroupDeletion" || owner == "CreateGroupRequest" || owner == "UpdateGroupRequest") && jsonName == "name" {
+		base["minLength"], base["maxLength"] = 1, 64
+	}
+	if (owner == "Group" || owner == "CreateGroupRequest" || owner == "UpdateGroupRequest") && jsonName == "description" {
+		base["minLength"], base["maxLength"] = 0, 512
 	}
 	if jsonName == "contentDigest" {
 		base = object{"type": "string", "pattern": `^sha256:[0-9a-f]{64}$`}
@@ -314,22 +348,29 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		base = openapi31.Ref("ID")
 	}
 	if owner == "CreatePolicyAttachmentRequest" && jsonName == "target" {
-		base = object{"allOf": []any{openapi31.Ref("PolicyAttachmentTarget"), object{"properties": object{"kind": object{"const": "USER"}}}}}
+		base = object{"allOf": []any{openapi31.Ref("PolicyAttachmentTarget"), object{"properties": object{"kind": object{"enum": []string{string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetGroup)}}}}}}
 	}
-	if (owner == "UserList" || owner == "AccountList") && jsonName == "items" {
+	if (owner == "UserList" || owner == "AccountList" || owner == "GroupList" || owner == "GroupMembershipList") && jsonName == "items" {
 		base["maxItems"] = 100
 	}
 	if owner == "PolicyList" && jsonName == "items" {
 		base["maxItems"] = iamv1.MaxPolicyListItems
 	}
-	if (owner == "CurrentIdentity" || owner == "UserAccess") && jsonName == "policyAttachments" {
+	if owner == "CurrentIdentity" && jsonName == "policySources" {
 		base["maxItems"] = 256
+	}
+	if (owner == "UserAccess" || owner == "GroupAccess") && jsonName == "policyAttachments" {
+		base["maxItems"] = 256
+		targetKind := string(iamv1.PolicyTargetUser)
+		if owner == "GroupAccess" {
+			targetKind = string(iamv1.PolicyTargetGroup)
+		}
 		base["items"] = object{"allOf": []any{openapi31.Ref("PolicyAttachment"), object{"properties": object{
-			"revokedAt": false, "target": object{"properties": object{"kind": object{"const": "USER"}}},
+			"revokedAt": false, "target": object{"properties": object{"kind": object{"const": targetKind}}},
 		}}}}
 	}
-	if (owner == "CurrentIdentity" || owner == "UserAccess" || owner == "AccountAccess") && jsonName == "capabilities" {
-		base["maxItems"] = 260
+	if (owner == "CurrentIdentity" || owner == "UserAccess" || owner == "GroupAccess" || owner == "GroupMembershipAccess" || owner == "AccountAccess") && jsonName == "capabilities" {
+		base["maxItems"] = map[string]int{"CurrentIdentity": 8, "UserAccess": 263, "GroupAccess": 262, "GroupMembershipAccess": 1, "AccountAccess": 2}[owner]
 	}
 	if field.Type.Name() == "Secret" {
 		base["writeOnly"] = true
@@ -376,6 +417,30 @@ func applySemanticOverlays(schemas object) {
 		object{"required": []string{"installationId"}, "properties": object{"scope": object{"const": "INSTALLATION_PROBE"},
 			"target": object{"properties": object{"kind": object{"const": "SERVICE_ACCOUNT"}}}}},
 	}
+	schemas["PolicyGrantSource"].(object)["oneOf"] = []any{
+		object{
+			"properties": object{
+				"kind":       object{"const": string(iamv1.PolicyGrantDirect)},
+				"membership": false,
+				"attachment": object{"properties": object{"target": object{"properties": object{"kind": object{"const": string(iamv1.PolicyTargetUser)}}}}},
+			},
+		},
+		object{
+			"required": []string{"membership"},
+			"properties": object{
+				"kind": object{"const": string(iamv1.PolicyGrantGroup)},
+				"attachment": object{"properties": object{
+					"scope":  object{"const": string(iamv1.AuthorityScopeTenant)},
+					"target": object{"properties": object{"kind": object{"const": string(iamv1.PolicyTargetGroup)}}},
+				}},
+				"membership": object{"properties": object{"removedAt": false, "removedBy": false}},
+			},
+		},
+	}
+	schemas["GroupMembership"].(object)["oneOf"] = []any{
+		object{"properties": object{"removedAt": false, "removedBy": false, "resourceVersion": object{"const": 1}}},
+		object{"required": []string{"removedAt", "removedBy"}, "properties": object{"resourceVersion": object{"minimum": 2}}},
+	}
 	schemas["AuditProducerAuthorization"].(object)["oneOf"] = []any{
 		object{"required": []string{"tenantId"}, "properties": object{"installationId": false}},
 		object{"required": []string{"installationId"}, "properties": object{"tenantId": false}},
@@ -383,8 +448,8 @@ func applySemanticOverlays(schemas object) {
 	kinds := map[string]string{
 		"Policy":          "Policy",
 		"PolicyList":      "PolicyList",
-		"CurrentIdentity": "CurrentIdentity", "UserList": "UserList", "AccountList": "AccountList",
-		"Account": "Account", "User": "User",
+		"CurrentIdentity": "CurrentIdentity", "UserList": "UserList", "GroupList": "GroupList", "GroupMembershipList": "GroupMembershipList", "AccountList": "AccountList",
+		"Account": "Account", "User": "User", "Group": "Group", "GroupMembership": "GroupMembership", "GroupDeletion": "GroupDeletion",
 		"PolicyAttachment": "PolicyAttachment",
 		"Session":          "Session", "BootstrapDocument": "IAMBootstrap", "BootstrapStatus": "BootstrapStatus",
 		"ServiceIdentity":            "ServiceIdentity",

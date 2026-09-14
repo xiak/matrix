@@ -220,3 +220,21 @@ history; the feature target precedes this review.
 | Legacy `69336e51f94fa98f6aa278fa4c62382e224dbeaf`: `accessgrant/domain/accessprofile/profile.go`, `statement.go`, `version.go` | `REFERENCE` for invariant separation; `REJECT` as code | The donor separates stable profile identity, version content, statements and defensive copies. Its multiple active versions, scope inheritance, obligation/operation/reference graph and external condition references do not implement this product's one effective immutable policy version or bounded typed language. No donor type, module or runtime is imported. |
 | Matrix `aa345eca5f1ed3921000aa5380d5bfd2aa6d0a50`: current role-binding and local credential-recovery SQL/receipt contracts | `ADAPT` for storage; `REUSE` sealed history | Migrate exact binding IDs, versions and revoked history into attachments. Preserve historical receipt/capability bytes and one-shot recovery; a new policy model cannot supply an offline grant or revive a revoked link. |
 | Matrix `273196d2442fd70b6824ec10fcd4ef8ba0f95a38`: IAM migration Source and Audit transaction coordinator | `ADAPT` | Replace separately committed IAM fragments with one context-owned transaction including final verification, proved against actual retained old-binary data. Pace only known rolled-back Audit conflicts; retain attempt bounds and reject unknown outcomes. No shared migration framework, client retry workaround or second canonical encoder is introduced. |
+
+## IAM/004 fixed group-adoption review
+
+The Group target was frozen in `IAM/FEAT-IAM-004` before implementation. No
+moving branch or another worktree is a donor, and no legacy group package is a
+build or runtime dependency.
+
+| Fixed source and slice | Decision | Reason |
+| --- | --- | --- |
+| Matrix `384d6d76b65498ed6b428ba9a2905ef67831b919`: ActionDefinition catalog, deny-first evaluator, policy/version/attachment store, SERIALIZABLE transaction owner and Account/User lifecycle | `ADAPT` | Keep one evaluator, credential-derived Account, immutable versions, outbox facts and exact evidence. Generalize the internal attachment target from principal-only storage to typed USER/GROUP without a group evaluator or second attachment table; inherited decisions add membership evidence. |
+| Matrix `384d6d76b65498ed6b428ba9a2905ef67831b919`: direct User attachment/session snapshot and CurrentIdentity `policyAttachments` | `ADAPT` then replace | Direct attachments remain valid sources, but the effective permission snapshot must distinguish DIRECT from GROUP and bind the live membership. Do not retain the direct-only projection as a parallel effective-authority model. |
+| Access-management product reference `1ad6884ff1f844429b477d5578a039ec809211d7`: Group, many-to-many membership and inherited policy behavior | `REFERENCE` for product behavior | Use Group as a non-login, non-owner User collection and preserve direct versus inherited provenance. External route names, quotas and unobservable internal topology are not Matrix contracts. |
+| Tencent CAM public Group material analyzed at fixed `b0e8627b7e8303136875bda074f2e382c23dfc0b` | `REFERENCE` | It corroborates bulk authorization and multi-group membership. It does not prove database tables, transaction order, caching, consistency or Audit internals; those remain Matrix-owned and require real gates. |
+| Legacy PaaS `69336e51f94fa98f6aa278fa4c62382e224dbeaf`: `app/ui/src/ui/xiak` social/group presentation | `REJECT` | It has no current IAM Action/Resource, membership authority, inherited evidence, Account isolation or fail-closed revocation contract. |
+| Matrix account donor `6a0f417743948a5303d3a3342cb1e8902c9d17f2` | `REJECT` for Group implementation; `REUSE` only through already-adapted Account/User invariants | The fixed slice has no Group or inherited-policy authority. Qualified login, Account ownership and root/User protection already exist in the target and are preserved, not copied again. |
+
+The concrete API, lock order, capacity limits and acceptance matrix belong only
+to `IAM/FEAT-IAM-004`; this adoption record does not duplicate them.

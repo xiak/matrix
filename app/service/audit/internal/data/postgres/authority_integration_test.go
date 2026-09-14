@@ -895,7 +895,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 8 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 9 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
@@ -976,7 +976,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 8 || checkedAt.IsZero() {
+	if ready || schemaVersion != 9 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -1759,9 +1759,11 @@ func assertIAMAuthorizationCatalog(
 			'version', jsonb_build_object('policyId', policy.id, 'versionId', version.id,
 			'contentDigest', version.content_digest)))
 			FROM iam.policy_attachments AS attachment
+			JOIN iam.principals AS subject ON subject.tenant_id=attachment.tenant_id
+			AND subject.id=attachment.target_id AND subject.principal_type=attachment.target_kind
 			JOIN iam.policies AS policy ON policy.id=attachment.policy_id
 			JOIN iam.policy_versions AS version ON version.policy_id=policy.id AND version.id=policy.default_version_id
-			WHERE attachment.tenant_id=$1 AND attachment.principal_id=$2 AND policy.id=$3
+			WHERE attachment.tenant_id=$1 AND attachment.target_id=$2 AND policy.id=$3
 			AND attachment.revoked_at IS NULL AND policy.status='ACTIVE'`,
 			string(fixture.TenantID), principal, string(policy)).Scan(&evidence); err != nil {
 			t.Fatalf("read exact fixture policy evidence: %v", err)
@@ -1976,7 +1978,7 @@ func assertIAMAuthorizationCatalog(
 	for _, attack := range []string{"mixed authority", "wrong installation", "revoked platform attachment"} {
 		if attack == "revoked platform attachment" {
 			if _, err := admin.Exec(ctx, `UPDATE iam.policy_attachments SET revoked_at = transaction_timestamp(), updated_at = transaction_timestamp(), resource_version = resource_version + 1
-				WHERE tenant_id = $1 AND principal_id = $2 AND policy_id = 'system.platform-operator' AND revoked_at IS NULL`,
+				WHERE tenant_id = $1 AND target_id = $2 AND target_kind='USER' AND policy_id = 'system.platform-operator' AND revoked_at IS NULL`,
 				string(fixture.TenantID), fixture.Administrator); err != nil {
 				t.Fatal(err)
 			}

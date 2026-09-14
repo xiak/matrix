@@ -7,9 +7,16 @@ import type {
   ActionCapability,
   CapabilityRestriction,
   DirectoryPage,
+  Group,
+  GroupAccess,
+  GroupDeletion,
+  GroupMembership,
+  GroupMembershipPage,
+  GroupPolicyAttachment,
   IamAction,
   PolicyDirectory,
   PolicyManagement,
+  PolicyGrantSource,
   PolicyScope,
   PolicyStatus,
   User,
@@ -47,6 +54,18 @@ function accountText(value: unknown): string {
   return value;
 }
 
+function accountIdentifier(value: unknown): string {
+  const result = accountText(value);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(result)) throw new Error("INVALID_IAM_RESPONSE");
+  return result;
+}
+
+function groupText(value: unknown, minimum: number, maximum: number): string {
+  if (typeof value !== "string" || value.trim() !== value || /\p{Cc}/u.test(value) ||
+      Array.from(value).length < minimum || Array.from(value).length > maximum) throw new Error("INVALID_IAM_RESPONSE");
+  return value;
+}
+
 function accountVersion(value: unknown): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) throw new Error("INVALID_IAM_RESPONSE");
   return value;
@@ -54,10 +73,18 @@ function accountVersion(value: unknown): number {
 
 function accountTimestamp(value: unknown): string {
   const result = accountText(value);
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(result) || Number.isNaN(Date.parse(result))) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(result) || Number.isNaN(Date.parse(result)) ||
+      new Date(result).toISOString().slice(0, 19) !== result.slice(0, 19)) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
   return result;
+}
+
+function chronologicalTimestamps(created: unknown, updated: unknown) {
+  const createdAt = accountTimestamp(created), updatedAt = accountTimestamp(updated);
+  const order = (value: string) => value.slice(0, 19) + "." + value.slice(19, -1).slice(1).padEnd(6, "0");
+  if (order(updatedAt) < order(createdAt)) throw new Error("INVALID_IAM_RESPONSE");
+  return { createdAt, updatedAt };
 }
 
 function accountStatus(value: unknown): "ACTIVE" | "DISABLED" {
@@ -73,6 +100,9 @@ function policyScope(value: unknown): PolicyScope {
 const capabilityActions = new Set<IamAction>([
   "iam.account.create", "iam.account.read", "iam.account.set-status", "iam.account.recover-root-credentials",
   "iam.account.alias-set", "iam.user.list", "iam.user.create", "iam.policy.list", "iam.user.read",
+  "iam.group.list", "iam.group.create", "iam.group.read", "iam.group.update", "iam.group.delete",
+  "iam.group-membership.list", "iam.group-membership.create", "iam.group-membership.remove",
+  "iam.group-policy-attachment.create", "iam.group-policy-attachment.revoke",
   "iam.user.update", "iam.user.delete", "iam.user.set-status",
   "iam.user.reset-password", "iam.policy-attachment.create", "iam.platform-policy-attachment.create",
   "iam.policy-attachment.revoke", "iam.platform-policy-attachment.revoke"
@@ -88,7 +118,10 @@ function capabilityResourceKind(action: IamAction): ActionCapability["resource"]
   if (action === "iam.user.read" || action === "iam.user.update" || action === "iam.user.delete" ||
       action === "iam.user.set-status" || action === "iam.user.reset-password" ||
       action === "iam.policy-attachment.create" || action === "iam.platform-policy-attachment.create") return "USER";
-  if (action === "iam.policy-attachment.revoke" || action === "iam.platform-policy-attachment.revoke") return "POLICY_ATTACHMENT";
+  if (action === "iam.policy-attachment.revoke" || action === "iam.platform-policy-attachment.revoke" || action === "iam.group-policy-attachment.revoke") return "POLICY_ATTACHMENT";
+  if (action === "iam.group.read" || action === "iam.group.update" || action === "iam.group.delete" ||
+      action === "iam.group-membership.list" || action === "iam.group-membership.create" || action === "iam.group-policy-attachment.create") return "GROUP";
+  if (action === "iam.group-membership.remove") return "GROUP_MEMBERSHIP";
   return "ACCOUNT";
 }
 
@@ -163,21 +196,128 @@ function parseUser(value: unknown): User {
     displayName: accountText(wire.displayName), status: accountStatus(wire.status), mustChangePassword: wire.mustChangePassword === true, resourceVersion: accountVersion(wire.resourceVersion) };
 }
 
-function parsePolicyAttachment(value: unknown): UserPolicyAttachment {
+function parseAttachment(value: unknown): Omit<UserPolicyAttachment, "target"> & { target: { kind: "USER" | "GROUP"; id: string } } {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "target", "policyId", "scope", "resourceVersion", "createdAt", "updatedAt"], ["installationId"]);
   requireAccountKind(wire, "PolicyAttachment");
   const target = accountRecord(wire.target);
   exactKeys(target, ["kind", "id"]);
   const scope = policyScope(wire.scope);
-  if (target.kind !== "USER" || (scope === "TENANT" && wire.installationId !== undefined) ||
+  if ((target.kind !== "USER" && target.kind !== "GROUP") || (target.kind === "GROUP" && scope !== "TENANT") || (scope === "TENANT" && wire.installationId !== undefined) ||
       (scope === "INSTALLATION" && typeof wire.installationId !== "string")) throw new Error("INVALID_IAM_RESPONSE");
   return {
-    id: accountText(wire.id), accountId: accountText(wire.accountId),
-    target: { kind: "USER", id: accountText(target.id) }, policyId: accountText(wire.policyId), scope,
-    installationId: scope === "INSTALLATION" ? accountText(wire.installationId) : null,
-    resourceVersion: accountVersion(wire.resourceVersion), createdAt: accountTimestamp(wire.createdAt), updatedAt: accountTimestamp(wire.updatedAt)
+    id: accountIdentifier(wire.id), accountId: accountIdentifier(wire.accountId),
+    target: { kind: target.kind, id: accountIdentifier(target.id) }, policyId: accountIdentifier(wire.policyId), scope,
+    installationId: scope === "INSTALLATION" ? accountIdentifier(wire.installationId) : null,
+    resourceVersion: accountVersion(wire.resourceVersion), ...chronologicalTimestamps(wire.createdAt, wire.updatedAt)
   };
+}
+
+function parsePolicyAttachment(value: unknown): UserPolicyAttachment {
+  const attachment = parseAttachment(value);
+  if (attachment.target.kind !== "USER") throw new Error("INVALID_IAM_RESPONSE");
+  return { ...attachment, target: { kind: "USER", id: attachment.target.id } };
+}
+
+function parseGroupPolicyAttachment(value: unknown): GroupPolicyAttachment {
+  const attachment = parseAttachment(value);
+  if (attachment.target.kind !== "GROUP" || attachment.scope !== "TENANT") {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return { ...attachment, scope: "TENANT", installationId: null, target: { kind: "GROUP", id: attachment.target.id } };
+}
+
+function parseGroupMembership(value: unknown): GroupMembership {
+  const member = accountRecord(value);
+  exactKeys(member, ["apiVersion", "kind", "id", "accountId", "groupId", "userId", "createdBy", "resourceVersion", "createdAt", "updatedAt"], ["removedAt", "removedBy"]);
+  requireAccountKind(member, "GroupMembership");
+  const membership: GroupMembership = {
+    id: accountIdentifier(member.id), accountId: accountIdentifier(member.accountId), groupId: accountIdentifier(member.groupId),
+    userId: accountIdentifier(member.userId), createdBy: accountIdentifier(member.createdBy), resourceVersion: accountVersion(member.resourceVersion),
+    ...chronologicalTimestamps(member.createdAt, member.updatedAt)
+  };
+  if (member.removedAt === undefined) {
+    if (member.removedBy !== undefined || membership.resourceVersion !== 1 || membership.updatedAt !== membership.createdAt) throw new Error("INVALID_IAM_RESPONSE");
+  } else {
+    membership.removedAt = accountTimestamp(member.removedAt);
+    membership.removedBy = accountIdentifier(member.removedBy);
+    if (membership.resourceVersion < 2 || membership.removedAt !== membership.updatedAt) throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return membership;
+}
+
+function parsePolicyGrantSource(value: unknown): PolicyGrantSource {
+  const wire = accountRecord(value);
+  if (wire.kind === "DIRECT") {
+    exactKeys(wire, ["kind", "attachment"]);
+    return { kind: "DIRECT", attachment: parsePolicyAttachment(wire.attachment) };
+  }
+  if (wire.kind !== "GROUP") throw new Error("INVALID_IAM_RESPONSE");
+  exactKeys(wire, ["kind", "attachment", "membership"]);
+  const attachment = parseGroupPolicyAttachment(wire.attachment);
+  const membership = parseGroupMembership(wire.membership);
+  if (membership.removedAt !== undefined ||
+      membership.accountId !== attachment.accountId || membership.groupId !== attachment.target.id) throw new Error("INVALID_IAM_RESPONSE");
+  return { kind: "GROUP", membership, attachment };
+}
+
+function parseGroup(value: unknown): Group {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "name", "resourceVersion", "createdAt", "updatedAt"], ["description"]);
+  requireAccountKind(wire, "Group");
+  return { id: accountIdentifier(wire.id), accountId: accountIdentifier(wire.accountId), name: groupText(wire.name, 1, 64),
+    description: wire.description === undefined ? "" : groupText(wire.description, 0, 512), resourceVersion: accountVersion(wire.resourceVersion),
+    ...chronologicalTimestamps(wire.createdAt, wire.updatedAt) };
+}
+
+function parseGroupAccess(value: unknown, accountId: string): GroupAccess {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["group", "policyAttachments", "capabilities"]);
+  const group = parseGroup(wire.group);
+  if (group.accountId !== accountId || !Array.isArray(wire.policyAttachments) || wire.policyAttachments.length > 256) throw new Error("INVALID_IAM_RESPONSE");
+  const policyAttachments = wire.policyAttachments.map(parseGroupPolicyAttachment);
+  if (policyAttachments.some((attachment) => attachment.accountId !== accountId || attachment.target.id !== group.id) ||
+      new Set(policyAttachments.map((attachment) => attachment.id)).size !== policyAttachments.length ||
+      new Set(policyAttachments.map((attachment) => attachment.policyId)).size !== policyAttachments.length) throw new Error("INVALID_IAM_RESPONSE");
+  const resource = { kind: "GROUP" as const, id: group.id };
+  const capabilities = parseCapabilities(wire.capabilities, [
+    { action: "iam.group.read", resource }, { action: "iam.group.update", resource }, { action: "iam.group.delete", resource },
+    { action: "iam.group-membership.list", resource }, { action: "iam.group-membership.create", resource },
+    { action: "iam.group-policy-attachment.create", resource },
+    ...policyAttachments.map((attachment) => ({ action: "iam.group-policy-attachment.revoke" as const,
+      resource: { kind: "POLICY_ATTACHMENT" as const, id: attachment.id } }))
+  ]);
+  return { group, policyAttachments, capabilities };
+}
+
+function parseGroupMembershipPage(value: unknown, accountId: string, groupId: string, after?: string): GroupMembershipPage {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "groupId", "items"], ["nextAfter"]);
+  requireAccountKind(wire, "GroupMembershipList");
+  if (wire.accountId !== accountId || wire.groupId !== groupId || !Array.isArray(wire.items) || wire.items.length > 100) throw new Error("INVALID_IAM_RESPONSE");
+  const items = wire.items.map((value) => {
+    const item = accountRecord(value);
+    exactKeys(item, ["membership", "capabilities"]);
+    const membership = parseGroupMembership(item.membership);
+    if (membership.accountId !== accountId || membership.groupId !== groupId || membership.removedAt !== undefined) throw new Error("INVALID_IAM_RESPONSE");
+    const capabilities = parseCapabilities(item.capabilities, [{ action: "iam.group-membership.remove",
+      resource: { kind: "GROUP_MEMBERSHIP", id: membership.id } }]);
+    return { membership, capabilities };
+  });
+  const nextAfter = orderedGroupPage(items.map((item) => item.membership.id), wire.nextAfter, after);
+  if (new Set(items.map((item) => item.membership.userId)).size !== items.length) throw new Error("INVALID_IAM_RESPONSE");
+  return { accountId, groupId, items, nextAfter };
+}
+
+function orderedGroupPage(ids: string[], next: unknown, after?: string): string | null {
+  if (ids.some((id, index) => id <= (index === 0 ? after ?? "" : ids[index - 1]!))) throw new Error("INVALID_IAM_RESPONSE");
+  if (next === undefined) return null;
+  if (ids.length !== 100 || accountIdentifier(next) !== ids.at(-1)) throw new Error("INVALID_IAM_RESPONSE");
+  return next as string;
+}
+
+function postAccount(credential: string, path: string, body: Record<string, unknown>): Promise<unknown> {
+  return requestJSON<unknown>(path, { method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" }, body: JSON.stringify(body) });
 }
 
 function parsePolicy(value: unknown): AccountPolicy {
@@ -216,13 +356,13 @@ function parsePolicyDirectory(value: unknown, expectedScope: PolicyScope): Polic
 
 function parseAccountIdentity(value: unknown): AccountIdentity {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "account", "user", "identityKind", "policyAttachments", "capabilities"]);
+  exactKeys(wire, ["apiVersion", "kind", "account", "user", "identityKind", "policySources", "capabilities"]);
   requireAccountKind(wire, "CurrentIdentity");
-  if (!Array.isArray(wire.policyAttachments) || wire.policyAttachments.length > 256 ||
+  if (!Array.isArray(wire.policySources) || wire.policySources.length > 256 ||
       (wire.identityKind !== "ROOT_IDENTITY" && wire.identityKind !== "USER")) throw new Error("INVALID_IAM_RESPONSE");
   const account = parseAccount(wire.account);
   const user = parseUser(wire.user);
-  const policyAttachments = wire.policyAttachments.map(parsePolicyAttachment);
+  const policySources = wire.policySources.map(parsePolicyGrantSource);
   const accountResource = { kind: "ACCOUNT" as const, id: account.id };
   const capabilities = parseCapabilities(wire.capabilities, [
     { action: "iam.account.create", resource: { kind: "ACCOUNT", id: "accounts" } },
@@ -230,16 +370,18 @@ function parseAccountIdentity(value: unknown): AccountIdentity {
     { action: "iam.account.alias-set", resource: accountResource },
     { action: "iam.user.list", resource: accountResource },
     { action: "iam.user.create", resource: accountResource },
-    { action: "iam.policy.list", resource: accountResource }
+    { action: "iam.policy.list", resource: accountResource },
+    { action: "iam.group.list", resource: accountResource },
+    { action: "iam.group.create", resource: accountResource }
   ]);
   if (account.id !== user.accountId ||
       (wire.identityKind === "ROOT_IDENTITY") !== (account.rootIdentity.principalId === user.id) ||
-      policyAttachments.some((attachment) => attachment.accountId !== user.accountId || attachment.target.id !== user.id) ||
-      new Set(policyAttachments.map((attachment) => attachment.id)).size !== policyAttachments.length ||
-      new Set(policyAttachments.map((attachment) => attachment.policyId)).size !== policyAttachments.length) {
+      policySources.some((source) => source.attachment.accountId !== user.accountId ||
+        (source.kind === "DIRECT" ? source.attachment.target.id !== user.id : source.membership.userId !== user.id || wire.identityKind !== "USER")) ||
+      policySources.some((source, index) => index > 0 && policySources[index - 1]!.attachment.id >= source.attachment.id)) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
-  return { account, user, identityKind: wire.identityKind, policyAttachments, capabilities };
+  return { account, user, identityKind: wire.identityKind, policySources, capabilities };
 }
 
 function parseUserAccess(value: unknown): UserAccess {
@@ -302,6 +444,89 @@ export const httpAccountRepository: AccountRepository = {
   },
   async listAccounts(credential, after) {
     return accountPage(await requestJSON<unknown>(`/api/iam/v1/accounts${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "AccountList", parseAccountAccess);
+  },
+  async listGroups(credential, accountId, after) {
+    const wire = accountRecord(await requestJSON<unknown>(`/api/iam/v1/groups${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }));
+    exactKeys(wire, ["apiVersion", "kind", "items"], ["nextAfter"]);
+    requireAccountKind(wire, "GroupList");
+    if (!Array.isArray(wire.items) || wire.items.length > 100) throw new Error("INVALID_IAM_RESPONSE");
+    const items = wire.items.map((item) => parseGroupAccess(item, accountId));
+    return { items, nextAfter: orderedGroupPage(items.map((item) => item.group.id), wire.nextAfter, after) };
+  },
+  async getGroup(credential, accountId, groupId) {
+    const access = parseGroupAccess(await requestJSON<unknown>(`/api/iam/v1/groups/${encodeURIComponent(groupId)}`, { headers: accountHeaders(credential) }), accountId);
+    if (access.group.id !== groupId) throw new Error("INVALID_IAM_RESPONSE");
+    return access;
+  },
+  async createGroup(credential, accountId, command) {
+    const group = parseGroup(await postAccount(credential, "/api/iam/v1/groups", {
+      name: command.name, description: command.description, requestId: command.requestId
+    }));
+    if (group.accountId !== accountId || group.name !== command.name || group.description !== (command.description ?? "") ||
+        group.resourceVersion !== 1 || group.updatedAt !== group.createdAt) throw new Error("INVALID_IAM_RESPONSE");
+    return group;
+  },
+  async updateGroup(credential, accountId, groupId, command) {
+    const group = parseGroup(await postAccount(credential, `/api/iam/v1/groups/${encodeURIComponent(groupId)}:update`, {
+      name: command.name, description: command.description, resourceVersion: command.resourceVersion, requestId: command.requestId
+    }));
+    if (group.accountId !== accountId || group.id !== groupId || group.name !== command.name || group.description !== (command.description ?? "") ||
+        group.resourceVersion !== command.resourceVersion + 1) throw new Error("INVALID_IAM_RESPONSE");
+    return group;
+  },
+  async deleteGroup(credential, accountId, groupId, command) {
+    const wire = accountRecord(await postAccount(credential, `/api/iam/v1/groups/${encodeURIComponent(groupId)}:delete`, {
+      resourceVersion: command.resourceVersion, requestId: command.requestId
+    }));
+    exactKeys(wire, ["apiVersion", "kind", "accountId", "id", "name", "resourceVersion", "removedMemberships", "revokedPolicyAttachments", "deletedAt"]);
+    requireAccountKind(wire, "GroupDeletion");
+    const count = (value: unknown) => {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 4294967295) throw new Error("INVALID_IAM_RESPONSE");
+      return value;
+    };
+    const result: GroupDeletion = { id: accountIdentifier(wire.id), accountId: accountIdentifier(wire.accountId), name: groupText(wire.name, 1, 64),
+      resourceVersion: accountVersion(wire.resourceVersion), deletedAt: accountTimestamp(wire.deletedAt),
+      removedMemberships: count(wire.removedMemberships), revokedPolicyAttachments: count(wire.revokedPolicyAttachments) };
+    if (result.id !== groupId || result.accountId !== accountId || result.resourceVersion !== command.resourceVersion + 1) throw new Error("INVALID_IAM_RESPONSE");
+    return result;
+  },
+  async listGroupMemberships(credential, accountId, groupId, after) {
+    return parseGroupMembershipPage(await requestJSON<unknown>(`/api/iam/v1/groups/${encodeURIComponent(groupId)}/memberships${after ? `?after=${encodeURIComponent(after)}` : ""}`,
+      { headers: accountHeaders(credential) }), accountId, groupId, after);
+  },
+  async createGroupMembership(credential, accountId, groupId, command) {
+    const membership = parseGroupMembership(await postAccount(credential, `/api/iam/v1/groups/${encodeURIComponent(groupId)}/memberships`, {
+      userId: command.userId, requestId: command.requestId
+    }));
+    if (membership.accountId !== accountId || membership.groupId !== groupId || membership.userId !== command.userId || membership.removedAt !== undefined) {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
+    return membership;
+  },
+  async removeGroupMembership(credential, accountId, groupId, membershipId, command) {
+    const membership = parseGroupMembership(await postAccount(credential, `/api/iam/v1/groups/${encodeURIComponent(groupId)}/memberships/${encodeURIComponent(membershipId)}:remove`, {
+      resourceVersion: command.resourceVersion, requestId: command.requestId
+    }));
+    if (membership.accountId !== accountId || membership.groupId !== groupId || membership.id !== membershipId || membership.removedAt === undefined ||
+        membership.resourceVersion !== command.resourceVersion + 1) throw new Error("INVALID_IAM_RESPONSE");
+    return membership;
+  },
+  async createGroupPolicyAttachment(credential, accountId, groupId, command) {
+    const attachment = parseGroupPolicyAttachment(await postAccount(credential, "/api/iam/v1/policy-attachments", {
+      target: { kind: "GROUP", id: groupId }, policyId: command.policyId, policyResourceVersion: command.policyResourceVersion, requestId: command.requestId
+    }));
+    if (attachment.accountId !== accountId || attachment.target.id !== groupId || attachment.policyId !== command.policyId) throw new Error("INVALID_IAM_RESPONSE");
+    return attachment;
+  },
+  async revokePolicyAttachment(credential, attachmentId, command) {
+    const wire = accountRecord(await postAccount(credential, `/api/iam/v1/policy-attachments/${encodeURIComponent(attachmentId)}:revoke`, {
+      resourceVersion: command.resourceVersion, requestId: command.requestId
+    }));
+    exactKeys(wire, ["apiVersion", "kind", "id", "resourceVersion", "revokedAt"]);
+    requireAccountKind(wire, "Revocation");
+    const result = { id: accountIdentifier(wire.id), resourceVersion: accountVersion(wire.resourceVersion), revokedAt: accountTimestamp(wire.revokedAt) };
+    if (result.id !== attachmentId || result.resourceVersion !== command.resourceVersion + 1) throw new Error("INVALID_IAM_RESPONSE");
+    return result;
   },
   async execute(credential, command) {
     const requestId = requestToken("ui-account-");

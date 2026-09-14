@@ -225,11 +225,17 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_policy_") {
 		t.Fatal("policy storage gate requires its own matrix_iam_policy_ database")
+	}
+	var migrationFaultReached atomic.Bool
+	config.OnNotice = func(_ *pgconn.PgConn, notice *pgconn.Notice) {
+		if notice.Message == "matrix-current-iam-fault" {
+			migrationFaultReached.Store(true)
+		}
 	}
 	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 	admin, err := pgx.ConnectConfig(ctx, config)
@@ -239,6 +245,33 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	defer admin.Close(context.Background())
 	assertIAMPostgres18(t, ctx, admin)
 	assertCleanIAMSchema(t, ctx, admin)
+	// The current clean-install gate proves the atomic boundary without
+	// treating every unpublished historical schema as a release baseline.
+	if err := iammigration.Bootstrap(ctx, admin); err != nil {
+		t.Fatal("bootstrap current-schema atomicity fixture")
+	}
+	if _, err := admin.Exec(ctx, `CREATE FUNCTION public.matrix_current_iam_fault() RETURNS event_trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF EXISTS(SELECT 1 FROM pg_event_trigger_ddl_commands() WHERE object_identity='iam.group_memberships')
+		THEN RAISE NOTICE 'matrix-current-iam-fault';
+		RAISE EXCEPTION 'injected current IAM migration failure'; END IF; END $body$;
+		CREATE EVENT TRIGGER matrix_current_iam_fault ON ddl_command_end EXECUTE FUNCTION public.matrix_current_iam_fault()`); err != nil {
+		t.Fatal("install isolated current-schema fault")
+	}
+	// The production adapter intentionally sanitizes database errors. Observe
+	// only the synthetic fixture notice to distinguish our fault from a setup error.
+	if err := iammigration.Up(ctx, admin); err == nil || !migrationFaultReached.Load() {
+		t.Fatalf("late current-schema fault not reached: %v", err)
+	}
+	if _, err := admin.Exec(ctx, "ROLLBACK; DROP EVENT TRIGGER matrix_current_iam_fault; DROP FUNCTION public.matrix_current_iam_fault()"); err != nil {
+		t.Fatal("finish isolated current-schema fault")
+	}
+	var emptyAuthority bool
+	if err := admin.QueryRow(ctx, `SELECT to_regclass('iam.principals') IS NULL
+		AND to_regclass('iam.policy_attachments') IS NULL AND to_regclass('iam.authorization_decisions') IS NULL
+		AND to_regclass('iam.audit_outbox') IS NULL AND to_regclass('iam.groups') IS NULL
+		AND to_regclass('iam.group_memberships') IS NULL AND to_regprocedure('iam.readiness()') IS NULL`).Scan(&emptyAuthority); err != nil || !emptyAuthority {
+		t.Fatal("failed current installation exposed a partial authority")
+	}
 	applyIAMSchema(t, ctx, admin)
 	applyIAMSchema(t, ctx, admin)
 	createIAMHTTPRole(t, ctx, admin)
@@ -263,7 +296,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	identityResponse := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", primary, nil)
 	var currentIdentity iamv1.CurrentIdentity
 	if identityResponse.Code != http.StatusOK || json.Unmarshal(identityResponse.Body.Bytes(), &currentIdentity) != nil ||
-		iamv1.ValidateCurrentIdentity(currentIdentity) != nil || len(currentIdentity.PolicyAttachments) != 2 {
+		iamv1.ValidateCurrentIdentity(currentIdentity) != nil || len(currentIdentity.PolicySources) != 2 {
 		t.Fatal("current identity did not consume the new policy snapshot")
 	}
 	readSnapshot := func() []authority.AttachedPolicy {
@@ -349,6 +382,9 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	t.Run("direct policy attachment management", func(t *testing.T) {
 		proveDirectPolicyAttachments(t, ctx, handler, admin, primary)
 	})
+	t.Run("group inheritance and terminal membership", func(t *testing.T) {
+		proveGroupInheritance(t, ctx, handler, admin, primary)
+	})
 	t.Run("policy publication versus attachment revision", func(t *testing.T) {
 		provePolicyDefaultAttachmentRaces(t, ctx, handler, admin, primary)
 	})
@@ -407,9 +443,9 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	assertRejected("default-must-belong-to-policy", `UPDATE iam.policies SET default_version_id=(SELECT default_version_id FROM iam.policies WHERE id='system.platform-operator'),resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE id='system.account-administrator'; SET CONSTRAINTS ALL IMMEDIATE`, "23503")
 	assertRejected("attachment-identity-immutable", `UPDATE iam.policy_attachments SET policy_id='system.paas-viewer' WHERE id=$1`, "42501", accountAttachment.ID)
 	assertRejected("attachment-history-delete", `DELETE FROM iam.policy_attachments WHERE id=$1`, "42501", accountAttachment.ID)
-	assertRejected("attachment-forged-installation", `INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,installation_id,resource_version,created_at,updated_at) VALUES($1,'forged-installation',$2,'system.platform-operator','other-installation',1,transaction_timestamp(),transaction_timestamp())`, "23503", document.Organization.ID, document.Administrator.ID)
-	assertRejected("attachment-wrong-principal-kind", `INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,target_kind,policy_id,resource_version,created_at,updated_at) VALUES($1,'forged-kind',$2,'SERVICE_ACCOUNT','system.paas-viewer',1,transaction_timestamp(),transaction_timestamp())`, "23503", document.Organization.ID, document.Administrator.ID)
-	assertRejected("tenant-attachment-cannot-select-installation", `INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,installation_id,resource_version,created_at,updated_at) VALUES($1,'forged-tenant-scope',$2,'system.paas-viewer',$3,1,transaction_timestamp(),transaction_timestamp())`, "22023", document.Organization.ID, document.Administrator.ID, document.InstallationID)
+	assertRejected("attachment-forged-installation", `INSERT INTO iam.policy_attachments(tenant_id,id,target_id,policy_id,installation_id,resource_version,created_at,updated_at) VALUES($1,'forged-installation',$2,'system.platform-operator','other-installation',1,transaction_timestamp(),transaction_timestamp())`, "23503", document.Organization.ID, document.Administrator.ID)
+	assertRejected("attachment-wrong-principal-kind", `INSERT INTO iam.policy_attachments(tenant_id,id,target_id,target_kind,policy_id,resource_version,created_at,updated_at) VALUES($1,'forged-kind',$2,'SERVICE_ACCOUNT','system.paas-viewer',1,transaction_timestamp(),transaction_timestamp())`, "23503", document.Organization.ID, document.Administrator.ID)
+	assertRejected("tenant-attachment-cannot-select-installation", `INSERT INTO iam.policy_attachments(tenant_id,id,target_id,policy_id,installation_id,resource_version,created_at,updated_at) VALUES($1,'forged-tenant-scope',$2,'system.paas-viewer',$3,1,transaction_timestamp(),transaction_timestamp())`, "22023", document.Organization.ID, document.Administrator.ID, document.InstallationID)
 	for _, role := range []string{iamHTTPTestRole, iamHTTPWorkerRole, "matrix_iam_credential_recovery"} {
 		tx, err := admin.Begin(ctx)
 		if err != nil {
@@ -478,7 +514,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if err := rls.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	assertRejected("attachment-cannot-use-another-account-policy", `INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at) VALUES($1,'cross-account-policy',$2,'customer.other',1,transaction_timestamp(),transaction_timestamp())`, "23503", document.Organization.ID, document.Administrator.ID)
+	assertRejected("attachment-cannot-use-another-account-policy", `INSERT INTO iam.policy_attachments(tenant_id,id,target_id,policy_id,resource_version,created_at,updated_at) VALUES($1,'cross-account-policy',$2,'customer.other',1,transaction_timestamp(),transaction_timestamp())`, "23503", document.Organization.ID, document.Administrator.ID)
 	allowDocument := denyDocument
 	allowDocument.Statements = append([]iamv1.PolicyStatement{}, denyDocument.Statements...)
 	allowDocument.Statements[0].Effect = iamv1.PolicyAllow
@@ -494,13 +530,13 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
 		SELECT 'budget-policy-'||i,'v1','TENANT',CASE WHEN i=255 THEN $4::jsonb ELSE $2::jsonb END,
 		CASE WHEN i=255 THEN $4 ELSE $2 END,CASE WHEN i=255 THEN $5 ELSE $3 END,transaction_timestamp() FROM generate_series(1,255) i;
-		INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at)
+		INSERT INTO iam.policy_attachments(tenant_id,id,target_id,policy_id,resource_version,created_at,updated_at)
 		SELECT $1,'budget-attachment-'||i,$6,'budget-policy-'||i,1,transaction_timestamp(),transaction_timestamp() FROM generate_series(1,254) i;
 		COMMIT;`, document.Organization.ID, allowCanonical, allowDigest, canonical, digest, document.Administrator.ID); err != nil {
 		t.Fatal(err)
 	}
 	assertDecision(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"}, true)
-	if _, err := admin.Exec(ctx, `INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at)
+	if _, err := admin.Exec(ctx, `INSERT INTO iam.policy_attachments(tenant_id,id,target_id,policy_id,resource_version,created_at,updated_at)
 		VALUES($1,'zz-budget-attachment-deny',$2,'budget-policy-255',1,transaction_timestamp(),transaction_timestamp())`, document.Organization.ID, document.Administrator.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -571,6 +607,504 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if identity.Code != http.StatusOK || json.Unmarshal(identity.Body.Bytes(), &service) != nil ||
 		service.Purpose != iamv1.ServiceInstallationVerifier || service.InstallationID != document.InstallationID {
 		t.Fatal("policy migration changed sealed verifier purpose or installation")
+	}
+}
+
+func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
+	t.Helper()
+	request := func(method, path, bearer string, body any, want int, result any) {
+		t.Helper()
+		var encoded []byte
+		var err error
+		if body != nil {
+			encoded, err = json.Marshal(body)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != want {
+			t.Fatalf("group %s %s: status=%d want=%d body=%s", method, path, response.Code, want, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("group response is cacheable")
+		}
+		if result != nil {
+			decoder := json.NewDecoder(response.Body)
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(result) != nil {
+				t.Fatal("invalid group response")
+			}
+		}
+	}
+	post := func(path, bearer string, body any, want int, result any) {
+		t.Helper()
+		request(http.MethodPost, path, bearer, body, want, result)
+	}
+	get := func(path, bearer string, want int, result any) {
+		t.Helper()
+		request(http.MethodGet, path, bearer, nil, want, result)
+	}
+	var actor iamv1.CurrentIdentity
+	get("/v1/auth/me", operator, http.StatusOK, &actor)
+	const otherAccount = "group-other-account"
+	post("/v1/accounts", operator, map[string]any{"id": otherAccount, "displayName": "Group isolation", "rootLoginName": "group.other", "rootDisplayName": "Other owner", "initialPassword": initialDeveloperPassword, "requestId": "group-other-account-create"}, http.StatusCreated, nil)
+	other := localRecoveryLogin(t, handler, "group.other", initialDeveloperPassword, true)
+	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
+	var member iamv1.User
+	post("/v1/users", operator, map[string]any{"loginName": "group.member", "displayName": "Group member", "initialPassword": initialDeveloperPassword, "requestId": "group-member-user-create"}, http.StatusCreated, &member)
+	bearer := localRecoveryLogin(t, handler, "group.member@"+string(member.AccountID), initialDeveloperPassword, true)
+	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+	var group, foreign, replay iamv1.Group
+	create := iamv1.CreateGroupRequest{Name: "Developers", Description: "Group permission test", RequestID: "group-create"}
+	post("/v1/groups", operator, create, http.StatusCreated, &group)
+	post("/v1/groups", operator, create, http.StatusCreated, &replay)
+	if group != replay || iamv1.ValidateGroup(group) != nil || group.AccountID != member.AccountID {
+		t.Fatal("group create replay or ownership differs")
+	}
+	post("/v1/groups", other, create, http.StatusCreated, &foreign)
+	if foreign.AccountID == group.AccountID || foreign.ID == group.ID || foreign.Name != group.Name {
+		t.Fatal("same-name groups are not isolated")
+	}
+	var foreignUser iamv1.User
+	post("/v1/users", other, map[string]any{"loginName": "group.member", "displayName": "Other group member", "initialPassword": initialDeveloperPassword, "requestId": "foreign-group-user"}, http.StatusCreated, &foreignUser)
+	var foreignMembership iamv1.GroupMembership
+	post("/v1/groups/"+string(foreign.ID)+"/memberships", other,
+		iamv1.CreateGroupMembershipRequest{UserID: foreignUser.ID, RequestID: "foreign-group-join"}, http.StatusOK, &foreignMembership)
+	variant := create
+	variant.Description = "Different intent"
+	post("/v1/groups", operator, variant, http.StatusConflict, nil)
+	variant = create
+	variant.RequestID = "group-duplicate-name"
+	post("/v1/groups", operator, variant, http.StatusConflict, nil)
+	var directory iamv1.GroupList
+	get("/v1/groups", operator, http.StatusOK, &directory)
+	if iamv1.ValidateGroupList(directory) != nil || len(directory.Items) != 1 || directory.Items[0].Group != group {
+		t.Fatal("group directory leaked or malformed")
+	}
+	get("/v1/groups/"+string(group.ID), other, http.StatusForbidden, nil)
+	get("/v1/groups/"+string(foreign.ID), operator, http.StatusForbidden, nil)
+	get("/v1/groups?accountId="+otherAccount, operator, http.StatusBadRequest, nil)
+	get("/v1/groups", paasCredential, http.StatusUnauthorized, nil)
+	get("/v1/groups", bearer, http.StatusForbidden, nil)
+	path := "/v1/groups/" + string(group.ID)
+	post(path+":update", operator, iamv1.UpdateGroupRequest{Name: "Invalid version", ResourceVersion: 0, RequestID: "group-zero-version"}, http.StatusUnprocessableEntity, nil)
+	post(path+":update", operator, iamv1.UpdateGroupRequest{Name: "Overflow version", ResourceVersion: 9007199254740991, RequestID: "group-max-version"}, http.StatusConflict, nil)
+	update := iamv1.UpdateGroupRequest{Name: "Operators", Description: "Renamed group", ResourceVersion: 1, RequestID: "group-rename"}
+	post(path+":update", operator, update, http.StatusOK, &group)
+	post(path+":update", operator, update, http.StatusOK, &replay)
+	if group != replay || group.ResourceVersion != 2 {
+		t.Fatal("group profile replay changed revision")
+	}
+	post("/v1/groups", operator, create, http.StatusConflict, nil)
+	changedIntent := update
+	changedIntent.ResourceVersion = group.ResourceVersion
+	changedIntent.Name = "Reused command identity"
+	post(path+":update", operator, changedIntent, http.StatusConflict, nil)
+	update.RequestID = "group-stale-rename"
+	update.Name = "Stale name"
+	post(path+":update", operator, update, http.StatusConflict, nil)
+	var membership, again iamv1.GroupMembership
+	join := iamv1.CreateGroupMembershipRequest{UserID: member.ID, RequestID: "group-join"}
+	post(path+"/memberships", operator, join, http.StatusOK, &membership)
+	post(path+"/memberships", operator, join, http.StatusOK, &again)
+	if membership != again || iamv1.ValidateGroupMembership(membership) != nil {
+		t.Fatal("membership create replay changed identity")
+	}
+	for _, target := range []iamv1.PrincipalID{actor.User.ID, "service-paas", iamv1.PrincipalID(foreign.ID), "missing-user"} {
+		post(path+"/memberships", operator, iamv1.CreateGroupMembershipRequest{UserID: target, RequestID: "group-invalid-" + string(target)}, http.StatusForbidden, nil)
+	}
+	// Restricted runtimes cannot write the table. Even a correctly shaped
+	// migration-owner insert must not introduce a root or service relationship.
+	for _, target := range []iamv1.PrincipalID{actor.User.ID, "service-paas"} {
+		_, err := database.Exec(ctx, `INSERT INTO iam.group_memberships(tenant_id,id,group_id,user_id,created_by,resource_version,created_at,updated_at)
+			VALUES($1,'forged-member-'||$2,$3,$2,$4,1,transaction_timestamp(),transaction_timestamp())`, member.AccountID, target, group.ID, actor.User.ID)
+		var databaseError *pgconn.PgError
+		if !errors.As(err, &databaseError) || databaseError.Code != "42501" {
+			t.Fatal("membership persistence accepted a root or service as a User")
+		}
+	}
+	post("/v1/groups/"+string(foreign.ID)+"/memberships", other, join, http.StatusForbidden, nil)
+	post(path+"/memberships", other, join, http.StatusForbidden, nil)
+	var members iamv1.GroupMembershipList
+	get(path+"/memberships", operator, http.StatusOK, &members)
+	if iamv1.ValidateGroupMembershipList(members) != nil || len(members.Items) != 1 || members.Items[0].Membership != membership {
+		t.Fatal("group membership page differs")
+	}
+	// Continuations are only ordered seek positions, never authority selectors.
+	// A foreign ID can skip local rows but cannot reveal its foreign relation.
+	get("/v1/groups?after="+string(foreign.ID), operator, http.StatusOK, &directory)
+	for _, entry := range directory.Items {
+		if entry.Group.AccountID != member.AccountID || entry.Group.ID <= foreign.ID {
+			t.Fatal("group continuation changed the caller's authority")
+		}
+	}
+	get(path+"/memberships?after="+string(foreignMembership.ID), operator, http.StatusOK, &members)
+	for _, entry := range members.Items {
+		if entry.Membership.AccountID != member.AccountID || entry.Membership.GroupID != group.ID || entry.Membership.ID <= foreignMembership.ID {
+			t.Fatal("membership continuation changed its account or group")
+		}
+	}
+	rls, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rls.Exec(ctx, `SET LOCAL ROLE matrix_iam_owner; SELECT set_config('matrix.iam_tenant_id',$1,true)`, member.AccountID); err != nil {
+		t.Fatal(err)
+	}
+	var visibleGroup, hiddenGroup, visibleMember, hiddenMember bool
+	if err := rls.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.groups WHERE id=$1),
+		EXISTS(SELECT 1 FROM iam.groups WHERE id=$2), EXISTS(SELECT 1 FROM iam.group_memberships WHERE id=$3),
+		EXISTS(SELECT 1 FROM iam.group_memberships WHERE id=$4)`, group.ID, foreign.ID, membership.ID, foreignMembership.ID).
+		Scan(&visibleGroup, &hiddenGroup, &visibleMember, &hiddenMember); err != nil || !visibleGroup || hiddenGroup || !visibleMember || hiddenMember {
+		t.Fatal("forced group or membership RLS leaked a foreign authority")
+	}
+	if err := rls.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var attachment iamv1.PolicyAttachment
+	grant := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "group-grant"}
+	post("/v1/policy-attachments", operator, grant, http.StatusOK, &attachment)
+	if iamv1.ValidatePolicyAttachment(attachment) != nil || attachment.Target != grant.Target {
+		t.Fatal("invalid group attachment")
+	}
+	grant.RequestID = "group-platform-grant"
+	grant.PolicyID = iamv1.SystemPolicyPlatformOperator
+	post("/v1/policy-attachments", operator, grant, http.StatusForbidden, nil)
+	var access iamv1.GroupAccess
+	get(path, operator, http.StatusOK, &access)
+	if iamv1.ValidateGroupAccess(access) != nil || len(access.PolicyAttachments) != 1 || access.PolicyAttachments[0] != attachment {
+		t.Fatal("group direct attachment projection differs")
+	}
+	var identity iamv1.CurrentIdentity
+	get("/v1/auth/me", bearer, http.StatusOK, &identity)
+	if iamv1.ValidateCurrentIdentity(identity) != nil || len(identity.PolicySources) != 1 || identity.PolicySources[0].Kind != iamv1.PolicyGrantGroup || identity.PolicySources[0].Membership == nil || *identity.PolicySources[0].Membership != membership {
+		t.Fatal("effective identity omitted group provenance")
+	}
+	authorize := func(want bool) iamv1.AuthorizationDecision {
+		t.Helper()
+		body, _ := json.Marshal(iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "group-application"}, RequestID: "group-application-read", CorrelationID: "group-application-read"})
+		response := performIAMRequestWithSubject(handler, body, paasCredential, bearer)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || decision.Allowed != want {
+			t.Fatalf("group permission allowed=%t want=%t status=%d", decision.Allowed, want, response.Code)
+		}
+		return decision
+	}
+	decision := authorize(true)
+	var evidence []authority.PolicyAttachmentEvidence
+	var encoded []byte
+	if err := database.QueryRow(ctx, `SELECT policy_evidence FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, member.AccountID, decision.ID).Scan(&encoded); err != nil || json.Unmarshal(encoded, &evidence) != nil || len(evidence) != 1 || evidence[0].MembershipID != membership.ID || evidence[0].MembershipResourceVersion != membership.ResourceVersion || evidence[0].AttachmentID != attachment.ID {
+		t.Fatal("stored decision omitted exact inheritance evidence")
+	}
+	assertEvidenceRejected := func(expression, code string) {
+		t.Helper()
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err = tx.Exec(ctx, `SET LOCAL ROLE matrix_iam_owner; SELECT set_config('matrix.iam_tenant_id',$1,true)`, member.AccountID); err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,document||jsonb_build_object('id','forged-group-decision','decidedAt',to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')),'{}'::jsonb,`+expression+`) FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$3`, member.AccountID, member.ID, decision.ID)
+		var databaseError *pgconn.PgError
+		if !errors.As(err, &databaseError) || databaseError.Code != code {
+			t.Fatalf("group evidence attack: %v want=%s", err, code)
+		}
+	}
+	assertEvidenceRejected(`jsonb_set(policy_evidence,'{0,membershipId}','"wrong-membership"'::jsonb)`, "42501")
+	assertEvidenceRejected(`jsonb_set(policy_evidence,'{0,membershipResourceVersion}','2'::jsonb)`, "42501")
+	assertEvidenceRejected(`jsonb_build_array((policy_evidence->0)-'membershipId'-'membershipResourceVersion')`, "42501")
+	assertEvidenceRejected(`jsonb_build_array((policy_evidence->0)-'membershipResourceVersion')`, "22023")
+	removePath := path + "/memberships/" + string(membership.ID) + ":remove"
+	remove := iamv1.RemoveGroupMembershipRequest{ResourceVersion: 2, RequestID: "group-remove"}
+	post(removePath, operator, remove, http.StatusConflict, nil)
+	authorize(true)
+	remove.ResourceVersion = 1
+	post(removePath, operator, remove, http.StatusOK, &again)
+	var removed iamv1.GroupMembership
+	post(removePath, operator, remove, http.StatusOK, &removed)
+	if iamv1.ValidateGroupMembership(removed) != nil || removed.RemovedAt == nil || removed.ResourceVersion != 2 || !removed.RemovedAt.Equal(*again.RemovedAt) {
+		t.Fatal("membership removal replay differs")
+	}
+	authorize(false)
+	assertEvidenceRejected(`policy_evidence`, "42501")
+	get("/v1/auth/me", bearer, http.StatusOK, &identity)
+	if len(identity.PolicySources) != 0 {
+		t.Fatal("removed membership remains an authority source")
+	}
+	post(path+"/memberships", operator, join, http.StatusConflict, nil)
+	join.RequestID = "group-rejoin"
+	post(path+"/memberships", operator, join, http.StatusOK, &again)
+	if again.ID == membership.ID {
+		t.Fatal("rejoin revived removed membership")
+	}
+	authorize(true)
+	var direct iamv1.PolicyAttachment
+	grant = iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "group-member-direct-grant"}
+	post("/v1/policy-attachments", operator, grant, http.StatusOK, &direct)
+	denyDocument := iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "group-deny", Effect: iamv1.PolicyDeny, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+	canonical, digest, err := iamv1.CanonicalizePolicyDocument(denyDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Customer-policy publication belongs to IAM/005. This valid, owner-created
+	// fixture proves the current evaluator and public attachment path only.
+	if _, err := database.Exec(ctx, `BEGIN;
+		INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
+		VALUES('customer.group-deny','CUSTOMER',$1,'Group deny','TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp());
+		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
+		VALUES('customer.group-deny','v1','TENANT',$2::jsonb,$2,$3,transaction_timestamp()); COMMIT;`, member.AccountID, canonical, digest); err != nil {
+		t.Fatal(err)
+	}
+	var deniedAttachment iamv1.PolicyAttachment
+	post("/v1/policy-attachments", operator, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}, PolicyID: "customer.group-deny", PolicyResourceVersion: 1, RequestID: "group-deny-attach"}, http.StatusOK, &deniedAttachment)
+	authorize(false)
+	post("/v1/policy-attachments/"+string(deniedAttachment.ID)+":revoke", operator, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: "group-deny-revoke"}, http.StatusOK, nil)
+	authorize(true)
+	post("/v1/policy-attachments/"+string(attachment.ID)+":revoke", operator, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: "group-revoke"}, http.StatusOK, nil)
+	authorize(true)
+	post("/v1/policy-attachments/"+string(direct.ID)+":revoke", operator, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: "group-direct-revoke"}, http.StatusOK, nil)
+	authorize(false)
+	grant.Target = iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}
+	grant.RequestID = "group-regrant"
+	post("/v1/policy-attachments", operator, grant, http.StatusOK, &attachment)
+	authorize(true)
+	var deletion, deletionReplay iamv1.GroupDeletion
+	deleteRequest := iamv1.DeleteGroupRequest{ResourceVersion: group.ResourceVersion, RequestID: "group-delete"}
+	post(path+":delete", operator, deleteRequest, http.StatusOK, &deletion)
+	post(path+":delete", operator, deleteRequest, http.StatusOK, &deletionReplay)
+	if iamv1.ValidateGroupDeletion(deletion) != nil || deletion != deletionReplay || deletion.RemovedMemberships != 1 || deletion.RevokedPolicyAttachments != 1 {
+		t.Fatal("group deletion was partial or replay changed its result")
+	}
+	authorize(false)
+	get(path, operator, http.StatusForbidden, nil)
+	get("/v1/groups/"+string(foreign.ID), other, http.StatusOK, &access)
+	post(path+"/memberships", operator, join, http.StatusForbidden, nil)
+	post("/v1/policy-attachments", operator, grant, http.StatusForbidden, nil)
+	create.Name = group.Name
+	create.RequestID = "group-replace-name"
+	post("/v1/groups", operator, create, http.StatusCreated, &replay)
+	if replay.ID == group.ID {
+		t.Fatal("reusing name revived group identity")
+	}
+	// Contenders use the same real HTTP/serializable transaction path. Inspect
+	// terminal relations and facts, not which goroutine happened to run first.
+	race := func(leftBearer, leftPath string, left any, rightBearer, rightPath string, right any) [2]*httptest.ResponseRecorder {
+		t.Helper()
+		var results [2]*httptest.ResponseRecorder
+		ready := make(chan struct{})
+		finished := make(chan int, 2)
+		for index, command := range []struct {
+			bearer string
+			path   string
+			body   any
+		}{{leftBearer, leftPath, left}, {rightBearer, rightPath, right}} {
+			encoded, err := json.Marshal(command.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			go func(index int, bearer, path string, body []byte) {
+				<-ready
+				results[index] = performIAMRequest(handler, http.MethodPost, path, bearer, body)
+				finished <- index
+			}(index, command.bearer, command.path, encoded)
+		}
+		close(ready)
+		<-finished
+		<-finished
+		return results
+	}
+	concurrentPath := "/v1/groups/" + string(replay.ID)
+	concurrentJoin := iamv1.CreateGroupMembershipRequest{UserID: member.ID, RequestID: "group-concurrent-join"}
+	joined := race(operator, concurrentPath+"/memberships", concurrentJoin, operator, concurrentPath+"/memberships", concurrentJoin)
+	var joins [2]iamv1.GroupMembership
+	for index, response := range joined {
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &joins[index]) != nil || iamv1.ValidateGroupMembership(joins[index]) != nil {
+			t.Fatalf("concurrent join status=%d: %s", response.Code, response.Body.String())
+		}
+	}
+	if joins[0] != joins[1] {
+		t.Fatal("concurrent equal joins created separate active relationships")
+	}
+	concurrentRemove := concurrentPath + "/memberships/" + string(joins[0].ID) + ":remove"
+	removals := race(operator, concurrentRemove, iamv1.RemoveGroupMembershipRequest{ResourceVersion: 1, RequestID: "group-concurrent-remove-a"}, operator, concurrentRemove, iamv1.RemoveGroupMembershipRequest{ResourceVersion: 1, RequestID: "group-concurrent-remove-b"})
+	if !((removals[0].Code == http.StatusOK && removals[1].Code == http.StatusConflict) || (removals[1].Code == http.StatusOK && removals[0].Code == http.StatusConflict)) {
+		t.Fatalf("concurrent removals: %d/%d", removals[0].Code, removals[1].Code)
+	}
+	for index, command := range []struct {
+		suffix string
+		body   any
+	}{
+		{"/memberships", iamv1.CreateGroupMembershipRequest{UserID: member.ID, RequestID: "group-delete-race-join"}},
+		{"attachment", iamv1.CreatePolicyAttachmentRequest{PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "group-delete-race-attach"}},
+	} {
+		var competing iamv1.Group
+		post("/v1/groups", operator, iamv1.CreateGroupRequest{Name: fmt.Sprintf("Race %d", index), RequestID: fmt.Sprintf("group-race-create-%d", index)}, http.StatusCreated, &competing)
+		competingPath := "/v1/groups/" + string(competing.ID)
+		mutationPath := competingPath + command.suffix
+		if command.suffix == "attachment" {
+			mutationPath = "/v1/policy-attachments"
+			body := command.body.(iamv1.CreatePolicyAttachmentRequest)
+			body.Target = iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(competing.ID)}
+			command.body = body
+		}
+		responses := race(operator, competingPath+":delete", iamv1.DeleteGroupRequest{ResourceVersion: 1, RequestID: fmt.Sprintf("group-race-delete-%d", index)}, operator, mutationPath, command.body)
+		if responses[0].Code != http.StatusOK || (responses[1].Code != http.StatusOK && responses[1].Code != http.StatusForbidden) {
+			t.Fatalf("group delete race %d: %d/%d %s %s", index, responses[0].Code, responses[1].Code, responses[0].Body.String(), responses[1].Body.String())
+		}
+		var activeMembers, activeAttachments int
+		if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.group_memberships WHERE tenant_id=$1 AND group_id=$2 AND removed_at IS NULL),(SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND target_kind='GROUP' AND target_id=$2 AND revoked_at IS NULL)`, member.AccountID, competing.ID).Scan(&activeMembers, &activeAttachments); err != nil || activeMembers != 0 || activeAttachments != 0 {
+			t.Fatal("concurrent group deletion retained active authority")
+		}
+	}
+	var delegate iamv1.User
+	post("/v1/users", operator, map[string]any{"loginName": "group.delegate", "displayName": "Group delegate", "initialPassword": initialDeveloperPassword, "requestId": "group-delegate-user"}, http.StatusCreated, &delegate)
+	delegateBearer := localRecoveryLogin(t, handler, "group.delegate@"+string(delegate.AccountID), initialDeveloperPassword, true)
+	delegateBearer = localRecoveryChangePassword(t, handler, delegateBearer, initialDeveloperPassword, changedDeveloperPassword)
+	var delegation iamv1.PolicyAttachment
+	post("/v1/policy-attachments", operator, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(delegate.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "group-delegate-grant"}, http.StatusOK, &delegation)
+	for _, target := range []iamv1.PrincipalID{delegate.ID, actor.User.ID} {
+		post(concurrentPath+"/memberships", delegateBearer, iamv1.CreateGroupMembershipRequest{UserID: target, RequestID: "group-delegate-self-or-root-" + string(target)}, http.StatusForbidden, nil)
+	}
+	delegatedCreate := iamv1.CreateGroupRequest{Name: "Delegated create", RequestID: "group-delegated-create"}
+	delegatedRace := race(delegateBearer, "/v1/groups", delegatedCreate, operator, "/v1/policy-attachments/"+string(delegation.ID)+":revoke",
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: delegation.ResourceVersion, RequestID: "group-delegate-revoke"})
+	if delegatedRace[1].Code != http.StatusOK || (delegatedRace[0].Code != http.StatusCreated && delegatedRace[0].Code != http.StatusForbidden) {
+		t.Fatalf("actor revocation vs group command: %d/%d", delegatedRace[0].Code, delegatedRace[1].Code)
+	}
+	delegatedCreate.RequestID, delegatedCreate.Name = "group-delegated-after-revoke", "Denied after revoke"
+	post("/v1/groups", delegateBearer, delegatedCreate, http.StatusForbidden, nil)
+	var groupsCreated, successes int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.groups WHERE tenant_id=$1 AND name IN ('Delegated create','Denied after revoke')),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.group.created'
+		 AND event_document#>>'{actor,id}'=$2)`, member.AccountID, delegate.ID).Scan(&groupsCreated, &successes); err != nil || groupsCreated != successes ||
+		(groupsCreated == 1) != (delegatedRace[0].Code == http.StatusCreated) || groupsCreated > 1 {
+		t.Fatal("actor revocation left partial group state or a success fact without its effect")
+	}
+	var capacityUser iamv1.User
+	post("/v1/users", operator, map[string]any{"loginName": "group.capacity", "displayName": "Capacity member", "initialPassword": initialDeveloperPassword, "requestId": "group-capacity-user-create"}, http.StatusCreated, &capacityUser)
+	capacityBearer := localRecoveryLogin(t, handler, "group.capacity@"+string(capacityUser.AccountID), initialDeveloperPassword, true)
+	capacityBearer = localRecoveryChangePassword(t, handler, capacityBearer, initialDeveloperPassword, changedDeveloperPassword)
+	var lastGroup iamv1.Group
+	for index := 0; index < 101; index++ {
+		post("/v1/groups", operator, iamv1.CreateGroupRequest{Name: fmt.Sprintf("Capacity %03d", index), RequestID: fmt.Sprintf("capacity-group-%03d", index)}, http.StatusCreated, &lastGroup)
+		if index < 100 {
+			post("/v1/groups/"+string(lastGroup.ID)+"/memberships", operator, iamv1.CreateGroupMembershipRequest{UserID: capacityUser.ID, RequestID: fmt.Sprintf("capacity-member-%03d", index)}, http.StatusOK, nil)
+		}
+	}
+	var firstPage, secondPage iamv1.GroupList
+	get("/v1/groups", operator, http.StatusOK, &firstPage)
+	get("/v1/groups?after="+firstPage.NextAfter, operator, http.StatusOK, &secondPage)
+	if iamv1.ValidateGroupList(firstPage) != nil || iamv1.ValidateGroupList(secondPage) != nil || len(firstPage.Items) != 100 || firstPage.NextAfter == "" || len(secondPage.Items) == 0 || secondPage.NextAfter != "" {
+		t.Fatal("group directory did not page past one hundred")
+	}
+	for _, item := range secondPage.Items {
+		if item.Group.ID <= firstPage.Items[99].Group.ID || item.Group.AccountID != member.AccountID {
+			t.Fatal("group cursor repeated or leaked another account")
+		}
+	}
+	var decisionsBefore, outboxBefore, decisionsAfter, outboxAfter int
+	counts := func() (int, int) {
+		t.Helper()
+		var decisions, facts int
+		if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.authorization_decisions),(SELECT count(*) FROM iam.audit_outbox)`).Scan(&decisions, &facts); err != nil {
+			t.Fatal(err)
+		}
+		return decisions, facts
+	}
+	decisionsBefore, outboxBefore = counts()
+	post("/v1/groups/"+string(lastGroup.ID)+"/memberships", operator, iamv1.CreateGroupMembershipRequest{UserID: capacityUser.ID, RequestID: "capacity-member-overflow"}, http.StatusServiceUnavailable, nil)
+	decisionsAfter, outboxAfter = counts()
+	if decisionsAfter != decisionsBefore || outboxAfter != outboxBefore {
+		t.Fatal("membership overflow committed partial authority or audit")
+	}
+	// Capacity fixtures use valid owner writes to reach the evaluator bound.
+	// Every attachment still traverses the real target/scope/uniqueness guards.
+	if _, err := database.Exec(ctx, `INSERT INTO iam.policy_attachments(tenant_id,id,target_kind,target_id,policy_id,resource_version,created_at,updated_at)
+		SELECT $1,'capacity-'||policy.suffix||'-'||member.id,'GROUP',member.group_id,policy.id,1,transaction_timestamp(),transaction_timestamp()
+		FROM iam.group_memberships AS member CROSS JOIN (VALUES('viewer','system.paas-viewer'),('developer','system.paas-developer')) AS policy(suffix,id)
+		WHERE member.tenant_id=$1 AND member.user_id=$2 AND member.removed_at IS NULL`, member.AccountID, capacityUser.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(ctx, `INSERT INTO iam.policy_attachments(tenant_id,id,target_kind,target_id,policy_id,resource_version,created_at,updated_at)
+		SELECT $1,'capacity-audit-'||member.id,'GROUP',member.group_id,'system.audit-reader',1,transaction_timestamp(),transaction_timestamp()
+		FROM iam.group_memberships AS member WHERE member.tenant_id=$1 AND member.user_id=$2 AND member.removed_at IS NULL ORDER BY member.id LIMIT 56`, member.AccountID, capacityUser.ID); err != nil {
+		t.Fatal(err)
+	}
+	var capacityIdentity iamv1.CurrentIdentity
+	get("/v1/auth/me", capacityBearer, http.StatusOK, &capacityIdentity)
+	if iamv1.ValidateCurrentIdentity(capacityIdentity) != nil || len(capacityIdentity.PolicySources) != 256 {
+		t.Fatal("inherited authority truncated before its budget")
+	}
+	if _, err := database.Exec(ctx, `INSERT INTO iam.policy_attachments(tenant_id,id,target_kind,target_id,policy_id,resource_version,created_at,updated_at)
+		SELECT $1,'capacity-audit-'||member.id,'GROUP',member.group_id,'system.audit-reader',1,transaction_timestamp(),transaction_timestamp()
+		FROM iam.group_memberships AS member WHERE member.tenant_id=$1 AND member.user_id=$2 AND member.removed_at IS NULL ORDER BY member.id OFFSET 56 LIMIT 1`, member.AccountID, capacityUser.ID); err != nil {
+		t.Fatal(err)
+	}
+	decisionsBefore, outboxBefore = counts()
+	get("/v1/auth/me", capacityBearer, http.StatusServiceUnavailable, nil)
+	body, _ := json.Marshal(iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "capacity-app"}, RequestID: "capacity-overflow-decide", CorrelationID: "capacity-overflow-decide"})
+	if response := performIAMRequestWithSubject(handler, body, paasCredential, capacityBearer); response.Code != http.StatusServiceUnavailable {
+		t.Fatal("authority overflow was evaluated after truncating sources")
+	}
+	decisionsAfter, outboxAfter = counts()
+	if decisionsAfter != decisionsBefore || outboxAfter != outboxBefore {
+		t.Fatal("authority overflow committed a partial decision")
+	}
+	post("/v1/users/"+string(capacityUser.ID)+":set-status", operator, map[string]any{"status": "DISABLED", "resourceVersion": capacityIdentity.User.ResourceVersion, "requestId": "capacity-user-disable"}, http.StatusOK, &capacityUser)
+	post("/v1/groups/"+string(lastGroup.ID)+"/memberships", operator, iamv1.CreateGroupMembershipRequest{UserID: capacityUser.ID, RequestID: "group-disabled-user-join"}, http.StatusForbidden, nil)
+	var userDeletion iamv1.UserDeletion
+	post("/v1/users/"+string(capacityUser.ID)+":delete", operator, iamv1.DeleteUserRequest{ResourceVersion: capacityUser.ResourceVersion, RequestID: "capacity-user-delete"}, http.StatusOK, &userDeletion)
+	post("/v1/groups/"+string(lastGroup.ID)+"/memberships", operator, iamv1.CreateGroupMembershipRequest{UserID: capacityUser.ID, RequestID: "group-deleted-user-join"}, http.StatusForbidden, nil)
+	var activeRelationships int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.group_memberships WHERE tenant_id=$1 AND user_id=$2 AND removed_at IS NULL`, member.AccountID, capacityUser.ID).Scan(&activeRelationships); err != nil || activeRelationships != 0 {
+		t.Fatal("deleted user retained group authority")
+	}
+	get("/v1/groups/"+string(lastGroup.ID), operator, http.StatusOK, &access)
+	// Compare real retained authority and historical evidence, not SQL text.
+	// HTTP requests below then prove the preserved terminal/live semantics.
+	retained := func() []byte {
+		t.Helper()
+		var state []byte
+		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+			'groups',(SELECT jsonb_agg(to_jsonb(g) ORDER BY tenant_id,id) FROM iam.groups g),
+			'memberships',(SELECT jsonb_agg(to_jsonb(m) ORDER BY tenant_id,id) FROM iam.group_memberships m),
+			'attachments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY tenant_id,id) FROM iam.policy_attachments a),
+			'decisions',(SELECT jsonb_agg(to_jsonb(d) ORDER BY tenant_id,id) FROM iam.authorization_decisions d),
+			'outbox',(SELECT jsonb_agg(to_jsonb(e) ORDER BY tenant_id,event_id) FROM iam.audit_outbox e))`).Scan(&state); err != nil {
+			t.Fatal("read populated group authority and history")
+		}
+		return state
+	}
+	beforeReplay := retained()
+	for range 2 {
+		applyIAMSchema(t, ctx, database)
+		if !bytes.Equal(beforeReplay, retained()) {
+			t.Fatal("current-schema replay changed group authority or historical evidence")
+		}
+	}
+	authorize(false)
+	get(path, operator, http.StatusForbidden, nil)
+	get("/v1/auth/me", capacityBearer, http.StatusUnauthorized, nil)
+	get("/v1/groups/"+string(foreign.ID), other, http.StatusOK, &access)
+	if access.Group != foreign {
+		t.Fatal("current-schema replay changed the independent live group")
+	}
+	post(path+":delete", operator, deleteRequest, http.StatusOK, &deletionReplay)
+	if deletionReplay != deletion {
+		t.Fatal("current-schema replay changed the completed deletion receipt")
+	}
+	var createdFacts, removedFacts, deletedFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.group.created' AND event_document#>>'{target,id}'=$2),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.group-membership.removed' AND event_document#>>'{target,id}'=$3),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.group.deleted' AND event_document#>>'{target,id}'=$2)`, member.AccountID, group.ID, membership.ID).Scan(&createdFacts, &removedFacts, &deletedFacts); err != nil || createdFacts != 1 || removedFacts != 1 || deletedFacts != 1 {
+		t.Fatal("idempotent group commands duplicated success facts")
 	}
 }
 
@@ -861,7 +1395,7 @@ func provePolicyDefaultAttachmentRaces(t *testing.T, ctx context.Context, handle
 				t.Helper()
 				var actualAttachments, actualDecisions, actualFacts int
 				if err := database.QueryRow(ctx, `SELECT
-					(SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND principal_id=$2 AND policy_id=$3),
+					(SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND target_id=$2 AND policy_id=$3),
 					(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$4),
 					(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$4
 					 AND event_document->>'action'='iam.policy-attachment.created')`,
@@ -956,7 +1490,7 @@ func provePolicyScopeCredentialProtection(t *testing.T, ctx context.Context, han
 		t.Fatal("create policy scope protection member")
 	}
 	var attachments int
-	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND principal_id=$2`, member.AccountID, member.ID).Scan(&attachments); err != nil || attachments != 0 {
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND target_id=$2`, member.AccountID, member.ID).Scan(&attachments); err != nil || attachments != 0 {
 		t.Fatal("user creation implicitly granted a policy attachment")
 	}
 	session := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initial, true)
@@ -977,7 +1511,7 @@ func provePolicyScopeCredentialProtection(t *testing.T, ctx context.Context, han
 		VALUES('system.scope-protection','SYSTEM','Scope protection','INSTALLATION','ACTIVE','scope-v1',1,transaction_timestamp(),transaction_timestamp());
 		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
 		VALUES('system.scope-protection','scope-v1','INSTALLATION',$1::jsonb,$1,$2,transaction_timestamp());
-		INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at)
+		INSERT INTO iam.policy_attachments(tenant_id,id,target_id,policy_id,resource_version,created_at,updated_at)
 		VALUES($3,'scope-protection-attachment',$4,'system.scope-protection',1,transaction_timestamp(),transaction_timestamp()); COMMIT;`,
 		canonical, digest, member.AccountID, member.ID); err != nil {
 		t.Fatal("prepare alternative platform policy fixture")
@@ -2111,7 +2645,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	}() {
 		t.Fatal("wrong tenant or platform capability in child identity")
 	}
-	if len(identity(childSessionB).PolicyAttachments) != 0 {
+	if len(identity(childSessionB).PolicySources) != 0 {
 		t.Fatal("new child gained implicit business permissions")
 	}
 	assertPaasDecision(childSessionA, iamv1.ActionManagedServiceInstallationRead, true, tenantA)
@@ -2531,7 +3065,7 @@ func proveUserProfileAndDeletion(t *testing.T, ctx context.Context, handler http
 	}
 	if err := database.QueryRow(ctx, `SELECT principal.deleted_at IS NOT NULL,
 		(SELECT count(*) FROM iam.user_credentials AS credential WHERE credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id),
-		(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.principal_id=principal.id AND attachment.revoked_at IS NULL),
+		(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.target_id=principal.id AND attachment.revoked_at IS NULL),
 		(SELECT count(*) FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=principal.tenant_id AND outbox.event_document->>'action'='iam.user.deleted' AND outbox.event_document#>>'{target,id}'=principal.id)
 		FROM iam.principals AS principal WHERE principal.tenant_id=$1 AND principal.id=$2`, accountID, user.ID).
 		Scan(&before.Deleted, &before.Credentials, &before.LiveAttachment, &before.DeleteFacts); err != nil || before.Deleted || before.Credentials != 1 || before.LiveAttachment != 2 || before.DeleteFacts != 0 {
@@ -2568,8 +3102,8 @@ func proveUserProfileAndDeletion(t *testing.T, ctx context.Context, handler http
 		(SELECT count(*) FROM iam.user_credentials AS credential WHERE credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id),
 		(SELECT count(*) FROM iam.sessions AS session WHERE session.tenant_id=principal.tenant_id AND session.principal_id=principal.id),
 		(SELECT count(*) FROM iam.sessions AS session WHERE session.tenant_id=principal.tenant_id AND session.principal_id=principal.id AND session.status='ACTIVE'),
-		(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.principal_id=principal.id),
-		(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.principal_id=principal.id AND attachment.revoked_at IS NULL),
+		(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.target_id=principal.id),
+		(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.target_id=principal.id AND attachment.revoked_at IS NULL),
 		(SELECT count(*) FROM iam.login_index AS login WHERE login.tenant_id=principal.tenant_id AND login.principal_id=principal.id AND login.login_name=principal.login_name),
 		(SELECT count(*) FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=principal.tenant_id AND outbox.event_document->>'action'='iam.user.updated' AND outbox.event_document#>>'{target,id}'=principal.id),
 		(SELECT count(*) FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=principal.tenant_id AND outbox.event_document->>'action'='iam.user.deleted' AND outbox.event_document#>>'{target,id}'=principal.id)
@@ -2595,7 +3129,7 @@ func proveUserProfileAndDeletion(t *testing.T, ctx context.Context, handler http
 		EXISTS(SELECT 1 FROM iam.login_index AS login WHERE login.tenant_id=principal.tenant_id AND login.principal_id=principal.id AND login.login_name=principal.login_name),
 		(SELECT count(*) FROM iam.user_credentials AS credential WHERE credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id),
 		(SELECT count(*) FROM iam.sessions AS session WHERE session.tenant_id=principal.tenant_id AND session.principal_id=principal.id AND session.status='ACTIVE'),
-		(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.principal_id=principal.id AND attachment.revoked_at IS NULL),
+		(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.target_id=principal.id AND attachment.revoked_at IS NULL),
 		(SELECT count(*) FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=principal.tenant_id AND outbox.event_document->>'action'='iam.user.deleted' AND outbox.event_document#>>'{target,id}'=principal.id)
 		FROM iam.principals AS principal WHERE principal.tenant_id=$1 AND principal.id=$2`, accountID, user.ID).
 		Scan(&replayDeleted, &replayReserved, &replayCredentials, &replayActiveSessions, &replayActiveAttachments, &replayDeleteFacts); err != nil ||
@@ -2745,7 +3279,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 		t.Fatal("platform operator identity is invalid")
 	}
 	operatorCreate, operatorCanCreate := findIAMCapability(identity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts")
-	if !operatorCanCreate || !operatorCreate.Available || len(identity.PolicyAttachments) != 1 || identity.User.ID == identity.Account.RootIdentity.PrincipalID {
+	if !operatorCanCreate || !operatorCreate.Available || len(identity.PolicySources) != 1 || identity.User.ID == identity.Account.RootIdentity.PrincipalID {
 		t.Fatal("tenant lifecycle still requires bootstrap/primary or tenant-admin identity")
 	}
 	protectedDirectory := request(http.MethodGet, "/v1/users", root, nil, http.StatusOK)
@@ -2808,7 +3342,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 			'organizations',(SELECT jsonb_agg(jsonb_build_array(o.id,o.status,o.resource_version) ORDER BY o.id) FROM iam.accounts AS o),
 			'principals',(SELECT jsonb_agg(jsonb_build_array(p.tenant_id,p.id,p.status,p.must_change_password,p.resource_version,c.password_hash) ORDER BY p.tenant_id,p.id) FROM iam.principals AS p LEFT JOIN iam.user_credentials AS c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id),
 			'sessions',(SELECT jsonb_agg(jsonb_build_array(s.tenant_id,s.id,s.status,s.resource_version,s.revoked_at) ORDER BY s.tenant_id,s.id) FROM iam.sessions AS s),
-			'bindings',(SELECT jsonb_agg(jsonb_build_array(b.tenant_id,b.id,b.principal_id,b.policy_id,b.resource_version,b.revoked_at) ORDER BY b.tenant_id,b.id) FROM iam.policy_attachments AS b),
+			'bindings',(SELECT jsonb_agg(jsonb_build_array(b.tenant_id,b.id,b.target_id,b.policy_id,b.resource_version,b.revoked_at) ORDER BY b.tenant_id,b.id) FROM iam.policy_attachments AS b),
 			'successes',(SELECT jsonb_agg(jsonb_build_array(e.event_id,e.event_document) ORDER BY e.event_id) FROM iam.audit_outbox AS e WHERE e.event_document->>'result'='SUCCEEDED')
 		)::text`).Scan(&state)
 		if err != nil {
@@ -2867,7 +3401,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	// itself must go through HTTP and must not resurrect the old revoked binding.
 	if _, err := database.Exec(ctx, `WITH revoked AS (
 		UPDATE iam.policy_attachments SET revoked_at=transaction_timestamp(),updated_at=transaction_timestamp(),resource_version=resource_version+1
-		WHERE tenant_id=$1 AND principal_id=$2 AND policy_id='system.account-administrator' AND revoked_at IS NULL RETURNING id)
+		WHERE tenant_id=$1 AND target_kind='USER' AND target_id=$2 AND policy_id='system.account-administrator' AND revoked_at IS NULL RETURNING id)
 		UPDATE iam.principals SET status='DISABLED',updated_at=transaction_timestamp(),resource_version=resource_version+1
 		WHERE tenant_id=$1 AND id=$2`, tenantID, primaryID); err != nil {
 		t.Fatal(err)
@@ -2879,7 +3413,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	var retainedRevocation, repaired bool
 	if err := database.QueryRow(ctx, `SELECT
 		EXISTS(SELECT 1 FROM iam.policy_attachments WHERE tenant_id=$1 AND id='primary-admin-binding' AND revoked_at IS NOT NULL),
-		(SELECT count(*)=1 FROM iam.policy_attachments WHERE tenant_id=$1 AND principal_id=$2 AND policy_id='system.account-administrator' AND revoked_at IS NULL)`,
+		(SELECT count(*)=1 FROM iam.policy_attachments WHERE tenant_id=$1 AND target_id=$2 AND policy_id='system.account-administrator' AND revoked_at IS NULL)`,
 		tenantID, primaryID).Scan(&retainedRevocation, &repaired); err != nil || !retainedRevocation || !repaired {
 		t.Fatal("primary recovery revived an old binding or did not restore exactly one tenant-admin binding")
 	}
@@ -2893,7 +3427,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	}
 	recoveredCreate, recoveredCanCreate := findIAMCapability(identity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts")
 	if !identity.User.MustChangePassword || !recoveredCanCreate || recoveredCreate.Available ||
-		recoveredCreate.RestrictionReason != iamv1.CapabilityCurrentCredentialChangeRequired || len(identity.PolicyAttachments) != 1 || identity.PolicyAttachments[0].PolicyID != iamv1.SystemPolicyAccountAdministrator {
+		recoveredCreate.RestrictionReason != iamv1.CapabilityCurrentCredentialChangeRequired || len(identity.PolicySources) != 1 || identity.PolicySources[0].Attachment.PolicyID != iamv1.SystemPolicyAccountAdministrator {
 		t.Fatal("primary recovery gained platform access or skipped required password change")
 	}
 	request(http.MethodGet, "/v1/users", primary, nil, http.StatusForbidden)
@@ -3345,7 +3879,7 @@ func provePlatformCredentialProtection(t *testing.T, ctx context.Context, handle
 			var status string
 			var mustChange bool
 			if err := database.QueryRow(ctx, `SELECT p.status,p.must_change_password,
-				EXISTS(SELECT 1 FROM iam.policy_attachments AS b WHERE b.tenant_id=p.tenant_id AND b.principal_id=p.id AND b.authority_scope='INSTALLATION' AND b.revoked_at IS NULL)
+				EXISTS(SELECT 1 FROM iam.policy_attachments AS b WHERE b.tenant_id=p.tenant_id AND b.target_id=p.id AND b.authority_scope='INSTALLATION' AND b.revoked_at IS NULL)
 				FROM iam.principals AS p WHERE p.tenant_id=$1 AND p.id=$2`, principal.AccountID, principal.ID).Scan(&status, &mustChange, &activePlatform); err != nil {
 				t.Fatal(err)
 			}

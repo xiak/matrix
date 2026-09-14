@@ -11,6 +11,16 @@ export type IamAction =
   | "iam.account.alias-set"
   | "iam.user.list"
   | "iam.user.create"
+  | "iam.group.list"
+  | "iam.group.create"
+  | "iam.group.read"
+  | "iam.group.update"
+  | "iam.group.delete"
+  | "iam.group-membership.list"
+  | "iam.group-membership.create"
+  | "iam.group-membership.remove"
+  | "iam.group-policy-attachment.create"
+  | "iam.group-policy-attachment.revoke"
   | "iam.user.read"
   | "iam.user.update"
   | "iam.user.delete"
@@ -35,7 +45,7 @@ export type CapabilityRestriction =
 
 export type ActionCapability = {
   action: IamAction;
-  resource: { kind: "ACCOUNT" | "USER" | "POLICY_ATTACHMENT"; id: string };
+  resource: { kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT"; id: string };
   available: boolean;
   restrictionReason: CapabilityRestriction | null;
 };
@@ -100,9 +110,56 @@ export type AccountIdentity = {
   account: Account;
   user: User;
   identityKind: IdentityKind;
-  policyAttachments: UserPolicyAttachment[];
+  policySources: PolicyGrantSource[];
   capabilities: ActionCapability[];
 };
+
+export type GroupPolicyAttachment = Omit<UserPolicyAttachment, "target" | "scope" | "installationId"> & {
+  target: { kind: "GROUP"; id: string };
+  scope: "TENANT";
+  installationId: null;
+};
+
+export type GroupMembership = {
+  id: string;
+  accountId: string;
+  groupId: string;
+  userId: string;
+  createdBy: string;
+  resourceVersion: number;
+  createdAt: string;
+  updatedAt: string;
+  removedAt?: string;
+  removedBy?: string;
+};
+
+export type Group = {
+  id: string;
+  accountId: string;
+  name: string;
+  description: string;
+  resourceVersion: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type GroupAccess = { group: Group; policyAttachments: GroupPolicyAttachment[]; capabilities: ActionCapability[] };
+export type GroupMembershipAccess = { membership: GroupMembership; capabilities: ActionCapability[] };
+export type GroupMembershipPage = DirectoryPage<GroupMembershipAccess> & { accountId: string; groupId: string };
+export type GroupDeletion = {
+  id: string;
+  accountId: string;
+  name: string;
+  resourceVersion: number;
+  removedMemberships: number;
+  revokedPolicyAttachments: number;
+  deletedAt: string;
+};
+export type PolicyAttachmentRevocation = { id: string; resourceVersion: number; revokedAt: string };
+
+export type PolicyGrantSource =
+  | { kind: "DIRECT"; attachment: UserPolicyAttachment }
+  | { kind: "GROUP"; attachment: GroupPolicyAttachment; membership: GroupMembership };
 
 export type UserAccess = { user: User; policyAttachments: UserPolicyAttachment[]; capabilities: ActionCapability[] };
 export type AccountAccess = { account: Account; capabilities: ActionCapability[] };

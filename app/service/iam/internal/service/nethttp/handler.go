@@ -22,6 +22,14 @@ type Workflow interface {
 	CurrentIdentity(context.Context, iamv1.Secret) (iamv1.CurrentIdentity, error)
 	ListUsers(context.Context, iamv1.Secret, string, string) (iamv1.UserList, error)
 	GetUser(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserAccess, error)
+	ListGroups(context.Context, iamv1.Secret, string, string) (iamv1.GroupList, error)
+	GetGroup(context.Context, iamv1.Secret, iamv1.GroupID, string) (iamv1.GroupAccess, error)
+	CreateGroup(context.Context, iamv1.Secret, iamv1.CreateGroupRequest) (iamv1.Group, error)
+	UpdateGroup(context.Context, iamv1.Secret, iamv1.GroupID, iamv1.UpdateGroupRequest) (iamv1.Group, error)
+	DeleteGroup(context.Context, iamv1.Secret, iamv1.GroupID, iamv1.DeleteGroupRequest) (iamv1.GroupDeletion, error)
+	ListGroupMemberships(context.Context, iamv1.Secret, iamv1.GroupID, string, string) (iamv1.GroupMembershipList, error)
+	CreateGroupMembership(context.Context, iamv1.Secret, iamv1.GroupID, iamv1.CreateGroupMembershipRequest) (iamv1.GroupMembership, error)
+	RemoveGroupMembership(context.Context, iamv1.Secret, iamv1.GroupID, iamv1.GroupMembershipID, iamv1.RemoveGroupMembershipRequest) (iamv1.GroupMembership, error)
 	ListPolicies(context.Context, iamv1.Secret, bool, string) (iamv1.PolicyList, error)
 	ListAccounts(context.Context, iamv1.Secret, string, string) (iamv1.AccountList, error)
 	GetAccount(context.Context, iamv1.Secret, iamv1.AccountID, string) (iamv1.AccountAccess, error)
@@ -105,6 +113,8 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
 	routes.HandleFunc("/v1/users", value.users)
 	routes.HandleFunc("/v1/users/", value.user)
+	routes.HandleFunc("/v1/groups", value.groups)
+	routes.HandleFunc("/v1/groups/", value.group)
 	routes.HandleFunc("/v1/policy-attachments", value.createPolicyAttachment)
 	routes.HandleFunc("/v1/policy-attachments/", value.revokePolicyAttachment)
 	routes.HandleFunc("/v1/sessions/", value.revokeSession)
@@ -288,6 +298,43 @@ func (value *handler) users(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	result, err := value.workflow.CreateUser(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusCreated, result)
+}
+
+func (value *handler) groups(response http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodGet {
+		after, ok := accountPage(response, request)
+		if !ok {
+			return
+		}
+		credential, ok := bearerCredential(response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.ListGroups(request.Context(), credential, after, requestID(request))
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.CreateGroupRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.CreateGroup(request.Context(), credential, body)
 	if err != nil {
 		value.writeError(response, request, err)
 		return
@@ -640,6 +687,145 @@ func (value *handler) user(response http.ResponseWriter, request *http.Request) 
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) group(response http.ResponseWriter, request *http.Request) {
+	path := strings.TrimPrefix(request.URL.Path, "/v1/groups/")
+	if path == request.URL.Path || path == "" || strings.Contains(path, "//") {
+		value.notFound(response, request)
+		return
+	}
+	parts := strings.Split(path, "/")
+	groupPart := parts[0]
+	if len(parts) == 1 {
+		suffix := ""
+		if request.Method != http.MethodGet {
+			if !value.requireMethod(response, request, http.MethodPost) {
+				return
+			}
+			if strings.HasSuffix(groupPart, ":update") {
+				suffix = ":update"
+			}
+			if strings.HasSuffix(groupPart, ":delete") {
+				suffix = ":delete"
+			}
+			if suffix == "" {
+				value.notFound(response, request)
+				return
+			}
+		}
+		id := strings.TrimSuffix(groupPart, suffix)
+		if iamv1.ValidateID("groupId", id) != nil {
+			value.notFound(response, request)
+			return
+		}
+		credential, ok := bearerCredential(response, request)
+		if !ok {
+			return
+		}
+		if suffix == "" {
+			if !rejectQueryAndBody(response, request) {
+				return
+			}
+			result, err := value.workflow.GetGroup(request.Context(), credential, iamv1.GroupID(id), requestID(request))
+			if err != nil {
+				value.writeError(response, request, err)
+				return
+			}
+			writeJSON(response, http.StatusOK, result)
+			return
+		}
+		if !rejectQuery(response, request) {
+			return
+		}
+		if suffix == ":update" {
+			body, ok := decodeJSON[iamv1.UpdateGroupRequest](value, response, request)
+			if !ok {
+				return
+			}
+			result, err := value.workflow.UpdateGroup(request.Context(), credential, iamv1.GroupID(id), body)
+			if err != nil {
+				value.writeError(response, request, err)
+				return
+			}
+			writeJSON(response, http.StatusOK, result)
+			return
+		}
+		body, ok := decodeJSON[iamv1.DeleteGroupRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.DeleteGroup(request.Context(), credential, iamv1.GroupID(id), body)
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "memberships" {
+		if iamv1.ValidateID("groupId", groupPart) != nil {
+			value.notFound(response, request)
+			return
+		}
+		credential, ok := bearerCredential(response, request)
+		if !ok {
+			return
+		}
+		if request.Method == http.MethodGet {
+			after, ok := accountPage(response, request)
+			if !ok {
+				return
+			}
+			result, err := value.workflow.ListGroupMemberships(request.Context(), credential, iamv1.GroupID(groupPart), after, requestID(request))
+			if err != nil {
+				value.writeError(response, request, err)
+				return
+			}
+			writeJSON(response, http.StatusOK, result)
+			return
+		}
+		if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+			return
+		}
+		body, ok := decodeJSON[iamv1.CreateGroupMembershipRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.CreateGroupMembership(request.Context(), credential, iamv1.GroupID(groupPart), body)
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	if len(parts) == 3 && parts[1] == "memberships" && strings.HasSuffix(parts[2], ":remove") {
+		membershipID := strings.TrimSuffix(parts[2], ":remove")
+		if iamv1.ValidateID("groupId", groupPart) != nil || iamv1.ValidateID("membershipId", membershipID) != nil {
+			value.notFound(response, request)
+			return
+		}
+		if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+			return
+		}
+		credential, ok := bearerCredential(response, request)
+		if !ok {
+			return
+		}
+		body, ok := decodeJSON[iamv1.RemoveGroupMembershipRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.RemoveGroupMembership(request.Context(), credential, iamv1.GroupID(groupPart), iamv1.GroupMembershipID(membershipID), body)
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	value.notFound(response, request)
 }
 
 func (value *handler) notFound(response http.ResponseWriter, request *http.Request) {

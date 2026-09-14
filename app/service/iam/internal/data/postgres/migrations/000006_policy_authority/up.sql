@@ -39,7 +39,7 @@ BEGIN
                 RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='IAM historical role has no explicit policy mapping';
             END IF;
             PERFORM set_config('matrix.iam_tenant_id',legacy.tenant_id,true);
-            INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at,revoked_at)
+            INSERT INTO iam.policy_attachments(tenant_id,id,target_id,policy_id,resource_version,created_at,updated_at,revoked_at)
             VALUES(legacy.tenant_id,legacy.id,legacy.principal_id,seed->>'policyId',legacy.resource_version,
                 legacy.created_at,legacy.updated_at,legacy.revoked_at);
         END LOOP;

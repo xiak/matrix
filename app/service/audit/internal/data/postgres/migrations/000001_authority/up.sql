@@ -306,6 +306,11 @@ BEGIN
         ('iam.user.created', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.user.updated', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.user.deleted', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.group.created', 'IAM', 'GROUP', 'SUCCEEDED', true, true, false),
+        ('iam.group.updated', 'IAM', 'GROUP', 'SUCCEEDED', true, true, false),
+        ('iam.group.deleted', 'IAM', 'GROUP', 'SUCCEEDED', true, true, false),
+        ('iam.group-membership.created', 'IAM', 'GROUP_MEMBERSHIP', 'SUCCEEDED', true, true, false),
+        ('iam.group-membership.removed', 'IAM', 'GROUP_MEMBERSHIP', 'SUCCEEDED', true, true, false),
         ('iam.user.status-set', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.user.password-reset', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.user.password-changed', 'IAM', 'USER', 'SUCCEEDED', false, false, false),
@@ -430,6 +435,7 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT', 'SYSTEM')
         OR (action_name IN ('iam.account.alias-set','iam.user.created','iam.user.updated','iam.user.deleted','iam.user.status-set',
+            'iam.group.created','iam.group.updated','iam.group.deleted','iam.group-membership.created','iam.group-membership.removed',
             'iam.user.password-reset','iam.user.password-changed',
             'iam.policy-attachment.created','iam.policy-attachment.revoked')
             AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
@@ -482,7 +488,7 @@ AS $function$
         to_regclass('audit.chain_heads') IS NOT NULL
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL,
-        5::bigint,
+        6::bigint,
         transaction_timestamp()
 $function$;
 
@@ -785,6 +791,8 @@ BEGIN
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
             'iam.account-root.credentials-recovered', 'iam.account.alias-set',
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
+            'iam.group.created','iam.group.updated','iam.group.deleted',
+            'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
             'iam.user.password-changed',
             'iam.bootstrap.applied', 'iam.session.issued',

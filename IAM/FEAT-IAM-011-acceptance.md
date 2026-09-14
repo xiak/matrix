@@ -12,7 +12,7 @@
 | IAM-AC-03 | PostgreSQL 18 真数据库、受限 runtime 登录、RLS/函数越权攻击 | 现有 IAM/Audit integration 与 authorityprocess |
 | IAM-AC-04 | 双账号 root/admin/member/role/service 完整业务与拒绝矩阵 | authorityprocess，真实 IAM/Audit/PaaS 进程 |
 | IAM-AC-05 | 已提交审计/outbox、hash chain、重放、暂停和历史证据关联 | Audit 与各 source owner |
-| IAM-AC-06 | 固定旧 binary 留存数据→迁移/重放/重启，撤销/凭据/原 root 不复活 | authorityprocess retained upgrade |
+| IAM-AC-06 | 当前基线带数据重放/重启，撤销/凭据/原 root 不复活；只有明确支持的数据保留起点才增加旧 binary 升级门禁 | 当前 IAM integration/authorityprocess；明确的历史起点另行冻结 |
 | IAM-AC-07 | 同完整 profile 签名 A/B 安装、保留升级/回滚/备份恢复；跨 profile 效果前拒绝 | 原安装 gate，与安装 owner 固定交接 |
 | IAM-AC-08 | IAM 控制台和真实授权资源的浏览器闭环 | 010 与 FEAT-007 |
 | IAM-AC-09 | 精确 SHA 独立 CI，固定提交、采用记录、可审查变更和回滚点 | 本分支 |
@@ -27,7 +27,17 @@
 - Transaction：同 resourceVersion 并发只有确定赢家；失败无新密码/附件/session/success fact 部分效果。
 - Producer：事实发生时的证明与当前服务凭据分开；暂停/撤权后历史 outbox 可完成；伪造 tenant/source/purpose/digest 拒绝。
 - Resource：成员生命周期不改变工作负载、Operation、配额、审计所有者；已接受后台任务执行边界明确。
-- Upgrade：固定旧状态、schema/function/readiness 实际形状、旧 bytes、签名 release tuple+revision；bootstrap 不补权。
+- Schema：当前空库安装、带数据重放、失败原子性、schema/function/readiness 实际形状与签名 profile 一致；bootstrap 不补权。历史升级只覆盖明确支持的发布/数据保留起点。
+
+## 未发布阶段与首版基线
+
+用户确认本次 IAM 尚未上线，计划以功能收敛后的最终 schema 作为首个受支持发布基线。开发期间的 schema 1、2、3 等编号、Git 回滚点和其他任务的联调固定提交，不自动成为必须永久支持的生产升级版本；不要求每个 FEAT 从 schema 1 逐版跑完整历史升级链。
+
+未发布迁移可以在风险替换前保存已验证并推送的 Git 回滚点后合并、改写或删除，不在工作树保留废弃实现作为兼容层。默认门禁是最终结构的空库安装、等值重放、带真实数据的重启/恢复、迁移失败无部分效果，以及当前版本的 RLS、受限身份、撤权和 Audit/outbox 不变量。它们不能因免除开发历史兼容而取消。
+
+只有明确要求保留某个现存安装的数据，或存在无法同次替换的真实消费者时，才冻结其准确起点和迁移/拒绝边界；无需补测未声明支持的中间版本。已运行的旧 binary 实验仍可作为一次风险替换的历史证据，但不是所有后续切片的默认完整回归矩阵。联调消费者在各自工作区使用固定提交原子对齐，不擅自清空对方环境。
+
+首版发布冻结实际完整 schema/profile、安装器和服务二进制；从该正式基线之后才维护已声明支持的升级、回滚和备份兼容窗口。首版产品版本不等于必须立即把当前各服务 schema 数字改成 1；发布前是否压缩/重编号要与安装及产品消费者一次性对齐。测试范围调整不授权删除用户数据，也不授予跨 profile 安装准入。
 
 ## 可用性与容量门禁
 
@@ -41,7 +51,7 @@ AC-11 当前仅服务副本子项有证据：2026-09-11 现有 `TestIndependentI
 
 ## 固定消费者的集成检查
 
-最终组合冻结为 IAM6/Audit4/PaaS5+r12。以下既有消费者必须在切换候选中通过真实数据检查；中间源码、同 schema 数字或静态编译不能替代：
+最终可发布组合尚未冻结，须在功能收敛后按首版基线规则与安装 owner 重新核对实际 schema、函数契约和二进制。开发阶段的联调版本不能提前作为最终发布 profile，也不能把不同分支的 PaaS 版本混为一谈。以下既有消费者必须在切换候选中通过真实数据检查；中间源码、同 schema 数字或静态编译不能替代：
 
 - `lookup_service` 五列与 `ServiceIdentity` 安装/purpose 语义；`claim_audit_event` 七列及物理 owner 的租约/完成身份。
 - `CanonicalizeEvent`、旧 tenant/installation bytes/hash/cursor/链与严格 event-bound producer proof。

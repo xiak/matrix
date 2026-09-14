@@ -25,9 +25,13 @@ func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.
 		if err != nil {
 			return err
 		}
-		attachments := make([]iamv1.PolicyAttachment, 0, len(subject.Policies))
+		sources := make([]iamv1.PolicyGrantSource, 0, len(subject.Policies))
 		for _, row := range subject.Policies {
-			attachments = append(attachments, row.Attachment)
+			source := iamv1.PolicyGrantSource{Kind: iamv1.PolicyGrantDirect, Attachment: row.Attachment}
+			if row.Membership != nil {
+				source.Kind, source.Membership = iamv1.PolicyGrantGroup, row.Membership
+			}
+			sources = append(sources, source)
 		}
 		user, err := userFromPrincipal(subject.Principal)
 		if err != nil {
@@ -42,7 +46,7 @@ func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.
 			return err
 		}
 		result = iamv1.CurrentIdentity{APIVersion: iamv1.APIVersion, Kind: "CurrentIdentity", Account: account,
-			User: user, IdentityKind: identityKind, PolicyAttachments: attachments, Capabilities: capabilities}
+			User: user, IdentityKind: identityKind, PolicySources: sources, Capabilities: capabilities}
 		return nil
 	})
 	if err != nil {
@@ -90,6 +94,8 @@ func currentIdentityCapabilities(subject SessionCredential, now time.Time) ([]ia
 		{iamv1.ActionIAMUserList, account},
 		{iamv1.ActionIAMUserCreate, account},
 		{iamv1.ActionIAMPolicyList, account},
+		{iamv1.ActionIAMGroupList, account},
+		{iamv1.ActionIAMGroupCreate, account},
 	}
 	result := make([]iamv1.ActionCapability, 0, len(requests))
 	for _, request := range requests {

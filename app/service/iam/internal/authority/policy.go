@@ -14,18 +14,21 @@ const MaxEvaluationStatements = 4096
 var ErrInvalidPolicyState = errors.New("IAM policy authority state is invalid")
 
 // AttachedPolicy is one database-resolved relationship, not a caller-provided
-// permission document. Group/role inheritance needs its own proven source path
-// before it can enter the direct-subject evaluation below.
+// permission document. A non-nil Membership proves one live group inheritance
+// path; both direct and inherited authority enter the same evaluator.
 type AttachedPolicy struct {
 	Policy     iamv1.Policy           `json:"policy"`
 	Version    iamv1.PolicyVersion    `json:"version"`
 	Attachment iamv1.PolicyAttachment `json:"attachment"`
+	Membership *iamv1.GroupMembership `json:"membership,omitempty"`
 }
 
 type PolicyAttachmentEvidence struct {
-	AttachmentID    iamv1.PolicyAttachmentID     `json:"attachmentId"`
-	ResourceVersion uint64                       `json:"resourceVersion"`
-	Version         iamv1.PolicyVersionReference `json:"version"`
+	AttachmentID              iamv1.PolicyAttachmentID     `json:"attachmentId"`
+	ResourceVersion           uint64                       `json:"resourceVersion"`
+	MembershipID              iamv1.GroupMembershipID      `json:"membershipId,omitempty"`
+	MembershipResourceVersion uint64                       `json:"membershipResourceVersion,omitempty"`
+	Version                   iamv1.PolicyVersionReference `json:"version"`
 }
 
 type PolicyEvaluation struct {
@@ -51,10 +54,16 @@ func EvaluateAttachedPolicies(accountID iamv1.AccountID, installationID string, 
 	seen := make(map[iamv1.PolicyAttachmentID]bool, len(attached))
 	for _, row := range attached {
 		policy, attachment := row.Policy, row.Attachment
+		directSource := row.Membership == nil && attachment.Target.ID == string(subject.ID) &&
+			string(attachment.Target.Kind) == string(subject.Type)
+		groupSource := row.Membership != nil && subject.Type == iamv1.PrincipalUser &&
+			iamv1.ValidateGroupMembership(*row.Membership) == nil && row.Membership.RemovedAt == nil &&
+			attachment.Scope == iamv1.AuthorityScopeTenant && attachment.Target.Kind == iamv1.PolicyTargetGroup &&
+			row.Membership.AccountID == accountID && row.Membership.UserID == subject.ID &&
+			string(row.Membership.GroupID) == attachment.Target.ID
 		if iamv1.ValidatePolicy(policy) != nil || iamv1.ValidatePolicyAttachment(attachment) != nil ||
 			policy.Status != iamv1.PolicyActive || attachment.RevokedAt != nil || seen[attachment.ID] ||
-			attachment.AccountID != accountID || attachment.Target.ID != string(subject.ID) ||
-			string(attachment.Target.Kind) != string(subject.Type) ||
+			attachment.AccountID != accountID || (!directSource && !groupSource) ||
 			(policy.Management == iamv1.PolicyCustomerManaged && policy.AccountID != accountID) ||
 			attachment.PolicyID != policy.ID || row.Version.PolicyID != policy.ID ||
 			row.Version.ID != policy.DefaultVersionID || row.Version.Document.Scope != policy.Scope ||
@@ -76,8 +85,13 @@ func EvaluateAttachedPolicies(accountID iamv1.AccountID, installationID string, 
 	evidence := make([]PolicyAttachmentEvidence, 0, len(result.MatchedVersions))
 	for _, row := range attached {
 		if version, found := matched[row.Policy.ID]; found {
-			evidence = append(evidence, PolicyAttachmentEvidence{AttachmentID: row.Attachment.ID,
-				ResourceVersion: row.Attachment.ResourceVersion, Version: version})
+			item := PolicyAttachmentEvidence{AttachmentID: row.Attachment.ID,
+				ResourceVersion: row.Attachment.ResourceVersion, Version: version}
+			if row.Membership != nil {
+				item.MembershipID = row.Membership.ID
+				item.MembershipResourceVersion = row.Membership.ResourceVersion
+			}
+			evidence = append(evidence, item)
 		}
 	}
 	slices.SortFunc(evidence, func(left, right PolicyAttachmentEvidence) int {
@@ -161,6 +175,10 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 			iamv1.ActionIAMUserCreate, iamv1.ActionIAMUserRead,
 			iamv1.ActionIAMUserUpdate, iamv1.ActionIAMUserDelete,
 			iamv1.ActionIAMPolicyAttachmentCreate, iamv1.ActionIAMPolicyAttachmentRevoke,
+			iamv1.ActionIAMGroupList, iamv1.ActionIAMGroupCreate, iamv1.ActionIAMGroupRead,
+			iamv1.ActionIAMGroupUpdate, iamv1.ActionIAMGroupDelete,
+			iamv1.ActionIAMGroupMembershipList, iamv1.ActionIAMGroupMembershipCreate, iamv1.ActionIAMGroupMembershipRemove,
+			iamv1.ActionIAMGroupPolicyAttachmentCreate, iamv1.ActionIAMGroupPolicyAttachmentRevoke,
 			iamv1.ActionIAMSessionRevoke,
 			iamv1.ActionPaaSApplicationCreate, iamv1.ActionPaaSApplicationRead,
 			iamv1.ActionPaaSConfigurationCreate, iamv1.ActionPaaSConfigurationRead,

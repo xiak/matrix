@@ -445,6 +445,37 @@ func (value *httpWorkflow) ListPolicies(_ context.Context, credential iamv1.Secr
 	return result, nil
 }
 
+func TestIAMGroupRoutesRejectSelectorsBeforeWorkflow(t *testing.T) {
+	handler := newTestHandler(t, newHTTPWorkflow(t))
+	for _, attack := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{http.MethodGet, "/v1/groups?tenantId=other", "", http.StatusBadRequest},
+		{http.MethodGet, "/v1/groups/g1?accountId=other", "", http.StatusBadRequest},
+		{http.MethodGet, "/v1/groups/g1/memberships?groupId=g2", "", http.StatusBadRequest},
+		{http.MethodGet, "/v1/groups", "{}", http.StatusBadRequest},
+		{http.MethodPost, "/v1/groups", `{"name":"group","requestId":"request","accountId":"other"}`, http.StatusBadRequest},
+		{http.MethodPost, "/v1/groups/g1/memberships", `{"userId":"u1","requestId":"request","kind":"ROLE"}`, http.StatusBadRequest},
+		{http.MethodPost, "/v1/groups/g1:update", `{"name":"changed","resourceVersion":1,"requestId":"request","policies":[]}`, http.StatusBadRequest},
+		{http.MethodPost, "/v1/groups/g1:delete?installationId=other", `{"resourceVersion":1,"requestId":"request"}`, http.StatusBadRequest},
+		{http.MethodPost, "/v1/groups/g1/memberships/m1:remove", `{"resourceVersion":1,"requestId":"request","userId":"u2"}`, http.StatusBadRequest},
+		{http.MethodDelete, "/v1/groups/g1", "", http.StatusMethodNotAllowed},
+		{http.MethodPost, "/v1/groups/g1/memberships/m1:activate", "{}", http.StatusNotFound},
+	} {
+		t.Run(attack.method+attack.path, func(t *testing.T) {
+			request := httptest.NewRequest(attack.method, attack.path, strings.NewReader(attack.body))
+			request.Header.Set("Authorization", "Bearer group-test-credential")
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != attack.status {
+				t.Fatalf("group request status=%d want=%d body=%s", response.Code, attack.status, response.Body.String())
+			}
+		})
+	}
+}
+
 func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 	t.Helper()
 	now := time.Date(2026, 8, 26, 9, 10, 11, 123000, time.UTC)

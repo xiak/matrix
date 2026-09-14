@@ -22,6 +22,7 @@ type PolicyManagement string
 type PolicyStatus string
 type PolicyAttachmentID string
 type PolicyAttachmentTargetKind string
+type PolicyGrantSourceKind string
 
 const (
 	PolicySystemManaged   PolicyManagement           = "SYSTEM"
@@ -32,6 +33,11 @@ const (
 	PolicyTargetService   PolicyAttachmentTargetKind = "SERVICE_ACCOUNT"
 	PolicyTargetGroup     PolicyAttachmentTargetKind = "GROUP"
 	PolicyTargetRole      PolicyAttachmentTargetKind = "ROLE"
+)
+
+const (
+	PolicyGrantDirect PolicyGrantSourceKind = "DIRECT"
+	PolicyGrantGroup  PolicyGrantSourceKind = "GROUP"
 )
 
 // Policy is mutable metadata pointing to one immutable content version. It
@@ -106,6 +112,14 @@ type PolicyAttachment struct {
 	RevokedAt       *time.Time             `json:"revokedAt,omitempty"`
 }
 
+// PolicyGrantSource describes one current authority path. It is a read-only
+// snapshot and never a reusable authorization permit.
+type PolicyGrantSource struct {
+	Kind       PolicyGrantSourceKind `json:"kind"`
+	Attachment PolicyAttachment      `json:"attachment"`
+	Membership *GroupMembership      `json:"membership,omitempty"`
+}
+
 // The requested policy revision is a concurrency precondition, not permission
 // to attach it. Account, installation and scope come from current authority.
 type CreatePolicyAttachmentRequest struct {
@@ -121,9 +135,9 @@ type RevokePolicyAttachmentRequest struct {
 }
 
 func ValidateCreatePolicyAttachmentRequest(value CreatePolicyAttachmentRequest) error {
-	// This direct-user management slice does not admit unimplemented group,
-	// role or service-credential workflows through a permissive target enum.
-	if value.Target.Kind != PolicyTargetUser {
+	// Group is the only inherited carrier implemented in this slice. Role and
+	// service-credential management remain closed until their own workflows.
+	if value.Target.Kind != PolicyTargetUser && value.Target.Kind != PolicyTargetGroup {
 		return ErrInvalidPolicy
 	}
 	return errors.Join(ValidateID("target.id", value.Target.ID), ValidateID("policyId", string(value.PolicyID)),
@@ -193,6 +207,28 @@ func ValidatePolicyAttachment(attachment PolicyAttachment) error {
 	}
 	if attachment.RevokedAt != nil && (validateTime("revokedAt", *attachment.RevokedAt) != nil ||
 		attachment.RevokedAt.Before(attachment.CreatedAt) || !attachment.RevokedAt.Equal(attachment.UpdatedAt) || attachment.ResourceVersion < 2) {
+		return ErrInvalidPolicy
+	}
+	return nil
+}
+
+func ValidatePolicyGrantSource(source PolicyGrantSource) error {
+	if ValidatePolicyAttachment(source.Attachment) != nil || source.Attachment.RevokedAt != nil {
+		return ErrInvalidPolicy
+	}
+	switch source.Kind {
+	case PolicyGrantDirect:
+		if source.Membership != nil || source.Attachment.Target.Kind != PolicyTargetUser {
+			return ErrInvalidPolicy
+		}
+	case PolicyGrantGroup:
+		if source.Membership == nil || ValidateGroupMembership(*source.Membership) != nil || source.Membership.RemovedAt != nil ||
+			source.Attachment.Scope != AuthorityScopeTenant || source.Attachment.Target.Kind != PolicyTargetGroup ||
+			source.Attachment.AccountID != source.Membership.AccountID ||
+			source.Attachment.Target.ID != string(source.Membership.GroupID) {
+			return ErrInvalidPolicy
+		}
+	default:
 		return ErrInvalidPolicy
 	}
 	return nil

@@ -243,7 +243,7 @@ BEGIN
         'rootHasInstallationAuthority',EXISTS(
             SELECT 1 FROM iam.account_roots AS root
             JOIN iam.policy_attachments AS attachment
-              ON attachment.tenant_id=root.account_id AND attachment.principal_id=root.principal_id
+              ON attachment.tenant_id=root.account_id AND attachment.target_id=root.principal_id
             WHERE root.account_id=tenant AND attachment.authority_scope='INSTALLATION'
               AND attachment.revoked_at IS NULL)
     ) INTO result FROM iam.accounts AS account WHERE account.id=tenant;
@@ -268,7 +268,7 @@ RETURNS jsonb LANGUAGE sql SET search_path = pg_catalog, pg_temp AS $function$
         'policyAttachments',COALESCE((
             SELECT jsonb_agg(iam.lookup_policy_attachment(tenant,selected.id) ORDER BY selected.id)
             FROM (SELECT attachment.id FROM iam.policy_attachments AS attachment
-                WHERE attachment.tenant_id=tenant AND attachment.principal_id=p.id
+                WHERE attachment.tenant_id=tenant AND attachment.target_id=p.id AND attachment.target_kind='USER'
                   AND attachment.revoked_at IS NULL
                 ORDER BY attachment.id LIMIT 257) AS selected
         ),'[]'::jsonb)
@@ -416,7 +416,7 @@ BEGIN
     VALUES(new_id,primary_id,password_hash,effective_now);
     INSERT INTO iam.login_index(login_name,tenant_id,principal_id) VALUES(login_name,new_id,primary_id);
     INSERT INTO iam.account_roots(account_id,principal_id,login_name) VALUES(new_id,primary_id,login_name);
-    INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at)
+    INSERT INTO iam.policy_attachments(tenant_id,id,target_id,policy_id,resource_version,created_at,updated_at)
     VALUES(new_id,'primary-admin-binding',primary_id,'system.account-administrator',1,effective_now,effective_now);
     result := iam.account_snapshot(new_id);
     PERFORM iam.append_account_event(tenant,actor,decision,'iam.account.created','ACCOUNT',new_id,event);
@@ -477,7 +477,7 @@ BEGIN
         WHERE root.account_id=target_tenant AND root.principal_id=primary_id
           AND principal.principal_type='USER' FOR UPDATE OF principal;
     IF NOT FOUND OR EXISTS(SELECT 1 FROM iam.policy_attachments AS binding WHERE binding.tenant_id=target_tenant
-        AND binding.principal_id=primary_id AND binding.authority_scope='INSTALLATION' AND binding.revoked_at IS NULL) THEN
+        AND binding.target_id=primary_id AND binding.target_kind='USER' AND binding.authority_scope='INSTALLATION' AND binding.revoked_at IS NULL) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='root credential recovery is forbidden';
     END IF;
     UPDATE iam.principals AS principal SET status='ACTIVE',must_change_password=true,
@@ -489,10 +489,10 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='primary credential is unavailable'; END IF;
     UPDATE iam.sessions AS session SET status='REVOKED',revoked_at=transaction_timestamp(),resource_version=session.resource_version+1
     WHERE session.tenant_id=target_tenant AND session.principal_id=primary_id AND session.status='ACTIVE';
-    INSERT INTO iam.policy_attachments(tenant_id,id,principal_id,policy_id,resource_version,created_at,updated_at)
+    INSERT INTO iam.policy_attachments(tenant_id,id,target_id,policy_id,resource_version,created_at,updated_at)
     SELECT target_tenant,new_binding_id,primary_id,'system.account-administrator',1,transaction_timestamp(),transaction_timestamp()
     WHERE NOT EXISTS(SELECT 1 FROM iam.policy_attachments AS binding WHERE binding.tenant_id=target_tenant
-        AND binding.principal_id=primary_id AND binding.policy_id='system.account-administrator' AND binding.revoked_at IS NULL);
+        AND binding.target_id=primary_id AND binding.target_kind='USER' AND binding.policy_id='system.account-administrator' AND binding.revoked_at IS NULL);
     UPDATE iam.accounts AS account SET resource_version=account.resource_version+1,updated_at=transaction_timestamp()
     WHERE account.id=target_tenant;
     PERFORM iam.append_account_event(tenant,actor,decision,'iam.account-root.credentials-recovered','USER',primary_id,event);
@@ -587,7 +587,7 @@ BEGIN
         OR EXISTS(SELECT 1 FROM iam.account_roots AS root
             WHERE root.account_id=tenant AND root.principal_id=user_id)
         OR EXISTS(SELECT 1 FROM iam.policy_attachments AS attachment
-            WHERE attachment.tenant_id=tenant AND attachment.principal_id=user_id
+            WHERE attachment.tenant_id=tenant AND attachment.target_id=user_id AND attachment.target_kind='USER'
               AND attachment.authority_scope='INSTALLATION' AND attachment.revoked_at IS NULL) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user is not deletable';
     END IF;
@@ -604,8 +604,16 @@ BEGIN
     END IF;
     -- Policy grant/revoke and deletion all acquire the principal before its
     -- attachments. Sorting closes multi-row deadlock ambiguity.
+    PERFORM target_group.id FROM iam.groups AS target_group
+      JOIN iam.group_memberships AS membership
+        ON membership.tenant_id=target_group.tenant_id AND membership.group_id=target_group.id
+     WHERE membership.tenant_id=tenant AND membership.user_id=delete_user.user_id AND membership.removed_at IS NULL
+     ORDER BY target_group.id FOR UPDATE OF target_group;
+    PERFORM membership.id FROM iam.group_memberships AS membership
+     WHERE membership.tenant_id=tenant AND membership.user_id=delete_user.user_id AND membership.removed_at IS NULL
+     ORDER BY membership.id FOR UPDATE;
     PERFORM attachment.id FROM iam.policy_attachments AS attachment
-     WHERE attachment.tenant_id=tenant AND attachment.principal_id=user_id
+     WHERE attachment.tenant_id=tenant AND attachment.target_id=user_id AND attachment.target_kind='USER'
      ORDER BY attachment.id FOR UPDATE;
     UPDATE iam.principals AS principal
        SET status='DISABLED',must_change_password=false,
@@ -622,7 +630,11 @@ BEGIN
      WHERE session.tenant_id=tenant AND session.principal_id=user_id AND session.status='ACTIVE';
     UPDATE iam.policy_attachments AS attachment
        SET resource_version=attachment.resource_version+1,updated_at=effective_now,revoked_at=effective_now
-     WHERE attachment.tenant_id=tenant AND attachment.principal_id=user_id AND attachment.revoked_at IS NULL;
+     WHERE attachment.tenant_id=tenant AND attachment.target_id=user_id AND attachment.target_kind='USER' AND attachment.revoked_at IS NULL;
+    UPDATE iam.group_memberships AS membership
+       SET resource_version=membership.resource_version+1,updated_at=effective_now,
+           removed_at=effective_now,removed_by=actor
+     WHERE membership.tenant_id=tenant AND membership.user_id=delete_user.user_id AND membership.removed_at IS NULL;
     PERFORM iam.append_account_event(tenant,actor,decision,'iam.user.deleted','USER',user_id,event);
     RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','UserDeletion',
         'accountId',tenant,'id',user_id,'loginName',stored.login_name,
@@ -651,7 +663,7 @@ BEGIN
     IF NOT FOUND OR stored.principal_type <> 'USER' OR stored.deleted_at IS NOT NULL OR user_id=actor
         OR EXISTS(SELECT 1 FROM iam.account_roots AS root WHERE root.account_id=tenant AND root.principal_id=user_id)
         OR EXISTS(SELECT 1 FROM iam.policy_attachments AS binding
-            WHERE binding.tenant_id=tenant AND binding.principal_id=user_id
+            WHERE binding.tenant_id=tenant AND binding.target_id=user_id AND binding.target_kind='USER'
               AND binding.authority_scope='INSTALLATION' AND binding.revoked_at IS NULL) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user is not manageable';
     END IF;

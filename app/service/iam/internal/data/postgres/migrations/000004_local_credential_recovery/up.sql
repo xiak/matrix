@@ -111,7 +111,7 @@ BEGIN
       JOIN iam.principals AS principal ON principal.tenant_id=organization.id
       JOIN iam.account_roots AS root ON root.account_id=principal.tenant_id AND root.principal_id=principal.id
       JOIN iam.user_credentials AS credential ON credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id
-      JOIN iam.policy_attachments AS binding ON binding.tenant_id=principal.tenant_id AND binding.principal_id=principal.id
+      JOIN iam.policy_attachments AS binding ON binding.tenant_id=principal.tenant_id AND binding.target_id=principal.id
        AND binding.policy_id='system.platform-operator' AND binding.revoked_at IS NULL
      WHERE organization.id=scope->>'organizationId' AND organization.status='ACTIVE'
        AND principal.id=scope->>'principalId' AND principal.principal_type='USER' AND principal.status='ACTIVE'
@@ -187,7 +187,7 @@ BEGIN
     PERFORM 1 FROM iam.policies AS policy WHERE policy.id='system.platform-operator' FOR SHARE;
     SELECT * INTO binding FROM iam.policy_attachments AS candidate
      WHERE candidate.tenant_id=scope->>'organizationId' AND candidate.id=expected->>'platformBindingId'
-       AND candidate.principal_id=scope->>'principalId' AND candidate.policy_id='system.platform-operator'
+       AND candidate.target_id=scope->>'principalId' AND candidate.target_kind='USER' AND candidate.policy_id='system.platform-operator'
        AND candidate.authority_scope='INSTALLATION'
        AND candidate.installation_id=scope->>'installationId'
      FOR UPDATE;
