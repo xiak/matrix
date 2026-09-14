@@ -1764,8 +1764,8 @@ and `git diff --check` gates must pass on the same committed worktree.
   Group creation now uses the bookmarkable two-step `create-group` route,
   replacing the combined metadata/member/policy dialog. Creation saves an
   empty group only; metadata editing never replaces memberships or policies.
-  The group renderer is separated into reusable directory, detail, member-table
-  and policy-table projections plus a Preview adapter. It consumes normalized
+  The group workspace owns reusable directory, detail, member-table and
+  policy-table projections separately from its Preview adapter. It consumes normalized
   records and explicit action controls, disables mutating entries while a read
   or write is active, and renders the member-count column only when the adapter
   supplies an authoritative total. A focused interaction test proves that a

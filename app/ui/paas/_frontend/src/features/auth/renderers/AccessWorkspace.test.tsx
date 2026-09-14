@@ -12,7 +12,7 @@ import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorks
 import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import type { PolicyDocument } from "../domain/policyDocument";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
-import { GroupDirectory } from "./AccessGroups";
+import { GroupDirectory } from "./GroupAccessWorkspace";
 import { buildAccessReport } from "../scenes/accessReport";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 import { previewAccountRepository, previewCredential, previewIamRepository } from "../repositories/previewIamRepository";
