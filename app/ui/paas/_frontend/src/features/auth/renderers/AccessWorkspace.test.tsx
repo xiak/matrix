@@ -12,6 +12,7 @@ import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorks
 import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import type { PolicyDocument } from "../domain/policyDocument";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
+import { GroupDirectory } from "./AccessGroups";
 import { buildAccessReport } from "../scenes/accessReport";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 import { previewAccountRepository, previewCredential, previewIamRepository } from "../repositories/previewIamRepository";
@@ -1184,6 +1185,22 @@ describe("CAM-style access workspace", () => {
     expect(within(members).queryByText("操作")).toBeNull();
     expect(within(members).queryByRole("button", { name: /从用户组移除/ })).toBeNull();
     expect(screen.getByRole("tab", { name: "直接关联策略 (1)" })).toBeTruthy();
+  });
+  it("omits the member-count column when the repository has not supplied an authoritative total", () => {
+    render(<LocaleProvider><GroupDirectory
+      groups={[{
+        id: "group-paged",
+        name: "PagedTeam",
+        description: "Memberships are loaded independently",
+        directPolicyCount: 2,
+        createdAt: "2026-09-08T09:00:00Z"
+      }]}
+      onOpen={vi.fn()}
+    /></LocaleProvider>);
+    const table = screen.getByRole("table", { name: "用户组" });
+    expect(within(table).queryByRole("columnheader", { name: "成员" })).toBeNull();
+    expect(within(table).getByRole("columnheader", { name: "直接关联策略" })).toBeTruthy();
+    expect(within(table).getByText("2 项直接关联")).toBeTruthy();
   });
   it("creates only an empty group, then adds each member and policy relationship separately", async () => {
     const { user, repository, extension } = await open("groups");

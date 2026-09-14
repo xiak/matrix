@@ -776,6 +776,13 @@ preselects a grant. Each change shows the selected object and affected members
 before saving; cancellation or failure preserves that exact pending choice.
 Removing a direct grant or membership does not imply all access is revoked when
 another source still grants it.
+The reusable group directory and detail consume normalized presentation records
+and actor-relative action controls. Preview owns its local-record mapping; the
+live adapter will own the fixed wire mapping and must not leak transport fields
+into the presentation component. A member-count column is rendered only when
+the repository supplies an authoritative total. The first live slice omits it
+rather than reading every membership page or presenting the loaded page size as
+a total; the isolated Preview may show its known complete local sample count.
 Groups, users and policies cross-link to the precise referenced entity; the
 IAM workspace accepts a URL entity identifier, including direct visits and
 Back/Forward navigation, without trusting it as authorization.
@@ -829,7 +836,7 @@ slice, not a replacement of FEAT-006 or a published live authorization API.
 | --- | --- | --- |
 | Policy lifecycle | Strict, lossless supported document handling; readable summary/JSON; metadata vs content editing; five-version history, protected effective version and reviewed rollback. | Implemented and locally verified for the supported effect/action/resource/condition MOCK dialect. Unsupported fields and condition keys are rejected without stripping the draft; summaries and history retain every supported restriction. |
 | Policy authoring | Full-page generator/JSON/template flow, typed action/resource/condition selection, diagnostics, review and optional atomic associations. | Full-page create/copy/edit, lossless multiple statements, guarded template/service replacement, typed operations and resources, IP/tag/time conditions, metadata tags, review, optional atomic associations and capacity recovery are implemented. Shared in-app unsaved-navigation protection preserves even invalid JSON drafts. |
-| Group authorization | Full-page empty-group creation, separate one-relationship membership/policy operations, permission provenance and cross-navigation. | Two-step group-only creation, isolated metadata updates, reviewed one-item relationship changes, named policy sources and query-addressable user/group/policy/role details are implemented in MOCK. Shared in-app unsaved-navigation protection preserves creation drafts. |
+| Group authorization | Full-page empty-group creation, separate one-relationship membership/policy operations, permission provenance and cross-navigation. | Two-step group-only creation, isolated metadata updates, reviewed one-item relationship changes, named policy sources and query-addressable user/group/policy/role details are implemented in MOCK. Reusable normalized directory/detail projections omit a non-authoritative live member total, while Preview retains its explicitly complete sample count. Shared in-app unsaved-navigation protection preserves creation drafts. |
 | Role authorization | Carrier-aware content wizard, trust vs permission vs boundary, bounded temporary-session preview and safe revocation explanation. | Four-step creation, isolated metadata/trust/settings commands, reviewed policy deltas, boundary and before/after trust changes, exact same-tenant account trust and known service/provider identities are implemented. Bounded preview sessions recheck assumption, retain immutable expiry and support individual revocation. Shared draft protection, unchanged/invalid trust, provider-reference rejection, pending locks, cancellation and failure/retry across role commands are locally verified. |
 | End-to-end access explanation | A no-grant user, group-derived allow, explicit deny, default-version rollback, boundary intersection and role-session case all lead to reproducible resource/action decisions. | Domain and interaction tests cover direct/group grants, deny precedence, conditions, current-version rollback, user/role boundary intersection, dual trust/caller authorization and session expiry/revocation. A real local MOCK journey proves caller denial before an exact assumption grant, role-only resource access limited by a boundary, then denial after revocation. Locally functionally verified for the documented subset. |
 | Supporting workspaces | Review overview, users, providers, SSO, settings and one-time MOCK keys against the documented scope without faking external activation. | Overview links and candidate guidance, source-aware user filtering, localized policy metadata, SAML/OIDC drafts, SSO/settings failure-retry, enterprise visibility/import and one-time MOCK keys are locally regression-verified. Scan/paid/live security flows remain skipped. |
@@ -1757,6 +1764,12 @@ and `git diff --check` gates must pass on the same committed worktree.
   Group creation now uses the bookmarkable two-step `create-group` route,
   replacing the combined metadata/member/policy dialog. Creation saves an
   empty group only; metadata editing never replaces memberships or policies.
+  The group renderer is separated into reusable directory, detail, member-table
+  and policy-table projections plus a Preview adapter. It consumes normalized
+  records and explicit action controls, disables mutating entries while a read
+  or write is active, and renders the member-count column only when the adapter
+  supplies an authoritative total. A focused interaction test proves that a
+  live-style directory without that aggregate does not invent the column.
   Separate add/remove commands validate references and change one membership
   or direct policy attachment per independent intent, without presenting
   several requests as an atomic batch. Public Transfer controls retain the

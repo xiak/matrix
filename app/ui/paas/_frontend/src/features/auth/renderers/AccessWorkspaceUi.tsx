@@ -16,7 +16,7 @@ export function WorkspaceTime({ value }: { value: string | null }) {
 
 export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, keywords, filter, embedded = false }: {
   title: string; description: string; items: T[]; columns: string[];
-  row(item: T): ReactNode; create?: { label: string; onClick(): void }; embedded?: boolean;
+  row(item: T): ReactNode; create?: { label: string; disabled?: boolean; reason?: string; onClick(): void }; embedded?: boolean;
   keywords?(item: T): string;
   filter?: { label: string; options: { value: string; label: string }[]; matches(item: T, value: string): boolean };
 }) {
@@ -35,7 +35,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   const pages = Math.max(1, Math.ceil(matches.length / pageSize));
   const currentPage = Math.min(page, pages);
   const reset = () => { setQuery(""); setKind("all"); setPage(1); };
-  const action = create ? <Button onClick={create.onClick} size="small"><Plus aria-hidden="true" />{create.label}</Button> : null;
+  const action = create ? <Button disabled={create.disabled} title={create.reason} onClick={create.onClick} size="small"><Plus aria-hidden="true" />{create.label}</Button> : null;
   return <Card aria-description={description}>
     {!embedded ? <ContentPage.Heading title={title} actions={action} /> : null}
     <TableToolbar labels={toolbarLabels} search={{ label: t("search"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
