@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -44,6 +45,29 @@ const (
 	verifierCredential       = "mx1.VerifierHTTPIntegrationCredential0000000001"
 	iamProducerCredential    = "mx1.IAMHTTPIntegrationCredential0000000000000001"
 )
+
+// Diagnostics only: count transient database failures without retaining SQL,
+// arguments, credentials or error details from the runtime connection.
+type iamTransactionFailureTrace struct {
+	serialization atomic.Int64
+	deadlock      atomic.Int64
+}
+
+func (*iamTransactionFailureTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	return ctx
+}
+
+func (trace *iamTransactionFailureTrace) TraceQueryEnd(_ context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	var databaseError *pgconn.PgError
+	if errors.As(data.Err, &databaseError) {
+		switch databaseError.Code {
+		case "40001":
+			trace.serialization.Add(1)
+		case "40P01":
+			trace.deadlock.Add(1)
+		}
+	}
+}
 
 func findIAMCapability(values []iamv1.ActionCapability, action iamv1.Action, kind iamv1.ResourceKind, id string) (iamv1.ActionCapability, bool) {
 	for _, value := range values {
@@ -2999,6 +3023,8 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	poolConfig.ConnConfig.User = iamHTTPTestRole
 	poolConfig.ConnConfig.Password = iamHTTPTestPassword
 	poolConfig.MaxConns = 4
+	transactionFailures := &iamTransactionFailureTrace{}
+	poolConfig.ConnConfig.Tracer = transactionFailures
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		t.Fatalf("open IAM HTTP runtime pool: %v", err)
@@ -3273,7 +3299,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		t.Fatalf("developer allowed decision=%#v err=%v", decision, err)
 	}
 	t.Run("tenant accounts and subusers", func(t *testing.T) {
-		proveTenantAccounts(t, ctx, handler, admin, loginWire.Credential)
+		proveTenantAccounts(t, ctx, handler, admin, loginWire.Credential, transactionFailures)
 	})
 	t.Run("password session policy", func(t *testing.T) {
 		provePasswordSessionPolicy(t, ctx, handler, admin, loginWire.Credential)
@@ -3868,7 +3894,7 @@ func proveIAMOutboxClaims(t *testing.T, ctx context.Context, admin *pgx.Conn, co
 	}
 }
 
-func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler, admin *pgx.Conn, root string) {
+func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler, admin *pgx.Conn, root string, failures *iamTransactionFailureTrace) {
 	t.Helper()
 	const tenantA = "organization-http-integration"
 	const tenantB = "organization-customer-b"
@@ -4280,23 +4306,63 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	request(http.MethodGet, "/v1/accounts?after="+accountFirst.NextAfter, primaryB, nil, http.StatusForbidden)
 	request(http.MethodGet, "/v1/users?after="+first.NextAfter, root, nil, http.StatusUnprocessableEntity)
 	// Two account administrators cannot acquire the same alias concurrently.
-	startAliasRace := make(chan struct{})
-	aliasResults := make(chan int, 2)
-	for _, actor := range []string{root, primaryB} {
-		version := identity(actor).Account.ResourceVersion
-		body, err := json.Marshal(iamv1.SetAccountAliasRequest{Alias: "concurrent-company", ResourceVersion: version, RequestID: "request-alias-race"})
-		if err != nil {
-			t.Fatal(err)
+	for round := 0; round < 8; round++ {
+		startAliasRace := make(chan struct{})
+		type aliasOutcome struct{ actor, status int }
+		aliasResults := make(chan aliasOutcome, 2)
+		actors := []string{root, primaryB}
+		beforeIdentity := []iamv1.CurrentIdentity{identity(root), identity(primaryB)}
+		before := []iamv1.Account{beforeIdentity[0].Account, beforeIdentity[1].Account}
+		alias, requestID := fmt.Sprintf("concurrent-company-%d", round), fmt.Sprintf("request-alias-race-%d", round)
+		serialization, deadlocks := failures.serialization.Load(), failures.deadlock.Load()
+		for index, actor := range actors {
+			body, err := json.Marshal(iamv1.SetAccountAliasRequest{Alias: alias, ResourceVersion: before[index].ResourceVersion, RequestID: requestID})
+			if err != nil {
+				t.Fatal(err)
+			}
+			go func(index int, bearer string, encoded []byte) {
+				<-startAliasRace
+				aliasResults <- aliasOutcome{index, performIAMRequest(handler, http.MethodPost, "/v1/account:alias", bearer, encoded).Code}
+			}(index, actor, body)
 		}
-		go func(bearer string, encoded []byte) {
-			<-startAliasRace
-			aliasResults <- performIAMRequest(handler, http.MethodPost, "/v1/account:alias", bearer, encoded).Code
-		}(actor, body)
-	}
-	close(startAliasRace)
-	firstStatus, secondStatus := <-aliasResults, <-aliasResults
-	if !((firstStatus == http.StatusOK && secondStatus == http.StatusConflict) || (secondStatus == http.StatusOK && firstStatus == http.StatusConflict)) {
-		t.Fatalf("concurrent alias acquisition statuses=%d,%d", firstStatus, secondStatus)
+		close(startAliasRace)
+		first, second := <-aliasResults, <-aliasResults
+		transient := fmt.Sprintf("40001=%d 40P01=%d", failures.serialization.Load()-serialization, failures.deadlock.Load()-deadlocks)
+		if !((first.status == http.StatusOK && second.status == http.StatusConflict) || (second.status == http.StatusOK && first.status == http.StatusConflict)) {
+			t.Fatalf("concurrent alias acquisition round=%d statuses=%d,%d %s", round, first.status, second.status, transient)
+		}
+		for _, result := range []aliasOutcome{first, second} {
+			afterIdentity := identity(actors[result.actor])
+			after := afterIdentity.Account
+			if !reflect.DeepEqual(afterIdentity.User, beforeIdentity[result.actor].User) {
+				t.Fatal("alias acquisition changed the original principal")
+			}
+			var totalLoginRows, matchingLoginRows int
+			if err := admin.QueryRow(ctx, `SELECT count(*), count(*) FILTER (WHERE login_name=$3) FROM iam.login_index WHERE tenant_id=$1 AND principal_id=$2`, after.ID, afterIdentity.User.ID, afterIdentity.User.LoginName).Scan(&totalLoginRows, &matchingLoginRows); err != nil || totalLoginRows != 1 || matchingLoginRows != 1 {
+				t.Fatal("alias acquisition changed the original login index")
+			}
+			// This CAS route does not promise an idempotent success receipt:
+			// replaying the original version must conflict without another write.
+			request(http.MethodPost, "/v1/account:alias", actors[result.actor], iamv1.SetAccountAliasRequest{Alias: alias, ResourceVersion: before[result.actor].ResourceVersion, RequestID: requestID}, http.StatusConflict)
+			if !reflect.DeepEqual(identity(actors[result.actor]).Account, after) {
+				t.Fatal("replaying the original alias CAS changed the account")
+			}
+			var facts, aliases int
+			if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.account.alias-set' AND event_document->>'requestId'=$2`, after.ID, requestID).Scan(&facts); err != nil {
+				t.Fatal(err)
+			}
+			if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.account_aliases WHERE tenant_id=$1 AND alias=$2`, after.ID, alias).Scan(&aliases); err != nil {
+				t.Fatal(err)
+			}
+			if result.status == http.StatusConflict {
+				if !reflect.DeepEqual(after, before[result.actor]) || facts != 0 || aliases != 0 {
+					t.Fatal("losing alias transaction changed account, reservation or success fact")
+				}
+			} else if after.ResourceVersion != before[result.actor].ResourceVersion+1 || after.LoginAlias == nil || *after.LoginAlias != alias || facts != 1 || aliases != 1 {
+				t.Fatal("winning alias transaction lacks exactly one version, reservation or success fact")
+			}
+		}
+		t.Logf("alias competition round=%d: one success, one conflict, loser unchanged; %s", round, transient)
 	}
 	for _, actor := range []struct{ bearer, alias string }{{root, "customer-a"}, {primaryB, "customer-b"}} {
 		setAlias(actor.bearer, actor.alias, identity(actor.bearer).Account.ResourceVersion, http.StatusOK)

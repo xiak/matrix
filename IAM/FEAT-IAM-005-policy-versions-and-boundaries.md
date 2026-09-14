@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联及版本查询/创建/默认切换/退休已有固定 CI；IAM 权威时间条件已通过本地完整真库与独立进程，待本片独立 CI。完整条件、边界和 UI 闭环未完成，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联及版本查询/创建/默认切换/退休已有固定 CI；IAM 权威时间条件已通过本地完整真库与独立进程，但候选 CI 因既有账号别名竞争失败，须修复后重新绑定固定提交验收。完整条件、边界和 UI 闭环未完成，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -161,4 +161,4 @@ PG18 聚焦 `customer_policy_terminal_deletion` 最终通过，3.18s（含父门
 
 最终带时间条件种子的诊断/canonical fuzz 通过：15 秒、2 workers、每次样本最小化限 1 秒，132,238 次执行；不以此声称性能或未实现语法正确。OpenAPI 重生成字节稳定，最终 API/authority race 与 Linux IAM/Audit 构建通过。全部本地进程结束后，专属 PG 容器、网络和合成数据卷按精确身份检查并清理，没有用户或其他任务数据变更。
 
-时间条件当前源码 readiness 为 IAM15/Audit11/PaaS1；IAM 版本反映新的策略文档/发布验证语义，Audit 编码、ServiceIdentity、lookup_service、七列 claim 和安装发布 profile 未变。本片固定 CI 尚未完成，不继承 b99e082 的结论。
+时间条件当前源码 readiness 为 IAM15/Audit11/PaaS1；IAM 版本反映新的策略文档/发布验证语义，Audit 编码、ServiceIdentity、lookup_service、七列 claim 和安装发布 profile 未变。固定 `7218e1671378a227d78d020686a68d164982e2ac` 的 [Verification 34830294815](https://github.com/xiak/matrix/actions/runs/34830294815) 最终失败：Go/node-process 成功，authority-process 中时间条件和独立进程通过，但原账号别名竞争返回 503/200 而非 409/200。PG 日志证明同一 backend 的五次 `40001` 相隔约 9ms，原无等待整事务重试在竞争提交前耗尽；修复与竞争验收归 003。本地时间条件证据保留，但该候选不得作为 CI 成功对象，不继承 b99e082 的结论。

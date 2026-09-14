@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	randv2 "math/rand/v2"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
@@ -72,12 +73,29 @@ func (service *Authority) withinTransaction(
 	}
 	var transactionErr error
 	for attempt := 0; attempt < service.config.MaxTransactionAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		transactionErr = service.repository.WithinTransaction(ctx, callback)
 		if transactionErr == nil || !errors.Is(transactionErr, ErrRetryableTransaction) {
 			return transactionErr
 		}
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if attempt+1 < service.config.MaxTransactionAttempts {
+			// The failed transaction (including its connection and locks) has
+			// ended. Yield before taking a fresh Serializable snapshot; otherwise
+			// a hot loop can spend every attempt before the winner commits.
+			ceiling := min(50*time.Millisecond<<attempt, 200*time.Millisecond)
+			delay := ceiling/2 + time.Duration(randv2.Int64N(int64(ceiling/2)))
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
 		}
 	}
 	return fmt.Errorf("IAM transaction attempts exhausted: %w", transactionErr)

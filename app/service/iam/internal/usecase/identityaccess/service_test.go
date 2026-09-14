@@ -9,12 +9,91 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 )
+
+func TestTransactionRetryYieldsToContendingCommit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		service, err := NewAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now()
+		// A concurrent commit is not yet visible. Each whole-transaction retry
+		// must obtain a fresh observation, eventually discovering the conflict.
+		attempts := 0
+		err = service.withinTransaction(t.Context(), func(context.Context, Transaction) error {
+			attempts++
+			if time.Since(started) < 120*time.Millisecond {
+				return fmt.Errorf("serialization: %w", ErrRetryableTransaction)
+			}
+			return ErrConflict
+		})
+		if !errors.Is(err, ErrConflict) || attempts > defaultMaxTransactionAttempts {
+			t.Fatalf("contending commit was not reobserved within budget: attempts=%d err=%v", attempts, err)
+		}
+		if elapsed := time.Since(started); elapsed < 120*time.Millisecond || elapsed > 550*time.Millisecond {
+			t.Fatalf("retry wait outside bounded contention budget: %s", elapsed)
+		}
+	})
+}
+
+func TestTransactionRetryCancellationAndTerminalResults(t *testing.T) {
+	for _, terminal := range []error{nil, ErrConflict, ErrForbidden, ErrUnavailable} {
+		t.Run(fmt.Sprint(terminal), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				service, err := NewAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				started, attempts := time.Now(), 0
+				err = service.withinTransaction(t.Context(), func(context.Context, Transaction) error { attempts++; return terminal })
+				if !errors.Is(err, terminal) || attempts != 1 || time.Since(started) != 0 {
+					t.Fatalf("terminal result retried or delayed: attempts=%d err=%v", attempts, err)
+				}
+			})
+		})
+	}
+	t.Run("cancel during backoff", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			service, err := NewAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
+			defer cancel()
+			started, attempts := time.Now(), 0
+			err = service.withinTransaction(ctx, func(context.Context, Transaction) error { attempts++; return ErrRetryableTransaction })
+			if !errors.Is(err, context.DeadlineExceeded) || attempts != 1 || time.Since(started) != time.Millisecond {
+				t.Fatalf("cancellation failed to bound retry: attempts=%d err=%v", attempts, err)
+			}
+		})
+	})
+	for _, limit := range []int{1, defaultMaxTransactionAttempts, 10} {
+		t.Run(fmt.Sprintf("exhaustion-%d", limit), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				service, err := NewAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{MaxTransactionAttempts: limit})
+				if err != nil {
+					t.Fatal(err)
+				}
+				started, attempts := time.Now(), 0
+				err = service.withinTransaction(t.Context(), func(context.Context, Transaction) error { attempts++; return ErrRetryableTransaction })
+				if !errors.Is(err, ErrRetryableTransaction) || errors.Is(err, ErrConflict) || attempts != limit {
+					t.Fatalf("exhaustion substituted a business outcome: attempts=%d err=%v", attempts, err)
+				}
+				elapsed := time.Since(started)
+				if limit == 1 && elapsed != 0 || elapsed > time.Duration(limit-1)*200*time.Millisecond {
+					t.Fatalf("exhausted transaction waited beyond budget: %s", elapsed)
+				}
+			})
+		})
+	}
+}
 
 func TestLocalRecoveryWorkflowBindsOnePrivateIntentToOneSanitizedFact(t *testing.T) {
 	secret := func(value string) iamv1.Secret {
