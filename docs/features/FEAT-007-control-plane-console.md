@@ -1125,7 +1125,8 @@ display names or statuses and absent user access profiles are not fabricated
 from the current actor or interpreted as disabled.
 
 The live account-access projection consumes the IAM contract fixed at
-`4201989773b6ca24829506b7e60dc3f9c4f20446`. `CurrentIdentity` controls which
+`25202188f33ca5892880b72d6f6831e476c0bfb1`, verified by run
+`34797635592`. `CurrentIdentity` controls which
 account-wide directories may be requested. Every `UserAccess` and
 `AccountAccess` entry then carries an exact action, resource kind and resource
 ID for each supported operation. The scene may use that projection to show an
