@@ -19,7 +19,7 @@ import { type AccessWorkspace, type AccessWorkspaceCommand } from "../domain/acc
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import type { AccountRepository } from "../repositories/iamRepository";
 import { httpAccountRepository } from "../repositories/httpIamRepository";
-import { buildAccountAccessScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
+import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
@@ -127,8 +127,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const [error, setError] = useState<AccountError | null>(null);
   const [success, setSuccess] = useState<"completed" | null>(null);
   const [revision, setRevision] = useState(0);
-  const [page, setPage] = useState({ users: "", accounts: "" });
   const mutationPending = useRef(false);
+  const directoryRequest = useRef({ users: 0, accounts: 0 });
   // View context survives list/detail navigation, not account/session changes.
   // Keeping it outside React state avoids rerendering the shell on each keystroke.
   const viewSession = useMemo(() => ({ credential, tenantId, principalId }), [credential, tenantId, principalId]);
@@ -156,14 +156,16 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   useEffect(() => {
     if (!active || !credential || !tenantId) return;
     let mounted = true;
+    directoryRequest.current.users += 1;
+    directoryRequest.current.accounts += 1;
     async function read() {
       const identity = await repository.currentIdentity(credential!);
       if (identity.account.id !== tenantId || identity.user.id !== principalId) throw new Error("INVALID_IAM_IDENTITY");
       const currentCapability = (action: Parameters<typeof findActionCapability>[1], id = identity.account.id) =>
         findActionCapability(identity.capabilities, action, "ACCOUNT", id)?.available === true;
       const [users, accounts, tenantPolicies, platformPolicies] = await Promise.all([
-        currentCapability("iam.user.list") ? readWhenAuthorized(() => repository.listUsers(credential!, page.users || undefined)) : null,
-        currentCapability("iam.account.read", "accounts") ? readWhenAuthorized(() => repository.listAccounts(credential!, page.accounts || undefined)) : null,
+        currentCapability("iam.user.list") ? readWhenAuthorized(() => repository.listUsers(credential!)) : null,
+        currentCapability("iam.account.read", "accounts") ? readWhenAuthorized(() => repository.listAccounts(credential!)) : null,
         currentCapability("iam.policy.list") ? readWhenAuthorized(() => repository.listPolicies(credential!, false)) : null,
         readWhenAuthorized(() => repository.listPolicies(credential!, true))
       ]);
@@ -174,13 +176,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       if (tenantPolicies && tenantPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
       if (platformPolicies && platformPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
       if (extension && (extension.accountId !== tenantId || extension.mode !== "preview")) throw new Error("INVALID_IAM_TENANT");
-      return { scene: { ...buildAccountAccessScene(identity, users, accounts, tenantPolicies, platformPolicies), directoryComplete: !page.users && users !== null && !users.nextAfter }, extension };
+      return { scene: buildAccountAccessScene(identity, users, accounts, tenantPolicies, platformPolicies), extension };
     }
     read().then((loaded) => { if (mounted) { setScene(loaded.scene); setWorkspace(loaded.extension); setError(null); } },
       (failure: unknown) => { if (mounted) { setScene(null); setWorkspace(null); setError(accountError(failure)); } })
       .finally(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
-  }, [active, credential, page, principalId, repository, revision, tenantId]);
+  }, [active, credential, principalId, repository, revision, tenantId]);
 
   const loadUser = useCallback(async (userId: string): Promise<AccountUserScene> => {
     if (!active || !credential || !scene || !userId || userId === scene.accountOwner.id) throw new Error("INVALID_IAM_USER_TARGET");
@@ -210,6 +212,49 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       revokePolicyAttachment: (attachmentId, command) => repository.revokePolicyAttachment(credential, attachmentId, command)
     };
   }, [active, credential, repository, scene, tenantId]);
+
+  const loadUsersPage = useCallback(async (after: string) => {
+    if (!active || !credential || !scene || loading || mutationPending.current) return;
+    const source = scene;
+    const request = ++directoryRequest.current.users;
+    setLoading(true); setError(null); setSuccess(null);
+    try {
+      const users = await repository.listUsers(credential, after || undefined);
+      if (request !== directoryRequest.current.users) return;
+      if (users.items.some((entry) => entry.user.accountId !== tenantId || entry.user.id === source.accountOwner.id)) throw new Error("INVALID_IAM_TENANT");
+      const items = users.items.map((entry) => buildAccountUserScene({ id: source.accountId, loginAlias: source.loginAlias }, source.policies, entry));
+      setScene((current) => current?.accountId === source.accountId ? {
+        ...current,
+        users: items,
+        nextUserPage: users.nextAfter,
+        directoryComplete: !after && !users.nextAfter
+      } : current);
+    } catch (failure) {
+      if (request === directoryRequest.current.users) setError(accountError(failure));
+    } finally {
+      if (request === directoryRequest.current.users) setLoading(false);
+    }
+  }, [active, credential, loading, repository, scene, tenantId]);
+
+  const loadAccountsPage = useCallback(async (after: string) => {
+    if (!active || !credential || !scene || loading || mutationPending.current) return;
+    const source = scene;
+    const request = ++directoryRequest.current.accounts;
+    setLoading(true); setError(null); setSuccess(null);
+    try {
+      const accounts = await repository.listAccounts(credential, after || undefined);
+      if (request !== directoryRequest.current.accounts) return;
+      setScene((current) => current?.accountId === source.accountId ? {
+        ...current,
+        accounts: accounts.items.map(buildAccountTenantScene),
+        nextAccountPage: accounts.nextAfter
+      } : current);
+    } catch (failure) {
+      if (request === directoryRequest.current.accounts) setError(accountError(failure));
+    } finally {
+      if (request === directoryRequest.current.accounts) setLoading(false);
+    }
+  }, [active, credential, loading, repository, scene]);
 
   const value = useMemo<AccountAccess>(() => ({
     supportsUserBatch: Boolean(repository.executeUserBatch),
@@ -261,9 +306,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } finally { mutationPending.current = false; setBusy(false); }
     },
     scene, loading, busy, error, success,
-    reload() { setLoading(true); setRevision((current) => current + 1); },
-    usersPage(after) { setLoading(true); setPage((current) => ({ ...current, users: after })); },
-    accountsPage(after) { setLoading(true); setPage((current) => ({ ...current, accounts: after })); },
+    reload() { directoryRequest.current.users += 1; directoryRequest.current.accounts += 1; setLoading(true); setRevision((current) => current + 1); },
+    usersPage(after) { void loadUsersPage(after); },
+    accountsPage(after) { void loadAccountsPage(after); },
     loadUser,
     async execute(command) {
       if (!active || !credential || loading || mutationPending.current) return false;
@@ -278,7 +323,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, loadUser, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

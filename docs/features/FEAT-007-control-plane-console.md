@@ -1485,14 +1485,22 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- The current Theme/component, navigation and CAM-style IAM slice has 501 frontend tests across 35 test
-  files; the complete suite passes with two workers at the default timeout
-  (the long user-selection journey retains its explicit 15s timeout).
-  Worker concurrency is bounded in the test owner because simultaneously
-  constructing all jsdom interaction trees exhausted local execution capacity;
-  each formerly timed-out journey passes alone well below five seconds and the
-  bounded full run passes without extending the default timeout. Functional
-  test success is not a browser-performance acceptance claim.
+- The current Theme/component, navigation and CAM-style IAM slice has 502 frontend tests across 35 test
+  files; the complete suite passes at the default timeout with one worker
+  (the long user-selection journey retains its explicit 15s timeout). A
+  two-worker run under local contention completed 499 tests while three existing
+  policy-authoring journeys crossed only the five-second test ceiling; each
+  passed independently in 4.02–4.79 seconds. Worker concurrency remains bounded
+  because simultaneously constructing all jsdom interaction trees exhausts
+  local execution capacity. Functional test success is not a browser-performance
+  acceptance claim.
+  Live user and tenant cursor actions own their repository reads independently:
+  user paging does not reload the current identity, tenant directory, policy
+  directories or preview graph, and tenant paging does not reload the user or
+  policy directories. The full refresh remains the explicit owner for related
+  identity, capability and preview-workspace changes. A regression verifies the
+  exact call boundary and signed cursor handoff for both directories; paging is
+  never used as an implicit whole-account refresh.
   The policy-directory revision verifies all/preset versus custom-only columns,
   category/filter semantics, retained view context, and actual policy modification
   timestamps. All four creation methods are exercised through reviewed saves

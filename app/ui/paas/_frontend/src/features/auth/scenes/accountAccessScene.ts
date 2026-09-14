@@ -112,6 +112,23 @@ export function buildAccountUserScene(
   };
 }
 
+export function buildAccountTenantScene(access: AccountAccess) {
+  const { account, capabilities } = access;
+  return {
+    id: account.id,
+    name: account.displayName,
+    loginAlias: account.loginAlias,
+    rootLoginName: account.rootIdentity.loginName,
+    rootPrincipalId: account.rootIdentity.principalId,
+    enabled: account.status === "ACTIVE",
+    resourceVersion: account.resourceVersion,
+    canSetStatus: findActionCapability(capabilities, "iam.account.set-status", "ACCOUNT", account.id)?.available === true,
+    statusRestrictionReason: findActionCapability(capabilities, "iam.account.set-status", "ACCOUNT", account.id)?.restrictionReason ?? null,
+    canRecoverRoot: findActionCapability(capabilities, "iam.account.recover-root-credentials", "ACCOUNT", account.id)?.available === true,
+    recoveryRestrictionReason: findActionCapability(capabilities, "iam.account.recover-root-credentials", "ACCOUNT", account.id)?.restrictionReason ?? null
+  };
+}
+
 export function buildAccountAccessScene(
   identity: AccountIdentity,
   users: DirectoryPage<UserAccess> | null,
@@ -175,19 +192,7 @@ export function buildAccountAccessScene(
     users: users?.items.map((item) => buildAccountUserScene(account, policies, item)) ?? [],
     nextUserPage: users?.nextAfter ?? null,
     directoryComplete: users !== null && !users.nextAfter,
-    accounts: accounts?.items.map(({ account: entry, capabilities }) => ({
-      id: entry.id,
-      name: entry.displayName,
-      loginAlias: entry.loginAlias,
-      rootLoginName: entry.rootIdentity.loginName,
-      rootPrincipalId: entry.rootIdentity.principalId,
-      enabled: entry.status === "ACTIVE",
-      resourceVersion: entry.resourceVersion,
-      canSetStatus: findActionCapability(capabilities, "iam.account.set-status", "ACCOUNT", entry.id)?.available === true,
-      statusRestrictionReason: findActionCapability(capabilities, "iam.account.set-status", "ACCOUNT", entry.id)?.restrictionReason ?? null,
-      canRecoverRoot: findActionCapability(capabilities, "iam.account.recover-root-credentials", "ACCOUNT", entry.id)?.available === true,
-      recoveryRestrictionReason: findActionCapability(capabilities, "iam.account.recover-root-credentials", "ACCOUNT", entry.id)?.restrictionReason ?? null
-    })) ?? [],
+    accounts: accounts?.items.map(buildAccountTenantScene) ?? [],
     nextAccountPage: accounts?.nextAfter ?? null
   };
 }

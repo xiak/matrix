@@ -298,6 +298,47 @@ describe("account access", () => {
     expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
   });
 
+  it("pages each live directory without reloading identity or unrelated IAM collections", async () => {
+    const userCursor = "ic1.dXNlcnM";
+    const accountCursor = "ic1.YWNjb3VudHM";
+    const nextUser: UserAccess = {
+      user: { ...childUser, id: "child-b", loginName: "auditor", displayName: "Auditor B" },
+      policyAttachments: [],
+      capabilities: userCapabilities({ ...childUser, id: "child-b", loginName: "auditor", displayName: "Auditor B" })
+    };
+    const nextAccount: Account = {
+      ...account,
+      id: "tenant-b",
+      displayName: "Team B",
+      rootIdentity: { principalId: "primary-b", loginName: "owner-b" }
+    };
+    const listUsers = vi.fn(async (_credential: string, after?: string) => after
+      ? { items: [nextUser], nextAfter: null }
+      : { items: [child], nextAfter: userCursor });
+    const listAccounts = vi.fn(async (_credential: string, after?: string) => after
+      ? { items: [accountAccess(nextAccount)], nextAfter: null }
+      : { items: [accountAccess(account)], nextAfter: accountCursor });
+    const listPolicies = vi.fn(async (_credential: string, platform: boolean) => directory(platform));
+    const repository = accounts({ listUsers, listAccounts, listPolicies });
+    const { user } = await openAccess(repository);
+
+    await screen.findByText("Developer A");
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(await screen.findByText("Auditor B")).toBeTruthy();
+    expect(listUsers).toHaveBeenNthCalledWith(2, credential, userCursor);
+    expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
+    expect(listPolicies).toHaveBeenCalledTimes(2);
+    expect(listAccounts).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByTestId("nav-tenants"));
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(await screen.findByRole("button", { name: "Team B" })).toBeTruthy();
+    expect(listAccounts).toHaveBeenNthCalledWith(2, credential, accountCursor);
+    expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
+    expect(listUsers).toHaveBeenCalledTimes(2);
+    expect(listPolicies).toHaveBeenCalledTimes(2);
+  });
+
   it("replaces the directory immediately with a local skeleton before loading live user details", async () => {
     let resolveUser!: (value: UserAccess) => void;
     const getUser = vi.fn(() => new Promise<UserAccess>((resolve) => { resolveUser = resolve; }));

@@ -1,4 +1,4 @@
 :HL["/_next/static/chunks/0qg5hvht-7yl7.css","style"]
 :HL["/_next/static/chunks/1bdsho4koqdnt.css","style"]
 :HL["/_next/static/chunks/2h9bq_gumbbc8.css","style"]
-0:{"tree":{"name":"","param":null,"prefetchHints":4176,"slots":{"children":{"name":"console","param":null,"prefetchHints":4192,"slots":{"children":{"name":"access","param":null,"prefetchHints":4192,"slots":{"children":{"name":"view","param":{"type":"d","key":"federations","siblings":[]},"prefetchHints":4192,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":4256,"slots":null}}}}}}}}},"staleTime":300,"buildId":"matrix-88ffb11eb31923311cb4"}
+0:{"tree":{"name":"","param":null,"prefetchHints":4176,"slots":{"children":{"name":"console","param":null,"prefetchHints":4192,"slots":{"children":{"name":"access","param":null,"prefetchHints":4192,"slots":{"children":{"name":"view","param":{"type":"d","key":"federations","siblings":[]},"prefetchHints":4192,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":4256,"slots":null}}}}}}}}},"staleTime":300,"buildId":"matrix-75caa54b0b2cbf59253e"}

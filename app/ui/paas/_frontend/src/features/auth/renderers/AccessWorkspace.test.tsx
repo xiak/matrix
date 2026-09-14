@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider, useLocalePreference } from "@/i18n/LocaleProvider";
 import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { SessionProvider, useSession } from "../application/SessionProvider";
-import { AccountAccessProvider } from "../application/AccountAccessProvider";
+import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
 import { accountAccessViews, type AccountAccessView, type AccountIdentity, type ActionCapability, type CapabilityRestriction, type GroupAccess, type GroupMembershipAccess, type IamAction, type User, type UserAccess } from "../domain/accounts";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorkspace";
@@ -52,6 +52,11 @@ const users: UserAccess[] = ["lin", "chen"].map(userAccess);
 const reviewUsers: UserAccess[] = [...users, ...["qiao", "wu"].map(userAccess)];
 const login: IamRepository = { login: async () => ({ credential: "preview-only", mustChangePassword: false, session: { id: "session", organizationId: "org-xiak", principalId: "admin", status: "ACTIVE", issuedAt: "2026-09-09T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z" } }), changePassword: async () => {}, logout: async () => {} };
 
+function AccountRefresh() {
+  const access = useAccountAccess();
+  return <button data-testid="refresh-account" onClick={access.reload}>Refresh account</button>;
+}
+
 function Harness({ repository, initialView, initialEntityId }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string }) {
   const requestLeave = useLeaveConfirmation();
   const session = useSession();
@@ -60,7 +65,7 @@ function Harness({ repository, initialView, initialEntityId }: { repository: Acc
   const [entityId, setEntityId] = useState(initialEntityId);
   const [policyMethod, setPolicyMethod] = useState<string>();
   if (!session.current) return <button onClick={() => void session.login("admin", "preview")}>Enter</button>;
-  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} onNavigate={(next, id, method) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); })} /></AccountAccessProvider>;
+  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><AccountRefresh /><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} onNavigate={(next, id, method) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); })} /></AccountAccessProvider>;
 }
 async function open(initialView: AccountAccessView, options?: { live?: boolean; reader?: boolean; entityId?: string; users?: UserAccess[]; repository?: Partial<AccountRepository>; seed?(extension: ReturnType<typeof createPreviewAccessWorkspace>): Promise<void> }) {
   const directoryUsers = options?.users ?? users;
@@ -696,8 +701,9 @@ describe("CAM-style access workspace", () => {
       delete state.userProfiles["principal-chen"];
       return state;
     });
-    // A new directory read is requested through the existing page control.
-    await user.click(screen.getByRole("button", { name: "First page" }));
+    // Refresh is the explicit owner of related access-method data. Cursor paging
+    // must not reload the identity, policy directories or preview workspace.
+    await user.click(screen.getByTestId("refresh-account"));
     await waitFor(() => expect(method(screen.getByRole("button", { name: "View user chen" }).closest("tr")!, "Console access").getByText("Configuration not provided")).toBeTruthy());
     await user.click(await screen.findByRole("button", { name: "View user chen" }));
     expect(screen.getByRole("tab", { name: "Identity" })).toBeTruthy();
