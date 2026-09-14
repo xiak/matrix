@@ -1074,12 +1074,14 @@ progress remains a native element driven by real values.
 Dashboard, table, card, list and access layouts share semantic Theme
 tokens and a single announced loading label. The outgoing content is hidden and
 inert while pending, but its draft remains mounted until the visit commits or is
-cancelled. A committed page receives a fresh scroll container and a `180ms`
-content-only fade. A thin indeterminate progress line communicates real route
-and refresh activity without inventing a completion percentage. Fast cached
-routes finish immediately; interrupted visits cannot overwrite a newer
-destination. Reduced-motion preferences disable animated content, skeletons,
-progress and refresh icons. Refreshing existing data retains the current page
+cancelled. The content viewport remains mounted across a committed visit so its
+background, scroll layer and geometry are not repainted as a new page-sized
+surface. Only the keyed route content is replaced, after the destination
+skeleton, with no full-canvas opacity transition. A thin indeterminate progress
+line communicates real route and refresh activity without inventing a completion
+percentage. Fast cached routes finish immediately; interrupted visits cannot overwrite a newer
+destination. Reduced-motion preferences disable skeletons, progress and refresh
+icons. Refreshing existing data retains the current page
 and draft instead of pretending to navigate again.
 
 Header open/close state is subscribed only by Header and its backdrop/inert
@@ -2024,8 +2026,12 @@ and `git diff --check` gates must pass on the same committed worktree.
   entry. This is current frontend/static-host acceptance, not a new installed
   backend release or a claim to translate user-authored resource names.
   Navigation tests cover real suspended transitions, interrupted destinations,
-  immediate hiding of the outgoing draft, cancellation recovery, committed-page
-  scroll isolation, and five non-interactive skeleton layouts. Browser checks
+  immediate hiding of the outgoing draft, cancellation recovery, stable-viewport
+  scroll isolation with keyed content replacement, and five non-interactive
+  skeleton layouts. A 2026-09-14 desktop MOCK regression visited Groups,
+  Policies, Simulator, Roles and Users after a hard reload; every committed
+  page exposed the destination title with `opacity: 1` and no content animation,
+  and produced no new browser warning or error. Browser checks
   at `1133px` and `360px` confirm immediate target titles, fully visible skeletons,
   hidden outgoing controls, and no horizontal page overflow for menu and search
   navigation. A temporary loopback-only delayed-response preview exercised long

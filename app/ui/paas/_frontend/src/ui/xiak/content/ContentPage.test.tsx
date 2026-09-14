@@ -116,7 +116,7 @@ describe("ContentPage context heading", () => {
     view.rerender(page("admin"));
     expect(screen.getByLabelText("Viewport").scrollTop).toBe(0);
     view.rerender(page("users"));
-    expect(screen.getByLabelText("Viewport")).not.toBe(original);
+    expect(screen.getByLabelText("Viewport")).toBe(original);
     expect(screen.getByLabelText("Viewport").scrollTop).toBe(300);
   });
 });
@@ -141,12 +141,15 @@ describe("ContentPage transition", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("commits the new page without retaining the outgoing page's scroll container", () => {
+  it("keeps the scroll viewport stable while replacing the outgoing page content", () => {
     const body = (page: string) => <ContentPage.Body transitionKey={page}><h2>{page}</h2></ContentPage.Body>;
     const view = render(body("Resources"));
-    const previous = screen.getByRole("heading").parentElement!.parentElement;
+    const previousContent = screen.getByRole("heading").parentElement!;
+    const viewport = previousContent.parentElement!;
     view.rerender(body("Logs"));
     expect(screen.queryByRole("heading", { name: "Resources" })).toBeNull();
-    expect(screen.getByRole("heading", { name: "Logs" }).parentElement!.parentElement).not.toBe(previous);
+    const nextContent = screen.getByRole("heading", { name: "Logs" }).parentElement!;
+    expect(nextContent).not.toBe(previousContent);
+    expect(nextContent.parentElement).toBe(viewport);
   });
 });

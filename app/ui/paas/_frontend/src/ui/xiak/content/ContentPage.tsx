@@ -88,6 +88,9 @@ function Body({ children, className, pending = false, loading, transitionKey, ..
   const viewport = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => { if (!pending && transitionKey !== undefined && viewport.current) viewport.current.scrollTop = positions?.get(transitionKey) ?? 0; }, [pending, transitionKey, positions]);
   if (transitionKey === undefined) return <div className={classNames(styles.body, className)} {...props}>{children}</div>;
+  // The viewport is a stable paint/scroll boundary. Route identity belongs to
+  // its inner content so a commit resets feature state without flashing a new
+  // page-sized background layer.
   return <div className={styles.stage}>
     <div {...props} ref={viewport} onScroll={(event) => {
       if (!pending && positions) {
@@ -96,8 +99,8 @@ function Body({ children, className, pending = false, loading, transitionKey, ..
         if (positions.size > 64) positions.delete(positions.keys().next().value!);
       }
       props.onScroll?.(event);
-    }} aria-busy={pending || props["aria-busy"]} className={classNames(styles.body, className)} key={transitionKey}>
-      <div aria-hidden={pending || undefined} className={styles.enter} hidden={pending} inert={pending}>{children}</div>
+    }} aria-busy={pending || props["aria-busy"]} className={classNames(styles.body, className)}>
+      <div aria-hidden={pending || undefined} className={styles.content} hidden={pending} inert={pending} key={transitionKey}>{children}</div>
     </div>
     {pending && loading ? <div className={classNames(styles.body, styles.pending)}>{loading}</div> : null}
   </div>;
