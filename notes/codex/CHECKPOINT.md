@@ -5,10 +5,15 @@
 - Updated: 2026-09-14
 - Repository: https://github.com/xiak/matrix.git
 - Branch: `feat/iam`
-- Latest pushed implementation: `b208ab081ac2f08aab81f63b8cfefb17ebdc6c82`,
-  trusted identity string conditions.
-- Exact [Verification 34836760785](https://github.com/xiak/matrix/actions/runs/34836760785)
-  matches this SHA and is in_progress; final CI is NOT yet confirmed.
+- Latest pushed implementation: `4f22e223398fbe4523bc09d6a369677cb23767db`,
+  handshake-cancellation test synchronization on top of identity conditions.
+- Exact [Verification 34837563263](https://github.com/xiak/matrix/actions/runs/34837563263)
+  matches this SHA and is queued; final CI is NOT yet confirmed.
+- Identity implementation `b208ab081ac2f08aab81f63b8cfefb17ebdc6c82` /
+  [34836760785](https://github.com/xiak/matrix/actions/runs/34836760785) FAILED:
+  authority-process/node-process succeeded; Go failed the preexisting
+  TestPinnedSSHExecutorHonorsCancellationDuringHandshake stage expectation.
+  Do not treat b208 as an independently successful candidate.
 - Last fully CI-verified rollback point:
   `581ce7584527470e1fe377040eb98ffe161e83de`,
   [34833032924](https://github.com/xiak/matrix/actions/runs/34833032924);
@@ -24,7 +29,7 @@ IAM/FEAT-IAM-005-policy-versions-and-boundaries.md, then owning code/tests.
 release/capacity/HA gates. The user reaffirmed prelaunch development versions
 do not require a complete schema1 history chain on every FEAT.
 
-First verify b208ab0's exact live CI. No local test handle remains.
+First verify4f22e22's exact live CI. No local test handle remains.
 Then continue005: bounded action/resource wildcards, trusted IP conditions,
 User/Role permission boundaries, safe delegation and editor/capabilities.
 Current time plus identity strings do NOT complete LANG-04 or005.
@@ -33,6 +38,17 @@ Current time plus identity strings do NOT complete LANG-04 or005.
 remain as specified. Do not redefine completion around policy CRUD/conditions.
 
 ## Current pushed implementation
+
+4f22e22 changes only the existing SSH test and005's CI evidence. Server Accept
+does not prove client DialContext completed, so cancel there can legitimately
+return ssh-connect/UNAVAILABLE instead of ssh-handshake/UNAVAILABLE.
+The owning installation task granted a test-only window. Receive a full client
+SSH-2.0 version line with1s ReadDeadline/255byte cap, without replying, before
+cancel. Preserve500ms exit and exactstage, check connectionEOF and accept
+goroutine cleanup. No production/error classification changes. Original test
+passed locally200 times (not a local red); CI provided actual failure evidence.
+Corrected test passedrace200; full adapter/architecture/vet and uncached full
+Go race-count1/vet/Linux amd64 build passed. No local PG or remote operation.
 
 b208ab0 adds iam.account-id and iam.principal-id, STRING with
 IAM_AUTHENTICATED_IDENTITY source, only declared TENANT/USER authorization.
