@@ -110,4 +110,4 @@ User 删除沿 003 的 User principal 锁后终态移除其所有活跃 membersh
 
 本片交付组 HTTP/数据库/授权与签名分页闭环和前端 domain/wire/repository；未新增第二套组页面。组目录、详情、表单及真实多成员鼠标闭环由既定 UX/UI owner 消费固定提交后完成。最终安装 key 分发/签名发布组合及 011 容量/HA 门禁仍需实施验证，本 FEAT 不因此标为 Accepted。
 
-替换前已推送回滚点为 `0bd6dd9dd8166fe31c67edb8cd49cd523606a401`，精确 [Verification 34805149946](https://github.com/xiak/matrix/actions/runs/34805149946) 三项 success。签名分页切片的固定提交与独立 CI 尚待本轮收口确认，不继承该回滚点或其他分支的验收状态。
+替换前已推送回滚点为 `0bd6dd9dd8166fe31c67edb8cd49cd523606a401`，精确 [Verification 34805149946](https://github.com/xiak/matrix/actions/runs/34805149946) 三项 success。签名分页固定实现为 `8117c54c112c842106d82fe934e460a280862549`；GitHub API 核实精确 [Verification 34808378047](https://github.com/xiak/matrix/actions/runs/34808378047) 的 Go、authority-process、node-process 全部 completed/success。本轮自有 PG18 容器、网络和合成测试数据卷已清理，不需要保留运行现场才能续作；未操作其他任务环境。

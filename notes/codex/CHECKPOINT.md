@@ -5,90 +5,96 @@
 - Updated: 2026-09-14
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/iam`
-- Pushed, verified Group backend/repository milestone:
-  `0bd6dd9dd8166fe31c67edb8cd49cd523606a401`
-- Exact independent Verification:
-  [34805149946](https://github.com/xiak/matrix/actions/runs/34805149946),
-  completed/success for Go, authority-process and node-process.
+- Pushed, verified Group and signed-directory milestone:
+  `8117c54c112c842106d82fe934e460a280862549`
+- Exact independent [Verification 34808378047](https://github.com/xiak/matrix/actions/runs/34808378047):
+  Go, authority-process and node-process all completed/success.
+- Preceding verified Group implementation:
+  `0bd6dd9dd8166fe31c67edb8cd49cd523606a401`.
 
 ## Resume route
 
 1. Read AGENTS.md and [IAM product contract](../../IAM/FEAT-IAM-000-product-contract.md).
-2. Continue [IAM/004](../../IAM/FEAT-IAM-004-groups-and-delegation.md), then its
-   owning API, IAM authority/use cases/SQL, integration and authorityprocess tests.
-3. Read [IAM/011](../../IAM/FEAT-IAM-011-acceptance.md) for the current first-release
-   schema policy and final acceptance boundaries. The user explicitly removed
-   the default obligation to upgrade through every unpublished development schema.
-4. Use [IAM navigation](../../IAM/README.md) for later FEAT owners, and the
-   [existing adoption record](../../docs/adoption/FEAT-006-platform-authorities.md)
-   only when reviewing fixed donors. Do not read another worktree's dirty files.
+2. Read [IAM/004](../../IAM/FEAT-IAM-004-groups-and-delegation.md) for the delivered
+   Group, inherited authority, signed paging and remaining UI boundaries.
+3. Continue [IAM/005](../../IAM/FEAT-IAM-005-policy-versions-and-boundaries.md)
+   using its existing API, evaluator, use-case, persistence and test owners.
+   Do not create another policy evaluator or duplicate the UX task's Group UI.
+4. Read [IAM/011](../../IAM/FEAT-IAM-011-acceptance.md) for first-release schema,
+   capacity/HA and final combination gates. Unpublished development versions do
+   not require a default complete upgrade chain beginning at schema 1.
+5. Read the [existing adoption record](../../docs/adoption/FEAT-006-platform-authorities.md)
+   only for fixed-source review. Do not inspect another worktree's dirty files.
 
 ## Current milestone
 
-The original complete IAM replacement goal remains active. The first Group
-slice is a verified backend/repository milestone, not acceptance of IAM/004 or
-the whole product. The old checkpoint's IAM/002 starting point is superseded.
-Policy persistence, Account/RootIdentity/User replacement, management
-capabilities and user profile/deletion are already implemented; their own
-FEATs retain the exact preceding evidence and remaining UI/release boundaries.
+The original complete IAM replacement goal remains active. Policy authority,
+Account/RootIdentity/User replacement, actor-relative capabilities and Group
+backend/repository are implemented; their FEAT owners retain exact evidence.
+Neither IAM/004 nor the whole product is accepted merely by this milestone.
 
-0bd6dd9 adds Group, terminal GroupMembership and tenant group attachments to
-the existing single policy authority, rather than adding another evaluator or
-attachment table. CurrentIdentity uses DIRECT/GROUP policySources. Group
-evidence binds the actual membership and immutable policy version; later
-removal does not prevent delivery of already-committed historical outbox facts.
-Current source/readiness is IAM9/Audit6/PaaS1. Existing signed release profile
-has not been rewritten; the source tuple is deliberately not advertised as an
-installable release. The final complete profile must be frozen with the real
-product/installation consumer after IAM converges.
+Group inheritance uses the single policy authority and immutable historical
+membership/attachment/version evidence. 8117c54 replaces raw-ID continuation
+for Account, User, Group and GroupMembership directories with a bounded,
+purpose-separated MAC cursor. Routes and after/nextAfter remain unchanged;
+there is no old-ID fallback. Each page reauthenticates and authorizes against
+the current transaction before cursor verification. The binding covers sealed
+installation, current account/principal/session, exact query and all current
+policy sources. Reading sealed installation for this MAC does not populate an
+ordinary tenant subject's platform context or grant installation authority.
 
-Local full Go race/vet, module/generation checks and Linux builds passed.
-Current PG18 policy/group, IAM HTTP, original local recovery, Audit/old-chain,
-PaaS database and independent two-IAM process gates passed. Frontend 100 tests,
-type/lint/architecture/styles and two 2-worker static exports passed; 59 files
-matched. These are local frontend gates, not an independent frontend CI job.
-All objects from this milestone's task-labelled PG fixture were cleaned.
-There is no required running database/container to resume.
+The network IAM entry requires MATRIX_IAM_CURSOR_KEY_FILE: exactly 64 lowercase
+hex characters in a protected file, representing an independent 32-byte key.
+There is no random fallback, bearer-derived key or Audit-key reuse. Replicas
+and restart use the same persistent key; changing it invalidates old cursors.
+The offline non-paging recovery entry does not need this key. Exact public
+shape, TTL, errors and query constraints belong to IAM/004 and the fixed API.
 
-The default CI now runs the actual current policy-storage gate. Historical IAM
-binary tests remain explicit optional diagnostics, not an automatic complete
-development-version upgrade chain. Current clean apply, populated replay,
-failure atomicity, runtime permissions, revocation and history remain required.
-No user/other-task data may be erased to satisfy that policy.
+Local stable-tree full Go race/vet, architecture, module/generation and Linux
+build gates passed. Current real PG18 policy/group, IAM HTTP and independent
+two-IAM/Audit/PaaS process gates passed, including 100+1 actual directories,
+cross-scope attacks, runtime logins, restart, revocation and historical outbox.
+Frontend 101 tests, type/lint/architecture/styles and two 2-worker static
+exports passed; 59 embedded files matched. These are local frontend gates,
+not an independent frontend CI job. Exact timings belong to IAM/004.
 
-## Required next work and coordination
+All task-labelled PG containers, networks and synthetic data volumes from
+this milestone have been cleaned. No running database or container is needed
+to resume; do not reuse or remove another task's resources.
 
-IAM/004 still requires the product's opaque/MAC cursor contract and complete
-multi-member pagination/UI acceptance. The current first slice uses account-
-and group-confined ID keyset continuation. This is documented as incomplete,
-not substituted for the final signed cursor requirement. Review the current
-credential and Audit cursor owners before designing IAM continuation: a
-bearer-derived credential digest is not a server-private signing key, and IAM
-must not import Audit internal packages or reuse its signing purpose. Coordinate
-any installation-key delivery change with its owner before editing that owner.
+## Next work and fixed coordination
 
-UX/UI task `01a07b21-9a0d-7fd0-b090-7827ce18262e` on
-`feat/cloud-console-ux` owns Group providers/scenes/renderers and real browser
-acceptance. It has received the fixed 0bd6dd9 contract and local gate results;
-consume only subsequent verified fixed objects, never WIP or its acceptance
-status. This task owns domain/wire/repository, so do not implement a duplicate
-Group UI. The frozen first slice has no membershipCount or user summary;
-members are identified by userId and removed by membership ID/revision. UI
-passes continuation unchanged and keeps the explicit command ID/input after
-uncertain outcomes. Unknown results do not authorize a new intent or automatic
-compensation.
+UX/UI task `01a07b21-9a0d-7fd0-b090-7827ce18262e`, branch
+`feat/cloud-console-ux`, owns Group providers/scenes/renderers and real browser
+acceptance. This task owns domain/wire/repository. Consume only its subsequent
+verified fixed objects, never WIP or inherited acceptance. Group UI must not
+invent memberCount, require N+1 user reads, infer authority from names, or
+replace unknown command outcomes with new intents. Its current-loaded-page
+filtering is not server search. The frozen names and permission relationships
+were also explained using formal IAM/000, 003, 004 and 010 owners, separate
+from supplier research and future, not-yet-implemented capabilities.
 
-IAM/005 and later FEATs, signed release integration and capacity/HA acceptance
-remain outstanding; follow their owners rather than treating this Group
-milestone as completion. Product reference material remains fixed at 1ad6884
-and the public-source study at b0e8627, not runtime dependencies.
+Installation task `01a04149-5dbb-7300-9e4c-31d9e85c8ada` will integrate the
+independent IAM cursor key, protected persistent file, signed topology and
+backup/recovery checks only when IAM/001–010's actual ABI has converged.
+Do not edit that owner's deployment/profile in intermediate IAM slices.
+Current development readiness/schema is IAM9/Audit6/PaaS1; the previously
+signed release profile is unchanged. This source tuple is not an installable
+release or a promise about the final product's PaaS version.
+
+IAM/005 and later implementation, Group browser acceptance, final signed
+release integration and capacity/HA remain outstanding. The first-release
+schema policy retains current clean apply, populated replay, failure atomicity,
+runtime permissions, revocation and history. Historical binary diagnostics
+are optional unless a precise retained-data starting point is explicitly
+supported. Never erase user or other-task data to satisfy that policy.
 
 ## Isolation
 
-Keep the existing sealed ServiceIdentity/lookup_service, seven-column outbox
-claim, canonical historical bytes and original-primary recovery boundaries.
-New development numbers are not N-1 compatibility proof. Do not change another
-Phase's branch, worktree, environment, profile or acceptance state. No extra
-agents/tasks, remote restarts or shared-service changes. Use task-labelled,
-uniquely named, bounded local resources; Go defaults remain GOMAXPROCS=2/-p 2.
-All user-facing document deliverables are Markdown.
+Preserve sealed ServiceIdentity/lookup_service, seven-column outbox claim,
+canonical historical bytes and original-primary recovery. A development
+schema number is not N-1 compatibility proof. Keep all code, commits and
+resource mutations within this feature's ownership. No extra agents/tasks,
+remote restarts or shared-service changes. Use unique task-labelled bounded
+local resources; Go defaults remain GOMAXPROCS=2/-p 2. All user-facing document
+deliverables are Markdown.
