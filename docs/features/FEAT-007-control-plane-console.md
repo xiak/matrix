@@ -596,8 +596,9 @@ Acceptance at this boundary requires all of the following:
   and group policy attachments keep separate IDs, resource versions and
   actor-relative capabilities. A group is never presented as a login identity,
   resource owner, role or final authorization decision.
-- Group and membership pages are bounded server reads. Their continuation is
-  pass-through state outside the strict transport adapter; search covers only
+- Account, user, group and membership pages are bounded server reads. Their
+  signed continuation is pass-through state outside the strict transport
+  adapter; it is never parsed as a resource ID or authority. Search covers only
   records already loaded and the UI labels that scope. The UI does not derive
   an authoritative member total from pages, exhaust the directory to
   manufacture one, or issue per-row user reads.
@@ -1482,7 +1483,7 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- The current Theme/component, navigation and CAM-style IAM slice has 500 frontend tests across 35 test
+- The current Theme/component, navigation and CAM-style IAM slice has 501 frontend tests across 35 test
   files; the complete suite passes with two workers at the default timeout
   (the long user-selection journey retains its explicit 15s timeout).
   Worker concurrency is bounded in the test owner because simultaneously
@@ -1587,7 +1588,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   feedback without new warning/error logs. Shared control tests cover required
   semantics, classification/status distinction, controlled paging and dialog
   focus return; existing large-candidate and batch/permission gates remain.
-  All 500 frontend tests and three static-export normalization tests pass,
+  All 501 frontend tests and three static-export normalization tests pass,
   alongside TypeScript, lint, architecture and 228 theme contrast checks.
   All 213 generated production files from 38 static routes match the Go-embedded export, and Go UI
   tests and vet pass. Tables, forms, dialogs, choices,
@@ -1657,10 +1658,12 @@ and `git diff --check` gates must pass on the same committed worktree.
   calculation from the controlled input update so large preview policy sets
   do not put synchronous filtering work on the keystroke path. The fixed live
   group slice uses exact capabilities and stable relation IDs, keeps the
-  current fixed keyset continuation inside the strict transport boundary,
-  performs no N+1 user lookups and never presents one-item relation commands
-  as atomic batch writes. A signed opaque continuation is not claimed until
-  the IAM owner fixes and verifies that successor contract.
+  signed opaque continuation inside the strict transport boundary, performs no
+  N+1 user lookups and never presents one-item relation commands as atomic
+  batch writes. The adapter accepts only the fixed bounded `ic1.` shape,
+  verifies stable ID order within a returned page and never compares the
+  continuation to resource IDs; application and presentation layers only pass
+  it back unchanged.
   Group detail now renders its stable identity, metadata and direct-policy
   facts as soon as the exact group read succeeds; it does not wait for the
   membership relationship page. The member region uses the shared public
