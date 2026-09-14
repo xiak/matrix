@@ -1,6 +1,6 @@
 # FEAT-IAM-004：用户组与授权委派
 
-- 状态：首片后端与前端接口适配已实现并通过本地门禁；独立 CI 待确认，签名游标和组 UI 闭环未完成，整体未验收。
+- 状态：首片后端与前端接口适配已实现，本地门禁及精确 SHA 独立 CI 通过；签名游标和组 UI 闭环未完成，整体未验收。
 - 依赖：002、003。
 - Owner：IAM Group、GroupMembership、组策略附件和组继承证据。
 
@@ -92,3 +92,5 @@ User 删除沿 003 的 User principal 锁后终态移除其所有活跃 membersh
 当前开发服务与实际数据库/readiness 为 IAM9/Audit6/PaaS1；既有签名发布 profile 未改写，组合门禁明确不把该开发 tuple 当作已可发布 profile。实际 IAM8 固定 binary 的保留数据实验仅为本次内部列替换的可选诊断，不使全部未发布版本成为默认升级义务。
 
 首片只交付组 HTTP/数据库/授权闭环与前端 domain/wire/repository；未新增第二套组页面。组目录、详情、表单及真实鼠标闭环由既定 UX/UI owner 消费固定提交后完成。签名游标、更多成员分页/完整多成员 UI 矩阵、最终发布组合及 011 容量/HA 门禁仍需实施验证，本 FEAT 不因此标为 Accepted。
+
+固定实现 `0bd6dd9dd8166fe31c67edb8cd49cd523606a401` 已推送。GitHub API 核实 [Verification 34805149946](https://github.com/xiak/matrix/actions/runs/34805149946) 对应同一 SHA，Go、authority-process、node-process 三项均 completed/success；前端上述门禁为本地证据，不冒充独立前端 CI。本轮专属测试容器、网络和数据卷已核对标签/占用后清理，未动其他任务资源。
