@@ -150,6 +150,10 @@
           "iam.policy.list",
           "iam.policy.create",
           "iam.policy.read",
+          "iam.policy-version.list",
+          "iam.policy-version.read",
+          "iam.policy-version.create",
+          "iam.policy.set-default-version",
           "iam.platform-policy.list",
           "iam.user.set-status",
           "iam.user.reset-password",
@@ -648,6 +652,110 @@
               "properties": {
                 "action": {
                   "const": "iam.policy.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy-version.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy-version.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy-version.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy.set-default-version"
                 }
               },
               "required": [
@@ -2398,6 +2506,10 @@
               "iam.policy.list",
               "iam.policy.create",
               "iam.policy.read",
+              "iam.policy-version.list",
+              "iam.policy-version.read",
+              "iam.policy-version.create",
+              "iam.policy.set-default-version",
               "iam.platform-policy.list",
               "iam.user.set-status",
               "iam.user.reset-password",
@@ -2730,6 +2842,110 @@
               "properties": {
                 "action": {
                   "const": "iam.policy.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy-version.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy-version.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy-version.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy.set-default-version"
                 }
               },
               "required": [
@@ -4529,6 +4745,41 @@
         ],
         "type": "object"
       },
+      "CreatePolicyVersionRequest": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "properties": {
+              "document": {
+                "properties": {
+                  "scope": {
+                    "const": "TENANT"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/PolicyDocument"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document",
+          "requestId",
+          "resourceVersion"
+        ],
+        "type": "object"
+      },
       "CreateUserRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5408,6 +5659,10 @@
                             "iam.policy.list",
                             "iam.policy.create",
                             "iam.policy.read",
+                            "iam.policy-version.list",
+                            "iam.policy-version.read",
+                            "iam.policy-version.create",
+                            "iam.policy.set-default-version",
                             "iam.user.set-status",
                             "iam.user.reset-password",
                             "iam.user.create",
@@ -6061,8 +6316,108 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "iam.policy.read"
+                      "iam.policy.read",
+                      "iam.policy-version.list",
+                      "iam.policy-version.read",
+                      "iam.policy-version.create",
+                      "iam.policy.set-default-version"
                     ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.policy-version.list"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.policy-version.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.policy-version.create"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.policy.set-default-version"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY"
+                      }
+                    }
                   }
                 }
               }
@@ -7932,12 +8287,127 @@
         ],
         "type": "object"
       },
+      "PolicyVersionDetail": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "properties": {
+              "policy": {
+                "properties": {
+                  "management": {
+                    "const": "CUSTOMER"
+                  },
+                  "scope": {
+                    "const": "TENANT"
+                  },
+                  "status": {
+                    "const": "ACTIVE"
+                  }
+                }
+              },
+              "version": {
+                "properties": {
+                  "document": {
+                    "properties": {
+                      "scope": {
+                        "const": "TENANT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/Policy"
+          },
+          "version": {
+            "$ref": "#/components/schemas/PolicyVersion"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "policy",
+          "version"
+        ],
+        "type": "object"
+      },
       "PolicyVersionID": {
         "allOf": [
           {
             "$ref": "#/components/schemas/ID"
           }
         ]
+      },
+      "PolicyVersionList": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "properties": {
+              "items": {
+                "items": {
+                  "properties": {
+                    "document": {
+                      "properties": {
+                        "scope": {
+                          "const": "TENANT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxItems": 5,
+                "minItems": 1
+              },
+              "policy": {
+                "properties": {
+                  "management": {
+                    "const": "CUSTOMER"
+                  },
+                  "scope": {
+                    "const": "TENANT"
+                  },
+                  "status": {
+                    "const": "ACTIVE"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyVersion"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/Policy"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "items",
+          "kind",
+          "policy"
+        ],
+        "type": "object"
       },
       "PrincipalID": {
         "allOf": [
@@ -8411,6 +8881,28 @@
           "requestId",
           "resourceVersion",
           "status"
+        ],
+        "type": "object"
+      },
+      "SetDefaultPolicyVersionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "versionId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "requestId",
+          "resourceVersion",
+          "versionId"
         ],
         "type": "object"
       },
@@ -10123,6 +10615,237 @@
           }
         },
         "summary": "Read the current tenant policy and default content"
+      }
+    },
+    "/v1/policies/{policyId}/versions": {
+      "get": {
+        "operationId": "listPolicyVersions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policyId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyVersionList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read the bounded customer policy version inventory"
+      },
+      "post": {
+        "operationId": "createPolicyVersion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policyId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePolicyVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyVersionDetail"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create immutable content without changing the default policy version"
+      }
+    },
+    "/v1/policies/{policyId}/versions/{versionId}": {
+      "get": {
+        "operationId": "getPolicyVersion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policyId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "versionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyVersionDetail"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read one immutable customer policy version"
+      }
+    },
+    "/v1/policies/{policyId}:set-default-version": {
+      "post": {
+        "operationId": "setDefaultPolicyVersion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policyId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDefaultPolicyVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyDetail"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Atomically select an existing default version using the current policy revision"
       }
     },
     "/v1/policy-attachments": {

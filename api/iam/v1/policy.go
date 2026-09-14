@@ -60,6 +60,7 @@ type Policy struct {
 
 const MaxPolicyListItems = 256
 const MaxCustomerPolicies = 128
+const MaxPolicyVersions = 5
 
 // PolicyDetail joins metadata to its current immutable default content. It is
 // a read result, not proof that the reader may publish or attach that content.
@@ -74,6 +75,77 @@ type CreatePolicyRequest struct {
 	DisplayName string         `json:"displayName"`
 	Document    PolicyDocument `json:"document"`
 	RequestID   string         `json:"requestId"`
+}
+
+// The selected version need not be the default. This is distinct from the
+// current-default PolicyDetail contract and is never an authorization permit.
+type PolicyVersionDetail struct {
+	APIVersion string        `json:"apiVersion"`
+	Kind       string        `json:"kind"`
+	Policy     Policy        `json:"policy"`
+	Version    PolicyVersion `json:"version"`
+}
+
+type PolicyVersionList struct {
+	APIVersion string          `json:"apiVersion"`
+	Kind       string          `json:"kind"`
+	Policy     Policy          `json:"policy"`
+	Items      []PolicyVersion `json:"items"`
+}
+
+type CreatePolicyVersionRequest struct {
+	Document        PolicyDocument `json:"document"`
+	ResourceVersion uint64         `json:"resourceVersion"`
+	RequestID       string         `json:"requestId"`
+}
+
+type SetDefaultPolicyVersionRequest struct {
+	VersionID       PolicyVersionID `json:"versionId"`
+	ResourceVersion uint64          `json:"resourceVersion"`
+	RequestID       string          `json:"requestId"`
+}
+
+func ValidateCreatePolicyVersionRequest(value CreatePolicyVersionRequest) error {
+	if value.Document.Scope != AuthorityScopeTenant || validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
+		return ErrInvalidPolicy
+	}
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidatePolicyDocument(value.Document))
+}
+
+func ValidateSetDefaultPolicyVersionRequest(value SetDefaultPolicyVersionRequest) error {
+	if validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
+		return ErrInvalidPolicy
+	}
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("versionId", string(value.VersionID)))
+}
+
+func ValidatePolicyVersionDetail(value PolicyVersionDetail) error {
+	if value.APIVersion != APIVersion || value.Kind != "PolicyVersionDetail" || ValidatePolicy(value.Policy) != nil ||
+		value.Policy.Management != PolicyCustomerManaged || value.Policy.Status != PolicyActive ||
+		ValidatePolicyVersion(value.Version) != nil || value.Version.PolicyID != value.Policy.ID || value.Version.Document.Scope != value.Policy.Scope {
+		return ErrInvalidPolicy
+	}
+	return nil
+}
+
+func ValidatePolicyVersionList(value PolicyVersionList) error {
+	if value.APIVersion != APIVersion || value.Kind != "PolicyVersionList" || ValidatePolicy(value.Policy) != nil ||
+		value.Policy.Management != PolicyCustomerManaged || value.Policy.Status != PolicyActive || len(value.Items) == 0 || len(value.Items) > MaxPolicyVersions {
+		return ErrInvalidPolicy
+	}
+	var previous PolicyVersionID
+	defaultFound := false
+	for _, version := range value.Items {
+		if ValidatePolicyVersion(version) != nil || version.PolicyID != value.Policy.ID || version.Document.Scope != value.Policy.Scope || version.ID <= previous {
+			return ErrInvalidPolicy
+		}
+		previous = version.ID
+		defaultFound = defaultFound || version.ID == value.Policy.DefaultVersionID
+	}
+	if !defaultFound {
+		return ErrInvalidPolicy
+	}
+	return nil
 }
 
 func ValidateCreatePolicyRequest(value CreatePolicyRequest) error {

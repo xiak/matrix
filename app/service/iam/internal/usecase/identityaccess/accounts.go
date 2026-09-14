@@ -409,6 +409,100 @@ func (service *Authority) CreatePolicy(ctx context.Context, credential iamv1.Sec
 		})
 }
 
+func (service *Authority) ListPolicyVersions(ctx context.Context, credential iamv1.Secret, id iamv1.PolicyID, requestID string) (iamv1.PolicyVersionList, error) {
+	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.PolicyVersionList{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionList,
+		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyVersionList, error) {
+			return tx.ListPolicyVersions(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id)
+		})
+}
+
+func (service *Authority) GetPolicyVersion(ctx context.Context, credential iamv1.Secret, id iamv1.PolicyID, version iamv1.PolicyVersionID, requestID string) (iamv1.PolicyVersionDetail, error) {
+	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateID("versionId", string(version)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.PolicyVersionDetail{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyVersionDetail, error) {
+			return tx.ReadPolicyVersion(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id, version)
+		})
+}
+
+func requirePolicyPublisher(ctx context.Context, tx Transaction, subject SessionCredential) error {
+	account, err := tx.ReadAccount(ctx, subject.Subject.Organization.ID, subject.Subject.Principal.ID)
+	if err != nil {
+		return err
+	}
+	if account.RootIdentity.PrincipalID != subject.Subject.Principal.ID {
+		return ErrForbidden
+	}
+	return nil
+}
+
+func (service *Authority) CreatePolicyVersion(ctx context.Context, credential iamv1.Secret, id iamv1.PolicyID, request iamv1.CreatePolicyVersionRequest) (iamv1.PolicyVersionDetail, error) {
+	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateCreatePolicyVersionRequest(request) != nil {
+		return iamv1.PolicyVersionDetail{}, ErrInvalidArgument
+	}
+	_, digest, err := iamv1.CanonicalizePolicyDocument(request.Document)
+	if err != nil {
+		return iamv1.PolicyVersionDetail{}, ErrInvalidArgument
+	}
+	requestDigest, err := digestSanitized("policy-version-create", struct {
+		PolicyID        iamv1.PolicyID `json:"policyId"`
+		ContentDigest   string         `json:"contentDigest"`
+		ResourceVersion uint64         `json:"resourceVersion"`
+		RequestID       string         `json:"requestId"`
+	}{id, digest, request.ResourceVersion, request.RequestID})
+	if err != nil {
+		return iamv1.PolicyVersionDetail{}, err
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionCreate,
+		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyVersionDetail, error) {
+			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
+				return iamv1.PolicyVersionDetail{}, err
+			}
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMPolicyVersionCreated, auditv1.TargetPolicy, string(id), decision.ID, requestDigest, request.RequestID, now)
+			if err != nil {
+				return iamv1.PolicyVersionDetail{}, err
+			}
+			version := iamv1.PolicyVersion{PolicyID: id, ID: iamv1.PolicyVersionID("version-" + digest[len("sha256:"):]), Document: request.Document, ContentDigest: digest}
+			return tx.CreatePolicyVersion(ctx, PolicyVersionCreation{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				DecisionID: decision.ID, Version: version, ResourceVersion: request.ResourceVersion, AuditEvent: event})
+		})
+}
+
+func (service *Authority) SetDefaultPolicyVersion(ctx context.Context, credential iamv1.Secret, id iamv1.PolicyID, request iamv1.SetDefaultPolicyVersionRequest) (iamv1.PolicyDetail, error) {
+	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateSetDefaultPolicyVersionRequest(request) != nil {
+		return iamv1.PolicyDetail{}, ErrInvalidArgument
+	}
+	requestDigest, err := digestSanitized("policy-set-default-version", struct {
+		PolicyID        iamv1.PolicyID        `json:"policyId"`
+		VersionID       iamv1.PolicyVersionID `json:"versionId"`
+		ResourceVersion uint64                `json:"resourceVersion"`
+		RequestID       string                `json:"requestId"`
+	}{id, request.VersionID, request.ResourceVersion, request.RequestID})
+	if err != nil {
+		return iamv1.PolicyDetail{}, err
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicySetDefaultVersion,
+		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
+			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
+				return iamv1.PolicyDetail{}, err
+			}
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMPolicyDefaultVersionSet, auditv1.TargetPolicy, string(id), decision.ID, requestDigest, request.RequestID, now)
+			if err != nil {
+				return iamv1.PolicyDetail{}, err
+			}
+			return tx.SetDefaultPolicyVersion(ctx, PolicyDefaultSelection{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				DecisionID: decision.ID, PolicyID: id, VersionID: request.VersionID, ResourceVersion: request.ResourceVersion, AuditEvent: event})
+		})
+}
+
 func (service *Authority) ListAccounts(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.AccountList, error) {
 	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.AccountList{}, ErrInvalidArgument

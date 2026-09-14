@@ -172,6 +172,7 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 		actions = []iamv1.Action{
 			iamv1.ActionIAMAccountAliasSet, iamv1.ActionIAMUserList, iamv1.ActionIAMPolicyList,
 			iamv1.ActionIAMPolicyCreate, iamv1.ActionIAMPolicyRead,
+			iamv1.ActionIAMPolicyVersionList, iamv1.ActionIAMPolicyVersionRead, iamv1.ActionIAMPolicyVersionCreate, iamv1.ActionIAMPolicySetDefaultVersion,
 			iamv1.ActionIAMUserSetStatus, iamv1.ActionIAMUserPasswordReset,
 			iamv1.ActionIAMUserCreate, iamv1.ActionIAMUserRead,
 			iamv1.ActionIAMUserUpdate, iamv1.ActionIAMUserDelete,

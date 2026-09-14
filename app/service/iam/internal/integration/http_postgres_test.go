@@ -389,6 +389,9 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	t.Run("customer policy publication and current authority", func(t *testing.T) {
 		proveCustomerPolicyPublication(t, ctx, handler, admin, primary)
 	})
+	t.Run("customer immutable versions and default selection", func(t *testing.T) {
+		proveCustomerPolicyVersions(t, ctx, handler, admin, primary)
+	})
 	t.Run("policy publication versus attachment revision", func(t *testing.T) {
 		provePolicyDefaultAttachmentRaces(t, ctx, handler, admin, primary)
 	})
@@ -882,6 +885,202 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		t.Fatal("read committed publication from disabled publisher")
 	}
 	post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
+}
+
+func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	request := func(method, path, bearer string, body any, want int, result any) {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != want {
+			t.Fatalf("policy versions %s %s: status=%d want=%d body=%s", method, path, response.Code, want, response.Body.String())
+		}
+		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+			t.Fatal("decode policy version result")
+		}
+	}
+	post := func(path, bearer string, body any, want int, result any) {
+		t.Helper()
+		request(http.MethodPost, path, bearer, body, want, result)
+	}
+	get := func(path, bearer string, want int, result any) {
+		t.Helper()
+		request(http.MethodGet, path, bearer, nil, want, result)
+	}
+	allow := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "selected", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "version-application"}}}}}
+	var initial iamv1.PolicyDetail
+	post("/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Versioned application read", Document: allow, RequestID: "version-policy-create"}, http.StatusCreated, &initial)
+	path := "/v1/policies/" + string(initial.Policy.ID)
+	deny := allow
+	deny.Statements = append([]iamv1.PolicyStatement(nil), allow.Statements...)
+	deny.Statements[0].Effect = iamv1.PolicyDeny
+	create := iamv1.CreatePolicyVersionRequest{Document: deny, ResourceVersion: 1, RequestID: "version-deny-create"}
+	var version, replay iamv1.PolicyVersionDetail
+	post(path+"/versions", root, create, http.StatusCreated, &version)
+	post(path+"/versions", root, create, http.StatusCreated, &replay)
+	if iamv1.ValidatePolicyVersionDetail(version) != nil || version.Policy.ResourceVersion != 2 || version.Policy.DefaultVersionID != initial.Version.ID ||
+		!bytes.Equal(mustIAMJSON(t, version), mustIAMJSON(t, replay)) {
+		t.Fatal("version creation changed default or exact replay result")
+	}
+	get(path+"/versions/"+string(version.Version.ID), root, http.StatusOK, &replay)
+	if !bytes.Equal(mustIAMJSON(t, version), mustIAMJSON(t, replay)) {
+		t.Fatal("exact nondefault version read differs")
+	}
+	var inventory iamv1.PolicyVersionList
+	get(path+"/versions", root, http.StatusOK, &inventory)
+	if iamv1.ValidatePolicyVersionList(inventory) != nil || len(inventory.Items) != 2 || inventory.Policy != version.Policy {
+		t.Fatal("invalid version inventory")
+	}
+	var member iamv1.User
+	post("/v1/users", root, map[string]any{"loginName": "version-member", "displayName": "Version member", "initialPassword": initialDeveloperPassword, "requestId": "version-member-create"}, http.StatusCreated, &member)
+	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
+	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: initial.Policy.ID, PolicyResourceVersion: 2, RequestID: "version-member-grant"}, http.StatusOK, nil)
+	authorize := func(requestID string, want bool, wantVersion iamv1.PolicyVersionID) iamv1.DecisionID {
+		t.Helper()
+		body := mustIAMJSON(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "version-application"}, RequestID: requestID, CorrelationID: requestID})
+		response := performIAMRequestWithSubject(handler, body, paasCredential, bearer)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || decision.Allowed != want {
+			t.Fatalf("version decision status=%d allowed=%t want=%t", response.Code, decision.Allowed, want)
+		}
+		var encoded []byte
+		if err := database.QueryRow(ctx, `SELECT policy_evidence FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, member.AccountID, decision.ID).Scan(&encoded); err != nil {
+			t.Fatal(err)
+		}
+		var evidence []authority.PolicyAttachmentEvidence
+		if json.Unmarshal(encoded, &evidence) != nil || len(evidence) != 1 || evidence[0].Version.VersionID != wantVersion {
+			t.Fatalf("decision does not bind selected immutable version: %s", encoded)
+		}
+		return decision.ID
+	}
+	oldDecision := authorize("version-before-default", true, initial.Version.ID)
+	selectDefault := iamv1.SetDefaultPolicyVersionRequest{VersionID: version.Version.ID, ResourceVersion: 2, RequestID: "version-select-deny"}
+	var selected, again iamv1.PolicyDetail
+	post(path+":set-default-version", root, selectDefault, http.StatusOK, &selected)
+	post(path+":set-default-version", root, selectDefault, http.StatusOK, &again)
+	if selected.Policy.ResourceVersion != 3 || selected.Version.ID != version.Version.ID || !bytes.Equal(mustIAMJSON(t, selected), mustIAMJSON(t, again)) {
+		t.Fatal("default switch/replay changed revision or content")
+	}
+	authorize("version-after-default", false, version.Version.ID)
+	post(path+"/versions", root, create, http.StatusConflict, nil)
+	var raw []byte
+	var oldEvent auditv1.Event
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'iamDecisionId'=$2 AND event_document->>'action'='iam.authorization.decided'`, member.AccountID, oldDecision).Scan(&raw); err != nil || json.Unmarshal(raw, &oldEvent) != nil {
+		t.Fatal("read old version authority fact")
+	}
+	post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: oldEvent}, http.StatusOK, nil)
+	post(path+":set-default-version", root, iamv1.SetDefaultPolicyVersionRequest{VersionID: initial.Version.ID, ResourceVersion: 3, RequestID: "version-select-original"}, http.StatusOK, &selected)
+	post(path+":set-default-version", root, selectDefault, http.StatusConflict, nil)
+	authorize("version-after-explicit-rollback", true, initial.Version.ID)
+	post(path+":set-default-version", root, iamv1.SetDefaultPolicyVersionRequest{VersionID: "missing-version", ResourceVersion: 4, RequestID: "version-select-missing"}, http.StatusForbidden, nil)
+	get(path+"/versions/missing-version", root, http.StatusForbidden, nil)
+	get(path+":set-default-version/versions", root, http.StatusForbidden, nil)
+	get(path+"/versions?accountId=other", root, http.StatusBadRequest, nil)
+	get(path+"/versions", paasCredential, http.StatusUnauthorized, nil)
+	get(path+"/versions", bearer, http.StatusForbidden, nil)
+	post(path+"/versions", bearer, create, http.StatusForbidden, nil)
+	post("/v1/policies/"+string(iamv1.SystemPolicyAccountAdministrator)+"/versions", root, create, http.StatusForbidden, nil)
+	get("/v1/policies/"+string(iamv1.SystemPolicyAccountAdministrator)+"/versions", root, http.StatusForbidden, nil)
+	failureDocument := allow
+	failureDocument.Statements = append([]iamv1.PolicyStatement(nil), allow.Statements...)
+	failureDocument.Statements[0].SID = "faulted-version"
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_policy_version_outbox_fault() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.event_document->>'action'='iam.policy-version.created' AND NEW.event_document->>'requestId'='version-injected-failure'
+		THEN RAISE EXCEPTION 'injected policy version outbox failure'; END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_policy_version_outbox_fault BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_version_outbox_fault()`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := database.Exec(context.Background(), `DROP TRIGGER IF EXISTS matrix_policy_version_outbox_fault ON iam.audit_outbox; DROP FUNCTION IF EXISTS public.matrix_policy_version_outbox_fault()`); err != nil {
+			t.Error("remove isolated version fault")
+		}
+	}()
+	post(path+"/versions", root, iamv1.CreatePolicyVersionRequest{Document: failureDocument, ResourceVersion: 4, RequestID: "version-injected-failure"}, http.StatusServiceUnavailable, nil)
+	get(path+"/versions", root, http.StatusOK, &inventory)
+	var faultFacts int
+	if len(inventory.Items) != 2 || inventory.Policy.ResourceVersion != 4 || inventory.Policy.DefaultVersionID != initial.Version.ID {
+		t.Fatal("failed version publication left content or metadata mutation")
+	}
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'='version-injected-failure'`, member.AccountID).Scan(&faultFacts); err != nil || faultFacts != 0 {
+		t.Fatal("failed version publication left authority facts")
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER matrix_policy_version_outbox_fault ON iam.audit_outbox; DROP FUNCTION public.matrix_policy_version_outbox_fault()`); err != nil {
+		t.Fatal(err)
+	}
+	// Competing explicit commands at one expected revision have one winner,
+	// not two independent defaults or a partially inserted losing version.
+	completed := make(chan *httptest.ResponseRecorder, 2)
+	for index := 0; index < 2; index++ {
+		document := allow
+		document.Statements = append([]iamv1.PolicyStatement(nil), allow.Statements...)
+		document.Statements[0].SID = fmt.Sprintf("concurrent-version-%d", index)
+		body := mustIAMJSON(t, iamv1.CreatePolicyVersionRequest{Document: document, ResourceVersion: 4, RequestID: fmt.Sprintf("version-race-%d", index)})
+		go func() { completed <- performIAMRequest(handler, http.MethodPost, path+"/versions", root, body) }()
+	}
+	winners, conflicts := 0, 0
+	for range 2 {
+		select {
+		case response := <-completed:
+			switch response.Code {
+			case http.StatusCreated:
+				winners++
+				if json.Unmarshal(response.Body.Bytes(), &version) != nil {
+					t.Fatal("decode concurrent version")
+				}
+				selected.Policy = version.Policy
+			case http.StatusConflict:
+				conflicts++
+			default:
+				t.Fatalf("version race status=%d", response.Code)
+			}
+		case <-ctx.Done():
+			t.Fatal("version race did not complete")
+		}
+	}
+	get(path+"/versions", root, http.StatusOK, &inventory)
+	if winners != 1 || conflicts != 1 || len(inventory.Items) != 3 || inventory.Policy.ResourceVersion != 5 {
+		t.Fatal("concurrent version revision did not have one atomic winner")
+	}
+	// Fill the bounded version inventory with explicit new revisions. Merely
+	// adding content must keep the already selected default and live grants.
+	for index := 0; index < 2; index++ {
+		document := allow
+		document.Statements = append([]iamv1.PolicyStatement(nil), allow.Statements...)
+		document.Statements[0].SID = fmt.Sprintf("variant-%d", index)
+		post(path+"/versions", root, iamv1.CreatePolicyVersionRequest{Document: document, ResourceVersion: selected.Policy.ResourceVersion, RequestID: fmt.Sprintf("version-extra-%d", index)}, http.StatusCreated, &version)
+		selected.Policy = version.Policy
+	}
+	get(path+"/versions", root, http.StatusOK, &inventory)
+	if iamv1.ValidatePolicyVersionList(inventory) != nil || len(inventory.Items) != iamv1.MaxPolicyVersions || inventory.Policy.DefaultVersionID != initial.Version.ID {
+		t.Fatal("version limit inventory/default differs")
+	}
+	create.ResourceVersion, create.RequestID = selected.Policy.ResourceVersion, "version-over-budget"
+	create.Document.Statements[0].SID = "over-budget"
+	post(path+"/versions", root, create, http.StatusConflict, nil)
+	authorize("version-after-inventory-growth", true, initial.Version.ID)
+	get(path+"/versions", root, http.StatusOK, &inventory)
+	if len(inventory.Items) != iamv1.MaxPolicyVersions || inventory.Policy != selected.Policy {
+		t.Fatal("rejected over-budget version changed policy state")
+	}
+	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "version-member-administrator"}, http.StatusOK, nil)
+	get(path+"/versions", bearer, http.StatusOK, nil)
+	post(path+"/versions", bearer, create, http.StatusForbidden, nil)
+	selection := iamv1.SetDefaultPolicyVersionRequest{VersionID: version.Version.ID, ResourceVersion: selected.Policy.ResourceVersion, RequestID: "version-delegate-select"}
+	post(path+":set-default-version", bearer, selection, http.StatusForbidden, nil)
+	post("/v1/accounts", root, map[string]any{"id": "version-other-account", "displayName": "Other version account", "rootLoginName": "version-other-root", "rootDisplayName": "Other owner", "initialPassword": initialDeveloperPassword, "requestId": "version-other-account-create"}, http.StatusCreated, nil)
+	other := localRecoveryLogin(t, handler, "version-other-root", initialDeveloperPassword, true)
+	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
+	get(path+"/versions", other, http.StatusForbidden, nil)
+	get(path+"/versions/"+string(initial.Version.ID), other, http.StatusForbidden, nil)
+	post(path+"/versions", other, create, http.StatusForbidden, nil)
+	post(path+":set-default-version", other, selection, http.StatusForbidden, nil)
 }
 
 func mustIAMJSON(t *testing.T, value any) []byte {

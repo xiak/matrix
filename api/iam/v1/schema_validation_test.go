@@ -75,6 +75,81 @@ func TestCustomerPolicyPublicationUsesTheStrictTenantLanguage(t *testing.T) {
 	}
 }
 
+func TestPolicyVersionCommandsBindOwnerRevisionAndImmutableContent(t *testing.T) {
+	openapi := loadIAMOpenAPI(t)
+	createSchema := compileIAMOpenAPISchema(t, openapi, "CreatePolicyVersionRequest")
+	selectSchema := compileIAMOpenAPISchema(t, openapi, "SetDefaultPolicyVersionRequest")
+	instance := func(value any) any {
+		t.Helper()
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	create := CreatePolicyVersionRequest{Document: policyDocumentFixture(), ResourceVersion: 2, RequestID: "version-create"}
+	selection := SetDefaultPolicyVersionRequest{VersionID: "version-one", ResourceVersion: 2, RequestID: "version-select"}
+	if ValidateCreatePolicyVersionRequest(create) != nil || createSchema.Validate(instance(create)) != nil || ValidateSetDefaultPolicyVersionRequest(selection) != nil || selectSchema.Validate(instance(selection)) != nil {
+		t.Fatal("valid version command rejected")
+	}
+	for _, revision := range []uint64{0, 9007199254740991, 9007199254740992} {
+		create.ResourceVersion, selection.ResourceVersion = revision, revision
+		if ValidateCreatePolicyVersionRequest(create) == nil || createSchema.Validate(instance(create)) == nil || ValidateSetDefaultPolicyVersionRequest(selection) == nil || selectSchema.Validate(instance(selection)) == nil {
+			t.Fatal("non-incrementable version command admitted")
+		}
+	}
+	create.ResourceVersion = 2
+	create.Document.Scope = AuthorityScopeInstallation
+	if ValidateCreatePolicyVersionRequest(create) == nil || createSchema.Validate(instance(create)) == nil {
+		t.Fatal("tenant version admitted installation content")
+	}
+	now := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
+	document := policyDocumentFixture()
+	_, digest, err := CanonicalizePolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := Policy{APIVersion: APIVersion, Kind: "Policy", ID: "policy-version-example", Management: PolicyCustomerManaged, AccountID: "account-one", DisplayName: "Versioned policy", Scope: AuthorityScopeTenant, Status: PolicyActive, DefaultVersionID: "version-a", ResourceVersion: 2, CreatedAt: now, UpdatedAt: now}
+	version := PolicyVersion{PolicyID: policy.ID, ID: "version-b", Document: document, ContentDigest: digest}
+	detail := PolicyVersionDetail{APIVersion: APIVersion, Kind: "PolicyVersionDetail", Policy: policy, Version: version}
+	if ValidatePolicyVersionDetail(detail) != nil {
+		t.Fatal("nondefault version read rejected")
+	}
+	if ValidatePolicyDetail(PolicyDetail{APIVersion: APIVersion, Kind: "PolicyDetail", Policy: policy, Version: version}) == nil {
+		t.Fatal("nondefault version widened existing current-default contract")
+	}
+	defaultVersion := version
+	defaultVersion.ID = policy.DefaultVersionID
+	list := PolicyVersionList{APIVersion: APIVersion, Kind: "PolicyVersionList", Policy: policy, Items: []PolicyVersion{defaultVersion, version}}
+	listSchema := compileIAMOpenAPISchema(t, openapi, "PolicyVersionList")
+	detailSchema := compileIAMOpenAPISchema(t, openapi, "PolicyVersionDetail")
+	if ValidatePolicyVersionList(list) != nil || listSchema.Validate(instance(list)) != nil || detailSchema.Validate(instance(detail)) != nil {
+		t.Fatal("valid version inventory/detail rejected")
+	}
+	for name, mutate := range map[string]func(*PolicyVersionList){
+		"empty":           func(v *PolicyVersionList) { v.Items = nil },
+		"missing default": func(v *PolicyVersionList) { v.Items = []PolicyVersion{version} },
+		"wrong owner":     func(v *PolicyVersionList) { v.Items[0].PolicyID = "another-policy" },
+		"duplicate":       func(v *PolicyVersionList) { v.Items[1] = v.Items[0] },
+		"unsorted":        func(v *PolicyVersionList) { v.Items[0], v.Items[1] = v.Items[1], v.Items[0] },
+		"retired":         func(v *PolicyVersionList) { v.Policy.Status = PolicyRetired },
+		"too many":        func(v *PolicyVersionList) { v.Items = make([]PolicyVersion, MaxPolicyVersions+1) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := list
+			value.Items = append([]PolicyVersion(nil), list.Items...)
+			mutate(&value)
+			if ValidatePolicyVersionList(value) == nil {
+				t.Fatal("invalid version inventory accepted")
+			}
+		})
+	}
+}
+
 func TestRetiredActionsAreHistoricalDecisionsNotRequestsOrPolicies(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	requestSchema := compileIAMOpenAPISchema(t, document, "AuthorizationRequest")

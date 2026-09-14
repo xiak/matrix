@@ -228,6 +228,82 @@ func (value *transaction) CreatePolicy(ctx context.Context, mutation identityacc
 	return decodePolicyDetail(encoded, mutation.Policy.AccountID, mutation.Policy.ID)
 }
 
+func decodePolicyVersionDetail(encoded []byte, account iamv1.AccountID, policy iamv1.PolicyID, version iamv1.PolicyVersionID) (iamv1.PolicyVersionDetail, error) {
+	var result iamv1.PolicyVersionDetail
+	if json.Unmarshal(encoded, &result) != nil {
+		return result, identityaccess.ErrUnavailable
+	}
+	result.Policy.CreatedAt, result.Policy.UpdatedAt = result.Policy.CreatedAt.UTC(), result.Policy.UpdatedAt.UTC()
+	if iamv1.ValidatePolicyVersionDetail(result) != nil || result.Policy.AccountID != account || result.Policy.ID != policy || result.Version.ID != version {
+		return iamv1.PolicyVersionDetail{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) ListPolicyVersions(ctx context.Context, read identityaccess.AccountRead, id iamv1.PolicyID) (iamv1.PolicyVersionList, error) {
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.list_policy_versions($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, id).Scan(&encoded); err != nil {
+		return iamv1.PolicyVersionList{}, mapAuthorizationDatabaseError("list IAM policy versions", err)
+	}
+	var result iamv1.PolicyVersionList
+	if json.Unmarshal(encoded, &result) != nil {
+		return result, identityaccess.ErrUnavailable
+	}
+	result.Policy.CreatedAt, result.Policy.UpdatedAt = result.Policy.CreatedAt.UTC(), result.Policy.UpdatedAt.UTC()
+	if iamv1.ValidatePolicyVersionList(result) != nil || result.Policy.ID != id || result.Policy.AccountID != read.AccountID {
+		return iamv1.PolicyVersionList{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) ReadPolicyVersion(ctx context.Context, read identityaccess.AccountRead, id iamv1.PolicyID, version iamv1.PolicyVersionID) (iamv1.PolicyVersionDetail, error) {
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.read_policy_version($1,$2,$3,$4,$5)", read.AccountID, read.ActorPrincipalID, read.DecisionID, id, version).Scan(&encoded); err != nil {
+		return iamv1.PolicyVersionDetail{}, mapAuthorizationDatabaseError("read IAM policy version", err)
+	}
+	return decodePolicyVersionDetail(encoded, read.AccountID, id, version)
+}
+
+func (value *transaction) CreatePolicyVersion(ctx context.Context, mutation identityaccess.PolicyVersionCreation) (iamv1.PolicyVersionDetail, error) {
+	canonical, digest, err := iamv1.CanonicalizePolicyDocument(mutation.Version.Document)
+	if err != nil || digest != mutation.Version.ContentDigest || iamv1.ValidatePolicyVersion(mutation.Version) != nil ||
+		iamv1.ValidateCreatePolicyVersionRequest(iamv1.CreatePolicyVersionRequest{Document: mutation.Version.Document, ResourceVersion: mutation.ResourceVersion, RequestID: mutation.AuditEvent.RequestID}) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		return iamv1.PolicyVersionDetail{}, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.PolicyVersionDetail{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, "SELECT iam.create_policy_version($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.Version.PolicyID, mutation.ResourceVersion, mutation.Version.ID, canonical, digest, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.PolicyVersionDetail{}, mapAuthorizationDatabaseError("create IAM policy version", err)
+	}
+	return decodePolicyVersionDetail(encoded, mutation.AccountID, mutation.Version.PolicyID, mutation.Version.ID)
+}
+
+func (value *transaction) SetDefaultPolicyVersion(ctx context.Context, mutation identityaccess.PolicyDefaultSelection) (iamv1.PolicyDetail, error) {
+	if iamv1.ValidateSetDefaultPolicyVersionRequest(iamv1.SetDefaultPolicyVersionRequest{VersionID: mutation.VersionID, ResourceVersion: mutation.ResourceVersion, RequestID: mutation.AuditEvent.RequestID}) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		return iamv1.PolicyDetail{}, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.PolicyDetail{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, "SELECT iam.set_default_policy_version($1,$2,$3,$4,$5,$6,$7::jsonb)",
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PolicyID, mutation.ResourceVersion, mutation.VersionID, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.PolicyDetail{}, mapAuthorizationDatabaseError("set IAM default policy version", err)
+	}
+	return decodePolicyDetail(encoded, mutation.AccountID, mutation.PolicyID)
+}
+
 func (value *transaction) ListPolicies(ctx context.Context, read identityaccess.AccountRead, scope iamv1.AuthorityScope) (iamv1.PolicyList, error) {
 	var encoded []byte
 	if err := value.tx.QueryRow(ctx, "SELECT iam.list_policies($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, scope).Scan(&encoded); err != nil {

@@ -37,6 +37,8 @@ const (
 	ActionIAMUserPasswordChanged             Action = "iam.user.password-changed"
 	ActionIAMGroupCreated                    Action = "iam.group.created"
 	ActionIAMPolicyCreated                   Action = "iam.policy.created"
+	ActionIAMPolicyVersionCreated            Action = "iam.policy-version.created"
+	ActionIAMPolicyDefaultVersionSet         Action = "iam.policy.default-version-set"
 	ActionIAMGroupUpdated                    Action = "iam.group.updated"
 	ActionIAMGroupDeleted                    Action = "iam.group.deleted"
 	ActionIAMGroupMembershipCreated          Action = "iam.group-membership.created"
@@ -178,6 +180,8 @@ var allActions = []Action{
 	ActionIAMUserPasswordChanged,
 	ActionIAMGroupCreated,
 	ActionIAMPolicyCreated,
+	ActionIAMPolicyVersionCreated,
+	ActionIAMPolicyDefaultVersionSet,
 	ActionIAMGroupUpdated,
 	ActionIAMGroupDeleted,
 	ActionIAMGroupMembershipCreated,
@@ -260,6 +264,12 @@ var actionContracts = map[Action]ActionContract{
 		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
 	ActionIAMPolicyCreated: {
+		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPolicyVersionCreated: {
+		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPolicyDefaultVersionSet: {
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
 	ActionIAMGroupUpdated: {

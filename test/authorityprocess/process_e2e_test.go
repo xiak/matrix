@@ -777,7 +777,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 10, Audit: 7, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 11, Audit: 8, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -977,11 +977,38 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	customAttachment := createIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, developer.ID, customPolicy.Policy.ID, "request-process-custom-attach")
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-custom-not-selected", http.StatusForbidden)
+	denyDocument := customRequest.Document
+	denyDocument.Statements = append([]iamv1.PolicyStatement(nil), customRequest.Document.Statements...)
+	denyDocument.Statements[0].Effect = iamv1.PolicyDeny
+	versionResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies/"+string(customPolicy.Policy.ID)+"/versions", adminLogin.Credential,
+		iamv1.CreatePolicyVersionRequest{Document: denyDocument, ResourceVersion: 1, RequestID: "request-process-deny-version"})
+	var denyVersion iamv1.PolicyVersionDetail
+	if versionResponse.Status != http.StatusCreated || json.Unmarshal(versionResponse.Body, &denyVersion) != nil || iamv1.ValidatePolicyVersionDetail(denyVersion) != nil || denyVersion.Policy.DefaultVersionID != customPolicy.Version.ID {
+		t.Fatalf("process nondefault version status=%d", versionResponse.Status)
+	}
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
+	selectDefault := func(version iamv1.PolicyVersionID, revision uint64, requestID string) {
+		t.Helper()
+		response := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/policies/"+string(customPolicy.Policy.ID)+":set-default-version", adminLogin.Credential,
+			iamv1.SetDefaultPolicyVersionRequest{VersionID: version, ResourceVersion: revision, RequestID: requestID})
+		var result iamv1.PolicyDetail
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &result) != nil || iamv1.ValidatePolicyDetail(result) != nil || result.Version.ID != version || result.Policy.ResourceVersion != revision+1 {
+			t.Fatalf("process default version switch status=%d", response.Status)
+		}
+	}
+	selectDefault(denyVersion.Version.ID, 2, "request-process-default-deny")
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
+	selectDefault(customPolicy.Version.ID, 3, "request-process-default-original")
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
 	revokeIAMPolicyAttachment(t, replicaEndpoint, adminLogin.Credential, customAttachment.ID, customAttachment.ResourceVersion, "request-process-custom-revoke")
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	if countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyCreated, auditv1.ResultSucceeded) != 1 {
 		t.Fatal("custom policy publication did not reach the immutable tenant Audit chain")
+	}
+	if countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyVersionCreated, auditv1.ResultSucceeded) != 1 ||
+		countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyDefaultVersionSet, auditv1.ResultSucceeded) != 2 {
+		t.Fatal("immutable version/default selection facts did not reach the original tenant chain")
 	}
 	deniedBefore := countAuditFacts(
 		t,

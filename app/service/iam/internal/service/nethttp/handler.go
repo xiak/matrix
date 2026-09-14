@@ -33,6 +33,10 @@ type Workflow interface {
 	ListPolicies(context.Context, iamv1.Secret, bool, string) (iamv1.PolicyList, error)
 	GetPolicy(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyDetail, error)
 	CreatePolicy(context.Context, iamv1.Secret, iamv1.CreatePolicyRequest) (iamv1.PolicyDetail, error)
+	ListPolicyVersions(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyVersionList, error)
+	GetPolicyVersion(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.PolicyVersionID, string) (iamv1.PolicyVersionDetail, error)
+	CreatePolicyVersion(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.CreatePolicyVersionRequest) (iamv1.PolicyVersionDetail, error)
+	SetDefaultPolicyVersion(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.SetDefaultPolicyVersionRequest) (iamv1.PolicyDetail, error)
 	ListAccounts(context.Context, iamv1.Secret, string, string) (iamv1.AccountList, error)
 	GetAccount(context.Context, iamv1.Secret, iamv1.AccountID, string) (iamv1.AccountAccess, error)
 	SetAccountStatus(context.Context, iamv1.Secret, iamv1.AccountID, iamv1.SetAccountStatusRequest) (iamv1.Account, error)
@@ -176,6 +180,11 @@ func (value *handler) policies(response http.ResponseWriter, request *http.Reque
 }
 
 func (value *handler) policy(response http.ResponseWriter, request *http.Request) {
+	path := strings.TrimPrefix(request.URL.Path, "/v1/policies/")
+	if strings.HasSuffix(path, ":set-default-version") || strings.Contains(path, "/") {
+		value.policyVersion(response, request, path)
+		return
+	}
 	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
 		return
 	}
@@ -194,6 +203,62 @@ func (value *handler) policy(response http.ResponseWriter, request *http.Request
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) policyVersion(response http.ResponseWriter, request *http.Request, path string) {
+	parts := strings.Split(path, "/")
+	id := parts[0]
+	setDefault := len(parts) == 1 && strings.HasSuffix(id, ":set-default-version")
+	if setDefault {
+		id = strings.TrimSuffix(id, ":set-default-version")
+	}
+	collection := len(parts) == 2 && parts[1] == "versions"
+	item := len(parts) == 3 && parts[1] == "versions" && iamv1.ValidateID("versionId", parts[2]) == nil
+	if iamv1.ValidateID("policyId", id) != nil || (!setDefault && !collection && !item) {
+		value.notFound(response, request)
+		return
+	}
+	method := http.MethodGet
+	if setDefault || (collection && request.Method == http.MethodPost) {
+		method = http.MethodPost
+	}
+	if !value.requireMethod(response, request, method) || !rejectQuery(response, request) {
+		return
+	}
+	if method == http.MethodGet && !rejectQueryAndBody(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	var result any
+	var err error
+	status := http.StatusOK
+	switch {
+	case setDefault:
+		body, ok := decodeJSON[iamv1.SetDefaultPolicyVersionRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.SetDefaultPolicyVersion(request.Context(), credential, iamv1.PolicyID(id), body)
+	case collection && method == http.MethodPost:
+		body, ok := decodeJSON[iamv1.CreatePolicyVersionRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.CreatePolicyVersion(request.Context(), credential, iamv1.PolicyID(id), body)
+		status = http.StatusCreated
+	case collection:
+		result, err = value.workflow.ListPolicyVersions(request.Context(), credential, iamv1.PolicyID(id), requestID(request))
+	case item:
+		result, err = value.workflow.GetPolicyVersion(request.Context(), credential, iamv1.PolicyID(id), iamv1.PolicyVersionID(parts[2]), requestID(request))
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, status, result)
 }
 
 func (value *handler) listPolicies(response http.ResponseWriter, request *http.Request) {
