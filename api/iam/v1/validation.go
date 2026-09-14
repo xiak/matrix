@@ -718,6 +718,24 @@ func ValidateCurrentIdentity(value CurrentIdentity) error {
 	return errors.Join(ValidateAccount(value.Account), ValidateUser(value.User))
 }
 
+const DirectoryPageSize = 100
+const MaxPageCursorBytes = 384
+
+// ValidatePageCursor checks only the public bounded opaque envelope. Signature,
+// current authority, query and expiry are verified exclusively by IAM.
+func ValidatePageCursor(value string) error {
+	if len(value) <= 4 || len(value) > MaxPageCursorBytes || value[:4] != "ic1." {
+		return errors.New("IAM page cursor is invalid")
+	}
+	for _, character := range value[4:] {
+		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || character == '-' || character == '_') {
+			return errors.New("IAM page cursor is invalid")
+		}
+	}
+	return nil
+}
+
 func ValidateUserList(value UserList) error {
 	if value.APIVersion != APIVersion || value.Kind != "UserList" || value.Items == nil || len(value.Items) > 100 {
 		return errors.New("user list is invalid")
@@ -734,7 +752,7 @@ func ValidateUserList(value UserList) error {
 		}
 		account = item.User.AccountID
 	}
-	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
 		return errors.New("user page boundary is invalid")
 	}
 	return nil
@@ -856,7 +874,7 @@ func ValidateGroupList(value GroupList) error {
 		}
 		previous, account = item.Group.ID, item.Group.AccountID
 	}
-	if value.NextAfter != "" && (previous == "" || value.NextAfter != string(previous)) {
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
 		return errors.New("group page boundary is invalid")
 	}
 	return nil
@@ -891,7 +909,7 @@ func ValidateGroupMembershipList(value GroupMembershipList) error {
 		}
 		previous = membership.ID
 	}
-	if value.NextAfter != "" && (previous == "" || value.NextAfter != string(previous)) {
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
 		return errors.New("group membership page boundary is invalid")
 	}
 	return nil
@@ -908,7 +926,7 @@ func ValidateAccountList(value AccountList) error {
 		}
 		previous = string(item.Account.ID)
 	}
-	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
 		return errors.New("account page boundary is invalid")
 	}
 	return nil

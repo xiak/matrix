@@ -152,19 +152,16 @@ func (value *transaction) ListUsers(ctx context.Context, read identityaccess.Acc
 	if json.Unmarshal(encoded, &result.Items) != nil || len(result.Items) > 101 {
 		return result, identityaccess.ErrUnavailable
 	}
-	if len(result.Items) > 100 {
-		result.Items = result.Items[:100]
-		result.NextAfter = string(result.Items[99].User.ID)
-	}
 	for i := range result.Items {
 		item := &result.Items[i]
-		if normalizeUserAccess(item, read.AccountID) != nil ||
+		if normalizeUserAccess(item, read.AccountID) != nil || string(item.User.ID) <= read.After ||
 			(i > 0 && result.Items[i-1].User.ID >= item.User.ID) {
 			return iamv1.UserList{}, identityaccess.ErrUnavailable
 		}
 	}
-	if result.NextAfter != "" && (len(result.Items) == 0 || result.NextAfter != string(result.Items[len(result.Items)-1].User.ID)) {
-		return iamv1.UserList{}, identityaccess.ErrUnavailable
+	if len(result.Items) > 100 {
+		result.Items = result.Items[:100]
+		result.NextAfter = string(result.Items[99].User.ID)
 	}
 	return result, nil
 }
@@ -212,22 +209,15 @@ func (value *transaction) ListAccounts(ctx context.Context, read identityaccess.
 	result := identityaccess.AccountManagementPage{Items: make([]identityaccess.AccountManagementSnapshot, 0, len(rows))}
 	for _, row := range rows {
 		item, err := decodeAccountManagement(row)
-		if err != nil {
-			return identityaccess.AccountManagementPage{}, err
+		if err != nil || string(item.Account.ID) <= read.After ||
+			(len(result.Items) > 0 && result.Items[len(result.Items)-1].Account.ID >= item.Account.ID) {
+			return identityaccess.AccountManagementPage{}, identityaccess.ErrUnavailable
 		}
 		result.Items = append(result.Items, item)
 	}
 	if len(result.Items) > 100 {
 		result.Items = result.Items[:100]
 		result.NextAfter = string(result.Items[99].Account.ID)
-	}
-	for index := 1; index < len(result.Items); index++ {
-		if result.Items[index-1].Account.ID >= result.Items[index].Account.ID {
-			return identityaccess.AccountManagementPage{}, identityaccess.ErrUnavailable
-		}
-	}
-	if len(result.Items) > 0 && result.NextAfter != "" && result.NextAfter != string(result.Items[len(result.Items)-1].Account.ID) {
-		return result, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }

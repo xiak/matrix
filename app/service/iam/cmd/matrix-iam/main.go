@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -23,12 +24,14 @@ const (
 	databaseDSNFileEnvironment = "MATRIX_IAM_DATABASE_DSN_FILE"
 	bootstrapFileEnvironment   = "MATRIX_IAM_BOOTSTRAP_FILE"
 	listenAddressEnvironment   = "MATRIX_IAM_LISTEN_ADDRESS"
+	cursorKeyFileEnvironment   = "MATRIX_IAM_CURSOR_KEY_FILE"
 )
 
 type configuration struct {
 	databaseDSNFile string
 	bootstrapFile   string
 	listenAddress   string
+	cursorKeyFile   string
 }
 
 func main() {
@@ -45,6 +48,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	cursorKey, err := readCursorKey(config.cursorKeyFile)
+	if err != nil {
+		return err
+	}
+	defer clear(cursorKey)
 	dsn, err := processconfig.ReadText(config.databaseDSNFile, 16*1024, true)
 	if err != nil {
 		return err
@@ -65,7 +73,8 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{})
+	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{CursorKey: cursorKey})
+	clear(cursorKey)
 	if err != nil {
 		return err
 	}
@@ -103,10 +112,33 @@ func loadConfiguration() (configuration, error) {
 		databaseDSNFile: os.Getenv(databaseDSNFileEnvironment),
 		bootstrapFile:   os.Getenv(bootstrapFileEnvironment),
 		listenAddress:   os.Getenv(listenAddressEnvironment),
+		cursorKeyFile:   os.Getenv(cursorKeyFileEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.bootstrapFile == "" ||
-		config.listenAddress == "" {
+		config.listenAddress == "" || config.cursorKeyFile == "" {
 		return configuration{}, errors.New("IAM process configuration is incomplete")
 	}
 	return config, nil
+}
+
+func readCursorKey(path string) ([]byte, error) {
+	encoded, err := processconfig.ReadFile(path, 64, true)
+	if err != nil {
+		return nil, errors.New("IAM cursor key is unavailable")
+	}
+	defer clear(encoded)
+	if len(encoded) != 64 {
+		return nil, errors.New("IAM cursor key is invalid")
+	}
+	for _, character := range encoded {
+		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+			return nil, errors.New("IAM cursor key is invalid")
+		}
+	}
+	key := make([]byte, 32)
+	if _, err := hex.Decode(key, encoded); err != nil {
+		clear(key)
+		return nil, errors.New("IAM cursor key is invalid")
+	}
+	return key, nil
 }

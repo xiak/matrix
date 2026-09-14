@@ -304,16 +304,25 @@ function parseGroupMembershipPage(value: unknown, accountId: string, groupId: st
       resource: { kind: "GROUP_MEMBERSHIP", id: membership.id } }]);
     return { membership, capabilities };
   });
-  const nextAfter = orderedGroupPage(items.map((item) => item.membership.id), wire.nextAfter, after);
+  const nextAfter = orderedDirectoryPage(items.map((item) => item.membership.id), wire.nextAfter, after);
   if (new Set(items.map((item) => item.membership.userId)).size !== items.length) throw new Error("INVALID_IAM_RESPONSE");
   return { accountId, groupId, items, nextAfter };
 }
 
-function orderedGroupPage(ids: string[], next: unknown, after?: string): string | null {
-  if (ids.some((id, index) => id <= (index === 0 ? after ?? "" : ids[index - 1]!))) throw new Error("INVALID_IAM_RESPONSE");
+function pageCursor(value: unknown): string {
+  if (typeof value !== "string" || value.length <= 4 || value.length > 384 || !value.startsWith("ic1.") || /[^A-Za-z0-9_-]/.test(value.slice(4))) throw new Error("INVALID_IAM_RESPONSE");
+  return value;
+}
+
+function pageQuery(after?: string): string {
+  return after === undefined ? "" : `?after=${encodeURIComponent(pageCursor(after))}`;
+}
+
+function orderedDirectoryPage(ids: string[], next: unknown, after?: string): string | null {
+  if (ids.some((id, index) => id <= (index === 0 ? "" : ids[index - 1]!))) throw new Error("INVALID_IAM_RESPONSE");
   if (next === undefined) return null;
-  if (ids.length !== 100 || accountIdentifier(next) !== ids.at(-1)) throw new Error("INVALID_IAM_RESPONSE");
-  return next as string;
+  if (ids.length !== 100 || next === after) throw new Error("INVALID_IAM_RESPONSE");
+  return pageCursor(next);
 }
 
 function postAccount(credential: string, path: string, body: Record<string, unknown>): Promise<unknown> {
@@ -420,11 +429,13 @@ function parseAccountAccess(value: unknown): AccountAccess {
   return { account, capabilities };
 }
 
-function accountPage<T>(value: unknown, kind: string, parse: (item: unknown) => T): DirectoryPage<T> {
+function accountPage<T>(value: unknown, kind: string, parse: (item: unknown) => T, identifier: (item: T) => string, after?: string): DirectoryPage<T> {
   const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "items"], ["nextAfter"]);
   requireAccountKind(wire, kind);
   if (!Array.isArray(wire.items) || wire.items.length > 100) throw new Error("INVALID_IAM_RESPONSE");
-  return { items: wire.items.map(parse), nextAfter: wire.nextAfter === undefined ? null : accountText(wire.nextAfter) };
+  const items = wire.items.map(parse);
+  return { items, nextAfter: orderedDirectoryPage(items.map(identifier), wire.nextAfter, after) };
 }
 
 function accountHeaders(credential: string): HeadersInit { return { Authorization: `Bearer ${credential}` }; }
@@ -434,7 +445,7 @@ export const httpAccountRepository: AccountRepository = {
     return parseAccountIdentity(await requestJSON<unknown>("/api/iam/v1/auth/me", { headers: accountHeaders(credential) }));
   },
   async listUsers(credential, after) {
-    return accountPage<UserAccess>(await requestJSON<unknown>(`/api/iam/v1/users${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "UserList", parseUserAccess);
+    return accountPage<UserAccess>(await requestJSON<unknown>(`/api/iam/v1/users${pageQuery(after)}`, { headers: accountHeaders(credential) }), "UserList", parseUserAccess, (item) => item.user.id, after);
   },
   async listPolicies(credential, platform) {
     return parsePolicyDirectory(await requestJSON<unknown>(
@@ -443,15 +454,15 @@ export const httpAccountRepository: AccountRepository = {
     ), platform ? "INSTALLATION" : "TENANT");
   },
   async listAccounts(credential, after) {
-    return accountPage(await requestJSON<unknown>(`/api/iam/v1/accounts${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "AccountList", parseAccountAccess);
+    return accountPage(await requestJSON<unknown>(`/api/iam/v1/accounts${pageQuery(after)}`, { headers: accountHeaders(credential) }), "AccountList", parseAccountAccess, (item) => item.account.id, after);
   },
   async listGroups(credential, accountId, after) {
-    const wire = accountRecord(await requestJSON<unknown>(`/api/iam/v1/groups${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }));
+    const wire = accountRecord(await requestJSON<unknown>(`/api/iam/v1/groups${pageQuery(after)}`, { headers: accountHeaders(credential) }));
     exactKeys(wire, ["apiVersion", "kind", "items"], ["nextAfter"]);
     requireAccountKind(wire, "GroupList");
     if (!Array.isArray(wire.items) || wire.items.length > 100) throw new Error("INVALID_IAM_RESPONSE");
     const items = wire.items.map((item) => parseGroupAccess(item, accountId));
-    return { items, nextAfter: orderedGroupPage(items.map((item) => item.group.id), wire.nextAfter, after) };
+    return { items, nextAfter: orderedDirectoryPage(items.map((item) => item.group.id), wire.nextAfter, after) };
   },
   async getGroup(credential, accountId, groupId) {
     const access = parseGroupAccess(await requestJSON<unknown>(`/api/iam/v1/groups/${encodeURIComponent(groupId)}`, { headers: accountHeaders(credential) }), accountId);
@@ -491,7 +502,7 @@ export const httpAccountRepository: AccountRepository = {
     return result;
   },
   async listGroupMemberships(credential, accountId, groupId, after) {
-    return parseGroupMembershipPage(await requestJSON<unknown>(`/api/iam/v1/groups/${encodeURIComponent(groupId)}/memberships${after ? `?after=${encodeURIComponent(after)}` : ""}`,
+    return parseGroupMembershipPage(await requestJSON<unknown>(`/api/iam/v1/groups/${encodeURIComponent(groupId)}/memberships${pageQuery(after)}`,
       { headers: accountHeaders(credential) }), accountId, groupId, after);
   },
   async createGroupMembership(credential, accountId, groupId, command) {

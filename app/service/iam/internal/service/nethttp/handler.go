@@ -495,7 +495,7 @@ func accountPage(response http.ResponseWriter, request *http.Request) (string, b
 		return "", true
 	}
 	values, ok := query["after"]
-	if !ok || len(values) != 1 || iamv1.ValidateID("after", values[0]) != nil {
+	if !ok || len(values) != 1 || iamv1.ValidatePageCursor(values[0]) != nil {
 		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.query.unsupported", "IAM page request invalid")
 		return "", false
 	}

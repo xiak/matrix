@@ -116,7 +116,13 @@
             "const": "AccountList"
           },
           "nextAfter": {
-            "$ref": "#/components/schemas/ID"
+            "maxLength": 384,
+            "minLength": 5,
+            "not": {
+              "pattern": "[^A-Za-z0-9._-]"
+            },
+            "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+            "type": "string"
           }
         },
         "required": [
@@ -4674,7 +4680,13 @@
             "const": "GroupList"
           },
           "nextAfter": {
-            "$ref": "#/components/schemas/ID"
+            "maxLength": 384,
+            "minLength": 5,
+            "not": {
+              "pattern": "[^A-Za-z0-9._-]"
+            },
+            "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+            "type": "string"
           }
         },
         "required": [
@@ -4812,7 +4824,13 @@
             "const": "GroupMembershipList"
           },
           "nextAfter": {
-            "$ref": "#/components/schemas/ID"
+            "maxLength": 384,
+            "minLength": 5,
+            "not": {
+              "pattern": "[^A-Za-z0-9._-]"
+            },
+            "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+            "type": "string"
           }
         },
         "required": [
@@ -6078,7 +6096,13 @@
             "const": "UserList"
           },
           "nextAfter": {
-            "$ref": "#/components/schemas/ID"
+            "maxLength": 384,
+            "minLength": 5,
+            "not": {
+              "pattern": "[^A-Za-z0-9._-]"
+            },
+            "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+            "type": "string"
           }
         },
         "required": [
@@ -6205,12 +6229,18 @@
         "operationId": "listAccounts",
         "parameters": [
           {
-            "description": "Exclusive user or account ID boundary within the authorized directory.",
+            "description": "Opaque signed continuation bound to the current account, session, query and authority revision. Pass nextAfter unchanged; raw resource IDs are not accepted.",
             "in": "query",
             "name": "after",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/ID"
+              "maxLength": 384,
+              "minLength": 5,
+              "not": {
+                "pattern": "[^A-Za-z0-9._-]"
+              },
+              "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+              "type": "string"
             }
           }
         ],
@@ -6830,12 +6860,18 @@
         "operationId": "listGroups",
         "parameters": [
           {
-            "description": "Exclusive user or account ID boundary within the authorized directory.",
+            "description": "Opaque signed continuation bound to the current account, session, query and authority revision. Pass nextAfter unchanged; raw resource IDs are not accepted.",
             "in": "query",
             "name": "after",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/ID"
+              "maxLength": 384,
+              "minLength": 5,
+              "not": {
+                "pattern": "[^A-Za-z0-9._-]"
+              },
+              "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+              "type": "string"
             }
           }
         ],
@@ -6978,12 +7014,18 @@
             }
           },
           {
-            "description": "Exclusive user or account ID boundary within the authorized directory.",
+            "description": "Opaque signed continuation bound to the current account, session, query and authority revision. Pass nextAfter unchanged; raw resource IDs are not accepted.",
             "in": "query",
             "name": "after",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/ID"
+              "maxLength": 384,
+              "minLength": 5,
+              "not": {
+                "pattern": "[^A-Za-z0-9._-]"
+              },
+              "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+              "type": "string"
             }
           }
         ],
@@ -7646,12 +7688,18 @@
         "operationId": "listUsers",
         "parameters": [
           {
-            "description": "Exclusive user or account ID boundary within the authorized directory.",
+            "description": "Opaque signed continuation bound to the current account, session, query and authority revision. Pass nextAfter unchanged; raw resource IDs are not accepted.",
             "in": "query",
             "name": "after",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/ID"
+              "maxLength": 384,
+              "minLength": 5,
+              "not": {
+                "pattern": "[^A-Za-z0-9._-]"
+              },
+              "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+              "type": "string"
             }
           }
         ],

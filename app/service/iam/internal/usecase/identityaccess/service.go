@@ -40,11 +40,23 @@ func NewAuthority(repository Repository, config Config) (*Authority, error) {
 	if config.NewID == nil {
 		config.NewID = newID
 	}
+	var cursors *authority.CursorCodec
+	if config.CursorKey != nil {
+		codec, err := authority.NewCursorCodec(config.CursorKey)
+		if err != nil {
+			return nil, err
+		}
+		cursors = &codec
+	}
+	// The codec owns its copy. Non-directory local workflows need no cursor
+	// authority; the network entry requires a persistent key explicitly.
+	config.CursorKey = nil
 	return &Authority{
 		repository:  repository,
 		config:      config,
 		passwords:   authority.NewPasswordHasher(nil),
 		credentials: authority.NewCredentialIssuer(nil),
+		cursors:     cursors,
 	}, nil
 }
 

@@ -83,15 +83,15 @@ func (value *transaction) ListGroups(ctx context.Context, read identityaccess.Ac
 	if json.Unmarshal(encoded, &result.Items) != nil || len(result.Items) > 101 {
 		return iamv1.GroupList{}, identityaccess.ErrUnavailable
 	}
-	if len(result.Items) > 100 {
-		result.Items = result.Items[:100]
-		result.NextAfter = string(result.Items[99].Group.ID)
-	}
 	for index := range result.Items {
-		if normalizeGroupAccess(&result.Items[index], read.AccountID) != nil ||
+		if normalizeGroupAccess(&result.Items[index], read.AccountID) != nil || string(result.Items[index].Group.ID) <= read.After ||
 			(index > 0 && result.Items[index-1].Group.ID >= result.Items[index].Group.ID) {
 			return iamv1.GroupList{}, identityaccess.ErrUnavailable
 		}
+	}
+	if len(result.Items) > 100 {
+		result.Items = result.Items[:100]
+		result.NextAfter = string(result.Items[99].Group.ID)
 	}
 	return result, nil
 }
@@ -183,14 +183,14 @@ func (value *transaction) ListGroupMemberships(ctx context.Context, read identit
 	result := iamv1.GroupMembershipList{APIVersion: iamv1.APIVersion, Kind: "GroupMembershipList",
 		AccountID: read.AccountID, GroupID: read.GroupID, Items: make([]iamv1.GroupMembershipAccess, 0, min(100, len(rows)))}
 	for index, row := range rows {
+		membership, err := decodeGroupMembership(row)
+		if err != nil || membership.RemovedAt != nil || membership.AccountID != read.AccountID || membership.GroupID != read.GroupID || string(membership.ID) <= read.After ||
+			(index > 0 && result.Items[index-1].Membership.ID >= membership.ID) {
+			return iamv1.GroupMembershipList{}, identityaccess.ErrUnavailable
+		}
 		if index == 100 {
 			result.NextAfter = string(result.Items[99].Membership.ID)
 			break
-		}
-		membership, err := decodeGroupMembership(row)
-		if err != nil || membership.RemovedAt != nil || membership.AccountID != read.AccountID || membership.GroupID != read.GroupID ||
-			(index > 0 && result.Items[index-1].Membership.ID >= membership.ID) {
-			return iamv1.GroupMembershipList{}, identityaccess.ErrUnavailable
 		}
 		result.Items = append(result.Items, iamv1.GroupMembershipAccess{Membership: membership})
 	}

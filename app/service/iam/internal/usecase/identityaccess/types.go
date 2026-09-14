@@ -23,6 +23,7 @@ type Config struct {
 	SessionLifetime        time.Duration
 	MaxTransactionAttempts int
 	NewID                  func(prefix string) (string, error)
+	CursorKey              []byte
 }
 
 type Repository interface {
@@ -344,4 +345,5 @@ type Authority struct {
 	config      Config
 	passwords   *authority.PasswordHasher
 	credentials *authority.CredentialIssuer
+	cursors     *authority.CursorCodec
 }

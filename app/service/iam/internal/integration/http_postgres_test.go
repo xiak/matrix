@@ -3,6 +3,7 @@ package integration
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -731,20 +732,9 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 	if iamv1.ValidateGroupMembershipList(members) != nil || len(members.Items) != 1 || members.Items[0].Membership != membership {
 		t.Fatal("group membership page differs")
 	}
-	// Continuations are only ordered seek positions, never authority selectors.
-	// A foreign ID can skip local rows but cannot reveal its foreign relation.
-	get("/v1/groups?after="+string(foreign.ID), operator, http.StatusOK, &directory)
-	for _, entry := range directory.Items {
-		if entry.Group.AccountID != member.AccountID || entry.Group.ID <= foreign.ID {
-			t.Fatal("group continuation changed the caller's authority")
-		}
-	}
-	get(path+"/memberships?after="+string(foreignMembership.ID), operator, http.StatusOK, &members)
-	for _, entry := range members.Items {
-		if entry.Membership.AccountID != member.AccountID || entry.Membership.GroupID != group.ID || entry.Membership.ID <= foreignMembership.ID {
-			t.Fatal("membership continuation changed its account or group")
-		}
-	}
+	// Raw resource IDs are not continuations, even within the same account.
+	get("/v1/groups?after="+string(foreign.ID), operator, http.StatusBadRequest, nil)
+	get(path+"/memberships?after="+string(foreignMembership.ID), operator, http.StatusBadRequest, nil)
 	rls, err := database.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -1008,6 +998,49 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 			t.Fatal("group cursor repeated or leaked another account")
 		}
 	}
+	for _, route := range []string{"/v1/users", "/v1/groups/" + string(lastGroup.ID) + "/memberships", "/v1/accounts"} {
+		get(route+"?after="+firstPage.NextAfter, operator, http.StatusUnprocessableEntity, nil)
+	}
+	get("/v1/groups?after="+firstPage.NextAfter, other, http.StatusUnprocessableEntity, nil)
+	anotherSession := localRecoveryLogin(t, handler, "admin", changedAdminPassword, false)
+	get("/v1/groups?after="+firstPage.NextAfter, anotherSession, http.StatusUnprocessableEntity, nil)
+	encodedCursor, err := base64.RawURLEncoding.DecodeString(firstPage.NextAfter[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	encodedCursor[len(encodedCursor)-1] ^= 1
+	get("/v1/groups?after=ic1."+base64.RawURLEncoding.EncodeToString(encodedCursor), operator, http.StatusUnprocessableEntity, nil)
+	// A removed source invalidates continuation even while an independent
+	// administrator attachment still allows a fresh directory request.
+	post("/v1/policy-attachments", operator, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(delegate.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "cursor-delegate-admin"}, http.StatusOK, nil)
+	var extraSource iamv1.PolicyAttachment
+	post("/v1/policy-attachments", operator, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(delegate.ID)}, PolicyID: iamv1.SystemPolicyAuditReader, PolicyResourceVersion: 1, RequestID: "cursor-delegate-extra"}, http.StatusOK, &extraSource)
+	var delegatedPage iamv1.GroupList
+	get("/v1/groups", delegateBearer, http.StatusOK, &delegatedPage)
+	post("/v1/policy-attachments/"+string(extraSource.ID)+":revoke", operator, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: extraSource.ResourceVersion, RequestID: "cursor-delegate-extra-revoke"}, http.StatusOK, nil)
+	get("/v1/groups?after="+delegatedPage.NextAfter, delegateBearer, http.StatusUnprocessableEntity, nil)
+	get("/v1/groups", delegateBearer, http.StatusOK, nil)
+	// Regrant creates a new relationship; returning to the same policy set
+	// cannot revive the previous signed authority lineage.
+	post("/v1/policy-attachments", operator, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(delegate.ID)}, PolicyID: iamv1.SystemPolicyAuditReader, PolicyResourceVersion: 1, RequestID: "cursor-delegate-extra-regrant"}, http.StatusOK, nil)
+	get("/v1/groups?after="+delegatedPage.NextAfter, delegateBearer, http.StatusUnprocessableEntity, nil)
+	var pagedGroup iamv1.Group
+	post("/v1/groups", operator, iamv1.CreateGroupRequest{Name: "Paged members", RequestID: "cursor-many-members-group"}, http.StatusCreated, &pagedGroup)
+	memberPath := "/v1/groups/" + string(pagedGroup.ID) + "/memberships"
+	for index := 0; index < 101; index++ {
+		var pageUser iamv1.User
+		post("/v1/users", operator, map[string]any{"loginName": fmt.Sprintf("cursor.member.%03d", index), "displayName": "Cursor member", "initialPassword": initialDeveloperPassword, "requestId": fmt.Sprintf("cursor-many-user-%03d", index)}, http.StatusCreated, &pageUser)
+		post(memberPath, operator, iamv1.CreateGroupMembershipRequest{UserID: pageUser.ID, RequestID: fmt.Sprintf("cursor-many-member-%03d", index)}, http.StatusOK, nil)
+	}
+	var memberFirst, memberSecond iamv1.GroupMembershipList
+	get(memberPath, operator, http.StatusOK, &memberFirst)
+	get(memberPath+"?after="+memberFirst.NextAfter, operator, http.StatusOK, &memberSecond)
+	if iamv1.ValidateGroupMembershipList(memberFirst) != nil || iamv1.ValidateGroupMembershipList(memberSecond) != nil || len(memberFirst.Items) != 100 || len(memberSecond.Items) != 1 || memberSecond.NextAfter != "" || memberSecond.Items[0].Membership.ID <= memberFirst.Items[99].Membership.ID {
+		t.Fatal("membership continuation did not yield exactly 100+1 distinct live relations")
+	}
+	get("/v1/groups/"+string(lastGroup.ID)+"/memberships?after="+memberFirst.NextAfter, operator, http.StatusUnprocessableEntity, nil)
+	get("/v1/groups?after="+memberFirst.NextAfter, operator, http.StatusUnprocessableEntity, nil)
+	get(memberPath+"?after="+memberFirst.NextAfter, anotherSession, http.StatusUnprocessableEntity, nil)
 	var decisionsBefore, outboxBefore, decisionsAfter, outboxAfter int
 	counts := func() (int, int) {
 		t.Helper()
@@ -1648,6 +1681,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	var sequence atomic.Int64
 	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{
 		SessionLifetime: time.Hour,
+		CursorKey:       bytes.Repeat([]byte{0x39}, 32),
 		NewID: func(prefix string) (string, error) {
 			return fmt.Sprintf("%s-http-%d", prefix, sequence.Add(1)), nil
 		},
@@ -2712,7 +2746,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 		request(http.MethodGet, path, root, nil, http.StatusBadRequest)
 	}
 	request(http.MethodPost, "/v1/account:alias", root, map[string]any{"alias": "forged", "tenantId": tenantB, "resourceVersion": 2, "requestId": "request-forged-alias"}, http.StatusBadRequest)
-	request(http.MethodGet, "/v1/users?after="+string(childB.ID), root, nil, http.StatusOK)
+	request(http.MethodGet, "/v1/users?after="+string(childB.ID), root, nil, http.StatusBadRequest)
 
 	delegated := createUser(root, "delegated.admin", iamv1.SystemPolicyAccountAdministrator, http.StatusCreated)
 	delegatedSession := login("delegated.admin@customer-a", childPassword, http.StatusOK)
@@ -2891,6 +2925,27 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 			t.Fatal("ordinary account lifecycle was unavailable to its authorized platform actor")
 		}
 	}
+	// Account directories use the same signed protocol but a distinct platform
+	// query. Exercise the real onboarding transaction, not synthesized rows.
+	for index := 0; index < 99; index++ {
+		request(http.MethodPost, "/v1/accounts", root, map[string]any{
+			"id": fmt.Sprintf("cursor-account-%03d", index), "displayName": "Cursor account",
+			"rootLoginName": fmt.Sprintf("cursor.root.%03d", index), "rootDisplayName": "Cursor root",
+			"initialPassword": childPassword, "requestId": fmt.Sprintf("cursor-account-create-%03d", index),
+		}, http.StatusCreated)
+	}
+	var accountFirst, accountSecond iamv1.AccountList
+	firstResponse := request(http.MethodGet, "/v1/accounts", root, nil, http.StatusOK)
+	if json.Unmarshal(firstResponse.Body.Bytes(), &accountFirst) != nil || iamv1.ValidateAccountList(accountFirst) != nil || len(accountFirst.Items) != 100 || accountFirst.NextAfter == "" {
+		t.Fatal("account directory did not issue a bounded signed continuation")
+	}
+	secondResponse := request(http.MethodGet, "/v1/accounts?after="+accountFirst.NextAfter, root, nil, http.StatusOK)
+	if json.Unmarshal(secondResponse.Body.Bytes(), &accountSecond) != nil || iamv1.ValidateAccountList(accountSecond) != nil || len(accountSecond.Items) != 1 || accountSecond.NextAfter != "" || accountSecond.Items[0].Account.ID <= accountFirst.Items[99].Account.ID {
+		t.Fatal("account signed directory did not yield 100+1 distinct accounts")
+	}
+	request(http.MethodGet, "/v1/users?after="+accountFirst.NextAfter, root, nil, http.StatusUnprocessableEntity)
+	request(http.MethodGet, "/v1/accounts?after="+accountFirst.NextAfter, primaryB, nil, http.StatusForbidden)
+	request(http.MethodGet, "/v1/users?after="+first.NextAfter, root, nil, http.StatusUnprocessableEntity)
 	// Two account administrators cannot acquire the same alias concurrently.
 	startAliasRace := make(chan struct{})
 	aliasResults := make(chan int, 2)

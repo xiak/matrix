@@ -148,7 +148,11 @@ func buildPaths() object {
 }
 
 func accountPageParameters() []any {
-	return []any{object{"name": "after", "in": "query", "required": false, "schema": openapi31.Ref("ID"), "description": "Exclusive user or account ID boundary within the authorized directory."}}
+	return []any{object{"name": "after", "in": "query", "required": false, "schema": pageCursorSchema(), "description": "Opaque signed continuation bound to the current account, session, query and authority revision. Pass nextAfter unchanged; raw resource IDs are not accepted."}}
+}
+
+func pageCursorSchema() object {
+	return object{"type": "string", "pattern": `^ic1\.[A-Za-z0-9_-]+$`, "not": object{"pattern": `[^A-Za-z0-9._-]`}, "minLength": 5, "maxLength": iamv1.MaxPageCursorBytes}
 }
 
 func mutationOperation(
@@ -345,7 +349,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		base = object{"anyOf": []any{object{"type": "null"}, object{"type": "string", "pattern": `^[a-z][a-z0-9-]{1,61}[a-z0-9]$`, "minLength": 3, "maxLength": 63}}}
 	}
 	if jsonName == "nextAfter" {
-		base = openapi31.Ref("ID")
+		base = pageCursorSchema()
 	}
 	if owner == "CreatePolicyAttachmentRequest" && jsonName == "target" {
 		base = object{"allOf": []any{openapi31.Ref("PolicyAttachmentTarget"), object{"properties": object{"kind": object{"enum": []string{string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetGroup)}}}}}}

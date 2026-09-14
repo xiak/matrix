@@ -151,14 +151,52 @@ func withAccountAuthorization[T any](service *Authority, ctx context.Context, cr
 	return result, nil
 }
 
+func (service *Authority) directoryPosition(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, after string, now time.Time) (string, authority.DirectoryQuery, error) {
+	var query authority.DirectoryQuery
+	if service.cursors == nil {
+		return "", query, ErrUnavailable
+	}
+	status, err := tx.BootstrapStatus(ctx)
+	if err != nil || iamv1.ValidateBootstrapStatus(status) != nil || status.State != iamv1.BootstrapReady {
+		return "", query, ErrUnavailable
+	}
+	query = authority.DirectoryQuery{InstallationID: status.InstallationID, Action: decision.Action, Resource: decision.Resource}
+	if after == "" {
+		return "", query, nil
+	}
+	position, err := service.cursors.Decode(after, subject.Subject, query, now)
+	if err != nil {
+		return "", query, ErrInvalidArgument
+	}
+	return position, query, nil
+}
+
+func (service *Authority) sealDirectoryPage(subject SessionCredential, query authority.DirectoryQuery, position string, now time.Time) (string, error) {
+	if service.cursors == nil {
+		return "", ErrUnavailable
+	}
+	if position == "" {
+		return "", nil
+	}
+	value, err := service.cursors.Encode(subject.Subject, query, position, now)
+	if err != nil {
+		return "", ErrUnavailable
+	}
+	return value, nil
+}
+
 func (service *Authority) ListUsers(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.UserList, error) {
-	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidateID("after", after) != nil) {
+	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.UserList{}, ErrInvalidArgument
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserList,
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.UserList, error) {
-			result, err := tx.ListUsers(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: after})
+			position, query, err := service.directoryPosition(ctx, tx, subject, decision, after, now)
+			if err != nil {
+				return iamv1.UserList{}, err
+			}
+			result, err := tx.ListUsers(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: position})
 			if err != nil {
 				return iamv1.UserList{}, err
 			}
@@ -168,7 +206,8 @@ func (service *Authority) ListUsers(ctx context.Context, credential iamv1.Secret
 					return iamv1.UserList{}, err
 				}
 			}
-			if iamv1.ValidateUserList(result) != nil {
+			result.NextAfter, err = service.sealDirectoryPage(subject, query, result.NextAfter, now)
+			if err != nil || iamv1.ValidateUserList(result) != nil {
 				return iamv1.UserList{}, ErrUnavailable
 			}
 			return result, nil
@@ -306,13 +345,17 @@ func (service *Authority) ListPolicies(ctx context.Context, credential iamv1.Sec
 }
 
 func (service *Authority) ListAccounts(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.AccountList, error) {
-	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidateID("after", after) != nil) {
+	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.AccountList{}, ErrInvalidArgument
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRead,
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "accounts"}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.AccountList, error) {
-			page, err := tx.ListAccounts(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: after})
+			position, query, err := service.directoryPosition(ctx, tx, subject, decision, after, now)
+			if err != nil {
+				return iamv1.AccountList{}, err
+			}
+			page, err := tx.ListAccounts(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: position})
 			if err != nil {
 				return iamv1.AccountList{}, err
 			}
@@ -325,7 +368,8 @@ func (service *Authority) ListAccounts(ctx context.Context, credential iamv1.Sec
 				}
 				result.Items = append(result.Items, access)
 			}
-			if iamv1.ValidateAccountList(result) != nil {
+			result.NextAfter, err = service.sealDirectoryPage(subject, query, result.NextAfter, now)
+			if err != nil || iamv1.ValidateAccountList(result) != nil {
 				return iamv1.AccountList{}, ErrUnavailable
 			}
 			return result, nil

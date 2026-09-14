@@ -451,6 +451,11 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 		decision.Subject == nil || decision.Subject.ID != "principal-admin" {
 		t.Fatalf("PaaS decision = %#v err=%v, want allowed", decision, err)
 	}
+	// This workflow intentionally has no directory key. Even an authorized
+	// administrator cannot fall back to raw IDs or an in-memory signing key.
+	if _, err := service.ListGroups(context.Background(), login.Credential, "", "request-no-cursor-key"); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("unconfigured directory did not fail closed")
+	}
 
 	request.RequestID = "request-authorize-wrong-service"
 	request.CorrelationID = "correlation-authorize-wrong-service"

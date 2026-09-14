@@ -647,7 +647,7 @@ func localRecoveryWorkflow(t *testing.T, ctx context.Context, dsn, user string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{})
+	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{CursorKey: bytes.Repeat([]byte{0x39}, 32)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,6 +1,6 @@
 # FEAT-IAM-004：用户组与授权委派
 
-- 状态：首片后端与前端接口适配已实现，本地门禁及精确 SHA 独立 CI 通过；签名游标和组 UI 闭环未完成，整体未验收。
+- 状态：后端、前端接口适配及签名游标已实现；组 UI 闭环与最终发布集成未完成，整体未验收。固定门禁证据见本文件末尾。
 - 依赖：002、003。
 - Owner：IAM Group、GroupMembership、组策略附件和组继承证据。
 
@@ -35,9 +35,25 @@
 - `POST /v1/groups/{groupId}/memberships/{membershipId}:remove`：按准确关系修订移除。
 - 既有 `POST /v1/policy-attachments` 与 `POST /v1/policy-attachments/{attachmentId}:revoke` 接受 GROUP target；不新建第二套附件模型或 group-local evaluator。
 
-请求只使用稳定 ID、明确字段、正的安全 resourceVersion 和 requestId。创建/移除的等值重放必须返回原结果且不追加第二条 success 事实；相同 command identity 的变体冲突。跨 Account 的资源/关系查找与变更以不泄露存在性的拒绝结果关闭。分页 `after` 只是当前 Account/Group 内的排序位置，不是授权令牌；传入外部 ID 也不得改变查询范围或返回其所属关系。
+请求只使用稳定 ID、明确字段、正的安全 resourceVersion 和 requestId。创建/移除的等值重放必须返回原结果且不追加第二条 success 事实；相同 command identity 的变体冲突。跨 Account 的资源/关系查找与变更以不泄露存在性的拒绝结果关闭。分页 `after` 是下面定义的签名 continuation，不是授权令牌；原始资源 ID 不再被接受。
 
-当前首片沿用既有目录的 ID keyset continuation；它不满足 000 的最终 opaque/MAC、账号/主体/查询/授权修订绑定游标要求。该要求仍是本 FEAT 最终验收前的待实现项，不能用已通过的 RLS/范围隔离测试替代。UI 把 continuation 当作原样回传值，不解析或拼接其内容。
+UI 把 continuation 当作原样回传值，不解析或拼接其内容，也不将它与资源 ID 比较排序。
+
+### 签名分页
+
+同一 IAM authority 的 Account、User、Group、GroupMembership 四类目录共同替换原始 ID continuation，保留 `after`/`nextAfter` 字段，不保留旧格式回退。每页固定 100 项、稳定 ID 升序；本片不提供服务端搜索或可变排序。客户端筛选只能明确作用于已加载页。数据库内部仍以精确 ID seek，游标不能改变 IAM 从有效 session 推导的 Account 或目标 Group。
+
+IAM 自有 HMAC-SHA256 codec 使用独立 domain/version 和大小上限，绑定封存 installation、Account/Principal 修订、当前 session lineage、准确 action/resource、过滤/排序/页大小，以及全部当前有效 Policy/默认版本/digest/Attachment/GroupMembership 修订。先在同一事务内重新认证和执行唯一 PDP，再核对游标；不缓存 permit，不因游标有效而跳过当前权限。不同 session、账号、安装、查询或授权状态、错误 key、篡改、过期均以统一不含内部边界的错误关闭；撤权即使仍有另一条 Allow，也不能沿用撤权前的 continuation。数据库时间定义最多 15 分钟有效期，且不能越过当前 session 到期；这不是跨页数据库快照，不承诺并发增删时冻结全集。
+
+公开 envelope 为最长 384 字节的 `ic1.` + 无 padding base64url；客户端只验证有界形状并透传，MAC/授权/期限核对仅在 IAM 内。请求格式非法返回既有 `400 iam.query.unsupported`；有 envelope 但签名、绑定或期限无效返回统一 `422 iam.argument.invalid`，不返回内部 ID 或失配原因。当前会话/权限本身无效仍按既有 401/403 关闭；数据库或 key 不可用为 503。UI 可让用户明确从首页刷新，不自动把旧 continuation 改成新权限意图。
+
+游标中的安装归属来自同一事务的封存 bootstrap receipt，独立于主体的 `SubjectContext.InstallationID` 平台权限上下文。普通租户 User 的平台上下文仍为空，读取本安装事实不授予平台能力；未改全局 authenticateSession 或服务身份判定。
+
+常驻 IAM 入口必须从 `MATRIX_IAM_CURSOR_KEY_FILE` 严格读取恰好 64 位小写 hex（32 字节），拒绝空白、多行、大写和错误长度。无随机进程内后备 key，不用 bearer 摘要或其他服务 key。多副本/重启共享同一安装的持久 key；更换 key 使旧游标失效，本片无双 key ring。仅离线恢复等不使用分页的工作流可不配置该 key，分页调用始终失败关闭。安装 owner 在最终 ABI 冻结后统一分发独立文件、挂载及签名拓扑，本片仅修改 IAM 入口与专属进程 fixture，不改旧发布 profile。
+
+验收包括 100+1 个真实组及成员的无重复翻页、跨目录/Group/账号/会话、篡改/过期/错 key、主体或授权修订变化、撤销后重新授予、两个 IAM 进程和进程重启复用原 key；缺失或无效配置不得启动可服务的常驻入口。原 SQL/RLS seek 范围、当前权限失败关闭和历史 outbox 仍单独验证，不能被 MAC 测试替代。
+
+### 组管理投影与命令
 
 创建只创建空 Group，成功后进入详情逐项添加成员/关联策略；没有 create-with-policy 或批量原子承诺。每步使用独立 requestId。组已创建而后续关联失败时，UI 保留组并明确显示未完成的步骤，不自动删组或撤销其他成功关系。未知结果保留原命令及载荷，等值重试后刷新权威详情；不能换 requestId 自动重发。CAS 冲突需刷新后由用户发起新意图。重放仍重新认证当前操作者：创建结果只在组尚未发生后续修改时等值返回，关系终态重放不复活关系；后续状态已变化时冲突，不把当前详情伪装为原回执。
 
@@ -79,18 +95,19 @@ User 删除沿 003 的 User principal 锁后终态移除其所有活跃 membersh
 
 独立 IAM/Audit/PaaS + dispatcher 门禁验证组授权可创建/读取租户资源且越租户、平台动作拒绝，移组不删除资源/Operation/outbox/Audit。控制台完成组目录、详情、成员和策略管理的鼠标闭环；键盘专项按用户优先级延期，不据此宣称已验收。签名发布与完整 Profile 仍由 011/安装 owner 证明，源码/SQL 门禁不能替代。
 
-## 首片实现与证据
+## 实现与证据
 
 2026-09-14，本分支在独立 PostgreSQL 18、1 CPU/768 MiB/PID 128 数据库容器上串行验证。Go 使用 `GOMAXPROCS=2`、`-p 2`（多真实数据库包的组合命令用 `-p 1`）；没有使用其他任务的数据库、服务或远端机器。
 
-- 现有 `TestIAMPolicyAuthorityStoragePostgres` 最新通过 race（32.87s，其中组继承子项 12.36s）：真实管理 HTTP、双 Account 同名组/同名成员、强制 RLS、外部 ID continuation 不改变范围、直接/组来源与 Deny、撤销/删除终态、并发关系/授权竞争、100/101 组和 256/257 来源预算。当前空库故意晚段 DDL 失败不暴露半套权威；已有组、移除、删除、附件、决定和 outbox 后连续重放两次保持原值，原删除回执仍等值返回。
-- 既有 IAM HTTP 全流程修正测试中的旧内部列引用后，通过 race（64.197s）。本地平台凭据恢复原门禁通过（15.07s；与策略存储合计 50.807s），保留原 primary、封闭历史事实、凭据 generation、会话及 grant/revoke/reset/recover 竞争，不新增恢复权限。
-- Audit 当前双 schema/保留旧链包通过（6.254s），Audit HTTP 通过（2.994s）；PaaS 数据库包通过（5.235s）。这些是本分支真实门禁，不继承其他 Phase 状态。
-- 现有独立进程门禁通过 race（39.023s）：两个 IAM 实例、Audit、PaaS 与两类 dispatcher 使用实际受限登录。仅组授权的成员实际创建应用/Operation；另一实例移组后原实例下一请求失权；Audit 中断期间已接受的资源/outbox 保留，移组后历史证明仍投递，重放不增加成功事实，Audit 记录和链不串账号。直接授权可独立保留，删除组后资源归属不变，重启不复活已撤来源。
-- 全仓无缓存 Go race/vet、模块校验、重复 API 生成稳定、Linux amd64 构建通过。前端 typecheck/lint/架构/20 组对比度、100 项测试通过；两次 2-worker 静态构建的 59 个内嵌文件一致。前端接口严格核对 Group/关系/附件/目标 capability，移除回执必须同时有 `removedAt`/`removedBy`，未知结果和 409 不自动换意图重发。
+- 现有 `TestIAMPolicyAuthorityStoragePostgres` 通过最终 race 复验（56.32s，其中组继承子项 33.85s）：真实管理 HTTP、双 Account 同名组/同名成员、强制 RLS、100+1 活跃成员分页、跨目录/Group/账号/会话/篡改游标拒绝、撤销后重新授予仍不能沿用旧游标。直接/组来源与 Deny、并发关系/授权竞争、100/101 组和 256/257 来源预算继续通过。当前空库晚段 DDL 失败不暴露半套权威；带 Group/membership/attachment/decision/outbox 重放保持原值及终态。
+- `TestIAMHTTPPostgresVerticalSlice` 通过 race（110.92s）：真实开通 101 个 Account 的 100+1 签名分页、100+ 用户目录、原始 ID 拒绝，以及原 root/租户生命周期、历史 producer proof、凭据 generation、会话与 grant/revoke/reset/recover 竞争；无 SQL/schema 变更，不新增恢复权限。
+- `TestIndependentIAMAuditAndPaaSProcesses` 通过 race（42.94s）：两个 IAM 实例共享本任务独立 key 文件，跨副本继续 100+1 Group 页，重启后同一游标仍有效，跨账号/目录拒绝。保留实际受限登录、仅组授权创建应用/Operation、跨副本移组即时失权、Audit 中断后历史 outbox 投递及完整链；组创建事实也真实分页核对，不以第一页代替全部成功事实。
+- 纯 authority/入口门禁通过：逐字节篡改、错 key/安装、有效但不同账号/主体/会话、权限/成员修订、期限边界、来源排序不影响结果、调用者清理原 key 不破坏 codec；空 key 无回退，文件严格拒绝宽松大小写/空白/多行/权限错误。
+- 源码和内嵌产物稳定后的全仓 Go race/vet、架构检查、模块校验、生成一致性及 Linux amd64 构建通过。
+- 前端 typecheck/lint/架构/20 组对比度、101 项测试通过；两次 2-worker 静态构建的 59 个内嵌文件一致。接口不解析游标、不与资源 ID 排序比较，拒绝原始 ID/换行/超长/重复 continuation；成员关系、目标 capability 和未知结果原意图边界继续保留。这是本地前端证据，不冒充独立前端 CI。
 
 当前开发服务与实际数据库/readiness 为 IAM9/Audit6/PaaS1；既有签名发布 profile 未改写，组合门禁明确不把该开发 tuple 当作已可发布 profile。实际 IAM8 固定 binary 的保留数据实验仅为本次内部列替换的可选诊断，不使全部未发布版本成为默认升级义务。
 
-首片只交付组 HTTP/数据库/授权闭环与前端 domain/wire/repository；未新增第二套组页面。组目录、详情、表单及真实鼠标闭环由既定 UX/UI owner 消费固定提交后完成。签名游标、更多成员分页/完整多成员 UI 矩阵、最终发布组合及 011 容量/HA 门禁仍需实施验证，本 FEAT 不因此标为 Accepted。
+本片交付组 HTTP/数据库/授权与签名分页闭环和前端 domain/wire/repository；未新增第二套组页面。组目录、详情、表单及真实多成员鼠标闭环由既定 UX/UI owner 消费固定提交后完成。最终安装 key 分发/签名发布组合及 011 容量/HA 门禁仍需实施验证，本 FEAT 不因此标为 Accepted。
 
-固定实现 `0bd6dd9dd8166fe31c67edb8cd49cd523606a401` 已推送。GitHub API 核实 [Verification 34805149946](https://github.com/xiak/matrix/actions/runs/34805149946) 对应同一 SHA，Go、authority-process、node-process 三项均 completed/success；前端上述门禁为本地证据，不冒充独立前端 CI。本轮专属测试容器、网络和数据卷已核对标签/占用后清理，未动其他任务资源。
+替换前已推送回滚点为 `0bd6dd9dd8166fe31c67edb8cd49cd523606a401`，精确 [Verification 34805149946](https://github.com/xiak/matrix/actions/runs/34805149946) 三项 success。签名分页切片的固定提交与独立 CI 尚待本轮收口确认，不继承该回滚点或其他分支的验收状态。

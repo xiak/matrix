@@ -144,12 +144,12 @@ describe("IAM HTTP group boundary", () => {
     }
   });
 
-  it("checks group page order, account and exact continuation without reading all members", async () => {
+  it("checks group page order and account while passing signed continuation unchanged", async () => {
     const items = Array.from({ length: 100 }, (_, index) => groupAccess({ ...group, id: `group-${index.toString().padStart(3, "0")}` }));
-    const fetcher = reply({ apiVersion, kind: "GroupList", items, nextAfter: "group-099" });
+    const fetcher = reply({ apiVersion, kind: "GroupList", items, nextAfter: "ic1.Opaque_signed-continuation" });
     const page = await httpAccountRepository.listGroups("bearer", account.id);
     expect(page.items).toHaveLength(100);
-    expect(page.nextAfter).toBe("group-099");
+    expect(page.nextAfter).toBe("ic1.Opaque_signed-continuation");
     expect(fetcher).toHaveBeenCalledTimes(1);
     for (const invalid of [
       { apiVersion, kind: "GroupList", items, nextAfter: "group-999" },
@@ -166,10 +166,27 @@ describe("IAM HTTP group boundary", () => {
     await expect(httpAccountRepository.listGroups("bearer", account.id, group.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
+  it("rejects noncanonical cursors and never compares opaque text with resource IDs", async () => {
+    for (const after of ["", group.id, "ic2.future", "ic1.trailing\n", "ic1.space ", "ic1.bad=", `ic1.${"a".repeat(381)}`]) {
+      const fetcher = reply({ apiVersion, kind: "GroupList", items: [groupAccess()] });
+      await expect(httpAccountRepository.listGroups("bearer", account.id, after)).rejects.toThrow("INVALID_IAM_RESPONSE");
+      expect(fetcher).not.toHaveBeenCalled();
+    }
+    const fetcher = reply({ apiVersion, kind: "GroupList", items: [groupAccess()] });
+    const page = await httpAccountRepository.listGroups("bearer", account.id, "ic1.zzzz_OPAQUE");
+    expect(page.items[0]?.group.id).toBe(group.id);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/groups?after=ic1.zzzz_OPAQUE");
+    const items = Array.from({ length: 100 }, (_, index) => groupAccess({ ...group, id: `group-${index.toString().padStart(3, "0")}` }));
+    for (const nextAfter of ["ic1.trailing\n", "ic1.again", `ic1.${"a".repeat(381)}`]) {
+      reply({ apiVersion, kind: "GroupList", items, nextAfter });
+      await expect(httpAccountRepository.listGroups("bearer", account.id, "ic1.again")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
   it("reads membership relations and keys removal capabilities by membership ID", async () => {
     const fetcher = reply(membershipPage());
-    const page = await httpAccountRepository.listGroupMemberships("bearer", account.id, group.id, "member:after");
-    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/groups/${group.id}/memberships?after=member%3Aafter`);
+    const page = await httpAccountRepository.listGroupMemberships("bearer", account.id, group.id, "ic1.Opaque_signed-continuation");
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/groups/${group.id}/memberships?after=ic1.Opaque_signed-continuation`);
     expect(page.items[0]?.membership).toMatchObject({ id: membership.id, userId: user.id, groupId: group.id });
     expect(page.items[0]?.capabilities[0]?.resource).toEqual({ kind: "GROUP_MEMBERSHIP", id: membership.id });
     const valid = membershipPage();
@@ -344,9 +361,9 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("bounds member pages and rejects foreign, duplicate, revoked, or old role projections", async () => {
-    const fetcher = reply({ apiVersion, kind: "UserList", items: [{ user, policyAttachments: [tenantAttachment], capabilities: userCapabilities() }], nextAfter: user.id });
-    const page = await httpAccountRepository.listUsers("bearer", "user:first");
-    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/users?after=user%3Afirst");
+    const fetcher = reply({ apiVersion, kind: "UserList", items: [{ user, policyAttachments: [tenantAttachment], capabilities: userCapabilities() }] });
+    const page = await httpAccountRepository.listUsers("bearer", "ic1.Opaque_signed-continuation");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/users?after=ic1.Opaque_signed-continuation");
     expect(page.items[0]?.policyAttachments[0]?.policyId).toBe("system.paas-viewer");
     for (const item of [
       { user, policyAttachments: [{ ...tenantAttachment, accountId: "another-account" }], capabilities: userCapabilities() },
@@ -363,9 +380,9 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("parses account management as per-resource capabilities", async () => {
-    const fetcher = reply({ apiVersion, kind: "AccountList", items: [accountAccess()], nextAfter: account.id });
-    const page = await httpAccountRepository.listAccounts("bearer", "account:first");
-    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/accounts?after=account%3Afirst");
+    const fetcher = reply({ apiVersion, kind: "AccountList", items: [accountAccess()] });
+    const page = await httpAccountRepository.listAccounts("bearer", "ic1.Opaque_signed-continuation");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/accounts?after=ic1.Opaque_signed-continuation");
     expect(page.items[0]?.capabilities.map((item) => item.action)).toEqual([
       "iam.account.set-status", "iam.account.recover-root-credentials"
     ]);

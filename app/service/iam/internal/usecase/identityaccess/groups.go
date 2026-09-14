@@ -9,14 +9,18 @@ import (
 )
 
 func (service *Authority) ListGroups(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.GroupList, error) {
-	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidateID("after", after) != nil) {
+	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.GroupList{}, ErrInvalidArgument
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupList,
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.GroupList, error) {
+			position, query, err := service.directoryPosition(ctx, tx, subject, decision, after, now)
+			if err != nil {
+				return iamv1.GroupList{}, err
+			}
 			result, err := tx.ListGroups(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
-				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: after})
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: position})
 			if err != nil {
 				return iamv1.GroupList{}, err
 			}
@@ -26,7 +30,8 @@ func (service *Authority) ListGroups(ctx context.Context, credential iamv1.Secre
 					return iamv1.GroupList{}, err
 				}
 			}
-			if iamv1.ValidateGroupList(result) != nil {
+			result.NextAfter, err = service.sealDirectoryPage(subject, query, result.NextAfter, now)
+			if err != nil || iamv1.ValidateGroupList(result) != nil {
 				return iamv1.GroupList{}, ErrUnavailable
 			}
 			return result, nil
@@ -177,14 +182,18 @@ func (service *Authority) DeleteGroup(ctx context.Context, credential iamv1.Secr
 
 func (service *Authority) ListGroupMemberships(ctx context.Context, credential iamv1.Secret, groupID iamv1.GroupID, after, requestID string) (iamv1.GroupMembershipList, error) {
 	if iamv1.ValidateID("groupId", string(groupID)) != nil || iamv1.ValidateID("requestId", requestID) != nil ||
-		(after != "" && iamv1.ValidateID("after", after) != nil) {
+		(after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.GroupMembershipList{}, ErrInvalidArgument
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupMembershipList,
 		iamv1.ResourceReference{Kind: iamv1.ResourceGroup, ID: string(groupID)}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.GroupMembershipList, error) {
+			position, query, err := service.directoryPosition(ctx, tx, subject, decision, after, now)
+			if err != nil {
+				return iamv1.GroupMembershipList{}, err
+			}
 			result, err := tx.ListGroupMemberships(ctx, GroupRead{AccountRead: AccountRead{AccountID: subject.Subject.Organization.ID,
-				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: after}, GroupID: groupID})
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: position}, GroupID: groupID})
 			if err != nil {
 				return iamv1.GroupMembershipList{}, err
 			}
@@ -197,7 +206,8 @@ func (service *Authority) ListGroupMemberships(ctx context.Context, credential i
 				}
 				result.Items[index].Capabilities = []iamv1.ActionCapability{capability}
 			}
-			if iamv1.ValidateGroupMembershipList(result) != nil {
+			result.NextAfter, err = service.sealDirectoryPage(subject, query, result.NextAfter, now)
+			if err != nil || iamv1.ValidateGroupMembershipList(result) != nil {
 				return iamv1.GroupMembershipList{}, ErrUnavailable
 			}
 			return result, nil

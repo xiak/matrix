@@ -147,6 +147,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	environment := []string{
 		"MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-api-dsn", []byte(apiDSN)),
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
+		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("35", 32))),
 	}
 	start := func(binary string) *childProcess {
 		child := startChild(t, root, binary, environment)
@@ -297,7 +298,8 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 	dsnPath := writeProtectedFile(t, temporary, "iam-dsn", []byte(runtimeDSN(t, config, iamAPILogin, processDBPassword)))
 	address := freeAddress(t)
 	endpoint := "http://" + address
-	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + dsnPath, "MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address}
+	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + dsnPath, "MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
+		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("35", 32)))}
 	var children []*childProcess
 	defer func() {
 		for _, child := range children {
@@ -665,6 +667,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		"audit-cursor-key",
 		[]byte(hex.EncodeToString(bytes.Repeat([]byte{0x6a}, 32))),
 	)
+	iamCursorKeyPath := writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("35", 32)))
 
 	iamAddress := freeAddress(t)
 	auditAddress := freeAddress(t)
@@ -678,6 +681,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		"MATRIX_IAM_DATABASE_DSN_FILE=" + iamDSNPath,
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
 		"MATRIX_IAM_LISTEN_ADDRESS=" + iamAddress,
+		"MATRIX_IAM_CURSOR_KEY_FILE=" + iamCursorKeyPath,
 	}
 	auditEnvironment := []string{
 		"MATRIX_AUDIT_DATABASE_DSN_FILE=" + auditDSNPath,
@@ -855,6 +859,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		"MATRIX_IAM_DATABASE_DSN_FILE=" + replicaDSNPath,
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
 		"MATRIX_IAM_LISTEN_ADDRESS=" + replicaAddress,
+		"MATRIX_IAM_CURSOR_KEY_FILE=" + iamCursorKeyPath,
 	})
 	waitHTTPStatus(t, ctx, replicaProcess, replicaEndpoint+"/ready", http.StatusOK)
 	assertRuntimeProcessLogins(t, ctx, admin, replicaLogin)
@@ -2194,6 +2199,43 @@ func proveGroupResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 	if group.AccountID != tenant || homeGroup.AccountID != "organization-process" || homeGroup.ID == group.ID || homeGroup.Name != group.Name {
 		t.Fatal("same-name groups lost their exact account identity")
 	}
+	for index := 0; index < 100; index++ {
+		response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups", ownerBearer,
+			iamv1.CreateGroupRequest{Name: fmt.Sprintf("Cursor process %03d", index), RequestID: fmt.Sprintf("cursor-process-group-%03d", index)})
+		if response.Status != http.StatusCreated {
+			t.Fatalf("create actual cursor directory: %d", response.Status)
+		}
+	}
+	readPage := func(endpoint, after string) iamv1.GroupList {
+		t.Helper()
+		path := endpoint + "/v1/groups"
+		if after != "" {
+			path += "?after=" + after
+		}
+		response := performJSON(t, http.MethodGet, path, ownerBearer, nil)
+		var page iamv1.GroupList
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &page) != nil || iamv1.ValidateGroupList(page) != nil {
+			t.Fatalf("process signed directory: %d", response.Status)
+		}
+		return page
+	}
+	firstPage := readPage(iamEndpoint, "")
+	secondPage := readPage(replicaEndpoint, firstPage.NextAfter)
+	if len(firstPage.Items) != 100 || firstPage.NextAfter == "" || len(secondPage.Items) != 1 || secondPage.NextAfter != "" || secondPage.Items[0].Group.ID <= firstPage.Items[99].Group.ID {
+		t.Fatal("two actual IAM processes did not share a signed 100+1 directory")
+	}
+	for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/groups?after="+firstPage.NextAfter, homeBearer, nil); response.Status != http.StatusUnprocessableEntity {
+			t.Fatal("process cursor crossed account authority")
+		}
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/users?after="+firstPage.NextAfter, ownerBearer, nil); response.Status != http.StatusUnprocessableEntity {
+			t.Fatal("process cursor crossed directory query")
+		}
+	}
+	restartIAM()
+	if restarted := readPage(iamEndpoint, firstPage.NextAfter); len(restarted.Items) != 1 || restarted.Items[0].Group.ID != secondPage.Items[0].Group.ID {
+		t.Fatal("process restart replaced the persistent cursor key")
+	}
 	for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
 		if response := performJSON(t, http.MethodGet, endpoint+"/v1/groups/"+string(group.ID), homeBearer, nil); response.Status != http.StatusForbidden {
 			t.Fatal("home owner read another account group")
@@ -2311,17 +2353,32 @@ func proveGroupResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 		action auditv1.Action
 		count  int
 	}{
-		{auditv1.ActionIAMGroupCreated, 1}, {auditv1.ActionIAMGroupMembershipCreated, 2},
+		{auditv1.ActionIAMGroupCreated, len(firstPage.Items) + len(secondPage.Items)}, {auditv1.ActionIAMGroupMembershipCreated, 2},
 		{auditv1.ActionIAMGroupMembershipRemoved, 1}, {auditv1.ActionIAMGroupDeleted, 1},
 	} {
-		page := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: item.action}, http.StatusOK)
-		if page.TenantID != tenant || len(page.Records) != item.count {
-			t.Fatalf("group fact action=%s tenant=%s count=%d", item.action, page.TenantID, len(page.Records))
-		}
-		for _, record := range page.Records {
-			if record.Source != auditv1.SourceIAM || record.Event.IAMDecisionID == "" || record.Event.TenantID != tenant {
-				t.Fatal("group fact lost its source, decision or account")
+		query := auditv1.QueryRecordsRequest{PageSize: 100, Action: item.action}
+		seen := map[auditv1.EventID]bool{}
+		for {
+			page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+			if page.TenantID != tenant {
+				t.Fatal("group audit page changed account")
 			}
+			for _, record := range page.Records {
+				if record.Source != auditv1.SourceIAM || record.Event.IAMDecisionID == "" || record.Event.TenantID != tenant || seen[record.Event.EventID] {
+					t.Fatal("group fact lost its source, decision, account or unique identity")
+				}
+				seen[record.Event.EventID] = true
+			}
+			if len(seen) > item.count {
+				t.Fatal("group lifecycle replay appended an extra success fact")
+			}
+			if page.NextCursor == "" {
+				break
+			}
+			query.Cursor = page.NextCursor
+		}
+		if len(seen) != item.count {
+			t.Fatalf("group action %s has %d facts, want %d", item.action, len(seen), item.count)
 		}
 	}
 	page := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{PageSize: 1, Action: auditv1.ActionIAMGroupMembershipCreated}, http.StatusOK)

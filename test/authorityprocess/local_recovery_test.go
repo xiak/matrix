@@ -89,7 +89,8 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	dsnPath := writeProtectedFile(t, temporary, "iam-schema3-dsn", []byte(runtimeDSN(t, config, iamAPILogin, processDBPassword)))
 	address := freeAddress(t)
 	endpoint := "http://" + address
-	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + dsnPath, "MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address}
+	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + dsnPath, "MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
+		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("35", 32)))}
 	var children []*childProcess
 	defer func() {
 		for _, child := range children {
