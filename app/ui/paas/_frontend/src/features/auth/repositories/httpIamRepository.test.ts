@@ -36,8 +36,8 @@ const platformPolicy = {
   defaultVersionId: "version-platform"
 };
 
-function capability(action: string, kind: "ACCOUNT" | "USER" | "POLICY_ATTACHMENT", id: string, available = true) {
-  return { action, resource: { kind, id }, available, ...(available ? {} : { restrictionReason: "AUTHORITY_REQUIRED" }) };
+function capability(action: string, kind: "ACCOUNT" | "USER" | "POLICY_ATTACHMENT", id: string, available = true, restrictionReason = "AUTHORITY_REQUIRED") {
+  return { action, resource: { kind, id }, available, ...(available ? {} : { restrictionReason }) };
 }
 
 function currentCapabilities(available = true) {
@@ -53,6 +53,9 @@ function currentCapabilities(available = true) {
 
 function userCapabilities(attachments = [tenantAttachment]) {
   return [
+    capability("iam.user.read", "USER", user.id),
+    capability("iam.user.update", "USER", user.id),
+    capability("iam.user.delete", "USER", user.id, false, "TARGET_MUST_BE_DISABLED"),
     capability("iam.user.set-status", "USER", user.id),
     capability("iam.user.reset-password", "USER", user.id),
     capability("iam.policy-attachment.create", "USER", user.id),
@@ -153,6 +156,17 @@ describe("IAM HTTP account boundary", () => {
     await expect(httpAccountRepository.listUsers("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
+  it("reads one exact user projection from the path target", async () => {
+    let fetcher = reply({ user, policyAttachments: [tenantAttachment], capabilities: userCapabilities() });
+    const access = await httpAccountRepository.getUser("bearer", user.id);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/users/user-alex");
+    expect(access.user.id).toBe(user.id);
+
+    fetcher = reply({ user: { ...user, id: "another-user" }, policyAttachments: [], capabilities: userCapabilities([]).map((entry) => ({ ...entry, resource: entry.resource.kind === "USER" ? { kind: "USER", id: "another-user" } : entry.resource })) });
+    await expect(httpAccountRepository.getUser("bearer", user.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/users/user-alex");
+  });
+
   it("parses account management as per-resource capabilities", async () => {
     const fetcher = reply({ apiVersion, kind: "AccountList", items: [accountAccess()], nextAfter: account.id });
     const page = await httpAccountRepository.listAccounts("bearer", "account:first");
@@ -205,6 +219,34 @@ describe("IAM HTTP account boundary", () => {
       initialPassword: "Recovery-Test-Password-49!", resourceVersion: 1 });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/accounts/account-acme:recover-root-credentials");
     expect(requestBody(fetcher)).toEqual({ initialPassword: "Recovery-Test-Password-49!", resourceVersion: 1, requestId: expect.any(String) });
+  });
+
+  it("binds profile updates and irreversible deletion to one user revision", async () => {
+    let fetcher = reply({ ...user, displayName: "Renamed Alex", resourceVersion: 3 });
+    await httpAccountRepository.execute("bearer", { kind: "update-user", userId: user.id, displayName: "Renamed Alex", resourceVersion: 2 });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/users/user-alex:update");
+    expect(requestBody(fetcher)).toEqual({ displayName: "Renamed Alex", resourceVersion: 2, requestId: expect.any(String) });
+
+    fetcher = reply({ apiVersion, kind: "UserDeletion", accountId: account.id, id: user.id, loginName: user.loginName, resourceVersion: 3, deletedAt: timestamp });
+    await httpAccountRepository.execute("bearer", { kind: "delete-user", userId: user.id, resourceVersion: 2 });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/users/user-alex:delete");
+    expect(requestBody(fetcher)).toEqual({ resourceVersion: 2, requestId: expect.any(String) });
+
+    for (const body of [
+      { ...user, id: "another-user", displayName: "Renamed Alex", resourceVersion: 3 },
+      { ...user, displayName: "Wrong name", resourceVersion: 3 }
+    ]) {
+      reply(body);
+      await expect(httpAccountRepository.execute("bearer", { kind: "update-user", userId: user.id, displayName: "Renamed Alex", resourceVersion: 2 })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    for (const body of [
+      { apiVersion, kind: "UserDeletion", accountId: account.id, id: "another-user", loginName: user.loginName, resourceVersion: 3, deletedAt: timestamp },
+      { apiVersion, kind: "UserDeletion", accountId: account.id, id: user.id, loginName: user.loginName, resourceVersion: 4, deletedAt: timestamp },
+      { apiVersion, kind: "UserDeletion", accountId: account.id, id: user.id, loginName: user.loginName, resourceVersion: 3, deletedAt: timestamp, password: "PRIVATE" }
+    ]) {
+      reply(body);
+      await expect(httpAccountRepository.execute("bearer", { kind: "delete-user", userId: user.id, resourceVersion: 2 })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 
   it("uses exact policy identity and revisions for attach and revoke", async () => {

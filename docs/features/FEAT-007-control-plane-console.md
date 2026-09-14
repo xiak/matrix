@@ -1449,7 +1449,7 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- The current Theme/component, navigation and CAM-style IAM slice has 477 frontend tests across 35 test
+- The current Theme/component, navigation and CAM-style IAM slice has 482 frontend tests across 35 test
   files; the complete suite passes with two workers at the default timeout
   (the long user-selection journey retains its explicit 15s timeout).
   Worker concurrency is bounded in the test owner because simultaneously
@@ -1554,7 +1554,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   feedback without new warning/error logs. Shared control tests cover required
   semantics, classification/status distinction, controlled paging and dialog
   focus return; existing large-candidate and batch/permission gates remain.
-  All 477 frontend tests and three static-export normalization tests pass,
+  All 482 frontend tests and three static-export normalization tests pass,
   alongside TypeScript, lint, architecture and 228 theme contrast checks.
   All 213 generated production files from 38 static routes match the Go-embedded export, and Go UI
   tests and vet pass. Tables, forms, dialogs, choices,
@@ -1592,6 +1592,20 @@ and `git diff --check` gates must pass on the same committed worktree.
   MOCK workspace. This is management-plane evidence only; it does not claim
   group inheritance, policy documents or final effective authorization from a
   directory response.
+  A live user selection now replaces the directory immediately with a local
+  content skeleton and reads the exact target through the dedicated
+  `UserAccess` route; the global shell and directory provider do not own that
+  request's loading state. The resulting detail updates only `displayName`
+  with optimistic resource-version concurrency and does not infer console
+  access, programmatic access or credentials from user status. Irreversible
+  deletion stays unavailable while IAM reports `TARGET_MUST_BE_DISABLED`; once
+  available, the user must type the immutable login name after reviewing the
+  retained identity and resource effects. The client accepts only the strict
+  non-secret deletion receipt. Target-read failures remain local and never
+  fall back to MOCK or distinguish forbidden, cross-account and absent users.
+  Focused transport and renderer tests cover exact paths and payloads, closed
+  capability parsing, immediate loading feedback, profile revision handling,
+  the disabled-before-delete gate and typed acknowledgement.
   Four user-directory integration journeys and ten batch transaction cases
   cover no-selection and current-page/mixed selection, filter/page clearing,
   primary/self protection, additive associations, stale/invalid target atomicity,

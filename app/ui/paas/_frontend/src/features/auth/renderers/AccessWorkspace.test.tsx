@@ -38,6 +38,8 @@ const currentCapabilities = (available = true): ActionCapability[] => [
 const userAccess = (name: string): UserAccess => {
   const user: User = { ...rootUser, id: "principal-" + name, loginName: name, displayName: name };
   return { user, policyAttachments: [], capabilities: [
+    capability("iam.user.read", "USER", user.id), capability("iam.user.update", "USER", user.id),
+    capability("iam.user.delete", "USER", user.id, "TARGET_MUST_BE_DISABLED"),
     capability("iam.user.set-status", "USER", user.id), capability("iam.user.reset-password", "USER", user.id),
     capability("iam.policy-attachment.create", "USER", user.id), capability("iam.platform-policy-attachment.create", "USER", user.id)
   ] };
@@ -64,6 +66,11 @@ async function open(initialView: AccountAccessView, options?: { live?: boolean; 
   const repository: AccountRepository = {
     currentIdentity: vi.fn().mockResolvedValue(options?.reader ? { ...identity, policyAttachments: [], capabilities: currentCapabilities(false) } : identity),
     listUsers: options?.reader ? vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) : vi.fn().mockResolvedValue({ items: directoryUsers, nextAfter: null }),
+    getUser: vi.fn().mockImplementation(async (_credential: string, userId: string) => {
+      const entry = directoryUsers.find((candidate) => candidate.user.id === userId);
+      if (!entry) throw new HttpProblem(403, "FORBIDDEN");
+      return entry;
+    }),
     listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => ({ accountId: "org-xiak", scope: platform ? "INSTALLATION" : "TENANT", installationId: platform ? "preview" : null, items: [] })),
     listAccounts: vi.fn().mockResolvedValue({ items: [], nextAfter: null }),
     execute: vi.fn().mockResolvedValue(undefined),
@@ -203,7 +210,10 @@ describe("selection-driven user directory", () => {
     expect(screen.getByRole("button", { name: "更多操作" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByText(/当前连接未提供批量操作/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看用户 lin" }));
-    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "lin" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "返回列表" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText(/不根据用户状态推断访问方式/)).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
   });
 });

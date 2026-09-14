@@ -40,6 +40,7 @@ function staticBuildId() {
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   agentRules: false,
+  allowedDevOrigins: ["127.0.0.1"],
   generateBuildId: async () => staticBuildId(),
   output: "export",
   reactStrictMode: true,

@@ -33,6 +33,9 @@ const currentCapabilities = (available = true): ActionCapability[] => [
   capability("iam.policy.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED")
 ];
 const userCapabilities = (user: User, attachments: UserPolicyAttachment[] = [], reason: CapabilityRestriction | null = null): ActionCapability[] => [
+  capability("iam.user.read", "USER", user.id, reason),
+  capability("iam.user.update", "USER", user.id, reason),
+  capability("iam.user.delete", "USER", user.id, reason ?? (user.status === "ACTIVE" ? "TARGET_MUST_BE_DISABLED" : null)),
   capability("iam.user.set-status", "USER", user.id, reason),
   capability("iam.user.reset-password", "USER", user.id, reason),
   capability("iam.policy-attachment.create", "USER", user.id),
@@ -60,6 +63,7 @@ function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository
   return {
     currentIdentity: vi.fn().mockResolvedValue(structuredClone(identity)),
     listUsers: vi.fn().mockResolvedValue({ items: [child], nextAfter: null }),
+    getUser: vi.fn().mockResolvedValue(structuredClone(child)),
     listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => directory(platform)),
     listAccounts: vi.fn().mockResolvedValue({ items: [accountAccess(identity.account)], nextAfter: null }),
     execute: vi.fn().mockResolvedValue(undefined), ...overrides
@@ -237,22 +241,24 @@ describe("account access", () => {
     expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
   });
 
-  it("localizes the complete management dialog and restores its initiating action", async () => {
+  it("localizes content-area user management and focuses the new destination", async () => {
     const { user } = await openAccess();
     await screen.findByText("Developer A");
     await user.click(screen.getByRole("button", { name: "Switch language" }));
     const trigger = screen.getByRole("button", { name: "View user developer" });
     await user.click(trigger);
-    const dialog = screen.getByRole("dialog", { name: "Manage Developer A" });
-    expect(dialog.textContent).not.toMatch(/\p{Script=Han}/u);
-    expect(within(dialog).getByRole("button", { name: "Revoke policy ReadOnlyAccess" })).toBeTruthy();
-    expect((within(dialog).getByRole("button", { name: "Attach policy" }) as HTMLButtonElement).disabled).toBe(true);
-    await user.click(within(dialog).getByRole("button", { name: "Reset password" }));
-    expect(document.activeElement).toBe(within(dialog).getByLabelText("Initial password"));
-    expect(dialog.textContent).not.toMatch(/\p{Script=Han}/u);
-    await user.click(within(dialog).getAllByRole("button", { name: "Close details" })[0]!);
+    const heading = await screen.findByRole("heading", { name: "developer" });
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(document.activeElement).toBe(trigger);
+    expect(document.activeElement).toBe(heading);
+    const region = screen.getByRole("region", { name: "Identity and access" });
+    expect(region.textContent).not.toMatch(/\p{Script=Han}/u);
+    expect(within(region).getByRole("button", { name: "Revoke policy ReadOnlyAccess" })).toBeTruthy();
+    expect((within(region).getByRole("button", { name: "Attach policy" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(within(region).getByRole("button", { name: "Reset password" }));
+    expect(document.activeElement).toBe(within(region).getByLabelText("Initial password"));
+    expect(region.textContent).not.toMatch(/\p{Script=Han}/u);
+    await user.click(screen.getByRole("button", { name: "Back to list" }));
+    expect(await screen.findByRole("table", { name: "Tenant users" })).toBeTruthy();
     await user.click(screen.getByTestId("nav-roles"));
     expect(screen.getByText("This capability is not connected")).toBeTruthy();
     await user.click(screen.getByTestId("nav-policies"));
@@ -288,6 +294,56 @@ describe("account access", () => {
     await user.click(screen.getByTestId("nav-users"));
     await screen.findByText("Developer A");
     expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces the directory immediately with a local skeleton before loading live user details", async () => {
+    let resolveUser!: (value: UserAccess) => void;
+    const getUser = vi.fn(() => new Promise<UserAccess>((resolve) => { resolveUser = resolve; }));
+    const repository = accounts({ getUser });
+    const { user } = await openAccess(repository);
+    await screen.findByText("Developer A");
+    await user.click(screen.getByRole("button", { name: "查看用户 developer" }));
+    expect(screen.queryByRole("table", { name: "租户用户列表" })).toBeNull();
+    expect(screen.getByText("正在读取用户详情…")).toBeTruthy();
+    expect(screen.queryByText("用户资料")).toBeNull();
+    await act(async () => { resolveUser(structuredClone(child)); });
+    expect(await screen.findByText("用户资料")).toBeTruthy();
+    expect(getUser).toHaveBeenCalledWith(credential, "child-a");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText(/不根据用户状态推断访问方式/)).toBeTruthy();
+  });
+
+  it("updates only the display name through the live user revision", async () => {
+    const repository = accounts();
+    const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "修改显示名称" }));
+    const field = screen.getByLabelText("用户显示名称");
+    await user.clear(field);
+    await user.type(field, "Developer Renamed");
+    await user.click(screen.getByRole("button", { name: "保存显示名称" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "update-user", userId: "child-a", displayName: "Developer Renamed", resourceVersion: 2 }));
+  });
+
+  it("requires disablement and typed confirmation before irreversible live deletion", async () => {
+    const disabledUser: User = { ...childUser, status: "DISABLED", resourceVersion: 5 };
+    const disabledAttachment = attachment(disabledUser.id, tenantPolicy);
+    const disabled: UserAccess = { user: disabledUser, policyAttachments: [disabledAttachment], capabilities: userCapabilities(disabledUser, [disabledAttachment]) };
+    const repository = accounts({
+      listUsers: vi.fn().mockResolvedValue({ items: [disabled], nextAfter: null }),
+      getUser: vi.fn().mockResolvedValue(structuredClone(disabled))
+    });
+    const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    const deleteButton = await screen.findByRole("button", { name: "删除用户" });
+    expect((deleteButton as HTMLButtonElement).disabled).toBe(false);
+    await user.click(deleteButton);
+    expect(repository.execute).not.toHaveBeenCalled();
+    const confirmation = screen.getByLabelText("输入 developer 确认删除");
+    await user.type(confirmation, "developer");
+    await user.click(screen.getByRole("button", { name: "永久删除用户" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "delete-user", userId: "child-a", resourceVersion: 5 }));
+    expect(await screen.findByRole("table", { name: "租户用户列表" })).toBeTruthy();
   });
 
   it("separates the resource owner from subusers and defaults creation to no business grant", async () => {

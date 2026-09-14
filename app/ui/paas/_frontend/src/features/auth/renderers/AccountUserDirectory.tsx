@@ -9,8 +9,7 @@ import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { UserAccessDialog } from "./AccountUserDialogs";
-import { AccountPrimaryWorkspace, AccountUserAccessMethods, AccountUserWorkspace } from "./AccountUserWorkspace";
+import { AccountLiveUserWorkspace, AccountPrimaryWorkspace, AccountUserAccessMethods, AccountUserWorkspace } from "./AccountUserWorkspace";
 import { UserBatchDialog, type DirectoryUser } from "./UserBatchDialog";
 import { userBatchActions, userBatchDisabledReason, userBatchLimit, type UserBatchAction } from "../domain/userBatch";
 import styles from "./AccountAccessRenderer.module.css";
@@ -24,7 +23,7 @@ function AccountUserRow({ user, principalId, workspace, grants, checked, disable
   return <tr data-selected={checked || undefined}>
     <TableSelectionCell label={batch("selectUser", { name: user.loginName })} checked={checked} disabled={disabled} onChange={onSelect} />
     <td><div className={styles.userIdentity}>
-      <button className={styles.userLink} aria-label={t("viewUser", { name: user.loginName })} onClick={onOpen} type="button">{user.loginName}</button>
+      {user.canRead ? <button className={styles.userLink} aria-label={t("viewUser", { name: user.loginName })} onClick={onOpen} type="button">{user.loginName}</button> : <strong>{user.loginName}</strong>}
       {user.name && user.name !== user.loginName ? <span className={styles.userDisplayName}>{user.name}</span> : null}
     </div><small className={styles.userIdentifier}>{user.id}</small></td>
     <td>{t("child")}{user.id === principalId ? <small>{t("signedIn")}</small> : null}</td>
@@ -68,7 +67,6 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   const toolbarLabels = useTableToolbarLabels();
   const access = useAccountAccess();
   const workspace = access.workspace;
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const { userDirectoryView } = access;
   const [query, setQuery] = useState(() => userDirectoryView.read().query);
   const [state, setState] = useState(() => userDirectoryView.read().state);
@@ -80,7 +78,6 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   const checkedIds = new Set(selection.scene === scene ? selection.ids : []);
   const clearSelection = () => setSelection({ scene, ids: [] });
   const changeFilter = (change: () => void) => { clearSelection(); change(); };
-  const selected = scene.users.find((user) => user.id === selectedId);
   const detail = scene.users.find((user) => user.id === entityId);
   const words = query.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
   const associations = new Map(scene.users.map((user) => [user.id, {
@@ -104,6 +101,7 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   if (entityId === scene.accountOwner.id) return <AccountPrimaryWorkspace scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
   if (entityId && !detail) return <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
   if (detail && access.workspace) return <AccountUserWorkspace user={detail} workspace={access.workspace} scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
+  if (detail) return detail.canRead ? <AccountLiveUserWorkspace key={`${detail.id}:${detail.resourceVersion}`} summary={detail} onBack={() => onOpen("users")} /> : <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
   return <div className={styles.userDirectory}>
     <Card>
       <ContentPage.Heading title={t("usersTitle")} actions={<div className={styles.directoryActions}>{scene.canCreateUsers ? <Button ref={createRef} disabled={access.busy || access.loading} onClick={onCreate} size="small"><Plus aria-hidden="true" />{t("createUser")}</Button> : null}
@@ -123,11 +121,10 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
           <tbody>{filtered.map((user) => <AccountUserRow key={user.id} user={user} principalId={scene.currentUserId} workspace={workspace} grants={associations.get(user.id)}
             checked={checkedIds.has(user.id)} disabled={blocked || !checkedIds.has(user.id) && checkedUsers.length >= userBatchLimit}
             onSelect={(checked) => setSelection({ scene, ids: checked ? [...checkedIds, user.id] : [...checkedIds].filter((id) => id !== user.id) })}
-            onOpen={() => workspace ? onOpen("users", user.id) : setSelectedId(user.id)} />)}</tbody>
+            onOpen={() => onOpen("users", user.id)} />)}</tbody>
         </Table> : <EmptyState title={t(hasFilters ? "noMatchingUsers" : "noUsers")} description={t(hasFilters ? "noMatchingUsersHint" : "noUsersHint")} action={hasFilters ? <Button onClick={clearFilters} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} />}
-      <Card.Footer><span className={styles.note}>{t("userPageHint")}</span><div className={styles.actions}><Button disabled={access.busy || access.loading} onClick={() => { setSelectedId(null); clearSelection(); access.usersPage(""); }} size="small" variant="ghost">{t("firstPage")}</Button><Button disabled={access.busy || access.loading || !scene.nextUserPage} onClick={() => { setSelectedId(null); clearSelection(); access.usersPage(scene.nextUserPage!); }} size="small" variant="secondary">{t("nextPage")}</Button></div></Card.Footer>
+      <Card.Footer><span className={styles.note}>{t("userPageHint")}</span><div className={styles.actions}><Button disabled={access.busy || access.loading} onClick={() => { clearSelection(); access.usersPage(""); }} size="small" variant="ghost">{t("firstPage")}</Button><Button disabled={access.busy || access.loading || !scene.nextUserPage} onClick={() => { clearSelection(); access.usersPage(scene.nextUserPage!); }} size="small" variant="secondary">{t("nextPage")}</Button></div></Card.Footer>
     </Card>
-    {selected ? <UserAccessDialog key={selected.id} onClose={() => setSelectedId(null)} user={selected} /> : null}
     {batchDialog ? <UserBatchDialog action={batchDialog.action} users={batchDialog.users} fallbackFocusRef={createRef} onClose={() => setBatchDialog(null)} onCompleted={clearSelection} /> : null}
   </div>;
 }

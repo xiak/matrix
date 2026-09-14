@@ -22,6 +22,7 @@ export interface AccountRepository {
   };
   currentIdentity(credential: string): Promise<AccountIdentity>;
   listUsers(credential: string, after?: string): Promise<DirectoryPage<UserAccess>>;
+  getUser(credential: string, userId: string): Promise<UserAccess>;
   listPolicies(credential: string, platform: boolean): Promise<PolicyDirectory>;
   listAccounts(credential: string, after?: string): Promise<DirectoryPage<AccountAccess>>;
   execute(credential: string, command: AccountCommand): Promise<void>;

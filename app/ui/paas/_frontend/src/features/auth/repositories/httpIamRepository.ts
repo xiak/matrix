@@ -57,7 +57,8 @@ function policyScope(value: unknown): PolicyScope {
 
 const capabilityActions = new Set<IamAction>([
   "iam.account.create", "iam.account.read", "iam.account.set-status", "iam.account.recover-root-credentials",
-  "iam.account.alias-set", "iam.user.list", "iam.user.create", "iam.policy.list", "iam.user.set-status",
+  "iam.account.alias-set", "iam.user.list", "iam.user.create", "iam.policy.list", "iam.user.read",
+  "iam.user.update", "iam.user.delete", "iam.user.set-status",
   "iam.user.reset-password", "iam.policy-attachment.create", "iam.platform-policy-attachment.create",
   "iam.policy-attachment.revoke", "iam.platform-policy-attachment.revoke"
 ]);
@@ -65,11 +66,12 @@ const capabilityActions = new Set<IamAction>([
 const capabilityRestrictions = new Set<CapabilityRestriction>([
   "AUTHORITY_REQUIRED", "CURRENT_CREDENTIAL_CHANGE_REQUIRED", "SELF_PROTECTED", "ROOT_IDENTITY_PROTECTED",
   "INSTALLATION_AUTHORITY_PROTECTED", "SYSTEM_ACCOUNT_PROTECTED", "TARGET_DISABLED",
-  "TARGET_CREDENTIAL_CHANGE_REQUIRED"
+  "TARGET_CREDENTIAL_CHANGE_REQUIRED", "TARGET_MUST_BE_DISABLED"
 ]);
 
 function capabilityResourceKind(action: IamAction): ActionCapability["resource"]["kind"] {
-  if (action === "iam.user.set-status" || action === "iam.user.reset-password" ||
+  if (action === "iam.user.read" || action === "iam.user.update" || action === "iam.user.delete" ||
+      action === "iam.user.set-status" || action === "iam.user.reset-password" ||
       action === "iam.policy-attachment.create" || action === "iam.platform-policy-attachment.create") return "USER";
   if (action === "iam.policy-attachment.revoke" || action === "iam.platform-policy-attachment.revoke") return "POLICY_ATTACHMENT";
   return "ACCOUNT";
@@ -267,6 +269,9 @@ function parseUserAccess(value: unknown): UserAccess {
     new Set(policyAttachments.map((attachment) => attachment.policyId)).size !== policyAttachments.length
   ) throw new Error("INVALID_IAM_RESPONSE");
   const capabilities = parseCapabilities(wire.capabilities, [
+    { action: "iam.user.read", resource: { kind: "USER", id: user.id } },
+    { action: "iam.user.update", resource: { kind: "USER", id: user.id } },
+    { action: "iam.user.delete", resource: { kind: "USER", id: user.id } },
     { action: "iam.user.set-status", resource: { kind: "USER", id: user.id } },
     { action: "iam.user.reset-password", resource: { kind: "USER", id: user.id } },
     { action: "iam.policy-attachment.create", resource: { kind: "USER", id: user.id } },
@@ -306,6 +311,11 @@ export const httpAccountRepository: AccountRepository = {
   async listUsers(credential, after) {
     return accountPage<UserAccess>(await requestJSON<unknown>(`/api/iam/v1/users${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "UserList", parseUserAccess);
   },
+  async getUser(credential, userId) {
+    const access = parseUserAccess(await requestJSON<unknown>(`/api/iam/v1/users/${encodeURIComponent(userId)}`, { headers: accountHeaders(credential) }));
+    if (access.user.id !== userId) throw new Error("INVALID_IAM_RESPONSE");
+    return access;
+  },
   async listPolicies(credential, platform) {
     return parsePolicyDirectory(await requestJSON<unknown>(platform ? "/api/iam/v1/platform-policies" : "/api/iam/v1/policies", { headers: accountHeaders(credential) }), platform ? "INSTALLATION" : "TENANT");
   },
@@ -322,6 +332,8 @@ export const httpAccountRepository: AccountRepository = {
       case "set-account-status": path = `/api/iam/v1/accounts/${encodeURIComponent(command.accountId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
       case "recover-root-credentials": path = `/api/iam/v1/accounts/${encodeURIComponent(command.accountId)}:recover-root-credentials`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
       case "set-alias": path = "/api/iam/v1/account:alias"; body = { alias: command.alias, resourceVersion: command.resourceVersion }; break;
+      case "update-user": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:update`; body = { displayName: command.displayName, resourceVersion: command.resourceVersion }; break;
+      case "delete-user": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:delete`; body = { resourceVersion: command.resourceVersion }; break;
       case "set-status": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
       case "reset-password": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:reset-password`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
       case "create-policy-attachment": path = "/api/iam/v1/policy-attachments"; body = { target: { kind: "USER", id: command.userId }, policyId: command.policyId, policyResourceVersion: command.policyResourceVersion }; break;
@@ -349,9 +361,23 @@ export const httpAccountRepository: AccountRepository = {
       accountTimestamp(wire.revokedAt);
       return;
     }
+    if (command.kind === "delete-user") {
+      const wire = accountRecord(result);
+      exactKeys(wire, ["apiVersion", "kind", "accountId", "id", "loginName", "resourceVersion", "deletedAt"]);
+      requireAccountKind(wire, "UserDeletion");
+      if (
+        wire.id !== command.userId ||
+        typeof wire.accountId !== "string" || !wire.accountId.length ||
+        typeof wire.loginName !== "string" || !wire.loginName.length ||
+        accountVersion(wire.resourceVersion) !== command.resourceVersion + 1
+      ) throw new Error("INVALID_IAM_RESPONSE");
+      accountTimestamp(wire.deletedAt);
+      return;
+    }
     const user = parseUser(result);
     if (command.kind === "create-user" && user.loginName !== command.loginName) throw new Error("INVALID_IAM_RESPONSE");
     if (command.kind !== "create-user" && (user.id !== command.userId || user.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
+    if (command.kind === "update-user" && user.displayName !== command.displayName) throw new Error("INVALID_IAM_RESPONSE");
     if (command.kind === "set-status" && user.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
     if ((command.kind === "create-user" || command.kind === "reset-password") && !user.mustChangePassword) throw new Error("INVALID_IAM_RESPONSE");
   }

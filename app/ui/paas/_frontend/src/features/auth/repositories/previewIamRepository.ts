@@ -205,6 +205,10 @@ function usersWithAttachments(source: AccessWorkspace): UserAccess[] {
       user,
       policyAttachments,
       capabilities: [
+      capability("iam.user.read", "USER", user.id),
+      capability("iam.user.update", "USER", user.id),
+      capability("iam.user.delete", "USER", user.id,
+        hasInstallationAuthority ? "INSTALLATION_AUTHORITY_PROTECTED" : user.status === "ACTIVE" ? "TARGET_MUST_BE_DISABLED" : null),
       capability("iam.user.set-status", "USER", user.id),
       capability("iam.user.reset-password", "USER", user.id),
       capability("iam.policy-attachment.create", "USER", user.id, user.status === "DISABLED" ? "TARGET_DISABLED" : null),
@@ -276,6 +280,12 @@ export const previewAccountRepository: AccountRepository = {
     requirePreviewCredential(credential);
     return page(usersWithAttachments(await workspace.read(credential)));
   },
+  async getUser(credential, userId) {
+    requirePreviewCredential(credential);
+    const access = usersWithAttachments(await workspace.read(credential)).find((entry) => entry.user.id === userId);
+    if (!access) throw new HttpProblem(403, "PREVIEW_USER_UNAVAILABLE");
+    return structuredClone(access);
+  },
   async listPolicies(credential, platform) {
     requirePreviewCredential(credential);
     return structuredClone(platform ? platformPolicyDirectory() : tenantPolicyDirectory(await workspace.read(credential)));
@@ -286,7 +296,7 @@ export const previewAccountRepository: AccountRepository = {
   },
   async execute(credential, command: AccountCommand) {
     requirePreviewCredential(credential);
-    if ((command.kind === "set-status" || command.kind === "reset-password" || command.kind === "create-policy-attachment") && command.userId === account.rootIdentity.principalId) throw new HttpProblem(403, "ROOT_IDENTITY_PROTECTED");
+    if ((command.kind === "update-user" || command.kind === "delete-user" || command.kind === "set-status" || command.kind === "reset-password" || command.kind === "create-policy-attachment") && command.userId === account.rootIdentity.principalId) throw new HttpProblem(403, "ROOT_IDENTITY_PROTECTED");
     if (command.kind === "create-user") {
       if (users.some((user) => user.loginName === command.loginName) || account.rootIdentity.loginName === command.loginName) throw new HttpProblem(409, "PREVIEW_NAME_CONFLICT");
       if (!/^[a-z][a-z0-9._-]{2,63}$/.test(command.loginName) || !command.displayName.trim() || command.initialPassword.length < 14) throw new HttpProblem(422, "PREVIEW_INVALID_USER");
@@ -324,6 +334,23 @@ export const previewAccountRepository: AccountRepository = {
     if (command.kind === "set-alias") {
       account = { ...account, loginAlias: command.alias, resourceVersion: account.resourceVersion + 1 };
       accounts = accounts.map((entry) => entry.id === account.id ? account : entry);
+      return;
+    }
+    if (command.kind === "update-user") {
+      const existing = users.find((user) => user.id === command.userId);
+      if (!existing || existing.resourceVersion !== command.resourceVersion) throw new HttpProblem(409, "PREVIEW_USER_CHANGED");
+      if (!command.displayName.trim()) throw new HttpProblem(422, "PREVIEW_INVALID_USER");
+      updateUser(command.userId, (user) => ({ ...user, displayName: command.displayName.trim(), resourceVersion: user.resourceVersion + 1 }));
+      return;
+    }
+    if (command.kind === "delete-user") {
+      const existing = users.find((user) => user.id === command.userId);
+      if (!existing || existing.resourceVersion !== command.resourceVersion) throw new HttpProblem(409, "PREVIEW_USER_CHANGED");
+      if (existing.status !== "DISABLED") throw new HttpProblem(409, "TARGET_MUST_BE_DISABLED");
+      if ((userPlatformPolicies[existing.id] ?? []).length) throw new HttpProblem(403, "INSTALLATION_AUTHORITY_PROTECTED");
+      await workspace.execute(credential, { kind: "delete-user", principalId: existing.id });
+      users = users.filter((user) => user.id !== existing.id);
+      delete userPlatformPolicies[existing.id];
       return;
     }
     if (command.kind === "set-status") {

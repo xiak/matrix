@@ -8,7 +8,7 @@ import { type AccessWorkspace, type AccessWorkspaceCommand } from "../domain/acc
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import type { AccountRepository } from "../repositories/iamRepository";
 import { httpAccountRepository } from "../repositories/httpIamRepository";
-import { buildAccountAccessScene, findActionCapability, type AccountAccessScene } from "../scenes/accountAccessScene";
+import { buildAccountAccessScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
@@ -36,6 +36,7 @@ type AccountAccess = {
   reload(): void;
   usersPage(after: string): void;
   accountsPage(after: string): void;
+  loadUser(userId: string): Promise<AccountUserScene>;
   execute(command: AccountCommand): Promise<boolean>;
 };
 
@@ -75,6 +76,8 @@ function accountCommandAvailable(scene: AccountAccessScene, command: AccountComm
   }
   const user = scene.users.find((item) => item.id === command.userId);
   if (!user) return false;
+  if (command.kind === "update-user") return user.canUpdate;
+  if (command.kind === "delete-user") return user.canDelete;
   if (command.kind === "set-status") return user.canSetStatus;
   if (command.kind === "reset-password") return user.canResetPassword;
   const policy = scene.policies.find((item) => item.id === command.policyId);
@@ -148,6 +151,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return () => { mounted = false; };
   }, [active, credential, page, principalId, repository, revision, tenantId]);
 
+  const loadUser = useCallback(async (userId: string): Promise<AccountUserScene> => {
+    if (!active || !credential || !scene || !userId || userId === scene.accountOwner.id) throw new Error("INVALID_IAM_USER_TARGET");
+    const access = await repository.getUser(credential, userId);
+    if (access.user.id !== userId || access.user.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
+    return buildAccountUserScene({ id: scene.accountId, loginAlias: scene.loginAlias }, scene.policies, access);
+  }, [active, credential, repository, scene, tenantId]);
+
   const value = useMemo<AccountAccess>(() => ({
     supportsUserBatch: Boolean(repository.executeUserBatch),
     async executeUserBatch(command) {
@@ -200,6 +210,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     reload() { setLoading(true); setRevision((current) => current + 1); },
     usersPage(after) { setLoading(true); setPage((current) => ({ ...current, users: after })); },
     accountsPage(after) { setLoading(true); setPage((current) => ({ ...current, accounts: after })); },
+    loadUser,
     async execute(command) {
       if (!active || !credential || loading || mutationPending.current) return false;
       if (!scene || !accountCommandAvailable(scene, command)) { setError("forbidden"); return false; }
@@ -213,7 +224,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, workspace, workspaceError, clearWorkspaceError, clearFeedback, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, workspace, workspaceError, clearWorkspaceError, clearFeedback, loadUser, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

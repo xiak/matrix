@@ -2,7 +2,7 @@
 
 import { useId, useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
-import { KeyRound, ShieldCheck } from "lucide-react";
+import { KeyRound, ShieldCheck, UserRound } from "lucide-react";
 import { Alert, Dialog, FormField, Badge, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { CapabilityRestriction } from "../domain/accounts";
@@ -54,11 +54,23 @@ export function CreateTenantDialog({ onClose }: { onClose(): void }) {
   </Dialog>;
 }
 
-export function UserAccessDialog({ user, onClose }: { user: AccountUserScene; onClose(): void }) {
+export function UserAccessManagement({ user, onDeleted, profileActions = false, deleteAction = false, showLiveEvidenceBoundary = false }: {
+  user: AccountUserScene;
+  onDeleted?(): void;
+  profileActions?: boolean;
+  deleteAction?: boolean;
+  showLiveEvidenceBoundary?: boolean;
+}) {
   const t = useTranslations("AccountAccess");
   const access = useAccountAccess();
+  const profileId = useId();
+  const deleteId = useId();
   const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState(user.name);
+  const [editingProfile, setEditingProfile] = useState(false);
   const [confirmStatus, setConfirmStatus] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [resettingPassword, setResettingPassword] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
   const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; resourceVersion: number } | null>(null);
@@ -77,13 +89,29 @@ export function UserAccessDialog({ user, onClose }: { user: AccountUserScene; on
     setPassword("");
     if (await access.execute({ kind: "reset-password", userId: user.id, resourceVersion: user.resourceVersion, initialPassword })) setResettingPassword(false);
   }
-  return <Dialog open title={t("manageUser", { name: user.name })} closeLabel={t("closeDetails")} onClose={onClose} busy={access.busy} footer={<Button disabled={access.busy} onClick={onClose} variant="secondary">{t("closeDetails")}</Button>}>
-    <div className={styles.detail}>
+  return <div className={styles.detail}>
       <div className={styles.userSummary}><div><strong>{user.name}</strong><Typography.Text tone="muted">{user.qualifiedName}</Typography.Text></div><Badge status={user.enabled ? "success" : "neutral"}>{t(`states.${user.state}`)}</Badge></div>
       <dl className={styles.facts}><div><dt>{t("userType")}</dt><dd>{t("child")}</dd></div><div><dt>{t("ownership")}</dt><dd>{access.scene?.accountName}</dd></div><div><dt>{t("userId")}</dt><dd><Typography.Code>{user.id}</Typography.Code></dd></div></dl>
       <p className={styles.note}>{t("subuserOwnershipHint")}</p>
       {access.error ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
       {access.success ? <Alert status="success">{t(access.success)}</Alert> : null}
+      {profileActions ? <section className={styles.identitySection}>
+        <div className={styles.sectionHeading}><UserRound aria-hidden="true" /><strong>{t("userProfile")}</strong></div>
+        {editingProfile ? <form className={styles.inlineForm} onSubmit={async (event) => {
+          event.preventDefault();
+          const next = displayName.trim();
+          if (next && await access.execute({ kind: "update-user", userId: user.id, displayName: next, resourceVersion: user.resourceVersion })) setEditingProfile(false);
+        }}>
+          <FormField id={profileId} label={t("displayName")}><Input autoFocus id={profileId} disabled={disabled} maxLength={128} minLength={1} required value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></FormField>
+          <Button disabled={disabled || !displayName.trim() || displayName.trim() === user.name} type="submit">{t("saveDisplayName")}</Button>
+          <Button disabled={disabled} onClick={() => { setDisplayName(user.name); setEditingProfile(false); }} type="button" variant="ghost">{t("cancel")}</Button>
+        </form> : <div className={styles.actions}><Button disabled={disabled || !user.canUpdate} onClick={() => setEditingProfile(true)} title={!user.canUpdate ? restriction(user.updateRestrictionReason) : undefined} variant="secondary">{t("editDisplayName")}</Button></div>}
+        <p className={styles.note}>{t("immutableUserFieldsHint")}</p>
+      </section> : null}
+      {showLiveEvidenceBoundary ? <section className={styles.identitySection}>
+        <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("accessMethodsAndCredentials")}</strong></div>
+        <p className={styles.note}>{t("liveCredentialContractHint")}</p>
+      </section> : null}
       <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>{t("directPolicyAttachments")}</strong></div>
       <p className={styles.note}>{t("policyAttachmentHint")}</p>
       <ul className={styles.bindingList}>
@@ -106,10 +134,12 @@ export function UserAccessDialog({ user, onClose }: { user: AccountUserScene; on
       </form> : <p className={styles.note}>{availablePolicies.length ? restriction(user.tenantAttachmentRestrictionReason ?? user.platformAttachmentRestrictionReason) : access.scene?.canViewPolicies ? t("allPoliciesAttached") : t("policyDirectoryUnavailable")}</p>}
       <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("loginSecurity")}</strong></div>
       <div className={styles.actions}>
-          <Button disabled={disabled || !user.canSetStatus} title={!user.canSetStatus ? restriction(user.statusRestrictionReason) : undefined} onClick={() => { setConfirmStatus(true); setResettingPassword(false); setPassword(""); }} variant="secondary">{user.enabled ? t("disableUser") : t("enableUser")}</Button>
-          <Button disabled={disabled || !user.canResetPassword} title={!user.canResetPassword ? restriction(user.passwordRestrictionReason) : undefined} onClick={() => { setResettingPassword(true); setConfirmStatus(false); }} variant="secondary">{t("resetPassword")}</Button>
+          <Button disabled={disabled || !user.canSetStatus} title={!user.canSetStatus ? restriction(user.statusRestrictionReason) : undefined} onClick={() => { setConfirmStatus(true); setConfirmDelete(false); setResettingPassword(false); setPassword(""); }} variant="secondary">{user.enabled ? t("disableUser") : t("enableUser")}</Button>
+          <Button disabled={disabled || !user.canResetPassword} title={!user.canResetPassword ? restriction(user.passwordRestrictionReason) : undefined} onClick={() => { setResettingPassword(true); setConfirmDelete(false); setConfirmStatus(false); }} variant="secondary">{t("resetPassword")}</Button>
+          {deleteAction ? <Button disabled={disabled || !user.canDelete} title={!user.canDelete ? restriction(user.deleteRestrictionReason) : undefined} onClick={() => { setConfirmDelete(true); setConfirmStatus(false); setResettingPassword(false); }} variant="danger">{t("deleteUser")}</Button> : null}
       </div>
       {!user.canSetStatus || !user.canResetPassword ? <p className={styles.note}>{restriction(user.statusRestrictionReason ?? user.passwordRestrictionReason)}</p> : null}
+      {deleteAction && !user.canDelete ? <p className={styles.note}>{t("deleteUnavailable", { reason: restriction(user.deleteRestrictionReason) })}</p> : null}
         {confirmStatus ? <Alert status={user.enabled ? "warning" : "info"}><div className={styles.confirmation}>
           <p>{user.enabled ? t("disableHint") : t("enableHint")}</p>
           <div className={styles.actions}>
@@ -122,6 +152,23 @@ export function UserAccessDialog({ user, onClose }: { user: AccountUserScene; on
           <p className={styles.note}>{t("resetHint")}</p>
           <div className={styles.actions}><Button disabled={disabled || !password} type="submit">{t("confirmReset")}</Button><Button disabled={disabled} onClick={() => { setResettingPassword(false); setPassword(""); }} variant="ghost">{t("cancel")}</Button></div>
         </form> : null}
-    </div>
+        {confirmDelete ? <Alert status="warning"><form className={styles.confirmation} onSubmit={async (event) => {
+          event.preventDefault();
+          if (deleteConfirmation !== user.loginName || !user.canDelete) return;
+          if (await access.execute({ kind: "delete-user", userId: user.id, resourceVersion: user.resourceVersion })) onDeleted?.();
+        }}>
+          <strong>{t("deleteUserTitle", { name: user.loginName })}</strong>
+          <p>{t("deleteUserImpact")}</p>
+          <FormField id={deleteId} label={t("deleteUserConfirmLabel", { name: user.loginName })}><Input autoComplete="off" id={deleteId} disabled={disabled} required value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} /></FormField>
+          <div className={styles.actions}><Button disabled={disabled || deleteConfirmation !== user.loginName || !user.canDelete} type="submit" variant="danger">{t("confirmDeleteUser")}</Button><Button disabled={disabled} onClick={() => { setConfirmDelete(false); setDeleteConfirmation(""); }} type="button" variant="ghost">{t("cancel")}</Button></div>
+        </form></Alert> : null}
+    </div>;
+}
+
+export function UserAccessDialog({ user, onClose }: { user: AccountUserScene; onClose(): void }) {
+  const t = useTranslations("AccountAccess");
+  const access = useAccountAccess();
+  return <Dialog open title={t("manageUser", { name: user.name })} closeLabel={t("closeDetails")} onClose={onClose} busy={access.busy} footer={<Button disabled={access.busy} onClick={onClose} variant="secondary">{t("closeDetails")}</Button>}>
+    <UserAccessManagement key={`${user.id}:${user.resourceVersion}`} user={user} />
   </Dialog>;
 }

@@ -1,14 +1,14 @@
 "use client";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Badge, Button, FormField, Input, Table, Tabs } from "@ui/xiak";
+import { Badge, Button, EmptyState, FormField, Input, PageSkeleton, Table, Tabs } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
 import { WorkspaceDelete, WorkspaceDetail, WorkspaceDialog, WorkspaceSelection } from "./AccessWorkspaceUi";
 import { AccessCredentials } from "./AccessCredentials";
-import { UserAccessDialog } from "./AccountUserDialogs";
+import { UserAccessDialog, UserAccessManagement } from "./AccountUserDialogs";
 import { PermissionBoundary } from "./PermissionBoundary";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -17,9 +17,29 @@ export function AccountUserAccessMethods({ user, workspace }: { user: AccountUse
   const a = useTranslations("AccountAccess");
   const profile = workspace?.userProfiles[user.id];
   return <ul className={styles.accessMethods}>
-    <li data-enabled={profile ? profile.consoleAccess : !workspace}><span>{t("consoleAccess")}</span><span>{profile ? t(profile.consoleAccess ? "enabled" : "disabled") : workspace ? a("accessUnknown") : t("enabled")}</span></li>
+    <li data-enabled={profile?.consoleAccess}><span>{t("consoleAccess")}</span><span>{profile ? t(profile.consoleAccess ? "enabled" : "disabled") : workspace ? a("accessUnknown") : a("accessUnsupported")}</span></li>
     <li data-enabled={profile?.programmaticAccess}><span>{t("programmaticAccess")}</span><span>{profile ? t(profile.programmaticAccess ? "enabled" : "disabled") : workspace ? a("accessUnknown") : a("accessUnsupported")}</span></li>
   </ul>;
+}
+
+export function AccountLiveUserWorkspace({ summary, onBack }: { summary: AccountUserScene; onBack(): void }) {
+  const t = useTranslations("AccountAccess");
+  const w = useTranslations("IamWorkspace");
+  const loadUser = useAccountAccess().loadUser;
+  const [loaded, setLoaded] = useState<{ state: "loading" } | { state: "ready"; user: AccountUserScene } | { state: "error" }>({ state: "loading" });
+  useEffect(() => {
+    let current = true;
+    void loadUser(summary.id).then(
+      (user) => { if (current) setLoaded({ state: "ready", user }); },
+      () => { if (current) setLoaded({ state: "error" }); }
+    );
+    return () => { current = false; };
+  }, [loadUser, summary.id, summary.resourceVersion]);
+  if (loaded.state === "loading") return <WorkspaceDetail title={summary.loginName} onBack={onBack}><PageSkeleton label={t("loadingUser")} layout="access" /></WorkspaceDetail>;
+  if (loaded.state === "error") return <WorkspaceDetail title={summary.loginName} onBack={onBack}><EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<Button variant="secondary" onClick={onBack}>{w("back")}</Button>} /></WorkspaceDetail>;
+  return <WorkspaceDetail title={loaded.user.loginName} onBack={onBack}>
+    <UserAccessManagement key={`${loaded.user.id}:${loaded.user.resourceVersion}`} deleteAction profileActions showLiveEvidenceBoundary user={loaded.user} onDeleted={onBack} />
+  </WorkspaceDetail>;
 }
 
 export function AccountPrimaryWorkspace({ scene, onBack, onOpen }: { scene: AccountAccessScene; onBack(): void; onOpen(view: AccountAccessView, id?: string): void }) {

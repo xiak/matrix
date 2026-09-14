@@ -1,6 +1,8 @@
 import type {
+  Account,
   AccountAccess,
   AccountIdentity,
+  AccountPolicy,
   ActionCapability,
   CapabilityRestriction,
   DirectoryPage,
@@ -25,6 +27,79 @@ function credentialProtection(...reasons: Array<CapabilityRestriction | null>): 
   return null;
 }
 
+function describeAttachment(attachment: UserPolicyAttachment, policyById: ReadonlyMap<string, AccountPolicy>) {
+  const policy = policyById.get(attachment.policyId);
+  return {
+    ...attachment,
+    label: policy?.displayName ?? attachment.policyId,
+    policyStatus: policy?.status ?? null,
+    policyResourceVersion: policy?.resourceVersion ?? null
+  };
+}
+
+export function buildAccountUserScene(
+  account: Pick<Account, "id" | "loginAlias">,
+  policies: readonly AccountPolicy[],
+  access: UserAccess
+) {
+  const { user, policyAttachments, capabilities } = access;
+  if (
+    user.accountId !== account.id ||
+    policyAttachments.some((attachment) => attachment.accountId !== account.id || attachment.target.id !== user.id)
+  ) throw new Error("INVALID_IAM_TENANT");
+  const policyById = new Map(policies.map((policy) => [policy.id, policy]));
+  const userCapability = (action: IamAction) => findActionCapability(capabilities, action, "USER", user.id);
+  const readCapability = userCapability("iam.user.read");
+  const updateCapability = userCapability("iam.user.update");
+  const deleteCapability = userCapability("iam.user.delete");
+  const statusCapability = userCapability("iam.user.set-status");
+  const resetCapability = userCapability("iam.user.reset-password");
+  const tenantAttachCapability = userCapability("iam.policy-attachment.create");
+  const platformAttachCapability = userCapability("iam.platform-policy-attachment.create");
+  const protection = credentialProtection(
+    updateCapability?.restrictionReason ?? null,
+    deleteCapability?.restrictionReason ?? null,
+    statusCapability?.restrictionReason ?? null,
+    resetCapability?.restrictionReason ?? null
+  );
+  return {
+    accountType: "subuser" as const,
+    id: user.id,
+    name: user.displayName,
+    loginName: user.loginName,
+    source: "local" as const,
+    qualifiedName: `${user.loginName}@${account.loginAlias ?? account.id}`,
+    protected: protection !== null,
+    credentialProtection: protection,
+    enabled: user.status === "ACTIVE",
+    resourceVersion: user.resourceVersion,
+    state: user.status === "DISABLED" ? "disabled" as const : user.mustChangePassword ? "passwordChangeRequired" as const : "active" as const,
+    canRead: readCapability?.available === true,
+    readRestrictionReason: readCapability?.restrictionReason ?? null,
+    canUpdate: updateCapability?.available === true,
+    updateRestrictionReason: updateCapability?.restrictionReason ?? null,
+    canDelete: deleteCapability?.available === true,
+    deleteRestrictionReason: deleteCapability?.restrictionReason ?? null,
+    canSetStatus: statusCapability?.available === true,
+    statusRestrictionReason: statusCapability?.restrictionReason ?? null,
+    canResetPassword: resetCapability?.available === true,
+    passwordRestrictionReason: resetCapability?.restrictionReason ?? null,
+    canAttachTenantPolicy: tenantAttachCapability?.available === true,
+    tenantAttachmentRestrictionReason: tenantAttachCapability?.restrictionReason ?? null,
+    canAttachPlatformPolicy: platformAttachCapability?.available === true,
+    platformAttachmentRestrictionReason: platformAttachCapability?.restrictionReason ?? null,
+    attachments: policyAttachments.map((attachment) => {
+      const action = attachment.scope === "INSTALLATION" ? "iam.platform-policy-attachment.revoke" : "iam.policy-attachment.revoke";
+      const revoke = findActionCapability(capabilities, action, "POLICY_ATTACHMENT", attachment.id);
+      return {
+        ...describeAttachment(attachment, policyById),
+        canRevoke: revoke?.available === true,
+        revokeRestrictionReason: revoke?.restrictionReason ?? null
+      };
+    })
+  };
+}
+
 export function buildAccountAccessScene(
   identity: AccountIdentity,
   users: DirectoryPage<UserAccess> | null,
@@ -38,15 +113,6 @@ export function buildAccountAccessScene(
   const policyById = new Map(policies.map((policy) => [policy.id, policy]));
   const identityCapability = (action: IamAction, id = account.id) =>
     findActionCapability(identity.capabilities, action, "ACCOUNT", id);
-  const describeAttachment = (attachment: UserPolicyAttachment) => {
-    const policy = policyById.get(attachment.policyId);
-    return {
-      ...attachment,
-      label: policy?.displayName ?? attachment.policyId,
-      policyStatus: policy?.status ?? null,
-      policyResourceVersion: policy?.resourceVersion ?? null
-    };
-  };
   const rootIsCurrent = identity.identityKind === "ROOT_IDENTITY";
 
   return {
@@ -61,7 +127,7 @@ export function buildAccountAccessScene(
     currentLoginName: identity.user.loginName,
     identityKind: identity.identityKind,
     isRoot: rootIsCurrent,
-    identityAttachments: identity.policyAttachments.map(describeAttachment),
+    identityAttachments: identity.policyAttachments.map((attachment) => describeAttachment(attachment, policyById)),
     canListUsers: identityCapability("iam.user.list")?.available === true && users !== null,
     canCreateUsers: identityCapability("iam.user.create")?.available === true,
     createUsersRestrictionReason: identityCapability("iam.user.create")?.restrictionReason ?? null,
@@ -88,46 +154,9 @@ export function buildAccountAccessScene(
       state: rootIsCurrent
         ? identity.user.status === "DISABLED" ? "disabled" as const : identity.user.mustChangePassword ? "passwordChangeRequired" as const : "active" as const
         : null,
-      attachments: rootIsCurrent ? identity.policyAttachments.map(describeAttachment) : []
+      attachments: rootIsCurrent ? identity.policyAttachments.map((attachment) => describeAttachment(attachment, policyById)) : []
     },
-    users: users?.items.map(({ user, policyAttachments, capabilities }) => {
-      const userCapability = (action: IamAction) => findActionCapability(capabilities, action, "USER", user.id);
-      const statusCapability = userCapability("iam.user.set-status");
-      const resetCapability = userCapability("iam.user.reset-password");
-      const tenantAttachCapability = userCapability("iam.policy-attachment.create");
-      const platformAttachCapability = userCapability("iam.platform-policy-attachment.create");
-      const protection = credentialProtection(statusCapability?.restrictionReason ?? null, resetCapability?.restrictionReason ?? null);
-      return {
-        accountType: "subuser" as const,
-        id: user.id,
-        name: user.displayName,
-        loginName: user.loginName,
-        source: "local" as const,
-        qualifiedName: `${user.loginName}@${account.loginAlias ?? account.id}`,
-        protected: protection !== null,
-        credentialProtection: protection,
-        enabled: user.status === "ACTIVE",
-        resourceVersion: user.resourceVersion,
-        state: user.status === "DISABLED" ? "disabled" as const : user.mustChangePassword ? "passwordChangeRequired" as const : "active" as const,
-        canSetStatus: statusCapability?.available === true,
-        statusRestrictionReason: statusCapability?.restrictionReason ?? null,
-        canResetPassword: resetCapability?.available === true,
-        passwordRestrictionReason: resetCapability?.restrictionReason ?? null,
-        canAttachTenantPolicy: tenantAttachCapability?.available === true,
-        tenantAttachmentRestrictionReason: tenantAttachCapability?.restrictionReason ?? null,
-        canAttachPlatformPolicy: platformAttachCapability?.available === true,
-        platformAttachmentRestrictionReason: platformAttachCapability?.restrictionReason ?? null,
-        attachments: policyAttachments.map((attachment) => {
-          const action = attachment.scope === "INSTALLATION" ? "iam.platform-policy-attachment.revoke" : "iam.policy-attachment.revoke";
-          const revoke = findActionCapability(capabilities, action, "POLICY_ATTACHMENT", attachment.id);
-          return {
-            ...describeAttachment(attachment),
-            canRevoke: revoke?.available === true,
-            revokeRestrictionReason: revoke?.restrictionReason ?? null
-          };
-        })
-      };
-    }) ?? [],
+    users: users?.items.map((item) => buildAccountUserScene(account, policies, item)) ?? [],
     nextUserPage: users?.nextAfter ?? null,
     directoryComplete: users !== null && !users.nextAfter,
     accounts: accounts?.items.map(({ account: entry, capabilities }) => ({
