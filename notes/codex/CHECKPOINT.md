@@ -1,100 +1,107 @@
 # Codex working checkpoint
 
-> Non-authoritative portable memory. Validate against Git and the owning FEAT.
+> Non-authoritative portable memory. Validate against Git, exact CI and the owning FEAT.
 
 - Updated: 2026-09-14
-- Repository: `https://github.com/xiak/matrix.git`
+- Repository: https://github.com/xiak/matrix.git
 - Branch: `feat/iam`
-- Pushed, verified Group and signed-directory milestone:
-  `8117c54c112c842106d82fe934e460a280862549`
-- Exact independent [Verification 34808378047](https://github.com/xiak/matrix/actions/runs/34808378047):
+- Latest pushed, locally verified version-management candidate:
+  `aa28c39ca25ad0136b4a7042f1f1ae358d4f1429`.
+- Its exact [Verification 34816605258](https://github.com/xiak/matrix/actions/runs/34816605258)
+  was confirmed in_progress; do not treat it as success or rerun merely because
+  an observation times out.
+- Last fully CI-verified policy creation/read milestone:
+  `7104b1de8f16ae82645e149b2c5376f983eae5cd`,
+  [Verification 34814615083](https://github.com/xiak/matrix/actions/runs/34814615083):
   Go, authority-process and node-process all completed/success.
-- Preceding verified Group implementation:
-  `0bd6dd9dd8166fe31c67edb8cd49cd523606a401`.
+- `4fcc983abbb8b7a66dd0d9b6f0718cb8ab12eae3` is the preceding implementation,
+  not the accepted CI point: its dual-authority test retained two schema9
+  assertions while IAM had advanced to 10. 7104 fixes only those assertions;
+  the actual restricted-role/PG gate was independently rerun, not weakened.
+- Signed directory/Group milestone remains
+  `8117c54c112c842106d82fe934e460a280862549` / successful CI 34808378047.
 
-## Resume route
+## Resume route and objective
 
-1. Read AGENTS.md and [IAM product contract](../../IAM/FEAT-IAM-000-product-contract.md).
-2. Read [IAM/004](../../IAM/FEAT-IAM-004-groups-and-delegation.md) for the delivered
-   Group, inherited authority, signed paging and remaining UI boundaries.
-3. Continue [IAM/005](../../IAM/FEAT-IAM-005-policy-versions-and-boundaries.md)
-   using its existing API, evaluator, use-case, persistence and test owners.
-   Do not create another policy evaluator or duplicate the UX task's Group UI.
-4. Read [IAM/011](../../IAM/FEAT-IAM-011-acceptance.md) for first-release schema,
-   capacity/HA and final combination gates. Unpublished development versions do
-   not require a default complete upgrade chain beginning at schema 1.
-5. Read the [existing adoption record](../../docs/adoption/FEAT-006-platform-authorities.md)
-   only for fixed-source review. Do not inspect another worktree's dirty files.
+The complete IAM replacement goal remains active; neither IAM/005 nor the
+overall product is accepted. Read AGENTS.md, [product contract](../../IAM/FEAT-IAM-000-product-contract.md),
+then [IAM/005](../../IAM/FEAT-IAM-005-policy-versions-and-boundaries.md) and its
+owning code/tests. Read [IAM/011](../../IAM/FEAT-IAM-011-acceptance.md) for
+first-release schema, exact compatibility, capacity/HA and final acceptance.
+Use the [existing adoption owner](../../docs/adoption/FEAT-006-platform-authorities.md)
+only for fixed sources. Do not load another worktree's dirty files.
 
-## Current milestone
+First resolve the exact aa28c39 CI result. If it fails, read the failing job's
+actual test output, correct the owning invariant/fixture, and verify it on
+fresh task-labelled PG18 databases. Do not infer failure from elapsed time.
+Keep GitHub credential material in memory only; do not print it. CI cleanup
+contains very large expected PostgreSQL attack logs, so restrict log excerpts
+to the failed test section before post-job cleanup.
 
-The original complete IAM replacement goal remains active. Policy authority,
-Account/RootIdentity/User replacement, actor-relative capabilities and Group
-backend/repository are implemented; their FEAT owners retain exact evidence.
-Neither IAM/004 nor the whole product is accepted merely by this milestone.
+## Pushed implementation and evidence boundary
 
-Group inheritance uses the single policy authority and immutable historical
-membership/attachment/version evidence. 8117c54 replaces raw-ID continuation
-for Account, User, Group and GroupMembership directories with a bounded,
-purpose-separated MAC cursor. Routes and after/nextAfter remain unchanged;
-there is no old-ID fallback. Each page reauthenticates and authorizes against
-the current transaction before cursor verification. The binding covers sealed
-installation, current account/principal/session, exact query and all current
-policy sources. Reading sealed installation for this MAC does not populate an
-ordinary tenant subject's platform context or grant installation authority.
+7104 delivers root-only CUSTOMER policy creation and exact current-default
+content read, using the existing PDP, serializable transaction, attachment
+and historical Audit owners. Creation does not attach or grant. Its public
+API/Go types, exact route/action scope, replay and rejected cases are in 005.
 
-The network IAM entry requires MATRIX_IAM_CURSOR_KEY_FILE: exactly 64 lowercase
-hex characters in a protected file, representing an independent 32-byte key.
-There is no random fallback, bearer-derived key or Audit-key reuse. Replicas
-and restart use the same persistent key; changing it invalidates old cursors.
-The offline non-paging recovery entry does not need this key. Exact public
-shape, TTL, errors and query constraints belong to IAM/004 and the fixed API.
+aa28c39 adds customer version inventory/exact nondefault reads, immutable
+version creation and explicit optimistic default selection. It does not add
+policy/version deletion, conditions, boundaries, full delegation, diagnostic
+HTTP endpoints or new UI capabilities. Version creation does not switch the
+default. A later policy revision makes an old command replay conflict.
+Current-version evidence and old Audit proofs retain their original content.
 
-Local stable-tree full Go race/vet, architecture, module/generation and Linux
-build gates passed. Current real PG18 policy/group, IAM HTTP and independent
-two-IAM/Audit/PaaS process gates passed, including 100+1 actual directories,
-cross-scope attacks, runtime logins, restart, revocation and historical outbox.
-Frontend 101 tests, type/lint/architecture/styles and two 2-worker static
-exports passed; 59 embedded files matched. These are local frontend gates,
-not an independent frontend CI job. Exact timings belong to IAM/004.
+Locally, related API/IAM/Audit/architecture race, strict schema contracts,
+generation stability, full Go tests/vet, module verification and Linux
+IAM/Audit builds passed. Real PG18 focused gates prove failure rollback,
+concurrent revision conflicts, exact replay, cross-account/non-root refusal,
+bounded versions and actual authorization changes. The complete serial
+CI-equivalent PostgreSQL package set passed, including dual authorities,
+Audit history/HTTP, IAM HTTP/policy/recovery, two IAM processes with real
+PaaS/Audit consumers, and PaaS storage. Exact timings belong only to 005.
+These local results do not substitute for aa28c39's still-unconfirmed CI.
 
-All task-labelled PG containers, networks and synthetic data volumes from
-this milestone have been cleaned. No running database or container is needed
-to resume; do not reuse or remove another task's resources.
+The current source tuple is IAM11/Audit8/PaaS1; it is not a signed release
+profile. The earlier source milestone was 10/7/1. Published installation
+profile/topology/admission remain unchanged. ServiceIdentity/lookup_service,
+seven-column claim, unique canonical bytes, sealed bootstrap and original
+primary recovery boundaries are preserved.
 
-## Next work and fixed coordination
+## Next implementation
 
-UX/UI task `01a07b21-9a0d-7fd0-b090-7827ce18262e`, branch
-`feat/cloud-console-ux`, owns Group providers/scenes/renderers and real browser
-acceptance. This task owns domain/wire/repository. Consume only its subsequent
-verified fixed objects, never WIP or inherited acceptance. Group UI must not
-invent memberCount, require N+1 user reads, infer authority from names, or
-replace unknown command outcomes with new intents. Its current-loaded-page
-filtering is not server search. The frozen names and permission relationships
-were also explained using formal IAM/000, 003, 004 and 010 owners, separate
-from supplier research and future, not-yet-implemented capabilities.
+Continue 005's full requirements after the version-switch milestone:
+policy metadata/deletion, version deletion that frees management capacity
+without destroying historical proof, bounded wildcard/condition semantics,
+permission boundaries and safe delegation. Five manageable versions must
+not become a lifetime five-publication limit. Keep one evaluator/compiler,
+immutable evidence, current-account derivation and transactional outbox.
+Use the current owners rather than another roadmap/test framework.
 
-Installation task `01a04149-5dbb-7300-9e4c-31d9e85c8ada` will integrate the
-independent IAM cursor key, protected persistent file, signed topology and
-backup/recovery checks only when IAM/001–010's actual ABI has converged.
-Do not edit that owner's deployment/profile in intermediate IAM slices.
-Current development readiness/schema is IAM9/Audit6/PaaS1; the previously
-signed release profile is unchanged. This source tuple is not an installable
-release or a promise about the final product's PaaS version.
+Then continue the remaining 006–010 scope and 011 final combination gates.
+012 retains explicitly deferred external integration requirements. Group
+browser acceptance, final signed integration, capacity/fairness and actual
+database HA remain outstanding; no mock or multi-process/single-database
+fixture substitutes for those requirements.
 
-IAM/005 and later implementation, Group browser acceptance, final signed
-release integration and capacity/HA remain outstanding. The first-release
-schema policy retains current clean apply, populated replay, failure atomicity,
-runtime permissions, revocation and history. Historical binary diagnostics
-are optional unless a precise retained-data starting point is explicitly
-supported. Never erase user or other-task data to satisfy that policy.
+## Coordination and isolation
 
-## Isolation
+UX/UI task `01a07b21-9a0d-7fd0-b090-7827ce18262e` owns Group and IAM scenes
+on `feat/cloud-console-ux`. It received 7104's exact successful CI and public
+type/route/action/status/replay boundaries, including absent capabilities.
+Only send later version contracts after their exact successful CI. Preserve
+its own UX/MOCK work; no implicit authority from names, root labels or menus.
+Its reported 9d10600/12287bc objects have not been imported by this task.
 
-Preserve sealed ServiceIdentity/lookup_service, seven-column outbox claim,
-canonical historical bytes and original-primary recovery. A development
-schema number is not N-1 compatibility proof. Keep all code, commits and
-resource mutations within this feature's ownership. No extra agents/tasks,
-remote restarts or shared-service changes. Use unique task-labelled bounded
-local resources; Go defaults remain GOMAXPROCS=2/-p 2. All user-facing document
-deliverables are Markdown.
+Installation task `01a04149-5dbb-7300-9e4c-31d9e85c8ada` will integrate
+only after 001–010's final ABI. It accepted 7104 as a reviewable fixed object
+but is not importing it now. Do not edit installation/releasebuild/profile,
+PaaS/node or its FEAT/checkpoint. No other worktree/environment mutations.
+
+All local PG containers, networks and synthetic volumes used in this
+milestone were verified task-owned and removed; no live local gate process
+needs resuming. Create fresh uniquely labelled resources for new real gates.
+Do not recreate a CI job merely because local fixtures are gone. Do not
+restart remote machines/shared engines or use another task's test services.
+Go defaults GOMAXPROCS=2/-p 2; heavy real gates serial and CPU/memory/PID
+bounded. No additional agents/tasks. All user-facing documents are Markdown.
