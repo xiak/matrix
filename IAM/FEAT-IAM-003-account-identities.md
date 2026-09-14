@@ -67,6 +67,8 @@ Account 更新以 scope/account 锁序列化；User 安全变更在 principal �
 
 固定实现 `384d6d76b65498ed6b428ba9a2905ef67831b919` 在上述能力契约上增加 `GET /v1/users/{userId}`、显示名 CAS 更新和禁用后永久删除。API、OpenAPI、服务事务、受限 SQL、Audit 事实、静态控制台与既有测试 owner 已同步替换；IAM readiness 为 8、Audit readiness 为 5，PaaS 仍为 1。全仓 Go test/vet/race、API 生成稳定、Linux amd64 构建、前端 type/lint/架构/20 组对比度、90 项测试与 59 个嵌入文件一致性通过。独立 PostgreSQL 18.6、2 CPU/768 MiB 下，IAM HTTP 全量 race（66.814s）、Audit 权威数据库（5.757s）、Audit HTTP（2.950s）、实际 9fd 旧 IAM executable 保留升级（13.560s）、实际 a36 旧 IAM executable 保留升级（14.781s）及 IAM/Audit/PaaS + 双 dispatcher 五进程 race（35.749s）通过；后者实际证明删除成员前创建的应用、数据库、配额、Operation、outbox 与租户 Audit 归属不变。[Verification 34796922149](https://github.com/xiak/matrix/actions/runs/34796922149) 已核实精确 SHA，go、authority-process、node-process 全部 `completed/success`。
 
+契约收口提交 `25202188f33ca5892880b72d6f6831e476c0bfb1` 将已实现的 `TARGET_MUST_BE_DISABLED` 纳入唯一 `CapabilityRestriction` 枚举 owner，并由同一值集生成校验器和 OpenAPI，补齐所有当前限制值的 schema 回归，未改变删除事务或运行语义。[Verification 34797635592](https://github.com/xiak/matrix/actions/runs/34797635592) 已核实精确 SHA，go、authority-process、node-process 全部 `completed/success`。因此本片最终可消费契约以 `25202188f33ca5892880b72d6f6831e476c0bfb1` 为准。
+
 本任务独立浏览器以鼠标完成用户详情、显示名修改、禁用前隐藏删除、禁用后展示不可逆确认说明和删除后目录消失；未做已降优先级的键盘专项。最终破坏性确认没有在浏览器中代用户点击，而是在同一合成测试环境通过服务 API 执行：收据不含秘密，旧密码登录返回 401、详情不再可读、同名重建返回 409；数据库保留唯一 principal/login tombstone 和一条 `iam.user.deleted` 事实，密码、有效会话及未撤销附件均为零。浏览器使用的一次性本地进程和临时目录已清理，未占用共享或其他 Phase 服务。
 
 当前源码 Profile 为 IAM8/Audit5/PaaS1；安装发布 Profile 仍保持最后已发布值并拒绝这个不匹配组合，未把 SQL 升级或源码进程门禁冒充签名发布、跨 profile 兼容或最终发布验收。最终发布 Profile 仍待后续切片。
