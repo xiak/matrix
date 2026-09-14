@@ -14,11 +14,14 @@ export function WorkspaceTime({ value }: { value: string | null }) {
   return value ? <time dateTime={value} title={value}>{format.dateTime(new Date(value), { dateStyle: "medium", timeStyle: "short" })}</time> : <span>{t("neverUsed")}</span>;
 }
 
-export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, keywords, filter, embedded = false }: {
+export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, keywords, filter, embedded = false, status, loadMore, footerNote }: {
   title: string; description: string; items: T[]; columns: string[];
   row(item: T): ReactNode; create?: { label: string; disabled?: boolean; reason?: string; onClick(): void }; embedded?: boolean;
   keywords?(item: T): string;
   filter?: { label: string; options: { value: string; label: string }[]; matches(item: T, value: string): boolean };
+  status?: string;
+  loadMore?: { label: string; disabled?: boolean; busy?: boolean; onClick(): void };
+  footerNote?: ReactNode;
 }) {
   const t = useTranslations("IamWorkspace");
   const toolbarLabels = useTableToolbarLabels();
@@ -41,10 +44,16 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
     <TableToolbar labels={toolbarLabels} search={{ label: t("search"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
       actions={embedded ? action : null}
       filters={filter ? [{ id: "kind", label: filter.label, options: [{ value: "all", label: t("all") }, ...filter.options], value: kind, onChange: (value) => { setKind(value); setPage(1); } }] : []}
-      status={t("count", { count: matches.length })} />
+      status={status ?? t("count", { count: matches.length })} />
     <Table aria-label={title} aria-busy={deferredQuery !== query}><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((item) => <tr key={item.id}>{row(item)}</tr>)}</tbody></Table>
     {!matches.length ? <EmptyState title={items.length ? t("noResults") : t("empty")} description={items.length ? t("noResultsHint") : t("emptyHint")} action={items.length ? <Button onClick={reset} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
-    <Card.Footer><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Card.Footer>
+    <Card.Footer>
+      {footerNote ? <span className={styles.note}>{footerNote}</span> : null}
+      <div className={styles.actions}>
+        <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />
+        {loadMore ? <Button disabled={loadMore.disabled || loadMore.busy} onClick={loadMore.onClick} size="small" variant="secondary">{loadMore.label}</Button> : null}
+      </div>
+    </Card.Footer>
   </Card>;
 }
 
@@ -57,34 +66,35 @@ export function WorkspaceDetail({ title, onBack, actions, children, embedded = f
   return <div ref={start} className={styles.detailWorkspace}>{embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{t("back")}</Button><h2 className={styles.detailTitle}>{title}</h2>{actions}</div> : <ContentPage.Heading title={title} back={{ label: t("back"), onClick: onBack }} actions={actions} focus />}{children}</div>;
 }
 
-export function WorkspaceDialog({ title, onClose, onSubmit, children, submitLabel, submitDisabled, submitVariant, validationError, size, fallbackFocusRef }: { title: string; onClose(): void; onSubmit(): Promise<boolean>; children: ReactNode; submitLabel?: string; submitDisabled?: boolean; submitVariant?: ComponentProps<typeof Button>["variant"]; validationError?: string; size?: ComponentProps<typeof Dialog>["size"]; fallbackFocusRef?: ComponentProps<typeof Dialog>["fallbackFocusRef"] }) {
+export function WorkspaceDialog({ title, onClose, onSubmit, children, submitLabel, submitDisabled, submitVariant, validationError, size, fallbackFocusRef, operation }: { title: string; onClose(): void; onSubmit(): Promise<boolean>; children: ReactNode; submitLabel?: string; submitDisabled?: boolean; submitVariant?: ComponentProps<typeof Button>["variant"]; validationError?: string; size?: ComponentProps<typeof Dialog>["size"]; fallbackFocusRef?: ComponentProps<typeof Dialog>["fallbackFocusRef"]; operation?: { busy: boolean; error?: string; clearError(): void } }) {
   const t = useTranslations("IamWorkspace");
   const access = useAccountAccess();
   const formId = useId();
   const form = useRef<HTMLFormElement>(null);
   const submitting = useRef(false);
-  const clearError = access.clearWorkspaceError;
-  const error = validationError ?? (access.workspaceError ? t(`errors.${access.workspaceError}`) : undefined);
+  const clearError = operation?.clearError ?? access.clearWorkspaceError;
+  const busy = operation?.busy ?? access.busy;
+  const error = validationError ?? operation?.error ?? (access.workspaceError ? t(`errors.${access.workspaceError}`) : undefined);
   useEffect(() => { clearError(); }, [clearError]);
   useEffect(() => {
-    if (!error || access.busy) return;
+    if (!error || busy) return;
     const alert = form.current?.querySelector<HTMLElement>('[role="alert"]');
     alert?.focus({ preventScroll: true });
     alert?.scrollIntoView?.({ block: "nearest" });
-  }, [error, access.busy]);
-  return <Dialog open size={size} fallbackFocusRef={fallbackFocusRef} title={title} closeLabel={t("close")} onClose={onClose} busy={access.busy} footer={<><Button disabled={access.busy} onClick={onClose} variant="secondary">{t("cancel")}</Button><Button disabled={access.busy || submitDisabled} variant={submitVariant} type="submit" form={formId}>{submitLabel ?? t("save")}</Button></>}>
-    <form id={formId} ref={form} className={styles.stack} onSubmit={async (event) => { event.preventDefault(); if (submitting.current || access.busy || submitDisabled) return; submitting.current = true; clearError(); try { if (await onSubmit()) onClose(); } finally { submitting.current = false; } }}>
+  }, [error, busy]);
+  return <Dialog open size={size} fallbackFocusRef={fallbackFocusRef} title={title} closeLabel={t("close")} onClose={onClose} busy={busy} footer={<><Button disabled={busy} onClick={onClose} variant="secondary">{t("cancel")}</Button><Button disabled={busy || submitDisabled} variant={submitVariant} type="submit" form={formId}>{submitLabel ?? t("save")}</Button></>}>
+    <form id={formId} ref={form} className={styles.stack} onSubmit={async (event) => { event.preventDefault(); if (submitting.current || busy || submitDisabled) return; submitting.current = true; clearError(); try { if (await onSubmit()) onClose(); } finally { submitting.current = false; } }}>
       {error ? <Alert status="danger" tabIndex={-1}>{error}</Alert> : null}
-      <fieldset className={styles.editorFields} disabled={access.busy}>{children}</fieldset>
+      <fieldset className={styles.editorFields} disabled={busy}>{children}</fieldset>
     </form>
   </Dialog>;
 }
 
-export function WorkspaceDelete({ name, onClose, onConfirm, impact }: { name: string; onClose(): void; onConfirm(): Promise<unknown>; impact?: ReactNode }) {
+export function WorkspaceDelete({ name, onClose, onConfirm, impact, operation }: { name: string; onClose(): void; onConfirm(): Promise<unknown>; impact?: ReactNode; operation?: { busy: boolean; error?: string; clearError(): void } }) {
   const t = useTranslations("IamWorkspace");
   const [confirmation, setConfirmation] = useState("");
   const id = useId();
-  return <WorkspaceDialog title={t("deleteTitle", { name })} onClose={onClose} submitLabel={t("deleteConfirm")} onSubmit={async () => confirmation === name && Boolean(await onConfirm())}>
+  return <WorkspaceDialog title={t("deleteTitle", { name })} onClose={onClose} submitLabel={t("deleteConfirm")} onSubmit={async () => confirmation === name && Boolean(await onConfirm())} operation={operation}>
     <Alert status="warning">{t("deleteHint")}</Alert>{impact}<strong>{name}</strong>
     <FormField id={id} label={t("confirmName")}><Input id={id} autoComplete="off" required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></FormField>
     {confirmation && confirmation !== name ? <p className={styles.note}>{t("confirmName")}: {name}</p> : null}

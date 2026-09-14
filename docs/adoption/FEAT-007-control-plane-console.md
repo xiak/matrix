@@ -13,6 +13,7 @@
 | PaaS product-design record | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Product-boundary reference only; it is not a second UI architecture or style donor. |
 | Matrix shared interaction fixes | `21b469b343d83a190acc0a3bb34a29b5294191ad` | This repository, fixed Git objects; backport bounded behavior to the existing cloud UI owner, not its replacement shell. |
 | IAM account-access capability contract | `25202188f33ca5892880b72d6f6831e476c0bfb1` | Same repository, fixed after verification run `34797635592`. Selectively adapt its public IAM wire/domain semantics and boundary tests into the existing console; do not cherry-pick its generated UI, styles or backend runtime. |
+| IAM group authority and management contract | `0bd6dd9dd8166fe31c67edb8cd49cd523606a401` | Same repository, fixed after verification run `34805149946`. Selectively adapt its group, membership, policy-source and relation-command contracts into the existing console; do not cherry-pick its backend, generated assets, UI shell or styles. |
 
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.
@@ -84,7 +85,7 @@ architecture, package or runtime dependency.
 
 ## IAM fixed-contract integration
 
-The IAM revision is an authority and transport donor, not another visual or
+The IAM revisions are authority and transport donors, not another visual or
 application-architecture donor. The existing FEAT-007 provider/repository/
 scene/renderer chain and isolated UX preview remain the UI owners.
 
@@ -96,9 +97,12 @@ scene/renderer chain and isolated UX preview remain the UI owners.
 | `CurrentIdentity`, `UserAccess` and `AccountAccess` with exact per-resource action capabilities | `ADAPT` | Display Account + RootIdentity separately from daily managed Users. Enable or explain each action from its exact action/resource tuple and closed restriction reason; missing, duplicate, foreign or unknown capability entries fail the whole response rather than degrading to a guessed role. |
 | Targeted `UserAccess` read, display-profile update and irreversible user deletion | `ADAPT` | Keep the directory as a locator and load the selected User through its dedicated read boundary. Update only `displayName` with its resource version. Show `TARGET_MUST_BE_DISABLED` before deletion, require an explicit typed impact acknowledgement once available, and accept only the strict non-secret `UserDeletion` receipt. Uniform forbidden responses remain an unavailable target and never become an existence oracle. |
 | Capability projection as advisory interaction data | `ADAPT` | Use availability only to prevent dead-end clicks and explain protection. Never cache it as a permit: every mutation still reaches IAM with the target and resource version, where authorization and current-state validation run again. |
+| `Group`, `GroupAccess`, `GroupMembership`, `GroupMembershipAccess`, group policy attachments and direct/group `PolicyGrantSource` provenance | `ADAPT` | Present groups as non-login relationship containers. Preserve stable relation IDs, exact membership provenance and independent group/member/attachment lifecycles; never flatten a group-derived grant into a direct user attachment or an effective-access claim. |
+| Closed group capability set and versioned single-relation commands | `ADAPT` | Drive list/read/update/delete, membership and attachment affordances only from their exact action/resource capability. Create an empty group first; add or remove one membership or attachment per command. Retain the exact request ID and payload after an uncertain outcome, while a version conflict refreshes state and requires a new user intent. |
+| Stable group/member pages and deliberately absent aggregates/user summaries | `ADAPT` | At this fixed revision the strict transport adapter validates the documented stable-ID keyset continuation; renderers and application clients only pass it through and never expose its representation as UI state. Search and filter only the currently loaded records and say so; load additional pages explicitly. Do not invent a global result count, load every membership to derive a total, or issue an N+1 user lookup merely to decorate membership rows. An exact same-account cached user summary may enhance a stable user ID but cannot determine existence or action availability. A signed opaque replacement requires its own subsequently fixed donor revision. |
 | IAM architecture analysis and fixed FEAT contracts | `REFERENCE` | Use them to explain object relationships, management snapshots and authorization boundaries. FEAT-007 owns only the browser behavior and does not restate IAM's domain contract. |
 | IAM branch UI styles, generated exports, route shell and wholesale commit | `REJECT` | They would replace the approved cloud UX and duplicate its owners. Only bounded contract semantics and tests cross the adoption boundary. |
-| Superseded `BuiltinRole`, `RoleBinding`, role-name-to-authority inference, hidden MOCK fallback and synthesized policy content/effective access | `REJECT` | These projections are not the fixed IAM contract and could overstate authority. Extended group/role/policy simulation survives only behind the explicit one-click preview repository. |
+| Superseded `BuiltinRole`, `RoleBinding`, role-name-to-authority inference, hidden MOCK fallback and synthesized policy content/effective access | `REJECT` | These projections are not the fixed IAM contract and could overstate authority. Unsupported role, policy-authoring and access-decision simulations survive only behind the explicit one-click preview repository. |
 
 ## Resulting implementation constraints
 

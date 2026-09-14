@@ -573,9 +573,8 @@ unchanged by this UX work.
 
 #### Fixed IAM console contract
 
-The live access-management slice adapts the IAM owner revision
-`121e68373951a9261754661329a8e4e41bb6206c`; its provenance decisions are
-owned by the corresponding [adoption review](../adoption/FEAT-007-control-plane-console.md).
+The live access-management slice adapts only the IAM owner revisions fixed in
+the corresponding [adoption review](../adoption/FEAT-007-control-plane-console.md).
 Acceptance at this boundary requires all of the following:
 
 - `AccountPolicy`, `PolicyDirectory` and `UserPolicyAttachment` replace the
@@ -592,10 +591,28 @@ Acceptance at this boundary requires all of the following:
 - Create/revoke association requests carry the selected policy revision or
   current attachment revision. If a policy changes before submission, the
   selector clears and requires an explicit new choice.
+- `CurrentIdentity` reports direct and group-derived policy sources without
+  flattening their provenance. Group directories, group details, memberships
+  and group policy attachments keep separate IDs, resource versions and
+  actor-relative capabilities. A group is never presented as a login identity,
+  resource owner, role or final authorization decision.
+- Group and membership pages are bounded server reads. Their continuation is
+  pass-through state outside the strict transport adapter; search covers only
+  records already loaded and the UI labels that scope. The UI does not derive
+  an authoritative member total from pages, exhaust the directory to
+  manufacture one, or issue per-row user reads.
+  A cached same-account user summary may decorate the stable membership user ID
+  but cannot determine existence, authority or operation availability.
+- Group creation creates only the group. Each membership or direct-policy
+  change is one versioned relationship command. An uncertain outcome keeps the
+  exact request ID and payload for an equal retry; a conflict refreshes current
+  state, closes the stale editor and requires the user to express a new intent.
 - Live page visibility follows actual directory authorization and explicit
-  capabilities. The advanced group, role, federation, key, simulator and
-  policy-authoring graph remains an isolated repository capability for the
-  one-click MOCK experience; its state cannot grant live access.
+  capabilities. Unsupported role, federation, key, simulator and
+  policy-authoring behavior remains an isolated repository capability for the
+  one-click MOCK experience; its state cannot grant live access. The MOCK group
+  workspace remains available for UX review but never substitutes for a failed
+  or forbidden live group request.
 
 #### CAM implementation slices and acceptance
 
@@ -842,7 +859,7 @@ slice, not a replacement of FEAT-006 or a published live authorization API.
 | --- | --- | --- |
 | Policy lifecycle | Strict, lossless supported document handling; readable summary/JSON; metadata vs content editing; five-version history, protected effective version and reviewed rollback. | Implemented and locally verified for the supported effect/action/resource/condition MOCK dialect. Unsupported fields and condition keys are rejected without stripping the draft; summaries and history retain every supported restriction. |
 | Policy authoring | Full-page generator/JSON/template flow, typed action/resource/condition selection, diagnostics, review and optional atomic associations. | Full-page create/copy/edit, lossless multiple statements, guarded template/service replacement, typed operations and resources, IP/tag/time conditions, metadata tags, review, optional atomic associations and capacity recovery are implemented. Shared in-app unsaved-navigation protection preserves even invalid JSON drafts. |
-| Group authorization | Full-page empty-group creation, separate one-relationship membership/policy operations, permission provenance and cross-navigation. | Two-step group-only creation, isolated metadata updates, reviewed one-item relationship changes, named policy sources and query-addressable user/group/policy/role details are implemented in MOCK. Reusable normalized directory/detail projections omit a non-authoritative live member total, while Preview retains its explicitly complete sample count. Shared in-app unsaved-navigation protection preserves creation drafts. |
+| Group authorization | Full-page empty-group creation, separate one-relationship membership/policy operations, permission provenance and cross-navigation. | Two-step group-only creation, isolated metadata updates, reviewed one-item relationship changes, named policy sources and query-addressable user/group/policy/role details are implemented in MOCK. The fixed live group contract reuses the same normalized directory/detail components, keeps group requests local to the workspace, omits non-authoritative member totals, discloses loaded-record search scope, keeps continuation representation out of presentation semantics and retries only an unchanged uncertain command. Preview retains its explicitly complete sample count. Shared in-app unsaved-navigation protection preserves creation drafts. |
 | Role authorization | Carrier-aware content wizard, trust vs permission vs boundary, bounded temporary-session preview and safe revocation explanation. | Four-step creation, isolated metadata/trust/settings commands, reviewed policy deltas, boundary and before/after trust changes, exact same-tenant account trust and known service/provider identities are implemented. Bounded preview sessions recheck assumption, retain immutable expiry and support individual revocation. Shared draft protection, unchanged/invalid trust, provider-reference rejection, pending locks, cancellation and failure/retry across role commands are locally verified. |
 | End-to-end access explanation | A no-grant user, group-derived allow, explicit deny, default-version rollback, boundary intersection and role-session case all lead to reproducible resource/action decisions. | Domain and interaction tests cover direct/group grants, deny precedence, conditions, current-version rollback, user/role boundary intersection, dual trust/caller authorization and session expiry/revocation. A real local MOCK journey proves caller denial before an exact assumption grant, role-only resource access limited by a boundary, then denial after revocation. Locally functionally verified for the documented subset. |
 | Supporting workspaces | Review overview, users, providers, SSO, settings and one-time MOCK keys against the documented scope without faking external activation. | Overview links and candidate guidance, source-aware user filtering, localized policy metadata, SAML/OIDC drafts, SSO/settings failure-retry, enterprise visibility/import and one-time MOCK keys are locally regression-verified. Scan/paid/live security flows remain skipped. |
@@ -1138,9 +1155,9 @@ account recovery and settings require their own capabilities. Unknown owner
 display names or statuses and absent user access profiles are not fabricated
 from the current actor or interpreted as disabled.
 
-The live account-access projection consumes the IAM contract fixed at
-`25202188f33ca5892880b72d6f6831e476c0bfb1`, verified by run
-`34797635592`. `CurrentIdentity` controls which
+The live account-access projection consumes the fixed IAM revisions recorded
+in the [adoption review](../adoption/FEAT-007-control-plane-console.md).
+`CurrentIdentity` controls which
 account-wide directories may be requested. Every `UserAccess` and
 `AccountAccess` entry then carries an exact action, resource kind and resource
 ID for each supported operation. The scene may use that projection to show an
@@ -1149,9 +1166,10 @@ authority from an administrator policy name, an installation-scoped badge or
 a successful list read. Missing, duplicate, foreign, extra or unknown
 capabilities invalidate the response. Availability is advisory interaction
 data, never a client-side permit: mutations retain target identity and resource
-version and IAM reauthorizes against current state. The richer group, batch,
-role, custom-policy and simulator actions remain explicit DEMO repository
-extensions until their own fixed IAM contracts are accepted.
+version and IAM reauthorizes against current state. Fixed group directory,
+detail, membership and direct group-policy relationship actions use the same
+rule. Batch, role, custom-policy and simulator actions remain explicit DEMO
+repository extensions until their own fixed IAM contracts are accepted.
 
 The directory table contains only daily manageable Users, with independent
 type, access-method, authorization-source and status columns. Status/source
@@ -1464,7 +1482,7 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- The current Theme/component, navigation and CAM-style IAM slice has 483 frontend tests across 35 test
+- The current Theme/component, navigation and CAM-style IAM slice has 497 frontend tests across 35 test
   files; the complete suite passes with two workers at the default timeout
   (the long user-selection journey retains its explicit 15s timeout).
   Worker concurrency is bounded in the test owner because simultaneously
@@ -1569,7 +1587,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   feedback without new warning/error logs. Shared control tests cover required
   semantics, classification/status distinction, controlled paging and dialog
   focus return; existing large-candidate and batch/permission gates remain.
-  All 483 frontend tests and three static-export normalization tests pass,
+  All 497 frontend tests and three static-export normalization tests pass,
   alongside TypeScript, lint, architecture and 228 theme contrast checks.
   All 213 generated production files from 38 static routes match the Go-embedded export, and Go UI
   tests and vet pass. Tables, forms, dialogs, choices,
@@ -1586,8 +1604,9 @@ and `git diff --check` gates must pass on the same committed worktree.
   group candidates and ordinary policy/credential/lifecycle commands; forged
   owner IDs are rejected by both batch and workspace transitions. Ordinary-user
   group membership and user-to-group detail navigation remain covered. These
-  checks do not establish live Tencent mutation behavior or live Matrix group
-  authorization.
+  checks do not establish live Tencent mutation behavior or final Matrix
+  resource authorization; live Matrix group-management evidence is described
+  below.
   The fixed live IAM projection now replaces built-in-role inference with
   direct, revisioned USER policy attachments and independent tenant/platform
   policy metadata directories. `iam.account.read` and `iam.account.create`
@@ -1605,8 +1624,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   403 section degradation, non-authorization failure closure, stale policy
   reselection, exact attach/revoke revisions and preservation of the explicit
   MOCK workspace. This is management-plane evidence only; it does not claim
-  group inheritance, policy documents or final effective authorization from a
-  directory response.
+  policy documents or final effective authorization from a directory response.
   A live user selection now replaces the directory immediately with a local
   content skeleton and reads the exact target through the dedicated
   `UserAccess` route; the global shell and directory provider do not own that
@@ -1630,15 +1648,25 @@ and `git diff --check` gates must pass on the same committed worktree.
   column, selection-driven menu, disabled explanations and group append/review;
   the original membership and grants remain intact. The synthetic membership
   added during that check was removed. Batch writes remain preview-only.
-  The group directory is now an action-free locator: it shows membership and
-  direct-policy counts, while edit, delete and relationship changes live in
-  the selected group detail. Member rows no longer duplicate a trailing
+  The group directory is now an action-free locator: Preview shows its complete
+  local membership sample and direct-policy counts, while live pages show only
+  aggregates explicitly supplied by IAM. Edit, delete and relationship changes
+  live in the selected group detail; member rows no longer duplicate a trailing
   operation column, and the empty state no longer suggests that RootIdentity
   can join a group. Shared small-directory and policy searches defer list
   calculation from the controlled input update so large preview policy sets
-  do not put synchronous filtering work on the keystroke path. This does not
-  adopt the IAM group's work-in-progress wire types or claim batch atomicity;
-  live group availability still requires its own fixed contract.
+  do not put synchronous filtering work on the keystroke path. The fixed live
+  group slice uses exact capabilities and stable relation IDs, keeps the
+  current fixed keyset continuation inside the strict transport boundary,
+  performs no N+1 user lookups and never presents one-item relation commands
+  as atomic batch writes. A signed opaque continuation is not claimed until
+  the IAM owner fixes and verifies that successor contract.
+  The focused group-contract regression has 214 passing tests across the HTTP
+  adapter, live/Preview renderers and isolated workspace repository. A desktop
+  browser check on the existing 4317 DEMO verified the shared group detail and
+  immediate add-member dialog without submitting a relationship change. The
+  complete frontend gate, static export, 213-file Go embed comparison, Go UI
+  test and Go vet all pass for this slice.
   The policy directory combines independent kind/service/action-type/resource-
   scope filters with localized keyword search, sorting and pagination. Page
   context survives list/detail navigation in the current account session;

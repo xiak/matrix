@@ -8,7 +8,15 @@ import type {
   ActionCapability,
   CapabilityRestriction,
   DirectoryPage,
+  Group,
+  GroupAccess,
+  GroupDeletion,
+  GroupMembership,
+  GroupMembershipAccess,
+  GroupMembershipPage,
+  GroupPolicyAttachment,
   IamAction,
+  PolicyAttachmentRevocation,
   PolicyDirectory,
   PolicyScope,
   User,
@@ -60,9 +68,26 @@ let accounts: Account[] = [
   }
 ];
 let userPlatformPolicies: Record<string, string[]> = {};
+const previewGroupVersions = new Map<string, { resourceVersion: number; updatedAt: string }>();
+const previewMemberships = new Map<string, GroupMembership>();
+const previewGroupAttachments = new Map<string, GroupPolicyAttachment>();
 
 function requirePreviewCredential(credential: string): void {
   if (credential !== previewCredential) throw new Error("INVALID_PREVIEW_CREDENTIAL");
+}
+
+function requirePreviewAccount(accountId: string): void {
+  if (accountId !== account.id) throw new HttpProblem(403, "PREVIEW_ACCOUNT_UNAVAILABLE");
+}
+
+function requireRequestId(requestId: string): void {
+  if (!requestId.trim()) throw new HttpProblem(422, "PREVIEW_REQUEST_ID_REQUIRED");
+}
+
+function clearPreviewGroupContractState(): void {
+  previewGroupVersions.clear();
+  previewMemberships.clear();
+  previewGroupAttachments.clear();
 }
 
 const initialPreviewState = structuredClone({ account, users, accounts, userPlatformPolicies });
@@ -94,6 +119,7 @@ export const previewIamRepository: IamRepository = {
     users = initial.users;
     accounts = initial.accounts;
     userPlatformPolicies = initial.userPlatformPolicies;
+    clearPreviewGroupContractState();
   }
 };
 
@@ -138,14 +164,16 @@ function currentIdentity(): AccountIdentity {
     account,
     user,
     identityKind: "ROOT_IDENTITY",
-    policyAttachments: [],
+    policySources: [],
     capabilities: [
       capability("iam.account.create", "ACCOUNT", "accounts"),
       capability("iam.account.read", "ACCOUNT", "accounts"),
       capability("iam.account.alias-set", "ACCOUNT", account.id),
       capability("iam.user.list", "ACCOUNT", account.id),
       capability("iam.user.create", "ACCOUNT", account.id),
-      capability("iam.policy.list", "ACCOUNT", account.id)
+      capability("iam.policy.list", "ACCOUNT", account.id),
+      capability("iam.group.list", "ACCOUNT", account.id),
+      capability("iam.group.create", "ACCOUNT", account.id)
     ],
   };
 }
@@ -236,6 +264,130 @@ function accountsWithCapabilities(): AccountAccess[] {
   }));
 }
 
+type PreviewAccessGroup = AccessWorkspace["groups"][number];
+
+function previewGroupMeta(group: PreviewAccessGroup): { resourceVersion: number; updatedAt: string } {
+  const current = previewGroupVersions.get(group.id);
+  if (current) return current;
+  const initial = { resourceVersion: 1, updatedAt: group.createdAt };
+  previewGroupVersions.set(group.id, initial);
+  return initial;
+}
+
+function previewGroup(group: PreviewAccessGroup): Group {
+  const metadata = previewGroupMeta(group);
+  return {
+    id: group.id,
+    accountId: account.id,
+    name: group.name,
+    description: group.description,
+    resourceVersion: metadata.resourceVersion,
+    createdAt: group.createdAt,
+    updatedAt: metadata.updatedAt
+  };
+}
+
+function membershipKey(groupId: string, userId: string): string {
+  return `${groupId}\u0000${userId}`;
+}
+
+function previewMembership(group: PreviewAccessGroup, userId: string): GroupMembership {
+  const key = membershipKey(group.id, userId);
+  const current = previewMemberships.get(key);
+  if (current && current.removedAt === undefined) return current;
+  const createdAt = group.createdAt;
+  const membership: GroupMembership = {
+    id: `preview-membership-${group.id}-${userId}`,
+    accountId: account.id,
+    groupId: group.id,
+    userId,
+    createdBy: account.rootIdentity.principalId,
+    resourceVersion: 1,
+    createdAt,
+    updatedAt: createdAt
+  };
+  previewMemberships.set(key, membership);
+  return membership;
+}
+
+function groupAttachmentKey(groupId: string, policyId: string): string {
+  return `${groupId}\u0000${policyId}`;
+}
+
+function previewGroupAttachment(group: PreviewAccessGroup, policyId: string): GroupPolicyAttachment {
+  const key = groupAttachmentKey(group.id, policyId);
+  const current = previewGroupAttachments.get(key);
+  if (current) return current;
+  const attachment: GroupPolicyAttachment = {
+    id: `preview-group-attachment-${group.id}-${policyId}`,
+    accountId: account.id,
+    target: { kind: "GROUP", id: group.id },
+    policyId,
+    scope: "TENANT",
+    installationId: null,
+    resourceVersion: 1,
+    createdAt: group.createdAt,
+    updatedAt: group.createdAt
+  };
+  previewGroupAttachments.set(key, attachment);
+  return attachment;
+}
+
+const groupActions: IamAction[] = [
+  "iam.group.read",
+  "iam.group.update",
+  "iam.group.delete",
+  "iam.group-membership.list",
+  "iam.group-membership.create",
+  "iam.group-policy-attachment.create"
+];
+
+function previewGroupAccess(group: PreviewAccessGroup): GroupAccess {
+  const policyAttachments = group.policyIds.map((policyId) => previewGroupAttachment(group, policyId));
+  return {
+    group: previewGroup(group),
+    policyAttachments,
+    capabilities: [
+      ...groupActions.map((action) => capability(action, "GROUP", group.id)),
+      ...policyAttachments.map((attachment) => capability("iam.group-policy-attachment.revoke", "POLICY_ATTACHMENT", attachment.id))
+    ]
+  };
+}
+
+function previewMembershipAccess(group: PreviewAccessGroup, userId: string): GroupMembershipAccess {
+  const membership = previewMembership(group, userId);
+  return {
+    membership,
+    capabilities: [capability("iam.group-membership.remove", "GROUP_MEMBERSHIP", membership.id)]
+  };
+}
+
+function findPreviewGroup(source: AccessWorkspace, groupId: string): PreviewAccessGroup {
+  const group = source.groups.find((entry) => entry.id === groupId);
+  if (!group) throw new HttpProblem(404, "PREVIEW_GROUP_NOT_FOUND");
+  return group;
+}
+
+function pageAfter<T>(items: T[], after: string | undefined, prefix: string, id: (item: T) => string): DirectoryPage<T> {
+  const sorted = [...items].sort((left, right) => id(left).localeCompare(id(right)));
+  let start = 0;
+  if (after !== undefined) {
+    if (!after.startsWith(prefix)) throw new HttpProblem(400, "PREVIEW_CURSOR_INVALID");
+    const cursorId = after.slice(prefix.length);
+    const cursorIndex = sorted.findIndex((item) => id(item) === cursorId);
+    if (cursorIndex < 0) throw new HttpProblem(400, "PREVIEW_CURSOR_INVALID");
+    start = cursorIndex + 1;
+  }
+  const result = sorted.slice(start, start + 100);
+  const last = result.at(-1);
+  return { items: structuredClone(result), nextAfter: start + result.length < sorted.length && last ? `${prefix}${id(last)}` : null };
+}
+
+function groupVersionChanged(group: PreviewAccessGroup, at: string): void {
+  const current = previewGroupMeta(group);
+  previewGroupVersions.set(group.id, { resourceVersion: current.resourceVersion + 1, updatedAt: at });
+}
+
 export const previewAccountRepository: AccountRepository = {
   async executeUserBatch(credential, command) {
     requirePreviewCredential(credential);
@@ -293,6 +445,167 @@ export const previewAccountRepository: AccountRepository = {
   async listAccounts(credential) {
     requirePreviewCredential(credential);
     return page(accountsWithCapabilities());
+  },
+  async listGroups(credential, accountId, after) {
+    requirePreviewCredential(credential);
+    requirePreviewAccount(accountId);
+    const source = await workspace.read(credential);
+    return pageAfter(source.groups.map(previewGroupAccess), after, "preview-group:", (entry) => entry.group.id);
+  },
+  async getGroup(credential, accountId, groupId) {
+    requirePreviewCredential(credential);
+    requirePreviewAccount(accountId);
+    return structuredClone(previewGroupAccess(findPreviewGroup(await workspace.read(credential), groupId)));
+  },
+  async createGroup(credential, accountId, command) {
+    requirePreviewCredential(credential);
+    requirePreviewAccount(accountId);
+    requireRequestId(command.requestId);
+    const before = await workspace.read(credential);
+    const result = await workspace.execute(credential, { kind: "create-group", name: command.name, description: command.description ?? "" });
+    const created = result.workspace.groups.find((entry) => !before.groups.some((previous) => previous.id === entry.id));
+    if (!created) throw new Error("INVALID_PREVIEW_WORKSPACE");
+    previewGroupVersions.set(created.id, { resourceVersion: 1, updatedAt: created.createdAt });
+    return structuredClone(previewGroup(created));
+  },
+  async updateGroup(credential, accountId, groupId, command) {
+    requirePreviewCredential(credential);
+    requirePreviewAccount(accountId);
+    requireRequestId(command.requestId);
+    const source = await workspace.read(credential);
+    const current = findPreviewGroup(source, groupId);
+    if (previewGroupMeta(current).resourceVersion !== command.resourceVersion) throw new HttpProblem(409, "PREVIEW_GROUP_CHANGED");
+    const changedAt = new Date().toISOString();
+    const result = await workspace.execute(credential, { kind: "update-group", id: groupId, name: command.name, description: command.description ?? "" });
+    const updated = findPreviewGroup(result.workspace, groupId);
+    groupVersionChanged(updated, changedAt);
+    return structuredClone(previewGroup(updated));
+  },
+  async deleteGroup(credential, accountId, groupId, command) {
+    requirePreviewCredential(credential);
+    requirePreviewAccount(accountId);
+    requireRequestId(command.requestId);
+    const source = await workspace.read(credential);
+    const current = findPreviewGroup(source, groupId);
+    const currentVersion = previewGroupMeta(current).resourceVersion;
+    if (currentVersion !== command.resourceVersion) throw new HttpProblem(409, "PREVIEW_GROUP_CHANGED");
+    const deletedAt = new Date().toISOString();
+    await workspace.execute(credential, { kind: "delete-group", id: groupId });
+    const receipt: GroupDeletion = {
+      id: current.id,
+      accountId,
+      name: current.name,
+      resourceVersion: currentVersion + 1,
+      removedMemberships: current.memberIds.length,
+      revokedPolicyAttachments: current.policyIds.length,
+      deletedAt
+    };
+    previewGroupVersions.delete(groupId);
+    for (const userId of current.memberIds) previewMemberships.delete(membershipKey(groupId, userId));
+    for (const policyId of current.policyIds) previewGroupAttachments.delete(groupAttachmentKey(groupId, policyId));
+    return receipt;
+  },
+  async listGroupMemberships(credential, accountId, groupId, after) {
+    requirePreviewCredential(credential);
+    requirePreviewAccount(accountId);
+    const group = findPreviewGroup(await workspace.read(credential), groupId);
+    const result = pageAfter(group.memberIds.map((userId) => previewMembershipAccess(group, userId)), after, `preview-membership:${groupId}:`, (entry) => entry.membership.id);
+    const response: GroupMembershipPage = { accountId, groupId, ...result };
+    return response;
+  },
+  async createGroupMembership(credential, accountId, groupId, command) {
+    requirePreviewCredential(credential);
+    requirePreviewAccount(accountId);
+    requireRequestId(command.requestId);
+    const source = await workspace.read(credential);
+    const group = findPreviewGroup(source, groupId);
+    if (!users.some((entry) => entry.id === command.userId)) throw new HttpProblem(404, "PREVIEW_USER_NOT_FOUND");
+    if (group.memberIds.includes(command.userId)) throw new HttpProblem(409, "PREVIEW_MEMBERSHIP_EXISTS");
+    const createdAt = new Date().toISOString();
+    await workspace.execute(credential, { kind: "change-group-members", id: groupId, added: [command.userId], removed: [] });
+    const membership: GroupMembership = {
+      id: `preview-membership-${crypto.randomUUID()}`,
+      accountId,
+      groupId,
+      userId: command.userId,
+      createdBy: account.rootIdentity.principalId,
+      resourceVersion: 1,
+      createdAt,
+      updatedAt: createdAt
+    };
+    previewMemberships.set(membershipKey(groupId, command.userId), membership);
+    return structuredClone(membership);
+  },
+  async removeGroupMembership(credential, accountId, groupId, membershipId, command) {
+    requirePreviewCredential(credential);
+    requirePreviewAccount(accountId);
+    requireRequestId(command.requestId);
+    const group = findPreviewGroup(await workspace.read(credential), groupId);
+    const current = group.memberIds.map((userId) => previewMembership(group, userId)).find((entry) => entry.id === membershipId);
+    if (!current) throw new HttpProblem(404, "PREVIEW_MEMBERSHIP_NOT_FOUND");
+    if (current.resourceVersion !== command.resourceVersion) throw new HttpProblem(409, "PREVIEW_MEMBERSHIP_CHANGED");
+    const removedAt = new Date().toISOString();
+    await workspace.execute(credential, { kind: "change-group-members", id: groupId, added: [], removed: [current.userId] });
+    const removed: GroupMembership = {
+      ...current,
+      resourceVersion: current.resourceVersion + 1,
+      updatedAt: removedAt,
+      removedAt,
+      removedBy: account.rootIdentity.principalId
+    };
+    previewMemberships.set(membershipKey(groupId, current.userId), removed);
+    return structuredClone(removed);
+  },
+  async createGroupPolicyAttachment(credential, accountId, groupId, command) {
+    requirePreviewCredential(credential);
+    requirePreviewAccount(accountId);
+    requireRequestId(command.requestId);
+    const source = await workspace.read(credential);
+    const group = findPreviewGroup(source, groupId);
+    const policy = source.policies.find((entry) => entry.id === command.policyId);
+    if (!policy) throw new HttpProblem(404, "PREVIEW_POLICY_NOT_FOUND");
+    if (Math.max(1, policy.lastVersion) !== command.policyResourceVersion) throw new HttpProblem(409, "PREVIEW_POLICY_CHANGED");
+    if (group.policyIds.includes(command.policyId)) throw new HttpProblem(409, "PREVIEW_ATTACHMENT_EXISTS");
+    const createdAt = new Date().toISOString();
+    await workspace.execute(credential, { kind: "change-group-policies", id: groupId, added: [command.policyId], removed: [] });
+    const attachment: GroupPolicyAttachment = {
+      id: `preview-group-attachment-${crypto.randomUUID()}`,
+      accountId,
+      target: { kind: "GROUP", id: groupId },
+      policyId: command.policyId,
+      scope: "TENANT",
+      installationId: null,
+      resourceVersion: 1,
+      createdAt,
+      updatedAt: createdAt
+    };
+    previewGroupAttachments.set(groupAttachmentKey(groupId, command.policyId), attachment);
+    return structuredClone(attachment);
+  },
+  async revokePolicyAttachment(credential, attachmentId, command) {
+    requirePreviewCredential(credential);
+    requireRequestId(command.requestId);
+    const source = await workspace.read(credential);
+    for (const group of source.groups) {
+      const match = group.policyIds
+        .map((policyId) => ({ policyId, attachment: previewGroupAttachment(group, policyId) }))
+        .find((entry) => entry.attachment.id === attachmentId);
+      if (!match) continue;
+      if (match.attachment.resourceVersion !== command.resourceVersion) throw new HttpProblem(409, "PREVIEW_ATTACHMENT_CHANGED");
+      const revokedAt = new Date().toISOString();
+      await workspace.execute(credential, { kind: "change-group-policies", id: group.id, added: [], removed: [match.policyId] });
+      previewGroupAttachments.delete(groupAttachmentKey(group.id, match.policyId));
+      const result: PolicyAttachmentRevocation = { id: attachmentId, resourceVersion: command.resourceVersion + 1, revokedAt };
+      return result;
+    }
+    const userMatch = users.flatMap((user) => [
+      ...(source.userPolicies[user.id] ?? []).map((policyId) => policyAttachment(user.id, policyId)),
+      ...(userPlatformPolicies[user.id] ?? []).map((policyId) => policyAttachment(user.id, policyId, "INSTALLATION"))
+    ]).find((attachment) => attachment.id === attachmentId);
+    if (!userMatch) throw new HttpProblem(404, "PREVIEW_ATTACHMENT_NOT_FOUND");
+    if (userMatch.resourceVersion !== command.resourceVersion) throw new HttpProblem(409, "PREVIEW_ATTACHMENT_CHANGED");
+    await previewAccountRepository.execute(credential, { kind: "revoke-policy-attachment", attachmentId, resourceVersion: command.resourceVersion });
+    return { id: attachmentId, resourceVersion: command.resourceVersion + 1, revokedAt: new Date().toISOString() };
   },
   async execute(credential, command: AccountCommand) {
     requirePreviewCredential(credential);

@@ -12,6 +12,7 @@ import { AccountUserDirectory } from "./AccountUserDirectory";
 import { CreateTenantDialog } from "./AccountUserDialogs";
 import { CreateUserWizard } from "./CreateUserWizard";
 import { AccessGroups } from "./AccessGroups";
+import { AccountLiveGroups } from "./AccountLiveGroups";
 import { GroupCreationWizard } from "./GroupCreationWizard";
 import { AccessPolicies } from "./AccessPolicies";
 import { PolicyAuthoringWizard } from "./PolicyAuthoringWizard";
@@ -83,10 +84,12 @@ export function AccountAccessRenderer({ view = "overview", entityId, policyMetho
   const clearFeedback = access.clearFeedback;
   const workflow = view === "create-user" || view === "create-policy" || view === "create-group" || view === "create-role";
   useEffect(() => { clearFeedback(); }, [view, clearFeedback]);
-  const previewOnly = ["groups", "create-group", "create-policy", "simulator", "roles", "create-role", "providers", "user-sso", "federations", "keys"].includes(view);
+  const previewOnly = ["create-policy", "simulator", "roles", "create-role", "providers", "user-sso", "federations", "keys"].includes(view);
   const denied = scene && (
     (view === "users" && !scene.canListUsers) ||
     (view === "create-user" && !scene.canCreateUsers) ||
+    (view === "groups" && !(workspace ? scene.canListUsers : scene.canListGroups)) ||
+    (view === "create-group" && !(workspace ? scene.canListUsers : scene.canCreateGroups)) ||
     (view === "tenants" && !scene.canReadAccounts) ||
     (view === "policies" && !(workspace ? scene.canListUsers : scene.canViewPolicies)) ||
     (previewOnly && capabilities.hasPreviewWorkspace && !scene.canListUsers)
@@ -103,11 +106,12 @@ export function AccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "tenants" ? <TenantDirectory scene={scene} /> :
       view === "settings" ? <><UserSettings key={scene.accountVersion} scene={scene} />{workspace ? <AccessSecuritySettings workspace={workspace} /> : null}</> :
       view === "policies" && !workspace ? <AccountPolicyDirectory scene={scene} /> :
+      view === "create-group" ? <GroupCreationWizard workspace={workspace ?? undefined} onBack={() => onNavigate("groups")} onDone={(id) => onNavigate("groups", id)} /> :
+      view === "groups" && workspace ? <AccessGroups key={entityId ?? "groups"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
+      view === "groups" && access.groups ? <AccountLiveGroups key={`${access.groups.accountId}:${entityId ?? "groups"}`} client={access.groups} entityId={entityId} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
       !workspace ? <EmptyState title={w("notConnected")} description={w("notConnectedHint")} /> :
       view === "create-policy" ? <PolicyAuthoringWizard method={policyCreationMethod(policyMethod)} workspace={workspace} scene={scene} doneLabel={w("finishBack")} onBack={() => onNavigate("policies")} onDone={() => onNavigate("policies")} /> :
-      view === "create-group" ? <GroupCreationWizard workspace={workspace} onBack={() => onNavigate("groups")} onDone={(id) => onNavigate("groups", id)} /> :
       view === "create-role" ? <RoleCreationWizard workspace={workspace} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
-      view === "groups" ? <AccessGroups key={entityId ?? "groups"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
       view === "policies" ? <AccessPolicies key={entityId ?? "policies"} entityId={entityId} workspace={workspace} scene={scene} onCreate={(method) => onNavigate("create-policy", undefined, method)} onOpen={onNavigate} /> :
       view === "roles" ? <AccessRoles key={entityId ?? "roles"} workspace={workspace} scene={scene} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} /> :
       view === "simulator" ? <AccessSimulator key={entityId ?? "simulator"} workspace={workspace} scene={scene} entityId={entityId} onOpen={onNavigate} /> :

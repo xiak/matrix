@@ -11,6 +11,38 @@ import { applyUserBatch, userBatchDisabledReason, userBatchLimit, type UserBatch
 const context = { id: "new-id", at: "2026-09-09T02:00:00Z", userIds: ["principal-lin", "principal-chen"], primaryPrincipalId: "principal-admin", canManage: true, canListUsers: true };
 const document = parsePolicyDocument('{"version":"1","statement":[{"effect":"allow","action":["logs:read"],"resource":["matrix:logs:org-xiak:*:topic/production/*"]}]}');
 
+describe("preview adapter for the fixed group contract", () => {
+  it("keeps current identity grant provenance and group capabilities explicit", async () => {
+    await previewIamRepository.logout(previewCredential);
+    const identity = await previewAccountRepository.currentIdentity(previewCredential);
+    expect(identity.policySources).toEqual([]);
+    expect(identity.capabilities.filter((item) => item.action.startsWith("iam.group")).map((item) => item.action)).toEqual([
+      "iam.group.list", "iam.group.create"
+    ]);
+  });
+
+  it("changes one membership or attachment per versioned command and returns deletion evidence", async () => {
+    await previewIamRepository.logout(previewCredential);
+    const accountId = (await previewAccountRepository.currentIdentity(previewCredential)).account.id;
+    const created = await previewAccountRepository.createGroup(previewCredential, accountId, { name: "ContractTeam", description: "Contract preview", requestId: "create-contract-team" });
+    expect(created).toMatchObject({ accountId, name: "ContractTeam", description: "Contract preview", resourceVersion: 1 });
+    const membership = await previewAccountRepository.createGroupMembership(previewCredential, accountId, created.id, { userId: "principal-lin", requestId: "add-lin" });
+    const attachment = await previewAccountRepository.createGroupPolicyAttachment(previewCredential, accountId, created.id, { policyId: "policy-delivery", policyResourceVersion: 1, requestId: "attach-delivery" });
+    const detail = await previewAccountRepository.getGroup(previewCredential, accountId, created.id);
+    expect(detail.policyAttachments).toEqual([attachment]);
+    expect((await previewAccountRepository.listGroupMemberships(previewCredential, accountId, created.id)).items[0]?.membership).toEqual(membership);
+    await expect(previewAccountRepository.createGroupMembership(previewCredential, accountId, created.id, { userId: "principal-admin", requestId: "reject-owner" })).rejects.toThrow("PREVIEW_USER_NOT_FOUND");
+    const removed = await previewAccountRepository.removeGroupMembership(previewCredential, accountId, created.id, membership.id, { resourceVersion: membership.resourceVersion, requestId: "remove-lin" });
+    expect(removed).toMatchObject({ resourceVersion: 2, removedBy: "principal-admin" });
+    const revoked = await previewAccountRepository.revokePolicyAttachment(previewCredential, attachment.id, { resourceVersion: attachment.resourceVersion, requestId: "revoke-delivery" });
+    expect(revoked).toMatchObject({ id: attachment.id, resourceVersion: 2 });
+    const updated = await previewAccountRepository.updateGroup(previewCredential, accountId, created.id, { name: "ContractOperators", resourceVersion: created.resourceVersion, requestId: "rename-contract-team" });
+    const deleted = await previewAccountRepository.deleteGroup(previewCredential, accountId, created.id, { resourceVersion: updated.resourceVersion, requestId: "delete-contract-team" });
+    expect(deleted).toMatchObject({ name: "ContractOperators", removedMemberships: 0, revokedPolicyAttachments: 0, resourceVersion: 3 });
+    await previewIamRepository.logout(previewCredential);
+  });
+});
+
 describe("atomic user directory batches", () => {
   async function fixture() {
     await previewIamRepository.logout(previewCredential);

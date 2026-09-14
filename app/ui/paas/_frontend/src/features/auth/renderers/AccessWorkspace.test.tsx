@@ -6,7 +6,7 @@ import { LocaleProvider, useLocalePreference } from "@/i18n/LocaleProvider";
 import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider } from "../application/AccountAccessProvider";
-import { accountAccessViews, type AccountAccessView, type AccountIdentity, type ActionCapability, type CapabilityRestriction, type IamAction, type User, type UserAccess } from "../domain/accounts";
+import { accountAccessViews, type AccountAccessView, type AccountIdentity, type ActionCapability, type CapabilityRestriction, type GroupAccess, type GroupMembershipAccess, type IamAction, type User, type UserAccess } from "../domain/accounts";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorkspace";
 import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
@@ -34,7 +34,9 @@ const currentCapabilities = (available = true): ActionCapability[] => [
   capability("iam.account.alias-set", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.user.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.user.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
-  capability("iam.policy.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED")
+  capability("iam.policy.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.group.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.group.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED")
 ];
 const userAccess = (name: string): UserAccess => {
   const user: User = { ...rootUser, id: "principal-" + name, loginName: name, displayName: name };
@@ -45,7 +47,7 @@ const userAccess = (name: string): UserAccess => {
     capability("iam.policy-attachment.create", "USER", user.id), capability("iam.platform-policy-attachment.create", "USER", user.id)
   ] };
 };
-const identity: AccountIdentity = { account, user: rootUser, identityKind: "ROOT_IDENTITY", policyAttachments: [], capabilities: currentCapabilities() };
+const identity: AccountIdentity = { account, user: rootUser, identityKind: "ROOT_IDENTITY", policySources: [], capabilities: currentCapabilities() };
 const users: UserAccess[] = ["lin", "chen"].map(userAccess);
 const reviewUsers: UserAccess[] = [...users, ...["qiao", "wu"].map(userAccess)];
 const login: IamRepository = { login: async () => ({ credential: "preview-only", mustChangePassword: false, session: { id: "session", organizationId: "org-xiak", principalId: "admin", status: "ACTIVE", issuedAt: "2026-09-09T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z" } }), changePassword: async () => {}, logout: async () => {} };
@@ -60,12 +62,12 @@ function Harness({ repository, initialView, initialEntityId }: { repository: Acc
   if (!session.current) return <button onClick={() => void session.login("admin", "preview")}>Enter</button>;
   return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} onNavigate={(next, id, method) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); })} /></AccountAccessProvider>;
 }
-async function open(initialView: AccountAccessView, options?: { live?: boolean; reader?: boolean; entityId?: string; users?: UserAccess[]; seed?(extension: ReturnType<typeof createPreviewAccessWorkspace>): Promise<void> }) {
+async function open(initialView: AccountAccessView, options?: { live?: boolean; reader?: boolean; entityId?: string; users?: UserAccess[]; repository?: Partial<AccountRepository>; seed?(extension: ReturnType<typeof createPreviewAccessWorkspace>): Promise<void> }) {
   const directoryUsers = options?.users ?? users;
   const extension = createPreviewAccessWorkspace("org-xiak", () => directoryUsers.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
   await options?.seed?.(extension);
   const repository: AccountRepository = {
-    currentIdentity: vi.fn().mockResolvedValue(options?.reader ? { ...identity, policyAttachments: [], capabilities: currentCapabilities(false) } : identity),
+    currentIdentity: vi.fn().mockResolvedValue(options?.reader ? { ...identity, policySources: [], capabilities: currentCapabilities(false) } : identity),
     listUsers: options?.reader ? vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) : vi.fn().mockResolvedValue({ items: directoryUsers, nextAfter: null }),
     getUser: vi.fn().mockImplementation(async (_credential: string, userId: string) => {
       const entry = directoryUsers.find((candidate) => candidate.user.id === userId);
@@ -74,8 +76,19 @@ async function open(initialView: AccountAccessView, options?: { live?: boolean; 
     }),
     listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => ({ accountId: "org-xiak", scope: platform ? "INSTALLATION" : "TENANT", installationId: platform ? "preview" : null, items: [] })),
     listAccounts: vi.fn().mockResolvedValue({ items: [], nextAfter: null }),
+    listGroups: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    getGroup: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    createGroup: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    updateGroup: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    deleteGroup: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    listGroupMemberships: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    createGroupMembership: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    removeGroupMembership: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    createGroupPolicyAttachment: vi.fn().mockRejectedValue(new Error("unused group contract")),
+    revokePolicyAttachment: vi.fn().mockRejectedValue(new Error("unused group contract")),
     execute: vi.fn().mockResolvedValue(undefined),
-    workspace: options?.live ? undefined : { read: vi.fn(extension.read), execute: vi.fn(extension.execute) }
+    workspace: options?.live ? undefined : { read: vi.fn(extension.read), execute: vi.fn(extension.execute) },
+    ...options?.repository
   };
   const user = userEvent.setup();
   render(<LocaleProvider><SessionProvider repository={login}><UnsavedChangesProvider><Harness initialView={initialView} initialEntityId={options?.entityId} repository={repository} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>);
@@ -1201,6 +1214,60 @@ describe("CAM-style access workspace", () => {
     expect(within(table).queryByRole("columnheader", { name: "成员" })).toBeNull();
     expect(within(table).getByRole("columnheader", { name: "直接关联策略" })).toBeTruthy();
     expect(within(table).getByText("2 项直接关联")).toBeTruthy();
+  });
+  it("uses the fixed live group contract without inventing totals and retries one unchanged relation intent", async () => {
+    const liveGroup: GroupAccess = {
+      group: { id: "group-live", accountId: account.id, name: "LiveOperators", description: "Backend-owned group", resourceVersion: 4, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [
+        capability("iam.group.read", "GROUP", "group-live"),
+        capability("iam.group.update", "GROUP", "group-live"),
+        capability("iam.group.delete", "GROUP", "group-live"),
+        capability("iam.group-membership.list", "GROUP", "group-live"),
+        capability("iam.group-membership.create", "GROUP", "group-live"),
+        capability("iam.group-policy-attachment.create", "GROUP", "group-live")
+      ]
+    };
+    const membership = (id: string, userId: string): GroupMembershipAccess => ({
+      membership: { id, accountId: account.id, groupId: liveGroup.group.id, userId, createdBy: rootUser.id, resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      capabilities: [capability("iam.group-membership.remove", "GROUP_MEMBERSHIP", id)]
+    });
+    const lin = membership("membership-lin", "principal-lin");
+    const chen = membership("membership-chen", "principal-chen");
+    const listMemberships = vi.fn()
+      .mockResolvedValueOnce({ accountId: account.id, groupId: liveGroup.group.id, items: [lin], nextAfter: null })
+      .mockResolvedValueOnce({ accountId: account.id, groupId: liveGroup.group.id, items: [lin, chen], nextAfter: null });
+    const createMembership = vi.fn()
+      .mockRejectedValueOnce(new Error("unknown outcome"))
+      .mockResolvedValueOnce(chen.membership);
+    const { user } = await open("groups", { live: true, repository: {
+      listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
+      getGroup: vi.fn().mockResolvedValue(liveGroup),
+      listGroupMemberships: listMemberships,
+      createGroupMembership: createMembership
+    } });
+    const directory = await screen.findByRole("table", { name: "用户组" });
+    expect(within(directory).queryByRole("columnheader", { name: "成员" })).toBeNull();
+    expect(screen.getByText(/搜索和筛选仅作用于当前已载入记录/)).toBeTruthy();
+    await user.click(within(directory).getByRole("button", { name: "LiveOperators" }));
+    expect(await screen.findByRole("heading", { name: "LiveOperators" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "成员" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "成员 (1)" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "添加成员" }));
+    const dialog = within(screen.getByRole("dialog"));
+    await user.click(dialog.getByRole("checkbox", { name: "chen" }));
+    await user.click(dialog.getByRole("button", { name: "审阅变更" }));
+    await user.click(dialog.getByRole("button", { name: "确认变更" }));
+    await waitFor(() => expect(createMembership).toHaveBeenCalledTimes(1));
+    const retained = createMembership.mock.calls[0]?.[3]?.requestId;
+    expect(retained).toEqual(expect.any(String));
+    expect(dialog.getByText(/暂时无法完成操作/)).toBeTruthy();
+    await user.click(dialog.getByRole("button", { name: "确认变更" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(createMembership).toHaveBeenCalledTimes(2);
+    expect(createMembership.mock.calls[1]?.[3]?.requestId).toBe(retained);
+    expect(screen.getByRole("tab", { name: "成员" })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "成员 (2)" })).toBeNull();
   });
   it("creates only an empty group, then adds each member and policy relationship separately", async () => {
     const { user, repository, extension } = await open("groups");

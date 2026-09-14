@@ -379,6 +379,7 @@ function ConsoleShell() {
   const localNavigation = scene.navigation.filter((item) => {
     if (scene.section !== "access" || item.id === "access" || item.id === "settings") return true;
     if (item.id === "users") return accountCapabilities.canListUsers;
+    if (item.id === "groups") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canListGroups;
     if (item.id === "policies") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canViewPolicies;
     if (item.id === "tenants") return accountCapabilities.canReadAccounts;
     return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canListUsers;

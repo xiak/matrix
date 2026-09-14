@@ -3,7 +3,18 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useSession, useSessionCredential } from "./SessionProvider";
-import type { AccountCommand } from "../domain/accounts";
+import type {
+  AccountCommand,
+  CapabilityRestriction,
+  DirectoryPage,
+  Group,
+  GroupAccess,
+  GroupDeletion,
+  GroupMembership,
+  GroupMembershipPage,
+  GroupPolicyAttachment,
+  PolicyAttachmentRevocation
+} from "../domain/accounts";
 import { type AccessWorkspace, type AccessWorkspaceCommand } from "../domain/accessWorkspace";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import type { AccountRepository } from "../repositories/iamRepository";
@@ -12,6 +23,24 @@ import { buildAccountAccessScene, buildAccountUserScene, findActionCapability, t
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
+
+export type GroupAccessClient = {
+  accountId: string;
+  canList: boolean;
+  listRestrictionReason: CapabilityRestriction | null;
+  canCreate: boolean;
+  createRestrictionReason: CapabilityRestriction | null;
+  list(after?: string): Promise<DirectoryPage<GroupAccess>>;
+  get(groupId: string): Promise<GroupAccess>;
+  create(command: { name: string; description?: string; requestId: string }): Promise<Group>;
+  update(groupId: string, command: { name: string; description?: string; resourceVersion: number; requestId: string }): Promise<Group>;
+  delete(groupId: string, command: { resourceVersion: number; requestId: string }): Promise<GroupDeletion>;
+  listMemberships(groupId: string, after?: string): Promise<GroupMembershipPage>;
+  createMembership(groupId: string, command: { userId: string; requestId: string }): Promise<GroupMembership>;
+  removeMembership(groupId: string, membershipId: string, command: { resourceVersion: number; requestId: string }): Promise<GroupMembership>;
+  createPolicyAttachment(groupId: string, command: { policyId: string; policyResourceVersion: number; requestId: string }): Promise<GroupPolicyAttachment>;
+  revokePolicyAttachment(attachmentId: string, command: { resourceVersion: number; requestId: string }): Promise<PolicyAttachmentRevocation>;
+};
 
 export type PolicyDirectoryView = { query: string; kind: string; service: string; category: string; sort: string; page: number; pageSize: number };
 export const defaultPolicyDirectoryView: PolicyDirectoryView = { query: "", kind: "all", service: "all", category: "all", sort: "name", page: 1, pageSize: 10 };
@@ -28,6 +57,7 @@ type AccountAccess = {
   executeWorkspace(command: AccessWorkspaceCommand): Promise<{ issuedKey?: { id: string; secret: string } } | null>;
   clearWorkspaceError(): void;
   clearFeedback(): void;
+  groups: GroupAccessClient | null;
   scene: AccountAccessScene | null;
   loading: boolean;
   busy: boolean;
@@ -41,10 +71,10 @@ type AccountAccess = {
 };
 
 const AccountAccessContext = createContext<AccountAccess | null>(null);
-type AccountCapabilities = Pick<AccountAccessScene, "canListUsers" | "canReadAccounts" | "canCreateAccounts" | "canViewPolicies"> & { hasPreviewWorkspace: boolean };
+type AccountCapabilities = Pick<AccountAccessScene, "canListUsers" | "canListGroups" | "canReadAccounts" | "canCreateAccounts" | "canViewPolicies"> & { hasPreviewWorkspace: boolean };
 const AccountCapabilitiesContext = createContext<AccountCapabilities | null>(null);
 
-function accountError(error: unknown): AccountError {
+export function accountError(error: unknown): AccountError {
   if (error instanceof HttpProblem) {
     if (error.status === 401) return "expired";
     if (error.status === 403) return "forbidden";
@@ -115,12 +145,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   }), [viewSession]);
   const clearFeedback = useCallback(() => { setWorkspaceError(null); setSuccess(null); }, []);
   const canListUsers = Boolean(scene?.canListUsers);
+  const canListGroups = Boolean(scene?.canListGroups);
   const canReadAccounts = Boolean(scene?.canReadAccounts);
   const canCreateAccounts = Boolean(scene?.canCreateAccounts);
   const canViewPolicies = Boolean(scene?.canViewPolicies);
   const hasPreviewWorkspace = Boolean(repository.workspace);
   // Navigation observes permission changes, not every form's pending/error state.
-  const capabilities = useMemo(() => ({ canListUsers, canReadAccounts, canCreateAccounts, canViewPolicies, hasPreviewWorkspace }), [canCreateAccounts, canListUsers, canReadAccounts, canViewPolicies, hasPreviewWorkspace]);
+  const capabilities = useMemo(() => ({ canListUsers, canListGroups, canReadAccounts, canCreateAccounts, canViewPolicies, hasPreviewWorkspace }), [canCreateAccounts, canListGroups, canListUsers, canReadAccounts, canViewPolicies, hasPreviewWorkspace]);
 
   useEffect(() => {
     if (!active || !credential || !tenantId) return;
@@ -158,6 +189,28 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return buildAccountUserScene({ id: scene.accountId, loginAlias: scene.loginAlias }, scene.policies, access);
   }, [active, credential, repository, scene, tenantId]);
 
+  const groups = useMemo<GroupAccessClient | null>(() => {
+    if (!active || !credential || !scene || scene.accountId !== tenantId) return null;
+    const accountId = scene.accountId;
+    return {
+      accountId,
+      canList: scene.canListGroups,
+      listRestrictionReason: scene.listGroupsRestrictionReason,
+      canCreate: scene.canCreateGroups,
+      createRestrictionReason: scene.createGroupsRestrictionReason,
+      list: (after) => repository.listGroups(credential, accountId, after),
+      get: (groupId) => repository.getGroup(credential, accountId, groupId),
+      create: (command) => repository.createGroup(credential, accountId, command),
+      update: (groupId, command) => repository.updateGroup(credential, accountId, groupId, command),
+      delete: (groupId, command) => repository.deleteGroup(credential, accountId, groupId, command),
+      listMemberships: (groupId, after) => repository.listGroupMemberships(credential, accountId, groupId, after),
+      createMembership: (groupId, command) => repository.createGroupMembership(credential, accountId, groupId, command),
+      removeMembership: (groupId, membershipId, command) => repository.removeGroupMembership(credential, accountId, groupId, membershipId, command),
+      createPolicyAttachment: (groupId, command) => repository.createGroupPolicyAttachment(credential, accountId, groupId, command),
+      revokePolicyAttachment: (attachmentId, command) => repository.revokePolicyAttachment(credential, attachmentId, command)
+    };
+  }, [active, credential, repository, scene, tenantId]);
+
   const value = useMemo<AccountAccess>(() => ({
     supportsUserBatch: Boolean(repository.executeUserBatch),
     async executeUserBatch(command) {
@@ -187,6 +240,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     },
     policyDirectoryView,
     userDirectoryView,
+    groups,
     workspace, workspaceError,
     clearWorkspaceError, clearFeedback,
     async executeWorkspace(command) {
@@ -224,7 +278,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, workspace, workspaceError, clearWorkspaceError, clearFeedback, loadUser, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, loadUser, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

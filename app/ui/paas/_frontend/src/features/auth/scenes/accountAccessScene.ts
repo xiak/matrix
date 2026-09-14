@@ -8,6 +8,7 @@ import type {
   DirectoryPage,
   IamAction,
   PolicyDirectory,
+  GroupPolicyAttachment,
   UserAccess,
   UserPolicyAttachment
 } from "../domain/accounts";
@@ -27,13 +28,24 @@ function credentialProtection(...reasons: Array<CapabilityRestriction | null>): 
   return null;
 }
 
-function describeAttachment(attachment: UserPolicyAttachment, policyById: ReadonlyMap<string, AccountPolicy>) {
+function describeAttachment(attachment: UserPolicyAttachment | GroupPolicyAttachment, policyById: ReadonlyMap<string, AccountPolicy>) {
   const policy = policyById.get(attachment.policyId);
   return {
     ...attachment,
     label: policy?.displayName ?? attachment.policyId,
     policyStatus: policy?.status ?? null,
     policyResourceVersion: policy?.resourceVersion ?? null
+  };
+}
+
+function describeIdentitySource(
+  source: AccountIdentity["policySources"][number],
+  policyById: ReadonlyMap<string, AccountPolicy>
+) {
+  return {
+    ...describeAttachment(source.attachment, policyById),
+    source: source.kind === "GROUP" ? "group" as const : "direct" as const,
+    groupId: source.kind === "GROUP" ? source.membership.groupId : null
   };
 }
 
@@ -127,10 +139,14 @@ export function buildAccountAccessScene(
     currentLoginName: identity.user.loginName,
     identityKind: identity.identityKind,
     isRoot: rootIsCurrent,
-    identityAttachments: identity.policyAttachments.map((attachment) => describeAttachment(attachment, policyById)),
+    identityAttachments: identity.policySources.map((source) => describeIdentitySource(source, policyById)),
     canListUsers: identityCapability("iam.user.list")?.available === true && users !== null,
     canCreateUsers: identityCapability("iam.user.create")?.available === true,
     createUsersRestrictionReason: identityCapability("iam.user.create")?.restrictionReason ?? null,
+    canListGroups: identityCapability("iam.group.list")?.available === true,
+    listGroupsRestrictionReason: identityCapability("iam.group.list")?.restrictionReason ?? null,
+    canCreateGroups: identityCapability("iam.group.create")?.available === true,
+    createGroupsRestrictionReason: identityCapability("iam.group.create")?.restrictionReason ?? null,
     canSetAlias: identityCapability("iam.account.alias-set")?.available === true,
     setAliasRestrictionReason: identityCapability("iam.account.alias-set")?.restrictionReason ?? null,
     canReadAccounts: identityCapability("iam.account.read", "accounts")?.available === true && accounts !== null,
@@ -154,7 +170,7 @@ export function buildAccountAccessScene(
       state: rootIsCurrent
         ? identity.user.status === "DISABLED" ? "disabled" as const : identity.user.mustChangePassword ? "passwordChangeRequired" as const : "active" as const
         : null,
-      attachments: rootIsCurrent ? identity.policyAttachments.map((attachment) => describeAttachment(attachment, policyById)) : []
+      attachments: rootIsCurrent ? identity.policySources.map((source) => describeIdentitySource(source, policyById)) : []
     },
     users: users?.items.map((item) => buildAccountUserScene(account, policies, item)) ?? [],
     nextUserPage: users?.nextAfter ?? null,

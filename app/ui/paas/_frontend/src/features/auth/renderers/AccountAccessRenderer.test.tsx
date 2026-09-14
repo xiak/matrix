@@ -30,7 +30,9 @@ const currentCapabilities = (available = true): ActionCapability[] => [
   capability("iam.account.alias-set", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.user.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.user.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
-  capability("iam.policy.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED")
+  capability("iam.policy.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.group.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.group.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED")
 ];
 const userCapabilities = (user: User, attachments: UserPolicyAttachment[] = [], reason: CapabilityRestriction | null = null): ActionCapability[] => [
   capability("iam.user.read", "USER", user.id, reason),
@@ -47,7 +49,7 @@ const accountAccess = (value: Account): AccountAccess => ({ account: value, capa
   capability("iam.account.recover-root-credentials", "ACCOUNT", value.id)
 ] });
 const identity: AccountIdentity = {
-  account, user: rootUser, identityKind: "ROOT_IDENTITY", policyAttachments: [], capabilities: currentCapabilities()
+  account, user: rootUser, identityKind: "ROOT_IDENTITY", policySources: [], capabilities: currentCapabilities()
 };
 const childUser: User = { ...rootUser, id: "child-a", loginName: "developer", displayName: "Developer A" };
 const child: UserAccess = { user: childUser, policyAttachments: [attachment("child-a", tenantPolicy)], capabilities: userCapabilities(childUser, [attachment("child-a", tenantPolicy)]) };
@@ -157,7 +159,7 @@ describe("account access", () => {
     expect(scene.accountOwner).toMatchObject({ id: "primary-a", accountType: "primary", name: "Account owner", state: "active" });
     expect(scene.users).toHaveLength(1);
     expect(scene.users[0]).toMatchObject({ id: "child-a", accountType: "subuser", attachments: [{ policyId: "customer.administrator" }] });
-    const actingChild: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", policyAttachments: child.policyAttachments, capabilities: currentCapabilities(false) };
+    const actingChild: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", policySources: child.policyAttachments.map((attachment) => ({ kind: "DIRECT" as const, attachment })), capabilities: currentCapabilities(false) };
     const selfProtected: UserAccess = { ...child, capabilities: userCapabilities(child.user, child.policyAttachments, "SELF_PROTECTED") };
     const pageWithoutOwner = buildAccountAccessScene(actingChild, { items: [selfProtected], nextAfter: "later" }, null, directory(false), null);
     expect(pageWithoutOwner.accountOwner).toMatchObject({ id: "primary-a", loginName: "admin", name: null, state: null, isCurrent: false });
@@ -381,7 +383,7 @@ describe("account access", () => {
   });
 
   it("allows an unprivileged user to inspect its own settings without querying admin directories", async () => {
-    const reader: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", policyAttachments: [], capabilities: currentCapabilities(false) };
+    const reader: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", policySources: [], capabilities: currentCapabilities(false) };
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(reader), listUsers: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) });
     await openAccess(repository, iam({}, "child-a"), "overview");
     await screen.findByText("未授权");

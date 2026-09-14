@@ -36,12 +36,13 @@ export type GroupPolicyRecord = {
   name: string;
   description?: string;
   kind?: "system" | "custom";
-  version?: number;
+  version?: number | string;
 };
 
 export type GroupDetailRecord = GroupDirectoryRecord & {
   members: GroupMemberRecord[];
   policies: GroupPolicyRecord[];
+  membersAvailability?: "ready" | "loading" | "forbidden";
 };
 
 export type GroupDetailControls = {
@@ -51,11 +52,15 @@ export type GroupDetailControls = {
   removeMember?: GroupActionControl;
   addPolicy?: GroupActionControl;
   removePolicy?: GroupActionControl;
+  loadMoreMembers?: GroupActionControl;
 };
 
-export function GroupDirectory({ groups, create, onOpen }: {
+export function GroupDirectory({ groups, create, loadMore, status, footerNote, onOpen }: {
   groups: GroupDirectoryRecord[];
   create?: GroupActionControl;
+  loadMore?: GroupActionControl;
+  status?: string;
+  footerNote?: string;
   onOpen(groupId: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
@@ -68,6 +73,9 @@ export function GroupDirectory({ groups, create, onOpen }: {
     items={groups}
     keywords={(group) => group.description}
     create={create ? { label: t("createGroup"), disabled: create.disabled, reason: create.reason, onClick: create.onInvoke } : undefined}
+    loadMore={loadMore ? { label: g("loadMore"), disabled: loadMore.disabled, onClick: loadMore.onInvoke } : undefined}
+    status={status}
+    footerNote={footerNote}
     columns={[t("name"), ...(showMemberCount ? [t("members")] : []), g("directPolicies"), t("created")]}
     row={(group) => <>
       <td>
@@ -117,7 +125,7 @@ function GroupPolicyTable({ policies, onOpen }: {
         <small>{policy.description}</small>
       </td>
       <td>{policy.kind ? t(policy.kind) : "—"}</td>
-      <td>{policy.version === undefined ? "—" : `v${policy.version}`}</td>
+      <td>{policy.version === undefined ? "—" : typeof policy.version === "number" ? `v${policy.version}` : policy.version}</td>
     </tr>)}</tbody>
   </Table>;
 }
@@ -170,9 +178,12 @@ export function GroupDetail({ group, controls, onBack, onOpenMember, onOpenPolic
           <GroupActionButton control={controls.addMember}>{g("addMembers")}</GroupActionButton>
           <GroupActionButton control={controls.removeMember} variant="secondary">{g("removeMembers")}</GroupActionButton>
         </div>
-        {group.members.length
+        {group.membersAvailability === "loading" ? <p className={styles.note} role="status">{g("loadingMembers")}</p>
+          : group.membersAvailability === "forbidden" ? <EmptyState title={g("membersUnavailable")} description={g("membersUnavailableHint")} />
+          : group.members.length
           ? <GroupMemberTable members={group.members} onOpen={onOpenMember} />
           : <EmptyState title={g("noMembers")} description={g("noMembersHint")} />}
+        <GroupActionButton control={controls.loadMoreMembers} variant="secondary">{g("loadMoreMembers")}</GroupActionButton>
       </Tabs.Content>
       <Tabs.Content className={styles.stack} value="policies">
         <div className={styles.actions}>
