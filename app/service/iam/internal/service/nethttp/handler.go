@@ -21,6 +21,7 @@ import (
 type Workflow interface {
 	CurrentIdentity(context.Context, iamv1.Secret) (iamv1.CurrentIdentity, error)
 	ListUsers(context.Context, iamv1.Secret, string, string) (iamv1.UserList, error)
+	GetUser(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserAccess, error)
 	ListPolicies(context.Context, iamv1.Secret, bool, string) (iamv1.PolicyList, error)
 	ListAccounts(context.Context, iamv1.Secret, string, string) (iamv1.AccountList, error)
 	GetAccount(context.Context, iamv1.Secret, iamv1.AccountID, string) (iamv1.AccountAccess, error)
@@ -28,6 +29,8 @@ type Workflow interface {
 	RecoverRootCredentials(context.Context, iamv1.Secret, iamv1.AccountID, iamv1.RecoverRootCredentialsRequest) (iamv1.Account, error)
 	CreateAccount(context.Context, iamv1.Secret, iamv1.CreateAccountRequest) (iamv1.Account, error)
 	SetAccountAlias(context.Context, iamv1.Secret, iamv1.SetAccountAliasRequest) (iamv1.Account, error)
+	UpdateUser(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.UpdateUserRequest) (iamv1.User, error)
+	DeleteUser(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.DeleteUserRequest) (iamv1.UserDeletion, error)
 	SetUserStatus(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.SetUserStatusRequest) (iamv1.User, error)
 	ResetUserPassword(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.ResetUserPasswordRequest) (iamv1.User, error)
 	Readiness(context.Context) (iamv1.Readiness, error)
@@ -101,7 +104,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/authorize", value.authorize)
 	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
 	routes.HandleFunc("/v1/users", value.users)
-	routes.HandleFunc("/v1/users/", value.changeUser)
+	routes.HandleFunc("/v1/users/", value.user)
 	routes.HandleFunc("/v1/policy-attachments", value.createPolicyAttachment)
 	routes.HandleFunc("/v1/policy-attachments/", value.revokePolicyAttachment)
 	routes.HandleFunc("/v1/sessions/", value.revokeSession)
@@ -573,29 +576,59 @@ func (value *handler) account(response http.ResponseWriter, request *http.Reques
 	writeJSON(response, http.StatusOK, result)
 }
 
-func (value *handler) changeUser(response http.ResponseWriter, request *http.Request) {
-	suffix := ":set-status"
-	reset := strings.HasSuffix(request.URL.Path, ":reset-password")
-	if reset {
-		suffix = ":reset-password"
+func (value *handler) user(response http.ResponseWriter, request *http.Request) {
+	suffix := ""
+	if request.Method == http.MethodPost {
+		for _, candidate := range []string{":update", ":delete", ":set-status", ":reset-password"} {
+			if strings.HasSuffix(request.URL.Path, candidate) {
+				suffix = candidate
+				break
+			}
+		}
+		if suffix == "" {
+			value.notFound(response, request)
+			return
+		}
+	} else if request.Method != http.MethodGet {
+		response.Header().Set("Allow", "GET, POST")
+		writeProblem(response, requestID(request), http.StatusMethodNotAllowed, "iam.method.invalid", "IAM method not allowed")
+		return
 	}
 	id, ok := commandPathID(response, request, "/v1/users/", suffix, "userId")
-	if !ok || !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+	if !ok || !rejectQuery(response, request) {
 		return
 	}
 	credential, ok := bearerCredential(response, request)
 	if !ok {
 		return
 	}
-	var result iamv1.User
+	var result any
 	var err error
-	if reset {
+	switch suffix {
+	case "":
+		if !rejectQueryAndBody(response, request) {
+			return
+		}
+		result, err = value.workflow.GetUser(request.Context(), credential, iamv1.PrincipalID(id), requestID(request))
+	case ":update":
+		body, ok := decodeJSON[iamv1.UpdateUserRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.UpdateUser(request.Context(), credential, iamv1.PrincipalID(id), body)
+	case ":delete":
+		body, ok := decodeJSON[iamv1.DeleteUserRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.DeleteUser(request.Context(), credential, iamv1.PrincipalID(id), body)
+	case ":reset-password":
 		body, ok := decodeJSON[iamv1.ResetUserPasswordRequest](value, response, request)
 		if !ok {
 			return
 		}
 		result, err = value.workflow.ResetUserPassword(request.Context(), credential, iamv1.PrincipalID(id), body)
-	} else {
+	case ":set-status":
 		body, ok := decodeJSON[iamv1.SetUserStatusRequest](value, response, request)
 		if !ok {
 			return

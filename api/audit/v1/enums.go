@@ -30,6 +30,8 @@ const (
 	ActionIAMAccountRootCredentialsRecovered Action = "iam.account-root.credentials-recovered"
 	ActionIAMAccountAliasUpdated             Action = "iam.account.alias-set"
 	ActionIAMUserCreated                     Action = "iam.user.created"
+	ActionIAMUserUpdated                     Action = "iam.user.updated"
+	ActionIAMUserDeleted                     Action = "iam.user.deleted"
 	ActionIAMUserStatusSet                   Action = "iam.user.status-set"
 	ActionIAMUserPasswordReset               Action = "iam.user.password-reset"
 	ActionIAMUserPasswordChanged             Action = "iam.user.password-changed"
@@ -160,6 +162,8 @@ var allActions = []Action{
 	ActionIAMAccountRootCredentialsRecovered,
 	ActionIAMAccountAliasUpdated,
 	ActionIAMUserCreated,
+	ActionIAMUserUpdated,
+	ActionIAMUserDeleted,
 	ActionIAMUserStatusSet,
 	ActionIAMUserPasswordReset,
 	ActionIAMUserPasswordChanged,
@@ -220,6 +224,12 @@ var actionContracts = map[Action]ActionContract{
 		Source: SourceIAM, Target: TargetAccount, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
 	ActionIAMUserCreated: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserUpdated: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMUserDeleted: {
 		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
 	ActionIAMUserStatusSet: {

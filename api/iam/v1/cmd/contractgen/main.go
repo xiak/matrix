@@ -97,6 +97,9 @@ func buildPaths() object {
 		"/v1/accounts/{accountId}:set-status":               object{"post": mutationOperation("setAccountStatus", "Suspend or restore account access without stopping workloads", "SetAccountStatusRequest", "Account", "200", nil, []any{openapi31.PathIDParameter("accountId")})},
 		"/v1/accounts/{accountId}:recover-root-credentials": object{"post": mutationOperation("recoverRootCredentials", "Recover the account's immutable root identity without transferring ownership", "RecoverRootCredentialsRequest", "Account", "200", nil, []any{openapi31.PathIDParameter("accountId")})},
 		"/v1/account:alias":                                 object{"post": mutationOperation("setAccountAlias", "Set the current account login alias", "SetAccountAliasRequest", "Account", "200", nil, nil)},
+		"/v1/users/{userId}":                                object{"get": readOperation("getUser", "Read one manageable account user and target capabilities", "UserAccess", nil, []any{openapi31.PathIDParameter("userId")})},
+		"/v1/users/{userId}:update":                         object{"post": mutationOperation("updateUser", "Update an account user's display profile", "UpdateUserRequest", "User", "200", nil, []any{openapi31.PathIDParameter("userId")})},
+		"/v1/users/{userId}:delete":                         object{"post": mutationOperation("deleteUser", "Irreversibly tombstone a disabled account user", "DeleteUserRequest", "UserDeletion", "200", nil, []any{openapi31.PathIDParameter("userId")})},
 		"/v1/users/{userId}:set-status":                     object{"post": mutationOperation("setUserStatus", "Disable or enable an account user", "SetUserStatusRequest", "User", "200", nil, []any{openapi31.PathIDParameter("userId")})},
 		"/v1/users/{userId}:reset-password":                 object{"post": mutationOperation("resetUserPassword", "Reset an account user password and revoke its sessions", "ResetUserPasswordRequest", "User", "200", nil, []any{openapi31.PathIDParameter("userId")})},
 		"/v1/auth/logout": object{"post": mutationOperation(
@@ -279,6 +282,9 @@ func structContracts() map[string]reflect.Type {
 		"CreateAccountRequest":          openapi31.StructType[iamv1.CreateAccountRequest](),
 		"SetAccountAliasRequest":        openapi31.StructType[iamv1.SetAccountAliasRequest](),
 		"SetUserStatusRequest":          openapi31.StructType[iamv1.SetUserStatusRequest](),
+		"UpdateUserRequest":             openapi31.StructType[iamv1.UpdateUserRequest](),
+		"DeleteUserRequest":             openapi31.StructType[iamv1.DeleteUserRequest](),
+		"UserDeletion":                  openapi31.StructType[iamv1.UserDeletion](),
 		"SetAccountStatusRequest":       openapi31.StructType[iamv1.SetAccountStatusRequest](),
 		"RecoverRootCredentialsRequest": openapi31.StructType[iamv1.RecoverRootCredentialsRequest](),
 		"ResetUserPasswordRequest":      openapi31.StructType[iamv1.ResetUserPasswordRequest](),
@@ -292,7 +298,7 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
-	if owner == "Policy" && jsonName == "displayName" {
+	if (owner == "Policy" || owner == "UpdateUserRequest") && jsonName == "displayName" {
 		base["minLength"], base["maxLength"] = 1, 128
 	}
 	if jsonName == "contentDigest" {

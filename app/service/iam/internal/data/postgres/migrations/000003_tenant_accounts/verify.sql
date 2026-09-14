@@ -1,6 +1,6 @@
 DO $verify_accounts$
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 7::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 8::bigint THEN
         RAISE EXCEPTION 'IAM account/proof schema version is incompatible';
     END IF;
     IF NOT EXISTS (
@@ -27,7 +27,13 @@ BEGIN
             WHERE conrelid='iam.account_roots'::regclass AND contype='f') <> 3
         OR to_regclass('iam.login_primary_name_uq') IS NOT NULL
         OR to_regclass('iam.login_primary_tenant_uq') IS NOT NULL
-        OR to_regclass('iam.account_alias_active_uq') IS NULL THEN
+        OR to_regclass('iam.account_alias_active_uq') IS NULL
+        OR NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute
+            WHERE attrelid='iam.principals'::regclass AND attname='deleted_at'
+              AND atttypid='timestamptz'::regtype AND NOT attnotnull AND NOT attisdropped)
+        OR NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint
+            WHERE conrelid='iam.principals'::regclass AND conname='principals_values_valid'
+              AND contype='c' AND convalidated) THEN
         RAISE EXCEPTION 'IAM account identity constraints are unavailable';
     END IF;
     IF has_table_privilege('matrix_iam_api','iam.account_aliases','SELECT,INSERT,UPDATE,DELETE')
@@ -41,6 +47,9 @@ BEGIN
         OR has_function_privilege('matrix_iam_worker','iam.account_management_snapshot(text)','EXECUTE')
         OR has_function_privilege('public','iam.account_management_snapshot(text)','EXECUTE')
         OR has_function_privilege('matrix_iam_api','iam.user_snapshot(text,text)','EXECUTE')
+        OR has_function_privilege('matrix_iam_api','iam.user_access_snapshot(text,text)','EXECUTE')
+        OR has_function_privilege('matrix_iam_worker','iam.user_access_snapshot(text,text)','EXECUTE')
+        OR has_function_privilege('public','iam.user_access_snapshot(text,text)','EXECUTE')
         OR has_function_privilege('public','iam.read_audit_evidence(text,text,text,text,jsonb)','EXECUTE')
         OR has_function_privilege('matrix_iam_worker','iam.read_audit_evidence(text,text,text,text,jsonb)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.read_audit_evidence(text,text,text,text,jsonb)','EXECUTE')
@@ -54,6 +63,9 @@ BEGIN
         OR NOT has_function_privilege('matrix_iam_api','iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.set_account_alias(text,text,text,text,bigint,jsonb)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.change_user(text,text,text,text,bigint,text,text,jsonb)','EXECUTE')
+        OR NOT has_function_privilege('matrix_iam_api','iam.read_user(text,text,text,text)','EXECUTE')
+        OR NOT has_function_privilege('matrix_iam_api','iam.update_user(text,text,text,text,text,bigint,jsonb)','EXECUTE')
+        OR NOT has_function_privilege('matrix_iam_api','iam.delete_user(text,text,text,text,bigint,jsonb)','EXECUTE')
         OR has_function_privilege('public','iam.create_account(text,text,text,text,text,text,text,text,text,jsonb)','EXECUTE')
         OR has_function_privilege('public','iam.read_account_as_platform(text,text,text,text)','EXECUTE')
         OR has_function_privilege('public','iam.read_account_root(text,text,text,text)','EXECUTE')
@@ -62,6 +74,12 @@ BEGIN
         OR has_function_privilege('matrix_iam_worker','iam.create_account(text,text,text,text,text,text,text,text,text,jsonb)','EXECUTE')
         OR has_function_privilege('matrix_iam_worker','iam.set_account_status(text,text,text,text,text,bigint,jsonb)','EXECUTE')
         OR has_function_privilege('matrix_iam_worker','iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb)','EXECUTE')
+        OR has_function_privilege('matrix_iam_worker','iam.read_user(text,text,text,text)','EXECUTE')
+        OR has_function_privilege('matrix_iam_worker','iam.update_user(text,text,text,text,text,bigint,jsonb)','EXECUTE')
+        OR has_function_privilege('matrix_iam_worker','iam.delete_user(text,text,text,text,bigint,jsonb)','EXECUTE')
+        OR has_function_privilege('public','iam.read_user(text,text,text,text)','EXECUTE')
+        OR has_function_privilege('public','iam.update_user(text,text,text,text,text,bigint,jsonb)','EXECUTE')
+        OR has_function_privilege('public','iam.delete_user(text,text,text,text,bigint,jsonb)','EXECUTE')
         OR to_regprocedure('iam.can_produce_audit(text,text,text,text)') IS NOT NULL
         OR to_regprocedure('iam.is_bootstrap_administrator(text,text)') IS NOT NULL
         OR to_regprocedure('iam.read_organization(text,text,text,text)') IS NOT NULL

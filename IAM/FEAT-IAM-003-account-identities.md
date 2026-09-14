@@ -1,6 +1,6 @@
 # FEAT-IAM-003：主账号、用户与凭据生命周期
 
-- 状态：实现中；Account/RootIdentity/User 命名替换、现有生命周期纵向闭环和显式管理能力投影已有固定验证；资料/删除、签名 Profile 和真实浏览器仍未验收。
+- 状态：实现中；Account/RootIdentity/User 命名替换、现有生命周期、显式管理能力、用户详情/资料/安全删除已有真实候选验证；签名 Profile 仍未验收。
 - 依赖：002。
 - Owner：IAM 账号/身份与安装 primary 的接口协作。
 
@@ -30,7 +30,7 @@ RootIdentity 仍由底层 USER principal 承载认证，但不出现在日常 Us
 
 控制台不得从某个系统策略 ID、显示名、角色名或业务服务名推断管理能力。服务端返回 actor-relative `ActionCapability {action, resource, available, restrictionReason}`：当前身份投影承载集合/自身动作，User 与 Account 目录项承载准确目标动作。它只供界面解释和隐藏无效入口，不能缓存为 permit；提交时仍须重新认证、按当前策略鉴权并在同一事务锁内验证目标保护不变量。`AUTHORITY_REQUIRED`、强制改密、自保护、安装级权限保护、系统 Account 保护、目标停用及目标待改密使用封闭原因，不暴露策略名称。
 
-能力集合是 API 契约而不是任意 action bag：当前身份必须完整返回账号目录读、账号创建、别名设置、用户目录读、用户创建和租户策略目录读；User 项必须返回状态、密码、tenant/platform 附件创建和每个当前附件对应 scope 的撤销动作；Account 项必须返回状态和原 root 凭据恢复。缺项、额外项、重复项、错误资源种类或错误目标整体失败关闭。账号目录可读与账号创建是不同能力，不能因为能列出租户就显示开通入口。
+能力集合是 API 契约而不是任意 action bag：当前身份必须完整返回账号目录读、账号创建、别名设置、用户目录读、用户创建和租户策略目录读；User 项必须返回详情读取、资料更新、删除、状态、密码、tenant/platform 附件创建和每个当前附件对应 scope 的撤销动作；Account 项必须返回状态和原 root 凭据恢复。缺项、额外项、重复项、错误资源种类或错误目标整体失败关闭。账号目录可读与账号创建是不同能力，不能因为能列出租户就显示开通入口。
 
 腾讯云公开资料对产品作为受保护资源、产品作为调用者及控制台共用 Action 目录的证据和推演，由[访问管理来源分析](../doc/access-management/sources/tencent-cam-architecture-analysis.md#6-业务如何接入-cam)唯一维护。本 FEAT 只拥有 Matrix 当前 Account/User 管理契约，不复制供应商研究，也不把当前静态产品/系统策略集合写成最终接入模型；版本化产品 Profile 与服务角色由 008 拥有。
 
@@ -38,14 +38,14 @@ RootIdentity 仍由底层 USER principal 承载认证，但不出现在日常 Us
 
 - 平台面：`GET|POST /v1/accounts`、`GET /v1/accounts/{accountId}`、`POST /v1/accounts/{accountId}:set-status`、`POST /v1/accounts/{accountId}:recover-root-credentials`。列表和详情返回 `AccountAccess`，把 Account 数据与该 actor 对该目标的状态/恢复能力分开。
 - 当前账号面：`POST /v1/account:alias`；Account 只能由当前有效 session 推导，body/query 不接受 `accountId`。
-- 用户面：`GET|POST /v1/users`、`POST /v1/users/{userId}:set-status`、`POST /v1/users/{userId}:reset-password`。详情、资料和删除作为紧随其后的独立事务切片加入同一路由族。
+- 用户面：`GET|POST /v1/users`、`GET /v1/users/{userId}`、`POST /v1/users/{userId}:update`、`POST /v1/users/{userId}:delete`、`POST /v1/users/{userId}:set-status`、`POST /v1/users/{userId}:reset-password`。详情返回与列表同形的 `UserAccess`；资料更新首片只允许显示名称，登录名与 Account 不可变。
 - `GET /v1/auth/me` 返回 `Account`、当前 USER 投影、显式 identityKind、策略附件与完整当前能力集合；不再保留 `canCreateAccounts` 单一提示或任何角色枚举。
 
 现有 `/v1/organizations*`、`/v1/organization:alias`、`/v1/principals*` 及对应 Organization/OrganizationAccount/Principal 管理 DTO 在切换提交中删除，不保留别名或双响应。Bootstrap、ServiceIdentity、AuthorizationDecision 和历史 Audit 中已经发布的 organization/tenant 字段属于历史或跨服务契约，不因管理面改名重编码；它们与新管理 DTO 的映射在单一 adapter 内完成。
 
 当前 Action 目录使用 `iam.account.*` 与 `iam.user.*`；被替换的 `iam.organization.*`、`iam.principal.*` 只进入历史决定解码目录，不可用于新 Policy、请求或决定。现有 tenant lifecycle Audit bytes 不改写；新命令使用封闭的新事实名，不能在旧 action 上漂移含义。
 
-删除 User 使用不可再认证的 tombstone 保存 principal ID、历史归属与审计关联；禁用所有凭据、撤销所有会话/角色会话和有效附件。是否允许重用 loginName 必须显式规则：第一版保留原名字，避免历史人员混淆。主账号、拥有未撤销平台附件的主体和服务身份不进入普通 User 删除/重置流程。
+删除 User 是明确的二步安全操作：目标必须先处于 `DISABLED`，再以最新 resourceVersion 删除；`TARGET_MUST_BE_DISABLED` 是稳定的能力限制原因。删除在 principal 行写入不可逆 `deleted_at` tombstone，保留 principal ID、Account、loginName、显示名、资源版本和审计关联；移除密码哈希，撤销全部会话/角色会话与未撤销附件。第一版永久保留 loginName 和 ID，不允许重用，避免历史人员混淆。返回的 `UserDeletion` 只含非敏感删除收据；已删除 User 不再出现在列表或详情。RootIdentity、当前 actor、拥有未撤销平台附件的主体和服务身份不进入普通 User 删除/重置流程。
 
 Account 更新以 scope/account 锁序列化；User 安全变更在 principal 锁内再次检查平台附件并与并发授予互斥。根身份名与 Account alias 独立。系统 home Account 暂停在效果前拒绝，保证服务身份和平台恢复入口不会锁死。
 
@@ -57,7 +57,7 @@ Account 更新以 scope/account 锁序列化；User 安全变更在 principal �
 
 两个 Account、各原 root/管理员 User/普通 User，同名登录、别名竞争、改密、退出、越租户 ID/cursor/body 攻击；平台与租户权限互不继承。错误版本、非原 root、并发状态/密码/平台授予无部分变更。旧 binary 状态升级、重放、重启和签名保留数据回滚通过，工作负载及 Audit 归属保持。
 
-首个命名替换门禁还必须证明旧管理路径全部 404、严格解码拒绝旧 selector/字段、RootIdentity 不出现在 User 目录且不能被普通 User 命令命中、同名 User 只能经显式 realm 登录。能力门禁必须证明读/写拆分、self/installation/system/disabled/must-change 限制，客户端拒绝缺失、额外、重复或错目标能力；增加产品、策略或角色名称不能要求通用 evaluator 或控制台新增名称分支。当前源码进程、OpenAPI、静态控制台和安装测试消费者必须在同一提交只使用新路由/DTO；残留扫描允许的旧词只限冻结的 Bootstrap、ServiceIdentity、历史决定/Audit 和迁移读取证据。
+首个命名替换门禁还必须证明旧管理路径全部 404、严格解码拒绝旧 selector/字段、RootIdentity 不出现在 User 目录且不能被普通 User 命令命中、同名 User 只能经显式 realm 登录。能力门禁必须证明读/写拆分、self/installation/system/disabled/must-change/must-disable 限制，客户端拒绝缺失、额外、重复或错目标能力；增加产品、策略或角色名称不能要求通用 evaluator 或控制台新增名称分支。详情/资料/删除门禁还须证明跨 Account ID、RootIdentity、当前 actor、平台附件主体、错误版本和并发 status/update/delete 全部失败关闭；删除前失败或提交冲突时凭据、session、附件、tombstone 和 outbox 无部分变化，成功后旧密码/会话不能使用，登录名不能重建，Account 资源、Operation 与 Audit 归属不变。当前源码进程、OpenAPI、静态控制台和安装测试消费者必须在同一提交只使用新路由/DTO；残留扫描允许的旧词只限冻结的 Bootstrap、ServiceIdentity、历史决定/Audit 和迁移读取证据。
 
 ## 当前候选证据
 
@@ -65,4 +65,8 @@ Account 更新以 scope/account 锁序列化；User 安全变更在 principal �
 
 固定实现 `4201989773b6ca24829506b7e60dc3f9c4f20446` 以同一策略 evaluator 生成 action/resource 对，并以私有目标事实增加 self、installation、system account、disabled 和 must-change 限制；控制台只消费这些值，不读取 policy ID、policy name、role name 或业务 service name。API/OpenAPI、服务、受限 SQL、安装测试消费者和静态页面已原子切换到 `AccountAccess` 与完整能力集合。全仓 Go test/vet/race、API 生成一致性和架构测试通过；前端 type/lint/架构/20 组对比度、87 项测试及 59 个嵌入文件的 2-worker 静态导出一致性通过。独立 PostgreSQL 18.6、2 CPU/768 MiB 下，IAM HTTP 全量 race（67.932s）、策略存储 race、Audit 权威数据库（5.321s）及 IAM/Audit/PaaS 独立进程（35.740s）通过；真实用例覆盖账号读写能力分离、当前 User 自保护、停用/待改密目标、安装权威 User、系统 Account 和错误能力形状失败关闭。[Verification 34605172417](https://github.com/xiak/matrix/actions/runs/34605172417) 已核实精确 SHA，go、authority-process、node-process 全部 `completed/success`。
 
-该固定源码的实际 readiness 为 IAM7/Audit4/PaaS1；安装发布 Profile 仍保持最后已发布值并拒绝这个不匹配组合，未把源码门禁冒充签名发布或跨 profile 兼容。详情/资料/删除、最终 Profile 和真实浏览器仍待后续切片验收。
+当前用户详情/资料/删除候选在上述固定能力契约上增加 `GET /v1/users/{userId}`、显示名 CAS 更新和禁用后永久删除。API、OpenAPI、服务事务、受限 SQL、Audit 事实、静态控制台与既有测试 owner 已同步替换；IAM readiness 为 8、Audit readiness 为 5，PaaS 仍为 1。全仓 Go test/vet/race、API 生成稳定、Linux amd64 构建、前端 type/lint/架构/20 组对比度、90 项测试与 59 个嵌入文件一致性通过。独立 PostgreSQL 18.6、2 CPU/768 MiB 下，IAM HTTP 全量 race（66.814s）、Audit 权威数据库（5.757s）、Audit HTTP（2.950s）、实际 9fd 旧 IAM executable 保留升级（13.560s）、实际 a36 旧 IAM executable 保留升级（14.781s）及 IAM/Audit/PaaS + 双 dispatcher 五进程 race（35.749s）通过；后者实际证明删除成员前创建的应用、数据库、配额、Operation、outbox 与租户 Audit 归属不变。
+
+本任务独立浏览器以鼠标完成用户详情、显示名修改、禁用前隐藏删除、禁用后展示不可逆确认说明和删除后目录消失；未做已降优先级的键盘专项。最终破坏性确认没有在浏览器中代用户点击，而是在同一合成测试环境通过服务 API 执行：收据不含秘密，旧密码登录返回 401、详情不再可读、同名重建返回 409；数据库保留唯一 principal/login tombstone 和一条 `iam.user.deleted` 事实，密码、有效会话及未撤销附件均为零。浏览器使用的一次性本地进程和临时目录已清理，未占用共享或其他 Phase 服务。
+
+当前源码 Profile 为 IAM8/Audit5/PaaS1；安装发布 Profile 仍保持最后已发布值并拒绝这个不匹配组合，未把 SQL 升级或源码进程门禁冒充签名发布、跨 profile 兼容或最终发布验收。最终发布 Profile 仍待后续切片。

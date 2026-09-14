@@ -72,6 +72,7 @@ CREATE TABLE IF NOT EXISTS iam.principals (
     resource_version bigint NOT NULL,
     created_at timestamptz(6) NOT NULL,
     updated_at timestamptz(6) NOT NULL,
+    deleted_at timestamptz(6),
     PRIMARY KEY (tenant_id, id),
     CONSTRAINT principals_account_fk FOREIGN KEY (tenant_id)
         REFERENCES iam.accounts (id),
@@ -85,6 +86,13 @@ CREATE TABLE IF NOT EXISTS iam.principals (
         AND btrim(display_name) = display_name
         AND resource_version BETWEEN 1 AND 9007199254740991
         AND updated_at >= created_at
+        AND (deleted_at IS NULL OR (
+            principal_type = 'USER'
+            AND status = 'DISABLED'
+            AND NOT must_change_password
+            AND deleted_at >= created_at
+            AND updated_at = deleted_at
+        ))
         AND (
             (
                 principal_type = 'USER'
@@ -96,6 +104,33 @@ CREATE TABLE IF NOT EXISTS iam.principals (
                 AND NOT must_change_password
             )
         )
+    )
+);
+
+-- A deleted USER remains as an irreversible identity tombstone so historical
+-- resource/audit references and the tenant-local login-name reservation never
+-- change meaning. Retained pre-extension principals are live by definition.
+ALTER TABLE iam.principals ADD COLUMN IF NOT EXISTS deleted_at timestamptz(6);
+ALTER TABLE iam.principals DROP CONSTRAINT IF EXISTS principals_values_valid;
+ALTER TABLE iam.principals ADD CONSTRAINT principals_values_valid CHECK (
+    tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND principal_type IN ('USER', 'SERVICE_ACCOUNT')
+    AND status IN ('ACTIVE', 'DISABLED')
+    AND length(display_name) BETWEEN 1 AND 128
+    AND btrim(display_name) = display_name
+    AND resource_version BETWEEN 1 AND 9007199254740991
+    AND updated_at >= created_at
+    AND (deleted_at IS NULL OR (
+        principal_type = 'USER'
+        AND status = 'DISABLED'
+        AND NOT must_change_password
+        AND deleted_at >= created_at
+        AND updated_at = deleted_at
+    ))
+    AND (
+        (principal_type = 'USER' AND login_name COLLATE "C" ~ '^[a-z][a-z0-9._-]{2,63}$')
+        OR (principal_type = 'SERVICE_ACCOUNT' AND login_name IS NULL AND NOT must_change_password)
     )
 );
 
@@ -667,7 +702,8 @@ BEGIN
         OR (expected_action IN (
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
             'iam.account-root.credentials-recovered', 'iam.account.alias-set',
-            'iam.user.created', 'iam.user.status-set', 'iam.user.password-reset',
+            'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
+            'iam.user.status-set', 'iam.user.password-reset',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',
             'iam.platform-policy-attachment.created', 'iam.platform-policy-attachment.revoked',
             'iam.principal.created', 'iam.role-binding.put',
@@ -933,6 +969,9 @@ BEGIN
             AND to_regprocedure('iam.set_account_status(text,text,text,text,text,bigint,jsonb)') IS NOT NULL
             AND to_regprocedure('iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
             AND to_regprocedure('iam.read_account_root(text,text,text,text)') IS NOT NULL
+            AND to_regprocedure('iam.read_user(text,text,text,text)') IS NOT NULL
+            AND to_regprocedure('iam.update_user(text,text,text,text,text,bigint,jsonb)') IS NOT NULL
+            AND to_regprocedure('iam.delete_user(text,text,text,text,bigint,jsonb)') IS NOT NULL
             AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS snapshot
                 WHERE snapshot.oid=to_regprocedure('iam.account_management_snapshot(text)')
                   AND snapshot.prorettype='jsonb'::regtype AND NOT snapshot.proretset
@@ -971,6 +1010,14 @@ BEGIN
                   AND NOT column_definition.attisdropped
            )
            AND EXISTS (
+               SELECT 1 FROM pg_catalog.pg_attribute AS column_definition
+                WHERE column_definition.attrelid = 'iam.principals'::regclass
+                  AND column_definition.attname = 'deleted_at'
+                  AND column_definition.atttypid = 'timestamptz'::regtype
+                  AND NOT column_definition.attnotnull
+                  AND NOT column_definition.attisdropped
+           )
+           AND EXISTS (
                SELECT 1 FROM pg_catalog.pg_proc AS claim
                 WHERE claim.oid = to_regprocedure('iam.claim_audit_event(text,integer)')
                   AND claim.proallargtypes = ARRAY['text'::regtype::oid, 'integer'::regtype::oid,
@@ -984,7 +1031,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           7::bigint,
+           8::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1007,6 +1054,8 @@ AS $function$
         WHEN 'iam.user.reset-password' THEN 'USER'
         WHEN 'iam.user.create' THEN 'ACCOUNT'
         WHEN 'iam.user.read' THEN 'USER'
+        WHEN 'iam.user.update' THEN 'USER'
+        WHEN 'iam.user.delete' THEN 'USER'
         WHEN 'iam.policy.list' THEN 'ACCOUNT'
         WHEN 'iam.platform-policy.list' THEN 'INSTALLATION'
         WHEN 'iam.policy-attachment.create' THEN 'USER'

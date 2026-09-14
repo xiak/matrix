@@ -227,6 +227,8 @@ BEGIN
        OR iam.resource_kind_for_action('iam.user.list') IS DISTINCT FROM 'ACCOUNT'
        OR iam.resource_kind_for_action('iam.user.create') IS DISTINCT FROM 'ACCOUNT'
        OR iam.resource_kind_for_action('iam.user.read') IS DISTINCT FROM 'USER'
+       OR iam.resource_kind_for_action('iam.user.update') IS DISTINCT FROM 'USER'
+       OR iam.resource_kind_for_action('iam.user.delete') IS DISTINCT FROM 'USER'
        OR iam.resource_kind_for_action('iam.user.set-status') IS DISTINCT FROM 'USER'
        OR iam.resource_kind_for_action('iam.user.reset-password') IS DISTINCT FROM 'USER'
        OR iam.resource_kind_for_action('iam.policy-attachment.create') IS DISTINCT FROM 'USER'

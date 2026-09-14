@@ -461,6 +461,23 @@ func ValidateSetUserStatusRequest(value SetUserStatusRequest) error {
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
+func ValidateUpdateUserRequest(value UpdateUserRequest) error {
+	return errors.Join(validateText("displayName", value.DisplayName, 1, 128),
+		validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateDeleteUserRequest(value DeleteUserRequest) error {
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateUserDeletion(value UserDeletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "UserDeletion" {
+		return errors.New("user deletion type metadata is invalid")
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("userId", string(value.ID)),
+		validateLoginName(value.LoginName), validatePositiveVersion(value.ResourceVersion), validateTime("deletedAt", value.DeletedAt))
+}
+
 func ValidateSetAccountStatusRequest(value SetAccountStatusRequest) error {
 	if value.Status != AccountActive && value.Status != AccountDisabled {
 		return errors.New("account status is invalid")
@@ -532,7 +549,8 @@ func knownCapabilityRestriction(value CapabilityRestriction) bool {
 		CapabilityInstallationAuthorityProtected,
 		CapabilitySystemAccountProtected,
 		CapabilityTargetDisabled,
-		CapabilityTargetCredentialChangeRequired:
+		CapabilityTargetCredentialChangeRequired,
+		CapabilityTargetMustBeDisabled:
 		return true
 	default:
 		return false
@@ -633,8 +651,7 @@ func ValidateUserList(value UserList) error {
 	var previous string
 	var account AccountID
 	for _, item := range value.Items {
-		if ValidateUser(item.User) != nil || string(item.User.ID) <= previous ||
-			item.PolicyAttachments == nil || len(item.PolicyAttachments) > 256 {
+		if ValidateUserAccess(item) != nil || string(item.User.ID) <= previous {
 			return errors.New("user list item is invalid")
 		}
 		previous = string(item.User.ID)
@@ -642,48 +659,67 @@ func ValidateUserList(value UserList) error {
 			return errors.New("user directory contains multiple accounts")
 		}
 		account = item.User.AccountID
-		attachments := map[PolicyAttachmentID]bool{}
-		policies := map[PolicyID]bool{}
-		for _, attachment := range item.PolicyAttachments {
-			if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil ||
-				attachment.AccountID != item.User.AccountID || attachment.Target.Kind != PolicyTargetUser ||
-				attachment.Target.ID != string(item.User.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
-				return errors.New("user policy attachment is invalid")
-			}
-			attachments[attachment.ID] = true
-			policies[attachment.PolicyID] = true
-		}
-		expected := expectedCapabilitySet(
-			struct {
-				Action   Action
-				Resource ResourceReference
-			}{ActionIAMUserSetStatus, ResourceReference{Kind: ResourceUser, ID: string(item.User.ID)}},
-			struct {
-				Action   Action
-				Resource ResourceReference
-			}{ActionIAMUserPasswordReset, ResourceReference{Kind: ResourceUser, ID: string(item.User.ID)}},
-			struct {
-				Action   Action
-				Resource ResourceReference
-			}{ActionIAMPolicyAttachmentCreate, ResourceReference{Kind: ResourceUser, ID: string(item.User.ID)}},
-			struct {
-				Action   Action
-				Resource ResourceReference
-			}{ActionIAMPlatformPolicyAttachmentCreate, ResourceReference{Kind: ResourceUser, ID: string(item.User.ID)}},
-		)
-		for _, attachment := range item.PolicyAttachments {
-			action := ActionIAMPolicyAttachmentRevoke
-			if attachment.Scope == AuthorityScopeInstallation {
-				action = ActionIAMPlatformPolicyAttachmentRevoke
-			}
-			expected[capabilityKey(action, ResourceReference{Kind: ResourcePolicyAttachment, ID: string(attachment.ID)})] = struct{}{}
-		}
-		if validateCapabilities(item.Capabilities, expected) != nil {
-			return errors.New("user capabilities are invalid")
-		}
 	}
 	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
 		return errors.New("user page boundary is invalid")
+	}
+	return nil
+}
+
+func ValidateUserAccess(value UserAccess) error {
+	if ValidateUser(value.User) != nil || value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 {
+		return errors.New("user access is invalid")
+	}
+	attachments := map[PolicyAttachmentID]bool{}
+	policies := map[PolicyID]bool{}
+	for _, attachment := range value.PolicyAttachments {
+		if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil ||
+			attachment.AccountID != value.User.AccountID || attachment.Target.Kind != PolicyTargetUser ||
+			attachment.Target.ID != string(value.User.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
+			return errors.New("user policy attachment is invalid")
+		}
+		attachments[attachment.ID] = true
+		policies[attachment.PolicyID] = true
+	}
+	expected := expectedCapabilitySet(
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserRead, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserUpdate, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserDelete, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserSetStatus, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserPasswordReset, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMPolicyAttachmentCreate, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMPlatformPolicyAttachmentCreate, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+	)
+	for _, attachment := range value.PolicyAttachments {
+		action := ActionIAMPolicyAttachmentRevoke
+		if attachment.Scope == AuthorityScopeInstallation {
+			action = ActionIAMPlatformPolicyAttachmentRevoke
+		}
+		expected[capabilityKey(action, ResourceReference{Kind: ResourcePolicyAttachment, ID: string(attachment.ID)})] = struct{}{}
+	}
+	if validateCapabilities(value.Capabilities, expected) != nil {
+		return errors.New("user capabilities are invalid")
 	}
 	return nil
 }

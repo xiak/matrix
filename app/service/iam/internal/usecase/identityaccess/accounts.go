@@ -169,12 +169,35 @@ func (service *Authority) ListUsers(ctx context.Context, credential iamv1.Secret
 		})
 }
 
+func (service *Authority) GetUser(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, requestID string) (iamv1.UserAccess, error) {
+	if iamv1.ValidateID("userId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.UserAccess{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.UserAccess, error) {
+			result, err := tx.ReadUser(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id)
+			if err != nil {
+				return iamv1.UserAccess{}, err
+			}
+			result.Capabilities, err = userCapabilities(subject, result, now)
+			if err != nil || iamv1.ValidateUserAccess(result) != nil {
+				return iamv1.UserAccess{}, ErrUnavailable
+			}
+			return result, nil
+		})
+}
+
 func userCapabilities(subject SessionCredential, target iamv1.UserAccess, now time.Time) ([]iamv1.ActionCapability, error) {
 	user := iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(target.User.ID)}
 	requests := []struct {
 		action   iamv1.Action
 		resource iamv1.ResourceReference
 	}{
+		{iamv1.ActionIAMUserRead, user},
+		{iamv1.ActionIAMUserUpdate, user},
+		{iamv1.ActionIAMUserDelete, user},
 		{iamv1.ActionIAMUserSetStatus, user},
 		{iamv1.ActionIAMUserPasswordReset, user},
 		{iamv1.ActionIAMPolicyAttachmentCreate, user},
@@ -206,6 +229,14 @@ func userCapabilities(subject SessionCredential, target iamv1.UserAccess, now ti
 				restrictCapability(&capability, iamv1.CapabilitySelfProtected)
 			} else if hasInstallationAuthority {
 				restrictCapability(&capability, iamv1.CapabilityInstallationAuthorityProtected)
+			}
+		case iamv1.ActionIAMUserDelete:
+			if target.User.ID == subject.Subject.Principal.ID {
+				restrictCapability(&capability, iamv1.CapabilitySelfProtected)
+			} else if hasInstallationAuthority {
+				restrictCapability(&capability, iamv1.CapabilityInstallationAuthorityProtected)
+			} else if target.User.Status != iamv1.PrincipalDisabled {
+				restrictCapability(&capability, iamv1.CapabilityTargetMustBeDisabled)
 			}
 		case iamv1.ActionIAMPolicyAttachmentCreate, iamv1.ActionIAMPlatformPolicyAttachmentCreate:
 			if target.User.Status != iamv1.PrincipalActive {
@@ -484,6 +515,56 @@ func (service *Authority) SetUserStatus(ctx context.Context, credential iamv1.Se
 		return iamv1.User{}, err
 	}
 	return service.changeUser(ctx, credential, id, request.ResourceVersion, &request.Status, iamv1.Secret{}, iamv1.ActionIAMUserSetStatus, auditv1.ActionIAMUserStatusSet, digest, request.RequestID)
+}
+
+func (service *Authority) UpdateUser(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, request iamv1.UpdateUserRequest) (iamv1.User, error) {
+	if iamv1.ValidateID("userId", string(id)) != nil || iamv1.ValidateUpdateUserRequest(request) != nil {
+		return iamv1.User{}, ErrInvalidArgument
+	}
+	digest, err := digestSanitized("user-profile-update", struct {
+		ID      iamv1.PrincipalID
+		Request iamv1.UpdateUserRequest
+	}{id, request})
+	if err != nil {
+		return iamv1.User{}, err
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserUpdate,
+		iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.User, error) {
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMUserUpdated, auditv1.TargetUser,
+				string(id), decision.ID, digest, request.RequestID, now)
+			if err != nil {
+				return iamv1.User{}, err
+			}
+			return tx.UpdateUser(ctx, UserProfileMutation{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, PrincipalID: id, DecisionID: decision.ID,
+				DisplayName: request.DisplayName, ResourceVersion: request.ResourceVersion, AuditEvent: event})
+		})
+}
+
+func (service *Authority) DeleteUser(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, request iamv1.DeleteUserRequest) (iamv1.UserDeletion, error) {
+	if iamv1.ValidateID("userId", string(id)) != nil || iamv1.ValidateDeleteUserRequest(request) != nil {
+		return iamv1.UserDeletion{}, ErrInvalidArgument
+	}
+	digest, err := digestSanitized("user-delete", struct {
+		ID      iamv1.PrincipalID
+		Request iamv1.DeleteUserRequest
+	}{id, request})
+	if err != nil {
+		return iamv1.UserDeletion{}, err
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserDelete,
+		iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.UserDeletion, error) {
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMUserDeleted, auditv1.TargetUser,
+				string(id), decision.ID, digest, request.RequestID, now)
+			if err != nil {
+				return iamv1.UserDeletion{}, err
+			}
+			return tx.DeleteUser(ctx, UserDeletionMutation{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, PrincipalID: id, DecisionID: decision.ID,
+				ResourceVersion: request.ResourceVersion, AuditEvent: event})
+		})
 }
 
 func (service *Authority) ResetUserPassword(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, request iamv1.ResetUserPasswordRequest) (iamv1.User, error) {

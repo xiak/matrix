@@ -337,6 +337,80 @@ func TestIAMAccountRoutesRejectSelectorsAndMissingCredentialsBeforeWorkflow(t *t
 	}
 }
 
+func TestIAMHTTPUserDetailUpdateAndDeleteAreBoundToTheRoute(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	handler := newTestHandler(t, workflow)
+	bearer := "user-session-credential"
+
+	detailRequest := httptest.NewRequest(http.MethodGet, "/v1/users/principal-user", nil)
+	detailRequest.Header.Set("Authorization", "Bearer "+bearer)
+	detailResponse := httptest.NewRecorder()
+	handler.ServeHTTP(detailResponse, detailRequest)
+	if detailResponse.Code != http.StatusOK || workflow.getUserCalls != 1 || workflow.userID != "principal-user" {
+		t.Fatalf("user detail status=%d calls=%d id=%q body=%s", detailResponse.Code, workflow.getUserCalls, workflow.userID, detailResponse.Body.String())
+	}
+	var detail iamv1.UserAccess
+	if json.Unmarshal(detailResponse.Body.Bytes(), &detail) != nil || iamv1.ValidateUserAccess(detail) != nil || detail.User.ID != "principal-user" {
+		t.Fatal("user detail response is not the exact validated resource")
+	}
+
+	updateBody := `{"displayName":"Renamed Developer","resourceVersion":7,"requestId":"request-user-update"}`
+	updateRequest := httptest.NewRequest(http.MethodPost, "/v1/users/principal-user:update", strings.NewReader(updateBody))
+	updateRequest.Header.Set("Authorization", "Bearer "+bearer)
+	updateRequest.Header.Set("Content-Type", "application/json")
+	updateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(updateResponse, updateRequest)
+	if updateResponse.Code != http.StatusOK || workflow.updateUserCalls != 1 || workflow.updateUser.DisplayName != "Renamed Developer" ||
+		workflow.updateUser.ResourceVersion != 7 || workflow.updateUser.RequestID != "request-user-update" {
+		t.Fatalf("user update status=%d calls=%d request=%#v body=%s", updateResponse.Code, workflow.updateUserCalls, workflow.updateUser, updateResponse.Body.String())
+	}
+
+	deleteBody := `{"resourceVersion":8,"requestId":"request-user-delete"}`
+	deleteRequest := httptest.NewRequest(http.MethodPost, "/v1/users/principal-user:delete", strings.NewReader(deleteBody))
+	deleteRequest.Header.Set("Authorization", "Bearer "+bearer)
+	deleteRequest.Header.Set("Content-Type", "application/json")
+	deleteResponse := httptest.NewRecorder()
+	handler.ServeHTTP(deleteResponse, deleteRequest)
+	if deleteResponse.Code != http.StatusOK || workflow.deleteUserCalls != 1 || workflow.deleteUser.ResourceVersion != 8 ||
+		workflow.deleteUser.RequestID != "request-user-delete" || bytes.Contains(deleteResponse.Body.Bytes(), []byte("password")) {
+		t.Fatalf("user deletion status=%d calls=%d request=%#v body=%s", deleteResponse.Code, workflow.deleteUserCalls, workflow.deleteUser, deleteResponse.Body.String())
+	}
+	var deletion iamv1.UserDeletion
+	if json.Unmarshal(deleteResponse.Body.Bytes(), &deletion) != nil || iamv1.ValidateUserDeletion(deletion) != nil || deletion.ID != "principal-user" {
+		t.Fatal("user deletion response is not a valid non-secret receipt")
+	}
+
+	for _, test := range []struct {
+		name, method, target, body string
+		status                     int
+	}{
+		{"detail query selector", http.MethodGet, "/v1/users/principal-user?accountId=forged", "", http.StatusBadRequest},
+		{"detail body selector", http.MethodGet, "/v1/users/principal-user", `{"accountId":"forged"}`, http.StatusBadRequest},
+		{"update query selector", http.MethodPost, "/v1/users/principal-user:update?tenantId=forged", updateBody, http.StatusBadRequest},
+		{"update body selector", http.MethodPost, "/v1/users/principal-user:update", `{"displayName":"Renamed Developer","resourceVersion":7,"requestId":"request-user-update","accountId":"forged"}`, http.StatusBadRequest},
+		{"delete body selector", http.MethodPost, "/v1/users/principal-user:delete", `{"resourceVersion":8,"requestId":"request-user-delete","principalId":"forged"}`, http.StatusBadRequest},
+		{"unknown command", http.MethodPost, "/v1/users/principal-user:transfer", `{}`, http.StatusNotFound},
+		{"unsupported method", http.MethodPut, "/v1/users/principal-user", "", http.StatusMethodNotAllowed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			beforeGet, beforeUpdate, beforeDelete := workflow.getUserCalls, workflow.updateUserCalls, workflow.deleteUserCalls
+			request := httptest.NewRequest(test.method, test.target, strings.NewReader(test.body))
+			request.Header.Set("Authorization", "Bearer "+bearer)
+			if test.method == http.MethodPost {
+				request.Header.Set("Content-Type", "application/json")
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status || workflow.getUserCalls != beforeGet || workflow.updateUserCalls != beforeUpdate || workflow.deleteUserCalls != beforeDelete {
+				t.Fatalf("invalid user request status=%d want=%d workflow=%d/%d/%d body=%s", response.Code, test.status, workflow.getUserCalls, workflow.updateUserCalls, workflow.deleteUserCalls, response.Body.String())
+			}
+			if test.method == http.MethodPut && response.Header().Get("Allow") != "GET, POST" {
+				t.Fatalf("user route allow=%q", response.Header().Get("Allow"))
+			}
+		})
+	}
+}
+
 type httpWorkflow struct {
 	Workflow
 	policyCalls             int
@@ -351,6 +425,12 @@ type httpWorkflow struct {
 	loginErr                error
 	identityCalls           int
 	loginCalls              int
+	getUserCalls            int
+	updateUserCalls         int
+	deleteUserCalls         int
+	userID                  iamv1.PrincipalID
+	updateUser              iamv1.UpdateUserRequest
+	deleteUser              iamv1.DeleteUserRequest
 	authorizeCalls          int
 	verifyInstallationCalls int
 }
@@ -498,6 +578,65 @@ func (workflow *httpWorkflow) CreateUser(
 		AccountID: "organization-example",
 		LoginName: "developer", DisplayName: "Developer", Status: iamv1.PrincipalActive,
 		MustChangePassword: true, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
+	}, nil
+}
+
+func (workflow *httpWorkflow) GetUser(
+	_ context.Context,
+	_ iamv1.Secret,
+	id iamv1.PrincipalID,
+	_ string,
+) (iamv1.UserAccess, error) {
+	workflow.getUserCalls++
+	workflow.userID = id
+	now := workflow.login.Session.IssuedAt
+	return iamv1.UserAccess{
+		User: iamv1.User{
+			APIVersion: iamv1.APIVersion, Kind: "User", ID: id,
+			AccountID: "organization-example", LoginName: "developer", DisplayName: "Developer",
+			Status: iamv1.PrincipalActive, ResourceVersion: 7, CreatedAt: now, UpdatedAt: now,
+		},
+		PolicyAttachments: []iamv1.PolicyAttachment{},
+		Capabilities: []iamv1.ActionCapability{
+			{Action: iamv1.ActionIAMUserRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: true},
+			{Action: iamv1.ActionIAMUserUpdate, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: true},
+			{Action: iamv1.ActionIAMUserDelete, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: false, RestrictionReason: iamv1.CapabilityTargetMustBeDisabled},
+			{Action: iamv1.ActionIAMUserSetStatus, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: true},
+			{Action: iamv1.ActionIAMUserPasswordReset, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: true},
+			{Action: iamv1.ActionIAMPolicyAttachmentCreate, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: true},
+			{Action: iamv1.ActionIAMPlatformPolicyAttachmentCreate, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: true},
+		},
+	}, nil
+}
+
+func (workflow *httpWorkflow) UpdateUser(
+	_ context.Context,
+	_ iamv1.Secret,
+	id iamv1.PrincipalID,
+	request iamv1.UpdateUserRequest,
+) (iamv1.User, error) {
+	workflow.updateUserCalls++
+	workflow.userID, workflow.updateUser = id, request
+	now := workflow.login.Session.IssuedAt
+	return iamv1.User{
+		APIVersion: iamv1.APIVersion, Kind: "User", ID: id, AccountID: "organization-example",
+		LoginName: "developer", DisplayName: request.DisplayName, Status: iamv1.PrincipalActive,
+		ResourceVersion: request.ResourceVersion + 1, CreatedAt: now, UpdatedAt: now,
+	}, nil
+}
+
+func (workflow *httpWorkflow) DeleteUser(
+	_ context.Context,
+	_ iamv1.Secret,
+	id iamv1.PrincipalID,
+	request iamv1.DeleteUserRequest,
+) (iamv1.UserDeletion, error) {
+	workflow.deleteUserCalls++
+	workflow.userID, workflow.deleteUser = id, request
+	return iamv1.UserDeletion{
+		APIVersion: iamv1.APIVersion, Kind: "UserDeletion", AccountID: "organization-example",
+		ID: id, LoginName: "developer", ResourceVersion: request.ResourceVersion + 1,
+		DeletedAt: workflow.login.Session.IssuedAt,
 	}, nil
 }
 

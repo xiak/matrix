@@ -257,7 +257,27 @@ RETURNS jsonb LANGUAGE sql SET search_path = pg_catalog, pg_temp AS $function$
         'id',p.id,'accountId',p.tenant_id,'loginName',p.login_name,
         'displayName',p.display_name,'status',p.status,'mustChangePassword',p.must_change_password,
         'resourceVersion',p.resource_version,'createdAt',p.created_at,'updatedAt',p.updated_at)
-    FROM iam.principals AS p WHERE p.tenant_id=tenant AND p.id=user_id AND p.principal_type='USER'
+    FROM iam.principals AS p WHERE p.tenant_id=tenant AND p.id=user_id
+      AND p.principal_type='USER' AND p.deleted_at IS NULL
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.user_access_snapshot(tenant text, user_id text)
+RETURNS jsonb LANGUAGE sql SET search_path = pg_catalog, pg_temp AS $function$
+    SELECT jsonb_build_object(
+        'user',iam.user_snapshot(tenant,p.id),
+        'policyAttachments',COALESCE((
+            SELECT jsonb_agg(iam.lookup_policy_attachment(tenant,selected.id) ORDER BY selected.id)
+            FROM (SELECT attachment.id FROM iam.policy_attachments AS attachment
+                WHERE attachment.tenant_id=tenant AND attachment.principal_id=p.id
+                  AND attachment.revoked_at IS NULL
+                ORDER BY attachment.id LIMIT 257) AS selected
+        ),'[]'::jsonb)
+    )
+    FROM iam.principals AS p
+    WHERE p.tenant_id=tenant AND p.id=user_id AND p.principal_type='USER'
+      AND p.deleted_at IS NULL
+      AND NOT EXISTS(SELECT 1 FROM iam.account_roots AS root
+          WHERE root.account_id=tenant AND root.principal_id=p.id)
 $function$;
 
 CREATE OR REPLACE FUNCTION iam.read_account(tenant text, principal text)
@@ -282,17 +302,27 @@ BEGIN
     IF after_id IS NULL OR (after_id <> '' AND after_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='page boundary is invalid';
     END IF;
-    SELECT COALESCE(jsonb_agg(jsonb_build_object('user',iam.user_snapshot(tenant,p.id),
-		'policyAttachments',COALESCE((SELECT jsonb_agg(iam.lookup_policy_attachment(tenant,b.id) ORDER BY b.id)
-			FROM (SELECT a.id FROM iam.policy_attachments AS a WHERE a.tenant_id=tenant
-				AND a.principal_id=p.id AND a.revoked_at IS NULL
-                ORDER BY a.id LIMIT 257) AS b),'[]'::jsonb))
-        ORDER BY p.id),'[]'::jsonb) INTO result
+    SELECT COALESCE(jsonb_agg(iam.user_access_snapshot(tenant,p.id) ORDER BY p.id),'[]'::jsonb) INTO result
     FROM (SELECT principal.id FROM iam.principals AS principal WHERE principal.tenant_id=tenant
-        AND principal.principal_type='USER' AND principal.id > after_id COLLATE "C"
+        AND principal.principal_type='USER' AND principal.deleted_at IS NULL
+        AND principal.id > after_id COLLATE "C"
         AND NOT EXISTS(SELECT 1 FROM iam.account_roots AS root
             WHERE root.account_id=tenant AND root.principal_id=principal.id)
         ORDER BY principal.id LIMIT 101) AS p;
+    RETURN result;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.read_user(tenant text, actor text, decision text, user_id text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
+DECLARE result jsonb;
+BEGIN
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.read','USER',user_id);
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts AS account WHERE account.id=tenant AND account.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user account is unavailable'; END IF;
+    result := iam.user_access_snapshot(tenant,user_id);
+    IF result IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user is unavailable'; END IF;
     RETURN result;
 END
 $function$;
@@ -499,6 +529,107 @@ BEGIN
 END
 $function$;
 
+CREATE OR REPLACE FUNCTION iam.update_user(tenant text, actor text, decision text,
+    user_id text, submitted_display_name text, expected_version bigint, event jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
+DECLARE stored iam.principals%ROWTYPE;
+BEGIN
+    IF submitted_display_name IS NULL OR length(submitted_display_name) NOT BETWEEN 1 AND 128
+        OR btrim(submitted_display_name)<>submitted_display_name OR expected_version IS NULL OR expected_version<1 THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='user profile mutation is invalid';
+    END IF;
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.update','USER',user_id);
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts AS account WHERE account.id=tenant AND account.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user account is unavailable'; END IF;
+    SELECT * INTO stored FROM iam.principals AS principal
+     WHERE principal.tenant_id=tenant AND principal.id=user_id FOR UPDATE;
+    IF NOT FOUND OR stored.principal_type<>'USER' OR stored.deleted_at IS NOT NULL
+        OR EXISTS(SELECT 1 FROM iam.account_roots AS root
+            WHERE root.account_id=tenant AND root.principal_id=user_id) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user is not manageable';
+    END IF;
+    IF expected_version<>stored.resource_version OR stored.resource_version=9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='user version changed';
+    END IF;
+    PERFORM iam.assert_audit_event(event,tenant,'iam.user.updated','USER',user_id,'SUCCEEDED');
+    PERFORM iam.assert_user_audit_actor(tenant,actor,event);
+    IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='user decision correlation is invalid';
+    END IF;
+    UPDATE iam.principals AS principal
+       SET display_name=submitted_display_name,resource_version=principal.resource_version+1,
+           updated_at=transaction_timestamp()
+     WHERE principal.tenant_id=tenant AND principal.id=user_id;
+    PERFORM iam.append_account_event(tenant,actor,decision,'iam.user.updated','USER',user_id,event);
+    RETURN iam.user_snapshot(tenant,user_id);
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.delete_user(tenant text, actor text, decision text,
+    user_id text, expected_version bigint, event jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
+DECLARE
+    stored iam.principals%ROWTYPE;
+    effective_now timestamptz(6) := transaction_timestamp();
+    changed integer;
+BEGIN
+    IF expected_version IS NULL OR expected_version<1 THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='user deletion is invalid';
+    END IF;
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.delete','USER',user_id);
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts AS account WHERE account.id=tenant AND account.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user account is unavailable'; END IF;
+    SELECT * INTO stored FROM iam.principals AS principal
+     WHERE principal.tenant_id=tenant AND principal.id=user_id FOR UPDATE;
+    IF NOT FOUND OR stored.principal_type<>'USER' OR stored.deleted_at IS NOT NULL OR user_id=actor
+        OR EXISTS(SELECT 1 FROM iam.account_roots AS root
+            WHERE root.account_id=tenant AND root.principal_id=user_id)
+        OR EXISTS(SELECT 1 FROM iam.policy_attachments AS attachment
+            WHERE attachment.tenant_id=tenant AND attachment.principal_id=user_id
+              AND attachment.authority_scope='INSTALLATION' AND attachment.revoked_at IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user is not deletable';
+    END IF;
+    IF expected_version<>stored.resource_version OR stored.resource_version=9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='user version changed';
+    END IF;
+    IF stored.status<>'DISABLED' THEN
+        RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='user must be disabled before deletion';
+    END IF;
+    PERFORM iam.assert_audit_event(event,tenant,'iam.user.deleted','USER',user_id,'SUCCEEDED');
+    PERFORM iam.assert_user_audit_actor(tenant,actor,event);
+    IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='user decision correlation is invalid';
+    END IF;
+    -- Policy grant/revoke and deletion all acquire the principal before its
+    -- attachments. Sorting closes multi-row deadlock ambiguity.
+    PERFORM attachment.id FROM iam.policy_attachments AS attachment
+     WHERE attachment.tenant_id=tenant AND attachment.principal_id=user_id
+     ORDER BY attachment.id FOR UPDATE;
+    UPDATE iam.principals AS principal
+       SET status='DISABLED',must_change_password=false,
+           resource_version=principal.resource_version+1,updated_at=effective_now,deleted_at=effective_now
+     WHERE principal.tenant_id=tenant AND principal.id=user_id;
+    DELETE FROM iam.user_credentials AS credential
+     WHERE credential.tenant_id=tenant AND credential.principal_id=user_id;
+    GET DIAGNOSTICS changed=ROW_COUNT;
+    IF changed<>1 THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user credential is unavailable';
+    END IF;
+    UPDATE iam.sessions AS session
+       SET status='REVOKED',revoked_at=effective_now,resource_version=session.resource_version+1
+     WHERE session.tenant_id=tenant AND session.principal_id=user_id AND session.status='ACTIVE';
+    UPDATE iam.policy_attachments AS attachment
+       SET resource_version=attachment.resource_version+1,updated_at=effective_now,revoked_at=effective_now
+     WHERE attachment.tenant_id=tenant AND attachment.principal_id=user_id AND attachment.revoked_at IS NULL;
+    PERFORM iam.append_account_event(tenant,actor,decision,'iam.user.deleted','USER',user_id,event);
+    RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','UserDeletion',
+        'accountId',tenant,'id',user_id,'loginName',stored.login_name,
+        'resourceVersion',stored.resource_version+1,'deletedAt',effective_now);
+END
+$function$;
+
 CREATE OR REPLACE FUNCTION iam.change_user(tenant text, actor text, decision text,
     user_id text, expected_version bigint, new_status text, new_password_hash text, event jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
@@ -517,7 +648,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user account is unavailable';
     END IF;
     SELECT * INTO stored FROM iam.principals AS p WHERE p.tenant_id=tenant AND p.id=user_id FOR UPDATE;
-    IF NOT FOUND OR stored.principal_type <> 'USER' OR user_id=actor
+    IF NOT FOUND OR stored.principal_type <> 'USER' OR stored.deleted_at IS NOT NULL OR user_id=actor
         OR EXISTS(SELECT 1 FROM iam.account_roots AS root WHERE root.account_id=tenant AND root.principal_id=user_id)
         OR EXISTS(SELECT 1 FROM iam.policy_attachments AS binding
             WHERE binding.tenant_id=tenant AND binding.principal_id=user_id
@@ -556,6 +687,7 @@ DROP FUNCTION IF EXISTS iam.principal_snapshot(text,text);
 
 REVOKE ALL ON ALL TABLES IN SCHEMA iam FROM PUBLIC, matrix_iam_api, matrix_iam_worker;
 REVOKE ALL ON FUNCTION iam.account_snapshot(text), iam.account_management_snapshot(text), iam.user_snapshot(text,text),
+    iam.user_access_snapshot(text,text),
     iam.append_account_event(text,text,text,text,text,text,jsonb) FROM PUBLIC, matrix_iam_api, matrix_iam_worker;
 REVOKE ALL ON FUNCTION iam.read_account(text,text), iam.read_account_as_platform(text,text,text,text),
     iam.read_account_root(text,text,text,text), iam.set_account_status(text,text,text,text,text,bigint,jsonb),
@@ -564,6 +696,9 @@ REVOKE ALL ON FUNCTION iam.read_account(text,text), iam.read_account_as_platform
     iam.list_users(text,text,text,text), iam.list_accounts(text,text,text,text),
     iam.create_account(text,text,text,text,text,text,text,text,text,jsonb),
     iam.set_account_alias(text,text,text,text,bigint,jsonb),
+    iam.read_user(text,text,text,text),
+    iam.update_user(text,text,text,text,text,bigint,jsonb),
+    iam.delete_user(text,text,text,text,bigint,jsonb),
     iam.change_user(text,text,text,text,bigint,text,text,jsonb) FROM PUBLIC, matrix_iam_worker;
 GRANT EXECUTE ON FUNCTION iam.read_account(text,text), iam.read_account_as_platform(text,text,text,text),
     iam.read_account_root(text,text,text,text), iam.set_account_status(text,text,text,text,text,bigint,jsonb),
@@ -572,4 +707,7 @@ GRANT EXECUTE ON FUNCTION iam.read_account(text,text), iam.read_account_as_platf
     iam.list_users(text,text,text,text), iam.list_accounts(text,text,text,text),
     iam.create_account(text,text,text,text,text,text,text,text,text,jsonb),
     iam.set_account_alias(text,text,text,text,bigint,jsonb),
+    iam.read_user(text,text,text,text),
+    iam.update_user(text,text,text,text,text,bigint,jsonb),
+    iam.delete_user(text,text,text,text,bigint,jsonb),
     iam.change_user(text,text,text,text,bigint,text,text,jsonb) TO matrix_iam_api;

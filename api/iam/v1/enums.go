@@ -72,6 +72,7 @@ const (
 	CapabilitySystemAccountProtected          CapabilityRestriction = "SYSTEM_ACCOUNT_PROTECTED"
 	CapabilityTargetDisabled                  CapabilityRestriction = "TARGET_DISABLED"
 	CapabilityTargetCredentialChangeRequired  CapabilityRestriction = "TARGET_CREDENTIAL_CHANGE_REQUIRED"
+	CapabilityTargetMustBeDisabled            CapabilityRestriction = "TARGET_MUST_BE_DISABLED"
 )
 
 const (
@@ -94,6 +95,8 @@ const (
 
 	ActionIAMUserCreate                     Action = "iam.user.create"
 	ActionIAMUserRead                       Action = "iam.user.read"
+	ActionIAMUserUpdate                     Action = "iam.user.update"
+	ActionIAMUserDelete                     Action = "iam.user.delete"
 	ActionIAMSessionRevoke                  Action = "iam.session.revoke"
 	ActionIAMPolicyAttachmentCreate         Action = "iam.policy-attachment.create"
 	ActionIAMPolicyAttachmentRevoke         Action = "iam.policy-attachment.revoke"
@@ -284,6 +287,8 @@ var actionDefinitions = [...]ActionDefinition{
 	{ActionIAMUserPasswordReset, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
 	{ActionIAMUserCreate, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
 	{ActionIAMUserRead, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
+	{ActionIAMUserUpdate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
+	{ActionIAMUserDelete, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
 	{ActionIAMPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
 	{ActionIAMPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeTenant},
 	{ActionIAMSessionRevoke, ProductIAM, ServiceIAM, ResourceSession, AuthorityScopeTenant},

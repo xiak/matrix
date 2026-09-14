@@ -39,6 +39,9 @@ function currentCapabilities(mode: "all" | "tenant" | "platform" | "none" = "all
 }
 function childCapabilities(attachments: UserPolicyAttachment[] = [viewer]): ActionCapability[] {
   return [
+    capability("iam.user.read", "USER", "child-a"),
+    capability("iam.user.update", "USER", "child-a"),
+    capability("iam.user.delete", "USER", "child-a", false, "TARGET_MUST_BE_DISABLED"),
     capability("iam.user.set-status", "USER", "child-a"),
     capability("iam.user.reset-password", "USER", "child-a"),
     capability("iam.policy-attachment.create", "USER", "child-a"),
@@ -226,6 +229,45 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "确认撤销" }));
     await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, {
       kind: "revoke-policy-attachment", attachmentId: "attachment-viewer", resourceVersion: 1
+    }));
+  });
+
+  it("updates only the selected user display name with its current revision", async () => {
+    const { user, repository } = await openAccess();
+    await user.click(await screen.findByRole("button", { name: "管理 developer" }));
+    await user.click(screen.getByRole("button", { name: "修改显示名称" }));
+    const displayName = screen.getByLabelText("显示名称");
+    await user.clear(displayName);
+    await user.type(displayName, "Developer Renamed");
+    await user.click(screen.getByRole("button", { name: "保存名称" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, {
+      kind: "update-user", userId: "child-a", displayName: "Developer Renamed", resourceVersion: 2
+    }));
+    expect(screen.getByText("用户 ID、登录名和所属账号创建后不可修改。")).toBeTruthy();
+  });
+
+  it("requires prior disable and explicit confirmation before irreversible user deletion", async () => {
+    const active = accounts();
+    const activeView = await openAccess(active);
+    await activeView.user.click(await screen.findByRole("button", { name: "管理 developer" }));
+    expect(screen.queryByRole("button", { name: "删除用户" })).toBeNull();
+    expect(screen.getByText(/删除用户前必须先禁用/)).toBeTruthy();
+    activeView.view.unmount();
+
+    const disabledCapabilities = childCapabilities().map((item) => item.action === "iam.user.delete" ?
+      { ...item, available: true, restrictionReason: null } : item);
+    const disabledChild: UserAccess = {
+      ...child, user: { ...child.user, status: "DISABLED" }, capabilities: disabledCapabilities
+    };
+    const repository = accounts({ listUsers: vi.fn().mockResolvedValue({ items: [disabledChild], nextAfter: null }) });
+    const disabledView = await openAccess(repository);
+    await disabledView.user.click(await screen.findByRole("button", { name: "管理 developer" }));
+    await disabledView.user.click(screen.getByRole("button", { name: "删除用户" }));
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(screen.getByText(/登录名与用户 ID 将永久保留/)).toBeTruthy();
+    await disabledView.user.click(screen.getByRole("button", { name: "确认永久删除" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, {
+      kind: "delete-user", userId: "child-a", resourceVersion: 2
     }));
   });
 

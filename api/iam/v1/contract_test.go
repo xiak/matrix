@@ -821,6 +821,9 @@ func TestAccountDirectoryContractsRejectCrossTenantAuthority(t *testing.T) {
 	}
 	list := UserList{APIVersion: APIVersion, Kind: "UserList", Items: []UserAccess{{User: user, PolicyAttachments: []PolicyAttachment{attachment},
 		Capabilities: []ActionCapability{
+			blocked(ActionIAMUserRead, ResourceUser, string(user.ID)),
+			blocked(ActionIAMUserUpdate, ResourceUser, string(user.ID)),
+			blocked(ActionIAMUserDelete, ResourceUser, string(user.ID)),
 			blocked(ActionIAMUserSetStatus, ResourceUser, string(user.ID)),
 			blocked(ActionIAMUserPasswordReset, ResourceUser, string(user.ID)),
 			blocked(ActionIAMPolicyAttachmentCreate, ResourceUser, string(user.ID)),
@@ -872,6 +875,44 @@ func TestAccountDirectoryContractsRejectCrossTenantAuthority(t *testing.T) {
 	}
 	if ValidateSetUserStatusRequest(SetUserStatusRequest{Status: "REMOVED", ResourceVersion: 1, RequestID: "request-status"}) == nil {
 		t.Fatal("unsupported status accepted")
+	}
+}
+
+func TestUserProfileAndDeletionContractsAreStrictAndNonSecret(t *testing.T) {
+	update := UpdateUserRequest{DisplayName: "Renamed user", ResourceVersion: 7, RequestID: "request-user-update"}
+	if ValidateUpdateUserRequest(update) != nil || ValidateDeleteUserRequest(DeleteUserRequest{ResourceVersion: 8, RequestID: "request-user-delete"}) != nil {
+		t.Fatal("valid user lifecycle request rejected")
+	}
+	for _, invalid := range []UpdateUserRequest{
+		{DisplayName: "", ResourceVersion: 7, RequestID: "request-user-update"},
+		{DisplayName: " padded ", ResourceVersion: 7, RequestID: "request-user-update"},
+		{DisplayName: "Renamed user", ResourceVersion: 0, RequestID: "request-user-update"},
+	} {
+		if ValidateUpdateUserRequest(invalid) == nil {
+			t.Fatal("invalid user profile update accepted")
+		}
+	}
+	for _, encoded := range []string{
+		`{"displayName":"Renamed user","resourceVersion":7,"requestId":"request-user-update","loginName":"replacement"}`,
+		`{"resourceVersion":8,"requestId":"request-user-delete","accountId":"forged"}`,
+	} {
+		var target any = &UpdateUserRequest{}
+		if strings.Contains(encoded, "accountId") {
+			target = &DeleteUserRequest{}
+		}
+		if DecodeRequest(strings.NewReader(encoded), target) == nil {
+			t.Fatal("user lifecycle request accepted an authority or identity selector")
+		}
+	}
+	deletedAt := time.Date(2026, 9, 11, 9, 10, 11, 123000, time.UTC)
+	receipt := UserDeletion{APIVersion: APIVersion, Kind: "UserDeletion", AccountID: "account-a", ID: "user-a",
+		LoginName: "member.a", ResourceVersion: 9, DeletedAt: deletedAt}
+	if ValidateUserDeletion(receipt) != nil {
+		t.Fatal("valid user deletion receipt rejected")
+	}
+	receipt.DeletedAt = time.Time{}
+	if ValidateUserDeletion(receipt) == nil {
+		t.Fatal("deletion receipt without an authoritative timestamp accepted")
 	}
 }
 

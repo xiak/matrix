@@ -57,6 +57,7 @@ type Transaction interface {
 	RevokePolicyAttachment(context.Context, PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error)
 	ReadAccount(context.Context, iamv1.AccountID, iamv1.PrincipalID) (iamv1.Account, error)
 	ListUsers(context.Context, AccountRead) (iamv1.UserList, error)
+	ReadUser(context.Context, AccountRead, iamv1.PrincipalID) (iamv1.UserAccess, error)
 	ListPolicies(context.Context, AccountRead, iamv1.AuthorityScope) (iamv1.PolicyList, error)
 	ListAccounts(context.Context, AccountRead) (AccountManagementPage, error)
 	ReadAccountAsPlatform(context.Context, AccountRead, iamv1.AccountID) (AccountManagementSnapshot, error)
@@ -67,6 +68,8 @@ type Transaction interface {
 	InspectLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, *iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, error)
 	RecoverLocalCredentials(context.Context, LocalCredentialRecoveryMutation) (iamv1.LocalCredentialRecoveryResult, error)
 	SetAccountAlias(context.Context, AccountAliasMutation) (iamv1.Account, error)
+	UpdateUser(context.Context, UserProfileMutation) (iamv1.User, error)
+	DeleteUser(context.Context, UserDeletionMutation) (iamv1.UserDeletion, error)
 	ChangeUser(context.Context, UserChange) (iamv1.User, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
 }
@@ -151,6 +154,25 @@ type UserChange struct {
 	ResourceVersion  uint64
 	Status           *iamv1.PrincipalStatus
 	PasswordHash     *authority.PasswordHash
+	AuditEvent       auditv1.Event
+}
+
+type UserProfileMutation struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	PrincipalID      iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	DisplayName      string
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type UserDeletionMutation struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	PrincipalID      iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	ResourceVersion  uint64
 	AuditEvent       auditv1.Event
 }
 

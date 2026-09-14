@@ -162,6 +162,7 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 	legacyTemporary := loginIAM(t, endpoint, oldChildLogin, initialReaderPassword, "request-upgrade-old-temporary")
 	changePasswordIAM(t, endpoint, member.Credential, initialReaderPassword, changedReaderPassword, "request-upgrade-member-password")
 	legacyCurrent := loginIAM(t, endpoint, oldChildLogin, changedReaderPassword, "request-upgrade-old-current")
+	deleteCandidateID := createLegacyIAMUser(t, endpoint, administrator.Credential, "retained.deleted", "Retained deletion candidate", initialReaderPassword, "request-upgrade-delete-candidate")
 	binding := putLegacyIAMBinding(t, endpoint, administrator.Credential, userID, legacyRolePaaSViewer, "request-upgrade-role")
 	revokeLegacyIAMBinding(t, endpoint, administrator.Credential, binding.ID, "request-upgrade-role-revoke")
 	revokeIAMSession(t, endpoint, administrator.Credential, member.Session.ID, "request-upgrade-session-revoke")
@@ -200,6 +201,12 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 			t.Fatal(err)
 		}
 	}
+	var retainedUsersLive bool
+	if err := admin.QueryRow(ctx, `SELECT count(*)=2 AND bool_and(deleted_at IS NULL)
+		FROM iam.principals WHERE tenant_id='organization-process' AND id=ANY($1::text[])`,
+		[]string{string(userID), string(deleteCandidateID)}).Scan(&retainedUsersLive); err != nil || !retainedUsersLive {
+		t.Fatal("upgrade failed to preserve live legacy users as non-tombstoned identities")
+	}
 	current := start(currentBinary)
 	// These rows were created by the actual old executable, not fabricated by
 	// current-schema writes. Neither pre-change nor post-change timestamps prove
@@ -233,6 +240,60 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 		var identity iamv1.CurrentIdentity
 		if identityResponse.Status != http.StatusOK || json.Unmarshal(identityResponse.Body, &identity) != nil || identity.Account.RootIdentity.PrincipalID != "principal-admin" || identity.User.MustChangePassword {
 			t.Fatal("upgrade replaced primary ownership or credentials")
+		}
+		detailResponse := performJSON(t, http.MethodGet, endpoint+"/v1/users/"+string(userID), primary.Credential, nil)
+		var detail iamv1.UserAccess
+		if detailResponse.Status != http.StatusOK || json.Unmarshal(detailResponse.Body, &detail) != nil || iamv1.ValidateUserAccess(detail) != nil || detail.User.ID != userID {
+			t.Fatal("upgraded legacy user did not expose the current detail contract")
+		}
+		if attempt == 0 {
+			updatedResponse := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(userID)+":update", primary.Credential,
+				iamv1.UpdateUserRequest{DisplayName: "Retained viewer upgraded", ResourceVersion: detail.User.ResourceVersion, RequestID: "request-upgrade-retained-profile"})
+			var updated iamv1.User
+			if updatedResponse.Status != http.StatusOK || json.Unmarshal(updatedResponse.Body, &updated) != nil || iamv1.ValidateUser(updated) != nil ||
+				updated.ID != userID || updated.DisplayName != "Retained viewer upgraded" || updated.ResourceVersion != detail.User.ResourceVersion+1 {
+				t.Fatal("current profile mutation did not operate on the retained legacy user")
+			}
+		} else if detail.User.DisplayName != "Retained viewer upgraded" {
+			t.Fatal("migration replay or restart lost the retained user profile mutation")
+		}
+		if attempt == 0 {
+			candidateResponse := performJSON(t, http.MethodGet, endpoint+"/v1/users/"+string(deleteCandidateID), primary.Credential, nil)
+			var candidate iamv1.UserAccess
+			if candidateResponse.Status != http.StatusOK || json.Unmarshal(candidateResponse.Body, &candidate) != nil || iamv1.ValidateUserAccess(candidate) != nil {
+				t.Fatal("retained deletion candidate is unavailable after upgrade")
+			}
+			disabledResponse := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(deleteCandidateID)+":set-status", primary.Credential,
+				iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: candidate.User.ResourceVersion, RequestID: "request-upgrade-retained-delete-disable"})
+			var disabled iamv1.User
+			if disabledResponse.Status != http.StatusOK || json.Unmarshal(disabledResponse.Body, &disabled) != nil || disabled.Status != iamv1.PrincipalDisabled {
+				t.Fatal("retained deletion candidate could not be disabled")
+			}
+			deletedResponse := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(deleteCandidateID)+":delete", primary.Credential,
+				iamv1.DeleteUserRequest{ResourceVersion: disabled.ResourceVersion, RequestID: "request-upgrade-retained-delete"})
+			var deletion iamv1.UserDeletion
+			if deletedResponse.Status != http.StatusOK || json.Unmarshal(deletedResponse.Body, &deletion) != nil || iamv1.ValidateUserDeletion(deletion) != nil || deletion.ID != deleteCandidateID {
+				t.Fatal("current deletion did not tombstone the retained legacy user")
+			}
+		}
+		if got := performJSON(t, http.MethodGet, endpoint+"/v1/users/"+string(deleteCandidateID), primary.Credential, nil); got.Status != http.StatusForbidden {
+			t.Fatal("deleted retained user became readable after migration replay or restart")
+		}
+		if got := performJSON(t, http.MethodPost, endpoint+"/v1/auth/login", "", map[string]any{
+			"loginName": "retained.deleted@organization-process", "password": initialReaderPassword, "requestId": "request-upgrade-deleted-login",
+		}); got.Status != http.StatusUnauthorized {
+			t.Fatal("deleted retained user could authenticate after migration replay or restart")
+		}
+		var tombstoned bool
+		var credentials, activeSessions, activeAttachments, deleteFacts int
+		if err := admin.QueryRow(ctx, `SELECT principal.deleted_at IS NOT NULL,
+			(SELECT count(*) FROM iam.user_credentials AS credential WHERE credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id),
+			(SELECT count(*) FROM iam.sessions AS session WHERE session.tenant_id=principal.tenant_id AND session.principal_id=principal.id AND session.status='ACTIVE'),
+			(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.principal_id=principal.id AND attachment.revoked_at IS NULL),
+			(SELECT count(*) FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=principal.tenant_id AND outbox.event_document->>'action'='iam.user.deleted' AND outbox.event_document#>>'{target,id}'=principal.id)
+			FROM iam.principals AS principal WHERE principal.tenant_id='organization-process' AND principal.id=$1`, deleteCandidateID).
+			Scan(&tombstoned, &credentials, &activeSessions, &activeAttachments, &deleteFacts); err != nil || !tombstoned || credentials != 0 || activeSessions != 0 || activeAttachments != 0 || deleteFacts != 1 {
+			t.Fatal("migration replay or restart revived retained user authority")
 		}
 		assertPlatformAuthorization(t, endpoint, primary.Credential, "principal-admin", "request-upgrade-platform-denied", false)
 		child := loginIAM(t, endpoint, "retained.viewer@organization-process", retainedReaderPassword, "request-upgrade-retained-child")
@@ -550,7 +611,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 7, Audit: 4, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 8, Audit: 5, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -1887,8 +1948,17 @@ func proveTenantAccountProcesses(
 	childLogin = loginIAM(t, endpoint, "account.user@process-company", changed, "request-resumed-child-login")
 	sensitive = append(sensitive, childLogin.Credential)
 	memberDisabled := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(child.ID)+":set-status", primary.Credential, iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: 2, RequestID: "request-process-creator-disabled"})
-	if memberDisabled.Status != http.StatusOK {
+	var disabledMember iamv1.User
+	if memberDisabled.Status != http.StatusOK || json.Unmarshal(memberDisabled.Body, &disabledMember) != nil ||
+		iamv1.ValidateUser(disabledMember) != nil || disabledMember.Status != iamv1.PrincipalDisabled {
 		t.Fatalf("disable resource creator status=%d", memberDisabled.Status)
+	}
+	memberDeleted := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(child.ID)+":delete", primary.Credential,
+		iamv1.DeleteUserRequest{ResourceVersion: disabledMember.ResourceVersion, RequestID: "request-process-creator-deleted"})
+	var deletion iamv1.UserDeletion
+	if memberDeleted.Status != http.StatusOK || json.Unmarshal(memberDeleted.Body, &deletion) != nil ||
+		iamv1.ValidateUserDeletion(deletion) != nil || deletion.ID != child.ID || deletion.AccountID != crossTenantID {
+		t.Fatalf("delete resource creator status=%d", memberDeleted.Status)
 	}
 	getPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", http.StatusUnauthorized)
 	getPaaSApplication(t, paasEndpoint, primary.Credential, "application-customer-only", http.StatusOK)
@@ -1910,6 +1980,11 @@ func proveTenantAccountProcesses(
 		t.Fatal("platform identity read another tenant's Operation")
 	}
 	waitAllIAMOutboxDelivered(t, ctx, admin)
+	deletionRecords := queryAudit(t, auditEndpoint, primary.Credential, auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMUserDeleted}, http.StatusOK)
+	if deletionRecords.TenantID != crossTenantID || len(deletionRecords.Records) != 1 ||
+		deletionRecords.Records[0].Event.Target.ID != string(child.ID) || deletionRecords.Records[0].Event.TenantID != crossTenantID {
+		t.Fatal("resource creator deletion lost its tenant audit identity")
+	}
 	for _, action := range []auditv1.Action{auditv1.ActionIAMAccountCreated, auditv1.ActionIAMAccountDisabled, auditv1.ActionIAMAccountEnabled, auditv1.ActionIAMAccountRootCredentialsRecovered} {
 		response := performJSON(t, http.MethodPost, auditEndpoint+"/v1/platform/records:query", bearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: action})
 		var records auditv1.RecordPage

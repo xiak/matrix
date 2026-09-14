@@ -11,6 +11,9 @@ export type IamAction =
   | "iam.account.alias-set"
   | "iam.user.list"
   | "iam.user.create"
+  | "iam.user.read"
+  | "iam.user.update"
+  | "iam.user.delete"
   | "iam.policy.list"
   | "iam.user.set-status"
   | "iam.user.reset-password"
@@ -27,7 +30,8 @@ export type CapabilityRestriction =
   | "INSTALLATION_AUTHORITY_PROTECTED"
   | "SYSTEM_ACCOUNT_PROTECTED"
   | "TARGET_DISABLED"
-  | "TARGET_CREDENTIAL_CHANGE_REQUIRED";
+  | "TARGET_CREDENTIAL_CHANGE_REQUIRED"
+  | "TARGET_MUST_BE_DISABLED";
 
 export type ActionCapability = {
   action: IamAction;
@@ -110,6 +114,8 @@ export type AccountCommand =
   | { kind: "set-account-status"; accountId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
   | { kind: "recover-root-credentials"; accountId: string; initialPassword: string; resourceVersion: number }
   | { kind: "set-alias"; alias: string; resourceVersion: number }
+  | { kind: "update-user"; userId: string; displayName: string; resourceVersion: number }
+  | { kind: "delete-user"; userId: string; resourceVersion: number }
   | { kind: "set-status"; userId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
   | { kind: "reset-password"; userId: string; initialPassword: string; resourceVersion: number }
   | { kind: "create-policy-attachment"; userId: string; policyId: string; policyResourceVersion: number }

@@ -18,6 +18,28 @@ func normalizeUser(value *iamv1.User) {
 	value.UpdatedAt = value.UpdatedAt.UTC()
 }
 
+func normalizeUserAccess(value *iamv1.UserAccess, account iamv1.AccountID) error {
+	normalizeUser(&value.User)
+	if iamv1.ValidateUser(value.User) != nil || value.User.AccountID != account || value.Capabilities != nil {
+		return identityaccess.ErrUnavailable
+	}
+	attachments := make(map[iamv1.PolicyAttachmentID]bool, len(value.PolicyAttachments))
+	policies := make(map[iamv1.PolicyID]bool, len(value.PolicyAttachments))
+	for index := range value.PolicyAttachments {
+		attachment := &value.PolicyAttachments[index]
+		attachment.CreatedAt = attachment.CreatedAt.UTC()
+		attachment.UpdatedAt = attachment.UpdatedAt.UTC()
+		if iamv1.ValidatePolicyAttachment(*attachment) != nil || attachment.RevokedAt != nil ||
+			attachment.AccountID != value.User.AccountID || attachment.Target.Kind != iamv1.PolicyTargetUser ||
+			attachment.Target.ID != string(value.User.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
+			return identityaccess.ErrUnavailable
+		}
+		attachments[attachment.ID] = true
+		policies[attachment.PolicyID] = true
+	}
+	return nil
+}
+
 func (value *transaction) ReadAccount(ctx context.Context, tenant iamv1.AccountID, principal iamv1.PrincipalID) (iamv1.Account, error) {
 	var encoded []byte
 	if err := value.tx.QueryRow(ctx, "SELECT iam.read_account($1,$2)", tenant, principal).Scan(&encoded); err != nil {
@@ -136,28 +158,25 @@ func (value *transaction) ListUsers(ctx context.Context, read identityaccess.Acc
 	}
 	for i := range result.Items {
 		item := &result.Items[i]
-		normalizeUser(&item.User)
-		if iamv1.ValidateUser(item.User) != nil || item.User.AccountID != read.AccountID ||
+		if normalizeUserAccess(item, read.AccountID) != nil ||
 			(i > 0 && result.Items[i-1].User.ID >= item.User.ID) {
 			return iamv1.UserList{}, identityaccess.ErrUnavailable
-		}
-		attachments := make(map[iamv1.PolicyAttachmentID]bool, len(item.PolicyAttachments))
-		policies := make(map[iamv1.PolicyID]bool, len(item.PolicyAttachments))
-		for j := range item.PolicyAttachments {
-			attachment := &item.PolicyAttachments[j]
-			attachment.CreatedAt = attachment.CreatedAt.UTC()
-			attachment.UpdatedAt = attachment.UpdatedAt.UTC()
-			if iamv1.ValidatePolicyAttachment(*attachment) != nil || attachment.RevokedAt != nil ||
-				attachment.AccountID != item.User.AccountID || attachment.Target.Kind != iamv1.PolicyTargetUser ||
-				attachment.Target.ID != string(item.User.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
-				return iamv1.UserList{}, identityaccess.ErrUnavailable
-			}
-			attachments[attachment.ID] = true
-			policies[attachment.PolicyID] = true
 		}
 	}
 	if result.NextAfter != "" && (len(result.Items) == 0 || result.NextAfter != string(result.Items[len(result.Items)-1].User.ID)) {
 		return iamv1.UserList{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) ReadUser(ctx context.Context, read identityaccess.AccountRead, id iamv1.PrincipalID) (iamv1.UserAccess, error) {
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.read_user($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, id).Scan(&encoded); err != nil {
+		return iamv1.UserAccess{}, mapAuthorizationDatabaseError("read IAM user", err)
+	}
+	var result iamv1.UserAccess
+	if json.Unmarshal(encoded, &result) != nil || normalizeUserAccess(&result, read.AccountID) != nil || result.User.ID != id {
+		return iamv1.UserAccess{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }
@@ -243,6 +262,56 @@ func (value *transaction) SetAccountAlias(ctx context.Context, mutation identity
 		return iamv1.Account{}, mapAuthorizationDatabaseError("set IAM account alias", err)
 	}
 	return decodeAccount(encoded)
+}
+
+func (value *transaction) UpdateUser(ctx context.Context, mutation identityaccess.UserProfileMutation) (iamv1.User, error) {
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.User{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, `SELECT iam.update_user($1,$2,$3,$4,$5,$6,$7::jsonb)`,
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PrincipalID,
+		mutation.DisplayName, mutation.ResourceVersion, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.User{}, mapAuthorizationDatabaseError("update IAM user", err)
+	}
+	var result iamv1.User
+	if json.Unmarshal(encoded, &result) != nil {
+		return iamv1.User{}, identityaccess.ErrUnavailable
+	}
+	normalizeUser(&result)
+	if iamv1.ValidateUser(result) != nil || result.AccountID != mutation.AccountID || result.ID != mutation.PrincipalID ||
+		result.DisplayName != mutation.DisplayName || result.ResourceVersion != mutation.ResourceVersion+1 {
+		return iamv1.User{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) DeleteUser(ctx context.Context, mutation identityaccess.UserDeletionMutation) (iamv1.UserDeletion, error) {
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.UserDeletion{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, `SELECT iam.delete_user($1,$2,$3,$4,$5,$6::jsonb)`,
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PrincipalID,
+		mutation.ResourceVersion, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.UserDeletion{}, mapAuthorizationDatabaseError("delete IAM user", err)
+	}
+	var result iamv1.UserDeletion
+	if json.Unmarshal(encoded, &result) != nil {
+		return iamv1.UserDeletion{}, identityaccess.ErrUnavailable
+	}
+	result.DeletedAt = result.DeletedAt.UTC()
+	if iamv1.ValidateUserDeletion(result) != nil || result.AccountID != mutation.AccountID ||
+		result.ID != mutation.PrincipalID || result.ResourceVersion != mutation.ResourceVersion+1 {
+		return iamv1.UserDeletion{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
 }
 
 func (value *transaction) ChangeUser(ctx context.Context, mutation identityaccess.UserChange) (iamv1.User, error) {

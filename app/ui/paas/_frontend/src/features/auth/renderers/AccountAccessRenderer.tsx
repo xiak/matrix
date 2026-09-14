@@ -16,12 +16,13 @@ const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
 function restrictionMessage(reason: ActionCapability["restrictionReason"]): string {
   switch (reason) {
     case "CURRENT_CREDENTIAL_CHANGE_REQUIRED": return "当前登录凭据必须先完成密码修改。";
-    case "SELF_PROTECTED": return "当前登录用户不能通过子用户管理修改自身状态或重置自身密码。";
+    case "SELF_PROTECTED": return "当前登录用户不能通过子用户管理删除自身或改变自身安全状态。";
     case "ROOT_IDENTITY_PROTECTED": return "主账号最终控制身份不能加入用户组或被子用户管理替代。";
     case "INSTALLATION_AUTHORITY_PROTECTED": return "目标关联安装级权限，必须使用受保护的平台恢复或管理流程。";
     case "SYSTEM_ACCOUNT_PROTECTED": return "安装服务所属的系统账号不能停用。";
     case "TARGET_DISABLED": return "目标用户已停用，恢复后才能新增策略关联。";
     case "TARGET_CREDENTIAL_CHANGE_REQUIRED": return "目标用户须先完成初始密码修改，才能取得安装级权限。";
+    case "TARGET_MUST_BE_DISABLED": return "删除用户前必须先禁用，确认现有会话已经失效。";
     default: return "当前身份没有执行此操作所需的权限。";
   }
 }
@@ -80,6 +81,9 @@ function UserAccess({ scene, user, onClose }: { scene: AccountAccessScene; user:
   const [password, setPassword] = useState("");
   const [confirmStatus, setConfirmStatus] = useState(false);
   const [resettingPassword, setResettingPassword] = useState(false);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [displayName, setDisplayName] = useState(user.name);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
   const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; resourceVersion: number } | null>(null);
   const availablePolicies = scene.policies.filter((policy) => policy.status === "ACTIVE" &&
@@ -101,6 +105,18 @@ function UserAccess({ scene, user, onClose }: { scene: AccountAccessScene; user:
       <Button onClick={onClose} size="small" variant="ghost">关闭详情</Button>
     </Card.Header>
     <Card.Body className={styles.detail}>
+      <div className={styles.sectionHeading}><UserRound aria-hidden="true" /><strong>用户资料</strong></div>
+      {editingProfile ? <form className={styles.inlineForm} onSubmit={async (event) => {
+        event.preventDefault();
+        const next = displayName.trim();
+        if (next && await access.execute({ kind: "update-user", userId: user.id, displayName: next, resourceVersion: user.resourceVersion })) setEditingProfile(false);
+      }}>
+        <Field label="显示名称"><Input disabled={disabled} maxLength={128} minLength={1} onChange={(event) => setDisplayName(event.target.value)} required value={displayName} /></Field>
+        <Button disabled={disabled || !displayName.trim()} type="submit">保存名称</Button>
+        <Button disabled={disabled} onClick={() => { setDisplayName(user.name); setEditingProfile(false); }} variant="ghost">取消</Button>
+      </form> : user.canUpdate ? <Button disabled={disabled} onClick={() => setEditingProfile(true)} size="small" variant="secondary">修改显示名称</Button>
+        : <p className={styles.note}>{restrictionMessage(user.updateRestrictionReason)}</p>}
+      <p className={styles.note}>用户 ID、登录名和所属账号创建后不可修改。</p>
       <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>已关联策略</strong></div>
       <p className={styles.note}>策略按明确权威范围生效，不限于该用户创建的资源。管理员交接通过关联、撤销策略完成，不转让原主账号。</p>
       <ul className={styles.bindingList}>
@@ -128,11 +144,13 @@ function UserAccess({ scene, user, onClose }: { scene: AccountAccessScene; user:
       {!user.canAttachTenantPolicy && !user.canAttachPlatformPolicy ? <p className={styles.note}>{restrictionMessage(user.tenantAttachmentRestrictionReason ?? user.platformAttachmentRestrictionReason)}</p> : null}
       <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>登录与安全</strong></div>
       <div className={styles.actions}>
-        {user.canSetStatus ? <Button disabled={disabled} onClick={() => { setConfirmStatus(true); setResettingPassword(false); setPassword(""); }} variant="secondary">{user.enabled ? "禁用用户" : "启用用户"}</Button> : null}
+        {user.canSetStatus ? <Button disabled={disabled} onClick={() => { setConfirmStatus(true); setResettingPassword(false); setConfirmDelete(false); setPassword(""); }} variant="secondary">{user.enabled ? "禁用用户" : "启用用户"}</Button> : null}
         {user.canResetPassword ? <Button disabled={disabled} onClick={() => { setResettingPassword(true); setConfirmStatus(false); }} variant="secondary">重置密码</Button> : null}
+        {user.canDelete ? <Button disabled={disabled} onClick={() => { setConfirmDelete(true); setConfirmStatus(false); setResettingPassword(false); }} variant="danger">删除用户</Button> : null}
       </div>
       {!user.canSetStatus ? <p className={styles.note}>状态：{restrictionMessage(user.statusRestrictionReason)}</p> : null}
       {!user.canResetPassword ? <p className={styles.note}>密码：{restrictionMessage(user.passwordRestrictionReason)}</p> : null}
+      {!user.canDelete ? <p className={styles.note}>删除：{restrictionMessage(user.deleteRestrictionReason)}</p> : null}
         {confirmStatus ? <div className={styles.confirmation}>
           <p>{user.enabled ? "禁用将撤销该用户的现有会话，下一次受保护请求即被拒绝；不会删除租户资源或停止已有工作负载。" : "启用后可使用有效密码重新登录；已撤销的会话不会恢复。"}</p>
           <div className={styles.actions}>
@@ -145,6 +163,13 @@ function UserAccess({ scene, user, onClose }: { scene: AccountAccessScene; user:
           <p className={styles.note}>重置将撤销所有现有会话。用户下次登录必须修改初始密码；禁用状态不会被自动解除。</p>
           <div className={styles.actions}><Button disabled={disabled || !password} type="submit">确认重置密码</Button><Button disabled={disabled} onClick={() => { setResettingPassword(false); setPassword(""); }} variant="ghost">取消</Button></div>
         </form> : null}
+        {confirmDelete ? <div className={styles.confirmation}>
+          <p>删除不可撤销。登录名与用户 ID 将永久保留，密码和现有会话失效，当前策略关联会被撤销；租户资源、运行中的工作负载和审计记录不会删除。</p>
+          <div className={styles.actions}>
+            <Button disabled={disabled} onClick={async () => { if (await access.execute({ kind: "delete-user", userId: user.id, resourceVersion: user.resourceVersion })) onClose(); }} variant="danger">确认永久删除</Button>
+            <Button disabled={disabled} onClick={() => setConfirmDelete(false)} variant="ghost">取消</Button>
+          </div>
+        </div> : null}
     </Card.Body>
   </Card>;
 }

@@ -304,6 +304,8 @@ BEGIN
         ('iam.account-root.credentials-recovered', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.account.alias-set', 'IAM', 'ACCOUNT', 'SUCCEEDED', true, true, false),
         ('iam.user.created', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.user.updated', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.user.deleted', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.user.status-set', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.user.password-reset', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.user.password-changed', 'IAM', 'USER', 'SUCCEEDED', false, false, false),
@@ -427,7 +429,7 @@ BEGIN
        OR COALESCE(submitted_event#>>'{actor,id}', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT', 'SYSTEM')
-        OR (action_name IN ('iam.account.alias-set','iam.user.created','iam.user.status-set',
+        OR (action_name IN ('iam.account.alias-set','iam.user.created','iam.user.updated','iam.user.deleted','iam.user.status-set',
             'iam.user.password-reset','iam.user.password-changed',
             'iam.policy-attachment.created','iam.policy-attachment.revoked')
             AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
@@ -480,7 +482,7 @@ AS $function$
         to_regclass('audit.chain_heads') IS NOT NULL
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL,
-        4::bigint,
+        5::bigint,
         transaction_timestamp()
 $function$;
 
@@ -782,7 +784,8 @@ BEGIN
         OR (submitted_action IS NOT NULL AND submitted_action NOT IN (
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
             'iam.account-root.credentials-recovered', 'iam.account.alias-set',
-            'iam.user.created', 'iam.user.status-set', 'iam.user.password-reset',
+            'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
+            'iam.user.status-set', 'iam.user.password-reset',
             'iam.user.password-changed',
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.session.revoked', 'iam.password.changed',

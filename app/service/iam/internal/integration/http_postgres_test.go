@@ -2144,6 +2144,8 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 				kind   iamv1.ResourceKind
 				id     string
 			}{
+				{iamv1.ActionIAMUserRead, iamv1.ResourceUser, string(childA.ID)},
+				{iamv1.ActionIAMUserUpdate, iamv1.ResourceUser, string(childA.ID)},
 				{iamv1.ActionIAMUserSetStatus, iamv1.ResourceUser, string(childA.ID)},
 				{iamv1.ActionIAMUserPasswordReset, iamv1.ResourceUser, string(childA.ID)},
 				{iamv1.ActionIAMPolicyAttachmentCreate, iamv1.ResourceUser, string(childA.ID)},
@@ -2154,6 +2156,10 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 				if !found || !capability.Available || capability.RestrictionReason != "" {
 					t.Fatalf("authorized target capability %s is unavailable", expected.action)
 				}
+			}
+			deleteCapability, deleteFound := findIAMCapability(entry.Capabilities, iamv1.ActionIAMUserDelete, iamv1.ResourceUser, string(childA.ID))
+			if !deleteFound || deleteCapability.Available || deleteCapability.RestrictionReason != iamv1.CapabilityTargetMustBeDisabled {
+				t.Fatal("active target deletion capability did not require prior disable")
 			}
 		}
 	}
@@ -2193,7 +2199,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 			continue
 		}
 		foundSelf = true
-		for _, action := range []iamv1.Action{iamv1.ActionIAMUserSetStatus, iamv1.ActionIAMUserPasswordReset} {
+		for _, action := range []iamv1.Action{iamv1.ActionIAMUserDelete, iamv1.ActionIAMUserSetStatus, iamv1.ActionIAMUserPasswordReset} {
 			capability, found := findIAMCapability(entry.Capabilities, action, iamv1.ResourceUser, string(delegated.ID))
 			if !found || capability.Available || capability.RestrictionReason != iamv1.CapabilitySelfProtected {
 				t.Fatalf("self-protection capability %s is invalid", action)
@@ -2380,10 +2386,300 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 			t.Fatalf("account mutation %s lacks atomic audit decision: %v", action, err)
 		}
 	}
+	t.Run("user detail profile and irreversible deletion", func(t *testing.T) {
+		proveUserProfileAndDeletion(t, ctx, handler, admin, root, primaryB)
+	})
 	assertIAMSecretsAbsent(t, ctx, admin, primaryBPassword, primaryBChanged, childPassword, childChangedA, childChangedB, resetPassword, primaryB, childSessionA, childSessionB, activeOne, activeTwo, resetSession)
 	t.Run("platform tenant lifecycle and original primary recovery", func(t *testing.T) {
 		proveTenantLifecycleHTTP(t, ctx, handler, admin, root, primaryB)
 	})
+}
+
+func proveUserProfileAndDeletion(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root, otherTenantRoot string) {
+	t.Helper()
+	const accountID = "organization-http-integration"
+	const initialPassword = "Profile-Initial-Password-47!"
+	const changedPassword = "Profile-Changed-Password-58!"
+	request := func(method, path, bearer string, body any, expected int) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		var err error
+		if body != nil {
+			encoded, err = json.Marshal(body)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != expected {
+			t.Fatalf("user lifecycle %s %s: status=%d want=%d body=%s", method, path, response.Code, expected, response.Body.String())
+		}
+		return response
+	}
+	create := func(name string) iamv1.User {
+		t.Helper()
+		response := request(http.MethodPost, "/v1/users", root, map[string]any{
+			"loginName": name, "displayName": "Disposable account user", "initialPassword": initialPassword,
+			"requestId": "request-create-" + strings.ReplaceAll(name, ".", "-"),
+		}, http.StatusCreated)
+		var result iamv1.User
+		if json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidateUser(result) != nil {
+			t.Fatal("invalid profile/deletion user")
+		}
+		return result
+	}
+	grant := func(user iamv1.User, policy iamv1.PolicyID, requestID string) iamv1.PolicyAttachment {
+		t.Helper()
+		response := request(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(user.ID)},
+			PolicyID: policy, PolicyResourceVersion: 1, RequestID: requestID,
+		}, http.StatusOK)
+		var result iamv1.PolicyAttachment
+		if json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidatePolicyAttachment(result) != nil {
+			t.Fatal("invalid profile/deletion attachment")
+		}
+		return result
+	}
+	login := func(name, password string, expected int) string {
+		t.Helper()
+		response := request(http.MethodPost, "/v1/auth/login", "", map[string]any{
+			"loginName": name, "password": password, "requestId": "request-login-" + strings.ReplaceAll(name, "@", "-"),
+		}, expected)
+		if expected != http.StatusOK {
+			return ""
+		}
+		var result struct {
+			Credential string `json:"credential"`
+		}
+		if json.Unmarshal(response.Body.Bytes(), &result) != nil || result.Credential == "" {
+			t.Fatal("profile/deletion login did not issue a credential")
+		}
+		return result.Credential
+	}
+	read := func(bearer string, id iamv1.PrincipalID, expected int) iamv1.UserAccess {
+		t.Helper()
+		response := request(http.MethodGet, "/v1/users/"+string(id), bearer, nil, expected)
+		var result iamv1.UserAccess
+		if expected == http.StatusOK && (json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidateUserAccess(result) != nil) {
+			t.Fatal("invalid user detail")
+		}
+		return result
+	}
+
+	user := create("profile.delete")
+	viewer := grant(user, iamv1.SystemPolicyPaaSViewer, "request-profile-viewer")
+	grant(user, iamv1.SystemPolicyAccountAdministrator, "request-profile-administrator")
+	bearer := login("profile.delete@"+accountID, initialPassword, http.StatusOK)
+	request(http.MethodPost, "/v1/auth/password", bearer, map[string]any{
+		"currentPassword": initialPassword, "newPassword": changedPassword, "requestId": "request-profile-password",
+	}, http.StatusOK)
+	detail := read(root, user.ID, http.StatusOK)
+	if detail.User.ResourceVersion != 2 || detail.User.LoginName != user.LoginName || len(detail.PolicyAttachments) != 2 {
+		t.Fatal("user detail lost its immutable identity or current policy attachments")
+	}
+	for _, action := range []iamv1.Action{iamv1.ActionIAMUserRead, iamv1.ActionIAMUserUpdate} {
+		capability, found := findIAMCapability(detail.Capabilities, action, iamv1.ResourceUser, string(user.ID))
+		if !found || !capability.Available || capability.RestrictionReason != "" {
+			t.Fatalf("user detail capability %s is unavailable", action)
+		}
+	}
+	deleteCapability, found := findIAMCapability(detail.Capabilities, iamv1.ActionIAMUserDelete, iamv1.ResourceUser, string(user.ID))
+	if !found || deleteCapability.Available || deleteCapability.RestrictionReason != iamv1.CapabilityTargetMustBeDisabled {
+		t.Fatal("active user detail did not require prior disable")
+	}
+	self := read(bearer, user.ID, http.StatusOK)
+	selfDelete, found := findIAMCapability(self.Capabilities, iamv1.ActionIAMUserDelete, iamv1.ResourceUser, string(user.ID))
+	if !found || selfDelete.Available || selfDelete.RestrictionReason != iamv1.CapabilitySelfProtected {
+		t.Fatal("user detail did not protect self deletion")
+	}
+	request(http.MethodPost, "/v1/users/"+string(user.ID)+":delete", bearer,
+		iamv1.DeleteUserRequest{ResourceVersion: detail.User.ResourceVersion, RequestID: "request-self-delete"}, http.StatusForbidden)
+	read(otherTenantRoot, user.ID, http.StatusForbidden)
+	read(root, "principal-admin", http.StatusForbidden)
+	read(root, "service-paas", http.StatusForbidden)
+	request(http.MethodGet, "/v1/users/"+string(user.ID)+"?accountId=organization-customer-b", root, nil, http.StatusBadRequest)
+	request(http.MethodGet, "/v1/users/"+string(user.ID), root, map[string]any{"accountId": "organization-customer-b"}, http.StatusBadRequest)
+	request(http.MethodPost, "/v1/users/"+string(user.ID)+":unknown", root, map[string]any{}, http.StatusNotFound)
+	request(http.MethodPost, "/v1/users/"+string(user.ID)+":update", root, map[string]any{
+		"displayName": "Forged", "resourceVersion": detail.User.ResourceVersion, "requestId": "request-forged-profile", "accountId": "organization-customer-b",
+	}, http.StatusBadRequest)
+	request(http.MethodPost, "/v1/users/"+string(user.ID)+":update", root, iamv1.UpdateUserRequest{
+		DisplayName: "Stale profile", ResourceVersion: 1, RequestID: "request-stale-profile",
+	}, http.StatusConflict)
+	updatedResponse := request(http.MethodPost, "/v1/users/"+string(user.ID)+":update", root, iamv1.UpdateUserRequest{
+		DisplayName: "Renamed account user", ResourceVersion: detail.User.ResourceVersion, RequestID: "request-profile-update",
+	}, http.StatusOK)
+	var updated iamv1.User
+	if json.Unmarshal(updatedResponse.Body.Bytes(), &updated) != nil || iamv1.ValidateUser(updated) != nil ||
+		updated.DisplayName != "Renamed account user" || updated.LoginName != user.LoginName || updated.AccountID != user.AccountID || updated.ResourceVersion != 3 {
+		t.Fatal("profile update changed immutable identity fields")
+	}
+	request(http.MethodPost, "/v1/users/"+string(user.ID)+":delete", root,
+		iamv1.DeleteUserRequest{ResourceVersion: updated.ResourceVersion, RequestID: "request-active-delete"}, http.StatusConflict)
+	request(http.MethodPost, "/v1/users/"+string(user.ID)+":set-status", root,
+		iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: updated.ResourceVersion, RequestID: "request-profile-disable"}, http.StatusOK)
+	read(root, user.ID, http.StatusOK)
+	request(http.MethodPost, "/v1/users/"+string(user.ID)+":delete", otherTenantRoot,
+		iamv1.DeleteUserRequest{ResourceVersion: 4, RequestID: "request-cross-account-delete"}, http.StatusForbidden)
+	request(http.MethodPost, "/v1/users/"+string(user.ID)+":delete", root,
+		iamv1.DeleteUserRequest{ResourceVersion: 3, RequestID: "request-stale-delete"}, http.StatusConflict)
+	var before struct {
+		Deleted        bool
+		Credentials    int
+		LiveAttachment int
+		DeleteFacts    int
+	}
+	if err := database.QueryRow(ctx, `SELECT principal.deleted_at IS NOT NULL,
+		(SELECT count(*) FROM iam.user_credentials AS credential WHERE credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id),
+		(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.principal_id=principal.id AND attachment.revoked_at IS NULL),
+		(SELECT count(*) FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=principal.tenant_id AND outbox.event_document->>'action'='iam.user.deleted' AND outbox.event_document#>>'{target,id}'=principal.id)
+		FROM iam.principals AS principal WHERE principal.tenant_id=$1 AND principal.id=$2`, accountID, user.ID).
+		Scan(&before.Deleted, &before.Credentials, &before.LiveAttachment, &before.DeleteFacts); err != nil || before.Deleted || before.Credentials != 1 || before.LiveAttachment != 2 || before.DeleteFacts != 0 {
+		t.Fatalf("failed deletion changed state: before=%#v err=%v", before, err)
+	}
+	deletedResponse := request(http.MethodPost, "/v1/users/"+string(user.ID)+":delete", root,
+		iamv1.DeleteUserRequest{ResourceVersion: 4, RequestID: "request-profile-delete"}, http.StatusOK)
+	var deletion iamv1.UserDeletion
+	if json.Unmarshal(deletedResponse.Body.Bytes(), &deletion) != nil || iamv1.ValidateUserDeletion(deletion) != nil ||
+		deletion.AccountID != accountID || deletion.ID != user.ID || deletion.LoginName != user.LoginName || deletion.ResourceVersion != 5 {
+		t.Fatal("invalid irreversible deletion receipt")
+	}
+	read(root, user.ID, http.StatusForbidden)
+	request(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized)
+	login("profile.delete@"+accountID, changedPassword, http.StatusUnauthorized)
+	request(http.MethodPost, "/v1/users", root, map[string]any{
+		"loginName": user.LoginName, "displayName": "Reused identity", "initialPassword": initialPassword, "requestId": "request-reuse-deleted-login",
+	}, http.StatusConflict)
+	list := request(http.MethodGet, "/v1/users", root, nil, http.StatusOK)
+	var directory iamv1.UserList
+	if json.Unmarshal(list.Body.Bytes(), &directory) != nil || iamv1.ValidateUserList(directory) != nil {
+		t.Fatal("user directory invalid after deletion")
+	}
+	for _, item := range directory.Items {
+		if item.User.ID == user.ID {
+			t.Fatal("deleted user remained in the live directory")
+		}
+	}
+	var status string
+	var mustChange bool
+	var deletedAt *time.Time
+	var credentials, sessions, activeSessions, attachments, activeAttachments, loginNames, updatedFacts, deletedFacts int
+	if err := database.QueryRow(ctx, `SELECT principal.status,principal.must_change_password,principal.deleted_at,
+		(SELECT count(*) FROM iam.user_credentials AS credential WHERE credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id),
+		(SELECT count(*) FROM iam.sessions AS session WHERE session.tenant_id=principal.tenant_id AND session.principal_id=principal.id),
+		(SELECT count(*) FROM iam.sessions AS session WHERE session.tenant_id=principal.tenant_id AND session.principal_id=principal.id AND session.status='ACTIVE'),
+		(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.principal_id=principal.id),
+		(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.principal_id=principal.id AND attachment.revoked_at IS NULL),
+		(SELECT count(*) FROM iam.login_index AS login WHERE login.tenant_id=principal.tenant_id AND login.principal_id=principal.id AND login.login_name=principal.login_name),
+		(SELECT count(*) FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=principal.tenant_id AND outbox.event_document->>'action'='iam.user.updated' AND outbox.event_document#>>'{target,id}'=principal.id),
+		(SELECT count(*) FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=principal.tenant_id AND outbox.event_document->>'action'='iam.user.deleted' AND outbox.event_document#>>'{target,id}'=principal.id)
+		FROM iam.principals AS principal WHERE principal.tenant_id=$1 AND principal.id=$2`, accountID, user.ID).
+		Scan(&status, &mustChange, &deletedAt, &credentials, &sessions, &activeSessions, &attachments, &activeAttachments, &loginNames, &updatedFacts, &deletedFacts); err != nil ||
+		status != "DISABLED" || mustChange || deletedAt == nil || credentials != 0 || sessions == 0 || activeSessions != 0 || attachments != 2 || activeAttachments != 0 || loginNames != 1 || updatedFacts != 1 || deletedFacts != 1 {
+		t.Fatalf("deleted user state is incomplete: status=%s mustChange=%t deleted=%v credential=%d sessions=%d/%d attachments=%d/%d login=%d facts=%d/%d err=%v",
+			status, mustChange, deletedAt, credentials, activeSessions, sessions, activeAttachments, attachments, loginNames, updatedFacts, deletedFacts, err)
+	}
+	if viewer.ID == "" {
+		t.Fatal("viewer attachment fixture was not created")
+	}
+	applyIAMSchema(t, ctx, database)
+	read(root, user.ID, http.StatusForbidden)
+	request(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized)
+	login("profile.delete@"+accountID, changedPassword, http.StatusUnauthorized)
+	request(http.MethodPost, "/v1/users", root, map[string]any{
+		"loginName": user.LoginName, "displayName": "Replay reuse attack", "initialPassword": initialPassword, "requestId": "request-replay-reuse-deleted-login",
+	}, http.StatusConflict)
+	var replayDeleted, replayReserved bool
+	var replayCredentials, replayActiveSessions, replayActiveAttachments, replayDeleteFacts int
+	if err := database.QueryRow(ctx, `SELECT principal.deleted_at IS NOT NULL,
+		EXISTS(SELECT 1 FROM iam.login_index AS login WHERE login.tenant_id=principal.tenant_id AND login.principal_id=principal.id AND login.login_name=principal.login_name),
+		(SELECT count(*) FROM iam.user_credentials AS credential WHERE credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id),
+		(SELECT count(*) FROM iam.sessions AS session WHERE session.tenant_id=principal.tenant_id AND session.principal_id=principal.id AND session.status='ACTIVE'),
+		(SELECT count(*) FROM iam.policy_attachments AS attachment WHERE attachment.tenant_id=principal.tenant_id AND attachment.principal_id=principal.id AND attachment.revoked_at IS NULL),
+		(SELECT count(*) FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=principal.tenant_id AND outbox.event_document->>'action'='iam.user.deleted' AND outbox.event_document#>>'{target,id}'=principal.id)
+		FROM iam.principals AS principal WHERE principal.tenant_id=$1 AND principal.id=$2`, accountID, user.ID).
+		Scan(&replayDeleted, &replayReserved, &replayCredentials, &replayActiveSessions, &replayActiveAttachments, &replayDeleteFacts); err != nil ||
+		!replayDeleted || !replayReserved || replayCredentials != 0 || replayActiveSessions != 0 || replayActiveAttachments != 0 || replayDeleteFacts != 1 {
+		t.Fatalf("migration replay revived deleted authority: deleted=%t reserved=%t credentials=%d sessions=%d attachments=%d facts=%d err=%v",
+			replayDeleted, replayReserved, replayCredentials, replayActiveSessions, replayActiveAttachments, replayDeleteFacts, err)
+	}
+
+	protected := create("platform.delete")
+	protectedBearer := login("platform.delete@"+accountID, initialPassword, http.StatusOK)
+	request(http.MethodPost, "/v1/auth/password", protectedBearer, map[string]any{
+		"currentPassword": initialPassword, "newPassword": changedPassword, "requestId": "request-platform-password",
+	}, http.StatusOK)
+	platformAttachment := grant(protected, iamv1.SystemPolicyPlatformOperator, "request-platform-protection")
+	request(http.MethodPost, "/v1/users/"+string(protected.ID)+":delete", root,
+		iamv1.DeleteUserRequest{ResourceVersion: 2, RequestID: "request-platform-delete"}, http.StatusForbidden)
+	protectedDetail := read(root, protected.ID, http.StatusOK)
+	protectedDelete, found := findIAMCapability(protectedDetail.Capabilities, iamv1.ActionIAMUserDelete, iamv1.ResourceUser, string(protected.ID))
+	if !found || protectedDelete.Available || protectedDelete.RestrictionReason != iamv1.CapabilityInstallationAuthorityProtected {
+		t.Fatal("installation authority deletion protection is missing")
+	}
+	request(http.MethodPost, "/v1/policy-attachments/"+string(platformAttachment.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: platformAttachment.ResourceVersion, RequestID: "request-platform-protection-revoke"}, http.StatusOK)
+	request(http.MethodPost, "/v1/users/"+string(protected.ID)+":set-status", root,
+		iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: 2, RequestID: "request-platform-cleanup-disable"}, http.StatusOK)
+	request(http.MethodPost, "/v1/users/"+string(protected.ID)+":delete", root,
+		iamv1.DeleteUserRequest{ResourceVersion: 3, RequestID: "request-platform-cleanup-delete"}, http.StatusOK)
+
+	raceUser := create("concurrent.delete")
+	request(http.MethodPost, "/v1/users/"+string(raceUser.ID)+":set-status", root,
+		iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: raceUser.ResourceVersion, RequestID: "request-race-disable"}, http.StatusOK)
+	start := make(chan struct{})
+	results := make(chan int, 3)
+	for _, operation := range []struct {
+		path string
+		body any
+	}{
+		{"/v1/users/" + string(raceUser.ID) + ":update", iamv1.UpdateUserRequest{DisplayName: "Concurrent winner", ResourceVersion: 2, RequestID: "request-race-update"}},
+		{"/v1/users/" + string(raceUser.ID) + ":set-status", iamv1.SetUserStatusRequest{Status: iamv1.PrincipalActive, ResourceVersion: 2, RequestID: "request-race-enable"}},
+		{"/v1/users/" + string(raceUser.ID) + ":delete", iamv1.DeleteUserRequest{ResourceVersion: 2, RequestID: "request-race-delete"}},
+	} {
+		encoded, err := json.Marshal(operation.body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		go func(path string, body []byte) {
+			<-start
+			results <- performIAMRequest(handler, http.MethodPost, path, root, body).Code
+		}(operation.path, encoded)
+	}
+	close(start)
+	statuses := []int{<-results, <-results, <-results}
+	successes := 0
+	for _, code := range statuses {
+		if code == http.StatusOK {
+			successes++
+		} else if code != http.StatusConflict && code != http.StatusForbidden {
+			t.Fatalf("concurrent user mutation returned unexpected status %d", code)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent status/update/delete admitted %d mutations: %v", successes, statuses)
+	}
+	var version uint64
+	var raceStatus, raceName string
+	var raceDeleted *time.Time
+	var raceCredentials, raceFacts int
+	if err := database.QueryRow(ctx, `SELECT status,display_name,resource_version,deleted_at,
+		(SELECT count(*) FROM iam.user_credentials AS credential WHERE credential.tenant_id=principal.tenant_id AND credential.principal_id=principal.id),
+		(SELECT count(*) FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=principal.tenant_id AND outbox.event_document#>>'{target,id}'=principal.id AND outbox.event_document->>'action' IN ('iam.user.updated','iam.user.deleted','iam.user.status-set') AND outbox.event_document->>'requestId' IN ('request-race-update','request-race-enable','request-race-delete'))
+		FROM iam.principals AS principal WHERE principal.tenant_id=$1 AND principal.id=$2`, accountID, raceUser.ID).
+		Scan(&raceStatus, &raceName, &version, &raceDeleted, &raceCredentials, &raceFacts); err != nil || version != 3 || raceFacts != 1 {
+		t.Fatalf("concurrent user mutation left ambiguous state: status=%s name=%s version=%d deleted=%v credentials=%d facts=%d err=%v",
+			raceStatus, raceName, version, raceDeleted, raceCredentials, raceFacts, err)
+	}
+	if raceDeleted != nil {
+		if raceStatus != "DISABLED" || raceCredentials != 0 {
+			t.Fatal("winning deletion left live credentials")
+		}
+	} else if raceCredentials != 1 || !((raceStatus == "ACTIVE" && raceName == raceUser.DisplayName) ||
+		(raceStatus == "DISABLED" && raceName == "Concurrent winner")) {
+		t.Fatal("winning status/profile mutation mixed concurrent effects")
+	}
+	assertIAMSecretsAbsent(t, ctx, database, initialPassword, changedPassword, bearer, protectedBearer)
 }
 
 func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root, otherPrimary string) {

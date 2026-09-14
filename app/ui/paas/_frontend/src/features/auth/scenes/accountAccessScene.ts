@@ -53,6 +53,9 @@ export function buildAccountAccessScene(
     })),
     users: users?.items.map(({ user, policyAttachments, capabilities }) => {
       const userCapability = (action: IamAction) => findActionCapability(capabilities, action, "USER", user.id);
+      const readCapability = userCapability("iam.user.read");
+      const updateCapability = userCapability("iam.user.update");
+      const deleteCapability = userCapability("iam.user.delete");
       const statusCapability = userCapability("iam.user.set-status");
       const resetCapability = userCapability("iam.user.reset-password");
       const tenantAttachCapability = userCapability("iam.policy-attachment.create");
@@ -62,6 +65,12 @@ export function buildAccountAccessScene(
       qualifiedName: `${user.loginName}@${account.loginAlias ?? account.id}`,
       enabled: user.status === "ACTIVE", resourceVersion: user.resourceVersion,
       statusLabel: user.status === "DISABLED" ? "已禁用" : user.mustChangePassword ? "待修改初始密码" : "正常",
+      canRead: readCapability?.available === true,
+      readRestrictionReason: readCapability?.restrictionReason ?? null,
+      canUpdate: updateCapability?.available === true,
+      updateRestrictionReason: updateCapability?.restrictionReason ?? null,
+      canDelete: deleteCapability?.available === true,
+      deleteRestrictionReason: deleteCapability?.restrictionReason ?? null,
       canSetStatus: statusCapability?.available === true,
       statusRestrictionReason: statusCapability?.restrictionReason ?? null,
       canResetPassword: resetCapability?.available === true,

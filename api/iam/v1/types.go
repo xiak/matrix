@@ -273,6 +273,29 @@ type SetUserStatusRequest struct {
 	RequestID       string          `json:"requestId"`
 }
 
+type UpdateUserRequest struct {
+	DisplayName     string `json:"displayName"`
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+type DeleteUserRequest struct {
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+// UserDeletion is the non-secret receipt for an irreversible user tombstone.
+// The login name and principal ID remain reserved and cannot be recreated.
+type UserDeletion struct {
+	APIVersion      string      `json:"apiVersion"`
+	Kind            string      `json:"kind"`
+	AccountID       AccountID   `json:"accountId"`
+	ID              PrincipalID `json:"id"`
+	LoginName       string      `json:"loginName"`
+	ResourceVersion uint64      `json:"resourceVersion"`
+	DeletedAt       time.Time   `json:"deletedAt"`
+}
+
 type SetAccountStatusRequest struct {
 	Status          AccountStatus `json:"status"`
 	ResourceVersion uint64        `json:"resourceVersion"`
