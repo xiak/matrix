@@ -105,6 +105,7 @@ const capabilityActions = new Set<IamAction>([
   "iam.group-membership.list", "iam.group-membership.create", "iam.group-membership.remove",
   "iam.group-policy-attachment.create", "iam.group-policy-attachment.revoke",
   "iam.user.update", "iam.user.delete", "iam.user.set-status",
+  "iam.user.permission-boundary.set", "iam.user.permission-boundary.remove",
   "iam.user.reset-password", "iam.policy-attachment.create", "iam.platform-policy-attachment.create",
   "iam.policy-attachment.revoke", "iam.platform-policy-attachment.revoke"
 ]);
@@ -117,6 +118,7 @@ const capabilityRestrictions = new Set<CapabilityRestriction>([
 
 function capabilityResourceKind(action: IamAction): ActionCapability["resource"]["kind"] {
   if (action === "iam.user.read" || action === "iam.user.update" || action === "iam.user.delete" ||
+      action === "iam.user.permission-boundary.set" || action === "iam.user.permission-boundary.remove" ||
       action === "iam.user.set-status" || action === "iam.user.reset-password" ||
       action === "iam.policy-attachment.create" || action === "iam.platform-policy-attachment.create") return "USER";
   if (action === "iam.policy-attachment.revoke" || action === "iam.platform-policy-attachment.revoke" || action === "iam.group-policy-attachment.revoke") return "POLICY_ATTACHMENT";
@@ -428,6 +430,8 @@ function parseUserAccess(value: unknown): UserAccess {
     { action: "iam.user.read", resource: { kind: "USER", id: user.id } },
     { action: "iam.user.update", resource: { kind: "USER", id: user.id } },
     { action: "iam.user.delete", resource: { kind: "USER", id: user.id } },
+    { action: "iam.user.permission-boundary.set", resource: { kind: "USER", id: user.id } },
+    { action: "iam.user.permission-boundary.remove", resource: { kind: "USER", id: user.id } },
     { action: "iam.user.set-status", resource: { kind: "USER", id: user.id } },
     { action: "iam.user.reset-password", resource: { kind: "USER", id: user.id } },
     { action: "iam.policy-attachment.create", resource: { kind: "USER", id: user.id } },
@@ -463,6 +467,11 @@ function accountPage<T>(value: unknown, kind: string, parse: (item: unknown) => 
 function accountHeaders(credential: string): HeadersInit { return { Authorization: `Bearer ${credential}` }; }
 
 export const httpAccountRepository: AccountRepository = {
+  async getUserPermissionBoundary(credential, accountId, userId) {
+    const result = parseUserPermissionBoundary(await requestJSON<unknown>(`/api/iam/v1/users/${encodeURIComponent(userId)}/permission-boundary`, { headers: accountHeaders(credential) }));
+    if (result.accountId !== accountId || result.userId !== userId) throw new Error("INVALID_IAM_RESPONSE");
+    return result;
+  },
   async currentIdentity(credential) {
     return parseAccountIdentity(await requestJSON<unknown>("/api/iam/v1/auth/me", { headers: accountHeaders(credential) }));
   },
@@ -562,6 +571,16 @@ export const httpAccountRepository: AccountRepository = {
     return result;
   },
   async execute(credential, command) {
+    if (command.kind === "set-user-boundary" || command.kind === "remove-user-boundary") {
+      const body = { resourceVersion: command.resourceVersion, requestId: command.requestId,
+        ...(command.kind === "set-user-boundary" ? { policyId: command.policyId, policyResourceVersion: command.policyResourceVersion } : {}) };
+      const result = parseUserPermissionBoundary(await requestJSON<unknown>(`/api/iam/v1/users/${encodeURIComponent(command.userId)}/permission-boundary`, {
+        method: command.kind === "set-user-boundary" ? "PUT" : "DELETE", headers: { ...accountHeaders(credential), "Content-Type": "application/json" }, body: JSON.stringify(body)
+      }));
+      if (result.accountId !== command.accountId || result.userId !== command.userId || result.resourceVersion !== command.resourceVersion + 1 ||
+          (command.kind === "set-user-boundary" ? result.policy?.policyId !== command.policyId : result.policy !== null)) throw new Error("INVALID_IAM_RESPONSE");
+      return;
+    }
     const requestId = requestToken("ui-account-");
     let path: string;
     let body: object;

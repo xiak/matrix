@@ -10812,7 +10812,7 @@
             "items": {
               "$ref": "#/components/schemas/ActionCapability"
             },
-            "maxItems": 263,
+            "maxItems": 265,
             "type": "array"
           },
           "policyAttachments": {

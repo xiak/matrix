@@ -24,6 +24,8 @@ export type IamAction =
   | "iam.user.read"
   | "iam.user.update"
   | "iam.user.delete"
+  | "iam.user.permission-boundary.set"
+  | "iam.user.permission-boundary.remove"
   | "iam.policy.list"
   | "iam.user.set-status"
   | "iam.user.reset-password"
@@ -180,6 +182,8 @@ export type AccountAccess = { account: Account; capabilities: ActionCapability[]
 export type DirectoryPage<T> = { items: T[]; nextAfter: string | null };
 
 export type AccountCommand =
+  | { kind: "set-user-boundary"; accountId: string; userId: string; policyId: string; policyResourceVersion: number; resourceVersion: number; requestId: string }
+  | { kind: "remove-user-boundary"; accountId: string; userId: string; resourceVersion: number; requestId: string }
   | { kind: "create-user"; loginName: string; displayName: string; initialPassword: string }
   | { kind: "create-account"; id: string; displayName: string; rootLoginName: string; rootDisplayName: string; initialPassword: string }
   | { kind: "set-account-status"; accountId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }

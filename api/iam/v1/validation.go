@@ -794,6 +794,14 @@ func ValidateUserAccess(value UserAccess) error {
 		struct {
 			Action   Action
 			Resource ResourceReference
+		}{ActionIAMUserPermissionBoundarySet, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserPermissionBoundaryRemove, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
 		}{ActionIAMUserSetStatus, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
 		struct {
 			Action   Action

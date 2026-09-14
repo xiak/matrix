@@ -64,6 +64,8 @@ function userCapabilities(attachments = [tenantAttachment]) {
     capability("iam.user.read", "USER", user.id),
     capability("iam.user.update", "USER", user.id),
     capability("iam.user.delete", "USER", user.id),
+    capability("iam.user.permission-boundary.set", "USER", user.id),
+    capability("iam.user.permission-boundary.remove", "USER", user.id),
     capability("iam.user.set-status", "USER", user.id),
     capability("iam.user.reset-password", "USER", user.id),
     capability("iam.policy-attachment.create", "USER", user.id),
@@ -403,6 +405,37 @@ describe("IAM HTTP account boundary", () => {
     expect(await httpAccountRepository.currentIdentity("bearer")).toMatchObject({ identityKind: "ROOT_IDENTITY", permissionBoundary: { policy: null } });
     reply({ ...base, user: root, identityKind: "ROOT_IDENTITY", permissionBoundary: { ...permissionBoundary, userId: root.id, policy: boundaryPolicy } });
     await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("binds boundary reads and mutations to the exact account, user, revisions and original request", async () => {
+    let fetcher = reply(permissionBoundary);
+    expect(await httpAccountRepository.getUserPermissionBoundary("bearer", account.id, user.id)).toMatchObject({ policy: null });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/users/${user.id}/permission-boundary`);
+    const command = { kind: "set-user-boundary" as const, accountId: account.id, userId: user.id, resourceVersion: user.resourceVersion,
+      policyId: boundaryPolicy.policyId, policyResourceVersion: 7, requestId: "original-boundary-intent" };
+    const success = { ...permissionBoundary, resourceVersion: user.resourceVersion + 1, policy: boundaryPolicy };
+    fetcher = reply(success);
+    fetcher.mockImplementation(async () => new Response(JSON.stringify(success), { status: 200, headers: { "Content-Type": "application/json" } }));
+    await httpAccountRepository.execute("bearer", command);
+    await httpAccountRepository.execute("bearer", command);
+    expect(firstRequest(fetcher)[1]).toMatchObject({ method: "PUT", cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(requestBody(fetcher)).toEqual({ policyId: boundaryPolicy.policyId, policyResourceVersion: 7, resourceVersion: user.resourceVersion, requestId: command.requestId });
+    expect(fetcher.mock.calls[0]?.[1]?.body).toBe(fetcher.mock.calls[1]?.[1]?.body);
+    for (const patch of [{ accountId: "foreign" }, { userId: "foreign" }, { resourceVersion: user.resourceVersion }, { policy: null }, { policy: { ...boundaryPolicy, policyId: "another-policy" } }]) {
+      reply({ ...success, ...patch });
+      await expect(httpAccountRepository.execute("bearer", command)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    fetcher = reply({ ...success, policy: null });
+    const remove = { kind: "remove-user-boundary" as const, accountId: account.id, userId: user.id, resourceVersion: user.resourceVersion, requestId: "original-remove-intent" };
+    await httpAccountRepository.execute("bearer", remove);
+    expect(firstRequest(fetcher)[1]).toMatchObject({ method: "DELETE" });
+    expect(requestBody(fetcher)).toEqual({ resourceVersion: user.resourceVersion, requestId: remove.requestId });
+    reply(success);
+    await expect(httpAccountRepository.execute("bearer", remove)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    for (const patch of [{ accountId: "foreign" }, { userId: "foreign" }]) {
+      reply({ ...permissionBoundary, ...patch });
+      await expect(httpAccountRepository.getUserPermissionBoundary("bearer", account.id, user.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 
   it("bounds member pages and rejects foreign, duplicate, revoked, or old role projections", async () => {

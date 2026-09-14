@@ -205,8 +205,12 @@ func (service *Authority) ListUsers(ctx context.Context, credential iamv1.Secret
 			if err != nil {
 				return iamv1.UserList{}, err
 			}
+			account, err := tx.ReadAccount(ctx, subject.Subject.Organization.ID, subject.Subject.Principal.ID)
+			if err != nil {
+				return iamv1.UserList{}, err
+			}
 			for index := range result.Items {
-				result.Items[index].Capabilities, err = userCapabilities(subject, result.Items[index], now)
+				result.Items[index].Capabilities, err = userCapabilities(subject, account, result.Items[index], now)
 				if err != nil {
 					return iamv1.UserList{}, err
 				}
@@ -231,7 +235,11 @@ func (service *Authority) GetUser(ctx context.Context, credential iamv1.Secret, 
 			if err != nil {
 				return iamv1.UserAccess{}, err
 			}
-			result.Capabilities, err = userCapabilities(subject, result, now)
+			account, err := tx.ReadAccount(ctx, subject.Subject.Organization.ID, subject.Subject.Principal.ID)
+			if err != nil {
+				return iamv1.UserAccess{}, err
+			}
+			result.Capabilities, err = userCapabilities(subject, account, result, now)
 			if err != nil || iamv1.ValidateUserAccess(result) != nil {
 				return iamv1.UserAccess{}, ErrUnavailable
 			}
@@ -239,7 +247,10 @@ func (service *Authority) GetUser(ctx context.Context, credential iamv1.Secret, 
 		})
 }
 
-func userCapabilities(subject SessionCredential, target iamv1.UserAccess, now time.Time) ([]iamv1.ActionCapability, error) {
+func userCapabilities(subject SessionCredential, account iamv1.Account, target iamv1.UserAccess, now time.Time) ([]iamv1.ActionCapability, error) {
+	if iamv1.ValidateAccount(account) != nil || account.ID != subject.Subject.Organization.ID || target.User.AccountID != account.ID {
+		return nil, ErrUnavailable
+	}
 	user := iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(target.User.ID)}
 	requests := []struct {
 		action   iamv1.Action
@@ -248,6 +259,8 @@ func userCapabilities(subject SessionCredential, target iamv1.UserAccess, now ti
 		{iamv1.ActionIAMUserRead, user},
 		{iamv1.ActionIAMUserUpdate, user},
 		{iamv1.ActionIAMUserDelete, user},
+		{iamv1.ActionIAMUserPermissionBoundarySet, user},
+		{iamv1.ActionIAMUserPermissionBoundaryRemove, user},
 		{iamv1.ActionIAMUserSetStatus, user},
 		{iamv1.ActionIAMUserPasswordReset, user},
 		{iamv1.ActionIAMPolicyAttachmentCreate, user},
@@ -274,6 +287,12 @@ func userCapabilities(subject SessionCredential, target iamv1.UserAccess, now ti
 			return nil, err
 		}
 		switch request.action {
+		case iamv1.ActionIAMUserPermissionBoundarySet, iamv1.ActionIAMUserPermissionBoundaryRemove:
+			if target.User.ID == account.RootIdentity.PrincipalID {
+				restrictCapability(&capability, iamv1.CapabilityRootIdentityProtected)
+			} else if subject.Subject.Principal.ID != account.RootIdentity.PrincipalID {
+				restrictCapability(&capability, iamv1.CapabilityAuthorityRequired)
+			}
 		case iamv1.ActionIAMUserSetStatus, iamv1.ActionIAMUserPasswordReset:
 			if target.User.ID == subject.Subject.Principal.ID {
 				restrictCapability(&capability, iamv1.CapabilitySelfProtected)

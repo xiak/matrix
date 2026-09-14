@@ -42,6 +42,8 @@ function currentCapabilities(mode: "all" | "tenant" | "platform" | "none" = "all
 function childCapabilities(attachments: UserPolicyAttachment[] = [viewer]): ActionCapability[] {
   return [
     capability("iam.user.read", "USER", "child-a"),
+    capability("iam.user.permission-boundary.set", "USER", "child-a"),
+    capability("iam.user.permission-boundary.remove", "USER", "child-a"),
     capability("iam.user.update", "USER", "child-a"),
     capability("iam.user.delete", "USER", "child-a", false, "TARGET_MUST_BE_DISABLED"),
     capability("iam.user.set-status", "USER", "child-a"),
@@ -89,6 +91,7 @@ function iam(overrides: Partial<IamRepository> = {}, id = "primary-a"): IamRepos
 function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository {
   return {
     currentIdentity: vi.fn().mockResolvedValue(structuredClone(identity)),
+    getUserPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, userId: child.user.id, resourceVersion: child.user.resourceVersion, policy: null }),
     listUsers: vi.fn().mockResolvedValue({ items: [child], nextAfter: null }),
     listPolicies: vi.fn().mockImplementation((_credential: string, platform: boolean) => Promise.resolve(structuredClone(platform ? platformPolicies : tenantPolicies))),
     listAccounts: vi.fn().mockResolvedValue({ items: [accountAccess(account, false)], nextAfter: null }),
@@ -335,6 +338,113 @@ describe("account access", () => {
     await screen.findByRole("alert");
     expect(screen.queryByLabelText("当前用户权限边界")).toBeNull();
     expect(screen.queryByText("未设置权限边界，不代表拥有任何权限。")).toBeNull();
+  });
+
+  it("sets, replaces and removes a boundary only after explicit confirmation with current revisions", async () => {
+    let current = structuredClone(child);
+    let boundary: AccountIdentity["permissionBoundary"] = { accountId: account.id, userId: child.user.id, resourceVersion: child.user.resourceVersion, policy: null };
+    const repository = accounts({
+      listUsers: vi.fn().mockImplementation(async () => ({ items: [structuredClone(current)], nextAfter: null })),
+      getUserPermissionBoundary: vi.fn().mockImplementation(async () => structuredClone(boundary)),
+      execute: vi.fn().mockImplementation(async (_credential, command) => {
+        current = { ...current, user: { ...current.user, resourceVersion: current.user.resourceVersion + 1 } };
+        boundary = { ...boundary, resourceVersion: current.user.resourceVersion, policy: command.kind === "remove-user-boundary" ? null : {
+          policyId: command.policyId, versionId: "version-current", contentDigest: `sha256:${"b".repeat(64)}`
+        } };
+      })
+    });
+    const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "管理 developer" }));
+    await screen.findByText("当前未设置边界。");
+    await user.selectOptions(screen.getByLabelText("边界策略"), "system.paas-developer");
+    await user.click(screen.getByRole("button", { name: "设置边界" }));
+    expect(repository.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "确认设置边界" }));
+    await screen.findByText(/当前边界：system.paas-developer/);
+    expect(repository.execute).toHaveBeenLastCalledWith(credential, {
+      kind: "set-user-boundary", accountId: account.id, userId: child.user.id, policyId: "system.paas-developer",
+      policyResourceVersion: 7, resourceVersion: 2, requestId: expect.stringMatching(/^ui-boundary-/)
+    });
+    await user.selectOptions(screen.getByLabelText("边界策略"), "system.paas-viewer");
+    await user.click(screen.getByRole("button", { name: "替换边界" }));
+    await user.click(screen.getByRole("button", { name: "确认设置边界" }));
+    await screen.findByText(/当前边界：system.paas-viewer/);
+    expect(repository.execute).toHaveBeenLastCalledWith(credential, expect.objectContaining({ kind: "set-user-boundary", policyId: "system.paas-viewer", resourceVersion: 3 }));
+    await user.click(screen.getByRole("button", { name: "移除边界" }));
+    expect(screen.getByText(/原有直接或用户组授权可能重新生效/)).toBeTruthy();
+    expect(repository.execute).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole("button", { name: "确认移除边界" }));
+    await screen.findByText("当前未设置边界。");
+    expect(repository.execute).toHaveBeenLastCalledWith(credential, expect.objectContaining({ kind: "remove-user-boundary", resourceVersion: 4 }));
+  });
+
+  it("retains the original boundary intent on unavailable results and never guesses an unread boundary", async () => {
+    const execute = vi.fn().mockRejectedValue(new HttpProblem(503, "iam.unavailable"));
+    const repository = accounts({ execute });
+    const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "管理 developer" }));
+    await screen.findByText("当前未设置边界。");
+    await user.selectOptions(screen.getByLabelText("边界策略"), "system.paas-viewer");
+    await user.click(screen.getByRole("button", { name: "设置边界" }));
+    await user.click(screen.getByRole("button", { name: "确认设置边界" }));
+    await screen.findByRole("alert");
+    const original = structuredClone(execute.mock.calls[0]?.[1]);
+    expect(screen.queryByText("操作已完成。")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "重试原边界请求" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
+    expect(execute.mock.calls[1]?.[1]).toEqual(original);
+    expect(screen.queryByLabelText("边界策略")).toBeNull();
+    vi.mocked(repository.getUserPermissionBoundary).mockRejectedValue(new Error("invalid response"));
+    await user.click(screen.getByRole("button", { name: "重新读取并核对边界" }));
+    await screen.findByText(/当前状态未知/);
+    expect(screen.queryByText("当前未设置边界。")).toBeNull();
+    expect(screen.queryByRole("button", { name: "确认设置边界" })).toBeNull();
+    vi.mocked(repository.getUserPermissionBoundary).mockResolvedValue({ accountId: account.id, userId: child.user.id, resourceVersion: 19, policy: null });
+    await user.click(screen.getByRole("button", { name: "重新读取并核对边界" }));
+    await screen.findByText(/用户修订已变化/);
+    expect(screen.queryByText("当前未设置边界。")).toBeNull();
+  });
+
+  it("does not offer boundary writes when exact target capabilities deny them", async () => {
+    const restricted = { ...child, capabilities: child.capabilities.map((item) => item.action.startsWith("iam.user.permission-boundary.") ?
+      { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item) };
+    const repository = accounts({ listUsers: vi.fn().mockResolvedValue({ items: [restricted], nextAfter: null }),
+      getUserPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, userId: child.user.id, resourceVersion: child.user.resourceVersion,
+        policy: { policyId: "customer.limit", versionId: "version-one", contentDigest: `sha256:${"c".repeat(64)}` } }) });
+    const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "管理 developer" }));
+    await screen.findByText(/当前边界：customer.limit/);
+    expect(screen.queryByLabelText("边界策略")).toBeNull();
+    expect(screen.queryByRole("button", { name: "移除边界" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "替换边界" })).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("withdraws a pending confirmation when refreshed target authority is no longer available", async () => {
+    const repository = accounts();
+    const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "管理 developer" }));
+    await screen.findByText("当前未设置边界。");
+    await user.selectOptions(screen.getByLabelText("边界策略"), "system.paas-viewer");
+    await user.click(screen.getByRole("button", { name: "设置边界" }));
+    const restricted = { ...child, capabilities: child.capabilities.map((item) => item.action.startsWith("iam.user.permission-boundary.") ?
+      { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item) };
+    vi.mocked(repository.listUsers).mockResolvedValue({ items: [restricted], nextAfter: null });
+    await user.click(screen.getByRole("button", { name: "刷新账号信息" }));
+    await waitFor(() => expect(screen.queryByText("正在读取 IAM 账号信息…")).toBeNull());
+    expect((screen.getByRole("button", { name: "确认设置边界" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "确认设置边界" }));
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("clears the management scene when the boundary read finds a revoked session", async () => {
+    const repository = accounts({ getUserPermissionBoundary: vi.fn().mockRejectedValue(new HttpProblem(401, "iam.unauthenticated")) });
+    const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "管理 developer" }));
+    await screen.findByText("会话已失效，请注销后重新登录。");
+    expect(screen.queryByLabelText("用户权限边界")).toBeNull();
+    expect(screen.queryByLabelText("当前用户权限边界")).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
   });
 
   it("keeps account directory read separate from account creation", async () => {

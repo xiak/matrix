@@ -297,3 +297,12 @@ positive grant. Inferring rights from boundary names, defaulting missing
 authority to null, and retaining a second old identity decoder are `REJECT`.
 No external UI workspace or legacy runtime is imported; UI acceptance and
 remaining boundary management belong to IAM/010, not this adoption record.
+
+For User boundary management in IAM/010, fixed Matrix
+`ef51b1d509e7e38dfb2146416c7e057a97638765` is `ADAPT`: extend the existing
+UserAccess capability projection and account-access provider/detail form.
+The fixed119f232e set/get/remove transaction is `REUSE`; it is not rewritten
+in the UI. Root eligibility comes from the current transaction's Account
+relation plus PDP, not a browser role-name check. Automatic new request IDs
+after uncertain results and a failed read presented as no boundary are
+`REJECT`. No new navigation framework, policy evaluator or legacy dependency.

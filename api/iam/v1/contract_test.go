@@ -1284,6 +1284,8 @@ func TestAccountDirectoryContractsRejectCrossTenantAuthority(t *testing.T) {
 			blocked(ActionIAMUserRead, ResourceUser, string(user.ID)),
 			blocked(ActionIAMUserUpdate, ResourceUser, string(user.ID)),
 			blocked(ActionIAMUserDelete, ResourceUser, string(user.ID)),
+			blocked(ActionIAMUserPermissionBoundarySet, ResourceUser, string(user.ID)),
+			blocked(ActionIAMUserPermissionBoundaryRemove, ResourceUser, string(user.ID)),
 			blocked(ActionIAMUserSetStatus, ResourceUser, string(user.ID)),
 			blocked(ActionIAMUserPasswordReset, ResourceUser, string(user.ID)),
 			blocked(ActionIAMPolicyAttachmentCreate, ResourceUser, string(user.ID)),
@@ -1292,6 +1294,18 @@ func TestAccountDirectoryContractsRejectCrossTenantAuthority(t *testing.T) {
 		}}}}
 	if err := ValidateUserList(list); err != nil {
 		t.Fatalf("valid directory: %v", err)
+	}
+	for _, action := range []Action{ActionIAMUserPermissionBoundarySet, ActionIAMUserPermissionBoundaryRemove} {
+		changed := list.Items[0]
+		changed.Capabilities = nil
+		for _, capability := range list.Items[0].Capabilities {
+			if capability.Action != action {
+				changed.Capabilities = append(changed.Capabilities, capability)
+			}
+		}
+		if ValidateUserAccess(changed) == nil {
+			t.Fatal("user projection omitted a boundary management capability")
+		}
 	}
 	for name, mutate := range map[string]func(*PolicyAttachment){
 		"wrong subject": func(a *PolicyAttachment) { a.Target.ID = "other-user" },

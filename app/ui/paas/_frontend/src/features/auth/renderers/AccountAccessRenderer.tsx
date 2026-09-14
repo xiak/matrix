@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { Building2, KeyRound, Plus, RefreshCcw, ShieldCheck, UserRound, Users } from "lucide-react";
 import { Badge, Button, Card, Input, Select, Typography } from "@ui/xiak";
 import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
 import { useSession } from "../application/SessionProvider";
-import type { ActionCapability } from "../domain/accounts";
+import type { AccountCommand, ActionCapability, UserPermissionBoundary } from "../domain/accounts";
 import type { AccountRepository } from "../repositories/iamRepository";
 import type { AccountAccessScene, AccountUserScene, TenantAccountScene } from "../scenes/accountAccessScene";
 import styles from "./AccountAccessRenderer.module.css";
@@ -76,6 +77,78 @@ function CreateAccountForm({ tenant, onClose }: { tenant: boolean; onClose(): vo
   </Card>;
 }
 
+function UserBoundaryForm({ scene, user }: { scene: AccountAccessScene; user: AccountUserScene }) {
+  const access = useAccountAccess();
+  const [boundary, setBoundary] = useState<UserPermissionBoundary | null>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [selection, setSelection] = useState<{ id: string; resourceVersion: number } | null>(null);
+  const [confirmation, setConfirmation] = useState<"set" | "remove" | null>(null);
+  const [pending, setPending] = useState<AccountCommand | null>(null);
+  const [revision, setRevision] = useState(0);
+  const read = access.readUserBoundary;
+  useEffect(() => {
+    let active = true;
+    read(user.id).then((value) => {
+      if (!active) return;
+      if (value.resourceVersion !== user.resourceVersion) {
+        setProblem("用户修订已变化，请刷新账号信息后重新核对。");
+        return;
+      }
+      setBoundary(value);
+      setPending(null); setConfirmation(null);
+    }, () => { if (active) setProblem("权限边界读取失败，当前状态未知；请重新读取，不会按无边界处理。"); });
+    return () => { active = false; };
+  }, [read, revision, user.id, user.resourceVersion]);
+  const policies = scene.policies.filter((policy) => policy.scope === "TENANT" && policy.status === "ACTIVE" && policy.id !== boundary?.policy?.policyId);
+  const selected = selection ? policies.find((policy) => policy.id === selection.id) : null;
+  const changed = selection !== null && selected?.resourceVersion !== selection.resourceVersion;
+  const disabled = access.busy || access.loading;
+  const operationAllowed = (pending ? pending.kind === "remove-user-boundary" : confirmation === "remove") ? user.canRemoveBoundary : user.canSetBoundary;
+  async function submit() {
+    if (!boundary || disabled || !operationAllowed) return;
+    const command: AccountCommand | null = pending ?? (confirmation === "remove" ? {
+      kind: "remove-user-boundary", accountId: scene.accountId, userId: user.id,
+      resourceVersion: boundary.resourceVersion, requestId: requestToken("ui-boundary-")
+    } : confirmation === "set" && selection && !changed ? {
+      kind: "set-user-boundary", accountId: scene.accountId, userId: user.id, policyId: selection.id,
+      policyResourceVersion: selection.resourceVersion, resourceVersion: boundary.resourceVersion, requestId: requestToken("ui-boundary-")
+    } : null);
+    if (!command) return;
+    setPending(command);
+    if (await access.execute(command)) {
+      setPending(null); setConfirmation(null); setSelection(null);
+    }
+  }
+  function refresh() {
+    setBoundary(null); setProblem(null); setRevision((value) => value + 1);
+  }
+  return <section aria-label="用户权限边界" className={styles.detail}>
+    <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>租户权限边界</strong></div>
+    <p className={styles.note}>边界只限制直接和用户组授权的最大范围，本身不授予权限，也不改变平台权限。</p>
+    {problem ? <p className={styles.error} role="alert">{problem}</p> : !boundary ? <p role="status">正在读取权限边界…</p> : <>
+      <p>{boundary.policy ? `当前边界：${boundary.policy.policyId} · ${boundary.policy.versionId}` : "当前未设置边界。"}</p>
+      {!pending && !confirmation ? <>
+        {user.canSetBoundary && scene.tenantPoliciesAvailable ? <form aria-label="选择权限边界" className={styles.inlineForm} onSubmit={(event) => { event.preventDefault(); if (selection && !changed) setConfirmation("set"); }}>
+          <Field label="边界策略"><Select disabled={disabled} value={changed ? "" : selection?.id ?? ""} onChange={(event) => {
+            const policy = policies.find((item) => item.id === event.target.value);
+            setSelection(policy ? { id: policy.id, resourceVersion: policy.resourceVersion } : null);
+          }}><option value="">{changed ? "策略修订已变化，请重新选择" : "请选择租户策略"}</option>{policies.map((policy) => <option key={policy.id} value={policy.id}>{policy.displayName}</option>)}</Select></Field>
+          <Button disabled={disabled || !selection || changed} type="submit" variant="secondary">{boundary.policy ? "替换边界" : "设置边界"}</Button>
+        </form> : null}
+        {user.canSetBoundary && !scene.tenantPoliciesAvailable ? <p className={styles.note}>没有可读取的租户策略目录，不能选择边界策略。</p> : null}
+        {user.canRemoveBoundary && boundary.policy ? <Button disabled={disabled} onClick={() => setConfirmation("remove")} variant="danger">移除边界</Button> : null}
+        {!user.canSetBoundary && !user.canRemoveBoundary ? <p className={styles.note}>{restrictionMessage(user.boundaryRestrictionReason)}</p> : null}
+      </> : <div className={styles.confirmation}>
+        <p>{pending ? "上次请求尚待核对。重试会使用原请求编号和原修订，不自动生成新意图。" : confirmation === "remove" ? "移除后，原有直接或用户组授权可能重新生效。确认解除此权限上限？" : "设置或替换会改变该用户的最大租户权限，下一次受保护请求生效。确认提交？"}</p>
+        <Button disabled={disabled || !operationAllowed || (!pending && confirmation === "set" && changed)} onClick={submit} variant="danger">{pending ? "重试原边界请求" : confirmation === "remove" ? "确认移除边界" : "确认设置边界"}</Button>
+        {!pending ? <Button disabled={disabled} onClick={() => setConfirmation(null)} variant="ghost">取消</Button> : null}
+        {changed && !pending ? <p role="alert">策略修订已变化，请取消并重新选择。</p> : null}
+      </div>}
+    </>}
+    <Button disabled={disabled} onClick={refresh} size="small" variant="ghost">重新读取并核对边界</Button>
+  </section>;
+}
+
 function UserAccess({ scene, user, onClose }: { scene: AccountAccessScene; user: AccountUserScene; onClose(): void }) {
   const access = useAccountAccess();
   const [password, setPassword] = useState("");
@@ -117,6 +190,7 @@ function UserAccess({ scene, user, onClose }: { scene: AccountAccessScene; user:
       </form> : user.canUpdate ? <Button disabled={disabled} onClick={() => setEditingProfile(true)} size="small" variant="secondary">修改显示名称</Button>
         : <p className={styles.note}>{restrictionMessage(user.updateRestrictionReason)}</p>}
       <p className={styles.note}>用户 ID、登录名和所属账号创建后不可修改。</p>
+      {user.canRead ? <UserBoundaryForm scene={scene} user={user} /> : null}
       <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>已关联策略</strong></div>
       <p className={styles.note}>策略按明确权威范围生效，不限于该用户创建的资源。管理员交接通过关联、撤销策略完成，不转让原主账号。</p>
       <ul className={styles.bindingList}>

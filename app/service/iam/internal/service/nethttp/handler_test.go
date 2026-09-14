@@ -631,6 +631,8 @@ func (workflow *httpWorkflow) GetUser(
 		Capabilities: []iamv1.ActionCapability{
 			{Action: iamv1.ActionIAMUserRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: true},
 			{Action: iamv1.ActionIAMUserUpdate, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: true},
+			{Action: iamv1.ActionIAMUserPermissionBoundarySet, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: true},
+			{Action: iamv1.ActionIAMUserPermissionBoundaryRemove, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: true},
 			{Action: iamv1.ActionIAMUserDelete, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: false, RestrictionReason: iamv1.CapabilityTargetMustBeDisabled},
 			{Action: iamv1.ActionIAMUserSetStatus, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: true},
 			{Action: iamv1.ActionIAMUserPasswordReset, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, Available: true},

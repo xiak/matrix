@@ -707,6 +707,21 @@ func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler ht
 	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
 	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 	path := "/v1/users/" + string(member.ID) + "/permission-boundary"
+	checkCapabilities := func(credential string, available bool) {
+		t.Helper()
+		var access iamv1.UserAccess
+		call(http.MethodGet, "/v1/users/"+string(member.ID), credential, nil, http.StatusOK, &access)
+		if iamv1.ValidateUserAccess(access) != nil {
+			t.Fatal("invalid boundary management capabilities")
+		}
+		for _, action := range []iamv1.Action{iamv1.ActionIAMUserPermissionBoundarySet, iamv1.ActionIAMUserPermissionBoundaryRemove} {
+			value, found := findIAMCapability(access.Capabilities, action, iamv1.ResourceUser, string(member.ID))
+			if !found || value.Available != available || (!available && value.RestrictionReason != iamv1.CapabilityAuthorityRequired) {
+				t.Fatalf("boundary capability %s disagrees with original-root management restriction", action)
+			}
+		}
+	}
+	checkCapabilities(root, true)
 	var view iamv1.UserPermissionBoundary
 	call(http.MethodGet, path, root, nil, http.StatusOK, &view)
 	if iamv1.ValidateUserPermissionBoundary(view) != nil || view.Policy != nil {
@@ -830,8 +845,10 @@ func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler ht
 	call(http.MethodGet, path, root, nil, http.StatusOK, &view)
 	variant = iamv1.SetUserPermissionBoundaryRequest{PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, ResourceVersion: view.ResourceVersion, RequestID: "boundary-system-set"}
 	call(http.MethodPut, path, root, variant, http.StatusOK, &view)
+	checkCapabilities(bearer, false)
 	call(http.MethodDelete, path, bearer, iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: view.ResourceVersion, RequestID: "boundary-self-remove"}, http.StatusForbidden, nil)
 	call(http.MethodPost, "/v1/users/"+string(member.ID)+":set-status", root, iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: view.ResourceVersion, RequestID: "boundary-disable"}, http.StatusOK, &member)
+	checkCapabilities(root, true)
 	remove := iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: member.ResourceVersion, RequestID: "boundary-remove"}
 	call(http.MethodDelete, path, root, remove, http.StatusOK, &view)
 	call(http.MethodDelete, path, root, remove, http.StatusOK, &replay)

@@ -1,9 +1,9 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useSession, useSessionCredential } from "./SessionProvider";
-import type { AccountCommand } from "../domain/accounts";
+import type { AccountCommand, UserPermissionBoundary } from "../domain/accounts";
 import type { AccountRepository } from "../repositories/iamRepository";
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, findActionCapability, type AccountAccessScene } from "../scenes/accountAccessScene";
@@ -17,6 +17,7 @@ type AccountAccess = {
   reload(): void;
   usersPage(after: string): void;
   accountsPage(after: string): void;
+  readUserBoundary(userId: string): Promise<UserPermissionBoundary>;
   execute(command: AccountCommand): Promise<boolean>;
 };
 
@@ -54,6 +55,17 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const [revision, setRevision] = useState(0);
   const [page, setPage] = useState({ users: "", accounts: "" });
   const mutationPending = useRef(false);
+  const readUserBoundary = useCallback(async (userId: string) => {
+    if (!credential || !tenantId) throw new Error("IAM_SESSION_REQUIRED");
+    try {
+      return await repository.getUserPermissionBoundary(credential, tenantId, userId);
+    } catch (failure) {
+      if (failure instanceof HttpProblem && failure.status === 401) {
+        setScene(null); setSuccess(null); setError(accountError(failure));
+      }
+      throw failure;
+    }
+  }, [credential, repository, tenantId]);
 
   useEffect(() => {
     if (!credential || !tenantId) return;
@@ -82,11 +94,16 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
 
   const value = useMemo<AccountAccess>(() => ({
     scene, loading, busy, error, success,
+    readUserBoundary,
     reload() { setLoading(true); setSuccess(null); setRevision((current) => current + 1); },
     usersPage(after) { setLoading(true); setPage((current) => ({ ...current, users: after })); },
     accountsPage(after) { setLoading(true); setPage((current) => ({ ...current, accounts: after })); },
     async execute(command) {
       if (!credential || loading || mutationPending.current) return false;
+      if ((command.kind === "set-user-boundary" || command.kind === "remove-user-boundary") && command.accountId !== tenantId) {
+        setScene(null); setSuccess(null); setError("当前账号已变化，请重新读取后操作。");
+        return false;
+      }
       mutationPending.current = true;
       setBusy(true); setError(null); setSuccess(null);
       try {
@@ -100,7 +117,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [busy, credential, error, loading, repository, scene, success]);
+  }), [busy, credential, error, loading, readUserBoundary, repository, scene, success, tenantId]);
 
   return <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>;
 }

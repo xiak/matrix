@@ -1,6 +1,6 @@
 import type { SessionSummary } from "../domain/session";
 import type { AccountAccess, AccountCommand, AccountIdentity, DirectoryPage, Group, GroupAccess, GroupDeletion, GroupMembership,
-  GroupMembershipPage, GroupPolicyAttachment, PolicyAttachmentRevocation, PolicyDirectory, UserAccess } from "../domain/accounts";
+  GroupMembershipPage, GroupPolicyAttachment, PolicyAttachmentRevocation, PolicyDirectory, UserAccess, UserPermissionBoundary } from "../domain/accounts";
 
 export type LoginCommand = {
   loginName: string;
@@ -30,6 +30,7 @@ export interface IamRepository {
 
 export interface AccountRepository {
   currentIdentity(credential: string): Promise<AccountIdentity>;
+  getUserPermissionBoundary(credential: string, accountId: string, userId: string): Promise<UserPermissionBoundary>;
   listUsers(credential: string, after?: string): Promise<DirectoryPage<UserAccess>>;
   listPolicies(credential: string, platform: boolean): Promise<PolicyDirectory>;
   listAccounts(credential: string, after?: string): Promise<DirectoryPage<AccountAccess>>;
