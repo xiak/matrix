@@ -37,15 +37,6 @@ function operationProps(state: OperationState, clearError: () => void) {
   return { busy: state.busy, error: state.error ?? undefined, clearError };
 }
 
-async function readGroupSnapshot(client: GroupAccessClient, groupId: string) {
-  const access = await client.get(groupId);
-  if (groupCapability(access, "iam.group-membership.list")?.available !== true) {
-    return { access, memberships: [] as GroupMembershipAccess[], nextAfter: null as string | null, membersPhase: "forbidden" as const };
-  }
-  const page = await client.listMemberships(groupId);
-  return { access, memberships: page.items, nextAfter: page.nextAfter, membersPhase: "ready" as const };
-}
-
 function LiveGroupMetadataEditor({ client, access, onClose, onChanged, onStale }: {
   client: GroupAccessClient;
   access: GroupAccess;
@@ -255,52 +246,80 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
   const a = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const requestVersion = useRef(0);
+  const membershipRequestVersion = useRef(0);
   const [access, setAccess] = useState<GroupAccess | null>(null);
   const [memberships, setMemberships] = useState<GroupMembershipAccess[]>([]);
   const [nextAfter, setNextAfter] = useState<string | null>(null);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
-  const [membersPhase, setMembersPhase] = useState<"loading" | "ready" | "forbidden">("loading");
+  const [membersPhase, setMembersPhase] = useState<"loading" | "ready" | "forbidden" | "error">("loading");
+  const [membersError, setMembersError] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [change, setChange] = useState<GroupChange | null>(null);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const applySnapshot = useCallback((snapshot: Awaited<ReturnType<typeof readGroupSnapshot>>) => {
-    setPageError(null);
-    setAccess(snapshot.access);
-    setMemberships(snapshot.memberships);
-    setNextAfter(snapshot.nextAfter);
-    setMembersPhase(snapshot.membersPhase);
-    setPhase("ready");
-  }, []);
-
   const applyFailure = useCallback((failure: unknown, initial: boolean) => {
     setPageError(a(`errors.${accountError(failure)}`));
     if (initial) setPhase("error");
   }, [a]);
 
+  const loadMemberships = useCallback(async (currentAccess: GroupAccess) => {
+    const version = ++membershipRequestVersion.current;
+    setMemberships([]);
+    setNextAfter(null);
+    setMembersError(null);
+    if (groupCapability(currentAccess, "iam.group-membership.list")?.available !== true) {
+      setMembersPhase("forbidden");
+      return;
+    }
+    setMembersPhase("loading");
+    try {
+      const page = await client.listMemberships(entityId);
+      if (version !== membershipRequestVersion.current) return;
+      setMemberships(page.items);
+      setNextAfter(page.nextAfter);
+      setMembersPhase("ready");
+    } catch (failure) {
+      if (version !== membershipRequestVersion.current) return;
+      setMembersError(a(`errors.${accountError(failure)}`));
+      setMembersPhase("error");
+    }
+  }, [a, client, entityId]);
+
   const load = useCallback(async (initial = false) => {
     const version = ++requestVersion.current;
+    membershipRequestVersion.current += 1;
     try {
-      const snapshot = await readGroupSnapshot(client, entityId);
+      const nextAccess = await client.get(entityId);
       if (version !== requestVersion.current) return;
-      applySnapshot(snapshot);
+      setPageError(null);
+      setAccess(nextAccess);
+      setPhase("ready");
+      void loadMemberships(nextAccess);
     } catch (failure) {
       if (version !== requestVersion.current) return;
       applyFailure(failure, initial);
     }
-  }, [applyFailure, applySnapshot, client, entityId]);
+  }, [applyFailure, client, entityId, loadMemberships]);
 
   useEffect(() => {
     const version = ++requestVersion.current;
-    readGroupSnapshot(client, entityId).then((snapshot) => {
-      if (version === requestVersion.current) applySnapshot(snapshot);
+    membershipRequestVersion.current += 1;
+    client.get(entityId).then((nextAccess) => {
+      if (version !== requestVersion.current) return;
+      setPageError(null);
+      setAccess(nextAccess);
+      setPhase("ready");
+      void loadMemberships(nextAccess);
     }, (failure: unknown) => {
       if (version === requestVersion.current) applyFailure(failure, true);
     });
-    return () => { requestVersion.current += 1; };
-  }, [applyFailure, applySnapshot, client, entityId]);
+    return () => {
+      requestVersion.current += 1;
+      membershipRequestVersion.current += 1;
+    };
+  }, [applyFailure, client, entityId, loadMemberships]);
 
   const userById = useMemo(() => new Map(scene.users.map((user) => [user.id, user])), [scene.users]);
   const policyById = useMemo(() => new Map(scene.policies.map((policy) => [policy.id, policy])), [scene.policies]);
@@ -312,7 +331,8 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
       description: access.group.description,
       createdAt: access.group.createdAt,
       directPolicyCount: access.policyAttachments.length,
-      membersAvailability: membersPhase === "forbidden" ? "forbidden" : membersPhase === "ready" ? "ready" : "loading",
+      membersAvailability: membersPhase,
+      membersError: membersError ?? undefined,
       members: memberships.map((entry) => {
         const user = userById.get(entry.membership.userId);
         return {
@@ -335,13 +355,14 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
         };
       })
     };
-  }, [access, memberships, membersPhase, policyById, t, userById]);
+  }, [access, membersError, memberships, membersPhase, policyById, t, userById]);
 
   if (phase === "loading") return <PageSkeleton label={t("loadingGroup")} layout="access" />;
-  if (phase === "error" || !access || !record) return <EmptyState title={w("entityUnavailable")} description={pageError ?? w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => void load(true)}>{t("retry")}</Button>} />;
+  if (phase === "error" || !access || !record) return <EmptyState title={w("entityUnavailable")} description={pageError ?? w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => { setPhase("loading"); void load(true); }}>{t("retry")}</Button>} />;
 
   const edit = groupCapability(access, "iam.group.update");
   const remove = groupCapability(access, "iam.group.delete");
+  const listMembers = groupCapability(access, "iam.group-membership.list");
   const addMember = groupCapability(access, "iam.group-membership.create");
   const addPolicy = groupCapability(access, "iam.group-policy-attachment.create");
   const removableMembers = memberships.some((entry) => findActionCapability(entry.capabilities, "iam.group-membership.remove", "GROUP_MEMBERSHIP", entry.membership.id)?.available === true);
@@ -355,15 +376,18 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
       controls={{
         edit: { disabled: edit?.available !== true, reason: edit?.restrictionReason ?? undefined, onInvoke: () => setEditing(true) },
         delete: { disabled: remove?.available !== true, reason: remove?.restrictionReason ?? undefined, onInvoke: () => setDeleting(true) },
-        addMember: { disabled: addMember?.available !== true || !scene.users.some((user) => !memberships.some((entry) => entry.membership.userId === user.id)), reason: addMember?.restrictionReason ?? undefined, onInvoke: () => setChange({ kind: "members", mode: "add" }) },
-        removeMember: { disabled: !removableMembers, onInvoke: () => setChange({ kind: "members", mode: "remove" }) },
+        addMember: { disabled: membersPhase !== "ready" || addMember?.available !== true || !scene.users.some((user) => !memberships.some((entry) => entry.membership.userId === user.id)), reason: membersPhase === "loading" ? t("loadingMembers") : membersPhase === "error" ? t("membersLoadFailed") : listMembers?.restrictionReason ?? addMember?.restrictionReason ?? undefined, onInvoke: () => setChange({ kind: "members", mode: "add" }) },
+        removeMember: { disabled: !removableMembers, reason: membersPhase === "loading" ? t("loadingMembers") : membersPhase === "error" ? t("membersLoadFailed") : listMembers?.restrictionReason ?? undefined, onInvoke: () => setChange({ kind: "members", mode: "remove" }) },
         addPolicy: { disabled: addPolicy?.available !== true || !scene.policies.some((policy) => policy.scopeKind === "tenant" && policy.available && !access.policyAttachments.some((attachment) => attachment.policyId === policy.id)), reason: addPolicy?.restrictionReason ?? undefined, onInvoke: () => setChange({ kind: "policies", mode: "add" }) },
         removePolicy: { disabled: !removablePolicies, onInvoke: () => setChange({ kind: "policies", mode: "remove" }) },
-        loadMoreMembers: nextAfter ? { disabled: loadingMore, onInvoke: async () => {
+        retryMembers: membersPhase === "error" ? { onInvoke: () => { void loadMemberships(access); } } : undefined,
+        loadMoreMembers: membersPhase === "ready" && nextAfter ? { disabled: loadingMore, onInvoke: async () => {
           if (!nextAfter || loadingMore) return;
+          const version = membershipRequestVersion.current;
           setLoadingMore(true);
           try {
             const page = await client.listMemberships(entityId, nextAfter);
+            if (version !== membershipRequestVersion.current) return;
             setMemberships((current) => [...current, ...page.items]);
             setNextAfter(page.nextAfter);
           } catch (failure) { setPageError(a(`errors.${accountError(failure)}`)); }

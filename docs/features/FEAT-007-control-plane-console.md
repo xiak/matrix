@@ -859,7 +859,7 @@ slice, not a replacement of FEAT-006 or a published live authorization API.
 | --- | --- | --- |
 | Policy lifecycle | Strict, lossless supported document handling; readable summary/JSON; metadata vs content editing; five-version history, protected effective version and reviewed rollback. | Implemented and locally verified for the supported effect/action/resource/condition MOCK dialect. Unsupported fields and condition keys are rejected without stripping the draft; summaries and history retain every supported restriction. |
 | Policy authoring | Full-page generator/JSON/template flow, typed action/resource/condition selection, diagnostics, review and optional atomic associations. | Full-page create/copy/edit, lossless multiple statements, guarded template/service replacement, typed operations and resources, IP/tag/time conditions, metadata tags, review, optional atomic associations and capacity recovery are implemented. Shared in-app unsaved-navigation protection preserves even invalid JSON drafts. |
-| Group authorization | Full-page empty-group creation, separate one-relationship membership/policy operations, permission provenance and cross-navigation. | Two-step group-only creation, isolated metadata updates, reviewed one-item relationship changes, named policy sources and query-addressable user/group/policy/role details are implemented in MOCK. The fixed live group contract reuses the same normalized directory/detail components, keeps group requests local to the workspace, omits non-authoritative member totals, discloses loaded-record search scope, keeps continuation representation out of presentation semantics and retries only an unchanged uncertain command. Preview retains its explicitly complete sample count. Shared in-app unsaved-navigation protection preserves creation drafts. |
+| Group authorization | Full-page empty-group creation, separate one-relationship membership/policy operations, permission provenance and cross-navigation. | Two-step group-only creation, isolated metadata updates, reviewed one-item relationship changes, named policy sources and query-addressable user/group/policy/role details are implemented in MOCK. The fixed live group contract reuses the same normalized directory/detail components, keeps group requests local to the workspace, renders group facts before the independently loaded membership relation, omits non-authoritative member totals, discloses loaded-record search scope, keeps continuation representation out of presentation semantics and retries only an unchanged uncertain command. Preview retains its explicitly complete sample count. Shared in-app unsaved-navigation protection preserves creation drafts. |
 | Role authorization | Carrier-aware content wizard, trust vs permission vs boundary, bounded temporary-session preview and safe revocation explanation. | Four-step creation, isolated metadata/trust/settings commands, reviewed policy deltas, boundary and before/after trust changes, exact same-tenant account trust and known service/provider identities are implemented. Bounded preview sessions recheck assumption, retain immutable expiry and support individual revocation. Shared draft protection, unchanged/invalid trust, provider-reference rejection, pending locks, cancellation and failure/retry across role commands are locally verified. |
 | End-to-end access explanation | A no-grant user, group-derived allow, explicit deny, default-version rollback, boundary intersection and role-session case all lead to reproducible resource/action decisions. | Domain and interaction tests cover direct/group grants, deny precedence, conditions, current-version rollback, user/role boundary intersection, dual trust/caller authorization and session expiry/revocation. A real local MOCK journey proves caller denial before an exact assumption grant, role-only resource access limited by a boundary, then denial after revocation. Locally functionally verified for the documented subset. |
 | Supporting workspaces | Review overview, users, providers, SSO, settings and one-time MOCK keys against the documented scope without faking external activation. | Overview links and candidate guidance, source-aware user filtering, localized policy metadata, SAML/OIDC drafts, SSO/settings failure-retry, enterprise visibility/import and one-time MOCK keys are locally regression-verified. Scan/paid/live security flows remain skipped. |
@@ -1482,7 +1482,7 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- The current Theme/component, navigation and CAM-style IAM slice has 497 frontend tests across 35 test
+- The current Theme/component, navigation and CAM-style IAM slice has 500 frontend tests across 35 test
   files; the complete suite passes with two workers at the default timeout
   (the long user-selection journey retains its explicit 15s timeout).
   Worker concurrency is bounded in the test owner because simultaneously
@@ -1587,7 +1587,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   feedback without new warning/error logs. Shared control tests cover required
   semantics, classification/status distinction, controlled paging and dialog
   focus return; existing large-candidate and batch/permission gates remain.
-  All 497 frontend tests and three static-export normalization tests pass,
+  All 500 frontend tests and three static-export normalization tests pass,
   alongside TypeScript, lint, architecture and 228 theme contrast checks.
   All 213 generated production files from 38 static routes match the Go-embedded export, and Go UI
   tests and vet pass. Tables, forms, dialogs, choices,
@@ -1661,6 +1661,13 @@ and `git diff --check` gates must pass on the same committed worktree.
   performs no N+1 user lookups and never presents one-item relation commands
   as atomic batch writes. A signed opaque continuation is not claimed until
   the IAM owner fixes and verifies that successor contract.
+  Group detail now renders its stable identity, metadata and direct-policy
+  facts as soon as the exact group read succeeds; it does not wait for the
+  membership relationship page. The member region uses the shared public
+  `TableSkeleton`, keeps its loading/failure/retry state local and disables
+  relationship-changing actions until the member facts are ready. A failed
+  member read therefore neither blanks the group object nor reloads its exact
+  object route when the user retries.
   The focused group-contract regression has 214 passing tests across the HTTP
   adapter, live/Preview renderers and isolated workspace repository. A desktop
   browser check on the existing 4317 DEMO verified the shared group detail and

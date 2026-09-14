@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { PageSkeleton, type PageSkeletonLayout } from "./PageSkeleton";
+import { PageSkeleton, TableSkeleton, type PageSkeletonLayout } from "./PageSkeleton";
 
 afterEach(cleanup);
 
@@ -12,5 +12,12 @@ describe("PageSkeleton", () => {
     expect(screen.queryByRole("table")).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("announces a local table read without exposing placeholder rows as data", () => {
+    render(<TableSkeleton label="Loading member relationships…" rows={3} header={false} />);
+    expect(screen.getByRole("status").textContent).toBe("Loading member relationships…");
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByRole("row")).toBeNull();
   });
 });

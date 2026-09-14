@@ -1215,6 +1215,59 @@ describe("CAM-style access workspace", () => {
     expect(within(table).getByRole("columnheader", { name: "直接关联策略" })).toBeTruthy();
     expect(within(table).getByText("2 项直接关联")).toBeTruthy();
   });
+  it("reveals the live group object before its membership relationship page finishes", async () => {
+    const liveGroup: GroupAccess = {
+      group: { id: "group-progressive", accountId: account.id, name: "ProgressiveTeam", description: "Group facts load independently", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [
+        capability("iam.group.read", "GROUP", "group-progressive"),
+        capability("iam.group-membership.list", "GROUP", "group-progressive")
+      ]
+    };
+    let resolveMemberships!: (page: { accountId: string; groupId: string; items: GroupMembershipAccess[]; nextAfter: null }) => void;
+    const listGroupMemberships = vi.fn(() => new Promise<{ accountId: string; groupId: string; items: GroupMembershipAccess[]; nextAfter: null }>((resolve) => { resolveMemberships = resolve; }));
+    const { user } = await open("groups", { live: true, repository: {
+      listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
+      getGroup: vi.fn().mockResolvedValue(liveGroup),
+      listGroupMemberships
+    } });
+    const directory = await screen.findByRole("table", { name: "用户组" });
+    await user.click(within(directory).getByRole("button", { name: "ProgressiveTeam" }));
+    expect(await screen.findByRole("heading", { name: "ProgressiveTeam" })).toBeTruthy();
+    expect(screen.getByText("正在读取成员关系…")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
+    await act(async () => { resolveMemberships({ accountId: account.id, groupId: liveGroup.group.id, items: [], nextAfter: null }); });
+    expect(await screen.findByText("暂无成员")).toBeTruthy();
+    expect(screen.queryByText("正在读取成员关系…")).toBeNull();
+  });
+  it("keeps live group facts available when membership loading fails and retries only that relation", async () => {
+    const liveGroup: GroupAccess = {
+      group: { id: "group-retry", accountId: account.id, name: "RetryTeam", description: "Relationship failure stays local", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [
+        capability("iam.group.read", "GROUP", "group-retry"),
+        capability("iam.group-membership.list", "GROUP", "group-retry")
+      ]
+    };
+    const getGroup = vi.fn().mockResolvedValue(liveGroup);
+    const listGroupMemberships = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary relationship failure"))
+      .mockResolvedValueOnce({ accountId: account.id, groupId: liveGroup.group.id, items: [], nextAfter: null });
+    const { user } = await open("groups", { live: true, repository: {
+      listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
+      getGroup,
+      listGroupMemberships
+    } });
+    const directory = await screen.findByRole("table", { name: "用户组" });
+    await user.click(within(directory).getByRole("button", { name: "RetryTeam" }));
+    expect(await screen.findByRole("heading", { name: "RetryTeam" })).toBeTruthy();
+    expect(await screen.findByText("成员关系暂时无法载入")).toBeTruthy();
+    expect(screen.getByText("Relationship failure stays local")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("暂无成员")).toBeTruthy();
+    expect(getGroup).toHaveBeenCalledTimes(1);
+    expect(listGroupMemberships).toHaveBeenCalledTimes(2);
+  });
   it("uses the fixed live group contract without inventing totals and retries one unchanged relation intent", async () => {
     const liveGroup: GroupAccess = {
       group: { id: "group-live", accountId: account.id, name: "LiveOperators", description: "Backend-owned group", resourceVersion: 4, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },

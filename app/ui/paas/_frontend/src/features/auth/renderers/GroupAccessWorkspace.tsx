@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, EmptyState, Table, Tabs } from "@ui/xiak";
+import { Alert, Badge, Button, EmptyState, Table, TableSkeleton, Tabs } from "@ui/xiak";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -42,7 +42,8 @@ export type GroupPolicyRecord = {
 export type GroupDetailRecord = GroupDirectoryRecord & {
   members: GroupMemberRecord[];
   policies: GroupPolicyRecord[];
-  membersAvailability?: "ready" | "loading" | "forbidden";
+  membersAvailability?: "ready" | "loading" | "forbidden" | "error";
+  membersError?: string;
 };
 
 export type GroupDetailControls = {
@@ -53,6 +54,7 @@ export type GroupDetailControls = {
   addPolicy?: GroupActionControl;
   removePolicy?: GroupActionControl;
   loadMoreMembers?: GroupActionControl;
+  retryMembers?: GroupActionControl;
 };
 
 export function GroupDirectory({ groups, create, loadMore, status, footerNote, onOpen }: {
@@ -178,8 +180,9 @@ export function GroupDetail({ group, controls, onBack, onOpenMember, onOpenPolic
           <GroupActionButton control={controls.addMember}>{g("addMembers")}</GroupActionButton>
           <GroupActionButton control={controls.removeMember} variant="secondary">{g("removeMembers")}</GroupActionButton>
         </div>
-        {group.membersAvailability === "loading" ? <p className={styles.note} role="status">{g("loadingMembers")}</p>
+        {group.membersAvailability === "loading" ? <TableSkeleton label={g("loadingMembers")} rows={3} header={false} />
           : group.membersAvailability === "forbidden" ? <EmptyState title={g("membersUnavailable")} description={g("membersUnavailableHint")} />
+          : group.membersAvailability === "error" ? <EmptyState title={g("membersLoadFailed")} description={group.membersError ?? g("membersLoadFailedHint")} action={<GroupActionButton control={controls.retryMembers} variant="secondary">{g("retry")}</GroupActionButton>} />
           : group.members.length
           ? <GroupMemberTable members={group.members} onOpen={onOpenMember} />
           : <EmptyState title={g("noMembers")} description={g("noMembersHint")} />}
