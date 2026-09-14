@@ -5,118 +5,110 @@
 - Updated: 2026-09-14
 - Repository: https://github.com/xiak/matrix.git
 - Branch: `feat/iam`
-- Latest pushed, locally verified metadata candidate:
-  `02fed1296d0f425e610812a870c85ed524295447`.
-- Its exact [Verification 34819882669](https://github.com/xiak/matrix/actions/runs/34819882669)
-  was confirmed in_progress. Poll the same run; observation timeout is not failure.
-- Last fully CI-verified version-management milestone:
-  `aa28c39ca25ad0136b4a7042f1f1ae358d4f1429`,
-  [Verification 34816605258](https://github.com/xiak/matrix/actions/runs/34816605258):
-  exact SHA and Go/authority-process/node-process all completed/success.
-- Earlier creation/read milestone remains
-  `7104b1de8f16ae82645e149b2c5376f983eae5cd` / successful CI 34814615083.
+- Latest pushed, locally verified policy deletion candidate:
+  `0ac6445a33fb2e592fe94d2787a87cd7460ec4ae`.
+- Exact [Verification 34823234061](https://github.com/xiak/matrix/actions/runs/34823234061)
+  is in_progress: Go/node-process success, authority-process still running.
+  Poll this same run; an observation timeout is not a terminal result.
+- Previous rename candidate `02fed1296d0f425e610812a870c85ed524295447`
+  FAILED CI 34819882669 in a pre-existing first-page-only protection test.
+  The new candidate fixes that test and proves a target beyond page one.
+- Last fully CI-verified code remains
+  `aa28c39ca25ad0136b4a7042f1f1ae358d4f1429` /
+  [Verification 34816605258](https://github.com/xiak/matrix/actions/runs/34816605258),
+  exact SHA and all three jobs completed/success.
 
-## Resume route and objective
+## Resume and full objective
 
-The complete IAM replacement goal remains active. Neither IAM/005 nor the
-overall product is accepted. Read AGENTS.md, the
-[product contract](../../IAM/FEAT-IAM-000-product-contract.md), then
-[IAM/005](../../IAM/FEAT-IAM-005-policy-versions-and-boundaries.md) and its
-owning code/tests. [IAM/011](../../IAM/FEAT-IAM-011-acceptance.md) owns the
-user-confirmed prelaunch schema policy, final release and capacity/HA gates.
-The [existing adoption record](../../docs/adoption/FEAT-006-platform-authorities.md)
-owns fixed sources; never use another worktree's dirty files.
+The complete IAM replacement goal remains active; 005 and the overall product
+are NOT accepted. Read AGENTS.md, [000](../../IAM/FEAT-IAM-000-product-contract.md),
+[005](../../IAM/FEAT-IAM-005-policy-versions-and-boundaries.md), then its existing
+code/tests. [011](../../IAM/FEAT-IAM-011-acceptance.md) owns the user's prelaunch
+schema baseline and final release/capacity/HA gates. Do not automatically run
+every unpublished schema from 1; current clean apply, data replay, security
+and explicit published-consumer obligations remain mandatory.
 
-First resolve 02fed12's exact CI. If it fails, inspect the actual failing
-test, correct its owning invariant/fixture and use a fresh task-owned
-database. Do not print GitHub credentials. Keep authenticated log credentials
-in memory only and restrict excerpts to failed tests before the very large
-post-job PostgreSQL cleanup logs.
+First resolve 0ac6445's exact CI. If it fails, inspect the actual failed test
+before changing code or fixtures. GitHub log credentials stay in RAM only;
+do not print headers, credentials or full post-job database logs.
 
-## Pushed implementation and evidence boundary
+## Current fixed behavior and evidence
 
-aa28 delivers CUSTOMER version list/exact nondefault read, immutable content
-creation and explicit optimistic default selection. Creation does not switch
-the default or grant. Old command replay conflicts after another Policy
-revision; historical decisions retain their exact original content.
+Policy create/read, immutable version list/read/create/default selection,
+metadata rename and terminal Policy deletion use the current PDP plus original
+Account root, ACTIVE USER/Account and own CUSTOMER checks. No implicit grants.
+DELETE /v1/policies/{policyId} accepts only resourceVersion/requestId and returns
+RETIRED Policy metadata. Any unrevoked User/Group attachment blocks deletion,
+including disabled identities. Content/default/history remain immutable.
+Only exact deletion replay can inspect its terminal result; public detail,
+version reads and other mutations remain active-only. Management PolicyList
+now excludes retired metadata, freeing active capacity and display names.
 
-02fed12 adds PATCH /v1/policies/{policyId} with UpdatePolicyRequest
-(displayName/resourceVersion/requestId), returning current-default
-PolicyDetail. Current PDP, original root, ACTIVE USER/Account and own ACTIVE
-CUSTOMER Policy are checked in existing transaction/SQL locks.
-iam.policy.update and iam.policy.updated are tenant-only, exact POLICY.
-Only displayName/resourceVersion/updatedAt change; identity, content, default
-and attachments do not. Equal replay requires the original result revision
-to remain current. No-op, name collision, variant and stale revision conflict.
-A service secret is not a user bearer and gets authentication 401, not a
-successful service authentication followed by policy authorization.
+New iam.policy.delete / iam.policy.deleted is TENANT / exact POLICY.
+Current development source shape is IAM13/Audit10/PaaS1. Installation/release
+profile, ServiceIdentity/lookup_service, seven-column claim, canonical bytes,
+original-primary sealed recovery and other product production code did not change.
 
-Final focused PG18 metadata tests, related API/IAM/Audit/architecture race,
-strict schema tests, full Go tests/vet, module verification, stable generation
-and Linux IAM/Audit builds passed. The serial CI-equivalent real PG package
-set passed: Audit data/history, Audit HTTP, IAM integration, dual IAM with
-actual PaaS/Audit and PaaS data. Exact timings belong to 005.
-They prove rename/default concurrency, publisher revocation during lock wait,
-final-outbox failure rollback including the decision, cross-account/non-root
-denial, old proof and unchanged application authority after rename. They do
-not replace the candidate's pending independent CI.
+Final real PG18 focused deletion passed 3.18s (parent8.82s). Complete IAM
+integration race passed199.938s: policy86.46s, HTTP94.02s, local recovery16.52s.
+The group101+ pagination remains real HTTP; platform protection uses returned
+opaque cursors and forces the protected HTTP-created USER beyond the first page.
+The four-way delete/rename/version/default race proves only the winner's state
+and its lifecycle fact bound to the committed authorization decision. An
+authorization-decided audit is not a second lifecycle success.
 
-Current development source is IAM12/Audit9/PaaS1; the preceding version slice
-was 11/8/1. Installation/release profile was NOT changed. No new UI capability,
-diagnostic endpoint, condition, boundary or deletion API is present.
-ServiceIdentity/lookup_service, seven-column claim, canonical bytes and
-sealed original-primary recovery contracts remain unchanged.
+Independent dual IAM/PaaS/Audit passed51.364s with actual restricted DB logins,
+real dispatcher/tenant chain and existing cross-account resource/Operation
+and outbox matrices. Audit data17.765s, Audit HTTP4.405s, PaaS data5.848s passed.
+One overlapping-build local batch exhausted the original two-minute policy
+budget and is NOT counted as passing; fresh serial revalidation above passed
+without extending timeouts or cutting Group scale/coverage.
 
-## Next implementation
+API/IAM/Audit/architecture race, full Go tests/vet, modules, stable OpenAPI
+generation and Linux IAM/Audit builds passed. Only a final test assertion changed
+after the broad runs; it then passed focused/full real IAM and vet.
+No UI, signed-installation, capacity or whole-FEAT acceptance is implied.
 
-Continue 005's remaining full scope: policy deletion, version deletion that
-frees management capacity while retaining immutable history, bounded
-wildcards/conditions, permission boundaries, safe delegation and editor UI.
-Do not stop at create/version/rename as a substitute for the full FEAT.
+## Next actual implementation
 
-Before deletion, inspect the existing owners:
+005 now defines the next version-deletion slice; it is not implemented:
+DELETE the exact nondefault version, return unchanged-default PolicyDetail,
+retire management visibility without destroying historical content, release
+the five-version budget, and retain old proof/replay invariants. New publication
+of retired content receives a new opaque version ID bound to content digest
+and monotonic Policy result revision; never revive a retired ID. Existing
+digest-derived IDs remain unchanged. Active duplicate content still conflicts.
 
-- 000001_authority/up.sql: policies, policy_versions, terminal metadata
-  guard, immutable history guard, default-version FK and list_policies.
-- 000006_policy_authority/up.sql: publisher/Policy locks, version inventory,
-  default selection and immutable outbox intent verification.
-- The directory test currently expects a retired CUSTOMER row to remain
-  listed. The complete 256-item directory would exhaust after repeated
-  create/delete unless management visibility or pagination changes.
-  Historical retention must not become a lifetime object/publication cap.
-- Current version IDs are content-digest derived. Settle explicit
-  republishing/retirement semantics before implementing deletion; no silent
-  revival or removal of historical content merely to pass quota tests.
-- Do not globally relax reject_policy_history_change, which protects more
-  than version management. Preserve canonical/digest and historical proof.
+Read that section before coding. Modify existing policy_versions and its precise
+transition guard rather than relaxing the shared immutable-history guard or
+adding a parallel content store. Public lists/read/default selection exclude
+retired versions; historical evidence does not. Test full capacity reuse,
+default/delete/create/Policy-delete races, exact intent conflict, outbox rollback,
+current-schema replay and retained old proof. Record fixed 0ac adoption only
+after its independent result is known.
 
-Then continue 006–010 and 011's real final combination gates. 012 retains
-explicitly deferred external requirements. Group/browser integration,
-final signed installation, capacity/fairness and database HA remain open;
-two processes over one database do not prove database failover.
+Then continue conditions/wildcards, boundaries, safe delegation and editor/
+capabilities; 006–010 and011 final gates still remain. Do not stop at CRUD as
+a substitute for LANG-01–08 or the full objective. 012 retains deferred external
+integration requirements. Two IAM processes do not prove database HA.
 
-## Coordination and isolation
+## Coordination and resource isolation
 
-UX/UI task `01a07b21-9a0d-7fd0-b090-7827ce18262e` on
-`feat/cloud-console-ux` received aa28's successful exact CI and complete
-version route/type/action/replay boundaries. User-initiated detail GET may
-reach server authorization and show 403; creation controls stay hidden until
-a fixed conservative capability projection exists. Do not infer authority
-from root labels, policy names or MOCK grammar. Its WIP is not a donor.
+UX/UI task `01a07b21-9a0d-7fd0-b090-7827ce18262e` received 0ac's candidate
+route/type/error/active-directory boundary and the planned version deletion.
+It must wait for fixed successful contracts; no capability has been added and
+root labels/policy names/MOCK grammar cannot authorize UI mutations.
 
-Installation task `01a04149-5dbb-7300-9e4c-31d9e85c8ada` acknowledged aa28
-but is not integrating now; it waits for 005 and final ABI. It approved the
-metadata-only window and unchanged installation/host contracts. Do not edit
-installation/releasebuild/profile, PaaS/node or its FEAT/checkpoint.
+Installation task `01a04149-5dbb-7300-9e4c-31d9e85c8ada` received the same
+candidate and waits for exact CI/final005 ABI. No profile change or integration
+is requested. Do not touch its worktree, host/PaaS/node or installation owner.
 
-All local test processes finished. The rename fixture's PostgreSQL container,
-network and synthetic volume were ownership-checked and removed. No live
-local gate handle remains; only exact remote CI needs checking. New tests
-use fresh labels/names and bounded CPU/memory/PIDs/concurrency.
-An internal-only Docker network did not publish the host port on this local
-engine; the verified fixture used its own ordinary bridge and loopback-only
-port publication. This fixture issue does not change production topology.
+All local gates are terminal. This slice's task-labelled PostgreSQL container,
+network and synthetic volume were ownership-checked, stopped and removed;
+no live local test handle remains. Only remote CI34823234061 is still running.
+Do not reuse removed database names as though their state survives.
 
-Go defaults GOMAXPROCS=2/-p 2; real database packages serial/-p 1. Never
-restart remote machines/shared engines or occupy another task's resources.
-No additional agents/tasks. User-facing documents default to Markdown.
+Go defaults GOMAXPROCS=2/-p2; real DB packages serial/-p1. Never overlap broad
+builds with the bounded real PG suite. Use new task-labelled resources, explicit
+limits and loopback publication. No remote/shared restarts, no other Phase
+resource cleanup, no extra agents/tasks. User-facing documents remain Markdown.
