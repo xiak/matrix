@@ -753,8 +753,11 @@ infrastructure, application hosting, PostgreSQL, log, delivery, monitoring and
 IAM workspaces. It is a domain vocabulary, independent of navigation labels.
 Read/list/write/permission-management categories and resource-level versus
 operation-level granularity come from this catalog and are visible separately in
-the action picker. These are explicit Matrix preview contracts, not rules
-inferred from Create/List/Describe names or a copy of Tencent product capabilities.
+the action picker. Each operation row sizes to its name, identifier, description
+and granularity inside one bounded scrolling list; filtering many operations must
+never compress row tracks until adjacent content overlaps. These are explicit
+Matrix preview contracts, not rules inferred from Create/List/Describe names or
+a copy of Tencent product capabilities.
 An action pattern must match
 at least one registered action. Canonical resource patterns are
 `matrix:<service>:<tenant>:<region>:<type>/<id>`; only region and ID can be
