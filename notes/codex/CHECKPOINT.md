@@ -5,110 +5,127 @@
 - Updated: 2026-09-14
 - Repository: https://github.com/xiak/matrix.git
 - Branch: `feat/iam`
-- Latest pushed, locally verified version-retirement candidate:
-  `b99e082fa9ba8a6412eeb766387f4fbeb5df0aa3`.
-- Exact [Verification 34827144713](https://github.com/xiak/matrix/actions/runs/34827144713)
-  is in_progress: node-process success, Go/authority-process running.
-  Poll this same run; observation timeout is not terminal.
-- Last fully CI-verified code is policy-deletion
-  `0ac6445a33fb2e592fe94d2787a87cd7460ec4ae` /
-  [Verification 34823234061](https://github.com/xiak/matrix/actions/runs/34823234061);
-  exact SHA and all three jobs completed/success.
-- Earlier rename candidate 02fed129 FAILED its own CI due to a first-page-only
-  protection test; 0ac fixes it. Do not inherit success backwards.
+- Latest pushed, locally verified time-condition candidate:
+  `7218e1671378a227d78d020686a68d164982e2ac`.
+- Exact [Verification 34830294815](https://github.com/xiak/matrix/actions/runs/34830294815)
+  is in_progress. Poll this same run; observation timeout is not terminal.
+- Last fully CI-verified code is version-retirement
+  `b99e082fa9ba8a6412eeb766387f4fbeb5df0aa3` /
+  [Verification 34827144713](https://github.com/xiak/matrix/actions/runs/34827144713);
+  exact SHA and Go/authority-process/node-process completed/success.
+- Earlier 0ac6445 policy deletion also passed all jobs34823234061;
+  its predecessor02fed129 failed a first-page-only protection test. Do not
+  inherit success backwards.
 
 ## Resume and full objective
 
-The full IAM replacement goal remains active. 005 and the overall product
-are NOT accepted. Read AGENTS.md, [000](../../IAM/FEAT-IAM-000-product-contract.md),
-[005](../../IAM/FEAT-IAM-005-policy-versions-and-boundaries.md), then owning code/tests.
-[011](../../IAM/FEAT-IAM-011-acceptance.md) owns the user's prelaunch baseline:
-unpublished schema numbers are not automatically supported upgrade origins.
-Current clean apply, retained-data replay, security and explicit published
-consumer obligations remain mandatory.
+The full IAM replacement goal remains active; 005 and the product are NOT
+accepted. Read AGENTS.md, [000](../../IAM/FEAT-IAM-000-product-contract.md),
+[005](../../IAM/FEAT-IAM-005-policy-versions-and-boundaries.md), then owning
+code/tests. [001](../../IAM/FEAT-IAM-001-authorization-profile.md) owns condition
+source declarations. [011](../../IAM/FEAT-IAM-011-acceptance.md) owns prelaunch
+schema baseline and final release/capacity/HA gates. Unpublished numbered
+schemas do not automatically require a complete upgrade chain from1.
 
-First resolve b99e082's exact CI. On failure inspect actual failed test before
+First resolve7218e16's exact CI. If failed, inspect actual failure before
 changing code/fixtures. GitHub credentials remain in RAM only; never print
-headers, credentials or full post-job database logs.
+headers, credentials or full post-job PostgreSQL cleanup logs.
 
-## Current fixed behavior
+## Current fixed behavior and scope
 
-DELETE /v1/policies/{policyId}/versions/{versionId} accepts only
-resourceVersion/requestId; current PDP plus original root, ACTIVE USER/Account
-and own ACTIVE CUSTOMER locks. SYSTEM/cross-account/non-root/default reject.
-Returns current-default PolicyDetail, PolicyRV+1. Exact replay is valid only
-while its original result revision is current; variants/stale intents conflict.
+Statement.conditions is optional; current key iam.current-time has source
+IAM_TRANSACTION_TIME and type TIME, declared only for current TENANT actions.
+Only USER authorization consumes conditions; platform/probe/service-subject
+conditional authority is closed. Operators DATE_GREATER_THAN_EQUALS and
+DATE_LESS_THAN take one canonical UTC/microsecond value, combining [start,end).
+Unknown fields/keys/operators, null/empty arrays, duplicate key/operator,
+bad dates/precision/timezones and empty/reversed windows reject.
 
-policy_versions.retired_at is a one-way terminal transition. The original ID,
-document/canonical/digest/time remain immutable; no physical deletion, initially
-retired insertion, unretirement or retired default. Current read/list/default
-and five-total-version budget exclude retired rows; historical proof does not.
-Ordinary attachments follow Policy default and are not nondefault version pins.
-Republishing retired content gets a new opaque ID bound to digest and monotonic
-Policy result RV; active equal content conflicts and old IDs never revive.
+PolicyDocument owns strict decoding/canonical; no-condition bytes/digest
+remain unchanged. The sole evaluator now requires explicit databaseTime.
+Actual Decide, capability projection and cursor reauthorization use the
+existing transaction_timestamp source. No caller attributes/currentTime map.
+Matched Deny still wins across sources; nonmatching conditional Allow does
+not cancel another valid Allow. Historical decisions retain exact versions,
+membership evidence and original DecidedAt; expiry does not prevent delivery.
 
-iam.policy-version.delete / iam.policy-version.deleted are TENANT / POLICY.
-Current development source is IAM14/Audit11/PaaS1. Installation/release profile,
-ServiceIdentity/lookup_service, seven-column claim, canonical and sealed
-original-primary recovery are unchanged. This is not a releasable profile.
+The current source is IAM15/Audit11/PaaS1. IAM reflects changed document/
+publication semantics, not a supported historical upgrade promise.
+Installation/release profile, ServiceIdentity/lookup_service, seven-column
+claim, Audit canonical and sealed original-primary recovery are unchanged.
+CAT-05 full signed Profile/revision/digest/granularity is NOT implemented.
 
-## Verified local evidence
+b99 remains the version-retirement baseline: five management-visible total
+versions including default, terminal nondefault retirement releases a slot
+without deleting proof. Republication gets a new opaque ID; active equal
+content conflicts and retired IDs never revive. Ordinary attachments follow
+Policy default; they are not nondefault version pins.
 
-Focused real PG18 version lifecycle passed6.19s (parent11.33s): capacity reuse,
-same-content new identity, default protection, exact replay, outbox rollback,
-historical proof and four-way retirement/default/publication/Policy-delete race.
-Complete final IAM integration race passed320.659s, including current policy
-storage, HTTP155.29s and local recovery37.59s. Final insertion attack and strict
-response checks were included. Existing real Group101+/pagination and
-credential concurrency coverage was preserved.
+## Actual local evidence
 
-The first serial IAM batch exhausted its shared two-minute aggregate context
-at122.72s and is NOT passing evidence. Ten flows now have individual2-minute
-budgets and the shared retained-data fixture has4 minutes; HTTP test requests
-inherit that deadline/cancellation. No production timeout/resource change.
-The final fresh database run above passed. This is not a performance SLO.
+Time-condition strict positive parser test first failed, then passed.
+Unit/contract tests cover microsecond window boundaries, Deny precedence,
+source order, invalid authority time, closed schema, stable canonical,
+and cursor rejection exactly when the granting policy expires.
 
-Actual independent dual IAM/PaaS/Audit passed137.207s: restricted runtime logins,
-real resource access unchanged by nondefault retirement, real dispatcher/chain,
-and existing Account/Operation/outbox isolation and identity-outage gates.
-Audit data11.447s, Audit HTTP3.286s, PaaS data18.719s passed.
-API/IAM/Audit/architecture race, full default tests/vet, module verification,
-stable OpenAPI and Linux IAM/Audit builds passed; final focused race/vet passed
-again after the last test harness/adapter changes. Default skipped DB tests do
-not replace the real runs. No new UI/signed-installation/capacity acceptance.
+Real PG18 focused versions/time passed9.47s (parent18.33s, package21.540s).
+The first time test still had a prior explicit unconditional AccountAdmin
+attachment: stored evidence correctly showed that surviving Allow. The test
+now revokes that attachment through HTTP; production union semantics were
+not weakened to make the test pass.
+
+Final full real PG18 serial batch passed: Audit data5.702s, Audit HTTP3.326s,
+IAM integration race246.989s, PaaS data6.202s. Final IAM time test uses real
+Group creation/membership/attachment, asserts exact inherited evidence inside
+the5-second database window and no matched evidence after expiry. Preserves
+current-schema/bootstrap replay, Group101+/pagination, version lifecycle,
+credential concurrency, immutable history and local platform recovery.
+
+Independent dual IAM/PaaS/Audit passed45.75s (package48.644s). Real direct
+attachment allows inside6-second window, expires on same bearer, newly
+published version alone remains denied, explicit default selection permits,
+then attachment revocation denies. Real dispatchers and full tenant chain,
+restricted runtime logins and existing cross-account resource/Operation/
+outbox/fail-closed gates remain.
+
+API/IAM/Audit/architecture race, full default Go tests/vet, modules, stable
+OpenAPI and Linux IAM/Audit builds passed. Final API/authority race passed
+again. Fuzz with timed seed15s/2workers/1s minimization passed132,238 executions;
+not a performance or full-language proof. The prior default60s minimization
+spent the short run minimizing; no failing corpus or production change.
+No UI, signed-installation, capacity or whole-FEAT acceptance is implied.
+
+The policy aggregate retains4-minute total/2-minute-per-flow test budgets
+from b99; no production deadline/resource changes. Never overlap broad
+builds/fuzz with the bounded real PostgreSQL suite.
 
 ## Next implementation
 
-005 now specifies the unimplemented IAM-authoritative time-condition slice:
-optional typed conditions, declared key/source, [start,end), current database
-transaction time only, closed input, unchanged old canonical, same evaluator,
-and a real publish/attach/PaaS/time-boundary/historical-proof path. Read its
-section and [001](../../IAM/FEAT-IAM-001-authorization-profile.md) before coding.
-CAT-05 is not complete: static ActionDefinition is not the final signed Profile.
-Resource/source-IP/tag conditions require declared trusted product inputs;
-never accept a caller-controlled generic attributes map.
+After exact CI, record final confirmation in005 and notify existing peers.
+Then continue full005: bounded wildcards, typed string/IP conditions and their
+declared trusted sources, User/Role permission boundaries, safe delegation,
+editor and capabilities. Current time support is NOT full LANG-04.
+Source IP cannot come from an untrusted forwarding header; product tags
+require008 PEP contracts. Do not add generic caller-controlled attributes.
+Read existing001/005/008 and directly relevant ADR before crossing boundaries.
 
-Then finish bounded wildcards, string/IP conditions, permission boundaries,
-safe delegation and editor/capabilities; 006–010 and011 final gates remain.
-Do not redefine success around CRUD. 012 owns deferred external integrations.
+006 roles/STS,007 programmatic credentials,008 product/service-role/ABAC,
+009 governance,010 console and011 final gates remain;012 retains explicitly
+deferred integrations. Do not redefine the goal around policy CRUD/time.
 
-## Coordination and resource isolation
+## Coordination and isolation
 
-UX/UI task 01a07b21-9a0d-7fd0-b090-7827ce18262e received the fixed candidate,
-route/result/capacity semantics and pending CI. No management capability was
-added; names/root labels/mock grammar cannot authorize UI writes.
+UX/UI task01a07b21-9a0d-7fd0-b090-7827ce18262e and installation task
+01a04149-5dbb-7300-9e4c-31d9e85c8ada received b99 final success and7218 pending
+candidate semantics/evidence. No new UI capability or installation profile
+was published; names/root labels/mock grammar never authorize writes.
+Only fixed objects are exchanged; peers do not inherit this branch's gates.
 
-Installation task 01a04149-5dbb-7300-9e4c-31d9e85c8ada received the same pending
-candidate and confirmed no consumption before all jobs succeed. No profile
-update requested. It agrees ordinary attachments are not version pins and
-the budget is five total management versions including default.
+All local test handles are terminal. Time-slice PostgreSQL container/network/
+synthetic volume were exact-ID/label checked, found client count0, stopped
+and removed. No local fixture survives. Only CI34830294815 is known live.
+Do not reuse old database names as if data survives.
 
-All local test handles are terminal. The version-retirement task's PostgreSQL
-container/network/synthetic volume were exact-ID/label checked, found client
-count0, stopped and removed. No local fixture survives. Remote CI34827144713
-remains the only known live gate; inspect it before restarting anything.
-
-Only own worktree/branch is writable. No other Phase WIP, remote/shared restart,
-resource cleanup or extra agents/tasks. Go GOMAXPROCS2/GOMEMLIMIT768MiB/-p2;
-real DB packages serial/-p1, never overlap broad builds with real PG.
-All user-facing documents default to Markdown.
+Only own worktree/branch is writable. No other Phase WIP, remote/shared
+restarts, other-resource cleanup or extra agents/tasks. Go GOMAXPROCS2,
+GOMEMLIMIT768MiB/-p2; real DB packages serial/-p1. Documents remain Markdown.
