@@ -58,6 +58,6 @@ export function AccountPolicyDirectory({ scene }: { scene: AccountAccessScene })
         <td><WorkspaceTime value={policy.updatedAt} /></td>
       </tr>)}</tbody>
     </Table> : <EmptyState title={t(scene.policies.length ? "noResults" : "empty")} description={t(scene.policies.length ? "noResultsHint" : "emptyHint")} action={scene.policies.length ? <Button variant="secondary" onClick={reset}>{toolbarLabels.resetQuery}</Button> : undefined} />}
-    <Card.Footer><span className={styles.note}>{t("completeSnapshot", { count: scene.policies.length })}</span><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Card.Footer>
+    <Table.Footer note={t("completeSnapshot", { count: scene.policies.length })}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
   </Card>;
 }

@@ -3,7 +3,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Play } from "lucide-react";
-import { Alert, Badge, Button, Card, EmptyState, FormField, Input, Select, Table } from "@ui/xiak";
+import { Alert, Badge, Button, Card, EmptyState, FormField, Input, Select, Table, TablePagination } from "@ui/xiak";
 import { evaluateUserAccess, evaluateRoleSessionAccess, type AccessTestRequest, type AccessTestResult } from "../domain/policyEvaluation";
 import { parsePolicyResource, policyActions, policyServices, type PolicyService } from "../domain/policyLanguage";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
@@ -28,6 +28,7 @@ export function AccessSimulator({ workspace, scene, entityId, onOpen }: { worksp
   const [exampleId, setExampleId] = useState<AccessWorkspace["testRequests"][number]["id"] | "">("");
   const [tested, setTested] = useState<{ result: AccessTestResult; workspace: AccessWorkspace } | null>(null);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [showAll, setShowAll] = useState(false);
   const resultHeading = useRef<HTMLHeadingElement>(null);
   const inventory = useMemo(() => workspace.testResources.map((entry) => ({ ...entry, parsed: parsePolicyResource(entry.reference, false) })), [workspace.testResources]);
@@ -53,7 +54,8 @@ export function AccessSimulator({ workspace, scene, entityId, onOpen }: { worksp
     resultHeading.current?.focus({ preventScroll: true });
     resultHeading.current?.scrollIntoView?.({ block: "center", inline: "nearest" });
   }, [result]);
-  const pages = Math.max(1, Math.ceil(evidence.length / 20));
+  const pages = Math.max(1, Math.ceil(evidence.length / pageSize));
+  const currentPage = Math.min(page, pages);
   function change(patch: Partial<AccessTestRequest>) { setRequest((current) => ({ ...current, ...patch })); setTested(null); setPage(1); setShowAll(false); setExampleId(""); }
   if (!scene.users.length && !workspace.roleSessions.length) return <EmptyState title={t("noUsers")} description={t("noUsersHint")} />;
   return <div className={styles.root}><div className={styles.stack}>
@@ -93,15 +95,15 @@ export function AccessSimulator({ workspace, scene, entityId, onOpen }: { worksp
         {selectedUser ? <Button variant="ghost" size="small" onClick={() => onOpen("users", selectedUser.id)}>{t("inspectUser", { name: selectedUser.loginName })}</Button> : selectedRole ? <Button variant="ghost" size="small" onClick={() => onOpen("roles", selectedRole)}>{t("inspectRole")}</Button> : null}
       </div>
       {result.boundary ? <Alert>{t("boundaryResult", { name: workspace.policies.find((policy) => policy.id === result.boundary!.policyId)?.name ?? result.boundary.policyId, decision: t(`decisions.${result.boundary.decision}`) })}</Alert> : null}
-      {result.evidence.length ? <><div className={styles.row}><p className={styles.note}>{t("evidenceCount", { count: result.evidence.length })}</p>{primaryEvidence.length > 0 && extraCount > 0 ? <Button variant="ghost" size="small" aria-expanded={showAll} onClick={() => { setShowAll((current) => !current); setPage(1); }}>{showAll ? t("decisiveOnly") : t("showAllEvidence", { count: extraCount })}</Button> : null}</div><Table aria-label={t("evidence")}>
+      {result.evidence.length ? <div className={styles.row}><p className={styles.note}>{t("evidenceCount", { count: result.evidence.length })}</p>{primaryEvidence.length > 0 && extraCount > 0 ? <Button variant="ghost" size="small" aria-expanded={showAll} onClick={() => { setShowAll((current) => !current); setPage(1); }}>{showAll ? t("decisiveOnly") : t("showAllEvidence", { count: extraCount })}</Button> : null}</div> : result.decision === "implicitDeny" ? <EmptyState title={t("noGrants")} description={t("noGrantsHint")} /> : null}
+    </Card.Body>{result.evidence.length ? <><Table aria-label={t("evidence")}>
         <thead><tr><th scope="col">{t("policy")}</th><th scope="col">{t("source")}</th><th scope="col">{t("matching")}</th><th scope="col">{t("statementEffect")}</th></tr></thead>
-        <tbody>{evidence.slice((page - 1) * 20, page * 20).map((entry, index) => <tr key={index}>
+        <tbody>{evidence.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((entry, index) => <tr key={index}>
           <td><button className={styles.evidenceLink} onClick={() => onOpen("policies", entry.policyId)}>{entry.policyName}</button><small>{entry.version ? "v" + entry.version : "—"}{entry.statement ? " · " + w("statementNumber", { number: entry.statement }) : ""}</small></td>
           <td>{t(`sources.${entry.source}`)}{entry.groupId ? <small><button className={styles.evidenceLink} onClick={() => onOpen("groups", entry.groupId)}>{workspace.groups.find((group) => group.id === entry.groupId)?.name ?? entry.groupId}</button></small> : null}</td>
           <td>{t(`reasons.${entry.reason}`)}{entry.reason === "missingContext" ? <small>{entry.missing?.map((key) => t(`missing.${key}`)).join(" · ")}</small> : null}</td>
           <td>{entry.effect ? <Badge status={entry.reason === "matched" ? entry.effect === "deny" ? "danger" : "success" : undefined}>{w(entry.effect)}</Badge> : "—"}</td>
         </tr>)}</tbody>
-      </Table>{pages > 1 ? <div className={styles.row}><span>{w("page", { page, pages })}</span><div className={styles.actions}><Button variant="secondary" disabled={page <= 1} onClick={() => setPage((current) => current - 1)}>{w("previous")}</Button><Button variant="secondary" disabled={page >= pages} onClick={() => setPage((current) => current + 1)}>{w("next")}</Button></div></div> : null}</> : result.decision === "implicitDeny" ? <EmptyState title={t("noGrants")} description={t("noGrantsHint")} /> : null}
-    </Card.Body></Card> : <p className={styles.note}>{t("beforeRun")}</p>}
+      </Table><Table.Footer><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: w("page", { page: currentPage, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer></> : null}</Card> : <p className={styles.note}>{t("beforeRun")}</p>}
   </div></div>;
 }

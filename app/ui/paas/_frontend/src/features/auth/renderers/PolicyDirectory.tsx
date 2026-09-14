@@ -92,8 +92,8 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate }: {
         </tr>)}</tbody>
       </Table>
       {!matches.length ? <EmptyState title={w("noResults")} description={w("noResultsHint")} action={<Button variant="secondary" onClick={reset}>{toolbarLabels.resetQuery}</Button>} /> : null}
-      <Card.Footer><TablePagination page={page} pages={pages} pageSize={view.pageSize} disabled={busy} onPageChange={(page) => change({ page })} onPageSizeChange={(pageSize) => change({ pageSize })}
-        labels={{ summary: w("page", { page, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Card.Footer>
+      <Table.Footer><TablePagination page={page} pages={pages} pageSize={view.pageSize} disabled={busy} onPageChange={(page) => change({ page })} onPageSizeChange={(pageSize) => change({ pageSize })}
+        labels={{ summary: w("page", { page, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer>
       </Tabs.Content>
     </Card>
     <p className={styles.note}>{t("batchLimit")} {t("categoryHint")}</p>

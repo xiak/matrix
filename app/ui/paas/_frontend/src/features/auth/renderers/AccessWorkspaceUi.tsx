@@ -47,13 +47,11 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
       status={status ?? t("count", { count: matches.length })} />
     <Table aria-label={title} aria-busy={deferredQuery !== query}><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((item) => <tr key={item.id}>{row(item)}</tr>)}</tbody></Table>
     {!matches.length ? <EmptyState title={items.length ? t("noResults") : t("empty")} description={items.length ? t("noResultsHint") : t("emptyHint")} action={items.length ? <Button onClick={reset} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
-    <Card.Footer>
-      {footerNote ? <span className={styles.note}>{footerNote}</span> : null}
-      <div className={styles.actions}>
-        <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />
-        {loadMore ? <Button disabled={loadMore.disabled || loadMore.busy} onClick={loadMore.onClick} size="small" variant="secondary">{loadMore.label}</Button> : null}
-      </div>
-    </Card.Footer>
+    <Table.Footer note={footerNote}>
+      <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+        trailing={loadMore ? <Button disabled={loadMore.disabled || loadMore.busy} onClick={loadMore.onClick} size="small" variant="secondary">{loadMore.label}</Button> : null}
+        labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />
+    </Table.Footer>
   </Card>;
 }
 

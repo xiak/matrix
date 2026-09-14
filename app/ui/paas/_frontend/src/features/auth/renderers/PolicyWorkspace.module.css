@@ -46,7 +46,6 @@
 
 .summaryBrowser { container: policy-summary / inline-size; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-comfortable); min-width: 0; }
 .summaryStack { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-default); min-width: 0; }
-.summaryPagination { display: flex; justify-content: space-between; align-items: center; gap: var(--xiak-spacing-default); }
 .serviceTable, .operationTable { min-width: 0; table-layout: fixed; }
 .serviceTable td, .operationTable td { min-width: 0; vertical-align: top; padding-block: var(--xiak-spacing-default); }
 .serviceTable thead th:nth-child(1) { width: 26%; }

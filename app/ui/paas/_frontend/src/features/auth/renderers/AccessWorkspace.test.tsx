@@ -150,6 +150,8 @@ describe("selection-driven user directory", () => {
   it("has no operation column, supports mixed page selection, and clears selection on filtering and paging", async () => {
     const { user, repository } = await openBatch();
     const table = screen.getByRole("table", { name: "租户用户列表" });
+    expect(screen.getByText("第 1 / 1 页")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "每页条数" })).toBeTruthy();
     expect(within(table).queryByRole("columnheader", { name: "操作" })).toBeNull();
     expect(screen.getByRole("button", { name: "更多操作" }).hasAttribute("disabled")).toBe(true);
     await user.click(screen.getByRole("checkbox", { name: "选择用户 lin" }));
@@ -168,7 +170,7 @@ describe("selection-driven user directory", () => {
     expect(screen.queryByText(/已选 \d 位用户/)).toBeNull();
     await user.click(screen.getByRole("checkbox", { name: "选择当前筛选页的全部用户" }));
     expect(screen.getByText("已选 1 位用户")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "首页" }));
+    await select(user, "每页条数", "20");
     await waitFor(() => expect(screen.getByRole("button", { name: "更多操作" }).hasAttribute("disabled")).toBe(true));
     expect(repository.executeUserBatch).not.toHaveBeenCalled();
   });
@@ -1599,6 +1601,8 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("策略允许")).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "模拟结果" }));
     const table = screen.getByRole("table", { name: "策略判断依据" });
+    expect(screen.getByText("第 1 / 1 页")).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "每页条数" })).toBeTruthy();
     expect(within(table).getByText("直接关联")).toBeTruthy();
     expect(within(table).queryByText("DeliveryTeam")).toBeNull();
     await user.click(screen.getByRole("button", { name: /查看其余 \d+ 条判断依据/ }));

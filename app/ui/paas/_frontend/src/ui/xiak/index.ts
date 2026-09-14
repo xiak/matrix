@@ -19,7 +19,7 @@ export { Skeleton } from "./skeleton/Skeleton";
 export { PageSkeleton, TableSkeleton, type PageSkeletonLayout } from "./skeleton/PageSkeleton";
 export { Typography } from "./typography/Typography";
 export { Table, TableSelectionCell } from "./table/Table";
-export { TablePagination } from "./table/TablePagination";
+export { TablePagination, type TablePaginationProps } from "./table/TablePagination";
 export { TableActions, type TableAction } from "./table/TableActions";
 export { TableToolbar, type TableFilter, type TableToolbarLabels } from "./table/TableToolbar";
 export { EmptyState } from "./empty-state/EmptyState";

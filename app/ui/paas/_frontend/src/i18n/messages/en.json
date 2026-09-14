@@ -1514,6 +1514,7 @@
     "emptyHint": "Create the first record to configure access management.",
     "count": "{count} records",
     "page": "Page {page} of {pages}",
+    "cursorPage": "Page {page}",
     "previous": "Previous",
     "next": "Next",
     "pageSize": "Rows per page",

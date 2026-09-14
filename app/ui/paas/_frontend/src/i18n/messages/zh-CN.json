@@ -1514,6 +1514,7 @@
     "emptyHint": "创建第一条记录，开始配置访问管理。",
     "count": "共 {count} 条",
     "page": "第 {page} / {pages} 页",
+    "cursorPage": "第 {page} 页",
     "previous": "上一页",
     "next": "下一页",
     "pageSize": "每页条数",

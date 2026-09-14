@@ -334,6 +334,13 @@ the active task reachable. The login route and every authenticated route must
 remain keyboard usable, visibly focused, reduced-motion compatible, and
 readable at 360 CSS pixels without horizontal page scrolling.
 
+Table-backed directories use the public `Table.Footer` and `TablePagination`
+composition: the page summary stays on the left and page-size plus icon-only
+navigation controls stay on the right, including one-page results. A complete
+client snapshot may expose its true page count and page size. A server cursor
+uses the same visual control but does not invent a total or offer a page-size
+choice the backend cannot honor. Selection always applies to the visible page.
+
 ### Unified cloud UX system and preview
 
 #### UX release and live-adapter continuity

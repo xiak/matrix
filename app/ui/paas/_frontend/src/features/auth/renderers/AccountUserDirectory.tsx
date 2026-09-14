@@ -3,7 +3,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Table, TableActions, TableSelectionCell, TableToolbar, ContentPage, EmptyState, Badge, Button, Card } from "@ui/xiak";
+import { Table, TableActions, TableSelectionCell, TableToolbar, TablePagination, ContentPage, EmptyState, Badge, Button, Card } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
@@ -71,6 +71,9 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   const [query, setQuery] = useState(() => userDirectoryView.read().query);
   const [state, setState] = useState(() => userDirectoryView.read().state);
   const [role, setRole] = useState(() => userDirectoryView.read().role);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [cursorPage, setCursorPage] = useState(1);
   const deferredQuery = useDeferredValue(query);
   const filtering = deferredQuery !== query;
   useEffect(() => { if (!entityId) userDirectoryView.remember({ query, state, role }); }, [userDirectoryView, query, state, role, entityId]);
@@ -79,7 +82,7 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   const [batchDialog, setBatchDialog] = useState<{ action: UserBatchAction; users: DirectoryUser[] } | null>(null);
   const checkedIds = new Set(selection.scene === scene ? selection.ids : []);
   const clearSelection = () => setSelection({ scene, ids: [] });
-  const changeFilter = (change: () => void) => { clearSelection(); change(); };
+  const changeFilter = (change: () => void) => { clearSelection(); setPage(1); change(); };
   const detail = scene.users.find((user) => user.id === entityId);
   const words = useMemo(() => deferredQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean), [deferredQuery]);
   const associations = useMemo(() => {
@@ -104,9 +107,14 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
     return words.every((word) => text.includes(word)) && (state === "all" || state === user.state) && roleMatches;
   }), [associations, role, scene.users, state, t, words, workspace]);
   const hasFilters = Boolean(query || state !== "all" || role !== "all");
-  const clearFilters = () => { clearSelection(); setQuery(""); setState("all"); setRole("all"); };
+  const clearFilters = () => { clearSelection(); setPage(1); setQuery(""); setState("all"); setRole("all"); };
+  const cursorMode = cursorPage > 1 || !scene.directoryComplete;
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  const visible = cursorMode ? filtered : filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const checkedUsers = filtered.filter((user) => checkedIds.has(user.id));
-  const allChecked = filtered.length > 0 && checkedUsers.length === filtered.length;
+  const visibleCheckedUsers = visible.filter((user) => checkedIds.has(user.id));
+  const allChecked = visible.length > 0 && visibleCheckedUsers.length === visible.length;
   const blocked = access.busy || access.loading || filtering || !access.supportsUserBatch;
   const batchContext = { canListUsers: scene.canListUsers, supported: access.supportsUserBatch, rootId: scene.accountOwner.id, actorId: scene.currentUserId, targets: checkedUsers.map((user) => ({ id: user.id, enabled: user.enabled, canSetStatus: user.canSetStatus, canAttachPolicy: user.canAttachTenantPolicy, protected: user.protected })) };
   if (entityId === scene.accountOwner.id) return <AccountPrimaryWorkspace scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
@@ -127,15 +135,22 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
           { id: "state", label: t("filterUserState"), value: state, onChange: (value) => changeFilter(() => setState(value)), options: [{ value: "all", label: t("allStates") }, ...(["active", "passwordChangeRequired", "disabled"] as const).map((value) => ({ value, label: t(`states.${value}`) }))] },
           { id: "role", label: w("filterPolicySource"), value: role, onChange: (value) => changeFilter(() => setRole(value)), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "platform", label: t("platformPolicyAttachments") }] }
         ]} />
-      {!access.supportsUserBatch || filtered.length > userBatchLimit ? <p className={styles.selectionHint}>{batch(!access.supportsUserBatch ? "unsupportedHint" : "limitHint", { limit: userBatchLimit })}</p> : null}
+      {!access.supportsUserBatch || visible.length > userBatchLimit ? <p className={styles.selectionHint}>{batch(!access.supportsUserBatch ? "unsupportedHint" : "limitHint", { limit: userBatchLimit })}</p> : null}
       {filtered.length ? <Table aria-label={t("userTable")} aria-busy={filtering || undefined} className={styles.userTable}>
-          <thead><tr><TableSelectionCell header label={batch("selectPage")} checked={allChecked ? true : checkedUsers.length ? "mixed" : false} disabled={blocked || filtered.length > userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? filtered.map((user) => user.id) : [] })} /><th scope="col">{t("user")}</th><th scope="col">{t("userType")}</th><th scope="col">{t("accessMethods")}</th><th scope="col">{w("policyAssociations")}</th><th scope="col">{t("status")}</th></tr></thead>
-          <tbody>{filtered.map((user) => <AccountUserRow key={user.id} user={user} principalId={scene.currentUserId} workspace={workspace} grants={associations.get(user.id)}
+          <thead><tr><TableSelectionCell header label={batch("selectPage")} checked={allChecked ? true : visibleCheckedUsers.length ? "mixed" : false} disabled={blocked || visible.length > userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? visible.map((user) => user.id) : [] })} /><th scope="col">{t("user")}</th><th scope="col">{t("userType")}</th><th scope="col">{t("accessMethods")}</th><th scope="col">{w("policyAssociations")}</th><th scope="col">{t("status")}</th></tr></thead>
+          <tbody>{visible.map((user) => <AccountUserRow key={user.id} user={user} principalId={scene.currentUserId} workspace={workspace} grants={associations.get(user.id)}
             checked={checkedIds.has(user.id)} disabled={blocked || !checkedIds.has(user.id) && checkedUsers.length >= userBatchLimit}
             onSelect={(checked) => setSelection({ scene, ids: checked ? [...checkedIds, user.id] : [...checkedIds].filter((id) => id !== user.id) })}
             onOpen={() => onOpen("users", user.id)} />)}</tbody>
         </Table> : <EmptyState title={t(hasFilters ? "noMatchingUsers" : "noUsers")} description={t(hasFilters ? "noMatchingUsersHint" : "noUsersHint")} action={hasFilters ? <Button onClick={clearFilters} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} />}
-      <Card.Footer><span className={styles.note}>{t("userPageHint")}</span><div className={styles.actions}><Button disabled={access.busy || access.loading} onClick={() => { clearSelection(); access.usersPage(""); }} size="small" variant="ghost">{t("firstPage")}</Button><Button disabled={access.busy || access.loading || !scene.nextUserPage} onClick={() => { clearSelection(); access.usersPage(scene.nextUserPage!); }} size="small" variant="secondary">{t("nextPage")}</Button></div></Card.Footer>
+      <Table.Footer note={t("userPageHint")}>
+        {cursorMode ? <TablePagination mode="cursor" disabled={access.busy || access.loading} summary={w("cursorPage", { page: cursorPage })}
+          previous={{ label: t("firstPage"), disabled: cursorPage <= 1, onClick: () => { clearSelection(); setCursorPage(1); setPage(1); access.usersPage(""); } }}
+          next={{ label: t("nextPage"), disabled: !scene.nextUserPage, onClick: () => { clearSelection(); setCursorPage((current) => current + 1); setPage(1); access.usersPage(scene.nextUserPage!); } }} />
+          : <TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={access.busy || access.loading}
+            onPageChange={(nextPage) => { clearSelection(); setPage(nextPage); }} onPageSizeChange={(size) => { clearSelection(); setPageSize(size); setPage(1); }}
+            labels={{ summary: w("page", { page: currentPage, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} />}
+      </Table.Footer>
     </Card>
     {batchDialog ? <UserBatchDialog action={batchDialog.action} users={batchDialog.users} fallbackFocusRef={createRef} onClose={() => setBatchDialog(null)} onCompleted={clearSelection} /> : null}
   </div>;

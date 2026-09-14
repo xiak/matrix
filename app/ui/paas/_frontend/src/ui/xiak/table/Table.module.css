@@ -37,10 +37,21 @@
 .table [data-numeric] { text-align: end; font-variant-numeric: tabular-nums; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; }
 .selectionSummary { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); overflow-wrap: anywhere; }
+.footer {
+  display: grid;
+  width: 100%;
+  gap: var(--xiak-spacing-tight);
+  padding: var(--xiak-spacing-default) var(--xiak-panel-padding);
+  border-top: var(--xiak-border-subtle);
+  background: var(--xiak-color-bg-panel);
+}
+.footerMain { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--xiak-spacing-tight); }
+.footerNote { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); overflow-wrap: anywhere; }
 .pagination { display: flex; width: 100%; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); font-size: var(--xiak-font-size-small); color: var(--xiak-color-text-muted); }
 .paginationControls { display: flex; align-items: center; gap: var(--xiak-spacing-tight); }
-.paginationControls > :first-child { width: 76px; }
+.pageSize { width: 76px; }
 .pageSummary { font-variant-numeric: tabular-nums; }
 @media (max-width: 760px) { .actions { display: contents; } }
 @media (pointer: coarse) { .selectionCell > label { min-height: var(--xiak-control-height); } .paginationControls button { min-height: var(--xiak-control-height); min-width: var(--xiak-control-height); } }
+@container xiak-card (max-width: 480px) { .footer { padding-inline: var(--xiak-spacing-comfortable); } }
 }

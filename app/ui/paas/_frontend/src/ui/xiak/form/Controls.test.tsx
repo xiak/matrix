@@ -20,7 +20,7 @@ describe("shared themed controls", () => {
     const user = userEvent.setup(), size = vi.fn();
     function Pages() {
       const [page, setPage] = useState(1);
-      return <TablePagination page={page} pages={2} pageSize={10} onPageChange={setPage} onPageSizeChange={size} labels={{ summary: `Page ${page} of 2`, pageSize: "Page size", previous: "Previous page", next: "Next page" }} />;
+      return <Table.Footer><TablePagination page={page} pages={2} pageSize={10} onPageChange={setPage} onPageSizeChange={size} labels={{ summary: `Page ${page} of 2`, pageSize: "Page size", previous: "Previous page", next: "Next page" }} /></Table.Footer>;
     }
     render(<Pages />);
     expect((screen.getByRole("button", { name: "Previous page" }) as HTMLButtonElement).disabled).toBe(true);
@@ -30,6 +30,18 @@ describe("shared themed controls", () => {
     await user.click(screen.getByRole("combobox", { name: "Page size" }));
     await user.click(screen.getByRole("option", { name: "20" }));
     expect(size).toHaveBeenCalledWith(20);
+  });
+  it("uses the same footer contract for opaque cursor directories without inventing totals", async () => {
+    const user = userEvent.setup(), first = vi.fn(), next = vi.fn();
+    render(<Table.Footer note="Server cursor"><TablePagination mode="cursor" summary="Page 3" previous={{ label: "First page", disabled: false, onClick: first }} next={{ label: "Next page", disabled: false, onClick: next }} /></Table.Footer>);
+    const footer = screen.getByText("Server cursor").parentElement!;
+    expect(within(footer).getByRole("status").textContent).toBe("Page 3");
+    expect(within(footer).queryByRole("combobox")).toBeNull();
+    expect(within(footer).getByText("Server cursor")).toBeTruthy();
+    await user.click(within(footer).getByRole("button", { name: "First page" }));
+    await user.click(within(footer).getByRole("button", { name: "Next page" }));
+    expect(first).toHaveBeenCalledOnce();
+    expect(next).toHaveBeenCalledOnce();
   });
   it("returns focus to a stable table command after its menu opens a dialog", async () => {
     const user = userEvent.setup();

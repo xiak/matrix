@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { ArrowLeft, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Badge, Button, SearchInput, Table, Tabs } from "@ui/xiak";
+import { Badge, Button, SearchInput, Table, TablePagination, Tabs } from "@ui/xiak";
 import { resourcesForPolicyActions, summarizePolicyServices, type PolicyCondition, type PolicyDocument, type PolicyServiceSummary } from "../domain/policyDocument";
 import { expandPolicyActions, parsePolicyResource, policyActions } from "../domain/policyLanguage";
 import styles from "./AccountAccessRenderer.module.css";
@@ -44,26 +44,20 @@ export function PolicyResourcesSummary({ resources }: { resources: readonly stri
   })}</div>;
 }
 
-const pageSize = 10;
 const normalized = (value: string) => value.normalize("NFKC").trim().toLowerCase();
 const searchWords = (value: string) => normalized(value).split(/\s+/).filter(Boolean);
 
-function SummaryPagination({ count, page, onPage }: { count: number; page: number; onPage(page: number): void }) {
+function SummaryPagination({ count, page, pageSize, onPage, onPageSize }: { count: number; page: number; pageSize: number; onPage(page: number): void; onPageSize(size: number): void }) {
   const t = useTranslations("IamWorkspace");
   const pages = Math.max(1, Math.ceil(count / pageSize));
-  if (pages === 1) return null;
-  return <div className={policyStyles.summaryPagination}>
-    <span className={policyStyles.note} role="status">{t("page", { page, pages })}</span>
-    <div className={policyStyles.actions}>
-      <Button variant="ghost" size="small" iconOnly aria-label={t("previous")} disabled={page === 1} onClick={() => onPage(page - 1)}><ChevronLeft aria-hidden="true" /></Button>
-      <Button variant="ghost" size="small" iconOnly aria-label={t("next")} disabled={page === pages} onClick={() => onPage(page + 1)}><ChevronRight aria-hidden="true" /></Button>
-    </div>
-  </div>;
+  return <Table.Footer><TablePagination page={page} pages={pages} pageSize={pageSize} onPageChange={onPage} onPageSizeChange={onPageSize}
+    labels={{ summary: t("page", { page, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>;
 }
 
-function PolicyServiceTable({ services, page, onOpen, buttonRef }: {
+function PolicyServiceTable({ services, page, pageSize, onOpen, buttonRef }: {
   services: readonly PolicyServiceSummary[];
   page: number;
+  pageSize: number;
   onOpen(key: string): void;
   buttonRef(key: string, button: HTMLButtonElement | null): void;
 }) {
@@ -98,6 +92,7 @@ function PolicyOperationDetails({ service, headingRef, onBack }: {
   const t = useTranslations("IamWorkspace"), p = useTranslations("PolicyWorkspace"), r = useTranslations("PolicyRules");
   const [query, setQuery] = useState("");
   const [requestedPage, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   // Only the selected service expands to operation rows. Each row retains its
   // source statement; identical actions in different branches stay distinct.
   const rows = useMemo(() => service.rules.flatMap((rule) => rule.actions.map((action) => ({
@@ -130,7 +125,7 @@ function PolicyOperationDetails({ service, headingRef, onBack }: {
       </tr>)}</tbody>
     </Table>
     {!visible.length ? <p className={policyStyles.note} role="status">{r("noActions")}</p> : null}
-    <SummaryPagination count={matches.length} page={page} onPage={setPage} />
+    <SummaryPagination count={matches.length} page={page} pageSize={pageSize} onPage={setPage} onPageSize={(size) => { setPageSize(size); setPage(1); }} />
     <details className={policyStyles.details}><summary>{p("sourceRules")}</summary>
       {service.rules.map((rule) => <div className={policyStyles.sourceRule} key={rule.statement}>
         <strong>{t("statementNumber", { number: rule.statement })}</strong>
@@ -148,6 +143,7 @@ export function PolicyDocumentViewer({ document }: { document: PolicyDocument })
   const t = useTranslations("IamWorkspace"), r = useTranslations("PolicyRules"), p = useTranslations("PolicyWorkspace");
   const [query, setQuery] = useState("");
   const [requestedPage, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [selection, setSelection] = useState<string | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const serviceButtons = useRef(new Map<string, HTMLButtonElement>());
@@ -180,9 +176,9 @@ export function PolicyDocumentViewer({ document }: { document: PolicyDocument })
             <p className={policyStyles.note} role="status">{p("summaryCount", { services: new Set(matches.map((entry) => entry.service)).size, statements: document.statement.length })}</p>
             <SearchInput aria-label={p("serviceSearch")} placeholder={p("serviceSearch")} value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }} clearAction={query ? { label: t("clear"), onClear: () => { setQuery(""); setPage(1); } } : undefined} />
           </div>
-          <PolicyServiceTable services={matches} page={page} onOpen={(key) => { focusIntent.current = { key, detail: true }; setSelection(key); }} buttonRef={(key, button) => { if (button) serviceButtons.current.set(key, button); else serviceButtons.current.delete(key); }} />
+          <PolicyServiceTable services={matches} page={page} pageSize={pageSize} onOpen={(key) => { focusIntent.current = { key, detail: true }; setSelection(key); }} buttonRef={(key, button) => { if (button) serviceButtons.current.set(key, button); else serviceButtons.current.delete(key); }} />
           {!matches.length ? <p className={policyStyles.note} role="status">{p("noService")}</p> : null}
-          <SummaryPagination count={matches.length} page={page} onPage={setPage} />
+          <SummaryPagination count={matches.length} page={page} pageSize={pageSize} onPage={setPage} onPageSize={(size) => { setPageSize(size); setPage(1); }} />
         </div>}
         {hasWildcard ? <p className={policyStyles.note}>{p("catalogExpansion")}</p> : null}
         <p className={policyStyles.note}>{t("policyInterpretation")}</p>
