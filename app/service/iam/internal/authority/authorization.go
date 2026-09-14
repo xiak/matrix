@@ -127,7 +127,7 @@ func decide(
 	if !knownServicePurpose(callingService) {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
-	evaluation, evidence, err := EvaluateAttachedPolicies(tenantID, installationID, subject, policies, request.Action, request.Resource)
+	evaluation, evidence, err := EvaluateAttachedPolicies(databaseTime, tenantID, installationID, subject, policies, request.Action, request.Resource)
 	if err != nil {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}

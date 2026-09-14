@@ -14,6 +14,31 @@ type ProductID string
 type AuthorityScope string
 type IdentityKind string
 type CapabilityRestriction string
+type ConditionKey string
+type ConditionValueType string
+type ConditionSource string
+
+const (
+	ConditionIAMCurrentTime     ConditionKey       = "iam.current-time"
+	ConditionTime               ConditionValueType = "TIME"
+	ConditionIAMTransactionTime ConditionSource    = "IAM_TRANSACTION_TIME"
+)
+
+// This is a source declaration, not caller-supplied context or a complete
+// AuthorizationProfile. Current tenant actions support IAM's own clock only.
+type ConditionKeyDefinition struct {
+	Key       ConditionKey
+	ValueType ConditionValueType
+	Source    ConditionSource
+}
+
+func LookupActionConditionDefinition(action Action, key ConditionKey) (ConditionKeyDefinition, bool) {
+	definition, known := LookupActionDefinition(action)
+	if !known || definition.AuthorityScope != AuthorityScopeTenant || key != ConditionIAMCurrentTime {
+		return ConditionKeyDefinition{}, false
+	}
+	return ConditionKeyDefinition{ConditionIAMCurrentTime, ConditionTime, ConditionIAMTransactionTime}, true
+}
 
 // ActionDefinition binds a product operation to its only authorization caller,
 // resource kind and authority scope. It describes a registered operation; it

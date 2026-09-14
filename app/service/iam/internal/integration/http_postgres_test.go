@@ -355,7 +355,11 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	}
 	assertDecision := func(action iamv1.Action, resource iamv1.ResourceReference, allowed bool) {
 		t.Helper()
-		result, evidence, err := authority.EvaluateAttachedPolicies(document.Organization.ID, document.InstallationID,
+		var databaseTime time.Time
+		if err := admin.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&databaseTime); err != nil {
+			t.Fatal(err)
+		}
+		result, evidence, err := authority.EvaluateAttachedPolicies(databaseTime.UTC(), document.Organization.ID, document.InstallationID,
 			iamv1.Subject{Type: iamv1.PrincipalUser, ID: document.Administrator.ID}, readSnapshot(), action, resource)
 		if err != nil || result.Allowed != allowed || (allowed && len(evidence) == 0) {
 			t.Fatalf("stored policy decision action=%s allowed=%t error=%v", action, result.Allowed, err)
@@ -1094,7 +1098,8 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 	if len(inventory.Items) != iamv1.MaxPolicyVersions || inventory.Policy != selected.Policy {
 		t.Fatal("rejected over-budget version changed policy state")
 	}
-	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "version-member-administrator"}, http.StatusOK, nil)
+	var delegatedAdministrator iamv1.PolicyAttachment
+	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "version-member-administrator"}, http.StatusOK, &delegatedAdministrator)
 	get(path+"/versions", bearer, http.StatusOK, nil)
 	post(path+"/versions", bearer, create, http.StatusForbidden, nil)
 	selection := iamv1.SetDefaultPolicyVersionRequest{VersionID: version.Version.ID, ResourceVersion: selected.Policy.ResourceVersion, RequestID: "version-delegate-select"}
@@ -1316,6 +1321,91 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 		AND event_document->>'requestId' IN ('version-retirement-race-retire','version-retirement-race-default','version-retirement-race-publish','version-retirement-race-policy')
 		AND event_document->>'action' IN ('iam.policy-version.deleted','iam.policy.default-version-set','iam.policy-version.created','iam.policy.deleted')`, racePolicy.Policy.AccountID, racePolicy.Policy.ID, operations[winner].action, operations[winner].requestID).Scan(&lifecycleCount, &matched); err != nil || lifecycleCount != 1 || matched != 1 {
 		t.Fatal("version lifecycle race has no single winner-bound success fact")
+	}
+	// Exercise a real database clock after publishing and attaching a bounded
+	// grant. Current request fields cannot supply or override that clock.
+	post("/v1/policy-attachments/"+string(delegatedAdministrator.ID)+":revoke", root, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: delegatedAdministrator.ResourceVersion, RequestID: "time-remove-broad-administrator"}, http.StatusOK, nil)
+	var timedGroup iamv1.Group
+	var timedMembership iamv1.GroupMembership
+	post("/v1/groups", root, iamv1.CreateGroupRequest{Name: "Time limited readers", RequestID: "time-group-create"}, http.StatusCreated, &timedGroup)
+	post("/v1/groups/"+string(timedGroup.ID)+"/memberships", root, iamv1.CreateGroupMembershipRequest{UserID: member.ID, RequestID: "time-group-join"}, http.StatusOK, &timedMembership)
+	var clock time.Time
+	if err := database.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&clock); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.UTC()
+	expires := clock.Add(5 * time.Second)
+	timedDocument := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "timed", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "time-window-application"}},
+			Conditions: []iamv1.PolicyCondition{
+				{Key: iamv1.ConditionIAMCurrentTime, Operator: iamv1.PolicyDateGreaterThanEquals, Values: []string{clock.Add(-time.Minute).Format(time.RFC3339Nano)}},
+				{Key: iamv1.ConditionIAMCurrentTime, Operator: iamv1.PolicyDateLessThan, Values: []string{expires.Format(time.RFC3339Nano)}},
+			}}}}
+	var timedPolicy iamv1.PolicyDetail
+	post("/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Time limited application read", Document: timedDocument, RequestID: "time-policy-create"}, http.StatusCreated, &timedPolicy)
+	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(timedGroup.ID)}, PolicyID: timedPolicy.Policy.ID, PolicyResourceVersion: 1, RequestID: "time-policy-attach"}, http.StatusOK, nil)
+	timeRequest := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "time-window-application"}, RequestID: "time-policy-allowed", CorrelationID: "time-policy"}
+	timeDecision := func(want bool) iamv1.AuthorizationDecision {
+		t.Helper()
+		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, timeRequest), paasCredential, bearer)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || iamv1.ValidateAuthorizationDecision(decision) != nil || decision.Allowed != want {
+			t.Fatalf("timed authority status=%d allowed=%t", response.Code, decision.Allowed)
+		}
+		if decision.Allowed && !decision.DecidedAt.Before(expires) {
+			t.Fatal("authorization used a caller/local time instead of its recorded clock")
+		}
+		var evidence []authority.PolicyAttachmentEvidence
+		if err := database.QueryRow(ctx, `SELECT policy_evidence FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, member.AccountID, decision.ID).Scan(&raw); err != nil || json.Unmarshal(raw, &evidence) != nil {
+			t.Fatal("read timed grant evidence")
+		}
+		if (want && (len(evidence) != 1 || evidence[0].Version.VersionID != timedPolicy.Version.ID || evidence[0].MembershipID != timedMembership.ID)) || (!want && len(evidence) != 0) {
+			t.Fatal("time condition lost exact inherited authority or retained expired grant")
+		}
+		return decision
+	}
+	allowedTimeDecision := timeDecision(true)
+	var timeEvent auditv1.Event
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'iamDecisionId'=$2 AND event_document->>'action'='iam.authorization.decided'`, member.AccountID, allowedTimeDecision.ID).Scan(&raw); err != nil || json.Unmarshal(raw, &timeEvent) != nil {
+		t.Fatal("read timed decision fact")
+	}
+	for _, field := range []string{"currentTime", "conditions", "attributes"} {
+		forged := bytes.Replace(mustIAMJSON(t, timeRequest), []byte(`"action":`), []byte(`"`+field+`":"forged","action":`), 1)
+		if response := performIAMRequestWithSubject(handler, forged, paasCredential, bearer); response.Code != http.StatusBadRequest {
+			t.Fatalf("caller clock accepted: status=%d", response.Code)
+		}
+	}
+	for clock.Before(expires) {
+		select {
+		case <-ctx.Done():
+			t.Fatal("time condition gate deadline")
+		case <-time.After(50 * time.Millisecond):
+		}
+		if err := database.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&clock); err != nil {
+			t.Fatal(err)
+		}
+	}
+	timeRequest.RequestID = "time-policy-expired"
+	expiredDecision := timeDecision(false)
+	if expiredDecision.DecidedAt.Before(expires) {
+		t.Fatal("expiration gate did not observe the database boundary")
+	}
+	post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: timeEvent}, http.StatusOK, nil)
+	canonicalTimed, _, err := iamv1.CanonicalizePolicyDocument(timedDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, malformed := range []string{
+		strings.Replace(canonicalTimed, "iam.current-time", "caller.current-time", 1),
+		strings.Replace(canonicalTimed, "DATE_LESS_THAN", "DATE_GREATER_THAN_EQUALS", 1),
+		strings.Replace(canonicalTimed, expires.Format(time.RFC3339Nano), "2026-02-30T00:00:00Z", 1),
+	} {
+		_, err := database.Exec(ctx, `SELECT iam.assert_customer_policy_document($1,'sha256:'||encode(sha256(convert_to('matrix.iam.policy.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'))`, malformed)
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != "22023" {
+			t.Fatalf("storage admitted malformed conditions: %v", err)
+		}
 	}
 }
 

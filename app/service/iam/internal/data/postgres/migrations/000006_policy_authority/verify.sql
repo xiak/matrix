@@ -67,7 +67,7 @@ END $verify_policy_authority$;
 DO $verify_customer_policy_publication$
 DECLARE function_name text;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 14::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 15::bigint THEN
         RAISE EXCEPTION 'IAM policy publication schema version is invalid';
     END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='iam.policy_versions'::regclass

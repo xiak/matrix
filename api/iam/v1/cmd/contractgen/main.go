@@ -255,6 +255,8 @@ func enumSchemas() map[string][]string {
 		"PolicyManagement":           {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
 		"PolicyStatus":               {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
 		"PolicyEffect":               {string(iamv1.PolicyAllow), string(iamv1.PolicyDeny)},
+		"ConditionKey":               {string(iamv1.ConditionIAMCurrentTime)},
+		"PolicyConditionOperator":    {string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan)},
 		"PolicyResourceMatch":        {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority)},
 		"Action":                     openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
@@ -286,6 +288,7 @@ func structContracts() map[string]reflect.Type {
 		"Policy":                         openapi31.StructType[iamv1.Policy](),
 		"PolicyDocument":                 openapi31.StructType[iamv1.PolicyDocument](),
 		"PolicyStatement":                openapi31.StructType[iamv1.PolicyStatement](),
+		"PolicyCondition":                openapi31.StructType[iamv1.PolicyCondition](),
 		"PolicyResourceSelector":         openapi31.StructType[iamv1.PolicyResourceSelector](),
 		"PolicyVersion":                  openapi31.StructType[iamv1.PolicyVersion](),
 		"PolicyDetail":                   openapi31.StructType[iamv1.PolicyDetail](),
@@ -625,6 +628,14 @@ func applyPolicyLanguageOverlays(schemas object) {
 	statement := schemas["PolicyStatement"].(object)
 	statementProperties := statement["properties"].(object)
 	statementProperties["sid"] = openapi31.Ref("ID")
+	statementProperties["conditions"].(object)["minItems"] = 1
+	statementProperties["conditions"].(object)["maxItems"] = iamv1.MaxStatementConditions
+	statementProperties["conditions"].(object)["uniqueItems"] = true
+	schemas["PolicyCondition"].(object)["properties"].(object)["values"] = object{
+		"type": "array", "minItems": 1, "maxItems": 1,
+		"items": object{"type": "string", "format": "date-time", "maxLength": 27,
+			"pattern": `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{0,5}[1-9])?Z$`},
+	}
 	for field, maximum := range map[string]int{"actions": iamv1.MaxStatementActions, "resources": iamv1.MaxStatementResources} {
 		items := statementProperties[field].(object)
 		items["minItems"], items["maxItems"], items["uniqueItems"] = 1, maximum, true
@@ -654,6 +665,12 @@ func applyPolicyLanguageOverlays(schemas object) {
 			"if":   object{"properties": object{"actions": object{"contains": object{"const": string(definition.Action)}}}},
 			"then": object{"properties": object{"resources": object{"contains": object{"properties": object{"kind": object{"const": string(definition.ResourceKind)}}}}}},
 		})
+		if _, supported := iamv1.LookupActionConditionDefinition(definition.Action, iamv1.ConditionIAMCurrentTime); !supported {
+			actionRules = append(actionRules, object{
+				"if":   object{"properties": object{"actions": object{"contains": object{"const": string(definition.Action)}}}},
+				"then": object{"properties": object{"conditions": false}},
+			})
+		}
 		if seenKinds[definition.ResourceKind] {
 			continue
 		}

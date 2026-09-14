@@ -134,7 +134,7 @@ func (codec CursorCodec) binding(subject SubjectContext, query DirectoryQuery, n
 	if !validQuery {
 		return nil, ErrInvalidCursor
 	}
-	evaluation, _, err := EvaluateAttachedPolicies(subject.Organization.ID, subject.InstallationID,
+	evaluation, _, err := EvaluateAttachedPolicies(now, subject.Organization.ID, subject.InstallationID,
 		iamv1.Subject{Type: subject.Principal.Type, ID: subject.Principal.ID}, subject.Policies, query.Action, query.Resource)
 	if err != nil || !evaluation.Allowed {
 		return nil, ErrInvalidCursor

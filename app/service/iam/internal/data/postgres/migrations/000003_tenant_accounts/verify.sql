@@ -1,6 +1,6 @@
 DO $verify_accounts$
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 14::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 15::bigint THEN
         RAISE EXCEPTION 'IAM account/proof schema version is incompatible';
     END IF;
     IF NOT EXISTS (

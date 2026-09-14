@@ -777,7 +777,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 14, Audit: 11, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 15, Audit: 11, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -1039,6 +1039,58 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyDeleted, auditv1.ResultSucceeded) != 1 {
 		t.Fatal("immutable version/default selection facts did not reach the original tenant chain")
 	}
+	// A separately published time grant is the developer's sole permission on
+	// this application. Real IAM database time, not a test-supplied clock or
+	// PEP attributes, governs the exact same bearer through both replicas.
+	var policyClock time.Time
+	if err := admin.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&policyClock); err != nil {
+		t.Fatal(err)
+	}
+	policyClock = policyClock.UTC()
+	policyExpiry := policyClock.Add(6 * time.Second)
+	timedRequest := customRequest
+	timedRequest.DisplayName, timedRequest.RequestID = "Time bound process application", "request-process-time-policy"
+	timedRequest.Document.Statements = append([]iamv1.PolicyStatement(nil), customRequest.Document.Statements...)
+	timedRequest.Document.Statements[0].Conditions = []iamv1.PolicyCondition{
+		{Key: iamv1.ConditionIAMCurrentTime, Operator: iamv1.PolicyDateGreaterThanEquals, Values: []string{policyClock.Add(-time.Minute).Format(time.RFC3339Nano)}},
+		{Key: iamv1.ConditionIAMCurrentTime, Operator: iamv1.PolicyDateLessThan, Values: []string{policyExpiry.Format(time.RFC3339Nano)}},
+	}
+	var timedPolicy iamv1.PolicyDetail
+	timedResponse := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/policies", adminLogin.Credential, timedRequest)
+	if timedResponse.Status != http.StatusCreated || json.Unmarshal(timedResponse.Body, &timedPolicy) != nil || iamv1.ValidatePolicyDetail(timedPolicy) != nil {
+		t.Fatalf("timed process policy publication status=%d", timedResponse.Status)
+	}
+	timedAttachment := createIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, developer.ID, timedPolicy.Policy.ID, "request-process-time-attach")
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
+	for policyClock.Before(policyExpiry) {
+		select {
+		case <-ctx.Done():
+			t.Fatal("process policy time deadline")
+		case <-time.After(50 * time.Millisecond):
+		}
+		if err := admin.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&policyClock); err != nil {
+			t.Fatal(err)
+		}
+	}
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
+	// Publishing a replacement is not a default change. Only the explicit
+	// switch opens a new request; historical timed decisions remain intact.
+	var untimedVersion iamv1.PolicyVersionDetail
+	untimedResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies/"+string(timedPolicy.Policy.ID)+"/versions", adminLogin.Credential,
+		iamv1.CreatePolicyVersionRequest{Document: customRequest.Document, ResourceVersion: 1, RequestID: "request-process-untimed-version"})
+	if untimedResponse.Status != http.StatusCreated || json.Unmarshal(untimedResponse.Body, &untimedVersion) != nil || iamv1.ValidatePolicyVersionDetail(untimedVersion) != nil {
+		t.Fatal("untimed replacement publication failed")
+	}
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
+	selectedTimeResponse := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/policies/"+string(timedPolicy.Policy.ID)+":set-default-version", adminLogin.Credential,
+		iamv1.SetDefaultPolicyVersionRequest{VersionID: untimedVersion.Version.ID, ResourceVersion: 2, RequestID: "request-process-untimed-default"})
+	if selectedTimeResponse.Status != http.StatusOK {
+		t.Fatal("explicit untimed default failed")
+	}
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
+	revokeIAMPolicyAttachment(t, replicaEndpoint, adminLogin.Credential, timedAttachment.ID, timedAttachment.ResourceVersion, "request-process-time-revoke")
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
+	waitAllIAMOutboxDelivered(t, ctx, admin)
 	deniedBefore := countAuditFacts(
 		t,
 		ctx,

@@ -24,6 +24,13 @@ type PolicyStatus string
 type PolicyAttachmentID string
 type PolicyAttachmentTargetKind string
 type PolicyGrantSourceKind string
+type PolicyConditionOperator string
+
+const (
+	PolicyDateGreaterThanEquals PolicyConditionOperator = "DATE_GREATER_THAN_EQUALS"
+	PolicyDateLessThan          PolicyConditionOperator = "DATE_LESS_THAN"
+	MaxStatementConditions                              = 16
+)
 
 const (
 	PolicySystemManaged   PolicyManagement           = "SYSTEM"
@@ -458,10 +465,44 @@ type PolicyDocument struct {
 }
 
 type PolicyStatement struct {
-	SID       string                   `json:"sid"`
-	Effect    PolicyEffect             `json:"effect"`
-	Actions   []Action                 `json:"actions"`
-	Resources []PolicyResourceSelector `json:"resources"`
+	SID        string                   `json:"sid"`
+	Effect     PolicyEffect             `json:"effect"`
+	Actions    []Action                 `json:"actions"`
+	Resources  []PolicyResourceSelector `json:"resources"`
+	Conditions []PolicyCondition        `json:"conditions,omitempty"`
+}
+
+type PolicyCondition struct {
+	Key      ConditionKey            `json:"key"`
+	Operator PolicyConditionOperator `json:"operator"`
+	Values   []string                `json:"values"`
+}
+
+func (statement *PolicyStatement) UnmarshalJSON(source []byte) error {
+	type wire PolicyStatement
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxPolicyBytes, &decoded) != nil {
+		return ErrInvalidPolicy
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return ErrInvalidPolicy
+	}
+	if _, present := fields["conditions"]; present && len(decoded.Conditions) == 0 {
+		return ErrInvalidPolicy
+	}
+	*statement = PolicyStatement(decoded)
+	return nil
+}
+
+// ParsePolicyTime accepts a single canonical UTC representation with at most
+// microsecond precision. It never accepts a timezone or a local clock fallback.
+func ParsePolicyTime(value string) (time.Time, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil || validateTime("conditionTime", parsed) != nil || parsed.Year() < 1 || parsed.Year() > 9999 || parsed.Format(time.RFC3339Nano) != value {
+		return time.Time{}, ErrInvalidPolicy
+	}
+	return parsed, nil
 }
 
 // ANY_IN_AUTHORITY does not assert ownership of a resource. Product PEPs must
@@ -557,6 +598,9 @@ func validatePolicyStructure(document PolicyDocument) error {
 		if len(statement.Resources) == 0 || len(statement.Resources) > MaxStatementResources {
 			return invalidPolicyAt(PolicyLimitExceeded, pointer+"/resources")
 		}
+		if err := validatePolicyConditions(statement, pointer); err != nil {
+			return err
+		}
 		seenActions := make(map[Action]bool, len(statement.Actions))
 		requiredKinds := make(map[ResourceKind]bool)
 		for index, action := range statement.Actions {
@@ -610,6 +654,48 @@ func validatePolicyStructure(document PolicyDocument) error {
 	return nil
 }
 
+func validatePolicyConditions(statement PolicyStatement, pointer string) error {
+	if statement.Conditions != nil && (len(statement.Conditions) == 0 || len(statement.Conditions) > MaxStatementConditions) {
+		return invalidPolicyAt(PolicyLimitExceeded, pointer+"/conditions")
+	}
+	seen := make(map[PolicyConditionOperator]bool)
+	var start, end time.Time
+	for index, condition := range statement.Conditions {
+		location := pointer + "/conditions/" + strconv.Itoa(index)
+		if condition.Key != ConditionIAMCurrentTime {
+			return invalidPolicyAt(PolicyUnsupported, location+"/key")
+		}
+		for _, action := range statement.Actions {
+			if _, supported := LookupActionConditionDefinition(action, condition.Key); !supported {
+				return invalidPolicyAt(PolicyUnsupported, location+"/key")
+			}
+		}
+		if condition.Operator != PolicyDateGreaterThanEquals && condition.Operator != PolicyDateLessThan {
+			return invalidPolicyAt(PolicyUnsupported, location+"/operator")
+		}
+		if seen[condition.Operator] {
+			return invalidPolicyAt(PolicyDuplicate, location)
+		}
+		seen[condition.Operator] = true
+		if len(condition.Values) != 1 {
+			return invalidPolicyAt(PolicyLimitExceeded, location+"/values")
+		}
+		value, err := ParsePolicyTime(condition.Values[0])
+		if err != nil {
+			return invalidPolicyAt(PolicyInvalidValue, location+"/values/0")
+		}
+		if condition.Operator == PolicyDateGreaterThanEquals {
+			start = value
+		} else {
+			end = value
+		}
+		if !start.IsZero() && !end.IsZero() && !start.Before(end) {
+			return invalidPolicyAt(PolicyInvalidValue, location+"/values/0")
+		}
+	}
+	return nil
+}
+
 // CanonicalizePolicyDocument is the single policy-content encoding owner.
 // Collection ordering is normalized without mutating caller-owned slices.
 // This digest is not an Audit event digest and cannot replace its encoding.
@@ -622,6 +708,13 @@ func CanonicalizePolicyDocument(document PolicyDocument) (string, string, error)
 		statement := &document.Statements[index]
 		statement.Actions = append([]Action(nil), statement.Actions...)
 		statement.Resources = append([]PolicyResourceSelector(nil), statement.Resources...)
+		statement.Conditions = append([]PolicyCondition(nil), statement.Conditions...)
+		slices.SortFunc(statement.Conditions, func(left, right PolicyCondition) int {
+			if order := cmp.Compare(left.Key, right.Key); order != 0 {
+				return order
+			}
+			return cmp.Compare(left.Operator, right.Operator)
+		})
 		slices.Sort(statement.Actions)
 		slices.SortFunc(statement.Resources, func(left, right PolicyResourceSelector) int {
 			if order := cmp.Compare(left.Kind, right.Kind); order != 0 {

@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联及版本查询/创建/默认切换已有固定 CI；版本退休和容量复用已通过本地完整真库/进程回归，待本片独立 CI。条件、边界和 UI 闭环未完成，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联及版本查询/创建/默认切换/退休已有固定 CI；IAM 权威时间条件已通过本地完整真库与独立进程，待本片独立 CI。完整条件、边界和 UI 闭环未完成，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -65,7 +65,7 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 #### 版本删除与再次发布
 
-版本删除退出管理集合并释放五版本名额，但不得物理移除旧授权证明内容。接口/事务与本地组合回归已完成，尚待独立 CI 与实际 UI 消费，不将该后端切片当作完整 LANG-01 验收。
+版本删除退出管理集合并释放五版本名额，但不得物理移除旧授权证明内容。接口/事务、本地组合回归与独立 CI 已完成，尚待实际 UI 消费，不将该后端切片当作完整 LANG-01 验收。
 
 - `DELETE /v1/policies/{policyId}/versions/{versionId}` 使用 `iam.policy-version.delete` / 所属 POLICY；请求只有 resourceVersion、requestId，版本 ID 来自路径，账号仍从当前身份推导。成功返回默认内容不变的 `PolicyDetail`，Policy 修订 +1。SYSTEM、跨账号、非原 root、退休 Policy 拒绝；当前默认版本不得删除，必须先显式切换。
 - 在现有 `policy_versions` 加终态退休时间，保留原 ID、scope、document、canonical、digest 和创建时间不变，不新建平行内容库。该表的更新保护只允许一次 NULL→退休时间，禁止内容变更、取消退休、物理删除及 truncate；共享的决定/附件历史保护函数不放宽。默认指针不能指向退休版本。列表、普通精确读取、默认选择和五版本预算只使用未退休内容；历史决定/proof 继续读取原精确版本，不能加当前活跃过滤而丢掉旧证据。
@@ -73,9 +73,9 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 - 再次提交仍在管理集合的相同内容继续冲突；已退休的内容可用新请求重新发布，但必须形成新 versionId，不能清除旧退休状态。digest-only 的初始 ID 原样保留；新版本发布 ID 绑定 contentDigest 与本次 Policy 结果修订（单调 resourceVersion），不再将“内容相同”误当成“同一次发布”。ID 对客户端始终是不透明值，不允许客户端拼接或推导授权。内容 digest/canonical 算法不变，新发布不会自动成为默认或产生附件。
 - 真实门禁：五项满额→退休非默认项→创建新内容以及再次发布已退休内容；活跃重复拒绝；退休版本的旧决定和 Audit proof 保留；旧创建/删除重放及 schema/bootstrap 重放不复活；删除与默认切换/新建/Policy 删除同修订竞争只有确定赢家；末尾 outbox 故障没有部分退休或名额变化。现有默认版本始终可读、目录只含最多五个可管理版本。后续 boundary 若引入精确版本引用，须在其 owning slice 将该活跃引用加入同锁删除约束，不能只依赖历史存在或静态检查。
 
-#### 条件首片：IAM 权威时间（待实施）
+#### 条件首片：IAM 权威时间
 
-下一纵向切片先证明有时间窗口的自定义策略从发布、显式关联到实际业务鉴权；不是只增加一个解析函数。该片是 LANG-04 的增量，不代替字符串、IP、标签或完整 CAT-05/产品接入。条件定义进入现有公共契约拥有者，来源声明按 001 管理；求值继续在单一 authority 中，不按产品名称分叉。
+本纵向切片证明有时间窗口的自定义策略从发布、显式关联到实际业务鉴权；不是只增加一个解析函数。目前已接入现有校验、数据库发布、唯一求值器与 cursor 复核，完整验收尚未完成。该片是 LANG-04 的增量，不代替字符串、IP、标签或完整 CAT-05/产品接入。条件定义进入现有公共契约拥有者，来源声明按 001 管理；求值继续在单一 authority 中，不按产品名称分叉。
 
 - Statement 增加可省略的 `conditions`，元素严格为 `key`、`operator`、`values`；旧无条件文档的 canonical bytes 保持不变。每语句最多 16 个条件，同 key/operator 重复拒绝，禁止空数组、未知字段和隐式类型转换。时间条件各只有一个值，不把多值含义交给实现偶然决定。
 - 第一项键为 `iam.current-time`，类型为时间，来源仅 IAM 当前数据库事务时间；算子为 `DATE_GREATER_THAN_EQUALS` 与 `DATE_LESS_THAN`，分别表示闭合起点和开放终点。两个条件组合表示 `[start,end)`。值使用严格 UTC 时间格式和既有微秒精度约束；非法日期、非 UTC、空值和反向/空窗口在发布前拒绝。
@@ -145,3 +145,19 @@ PG18 聚焦 `customer_policy_terminal_deletion` 最终通过，3.18s（含父门
 完整回归中的 Audit 数据层 11.447s、Audit HTTP 3.286s、实际双 IAM/PaaS/Audit 进程 137.207s、PaaS 数据层 18.719s 通过；真实 PaaS 在非默认版本退休后保持原授权，版本退休/策略删除事实均经实际 dispatcher 入链。该次 IAM 包没有通过：十组串行流程共用的两分钟 context 在末尾凭据并发耗尽（策略父门禁 122.72s），后续保护检查因同一已过期 context 不能执行，不计为成功。现有测试 owner 改为每组两分钟、共享数据综合门禁四分钟，HTTP 请求也继承对应截止时间与取消；没有删除规模、并发或攻击用例，没有改变生产超时、资源上限和 CI 作业总上限。
 
 上述调整后的新库完整 IAM integration race 最终通过，320.659s，包含完整策略存储/版本/组/凭据保护、IAM HTTP 155.29s 与本地原平台凭据恢复 37.59s，未跳过原有并发、撤权及重放检查。这是功能/隔离验收，不是容量/性能 SLO。相关 API/IAM/Audit/architecture race、全仓 Go 测试/vet、模块校验、OpenAPI 稳定生成与 Linux IAM/Audit 构建通过；最终测试预算与响应校验增量另经完整真库与聚焦 vet 验证。发布 profile、签名安装与 UI 仍未作为本片证据。
+
+版本退休固定 `b99e082fa9ba8a6412eeb766387f4fbeb5df0aa3` 的 [Verification 34827144713](https://github.com/xiak/matrix/actions/runs/34827144713) 已核实精确 SHA，Go/authority-process/node-process 全部 completed/success；该固定对象不包含后续时间条件。
+
+### 时间条件增量证据
+
+2026-09-14，严格条件解析正向测试先因不支持条件失败，实现后通过；非法来源、未知算子、重复条件、空/反向窗口、非 UTC/非法日期/非微秒精度拒绝，无条件文档原 canonical/digest 与调用者输入保持。领域门禁覆盖 `[start,end)` 微秒边界、匹配 Deny 优先、来源顺序无关、无效权威时间失败关闭；现有 cursor owner 补窗口到期不能继续分页。
+
+专属 PG18（1 CPU、768 MiB、128 PIDs、64 连接）的原版本门禁最终聚焦通过，9.47s（父门禁 18.33s，包 21.540s），包含实际 HTTP 发布/关联、当前数据库时间的五秒窗口到期拒绝、禁止 caller currentTime/conditions/attributes、到期前决定继续通过 producer proof、存储层非法来源/重复算子/日期攻击，以及原版本退休和带数据 replay。首轮测试忘记撤销其先前显式授予的账号管理员策略，过期后仍由另一无条件 Allow 授权；实际 policy_evidence 精确证明这一点。测试已通过原 HTTP 撤销该宽权限再观察唯一窗口授权，没有改变正确的权限并集语义来迁就用例。
+
+真实独立双 IAM/PaaS/Audit 进程门禁通过，45.75s（包 48.644s）：同一 bearer 在实际数据库时间的六秒窗口内可读目标应用，到期后拒绝；发布无条件新版本仍拒绝，只有显式默认切换才使下一请求恢复允许，撤销附件再次拒绝。真实 dispatcher 投递旧时间决定及生命周期事实，原完整租户链、受限 runtime 身份、跨账号业务/Operation/outbox 与失联回归保留。
+
+最终完整串行真实 PG18 回归通过：Audit 数据层 5.702s、Audit HTTP 3.326s、IAM integration race 246.989s、PaaS 数据层 6.202s。IAM 门禁进一步把时间授权改为真实组继承，检查窗口内证据精确绑定 PolicyVersion 和 Membership、窗口外无匹配授权来源；独立进程覆盖直接附件。保留原组规模/分页、版本生命周期、凭据并发、旧 canonical、schema/bootstrap 带数据重放及原平台恢复。全仓默认 Go 测试/vet、API/IAM/Audit/architecture race 与模块校验通过；默认跳过数据库的测试不替代上述真实运行。
+
+最终带时间条件种子的诊断/canonical fuzz 通过：15 秒、2 workers、每次样本最小化限 1 秒，132,238 次执行；不以此声称性能或未实现语法正确。OpenAPI 重生成字节稳定，最终 API/authority race 与 Linux IAM/Audit 构建通过。全部本地进程结束后，专属 PG 容器、网络和合成数据卷按精确身份检查并清理，没有用户或其他任务数据变更。
+
+时间条件当前源码 readiness 为 IAM15/Audit11/PaaS1；IAM 版本反映新的策略文档/发布验证语义，Audit 编码、ServiceIdentity、lookup_service、七列 claim 和安装发布 profile 未变。本片固定 CI 尚未完成，不继承 b99e082 的结论。

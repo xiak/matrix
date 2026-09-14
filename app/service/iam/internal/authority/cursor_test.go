@@ -13,6 +13,35 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
+func TestDirectoryCursorCannotBypassExpiredPolicyConditions(t *testing.T) {
+	now := authorityTestTime()
+	codec, err := NewCursorCodec(bytes.Repeat([]byte{0x36}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := authoritySubject(now, iamv1.SystemPolicyAccountAdministrator)
+	row := &subject.Policies[0]
+	row.Policy.ID, row.Version.PolicyID, row.Attachment.PolicyID = "timed-directory-policy", "timed-directory-policy", "timed-directory-policy"
+	row.Policy.Management, row.Policy.AccountID = iamv1.PolicyCustomerManaged, subject.Organization.ID
+	row.Version.Document.Statements[0].Conditions = []iamv1.PolicyCondition{{Key: iamv1.ConditionIAMCurrentTime, Operator: iamv1.PolicyDateLessThan, Values: []string{now.Add(10 * time.Second).Format(time.RFC3339Nano)}}}
+	_, digest, err := iamv1.CanonicalizePolicyDocument(row.Version.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row.Version.ContentDigest = digest
+	query := DirectoryQuery{InstallationID: subject.InstallationID, Action: iamv1.ActionIAMGroupList, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Organization.ID)}}
+	cursor, err := codec.Encode(subject, query, "group-last", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after, err := codec.Decode(cursor, subject, query, now.Add(9*time.Second)); err != nil || after != "group-last" {
+		t.Fatal("valid timed cursor rejected")
+	}
+	if _, err := codec.Decode(cursor, subject, query, now.Add(10*time.Second)); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("cursor continued after granting policy expired")
+	}
+}
+
 func TestDirectoryCursorBindsCurrentAuthorityAndQuery(t *testing.T) {
 	now := authorityTestTime()
 	key := bytes.Repeat([]byte{0x35}, 32)

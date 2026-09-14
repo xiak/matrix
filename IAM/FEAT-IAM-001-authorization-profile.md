@@ -23,6 +23,8 @@
 
 控制台的目录展示和保守可用性提示归 010；静态登记不等于某个用户的 `allowedActions`，不能绕过资源/条件判断。
 
+005 的时间条件增量在本 owner 声明 `iam.current-time`：类型 TIME，来源 IAM_TRANSACTION_TIME。当前目录中 TENANT 动作声明该键，INSTALLATION 与 INSTALLATION_PROBE 不声明；未知动作/键无能力。只读 `LookupActionConditionDefinition` 返回值副本，静态校验、生成 schema 与唯一评估器使用同一来源定义；没有通用调用者属性 map。该局部来源声明不等于已交付完整签名 AuthorizationProfile、revision/digest、资源粒度或业务属性接入，CAT-05 仍未完成。时间算子、窗口与事务/历史语义由 005 唯一规定。
+
 ## 事务与权限
 
 目录是发布源码常量，读取无副作用；既有 IAM 当前凭据、SERIALIZABLE 决定持久化和 outbox 事务不变。后续可写 Profile 发布必须受产品注册权威管理，不能由租户管理员声明新的 platform Action。

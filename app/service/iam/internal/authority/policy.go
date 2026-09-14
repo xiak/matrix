@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"slices"
+	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
@@ -40,7 +41,7 @@ type PolicyEvaluation struct {
 // EvaluateAttachedPolicies joins current policy metadata, immutable content and
 // a live attachment inside an already authenticated authority snapshot. It
 // invokes the sole statement evaluator only after every ownership link agrees.
-func EvaluateAttachedPolicies(accountID iamv1.AccountID, installationID string, subject iamv1.Subject,
+func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID, installationID string, subject iamv1.Subject,
 	attached []AttachedPolicy, action iamv1.Action, resource iamv1.ResourceReference,
 ) (PolicyEvaluation, []PolicyAttachmentEvidence, error) {
 	if iamv1.ValidateID("accountId", string(accountID)) != nil ||
@@ -72,9 +73,16 @@ func EvaluateAttachedPolicies(accountID iamv1.AccountID, installationID string, 
 			return PolicyEvaluation{}, nil, ErrInvalidPolicyState
 		}
 		seen[attachment.ID] = true
+		if subject.Type != iamv1.PrincipalUser {
+			for _, statement := range row.Version.Document.Statements {
+				if len(statement.Conditions) != 0 {
+					return PolicyEvaluation{}, nil, ErrInvalidPolicyState
+				}
+			}
+		}
 		versions = append(versions, row.Version)
 	}
-	result, err := EvaluatePolicies(versions, action, resource)
+	result, err := EvaluatePolicies(databaseTime, versions, action, resource)
 	if err != nil {
 		return PolicyEvaluation{}, nil, err
 	}
@@ -103,7 +111,10 @@ func EvaluateAttachedPolicies(accountID iamv1.AccountID, installationID string, 
 // EvaluatePolicies evaluates a current, owner-validated policy snapshot. It
 // does not authenticate a subject, resolve ownership, or authorize attachment
 // management. Those checks surround it in the existing authority transaction.
-func EvaluatePolicies(versions []iamv1.PolicyVersion, action iamv1.Action, resource iamv1.ResourceReference) (PolicyEvaluation, error) {
+func EvaluatePolicies(databaseTime time.Time, versions []iamv1.PolicyVersion, action iamv1.Action, resource iamv1.ResourceReference) (PolicyEvaluation, error) {
+	if validateAuthorityTime(databaseTime) != nil {
+		return PolicyEvaluation{}, ErrInvalidPolicyState
+	}
 	definition, known := iamv1.LookupActionDefinition(action)
 	if !known || resource.Kind != definition.ResourceKind || iamv1.ValidateID("resource.id", resource.ID) != nil {
 		return PolicyEvaluation{}, ErrInvalidAuthorizationRequest
@@ -136,6 +147,13 @@ func EvaluatePolicies(versions []iamv1.PolicyVersion, action iamv1.Action, resou
 			if !slices.Contains(statement.Actions, action) {
 				continue
 			}
+			conditionMatch, err := policyConditionsMatch(statement.Conditions, action, databaseTime)
+			if err != nil {
+				return PolicyEvaluation{}, err
+			}
+			if !conditionMatch {
+				continue
+			}
 			for _, selector := range statement.Resources {
 				if selector.Kind != resource.Kind || (selector.Match == iamv1.PolicyResourceExact && selector.ID != resource.ID) {
 					continue
@@ -158,6 +176,29 @@ func EvaluatePolicies(versions []iamv1.PolicyVersion, action iamv1.Action, resou
 	result.Allowed = hasAllow && !result.ExplicitDeny
 	slices.SortFunc(result.MatchedVersions, func(left, right iamv1.PolicyVersionReference) int { return cmp.Compare(left.PolicyID, right.PolicyID) })
 	return result, nil
+}
+
+func policyConditionsMatch(conditions []iamv1.PolicyCondition, action iamv1.Action, databaseTime time.Time) (bool, error) {
+	matched := true
+	for _, condition := range conditions {
+		definition, supported := iamv1.LookupActionConditionDefinition(action, condition.Key)
+		if !supported || definition.Source != iamv1.ConditionIAMTransactionTime || definition.ValueType != iamv1.ConditionTime || len(condition.Values) != 1 {
+			return false, ErrInvalidPolicyState
+		}
+		boundary, err := iamv1.ParsePolicyTime(condition.Values[0])
+		if err != nil {
+			return false, ErrInvalidPolicyState
+		}
+		switch condition.Operator {
+		case iamv1.PolicyDateGreaterThanEquals:
+			matched = matched && !databaseTime.Before(boundary)
+		case iamv1.PolicyDateLessThan:
+			matched = matched && databaseTime.Before(boundary)
+		default:
+			return false, ErrInvalidPolicyState
+		}
+	}
+	return matched, nil
 }
 
 // SystemPolicyVersion publishes the code-owned permission documents used by

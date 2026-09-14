@@ -4757,6 +4757,12 @@
         ],
         "type": "object"
       },
+      "ConditionKey": {
+        "enum": [
+          "iam.current-time"
+        ],
+        "type": "string"
+      },
       "CreateAccountRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5782,6 +5788,41 @@
         ],
         "type": "string"
       },
+      "PolicyCondition": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/ConditionKey"
+          },
+          "operator": {
+            "$ref": "#/components/schemas/PolicyConditionOperator"
+          },
+          "values": {
+            "items": {
+              "format": "date-time",
+              "maxLength": 27,
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{0,5}[1-9])?Z$",
+              "type": "string"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "operator",
+          "values"
+        ],
+        "type": "object"
+      },
+      "PolicyConditionOperator": {
+        "enum": [
+          "DATE_GREATER_THAN_EQUALS",
+          "DATE_LESS_THAN"
+        ],
+        "type": "string"
+      },
       "PolicyDetail": {
         "additionalProperties": false,
         "allOf": [
@@ -6284,6 +6325,22 @@
           {
             "if": {
               "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.account.create"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
                 "resources": {
                   "contains": {
                     "properties": {
@@ -6346,7 +6403,63 @@
               "properties": {
                 "actions": {
                   "contains": {
+                    "const": "iam.account.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
                     "const": "iam.account.set-status"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCOUNT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.account.set-status"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.account.recover-root-credentials"
                   }
                 }
               }
@@ -6377,15 +6490,7 @@
             },
             "then": {
               "properties": {
-                "resources": {
-                  "contains": {
-                    "properties": {
-                      "kind": {
-                        "const": "ACCOUNT"
-                      }
-                    }
-                  }
-                }
+                "conditions": false
               }
             }
           },
@@ -6731,6 +6836,22 @@
                     }
                   }
                 }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.platform-policy.list"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
               }
             }
           },
@@ -7389,6 +7510,22 @@
               "properties": {
                 "actions": {
                   "contains": {
+                    "const": "iam.platform-policy-attachment.create"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
                     "const": "iam.platform-policy-attachment.revoke"
                   }
                 }
@@ -7413,6 +7550,22 @@
               "properties": {
                 "actions": {
                   "contains": {
+                    "const": "iam.platform-policy-attachment.revoke"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
                     "const": "paas.execution-pool.create"
                   }
                 }
@@ -7429,6 +7582,22 @@
                     }
                   }
                 }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.execution-pool.create"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
               }
             }
           },
@@ -7488,6 +7657,22 @@
               "properties": {
                 "actions": {
                   "contains": {
+                    "const": "paas.execution-pool.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
                     "const": "paas.execution-target.register"
                   }
                 }
@@ -7504,6 +7689,22 @@
                     }
                   }
                 }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.execution-target.register"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
               }
             }
           },
@@ -7563,6 +7764,22 @@
               "properties": {
                 "actions": {
                   "contains": {
+                    "const": "paas.execution-target.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
                     "const": "paas.platform-operation.read"
                   }
                 }
@@ -7579,6 +7796,22 @@
                     }
                   }
                 }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.platform-operation.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
               }
             }
           },
@@ -8464,6 +8697,22 @@
               "properties": {
                 "actions": {
                   "contains": {
+                    "const": "audit.platform-record.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
                     "const": "audit.platform-integrity.verify"
                   }
                 }
@@ -8480,6 +8729,22 @@
                     }
                   }
                 }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "audit.platform-integrity.verify"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
               }
             }
           },
@@ -8506,6 +8771,22 @@
                 }
               }
             }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "installation.verify"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
           }
         ],
         "properties": {
@@ -8514,6 +8795,15 @@
               "$ref": "#/components/schemas/Action"
             },
             "maxItems": 128,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyCondition"
+            },
+            "maxItems": 16,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true

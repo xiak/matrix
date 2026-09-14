@@ -22,6 +22,49 @@ func TestEveryIAMOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
 	}
 }
 
+func TestPolicyConditionSchemaRejectsUntrustedShape(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "CreatePolicyRequest")
+	value := CreatePolicyRequest{DisplayName: "Timed read", RequestID: "timed-create", Document: policyDocumentFixture()}
+	value.Document.Statements[0].Conditions = []PolicyCondition{{Key: ConditionIAMCurrentTime, Operator: PolicyDateLessThan, Values: []string{"2026-09-15T00:00:00Z"}}}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(encoded []byte, want bool) {
+		t.Helper()
+		instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (schema.Validate(instance) == nil) != want {
+			t.Fatal("schema condition acceptance differs")
+		}
+	}
+	check(encoded, true)
+	for _, invalid := range []string{
+		strings.Replace(string(encoded), "iam.current-time", "request.time", 1),
+		strings.Replace(string(encoded), "DATE_LESS_THAN", "DATE_NOT_EQUALS", 1),
+		strings.Replace(string(encoded), `"values":["2026-09-15T00:00:00Z"]`, `"values":[]`, 1),
+		strings.Replace(string(encoded), `"values":["2026-09-15T00:00:00Z"]`, `"values":["2026-09-15T00:00:00+00:00"]`, 1),
+		strings.Replace(string(encoded), `"key":`, `"source":"CALLER","key":`, 1),
+	} {
+		check([]byte(invalid), false)
+	}
+	for _, definition := range AllActionDefinitions() {
+		if definition.AuthorityScope == AuthorityScopeTenant {
+			continue
+		}
+		document := value.Document
+		document.Scope = definition.AuthorityScope
+		document.Statements = append([]PolicyStatement(nil), value.Document.Statements[:1]...)
+		document.Statements[0].Actions = []Action{definition.Action}
+		document.Statements[0].Resources = []PolicyResourceSelector{{Kind: definition.ResourceKind, Match: PolicyResourceAnyInAuthority}}
+		if ValidatePolicyDocument(document) == nil {
+			t.Fatal("undeclared platform/probe time condition accepted")
+		}
+	}
+}
+
 func TestCustomerPolicyPublicationUsesTheStrictTenantLanguage(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "CreatePolicyRequest")
 	check := func(value CreatePolicyRequest, valid bool) {

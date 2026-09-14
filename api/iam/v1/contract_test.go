@@ -457,6 +457,84 @@ func policyDocumentFixture() PolicyDocument {
 	}}
 }
 
+func TestPolicyTimeConditionsAreStrictAndPreserveUnconditionalContent(t *testing.T) {
+	for _, action := range AllActionDefinitions() {
+		definition, found := LookupActionConditionDefinition(action.Action, ConditionIAMCurrentTime)
+		if found != (action.AuthorityScope == AuthorityScopeTenant) || (found && (definition.Source != ConditionIAMTransactionTime || definition.ValueType != ConditionTime)) {
+			t.Fatal("time source declaration crossed a scope")
+		}
+		if _, found := LookupActionConditionDefinition(action.Action, "caller.time"); found {
+			t.Fatal("unknown condition declared")
+		}
+	}
+	if _, found := LookupActionConditionDefinition("unknown.action", ConditionIAMCurrentTime); found {
+		t.Fatal("unknown action acquired time condition support")
+	}
+	original, digest, err := CanonicalizePolicyDocument(policyDocumentFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	withConditions := func(conditions string) string {
+		return strings.Replace(original, `"resources":`, `"conditions":`+conditions+`,"resources":`, 1)
+	}
+	valid := `[{"key":"iam.current-time","operator":"DATE_GREATER_THAN_EQUALS","values":["2026-09-14T00:00:00Z"]},{"key":"iam.current-time","operator":"DATE_LESS_THAN","values":["2026-09-15T00:00:00Z"]}]`
+	document, err := DecodePolicyDocument(strings.NewReader(withConditions(valid)))
+	if err != nil {
+		t.Fatal("declared time window rejected", err)
+	}
+	before, _ := json.Marshal(document)
+	encoded, _, err := CanonicalizePolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := json.Marshal(document)
+	if !bytes.Equal(before, after) {
+		t.Fatal("condition canonicalization mutated caller input")
+	}
+	reversed := document
+	reversed.Statements = append([]PolicyStatement(nil), document.Statements...)
+	reversed.Statements[0].Conditions = append([]PolicyCondition(nil), document.Statements[0].Conditions...)
+	reversed.Statements[0].Conditions[0], reversed.Statements[0].Conditions[1] = reversed.Statements[0].Conditions[1], reversed.Statements[0].Conditions[0]
+	if normalized, _, err := CanonicalizePolicyDocument(reversed); err != nil || normalized != encoded {
+		t.Fatal("condition AND order changed canonical authority")
+	}
+	roundTrip, err := DecodePolicyDocument(strings.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, _, err := CanonicalizePolicyDocument(roundTrip)
+	if err != nil || canonical != encoded {
+		t.Fatal("condition canonical round trip changed content")
+	}
+	for _, invalid := range []string{
+		`null`, `[]`,
+		strings.Replace(valid, "iam.current-time", "request.current-time", 1),
+		strings.Replace(valid, "DATE_LESS_THAN", "DATE_NOT_EQUALS", 1),
+		strings.Replace(valid, "2026-09-15T00:00:00Z", "2026-09-14T00:00:00Z", 1),
+		strings.Replace(valid, "2026-09-15T00:00:00Z", "2026-09-13T00:00:00Z", 1),
+		strings.Replace(valid, "2026-09-15T00:00:00Z", "2026-09-15T00:00:00+00:00", 1),
+		strings.Replace(valid, "2026-09-15T00:00:00Z", "2026-09-15T00:00:00.0000001Z", 1),
+		strings.Replace(valid, "2026-09-15T00:00:00Z", "2026-02-30T00:00:00Z", 1),
+		strings.Replace(valid, `"values":["2026-09-14T00:00:00Z"]`, `"values":[]`, 1),
+		strings.Replace(valid, `"values":["2026-09-14T00:00:00Z"]`, `"values":[123]`, 1),
+		strings.Replace(valid, `"values":["2026-09-14T00:00:00Z"]`, `"values":["2026-09-14T00:00:00Z","2026-09-13T00:00:00Z"]`, 1),
+		strings.Replace(valid, `"key":`, `"source":"CALLER","key":`, 1),
+		strings.Replace(valid, "DATE_LESS_THAN", "DATE_GREATER_THAN_EQUALS", 1),
+	} {
+		if _, err := DecodePolicyDocument(strings.NewReader(withConditions(invalid))); !errors.Is(err, ErrInvalidPolicy) {
+			t.Fatal("invalid time condition admitted")
+		}
+	}
+	plain, err := DecodePolicyDocument(strings.NewReader(original))
+	if err != nil {
+		t.Fatal(err)
+	}
+	retained, retainedDigest, err := CanonicalizePolicyDocument(plain)
+	if err != nil || retained != original || retainedDigest != digest || strings.Contains(retained, "conditions") {
+		t.Fatal("unconditional canonical content changed")
+	}
+}
+
 func TestPolicyContentCanonicalizationIsStableAndDoesNotMutateTheDocument(t *testing.T) {
 	document := policyDocumentFixture()
 	before, _ := json.Marshal(document)
@@ -654,6 +732,13 @@ func TestPolicyDecodeDiagnosticsPreserveStrictDocumentRejection(t *testing.T) {
 func FuzzPolicyDocumentCanonicalRoundTrip(f *testing.F) {
 	valid, _, _ := CanonicalizePolicyDocument(policyDocumentFixture())
 	f.Add(valid)
+	timed := policyDocumentFixture()
+	timed.Statements[0].Conditions = []PolicyCondition{{Key: ConditionIAMCurrentTime, Operator: PolicyDateLessThan, Values: []string{"2026-09-15T00:00:00Z"}}}
+	timedCanonical, _, err := CanonicalizePolicyDocument(timed)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(timedCanonical)
 	f.Add(`{"languageVersion":"1","scope":"TENANT","statements":[]}`)
 	f.Add(`{"statements":null}`)
 	f.Fuzz(func(t *testing.T, source string) {
