@@ -115,11 +115,12 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   if (detail) return detail.canRead ? <AccountLiveUserWorkspace key={`${detail.id}:${detail.resourceVersion}`} summary={detail} onBack={() => onOpen("users")} /> : <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
   return <div className={styles.userDirectory}>
     <Card>
-      <ContentPage.Heading title={t("usersTitle")} actions={<div className={styles.directoryActions}>{scene.canCreateUsers ? <Button ref={createRef} disabled={access.busy || access.loading} onClick={onCreate} size="small"><Plus aria-hidden="true" />{t("createUser")}</Button> : null}
-          <TableActions label={batch("more")} disabled={blocked || !checkedUsers.length} hint={batch(access.supportsUserBatch ? "selectHint" : "unsupportedHint")}
+      <ContentPage.Heading title={t("usersTitle")} actions={<ContentPage.Actions
+        contextual={<TableActions label={batch("more")} disabled={blocked || !checkedUsers.length} hint={batch(access.supportsUserBatch ? "selectHint" : "unsupportedHint")}
             selectionLabel={checkedUsers.length ? batch("selected", { count: checkedUsers.length }) : undefined} clearLabel={batch("clear")} onClear={clearSelection}
-            actions={userBatchActions.map((action) => { const reason = userBatchDisabledReason(action, batchContext); return { id: action, label: batch(`actions.${action}`), danger: action === "delete", disabledReason: reason ? batch(`reasons.${reason}`) : undefined, onSelect: () => setBatchDialog({ action, users: checkedUsers }) }; })} />
-          </div>} />
+            actions={userBatchActions.map((action) => { const reason = userBatchDisabledReason(action, batchContext); return { id: action, label: batch(`actions.${action}`), danger: action === "delete", disabledReason: reason ? batch(`reasons.${reason}`) : undefined, onSelect: () => setBatchDialog({ action, users: checkedUsers }) }; })} />}
+        primary={scene.canCreateUsers ? <Button ref={createRef} disabled={access.busy || access.loading} onClick={onCreate} size="small"><Plus aria-hidden="true" />{t("createUser")}</Button> : undefined}
+      />} />
       <AccountOwnerSummary scene={scene} onOpen={() => onOpen("users", scene.accountOwner.id)} />
       <TableToolbar labels={toolbarLabels} search={{ label: t("searchUsers"), placeholder: t("searchUsersPlaceholder"), value: query, onChange: (value) => changeFilter(() => setQuery(value)) }}
         status={t("userResults", { shown: filtered.length, loaded: scene.users.length })} filters={[

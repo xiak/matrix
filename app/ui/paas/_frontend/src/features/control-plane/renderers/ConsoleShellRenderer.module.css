@@ -302,12 +302,8 @@
 .pageActions {
   display: flex;
   min-width: 0;
-  align-items: center;
-  gap: var(--xiak-spacing-default);
-}
-
-.pageActions {
   flex: none;
+  align-items: center;
   gap: var(--xiak-spacing-tight);
 }
 
@@ -399,10 +395,8 @@
 
 .pageHeader { position: relative; }
 .navigationProgress { position: absolute; inset: auto 0 0; height: var(--xiak-navigation-progress-height); border-radius: 0; }
-.refreshing { animation: refreshing var(--xiak-motion-loading) linear infinite; }
 .shellBase a[data-navigation-pending="true"] { color: var(--xiak-color-accent-text); }
 .contextItem[data-navigation-pending="true"] { background: var(--xiak-color-bg-control-hover); }
-@keyframes refreshing { to { transform: rotate(360deg); } }
 
 @container matrix-control-shell (max-width: 920px) {
   .sider {
@@ -526,7 +520,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .refreshing { animation: none; }
   .contextMenu,
   .railIndicator {
     transition: none;

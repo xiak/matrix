@@ -151,20 +151,6 @@ describe("ConsoleShellRenderer", () => {
     expect(within(navigation).getByRole("link", { name: /^Applications/ }).getAttribute("href")).toMatch(/^\/console\/applications\/?$/);
   });
 
-  it("keeps data-refresh feedback local without rerendering static global-header controls", async () => {
-    let resolve!: (value: ControlPlaneSnapshot) => void;
-    const load = vi.fn().mockResolvedValueOnce(snapshot).mockImplementation(() => new Promise<ControlPlaneSnapshot>(done => { resolve = done; }));
-    const { user } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot, load });
-    await screen.findByRole("heading", { name: "资源中心", level: 1 });
-    const header = screen.getByLabelText("全局导航");
-    accountMenuRender.mockClear();
-    await user.click(screen.getByRole("button", { name: "刷新" }));
-    expect(screen.getByRole("progressbar", { name: "正在刷新当前页面…" }).closest("header")).not.toBe(header);
-    expect(within(header).queryByRole("progressbar")).toBeNull();
-    expect(accountMenuRender).not.toHaveBeenCalled();
-    await act(async () => resolve(snapshot));
-  });
-
   it("retains entity search parameters through sign-in without accepting a query redirect", async () => {
     navigation.query = "id=resource%2Fexample&returnTo=https%3A%2F%2Foutside.invalid";
     const { loginDestination } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot });

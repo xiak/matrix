@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useTransition, type ComponentProps, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useTransition, type ComponentProps, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
@@ -13,8 +13,11 @@ type ConsoleNavigationState = {
   currentHref: string;
   pendingHref: string | null;
   pendingSelection: ControlPlaneRouteSelection | null;
+  contentFallbackVisible: boolean;
   navigate(href: string, options?: NavigationOptions): void;
 };
+
+export const ROUTE_CONTENT_FALLBACK_DELAY_MS = 200;
 
 const NavigationContext = createContext<ConsoleNavigationState | null>(null);
 const canonicalHref = (href: string) => {
@@ -32,9 +35,23 @@ function ConsoleNavigationBoundary({ selection, children }: { selection: Control
   const router = useRouter();
   const requestLeave = useLeaveConfirmation();
   const [isPending, startTransition] = useTransition();
-  const [destination, setDestination] = useState<string | null>(null);
+  const requestSequence = useRef(0);
+  const [destination, setDestination] = useState<{ href: string; requestId: number } | null>(null);
+  const [fallbackRequestId, setFallbackRequestId] = useState<number | null>(null);
   const currentHref = consoleRouteHref(selection);
-  const pendingHref = isPending ? destination : null;
+  const pendingDestination = isPending ? destination : null;
+  const pendingHref = pendingDestination?.href ?? null;
+  const pendingRequestId = pendingDestination?.requestId ?? null;
+  const contentFallbackVisible = pendingRequestId !== null && fallbackRequestId === pendingRequestId;
+
+  // Navigation acknowledgement is immediate in the Header. A page-sized
+  // fallback is intentionally deferred so cached and local routes can commit
+  // atomically instead of flashing a skeleton for one or two frames.
+  useEffect(() => {
+    if (pendingRequestId === null) return;
+    const timer = window.setTimeout(() => setFallbackRequestId(pendingRequestId), ROUTE_CONTENT_FALLBACK_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [pendingRequestId]);
 
   function navigate(href: string, options?: NavigationOptions) {
     const target = canonicalHref(href);
@@ -46,7 +63,7 @@ function ConsoleNavigationBoundary({ selection, children }: { selection: Control
     if (target === committed && !isPending) { options?.onAccepted?.(); return; }
     const proceed = () => {
       options?.onAccepted?.();
-      setDestination(target);
+      setDestination({ href: target, requestId: ++requestSequence.current });
       startTransition(() => {
         const navigate = options?.replace ? router.replace : router.push;
         if (options?.scroll === undefined) navigate(href);
@@ -57,7 +74,7 @@ function ConsoleNavigationBoundary({ selection, children }: { selection: Control
     else requestLeave(proceed);
   }
 
-  return <NavigationContext.Provider value={{ selection, currentHref, pendingHref, pendingSelection: pendingHref ? parseControlPlanePathname(pendingHref.split(/[?#]/)[0] ?? "") : null, navigate }}>
+  return <NavigationContext.Provider value={{ selection, currentHref, pendingHref, pendingSelection: pendingHref ? parseControlPlanePathname(pendingHref.split(/[?#]/)[0] ?? "") : null, contentFallbackVisible, navigate }}>
     {children}
   </NavigationContext.Provider>;
 }

@@ -704,8 +704,8 @@ dirty/busy status, localized confirmation copy and a focus-return target;
 passwords, policy documents and identity selections never leave local state.
 The console routes menu, product, favorite, search and imperative navigation
 through the same leave decision, as well as explicit cancel and sign-out
-actions. The console's read-only refresh preserves the mounted draft and is
-not misrepresented as a discard. Confirmation precedes the router transition and skeleton.
+actions. Read-only data revalidation preserves the mounted draft and is
+not misrepresented as a discard. Confirmation precedes the router transition and any delayed fallback.
 Staying retains the current step, validation and every field; confirmed leaving
 executes the original destination once. A save already in flight cannot be
 discarded or silently queue another destination. Save completion clears the
@@ -1060,34 +1060,40 @@ Button. Compact variants consume Theme dimensions instead of private style forks
 
 Console navigation keeps the global Header and shell mounted. One shared route
 transition owner connects console links and global-search results to the actual
-App Router transition. Clicking a destination immediately replaces the outgoing
-content with its page-shaped PageSkeleton and updates the same title frame;
-there is no delayed skeleton reveal or minimum artificial wait. A dedicated
+App Router transition. Clicking a destination immediately marks the target and
+starts the Header progress track. Fast cached or local visits retain the already
+revealed title and content during a bounded 200ms grace period, while making its
+actions and body inert. If the real transition remains pending beyond that
+threshold, the same title frame switches to the destination and the body is
+replaced with its page-shaped PageSkeleton. There is no fabricated navigation
+delay or minimum fallback dwell. A dedicated
 route subscriber renders an indeterminate two-pixel progress track over the
 global Header's bottom divider, without subscribing static Header controls to
-its loading state. Local refresh feedback stays with its content. The public
+its loading state. The shell does not expose a universal manual refresh action:
+mutation revalidation, retry and any product-owned refresh remain at the data
+boundary they actually affect. The public
 indeterminate Progress animates only a clipped, paint-contained child transform,
 not background position or layout dimensions; it owns no animation timer or
 React frame state. The active child alone receives the compositor hint, and
 reduced-motion preference presents a stationary indicator. Determinate task
 progress remains a native element driven by real values.
 Dashboard, table, card, list and access layouts share semantic Theme
-tokens and a single announced loading label. The outgoing content is hidden and
-inert while pending, but its draft remains mounted until the visit commits or is
-cancelled. The content viewport remains mounted across a committed visit so its
+tokens and a single announced loading label. The outgoing content becomes inert
+immediately, remains visually stable during the grace period, and is hidden only
+when the delayed fallback is revealed; its draft remains mounted until the visit
+commits or is cancelled. The content viewport remains mounted across a committed visit so its
 background, scroll layer and geometry are not repainted as a new page-sized
 surface. Only the keyed route content is replaced, after the destination
 skeleton, with no full-canvas opacity transition. A thin indeterminate progress
-line communicates real route and refresh activity without inventing a completion
+line communicates real route and scoped background activity without inventing a completion
 percentage. Fast cached routes finish immediately; interrupted visits cannot overwrite a newer
-destination. Reduced-motion preferences disable skeletons, progress and refresh
-icons. Refreshing existing data retains the current page
+destination. Reduced-motion preferences disable skeleton and progress motion.
+Revalidating existing data retains the current page
 and draft instead of pretending to navigate again.
 
 Header open/close state is subscribed only by Header and its backdrop/inert
 boundaries, not by the service-page renderer. IAM navigation subscribes to
-stable capabilities independently of form pending/error state; the refresh
-control owns its status subscription. Message details and their destination
+stable capabilities independently of form pending/error state. Message details and their destination
 links mount only when expanded. Optimizations must preserve region and locale
 updates, permission changes, focus restoration and modal isolation. Measure
 interaction work in a production build, including style/layout and paint, not
@@ -1103,6 +1109,16 @@ raw feature palette values, unresolved tokens, private native-table forks,
 unlayered public-control CSS and missing CSS-module bindings. Feature selectors
 target their own label wrappers instead of recoloring descendant status badges
 or other shared controls.
+
+Content-page actions have two explicit shared slots. Selection-dependent context
+(count, clear and batch commands) grows toward the title; the primary create
+action is the trailing anchor and therefore does not move when rows are selected.
+`TableActions` keeps its stable command trigger after the dynamic selection
+summary. User and policy directories use this same composition instead of local
+header flex rules. The removed universal Refresh button must not be recreated per
+page; a future refresh control requires a scoped stale-data case, a visible
+freshness contract and a repository operation that does not reload unrelated IAM
+directories.
 
 IAM tenant creation and lightweight user management use the shared native Dialog. It focuses its
 title, contains keyboard navigation, suppresses global shortcuts and restores
@@ -1557,9 +1573,10 @@ and `git diff --check` gates must pass on the same committed worktree.
   prove draft input causes no title-frame commits, and check that the return
   action still reads the latest draft. Loading-state tests prove static global
   Header controls do not rerender when the isolated route progress starts or
-  stops; local refresh feedback stays inside the content header. Browser checks
+  stops. Browser checks
   verify the equal 56px context bars for users and federations, detail and
-  creation return controls, immediate destination titles/skeletons, progress
+  creation return controls, immediate route acknowledgement and delayed destination
+  titles/skeletons for sustained waits, progress
   inside the global Header, and current-draft leave/cancel protection without
   creating an account. Sidebar checks retain a 56px header with one complete
   localized product name for application hosting, no generic navigation caption,
@@ -1590,7 +1607,10 @@ and `git diff --check` gates must pass on the same committed worktree.
   include light Chinese, dark English and mixed English surfaces; 40px table
   headers, neutral classification, readable object/metadata hierarchy,
   selected/mixed checkboxes, visible eligibility and stable More-trigger focus
-  after cancelling an association dialog. The compact user and Transfer tables
+  after cancelling an association dialog. A 1477px desktop selection check
+  measured zero horizontal movement for both fixed Header commands: Users kept
+  More/Create at x=1239/1349 and Policies kept More/Create at x=1200/1310 while
+  selection count and Clear appeared to their left. The compact user and Transfer tables
   scroll locally without widening the 360px document. Wizard checks preserve
   required-field errors, page selection counts, opaque footer and guarded
   cancellation; the temporary draft was discarded without creating an account.
@@ -1918,7 +1938,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   leave requests, native Back cancellation/resumption and Forward without
   manufactured history entries, plus sign-out cancellation and confirmation.
   Cancelled service navigation did not increment recently visited services.
-  Read-only refresh, appearance and locale changes retained the selected role
+  Appearance and locale changes retained the selected role
   principal. English/light at 360 x 800 had a bounded confirmation, wrapping
   copy and visible actions; Chinese/dark and the default viewport were restored.
   Warning/error log inspection returned no entries. Browser-forced or unsupported
@@ -2002,7 +2022,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   verifies bounded Header panels, catalog search focus/background isolation,
   repeated trigger closure and lazily mounted message details.
   Chinese/dark and English/light checks include grouped navigation,
-  immediate skeleton transitions, compact dialogs with retained action
+  graduated navigation feedback, compact dialogs with retained action
   footers, Escape focus restoration and no horizontal page overflow down to
   a measured `319px` CSS viewport. Overview mini-tables fit their cards.
   Locale tests additionally preserve installation/alias drafts, safe IAM
@@ -2034,14 +2054,15 @@ and `git diff --check` gates must pass on the same committed worktree.
   entry. This is current frontend/static-host acceptance, not a new installed
   backend release or a claim to translate user-authored resource names.
   Navigation tests cover real suspended transitions, interrupted destinations,
-  immediate hiding of the outgoing draft, cancellation recovery, stable-viewport
+  immediate inerting of the outgoing draft, the 200ms fallback threshold,
+  fast-route fallback suppression, cancellation recovery, stable-viewport
   scroll isolation with keyed content replacement, and five non-interactive
   skeleton layouts. A 2026-09-14 desktop MOCK regression visited Groups,
   Policies, Simulator, Roles and Users after a hard reload; every committed
   page exposed the destination title with `opacity: 1` and no content animation,
   and produced no new browser warning or error. Browser checks
-  at `1133px` and `360px` confirm immediate target titles, fully visible skeletons,
-  hidden outgoing controls, and no horizontal page overflow for menu and search
+  at `1133px` and `360px` confirm immediate progress, stable fast-route content,
+  delayed target skeletons for sustained waits, hidden outgoing controls, and no horizontal page overflow for menu and search
   navigation. A temporary loopback-only delayed-response preview exercised long
   route waits; the normal development route was also verified without that
   delay. The temporary preview was removed. All animation styling remains
@@ -2114,7 +2135,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   Browser inspection informed the explicit-choice grant default. This is a
   development-runtime IAM gate, not the installed-release PaaS purchase/deploy
   journey. Compact development-browser inspection additionally proves a
-  single-row horizontally browsable tablist, fixed refresh control, deliberate
+  single-row horizontally browsable tablist, stable trailing action placement, deliberate
   card-header action stacking, no page overflow, and arrow/`Home`/`End` focus
   movement at a viewport narrower than `360px`. Authenticated installed-release
   evidence from the `29821ad` candidate separately proves the same four-tab

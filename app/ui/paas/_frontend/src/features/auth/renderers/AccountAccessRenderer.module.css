@@ -170,7 +170,6 @@
 .identifier code { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
 .copyFeedback { font-size: var(--xiak-font-size-small); color: var(--xiak-color-text-muted); }
 .userDirectory { container: user-directory / inline-size; display: grid; gap: var(--xiak-spacing-comfortable); min-width: 0; }
-.directoryActions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: var(--xiak-spacing-tight); min-width: 0; }
 .accountOwner { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); min-width: 0; padding: var(--xiak-spacing-default) var(--xiak-panel-padding); border-block: var(--xiak-border-subtle); background: var(--xiak-color-bg-panel-hover); }
 .accountOwnerIdentity { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
 .accountOwnerLabel { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }

@@ -12,10 +12,10 @@ type PageHeading = { title: string; back?: BackAction; focus?: boolean };
 type HeadingContribution = PageHeading & { owner: string };
 type HeadingSlot = { target: HTMLDivElement | null; parentLabel?: string; update(value: HeadingContribution): void; remove(owner: string): void };
 const HeadingSlotContext = createContext<HeadingSlot | null>(null);
-const HeaderStateContext = createContext<{ heading: HeadingContribution | null; setTarget(target: HTMLDivElement | null): void } | null>(null);
+const HeaderStateContext = createContext<{ heading: HeadingContribution | null; pending: boolean; setTarget(target: HTMLDivElement | null): void } | null>(null);
 const ScrollPositionContext = createContext<Map<string, number> | null>(null);
 
-function ContentPageRoot({ className, children, parentLabel, pending = false, ...props }: ComponentPropsWithoutRef<"section"> & { parentLabel?: string; pending?: boolean }) {
+function ContentPageRoot({ className, children, parentLabel, pending = false, fallback = pending, ...props }: ComponentPropsWithoutRef<"section"> & { parentLabel?: string; pending?: boolean; fallback?: boolean }) {
   const [target, setTarget] = useState<HTMLDivElement | null>(null);
   const [heading, setHeading] = useState<HeadingContribution | null>(null);
   const [positions] = useState(() => new Map<string, number>());
@@ -23,7 +23,7 @@ function ContentPageRoot({ className, children, parentLabel, pending = false, ..
   // Only presentation metadata reaches the header. Actions keep their feature
   // providers through a portal; form state never travels through the shell.
   const slot = useMemo(() => ({ target, parentLabel, update: setHeading, remove }), [target, parentLabel, remove]);
-  const header = useMemo(() => ({ heading: pending ? null : heading, setTarget }), [heading, pending]);
+  const header = useMemo(() => ({ heading: fallback ? null : heading, pending, setTarget }), [heading, pending, fallback]);
   return <HeadingSlotContext.Provider value={slot}><HeaderStateContext.Provider value={header}><ScrollPositionContext.Provider value={positions}>
     <section className={classNames(styles.page, className)} {...props}>{children}</section>
   </ScrollPositionContext.Provider></HeaderStateContext.Provider></HeadingSlotContext.Provider>;
@@ -39,16 +39,19 @@ function HeadingIdentity({ title, back, focus, headingRef }: Omit<PageHeading, "
 function Header({ className, title, back, leading, trailing, progress, ...props }: Omit<ComponentPropsWithoutRef<"header">, "children" | "title"> & { title: ReactNode; back?: BackAction; leading?: ReactNode; trailing?: ReactNode; progress?: ReactNode }) {
   const state = useContext(HeaderStateContext);
   const heading = state?.heading;
+  const pending = state?.pending ?? false;
   const setTarget = state?.setTarget;
   const titleRef = useRef<HTMLHeadingElement>(null);
   const owner = heading?.owner;
   const focus = heading?.focus;
+  const displayedBack = heading ? heading.back : back;
+  const safeBack = displayedBack && pending ? { ...displayedBack, disabled: true } : displayedBack;
   useLayoutEffect(() => { if (focus) titleRef.current?.focus({ preventScroll: true }); }, [owner, focus]);
   return <header className={classNames(styles.header, className)} {...props}>
     {leading}
     <div className={styles.headerContent}>
-      <HeadingIdentity title={heading?.title ?? title} back={heading ? heading.back : back} focus={focus} headingRef={titleRef} />
-      {setTarget ? <div className={styles.headerActions} hidden={!heading} ref={setTarget} /> : null}
+      <HeadingIdentity title={heading?.title ?? title} back={safeBack} focus={focus} headingRef={titleRef} />
+      {setTarget ? <div className={styles.headerActions} hidden={!heading || pending} ref={setTarget} /> : null}
     </div>
     {trailing ? <div className={styles.headerActions}>{trailing}</div> : null}
     {progress}
@@ -79,6 +82,15 @@ function Heading({ title, back, actions, focus = false }: PageHeading & { action
   return target && actions ? createPortal(actions, target) : null;
 }
 
+// Contextual controls may grow with table selection; primary controls remain
+// the trailing anchor so their position does not jump when that context appears.
+function Actions({ contextual, primary, className, ...props }: Omit<ComponentPropsWithoutRef<"div">, "children"> & { contextual?: ReactNode; primary?: ReactNode }) {
+  return <div className={classNames(styles.actionBar, className)} {...props}>
+    {contextual ? <div className={styles.contextualActions}>{contextual}</div> : null}
+    {primary ? <div className={styles.primaryActions}>{primary}</div> : null}
+  </div>;
+}
+
 function Body({ children, className, pending = false, loading, transitionKey, ...props }: ComponentPropsWithoutRef<"div"> & {
   transitionKey?: string;
   pending?: boolean;
@@ -91,6 +103,7 @@ function Body({ children, className, pending = false, loading, transitionKey, ..
   // The viewport is a stable paint/scroll boundary. Route identity belongs to
   // its inner content so a commit resets feature state without flashing a new
   // page-sized background layer.
+  const showLoading = pending && loading !== undefined && loading !== null;
   return <div className={styles.stage}>
     <div {...props} ref={viewport} onScroll={(event) => {
       if (!pending && positions) {
@@ -100,10 +113,10 @@ function Body({ children, className, pending = false, loading, transitionKey, ..
       }
       props.onScroll?.(event);
     }} aria-busy={pending || props["aria-busy"]} className={classNames(styles.body, className)}>
-      <div aria-hidden={pending || undefined} className={styles.content} hidden={pending} inert={pending} key={transitionKey}>{children}</div>
+      <div aria-hidden={pending || undefined} className={styles.content} hidden={showLoading} inert={pending} key={transitionKey}>{children}</div>
     </div>
-    {pending && loading ? <div className={classNames(styles.body, styles.pending)}>{loading}</div> : null}
+    {showLoading ? <div className={classNames(styles.body, styles.pending)}>{loading}</div> : null}
   </div>;
 }
 
-export const ContentPage = Object.assign(ContentPageRoot, { Header, Heading, Body });
+export const ContentPage = Object.assign(ContentPageRoot, { Header, Heading, Actions, Body });

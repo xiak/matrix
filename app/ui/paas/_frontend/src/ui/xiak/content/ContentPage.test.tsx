@@ -42,6 +42,11 @@ describe("ContentPage context heading", () => {
     expect(toolsRendered).toHaveBeenCalledTimes(count);
   });
 
+  it("keeps contextual commands before a stable trailing primary action", () => {
+    render(<ContentPage.Actions contextual={<button>More actions</button>} primary={<button>Create user</button>} />);
+    expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual(["More actions", "Create user"]);
+  });
+
   it("hides outgoing actions while pending and restores them on cancellation; cleans up on exit", () => {
     const action = vi.fn();
     const page = (pending: boolean, detail: boolean) => <ContentPage parentLabel="Users" pending={pending}>
@@ -108,6 +113,23 @@ describe("ContentPage context heading", () => {
     expect(screen.getAllByRole("heading", { level: 1, hidden: true })).toHaveLength(1);
   });
 
+  it("preserves the current heading during the grace period and switches it with a delayed fallback", () => {
+    const page = (fallback: boolean) => <ContentPage pending fallback={fallback} parentLabel="Users">
+      <ContentPage.Header title="Policies" back={{ label: "Back to policies", parentLabel: "Policies", onClick() {} }} />
+      <ContentPage.Body pending transitionKey="users">
+        <ContentPage.Heading title="admin" back={{ label: "Back to users", onClick() {} }} actions={<button>Edit user</button>} />
+      </ContentPage.Body>
+    </ContentPage>;
+    const view = render(page(false));
+    const title = screen.getByRole("heading", { name: "admin" });
+    expect((screen.getByRole("button", { name: "Back to users" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "Edit user" })).toBeNull();
+
+    view.rerender(page(true));
+    expect(screen.getByRole("heading", { name: "Policies" })).toBe(title);
+    expect((screen.getByRole("button", { name: "Back to policies" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("restores a collection scroll position without retaining its outgoing DOM", () => {
     const page = (key: string) => <ContentPage><ContentPage.Body aria-label="Viewport" transitionKey={key}>{key}</ContentPage.Body></ContentPage>;
     const view = render(page("users"));
@@ -122,6 +144,19 @@ describe("ContentPage context heading", () => {
 });
 
 describe("ContentPage transition", () => {
+  it("keeps outgoing content visually stable but inert during a fallback grace period", () => {
+    const body = (loading?: React.ReactNode) => <ContentPage.Body transitionKey="resources" pending loading={loading}><input aria-label="Filter resources" /></ContentPage.Body>;
+    const view = render(body());
+    const input = screen.getByRole("textbox", { name: "Filter resources", hidden: true });
+    expect(input.closest("[inert]")).toBeTruthy();
+    expect(input.closest("[hidden]")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+
+    view.rerender(body(<p role="status">Opening logs…</p>));
+    expect(input.closest("[hidden]")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("Opening logs…");
+  });
+
   it("immediately hides the old draft behind loading, then restores it if navigation is cancelled", async () => {
     const user = userEvent.setup();
     const body = (pending: boolean) => <ContentPage.Body transitionKey="resources" pending={pending} loading={<p role="status">Opening logs…</p>}><input aria-label="Filter resources" /></ContentPage.Body>;

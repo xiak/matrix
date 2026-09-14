@@ -46,7 +46,7 @@ import {
   X
 } from "lucide-react";
 import { useSession } from "@/features/auth/application/SessionProvider";
-import { AccountAccessProvider, useAccountAccess, useAccountCapabilities } from "@/features/auth/application/AccountAccessProvider";
+import { AccountAccessProvider, useAccountCapabilities } from "@/features/auth/application/AccountAccessProvider";
 import { LoginRenderer } from "@/features/auth/renderers/LoginRenderer";
 import type { AccountRepository } from "@/features/auth/repositories/iamRepository";
 import {
@@ -142,14 +142,6 @@ function HeaderBackdrop() {
 function ServiceLayout({ children }: { children: React.ReactNode }) {
   const catalogOpen = useConsoleUiStore((state) => state.headerPanel === "products");
   return <Layout inert={catalogOpen}>{children}</Layout>;
-}
-
-function ConsoleRefresh({ account, pending }: { account: boolean; pending: boolean }) {
-  const t = useTranslations("Console");
-  const access = useAccountAccess();
-  const controlPlane = useControlPlane();
-  const loading = account ? access.loading : controlPlane.loading;
-  return <Button aria-label={t("refresh")} aria-busy={loading} disabled={pending || loading || (account && access.busy)} onClick={() => account ? access.reload() : void controlPlane.reload()} size="small" variant="ghost"><RefreshCcw className={loading ? styles.refreshing : undefined} aria-hidden="true" /><span>{t("refresh")}</span></Button>;
 }
 
 function LoadingShell({ error, logout, retry, revoking, sessionError, selection }: {
@@ -388,9 +380,11 @@ function ConsoleShell() {
   const accessView = scene.content.kind === "access" ? scene.content.view : undefined;
   const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : scene.section === "overview" ? dashboard("title") : t(`pages.${scene.section}.title`);
   const pendingSelection = navigation.pendingSelection;
+  const contentFallbackVisible = navigation.contentFallbackVisible;
   const pendingView = pendingSelection?.section === "access" ? pendingSelection.view : undefined;
-  const visiblePageTitle = pendingSelection ? pendingView && pendingView in accessTitles ? accessTitles[pendingView as keyof typeof accessTitles] : navigationText(`items.${pendingSelection.view ?? pendingSelection.section}.label`) : pageTitle;
-  const loadingLabel = pendingSelection ? t("openingPage", { name: visiblePageTitle }) : t("refreshingPage");
+  const pendingPageTitle = pendingSelection ? pendingView && pendingView in accessTitles ? accessTitles[pendingView as keyof typeof accessTitles] : navigationText(`items.${pendingSelection.view ?? pendingSelection.section}.label`) : pageTitle;
+  const visiblePageTitle = contentFallbackVisible ? pendingPageTitle : pageTitle;
+  const loadingLabel = pendingSelection ? t("openingPage", { name: pendingPageTitle }) : t("refreshingPage");
 
   function resizeWorkspace(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -512,15 +506,12 @@ function ConsoleShell() {
             <button aria-hidden="true" aria-label={t("closeNavigation")} className={styles.overlayBackdrop} onClick={closeSidebarAndRestoreFocus} tabIndex={-1} type="button" />
 
             <Layout.Content>
-              <ContentPage parentLabel={pageTitle} pending={Boolean(pendingSelection)} data-navigating={pendingSelection ? "true" : undefined}>
-                <Suspense fallback={<ContentPage.Header title={visiblePageTitle} />}><ConsolePageHeader title={visiblePageTitle} selection={pendingSelection ?? navigation.selection} pendingHref={navigation.pendingHref} className={styles.pageHeader} data-workflow={workspaceAction ? "true" : undefined}
+              <ContentPage parentLabel={pageTitle} pending={Boolean(pendingSelection)} fallback={contentFallbackVisible} data-navigating={pendingSelection ? "true" : undefined}>
+                <Suspense fallback={<ContentPage.Header title={visiblePageTitle} />}><ConsolePageHeader title={visiblePageTitle} selection={contentFallbackVisible && pendingSelection ? pendingSelection : navigation.selection} pendingHref={contentFallbackVisible ? navigation.pendingHref : null} className={styles.pageHeader} data-workflow={workspaceAction ? "true" : undefined}
                   leading={<Button aria-controls="console-product-navigation" aria-expanded={sidebarOverlayOpen} aria-label={t("openNavigation")} className={styles.mobileMenuButton} onClick={openSidebar} ref={sidebarTrigger} iconOnly size="small" variant="ghost"><Menu aria-hidden="true" /></Button>}
-                  trailing={<div className={styles.pageActions}>
-                    <ConsoleRefresh account={scene.section === "access"} pending={Boolean(pendingSelection)} />
-                    {workspaceAction && WorkspaceActionIcon ? <Button disabled={Boolean(pendingSelection)} data-workflow-action="" aria-controls="console-workspace" aria-expanded={workspaceVisible} aria-label={t(`workspaceActions.${scene.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`)} onClick={toggleWorkspaceWithFocus} ref={workspaceTrigger} size="small" variant={workspaceVisible || !workspaceAction.primary ? "secondary" : "primary"}>{workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />}<span>{t(`workspaceActions.${scene.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`)}</span></Button> : null}
-                  </div>}
+                  trailing={workspaceAction && WorkspaceActionIcon ? <div className={styles.pageActions}><Button disabled={Boolean(pendingSelection)} data-workflow-action="" aria-controls="console-workspace" aria-expanded={workspaceVisible} aria-label={t(`workspaceActions.${scene.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`)} onClick={toggleWorkspaceWithFocus} ref={workspaceTrigger} size="small" variant={workspaceVisible || !workspaceAction.primary ? "secondary" : "primary"}>{workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />}<span>{t(`workspaceActions.${scene.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`)}</span></Button></div> : undefined}
                   progress={!pendingSelection && controlPlane.loading && scene.section !== "access" ? <Progress aria-label={loadingLabel} className={styles.navigationProgress} /> : null} /></Suspense>
-                <ContentPage.Body transitionKey={navigation.currentHref} pending={Boolean(pendingSelection)} loading={pendingSelection ? <div className={styles.pageCanvas}><PageSkeleton label={loadingLabel} layout={pageSkeletonLayout(pendingSelection)} /></div> : undefined}>
+                <ContentPage.Body transitionKey={navigation.currentHref} pending={Boolean(pendingSelection)} loading={contentFallbackVisible && pendingSelection ? <div className={styles.pageCanvas}><PageSkeleton label={loadingLabel} layout={pageSkeletonLayout(pendingSelection)} /></div> : undefined}>
                   <div aria-busy={controlPlane.loading && scene.section !== "access"} className={styles.pageCanvas}>
                     {session.error ? <Alert className={styles.feedback} status="danger">{authErrors(session.error)}</Alert> : null}
                     {controlPlane.error ? <Alert className={styles.feedback} status="danger">{t(`errors.${controlPlane.error}`)}</Alert> : null}

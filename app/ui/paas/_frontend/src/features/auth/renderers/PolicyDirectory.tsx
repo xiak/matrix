@@ -62,12 +62,12 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate }: {
   const reset = () => setView({ ...defaultPolicyDirectoryView, pageSize: view.pageSize, sort: view.sort });
   const customOnly = view.kind === "custom";
   return <Tabs.Root className={styles.directory} value={view.kind} onValueChange={(kind) => change({ kind, service: "all", category: "all" })}>
-    <ContentPage.Heading title={w("policies")} actions={<>
-      <Button size="small" disabled={busy} onClick={onCreate}><Plus aria-hidden="true" />{t("createCustomPolicy")}</Button>
-      <TableActions label={collection("moreActions")} disabled={busy || !selected.length} hint={collection("selectFirst")}
+    <ContentPage.Heading title={w("policies")} actions={<ContentPage.Actions
+      contextual={<TableActions label={collection("moreActions")} disabled={busy || !selected.length} hint={collection("selectFirst")}
         selectionLabel={selected.length ? t("selected", { count: selected.length }) : undefined} clearLabel={t("clearSelected")} onClear={() => setSelection([])}
-        actions={[{ id: "associate", label: selected.length > 1 ? t("batchAttach") : w("associateTargets"), onSelect: () => onAssociate(selected, selected.length > 1) }]} />
-    </>} />
+        actions={[{ id: "associate", label: selected.length > 1 ? t("batchAttach") : w("associateTargets"), onSelect: () => onAssociate(selected, selected.length > 1) }]} />}
+      primary={<Button size="small" disabled={busy} onClick={onCreate}><Plus aria-hidden="true" />{t("createCustomPolicy")}</Button>}
+    />} />
     <Card>
       <div className={styles.directoryHeading}>
         <Tabs.List aria-label={w("type")}>

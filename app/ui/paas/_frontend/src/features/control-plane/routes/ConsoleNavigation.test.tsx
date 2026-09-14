@@ -2,7 +2,7 @@ import { Suspense, useEffect, useRef, useState } from "react";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConsoleLink, ConsoleNavigationProvider, useConsoleNavigation } from "./ConsoleNavigation";
+import { ConsoleLink, ConsoleNavigationProvider, ROUTE_CONTENT_FALLBACK_DELAY_MS, useConsoleNavigation } from "./ConsoleNavigation";
 import { parseControlPlanePathname } from "./parseControlPlaneRoute";
 import { useUnsavedChanges } from "@ui/xiak";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
@@ -47,6 +47,7 @@ function NavigationControls() {
   const navigation = useConsoleNavigation();
   return <>
     <output aria-label="Pending destination">{navigation.pendingHref ?? "idle"}</output>
+    <output aria-label="Content fallback">{navigation.contentFallbackVisible ? "visible" : "hidden"}</output>
     <ConsoleLink href="/console/">Home</ConsoleLink>
     <ConsoleLink href="/console/resources/">Resources</ConsoleLink>
     <ConsoleLink href="/console/logs/">Logs</ConsoleLink>
@@ -171,6 +172,42 @@ describe("Console navigation", () => {
     await act(async () => request.release());
     expect(screen.getByLabelText("Current content").textContent).toBe("/console/resources/");
     expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
+  });
+
+  it("acknowledges navigation immediately but only reveals heavy content fallback after the grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = hold("/console/resources/");
+      render(<LocaleProvider><Harness withHeader /></LocaleProvider>);
+      staticHeaderRender.mockClear();
+      fireEvent.click(screen.getByRole("link", { name: "Resources" }));
+      expect(screen.getByLabelText("Pending destination").textContent).toBe("/console/resources/");
+      expect(screen.getByLabelText("Content fallback").textContent).toBe("hidden");
+      expect(within(screen.getByLabelText("全局导航")).getByRole("progressbar", { name: "正在打开资源中心…" })).toBeTruthy();
+      act(() => vi.advanceTimersByTime(ROUTE_CONTENT_FALLBACK_DELAY_MS - 1));
+      expect(screen.getByLabelText("Content fallback").textContent).toBe("hidden");
+      act(() => vi.advanceTimersByTime(1));
+      expect(screen.getByLabelText("Content fallback").textContent).toBe("visible");
+      expect(staticHeaderRender).not.toHaveBeenCalled();
+      await act(async () => request.release());
+      expect(screen.getByLabelText("Content fallback").textContent).toBe("hidden");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never reveals heavy content fallback when a cached route commits inside the grace period", () => {
+    vi.useFakeTimers();
+    try {
+      render(<Harness />);
+      fireEvent.click(screen.getByRole("link", { name: "Resources" }));
+      expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
+      act(() => vi.advanceTimersByTime(ROUTE_CONTENT_FALLBACK_DELAY_MS));
+      expect(screen.getByLabelText("Content fallback").textContent).toBe("hidden");
+      expect(screen.getByLabelText("Current content").textContent).toBe("/console/resources/");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the latest destination when navigation interrupts a slower visit", async () => {

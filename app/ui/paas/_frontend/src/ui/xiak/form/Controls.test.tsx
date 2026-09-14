@@ -35,11 +35,12 @@ describe("shared themed controls", () => {
     const user = userEvent.setup();
     function Commands() {
       const [open, setOpen] = useState(false);
-      return <><TableActions label="More actions" hint="Select a row" clearLabel="Clear" onClear={() => {}} actions={[{ id: "review", label: "Review access", onSelect: () => setOpen(true) }]} />
+      return <><TableActions label="More actions" hint="Select a row" selectionLabel="1 selected" clearLabel="Clear" onClear={() => {}} actions={[{ id: "review", label: "Review access", onSelect: () => setOpen(true) }]} />
         <Dialog open={open} title="Review" closeLabel="Close review" onClose={() => setOpen(false)}>Selected policy</Dialog></>;
     }
     render(<Commands />);
     const trigger = screen.getByRole("button", { name: "More actions" });
+    expect(screen.getByRole("status").compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(trigger.getAttribute("title")).toBeNull();
     await user.click(trigger);
     await user.click(screen.getByRole("menuitem", { name: "Review access" }));

@@ -25,6 +25,10 @@
 .headerContent { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
 .headerActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; max-width: 100%; flex: none; }
 .headerActions:empty, .headerActions[hidden] { display: none; }
+.actionBar, .contextualActions, .primaryActions { display: flex; min-width: 0; align-items: center; gap: var(--xiak-spacing-tight); }
+.actionBar { justify-content: flex-end; }
+.contextualActions { flex: 0 1 auto; }
+.primaryActions { flex: none; }
 .identity { display: flex; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; }
 .parentLink { flex: none; }
 .separator { flex: none; width: var(--xiak-font-size-small); height: var(--xiak-font-size-small); color: var(--xiak-color-text-subtle); }
@@ -54,6 +58,7 @@
 
   .headerContent { flex-wrap: wrap; padding-block: var(--xiak-spacing-tight); gap: var(--xiak-spacing-tight); }
   .headerActions { flex-wrap: wrap; }
+  .actionBar, .contextualActions { flex-wrap: wrap; justify-content: flex-end; }
   .identity { flex: 1 1 auto; }
 
   .body {

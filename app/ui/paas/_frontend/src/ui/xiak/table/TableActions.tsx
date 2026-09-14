@@ -20,6 +20,7 @@ export function TableActions({ label, disabled, hint, selectionLabel, clearLabel
   const reasonId = useId();
   const reasons = [...new Set(actions.flatMap((action) => action.disabledReason ? [action.disabledReason] : []))];
   return <div className={styles.actions}>
+    {selectionLabel ? <><span className={styles.selectionSummary} role="status">{selectionLabel}</span><Button size="small" variant="ghost" disabled={disabled} onClick={onClear}>{clearLabel}</Button></> : null}
     <Menu.Root modal={false}>
       <Menu.Trigger asChild><Button ref={trigger} size="small" variant="secondary" disabled={disabled} title={disabled ? hint : undefined}>{label}<ChevronDown aria-hidden="true" /></Button></Menu.Trigger>
       <Menu.Portal><Menu.Content aria-label={label} align="end" collisionPadding={12} sideOffset={6} className={menuStyles.popup} onCloseAutoFocus={(event) => { if (chosen.current) event.preventDefault(); chosen.current = false; }}>
@@ -32,6 +33,5 @@ export function TableActions({ label, disabled, hint, selectionLabel, clearLabel
         {reasons.length ? <><Menu.Separator className={menuStyles.separator} />{reasons.map((reason, index) => <p key={reason} id={`${reasonId}-${index}`} className={menuStyles.reason}>{reason}</p>)}</> : null}
       </Menu.Content></Menu.Portal>
     </Menu.Root>
-    {selectionLabel ? <><span className={styles.selectionSummary} role="status">{selectionLabel}</span><Button size="small" variant="ghost" disabled={disabled} onClick={onClear}>{clearLabel}</Button></> : null}
   </div>;
 }
