@@ -783,6 +783,12 @@ into the presentation component. A member-count column is rendered only when
 the repository supplies an authoritative total. The first live slice omits it
 rather than reading every membership page or presenting the loaded page size as
 a total; the isolated Preview may show its known complete local sample count.
+The first live membership projection treats the stable user identifier as its
+authoritative label. A same-account, exact-ID user summary already held by the
+directory may enhance it, but a missing summary neither proves deletion nor
+causes per-row reads. Relationship capabilities alone control displayed
+mutations. Opaque continuation values are returned unchanged and never parsed
+as identifiers or authority context.
 Groups, users and policies cross-link to the precise referenced entity; the
 IAM workspace accepts a URL entity identifier, including direct visits and
 Back/Forward navigation, without trusting it as authorization.
