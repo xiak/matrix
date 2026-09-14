@@ -419,15 +419,16 @@ const (
 )
 
 const (
-	PolicyLanguageVersion                            = "1"
-	MaxPolicyBytes               int64               = 64 * 1024
-	MaxPolicyStatements                              = 64
-	MaxStatementActions                              = 128
-	MaxStatementResources                            = 64
-	PolicyAllow                  PolicyEffect        = "ALLOW"
-	PolicyDeny                   PolicyEffect        = "DENY"
-	PolicyResourceExact          PolicyResourceMatch = "EXACT"
-	PolicyResourceAnyInAuthority PolicyResourceMatch = "ANY_IN_AUTHORITY"
+	PolicyLanguageVersion                               = "1"
+	MaxPolicyBytes                  int64               = 64 * 1024
+	MaxPolicyStatements                                 = 64
+	MaxStatementActions                                 = 128
+	MaxStatementResources                               = 64
+	PolicyAllow                     PolicyEffect        = "ALLOW"
+	PolicyDeny                      PolicyEffect        = "DENY"
+	PolicyResourceExact             PolicyResourceMatch = "EXACT"
+	PolicyResourceAnyInAuthority    PolicyResourceMatch = "ANY_IN_AUTHORITY"
+	PolicyResourcePrefixInAuthority PolicyResourceMatch = "PREFIX_IN_AUTHORITY"
 )
 
 var ErrInvalidPolicy = errors.New("IAM policy is invalid")
@@ -508,8 +509,9 @@ func ParsePolicyTime(value string) (time.Time, error) {
 	return parsed, nil
 }
 
-// ANY_IN_AUTHORITY does not assert ownership of a resource. Product PEPs must
-// still bind the actual resource to the credential-derived authority.
+// Authority-scoped matching never asserts resource ownership. Product PEPs
+// must bind the actual resource to the credential-derived authority. For
+// PREFIX_IN_AUTHORITY, ID is a literal, nonempty prefix, not a glob or a path.
 type PolicyResourceSelector struct {
 	Kind  ResourceKind        `json:"kind"`
 	Match PolicyResourceMatch `json:"match"`
@@ -606,6 +608,7 @@ func validatePolicyStructure(document PolicyDocument) error {
 		}
 		seenActions := make(map[Action]bool, len(statement.Actions))
 		requiredKinds := make(map[ResourceKind]bool)
+		prefixUnsupportedKinds := make(map[ResourceKind]bool)
 		for index, action := range statement.Actions {
 			actionPointer := pointer + "/actions/" + strconv.Itoa(index)
 			definition, known := LookupActionDefinition(action)
@@ -620,6 +623,9 @@ func validatePolicyStructure(document PolicyDocument) error {
 			}
 			seenActions[action] = true
 			requiredKinds[definition.ResourceKind] = false
+			if !definition.ResourcePrefixAllowed {
+				prefixUnsupportedKinds[definition.ResourceKind] = true
+			}
 		}
 		seenResources := make(map[PolicyResourceSelector]bool, len(statement.Resources))
 		for index, resource := range statement.Resources {
@@ -631,6 +637,16 @@ func validatePolicyStructure(document PolicyDocument) error {
 				return invalidPolicyAt(PolicyDuplicate, resourcePointer)
 			}
 			switch resource.Match {
+			case PolicyResourcePrefixInAuthority:
+				if document.Scope != AuthorityScopeTenant {
+					return invalidPolicyAt(PolicyScopeMismatch, resourcePointer+"/match")
+				}
+				if prefixUnsupportedKinds[resource.Kind] {
+					return invalidPolicyAt(PolicyUnsupported, resourcePointer+"/match")
+				}
+				if ValidateID("resource.id", resource.ID) != nil {
+					return invalidPolicyAt(PolicyInvalidValue, resourcePointer+"/id")
+				}
 			case PolicyResourceExact:
 				if ValidateID("resource.id", resource.ID) != nil {
 					return invalidPolicyAt(PolicyInvalidValue, resourcePointer+"/id")

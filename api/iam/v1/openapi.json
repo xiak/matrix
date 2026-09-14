@@ -6035,6 +6035,18 @@
                             "audit.platform-integrity.verify"
                           ]
                         }
+                      },
+                      "resources": {
+                        "items": {
+                          "properties": {
+                            "match": {
+                              "enum": [
+                                "EXACT",
+                                "ANY_IN_AUTHORITY"
+                              ]
+                            }
+                          }
+                        }
                       }
                     }
                   }
@@ -6060,6 +6072,18 @@
                           "enum": [
                             "installation.verify"
                           ]
+                        }
+                      },
+                      "resources": {
+                        "items": {
+                          "properties": {
+                            "match": {
+                              "enum": [
+                                "EXACT",
+                                "ANY_IN_AUTHORITY"
+                              ]
+                            }
+                          }
                         }
                       }
                     }
@@ -6277,7 +6301,8 @@
       "PolicyResourceMatch": {
         "enum": [
           "EXACT",
-          "ANY_IN_AUTHORITY"
+          "ANY_IN_AUTHORITY",
+          "PREFIX_IN_AUTHORITY"
         ],
         "type": "string"
       },
@@ -6287,7 +6312,10 @@
           {
             "properties": {
               "match": {
-                "const": "EXACT"
+                "enum": [
+                  "EXACT",
+                  "PREFIX_IN_AUTHORITY"
+                ]
               }
             },
             "required": [
@@ -6383,6 +6411,47 @@
             "then": {
               "properties": {
                 "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCOUNT"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "iam.account.create",
+                        "iam.account.read",
+                        "iam.account.set-status",
+                        "iam.account.recover-root-credentials",
+                        "iam.account.alias-set",
+                        "iam.user.list",
+                        "iam.policy.list",
+                        "iam.policy.create",
+                        "iam.user.create",
+                        "iam.group.list",
+                        "iam.group.create"
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -6670,6 +6739,44 @@
                     "properties": {
                       "kind": {
                         "const": "POLICY"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "iam.policy.read",
+                        "iam.policy-version.list",
+                        "iam.policy-version.read",
+                        "iam.policy-version.create",
+                        "iam.policy-version.delete",
+                        "iam.policy.set-default-version",
+                        "iam.policy.update",
+                        "iam.policy.delete"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY"
                       }
                     }
                   }
@@ -6911,6 +7018,38 @@
                     "properties": {
                       "kind": {
                         "const": "INSTALLATION"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "iam.platform-policy.list",
+                        "installation.verify"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "INSTALLATION"
                       }
                     }
                   }
@@ -6948,6 +7087,43 @@
                       "kind": {
                         "const": "USER"
                       }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "USER"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "iam.user.set-status",
+                        "iam.user.reset-password",
+                        "iam.user.read",
+                        "iam.user.update",
+                        "iam.user.delete",
+                        "iam.policy-attachment.create",
+                        "iam.platform-policy-attachment.create"
+                      ]
                     }
                   }
                 }
@@ -7186,6 +7362,42 @@
                     "properties": {
                       "kind": {
                         "const": "GROUP"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "iam.group.read",
+                        "iam.group.update",
+                        "iam.group.delete",
+                        "iam.group-membership.list",
+                        "iam.group-membership.create",
+                        "iam.group-policy-attachment.create"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "GROUP"
                       }
                     }
                   }
@@ -7337,6 +7549,37 @@
                     "properties": {
                       "kind": {
                         "const": "GROUP_MEMBERSHIP"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "iam.group-membership.remove"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "GROUP_MEMBERSHIP"
                       }
                     }
                   }
@@ -7397,6 +7640,39 @@
                       "kind": {
                         "const": "POLICY_ATTACHMENT"
                       }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY_ATTACHMENT"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "iam.group-policy-attachment.revoke",
+                        "iam.policy-attachment.revoke",
+                        "iam.platform-policy-attachment.revoke"
+                      ]
                     }
                   }
                 }
@@ -7497,6 +7773,37 @@
                       "kind": {
                         "const": "SESSION"
                       }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SESSION"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "iam.session.revoke"
+                      ]
                     }
                   }
                 }
@@ -7657,6 +7964,38 @@
                     "properties": {
                       "kind": {
                         "const": "EXECUTION_POOL"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "paas.execution-pool.create",
+                        "paas.execution-pool.read"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "EXECUTION_POOL"
                       }
                     }
                   }
@@ -7753,6 +8092,38 @@
             "then": {
               "properties": {
                 "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "EXECUTION_TARGET"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "paas.execution-target.register",
+                        "paas.execution-target.read"
+                      ]
+                    }
+                  }
+                }
               }
             }
           },
@@ -7871,6 +8242,38 @@
                     "properties": {
                       "kind": {
                         "const": "OPERATION"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "paas.platform-operation.read",
+                        "paas.operation.read"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "OPERATION"
                       }
                     }
                   }
@@ -7908,6 +8311,37 @@
                       "kind": {
                         "const": "APPLICATION"
                       }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "APPLICATION"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "paas.application.create"
+                      ]
                     }
                   }
                 }
@@ -7997,6 +8431,38 @@
                     "properties": {
                       "kind": {
                         "const": "CONFIGURATION"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "paas.configuration.create",
+                        "paas.configuration.read"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "CONFIGURATION"
                       }
                     }
                   }
@@ -8058,6 +8524,38 @@
                       "kind": {
                         "const": "CONFIGURATION_REVISION"
                       }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "CONFIGURATION_REVISION"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "paas.configuration-revision.create",
+                        "paas.configuration-revision.read"
+                      ]
                     }
                   }
                 }
@@ -8147,6 +8645,38 @@
                     "properties": {
                       "kind": {
                         "const": "APPLICATION_REVISION"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "paas.application-revision.create",
+                        "paas.application-revision.read"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "APPLICATION_REVISION"
                       }
                     }
                   }
@@ -8208,6 +8738,41 @@
                       "kind": {
                         "const": "DEPLOYMENT"
                       }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "DEPLOYMENT"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "paas.deployment.create",
+                        "paas.deployment.update",
+                        "paas.deployment.rollback",
+                        "paas.deployment.stop",
+                        "paas.deployment.read"
+                      ]
                     }
                   }
                 }
@@ -8396,6 +8961,37 @@
                     "properties": {
                       "kind": {
                         "const": "SERVICE_OFFERING"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "managedservice.offering.read"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SERVICE_OFFERING"
                       }
                     }
                   }
@@ -8446,6 +9042,37 @@
                     "properties": {
                       "kind": {
                         "const": "REGION"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "managedservice.region.read"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "REGION"
                       }
                     }
                   }
@@ -8482,6 +9109,38 @@
                       "kind": {
                         "const": "QUOTA_ENTITLEMENT"
                       }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "QUOTA_ENTITLEMENT"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "managedservice.quota-entitlement.activate",
+                        "managedservice.quota-entitlement.read"
+                      ]
                     }
                   }
                 }
@@ -8571,6 +9230,38 @@
                     "properties": {
                       "kind": {
                         "const": "SERVICE_INSTALLATION"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "managedservice.service-installation.create",
+                        "managedservice.service-installation.read"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SERVICE_INSTALLATION"
                       }
                     }
                   }
@@ -8646,6 +9337,38 @@
                     "properties": {
                       "kind": {
                         "const": "AUDIT_RECORD"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "audit.record.read",
+                        "audit.platform-record.read"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "AUDIT_RECORD"
                       }
                     }
                   }
@@ -8683,6 +9406,38 @@
                       "kind": {
                         "const": "AUDIT_CHAIN"
                       }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "AUDIT_CHAIN"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "audit.integrity.verify",
+                        "audit.platform-integrity.verify"
+                      ]
                     }
                   }
                 }

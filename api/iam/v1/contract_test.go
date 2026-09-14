@@ -332,26 +332,26 @@ func TestIAMActionDefinitionsDeclareProductServiceAndScope(t *testing.T) {
 	// These cases pin security boundaries, including equal resource kinds in
 	// different authority scopes and managedservice's PaaS caller.
 	for _, want := range []ActionDefinition{
-		{ActionIAMAccountCreate, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeInstallation},
-		{ActionIAMAccountRootCredentialsRecover, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeInstallation},
-		{ActionIAMUserCreate, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
-		{ActionIAMPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
-		{ActionIAMPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeTenant},
-		{ActionIAMPlatformPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeInstallation},
-		{ActionIAMPlatformPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeInstallation},
-		{ActionIAMSessionRevoke, ProductIAM, ServiceIAM, ResourceSession, AuthorityScopeTenant},
-		{ActionPaaSApplicationCreate, ProductPaaS, ServicePaaS, ResourceApplication, AuthorityScopeTenant},
-		{ActionPaaSExecutionPoolCreate, ProductPaaS, ServicePaaS, ResourceExecutionPool, AuthorityScopeInstallation},
-		{ActionPaaSExecutionTargetRegister, ProductPaaS, ServicePaaS, ResourceExecutionTarget, AuthorityScopeInstallation},
-		{ActionPaaSOperationRead, ProductPaaS, ServicePaaS, ResourceOperation, AuthorityScopeTenant},
-		{ActionPaaSPlatformOperationRead, ProductPaaS, ServicePaaS, ResourceOperation, AuthorityScopeInstallation},
-		{ActionManagedServiceOfferingRead, ProductManagedService, ServicePaaS, ResourceServiceOffering, AuthorityScopeTenant},
-		{ActionManagedServiceInstallationCreate, ProductManagedService, ServicePaaS, ResourceServiceInstallation, AuthorityScopeTenant},
-		{ActionAuditRecordRead, ProductAudit, ServiceAudit, ResourceAuditRecord, AuthorityScopeTenant},
-		{ActionAuditPlatformRecordRead, ProductAudit, ServiceAudit, ResourceAuditRecord, AuthorityScopeInstallation},
-		{ActionAuditIntegrityVerify, ProductAudit, ServiceAudit, ResourceAuditChain, AuthorityScopeTenant},
-		{ActionAuditPlatformIntegrityVerify, ProductAudit, ServiceAudit, ResourceAuditChain, AuthorityScopeInstallation},
-		{ActionInstallationVerify, ProductInstallation, ServiceInstallationVerifier, ResourceInstallation, AuthorityScopeInstallationProbe},
+		{ActionIAMAccountCreate, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeInstallation, false},
+		{ActionIAMAccountRootCredentialsRecover, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeInstallation, false},
+		{ActionIAMUserCreate, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant, false},
+		{ActionIAMPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant, false},
+		{ActionIAMPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeTenant, false},
+		{ActionIAMPlatformPolicyAttachmentCreate, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeInstallation, false},
+		{ActionIAMPlatformPolicyAttachmentRevoke, ProductIAM, ServiceIAM, ResourcePolicyAttachment, AuthorityScopeInstallation, false},
+		{ActionIAMSessionRevoke, ProductIAM, ServiceIAM, ResourceSession, AuthorityScopeTenant, false},
+		{ActionPaaSApplicationCreate, ProductPaaS, ServicePaaS, ResourceApplication, AuthorityScopeTenant, false},
+		{ActionPaaSExecutionPoolCreate, ProductPaaS, ServicePaaS, ResourceExecutionPool, AuthorityScopeInstallation, false},
+		{ActionPaaSExecutionTargetRegister, ProductPaaS, ServicePaaS, ResourceExecutionTarget, AuthorityScopeInstallation, false},
+		{ActionPaaSOperationRead, ProductPaaS, ServicePaaS, ResourceOperation, AuthorityScopeTenant, false},
+		{ActionPaaSPlatformOperationRead, ProductPaaS, ServicePaaS, ResourceOperation, AuthorityScopeInstallation, false},
+		{ActionManagedServiceOfferingRead, ProductManagedService, ServicePaaS, ResourceServiceOffering, AuthorityScopeTenant, false},
+		{ActionManagedServiceInstallationCreate, ProductManagedService, ServicePaaS, ResourceServiceInstallation, AuthorityScopeTenant, false},
+		{ActionAuditRecordRead, ProductAudit, ServiceAudit, ResourceAuditRecord, AuthorityScopeTenant, false},
+		{ActionAuditPlatformRecordRead, ProductAudit, ServiceAudit, ResourceAuditRecord, AuthorityScopeInstallation, false},
+		{ActionAuditIntegrityVerify, ProductAudit, ServiceAudit, ResourceAuditChain, AuthorityScopeTenant, false},
+		{ActionAuditPlatformIntegrityVerify, ProductAudit, ServiceAudit, ResourceAuditChain, AuthorityScopeInstallation, false},
+		{ActionInstallationVerify, ProductInstallation, ServiceInstallationVerifier, ResourceInstallation, AuthorityScopeInstallationProbe, false},
 	} {
 		if got, known := LookupActionDefinition(want.Action); !known || got != want {
 			t.Errorf("definition %s = %+v known=%v, want %+v", want.Action, got, known, want)
@@ -455,6 +455,55 @@ func policyDocumentFixture() PolicyDocument {
 			{Kind: ResourceApplication, Match: PolicyResourceAnyInAuthority},
 		}},
 	}}
+}
+
+func TestPolicyResourcePrefixesAreLiteralAndScopeBounded(t *testing.T) {
+	document := policyDocumentFixture()
+	document.Statements = document.Statements[:1]
+	document.Statements[0].Actions = []Action{ActionPaaSApplicationRead}
+	document.Statements[0].Resources = []PolicyResourceSelector{{Kind: ResourceApplication, ID: "application-"}}
+	for index := range document.Statements[0].Resources {
+		document.Statements[0].Resources[index].Match = PolicyResourceMatch("PREFIX_IN_AUTHORITY")
+	}
+	canonical, digest, err := CanonicalizePolicyDocument(document)
+	if err != nil {
+		t.Fatal("declared literal resource prefix rejected", err)
+	}
+	decoded, err := DecodePolicyDocument(strings.NewReader(canonical))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, secondDigest, err := CanonicalizePolicyDocument(decoded); err != nil || second != canonical || secondDigest != digest {
+		t.Fatal("prefix document round trip changed content")
+	}
+	document.Statements[0].Actions = []Action{ActionPaaSApplicationRead, ActionPaaSApplicationCreate}
+	if !errors.Is(ValidatePolicyDocument(document), ErrInvalidPolicy) {
+		t.Fatal("instance read capability admitted collection create prefix")
+	}
+	document.Statements[0].Actions = []Action{ActionPaaSApplicationRead}
+	for _, value := range []string{"a", "app-prod-", "A._:-", strings.Repeat("a", 128)} {
+		document.Statements[0].Resources[0].ID = value
+		if err := ValidatePolicyDocument(document); err != nil {
+			t.Fatal("valid literal prefix rejected", err)
+		}
+	}
+	for _, value := range []string{"", "*", "app-*", "app?", "app[ab]", "app/", "app\\", " app", "app\n", "应用", strings.Repeat("a", 129)} {
+		document.Statements[0].Resources[0].ID = value
+		if !errors.Is(ValidatePolicyDocument(document), ErrInvalidPolicy) {
+			t.Fatal("nonliteral or unbounded prefix admitted")
+		}
+	}
+	for _, action := range AllActionDefinitions() {
+		if action.ResourcePrefixAllowed {
+			continue
+		}
+		document.Scope = action.AuthorityScope
+		document.Statements[0].Actions = []Action{action.Action}
+		document.Statements[0].Resources = []PolicyResourceSelector{{Kind: action.ResourceKind, Match: "PREFIX_IN_AUTHORITY", ID: "resource-"}}
+		if !errors.Is(ValidatePolicyDocument(document), ErrInvalidPolicy) {
+			t.Fatal("prefix crossed tenant policy scope")
+		}
+	}
 }
 
 func TestPolicyIdentityStringConditionsAreBoundedSets(t *testing.T) {
@@ -809,6 +858,15 @@ func FuzzPolicyDocumentCanonicalRoundTrip(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Add(identityCanonical)
+	prefix := policyDocumentFixture()
+	prefix.Statements = prefix.Statements[:1]
+	prefix.Statements[0].Actions = []Action{ActionPaaSApplicationRead}
+	prefix.Statements[0].Resources = []PolicyResourceSelector{{Kind: ResourceApplication, Match: PolicyResourcePrefixInAuthority, ID: "application-"}}
+	prefixCanonical, _, err := CanonicalizePolicyDocument(prefix)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(prefixCanonical)
 	f.Add(`{"languageVersion":"1","scope":"TENANT","statements":[]}`)
 	f.Add(`{"statements":null}`)
 	f.Fuzz(func(t *testing.T, source string) {

@@ -66,6 +66,30 @@ func TestPolicyConditionSchemaRejectsUntrustedShape(t *testing.T) {
 	}
 }
 
+func TestResourcePrefixSchemaIsLiteralAndTenantOnly(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "PolicyDocument")
+	for _, action := range AllActionDefinitions() {
+		value := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: action.AuthorityScope,
+			Statements: []PolicyStatement{{SID: "Prefix", Effect: PolicyAllow, Actions: []Action{action.Action},
+				Resources: []PolicyResourceSelector{{Kind: action.ResourceKind, Match: "PREFIX_IN_AUTHORITY", ID: "resource-"}}}}}
+		for _, id := range []string{"resource-", "", "resource-*", "resource?", strings.Repeat("r", 129)} {
+			value.Statements[0].Resources[0].ID = id
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+			if err != nil {
+				t.Fatal(err)
+			}
+			valid := action.ResourcePrefixAllowed && id == "resource-"
+			if (schema.Validate(instance) == nil) != valid || (ValidatePolicyDocument(value) == nil) != valid {
+				t.Fatal("prefix schema/validator scope or grammar differs")
+			}
+		}
+	}
+}
+
 func TestIdentityConditionSchemaUsesKeySpecificOperatorsAndBoundedIDs(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "CreatePolicyRequest")
 	for _, key := range []ConditionKey{ConditionIAMAccountID, ConditionIAMPrincipalID} {

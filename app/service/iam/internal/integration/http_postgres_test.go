@@ -823,6 +823,8 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 			t.Fatal(err)
 		}
 		checkDocument(canonical, action.AuthorityScope == iamv1.AuthorityScopeTenant)
+		document.Statements[0].Resources[0] = iamv1.PolicyResourceSelector{Kind: action.ResourceKind, Match: iamv1.PolicyResourcePrefixInAuthority, ID: "resource-"}
+		checkDocument(string(mustIAMJSON(t, document)), action.ResourcePrefixAllowed)
 		if action.AuthorityScope != iamv1.AuthorityScopeTenant {
 			document.Scope = iamv1.AuthorityScopeTenant
 			checkDocument(string(mustIAMJSON(t, document)), false)
@@ -1595,6 +1597,82 @@ func proveIdentityStringConditions(t *testing.T, ctx context.Context, handler ht
 	authorize(bearer, member, false, "", "")
 	if response := performIAMRequest(handler, http.MethodGet, path, foreignRoot, nil); response.Code != http.StatusForbidden {
 		t.Fatal("foreign root read another account's conditional policy")
+	}
+	// Reuse the two actual accounts/groups, but grant a distinct resource
+	// prefix. Identical resource IDs still require each account's own attachment.
+	prefixDocument := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{
+			{SID: "prefix-read", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourcePrefixInAuthority, ID: "prefix-app-"}}},
+			{SID: "prefix-private", Effect: iamv1.PolicyDeny, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourcePrefixInAuthority, ID: "prefix-app-private"}}},
+		}}
+	prefixDecide := func(credential string, user iamv1.User, resource string, want bool) iamv1.AuthorizationDecision {
+		t.Helper()
+		request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: resource}, RequestID: "prefix-read-" + resource, CorrelationID: "prefix-read"}
+		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, credential)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || iamv1.ValidateAuthorizationDecision(decision) != nil || decision.Allowed != want {
+			t.Fatalf("prefix decision resource=%s status=%d allowed=%v", resource, response.Code, decision.Allowed)
+		}
+		var owned bool
+		if err := database.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND id=$3)`, user.AccountID, user.ID, decision.ID).Scan(&owned); err != nil || !owned {
+			t.Fatal("resource prefix changed authoritative ownership")
+		}
+		return decision
+	}
+	for index, account := range []struct {
+		root, bearer string
+		user         iamv1.User
+		group        iamv1.Group
+		membership   iamv1.GroupMembership
+	}{
+		{root, bearer, member, group, memberships[0]}, {foreignRoot, foreignBearer, foreignMember, foreignGroup, foreignMembership},
+	} {
+		prefixDecide(account.bearer, account.user, "prefix-app-api", false)
+		var prefixPolicy iamv1.PolicyDetail
+		post("/v1/policies", account.root, iamv1.CreatePolicyRequest{DisplayName: "Prefixed applications", Document: prefixDocument, RequestID: "prefix-policy-create"}, http.StatusCreated, &prefixPolicy)
+		var prefixAttachment iamv1.PolicyAttachment
+		post("/v1/policy-attachments", account.root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(account.group.ID)}, PolicyID: prefixPolicy.Policy.ID, PolicyResourceVersion: 1, RequestID: "prefix-policy-attach"}, http.StatusOK, &prefixAttachment)
+		allowed := prefixDecide(account.bearer, account.user, "prefix-app-api", true)
+		prefixDecide(account.bearer, account.user, "prefix-app-", true)
+		for _, id := range []string{"prefix-app", "Prefix-app-api", "other-app-api", "prefix-app-private", "prefix-app-private-api"} {
+			prefixDecide(account.bearer, account.user, id, false)
+		}
+		var evidence []authority.PolicyAttachmentEvidence
+		if err := database.QueryRow(ctx, `SELECT policy_evidence FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, account.user.AccountID, allowed.ID).Scan(&raw); err != nil || json.Unmarshal(raw, &evidence) != nil || len(evidence) != 1 || evidence[0].MembershipID != account.membership.ID || evidence[0].Version.VersionID != prefixPolicy.Version.ID {
+			t.Fatal("prefix permission lost actual group/version provenance")
+		}
+		if index == 0 {
+			prefixDecide(foreignBearer, foreignMember, "prefix-app-api", false)
+			post("/v1/policy-attachments", foreignRoot, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(foreignGroup.ID)}, PolicyID: prefixPolicy.Policy.ID, PolicyResourceVersion: 1, RequestID: "prefix-foreign-policy"}, http.StatusForbidden, nil)
+		}
+		var prefixFact auditv1.Event
+		if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'iamDecisionId'=$2 AND event_document->>'action'='iam.authorization.decided'`, account.user.AccountID, allowed.ID).Scan(&raw); err != nil || json.Unmarshal(raw, &prefixFact) != nil {
+			t.Fatal("read prefix decision fact")
+		}
+		changed := prefixDocument
+		changed.Statements = append([]iamv1.PolicyStatement(nil), prefixDocument.Statements...)
+		changed.Statements[0].Resources = []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourcePrefixInAuthority, ID: "prefix-other-"}}
+		var next iamv1.PolicyVersionDetail
+		prefixPath := "/v1/policies/" + string(prefixPolicy.Policy.ID)
+		post(prefixPath+"/versions", account.root, iamv1.CreatePolicyVersionRequest{Document: changed, ResourceVersion: 1, RequestID: "prefix-version"}, http.StatusCreated, &next)
+		prefixDecide(account.bearer, account.user, "prefix-app-api", true)
+		post(prefixPath+":set-default-version", account.root, iamv1.SetDefaultPolicyVersionRequest{VersionID: next.Version.ID, ResourceVersion: 2, RequestID: "prefix-default"}, http.StatusOK, nil)
+		prefixDecide(account.bearer, account.user, "prefix-app-api", false)
+		prefixDecide(account.bearer, account.user, "prefix-other-api", true)
+		post("/v1/policy-attachments/"+string(prefixAttachment.ID)+":revoke", account.root, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: prefixAttachment.ResourceVersion, RequestID: "prefix-revoke"}, http.StatusOK, nil)
+		prefixDecide(account.bearer, account.user, "prefix-other-api", false)
+		post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: prefixFact}, http.StatusOK, nil)
+	}
+	prefixCanonical, _, err := iamv1.CanonicalizePolicyDocument(prefixDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, malformed := range []string{strings.Replace(prefixCanonical, `"id":"prefix-app-"`, `"id":""`, 1), strings.Replace(prefixCanonical, `"id":"prefix-app-"`, `"id":"prefix-app-*"`, 1), strings.Replace(prefixCanonical, "PREFIX_IN_AUTHORITY", "REGEX", 1)} {
+		_, err := database.Exec(ctx, `SELECT iam.assert_customer_policy_document($1,'sha256:'||encode(sha256(convert_to('matrix.iam.policy.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'))`, malformed)
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != "22023" {
+			t.Fatal("storage admitted malformed resource prefix")
+		}
 	}
 }
 

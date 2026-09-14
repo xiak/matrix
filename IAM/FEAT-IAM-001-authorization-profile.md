@@ -29,6 +29,8 @@
 
 ## 事务与权限
 
+005 的资源前缀切片在同一 `ActionDefinition` 增加 `ResourcePrefixAllowed`，默认 false；当前只为已验证传入精确实例 ID 的 `paas.application.read` 声明 true。语法验证、生成 schema 和唯一 PDP 均读取该能力，不依据服务名称、Action 后缀或 ResourceKind 推断。create/list/collection、platform/probe 以及新加入但未声明的动作均不支持 PREFIX；其他实例能力须随真实 PEP/粒度门禁逐项登记。SQL 发布不变量由既有存储 owner 执行，并以所有当前 Action 的真实 PG 正/负校验对照该目录，不把手写 SQL 约束声称为另一可编辑目录。此声明不是完整 Profile/granularity 或所有业务前缀能力验收。
+
 目录是发布源码常量，读取无副作用；既有 IAM 当前凭据、SERIALIZABLE 决定持久化和 outbox 事务不变。后续可写 Profile 发布必须受产品注册权威管理，不能由租户管理员声明新的 platform Action。
 
 ## 验收

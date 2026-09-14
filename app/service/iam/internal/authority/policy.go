@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -165,7 +166,21 @@ func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVe
 				continue
 			}
 			for _, selector := range statement.Resources {
-				if selector.Kind != resource.Kind || (selector.Match == iamv1.PolicyResourceExact && selector.ID != resource.ID) {
+				if selector.Kind != resource.Kind {
+					continue
+				}
+				resourceMatches := false
+				switch selector.Match {
+				case iamv1.PolicyResourceExact:
+					resourceMatches = selector.ID == resource.ID
+				case iamv1.PolicyResourceAnyInAuthority:
+					resourceMatches = true
+				case iamv1.PolicyResourcePrefixInAuthority:
+					resourceMatches = strings.HasPrefix(resource.ID, selector.ID)
+				default:
+					return PolicyEvaluation{}, ErrInvalidPolicyState
+				}
+				if !resourceMatches {
 					continue
 				}
 				matched = true

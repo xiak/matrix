@@ -42,6 +42,45 @@ func TestDirectoryCursorCannotBypassExpiredPolicyConditions(t *testing.T) {
 	}
 }
 
+func TestResourcePrefixCannotGrantDirectoryAccessOrPreserveStaleCursor(t *testing.T) {
+	now := authorityTestTime()
+	codec, err := NewCursorCodec(bytes.Repeat([]byte{0x38}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject := authoritySubject(now, iamv1.SystemPolicyAccountAdministrator)
+	prefix := authoritySubject(now, iamv1.SystemPolicyPaaSViewer).Policies[0]
+	prefix.Version = policyVersionForTest(t, "prefix-cursor-policy", iamv1.PolicyAllow, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourcePrefixInAuthority, "application-")
+	prefix.Policy.ID, prefix.Attachment.PolicyID = prefix.Version.PolicyID, prefix.Version.PolicyID
+	prefix.Policy.DefaultVersionID = prefix.Version.ID
+	prefix.Policy.Management, prefix.Policy.AccountID = iamv1.PolicyCustomerManaged, subject.Organization.ID
+	query := DirectoryQuery{InstallationID: subject.InstallationID, Action: iamv1.ActionIAMGroupList, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Organization.ID)}}
+	onlyPrefix := subject
+	onlyPrefix.Policies = []AttachedPolicy{prefix}
+	if _, err := codec.Encode(onlyPrefix, query, "group-last", now); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("application prefix granted directory authority")
+	}
+	subject.Policies = append(subject.Policies, prefix)
+	cursor, err := codec.Encode(subject, query, "group-last", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := &subject.Policies[len(subject.Policies)-1]
+	changed.Version.Document.Statements[0].Resources[0].ID = "application-other-"
+	changed.Version.ID, changed.Policy.DefaultVersionID = "prefix-next-version", "prefix-next-version"
+	changed.Policy.ResourceVersion++
+	_, changed.Version.ContentDigest, err = iamv1.CanonicalizePolicyDocument(changed.Version.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codec.Decode(cursor, subject, query, now); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("cursor retained stale prefix policy snapshot")
+	}
+	if _, err := codec.Encode(subject, query, "group-last", now); err != nil {
+		t.Fatal("independent current directory grant lost after prefix change")
+	}
+}
+
 func TestDirectoryCursorRechecksIdentityConditionsAfterDefaultChange(t *testing.T) {
 	now := authorityTestTime()
 	codec, err := NewCursorCodec(bytes.Repeat([]byte{0x37}, 32))

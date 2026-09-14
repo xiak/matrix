@@ -262,3 +262,13 @@ Legacy `69336e51f94fa98f6aa278fa4c62382e224dbeaf` is not present in this
 checkout's object database. The earlier IAM/002 review remains historical
 context, not evidence of a new inspection. This foundation imports no legacy
 code or runtime and makes no new claim about a donor diagnostic implementation.
+
+For the resource-prefix target recorded in IAM/005, fixed Matrix
+`4f22e223398fbe4523bc09d6a369677cb23767db` is `ADAPT`: its existing
+PolicyResourceSelector, strict validator/canonical and sole attached-policy
+evaluator gain a bounded literal prefix under an explicit ActionDefinition
+capability. Its PaaS `getApplication`/`authorizePath` is `REFERENCE` for the
+exact instance ID boundary; no PaaS production code is imported or changed.
+Implicit action-name wildcards, arbitrary glob/regex execution and inferring
+collection support from resource kind are `REJECT`. No legacy implementation
+or runtime dependency is introduced; acceptance remains with IAM/005.

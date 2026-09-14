@@ -777,7 +777,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 16, Audit: 11, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 17, Audit: 11, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -943,6 +943,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		"create-application-process",
 		http.StatusCreated,
 	)
+	createPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-nonprefix", "nonprefix-application", "create-application-nonprefix", http.StatusCreated)
 	if developerOperation.Scope != (paasv1.ResourceScope{
 		Kind: paasv1.AuthorityTenant, TenantID: "organization-process",
 	}) || developerOperation.RequestedBy != (paasv1.SubjectRef{
@@ -1051,6 +1052,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	timedRequest := customRequest
 	timedRequest.DisplayName, timedRequest.RequestID = "Time bound process application", "request-process-time-policy"
 	timedRequest.Document.Statements = append([]iamv1.PolicyStatement(nil), customRequest.Document.Statements...)
+	timedRequest.Document.Statements[0].Resources = []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourcePrefixInAuthority, ID: "application-pro"}}
 	timedRequest.Document.Statements[0].Conditions = []iamv1.PolicyCondition{
 		{Key: iamv1.ConditionIAMAccountID, Operator: iamv1.PolicyStringEquals, Values: []string{string(developer.AccountID)}},
 		{Key: iamv1.ConditionIAMPrincipalID, Operator: iamv1.PolicyStringEquals, Values: []string{"another-principal", string(developer.ID)}},
@@ -1064,6 +1066,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	}
 	timedAttachment := createIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, developer.ID, timedPolicy.Policy.ID, "request-process-time-attach")
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-nonprefix", http.StatusForbidden)
 	for policyClock.Before(policyExpiry) {
 		select {
 		case <-ctx.Done():

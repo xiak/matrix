@@ -171,11 +171,14 @@ BEGIN
             IF jsonb_typeof(selector) IS DISTINCT FROM 'object' OR NOT (selector ?& ARRAY['kind','match'])
                OR selector-ARRAY['kind','match','id']<>'{}'::jsonb
                OR jsonb_typeof(selector->'kind') IS DISTINCT FROM 'string'
-               OR COALESCE(selector->>'match','') NOT IN ('EXACT','ANY_IN_AUTHORITY')
+               OR COALESCE(selector->>'match','') NOT IN ('EXACT','ANY_IN_AUTHORITY','PREFIX_IN_AUTHORITY')
                OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(statement->'actions') AS item
                     WHERE iam.resource_kind_for_action(item)=selector->>'kind')
                OR (selector->>'match'='ANY_IN_AUTHORITY' AND selector ? 'id')
-               OR (selector->>'match'='EXACT' AND (jsonb_typeof(selector->'id') IS DISTINCT FROM 'string'
+               OR (selector->>'match'='PREFIX_IN_AUTHORITY' AND EXISTS(
+                    SELECT 1 FROM jsonb_array_elements_text(statement->'actions') AS item
+                    WHERE iam.resource_kind_for_action(item)=selector->>'kind' AND item<>'paas.application.read'))
+               OR (selector->>'match' IN ('EXACT','PREFIX_IN_AUTHORITY') AND (jsonb_typeof(selector->'id') IS DISTINCT FROM 'string'
                     OR COALESCE(selector->>'id','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')) THEN
                 RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy resource is invalid';
             END IF;

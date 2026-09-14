@@ -462,6 +462,39 @@ func TestPolicyTimeWindowsUseOneAuthorityClockAndDenyAcrossSources(t *testing.T)
 	}
 }
 
+func TestResourcePrefixEvaluationIsLiteralAndDenyFirst(t *testing.T) {
+	allow := policyVersionForTest(t, "policy-prefix-allow", iamv1.PolicyAllow, iamv1.ActionPaaSApplicationRead, "PREFIX_IN_AUTHORITY", "application-prod-")
+	deny := policyVersionForTest(t, "policy-prefix-deny", iamv1.PolicyDeny, iamv1.ActionPaaSApplicationRead, "PREFIX_IN_AUTHORITY", "application-prod-private")
+	for _, test := range []struct {
+		id              string
+		allowed, denied bool
+	}{
+		{"application-prod-", true, false},
+		{"application-prod-api", true, false},
+		{"application-prod", false, false},
+		{"Application-prod-api", false, false},
+		{"application-dev-api", false, false},
+		{"application-prod-private", false, true},
+		{"application-prod-private-api", false, true},
+	} {
+		for _, versions := range [][]iamv1.PolicyVersion{{allow, deny}, {deny, allow}} {
+			result, err := evaluatePolicies(policyContextForTest(authorityTestTime()), versions, iamv1.ActionPaaSApplicationRead,
+				iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: test.id})
+			if err != nil || result.Allowed != test.allowed || result.ExplicitDeny != test.denied {
+				t.Fatalf("prefix evaluation id=%s allowed=%v deny=%v err=%v", test.id, result.Allowed, result.ExplicitDeny, err)
+			}
+		}
+	}
+	longPrefix := strings.Repeat("r", 127)
+	longVersion := policyVersionForTest(t, "policy-long-prefix", iamv1.PolicyAllow, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourcePrefixInAuthority, longPrefix)
+	for _, id := range []string{longPrefix, longPrefix + "z", longPrefix[:126], longPrefix[:126] + "Rz"} {
+		result, err := evaluatePolicies(policyContextForTest(authorityTestTime()), []iamv1.PolicyVersion{longVersion}, iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: id})
+		if err != nil || result.Allowed != (id == longPrefix || id == longPrefix+"z") {
+			t.Fatal("maximum-length literal prefix comparison differs")
+		}
+	}
+}
+
 func TestPolicyEvaluationDefaultsToDenyAndExplicitDenyWins(t *testing.T) {
 	allow := policyVersionForTest(t, "policy-allow", iamv1.PolicyAllow, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceAnyInAuthority, "")
 	deny := policyVersionForTest(t, "policy-deny", iamv1.PolicyDeny, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceExact, "application-protected")

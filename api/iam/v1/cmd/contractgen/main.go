@@ -257,7 +257,7 @@ func enumSchemas() map[string][]string {
 		"PolicyEffect":               {string(iamv1.PolicyAllow), string(iamv1.PolicyDeny)},
 		"ConditionKey":               {string(iamv1.ConditionIAMCurrentTime), string(iamv1.ConditionIAMAccountID), string(iamv1.ConditionIAMPrincipalID)},
 		"PolicyConditionOperator":    {string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan), string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals)},
-		"PolicyResourceMatch":        {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority)},
+		"PolicyResourceMatch":        {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority), string(iamv1.PolicyResourcePrefixInAuthority)},
 		"Action":                     openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
 			string(iamv1.ResourceAccount), string(iamv1.ResourceUser),
@@ -668,7 +668,7 @@ func applyPolicyLanguageOverlays(schemas object) {
 		items["minItems"], items["maxItems"], items["uniqueItems"] = 1, maximum, true
 	}
 	schemas["PolicyResourceSelector"].(object)["oneOf"] = []any{
-		object{"required": []string{"id"}, "properties": object{"match": object{"const": string(iamv1.PolicyResourceExact)}}},
+		object{"required": []string{"id"}, "properties": object{"match": object{"enum": []string{string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourcePrefixInAuthority)}}}},
 		object{"properties": object{"match": object{"const": string(iamv1.PolicyResourceAnyInAuthority)}, "id": false}},
 	}
 	var scopeRules []any
@@ -679,9 +679,13 @@ func applyPolicyLanguageOverlays(schemas object) {
 				actions = append(actions, string(definition.Action))
 			}
 		}
+		properties := object{"actions": object{"items": object{"enum": actions}}}
+		if scope != iamv1.AuthorityScopeTenant {
+			properties["resources"] = object{"items": object{"properties": object{"match": object{"enum": []string{string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority)}}}}}
+		}
 		scopeRules = append(scopeRules, object{
 			"if":   object{"properties": object{"scope": object{"const": string(scope)}}},
-			"then": object{"properties": object{"statements": object{"items": object{"properties": object{"actions": object{"items": object{"enum": actions}}}}}}},
+			"then": object{"properties": object{"statements": object{"items": object{"properties": properties}}}},
 		})
 	}
 	document["allOf"] = scopeRules
@@ -703,10 +707,22 @@ func applyPolicyLanguageOverlays(schemas object) {
 		}
 		seenKinds[definition.ResourceKind] = true
 		actions := []string{}
+		prefixUnsupported := []string{}
 		for _, candidate := range iamv1.AllActionDefinitions() {
 			if candidate.ResourceKind == definition.ResourceKind {
 				actions = append(actions, string(candidate.Action))
+				if !candidate.ResourcePrefixAllowed {
+					prefixUnsupported = append(prefixUnsupported, string(candidate.Action))
+				}
 			}
+		}
+		if len(prefixUnsupported) != 0 {
+			actionRules = append(actionRules, object{
+				"if": object{"properties": object{"resources": object{"contains": object{"properties": object{
+					"kind": object{"const": string(definition.ResourceKind)}, "match": object{"const": string(iamv1.PolicyResourcePrefixInAuthority)},
+				}}}}},
+				"then": object{"properties": object{"actions": object{"not": object{"contains": object{"enum": prefixUnsupported}}}}},
+			})
 		}
 		actionRules = append(actionRules, object{
 			"if":   object{"properties": object{"resources": object{"contains": object{"properties": object{"kind": object{"const": string(definition.ResourceKind)}}}}}},

@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期及 IAM 权威时间条件已有固定 CI；时间条件以修复原别名竞争后的 `581ce75` 为最终验证点。身份字符串条件的本地真实闭环已通过，但 `b208ab0` 独立 CI 的原 SSH 测试失败，修复后须重新确认；IP 条件、边界和 UI 闭环未完成，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期及时间/身份字符串条件已有固定 CI；身份条件以修复原 SSH 测试屏障后的 `4f22e22` 为最终验证点。资源前缀实施中；动作通配、IP 条件、边界和 UI 闭环未完成，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -72,6 +72,20 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 - 同请求精确重放仅在其原结果修订仍当前时返回；错误版本、变体、后来已有其他修订或其他命令再次删除均冲突。成功事实为租户链 `iam.policy-version.deleted`，target 为所属 POLICY，原 request digest 绑定准确 versionId、Policy ID 和预期修订；退休、修订、授权决定与 outbox 同事务。
 - 再次提交仍在管理集合的相同内容继续冲突；已退休的内容可用新请求重新发布，但必须形成新 versionId，不能清除旧退休状态。digest-only 的初始 ID 原样保留；新版本发布 ID 绑定 contentDigest 与本次 Policy 结果修订（单调 resourceVersion），不再将“内容相同”误当成“同一次发布”。ID 对客户端始终是不透明值，不允许客户端拼接或推导授权。内容 digest/canonical 算法不变，新发布不会自动成为默认或产生附件。
 - 真实门禁：五项满额→退休非默认项→创建新内容以及再次发布已退休内容；活跃重复拒绝；退休版本的旧决定和 Audit proof 保留；旧创建/删除重放及 schema/bootstrap 重放不复活；删除与默认切换/新建/Policy 删除同修订竞争只有确定赢家；末尾 outbox 故障没有部分退休或名额变化。现有默认版本始终可读、目录只含最多五个可管理版本。后续 boundary 若引入精确版本引用，须在其 owning slice 将该活跃引用加入同锁删除约束，不能只依赖历史存在或静态检查。
+
+#### 受限资源通配：当前权威内的 ID 前缀
+
+该纵向切片实施中，尚未验收。资源选择器沿用 `kind`、`match`、`id`，增加 `PREFIX_IN_AUTHORITY`：`id` 是非空、最多 128 字节、符合当前稳定 ID 字符集的字面前缀，例如 `application-prod-`；匹配该前缀本身和以其开头的合法资源 ID。`*`、`?`、正则、转义、路径归一化和大小写折叠均不参与此语法，也不增加另一种带星号的兼容写法。完全匹配仍为 EXACT，整个权威内同种资源仍为 ANY_IN_AUTHORITY，后者不携带 id。
+
+前缀只缩小当前已认证权威中的资源集合，不从 ID 猜账号/主体/目录层级，也不取显示名、别名或标签。只在 TENANT 且动作目录明确声明支持时启用；能力声明由 001 拥有，当前仅真实实例 `paas.application.read` 开启。相同 ResourceKind 不能让 create/list/collection、平台/probe 或未来动作隐式获得前缀支持；同一语句有多个使用该 kind 的动作时，必须全部声明支持，不能用其中一个 read 掩盖 create。原 EXACT/ANY 行为不变。
+
+产品 PEP 仍独立证明真实资源归属并按既有集合/实例语义调用 IAM；`getApplication` 传入 URL 中的精确 applicationId，数据读取再次使用当前 tenant。匹配某个集合 ID 不意味着可将实例列表按前缀自动过滤，更不改变 create 的 collection→最终 ID 契约。账号相同前缀、甚至相同 ID 仍严格隔离。目录分页不能用此前缀获得权限，现有 cursor 的每页当前 PDP/完整权限快照校验继续保留。
+
+匹配为一次有界字面前缀比较，每个选择器最多比较 128 字节；现有文档/语句/动作/资源数量和总评估预算不增加，无正则编译、回溯、文件系统匹配或展开缓存。匹配 Deny 与所有直接/组来源、条件照常合成，默认切换/撤销和 cursor 必须重新检查当前版本。旧 EXACT/ANY 内容和 canonical 不变，历史事实不按新默认权限重新授权。
+
+验收沿用现有契约、求值器、HTTP/PG 与双 IAM/PaaS/Audit 门禁：前缀本身/较短 ID/匹配后缀/不匹配/大小写/最大长度、空与通配字符攻击、重复选择器、未知 kind、平台/probe 拒绝；组继承与匹配 Deny、时间/身份组合、跨账号同前缀/同 ID、旧 cursor/版本重放、受限 SQL 发布及末尾事务失败无部分效果。至少实际 PaaS 中一个匹配应用允许、一个非匹配应用拒绝，随后改变默认/撤销后同 bearer 下一请求拒绝；不能只增加 parser 单测。
+
+动作通配符仍是 LANG-03 的未完成部分，须结合 001/008 的版本化 Profile 冻结展开范围与历史证据：旧不可变 PolicyVersion 不能因产品以后注册了同前缀的新动作而自动取得这些权限。不以运行时字符串前缀判断 Action、服务或 scope，不把资源前缀子集宣称为完整 LANG-03。
 
 #### 条件首片：IAM 权威时间
 
@@ -184,10 +198,24 @@ PG18 聚焦 `customer_policy_terminal_deletion` 最终通过，3.18s（含父门
 
 完整串行 PG18 回归通过：Audit 数据层 5.449s、Audit HTTP 3.060s、IAM integration race 172.276s、独立双 IAM/PaaS/Audit 45.125s、PaaS 数据层 4.427s。实际 PaaS 同一 bearer 使用账号/主体/时间组合条件，窗口后拒绝；发布不切换默认，显式切换到否定集合后按当前主体允许或拒绝，撤销附件再次拒绝。真实 dispatcher、受限 runtime 登录、跨账号资源/Operation/outbox、历史链与当前状态重放门禁保留。随后补充的服务凭据冒充 USER 攻击在新库聚焦复验通过，11.31s（父门禁 15.80s、包 18.343s）；没有用默认跳过数据库的测试代替真实验收。
 
-当前开发源码/SQL readiness 为 IAM16/Audit11/PaaS1；IAM 仅反映新增字符串发布验证和当前权威求值，安装发布 profile、ServiceIdentity、lookup_service、七列 claim 与 Audit canonical 未改。UI、签名安装、IP 条件和完整 LANG-04 未验收。专属 PG 的容器/网络/合成数据卷在精确身份与标签核对、确认无客户端后清理，未动用户数据或其他任务资源。
+身份条件固定基线的源码/SQL readiness 为 IAM16/Audit11/PaaS1；IAM 仅反映该片字符串发布验证和当前权威求值，安装发布 profile、ServiceIdentity、lookup_service、七列 claim 与 Audit canonical 未改。UI、签名安装、IP 条件和完整 LANG-04 未验收。专属 PG 的容器/网络/合成数据卷在精确身份与标签核对、确认无客户端后清理，未动用户数据或其他任务资源。
 
 最终全仓 Go race/vet、模块校验、稳定 API 生成及 Linux amd64 全仓构建通过。现有 canonical round-trip fuzz 加身份否定集合种子，15 秒/2 workers/1 秒样本最小化预算通过 549,059 次执行；该数字仅是有界随机验证，不是容量或完整语言证明。真实 PG 与广域构建/fuzz 串行，未增加共享资源或放宽生产权限。
 
 固定候选 `b208ab081ac2f08aab81f63b8cfefb17ebdc6c82` / [Verification 34836760785](https://github.com/xiak/matrix/actions/runs/34836760785) 不作为 CI 成功点：Go 作业的既有 `TestPinnedSSHExecutorHonorsCancellationDuringHandshake` 期望 `ssh-handshake`，实际为 `ssh-connect`（两者均 UNAVAILABLE）。测试在服务端 TCP Accept 后立即取消，不能证明客户端 DialContext 已完成；本地原测试 200 次未复现，不将其称为确定的本地 red。取得该 owner 的窄测试窗口后，以有界读取客户端完整 SSH 版本行作为真实协议屏障，仍不发送服务端版本，严格保留握手阶段、500ms 退出和连接/goroutine 清理断言；生产 SSH 行为和错误分类不变。修复后的同测试 race 200 次、整个 adapter 与架构检查、vet 通过；新固定组合仍需独立 CI，不能将本地字符串证据或其他 job 成功冒充整次成功。
 
 34836760785 已结束为 failure：authority-process/node-process 均 success，Go 仅上述 SSH 测试失败。窄测试修复后全仓 `go test -race -p 2 -count=1 ./...`、全仓 vet 与 Linux amd64 构建通过；本轮未改 IAM 生产代码、SQL 或 schema/profile，不重启真实数据库或重跑未发布历史升级链。新提交必须重新核实完整 CI，修复后的成功不能回填到 b208 候选。
+
+修复固定 `4f22e223398fbe4523bc09d6a369677cb23767db` / [Verification 34837563263](https://github.com/xiak/matrix/actions/runs/34837563263) 已核实精确 SHA，Go/authority-process/node-process 全部 completed/success。该对象是身份字符串条件及 SSH 测试修正的已验证回滚点，不包含后续资源前缀，不回填 b208 的失败结果。
+
+### 资源字面前缀增量证据
+
+2026-09-14，正向契约、schema 和唯一求值器门禁先因不支持 PREFIX_IN_AUTHORITY 失败，接入后通过；覆盖字面/大小写/长度/空与通配字符、较短 ID、匹配 Deny 与来源顺序。后续按真实资源粒度收紧为 ActionDefinition 显式能力，所有当前动作的 schema/Go 接受矩阵对齐；read 与同 kind create 混合不能绕过。目录 cursor 不因应用前缀得到权限，独立目录授权仍需当前 PDP；默认前缀改变后旧完整快照 cursor 失效。
+
+专属受限 PG18（1 CPU、768 MiB、128 PIDs、64 连接）版本/条件聚焦通过，11.64s（父门禁 16.38s，包 19.111s）：两个真实账号/组对相同前缀和同资源 ID 各自授权，跨账号附件拒绝；前缀本身/后缀允许，大小写/短值/不匹配与匹配 Deny 拒绝；确切 Membership/版本证据、发布不隐式切换、显式默认切换和附件撤销在原 bearer 下一请求生效；旧事实仍通过 producer proof。末尾存储攻击的首轮测试误把排在前面的另一个前缀截成合法 ID，导致预期错误，实际 canonical 证明这一点；修正为精确字段替换后的新库完整聚焦通过，生产校验未放宽。
+
+完整串行真实 PG18 回归通过：Audit 数据层 5.434s、Audit HTTP 2.620s、IAM integration race 164.055s、双 IAM/PaaS/Audit 独立进程 46.279s、PaaS 数据层 5.044s。受限 SQL 对所有当前动作的 prefix 接受/拒绝与目录能力对照；当前 schema/bootstrap 带数据重放、凭据/组/策略并发、失败原子性与不可变历史门禁保留。实际 PaaS 先创建两个应用，然后只用前缀+时间+身份组合授权：匹配应用允许，真实存在但不匹配的应用拒绝；原 bearer 到期、后续默认变更及附件撤销均按当前 PDP 生效。原实际 dispatcher、租户链、受限登录和资源/Operation/outbox 隔离回归未替换。
+
+当前开发源码 IAM17/Audit11/PaaS1，仅反映新增前缀文档/发布语义；安装 profile、ServiceIdentity、lookup_service、七列 claim、Audit canonical 和 PaaS 生产契约未改。独立 CI 待固定提交后确认；签名安装、UI 和完整 LANG-03 未验收。专属容器/网络/合成数据卷已核对精确身份、标签与零客户端后移除，不涉及用户数据或其他任务资源。
+
+全仓 Go race/vet、模块校验、稳定 API 生成与 Linux amd64 构建通过。上述真库回归后，唯一验证器将按资源重复检查动作能力改为每语句一次汇总不支持前缀的 kind，不改变接受集合；最终 API/authority/usecase/architecture race、全仓 vet 与 Linux 构建再过。现有 round-trip fuzz 增加前缀种子，最终 15 秒/2 workers/1 秒样本最小化预算通过 634,172 次执行；最大合法长度比较、混合 read/create 拒绝和 cursor 当前快照门禁通过。该末尾纯校验整理后的完整真库仍由新固定提交的独立 CI 再验，不把之前的临时工作树结果冒充该提交所有门禁已完成。
