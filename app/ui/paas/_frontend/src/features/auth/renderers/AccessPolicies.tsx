@@ -12,7 +12,7 @@ import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import { PolicyAuthoringWizard } from "./PolicyAuthoringWizard";
 import { PolicyDirectory, usePolicyDescription } from "./PolicyDirectory";
 import { PolicyCreationMethods, type PolicyCreationMethod } from "./PolicyCreationMethods";
-import { PolicyAssociationEditor, PolicyAffectedIdentities } from "./PolicyAssociationReview";
+import { PolicyAssociationWizard, PolicyAffectedIdentities } from "./PolicyAssociationReview";
 import { PolicyDocumentChanges } from "./PolicyDocumentChanges";
 import policyStyles from "./PolicyWorkspace.module.css";
 import styles from "./AccountAccessRenderer.module.css";
@@ -121,8 +121,9 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
   const usage = selected ? policyUsageCounts(workspace, selected.id) : null;
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("policies")}>{t("back")}</Button>} />;
   if (editing) return <PolicyAuthoringWizard {...editing} workspace={workspace} scene={scene} onBack={() => setEditing(null)} onDone={(id) => { setEditing(null); onOpen("policies", id); }} />;
+  if (associating) return <PolicyAssociationWizard {...associating} workspace={workspace} scene={scene} onBack={() => setAssociating(null)} />;
   return <>
-    {access.workspaceError && !associating && !deleting && !editingDescription ? <Alert status="danger">{t(`errors.${access.workspaceError}`)}</Alert> : null}
+    {access.workspaceError && !deleting && !editingDescription ? <Alert status="danger">{t(`errors.${access.workspaceError}`)}</Alert> : null}
     {selected ? <WorkspaceDetail title={selected.name} onBack={() => onOpen("policies")} actions={{
       primary: { id: "associate", label: t("associateTargets"), onSelect: () => setAssociating({ policies: [selected] }) },
       secondary: [
@@ -152,7 +153,6 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
       </Tabs.Root>
     </WorkspaceDetail> : <PolicyDirectory workspace={workspace} onCreate={() => setChoosingMethod(true)} onOpen={(id) => onOpen("policies", id)} onAssociate={(policies, additive) => setAssociating({ policies, additive })} />}
     {choosingMethod ? <PolicyCreationMethods onClose={() => setChoosingMethod(false)} onSelect={(method) => { setChoosingMethod(false); onCreate(method); }} /> : null}
-    {associating ? <PolicyAssociationEditor {...associating} workspace={workspace} scene={scene} onClose={() => setAssociating(null)} /> : null}
     {deleting ? <WorkspaceDelete name={deleting.name} onClose={() => setDeleting(null)} onConfirm={async () => { const result = await access.executeWorkspace({ kind: "delete-policy", id: deleting.id }); if (result && entityId === deleting.id) onOpen("policies"); return result; }} /> : null}
     {selected && editingDescription ? <PolicyDescriptionEditor policy={selected} onClose={() => setEditingDescription(false)} /> : null}
   </>;

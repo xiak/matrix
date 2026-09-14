@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button } from "@ui/xiak";
+import { ArrowRight, ShieldCheck } from "lucide-react";
+import { Alert, Badge, Button, ContentPage, Wizard } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { policyGrantTargets, type AccessPolicy, type AccessWorkspace, type PolicyTargets } from "../domain/accessWorkspace";
 import { includesPermissionManagement } from "../domain/policyDocument";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { WorkspaceDialog } from "./AccessWorkspaceUi";
 import { PolicyTargetSelector } from "./PolicyTargetSelector";
+import { useAccessDraft } from "./useAccessDraft";
 import styles from "./PolicyWorkspace.module.css";
 
 const emptyTargets = (): PolicyTargets => ({ userIds: [], groupIds: [], roleIds: [] });
@@ -66,25 +67,56 @@ export function PolicyAffectedIdentities({ policyId, targets, workspace, scene }
   </section>;
 }
 
-export function PolicyAssociationEditor({ policies, additive = false, workspace, scene, onClose }: {
-  policies: AccessPolicy[]; additive?: boolean; workspace: AccessWorkspace; scene: AccountAccessScene; onClose(): void;
+export function PolicyAssociationWizard({ policies, additive = false, workspace, scene, onBack }: {
+  policies: AccessPolicy[]; additive?: boolean; workspace: AccessWorkspace; scene: AccountAccessScene; onBack(): void;
 }) {
-  const t = useTranslations("PolicyWorkspace"), w = useTranslations("IamWorkspace");
+  const t = useTranslations("PolicyWorkspace"), w = useTranslations("IamWorkspace"), p = useTranslations("PolicyWizard"), a = useTranslations("AccountAccess"), u = useTranslations("UserWizard");
   const access = useAccountAccess();
   const [initial] = useState(() => additive ? emptyTargets() : policyGrantTargets(workspace, policies[0]!.id));
   const [targets, setTargets] = useState(initial);
-  const [reviewing, setReviewing] = useState(false);
-  const review = useRef<HTMLElement>(null);
-  useEffect(() => { if (reviewing) { review.current?.focus({ preventScroll: true }); review.current?.scrollIntoView?.({ block: "start" }); } }, [reviewing]);
+  const [step, setStep] = useState(0);
+  const [complete, setComplete] = useState(false);
+  const form = useRef<HTMLFormElement>(null);
+  const submitting = useRef(false);
   const changed = kinds.some((kind) => initial[kind].some((id) => !targets[kind].includes(id)) || targets[kind].some((id) => !initial[kind].includes(id)));
   const high = policies.some((policy) => includesPermissionManagement(policy.versions.find((version) => version.id === policy.defaultVersion)!.document));
-  return <WorkspaceDialog size="wide" title={additive ? t(reviewing ? "batchReview" : "batchAttach") : w("associateTargets") + " · " + policies[0]!.name}
-    onClose={onClose} submitLabel={t(reviewing ? "confirmAssociations" : "review")} submitDisabled={!changed} onSubmit={async () => {
-      if (!reviewing) { setReviewing(true); return false; }
-      return Boolean(await access.executeWorkspace(additive ? { kind: "attach-policies", policyIds: policies.map((policy) => policy.id), targets } : { kind: "associate-policy", id: policies[0]!.id, ...targets }));
-    }}>
-    {additive ? <><p className={styles.note}>{t("batchHint")}</p><section aria-label={t("policySet")} className={styles.actions}>{policies.map((policy) => <Badge key={policy.id}>{policy.name}</Badge>)}</section></> : null}
-    {reviewing ? <><div><Button variant="ghost" onClick={() => setReviewing(false)}>{t("backSelection")}</Button></div><section ref={review} tabIndex={-1} aria-label={t("reviewAssociations")}><PolicyAssociationChanges before={initial} after={targets} workspace={workspace} scene={scene} /></section></> : <PolicyTargetSelector workspace={workspace} scene={scene} value={targets} onChange={setTargets} />}
-    {high ? <Alert status="warning">{w("highPrivilege")}</Alert> : null}
-  </WorkspaceDialog>;
+  const busy = access.busy || access.loading;
+  const clearError = access.clearWorkspaceError;
+  const pageTitle = additive ? t("batchAttach") : w("associateTargets");
+  const workflowLabel = additive ? t("batchAttach") : `${w("associateTargets")} · ${policies[0]!.name}`;
+  const requestLeave = useAccessDraft({ dirty: changed && !complete, busy: access.busy, title: t("associationCancelTitle"), description: t("associationCancelHint"), form });
+  useEffect(() => { clearError(); }, [clearError]);
+  useEffect(() => {
+    if (!access.workspaceError || busy) return;
+    const alert = form.current?.querySelector<HTMLElement>('[data-workspace-error]');
+    alert?.focus({ preventScroll: true });
+    alert?.scrollIntoView?.({ block: "nearest" });
+  }, [access.workspaceError, busy]);
+  function changeStep(next: number) { clearError(); setStep(next); }
+  function cancel() { requestLeave(onBack); }
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (busy || submitting.current || complete || !changed) return;
+    if (step === 0) { changeStep(1); return; }
+    submitting.current = true;
+    const saved = await access.executeWorkspace(additive ? { kind: "attach-policies", policyIds: policies.map((policy) => policy.id), targets } : { kind: "associate-policy", id: policies[0]!.id, ...targets });
+    submitting.current = false;
+    if (saved) setComplete(true);
+  }
+  return <div className={styles.associationWorkflow}>
+    <ContentPage.Heading title={pageTitle} scrollKey={`associate-policy:${additive ? "batch:" + policies.map((policy) => policy.id).join(",") : policies[0]!.id}`} back={{ label: p("back"), parentLabel: additive ? w("policies") : policies[0]!.name, disabled: busy, onClick: cancel }} />
+    <Wizard label={workflowLabel} steps={[{ id: "select", label: t("selectAssociations") }, { id: "review", label: t("reviewAssociations") }]} currentStep={step} onStepChange={changeStep} busy={busy} completed={complete} formRef={form} onSubmit={submit}
+      title={complete ? t("associationSaved") : step === 0 ? t("selectAssociations") : t("reviewAssociations")}
+      description={complete ? t("associationSavedHint") : step === 0 ? additive ? t("batchHint") : p("targetsHint") : t("associationReviewHint")}
+      progressLabel={complete ? undefined : u("stepCount", { current: step + 1, total: 2 })}
+      hint={<><ShieldCheck aria-hidden="true" />{p("mockHint")}</>}
+      actions={complete ? <Button type="button" onClick={onBack}>{t("finishAssociations")}<ArrowRight aria-hidden="true" /></Button> : <><Button type="button" variant="ghost" disabled={busy} onClick={cancel}>{w("cancel")}</Button>{step > 0 ? <Button type="button" variant="secondary" disabled={busy} onClick={() => changeStep(step - 1)}>{a("previousStep")}</Button> : null}<Button type="submit" disabled={busy || !changed}>{busy ? a("saving") : step === 0 ? t("review") : t("confirmAssociations")}</Button></>}>
+      {complete ? <Alert status="success">{t("associationSavedScope")}</Alert> : <div className={styles.stack}>
+        <section aria-label={t("policySet")} className={styles.policySet}><span className={styles.note}>{t("policySet")}</span><div className={styles.actions}>{policies.map((policy) => <Badge key={policy.id}>{policy.name}</Badge>)}</div></section>
+        {step === 0 ? <PolicyTargetSelector workspace={workspace} scene={scene} value={targets} onChange={setTargets} /> : <section aria-label={t("reviewAssociations")}><PolicyAssociationChanges before={initial} after={targets} workspace={workspace} scene={scene} /></section>}
+        {high ? <Alert status="warning">{w("highPrivilege")}</Alert> : null}
+        {access.workspaceError ? <Alert data-workspace-error status="danger" tabIndex={-1}>{w(`errors.${access.workspaceError}`)}</Alert> : null}
+      </div>}
+    </Wizard>
+  </div>;
 }

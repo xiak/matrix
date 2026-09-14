@@ -462,9 +462,12 @@ directory and review presentation. Acceptance requires:
 - One validation owner for execution and editor diagnostics. Diagnostics have
   severity and a document path; errors block saving, warnings and suggestions
   are review guidance, never proof that a request will be authorized.
-- Policy association changes have a selection/review/confirm boundary. Review
-  names additions/removals and explains remaining group grants. Batch attachment
-  is bounded, additive and atomic; it never replaces unrelated bindings.
+- Policy association changes use the same content-area workflow shell as other
+  multi-step IAM work: select -> review -> confirm. The page header owns return
+  navigation, the shared Wizard owns progress and sticky actions, and only short
+  discard/error confirmations may use a dialog. Review names additions/removals
+  and explains remaining group grants. Batch attachment is bounded, additive and
+  atomic; it never replaces unrelated bindings.
 - Content edits and rollback show statement additions/removals and named
   affected users, groups, roles and boundary uses. The comparison is structural
   and must not claim that removed text necessarily removes effective access.
@@ -1810,8 +1813,8 @@ and `git diff --check` gates must pass on the same committed worktree.
   failure/retry without a partial save. Capacity recovery explicitly nominates
   a nondefault revision and atomically replaces it only on successful save;
   defaults and original history remain unchanged after failure. The public
-  TagEditor is shared with user creation, and policy association dialogs reuse
-  the same bounded Transfer composition as the authoring workflow.
+  TagEditor is shared with user creation, and policy association pages reuse the
+  same bounded Transfer and Wizard compositions as the authoring workflow.
   Browser authoring checks covered Chinese/dark and English/light, creation
   with both user and group associations, saved tags, details, step navigation
   and explicit draft discard. At 360 CSS pixels there was no page-wide or
@@ -2114,8 +2117,9 @@ and `git diff --check` gates must pass on the same committed worktree.
   semantic contrast checks pass. Fresh development-browser checks at `360px`
   confirm a `56px` title bar and an identical trailing menu position on Users,
   Groups, Roles, Role SSO, API keys and tenant directories. Policy selection
-  leaves the title/trigger in place; menu-triggered association opens the
-  existing dialog and Cancel restores the menu trigger. English/dark and
+  leaves the title/trigger in place. Association now replaces the content area
+  with the shared two-step Wizard instead of overlaying a large dialog; return
+  navigation restores the policy detail or directory. English/dark and
   Chinese/light policy menus stay within the viewport with separated destructive
   commands. Installation-workspace checks restore the visible trigger when
   closing after both compact-to-desktop and desktop-to-compact resizes.

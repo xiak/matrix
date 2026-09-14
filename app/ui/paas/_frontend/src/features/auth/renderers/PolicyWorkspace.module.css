@@ -1,4 +1,7 @@
 .directory, .stack { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: var(--xiak-spacing-comfortable); }
+.associationWorkflow { min-width: 0; container: policy-association / inline-size; }
+.policySet { display: grid; grid-template-columns: minmax(112px, auto) minmax(0, 1fr); align-items: start; gap: var(--xiak-spacing-default); padding-bottom: var(--xiak-spacing-comfortable); border-bottom: var(--xiak-border-subtle); }
+.policySet > .note { padding-top: var(--xiak-spacing-micro); }
 .directoryContent { padding-block-start: 0; }
 .directory { container: policy-directory / inline-size; }
 .directoryHeading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-narrow) var(--xiak-table-cell-padding-inline) 0; border-bottom: var(--xiak-border-subtle); }
@@ -59,6 +62,9 @@
 @container policy-directory (max-width: 480px) {
   .directoryHeading { padding-inline: var(--xiak-spacing-default); }
   .directoryHeading > button { width: 100%; }
+}
+@container policy-association (max-width: 520px) {
+  .policySet { grid-template-columns: minmax(0, 1fr); }
 }
 
 .summaryBrowser { container: policy-summary / inline-size; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-comfortable); min-width: 0; }
