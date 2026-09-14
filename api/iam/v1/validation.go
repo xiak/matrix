@@ -541,20 +541,12 @@ func ValidateActionCapability(value ActionCapability) error {
 }
 
 func knownCapabilityRestriction(value CapabilityRestriction) bool {
-	switch value {
-	case CapabilityAuthorityRequired,
-		CapabilityCurrentCredentialChangeRequired,
-		CapabilitySelfProtected,
-		CapabilityRootIdentityProtected,
-		CapabilityInstallationAuthorityProtected,
-		CapabilitySystemAccountProtected,
-		CapabilityTargetDisabled,
-		CapabilityTargetCredentialChangeRequired,
-		CapabilityTargetMustBeDisabled:
-		return true
-	default:
-		return false
+	for _, known := range allCapabilityRestrictions {
+		if value == known {
+			return true
+		}
 	}
+	return false
 }
 
 func capabilityKey(action Action, resource ResourceReference) string {

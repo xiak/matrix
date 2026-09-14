@@ -559,6 +559,21 @@ func TestIAMExamplesValidateAgainstOpenAPISchemas(t *testing.T) {
 	}
 }
 
+func TestActionCapabilitySchemaAcceptsEveryCurrentRestriction(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "ActionCapability")
+	for _, restriction := range AllCapabilityRestrictions() {
+		value := map[string]any{
+			"action":            string(ActionIAMUserDelete),
+			"resource":          map[string]any{"kind": string(ResourceUser), "id": "user-a"},
+			"available":         false,
+			"restrictionReason": string(restriction),
+		}
+		if err := schema.Validate(value); err != nil {
+			t.Fatalf("current restriction %q is absent from ActionCapability schema: %v", restriction, err)
+		}
+	}
+}
+
 func TestIAMOpenAPIEnforcesAuthorizationAndBootstrapSemantics(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	authorizationSchema := compileIAMOpenAPISchema(t, document, "AuthorizationRequest")

@@ -3677,7 +3677,8 @@
           "INSTALLATION_AUTHORITY_PROTECTED",
           "SYSTEM_ACCOUNT_PROTECTED",
           "TARGET_DISABLED",
-          "TARGET_CREDENTIAL_CHANGE_REQUIRED"
+          "TARGET_CREDENTIAL_CHANGE_REQUIRED",
+          "TARGET_MUST_BE_DISABLED"
         ],
         "type": "string"
       },

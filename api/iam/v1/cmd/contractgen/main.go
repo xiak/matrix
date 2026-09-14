@@ -208,19 +208,13 @@ func scalarSchemas() object {
 
 func enumSchemas() map[string][]string {
 	return map[string][]string{
-		"AccountStatus":   {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
-		"PrincipalType":   {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
-		"PrincipalStatus": {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
-		"SessionStatus":   {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
-		"AuthorityScope":  {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
-		"IdentityKind":    {string(iamv1.IdentityRoot), string(iamv1.IdentityUser)},
-		"CapabilityRestriction": {
-			string(iamv1.CapabilityAuthorityRequired), string(iamv1.CapabilityCurrentCredentialChangeRequired),
-			string(iamv1.CapabilitySelfProtected), string(iamv1.CapabilityRootIdentityProtected),
-			string(iamv1.CapabilityInstallationAuthorityProtected),
-			string(iamv1.CapabilitySystemAccountProtected), string(iamv1.CapabilityTargetDisabled),
-			string(iamv1.CapabilityTargetCredentialChangeRequired),
-		},
+		"AccountStatus":              {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
+		"PrincipalType":              {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
+		"PrincipalStatus":            {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
+		"SessionStatus":              {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
+		"AuthorityScope":             {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
+		"IdentityKind":               {string(iamv1.IdentityRoot), string(iamv1.IdentityUser)},
+		"CapabilityRestriction":      openapi31.StringValues(iamv1.AllCapabilityRestrictions()),
 		"PolicyAttachmentTargetKind": {string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetService), string(iamv1.PolicyTargetGroup), string(iamv1.PolicyTargetRole)},
 		"PolicyManagement":           {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
 		"PolicyStatus":               {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},

@@ -75,6 +75,22 @@ const (
 	CapabilityTargetMustBeDisabled            CapabilityRestriction = "TARGET_MUST_BE_DISABLED"
 )
 
+var allCapabilityRestrictions = [...]CapabilityRestriction{
+	CapabilityAuthorityRequired,
+	CapabilityCurrentCredentialChangeRequired,
+	CapabilitySelfProtected,
+	CapabilityRootIdentityProtected,
+	CapabilityInstallationAuthorityProtected,
+	CapabilitySystemAccountProtected,
+	CapabilityTargetDisabled,
+	CapabilityTargetCredentialChangeRequired,
+	CapabilityTargetMustBeDisabled,
+}
+
+func AllCapabilityRestrictions() []CapabilityRestriction {
+	return append([]CapabilityRestriction(nil), allCapabilityRestrictions[:]...)
+}
+
 const (
 	SessionActive  SessionStatus = "ACTIVE"
 	SessionRevoked SessionStatus = "REVOKED"
