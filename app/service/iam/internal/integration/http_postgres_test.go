@@ -395,6 +395,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	t.Run("customer policy metadata lifecycle", func(t *testing.T) {
 		proveCustomerPolicyMetadata(t, ctx, handler, admin, primary)
 	})
+	t.Run("customer policy terminal deletion", func(t *testing.T) { proveCustomerPolicyDeletion(t, ctx, handler, admin, primary) })
 	t.Run("policy publication versus attachment revision", func(t *testing.T) {
 		provePolicyDefaultAttachmentRaces(t, ctx, handler, admin, primary)
 	})
@@ -611,6 +612,14 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	var retainedVersions int
 	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.policy_versions WHERE policy_id='system.account-administrator'`).Scan(&retainedVersions); err != nil || retainedVersions != 2 {
 		t.Fatal("migration lost an immutable version")
+	}
+	var deletionChanged bool
+	if err := admin.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.audit_outbox fact
+		LEFT JOIN iam.policies p ON p.id=fact.event_document#>>'{target,id}' AND p.owner_tenant_id=fact.tenant_id
+		LEFT JOIN iam.policy_versions v ON v.policy_id=p.id AND v.id=p.default_version_id
+		WHERE fact.event_document->>'action'='iam.policy.deleted' AND (p.id IS NULL OR p.status<>'RETIRED' OR v.id IS NULL
+		OR EXISTS(SELECT 1 FROM iam.policy_attachments a WHERE a.policy_id=p.id AND a.revoked_at IS NULL)))`).Scan(&deletionChanged); err != nil || deletionChanged {
+		t.Fatal("schema/bootstrap replay lost deleted policy history or resurrected authority")
 	}
 	identity := performIAMRequest(handler, http.MethodGet, "/v1/service-identity", verifierCredential, nil)
 	var service iamv1.ServiceIdentity
@@ -1314,6 +1323,282 @@ func proveCustomerPolicyMetadata(t *testing.T, ctx context.Context, handler http
 	}
 }
 
+func proveCustomerPolicyDeletion(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	call := func(method, path, bearer string, body any, want int, result any) {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != want {
+			t.Fatalf("policy deletion %s %s status=%d want=%d body=%s", method, path, response.Code, want, response.Body.String())
+		}
+		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+			t.Fatal("decode policy deletion response")
+		}
+	}
+	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant, Statements: []iamv1.PolicyStatement{{SID: "deletion", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "deletion-application"}}}}}
+	creation := iamv1.CreatePolicyRequest{DisplayName: "Deletable policy", Document: document, RequestID: "delete-policy-create"}
+	var policy iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", root, creation, http.StatusCreated, &policy)
+	path := "/v1/policies/" + string(policy.Policy.ID)
+	deletion := iamv1.DeletePolicyRequest{ResourceVersion: 1, RequestID: "delete-policy"}
+	var member iamv1.User
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "deletion.member", "displayName": "Deletion member", "initialPassword": initialDeveloperPassword, "requestId": "deletion-member-create"}, http.StatusCreated, &member)
+	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
+	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+	var attachment iamv1.PolicyAttachment
+	grant := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: policy.Policy.ID, PolicyResourceVersion: 1, RequestID: "deletion-user-grant"}
+	call(http.MethodPost, "/v1/policy-attachments", root, grant, http.StatusOK, &attachment)
+	call(http.MethodDelete, path, root, deletion, http.StatusConflict, nil)
+	var access iamv1.UserAccess
+	call(http.MethodGet, "/v1/users/"+string(member.ID), root, nil, http.StatusOK, &access)
+	call(http.MethodPost, "/v1/users/"+string(member.ID)+":set-status", root, iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: access.User.ResourceVersion, RequestID: "deletion-member-disable"}, http.StatusOK, &member)
+	call(http.MethodDelete, path, root, deletion, http.StatusConflict, nil)
+	call(http.MethodPost, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", root, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: "deletion-user-revoke"}, http.StatusOK, nil)
+	var group iamv1.Group
+	call(http.MethodPost, "/v1/groups", root, iamv1.CreateGroupRequest{Name: "Deletion group", RequestID: "deletion-group-create"}, http.StatusCreated, &group)
+	grant.Target = iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}
+	grant.RequestID = "deletion-group-grant"
+	call(http.MethodPost, "/v1/policy-attachments", root, grant, http.StatusOK, &attachment)
+	call(http.MethodDelete, path, root, deletion, http.StatusConflict, nil)
+	call(http.MethodPost, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", root, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: "deletion-group-revoke"}, http.StatusOK, nil)
+	call(http.MethodDelete, path+"?accountId=other", root, deletion, http.StatusBadRequest, nil)
+	call(http.MethodDelete, path, iamProducerCredential, deletion, http.StatusUnauthorized, nil)
+	call(http.MethodDelete, "/v1/policies/"+string(iamv1.SystemPolicyAccountAdministrator), root, deletion, http.StatusForbidden, nil)
+	for _, field := range []string{"accountId", "scope", "management", "id", "force"} {
+		call(http.MethodDelete, path, root, map[string]any{"resourceVersion": 1, "requestId": "deletion-selector", field: "injected"}, http.StatusBadRequest, nil)
+	}
+	wrong := deletion
+	wrong.ResourceVersion = 2
+	call(http.MethodDelete, path, root, wrong, http.StatusConflict, nil)
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_policy_delete_fault() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.event_document->>'action'='iam.policy.deleted' THEN RAISE EXCEPTION 'injected deletion outbox failure'; END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_policy_delete_fault BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_delete_fault()`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := database.Exec(context.Background(), `DROP TRIGGER IF EXISTS matrix_policy_delete_fault ON iam.audit_outbox; DROP FUNCTION IF EXISTS public.matrix_policy_delete_fault()`); err != nil {
+			t.Error("remove isolated policy deletion fault")
+		}
+	}()
+	call(http.MethodDelete, path, root, deletion, http.StatusServiceUnavailable, nil)
+	var before iamv1.PolicyDetail
+	call(http.MethodGet, path, root, nil, http.StatusOK, &before)
+	if !bytes.Equal(mustIAMJSON(t, before), mustIAMJSON(t, policy)) {
+		t.Fatal("failed deletion left metadata changes")
+	}
+	var count int
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2)+(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$2)`, policy.Policy.AccountID, deletion.RequestID).Scan(&count); err != nil || count != 0 {
+		t.Fatal("failed deletion left decision or fact")
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER matrix_policy_delete_fault ON iam.audit_outbox; DROP FUNCTION public.matrix_policy_delete_fault()`); err != nil {
+		t.Fatal(err)
+	}
+	var retired, replayed iamv1.Policy
+	call(http.MethodDelete, path, root, deletion, http.StatusOK, &retired)
+	call(http.MethodDelete, path, root, deletion, http.StatusOK, &replayed)
+	if iamv1.ValidatePolicy(retired) != nil || retired.Status != iamv1.PolicyRetired || retired.ResourceVersion != 2 || retired.ID != policy.Policy.ID || retired.DefaultVersionID != policy.Version.ID || retired != replayed {
+		t.Fatal("policy deletion identity or replay differs")
+	}
+	wrong = deletion
+	wrong.RequestID = "deletion-different-intent"
+	call(http.MethodDelete, path, root, wrong, http.StatusConflict, nil)
+	call(http.MethodGet, path, root, nil, http.StatusForbidden, nil)
+	call(http.MethodGet, path+"/versions", root, nil, http.StatusForbidden, nil)
+	call(http.MethodPatch, path, root, iamv1.UpdatePolicyRequest{DisplayName: "Revived", ResourceVersion: 2, RequestID: "deletion-revive-name"}, http.StatusForbidden, nil)
+	call(http.MethodPost, path+"/versions", root, iamv1.CreatePolicyVersionRequest{Document: document, ResourceVersion: 2, RequestID: "deletion-revive-version"}, http.StatusForbidden, nil)
+	call(http.MethodPost, path+":set-default-version", root, iamv1.SetDefaultPolicyVersionRequest{VersionID: policy.Version.ID, ResourceVersion: 2, RequestID: "deletion-revive-default"}, http.StatusForbidden, nil)
+	grant.RequestID = "deletion-revive-attachment"
+	grant.PolicyResourceVersion = 2
+	call(http.MethodPost, "/v1/policy-attachments", root, grant, http.StatusForbidden, nil)
+	call(http.MethodPost, "/v1/policies", root, creation, http.StatusConflict, nil)
+	var inventory iamv1.PolicyList
+	call(http.MethodGet, "/v1/policies", root, nil, http.StatusOK, &inventory)
+	for _, item := range inventory.Items {
+		if item.ID == retired.ID {
+			t.Fatal("deleted policy still occupies management inventory")
+		}
+	}
+	var raw []byte
+	var event auditv1.Event
+	for _, action := range []auditv1.Action{auditv1.ActionIAMPolicyCreated, auditv1.ActionIAMPolicyDeleted} {
+		if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document#>>'{target,id}'=$3`, retired.AccountID, action, retired.ID).Scan(&raw); err != nil || json.Unmarshal(raw, &event) != nil {
+			t.Fatal("read retained lifecycle fact")
+		}
+		call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
+	}
+	var canonical, digest string
+	if err := database.QueryRow(ctx, `SELECT canonical_document,content_digest FROM iam.policy_versions WHERE policy_id=$1 AND id=$2`, retired.ID, retired.DefaultVersionID).Scan(&canonical, &digest); err != nil || digest != policy.Version.ContentDigest {
+		t.Fatal("deletion destroyed original immutable content")
+	}
+	// Real deletion frees the name and capacity; large retired history is
+	// read-budget data, not a claim that a bulk SQL fixture used this API.
+	if _, err := database.Exec(ctx, `BEGIN;
+		INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
+		SELECT 'delete-history-'||i,'CUSTOMER',$1,'Retired history '||i,'TENANT','RETIRED','v1',1,transaction_timestamp(),transaction_timestamp() FROM generate_series(1,257) i;
+		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
+		SELECT 'delete-history-'||i,'v1','TENANT',$2::jsonb,$2,$3,transaction_timestamp() FROM generate_series(1,257) i;COMMIT;`, retired.AccountID, canonical, digest); err != nil {
+		t.Fatal(err)
+	}
+	var replacement iamv1.PolicyDetail
+	creation.RequestID = "deletion-replacement"
+	call(http.MethodPost, "/v1/policies", root, creation, http.StatusCreated, &replacement)
+	if replacement.Policy.ID == retired.ID {
+		t.Fatal("replacement resurrected old policy identity")
+	}
+	call(http.MethodGet, "/v1/policies", root, nil, http.StatusOK, &inventory)
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.deleted' AND event_document#>>'{target,id}'=$2`, retired.AccountID, retired.ID).Scan(&count); err != nil || count != 1 {
+		t.Fatal("deletion replay duplicated success fact")
+	}
+	// Restoration of the member does not restore its revoked attachment.
+	call(http.MethodPost, "/v1/users/"+string(member.ID)+":set-status", root, iamv1.SetUserStatusRequest{Status: iamv1.PrincipalActive, ResourceVersion: member.ResourceVersion, RequestID: "deletion-member-enable"}, http.StatusOK, nil)
+	bearer = localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword, false)
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "deletion-member-admin"}, http.StatusOK, nil)
+	call(http.MethodDelete, "/v1/policies/"+string(replacement.Policy.ID), bearer, deletion, http.StatusForbidden, nil)
+	call(http.MethodPost, "/v1/accounts", root, map[string]any{"id": "deletion-other-account", "displayName": "Deletion other", "rootLoginName": "deletion-other-root", "rootDisplayName": "Other root", "initialPassword": initialDeveloperPassword, "requestId": "deletion-other-create"}, http.StatusCreated, nil)
+	other := localRecoveryLogin(t, handler, "deletion-other-root", initialDeveloperPassword, true)
+	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
+	call(http.MethodDelete, "/v1/policies/"+string(replacement.Policy.ID), other, deletion, http.StatusForbidden, nil)
+	// Delete and attach coordinate through the same Policy lock. No schedule
+	// may leave a live attachment pointing at a retired policy.
+	grant.PolicyID = replacement.Policy.ID
+	grant.PolicyResourceVersion = 1
+	grant.RequestID = "deletion-racing-attachment"
+	deleteBody := mustIAMJSON(t, iamv1.DeletePolicyRequest{ResourceVersion: 1, RequestID: "deletion-racing-delete"})
+	grantBody := mustIAMJSON(t, grant)
+	completed := make(chan *httptest.ResponseRecorder, 2)
+	go func() {
+		completed <- performIAMRequest(handler, http.MethodDelete, "/v1/policies/"+string(replacement.Policy.ID), root, deleteBody)
+	}()
+	go func() {
+		completed <- performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", root, grantBody)
+	}()
+	winners, denied := 0, 0
+	for range 2 {
+		select {
+		case response := <-completed:
+			switch response.Code {
+			case http.StatusOK:
+				winners++
+			case http.StatusConflict, http.StatusForbidden:
+				denied++
+			default:
+				t.Fatalf("delete/attach race status=%d", response.Code)
+			}
+		case <-ctx.Done():
+			t.Fatal("delete/attach race timed out")
+		}
+	}
+	if winners != 1 || denied != 1 {
+		t.Fatal("delete/attach race did not have one winner")
+	}
+	var inconsistent bool
+	if err := database.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.policies p JOIN iam.policy_attachments a ON a.policy_id=p.id WHERE p.id=$1 AND p.status='RETIRED' AND a.revoked_at IS NULL)`, replacement.Policy.ID).Scan(&inconsistent); err != nil || inconsistent {
+		t.Fatal("delete/attach race left a live retired-policy reference")
+	}
+	// Deletion competes with all metadata/content mutation paths at one
+	// expected revision; their shared lock must not merely protect delete
+	// against itself or attachment creation.
+	creation.DisplayName = "Deletion multiway race"
+	creation.RequestID = "deletion-multi-create"
+	var competing iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", root, creation, http.StatusCreated, &competing)
+	competingPath := "/v1/policies/" + string(competing.Policy.ID)
+	variant := document
+	variant.Statements = append([]iamv1.PolicyStatement(nil), document.Statements...)
+	variant.Statements[0].Effect = iamv1.PolicyDeny
+	var next iamv1.PolicyVersionDetail
+	call(http.MethodPost, competingPath+"/versions", root, iamv1.CreatePolicyVersionRequest{Document: variant, ResourceVersion: 1, RequestID: "deletion-multi-version"}, http.StatusCreated, &next)
+	variant.Statements[0].SID = "competing-version"
+	type mutationResult struct {
+		index    int
+		response *httptest.ResponseRecorder
+	}
+	results := make(chan mutationResult, 4)
+	operations := []struct {
+		method, path string
+		body         any
+	}{
+		{http.MethodDelete, competingPath, iamv1.DeletePolicyRequest{ResourceVersion: 2, RequestID: "deletion-multi-race-delete"}},
+		{http.MethodPatch, competingPath, iamv1.UpdatePolicyRequest{DisplayName: "Deletion race renamed", ResourceVersion: 2, RequestID: "deletion-multi-race-update"}},
+		{http.MethodPost, competingPath + "/versions", iamv1.CreatePolicyVersionRequest{Document: variant, ResourceVersion: 2, RequestID: "deletion-multi-race-version"}},
+		{http.MethodPost, competingPath + ":set-default-version", iamv1.SetDefaultPolicyVersionRequest{VersionID: next.Version.ID, ResourceVersion: 2, RequestID: "deletion-multi-race-default"}},
+	}
+	for index, operation := range operations {
+		body := mustIAMJSON(t, operation.body)
+		go func() {
+			results <- mutationResult{index, performIAMRequest(handler, operation.method, operation.path, root, body)}
+		}()
+	}
+	winner := -1
+	denied = 0
+	for range 4 {
+		select {
+		case result := <-results:
+			switch result.response.Code {
+			case http.StatusOK, http.StatusCreated:
+				if winner != -1 {
+					t.Fatal("multiple policy mutations won one revision")
+				}
+				winner = result.index
+			case http.StatusConflict, http.StatusForbidden:
+				denied++
+			default:
+				t.Fatalf("multiway policy race status=%d", result.response.Code)
+			}
+		case <-ctx.Done():
+			t.Fatal("multiway policy mutation race timed out")
+		}
+	}
+	if winner < 0 || denied != 3 {
+		t.Fatal("policy lifecycle race had no single winner")
+	}
+	var stored iamv1.Policy
+	var contentCount int
+	if err := database.QueryRow(ctx, `SELECT iam.lookup_policy($1,$2),(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$2)`, competing.Policy.AccountID, competing.Policy.ID).Scan(&raw, &contentCount); err != nil || json.Unmarshal(raw, &stored) != nil {
+		t.Fatal("read multiway policy result")
+	}
+	wantStatus, wantName, wantDefault, wantContent := iamv1.PolicyActive, competing.Policy.DisplayName, competing.Version.ID, 2
+	if winner == 0 {
+		wantStatus = iamv1.PolicyRetired
+	}
+	if winner == 1 {
+		wantName = "Deletion race renamed"
+	}
+	if winner == 2 {
+		wantContent = 3
+	}
+	if winner == 3 {
+		wantDefault = next.Version.ID
+	}
+	if stored.ResourceVersion != 3 || stored.Status != wantStatus || stored.DisplayName != wantName ||
+		contentCount != wantContent || stored.DefaultVersionID != wantDefault || stored.ID != competing.Policy.ID || stored.AccountID != competing.Policy.AccountID {
+		t.Fatal("losing policy mutation left partial state")
+	}
+	// Authorization itself also emits a fact. Count the lifecycle fact, then
+	// bind it to the actual winning command and its committed decision.
+	wantAction := []auditv1.Action{auditv1.ActionIAMPolicyDeleted, auditv1.ActionIAMPolicyUpdated, auditv1.ActionIAMPolicyVersionCreated, auditv1.ActionIAMPolicyDefaultVersionSet}[winner]
+	var winningRequest struct {
+		RequestID string `json:"requestId"`
+	}
+	if json.Unmarshal(mustIAMJSON(t, operations[winner].body), &winningRequest) != nil {
+		t.Fatal("read winning command identity")
+	}
+	var matched int
+	if err := database.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE o.event_document->>'action'=$2
+		AND o.event_document->>'requestId'=$3 AND o.event_document#>>'{target,id}'=$4
+		AND EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=o.tenant_id
+		AND d.id=o.event_document->>'iamDecisionId' AND d.allowed AND d.request_id=$3))
+		FROM iam.audit_outbox o WHERE o.tenant_id=$1 AND o.event_document->>'requestId' LIKE 'deletion-multi-race-%'
+		AND o.event_document->>'action' IN ('iam.policy.deleted','iam.policy.updated','iam.policy-version.created','iam.policy.default-version-set')`,
+		competing.Policy.AccountID, wantAction, winningRequest.RequestID, competing.Policy.ID).Scan(&count, &matched); err != nil || count != 1 || matched != 1 {
+		t.Fatal("policy lifecycle race did not commit one winner-bound fact")
+	}
+}
+
 func mustIAMJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	encoded, err := json.Marshal(value)
@@ -1982,8 +2267,8 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 		t.Fatal(err)
 	}
 	retired := find(read("/v1/policies", operator, http.StatusOK), "customer.catalog-a")
-	if retired == nil || retired.Status != iamv1.PolicyRetired || retired.ResourceVersion != 2 {
-		t.Fatal("retired metadata or current revision was hidden")
+	if retired != nil {
+		t.Fatal("retired policy occupied the active management directory")
 	}
 	read("/v1/policies", bearer, http.StatusForbidden)
 	// A prior read decision is a historical fact, not a reusable SQL permit.
@@ -2276,6 +2561,15 @@ func provePolicyScopeCredentialProtection(t *testing.T, ctx context.Context, han
 		}
 		return state, revision
 	}
+	// Bulk disabled identities are pagination data, not evidence of online
+	// user creation. Put the real HTTP-created protected USER beyond page one
+	// even when this subtest is run alone; unrelated random IDs must not decide
+	// whether the protection assertion is exercised.
+	if _, err := database.Exec(ctx, `INSERT INTO iam.principals(tenant_id,id,principal_type,login_name,display_name,status,must_change_password,resource_version,created_at,updated_at)
+		SELECT $1,'0-scope-page-'||lpad(i::text,3,'0'),'USER','scope.page.'||i,'Scope pagination fixture','DISABLED',false,1,transaction_timestamp(),transaction_timestamp()
+		FROM generate_series(1,100) i`, member.AccountID); err != nil {
+		t.Fatal("prepare protected-directory pagination")
+	}
 	for _, phase := range []string{"active", "retired-policy", "disabled-user"} {
 		if phase == "retired-policy" {
 			if _, err := database.Exec(ctx, `UPDATE iam.policies SET status='RETIRED',resource_version=resource_version+1,updated_at=transaction_timestamp()
@@ -2289,23 +2583,36 @@ func provePolicyScopeCredentialProtection(t *testing.T, ctx context.Context, han
 				t.Fatal(err)
 			}
 		}
-		response := performIAMRequest(handler, http.MethodGet, "/v1/users", operator, nil)
-		var directory iamv1.UserList
-		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &directory) != nil || iamv1.ValidateUserList(directory) != nil {
-			t.Fatalf("protected identity directory %s: status=%d", phase, response.Code)
-		}
 		found := false
-		for _, entry := range directory.Items {
-			if entry.User.ID != member.ID {
-				continue
+		path := "/v1/users"
+		seen := map[string]bool{}
+		pages := 0
+		for ; pages < 10; pages++ {
+			response := performIAMRequest(handler, http.MethodGet, path, operator, nil)
+			var directory iamv1.UserList
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &directory) != nil || iamv1.ValidateUserList(directory) != nil {
+				t.Fatalf("protected identity directory %s: status=%d", phase, response.Code)
 			}
-			for _, attachment := range entry.PolicyAttachments {
-				if attachment.ID == "scope-protection-attachment" && attachment.Scope == iamv1.AuthorityScopeInstallation && attachment.RevokedAt == nil {
-					found = true
+			for _, entry := range directory.Items {
+				if entry.User.ID != member.ID {
+					continue
+				}
+				for _, attachment := range entry.PolicyAttachments {
+					if attachment.ID == "scope-protection-attachment" && attachment.Scope == iamv1.AuthorityScopeInstallation && attachment.RevokedAt == nil {
+						found = true
+					}
 				}
 			}
+			if found || directory.NextAfter == "" {
+				break
+			}
+			if seen[directory.NextAfter] {
+				t.Fatal("protected directory cursor did not advance")
+			}
+			seen[directory.NextAfter] = true
+			path = "/v1/users?after=" + directory.NextAfter
 		}
-		if !found {
+		if !found || pages == 0 {
 			t.Fatalf("directory hid protected association in %s", phase)
 		}
 		for _, operation := range []string{"set-status", "reset-password"} {

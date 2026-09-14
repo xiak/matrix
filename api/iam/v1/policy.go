@@ -83,6 +83,18 @@ type UpdatePolicyRequest struct {
 	RequestID       string `json:"requestId"`
 }
 
+type DeletePolicyRequest struct {
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+func ValidateDeletePolicyRequest(value DeletePolicyRequest) error {
+	if validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
+		return ErrInvalidPolicy
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
 func ValidateUpdatePolicyRequest(value UpdatePolicyRequest) error {
 	if validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
 		return ErrInvalidPolicy
@@ -203,7 +215,7 @@ func ValidatePolicyList(value PolicyList) error {
 	}
 	var previous PolicyID
 	for _, item := range value.Items {
-		if ValidatePolicy(item) != nil || item.Scope != value.Scope || (item.AccountID != "" && item.AccountID != value.AccountID) || item.ID <= previous {
+		if ValidatePolicy(item) != nil || item.Status != PolicyActive || item.Scope != value.Scope || (item.AccountID != "" && item.AccountID != value.AccountID) || item.ID <= previous {
 			return ErrInvalidPolicy
 		}
 		previous = item.ID

@@ -81,6 +81,7 @@ func TestPolicyVersionCommandsBindOwnerRevisionAndImmutableContent(t *testing.T)
 	createSchema := compileIAMOpenAPISchema(t, openapi, "CreatePolicyVersionRequest")
 	selectSchema := compileIAMOpenAPISchema(t, openapi, "SetDefaultPolicyVersionRequest")
 	updateSchema := compileIAMOpenAPISchema(t, openapi, "UpdatePolicyRequest")
+	deleteSchema := compileIAMOpenAPISchema(t, openapi, "DeletePolicyRequest")
 	instance := func(value any) any {
 		t.Helper()
 		encoded, err := json.Marshal(value)
@@ -96,6 +97,10 @@ func TestPolicyVersionCommandsBindOwnerRevisionAndImmutableContent(t *testing.T)
 	create := CreatePolicyVersionRequest{Document: policyDocumentFixture(), ResourceVersion: 2, RequestID: "version-create"}
 	selection := SetDefaultPolicyVersionRequest{VersionID: "version-one", ResourceVersion: 2, RequestID: "version-select"}
 	update := UpdatePolicyRequest{DisplayName: "Renamed policy", ResourceVersion: 2, RequestID: "policy-rename"}
+	deletion := DeletePolicyRequest{ResourceVersion: 2, RequestID: "policy-delete"}
+	if ValidateDeletePolicyRequest(deletion) != nil || deleteSchema.Validate(instance(deletion)) != nil {
+		t.Fatal("valid policy deletion rejected")
+	}
 	if ValidateUpdatePolicyRequest(update) != nil || updateSchema.Validate(instance(update)) != nil {
 		t.Fatal("valid metadata update rejected")
 	}
@@ -107,6 +112,11 @@ func TestPolicyVersionCommandsBindOwnerRevisionAndImmutableContent(t *testing.T)
 		}
 	}
 	for _, field := range []string{"accountId", "management", "scope", "document", "defaultVersionId", "id"} {
+		deleteAttack := instance(deletion).(map[string]any)
+		deleteAttack[field] = "injected"
+		if deleteSchema.Validate(deleteAttack) == nil {
+			t.Fatal("policy deletion admitted selector")
+		}
 		attack := instance(update).(map[string]any)
 		attack[field] = "injected"
 		if updateSchema.Validate(attack) == nil {
@@ -117,6 +127,10 @@ func TestPolicyVersionCommandsBindOwnerRevisionAndImmutableContent(t *testing.T)
 		t.Fatal("valid version command rejected")
 	}
 	for _, revision := range []uint64{0, 9007199254740991, 9007199254740992} {
+		deletion.ResourceVersion = revision
+		if ValidateDeletePolicyRequest(deletion) == nil || deleteSchema.Validate(instance(deletion)) == nil {
+			t.Fatal("invalid deletion revision admitted")
+		}
 		update.ResourceVersion = revision
 		if ValidateUpdatePolicyRequest(update) == nil || updateSchema.Validate(instance(update)) == nil {
 			t.Fatal("metadata update admitted non-incrementable revision")
@@ -338,7 +352,7 @@ func TestPolicyDirectoryScopeBudgetAndOwnership(t *testing.T) {
 	}{
 		{"metadata", func(*PolicyList) {}, true},
 		{"empty complete directory", func(v *PolicyList) { v.Items = []Policy{} }, true},
-		{"retired remains visible", func(v *PolicyList) { v.Items[0].Status = PolicyRetired }, true},
+		{"retired does not consume active inventory", func(v *PolicyList) { v.Items[0].Status = PolicyRetired }, false},
 		{"foreign account", func(v *PolicyList) { v.AccountID = "account-b" }, false},
 		{"missing items", func(v *PolicyList) { v.Items = nil }, false},
 		{"mixed installation", func(v *PolicyList) { v.InstallationID = "installation-a" }, false},
@@ -369,6 +383,7 @@ func TestPolicyDirectoryScopeBudgetAndOwnership(t *testing.T) {
 		{"unknown permit", func(v map[string]any) { v["permit"] = true }, false},
 		{"unknown cursor", func(v map[string]any) { v["nextAfter"] = "hidden-partial-directory" }, false},
 		{"unknown policy status", func(v map[string]any) { v["items"].([]any)[0].(map[string]any)["status"] = "DELETED" }, false},
+		{"retired policy excluded", func(v map[string]any) { v["items"].([]any)[0].(map[string]any)["status"] = "RETIRED" }, false},
 		{"unknown policy management", func(v map[string]any) { v["items"].([]any)[0].(map[string]any)["management"] = "PROVIDER" }, false},
 		{"customer missing owner", func(v map[string]any) { delete(v["items"].([]any)[0].(map[string]any), "accountId") }, false},
 		{"customer reserved id", func(v map[string]any) { v["items"].([]any)[0].(map[string]any)["id"] = "system.forged" }, false},

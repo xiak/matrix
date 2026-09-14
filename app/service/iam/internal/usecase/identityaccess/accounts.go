@@ -529,6 +529,30 @@ func (service *Authority) UpdatePolicy(ctx context.Context, credential iamv1.Sec
 		})
 }
 
+func (service *Authority) DeletePolicy(ctx context.Context, credential iamv1.Secret, id iamv1.PolicyID, request iamv1.DeletePolicyRequest) (iamv1.Policy, error) {
+	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateDeletePolicyRequest(request) != nil {
+		return iamv1.Policy{}, ErrInvalidArgument
+	}
+	requestDigest, err := digestSanitized("policy-delete", struct {
+		PolicyID iamv1.PolicyID            `json:"policyId"`
+		Request  iamv1.DeletePolicyRequest `json:"request"`
+	}{id, request})
+	if err != nil {
+		return iamv1.Policy{}, err
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyDelete, iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Policy, error) {
+			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
+				return iamv1.Policy{}, err
+			}
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMPolicyDeleted, auditv1.TargetPolicy, string(id), decision.ID, requestDigest, request.RequestID, now)
+			if err != nil {
+				return iamv1.Policy{}, err
+			}
+			return tx.DeletePolicy(ctx, PolicyDeletion{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, PolicyID: id, ResourceVersion: request.ResourceVersion, AuditEvent: event})
+		})
+}
+
 func (service *Authority) ListAccounts(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.AccountList, error) {
 	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.AccountList{}, ErrInvalidArgument

@@ -777,7 +777,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 12, Audit: 9, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 13, Audit: 10, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -1012,13 +1012,22 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-custom-not-selected", http.StatusForbidden)
 	revokeIAMPolicyAttachment(t, replicaEndpoint, adminLogin.Credential, customAttachment.ID, customAttachment.ResourceVersion, "request-process-custom-revoke")
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
+	deleteResponse := performJSON(t, http.MethodDelete, iamEndpoint+"/v1/policies/"+string(customPolicy.Policy.ID), adminLogin.Credential,
+		iamv1.DeletePolicyRequest{ResourceVersion: 5, RequestID: "request-process-policy-delete"})
+	var retiredPolicy iamv1.Policy
+	if deleteResponse.Status != http.StatusOK || json.Unmarshal(deleteResponse.Body, &retiredPolicy) != nil || iamv1.ValidatePolicy(retiredPolicy) != nil ||
+		retiredPolicy.Status != iamv1.PolicyRetired || retiredPolicy.ResourceVersion != 6 || retiredPolicy.ID != customPolicy.Policy.ID || retiredPolicy.DefaultVersionID != customPolicy.Version.ID {
+		t.Fatalf("process policy deletion status=%d", deleteResponse.Status)
+	}
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	if countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyCreated, auditv1.ResultSucceeded) != 1 {
 		t.Fatal("custom policy publication did not reach the immutable tenant Audit chain")
 	}
 	if countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyVersionCreated, auditv1.ResultSucceeded) != 1 ||
 		countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyDefaultVersionSet, auditv1.ResultSucceeded) != 2 ||
-		countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyUpdated, auditv1.ResultSucceeded) != 1 {
+		countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyUpdated, auditv1.ResultSucceeded) != 1 ||
+		countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyDeleted, auditv1.ResultSucceeded) != 1 {
 		t.Fatal("immutable version/default selection facts did not reach the original tenant chain")
 	}
 	deniedBefore := countAuditFacts(

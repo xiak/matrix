@@ -92,8 +92,9 @@ func buildPaths() object {
 			"post": mutationOperation("createPolicy", "Create an account-owned policy and its initial immutable version without attaching it", "CreatePolicyRequest", "PolicyDetail", "201", nil, nil),
 		},
 		"/v1/policies/{policyId}": object{
-			"get":   readOperation("getPolicy", "Read the current tenant policy and default content", "PolicyDetail", nil, []any{openapi31.PathIDParameter("policyId")}),
-			"patch": mutationOperation("updatePolicy", "Rename a customer policy without changing its content or authority", "UpdatePolicyRequest", "PolicyDetail", "200", nil, []any{openapi31.PathIDParameter("policyId")}),
+			"get":    readOperation("getPolicy", "Read the current tenant policy and default content", "PolicyDetail", nil, []any{openapi31.PathIDParameter("policyId")}),
+			"patch":  mutationOperation("updatePolicy", "Rename a customer policy without changing its content or authority", "UpdatePolicyRequest", "PolicyDetail", "200", nil, []any{openapi31.PathIDParameter("policyId")}),
+			"delete": mutationOperation("deletePolicy", "Retire an unreferenced customer policy while preserving immutable history", "DeletePolicyRequest", "Policy", "200", nil, []any{openapi31.PathIDParameter("policyId")}),
 		},
 		"/v1/policies/{policyId}/versions": object{
 			"get":  readOperation("listPolicyVersions", "Read the bounded customer policy version inventory", "PolicyVersionList", nil, []any{openapi31.PathIDParameter("policyId")}),
@@ -291,6 +292,7 @@ func structContracts() map[string]reflect.Type {
 		"CreatePolicyVersionRequest":     openapi31.StructType[iamv1.CreatePolicyVersionRequest](),
 		"SetDefaultPolicyVersionRequest": openapi31.StructType[iamv1.SetDefaultPolicyVersionRequest](),
 		"UpdatePolicyRequest":            openapi31.StructType[iamv1.UpdatePolicyRequest](),
+		"DeletePolicyRequest":            openapi31.StructType[iamv1.DeletePolicyRequest](),
 		"PolicyAttachmentTarget":         openapi31.StructType[iamv1.PolicyAttachmentTarget](),
 		"CreatePolicyAttachmentRequest":  openapi31.StructType[iamv1.CreatePolicyAttachmentRequest](),
 		"RevokePolicyAttachmentRequest":  openapi31.StructType[iamv1.RevokePolicyAttachmentRequest](),
@@ -386,6 +388,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	}
 	if owner == "PolicyList" && jsonName == "items" {
 		base["maxItems"] = iamv1.MaxPolicyListItems
+		base["items"] = object{"allOf": []any{base["items"], object{"properties": object{"status": object{"const": "ACTIVE"}}}}}
 	}
 	if owner == "CurrentIdentity" && jsonName == "policySources" {
 		base["maxItems"] = 256
@@ -677,7 +680,7 @@ func applyPolicyLanguageOverlays(schemas object) {
 		"policy":  object{"properties": object{"scope": object{"const": "TENANT"}, "status": object{"const": "ACTIVE"}}},
 		"version": object{"properties": object{"document": object{"properties": object{"scope": object{"const": "TENANT"}}}}},
 	}}}
-	for _, name := range []string{"CreatePolicyVersionRequest", "SetDefaultPolicyVersionRequest", "UpdatePolicyRequest"} {
+	for _, name := range []string{"CreatePolicyVersionRequest", "SetDefaultPolicyVersionRequest", "UpdatePolicyRequest", "DeletePolicyRequest"} {
 		schemas[name].(object)["properties"].(object)["resourceVersion"].(object)["maximum"] = 9007199254740990
 	}
 	schemas["CreatePolicyVersionRequest"].(object)["allOf"] = schemas["CreatePolicyRequest"].(object)["allOf"]

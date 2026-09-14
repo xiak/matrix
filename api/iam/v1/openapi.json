@@ -155,6 +155,7 @@
           "iam.policy-version.create",
           "iam.policy.set-default-version",
           "iam.policy.update",
+          "iam.policy.delete",
           "iam.platform-policy.list",
           "iam.user.set-status",
           "iam.user.reset-password",
@@ -783,6 +784,32 @@
               "properties": {
                 "action": {
                   "const": "iam.policy.update"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy.delete"
                 }
               },
               "required": [
@@ -2538,6 +2565,7 @@
               "iam.policy-version.create",
               "iam.policy.set-default-version",
               "iam.policy.update",
+              "iam.policy.delete",
               "iam.platform-policy.list",
               "iam.user.set-status",
               "iam.user.reset-password",
@@ -3000,6 +3028,32 @@
               "properties": {
                 "action": {
                   "const": "iam.policy.update"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy.delete"
                 }
               },
               "required": [
@@ -4938,6 +4992,24 @@
         ],
         "type": "object"
       },
+      "DeletePolicyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requestId",
+          "resourceVersion"
+        ],
+        "type": "object"
+      },
       "DeleteUserRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5718,6 +5790,7 @@
                             "iam.policy-version.create",
                             "iam.policy.set-default-version",
                             "iam.policy.update",
+                            "iam.policy.delete",
                             "iam.user.set-status",
                             "iam.user.reset-password",
                             "iam.user.create",
@@ -6000,7 +6073,18 @@
           },
           "items": {
             "items": {
-              "$ref": "#/components/schemas/Policy"
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Policy"
+                },
+                {
+                  "properties": {
+                    "status": {
+                      "const": "ACTIVE"
+                    }
+                  }
+                }
+              ]
             },
             "maxItems": 256,
             "type": "array"
@@ -6376,7 +6460,8 @@
                       "iam.policy-version.read",
                       "iam.policy-version.create",
                       "iam.policy.set-default-version",
-                      "iam.policy.update"
+                      "iam.policy.update",
+                      "iam.policy.delete"
                     ]
                   }
                 }
@@ -6485,6 +6570,30 @@
                 "actions": {
                   "contains": {
                     "const": "iam.policy.update"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.policy.delete"
                   }
                 }
               }
@@ -10679,6 +10788,72 @@
       }
     },
     "/v1/policies/{policyId}": {
+      "delete": {
+        "operationId": "deletePolicy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policyId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeletePolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Policy"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Retire an unreferenced customer policy while preserving immutable history"
+      },
       "get": {
         "operationId": "getPolicy",
         "parameters": [

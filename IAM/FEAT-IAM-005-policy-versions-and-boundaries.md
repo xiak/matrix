@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略创建/读取/显式关联及版本查询/创建/默认切换已有固定 CI；策略改名已实现并通过本地真库和独立进程门禁。策略与版本删除、条件、边界和 UI 闭环未完成，整体未验收。
+- 状态：实施中；结构诊断、自定义策略创建/读取/显式关联及版本查询/创建/默认切换已有固定 CI；策略改名、删除及旧分页门禁修复有本地真库和独立进程证据，等待本片独立 CI。版本删除、条件、边界和 UI 闭环未完成，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -58,7 +58,11 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 策略改名使用 `PATCH /v1/policies/{policyId}`，入参严格为 displayName、resourceVersion、requestId，返回当前默认 `PolicyDetail`。对应 `iam.policy.update` / 精确 POLICY，当前 PDP 与原 root/ACTIVE CUSTOMER 锁内约束均保留。显示名按账号内活跃 CUSTOMER 精确唯一；更新仅改变显示名、修订号和更新时间，不能改变稳定 ID、owner、默认版本、内容或附件。新意图的同名无变更、旧修订、重复活跃名称均冲突；精确重放仅在原结果修订仍当前时返回同一结果。成功事实为租户链 `iam.policy.updated`，只记录绑定意图摘要的 POLICY 目标，不记录正文。并发改名/默认切换/附件使用同一 Policy 修订锁；末尾 outbox 写失败必须全部回滚。
 
-删除仍是后续必须交付的同一生命周期：Policy 删除终态化而非销毁历史，被活跃附件引用时拒绝；版本删除退出管理集合并释放五版本名额，但不得物理移除旧授权证明内容。管理目录不能因为保留历史对象而形成终生容量上限。尚未实现这些删除入口，不将本次改名作为完整 CRUD 验收。
+策略删除使用 `DELETE /v1/policies/{policyId}`，入参仅 resourceVersion、requestId，使用 `iam.policy.delete` / 精确 POLICY。当前 PDP 和原 root/ACTIVE Account/USER 检查后，锁定本账号 CUSTOMER Policy；SYSTEM 和跨账号拒绝。任何未撤销附件（包括停用 User 或组的附件）都使删除冲突，不能隐式解除关联。删除只把 Policy 置为不可恢复的 RETIRED，resourceVersion +1，返回终态 `Policy` 元数据；保留默认指针、全部不可变版本、已撤销附件、决定和 outbox。等值删除重放仅匹配原意图和终态修订；不同命令、错误版本、旧创建/改名/切换不得复活对象。成功事实为租户链 `iam.policy.deleted` / POLICY，与终态同事务。
+
+普通管理目录只列 ACTIVE 策略，删除释放活跃 CUSTOMER 名额和显示名；原创建意图不能复用，但新创建意图可以使用相同显示名并得到新稳定 ID。删除后的普通内容读取、改名、发布/切换与重新关联均拒绝，历史事实按其原证据投递，不从当前目录反推历史是否存在。目录不提供未声明的回收站或历史查询 API；原始内容仍受不可变存储保护。真实门禁必须证明有超过目录预算的历史退休记录时仍能列出/创建当前策略，不能以扩大预算掩盖终生容量问题。附件创建与删除在同一 Policy 锁序列化；只有创建关联成功或策略终态成功之一，不能留下活跃的退休策略附件。
+
+版本删除仍是后续必须交付的同一生命周期：退出管理集合并释放五版本名额，但不得物理移除旧授权证明内容；版本重新发布语义在该片明确。当前没有版本删除入口，不将策略 CRUD 当作完整 LANG-01 验收。
 
 评估器处理类型化 Statement。条件缺失对匹配为 false；显式 Null 存在检查单独定义；否定条件也不能因属性缺失自动放行。多个条件同时满足，多值规则明确为 any/all；禁止隐式字符串类型转换。资源列表中每个必要资源都要通过，不以某个资源成功代替全部。
 
@@ -94,6 +98,18 @@ Allow/Deny/边界交集表、条件缺失/类型/大小攻击、跨账号资源�
 
 同一独立 PG18（1 CPU、768 MiB、128 PIDs、64 连接）上的串行 CI 等价回归：Audit 数据层 18.484s、Audit HTTP 5.576s、IAM 集成 228.237s、独立进程 61.388s、PaaS 数据层 10.364s。实际两个 IAM 实例与 PaaS/Audit 证明 rename 后原应用仍可访问、其他应用仍拒绝，随后附件撤销生效，单一改名事实由真实 outbox 进入租户链；保留当前 schema 带数据重放、故障原子性、受限数据库身份、旧 Audit 字节和历史 proof 门禁。未运行未发布 IAM 从 schema 1 起的逐版升级链。
 
-相关 API/IAM/Audit/architecture race、全仓 Go 测试/vet、模块校验、OpenAPI 稳定生成及 Linux IAM/Audit 构建通过。以上是本分支本地证据；改名固定提交的独立 CI 尚待确认，不继承前一版本片的 CI，也不宣称 UI 或安装发布验收。
+相关 API/IAM/Audit/architecture race、全仓 Go 测试/vet、模块校验、OpenAPI 稳定生成及 Linux IAM/Audit 构建通过。改名候选 `02fed1296d0f425e610812a870c85ed524295447` 的 [Verification 34819882669](https://github.com/xiak/matrix/actions/runs/34819882669) 最终为 failure：Go/node-process 成功，authority-process 中既有平台凭据保护测试只读取用户目录第一页，前置 Group 测试已创建超过 100 个用户，目标随机 ID 落在后页时误报缺关联。因此 02fed 不作为独立 CI 成功点；本地改名证据不替代修复后的完整 CI。
 
-当前改名增量开发 readiness 为 IAM12/Audit9/PaaS1，仅反映实际函数与封闭 action 契约；前一固定版本片为 11/8/1。安装发布 profile 未修改，不能据此组装或宣称跨版本可升级。当前没有对外诊断 endpoint、版本管理 capability 条目或自定义策略 UI 验收。LANG-01 的策略删除及版本删除、LANG-03 的受限通配、LANG-04 条件、LANG-05 边界、LANG-07 编辑器以及 LANG-08 完整委派仍必须继续实现，不能将已完成的创建、改名和版本切换路径当作 FEAT Accepted。
+### 策略删除与分页门禁
+
+旧平台凭据保护门禁改为使用服务返回的 opaque 签名 cursor 至多读取 10 页，每页仍由 UserList 校验限制为 100 项，重复 cursor 拒绝；不会解码/推导游标。仅此确定规模的测试使用页上限，生产保护继续由数据库检查全部有效关联。100 条排序靠前的停用主体仅作为分页数据，真实受保护用户仍由 HTTP 创建，确保单独运行也经过后页；它不证明这些批量数据完成了用户创建流程。PG18 聚焦 `platform_scope_protects_credentials_independently_of_policy_name` 修复后通过，14.34s（含父门禁 30.08s），保留 ACTIVE/退休系统策略/停用主体各阶段的原凭据保护断言。
+
+PG18 聚焦 `customer_policy_terminal_deletion` 最终通过，3.18s（含父门禁 8.82s）：活跃 User、停用 User 与 Group 的未撤销附件均阻止删除；outbox 最后失败没有元数据/决定/事实残留；精确重放单一生命周期事实、旧创建/更新/版本/关联不能复活；同名新意图产生新 Policy ID；原版本与创建/删除历史 proof 保留。257 条退休内容仅作为目录容量数据，验证历史不占活跃管理目录；删除与附件创建竞争没有活跃的退休策略关联。改名/发布/默认切换/删除同修订四路竞争只有一项生效，未获胜操作不改变名称、默认版本、内容集合或终态；成功生命周期事实与实际获胜请求及已提交授权决定绑定，不把正常的授权决定审计误计为第二条生命周期事实。
+
+当前完整 `TestIAMPolicyAuthorityStoragePostgres` 在同一限额的新数据库串行复验通过，86.46s，包含原 Group 规模/分页 46.39s、删除 3.33s、平台保护后页 5.92s，以及最终 schema/bootstrap 带数据重放、终态/撤权不复活和不可变证据攻击。一次与本机其他构建重叠的回归曾耗尽原两分钟总预算；该次不算通过，没有增大超时或削减 Group HTTP 创建/分页覆盖，以上为无并行重型构建的完整复验。
+
+原独立双 IAM/PaaS/Audit 真实进程门禁通过，51.364s：从实际 HTTP 创建、发布、切换、改名、撤销附件到删除策略，真实 PaaS 权限仍正确拒绝，删除事实由 dispatcher 进入同一租户链。Audit 数据层 17.765s、Audit HTTP 4.405s、PaaS 数据层 5.848s 均通过；保留受限进程登录、租户/资源/Operation/outbox 隔离、当前身份失联失败关闭和历史链。该源码组合不是签名安装或 UI 验收。
+
+最终 IAM 集成包 race 串行复验共 199.938s，通过上述策略权威、真实 IAM HTTP 94.02s、专用本地凭据恢复 16.52s，保留当前版本的改密/重置/恢复/退出/撤权并发与原意图重放。相关 API/IAM/Audit/architecture race、全仓 Go 测试/vet、模块校验、OpenAPI 稳定生成和 Linux IAM/Audit 构建均通过；本片独立 CI 仍须绑定提交核实。
+
+当前删除增量开发 readiness 为 IAM13/Audit10/PaaS1，仅反映实际函数与封闭 action 契约；改名候选为 12/9/1。安装发布 profile 未修改，不能据此组装或宣称跨版本可升级。当前没有对外诊断 endpoint、版本管理 capability 条目或自定义策略 UI 验收。LANG-01 的版本删除、LANG-03 的受限通配、LANG-04 条件、LANG-05 边界、LANG-07 编辑器以及 LANG-08 完整委派仍必须继续实现，不能将策略 CRUD 当作 FEAT Accepted。

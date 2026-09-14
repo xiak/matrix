@@ -323,6 +323,31 @@ func (value *transaction) UpdatePolicy(ctx context.Context, mutation identityacc
 	return decodePolicyDetail(encoded, mutation.AccountID, mutation.PolicyID)
 }
 
+func (value *transaction) DeletePolicy(ctx context.Context, mutation identityaccess.PolicyDeletion) (iamv1.Policy, error) {
+	if iamv1.ValidateDeletePolicyRequest(iamv1.DeletePolicyRequest{ResourceVersion: mutation.ResourceVersion, RequestID: mutation.AuditEvent.RequestID}) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		return iamv1.Policy{}, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.Policy{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, "SELECT iam.delete_policy($1,$2,$3,$4,$5,$6::jsonb)", mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PolicyID, mutation.ResourceVersion, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.Policy{}, mapAuthorizationDatabaseError("delete IAM policy", err)
+	}
+	var result iamv1.Policy
+	if json.Unmarshal(encoded, &result) != nil {
+		return result, identityaccess.ErrUnavailable
+	}
+	result.CreatedAt, result.UpdatedAt = result.CreatedAt.UTC(), result.UpdatedAt.UTC()
+	if iamv1.ValidatePolicy(result) != nil || result.ID != mutation.PolicyID || result.AccountID != mutation.AccountID || result.Management != iamv1.PolicyCustomerManaged || result.Status != iamv1.PolicyRetired || result.ResourceVersion != mutation.ResourceVersion+1 {
+		return iamv1.Policy{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
 func (value *transaction) ListPolicies(ctx context.Context, read identityaccess.AccountRead, scope iamv1.AuthorityScope) (iamv1.PolicyList, error) {
 	var encoded []byte
 	if err := value.tx.QueryRow(ctx, "SELECT iam.list_policies($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, scope).Scan(&encoded); err != nil {

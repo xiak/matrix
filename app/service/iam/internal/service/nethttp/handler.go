@@ -38,6 +38,7 @@ type Workflow interface {
 	CreatePolicyVersion(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.CreatePolicyVersionRequest) (iamv1.PolicyVersionDetail, error)
 	SetDefaultPolicyVersion(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.SetDefaultPolicyVersionRequest) (iamv1.PolicyDetail, error)
 	UpdatePolicy(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.UpdatePolicyRequest) (iamv1.PolicyDetail, error)
+	DeletePolicy(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.DeletePolicyRequest) (iamv1.Policy, error)
 	ListAccounts(context.Context, iamv1.Secret, string, string) (iamv1.AccountList, error)
 	GetAccount(context.Context, iamv1.Secret, iamv1.AccountID, string) (iamv1.AccountAccess, error)
 	SetAccountStatus(context.Context, iamv1.Secret, iamv1.AccountID, iamv1.SetAccountStatusRequest) (iamv1.Account, error)
@@ -184,6 +185,30 @@ func (value *handler) policy(response http.ResponseWriter, request *http.Request
 	path := strings.TrimPrefix(request.URL.Path, "/v1/policies/")
 	if strings.HasSuffix(path, ":set-default-version") || strings.Contains(path, "/") {
 		value.policyVersion(response, request, path)
+		return
+	}
+	if request.Method == http.MethodDelete {
+		if !rejectQuery(response, request) {
+			return
+		}
+		if iamv1.ValidateID("policyId", path) != nil {
+			value.notFound(response, request)
+			return
+		}
+		credential, ok := bearerCredential(response, request)
+		if !ok {
+			return
+		}
+		body, ok := decodeJSON[iamv1.DeletePolicyRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.DeletePolicy(request.Context(), credential, iamv1.PolicyID(path), body)
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
 		return
 	}
 	if request.Method == http.MethodPatch {

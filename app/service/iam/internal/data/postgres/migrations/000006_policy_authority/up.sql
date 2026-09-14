@@ -56,6 +56,10 @@ SET CONSTRAINTS iam.policies_default_version_fk IMMEDIATE;
 
 CREATE UNIQUE INDEX IF NOT EXISTS customer_policies_active_name_uq
     ON iam.policies(owner_tenant_id,display_name COLLATE "C") WHERE management='CUSTOMER' AND status='ACTIVE';
+CREATE INDEX IF NOT EXISTS policies_active_directory_idx
+    ON iam.policies(authority_scope,owner_tenant_id,id) WHERE status='ACTIVE';
+CREATE INDEX IF NOT EXISTS policy_attachments_live_policy_idx
+    ON iam.policy_attachments(policy_id) WHERE revoked_at IS NULL;
 
 CREATE OR REPLACE FUNCTION iam.assert_customer_policy_document(canonical text,content_digest text)
 RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
@@ -239,9 +243,8 @@ BEGIN
     RETURN iam.policy_version_detail(tenant,policy_id,version_id);
 END $function$;
 
-CREATE OR REPLACE FUNCTION iam.lock_customer_policy_publisher(tenant text,actor text,policy_id text)
-RETURNS iam.policies LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE policy iam.policies%ROWTYPE;
+CREATE OR REPLACE FUNCTION iam.lock_policy_publisher(tenant text,actor text)
+RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     PERFORM 1 FROM iam.accounts WHERE id=tenant AND status='ACTIVE' FOR SHARE;
@@ -251,6 +254,13 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy actor is unavailable'; END IF;
     PERFORM 1 FROM iam.account_roots WHERE account_id=tenant AND principal_id=actor FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy publisher is unavailable'; END IF;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.lock_customer_policy_publisher(tenant text,actor text,policy_id text)
+RETURNS iam.policies LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE policy iam.policies%ROWTYPE;
+BEGIN
+    PERFORM iam.lock_policy_publisher(tenant,actor);
     SELECT * INTO policy FROM iam.policies AS p WHERE p.id=policy_id AND p.owner_tenant_id=tenant
       AND p.management='CUSTOMER' AND p.authority_scope='TENANT' AND p.status='ACTIVE' FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy is unavailable'; END IF;
@@ -373,3 +383,37 @@ BEGIN
 END $function$;
 REVOKE ALL ON FUNCTION iam.update_policy(text,text,text,text,bigint,text,jsonb) FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.update_policy(text,text,text,text,bigint,text,jsonb) TO matrix_iam_api;
+
+CREATE OR REPLACE FUNCTION iam.delete_policy(tenant text,actor text,decision text,policy_id text,expected_version bigint,event jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE policy iam.policies%ROWTYPE; effective_now timestamptz(6):=transaction_timestamp();
+BEGIN
+    IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990 THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy revision is invalid';
+    END IF;
+    PERFORM iam.lock_policy_publisher(tenant,actor);
+    SELECT * INTO policy FROM iam.policies AS p WHERE p.id=policy_id AND p.owner_tenant_id=tenant
+      AND p.management='CUSTOMER' AND p.authority_scope='TENANT' FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy is unavailable'; END IF;
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.delete','POLICY',policy_id);
+    PERFORM iam.assert_audit_event(event,tenant,'iam.policy.deleted','POLICY',policy_id,'SUCCEEDED');
+    PERFORM iam.assert_user_audit_actor(tenant,actor,event);
+    IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy deletion decision is invalid'; END IF;
+    IF iam.policy_version_intent_replayed(tenant,actor,event) THEN
+        IF policy.status<>'RETIRED' OR policy.resource_version<>expected_version+1 THEN
+            RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy deletion replay conflicts';
+        END IF;
+        RETURN iam.lookup_policy(tenant,policy_id);
+    END IF;
+    IF policy.status<>'ACTIVE' OR policy.resource_version<>expected_version OR EXISTS(
+        SELECT 1 FROM iam.policy_attachments AS a WHERE a.policy_id=delete_policy.policy_id AND a.revoked_at IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy revision or live reference conflicts';
+    END IF;
+    UPDATE iam.policies AS p SET status='RETIRED',resource_version=resource_version+1,updated_at=effective_now WHERE p.id=policy_id;
+    INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
+      VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
+    RETURN iam.lookup_policy(tenant,policy_id);
+END $function$;
+REVOKE ALL ON FUNCTION iam.lock_policy_publisher(text,text),iam.delete_policy(text,text,text,text,bigint,jsonb)
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+GRANT EXECUTE ON FUNCTION iam.delete_policy(text,text,text,text,bigint,jsonb) TO matrix_iam_api;
