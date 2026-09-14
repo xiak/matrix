@@ -53,7 +53,7 @@ export type AccessWorkspace = {
 };
 export type AccessWorkspaceCommand =
   | { kind: "create-subuser"; loginName: string; displayName: string; profile: PreviewUserProfile; policyIds: string[]; groupIds: string[] }
-  | { kind: "create-group"; name: string; description: string; policyIds: string[] }
+  | { kind: "create-group"; name: string; description: string }
   | { kind: "update-group"; id: string; name: string; description: string }
   | { kind: "change-group-members"; id: string; added: string[]; removed: string[] }
   | { kind: "change-group-policies"; id: string; added: string[]; removed: string[] }
@@ -189,8 +189,8 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     }
     case "create-group": {
       validateName(state.groups, command.name);
-      if (command.description.length > 256 || command.policyIds.length > 30) invalid();
-      state.groups.push({ id, name: command.name.trim(), description: command.description, memberIds: [], policyIds: policies(command.policyIds), createdAt });
+      if (command.description.length > 256) invalid();
+      state.groups.push({ id, name: command.name.trim(), description: command.description, memberIds: [], policyIds: [], createdAt });
       target = command.name; break;
     }
     case "update-group": {

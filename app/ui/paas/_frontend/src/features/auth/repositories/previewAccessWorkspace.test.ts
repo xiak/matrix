@@ -315,16 +315,16 @@ describe("access workspace preview invariants", () => {
     const next = applyAccessWorkspaceCommand(state, { ...command, profile: { ...command.profile, programmaticAccess: true } }, context);
     expect(next.userProfiles["principal-new.user"]).toMatchObject({ consoleAccess: false, passwordResetRequired: false, loginProtection: false });
   });
-  it("creates empty groups atomically, validates policy references and rejects duplicate names", () => {
+  it("creates only an empty group and leaves policy attachments to a separate command", () => {
     const source = initialAccessWorkspace("org-xiak");
-    const next = applyAccessWorkspaceCommand(source, { kind: "create-group", name: "New Team", description: "", policyIds: [] }, context);
+    const next = applyAccessWorkspaceCommand(source, { kind: "create-group", name: "New Team", description: "" }, context);
     expect(next.groups).toHaveLength(source.groups.length + 1);
     expect(source.groups.some((group) => group.name === "New Team")).toBe(false);
     expect(next.groups.at(-1)?.memberIds).toEqual([]);
     expect(next.groups.at(-1)?.policyIds).toEqual([]);
-    expect(() => applyAccessWorkspaceCommand(source, { kind: "create-group", name: "Outside", description: "", policyIds: ["other-account-policy"] }, context)).toThrow("notFound");
-    expect(() => applyAccessWorkspaceCommand(source, { kind: "create-group", name: "deliveryteam", description: "", policyIds: [] }, context)).toThrow("duplicate");
-    const attached = applyAccessWorkspaceCommand(source, { kind: "create-group", name: "Readers", description: "", policyIds: ["policy-read", "policy-read"] }, context);
+    expect(() => applyAccessWorkspaceCommand(source, { kind: "create-group", name: "deliveryteam", description: "" }, context)).toThrow("duplicate");
+    const created = applyAccessWorkspaceCommand(source, { kind: "create-group", name: "Readers", description: "" }, { ...context, id: "group-readers" });
+    const attached = applyAccessWorkspaceCommand(created, { kind: "change-group-policies", id: "group-readers", added: ["policy-read", "policy-read"], removed: [] }, context);
     expect(attached.groups.at(-1)?.policyIds).toEqual(["policy-read"]);
     expect(attached.groups.at(-1)?.memberIds).toEqual([]);
   });

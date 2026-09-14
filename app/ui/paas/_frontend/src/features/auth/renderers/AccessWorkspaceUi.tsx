@@ -91,12 +91,13 @@ export function WorkspaceDelete({ name, onClose, onConfirm, impact }: { name: st
   </WorkspaceDialog>;
 }
 
-export function WorkspaceSelection({ label, options, value, onChange }: { label: string; options: { id: string; name: string; description?: string }[]; value: string[]; onChange(ids: string[]): void }) {
+export function WorkspaceSelection({ label, options, value, onChange, limit = 30 }: { label: string; options: { id: string; name: string; description?: string }[]; value: string[]; onChange(ids: string[]): void; limit?: number }) {
   const t = useTranslations("IamWorkspace");
+  const selectionLimit = Math.max(1, Math.floor(limit));
   const remove = (id: string) => onChange(value.filter((entry) => entry !== id));
-  return <Transfer options={options.map((option) => ({ id: option.id, label: option.name, description: option.description }))} remaining={30 - value.length}
+  return <Transfer options={options.map((option) => ({ id: option.id, label: option.name, description: option.description }))} remaining={Math.max(0, selectionLimit - value.length)}
     selected={value.map((id) => { const option = options.find((entry) => entry.id === id); return { id, label: option?.name ?? id, description: option?.description }; })}
-    onSelect={(ids, checked) => { const next = checked ? [...new Set([...value, ...ids])] : value.filter((id) => !ids.includes(id)); if (next.length <= 30) onChange(next); }} onRemove={remove} onClear={() => onChange([])}
+    onSelect={(ids, checked) => { const next = checked ? [...new Set([...value, ...ids])] : value.filter((id) => !ids.includes(id)); if (next.length <= selectionLimit) onChange(next); }} onRemove={remove} onClear={() => onChange([])}
     labels={{ available: label, selected: t("selectCount", { count: value.length }), search: label + " · " + t("search"), clearSearch: t("clear"), clearSelected: t("clearSelection"), empty: t("selectionEmpty"), emptyHint: t("selectionEmptyHint"), noResults: t("noResults"), noOptions: t("empty"), remove: (name) => t("removeSelection", { name }), previous: t("previous"), next: t("next"), page: (page, pages) => t("page", { page, pages }), selectPage: t("selectPage"), clearPage: t("clearPage"), pageSelection: (selected, total) => t("pageSelection", { selected, total }), limit: (remaining, needed) => t("pageSelectionLimit", { remaining, needed }) }}
-    footnote={t("selectionLimit")} />;
+    footnote={t(selectionLimit === 1 ? "singleSelectionLimit" : "selectionLimit")} />;
 }

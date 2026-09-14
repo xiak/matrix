@@ -57,7 +57,7 @@ function GroupAssociationEditor({ group, workspace, scene, change, onClose }: { 
       <div><Button variant="secondary" onClick={() => { setReview(false); access.clearWorkspaceError(); }}>{t("backToSelection")}</Button></div>
     </> : <>
       <Alert>{t(change.kind === "members" ? "membershipHint" : "policyChangeHint")}</Alert>
-      <WorkspaceSelection label={label} options={options} value={selection} onChange={setSelection} />
+      <WorkspaceSelection label={label} options={options} value={selection} onChange={setSelection} limit={1} />
     </>}
   </WorkspaceDialog>;
 }

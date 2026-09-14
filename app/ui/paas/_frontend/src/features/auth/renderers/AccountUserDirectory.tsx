@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Table, TableActions, TableSelectionCell, TableToolbar, ContentPage, EmptyState, Badge, Button, Card } from "@ui/xiak";
@@ -71,6 +71,8 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   const [query, setQuery] = useState(() => userDirectoryView.read().query);
   const [state, setState] = useState(() => userDirectoryView.read().state);
   const [role, setRole] = useState(() => userDirectoryView.read().role);
+  const deferredQuery = useDeferredValue(query);
+  const filtering = deferredQuery !== query;
   useEffect(() => { if (!entityId) userDirectoryView.remember({ query, state, role }); }, [userDirectoryView, query, state, role, entityId]);
   const createRef = useRef<HTMLButtonElement>(null);
   const [selection, setSelection] = useState<{ scene: AccountAccessScene; ids: string[] }>({ scene, ids: [] });
@@ -79,24 +81,33 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   const clearSelection = () => setSelection({ scene, ids: [] });
   const changeFilter = (change: () => void) => { clearSelection(); change(); };
   const detail = scene.users.find((user) => user.id === entityId);
-  const words = query.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const associations = new Map(scene.users.map((user) => [user.id, {
-    direct: workspace?.userPolicies[user.id]?.length ?? 0,
-    inherited: new Set(workspace?.groups.filter((group) => group.memberIds.includes(user.id)).flatMap((group) => group.policyIds)).size
-  }]));
-  const filtered = scene.users.filter((user) => {
+  const words = useMemo(() => deferredQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean), [deferredQuery]);
+  const associations = useMemo(() => {
+    const result = new Map(scene.users.map((user) => [user.id, { direct: new Set(workspace?.userPolicies[user.id] ?? []).size, inherited: 0 }]));
+    if (!workspace) return result;
+    const inherited = new Map<string, Set<string>>();
+    for (const group of workspace.groups) for (const userId of group.memberIds) {
+      if (!result.has(userId)) continue;
+      const policies = inherited.get(userId) ?? new Set<string>();
+      for (const policyId of group.policyIds) policies.add(policyId);
+      inherited.set(userId, policies);
+    }
+    for (const [userId, policies] of inherited) result.get(userId)!.inherited = policies.size;
+    return result;
+  }, [scene.users, workspace]);
+  const filtered = useMemo(() => scene.users.filter((user) => {
     const text = [user.name, user.loginName, user.id, user.qualifiedName, t("child")].join(" ").normalize("NFKC").toLowerCase();
     const grants = associations.get(user.id);
     const roleMatches = workspace ?
       role === "all" || (role === "ungranted" ? !grants!.direct && !grants!.inherited : role === "direct" ? grants!.direct > 0 : grants!.inherited > 0) :
       role === "all" || (role === "ungranted" ? !user.attachments.length : role === "direct" ? user.attachments.length > 0 : user.attachments.some((attachment) => attachment.scope === "INSTALLATION"));
     return words.every((word) => text.includes(word)) && (state === "all" || state === user.state) && roleMatches;
-  });
+  }), [associations, role, scene.users, state, t, words, workspace]);
   const hasFilters = Boolean(query || state !== "all" || role !== "all");
   const clearFilters = () => { clearSelection(); setQuery(""); setState("all"); setRole("all"); };
   const checkedUsers = filtered.filter((user) => checkedIds.has(user.id));
   const allChecked = filtered.length > 0 && checkedUsers.length === filtered.length;
-  const blocked = access.busy || access.loading || !access.supportsUserBatch;
+  const blocked = access.busy || access.loading || filtering || !access.supportsUserBatch;
   const batchContext = { canListUsers: scene.canListUsers, supported: access.supportsUserBatch, rootId: scene.accountOwner.id, actorId: scene.currentUserId, targets: checkedUsers.map((user) => ({ id: user.id, enabled: user.enabled, canSetStatus: user.canSetStatus, canAttachPolicy: user.canAttachTenantPolicy, protected: user.protected })) };
   if (entityId === scene.accountOwner.id) return <AccountPrimaryWorkspace scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
   if (entityId && !detail) return <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
@@ -116,7 +127,7 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
           { id: "role", label: w("filterPolicySource"), value: role, onChange: (value) => changeFilter(() => setRole(value)), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "platform", label: t("platformPolicyAttachments") }] }
         ]} />
       {!access.supportsUserBatch || filtered.length > userBatchLimit ? <p className={styles.selectionHint}>{batch(!access.supportsUserBatch ? "unsupportedHint" : "limitHint", { limit: userBatchLimit })}</p> : null}
-      {filtered.length ? <Table aria-label={t("userTable")} className={styles.userTable}>
+      {filtered.length ? <Table aria-label={t("userTable")} aria-busy={filtering || undefined} className={styles.userTable}>
           <thead><tr><TableSelectionCell header label={batch("selectPage")} checked={allChecked ? true : checkedUsers.length ? "mixed" : false} disabled={blocked || filtered.length > userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? filtered.map((user) => user.id) : [] })} /><th scope="col">{t("user")}</th><th scope="col">{t("userType")}</th><th scope="col">{t("accessMethods")}</th><th scope="col">{w("policyAssociations")}</th><th scope="col">{t("status")}</th></tr></thead>
           <tbody>{filtered.map((user) => <AccountUserRow key={user.id} user={user} principalId={scene.currentUserId} workspace={workspace} grants={associations.get(user.id)}
             checked={checkedIds.has(user.id)} disabled={blocked || !checkedIds.has(user.id) && checkedUsers.length >= userBatchLimit}

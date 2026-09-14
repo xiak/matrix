@@ -1295,16 +1295,14 @@
     "back": "返回用户组列表",
     "steps": {
       "details": "填写用户组信息",
-      "policies": "关联策略",
       "review": "审阅并创建"
     },
     "hints": {
       "details": "通过用户组统一管理团队权限。",
-      "policies": "只选择团队工作必需的策略，也可以暂不关联。",
-      "review": "核对用户组信息及策略，确认后再创建。"
+      "review": "核对用户组信息。创建后，在详情页逐项配置成员和策略关系。"
     },
     "created": "用户组已创建",
-    "createdHint": "用户组已就绪，可以在详情页添加成员。",
+    "createdHint": "空用户组已就绪。进入详情后可逐项添加成员或直接关联策略。",
     "mockHint": "MOCK · 不修改后端",
     "viewGroup": "查看用户组",
     "saving": "保存中…",
@@ -1312,12 +1310,11 @@
     "nameHint": "1–64 个字符，使用便于识别且唯一的团队名称。",
     "invalidName": "请输入 1–64 个字符的有效用户组名称。",
     "duplicate": "用户组名称已存在。",
-    "policyHint": "默认不授予权限。添加子用户后，子用户将继承此用户组关联的策略。主账号不依赖组策略授权。",
-    "reviewHint": "本次创建一个空用户组，不添加用户，也不改变任何用户的权限。",
-    "noPolicies": "尚未关联策略",
-    "createdScope": "仅在当前体验会话中创建了用户组及所选策略关联。",
+    "reviewHint": "本次只创建空用户组；不会添加成员或关联策略。",
+    "noPolicies": "尚未直接关联策略",
+    "createdScope": "仅在当前体验会话中创建了空用户组；成员与策略关系尚未配置。",
     "cancelTitle": "放弃用户组草稿？",
-    "cancelHint": "用户组尚未创建。离开将丢弃名称、描述和已选策略。",
+    "cancelHint": "用户组尚未创建。离开将丢弃名称和描述。",
     "addMembers": "添加成员",
     "removeMembers": "移除成员",
     "directPolicies": "直接关联策略",
@@ -1446,6 +1443,7 @@
     "pageSelectionLimit": "本页还有 {needed} 项未选，剩余可选 {remaining} 项。请逐项选择，或先取消已选项。",
     "removeSelection": "移除 {name}",
     "selectionLimit": "单次最多选择 30 项，搜索不会丢失已选项。",
+    "singleSelectionLimit": "每次选择 1 项。保存后可继续添加，便于单独确认每次变更。",
     "entityUnavailable": "对象不可用",
     "entityUnavailableHint": "对象不存在或不在已加载的目录中，请返回列表查找。",
     "inheritedFrom": "继承自 {name}",

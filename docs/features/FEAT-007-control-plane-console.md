@@ -396,7 +396,7 @@ implemented or that a successful reference submission was exercised.
 | --- | --- | --- |
 | Overview | Identity counts link to directories; high-privilege associations, recent sensitive actions, account identity, login links and security guidance are separate blocks. | Keep the existing overview composition; derive counts and guidance from the same workspace state. Never show simulated protection as real MFA or a real security assessment. |
 | Users | The subuser detail distinguishes access method from permission. The Owner detail exposes group management, while an ungranted user is guided to join a group, copy another user's permissions or attach policies. Adding permissions is a content-area selection/review flow. | Reuse the user wizard and permission selector, but treat the Tencent Owner group affordance as reference only. Matrix projects Account + RootIdentity as a compact owner summary and independent protected detail; only User rows participate in group, grant, credential and lifecycle tasks. Copying permissions must describe precisely which direct bindings or memberships are copied; it never clones passwords, keys, boundaries or role sessions. |
-| Groups | Creation is a three-step content page: basic information, policy selection, review. Empty policy selection is allowed. The selector separates available/selected items and states its per-operation limit. | Replace the combined group dialog with this journey. Group details own separate member and permission operations, with an impact review when removing an inherited grant. A group is not a login identity and cannot be assumed. |
+| Groups | Creation is a three-step content page: basic information, policy selection, review. Empty policy selection is allowed. The selector separates available/selected items and states its per-operation limit. | Matrix uses a two-step group-only journey: details, then review. Creation produces an empty group and opens its detail; each member or direct-policy relationship is a separately reviewed command. Group detail explains inherited-grant impact. A group is not a login identity and cannot be assumed. |
 | Policy directory | All/preset views show policy name, product, permission category, description, last modified time and authorization action. Custom-only omits product and permission category. Presets cannot be deleted. | Adopt the directory task and compact search/filter hierarchy, but render only fields supplied by the fixed Matrix contract: stable ID, display name, management owner, tenant/installation scope, lifecycle status, default version and updated time. Product, description, permission category, policy content, affected subjects and effective access are not inferred. The bounded complete snapshot is paged only in the client; it is never presented as backend pagination. |
 | Policy creation | Entry chooser offers generator, policy syntax, tag authorization, and product-feature/project authorization. The fourth entry carries upgrade guidance toward tags and the generator. Name becomes immutable after creation. | Four entry points share one content-area edit/configure/review draft and save contract. The fourth selects registered Matrix product functions; project permissions are explicitly unavailable. Templates copy into custom policies, never mutate presets. Resource-tag conditions remain distinct from policy metadata tags. |
 | Policy editor | Select a service, then read/write/list/other actions, their authorization granularity, all/specific resources, and optional key/operator/value conditions. Structured resource input exposes service, region, owner, type and resource ID. The analyzer separates errors, warnings and suggestions. | Add a code-owned preview capability catalog and structured statement editor. Invalid drafts remain editable; errors block progression, warnings explain broad access. Unsupported syntax cannot be silently dropped when switching modes. |
@@ -764,17 +764,18 @@ invalid context, return indeterminate rather than allow. Role assumption is
 checked separately before a preview session can be created; a direct user-policy
 simulation cannot bypass trust or serve as a session.
 
-Group creation is a three-step content-area draft: name/description, optional
-policy selection, and review. No members are added during creation. The saved
-group opens its detail with an explicit add-members action. Metadata editing,
-membership changes and policy changes are separate commands; each changes only
-its owned fields. Membership/policy commands apply explicit add/remove deltas,
-bounded to 30 changes per operation, never a replacement of a partially loaded
-directory. Selection uses the bounded public Transfer control, preserves
-off-search choices and never preselects a new grant. Membership/policy changes
-show additions, removals and the affected members before saving; cancellation
-or failure preserves the original state. Removing a direct grant or membership
-does not imply all access is revoked when another source still grants it.
+Group creation is a two-step content-area draft: name/description, then review.
+It creates only an empty group and opens its detail; it cannot add members or
+attach policies in the same request. Metadata, membership and direct-policy
+changes are separate commands that each change only their owned fields. The
+confirmed relationship-integration target changes one member or policy attachment at
+a time, with an independent request intent; the UI must not present several
+requests as an atomic batch. Selection uses the public Transfer control with a
+one-item limit, preserves an editable choice through review and never
+preselects a grant. Each change shows the selected object and affected members
+before saving; cancellation or failure preserves that exact pending choice.
+Removing a direct grant or membership does not imply all access is revoked when
+another source still grants it.
 Groups, users and policies cross-link to the precise referenced entity; the
 IAM workspace accepts a URL entity identifier, including direct visits and
 Back/Forward navigation, without trusting it as authorization.
@@ -828,7 +829,7 @@ slice, not a replacement of FEAT-006 or a published live authorization API.
 | --- | --- | --- |
 | Policy lifecycle | Strict, lossless supported document handling; readable summary/JSON; metadata vs content editing; five-version history, protected effective version and reviewed rollback. | Implemented and locally verified for the supported effect/action/resource/condition MOCK dialect. Unsupported fields and condition keys are rejected without stripping the draft; summaries and history retain every supported restriction. |
 | Policy authoring | Full-page generator/JSON/template flow, typed action/resource/condition selection, diagnostics, review and optional atomic associations. | Full-page create/copy/edit, lossless multiple statements, guarded template/service replacement, typed operations and resources, IP/tag/time conditions, metadata tags, review, optional atomic associations and capacity recovery are implemented. Shared in-app unsaved-navigation protection preserves even invalid JSON drafts. |
-| Group authorization | Full-page creation, separate membership/policy operations, permission provenance and cross-navigation. | Three-step creation, isolated metadata updates, reviewed add/remove deltas, named policy sources and query-addressable user/group/policy/role details are implemented. Shared in-app unsaved-navigation protection preserves creation drafts. |
+| Group authorization | Full-page empty-group creation, separate one-relationship membership/policy operations, permission provenance and cross-navigation. | Two-step group-only creation, isolated metadata updates, reviewed one-item relationship changes, named policy sources and query-addressable user/group/policy/role details are implemented in MOCK. Shared in-app unsaved-navigation protection preserves creation drafts. |
 | Role authorization | Carrier-aware content wizard, trust vs permission vs boundary, bounded temporary-session preview and safe revocation explanation. | Four-step creation, isolated metadata/trust/settings commands, reviewed policy deltas, boundary and before/after trust changes, exact same-tenant account trust and known service/provider identities are implemented. Bounded preview sessions recheck assumption, retain immutable expiry and support individual revocation. Shared draft protection, unchanged/invalid trust, provider-reference rejection, pending locks, cancellation and failure/retry across role commands are locally verified. |
 | End-to-end access explanation | A no-grant user, group-derived allow, explicit deny, default-version rollback, boundary intersection and role-session case all lead to reproducible resource/action decisions. | Domain and interaction tests cover direct/group grants, deny precedence, conditions, current-version rollback, user/role boundary intersection, dual trust/caller authorization and session expiry/revocation. A real local MOCK journey proves caller denial before an exact assumption grant, role-only resource access limited by a boundary, then denial after revocation. Locally functionally verified for the documented subset. |
 | Supporting workspaces | Review overview, users, providers, SSO, settings and one-time MOCK keys against the documented scope without faking external activation. | Overview links and candidate guidance, source-aware user filtering, localized policy metadata, SAML/OIDC drafts, SSO/settings failure-retry, enterprise visibility/import and one-time MOCK keys are locally regression-verified. Scan/paid/live security flows remain skipped. |
@@ -1753,16 +1754,17 @@ and `git diff --check` gates must pass on the same committed worktree.
   emits asynchronous act warnings from the existing Wizard, preferences and
   log-service tests; all tests pass, but those warnings are not a performance
   claim or suppressed by a longer timeout.
-  Group creation now uses the bookmarkable three-step `create-group` route,
-  replacing the combined metadata/member/policy dialog. Creation saves no
-  members; metadata editing never replaces memberships or policies. Separate
-  add/remove commands validate references and apply at most 30 explicit deltas
-  without dropping members outside the loaded directory. Public Transfer
-  controls retain off-search selections and distinguish an empty directory
-  from an empty selection. Changes present selected objects and affected
-  member counts before confirmation, and failures leave the same selection
-  editable for retry. Membership review shows each selected member once;
-  policy review additionally identifies affected members. Removing a source
+  Group creation now uses the bookmarkable two-step `create-group` route,
+  replacing the combined metadata/member/policy dialog. Creation saves an
+  empty group only; metadata editing never replaces memberships or policies.
+  Separate add/remove commands validate references and change one membership
+  or direct policy attachment per independent intent, without presenting
+  several requests as an atomic batch. Public Transfer controls retain the
+  pending choice and distinguish an empty directory from an empty selection.
+  Changes present the selected object and affected member count before
+  confirmation, and failures leave the same choice editable for retry.
+  Membership review shows the selected member once; policy review additionally
+  identifies affected members. Removing a source
   warns that direct policies or other groups can still grant access.
   User policy rows now identify each granting group by name. User, group,
   policy and role references open their exact detail through an encoded query
@@ -1773,7 +1775,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   simulation entry retains the selected principal; an unknown principal is
   not replaced by the first available user.
   Domain and interaction tests cover empty-group creation, duplicate names,
-  invalid references, bounded deltas, unloaded-member preservation, metadata
+  invalid references, one-item UX deltas, unloaded-member preservation, metadata
   isolation, reviewed policy/member changes, failure/retry, cancellation,
   locale-preserved drafts and precise cross-navigation. The real MOCK browser
   journey created an empty group, associated an existing policy, added a

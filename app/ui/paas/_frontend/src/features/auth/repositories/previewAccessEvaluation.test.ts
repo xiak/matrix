@@ -264,7 +264,8 @@ describe("user permission explanation", () => {
   it("reflects reviewed group commands without confusing one revoked source with total revocation", () => {
     let workspace = initialAccessWorkspace("org-xiak");
     const context = { id: "group-logs", at: request.at!, userIds, primaryPrincipalId: "principal-admin" };
-    workspace = applyAccessWorkspaceCommand(workspace, { kind: "create-group", name: "Log readers", description: "", policyIds: ["policy-prod-logs"] }, context);
+    workspace = applyAccessWorkspaceCommand(workspace, { kind: "create-group", name: "Log readers", description: "" }, context);
+    workspace = applyAccessWorkspaceCommand(workspace, { kind: "change-group-policies", id: "group-logs", added: ["policy-prod-logs"], removed: [] }, context);
     workspace = applyAccessWorkspaceCommand(workspace, { kind: "change-group-members", id: "group-logs", added: ["principal-chen", "principal-lin"], removed: [] }, context);
     const chen = { ...request, principalId: "principal-chen" };
     expect(evaluateUserAccess(workspace, userIds, chen).decision).toBe("allow");

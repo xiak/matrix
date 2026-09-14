@@ -1295,16 +1295,14 @@
     "back": "Back to groups",
     "steps": {
       "details": "Group details",
-      "policies": "Attach policies",
       "review": "Review and create"
     },
     "hints": {
       "details": "Create a group to manage team permissions together.",
-      "policies": "Choose only the permissions this team needs. This step is optional.",
-      "review": "Check the group and its policies before creating it."
+      "review": "Review the group. Configure member and policy relationships one at a time from its detail page after creation."
     },
     "created": "Group created",
-    "createdHint": "The group is ready. Add members from its detail page.",
+    "createdHint": "The empty group is ready. Open its detail page to add members or direct policies one at a time.",
     "mockHint": "MOCK · No backend changes",
     "viewGroup": "View group",
     "saving": "Saving…",
@@ -1312,12 +1310,11 @@
     "nameHint": "1–64 characters. Use a unique, recognizable team name.",
     "invalidName": "Enter a valid group name using 1–64 characters.",
     "duplicate": "This group name already exists.",
-    "policyHint": "No policy is selected by default. Subuser members inherit the group's policies. Primary permissions do not depend on group policies.",
-    "reviewHint": "This creates an empty group. No users are added or granted access at this step.",
-    "noPolicies": "No policies attached",
-    "createdScope": "Only the group and selected policy associations were created in this preview session.",
+    "reviewHint": "This creates only an empty group; no members or policies are attached.",
+    "noPolicies": "No direct policies yet",
+    "createdScope": "Only an empty group was created in this preview session; member and policy relationships are not configured yet.",
     "cancelTitle": "Discard this group draft?",
-    "cancelHint": "The group has not been created. Leaving will discard its name, description and policy selection.",
+    "cancelHint": "The group has not been created. Leaving will discard its name and description.",
     "addMembers": "Add members",
     "removeMembers": "Remove members",
     "directPolicies": "Direct policies",
@@ -1446,6 +1443,7 @@
     "pageSelectionLimit": "{needed} unselected on this page; space for {remaining} more. Select individually or remove selected items first.",
     "removeSelection": "Remove {name}",
     "selectionLimit": "Up to 30 items per operation. Search keeps your selection.",
+    "singleSelectionLimit": "Select one item at a time. Save it before adding another so each change can be reviewed independently.",
     "entityUnavailable": "Object unavailable",
     "entityUnavailableHint": "This object is missing or not in the loaded directory. Return to the list to find it.",
     "inheritedFrom": "Inherited from {name}",
