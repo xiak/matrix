@@ -36,6 +36,7 @@ export function buildAccountAccessScene(
     rootLoginName: account.rootIdentity.loginName,
     identityLabel: identity.user.displayName,
     isRoot: identity.identityKind === "ROOT_IDENTITY",
+    permissionBoundary: identity.permissionBoundary.policy,
     identityAttachments: identity.policySources.map((source) => {
       const attachment = describeAttachment(source.attachment);
       return { ...attachment, label: `${attachment.label}（${source.kind === "GROUP" ? `用户组 ${source.membership.groupId} 继承` : "直接授权"}）` };

@@ -13,6 +13,11 @@ const account = {
   rootIdentity: { principalId: "root-acme", loginName: "acme.owner" }, loginAlias: "acme", resourceVersion: 2,
   createdAt: timestamp, updatedAt: timestamp
 };
+const permissionBoundary = {
+  apiVersion, kind: "UserPermissionBoundary", accountId: account.id, userId: user.id,
+  resourceVersion: user.resourceVersion, policy: null
+};
+const boundaryPolicy = { policyId: "customer.application-limit", versionId: "version-limit", contentDigest: `sha256:${"a".repeat(64)}` };
 const tenantAttachment = {
   apiVersion, kind: "PolicyAttachment", id: "attachment-viewer", accountId: "account-acme",
   target: { kind: "USER", id: "user-alex" }, policyId: "system.paas-viewer", scope: "TENANT",
@@ -314,7 +319,7 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("parses current attachments without interpreting policy names", async () => {
-    reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policySources: directSources(tenantAttachment, platformAttachment), capabilities: currentCapabilities() });
+    reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", permissionBoundary, policySources: directSources(tenantAttachment, platformAttachment), capabilities: currentCapabilities() });
     const identity = await httpAccountRepository.currentIdentity("bearer");
     expect(identity.policySources.map((item) => item.attachment.policyId)).toEqual(["system.platform-operator", "system.paas-viewer"]);
     for (const patch of [
@@ -329,7 +334,7 @@ describe("IAM HTTP account boundary", () => {
       { roles: ["PLATFORM_OPERATOR"] },
       { apiVersion: "future/v2" }
     ]) {
-      reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policySources: [], capabilities: currentCapabilities(false), ...patch });
+      reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", permissionBoundary, policySources: [], capabilities: currentCapabilities(false), ...patch });
       await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });
@@ -339,7 +344,7 @@ describe("IAM HTTP account boundary", () => {
       groupId: "group-a", userId: user.id, createdBy: account.rootIdentity.principalId, resourceVersion: 1,
       createdAt: timestamp, updatedAt: timestamp };
     const inherited = { kind: "GROUP", attachment: { ...tenantAttachment, id: "attachment-group", target: { kind: "GROUP", id: membership.groupId } }, membership };
-    const base = { apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", capabilities: currentCapabilities(false) };
+    const base = { apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", permissionBoundary, capabilities: currentCapabilities(false) };
     reply({ ...base, policySources: [inherited, ...directSources(tenantAttachment)] });
     const identity = await httpAccountRepository.currentIdentity("bearer");
     expect(identity.policySources.map((source) => source.kind)).toEqual(["GROUP", "DIRECT"]);
@@ -358,6 +363,46 @@ describe("IAM HTTP account boundary", () => {
       reply({ ...base, policySources: [source] });
       await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
+  });
+
+  it("requires an explicit current user boundary and never converts it into a grant", async () => {
+    const base = { apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER",
+      policySources: [], capabilities: currentCapabilities(false), permissionBoundary };
+    reply(base);
+    expect(await httpAccountRepository.currentIdentity("bearer")).toMatchObject({ permissionBoundary: { policy: null }, policySources: [] });
+    reply({ ...base, permissionBoundary: { ...permissionBoundary, policy: boundaryPolicy } });
+    expect(await httpAccountRepository.currentIdentity("bearer")).toMatchObject({
+      permissionBoundary: { policy: boundaryPolicy }, policySources: [], capabilities: currentCapabilities(false)
+        .map((item) => ({ ...item, restrictionReason: "AUTHORITY_REQUIRED" }))
+    });
+    for (const invalid of [undefined, null, {},
+      { ...permissionBoundary, policy: undefined },
+      { ...permissionBoundary, policy: {} },
+      { ...permissionBoundary, accountId: "foreign-account" },
+      { ...permissionBoundary, userId: "foreign-user" },
+      { ...permissionBoundary, resourceVersion: user.resourceVersion + 1 },
+      { ...permissionBoundary, resourceVersion: 0 },
+      { ...permissionBoundary, resourceVersion: Number.MAX_SAFE_INTEGER + 1 },
+      { ...permissionBoundary, kind: "PolicyAttachment" },
+      { ...permissionBoundary, apiVersion: "future/v2" },
+      { ...permissionBoundary, permit: true },
+      ...[
+        { ...boundaryPolicy, policyId: "bad/id" },
+        { ...boundaryPolicy, versionId: "" },
+        { ...boundaryPolicy, contentDigest: "sha256:unknown" },
+        { ...boundaryPolicy, contentDigest: `sha256:${"A".repeat(64)}` },
+        { ...boundaryPolicy, document: {} },
+        { ...boundaryPolicy, accountId: account.id }
+      ].map((policy) => ({ ...permissionBoundary, policy }))
+    ]) {
+      reply({ ...base, permissionBoundary: invalid });
+      await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    const root = { ...user, id: account.rootIdentity.principalId };
+    reply({ ...base, user: root, identityKind: "ROOT_IDENTITY", permissionBoundary: { ...permissionBoundary, userId: root.id } });
+    expect(await httpAccountRepository.currentIdentity("bearer")).toMatchObject({ identityKind: "ROOT_IDENTITY", permissionBoundary: { policy: null } });
+    reply({ ...base, user: root, identityKind: "ROOT_IDENTITY", permissionBoundary: { ...permissionBoundary, userId: root.id, policy: boundaryPolicy } });
+    await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
   it("bounds member pages and rejects foreign, duplicate, revoked, or old role projections", async () => {

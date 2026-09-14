@@ -68,10 +68,13 @@ const tenantPolicies: PolicyDirectory = { accountId: "tenant-a", scope: "TENANT"
 ] };
 const platformPolicies: PolicyDirectory = { accountId: "tenant-a", scope: "INSTALLATION", installationId: "installation-a",
   items: [policy("system.platform-operator", "平台运营者", "INSTALLATION")] };
-const identity: AccountIdentity = { account, user: rootUser, identityKind: "ROOT_IDENTITY", policySources: [tenantAdmin, platformOperator].map((attachment) => ({ kind: "DIRECT", attachment })), capabilities: currentCapabilities() };
+const identity: AccountIdentity = { account, user: rootUser, identityKind: "ROOT_IDENTITY",
+  permissionBoundary: { accountId: account.id, userId: rootUser.id, resourceVersion: rootUser.resourceVersion, policy: null },
+  policySources: [tenantAdmin, platformOperator].map((attachment) => ({ kind: "DIRECT", attachment })), capabilities: currentCapabilities() };
 const child: UserAccess = { user: { ...rootUser, id: "child-a", loginName: "developer", displayName: "Developer A" }, policyAttachments: [viewer], capabilities: childCapabilities() };
 const customer: Account = { id: "tenant-b", displayName: "Team B", status: "ACTIVE", rootIdentity: { principalId: "primary-b", loginName: "owner-b" }, loginAlias: null, resourceVersion: 4 };
 const platformIdentity: AccountIdentity = { ...identity, user: child.user, identityKind: "USER",
+  permissionBoundary: { ...identity.permissionBoundary, userId: child.user.id },
   policySources: [{ kind: "DIRECT", attachment: attachment("attachment-platform-child", "child-a", "system.platform-operator", "INSTALLATION") }], capabilities: currentCapabilities("platform") };
 
 function forbidden(): Promise<never> { return Promise.reject(new HttpProblem(403, "DENIED")); }
@@ -129,7 +132,7 @@ describe("qualified login", () => {
       } }),
       changePassword: vi.fn().mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; }))
     });
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: child.user, identityKind: "USER", policySources: [], capabilities: currentCapabilities("none") }) });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...platformIdentity, policySources: [], capabilities: currentCapabilities("none") }) });
     const user = userEvent.setup();
     render(<SessionProvider repository={source}><AuthenticatedAccess repository={repository} /></SessionProvider>);
     await user.click(screen.getByRole("button", { name: "IAM 子账号" }));
@@ -171,7 +174,7 @@ describe("account access", () => {
   it.each([true, false])("offers a default-on ordinary password session choice (%s)", async (revokeOtherSessions) => {
     let complete!: () => void;
     const passwordRepository = iam({ changePassword: vi.fn().mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; })) }, "child-a");
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: child.user, identityKind: "USER", policySources: [], capabilities: currentCapabilities("none") }) });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...platformIdentity, policySources: [], capabilities: currentCapabilities("none") }) });
     const { user, view } = await openAccess(repository, passwordRepository);
     await user.click(await screen.findByRole("button", { name: "用户设置" }));
     const option = screen.getByRole("checkbox", { name: "同时退出其他登录会话（推荐）" }) as HTMLInputElement;
@@ -284,7 +287,7 @@ describe("account access", () => {
   });
 
   it("derives accessible sections from separately authorized reads", async () => {
-    const reader: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", policySources: [], capabilities: currentCapabilities("none") };
+    const reader: AccountIdentity = { ...platformIdentity, policySources: [], capabilities: currentCapabilities("none") };
     const repository = accounts({
       currentIdentity: vi.fn().mockResolvedValue(reader), listUsers: vi.fn().mockImplementation(forbidden),
       listPolicies: vi.fn().mockImplementation(forbidden)
@@ -298,6 +301,40 @@ describe("account access", () => {
     expect(screen.queryByRole("button", { name: "策略" })).toBeNull();
     expect(screen.queryByRole("button", { name: "租户管理" })).toBeNull();
     expect(screen.queryByRole("button", { name: "保存别名" })).toBeNull();
+  });
+
+  it("shows the current boundary separately without making restricted sections available", async () => {
+    const reference = { policyId: "customer.user-limit", versionId: "version-one", contentDigest: `sha256:${"a".repeat(64)}` };
+    const reader: AccountIdentity = { ...platformIdentity, policySources: [], capabilities: currentCapabilities("none"),
+      permissionBoundary: { ...platformIdentity.permissionBoundary, policy: reference } };
+    const currentIdentity = vi.fn().mockResolvedValue(reader);
+    const repository = accounts({ currentIdentity, listPolicies: vi.fn().mockImplementation(forbidden) });
+    const { user } = await openAccess(repository, iam({}, "child-a"));
+    const boundary = await screen.findByLabelText("当前用户权限边界");
+    expect(within(boundary).getByText(reference.policyId)).toBeTruthy();
+    expect(within(boundary).getByText(/当前版本 version-one/)).toBeTruthy();
+    expect(within(boundary).getByText(/边界仅限制权限，不授予权限/)).toBeTruthy();
+    expect(screen.getByText("尚未关联权限策略")).toBeTruthy();
+    expect(repository.listUsers).not.toHaveBeenCalled();
+    expect(repository.listAccounts).not.toHaveBeenCalled();
+    expect(repository.listPolicies).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "用户" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "策略" })).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+
+    currentIdentity.mockResolvedValue({ ...reader, permissionBoundary: { ...reader.permissionBoundary, policy: { ...reference, versionId: "version-two" } } });
+    await user.click(screen.getByRole("button", { name: "刷新账号信息" }));
+    await screen.findByText(/当前版本 version-two/);
+    expect(screen.queryByText(/当前版本 version-one/)).toBeNull();
+    currentIdentity.mockResolvedValue({ ...reader, permissionBoundary: { ...reader.permissionBoundary, policy: null } });
+    await user.click(screen.getByRole("button", { name: "刷新账号信息" }));
+    await screen.findByText("未设置权限边界，不代表拥有任何权限。");
+    expect(screen.queryByText(reference.policyId)).toBeNull();
+    currentIdentity.mockRejectedValue(new Error("INVALID_IAM_RESPONSE"));
+    await user.click(screen.getByRole("button", { name: "刷新账号信息" }));
+    await screen.findByRole("alert");
+    expect(screen.queryByLabelText("当前用户权限边界")).toBeNull();
+    expect(screen.queryByText("未设置权限边界，不代表拥有任何权限。")).toBeNull();
   });
 
   it("keeps account directory read separate from account creation", async () => {

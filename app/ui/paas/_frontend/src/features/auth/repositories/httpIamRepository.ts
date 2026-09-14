@@ -21,6 +21,7 @@ import type {
   PolicyStatus,
   User,
   UserAccess,
+  UserPermissionBoundary,
   UserPolicyAttachment
 } from "../domain/accounts";
 import type {
@@ -363,15 +364,33 @@ function parsePolicyDirectory(value: unknown, expectedScope: PolicyScope): Polic
   return { accountId, scope: expectedScope, installationId: expectedScope === "INSTALLATION" ? accountText(wire.installationId) : null, items };
 }
 
+function parseUserPermissionBoundary(value: unknown): UserPermissionBoundary {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "userId", "resourceVersion", "policy"]);
+  requireAccountKind(wire, "UserPermissionBoundary");
+  let policy: UserPermissionBoundary["policy"] = null;
+  if (wire.policy !== null) {
+    const reference = accountRecord(wire.policy);
+    exactKeys(reference, ["policyId", "versionId", "contentDigest"]);
+    if (typeof reference.contentDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(reference.contentDigest)) {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
+    policy = { policyId: accountIdentifier(reference.policyId), versionId: accountIdentifier(reference.versionId), contentDigest: reference.contentDigest };
+  }
+  return { accountId: accountIdentifier(wire.accountId), userId: accountIdentifier(wire.userId),
+    resourceVersion: accountVersion(wire.resourceVersion), policy };
+}
+
 function parseAccountIdentity(value: unknown): AccountIdentity {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "account", "user", "identityKind", "policySources", "capabilities"]);
+  exactKeys(wire, ["apiVersion", "kind", "account", "user", "identityKind", "policySources", "permissionBoundary", "capabilities"]);
   requireAccountKind(wire, "CurrentIdentity");
   if (!Array.isArray(wire.policySources) || wire.policySources.length > 256 ||
       (wire.identityKind !== "ROOT_IDENTITY" && wire.identityKind !== "USER")) throw new Error("INVALID_IAM_RESPONSE");
   const account = parseAccount(wire.account);
   const user = parseUser(wire.user);
   const policySources = wire.policySources.map(parsePolicyGrantSource);
+  const permissionBoundary = parseUserPermissionBoundary(wire.permissionBoundary);
   const accountResource = { kind: "ACCOUNT" as const, id: account.id };
   const capabilities = parseCapabilities(wire.capabilities, [
     { action: "iam.account.create", resource: { kind: "ACCOUNT", id: "accounts" } },
@@ -384,13 +403,16 @@ function parseAccountIdentity(value: unknown): AccountIdentity {
     { action: "iam.group.create", resource: accountResource }
   ]);
   if (account.id !== user.accountId ||
+      permissionBoundary.accountId !== account.id || permissionBoundary.userId !== user.id ||
+      permissionBoundary.resourceVersion !== user.resourceVersion ||
+      (wire.identityKind === "ROOT_IDENTITY" && permissionBoundary.policy !== null) ||
       (wire.identityKind === "ROOT_IDENTITY") !== (account.rootIdentity.principalId === user.id) ||
       policySources.some((source) => source.attachment.accountId !== user.accountId ||
         (source.kind === "DIRECT" ? source.attachment.target.id !== user.id : source.membership.userId !== user.id || wire.identityKind !== "USER")) ||
       policySources.some((source, index) => index > 0 && policySources[index - 1]!.attachment.id >= source.attachment.id)) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
-  return { account, user, identityKind: wire.identityKind, policySources, capabilities };
+  return { account, user, identityKind: wire.identityKind, policySources, permissionBoundary, capabilities };
 }
 
 function parseUserAccess(value: unknown): UserAccess {

@@ -111,7 +111,21 @@ export type AccountIdentity = {
   user: User;
   identityKind: IdentityKind;
   policySources: PolicyGrantSource[];
+  permissionBoundary: UserPermissionBoundary;
   capabilities: ActionCapability[];
+};
+
+export type PolicyVersionReference = {
+  policyId: string;
+  versionId: string;
+  contentDigest: string;
+};
+
+export type UserPermissionBoundary = {
+  accountId: string;
+  userId: string;
+  resourceVersion: number;
+  policy: PolicyVersionReference | null;
 };
 
 export type GroupPolicyAttachment = Omit<UserPolicyAttachment, "target" | "scope" | "installationId"> & {

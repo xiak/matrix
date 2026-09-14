@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串条件及资源前缀已有固定 CI，此前验证点为 `b342e9d`。User 权限边界后端的本地真库、独立多进程、竞争/撤销、混合授权与分页门禁已通过，本片独立 CI 待确认。边界 UI、动作通配、IP 条件、Role 边界及完整委派未完成，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串条件及资源前缀已有固定 CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过。边界管理 UI、动作通配、IP 条件、Role 边界及完整委派未完成，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -170,7 +170,7 @@ CurrentIdentity/capabilities 与所有目录每页重新调用当前 PDP；curso
 
 Allow/Deny/边界交集表、条件缺失/类型/大小攻击、跨账号资源与 namespace、未知版本/Action、显式 Deny 全来源优先；真实数据库改版/附件/边界并发，旧 session 下次请求立即反映；旧事实仍可验证投递；UI 与 API 使用同一文档。fuzz 只证明当前 grammar 不崩溃且失败关闭，不快照实现细节。
 
-### User 边界后端证据：独立 CI 待确认
+### User 边界后端证据
 
 契约、唯一 statement evaluator 的交集、独立 provenance 和 cursor 当前边界/default 摘要已进入当前工作树。严格响应 decoder 不将缺失 policy 当成显式 null；生成 schema 的 nullable/required 缺失由正向测试发现并修正。API schema/Go 验证、边界不授予权限、时间/身份/前缀条件、损坏快照失败关闭、平台不求租户交集及 cursor 旧默认拒绝的聚焦 race 通过；相关 usecase/架构与 vet 通过。它们不证明管理写入或安全委派已完成。
 
@@ -190,11 +190,11 @@ Audit 原双 schema/受限 recorder/封闭 action/不可变链真库门禁5.324s
 
 现有组/成员容量门禁复用真实百条 HTTP 数据补边界分页后通过32.63s（父36.62s、包39.201s）：设置、默认切换、移除均拒绝旧 cursor；两默认版本都允许列表时也不复用旧快照，新 cursor 仍能翻到下一页。没有新建分页框架、批量伪造权限数据或扩大页面上限。
 
-以上竞争/分页测试增量后的全仓 Go race 测试与 vet、模块校验、API 生成字节稳定及 Linux amd64 全仓构建通过。默认跳过的外部环境测试没有记作真实运行；最终独立 CI 尚待固定提交。
+以上竞争/分页测试增量后的全仓 Go race 测试与 vet、模块校验、API 生成字节稳定及 Linux amd64 全仓构建通过。默认跳过的外部环境测试没有记作真实运行；最终独立 CI 绑定下述准确提交。
 
 最终混合授权聚焦通过3.05s（父7.42s、包9.969s）：同一 USER 的直接授权与两个真实 Group 继承均不能绕过边界，决定保存两个精确 Membership 证明；普通 Group 中的 Deny 在边界 Allow 时仍拒绝，撤销该 Deny 后恢复交集内访问。随后最终源码的完整串行 PG18 回归通过：IAM integration172.824s、Audit 数据5.412s、Audit HTTP2.650s、独立双 IAM/PaaS/Audit45.400s、PaaS 数据4.310s。该轮包含现有凭据/恢复、schema/bootstrap 带数据重放、真实运行身份、资源/Operation/outbox 隔离及全部新边界测试，不扩展未发布历史升级矩阵。
 
-当前源码 readiness 为 IAM18/Audit12/PaaS1，反映新增快照/六参数 recorder、带私有 session 参数的边界写入口和两个封闭成功事实；实际 lookup_session 末尾为 policies/boundary 两个 jsonb。没有修改安装 profile，不授权旧 binary 使用新函数形状。两个新 IAM 管理 Action 进入显式目录，但发行策略的新内容不会借 schema/bootstrap 等值重放偷偷切换已存在默认指针；首版策略由最终发行基线冻结。独立 CI 尚待提交绑定确认，UI、Role 边界、安全委派及其他语言需求仍未验收；不能将本片后端门禁作为整 FEAT 完成。
+当前源码 readiness 为 IAM18/Audit12/PaaS1，反映新增快照/六参数 recorder、带私有 session 参数的边界写入口和两个封闭成功事实；实际 lookup_session 末尾为 policies/boundary 两个 jsonb。没有修改安装 profile，不授权旧 binary 使用新函数形状。两个新 IAM 管理 Action 进入显式目录，但发行策略的新内容不会借 schema/bootstrap 等值重放偷偷切换已存在默认指针；首版策略由最终发行基线冻结。固定 `119f232ea7cf7ba7d91a1ef6433e132e0127f03f` 的 [Verification 34849128040](https://github.com/xiak/matrix/actions/runs/34849128040) 已通过 GitHub API 核实精确 SHA，Go、authority-process、node-process 全部 completed/success。UI、Role 边界、安全委派及其他语言需求仍未验收；不能将本片后端门禁作为整 FEAT 完成。
 
 ### 当前首片证据与未完成边界
 

@@ -287,3 +287,13 @@ Implicit removal on policy deletion, an absent snapshot treated as no boundary,
 and a boundary that grants rights by itself are `REJECT`. No legacy code or
 runtime is introduced. API, lock order and implementation acceptance belong
 only to IAM/005; RoleSession integration remains with IAM/006.
+
+For the current-identity console consumer in IAM/010, fixed Matrix
+`119f232ea7cf7ba7d91a1ef6433e132e0127f03f` is `ADAPT`: extend its existing
+strict HTTP decoder, AccountIdentity, scene and account-access renderer to
+consume the mandatory UserPermissionBoundary projection. Its public
+PolicyVersionReference is `REUSE` as the wire contract, not a policy body or
+positive grant. Inferring rights from boundary names, defaulting missing
+authority to null, and retaining a second old identity decoder are `REJECT`.
+No external UI workspace or legacy runtime is imported; UI acceptance and
+remaining boundary management belong to IAM/010, not this adoption record.

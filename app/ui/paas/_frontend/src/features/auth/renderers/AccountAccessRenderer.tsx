@@ -393,6 +393,13 @@ function AccountAccessContent() {
         <div><small>所属租户 · 资源归属</small><strong>{scene.accountName}</strong><small>{scene.accountId}</small></div>
         <div><small>当前登录用户</small><strong>{scene.identityLabel}<Badge status="info">{scene.isRoot ? "主账号" : "IAM 子用户"}</Badge></strong><small>{scene.identityAttachments.map((attachment) => attachment.label).join(" · ") || "尚未关联权限策略"}</small></div>
       </div>
+      <div aria-label="当前用户权限边界" className={styles.note}>
+        <strong>租户权限上限：</strong>{scene.permissionBoundary ? <>
+          <span>{scene.permissionBoundary.policyId}</span>
+          <span> · 当前版本 {scene.permissionBoundary.versionId}</span>
+          <p>边界仅限制权限，不授予权限。实际访问还需要直接或用户组授权，并由服务端逐次检查。</p>
+        </> : <span>{scene.isRoot ? "主账号不设置子用户权限边界。" : "未设置权限边界，不代表拥有任何权限。"}</span>}
+      </div>
       {tab === "users" ? <UserDirectory scene={scene} /> : tab === "tenants" ? <TenantDirectory scene={scene} /> : tab === "permissions" ? <PermissionCatalog scene={scene} /> : <UserSettings key={scene.accountVersion} scene={scene} />}
     </> : null}
   </section>;
