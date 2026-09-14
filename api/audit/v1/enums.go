@@ -36,6 +36,7 @@ const (
 	ActionIAMUserPasswordReset               Action = "iam.user.password-reset"
 	ActionIAMUserPasswordChanged             Action = "iam.user.password-changed"
 	ActionIAMGroupCreated                    Action = "iam.group.created"
+	ActionIAMPolicyCreated                   Action = "iam.policy.created"
 	ActionIAMGroupUpdated                    Action = "iam.group.updated"
 	ActionIAMGroupDeleted                    Action = "iam.group.deleted"
 	ActionIAMGroupMembershipCreated          Action = "iam.group-membership.created"
@@ -89,6 +90,7 @@ const (
 	TargetAccount               TargetKind = "ACCOUNT"
 	TargetUser                  TargetKind = "USER"
 	TargetGroup                 TargetKind = "GROUP"
+	TargetPolicy                TargetKind = "POLICY"
 	TargetGroupMembership       TargetKind = "GROUP_MEMBERSHIP"
 	TargetOrganization          TargetKind = "ORGANIZATION"
 	TargetInstallation          TargetKind = "INSTALLATION"
@@ -175,6 +177,7 @@ var allActions = []Action{
 	ActionIAMUserPasswordReset,
 	ActionIAMUserPasswordChanged,
 	ActionIAMGroupCreated,
+	ActionIAMPolicyCreated,
 	ActionIAMGroupUpdated,
 	ActionIAMGroupDeleted,
 	ActionIAMGroupMembershipCreated,
@@ -255,6 +258,9 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionIAMGroupCreated: {
 		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
+	ActionIAMPolicyCreated: {
+		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
 	ActionIAMGroupUpdated: {
 		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,

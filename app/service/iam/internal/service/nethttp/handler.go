@@ -31,6 +31,8 @@ type Workflow interface {
 	CreateGroupMembership(context.Context, iamv1.Secret, iamv1.GroupID, iamv1.CreateGroupMembershipRequest) (iamv1.GroupMembership, error)
 	RemoveGroupMembership(context.Context, iamv1.Secret, iamv1.GroupID, iamv1.GroupMembershipID, iamv1.RemoveGroupMembershipRequest) (iamv1.GroupMembership, error)
 	ListPolicies(context.Context, iamv1.Secret, bool, string) (iamv1.PolicyList, error)
+	GetPolicy(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyDetail, error)
+	CreatePolicy(context.Context, iamv1.Secret, iamv1.CreatePolicyRequest) (iamv1.PolicyDetail, error)
 	ListAccounts(context.Context, iamv1.Secret, string, string) (iamv1.AccountList, error)
 	GetAccount(context.Context, iamv1.Secret, iamv1.AccountID, string) (iamv1.AccountAccess, error)
 	SetAccountStatus(context.Context, iamv1.Secret, iamv1.AccountID, iamv1.SetAccountStatusRequest) (iamv1.Account, error)
@@ -102,7 +104,8 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/audit-producer:resolve", value.resolveAuditProducer)
 	routes.HandleFunc("/v1/auth/login", value.login)
 	routes.HandleFunc("/v1/auth/me", value.currentIdentity)
-	routes.HandleFunc("/v1/policies", value.listPolicies)
+	routes.HandleFunc("/v1/policies", value.policies)
+	routes.HandleFunc("/v1/policies/", value.policy)
 	routes.HandleFunc("/v1/platform-policies", value.listPolicies)
 	routes.HandleFunc("/v1/accounts", value.accounts)
 	routes.HandleFunc("/v1/accounts/", value.account)
@@ -146,6 +149,51 @@ func (value *handler) ready(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	writeJSON(response, http.StatusOK, readiness)
+}
+
+func (value *handler) policies(response http.ResponseWriter, request *http.Request) {
+	if request.Method == http.MethodGet {
+		value.listPolicies(response, request)
+		return
+	}
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.CreatePolicyRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.CreatePolicy(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusCreated, result)
+}
+
+func (value *handler) policy(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	id := strings.TrimPrefix(request.URL.Path, "/v1/policies/")
+	if iamv1.ValidateID("policyId", id) != nil {
+		value.notFound(response, request)
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.GetPolicy(request.Context(), credential, iamv1.PolicyID(id), requestID(request))
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
 }
 
 func (value *handler) listPolicies(response http.ResponseWriter, request *http.Request) {

@@ -239,3 +239,20 @@ build or runtime dependency.
 
 The concrete API, lock order, capacity limits and acceptance matrix belong only
 to `IAM/FEAT-IAM-004`; this adoption record does not duplicate them.
+
+## IAM/005 policy publication and diagnostics adoption
+
+The current-language diagnostic target was recorded in IAM/005 before this
+focused fixed-object review. It does not reduce the feature's custom-policy,
+condition, boundary or real-runtime requirements.
+
+| Fixed source and slice | Decision | Reason |
+| --- | --- | --- |
+| Matrix `8117c54c112c842106d82fe934e460a280862549`: `api/iam/v1/policy.go`, current policy contract tests and `api/contractjson/decode.go` | `ADAPT` | Add deterministic safe field diagnostics to the existing strict validator; keep one bounded decoder and canonical/digest owner. Preserve rejection of duplicate/unknown fields and invalid scope/action/resource coverage. Do not duplicate grammar or include input values in errors. |
+| Same fixed Matrix source: the current attached-policy evaluator | `REUSE` | Syntax validity does not publish a policy or authorize an attachment; the current owner-resolved snapshot and explicit-Deny evaluation remain mandatory. |
+| Matrix `8117c54c112c842106d82fe934e460a280862549`: existing `identityaccess/accounts.go` serializable account authorization and `postgres/accounts.go` policy directory projection | `ADAPT` | Extend the existing current-credential/PDP/transaction owner with customer policy creation and exact content read. Reuse typed attachments, immutable versions and source outbox; no parallel publisher, evaluator or caller-selected account. Publication remains root-only until the feature's explicit safe delegation contract is implemented. |
+
+Legacy `69336e51f94fa98f6aa278fa4c62382e224dbeaf` is not present in this
+checkout's object database. The earlier IAM/002 review remains historical
+context, not evidence of a new inspection. This foundation imports no legacy
+code or runtime and makes no new claim about a donor diagnostic implementation.

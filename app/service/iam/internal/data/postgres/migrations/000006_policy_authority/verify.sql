@@ -63,3 +63,38 @@ BEGIN
         RAISE EXCEPTION 'IAM policy directory function shape is invalid';
     END IF;
 END $verify_policy_authority$;
+
+DO $verify_customer_policy_publication$
+DECLARE function_name text;
+BEGIN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 10::bigint THEN
+        RAISE EXCEPTION 'IAM policy publication schema version is invalid';
+    END IF;
+    FOREACH function_name IN ARRAY ARRAY['iam.read_policy(text,text,text,text)',
+        'iam.create_policy(text,text,text,text,text,text,text,text,jsonb)'] LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS entry WHERE entry.oid=to_regprocedure(function_name)
+            AND entry.prorettype='jsonb'::regtype AND NOT entry.proretset AND entry.prosecdef
+            AND entry.proowner='matrix_iam_owner'::regrole AND 'search_path=pg_catalog, pg_temp'=ANY(entry.proconfig))
+           OR NOT has_function_privilege('matrix_iam_api',function_name,'EXECUTE')
+           OR has_function_privilege('matrix_iam_worker',function_name,'EXECUTE')
+           OR has_function_privilege('matrix_iam_credential_recovery',function_name,'EXECUTE')
+           OR has_function_privilege('public',function_name,'EXECUTE') THEN
+            RAISE EXCEPTION 'IAM policy publication function boundary is invalid';
+        END IF;
+    END LOOP;
+    FOREACH function_name IN ARRAY ARRAY['iam.assert_customer_policy_document(text,text)','iam.policy_detail_snapshot(text,text)'] LOOP
+        IF to_regprocedure(function_name) IS NULL OR has_function_privilege('matrix_iam_api',function_name,'EXECUTE')
+           OR has_function_privilege('matrix_iam_worker',function_name,'EXECUTE')
+           OR has_function_privilege('matrix_iam_credential_recovery',function_name,'EXECUTE')
+           OR has_function_privilege('public',function_name,'EXECUTE') THEN
+            RAISE EXCEPTION 'IAM internal policy document boundary is invalid';
+        END IF;
+    END LOOP;
+    IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_index WHERE indexrelid=to_regclass('iam.customer_policies_active_name_uq')
+        AND indrelid='iam.policies'::regclass AND indisunique AND indisvalid AND indnkeyatts=2 AND indpred IS NOT NULL)
+       OR iam.resource_kind_for_action('iam.policy.create') IS DISTINCT FROM 'ACCOUNT'
+       OR iam.resource_kind_for_action('iam.policy.read') IS DISTINCT FROM 'POLICY'
+       OR iam.is_platform_action('iam.policy.create') OR iam.is_platform_action('iam.policy.read') THEN
+        RAISE EXCEPTION 'IAM customer policy identity or action mapping is invalid';
+    END IF;
+END $verify_customer_policy_publication$;

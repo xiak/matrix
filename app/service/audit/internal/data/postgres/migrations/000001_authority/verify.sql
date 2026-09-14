@@ -2,7 +2,7 @@ DO $matrix_audit_verify$
 DECLARE
     missing text;
 BEGIN
-    IF (SELECT schema_version FROM audit.readiness()) IS DISTINCT FROM 6::bigint THEN
+    IF (SELECT schema_version FROM audit.readiness()) IS DISTINCT FROM 7::bigint THEN
         RAISE EXCEPTION 'Audit schema version is incompatible';
     END IF;
     SELECT string_agg(required.name, ', ' ORDER BY required.name)

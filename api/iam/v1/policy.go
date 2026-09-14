@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +59,41 @@ type Policy struct {
 }
 
 const MaxPolicyListItems = 256
+const MaxCustomerPolicies = 128
+
+// PolicyDetail joins metadata to its current immutable default content. It is
+// a read result, not proof that the reader may publish or attach that content.
+type PolicyDetail struct {
+	APIVersion string        `json:"apiVersion"`
+	Kind       string        `json:"kind"`
+	Policy     Policy        `json:"policy"`
+	Version    PolicyVersion `json:"version"`
+}
+
+type CreatePolicyRequest struct {
+	DisplayName string         `json:"displayName"`
+	Document    PolicyDocument `json:"document"`
+	RequestID   string         `json:"requestId"`
+}
+
+func ValidateCreatePolicyRequest(value CreatePolicyRequest) error {
+	if value.Document.Scope != AuthorityScopeTenant {
+		return ErrInvalidPolicy
+	}
+	return errors.Join(validateText("displayName", value.DisplayName, 1, 128),
+		ValidateID("requestId", value.RequestID), ValidatePolicyDocument(value.Document))
+}
+
+func ValidatePolicyDetail(value PolicyDetail) error {
+	if value.APIVersion != APIVersion || value.Kind != "PolicyDetail" ||
+		ValidatePolicy(value.Policy) != nil || ValidatePolicyVersion(value.Version) != nil ||
+		value.Policy.Status != PolicyActive || value.Policy.Scope != AuthorityScopeTenant ||
+		value.Version.PolicyID != value.Policy.ID || value.Version.ID != value.Policy.DefaultVersionID ||
+		value.Version.Document.Scope != value.Policy.Scope {
+		return ErrInvalidPolicy
+	}
+	return nil
+}
 
 // PolicyList is a complete bounded metadata snapshot, not an authorization
 // permit. The scope is derived from the separately authorized route.
@@ -277,6 +313,33 @@ const (
 
 var ErrInvalidPolicy = errors.New("IAM policy is invalid")
 
+type PolicyValidationCode string
+
+const (
+	PolicyInvalidDocument  PolicyValidationCode = "INVALID_DOCUMENT"
+	PolicyInvalidValue     PolicyValidationCode = "INVALID_VALUE"
+	PolicyUnsupported      PolicyValidationCode = "UNSUPPORTED"
+	PolicyDuplicate        PolicyValidationCode = "DUPLICATE"
+	PolicyLimitExceeded    PolicyValidationCode = "LIMIT_EXCEEDED"
+	PolicyScopeMismatch    PolicyValidationCode = "SCOPE_MISMATCH"
+	PolicyResourceMismatch PolicyValidationCode = "RESOURCE_MISMATCH"
+)
+
+// PolicyValidationError locates a rejected field without echoing input values.
+// Pointer is a JSON Pointer; the empty string denotes the entire document.
+// Ordinary errors remain sanitized and compatible with ErrInvalidPolicy.
+type PolicyValidationError struct {
+	Code    PolicyValidationCode
+	Pointer string
+}
+
+func (err *PolicyValidationError) Error() string { return ErrInvalidPolicy.Error() }
+func (err *PolicyValidationError) Unwrap() error { return ErrInvalidPolicy }
+
+func invalidPolicyAt(code PolicyValidationCode, pointer string) error {
+	return &PolicyValidationError{Code: code, Pointer: pointer}
+}
+
 // PolicyDocument is a closed permission language, not a request-supplied
 // authority. Valid syntax does not confer permission to publish or attach it.
 type PolicyDocument struct {
@@ -333,7 +396,11 @@ type PolicyVersionReference struct {
 func DecodePolicyDocument(reader io.Reader) (PolicyDocument, error) {
 	var document PolicyDocument
 	if err := contractjson.DecodeObject(reader, MaxPolicyBytes, &document); err != nil {
-		return PolicyDocument{}, ErrInvalidPolicy
+		code := PolicyInvalidDocument
+		if errors.Is(err, contractjson.ErrDocumentTooLarge) || errors.Is(err, contractjson.ErrDocumentTooDeep) {
+			code = PolicyLimitExceeded
+		}
+		return PolicyDocument{}, invalidPolicyAt(code, "")
 	}
 	if err := ValidatePolicyDocument(document); err != nil {
 		return PolicyDocument{}, err
@@ -347,61 +414,87 @@ func ValidatePolicyDocument(document PolicyDocument) error {
 	}
 	encoded, err := json.Marshal(document)
 	if err != nil || int64(len(encoded)) > MaxPolicyBytes {
-		return ErrInvalidPolicy
+		return invalidPolicyAt(PolicyLimitExceeded, "")
 	}
 	return nil
 }
 
 func validatePolicyStructure(document PolicyDocument) error {
-	if document.LanguageVersion != PolicyLanguageVersion ||
-		len(document.Statements) == 0 || len(document.Statements) > MaxPolicyStatements {
-		return ErrInvalidPolicy
+	if document.LanguageVersion != PolicyLanguageVersion {
+		return invalidPolicyAt(PolicyUnsupported, "/languageVersion")
 	}
 	if !validPolicyScope(document.Scope) {
-		return ErrInvalidPolicy
+		return invalidPolicyAt(PolicyInvalidValue, "/scope")
+	}
+	if len(document.Statements) == 0 || len(document.Statements) > MaxPolicyStatements {
+		return invalidPolicyAt(PolicyLimitExceeded, "/statements")
 	}
 	seenStatements := make(map[string]bool, len(document.Statements))
-	for _, statement := range document.Statements {
-		if ValidateID("sid", statement.SID) != nil || seenStatements[statement.SID] ||
-			(statement.Effect != PolicyAllow && statement.Effect != PolicyDeny) ||
-			len(statement.Actions) == 0 || len(statement.Actions) > MaxStatementActions ||
-			len(statement.Resources) == 0 || len(statement.Resources) > MaxStatementResources {
-			return ErrInvalidPolicy
+	for index, statement := range document.Statements {
+		pointer := "/statements/" + strconv.Itoa(index)
+		if ValidateID("sid", statement.SID) != nil {
+			return invalidPolicyAt(PolicyInvalidValue, pointer+"/sid")
+		}
+		if seenStatements[statement.SID] {
+			return invalidPolicyAt(PolicyDuplicate, pointer+"/sid")
 		}
 		seenStatements[statement.SID] = true
+		if statement.Effect != PolicyAllow && statement.Effect != PolicyDeny {
+			return invalidPolicyAt(PolicyInvalidValue, pointer+"/effect")
+		}
+		if len(statement.Actions) == 0 || len(statement.Actions) > MaxStatementActions {
+			return invalidPolicyAt(PolicyLimitExceeded, pointer+"/actions")
+		}
+		if len(statement.Resources) == 0 || len(statement.Resources) > MaxStatementResources {
+			return invalidPolicyAt(PolicyLimitExceeded, pointer+"/resources")
+		}
 		seenActions := make(map[Action]bool, len(statement.Actions))
 		requiredKinds := make(map[ResourceKind]bool)
-		for _, action := range statement.Actions {
+		for index, action := range statement.Actions {
+			actionPointer := pointer + "/actions/" + strconv.Itoa(index)
 			definition, known := LookupActionDefinition(action)
-			if !known || definition.AuthorityScope != document.Scope || seenActions[action] {
-				return ErrInvalidPolicy
+			if !known {
+				return invalidPolicyAt(PolicyUnsupported, actionPointer)
+			}
+			if definition.AuthorityScope != document.Scope {
+				return invalidPolicyAt(PolicyScopeMismatch, actionPointer)
+			}
+			if seenActions[action] {
+				return invalidPolicyAt(PolicyDuplicate, actionPointer)
 			}
 			seenActions[action] = true
 			requiredKinds[definition.ResourceKind] = false
 		}
 		seenResources := make(map[PolicyResourceSelector]bool, len(statement.Resources))
-		for _, resource := range statement.Resources {
-			if _, needed := requiredKinds[resource.Kind]; !needed || seenResources[resource] {
-				return ErrInvalidPolicy
+		for index, resource := range statement.Resources {
+			resourcePointer := pointer + "/resources/" + strconv.Itoa(index)
+			if _, needed := requiredKinds[resource.Kind]; !needed {
+				return invalidPolicyAt(PolicyResourceMismatch, resourcePointer+"/kind")
+			}
+			if seenResources[resource] {
+				return invalidPolicyAt(PolicyDuplicate, resourcePointer)
 			}
 			switch resource.Match {
 			case PolicyResourceExact:
 				if ValidateID("resource.id", resource.ID) != nil {
-					return ErrInvalidPolicy
+					return invalidPolicyAt(PolicyInvalidValue, resourcePointer+"/id")
 				}
 			case PolicyResourceAnyInAuthority:
 				if resource.ID != "" {
-					return ErrInvalidPolicy
+					return invalidPolicyAt(PolicyInvalidValue, resourcePointer+"/id")
 				}
 			default:
-				return ErrInvalidPolicy
+				return invalidPolicyAt(PolicyUnsupported, resourcePointer+"/match")
 			}
 			seenResources[resource] = true
 			requiredKinds[resource.Kind] = true
 		}
-		for _, covered := range requiredKinds {
-			if !covered {
-				return ErrInvalidPolicy
+		// Select the first uncovered action in input order, not map iteration
+		// order, so repeated analysis always identifies the same field.
+		for index, action := range statement.Actions {
+			definition, _ := LookupActionDefinition(action)
+			if !requiredKinds[definition.ResourceKind] {
+				return invalidPolicyAt(PolicyResourceMismatch, pointer+"/actions/"+strconv.Itoa(index))
 			}
 		}
 	}
@@ -434,7 +527,7 @@ func CanonicalizePolicyDocument(document PolicyDocument) (string, string, error)
 	slices.SortFunc(document.Statements, func(left, right PolicyStatement) int { return cmp.Compare(left.SID, right.SID) })
 	encoded, err := json.Marshal(document)
 	if err != nil || int64(len(encoded)) > MaxPolicyBytes {
-		return "", "", ErrInvalidPolicy
+		return "", "", invalidPolicyAt(PolicyLimitExceeded, "")
 	}
 	digest := sha256.Sum256(append([]byte("matrix.iam.policy.v1\x00"), encoded...))
 	return string(encoded), "sha256:" + hex.EncodeToString(digest[:]), nil

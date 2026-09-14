@@ -777,7 +777,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 9, Audit: 6, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 10, Audit: 7, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -961,6 +961,28 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		string(developer.ID),
 	)
 	revokeIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, developerBinding.ID, 1, "request-revoke-developer-binding")
+	// Publish through the real IAM API, then consume the exact resource rule
+	// through the independent PaaS PEP. No owner-side policy fixtures are used.
+	customRequest := iamv1.CreatePolicyRequest{DisplayName: "Selected process application", RequestID: "request-process-custom-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "read-selected", Effect: iamv1.PolicyAllow,
+				Actions:   []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "application-process"}}}}}}
+	publication := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/policies", adminLogin.Credential, customRequest)
+	var customPolicy iamv1.PolicyDetail
+	if publication.Status != http.StatusCreated || json.Unmarshal(publication.Body, &customPolicy) != nil || iamv1.ValidatePolicyDetail(customPolicy) != nil {
+		t.Fatalf("process customer policy publication status=%d", publication.Status)
+	}
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
+	customAttachment := createIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, developer.ID, customPolicy.Policy.ID, "request-process-custom-attach")
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-custom-not-selected", http.StatusForbidden)
+	revokeIAMPolicyAttachment(t, replicaEndpoint, adminLogin.Credential, customAttachment.ID, customAttachment.ResourceVersion, "request-process-custom-revoke")
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	if countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyCreated, auditv1.ResultSucceeded) != 1 {
+		t.Fatal("custom policy publication did not reach the immutable tenant Audit chain")
+	}
 	deniedBefore := countAuditFacts(
 		t,
 		ctx,

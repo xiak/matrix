@@ -547,6 +547,110 @@ func TestPolicyLanguageRejectsUnsupportedOrAmbiguousAuthority(t *testing.T) {
 	}
 }
 
+func TestPolicyDiagnosticsLocateRejectedAuthorityWithoutEchoingInput(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		mutate  func(*PolicyDocument)
+		code    PolicyValidationCode
+		pointer string
+	}{
+		{"language", func(v *PolicyDocument) { v.LanguageVersion = "untrusted-private-input" }, PolicyUnsupported, "/languageVersion"},
+		{"scope", func(v *PolicyDocument) { v.Scope = "untrusted-private-input" }, PolicyInvalidValue, "/scope"},
+		{"empty statements", func(v *PolicyDocument) { v.Statements = nil }, PolicyLimitExceeded, "/statements"},
+		{"statement limit", func(v *PolicyDocument) { v.Statements = make([]PolicyStatement, MaxPolicyStatements+1) }, PolicyLimitExceeded, "/statements"},
+		{"sid", func(v *PolicyDocument) { v.Statements[0].SID = "bad/input" }, PolicyInvalidValue, "/statements/0/sid"},
+		{"duplicate sid", func(v *PolicyDocument) { v.Statements[1].SID = v.Statements[0].SID }, PolicyDuplicate, "/statements/1/sid"},
+		{"effect", func(v *PolicyDocument) { v.Statements[0].Effect = "untrusted-private-input" }, PolicyInvalidValue, "/statements/0/effect"},
+		{"empty actions", func(v *PolicyDocument) { v.Statements[0].Actions = nil }, PolicyLimitExceeded, "/statements/0/actions"},
+		{"action limit", func(v *PolicyDocument) { v.Statements[0].Actions = make([]Action, MaxStatementActions+1) }, PolicyLimitExceeded, "/statements/0/actions"},
+		{"empty resources", func(v *PolicyDocument) { v.Statements[0].Resources = nil }, PolicyLimitExceeded, "/statements/0/resources"},
+		{"resource limit", func(v *PolicyDocument) {
+			v.Statements[0].Resources = make([]PolicyResourceSelector, MaxStatementResources+1)
+		}, PolicyLimitExceeded, "/statements/0/resources"},
+		{"unknown action", func(v *PolicyDocument) { v.Statements[0].Actions[0] = "untrusted-private-input" }, PolicyUnsupported, "/statements/0/actions/0"},
+		{"scope mismatch", func(v *PolicyDocument) { v.Statements[0].Actions[0] = ActionPaaSExecutionTargetRegister }, PolicyScopeMismatch, "/statements/0/actions/0"},
+		{"duplicate action", func(v *PolicyDocument) { v.Statements[0].Actions[1] = v.Statements[0].Actions[0] }, PolicyDuplicate, "/statements/0/actions/1"},
+		{"resource kind", func(v *PolicyDocument) { v.Statements[0].Resources[0].Kind = ResourceUser }, PolicyResourceMismatch, "/statements/0/resources/0/kind"},
+		{"resource match", func(v *PolicyDocument) { v.Statements[0].Resources[0].Match = "untrusted-private-input" }, PolicyUnsupported, "/statements/0/resources/0/match"},
+		{"resource id", func(v *PolicyDocument) { v.Statements[0].Resources[0].ID = "bad/input" }, PolicyInvalidValue, "/statements/0/resources/0/id"},
+		{"authority id", func(v *PolicyDocument) { v.Statements[1].Resources[0].ID = "untrusted-private-input" }, PolicyInvalidValue, "/statements/1/resources/0/id"},
+		{"duplicate resource", func(v *PolicyDocument) {
+			v.Statements[0].Resources = append(v.Statements[0].Resources, v.Statements[0].Resources[0])
+		}, PolicyDuplicate, "/statements/0/resources/2"},
+		{"missing resource", func(v *PolicyDocument) { v.Statements[0].Resources = v.Statements[0].Resources[:1] }, PolicyResourceMismatch, "/statements/0/actions/1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			document := policyDocumentFixture()
+			test.mutate(&document)
+			before, _ := json.Marshal(document)
+			for range 3 {
+				canonical, digest, encodingError := CanonicalizePolicyDocument(document)
+				if canonical != "" || digest != "" {
+					t.Fatal("rejected document acquired canonical authority")
+				}
+				for _, err := range []error{ValidatePolicyDocument(document), encodingError} {
+					var diagnostic *PolicyValidationError
+					if !errors.Is(err, ErrInvalidPolicy) || !errors.As(err, &diagnostic) || diagnostic.Code != test.code || diagnostic.Pointer != test.pointer {
+						t.Fatalf("unexpected safe diagnostic: %#v", diagnostic)
+					}
+					if err.Error() != ErrInvalidPolicy.Error() {
+						t.Fatal("ordinary error exposed diagnostic or input")
+					}
+				}
+			}
+			after, _ := json.Marshal(document)
+			if !bytes.Equal(before, after) {
+				t.Fatal("analysis changed the submitted policy")
+			}
+		})
+	}
+}
+
+func TestPolicyDecodeDiagnosticsPreserveStrictDocumentRejection(t *testing.T) {
+	valid, _, err := CanonicalizePolicyDocument(policyDocumentFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{
+		`null`, `[]`, `{"languageVersion":`, valid + `{}`,
+		strings.Replace(valid, `"scope":`, `"scope":"TENANT","scope":`, 1),
+		strings.Replace(valid, `"scope":`, `"private-input":"must-not-be-echoed","scope":`, 1),
+		strings.Replace(valid, `"actions":[`, `"actions":[{},`, 1),
+		strings.Replace(valid, `"match":"ANY_IN_AUTHORITY"`, `"match":"ANY_IN_AUTHORITY","id":null`, 1),
+	} {
+		_, err := DecodePolicyDocument(strings.NewReader(source))
+		var diagnostic *PolicyValidationError
+		if !errors.Is(err, ErrInvalidPolicy) || !errors.As(err, &diagnostic) || diagnostic.Code != PolicyInvalidDocument || diagnostic.Pointer != "" {
+			t.Fatalf("ambiguous JSON was accepted or mislocated: %#v", diagnostic)
+		}
+		if err.Error() != ErrInvalidPolicy.Error() {
+			t.Fatal("malformed JSON leaked native decoder details")
+		}
+	}
+	_, err = DecodePolicyDocument(strings.NewReader(strings.Repeat(" ", int(MaxPolicyBytes)) + valid))
+	var diagnostic *PolicyValidationError
+	if !errors.As(err, &diagnostic) || diagnostic.Code != PolicyLimitExceeded || diagnostic.Pointer != "" {
+		t.Fatal("raw input size limit did not produce a bounded root diagnostic")
+	}
+	large := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant}
+	for i := range MaxPolicyStatements {
+		statement := PolicyStatement{SID: fmt.Sprintf("statement-%d", i), Effect: PolicyAllow, Actions: []Action{ActionPaaSApplicationRead}}
+		for j := range MaxStatementResources {
+			statement.Resources = append(statement.Resources, PolicyResourceSelector{Kind: ResourceApplication, Match: PolicyResourceExact, ID: strings.Repeat("r", 120) + fmt.Sprintf("%03d", j)})
+		}
+		large.Statements = append(large.Statements, statement)
+	}
+	canonical, digest, encodingError := CanonicalizePolicyDocument(large)
+	if canonical != "" || digest != "" {
+		t.Fatal("oversized typed document acquired canonical authority")
+	}
+	for _, err := range []error{ValidatePolicyDocument(large), encodingError} {
+		if !errors.As(err, &diagnostic) || diagnostic.Code != PolicyLimitExceeded || diagnostic.Pointer != "" {
+			t.Fatal("typed document size limit did not produce a root diagnostic")
+		}
+	}
+}
+
 func FuzzPolicyDocumentCanonicalRoundTrip(f *testing.F) {
 	valid, _, _ := CanonicalizePolicyDocument(policyDocumentFixture())
 	f.Add(valid)
@@ -555,6 +659,10 @@ func FuzzPolicyDocumentCanonicalRoundTrip(f *testing.F) {
 	f.Fuzz(func(t *testing.T, source string) {
 		document, err := DecodePolicyDocument(strings.NewReader(source))
 		if err != nil {
+			var diagnostic *PolicyValidationError
+			if !errors.Is(err, ErrInvalidPolicy) || !errors.As(err, &diagnostic) || err.Error() != ErrInvalidPolicy.Error() {
+				t.Fatal("rejected input lacks a safe policy diagnostic")
+			}
 			return
 		}
 		canonical, digest, err := CanonicalizePolicyDocument(document)
@@ -581,6 +689,31 @@ func TestPolicyMetadataAndAttachmentOwnershipContracts(t *testing.T) {
 		Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
 	if ValidatePolicy(policy) != nil || ValidatePolicyAttachment(attachment) != nil {
 		t.Fatal("valid policy relationship rejected")
+	}
+	document := policyDocumentFixture()
+	_, digest, err := CanonicalizePolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := PolicyDetail{APIVersion: APIVersion, Kind: "PolicyDetail", Policy: policy,
+		Version: PolicyVersion{PolicyID: policy.ID, ID: policy.DefaultVersionID, Document: document, ContentDigest: digest}}
+	if ValidatePolicyDetail(detail) != nil {
+		t.Fatal("valid policy detail rejected")
+	}
+	for name, mutate := range map[string]func(*PolicyDetail){
+		"wrong version owner": func(v *PolicyDetail) { v.Version.PolicyID = "another-policy" },
+		"wrong default":       func(v *PolicyDetail) { v.Policy.DefaultVersionID = "another-version" },
+		"wrong digest":        func(v *PolicyDetail) { v.Version.ContentDigest = "sha256:" + strings.Repeat("0", 64) },
+		"retired detail":      func(v *PolicyDetail) { v.Policy.Status = PolicyRetired },
+		"unknown wrapper":     func(v *PolicyDetail) { v.Kind = "PolicyPermit" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := detail
+			mutate(&value)
+			if ValidatePolicyDetail(value) == nil {
+				t.Fatal("inconsistent policy detail accepted")
+			}
+		})
 	}
 	for name, mutate := range map[string]func(*Policy){
 		"missing owner":             func(v *Policy) { v.AccountID = "" },

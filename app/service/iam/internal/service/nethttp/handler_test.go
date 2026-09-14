@@ -122,7 +122,7 @@ func TestIAMHTTPPolicyDirectoriesDeriveScopeOnlyFromRoute(t *testing.T) {
 			{"query account", http.MethodGet, "?accountId=other", "", "catalog-session", http.StatusBadRequest},
 			{"body selector", http.MethodGet, "", `{"installationId":"other"}`, "catalog-session", http.StatusBadRequest},
 			{"missing bearer", http.MethodGet, "", "", "", http.StatusUnauthorized},
-			{"wrong method", http.MethodPost, "", "", "catalog-session", http.StatusMethodNotAllowed},
+			{"wrong method", http.MethodPut, "", "", "catalog-session", http.StatusMethodNotAllowed},
 		} {
 			t.Run(route+"/"+test.name, func(t *testing.T) {
 				before := workflow.policyCalls

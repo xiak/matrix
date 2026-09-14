@@ -27,6 +27,7 @@
           "iam.user.password-reset",
           "iam.user.password-changed",
           "iam.group.created",
+          "iam.policy.created",
           "iam.group.updated",
           "iam.group.deleted",
           "iam.group-membership.created",
@@ -399,6 +400,32 @@
                   "properties": {
                     "action": {
                       "const": "iam.group.created"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.policy.created"
                     }
                   },
                   "required": [
@@ -2224,6 +2251,51 @@
                   "properties": {
                     "kind": {
                       "const": "GROUP"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy.created"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
                     },
                     "tenantId": false
                   },
@@ -4368,6 +4440,7 @@
           "ACCOUNT",
           "USER",
           "GROUP",
+          "POLICY",
           "GROUP_MEMBERSHIP",
           "ORGANIZATION",
           "PRINCIPAL",

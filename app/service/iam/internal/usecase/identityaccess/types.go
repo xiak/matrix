@@ -68,6 +68,8 @@ type Transaction interface {
 	CreateGroupMembership(context.Context, GroupMembershipMutation) (iamv1.GroupMembership, error)
 	RemoveGroupMembership(context.Context, GroupMembershipRemovalMutation) (iamv1.GroupMembership, bool, error)
 	ListPolicies(context.Context, AccountRead, iamv1.AuthorityScope) (iamv1.PolicyList, error)
+	ReadPolicy(context.Context, AccountRead, iamv1.PolicyID) (iamv1.PolicyDetail, error)
+	CreatePolicy(context.Context, PolicyCreation) (iamv1.PolicyDetail, error)
 	ListAccounts(context.Context, AccountRead) (AccountManagementPage, error)
 	ReadAccountAsPlatform(context.Context, AccountRead, iamv1.AccountID) (AccountManagementSnapshot, error)
 	ReadAccountRoot(context.Context, AccountRead, iamv1.AccountID) (iamv1.RootIdentity, error)
@@ -312,6 +314,14 @@ type SessionRevocationMutation struct {
 type UserMutation struct {
 	User             iamv1.User
 	PasswordHash     authority.PasswordHash
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+type PolicyCreation struct {
+	Policy           iamv1.Policy
+	Version          iamv1.PolicyVersion
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event

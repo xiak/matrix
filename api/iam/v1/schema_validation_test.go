@@ -21,6 +21,60 @@ func TestEveryIAMOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
 	}
 }
 
+func TestCustomerPolicyPublicationUsesTheStrictTenantLanguage(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "CreatePolicyRequest")
+	check := func(value CreatePolicyRequest, valid bool) {
+		t.Helper()
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if (ValidateCreatePolicyRequest(value) == nil) != valid || (schema.Validate(instance) == nil) != valid {
+			t.Fatalf("policy creation schema/validator disagree: expected valid=%t", valid)
+		}
+	}
+	valid := func() CreatePolicyRequest {
+		return CreatePolicyRequest{DisplayName: "Application access", RequestID: "create-policy", Document: policyDocumentFixture()}
+	}
+	check(valid(), true)
+	for _, action := range AllActionDefinitions() {
+		value := valid()
+		value.Document.Scope = action.AuthorityScope
+		value.Document.Statements = []PolicyStatement{{SID: "one", Effect: PolicyAllow, Actions: []Action{action.Action},
+			Resources: []PolicyResourceSelector{{Kind: action.ResourceKind, Match: PolicyResourceAnyInAuthority}}}}
+		check(value, action.AuthorityScope == AuthorityScopeTenant)
+	}
+	for name, mutate := range map[string]func(*CreatePolicyRequest){
+		"empty display name": func(v *CreatePolicyRequest) { v.DisplayName = "" },
+		"unknown language":   func(v *CreatePolicyRequest) { v.Document.LanguageVersion = "future" },
+		"duplicate action": func(v *CreatePolicyRequest) {
+			v.Document.Statements[0].Actions = []Action{ActionPaaSApplicationRead, ActionPaaSApplicationRead}
+		},
+		"missing resource":     func(v *CreatePolicyRequest) { v.Document.Statements[0].Resources = nil },
+		"caller wildcard":      func(v *CreatePolicyRequest) { v.Document.Statements[0].Actions = []Action{"*"} },
+		"unknown selector":     func(v *CreatePolicyRequest) { v.Document.Statements[0].Resources[0].Match = "PREFIX" },
+		"oversized statements": func(v *CreatePolicyRequest) { v.Document.Statements = make([]PolicyStatement, MaxPolicyStatements+1) },
+	} {
+		t.Run(name, func(t *testing.T) { value := valid(); mutate(&value); check(value, false) })
+	}
+	encoded, _ := json.Marshal(valid())
+	var instance map[string]any
+	if json.Unmarshal(encoded, &instance) != nil {
+		t.Fatal("decode policy request")
+	}
+	for _, field := range []string{"accountId", "tenantId", "management", "policyId", "installationId"} {
+		instance[field] = "caller-selected"
+		if schema.Validate(instance) == nil {
+			t.Fatalf("policy request allows caller authority selector %s", field)
+		}
+		delete(instance, field)
+	}
+}
+
 func TestRetiredActionsAreHistoricalDecisionsNotRequestsOrPolicies(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	requestSchema := compileIAMOpenAPISchema(t, document, "AuthorizationRequest")

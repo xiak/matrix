@@ -726,7 +726,7 @@ BEGIN
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
             'iam.account-root.credentials-recovered', 'iam.account.alias-set',
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
-            'iam.group.created','iam.group.updated','iam.group.deleted',
+            'iam.policy.created','iam.group.created','iam.group.updated','iam.group.deleted',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',
@@ -979,6 +979,11 @@ BEGIN
            AND to_regprocedure('iam.create_policy_attachment(text,text,text,text,bigint,text,text,jsonb)') IS NULL
            AND to_regprocedure('iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
            AND to_regprocedure('iam.create_group(text,text,text,text,text,text,jsonb)') IS NOT NULL
+           AND (SELECT count(*) FROM pg_catalog.pg_proc AS policy_entry
+                WHERE policy_entry.oid IN (to_regprocedure('iam.read_policy(text,text,text,text)'),
+                    to_regprocedure('iam.create_policy(text,text,text,text,text,text,text,text,jsonb)'))
+                  AND policy_entry.prorettype='jsonb'::regtype AND NOT policy_entry.proretset
+                  AND policy_entry.prosecdef AND policy_entry.proowner='matrix_iam_owner'::regrole)=2
            AND to_regprocedure('iam.create_group_membership(text,text,text,text,text,text,jsonb)') IS NOT NULL
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS removal
                 WHERE removal.oid=to_regprocedure('iam.remove_group_membership(text,text,text,text,text,bigint,jsonb)')
@@ -1073,7 +1078,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           9::bigint,
+           10::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1109,6 +1114,8 @@ AS $function$
         WHEN 'iam.user.update' THEN 'USER'
         WHEN 'iam.user.delete' THEN 'USER'
         WHEN 'iam.policy.list' THEN 'ACCOUNT'
+        WHEN 'iam.policy.create' THEN 'ACCOUNT'
+        WHEN 'iam.policy.read' THEN 'POLICY'
         WHEN 'iam.platform-policy.list' THEN 'INSTALLATION'
         WHEN 'iam.policy-attachment.create' THEN 'USER'
         WHEN 'iam.policy-attachment.revoke' THEN 'POLICY_ATTACHMENT'

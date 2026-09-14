@@ -344,6 +344,71 @@ func (service *Authority) ListPolicies(ctx context.Context, credential iamv1.Sec
 	return result, nil
 }
 
+func (service *Authority) GetPolicy(ctx context.Context, credential iamv1.Secret, id iamv1.PolicyID, requestID string) (iamv1.PolicyDetail, error) {
+	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.PolicyDetail{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
+			return tx.ReadPolicy(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id)
+		})
+}
+
+func (service *Authority) CreatePolicy(ctx context.Context, credential iamv1.Secret, request iamv1.CreatePolicyRequest) (iamv1.PolicyDetail, error) {
+	if iamv1.ValidateCreatePolicyRequest(request) != nil {
+		return iamv1.PolicyDetail{}, ErrInvalidArgument
+	}
+	_, contentDigest, err := iamv1.CanonicalizePolicyDocument(request.Document)
+	if err != nil {
+		return iamv1.PolicyDetail{}, ErrInvalidArgument
+	}
+	requestDigest, err := digestSanitized("policy-create", struct {
+		DisplayName   string `json:"displayName"`
+		ContentDigest string `json:"contentDigest"`
+		RequestID     string `json:"requestId"`
+	}{request.DisplayName, contentDigest, request.RequestID})
+	if err != nil {
+		return iamv1.PolicyDetail{}, err
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyCreate,
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
+			account, err := tx.ReadAccount(ctx, subject.Subject.Organization.ID, subject.Subject.Principal.ID)
+			if err != nil {
+				return iamv1.PolicyDetail{}, err
+			}
+			// Publication starts root-only, in addition to the ordinary PDP. It
+			// does not turn the root relation into a second policy evaluator.
+			if account.RootIdentity.PrincipalID != subject.Subject.Principal.ID {
+				return iamv1.PolicyDetail{}, ErrForbidden
+			}
+			identityDigest, err := digestSanitized("policy-identity", struct {
+				AccountID iamv1.AccountID   `json:"accountId"`
+				ActorID   iamv1.PrincipalID `json:"actorId"`
+				RequestID string            `json:"requestId"`
+			}{account.ID, subject.Subject.Principal.ID, request.RequestID})
+			if err != nil {
+				return iamv1.PolicyDetail{}, err
+			}
+			id := iamv1.PolicyID("policy-" + identityDigest[len("sha256:"):])
+			version := iamv1.PolicyVersion{PolicyID: id, ID: iamv1.PolicyVersionID("version-" + contentDigest[len("sha256:"):]),
+				Document: request.Document, ContentDigest: contentDigest}
+			policy := iamv1.Policy{APIVersion: iamv1.APIVersion, Kind: "Policy", ID: id,
+				Management: iamv1.PolicyCustomerManaged, AccountID: account.ID, DisplayName: request.DisplayName,
+				Scope: iamv1.AuthorityScopeTenant, Status: iamv1.PolicyActive, DefaultVersionID: version.ID,
+				ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMPolicyCreated, auditv1.TargetPolicy,
+				string(id), decision.ID, requestDigest, request.RequestID, now)
+			if err != nil {
+				return iamv1.PolicyDetail{}, err
+			}
+			return tx.CreatePolicy(ctx, PolicyCreation{Policy: policy, Version: version,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, AuditEvent: event})
+		})
+}
+
 func (service *Authority) ListAccounts(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.AccountList, error) {
 	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.AccountList{}, ErrInvalidArgument

@@ -86,9 +86,13 @@ func buildPaths() object {
 		"/v1/auth/login": object{"post": mutationOperation(
 			"login", "Log in with a password", "LoginRequest", "LoginResponse", "200", []any{}, nil,
 		)},
-		"/v1/auth/me":           object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
-		"/v1/policies":          object{"get": readOperation("listPolicies", "Read the complete bounded current account policy metadata directory", "PolicyList", nil, nil)},
-		"/v1/platform-policies": object{"get": readOperation("listPlatformPolicies", "Read the separately authorized sealed installation policy metadata directory", "PolicyList", nil, nil)},
+		"/v1/auth/me": object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
+		"/v1/policies": object{
+			"get":  readOperation("listPolicies", "Read the complete bounded current account policy metadata directory", "PolicyList", nil, nil),
+			"post": mutationOperation("createPolicy", "Create an account-owned policy and its initial immutable version without attaching it", "CreatePolicyRequest", "PolicyDetail", "201", nil, nil),
+		},
+		"/v1/policies/{policyId}": object{"get": readOperation("getPolicy", "Read the current tenant policy and default content", "PolicyDetail", nil, []any{openapi31.PathIDParameter("policyId")})},
+		"/v1/platform-policies":   object{"get": readOperation("listPlatformPolicies", "Read the separately authorized sealed installation policy metadata directory", "PolicyList", nil, nil)},
 		"/v1/accounts": object{
 			"get":  readOperation("listAccounts", "List accounts as a platform operator", "AccountList", nil, accountPageParameters()),
 			"post": mutationOperation("createAccount", "Create an account and its immutable root identity", "CreateAccountRequest", "Account", "201", nil, nil),
@@ -237,9 +241,12 @@ func enumSchemas() map[string][]string {
 		"PolicyGrantSourceKind":      {string(iamv1.PolicyGrantDirect), string(iamv1.PolicyGrantGroup)},
 		"PolicyManagement":           {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
 		"PolicyStatus":               {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
+		"PolicyEffect":               {string(iamv1.PolicyAllow), string(iamv1.PolicyDeny)},
+		"PolicyResourceMatch":        {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority)},
 		"Action":                     openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
 			string(iamv1.ResourceAccount), string(iamv1.ResourceUser),
+			string(iamv1.ResourcePolicy),
 			string(iamv1.ResourceOrganization), string(iamv1.ResourcePrincipal), string(iamv1.ResourceGroup), string(iamv1.ResourceGroupMembership), string(iamv1.ResourceRoleBinding), string(iamv1.ResourcePolicyAttachment),
 			string(iamv1.ResourceSession), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
 			string(iamv1.ResourceConfigurationRevision), string(iamv1.ResourceApplicationRevision),
@@ -264,6 +271,12 @@ func structContracts() map[string]reflect.Type {
 		"PolicyAttachment":              openapi31.StructType[iamv1.PolicyAttachment](),
 		"PolicyGrantSource":             openapi31.StructType[iamv1.PolicyGrantSource](),
 		"Policy":                        openapi31.StructType[iamv1.Policy](),
+		"PolicyDocument":                openapi31.StructType[iamv1.PolicyDocument](),
+		"PolicyStatement":               openapi31.StructType[iamv1.PolicyStatement](),
+		"PolicyResourceSelector":        openapi31.StructType[iamv1.PolicyResourceSelector](),
+		"PolicyVersion":                 openapi31.StructType[iamv1.PolicyVersion](),
+		"PolicyDetail":                  openapi31.StructType[iamv1.PolicyDetail](),
+		"CreatePolicyRequest":           openapi31.StructType[iamv1.CreatePolicyRequest](),
 		"PolicyAttachmentTarget":        openapi31.StructType[iamv1.PolicyAttachmentTarget](),
 		"CreatePolicyAttachmentRequest": openapi31.StructType[iamv1.CreatePolicyAttachmentRequest](),
 		"RevokePolicyAttachmentRequest": openapi31.StructType[iamv1.RevokePolicyAttachmentRequest](),
@@ -324,7 +337,7 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
-	if (owner == "Policy" || owner == "UpdateUserRequest") && jsonName == "displayName" {
+	if (owner == "Policy" || owner == "CreatePolicyRequest" || owner == "UpdateUserRequest") && jsonName == "displayName" {
 		base["minLength"], base["maxLength"] = 1, 128
 	}
 	if (owner == "Group" || owner == "GroupDeletion" || owner == "CreateGroupRequest" || owner == "UpdateGroupRequest") && jsonName == "name" {
@@ -398,6 +411,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	applyPolicyLanguageOverlays(schemas)
 	schemas["Policy"].(object)["oneOf"] = []any{
 		object{"properties": object{"management": object{"const": "SYSTEM"}, "accountId": false,
 			"id": object{"pattern": `^system\..+`}}},
@@ -579,6 +593,76 @@ func actionResourceRules(definitions []iamv1.ActionDefinition) []any {
 		})
 	}
 	return rules
+}
+
+func applyPolicyLanguageOverlays(schemas object) {
+	document := schemas["PolicyDocument"].(object)
+	documentProperties := document["properties"].(object)
+	documentProperties["languageVersion"] = object{"const": iamv1.PolicyLanguageVersion}
+	documentProperties["statements"].(object)["minItems"] = 1
+	documentProperties["statements"].(object)["maxItems"] = iamv1.MaxPolicyStatements
+	statement := schemas["PolicyStatement"].(object)
+	statementProperties := statement["properties"].(object)
+	statementProperties["sid"] = openapi31.Ref("ID")
+	for field, maximum := range map[string]int{"actions": iamv1.MaxStatementActions, "resources": iamv1.MaxStatementResources} {
+		items := statementProperties[field].(object)
+		items["minItems"], items["maxItems"], items["uniqueItems"] = 1, maximum, true
+	}
+	schemas["PolicyResourceSelector"].(object)["oneOf"] = []any{
+		object{"required": []string{"id"}, "properties": object{"match": object{"const": string(iamv1.PolicyResourceExact)}}},
+		object{"properties": object{"match": object{"const": string(iamv1.PolicyResourceAnyInAuthority)}, "id": false}},
+	}
+	var scopeRules []any
+	for _, scope := range []iamv1.AuthorityScope{iamv1.AuthorityScopeTenant, iamv1.AuthorityScopeInstallation, iamv1.AuthorityScopeInstallationProbe} {
+		actions := []string{}
+		for _, definition := range iamv1.AllActionDefinitions() {
+			if definition.AuthorityScope == scope {
+				actions = append(actions, string(definition.Action))
+			}
+		}
+		scopeRules = append(scopeRules, object{
+			"if":   object{"properties": object{"scope": object{"const": string(scope)}}},
+			"then": object{"properties": object{"statements": object{"items": object{"properties": object{"actions": object{"items": object{"enum": actions}}}}}}},
+		})
+	}
+	document["allOf"] = scopeRules
+	var actionRules []any
+	seenKinds := map[iamv1.ResourceKind]bool{}
+	for _, definition := range iamv1.AllActionDefinitions() {
+		actionRules = append(actionRules, object{
+			"if":   object{"properties": object{"actions": object{"contains": object{"const": string(definition.Action)}}}},
+			"then": object{"properties": object{"resources": object{"contains": object{"properties": object{"kind": object{"const": string(definition.ResourceKind)}}}}}},
+		})
+		if seenKinds[definition.ResourceKind] {
+			continue
+		}
+		seenKinds[definition.ResourceKind] = true
+		actions := []string{}
+		for _, candidate := range iamv1.AllActionDefinitions() {
+			if candidate.ResourceKind == definition.ResourceKind {
+				actions = append(actions, string(candidate.Action))
+			}
+		}
+		actionRules = append(actionRules, object{
+			"if":   object{"properties": object{"resources": object{"contains": object{"properties": object{"kind": object{"const": string(definition.ResourceKind)}}}}}},
+			"then": object{"properties": object{"actions": object{"contains": object{"enum": actions}}}},
+		})
+	}
+	// Retired/unknown resource kinds cannot enter a live permission document.
+	kinds := []string{}
+	for _, definition := range iamv1.AllActionDefinitions() {
+		if seenKinds[definition.ResourceKind] {
+			kinds = append(kinds, string(definition.ResourceKind))
+			delete(seenKinds, definition.ResourceKind)
+		}
+	}
+	schemas["PolicyResourceSelector"].(object)["properties"].(object)["kind"] = object{"enum": kinds}
+	statement["allOf"] = actionRules
+	schemas["CreatePolicyRequest"].(object)["allOf"] = []any{object{"properties": object{"document": object{"properties": object{"scope": object{"const": "TENANT"}}}}}}
+	schemas["PolicyDetail"].(object)["allOf"] = []any{object{"properties": object{
+		"policy":  object{"properties": object{"scope": object{"const": "TENANT"}, "status": object{"const": "ACTIVE"}}},
+		"version": object{"properties": object{"document": object{"properties": object{"scope": object{"const": "TENANT"}}}}},
+	}}}
 }
 
 func fatalf(format string, arguments ...any) {

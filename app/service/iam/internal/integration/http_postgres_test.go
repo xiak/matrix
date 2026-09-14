@@ -386,6 +386,9 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	t.Run("group inheritance and terminal membership", func(t *testing.T) {
 		proveGroupInheritance(t, ctx, handler, admin, primary)
 	})
+	t.Run("customer policy publication and current authority", func(t *testing.T) {
+		proveCustomerPolicyPublication(t, ctx, handler, admin, primary)
+	})
 	t.Run("policy publication versus attachment revision", func(t *testing.T) {
 		provePolicyDefaultAttachmentRaces(t, ctx, handler, admin, primary)
 	})
@@ -527,7 +530,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	// that silently truncates at 256 would authorize this request incorrectly.
 	if _, err := admin.Exec(ctx, `BEGIN;
 		INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
-		SELECT 'budget-policy-'||i,'CUSTOMER',$1,'Budget policy','TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp() FROM generate_series(1,255) i;
+		SELECT 'budget-policy-'||i,'CUSTOMER',$1,'Budget policy '||i,'TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp() FROM generate_series(1,255) i;
 		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
 		SELECT 'budget-policy-'||i,'v1','TENANT',CASE WHEN i=255 THEN $4::jsonb ELSE $2::jsonb END,
 		CASE WHEN i=255 THEN $4 ELSE $2 END,CASE WHEN i=255 THEN $5 ELSE $3 END,transaction_timestamp() FROM generate_series(1,255) i;
@@ -609,6 +612,285 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		service.Purpose != iamv1.ServiceInstallationVerifier || service.InstallationID != document.InstallationID {
 		t.Fatal("policy migration changed sealed verifier purpose or installation")
 	}
+}
+
+func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	request := func(method, path, bearer string, body any, want int, result any) {
+		t.Helper()
+		var encoded []byte
+		var err error
+		if body != nil {
+			encoded, err = json.Marshal(body)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != want {
+			t.Fatalf("customer policy %s %s: status=%d want=%d body=%s", method, path, response.Code, want, response.Body.String())
+		}
+		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+			t.Fatal("invalid customer policy response")
+		}
+	}
+	post := func(path, bearer string, body any, want int, result any) {
+		t.Helper()
+		request(http.MethodPost, path, bearer, body, want, result)
+	}
+	get := func(path, bearer string, want int, result any) {
+		t.Helper()
+		request(http.MethodGet, path, bearer, nil, want, result)
+	}
+	create := iamv1.CreatePolicyRequest{DisplayName: "Selected application read", RequestID: "customer-policy-create",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "selected", Effect: iamv1.PolicyAllow,
+				Actions:   []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-selected-app"}}}}}}
+	var policy, replay, fetched iamv1.PolicyDetail
+	post("/v1/policies", root, create, http.StatusCreated, &policy)
+	post("/v1/policies", root, create, http.StatusCreated, &replay)
+	get("/v1/policies/"+string(policy.Policy.ID), root, http.StatusOK, &fetched)
+	if iamv1.ValidatePolicyDetail(policy) != nil || policy.Policy.Management != iamv1.PolicyCustomerManaged ||
+		!bytes.Equal(mustIAMJSON(t, policy), mustIAMJSON(t, replay)) || !bytes.Equal(mustIAMJSON(t, policy), mustIAMJSON(t, fetched)) {
+		t.Fatal("creation replay/read changed immutable policy identity or content")
+	}
+	var factCount, versionCount, attachmentCount int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.created' AND event_document#>>'{target,id}'=$2),
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$2),
+		(SELECT count(*) FROM iam.policy_attachments WHERE policy_id=$2)`, policy.Policy.AccountID, policy.Policy.ID).Scan(&factCount, &versionCount, &attachmentCount); err != nil || factCount != 1 || versionCount != 1 || attachmentCount != 0 {
+		t.Fatalf("publication/replay is not atomic or implicitly attached: facts=%d versions=%d attachments=%d err=%v", factCount, versionCount, attachmentCount, err)
+	}
+	variant := create
+	variant.DisplayName = "Different intent"
+	post("/v1/policies", root, variant, http.StatusConflict, nil)
+	variant = create
+	variant.RequestID = "customer-policy-duplicate-name"
+	post("/v1/policies", root, variant, http.StatusConflict, nil)
+	post("/v1/policies?accountId=other", root, create, http.StatusBadRequest, nil)
+	post("/v1/policies", paasCredential, create, http.StatusUnauthorized, nil)
+	get("/v1/policies/"+string(iamv1.SystemPolicyPlatformOperator), root, http.StatusForbidden, nil)
+	get("/v1/policies/missing-policy", root, http.StatusForbidden, nil)
+	var member iamv1.User
+	post("/v1/users", root, map[string]any{"loginName": "customer-policy-member", "displayName": "Policy member", "initialPassword": initialDeveloperPassword, "requestId": "customer-policy-member-create"}, http.StatusCreated, &member)
+	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
+	post("/v1/policies", bearer, create, http.StatusForbidden, nil)
+	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+	get("/v1/policies/"+string(policy.Policy.ID), bearer, http.StatusForbidden, nil)
+	post("/v1/policies", bearer, create, http.StatusForbidden, nil)
+	authorize := func(id string, want bool) {
+		t.Helper()
+		body := mustIAMJSON(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+			Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: id}, RequestID: "customer-policy-read", CorrelationID: "customer-policy-read"})
+		response := performIAMRequestWithSubject(handler, body, paasCredential, bearer)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || decision.Allowed != want {
+			t.Fatalf("custom policy decision for %s: status=%d allowed=%t want=%t", id, response.Code, decision.Allowed, want)
+		}
+	}
+	authorize("customer-selected-app", false)
+	var attachment iamv1.PolicyAttachment
+	grant := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
+		PolicyID: policy.Policy.ID, PolicyResourceVersion: 1, RequestID: "customer-policy-attach"}
+	post("/v1/policy-attachments", root, grant, http.StatusOK, &attachment)
+	authorize("customer-selected-app", true)
+	authorize("customer-unselected-app", false)
+	post("/v1/policy-attachments/"+string(attachment.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: "customer-policy-revoke"}, http.StatusOK, nil)
+	authorize("customer-selected-app", false)
+	// Even an explicit tenant administrator attachment does not yet delegate
+	// the high-risk publishing workflow; it never becomes an implicit root.
+	grant.PolicyID, grant.RequestID = iamv1.SystemPolicyAccountAdministrator, "customer-policy-admin"
+	post("/v1/policy-attachments", root, grant, http.StatusOK, nil)
+	get("/v1/policies/"+string(policy.Policy.ID), bearer, http.StatusOK, nil)
+	variant.RequestID, variant.DisplayName = "customer-delegate-create", "Delegate policy"
+	post("/v1/policies", bearer, variant, http.StatusForbidden, nil)
+	post("/v1/accounts", root, map[string]any{"id": "customer-policy-other", "displayName": "Other policy account", "rootLoginName": "customer-policy-other", "rootDisplayName": "Other root", "initialPassword": initialDeveloperPassword, "requestId": "customer-policy-other-create"}, http.StatusCreated, nil)
+	other := localRecoveryLogin(t, handler, "customer-policy-other", initialDeveloperPassword, true)
+	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
+	var foreign iamv1.PolicyDetail
+	post("/v1/policies", other, create, http.StatusCreated, &foreign)
+	if foreign.Policy.ID == policy.Policy.ID || foreign.Policy.AccountID == policy.Policy.AccountID || foreign.Policy.DisplayName != policy.Policy.DisplayName {
+		t.Fatal("same-name customer policies did not retain independent account ownership")
+	}
+	get("/v1/policies/"+string(policy.Policy.ID), other, http.StatusForbidden, nil)
+	get("/v1/policies/"+string(foreign.Policy.ID), root, http.StatusForbidden, nil)
+	grant.PolicyID, grant.RequestID = foreign.Policy.ID, "customer-cross-account-attach"
+	post("/v1/policy-attachments", root, grant, http.StatusForbidden, nil)
+	var event auditv1.Event
+	var raw []byte
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.created' AND event_document#>>'{target,id}'=$2`, policy.Policy.AccountID, policy.Policy.ID).Scan(&raw); err != nil || json.Unmarshal(raw, &event) != nil || auditv1.ValidateEvent(event) != nil || event.IAMDecisionID == "" || bytes.Contains(raw, []byte("customer-selected-app")) {
+		t.Fatal("policy publication fact lacks authority correlation or discloses document content")
+	}
+	post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
+	for _, mutate := range []func(*auditv1.Event){
+		func(v *auditv1.Event) { v.Target.ID = string(foreign.Policy.ID) },
+		func(v *auditv1.Event) { v.TenantID = auditv1.TenantID(foreign.Policy.AccountID) },
+		func(v *auditv1.Event) { v.RequestDigest = "sha256:" + strings.Repeat("f", 64) },
+	} {
+		forged := event
+		mutate(&forged)
+		post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: forged}, http.StatusForbidden, nil)
+	}
+	// Raw database publication has the same closed language boundary. Check
+	// every registered action, not a prefix-based approximation of platform scope.
+	checkDocument := func(canonical string, allowed bool) {
+		t.Helper()
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err = tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, `SELECT iam.assert_customer_policy_document($1,
+			'sha256:'||encode(sha256(convert_to('matrix.iam.policy.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'))`, canonical)
+		if allowed {
+			if err != nil {
+				t.Fatalf("valid customer document was rejected: %v", err)
+			}
+		} else {
+			var invalid *pgconn.PgError
+			if !errors.As(err, &invalid) || invalid.Code != "22023" {
+				t.Fatalf("invalid customer document did not fail closed: %v", err)
+			}
+		}
+	}
+	for _, action := range iamv1.AllActionDefinitions() {
+		document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: action.AuthorityScope,
+			Statements: []iamv1.PolicyStatement{{SID: "one", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{action.Action},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: action.ResourceKind, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+		canonical, _, err := iamv1.CanonicalizePolicyDocument(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkDocument(canonical, action.AuthorityScope == iamv1.AuthorityScopeTenant)
+		if action.AuthorityScope != iamv1.AuthorityScopeTenant {
+			document.Scope = iamv1.AuthorityScopeTenant
+			checkDocument(string(mustIAMJSON(t, document)), false)
+		}
+	}
+	canonical, _, err := iamv1.CanonicalizePolicyDocument(create.Document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, malformed := range []string{
+		strings.Replace(canonical, `"scope":`, `"scope":"TENANT","scope":`, 1),
+		strings.Replace(canonical, `"effect":`, `"conditions":{"callerAdmin":true},"effect":`, 1),
+		strings.Replace(canonical, `"paas.application.read"`, `"paas.future.allow"`, 1),
+		strings.Replace(canonical, `"kind":"APPLICATION"`, `"kind":"USER","kind":"APPLICATION"`, 1),
+		strings.Replace(canonical, `"id":"customer-selected-app"`, `"id":"*"`, 1),
+		strings.Repeat(" ", int(iamv1.MaxPolicyBytes)) + canonical,
+	} {
+		checkDocument(malformed, false)
+	}
+	// Same-intent concurrent requests serialize on the publisher and return
+	// one immutable creation; successful retries never add a second fact.
+	concurrent := create
+	concurrent.RequestID, concurrent.DisplayName = "customer-policy-concurrent", "Concurrent policy"
+	body := mustIAMJSON(t, concurrent)
+	responses := make(chan *httptest.ResponseRecorder, 2)
+	for range 2 {
+		go func() { responses <- performIAMRequest(handler, http.MethodPost, "/v1/policies", root, body) }()
+	}
+	var first []byte
+	for range 2 {
+		response := <-responses
+		if response.Code != http.StatusCreated {
+			t.Fatalf("concurrent publication: status=%d body=%s", response.Code, response.Body.String())
+		}
+		if first != nil && !bytes.Equal(first, response.Body.Bytes()) {
+			t.Fatal("same-intent concurrent creation changed its result")
+		}
+		first = append([]byte(nil), response.Body.Bytes()...)
+	}
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.created' AND event_document->>'requestId'=$2`, policy.Policy.AccountID, concurrent.RequestID).Scan(&factCount); err != nil || factCount != 1 {
+		t.Fatal("concurrent publication created multiple successful facts")
+	}
+	// The last write fails after the policy and immutable version inserts.
+	// The real restricted API transaction must roll back all three, including
+	// its successful decision, and permit only an exact fresh retry afterward.
+	failing := create
+	failing.RequestID, failing.DisplayName = "customer-policy-injected-failure", "Atomic policy"
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_policy_outbox_fault() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.event_document->>'action'='iam.policy.created' AND NEW.event_document->>'requestId'='customer-policy-injected-failure'
+		THEN RAISE EXCEPTION 'injected customer policy outbox failure'; END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_policy_outbox_fault BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_outbox_fault()`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := database.Exec(context.Background(), `DROP TRIGGER IF EXISTS matrix_policy_outbox_fault ON iam.audit_outbox; DROP FUNCTION IF EXISTS public.matrix_policy_outbox_fault()`); err != nil {
+			t.Error("remove isolated policy fault")
+		}
+	}()
+	post("/v1/policies", root, failing, http.StatusServiceUnavailable, nil)
+	var partial bool
+	if err := database.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.policies WHERE owner_tenant_id=$1 AND display_name=$2)
+		OR EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$3)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)`,
+		policy.Policy.AccountID, failing.DisplayName, failing.RequestID).Scan(&partial); err != nil || partial {
+		t.Fatalf("failed publication left partial authority: partial=%t err=%v", partial, err)
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER matrix_policy_outbox_fault ON iam.audit_outbox; DROP FUNCTION public.matrix_policy_outbox_fault()`); err != nil {
+		t.Fatal(err)
+	}
+	post("/v1/policies", root, failing, http.StatusCreated, nil)
+	var otherIdentity iamv1.CurrentIdentity
+	get("/v1/auth/me", other, http.StatusOK, &otherIdentity)
+	mutation, err := pgx.ConnectConfig(ctx, database.Config().Copy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mutation.Close(context.Background())
+	tx, err := mutation.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	// Hold the same principal row needed by credential/status transitions.
+	// A publisher already authenticated against the old snapshot must retry
+	// after this revocation, not commit using its prior active identity.
+	if _, err := tx.Exec(ctx, `UPDATE iam.principals SET status='DISABLED',resource_version=resource_version+1,
+		updated_at=transaction_timestamp() WHERE tenant_id=$1 AND id=$2`, foreign.Policy.AccountID, otherIdentity.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	racing := create
+	racing.RequestID, racing.DisplayName = "customer-policy-disabled-publisher", "Disabled publisher policy"
+	racingBody := mustIAMJSON(t, racing)
+	completed := make(chan *httptest.ResponseRecorder, 1)
+	go func() { completed <- performIAMRequest(handler, http.MethodPost, "/v1/policies", other, racingBody) }()
+	waitForLocalRecoveryLock(t, ctx, database, iamHTTPTestRole)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case response := <-completed:
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("publication survived concurrent identity revocation: status=%d", response.Code)
+		}
+	case <-ctx.Done():
+		t.Fatal("publication did not finish after identity revocation")
+	}
+	if err := database.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.policies WHERE owner_tenant_id=$1 AND display_name=$2)
+		OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3)`, foreign.Policy.AccountID, racing.DisplayName, racing.RequestID).Scan(&partial); err != nil || partial {
+		t.Fatal("revoked publisher left a partial policy or fact")
+	}
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.created' AND event_document#>>'{target,id}'=$2`, foreign.Policy.AccountID, foreign.Policy.ID).Scan(&raw); err != nil || json.Unmarshal(raw, &event) != nil {
+		t.Fatal("read committed publication from disabled publisher")
+	}
+	post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
+}
+
+func mustIAMJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }
 
 func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
@@ -1312,7 +1594,7 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 		t.Helper()
 		if _, err := database.Exec(ctx, `BEGIN;
 			INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
-			SELECT 'catalog-budget-'||i,'CUSTOMER',$1,'Catalog budget','TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp() FROM generate_series($4::int,$5::int) i;
+			SELECT 'catalog-budget-'||i,'CUSTOMER',$1,'Catalog budget '||i,'TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp() FROM generate_series($4::int,$5::int) i;
 			INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
 			SELECT 'catalog-budget-'||i,'v1','TENANT',$2::jsonb,$2,$3,transaction_timestamp() FROM generate_series($4::int,$5::int) i;
 			COMMIT;`, otherAccount, canonical, digest, first, last); err != nil {
@@ -1368,7 +1650,7 @@ func provePolicyDefaultAttachmentRaces(t *testing.T, ctx context.Context, handle
 			}
 			if _, err := database.Exec(ctx, `BEGIN;
 				INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
-				VALUES($1,'CUSTOMER',$2,'Publication race','TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp());
+				VALUES($1,'CUSTOMER',$2,'Publication race '||$1,'TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp());
 				INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
 				VALUES($1,'v1','TENANT',$3::jsonb,$3,$4,transaction_timestamp()),
 				($1,'v2','TENANT',$5::jsonb,$5,$6,transaction_timestamp()); COMMIT;`,

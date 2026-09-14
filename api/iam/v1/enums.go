@@ -105,6 +105,8 @@ const (
 	ActionIAMAccountAliasSet               Action = "iam.account.alias-set"
 	ActionIAMUserList                      Action = "iam.user.list"
 	ActionIAMPolicyList                    Action = "iam.policy.list"
+	ActionIAMPolicyCreate                  Action = "iam.policy.create"
+	ActionIAMPolicyRead                    Action = "iam.policy.read"
 	ActionIAMPlatformPolicyList            Action = "iam.platform-policy.list"
 	ActionIAMUserSetStatus                 Action = "iam.user.set-status"
 	ActionIAMUserPasswordReset             Action = "iam.user.reset-password"
@@ -192,6 +194,7 @@ const (
 	ResourcePrincipal             ResourceKind = "PRINCIPAL"
 	ResourceRoleBinding           ResourceKind = "ROLE_BINDING"
 	ResourcePolicyAttachment      ResourceKind = "POLICY_ATTACHMENT"
+	ResourcePolicy                ResourceKind = "POLICY"
 	ResourceSession               ResourceKind = "SESSION"
 	ResourceApplication           ResourceKind = "APPLICATION"
 	ResourceConfiguration         ResourceKind = "CONFIGURATION"
@@ -310,6 +313,8 @@ var actionDefinitions = [...]ActionDefinition{
 	{ActionIAMAccountAliasSet, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
 	{ActionIAMUserList, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
 	{ActionIAMPolicyList, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
+	{ActionIAMPolicyCreate, ProductIAM, ServiceIAM, ResourceAccount, AuthorityScopeTenant},
+	{ActionIAMPolicyRead, ProductIAM, ServiceIAM, ResourcePolicy, AuthorityScopeTenant},
 	{ActionIAMPlatformPolicyList, ProductIAM, ServiceIAM, ResourceInstallation, AuthorityScopeInstallation},
 	{ActionIAMUserSetStatus, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
 	{ActionIAMUserPasswordReset, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
