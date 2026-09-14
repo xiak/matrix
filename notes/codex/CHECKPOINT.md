@@ -5,16 +5,22 @@
 - Updated: 2026-09-14
 - Repository: https://github.com/xiak/matrix.git
 - Branch: `feat/iam`
-- Latest pushed implementation: `b342e9da08515f9172b29d1ac237a088171c9e53`,
-  literal resource prefixes constrained by explicit action capability.
+- Latest pushed design: `80e513191357aa1789389435c3474afdf341638c`,
+  User boundary vertical slice in IAM/005 and its fixed-source adoption.
+  Documentation only; architecture and diff checks passed. No boundary API,
+  schema, evaluator or runtime implementation is claimed.
+- Latest pushed implementation and fully CI-verified rollback point:
+  `b342e9da08515f9172b29d1ac237a088171c9e53`, literal resource prefixes
+  constrained by explicit action capability.
 - Exact [Verification 34839955131](https://github.com/xiak/matrix/actions/runs/34839955131)
-  matches this SHA and is in_progress; final CI is NOT yet confirmed.
+  matches this SHA and is completed/success; Go/authority-process/node-process
+  all completed/success, independently checked through GitHub API.
 - Identity implementation `b208ab081ac2f08aab81f63b8cfefb17ebdc6c82` /
   [34836760785](https://github.com/xiak/matrix/actions/runs/34836760785) FAILED:
   authority-process/node-process succeeded; Go failed the preexisting
   TestPinnedSSHExecutorHonorsCancellationDuringHandshake stage expectation.
   Do not treat b208 as an independently successful candidate.
-- Last fully CI-verified rollback point:
+- Earlier fully CI-verified rollback point:
   `4f22e223398fbe4523bc09d6a369677cb23767db`,
   [34837563263](https://github.com/xiak/matrix/actions/runs/34837563263);
   exact SHA and Go/authority-process/node-process completed/success.
@@ -29,9 +35,10 @@ IAM/FEAT-IAM-005-policy-versions-and-boundaries.md, then owning code/tests.
 release/capacity/HA gates. The user reaffirmed prelaunch development versions
 do not require a complete schema1 history chain on every FEAT.
 
-First verifyb342e9d's exact live CI. No local test handle remains.
-Then continue005: action wildcards with pinned Profile/catalog semantics, trusted IP conditions,
-User/Role permission boundaries, safe delegation and editor/capabilities.
+No local or CI test handle remains. Continue005's specified User boundary
+vertical slice, then complete action wildcards with pinned Profile/catalog
+semantics, trusted IP conditions, Role boundaries, safe delegation and
+editor/capabilities. The current root-only writer is not final LANG-08.
 Current time plus identity strings do NOT complete LANG-04 or005.
 006 roles/STS,007 programmatic credentials,008 product/service-role/ABAC,
 009 governance,010 console,011 acceptance and012 explicit deferred integrations
@@ -70,8 +77,9 @@ cross-tenant resources/Operation/outbox and historical chains remain.
 Full Go race/vet/modules/stable generation/Linuxbuild passed, then final pure
 validation loop aggregation passed API/authority/usecase/architecture race,
 fullvet/Linuxbuild and fuzz15s/2workers/1s minimization634172executions.
-Exact final code's full PG is pending new independentCI, not claimed inherited
-from the pre-aggregation local tree. No capacity/UI/install acceptance implied.
+Exact final code's full PG was independently revalidated by successful
+CI34839955131; its evidence is separate from the pre-aggregation local tree.
+No capacity/UI/install acceptance implied.
 Own PG18 used1CPU/768MiB/PIDs128/64connections. Default Docker subnet pools were
 exhausted; read-only subnet inventory established an unused explicit /28 for
 only this fixture. No network pruning or shared configuration changes. Exact
@@ -153,6 +161,18 @@ only synthetic test data removed. No local fixture/live test survives.
 Never overlap broad builds/fuzz and the real PG gate.
 
 ## Coordination and isolation
+
+User boundary design80e5131 has a concrete API, transaction and acceptance
+matrix in IAM/005; read that owner before implementation. Intended additions:
+current lookup_session boundary snapshot and record_authorization evidence,
+not fake positive PolicyAttachmentEvidence; all tenant grants intersect the
+single boundary. Policy deletion must account for active references; cursor
+must bind complete current boundary/default; self password/logout retain
+existing authenticated paths. New set/remove are root-only now, exact USER;
+Root cannot be bound, platform authority is not altered. Role integrates in006.
+Phase3 was notified of this upcoming public surface; no production code or
+readiness/profile was changed in this design. No actual new revision assigned.
+Both peers were notified of b342 exact three-job CI success.
 
 Existing UX/UI task01a07b21-9a0d-7fd0-b090-7827ce18262e and installation task
 01a04149-5dbb-7300-9e4c-31d9e85c8ada consume only fixed objects and own their
