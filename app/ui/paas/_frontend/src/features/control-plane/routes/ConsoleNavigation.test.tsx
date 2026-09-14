@@ -110,7 +110,7 @@ describe("Console navigation", () => {
     expect((screen.getByLabelText("Workflow draft") as HTMLInputElement).value).toBe("keep this policy");
     await user.click(screen.getByRole("link", { name: "Resources" }));
     await user.click(screen.getByRole("button", { name: "Leave" }));
-    expect(router.push).toHaveBeenCalledExactlyOnceWith("/console/resources/");
+    expect(router.push).toHaveBeenCalledExactlyOnceWith("/console/resources/", { scroll: false });
     expect(screen.getByLabelText("Pending destination").textContent).toBe("/console/resources/");
     await act(async () => request.release());
     expect(screen.getByLabelText("Current content").textContent).toBe("/console/resources/");
@@ -128,7 +128,7 @@ describe("Console navigation", () => {
     await user.click(screen.getByRole("button", { name: "Search result" }));
     expect(router.push).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Leave" }));
-    expect(router.push).toHaveBeenCalledExactlyOnceWith("/console/operations/");
+    expect(router.push).toHaveBeenCalledExactlyOnceWith("/console/operations/", { scroll: false });
   });
 
   it("preserves replace and scroll options and records a service visit only after acceptance", async () => {
@@ -158,7 +158,7 @@ describe("Console navigation", () => {
     await user.click(screen.getByRole("link", { name: "Group detail" }));
     expect(router.push).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("link", { name: "Group directory" }));
-    expect(router.push).toHaveBeenLastCalledWith("/console/access/groups/");
+    expect(router.push).toHaveBeenLastCalledWith("/console/access/groups/", { scroll: false });
     expect(screen.getByLabelText("Current content").textContent).toBe("/console/access/groups/");
   });
   it("exposes a real pending destination while a route suspends and clears it on commit", async () => {
@@ -234,7 +234,7 @@ describe("Console navigation", () => {
     expect(router.push).not.toHaveBeenCalled();
     expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
     await user.click(screen.getByRole("button", { name: "Search result" }));
-    expect(router.push).toHaveBeenCalledExactlyOnceWith("/console/operations/");
+    expect(router.push).toHaveBeenCalledExactlyOnceWith("/console/operations/", { scroll: false });
     expect(screen.getByLabelText("Current content").textContent).toBe("/console/operations/");
     expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
   });

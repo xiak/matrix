@@ -38,13 +38,14 @@
 
 .body {
   --xiak-scroll-inset: var(--xiak-spacing-roomy);
+  --xiak-scroll-inset-inline: var(--xiak-spacing-roomy);
   container-name: matrix-page-content;
   container-type: inline-size;
   min-width: 0;
   min-height: 0;
   flex: 1;
   overflow: auto;
-  padding: var(--xiak-scroll-inset);
+  padding: var(--xiak-scroll-inset) var(--xiak-scroll-inset-inline);
 }
 
 .stage { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
@@ -64,7 +65,8 @@
   .commandBar > .overflowCommand { display: inline-flex; }
 
   .body {
-    --xiak-scroll-inset: var(--xiak-spacing-default);
+    --xiak-scroll-inset: var(--xiak-spacing-comfortable);
+    --xiak-scroll-inset-inline: var(--xiak-spacing-default);
   }
 }
 @container matrix-content-frame (max-width: 960px) {

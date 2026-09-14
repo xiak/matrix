@@ -62,7 +62,7 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate }: {
   const reset = () => setView({ ...defaultPolicyDirectoryView, pageSize: view.pageSize, sort: view.sort });
   const customOnly = view.kind === "custom";
   return <Tabs.Root className={styles.directory} value={view.kind} onValueChange={(kind) => change({ kind, service: "all", category: "all" })}>
-    <ContentPage.Heading title={w("policies")} actions={<ContentPage.Commands label={collection("pageActions")}
+    <ContentPage.Heading title={w("policies")} scrollKey="policy-directory" actions={<ContentPage.Commands label={collection("pageActions")}
       selection={{ label: collection("moreActions"), disabled: busy || !selected.length, hint: !selected.length ? collection("selectFirst") : undefined,
         selectionLabel: selected.length ? t("selected", { count: selected.length }) : undefined, clearLabel: t("clearSelected"), onClear: () => setSelection([]),
         actions: [{ id: "associate", label: selected.length > 1 ? t("batchAttach") : w("associateTargets"), onSelect: () => onAssociate(selected, selected.length > 1) }] }}

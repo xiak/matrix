@@ -37,7 +37,7 @@ describe("branded sign-in flows", () => {
       await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
       await user.click(screen.getByRole("button", { name: "登录控制台" }));
     }
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledExactlyOnceWith("/console/"));
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledExactlyOnceWith("/console/", { scroll: false }));
   });
 
   it("returns an IAM user to a requested resource page", async () => {
@@ -46,7 +46,7 @@ describe("branded sign-in flows", () => {
     await user.type(screen.getByLabelText("子账号登录名"), "developer@tenant-a");
     await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledExactlyOnceWith("/console/resources/"));
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledExactlyOnceWith("/console/resources/", { scroll: false }));
   });
 
   it.each(["/console/", "/console/resources/"])("returns an IAM user to %s only after required password replacement", async (returnTo) => {
@@ -61,7 +61,7 @@ describe("branded sign-in flows", () => {
     await user.type(screen.getByLabelText("新密码", { exact: true }), "Permanent-Password-49!");
     await user.type(screen.getByLabelText("确认新密码"), "Permanent-Password-49!");
     await user.click(screen.getByRole("button", { name: "保存并进入控制台" }));
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledExactlyOnceWith(returnTo));
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledExactlyOnceWith(returnTo, { scroll: false }));
     expect(iam.changePassword).toHaveBeenCalledOnce();
   });
 
@@ -70,7 +70,7 @@ describe("branded sign-in flows", () => {
     await user.type(screen.getByLabelText("密码", { exact: true }), "Unsubmitted-secret-49!");
     await user.click(screen.getByRole("button", { name: "一键进入体验控制台" }));
     expect(iam.login).toHaveBeenCalledWith({ loginName: "preview-admin", password: "experience-only" });
-    expect(navigation.replace).toHaveBeenCalledWith("/console/resources/");
+    expect(navigation.replace).toHaveBeenCalledWith("/console/resources/", { scroll: false });
     expect((screen.getByLabelText("密码", { exact: true }) as HTMLInputElement).value).toBe("");
     expect(localStorage.length + sessionStorage.length).toBe(0);
     expect(document.body.textContent).not.toContain("memory-only-token");
@@ -115,7 +115,7 @@ describe("branded sign-in flows", () => {
     await user.clear(screen.getByLabelText("确认新密码"));
     await user.type(screen.getByLabelText("确认新密码"), "Permanent-Password-49!");
     await user.click(screen.getByRole("button", { name: "保存并进入控制台" }));
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/console/resources/"));
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/console/resources/", { scroll: false }));
     expect(iam.changePassword).toHaveBeenCalledWith("memory-only-token", { currentPassword: "Initial-Password-49!", newPassword: "Permanent-Password-49!" });
   });
   it("retains a restricted session after failed revocation and shows translated feedback", async () => {

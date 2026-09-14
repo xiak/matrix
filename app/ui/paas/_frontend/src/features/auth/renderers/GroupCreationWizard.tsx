@@ -64,7 +64,7 @@ export function GroupCreationWizard({ workspace, onBack, onDone }: { workspace?:
   }
   const steps = ["details", "review"] as const;
   const currentStep = steps[step] ?? "details";
-  return <div className={styles.root}><ContentPage.Heading title={w("createGroup")} back={{ label: t("back"), parentLabel: w("groups"), disabled: busy, onClick: cancel }} />
+  return <div className={styles.root}><ContentPage.Heading title={w("createGroup")} scrollKey="create-group" back={{ label: t("back"), parentLabel: w("groups"), disabled: busy, onClick: cancel }} />
     <Wizard label={w("createGroup")} steps={steps.map((key) => ({ id: key, label: t(`steps.${key}`) }))} currentStep={step} onStepChange={(next) => { setError(null); clear(); setStep(next); }} completed={created} busy={busy} formRef={form} onSubmit={submit}
       title={created ? t("created") : t(`steps.${currentStep}`)} description={created ? t("createdHint") : t(`hints.${currentStep}`)} progressLabel={u("stepCount", { current: step + 1, total: 2 })} hint={<><ShieldCheck aria-hidden="true" />{t(workspace ? "mockHint" : "liveHint")}</>}
       actions={created ? <Button onClick={() => { const groupId = createdId ?? workspace?.groups.find((entry) => entry.name === name.trim())?.id; if (groupId) onDone(groupId); else onBack(); }}>{t("viewGroup")}</Button> : <><Button variant="ghost" disabled={busy} onClick={cancel}>{w("cancel")}</Button>{step ? <Button variant="secondary" disabled={busy} onClick={() => setStep(step - 1)}>{a("previousStep")}</Button> : null}<Button type="submit" disabled={busy}>{busy ? t("saving") : step < 1 ? t("next") : w("createGroup")}</Button></>}>

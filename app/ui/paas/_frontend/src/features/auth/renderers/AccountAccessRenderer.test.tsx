@@ -112,7 +112,7 @@ describe("qualified login", () => {
     render(<LocaleProvider><SessionProvider repository={repository}><LoginRenderer returnTo="/console/resources/" /></SessionProvider></LocaleProvider>);
     await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/console/resources/"));
+    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/console/resources/", { scroll: false }));
   });
 
   it("uses one text identifier, clears secrets on mode change, and preserves IAM's account namespace", async () => {
@@ -128,7 +128,7 @@ describe("qualified login", () => {
     await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
     await waitFor(() => expect(repository.login).toHaveBeenCalledWith({ loginName: "developer@tenant-a", password: "Only-Test-Password-49!" }));
-    expect(navigation.replace).toHaveBeenCalledWith("/console/");
+    expect(navigation.replace).toHaveBeenCalledWith("/console/", { scroll: false });
     expect(localStorage.length + sessionStorage.length).toBe(0);
   });
 

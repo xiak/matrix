@@ -239,7 +239,7 @@ describe("ConsoleShellRenderer", () => {
     const input = screen.getByRole("combobox", { name: "Search products, resources and pages" });
     await user.type(input, "resource center");
     await user.click(screen.getByRole("option", { name: /Resource center/ }));
-    expect(navigation.push).toHaveBeenCalledWith("/console/resources/");
+    expect(navigation.push).toHaveBeenCalledWith("/console/resources/", { scroll: false });
     expect(load).toHaveBeenCalledTimes(1);
     await user.click(input);
     expect(screen.getByRole("listbox", { name: "Search results" })).toBeTruthy();
@@ -247,7 +247,7 @@ describe("ConsoleShellRenderer", () => {
     const nodeResult = screen.getByRole("option", { name: /edge-worker-01/ });
     expect(nodeResult.textContent).toContain("Compute node");
     await user.click(nodeResult);
-    expect(navigation.push).toHaveBeenLastCalledWith("/console/regions/");
+    expect(navigation.push).toHaveBeenLastCalledWith("/console/regions/", { scroll: false });
     expect(load).toHaveBeenCalledTimes(1);
   });
 
@@ -471,7 +471,7 @@ describe("ConsoleShellRenderer", () => {
     await user.type(search, "支付");
     expect(screen.getByRole("option", { name: /支付服务/ })).toBeTruthy();
     await user.keyboard("{Enter}");
-    expect(navigation.push).toHaveBeenCalledWith("/console/observability/");
+    expect(navigation.push).toHaveBeenCalledWith("/console/observability/", { scroll: false });
   });
 
   it("owns principal identity and logout in one global account menu", async () => {

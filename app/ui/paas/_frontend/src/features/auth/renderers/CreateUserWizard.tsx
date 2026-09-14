@@ -82,7 +82,7 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
   const errorFor = (field: keyof Errors) => errors[field] ? `${id}-${field}-error` : undefined;
   const updateProfile = (next: Partial<PreviewUserProfile>) => setProfile((previous) => ({ ...previous, ...next }));
   return <div className={styles.wizard}>
-    <ContentPage.Heading title={a("createUserTitle")} back={{ label: t("backUsers"), parentLabel: a("usersTitle"), disabled: busy, onClick: cancel }} />
+    <ContentPage.Heading title={a("createUserTitle")} scrollKey="create-user" back={{ label: t("backUsers"), parentLabel: a("usersTitle"), disabled: busy, onClick: cancel }} />
     <Wizard label={a("createUserTitle")} steps={steps.map((item) => ({ id: item, label: t(`steps.${item}`) }))} currentStep={step} onStepChange={changeStep} busy={busy} completed={complete}
       title={complete ? t("created") : t(`steps.${current}`)} description={complete ? t("createdHint", { name: login.trim() }) : t(`hints.${current}`)} progressLabel={complete ? undefined : t("stepCount", { current: step + 1, total: steps.length })}
       formRef={form} onSubmit={submit} hint={<><ShieldCheck aria-hidden="true" />{t(preview ? "previewFooter" : "secureFooter")}</>}

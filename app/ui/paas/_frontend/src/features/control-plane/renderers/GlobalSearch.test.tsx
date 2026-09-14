@@ -52,13 +52,13 @@ describe("GlobalSearch", () => {
     expect(input.getAttribute("aria-activedescendant")).toBe(lastOption.id);
     expect(lastOption.getAttribute("aria-selected")).toBe("true");
     await user.keyboard("{Enter}");
-    expect(navigation.push).toHaveBeenCalledExactlyOnceWith("/console/observability/");
+    expect(navigation.push).toHaveBeenCalledExactlyOnceWith("/console/observability/", { scroll: false });
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(document.activeElement).toBe(input);
     await user.click(input);
     expect(input.getAttribute("aria-expanded")).toBe("true");
     expect(input.getAttribute("aria-activedescendant")).toBe(screen.getByRole("option", { name: /资源中心/ }).id);
-    expect(navigation.push).toHaveBeenCalledExactlyOnceWith("/console/observability/");
+    expect(navigation.push).toHaveBeenCalledExactlyOnceWith("/console/observability/", { scroll: false });
   });
 
   it("keeps an empty query result after Escape and reopens on a focused input click", async () => {
@@ -98,7 +98,7 @@ describe("GlobalSearch", () => {
     const input = screen.getByRole("combobox");
     await user.type(input, "支付");
     await user.click(screen.getByRole("option", { name: /支付服务/ }));
-    expect(navigation.push).toHaveBeenCalledExactlyOnceWith("/console/observability/");
+    expect(navigation.push).toHaveBeenCalledExactlyOnceWith("/console/observability/", { scroll: false });
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(document.activeElement).toBe(input);
     expect((input as HTMLInputElement).value).toBe("");
@@ -107,7 +107,7 @@ describe("GlobalSearch", () => {
     expect(input.getAttribute("aria-expanded")).toBe("true");
     await user.click(input);
     expect(screen.getByRole("listbox")).toBeTruthy();
-    expect(navigation.push).toHaveBeenCalledExactlyOnceWith("/console/observability/");
+    expect(navigation.push).toHaveBeenCalledExactlyOnceWith("/console/observability/", { scroll: false });
     await user.click(screen.getByRole("button", { name: "后续操作" }));
     expect(screen.queryByRole("listbox")).toBeNull();
   });

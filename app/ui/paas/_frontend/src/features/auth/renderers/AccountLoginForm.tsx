@@ -43,7 +43,7 @@ export function AccountLoginForm({ returnTo }: { returnTo: string }) {
     const outcome = await session.login(identifier, password);
     setPassword("");
     setSubmission(null);
-    if (outcome === "authenticated") router.replace(returnTo);
+    if (outcome === "authenticated") router.replace(returnTo, { scroll: false });
   }
 
   async function enterPreview() {
@@ -53,7 +53,7 @@ export function AccountLoginForm({ returnTo }: { returnTo: string }) {
     setSubmission("preview");
     const outcome = await session.login("preview-admin", "experience-only");
     setSubmission(null);
-    if (outcome === "authenticated") router.replace(returnTo);
+    if (outcome === "authenticated") router.replace(returnTo, { scroll: false });
   }
 
   return <>

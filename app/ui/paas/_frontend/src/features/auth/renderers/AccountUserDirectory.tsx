@@ -124,7 +124,7 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   if (detail) return detail.canRead ? <AccountLiveUserWorkspace key={`${detail.id}:${detail.resourceVersion}`} summary={detail} onBack={() => onOpen("users")} /> : <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
   return <div className={styles.userDirectory}>
     <Card>
-      <ContentPage.Heading title={t("usersTitle")} actions={<ContentPage.Commands label={collection("pageActions")} primaryRef={createRef}
+      <ContentPage.Heading title={t("usersTitle")} scrollKey="user-directory" actions={<ContentPage.Commands label={collection("pageActions")} primaryRef={createRef}
         selection={{ label: batch("more"), disabled: blocked || !checkedUsers.length, hint: batch(access.supportsUserBatch ? "selectHint" : "unsupportedHint"),
           selectionLabel: checkedUsers.length ? batch("selected", { count: checkedUsers.length }) : undefined, clearLabel: batch("clear"), onClear: clearSelection,
           actions: userBatchActions.map((action) => { const reason = userBatchDisabledReason(action, batchContext); return { id: action, label: batch(`actions.${action}`), danger: action === "delete", disabledReason: reason ? batch(`reasons.${reason}`) : undefined, onSelect: () => setBatchDialog({ action, users: checkedUsers }) }; }) }}

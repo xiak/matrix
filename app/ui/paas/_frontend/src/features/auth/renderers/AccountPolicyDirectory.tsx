@@ -33,7 +33,7 @@ export function AccountPolicyDirectory({ scene }: { scene: AccountAccessScene })
   const partial = !scene.tenantPoliciesAvailable || !scene.platformPoliciesAvailable;
 
   return <Card>
-    <ContentPage.Heading title={t("title")} />
+    <ContentPage.Heading title={t("title")} scrollKey="policy-directory" />
     <div className={styles.policyDirectoryIntro}>
       <p>{t("description")}</p>
       <p>{t("managementSnapshot")}</p>

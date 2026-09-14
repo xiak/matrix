@@ -29,7 +29,7 @@ export function PasswordChangeForm({ returnTo }: { returnTo: string }) {
     if (accepted) {
       setNewPassword("");
       setConfirmedPassword("");
-      router.replace(returnTo);
+      router.replace(returnTo, { scroll: false });
     }
   }
 

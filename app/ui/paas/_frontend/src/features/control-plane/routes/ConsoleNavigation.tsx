@@ -66,8 +66,10 @@ function ConsoleNavigationBoundary({ selection, children }: { selection: Control
       setDestination({ href: target, requestId: ++requestSequence.current });
       startTransition(() => {
         const navigate = options?.replace ? router.replace : router.push;
-        if (options?.scroll === undefined) navigate(href);
-        else navigate(href, { scroll: options.scroll });
+        // ContentPage owns its scroll viewport and route-position memory.
+        // Next's document scroll handling otherwise advances that viewport by
+        // its top inset, visually erasing the shared header/content gutter.
+        navigate(href, { scroll: options?.scroll ?? false });
       });
     };
     if (target.split("#")[0] === committed.split("#")[0]) proceed();

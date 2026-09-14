@@ -202,6 +202,24 @@ describe("ContentPage context heading", () => {
     expect(screen.getByLabelText("Viewport")).toBe(original);
     expect(screen.getByLabelText("Viewport").scrollTop).toBe(300);
   });
+
+  it("separates same-route collection and detail scroll positions by heading scope", () => {
+    const page = (detail: boolean) => <ContentPage>
+      <ContentPage.Header title="Policies" />
+      <ContentPage.Body aria-label="Viewport" transitionKey="policies">
+        <ContentPage.Heading title={detail ? "AssumeLogReviewRole" : "Policies"} scrollKey={detail ? "detail:policy-assume-reviewer" : "policy-directory"} />
+        <p>{detail ? "Policy detail" : "Policy directory"}</p>
+      </ContentPage.Body>
+    </ContentPage>;
+    const view = render(page(false));
+    const viewport = screen.getByLabelText("Viewport");
+    fireEvent.scroll(viewport, { target: { scrollTop: 240 } });
+    view.rerender(page(true));
+    expect(viewport.scrollTop).toBe(0);
+    fireEvent.scroll(viewport, { target: { scrollTop: 72 } });
+    view.rerender(page(false));
+    expect(viewport.scrollTop).toBe(240);
+  });
 });
 
 describe("ContentPage transition", () => {

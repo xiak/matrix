@@ -12,11 +12,11 @@ import styles from "./ContentPage.module.css";
 type BackAction = { label: string; parentLabel?: string; disabled?: boolean; onClick(): void };
 export type PageCommand = ActionMenuItem & { variant?: "primary" | "secondary" | "ghost"; icon?: ReactNode };
 type PageSelection = Omit<ComponentPropsWithoutRef<typeof TableActions>, "triggerRef">;
-type PageHeading = { title: string; back?: BackAction; focus?: boolean };
+type PageHeading = { title: string; back?: BackAction; focus?: boolean; scrollKey?: string };
 type HeadingContribution = PageHeading & { owner: string };
 type HeadingSlot = { target: HTMLDivElement | null; parentLabel?: string; update(value: HeadingContribution): void; remove(owner: string): void };
 const HeadingSlotContext = createContext<HeadingSlot | null>(null);
-const HeaderStateContext = createContext<{ heading: HeadingContribution | null; pending: boolean; setTarget(target: HTMLDivElement | null): void } | null>(null);
+const HeaderStateContext = createContext<{ heading: HeadingContribution | null; scrollKey: string | null; pending: boolean; setTarget(target: HTMLDivElement | null): void } | null>(null);
 const ScrollPositionContext = createContext<Map<string, number> | null>(null);
 
 function ContentPageRoot({ className, children, parentLabel, pending = false, fallback = pending, ...props }: ComponentPropsWithoutRef<"section"> & { parentLabel?: string; pending?: boolean; fallback?: boolean }) {
@@ -27,7 +27,7 @@ function ContentPageRoot({ className, children, parentLabel, pending = false, fa
   // Only presentation metadata reaches the header. Actions keep their feature
   // providers through a portal; form state never travels through the shell.
   const slot = useMemo(() => ({ target, parentLabel, update: setHeading, remove }), [target, parentLabel, remove]);
-  const header = useMemo(() => ({ heading: fallback ? null : heading, pending, setTarget }), [heading, pending, fallback]);
+  const header = useMemo(() => ({ heading: fallback ? null : heading, scrollKey: heading?.scrollKey ?? null, pending, setTarget }), [heading, pending, fallback]);
   return <HeadingSlotContext.Provider value={slot}><HeaderStateContext.Provider value={header}><ScrollPositionContext.Provider value={positions}>
     <section className={classNames(styles.page, className)} {...props}>{children}</section>
   </ScrollPositionContext.Provider></HeaderStateContext.Provider></HeadingSlotContext.Provider>;
@@ -62,7 +62,7 @@ function Header({ className, title, back, leading, trailing, progress, ...props 
   </header>;
 }
 
-function Heading({ title, back, actions, focus = false }: PageHeading & { actions?: ReactNode }) {
+function Heading({ title, back, actions, focus = false, scrollKey }: PageHeading & { actions?: ReactNode }) {
   const slot = useContext(HeadingSlotContext);
   const owner = useId();
   const update = slot?.update;
@@ -79,8 +79,8 @@ function Heading({ title, back, actions, focus = false }: PageHeading & { action
   useLayoutEffect(() => { onBackRef.current = onBack; }, [onBack]);
   useLayoutEffect(() => () => remove?.(owner), [remove, owner]);
   useLayoutEffect(() => {
-    update?.({ owner, title, focus, back: hasBack && backLabel ? { label: backLabel, parentLabel, disabled: backDisabled, onClick: invokeBack } : undefined });
-  }, [update, owner, title, focus, backLabel, parentLabel, backDisabled, hasBack, invokeBack]);
+    update?.({ owner, title, focus, scrollKey, back: hasBack && backLabel ? { label: backLabel, parentLabel, disabled: backDisabled, onClick: invokeBack } : undefined });
+  }, [update, owner, title, focus, scrollKey, backLabel, parentLabel, backDisabled, hasBack, invokeBack]);
   useLayoutEffect(() => { if (!update && focus) heading.current?.focus({ preventScroll: true }); }, [update, focus]);
   if (!slot) return <header className={styles.standaloneHeading}><HeadingIdentity title={title} back={back} focus={focus} headingRef={heading} />{actions ? <div className={styles.headerActions}>{actions}</div> : null}</header>;
   return target && actions ? createPortal(actions, target) : null;
@@ -124,8 +124,10 @@ function Body({ children, className, pending = false, loading, transitionKey, ..
   loading?: ReactNode;
 }) {
   const positions = useContext(ScrollPositionContext);
+  const scrollKey = useContext(HeaderStateContext)?.scrollKey;
   const viewport = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => { if (!pending && transitionKey !== undefined && viewport.current) viewport.current.scrollTop = positions?.get(transitionKey) ?? 0; }, [pending, transitionKey, positions]);
+  const positionKey = transitionKey === undefined ? undefined : scrollKey ? `${transitionKey}#${scrollKey}` : transitionKey;
+  useLayoutEffect(() => { if (!pending && positionKey !== undefined && viewport.current) viewport.current.scrollTop = positions?.get(positionKey) ?? 0; }, [pending, positionKey, positions]);
   if (transitionKey === undefined) return <div className={classNames(styles.body, className)} {...props}>{children}</div>;
   // The viewport is a stable paint/scroll boundary. Route identity belongs to
   // its inner content so a commit resets feature state without flashing a new
@@ -134,8 +136,8 @@ function Body({ children, className, pending = false, loading, transitionKey, ..
   return <div className={styles.stage}>
     <div {...props} ref={viewport} onScroll={(event) => {
       if (!pending && positions) {
-        positions.delete(transitionKey);
-        positions.set(transitionKey, event.currentTarget.scrollTop);
+        positions.delete(positionKey!);
+        positions.set(positionKey!, event.currentTarget.scrollTop);
         if (positions.size > 64) positions.delete(positions.keys().next().value!);
       }
       props.onScroll?.(event);

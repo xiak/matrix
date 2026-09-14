@@ -41,7 +41,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   const reset = () => { setQuery(""); setKind("all"); setPage(1); };
   const action = create ? <Button disabled={create.disabled} title={create.reason} onClick={create.onClick} size="small"><Plus aria-hidden="true" />{create.label}</Button> : null;
   return <Card aria-description={description}>
-    {!embedded ? <ContentPage.Heading title={title} actions={create ? <ContentPage.Commands label={collection("pageActions")} primary={{ id: "create", label: create.label, icon: <Plus aria-hidden="true" />, disabled: create.disabled, disabledReason: create.disabled ? create.reason : undefined, onSelect: create.onClick }} /> : undefined} /> : null}
+    {!embedded ? <ContentPage.Heading title={title} scrollKey={`collection:${title}`} actions={create ? <ContentPage.Commands label={collection("pageActions")} primary={{ id: "create", label: create.label, icon: <Plus aria-hidden="true" />, disabled: create.disabled, disabledReason: create.disabled ? create.reason : undefined, onSelect: create.onClick }} /> : undefined} /> : null}
     <TableToolbar labels={toolbarLabels} search={{ label: t("search"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
       actions={embedded ? action : null}
       filters={filter ? [{ id: "kind", label: filter.label, options: [{ value: "all", label: t("all") }, ...filter.options], value: kind, onChange: (value) => { setKind(value); setPage(1); } }] : []}
@@ -61,12 +61,8 @@ export function WorkspaceDetail({ title, onBack, actions, children, embedded = f
 }) {
   const t = useTranslations("IamWorkspace");
   const c = useTranslations("Collection");
-  const start = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    start.current?.scrollIntoView?.({ block: "start", behavior: "instant" });
-  }, []);
   const commands = actions ? <ContentPage.Commands label={c("pageActions")} {...actions} /> : undefined;
-  return <div ref={start} className={styles.detailWorkspace}>{embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{t("back")}</Button><h2 className={styles.detailTitle}>{title}</h2>{commands}</div> : <ContentPage.Heading title={title} back={{ label: t("back"), onClick: onBack }} actions={commands} focus />}{children}</div>;
+  return <div className={styles.detailWorkspace}>{embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{t("back")}</Button><h2 className={styles.detailTitle}>{title}</h2>{commands}</div> : <ContentPage.Heading title={title} scrollKey={`detail:${title}`} back={{ label: t("back"), onClick: onBack }} actions={commands} focus />}{children}</div>;
 }
 
 export function WorkspaceDialog({ title, onClose, onSubmit, children, submitLabel, submitDisabled, submitVariant, validationError, size, fallbackFocusRef, operation }: { title: string; onClose(): void; onSubmit(): Promise<boolean>; children: ReactNode; submitLabel?: string; submitDisabled?: boolean; submitVariant?: ComponentProps<typeof Button>["variant"]; validationError?: string; size?: ComponentProps<typeof Dialog>["size"]; fallbackFocusRef?: ComponentProps<typeof Dialog>["fallbackFocusRef"]; operation?: { busy: boolean; error?: string; clearError(): void } }) {

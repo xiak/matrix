@@ -999,9 +999,15 @@ deep links. Feature metadata updates that same title; contextual actions retain
 their feature providers through an action-only portal. Input does not subscribe
 the shell or title frame to draft changes, while return actions use the current
 draft guard. Pending navigation masks outgoing actions; cancellation restores
-the original context. The content begins with meaningful
-resource summary, tabs or data, not another generic title, return toolbar or
-repeated preview banner. Header MOCK identity and mutation-level limitations
+the original context. ContentPage owns the header-to-content gutter for every
+composition: compact canvases retain a `16px` block inset and `12px` inline
+inset. Console navigation disables framework document-scroll adjustment because
+the stable ContentPage viewport owns route scroll position; navigation must not
+consume that inset or make content touch the context header. Same-path
+collections, details and workflows contribute distinct scroll keys, replacing
+feature-level `scrollIntoView` calls that could collapse the shared gutter. The
+content begins with meaningful resource summary, tabs or data, not another
+generic title, return toolbar or repeated preview banner. Header MOCK identity and mutation-level limitations
 remain visible; errors, risks and destructive confirmations are never hidden
 as optional help. Details use aligned multi-column facts when space permits,
 with a single-column compact layout and full readable values. The policy
