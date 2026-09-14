@@ -272,3 +272,18 @@ exact instance ID boundary; no PaaS production code is imported or changed.
 Implicit action-name wildcards, arbitrary glob/regex execution and inferring
 collection support from resource kind are `REJECT`. No legacy implementation
 or runtime dependency is introduced; acceptance remains with IAM/005.
+
+For the User permission-boundary target in IAM/005, fixed Matrix
+`b342e9da08515f9172b29d1ac237a088171c9e53` is `ADAPT`: reuse its sole typed
+statement evaluator, current session authority, User/Policy revisions,
+restricted publisher transactions, cursor owner and immutable decision/outbox
+evidence. A boundary must be resolved and recorded separately from positive
+attachment provenance, then intersected with grants. Reusing the statement
+language does not justify synthesizing an attachment or a second evaluator.
+The fixed public analysis at `b0e8627b7e8303136875bda074f2e382c23dfc0b`
+is `REFERENCE` for the User/Role maximum-permission and set/get/remove concepts;
+it is not evidence of a vendor's database, locks, cache or historical proof.
+Implicit removal on policy deletion, an absent snapshot treated as no boundary,
+and a boundary that grants rights by itself are `REJECT`. No legacy code or
+runtime is introduced. API, lock order and implementation acceptance belong
+only to IAM/005; RoleSession integration remains with IAM/006.

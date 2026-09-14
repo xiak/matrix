@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期及时间/身份字符串条件已有固定 CI；身份条件以修复原 SSH 测试屏障后的 `4f22e22` 为最终验证点。资源前缀实施中；动作通配、IP 条件、边界和 UI 闭环未完成，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串条件及资源前缀已有固定 CI，最新验证点为 `b342e9d`。User 权限边界已细化设计，未实施；动作通配、IP 条件、完整边界/委派和 UI 闭环未完成，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -75,7 +75,7 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 #### 受限资源通配：当前权威内的 ID 前缀
 
-该纵向切片实施中，尚未验收。资源选择器沿用 `kind`、`match`、`id`，增加 `PREFIX_IN_AUTHORITY`：`id` 是非空、最多 128 字节、符合当前稳定 ID 字符集的字面前缀，例如 `application-prod-`；匹配该前缀本身和以其开头的合法资源 ID。`*`、`?`、正则、转义、路径归一化和大小写折叠均不参与此语法，也不增加另一种带星号的兼容写法。完全匹配仍为 EXACT，整个权威内同种资源仍为 ANY_IN_AUTHORITY，后者不携带 id。
+该后端纵向切片已通过本地真实门禁和精确提交独立 CI，不代表完整 LANG-03 或 UI 验收。资源选择器沿用 `kind`、`match`、`id`，增加 `PREFIX_IN_AUTHORITY`：`id` 是非空、最多 128 字节、符合当前稳定 ID 字符集的字面前缀，例如 `application-prod-`；匹配该前缀本身和以其开头的合法资源 ID。`*`、`?`、正则、转义、路径归一化和大小写折叠均不参与此语法，也不增加另一种带星号的兼容写法。完全匹配仍为 EXACT，整个权威内同种资源仍为 ANY_IN_AUTHORITY，后者不携带 id。
 
 前缀只缩小当前已认证权威中的资源集合，不从 ID 猜账号/主体/目录层级，也不取显示名、别名或标签。只在 TENANT 且动作目录明确声明支持时启用；能力声明由 001 拥有，当前仅真实实例 `paas.application.read` 开启。相同 ResourceKind 不能让 create/list/collection、平台/probe 或未来动作隐式获得前缀支持；同一语句有多个使用该 kind 的动作时，必须全部声明支持，不能用其中一个 read 掩盖 create。原 EXACT/ANY 行为不变。
 
@@ -114,7 +114,57 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 评估器处理类型化 Statement。必需的 IAM 身份/时间上下文缺失使整个决定失败关闭；未来可选业务属性缺失时条件不匹配，否定条件也不能因此自动放行。显式 Null 存在检查尚未启用，不能把 null 输入当成受支持算子。多个条件同时满足，多值规则明确为 any/all；禁止隐式字符串类型转换。资源列表中每个必要资源都要通过，不以某个资源成功代替全部。
 
-变更在 account → principal → policy → default pointer/attachment 锁顺序内检查管理者当前委派上限。首版可把高风险自定义授权限定为 root/明确 PolicyAdministrator 系统策略，不能用通用子集推理的假实现宣称安全委派。非 root 不得去除自身强制边界或为自己授予不可委派系统策略。
+变更在 account → principal → policy → default pointer/attachment 锁顺序内检查管理者当前委派上限。当前高风险发布与边界写入仅限原 Account Root；仅持有管理策略不足以开放这些写入。后续 LANG-08 必须证明受委派者不能经创建/改版/附件或去除边界扩大自身许可，不能用通用子集推理的假实现宣称安全委派。
+
+#### 权限边界：User 纵向闭环
+
+本节是下一实现片的设计与验收契约，不是已存在 API 或验收证据。先使普通 User 的真实管理、鉴权、分页、历史证明闭合；Role 的边界随 006 的真实 RoleSession 接入，不制造临时 Role 别名或在本片后删除 Role 需求。边界用于限制主体，不是第二种正向附件、单独的 Deny 策略或 Group 的属性。
+
+**权限合成。** 每个普通 User 最多一个当前 TENANT 边界，引用已有 ACTIVE/TENANT Policy；CUSTOMER 必须属于当前 Account，SYSTEM 必须是本账号可见的租户策略。边界跟随该 Policy 的当前默认版本，不另开版本 pin 或复制策略内容。普通直接/组授权先按现有唯一求值器求并集并处理显式 Deny，再与边界的 Allow 求交；两边任一匹配 Deny 均拒绝。边界使用同一次 IAM 身份、数据库时间和资源上下文，不能引用另一账号、组身份或请求属性。
+
+| 普通直接/组授权结果 | 当前边界状态/结果 | 最终结果 |
+| --- | --- | --- |
+| 没有 Allow | 有 Allow | 拒绝：边界不能授予权限 |
+| Allow | 明确无边界 | 允许，仍需通过身份、服务、scope 与资源归属检查 |
+| Allow | 有 Allow 且无匹配 Deny | 允许，仍需通过相同检查 |
+| Allow | 没有匹配 Allow，包括窗口外/条件不匹配 | 拒绝，另一普通附件不能绕过 |
+| 任一侧匹配 Deny | 任意合法状态 | 拒绝 |
+| 任意结果 | 边界状态缺失、损坏、跨账号或版本关系不成立 | 整个决定失败关闭，不降级成无边界 |
+
+边界只限制 TENANT 权限；不能授予或取消 INSTALLATION/INSTALLATION_PROBE，不将普通用户伪装为 service。原 Account Root 不允许绑定普通 User 边界，保留其租户最终控制关系。持有未撤销平台附件的 USER 继续受已有凭据/状态保护；其租户边界不改变平台附件和离线恢复语义。普通管理员不能借边界 API 接管平台身份；本片写入仍只允许原 root，并且不能更改任何凭据或平台附件。登录、自己的有效会话退出、需验证旧密码的自助改密沿现有身份认证路径，不因业务权限边界没有 Allow 而无法退出或完成强制改密；这些路径不产生业务许可。
+
+**管理 API。** 沿现有 users 资源，不新增 boundary 顶层目录或第二个 Policy 发布入口。Account 从当前有效 bearer 推导，目标只取精确 userId。读取不返回策略正文；要读取正文仍需独立 `iam.policy.read`。
+
+| 路由 | Action / 资源 | 严格输入与结果 |
+| --- | --- | --- |
+| `GET /v1/users/{userId}/permission-boundary` | 既有 `iam.user.read` / USER | 返回 UserPermissionBoundary：accountId、userId、当前 User resourceVersion，以及显式 null 或精确 PolicyVersionReference；无边界不是 404 |
+| `PUT /v1/users/{userId}/permission-boundary` | 新 `iam.user.permission-boundary.set` / USER | policyId、policyResourceVersion、resourceVersion、requestId；设置或替换单一边界，返回同一当前投影 |
+| `DELETE /v1/users/{userId}/permission-boundary` | 新 `iam.user.permission-boundary.remove` / USER | resourceVersion、requestId；显式解除上限，返回 policy 为 null 的当前投影 |
+
+两个新动作属于现有 IAM/TENANT/USER 目录，不开放平台、probe 或 PREFIX 能力。当前 PDP 通过后，写入还必须锁内验证原 root；普通管理员即使通过正向策略取得这两个 Action，也不能执行高风险写入。GET 对本人或他人均沿精确 `iam.user.read`，CurrentIdentity 则仅投影自身边界，不由此泄露他人信息。set 的 policyResourceVersion 绑定操作者看到的默认版本状态，避免等待期间默认切换后静默设置另一份上限；后续显式默认切换仍对所有当前引用生效。已有相同边界的新意图、无边界时的新 remove 意图均冲突；等值重放仅在该命令结果仍为当前 User 修订时返回原结果。后续变更后的旧命令不能重新设置、解除或复活边界。
+
+**事务和存储。** 仍由 identityaccess 用例协调 SERIALIZABLE 事务、当前 PDP、受限数据库函数与 outbox。在既有 principal/user 修订上做并发控制，不引入与 User 脱节的可独立授权聚合。现有 policy authority 迁移 owner 增加按 tenant+USER 归属的边界关系及不可丢弃的设置/撤销历史；一个 User 至多一个未撤销关系，复设形成新关系身份而非恢复旧关系。关系不是 `policy_attachments` 的另一种 target。首次没有关系必须由权威查询明确输出 NONE；数据库/解码错误、缺少查询结果或内连接漏行不能输出 NONE。
+
+锁顺序为 Account → actor/目标 USER（同类按稳定 ID 顺序）→ 原 root 关系 → 涉及的 Policy（旧/新按稳定 ID 顺序）→ 当前边界关系。写入重检活跃 Account/actor、目标为本账号未删除的普通 USER、原 root 关系、当前会话和预期 User/Policy 修订；允许为停用的普通 User 管理边界，但不得顺带启用它。User resourceVersion 与关系更新、单一成功事实在同事务提交。set/remove 与 User 状态/删除、Policy 默认切换/删除、另一边界命令的锁序必须与既有函数逐项对齐，真实竞争只允许一个符合预期修订的赢家或有界失败关闭。
+
+任何当前边界引用都阻止 Policy 删除，包括停用 User 的引用；不能因没有普通附件而误判无引用。边界跟随默认，因此只阻止当前默认版本退休，旧非默认版本可依既有规则退休但必须保留内容与历史证明。User 删除在其既有事务内终结当前边界并保留历史；停用/恢复不移除边界、不复活旧关系。末尾 outbox 故障不得留下 User 修订、边界状态或完成事实的部分变更。
+
+**当前权威与历史。** `lookup_session` 当前快照必须包含独立、完整的边界状态；不改 `lookup_service`、ServiceIdentity、七列 claim 或 Audit canonical。SubjectContext 中由数据库构造边界，业务 Authorize 请求不能带边界 selector。复用同一文档校验和 statement evaluator，普通附件 provenance 与边界 provenance 分开；边界本身不能填入 PolicyAttachmentEvidence 冒充一个 Allow 来源。边界最多增加一份现有有界文档的求值预算，仍须验证整个快照，不用遇到 Allow/Deny 就提前退出而掩盖损坏状态。
+
+CurrentIdentity/capabilities 与所有目录每页重新调用当前 PDP；cursor 的完整授权摘要纳入边界关系修订、Policy 修订及精确默认版本/digest，即使当前列表动作在变更前后均允许，也拒绝旧 cursor。不能把 null pointer、旧 capability 或首次页面的决定缓存为当前无边界证明。
+
+`record_authorization` 增加独立的边界证据：区分当前 USER/TENANT 的 NONE、实际应用边界，以及不适用的权威类型。当前记录入口必须拒绝省略或伪造状态，锁内验证 User 修订、当前关系/owner/default/digest；不能只校验普通正向附件。新决定无论 Allow/Deny 均保存实际边界状态，适用时保存精确关系与 PolicyVersionReference，即使边界没有匹配语句。旧不可变决定没有该证据时按其原契约验证，不伪造历史边界、不回填当下状态；旧记录的存在不允许新入口省略证明。历史 proof 验证原已提交证据，默认切换、策略退休、移除边界或停用主体后仍能投递，不重新执行当前权限。
+
+成功事实新增租户链 `iam.user.permission-boundary.set` 与 `iam.user.permission-boundary.removed`，target 为真实 USER；绑定原 actor、decision、request digest 和单一关系变更，不放策略正文。设置/替换使用同一 set 事实，不新增泛化 attributes 或成功事实别名。API、Audit catalog、SQL 验证与 producer 封闭映射一起修改；发生时 evidence 仅证明 IAM 授权/归属，不扩张为业务完整 payload 的真实性证明。实际新增字段/函数形状完成后再冻结开发 readiness，不提前修改安装 profile，也不把开发版本变动当成首版全历史升级责任。
+
+**必须通过的纵向门禁。** 沿既有契约/authority/cursor、IAM HTTP/PG、Audit proof 和 authorityprocess owner 扩展，禁止新增平行框架：
+
+- 上表全部组合；同一 Policy 同时作为普通附件和边界时 provenance 仍独立；直接/多组 Allow 不能绕过边界，边界中的 Deny/时间/身份/资源前缀使用同一语义。
+- 两真实 Account 的同名 User/Policy、同资源 ID；跨账号 Policy/User、Group/service/root 目标、伪造 scope/body/header/cursor、非法版本和非 root 自助移除/替换均拒绝且无部分效果。
+- 无边界→设置→替换→移除、仅发布与显式默认切换、普通附件撤销、User 停复用；同 bearer 在两个 IAM 实例和真实 PaaS 下一请求生效。至少两个实际应用，一项允许、一项受边界拒绝；边界独立存在而无正向附件时两项都拒绝。
+- set/remove 同修订竞争、set/default 切换、set/Policy 删除、remove/User 删除及等值/变体/陈旧命令；实际锁等待后 actor/session 撤销；最后 outbox 写失败完整回滚。当前引用阻止删除，删除 User 不丢历史且不移资源。
+- 受限 runtime 不能直接改关系/证据；新决定的 NONE/不适用/版本证明伪造失败；当前数据重复迁移/重启后边界和撤权不复活，原决定/outbox/旧 canonical 可验证。遵循 011 首版基线，不为本片枚举所有未发布 schema 起点。
+- CurrentIdentity 显示边界不是授权来源；capability 不越界；旧 cursor 在边界/默认变化后拒绝。正常/强制改密与退出仍保持当前 credential generation 和撤销语义。UI 在该后端片后接入，不以纯函数测试代替整个 LANG-05/08。
 
 ## 验收
 
@@ -216,6 +266,6 @@ PG18 聚焦 `customer_policy_terminal_deletion` 最终通过，3.18s（含父门
 
 完整串行真实 PG18 回归通过：Audit 数据层 5.434s、Audit HTTP 2.620s、IAM integration race 164.055s、双 IAM/PaaS/Audit 独立进程 46.279s、PaaS 数据层 5.044s。受限 SQL 对所有当前动作的 prefix 接受/拒绝与目录能力对照；当前 schema/bootstrap 带数据重放、凭据/组/策略并发、失败原子性与不可变历史门禁保留。实际 PaaS 先创建两个应用，然后只用前缀+时间+身份组合授权：匹配应用允许，真实存在但不匹配的应用拒绝；原 bearer 到期、后续默认变更及附件撤销均按当前 PDP 生效。原实际 dispatcher、租户链、受限登录和资源/Operation/outbox 隔离回归未替换。
 
-当前开发源码 IAM17/Audit11/PaaS1，仅反映新增前缀文档/发布语义；安装 profile、ServiceIdentity、lookup_service、七列 claim、Audit canonical 和 PaaS 生产契约未改。独立 CI 待固定提交后确认；签名安装、UI 和完整 LANG-03 未验收。专属容器/网络/合成数据卷已核对精确身份、标签与零客户端后移除，不涉及用户数据或其他任务资源。
+当前开发源码 IAM17/Audit11/PaaS1，仅反映新增前缀文档/发布语义；安装 profile、ServiceIdentity、lookup_service、七列 claim、Audit canonical 和 PaaS 生产契约未改。固定 `b342e9da08515f9172b29d1ac237a088171c9e53` 的 [Verification 34839955131](https://github.com/xiak/matrix/actions/runs/34839955131) 已由 GitHub API 核实精确 SHA，Go、authority-process、node-process 全部 completed/success。签名安装、UI 和完整 LANG-03 未验收。专属容器/网络/合成数据卷已核对精确身份、标签与零客户端后移除，不涉及用户数据或其他任务资源。
 
-全仓 Go race/vet、模块校验、稳定 API 生成与 Linux amd64 构建通过。上述真库回归后，唯一验证器将按资源重复检查动作能力改为每语句一次汇总不支持前缀的 kind，不改变接受集合；最终 API/authority/usecase/architecture race、全仓 vet 与 Linux 构建再过。现有 round-trip fuzz 增加前缀种子，最终 15 秒/2 workers/1 秒样本最小化预算通过 634,172 次执行；最大合法长度比较、混合 read/create 拒绝和 cursor 当前快照门禁通过。该末尾纯校验整理后的完整真库仍由新固定提交的独立 CI 再验，不把之前的临时工作树结果冒充该提交所有门禁已完成。
+全仓 Go race/vet、模块校验、稳定 API 生成与 Linux amd64 构建通过。上述真库回归后，唯一验证器将按资源重复检查动作能力改为每语句一次汇总不支持前缀的 kind，不改变接受集合；最终 API/authority/usecase/architecture race、全仓 vet 与 Linux 构建再过。现有 round-trip fuzz 增加前缀种子，最终 15 秒/2 workers/1 秒样本最小化预算通过 634,172 次执行；最大合法长度比较、混合 read/create 拒绝和 cursor 当前快照门禁通过。末尾纯校验整理后的完整真库由上述精确提交的独立 authority-process 再验成功；该结果与之前临时工作树的本地结果分开记录。
