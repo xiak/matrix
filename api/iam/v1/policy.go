@@ -77,6 +77,19 @@ type CreatePolicyRequest struct {
 	RequestID   string         `json:"requestId"`
 }
 
+type UpdatePolicyRequest struct {
+	DisplayName     string `json:"displayName"`
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+func ValidateUpdatePolicyRequest(value UpdatePolicyRequest) error {
+	if validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
+		return ErrInvalidPolicy
+	}
+	return errors.Join(validateText("displayName", value.DisplayName, 1, 128), ValidateID("requestId", value.RequestID))
+}
+
 // The selected version need not be the default. This is distinct from the
 // current-default PolicyDetail contract and is never an authorization permit.
 type PolicyVersionDetail struct {

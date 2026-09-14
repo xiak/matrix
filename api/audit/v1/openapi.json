@@ -30,6 +30,7 @@
           "iam.policy.created",
           "iam.policy-version.created",
           "iam.policy.default-version-set",
+          "iam.policy.updated",
           "iam.group.updated",
           "iam.group.deleted",
           "iam.group-membership.created",
@@ -480,6 +481,32 @@
                   "properties": {
                     "action": {
                       "const": "iam.policy.default-version-set"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.policy.updated"
                     }
                   },
                   "required": [
@@ -2414,6 +2441,51 @@
               "properties": {
                 "action": {
                   "const": "iam.policy.default-version-set"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy.updated"
                 }
               },
               "required": [

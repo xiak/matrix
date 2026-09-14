@@ -726,7 +726,7 @@ BEGIN
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
             'iam.account-root.credentials-recovered', 'iam.account.alias-set',
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
-            'iam.policy.created','iam.policy-version.created','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
+            'iam.policy.created','iam.policy.updated','iam.policy-version.created','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',
@@ -985,9 +985,10 @@ BEGIN
                     to_regprocedure('iam.list_policy_versions(text,text,text,text)'),
                     to_regprocedure('iam.read_policy_version(text,text,text,text,text)'),
                     to_regprocedure('iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb)'),
-                    to_regprocedure('iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)'))
+                    to_regprocedure('iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)'),
+                    to_regprocedure('iam.update_policy(text,text,text,text,bigint,text,jsonb)'))
                   AND policy_entry.prorettype='jsonb'::regtype AND NOT policy_entry.proretset
-                  AND policy_entry.prosecdef AND policy_entry.proowner='matrix_iam_owner'::regrole)=6
+                  AND policy_entry.prosecdef AND policy_entry.proowner='matrix_iam_owner'::regrole)=7
            AND to_regprocedure('iam.create_group_membership(text,text,text,text,text,text,jsonb)') IS NOT NULL
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS removal
                 WHERE removal.oid=to_regprocedure('iam.remove_group_membership(text,text,text,text,text,bigint,jsonb)')
@@ -1082,7 +1083,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           11::bigint,
+           12::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1124,6 +1125,7 @@ AS $function$
         WHEN 'iam.policy-version.read' THEN 'POLICY'
         WHEN 'iam.policy-version.create' THEN 'POLICY'
         WHEN 'iam.policy.set-default-version' THEN 'POLICY'
+        WHEN 'iam.policy.update' THEN 'POLICY'
         WHEN 'iam.platform-policy.list' THEN 'INSTALLATION'
         WHEN 'iam.policy-attachment.create' THEN 'USER'
         WHEN 'iam.policy-attachment.revoke' THEN 'POLICY_ATTACHMENT'

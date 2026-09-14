@@ -342,3 +342,34 @@ REVOKE ALL ON FUNCTION iam.policy_version_detail(text,text,text),iam.lock_custom
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.list_policy_versions(text,text,text,text),iam.read_policy_version(text,text,text,text,text),
     iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb),iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb) TO matrix_iam_api;
+
+CREATE OR REPLACE FUNCTION iam.update_policy(tenant text,actor text,decision text,policy_id text,expected_version bigint,display_name text,event jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE policy iam.policies%ROWTYPE; effective_now timestamptz(6):=transaction_timestamp();
+BEGIN
+    IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990
+       OR display_name IS NULL OR octet_length(display_name) NOT BETWEEN 1 AND 128 OR display_name<>btrim(display_name)
+       OR display_name ~ '[[:cntrl:]]' THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy metadata input is invalid';
+    END IF;
+    policy:=iam.lock_customer_policy_publisher(tenant,actor,policy_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.update','POLICY',policy_id);
+    PERFORM iam.assert_audit_event(event,tenant,'iam.policy.updated','POLICY',policy_id,'SUCCEEDED');
+    PERFORM iam.assert_user_audit_actor(tenant,actor,event);
+    IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy metadata decision is invalid'; END IF;
+    IF iam.policy_version_intent_replayed(tenant,actor,event) THEN
+        IF policy.resource_version<>expected_version+1 OR policy.display_name<>display_name THEN
+            RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy metadata replay conflicts';
+        END IF;
+        RETURN iam.policy_detail_snapshot(tenant,policy_id);
+    END IF;
+    IF policy.resource_version<>expected_version OR policy.display_name=display_name THEN
+        RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy metadata revision conflicts';
+    END IF;
+    UPDATE iam.policies AS p SET display_name=update_policy.display_name,resource_version=resource_version+1,updated_at=effective_now WHERE p.id=policy_id;
+    INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
+      VALUES(tenant,event->>'eventId',event,effective_now,effective_now,effective_now);
+    RETURN iam.policy_detail_snapshot(tenant,policy_id);
+END $function$;
+REVOKE ALL ON FUNCTION iam.update_policy(text,text,text,text,bigint,text,jsonb) FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+GRANT EXECUTE ON FUNCTION iam.update_policy(text,text,text,text,bigint,text,jsonb) TO matrix_iam_api;

@@ -392,6 +392,9 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	t.Run("customer immutable versions and default selection", func(t *testing.T) {
 		proveCustomerPolicyVersions(t, ctx, handler, admin, primary)
 	})
+	t.Run("customer policy metadata lifecycle", func(t *testing.T) {
+		proveCustomerPolicyMetadata(t, ctx, handler, admin, primary)
+	})
 	t.Run("policy publication versus attachment revision", func(t *testing.T) {
 		provePolicyDefaultAttachmentRaces(t, ctx, handler, admin, primary)
 	})
@@ -1081,6 +1084,234 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 	get(path+"/versions/"+string(initial.Version.ID), other, http.StatusForbidden, nil)
 	post(path+"/versions", other, create, http.StatusForbidden, nil)
 	post(path+":set-default-version", other, selection, http.StatusForbidden, nil)
+}
+
+func proveCustomerPolicyMetadata(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	call := func(method, path, bearer string, body any, want int, result any) {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != want {
+			t.Fatalf("policy metadata %s %s status=%d want=%d body=%s", method, path, response.Code, want, response.Body.String())
+		}
+		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+			t.Fatal("decode policy metadata")
+		}
+	}
+	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "metadata", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "metadata-application"}}}}}
+	var initial, renamed, replay iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Original metadata", Document: document, RequestID: "metadata-create"}, http.StatusCreated, &initial)
+	path := "/v1/policies/" + string(initial.Policy.ID)
+	update := iamv1.UpdatePolicyRequest{DisplayName: "Renamed metadata", ResourceVersion: 1, RequestID: "metadata-rename"}
+	call(http.MethodPatch, path, root, update, http.StatusOK, &renamed)
+	call(http.MethodPatch, path, root, update, http.StatusOK, &replay)
+	if iamv1.ValidatePolicyDetail(renamed) != nil || renamed.Policy.ID != initial.Policy.ID || renamed.Policy.AccountID != initial.Policy.AccountID ||
+		renamed.Policy.ResourceVersion != 2 || renamed.Policy.DisplayName != update.DisplayName || renamed.Policy.DefaultVersionID != initial.Policy.DefaultVersionID ||
+		!bytes.Equal(mustIAMJSON(t, renamed.Version), mustIAMJSON(t, initial.Version)) || !bytes.Equal(mustIAMJSON(t, renamed), mustIAMJSON(t, replay)) {
+		t.Fatal("rename changed content, identity or replay result")
+	}
+	call(http.MethodGet, path, root, nil, http.StatusOK, &replay)
+	if !bytes.Equal(mustIAMJSON(t, renamed), mustIAMJSON(t, replay)) {
+		t.Fatal("rename was not visible to current read")
+	}
+	variant := update
+	variant.DisplayName = "Variant metadata"
+	call(http.MethodPatch, path, root, variant, http.StatusConflict, nil)
+	variant.RequestID = "metadata-stale"
+	call(http.MethodPatch, path, root, variant, http.StatusConflict, nil)
+	variant.ResourceVersion = 2
+	variant.DisplayName = renamed.Policy.DisplayName
+	variant.RequestID = "metadata-noop"
+	call(http.MethodPatch, path, root, variant, http.StatusConflict, nil)
+	call(http.MethodPatch, "/v1/policies/"+string(iamv1.SystemPolicyAccountAdministrator), root, update, http.StatusForbidden, nil)
+	call(http.MethodPatch, path+"?accountId=other", root, update, http.StatusBadRequest, nil)
+	// A service secret is not a user bearer; authentication itself must fail.
+	call(http.MethodPatch, path, iamProducerCredential, update, http.StatusUnauthorized, nil)
+	for _, field := range []string{"accountId", "scope", "management", "defaultVersionId", "document", "id"} {
+		attack := map[string]any{"displayName": "attack", "resourceVersion": 2, "requestId": "metadata-selector", field: "injected"}
+		call(http.MethodPatch, path, root, attack, http.StatusBadRequest, nil)
+	}
+	// A second active policy may reuse the old display name, but not the new
+	// one. Stable identity and immutable content never depend on that name.
+	var second iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: initial.Policy.DisplayName, Document: document, RequestID: "metadata-second"}, http.StatusCreated, &second)
+	variant.DisplayName = second.Policy.DisplayName
+	variant.RequestID = "metadata-collision"
+	call(http.MethodPatch, path, root, variant, http.StatusConflict, nil)
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_policy_metadata_fault() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.event_document->>'requestId'='metadata-injected-failure' THEN RAISE EXCEPTION 'injected metadata outbox failure'; END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_policy_metadata_fault BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_policy_metadata_fault()`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := database.Exec(context.Background(), `DROP TRIGGER IF EXISTS matrix_policy_metadata_fault ON iam.audit_outbox; DROP FUNCTION IF EXISTS public.matrix_policy_metadata_fault()`); err != nil {
+			t.Error("remove isolated metadata fault")
+		}
+	}()
+	variant.DisplayName = "Rollback metadata"
+	variant.RequestID = "metadata-injected-failure"
+	call(http.MethodPatch, path, root, variant, http.StatusServiceUnavailable, nil)
+	call(http.MethodGet, path, root, nil, http.StatusOK, &replay)
+	if !bytes.Equal(mustIAMJSON(t, renamed), mustIAMJSON(t, replay)) {
+		t.Fatal("outbox failure left partial metadata")
+	}
+	var count int
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'='metadata-injected-failure')+
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id='metadata-injected-failure')`, initial.Policy.AccountID).Scan(&count); err != nil || count != 0 {
+		t.Fatal("failed rename left a fact or decision")
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER matrix_policy_metadata_fault ON iam.audit_outbox; DROP FUNCTION public.matrix_policy_metadata_fault()`); err != nil {
+		t.Fatal(err)
+	}
+	// Two edits to one revision have one winner; the losing name and old
+	// command cannot overwrite it after transaction retries.
+	completed := make(chan *httptest.ResponseRecorder, 2)
+	for index := 0; index < 2; index++ {
+		body := mustIAMJSON(t, iamv1.UpdatePolicyRequest{DisplayName: fmt.Sprintf("Metadata winner %d", index), ResourceVersion: 2, RequestID: fmt.Sprintf("metadata-race-%d", index)})
+		go func() { completed <- performIAMRequest(handler, http.MethodPatch, path, root, body) }()
+	}
+	winners, conflicts := 0, 0
+	for range 2 {
+		select {
+		case response := <-completed:
+			switch response.Code {
+			case http.StatusOK:
+				winners++
+				if json.Unmarshal(response.Body.Bytes(), &renamed) != nil {
+					t.Fatal("decode metadata race")
+				}
+			case http.StatusConflict:
+				conflicts++
+			default:
+				t.Fatalf("metadata race status=%d", response.Code)
+			}
+		case <-ctx.Done():
+			t.Fatal("metadata race timed out")
+		}
+	}
+	if winners != 1 || conflicts != 1 || renamed.Policy.ResourceVersion != 3 {
+		t.Fatal("rename concurrency did not have one winner")
+	}
+	call(http.MethodPatch, path, root, update, http.StatusConflict, nil)
+	var event auditv1.Event
+	var raw []byte
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.updated' AND event_document->>'requestId'='metadata-rename'`, initial.Policy.AccountID).Scan(&raw); err != nil || json.Unmarshal(raw, &event) != nil {
+		t.Fatal("read original rename fact")
+	}
+	call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.policy.updated' AND event_document#>>'{target,id}'=$2`, initial.Policy.AccountID, initial.Policy.ID).Scan(&count); err != nil || count != 2 {
+		t.Fatal("rename duplicated or lost success facts")
+	}
+	var member iamv1.User
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "metadata-member", "displayName": "Metadata member", "initialPassword": initialDeveloperPassword, "requestId": "metadata-member-create"}, http.StatusCreated, &member)
+	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
+	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "metadata-member-admin"}, http.StatusOK, nil)
+	call(http.MethodGet, path, bearer, nil, http.StatusOK, nil)
+	variant.ResourceVersion = 3
+	variant.RequestID = "metadata-delegate"
+	call(http.MethodPatch, path, bearer, variant, http.StatusForbidden, nil)
+	call(http.MethodPost, "/v1/accounts", root, map[string]any{"id": "metadata-other-account", "displayName": "Metadata other", "rootLoginName": "metadata-other-root", "rootDisplayName": "Other root", "initialPassword": initialDeveloperPassword, "requestId": "metadata-other-create"}, http.StatusCreated, nil)
+	other := localRecoveryLogin(t, handler, "metadata-other-root", initialDeveloperPassword, true)
+	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
+	call(http.MethodPatch, path, other, variant, http.StatusForbidden, nil)
+	call(http.MethodGet, path, root, nil, http.StatusOK, &replay)
+	if !bytes.Equal(mustIAMJSON(t, renamed), mustIAMJSON(t, replay)) {
+		t.Fatal("rejected caller changed metadata")
+	}
+	var foreign iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", other, iamv1.CreatePolicyRequest{DisplayName: renamed.Policy.DisplayName, Document: document, RequestID: "metadata-foreign-same-name"}, http.StatusCreated, &foreign)
+	if foreign.Policy.AccountID == renamed.Policy.AccountID || foreign.Policy.ID == renamed.Policy.ID {
+		t.Fatal("same display name merged account identities")
+	}
+	// Metadata and default selection share the same optimistic revision. A
+	// concurrent edit cannot accidentally select content, or overwrite a
+	// selection that has already advanced the policy.
+	deny := document
+	deny.Statements = append([]iamv1.PolicyStatement(nil), document.Statements...)
+	deny.Statements[0].Effect = iamv1.PolicyDeny
+	var version iamv1.PolicyVersionDetail
+	call(http.MethodPost, path+"/versions", root, iamv1.CreatePolicyVersionRequest{Document: deny, ResourceVersion: 3, RequestID: "metadata-race-version"}, http.StatusCreated, &version)
+	renameBody := mustIAMJSON(t, iamv1.UpdatePolicyRequest{DisplayName: "Metadata versus default", ResourceVersion: 4, RequestID: "metadata-default-race-rename"})
+	selectBody := mustIAMJSON(t, iamv1.SetDefaultPolicyVersionRequest{VersionID: version.Version.ID, ResourceVersion: 4, RequestID: "metadata-default-race-select"})
+	go func() { completed <- performIAMRequest(handler, http.MethodPatch, path, root, renameBody) }()
+	go func() {
+		completed <- performIAMRequest(handler, http.MethodPost, path+":set-default-version", root, selectBody)
+	}()
+	winners, conflicts = 0, 0
+	for range 2 {
+		select {
+		case response := <-completed:
+			switch response.Code {
+			case http.StatusOK:
+				winners++
+				if json.Unmarshal(response.Body.Bytes(), &replay) != nil {
+					t.Fatal("decode metadata/default race")
+				}
+			case http.StatusConflict:
+				conflicts++
+			default:
+				t.Fatalf("metadata/default race status=%d", response.Code)
+			}
+		case <-ctx.Done():
+			t.Fatal("metadata/default race timed out")
+		}
+	}
+	if winners != 1 || conflicts != 1 || replay.Policy.ResourceVersion != 5 {
+		t.Fatal("metadata/default race did not have one winner")
+	}
+	if replay.Policy.DisplayName == "Metadata versus default" {
+		if replay.Version.ID != initial.Version.ID {
+			t.Fatal("rename implicitly selected competing content")
+		}
+	} else if replay.Policy.DisplayName != renamed.Policy.DisplayName || replay.Version.ID != version.Version.ID {
+		t.Fatal("default selection overwrote competing metadata")
+	}
+	var otherIdentity iamv1.CurrentIdentity
+	call(http.MethodGet, "/v1/auth/me", other, nil, http.StatusOK, &otherIdentity)
+	mutation, err := pgx.ConnectConfig(ctx, database.Config().Copy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mutation.Close(context.Background())
+	tx, err := mutation.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, `UPDATE iam.principals SET status='DISABLED',resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE tenant_id=$1 AND id=$2`, foreign.Policy.AccountID, otherIdentity.User.ID); err != nil {
+		t.Fatal(err)
+	}
+	racingBody := mustIAMJSON(t, iamv1.UpdatePolicyRequest{DisplayName: "Disabled publisher rename", ResourceVersion: 1, RequestID: "metadata-disabled-publisher"})
+	go func() {
+		completed <- performIAMRequest(handler, http.MethodPatch, "/v1/policies/"+string(foreign.Policy.ID), other, racingBody)
+	}()
+	waitForLocalRecoveryLock(t, ctx, database, iamHTTPTestRole)
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case response := <-completed:
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("rename survived publisher revocation: %d", response.Code)
+		}
+	case <-ctx.Done():
+		t.Fatal("publisher revocation race timed out")
+	}
+	var originalName string
+	var revision uint64
+	if err := database.QueryRow(ctx, `SELECT display_name,resource_version FROM iam.policies WHERE id=$1`, foreign.Policy.ID).Scan(&originalName, &revision); err != nil || originalName != foreign.Policy.DisplayName || revision != 1 {
+		t.Fatal("revoked publisher left partial metadata")
+	}
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'='metadata-disabled-publisher'`, foreign.Policy.AccountID).Scan(&count); err != nil || count != 0 {
+		t.Fatal("revoked publisher left success fact")
+	}
 }
 
 func mustIAMJSON(t *testing.T, value any) []byte {

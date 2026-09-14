@@ -777,7 +777,7 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 11, Audit: 8, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 12, Audit: 9, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -1000,6 +1000,16 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
 	selectDefault(customPolicy.Version.ID, 3, "request-process-default-original")
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
+	metadataResponse := performJSON(t, http.MethodPatch, replicaEndpoint+"/v1/policies/"+string(customPolicy.Policy.ID), adminLogin.Credential,
+		iamv1.UpdatePolicyRequest{DisplayName: "Renamed process application policy", ResourceVersion: 4, RequestID: "request-process-policy-rename"})
+	var renamedPolicy iamv1.PolicyDetail
+	if metadataResponse.Status != http.StatusOK || json.Unmarshal(metadataResponse.Body, &renamedPolicy) != nil ||
+		iamv1.ValidatePolicyDetail(renamedPolicy) != nil || renamedPolicy.Policy.ResourceVersion != 5 || renamedPolicy.Policy.ID != customPolicy.Policy.ID ||
+		renamedPolicy.Version.ID != customPolicy.Version.ID || renamedPolicy.Version.ContentDigest != customPolicy.Version.ContentDigest {
+		t.Fatalf("process policy rename changed immutable identity/content status=%d", metadataResponse.Status)
+	}
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-custom-not-selected", http.StatusForbidden)
 	revokeIAMPolicyAttachment(t, replicaEndpoint, adminLogin.Credential, customAttachment.ID, customAttachment.ResourceVersion, "request-process-custom-revoke")
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
@@ -1007,7 +1017,8 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		t.Fatal("custom policy publication did not reach the immutable tenant Audit chain")
 	}
 	if countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyVersionCreated, auditv1.ResultSucceeded) != 1 ||
-		countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyDefaultVersionSet, auditv1.ResultSucceeded) != 2 {
+		countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyDefaultVersionSet, auditv1.ResultSucceeded) != 2 ||
+		countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyUpdated, auditv1.ResultSucceeded) != 1 {
 		t.Fatal("immutable version/default selection facts did not reach the original tenant chain")
 	}
 	deniedBefore := countAuditFacts(

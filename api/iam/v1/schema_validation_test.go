@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +80,7 @@ func TestPolicyVersionCommandsBindOwnerRevisionAndImmutableContent(t *testing.T)
 	openapi := loadIAMOpenAPI(t)
 	createSchema := compileIAMOpenAPISchema(t, openapi, "CreatePolicyVersionRequest")
 	selectSchema := compileIAMOpenAPISchema(t, openapi, "SetDefaultPolicyVersionRequest")
+	updateSchema := compileIAMOpenAPISchema(t, openapi, "UpdatePolicyRequest")
 	instance := func(value any) any {
 		t.Helper()
 		encoded, err := json.Marshal(value)
@@ -93,10 +95,32 @@ func TestPolicyVersionCommandsBindOwnerRevisionAndImmutableContent(t *testing.T)
 	}
 	create := CreatePolicyVersionRequest{Document: policyDocumentFixture(), ResourceVersion: 2, RequestID: "version-create"}
 	selection := SetDefaultPolicyVersionRequest{VersionID: "version-one", ResourceVersion: 2, RequestID: "version-select"}
+	update := UpdatePolicyRequest{DisplayName: "Renamed policy", ResourceVersion: 2, RequestID: "policy-rename"}
+	if ValidateUpdatePolicyRequest(update) != nil || updateSchema.Validate(instance(update)) != nil {
+		t.Fatal("valid metadata update rejected")
+	}
+	for _, name := range []string{"", strings.Repeat("x", 129)} {
+		invalid := update
+		invalid.DisplayName = name
+		if ValidateUpdatePolicyRequest(invalid) == nil || updateSchema.Validate(instance(invalid)) == nil {
+			t.Fatal("metadata name budget was not enforced")
+		}
+	}
+	for _, field := range []string{"accountId", "management", "scope", "document", "defaultVersionId", "id"} {
+		attack := instance(update).(map[string]any)
+		attack[field] = "injected"
+		if updateSchema.Validate(attack) == nil {
+			t.Fatal("metadata update admitted an authority selector")
+		}
+	}
 	if ValidateCreatePolicyVersionRequest(create) != nil || createSchema.Validate(instance(create)) != nil || ValidateSetDefaultPolicyVersionRequest(selection) != nil || selectSchema.Validate(instance(selection)) != nil {
 		t.Fatal("valid version command rejected")
 	}
 	for _, revision := range []uint64{0, 9007199254740991, 9007199254740992} {
+		update.ResourceVersion = revision
+		if ValidateUpdatePolicyRequest(update) == nil || updateSchema.Validate(instance(update)) == nil {
+			t.Fatal("metadata update admitted non-incrementable revision")
+		}
 		create.ResourceVersion, selection.ResourceVersion = revision, revision
 		if ValidateCreatePolicyVersionRequest(create) == nil || createSchema.Validate(instance(create)) == nil || ValidateSetDefaultPolicyVersionRequest(selection) == nil || selectSchema.Validate(instance(selection)) == nil {
 			t.Fatal("non-incrementable version command admitted")

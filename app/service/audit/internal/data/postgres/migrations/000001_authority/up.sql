@@ -309,6 +309,7 @@ BEGIN
         ('iam.policy.created', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
         ('iam.policy-version.created', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
         ('iam.policy.default-version-set', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
+        ('iam.policy.updated', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
         ('iam.group.created', 'IAM', 'GROUP', 'SUCCEEDED', true, true, false),
         ('iam.group.updated', 'IAM', 'GROUP', 'SUCCEEDED', true, true, false),
         ('iam.group.deleted', 'IAM', 'GROUP', 'SUCCEEDED', true, true, false),
@@ -438,7 +439,7 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT', 'SYSTEM')
         OR (action_name IN ('iam.account.alias-set','iam.user.created','iam.user.updated','iam.user.deleted','iam.user.status-set',
-            'iam.policy.created','iam.policy-version.created','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted','iam.group-membership.created','iam.group-membership.removed',
+            'iam.policy.created','iam.policy.updated','iam.policy-version.created','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted','iam.group-membership.created','iam.group-membership.removed',
             'iam.user.password-reset','iam.user.password-changed',
             'iam.policy-attachment.created','iam.policy-attachment.revoked')
             AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
@@ -491,7 +492,7 @@ AS $function$
         to_regclass('audit.chain_heads') IS NOT NULL
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL,
-        8::bigint,
+        9::bigint,
         transaction_timestamp()
 $function$;
 
@@ -794,7 +795,7 @@ BEGIN
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
             'iam.account-root.credentials-recovered', 'iam.account.alias-set',
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
-            'iam.policy.created','iam.policy-version.created','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
+            'iam.policy.created','iam.policy.updated','iam.policy-version.created','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
             'iam.user.password-changed',

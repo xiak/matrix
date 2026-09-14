@@ -154,6 +154,7 @@
           "iam.policy-version.read",
           "iam.policy-version.create",
           "iam.policy.set-default-version",
+          "iam.policy.update",
           "iam.platform-policy.list",
           "iam.user.set-status",
           "iam.user.reset-password",
@@ -756,6 +757,32 @@
               "properties": {
                 "action": {
                   "const": "iam.policy.set-default-version"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy.update"
                 }
               },
               "required": [
@@ -2510,6 +2537,7 @@
               "iam.policy-version.read",
               "iam.policy-version.create",
               "iam.policy.set-default-version",
+              "iam.policy.update",
               "iam.platform-policy.list",
               "iam.user.set-status",
               "iam.user.reset-password",
@@ -2946,6 +2974,32 @@
               "properties": {
                 "action": {
                   "const": "iam.policy.set-default-version"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.policy.update"
                 }
               },
               "required": [
@@ -5663,6 +5717,7 @@
                             "iam.policy-version.read",
                             "iam.policy-version.create",
                             "iam.policy.set-default-version",
+                            "iam.policy.update",
                             "iam.user.set-status",
                             "iam.user.reset-password",
                             "iam.user.create",
@@ -6320,7 +6375,8 @@
                       "iam.policy-version.list",
                       "iam.policy-version.read",
                       "iam.policy-version.create",
-                      "iam.policy.set-default-version"
+                      "iam.policy.set-default-version",
+                      "iam.policy.update"
                     ]
                   }
                 }
@@ -6405,6 +6461,30 @@
                 "actions": {
                   "contains": {
                     "const": "iam.policy.set-default-version"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "iam.policy.update"
                   }
                 }
               }
@@ -8978,6 +9058,30 @@
         ],
         "type": "object"
       },
+      "UpdatePolicyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "displayName",
+          "requestId",
+          "resourceVersion"
+        ],
+        "type": "object"
+      },
       "UpdateUserRequest": {
         "additionalProperties": false,
         "properties": {
@@ -10615,6 +10719,72 @@
           }
         },
         "summary": "Read the current tenant policy and default content"
+      },
+      "patch": {
+        "operationId": "updatePolicy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policyId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyDetail"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Rename a customer policy without changing its content or authority"
       }
     },
     "/v1/policies/{policyId}/versions": {

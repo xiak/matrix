@@ -111,6 +111,7 @@ const (
 	ActionIAMPolicyVersionRead             Action = "iam.policy-version.read"
 	ActionIAMPolicyVersionCreate           Action = "iam.policy-version.create"
 	ActionIAMPolicySetDefaultVersion       Action = "iam.policy.set-default-version"
+	ActionIAMPolicyUpdate                  Action = "iam.policy.update"
 	ActionIAMPlatformPolicyList            Action = "iam.platform-policy.list"
 	ActionIAMUserSetStatus                 Action = "iam.user.set-status"
 	ActionIAMUserPasswordReset             Action = "iam.user.reset-password"
@@ -323,6 +324,7 @@ var actionDefinitions = [...]ActionDefinition{
 	{ActionIAMPolicyVersionRead, ProductIAM, ServiceIAM, ResourcePolicy, AuthorityScopeTenant},
 	{ActionIAMPolicyVersionCreate, ProductIAM, ServiceIAM, ResourcePolicy, AuthorityScopeTenant},
 	{ActionIAMPolicySetDefaultVersion, ProductIAM, ServiceIAM, ResourcePolicy, AuthorityScopeTenant},
+	{ActionIAMPolicyUpdate, ProductIAM, ServiceIAM, ResourcePolicy, AuthorityScopeTenant},
 	{ActionIAMPlatformPolicyList, ProductIAM, ServiceIAM, ResourceInstallation, AuthorityScopeInstallation},
 	{ActionIAMUserSetStatus, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},
 	{ActionIAMUserPasswordReset, ProductIAM, ServiceIAM, ResourceUser, AuthorityScopeTenant},

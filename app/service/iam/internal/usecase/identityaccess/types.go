@@ -74,6 +74,7 @@ type Transaction interface {
 	ReadPolicyVersion(context.Context, AccountRead, iamv1.PolicyID, iamv1.PolicyVersionID) (iamv1.PolicyVersionDetail, error)
 	CreatePolicyVersion(context.Context, PolicyVersionCreation) (iamv1.PolicyVersionDetail, error)
 	SetDefaultPolicyVersion(context.Context, PolicyDefaultSelection) (iamv1.PolicyDetail, error)
+	UpdatePolicy(context.Context, PolicyUpdate) (iamv1.PolicyDetail, error)
 	ListAccounts(context.Context, AccountRead) (AccountManagementPage, error)
 	ReadAccountAsPlatform(context.Context, AccountRead, iamv1.AccountID) (AccountManagementSnapshot, error)
 	ReadAccountRoot(context.Context, AccountRead, iamv1.AccountID) (iamv1.RootIdentity, error)
@@ -346,6 +347,16 @@ type PolicyDefaultSelection struct {
 	DecisionID       iamv1.DecisionID
 	PolicyID         iamv1.PolicyID
 	VersionID        iamv1.PolicyVersionID
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type PolicyUpdate struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	DecisionID       iamv1.DecisionID
+	PolicyID         iamv1.PolicyID
+	DisplayName      string
 	ResourceVersion  uint64
 	AuditEvent       auditv1.Event
 }

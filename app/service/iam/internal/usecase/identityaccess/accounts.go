@@ -503,6 +503,32 @@ func (service *Authority) SetDefaultPolicyVersion(ctx context.Context, credentia
 		})
 }
 
+func (service *Authority) UpdatePolicy(ctx context.Context, credential iamv1.Secret, id iamv1.PolicyID, request iamv1.UpdatePolicyRequest) (iamv1.PolicyDetail, error) {
+	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateUpdatePolicyRequest(request) != nil {
+		return iamv1.PolicyDetail{}, ErrInvalidArgument
+	}
+	requestDigest, err := digestSanitized("policy-update", struct {
+		PolicyID iamv1.PolicyID            `json:"policyId"`
+		Request  iamv1.UpdatePolicyRequest `json:"request"`
+	}{id, request})
+	if err != nil {
+		return iamv1.PolicyDetail{}, err
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyUpdate,
+		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
+			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
+				return iamv1.PolicyDetail{}, err
+			}
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMPolicyUpdated, auditv1.TargetPolicy, string(id), decision.ID, requestDigest, request.RequestID, now)
+			if err != nil {
+				return iamv1.PolicyDetail{}, err
+			}
+			return tx.UpdatePolicy(ctx, PolicyUpdate{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				DecisionID: decision.ID, PolicyID: id, DisplayName: request.DisplayName, ResourceVersion: request.ResourceVersion, AuditEvent: event})
+		})
+}
+
 func (service *Authority) ListAccounts(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.AccountList, error) {
 	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.AccountList{}, ErrInvalidArgument
