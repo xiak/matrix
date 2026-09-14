@@ -1,185 +1,83 @@
 # Codex working checkpoint
 
-> Non-authoritative portable memory. Validate against Git, exact CI and the owning FEAT.
+> Non-authoritative portable memory. Validate against Git, exact CI and owning FEAT.
 
 - Updated: 2026-09-14
 - Repository: https://github.com/xiak/matrix.git
 - Branch: `feat/iam`
-- Latest pushed design: `80e513191357aa1789389435c3474afdf341638c`,
-  User boundary vertical slice in IAM/005 and its fixed-source adoption.
-  Documentation only; architecture and diff checks passed. No boundary API,
-  schema, evaluator or runtime implementation is claimed.
-- Latest pushed implementation and fully CI-verified rollback point:
-  `b342e9da08515f9172b29d1ac237a088171c9e53`, literal resource prefixes
-  constrained by explicit action capability.
-- Exact [Verification 34839955131](https://github.com/xiak/matrix/actions/runs/34839955131)
-  matches this SHA and is completed/success; Go/authority-process/node-process
-  all completed/success, independently checked through GitHub API.
-- Identity implementation `b208ab081ac2f08aab81f63b8cfefb17ebdc6c82` /
-  [34836760785](https://github.com/xiak/matrix/actions/runs/34836760785) FAILED:
-  authority-process/node-process succeeded; Go failed the preexisting
-  TestPinnedSSHExecutorHonorsCancellationDuringHandshake stage expectation.
-  Do not treat b208 as an independently successful candidate.
-- Earlier fully CI-verified rollback point:
-  `4f22e223398fbe4523bc09d6a369677cb23767db`,
-  [34837563263](https://github.com/xiak/matrix/actions/runs/34837563263);
-  exact SHA and Go/authority-process/node-process completed/success.
-- Earlier time candidate7218 failed alias competition; do not inherit581 success
-  backwards. Existing FEAT evidence owns details.
+- Latest pushed implementation: `ef51b1d509e7e38dfb2146416c7e057a97638765`,
+  strict CurrentIdentity boundary client and separate permission-limit display.
+  [Verification34850453837](https://github.com/xiak/matrix/actions/runs/34850453837)
+  is confirmed live/in_progress, not yet accepted.
+- Backend rollback point: `119f232ea7cf7ba7d91a1ef6433e132e0127f03f`,
+  User permission-boundary intersection and historical evidence.
+  [Verification34849128040](https://github.com/xiak/matrix/actions/runs/34849128040):
+  exact SHA and Go/authority-process/node-process all completed/success,
+  independently checked through GitHub API. Both existing peers were informed.
+- Earlier verified rollback: `b342e9da08515f9172b29d1ac237a088171c9e53`
+  /34839955131. Earlier candidate failures remain in IAM/005, not an all-green history.
 
 ## Resume and full objective
 
-The entire IAM goal remains active. Read AGENTS.md, IAM/FEAT-IAM-000-product-contract.md,
-IAM/FEAT-IAM-005-policy-versions-and-boundaries.md, then owning code/tests.
-001 owns trusted condition sources;011 owns first-release schema and final
-release/capacity/HA gates. The user reaffirmed prelaunch development versions
-do not require a complete schema1 history chain on every FEAT.
+Whole IAM goal remains active. Read AGENTS.md, the owning IAM FEAT, then code/tests.
+005 owns language/boundaries;010 owns console;001/008 own product/profile;
+011 owns first-release, real runtime, HA/capacity and final acceptance.
 
-No local or CI test handle remains. Continue005's specified User boundary
-vertical slice, then complete action wildcards with pinned Profile/catalog
-semantics, trusted IP conditions, Role boundaries, safe delegation and
-editor/capabilities. The current root-only writer is not final LANG-08.
-Current time plus identity strings do NOT complete LANG-04 or005.
-006 roles/STS,007 programmatic credentials,008 product/service-role/ABAC,
-009 governance,010 console,011 acceptance and012 explicit deferred integrations
-remain as specified. Do not redefine completion around policy CRUD/conditions.
+Next complete User boundary management UI and conservative resource capabilities,
+then actual backend/browser acceptance. ef51 only repairs mandatory current
+identity parsing and displays self boundary; no set/replace/remove forms or policy
+editor. Do not infer eligibility from identityKind or policy name. Root-only
+backend management is an intermediate boundary, not completed safe delegation.
+Remaining action wildcards with fixed catalog expansion, trusted IP, Role/STS,
+programmatic credentials, extensible product/service-role/ABAC, governance,
+complete UI, HA/capacity/final release and explicit external-integration deferrals
+remain in their FEATs. Do not reduce completion to policy CRUD or User boundaries.
 
-## Current pushed implementation
+User schema agreement is in011: final converged schema is first supported release
+baseline. No per-FEAT schema1..N unpublished upgrade matrix. Current fresh/replay/
+retained state/atomicity/RLS/revocation/Audit gates remain; real old consumers need
+explicit support evidence. No number reset or install-profile admission relaxation.
 
-b342e9d adds PREFIX_IN_AUTHORITY to the existing kind/match/id selector.
-ID is a literal nonempty ASCII stable-ID prefix<=128bytes, not a star/glob/regex,
-path or name. Matching is bounded strings.HasPrefix, current tenant and exact
-kind still required. ActionDefinition.ResourcePrefixAllowed defaultsfalse,
-only paas.application.read declarestrue after checking its exact applicationId
-PEP. Create/list/collection/platform/probe/unknown/future actions do not gain it.
-All same-kind actions in a statement must support PREFIX. API validation and
-generated schema consume that one catalog; SQL storage constraints are checked
-against every catalog action in the real PG gate. No evaluator product-name
-branch. Existing EXACT/ANY and canonical/decision history retained.
-Final validator aggregates unsupported kinds once per statement, not scanning
-the entire catalog again per resource. Current sourceIAM17/Audit11/PaaS1;
-installation profile, ServiceIdentity, lookup_service, seven-column claim,
-Audit canonical and PaaS production code unchanged. Full CAT05/008 not done.
+## Fixed implementation and evidence
 
-Contract/schema/evaluator positives first failed, then passed. Prefix grammar,
-scope, mixedread/create, full action acceptance matrix, Deny/source ordering,
-max-length comparison and cursor snapshot tests pass. Actual two-account/group
-HTTP gate with same resource IDs/prefixes, foreign attachment refusal, exact
-membership/version evidence, default/revoke and retained proof passed11.64s
-(parent16.38/package19.111). Initial malformed-input fixture replaced a prefix
-substring inside another valid ID; actual stored canonical proved the mistake;
-fixed exact-field mutation, no production relaxation.
-Full serialPG18 passed Audit data5.434s, AuditHTTP2.620s, IAM164.055s,
-dualIAM/PaaS/Audit46.279s, PaaSdata5.044s. PaaS creates two real apps before
-revocation; sole prefix+time+identity grant allows matching and denies actual
-nonmatching app. Original default/revoke, restricted runtime identities,
-cross-tenant resources/Operation/outbox and historical chains remain.
-Full Go race/vet/modules/stable generation/Linuxbuild passed, then final pure
-validation loop aggregation passed API/authority/usecase/architecture race,
-fullvet/Linuxbuild and fuzz15s/2workers/1s minimization634172executions.
-Exact final code's full PG was independently revalidated by successful
-CI34839955131; its evidence is separate from the pre-aggregation local tree.
-No capacity/UI/install acceptance implied.
-Own PG18 used1CPU/768MiB/PIDs128/64connections. Default Docker subnet pools were
-exhausted; read-only subnet inventory established an unused explicit /28 for
-only this fixture. No network pruning or shared configuration changes. Exact
-IDs/labels and zero clients confirmed before removing container/network and
-synthetic volume. No local resource or process handle survives.
+119 source IAM18/Audit12/PaaS1; installation profile unchanged.
+lookup_session appends boundary jsonb after policies (23output columns);
+record_authorization exactly six parameters with independent evidence, no old
+overload/fallback. Boundary mutation has ten private parameters including current
+bearer-derived session. ServiceIdentity/lookup_service/claim7/canonical unchanged.
+005 owns exact API, lock/replay/default-following semantics and evidence.
 
-4f22e22 changes only the existing SSH test and005's CI evidence. Server Accept
-does not prove client DialContext completed, so cancel there can legitimately
-return ssh-connect/UNAVAILABLE instead of ssh-handshake/UNAVAILABLE.
-The owning installation task granted a test-only window. Receive a full client
-SSH-2.0 version line with1s ReadDeadline/255byte cap, without replying, before
-cancel. Preserve500ms exit and exactstage, check connectionEOF and accept
-goroutine cleanup. No production/error classification changes. Original test
-passed locally200 times (not a local red); CI provided actual failure evidence.
-Corrected test passedrace200; full adapter/architecture/vet and uncached full
-Go race-count1/vet/Linux amd64 build passed. Its exact three-job CI now SUCCESS.
-No local PG or remote operation in that correction.
+One current TENANT boundary intersects ordinary direct/all-group authorization,
+grants nothing, fails closed on malformed/missing snapshots; root cannot be bound.
+Platform/probe/service authority is distinct. Root-only writes recheck credentials/
+session under principal-first locks; no implicit enable/credential/platform effect.
+References block Policy deletion; deleted User relations end but retain history.
+set-before-default may both succeed; reverse order rejects stale policy revision.
+Historical proof survives later default/removal/disable; producer must remain valid.
 
-b208ab0 adds iam.account-id and iam.principal-id, STRING with
-IAM_AUTHENTICATED_IDENTITY source, only declared TENANT/USER authorization.
-Values come from the current owner-validated IAM Account/Subject, not Group,
-policy owner, resource, alias, caller body/header/cursor or service credentials.
-STRING_EQUALS is any exact match; STRING_NOT_EQUALS is all values unequal.
-Each set has1–16 distinct valid IDs, case-sensitive without coercion/wildcards.
-Duplicate key/operator or value rejects; different keys may use the same op.
-Multiple conditions AND; matched Deny wins across all direct/group sources.
-Mandatory identity/time missing or invalid fails the entire decision closed;
-there is no negative-match fallback to Allow or generic context map.
+Final serial PG18: IAM172.824s, Audit data5.412s, AuditHTTP2.650s,
+dualIAM/PaaS/Audit45.400s, PaaSdata4.310s. Multi-group/Deny, two actual apps,
+cross-account/scope, revision/default/delete competition, logout lock barrier,
+forced password, cursor and dispatchers/chains passed. Current data replay and
+restricted runtime identities retained. Full Go race/vet/modules/generation/
+Linuxbuild and exact backendCI passed. Detailed evidence belongs to005.
 
-The sole private evaluator receives typed policyEvaluationContext through
-EvaluateAttachedPolicies. No exported bypass or parallel evaluator retained.
-Existing canonical owner copies/sorts values; reordering preserves digest and
-request replay. Old absent-condition/single-time bytes remain unchanged.
-Go, generated OpenAPI and SQL publisher validate bounded semantics;
-schema maxContains rules also reject duplicate key/op with different values.
-No second canonical encoder. Identity fixed baseline IAM16/Audit11/PaaS1; installation
-release profile unchanged. ServiceIdentity, lookup_service, seven-column claim,
-Audit canonical and sealed recovery remain untouched. This source combination
-is not a signed install/profile compatibility assertion.
+ef51 requires explicit boundary account/user/RV and null or strict version
+reference. Missing/foreign/stale/root-bound responses reject, never become NONE.
+Boundary stays separate from policySources and does not reveal a policy body.
+Current display updates on refresh, clears on error, grants no UI capabilities.
+103 frontend tests/type/lint/architecture/20contrast checks passed; two2-worker
+static builds match59 embedded files. UI/architecture Go race, UI vet/Linuxbuild
+passed. No real-browser, boundary-management or complete010 acceptance claimed.
 
-581 retry behavior remains: five whole-transaction attempts, only40001/40P01
-retry, released connection before bounded jitter25–50/50–100/100–200/100–200ms,
-context-aware cancellation; exhaustion unavailable, not fabricated409.
+## Isolation and coordination
 
-## Actual local evidence for b208ab0
+No local test process or owned PG fixture remains. Exact IDs/labels and zero clients
+were checked before removing own containers/networks/synthetic volumes. Never clean
+another named IAM resource or restart remote/shared services. Go GOMAXPROCS2,
+GOMEMLIMIT768MiB/-p2; realPG-p1 and1CPU/768MiB/PIDs128. Heavy gates run serially.
 
-Strict contract and evaluator positives first failed, then passed. Tests cover
-EQ/NEQ, AND, case, Group's actual USER, Deny/source ordering, missing authority,
-invalid source/operator/shape/duplicates/bounds, canonical stability and cursor
-reauthorization after default change. OpenAPI duplicate-pair test red→green.
-
-Real PG18 focused version/identity gate11.29s(parent15.57/package18.454):
-two accounts with same User/Group/Policy names and resource ID, two group members,
-selected current USER, default selection, remove/rejoin membership, attachment
-revocation, forged body/header, restricted SQL attacks and historical proof.
-Fixture corrections preserved public Denied identity privacy and existing
-unqualified root/qualified ordinary User login contract; no production weakening.
-
-Full serial real PG18 race batch passed:
-Audit data5.449s, Audit HTTP3.060s, IAM integration172.276s,
-independent dualIAM/PaaS/Audit45.125s, PaaS data4.427s.
-Actual PaaS combines identity/time, allows within window, denies after expiry;
-publication alone does not change default; explicit negative-set default
-allows/excludes the actual USER on the same bearer. Real dispatchers and
-tenant chains, restricted logins, cross-account resources/Operation/outbox,
-credential concurrency and current-state replay gates preserved.
-Final service-credential-as-USER attack added afterward passed a new focused
-database11.31s(parent15.80/package18.343). An earlier last output was unavailable,
-process and PG clients were terminal before this evidence replacement run.
-
-Final full Go race/vet, modules, stable API generation and Linux amd64 whole-repo
-build passed. Existing canonical fuzz15s/2workers/1s minimization passed549,059
-executions. Default-skipped DB tests are not substituted for real batch.
-No UI, installation, capacity or whole-FEAT acceptance implied.
-
-Own PG18 fixture used1CPU/768MiB/PIDs128/64connections. Exact container/network/
-volume identity and task labels confirmed, client count0, stopped and deleted;
-only synthetic test data removed. No local fixture/live test survives.
-Never overlap broad builds/fuzz and the real PG gate.
-
-## Coordination and isolation
-
-User boundary design80e5131 has a concrete API, transaction and acceptance
-matrix in IAM/005; read that owner before implementation. Intended additions:
-current lookup_session boundary snapshot and record_authorization evidence,
-not fake positive PolicyAttachmentEvidence; all tenant grants intersect the
-single boundary. Policy deletion must account for active references; cursor
-must bind complete current boundary/default; self password/logout retain
-existing authenticated paths. New set/remove are root-only now, exact USER;
-Root cannot be bound, platform authority is not altered. Role integrates in006.
-Phase3 was notified of this upcoming public surface; no production code or
-readiness/profile was changed in this design. No actual new revision assigned.
-Both peers were notified of b342 exact three-job CI success.
-
-Existing UX/UI task01a07b21-9a0d-7fd0-b090-7827ce18262e and installation task
-01a04149-5dbb-7300-9e4c-31d9e85c8ada consume only fixed objects and own their
-verification. No UI capability, install profile or other Phase acceptance
-transferred. Mandatory authority absence differs from future optional business
-attribute absence; identity negatives never implicitly allow.
-
-Only own worktree/branch writable; no extra agents/tasks, no other Phase WIP,
-no remote/shared restart or other-resource cleanup. Go GOMAXPROCS2,
-GOMEMLIMIT768MiB/-p2; real DB serial/-p1. Markdown documentation only.
+Existing UX task01a07b21-9a0d-7fd0-b090-7827ce18262e and installation task
+01a04149-5dbb-7300-9e4c-31d9e85c8ada consume only fixed objects with their own gates.
+Both know119 exactCI success and ongoing client scope. No other Phase WIP/profile/
+environment/acceptance imported. No extra agents/tasks; only own branch writable.
