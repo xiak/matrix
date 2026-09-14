@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableToolbar, TablePagination, Transfer } from "@ui/xiak";
@@ -26,11 +26,12 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   const [kind, setKind] = useState("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const words = query.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const matches = items.filter((item) => {
+  const deferredQuery = useDeferredValue(query);
+  const words = useMemo(() => deferredQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean), [deferredQuery]);
+  const matches = useMemo(() => items.filter((item) => {
     const haystack = [item.name, item.id, keywords?.(item) ?? ""].join(" ").normalize("NFKC").toLowerCase();
     return words.every((word) => haystack.includes(word)) && (kind === "all" || !filter || filter.matches(item, kind));
-  });
+  }), [filter, items, keywords, kind, words]);
   const pages = Math.max(1, Math.ceil(matches.length / pageSize));
   const currentPage = Math.min(page, pages);
   const reset = () => { setQuery(""); setKind("all"); setPage(1); };
@@ -41,7 +42,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
       actions={embedded ? action : null}
       filters={filter ? [{ id: "kind", label: filter.label, options: [{ value: "all", label: t("all") }, ...filter.options], value: kind, onChange: (value) => { setKind(value); setPage(1); } }] : []}
       status={t("count", { count: matches.length })} />
-    <Table aria-label={title}><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((item) => <tr key={item.id}>{row(item)}</tr>)}</tbody></Table>
+    <Table aria-label={title} aria-busy={deferredQuery !== query}><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((item) => <tr key={item.id}>{row(item)}</tr>)}</tbody></Table>
     {!matches.length ? <EmptyState title={items.length ? t("noResults") : t("empty")} description={items.length ? t("noResultsHint") : t("emptyHint")} action={items.length ? <Button onClick={reset} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
     <Card.Footer><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Card.Footer>
   </Card>;

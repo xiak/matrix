@@ -1170,6 +1170,21 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("region", { name: "Identity and access" })).toBeTruthy();
     expect(document.body.textContent).not.toMatch(/\p{Script=Han}/u);
   });
+  it("keeps the group directory action-free and moves management into the selected group", async () => {
+    const { user } = await open("groups");
+    const directory = await screen.findByRole("table", { name: "用户组" });
+    expect(within(directory).queryByText("操作")).toBeNull();
+    expect(within(directory).queryByRole("button", { name: "编辑" })).toBeNull();
+    expect(within(directory).queryByRole("button", { name: "删除" })).toBeNull();
+    expect(within(directory).getAllByText("1 项直接关联")).toHaveLength(2);
+    await user.click(within(directory).getByRole("button", { name: "DeliveryTeam" }));
+    expect(screen.getByRole("button", { name: "编辑" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "删除" })).toBeTruthy();
+    const members = screen.getByRole("table", { name: "成员" });
+    expect(within(members).queryByText("操作")).toBeNull();
+    expect(within(members).queryByRole("button", { name: /从用户组移除/ })).toBeNull();
+    expect(screen.getByRole("tab", { name: "直接关联策略 (1)" })).toBeTruthy();
+  });
   it("creates an empty group in a page wizard, then adds members in a separately reviewed change", async () => {
     const { user, repository, extension } = await open("groups");
     await user.click(await screen.findByRole("button", { name: "新建用户组" }));
@@ -1246,8 +1261,9 @@ describe("CAM-style access workspace", () => {
     await user.click(dialog.getByRole("button", { name: "确认变更" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect((await extension.read("preview")).groups[0]?.memberIds).toEqual(["principal-lin", "principal-chen"]);
-    await user.click(screen.getByRole("button", { name: "从用户组移除 chen" }));
+    await user.click(screen.getByRole("button", { name: "移除成员" }));
     dialog = within(screen.getByRole("dialog"));
+    await user.click(dialog.getByRole("checkbox", { name: "chen" }));
     await user.click(dialog.getByRole("button", { name: "审阅变更" }));
     expect(dialog.getByText(/不代表撤销全部访问权限/)).toBeTruthy();
     await user.click(dialog.getByRole("button", { name: "取消" }));
@@ -1265,7 +1281,7 @@ describe("CAM-style access workspace", () => {
     expect(within(policyRow).getByText("直接关联")).toBeTruthy();
     await user.click(within(policyRow).getByRole("button", { name: "继承自 DeliveryTeam" }));
     expect(screen.getByLabelText("Entity destination").textContent).toBe("group-delivery");
-    await user.click(screen.getByRole("tab", { name: "权限策略 (2)" }));
+    await user.click(screen.getByRole("tab", { name: "直接关联策略 (2)" }));
     await user.click(screen.getByRole("button", { name: "ProductionLogReader" }));
     expect(screen.getByLabelText("Entity destination").textContent).toBe("policy-prod-logs");
     await user.click(screen.getByRole("tab", { name: /策略用法/ }));
@@ -1282,7 +1298,7 @@ describe("CAM-style access workspace", () => {
     await user.click(metadata.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const before = await extension.read("preview");
-    await user.click(screen.getByRole("tab", { name: "权限策略 (1)" }));
+    await user.click(screen.getByRole("tab", { name: "直接关联策略 (1)" }));
     await user.click(screen.getByRole("button", { name: "关联策略" }));
     let dialog = within(screen.getByRole("dialog"));
     await user.click(dialog.getByRole("checkbox", { name: "MatrixReadOnlyAccess" }));

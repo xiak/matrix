@@ -1450,7 +1450,7 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- The current Theme/component, navigation and CAM-style IAM slice has 482 frontend tests across 35 test
+- The current Theme/component, navigation and CAM-style IAM slice has 483 frontend tests across 35 test
   files; the complete suite passes with two workers at the default timeout
   (the long user-selection journey retains its explicit 15s timeout).
   Worker concurrency is bounded in the test owner because simultaneously
@@ -1555,7 +1555,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   feedback without new warning/error logs. Shared control tests cover required
   semantics, classification/status distinction, controlled paging and dialog
   focus return; existing large-candidate and batch/permission gates remain.
-  All 482 frontend tests and three static-export normalization tests pass,
+  All 483 frontend tests and three static-export normalization tests pass,
   alongside TypeScript, lint, architecture and 228 theme contrast checks.
   All 213 generated production files from 38 static routes match the Go-embedded export, and Go UI
   tests and vet pass. Tables, forms, dialogs, choices,
@@ -1616,6 +1616,15 @@ and `git diff --check` gates must pass on the same committed worktree.
   column, selection-driven menu, disabled explanations and group append/review;
   the original membership and grants remain intact. The synthetic membership
   added during that check was removed. Batch writes remain preview-only.
+  The group directory is now an action-free locator: it shows membership and
+  direct-policy counts, while edit, delete and relationship changes live in
+  the selected group detail. Member rows no longer duplicate a trailing
+  operation column, and the empty state no longer suggests that RootIdentity
+  can join a group. Shared small-directory and policy searches defer list
+  calculation from the controlled input update so large preview policy sets
+  do not put synchronous filtering work on the keystroke path. This does not
+  adopt the IAM group's work-in-progress wire types or claim batch atomicity;
+  live group availability still requires its own fixed contract.
   The policy directory combines independent kind/service/action-type/resource-
   scope filters with localized keyword search, sorting and pagination. Page
   context survives list/detail navigation in the current account session;

@@ -1320,6 +1320,8 @@
     "cancelHint": "用户组尚未创建。离开将丢弃名称、描述和已选策略。",
     "addMembers": "添加成员",
     "removeMembers": "移除成员",
+    "directPolicies": "直接关联策略",
+    "directPolicyCount": "{count} 项直接关联",
     "addPolicies": "关联策略",
     "removePolicies": "解除策略",
     "confirmChange": "确认变更",
@@ -1330,11 +1332,9 @@
     "remainingSources": "其他用户组或直接关联的策略可能仍授予权限，移除本来源不代表撤销全部访问权限。",
     "backToSelection": "返回选择",
     "groupIdentityHint": "用户组为子用户成员提供策略继承；它不是资源所有者，不能登录，也不能像角色一样被扮演。",
-    "removeMember": "从用户组移除 {name}",
-    "remove": "移除",
     "noMembers": "暂无成员",
-    "noMembersHint": "可添加主账号或子用户；子用户将继承用户组关联的策略。",
-    "deleteImpact": "删除用户组将移除 {count} 位成员从本组继承的授权，不删除用户、策略或资源。",
+    "noMembersHint": "可添加子用户；成员将继承用户组直接关联的策略。账户所有者不加入用户组。",
+    "deleteImpact": "删除用户组将解除 {members} 位成员关系和 {policies} 项直接策略关联，不删除用户、策略或资源。",
     "moreMembers": "另有 {count} 位成员。"
   },
   "RoleWorkspace": {

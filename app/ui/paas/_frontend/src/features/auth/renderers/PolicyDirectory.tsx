@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Badge, Button, Card, ContentPage, EmptyState, TableActions, TableSelectionCell, TablePagination, TableToolbar, Select, Table, Tabs } from "@ui/xiak";
@@ -33,6 +33,7 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate }: {
   const collection = useTranslations("Collection");
   const [view, setView] = useState(policyDirectoryView.read);
   const [selection, setSelection] = useState<string[]>([]);
+  const deferredQuery = useDeferredValue(view.query);
   useEffect(() => { policyDirectoryView.remember(view); }, [view, policyDirectoryView]);
   const directory = useMemo(() => workspace.policies.map((policy) => {
     const document = policy.versions.find((version) => version.id === policy.defaultVersion)!.document;
@@ -44,13 +45,13 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate }: {
     return { policy, description, services, keywords };
   }), [workspace.policies, describe, r]);
   const matches = useMemo(() => {
-    const words = view.query.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const words = deferredQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
     return directory.filter((row) => (view.kind === "all" || row.policy.kind === view.kind) &&
       (view.service === "all" || row.services.some((service) => service === view.service)) &&
       (view.category === "all" || row.policy.systemCategory === view.category) && words.every((word) => row.keywords.includes(word)))
       .sort((a, b) => view.sort === "name" ? a.policy.name.localeCompare(b.policy.name, locale) :
         (view.sort === "newest" ? -1 : 1) * a.policy.updatedAt.localeCompare(b.policy.updatedAt) || a.policy.name.localeCompare(b.policy.name, locale));
-  }, [directory, view, locale]);
+  }, [deferredQuery, directory, locale, view.category, view.kind, view.service, view.sort]);
   const pages = Math.max(1, Math.ceil(matches.length / view.pageSize));
   const page = Math.min(view.page, pages);
   const visible = matches.slice((page - 1) * view.pageSize, page * view.pageSize);
@@ -79,7 +80,7 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate }: {
           { id: "service", label: t("product"), value: view.service, onChange: (service) => change({ service }), options: [{ value: "all", label: t("allServices") }, ...policyServices.map((value) => ({ value, label: r(`services.${value}`) }))] },
           { id: "category", label: t("permissionCategory"), value: view.category, onChange: (category) => change({ category }), options: [{ value: "all", label: t("allCategories") }, ...(["global", "product"] as const).map((value) => ({ value, label: t(`categories.${value}`) }))] }
         ]} tools={<Select controlSize="small" aria-label={t("sort")} value={view.sort} onValueChange={(sort) => change({ sort })} options={[{ value: "name", label: t("nameSort") }, { value: "newest", label: t("newest") }, { value: "oldest", label: t("oldest") }]} />} />
-      <Table aria-label={w("policies")} className={styles.policyTable} data-custom-only={customOnly || undefined}>
+      <Table aria-label={w("policies")} aria-busy={deferredQuery !== view.query} className={styles.policyTable} data-custom-only={customOnly || undefined}>
         <thead><tr><TableSelectionCell header label={t("selectPage")} checked={allSelected ? true : someSelected ? "mixed" : false} disabled={busy || !visible.length || (!allSelected && new Set([...selection, ...visible.map((row) => row.policy.id)]).size > 30)} onChange={(checked) => setSelection(!checked ? selection.filter((id) => !visible.some((row) => row.policy.id === id)) : [...new Set([...selection, ...visible.map((row) => row.policy.id)])])} />
           <th scope="col" className={styles.nameCell}>{t("policyName")}</th>{!customOnly ? <><th scope="col" className={styles.productCell}>{t("product")}</th><th scope="col" className={styles.categoryCell}>{t("permissionCategory")}</th></> : null}<th scope="col">{w("description")}</th><th scope="col" className={styles.timeCell}>{t("updatedAt")}</th></tr></thead>
         <tbody>{visible.map(({ policy, description, services }) => <tr key={policy.id} data-selected={selection.includes(policy.id) || undefined}>

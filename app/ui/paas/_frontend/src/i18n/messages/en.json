@@ -1320,6 +1320,8 @@
     "cancelHint": "The group has not been created. Leaving will discard its name, description and policy selection.",
     "addMembers": "Add members",
     "removeMembers": "Remove members",
+    "directPolicies": "Direct policies",
+    "directPolicyCount": "{count, plural, one {# direct attachment} other {# direct attachments}}",
     "addPolicies": "Attach policies",
     "removePolicies": "Detach policies",
     "confirmChange": "Confirm changes",
@@ -1330,11 +1332,9 @@
     "remainingSources": "Other groups or direct policies may still grant access. Removing this source does not necessarily revoke all access.",
     "backToSelection": "Back to selection",
     "groupIdentityHint": "A group provides policy inheritance to subuser members. It is not a resource owner, cannot sign in and cannot be assumed as a role.",
-    "removeMember": "Remove {name} from group",
-    "remove": "Remove",
     "noMembers": "No members yet",
-    "noMembersHint": "Add the primary identity or subusers. Subuser members inherit the group's policies.",
-    "deleteImpact": "Deleting this group removes its inherited grants from {count, plural, one {# member} other {# members}}. Users, policies and resources are not deleted.",
+    "noMembersHint": "Add subusers to inherit the group's directly attached policies. The account owner cannot join a group.",
+    "deleteImpact": "Deleting this group removes {members, plural, one {# membership} other {# memberships}} and {policies, plural, one {# direct policy attachment} other {# direct policy attachments}}. Users, policies and resources are not deleted.",
     "moreMembers": "And {count} more members."
   },
   "RoleWorkspace": {
