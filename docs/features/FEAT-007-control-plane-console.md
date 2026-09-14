@@ -1008,6 +1008,8 @@ with a single-column compact layout and full readable values. The policy
 overview separates its readable `16px` description from `12px` muted field
 labels and `14px` semibold values; identifiers retain `13px` monospace text.
 Classification badges keep intrinsic width instead of becoming a mobile banner.
+The policy classification and description share one lead row at every width;
+the description wraps only within the remaining inline space.
 
 Collection search uses one keyword field per independently searched collection.
 The shared TableToolbar separates commands, query, structured filters and result

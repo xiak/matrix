@@ -42,7 +42,6 @@
   .policyFacts > div:first-child { grid-column: 1 / -1; }
 }
 @container policy-overview (max-width: 380px) {
-  .policyLead { display: grid; }
   .policyFacts { grid-template-columns: minmax(0, 1fr); }
   .policyFacts > div:first-child { grid-column: auto; }
 }
