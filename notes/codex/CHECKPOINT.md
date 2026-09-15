@@ -3,10 +3,10 @@
 > Non-authoritative portable memory. Validate Git, exact CI and owning FEAT.
 
 - Updated 2026-09-15. Repository https://github.com/xiak/matrix.git, branch feat/iam.
-- Latest pushed candidate f15cc983a69092528a66eb49b0509b760392187c:
+- Latest pushed and independently verified f15cc983a69092528a66eb49b0509b760392187c:
   frozen action-family HTTP/SQL/PDP cutover; all local gates passed.
-  Verification34955695756 exact SHA checked: go and node-process success,
-  authority-process still running. Do not call the candidate CI accepted.
+  Verification34955695756 exact SHA checked: go, authority-process and
+  node-process all completed/success. This is the next verified rollback point.
 - Latest fully verified rollback point 9febf76690e96f98abbf265b3ce840b8bf3dbc2c,
   Verification34947449762 exact SHA, all three jobs completed/success.
   It is pure family compilation only; online grammar remains exact-only.
@@ -27,14 +27,14 @@ remains excluded. Current user additionally authorized cleanup of stopped local
 Docker containers and unused custom networks; completed without deleting
 images/volumes or touching running foreign containers or remote/shared services.
 
-First check exact f15 CI, then update only the owning evidence and this checkpoint.
-Do not restart passed heavy local gates merely because CI is pending.
+Exact f15 CI is confirmed; owning005 evidence records the fixed result.
+Do not restart its passed heavy local gates merely for a documentation change.
 Next backend work must address 005 remaining conditions/delegation and 006
 Role/STS, plus the real readonly product catalog needed by the UI. Freeze each
 narrow contract before code; no runtime product registration or hardcoded UI
 permission engine. Entire goal remains incomplete.
 
-## Candidate f15 family runtime contract
+## Fixed f15 family runtime contract
 
 Author patterns are TENANT-only, exactly product.family.*; star matches one
 nonempty complete declaration segment. No global/product-only, nested, partial,
@@ -135,7 +135,7 @@ No new online repair, current-head historical fallback or unpublished1..N matrix
 ## Peer coordination / remaining boundary
 
 Phase3 thread01a04149-5dbb-7300-9e4c-31d9e85c8ada received f15 candidate and
-local evidence. It waits ONE cumulative final IAM/Role/STS donor, retaining
+local evidence; exact all3 CI is now confirmed. It waits ONE cumulative final IAM/Role/STS donor, retaining
 its PaaS5/host and predecessor5/4/5+r11. Final host donor
 be3c4a96b4381426c01cd6315eaa3713c2855982 includes platform12 and ca7 enrollment.
 Never import this branch PaaS1/profile, the other checkpoint or acceptance state.

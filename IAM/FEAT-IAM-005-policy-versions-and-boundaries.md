@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串条件及资源前缀已有固定 CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过。受限动作族通配已完成本地后端闭环，独立 CI 待确认；IP 条件、Role 边界及完整委派未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串条件及资源前缀已有固定 CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过。受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；IP 条件、Role 边界及完整委派未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -89,7 +89,7 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 #### 受限动作族通配：冻结目录的编译增量
 
-纯编译基础已有固定 CI；当前纵向片已接入在线发布、数据库与唯一 PDP，并完成下述本地真实运行门禁，独立 CI 待确认。作者 `actions` 只允许精确三段 `product.family.*`，例如 `paas.application.*`；总长仍最多128字节。星号只匹配一个非空完整声明段；`paas.application.*` 不匹配 `paas.application-extra.read` 或 `paas.application.child.read`。全局 `*`、仅产品 `paas.*`、多层模式、中间星号、部分段前缀、问号、正则、转义、大小写折叠和未知命名空间不支持。
+本纵向片已接入在线发布、数据库与唯一 PDP，并完成下述本地真实运行门禁和精确提交独立 CI。作者 `actions` 只允许精确三段 `product.family.*`，例如 `paas.application.*`；总长仍最多128字节。星号只匹配一个非空完整声明段；`paas.application.*` 不匹配 `paas.application-extra.read` 或 `paas.application.child.read`。全局 `*`、仅产品 `paas.*`、多层模式、中间星号、部分段前缀、问号、正则、转义、大小写折叠和未知命名空间不支持。
 
 仅 TENANT 作者可使用模式。编译器在调用边界明确提供、完整校验的冻结 Profile 中展开，不按 scope、资源或条件筛掉不便匹配的动作：任一展开动作范围不符、资源缺失、条件或前缀能力不符，整个语句拒绝。零匹配拒绝，不表示“未来可能允许”。重复作者 token 拒绝；不同模式以及模式与精确动作重叠时按集合去重。作者文档原样规范编码，resolvedStatements 只含排序、精确、去重的动作，逐语句仍最多128项；原64KiB作者、128KiB完整内容及16个Profile预算不增加。每次解析至多8192次动作访问（64语句×128动作），在去重之前计入所有展开结果与精确 token，重叠不能隐藏编译工作；展开表只从已验证且每个最多128动作的Profile一次构造，不逐模式扫描全局目录。产品名只用于语法命名空间与查找明确声明，不推导服务或授权资格。
 
@@ -115,7 +115,7 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 最终源码的整组PG18 policy race剖析通过158.43s：组流程74.41s、完整数据后的平台凭据保护13.64s、末尾原schema/bootstrap/退休/撤权重放及current Profile/私有ACL攻击全部完成。剖析二进制保留`-race`，局部`-ldflags=-w`只去除Windows调试段；随后使用普通链接的最终串行回归也通过，未以剖析代替正常运行：Audit数据库/保留升级7.741s、Audit HTTP3.593s、IAM integration308.117s、authorityprocess101.499s、PaaS数据库5.817s。IAM包包含完整policy、真实HTTP和本地恢复；进程包包含固定21 retained升级、首次r2条件冲突/新增动作，以及真实双IAM/PaaS/Audit、受限数据库身份、模式Allow/Deny/撤销、跨租户资源/配置/Operation/outbox与历史proof。环境为本任务独立PG18.6、1CPU/768MiB/PIDs128/maxconn64，Go2/768MiB、重型race-p1串行；无远端或其他Phase运行验收。
 
-最终全仓 Go race/vet、模块校验、API 生成字节稳定和 Linux amd64 全仓构建通过。受限动作族与原编译内容往返 fuzz 各15秒、2 workers、1秒最小化预算，通过212769/218535次执行。上述检查与真实PG重型门禁串行，原组120秒/综合240秒和101成员规模未放宽。精确提交独立 CI 待确认；不宣称容量/HA、UI或发布兼容。
+最终全仓 Go race/vet、模块校验、API 生成字节稳定和 Linux amd64 全仓构建通过。受限动作族与原编译内容往返 fuzz 各15秒、2 workers、1秒最小化预算，通过212769/218535次执行。上述检查与真实PG重型门禁串行，原组120秒/综合240秒和101成员规模未放宽。固定 `f15cc983a69092528a66eb49b0509b760392187c` 的 [Verification 34955695756](https://github.com/xiak/matrix/actions/runs/34955695756) 已通过 GitHub API 核实精确 SHA，go、authority-process、node-process 全部 completed/success；不宣称容量/HA、UI或发布兼容。
 
 纯片固定 `9febf76690e96f98abbf265b3ce840b8bf3dbc2c` / [Verification 34947449762](https://github.com/xiak/matrix/actions/runs/34947449762) 已核实精确SHA，go/authority-process/node-process全部success。该固定仍22/13/1且线上拒绝模式，不含当前23纵向增量。其本地契约攻击、两个实际产品的最小引用、合成非全局目录、当前请求兼容、8192恰好通过及去重前超限拒绝均通过；全仓 Go race/vet、模块校验、生成稳定和Linux构建通过，Go2核/768MiB。模式/原编译内容往返分别15秒/2workers/1秒最小化预算通过265354/284079次；原单策略样本约80μs、49989B、162alloc，无模式不建索引；这些不是容量SLO。该纯片本地没有外部环境，CI真实进程只是既有exact授权回归，不能作为模式运行验收。
 
