@@ -4,8 +4,8 @@
 
 - Updated 2026-09-15. Repository https://github.com/xiak/matrix.git, branch feat/iam.
 - Latest pushed implementation 32dc1a4aab4a69d1c6cb4d04437dd7f8fd739cb0.
-  Verification34944465086 exact SHA checked: go/node-process success,
-  authority-process still running. Candidate, not final CI acceptance.
+  Verification34944465086 exact SHA independently checked: go,
+  authority-process and node-process all completed/success.
 - Prior f272d06f84d8a753f0a7ec2cf3dc4276f637d660 /34935374957 and
   1dc1079c4e7bec80f5345d06929875b492ba9a86 /34933760954 exact all3 success.
   Those are the verified rollback points; checkpoints are never donors.
@@ -19,8 +19,8 @@ Whole IAM goal ACTIVE. Read AGENTS, owning FEAT, then code/tests.
 registration/request/decision;008 service/PEP/ABAC;010 UI;011 final capacity/HA.
 No new agents/tasks. UI entirely UX/UI peer-owned, no UI/style/embed/browser
 or other worktree/WIP reads. Withdrawn GitLab/root172.30.1.5 never accessed.
-Next confirm exact32dc CI, update005 evidence, send final fixed confirmation,
-then continue the existing FEAT priorities. Do not call the whole goal complete.
+005 owns final32dc evidence. Continue existing FEAT priorities after the fixed
+handoff; no UI implementation here. Do not call the whole goal complete.
 
 ## Fixed32dc compiled policies
 
@@ -117,15 +117,15 @@ sample is not a deliverable or portable runtime resource.
 
 ## Peers / remaining boundary
 
-Installation thread01a04149-5dbb-7300-9e4c-31d9e85c8ada received32dc candidate,
-waits exact all3 success/final cumulative ABI. Will preserve own PaaS5/host
+Installation thread01a04149-5dbb-7300-9e4c-31d9e85c8ada received32dc candidate;
+final all3 CI success is confirmed. Will preserve own PaaS5/host
 and predecessor5/4/5+r11; no import of this branch PaaS1/profile/FEAT/checkpoint.
 Final host donor be3c4a96b4381426c01cd6315eaa3713c2855982 includes platform12
 and ca7f694 enrollment history. Final consumer parity remains its own gate.
 
 UX/UI thread01a07b21-9a0d-7fd0-b090-7827ce18262e, feat/cloud-console-ux,
-fixed610fef1954be84be5b4bc16e4dd2d9f6e9ff209c, received32dc candidate wire
-change; creation inputs unchanged, no client-submitted compilation. Await CI.
+fixed610fef1954be84be5b4bc16e4dd2d9f6e9ff209c, received32dc wire change;
+creation inputs unchanged, no client-submitted compilation. CI now all3 success.
 MOCK/live separate; do not implement its UI here.
 
 Role/STS/programmatic/service identity policy/ABAC/governance/product runtime

@@ -89,19 +89,19 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 #### CAT-05 的不可变编译内容
 
-版本绑定先在现有 `api/iam/v1/policy.go` 收敛为纯契约，再接入注册事务、发布、当前评估与历史证明；纯契约通过不能代表线上 PolicyVersion 已使用它。保留唯一作者 `document`，编译结果显式使用 `compilationVersion="1"`、`profiles` 和 `resolvedStatements`。每个 resolved 项只有唯一 `sid` 与排序的精确 `actions`；与作者语句逐一对应。当前只编译既有精确动作，未知动作或 pattern 仍拒绝；以后受限 pattern 只能由同一发布编译器展开，不能进入运行时字符串匹配。
+版本绑定由现有 `api/iam/v1/policy.go` 拥有唯一契约，并贯穿注册事务、发布、当前评估与历史证明。保留唯一作者 `document`，编译结果显式使用 `compilationVersion="1"`、`profiles` 和 `resolvedStatements`。每个 resolved 项只有唯一 `sid` 与排序的精确 `actions`；与作者语句逐一对应。当前只编译既有精确动作，未知动作或 pattern 仍拒绝；以后受限 pattern 只能由同一发布编译器展开，不能进入运行时字符串匹配。
 
-编译器消费显式的 Profile 集合，校验动作的范围、资源/前缀与条件能力，输出恰好实际涉及的产品引用，每产品一个精确 revision/digest；不能按产品名或动作后缀推导权限。输入 Profile 是调用边界提供的材料，纯语法/摘要校验不认证发布者、不注册新产品。实际 Create/Publish 仍只接受 document 和既有并发/幂等字段，后续必须在锁内从受信 current head 选择 Profile；用户不能提交 compilation 或选择旧 Profile。不可变内容加载必须核对注册的精确 Profile、重新验证整个编译结果及其摘要，不把缺失字段解释成旧格式。
+编译器消费显式的 Profile 集合，校验动作的范围、资源/前缀与条件能力，输出恰好实际涉及的产品引用，每产品一个精确 revision/digest；不能按产品名或动作后缀推导权限。输入 Profile 是调用边界提供的材料，纯语法/摘要校验不认证发布者、不注册新产品。实际 Create/Publish 只接受 document 和既有并发/幂等字段，在锁内核对受信 current head 与当前源码声明；用户不能提交 compilation 或选择旧 Profile。不可变内容加载核对注册的精确 Profile、重新验证整个编译结果及其摘要，不把缺失字段解释成旧格式。
 
 唯一 canonical owner 使用新域 `matrix.iam.policy-compilation.v1` 承诺完整规范作者文档、编译版本、最小产品引用和逐语句解析结果。SID 在两侧均唯一且一一对应，整个文档已经进入摘要，不另存第二个语句摘要或可独立改变的 ordinal。原 v1 文档 canonical/digest 保留真实历史读取契约；新编译内容不能使用原算法冒充已绑定版本。纯契约首片不改变当前 PolicyVersion HTTP/SQL 或安装 profile，后续切换必须增加明确的完整新载荷和受保护历史标记。
 
 编译预算沿用原文档/语句/动作/资源限制，输入最多16个 Profile（各自仍受001预算），完整规范编译内容最多128KiB；这不是放大当前HTTP请求/响应预算。输入与输出集合不共享可修改切片；重排不改变摘要，重复/多余/缺失引用、同产品多版本、SID错配、解析动作变体，以及用同revision的不同内容验证已冻结引用均拒绝。纯编译器不证明全局同revision不变性，该责任属于后续不可变registry。目录新增动作或形状只能改变新编译内容，旧结果按原 Profile 验证；两个实际产品以及没有当前全局目录条目的合法合成产品均走同一纯校验路径。后者只证明无产品名分支，不证明它被线上接入。
 
-后续真实评估须同时满足请求当前 Profile 与策略原 Profile 的目标模式、资源种类、scope、caller及可信条件解释；同名动作的解释冲突失败关闭，不能静默忽略旧 Deny。当前分支已有 ALLOW/DENY 及 Deny 优先，该规则不会被 Profile 绑定降级。目录更新不重编译旧版本、不移动默认指针，历史决定不查最新 head。001 已在固定1dc完成注册、当前请求与决定绑定；本 owner 的数据库发布/求值及最终be3消费者组合仍是未完成硬门禁。
+当前真实评估同时满足请求当前 Profile 与策略原 Profile 的目标模式、资源种类、scope、caller及可信条件解释；同名动作的解释冲突失败关闭，不能静默忽略旧 Deny。ALLOW/DENY 及 Deny 优先不会被 Profile 绑定降级。目录更新不重编译旧版本、不移动默认指针，历史决定不查最新 head。001 的注册/当前请求/决定绑定与本 owner 的数据库发布/求值已串联并通过下述本分支门禁；最终be3主机消费者组合及未来有效Profile版本升级仍须由其真实消费者另验。
 
 #### 编译持久化切换与支持边界
 
-本节的切片正在实施，尚未验收。沿现有 policy_versions、发布事务、默认指针及唯一 evaluator 替换，不新建平行策略库或权限引擎。新版本由服务端在同一事务锁住受信 current heads 后编译，保存完整不可变编译内容和唯一摘要；客户端仍只提交作者文档与原并发/幂等字段。源码目录、SQL实际登记与当前 head 不一致时发布失败关闭，不从 archive 最大 revision 或请求中选择产品版本。相同作者文档在不同合法 Profile 下会形成不同内容承诺，须显式发布再显式 set-default，不自动更新附件。
+本节后端切片已通过本分支固定CI，完整005及组合发行未验收。沿现有 policy_versions、发布事务、默认指针及唯一 evaluator 替换，不新建平行策略库或权限引擎。新版本由服务端在同一事务锁住受信 current heads 后编译，保存完整不可变编译内容和唯一摘要；客户端仍只提交作者文档与原并发/幂等字段。源码目录、SQL实际登记与当前 head 不一致时发布失败关闭，不从 archive 最大 revision 或请求中选择产品版本。相同作者文档在不同合法 Profile 下会形成不同内容承诺，须显式发布再显式 set-default，不自动更新附件。
 
 policy_versions 增加无默认、必填的 contract_version，1只标识切换前真实完整存储行，2代表新编译契约；缺列/缺字段/null 不是可由运行时提交的旧格式选择器。一次性 cutover 持锁、整事务检查既有行后标记；旧 document/canonical/contentDigest、创建时间、默认指针和附件均不改，不回填编译结果。重复迁移不得补齐不完整新行或复活退休内容。本片开发契约已对齐为 IAM22/Audit13，本分支 PaaS1 不变；发布 CurrentDatabaseProfile 不变，数字不授权旧二进制或发行升级。
 
@@ -117,7 +117,7 @@ policy_versions 增加无默认、必填的 contract_version，1只标识切换�
 
 **历史存在不等于旧语义已获证明。** contract1 仅证明在切换前存在，不证明记录来自哪一版程序；首版 archive 恰好存在同样不是来源证明。固定 `1dc1079c4e7bec80f5345d06929875b492ba9a86` 是此切片明确的解释基线，不是每份旧策略的作者声明。若保存 migration/legacy interpretation 上限，它不能伪装成作者 profiles、compilationVersion 或修改旧摘要。最终 host 固定 be3 的权限 parity 是消费者验收，不补造旧数据来源。
 
-- CUSTOMER 旧版本只在明确支持的固定能力契约及真实旧 binary→当前 PEP 非扩权矩阵下恢复当前求值；必须逐项证明精确 action、kind、scope、caller、mode/usage、所用条件来源/算子及 EXACT/ANY/PREFIX 语义。未知来源、未覆盖形状或冲突使整次决定失败关闭，不能跳过 Deny 后使用另一 Allow。未获正向证明的内容仅保留管理/历史读取和原事实 proof，不能授予当前权限。
+- 当前CUSTOMER旧版本仅保留管理/历史读取和原事实proof，不参与当前授权；原Root必须显式重发编译版本并选择默认。以后若支持旧解释，须另有固定能力契约及真实旧binary→当前PEP非扩权矩阵，逐项证明action/kind/scope/caller/mode/usage、条件来源/算子及EXACT/ANY/PREFIX语义。未知或冲突使整次决定失败关闭，不能跳过Deny后使用另一Allow。
 - Account Root 必须沿既有当前授权路径显式发布新编译版本并 set-default 才完成重审。首片 preflight 要求原 Root USER 为 ACTIVE、原 SYSTEM 默认精确匹配已证明的固定管理 seed，并拒绝 Root 任何当前直接或实际组继承的 legacy CUSTOMER 附件；即使该文档在普通 User 兼容集合中也不例外，受支持的 Deny/时间条件仍可能封锁管理。操作者须在旧版本按已有权限显式解除这些 Root 附件再重试，迁移不自动解除。真实切换后还必须证明 policy.read/create、version.create/set-default 及必要 attachment.revoke 可达，不以 seed 存在代替。若资格或路径不满足，在 marker/schema/default/outbox 变化前整事务拒绝；不先切换再将用户锁死，不新增绕过 PDP 的在线修复权限。以后若允许 Root 的旧CUSTOMER附件，需要另证完整有效快照及所有必需管理操作的可达矩阵。
 - SYSTEM 种子是有确定源码 canonical/digest 的另一种输入。已有种子只有精确匹配受支持固定内容及已验证能力上限才可继续当前求值；名字相同、管理类型相同不足。新装直接产生新编译版本；已有默认值不得因 schema/bootstrap 等值重放被替换，旧平台撤权不恢复。
 - ACTIVE Root 指原 USER，不允许迁移启用暂停 Account。ACTIVE/DISABLED Account 都检查原 Root 归属、ACTIVE USER、精确管理 seed 和零 Root legacy CUSTOMER 直接/实际组附件；暂停不能豁免资格。ACTIVE Account 验证当前管理可达；DISABLED Account 只承诺原状态和访问冻结保持，并须真实完成暂停带数据切换→仍拒绝→既有平台显式 enable→Root 管理可达的分支，enable 有自己的决定/事实。该分支未经验证前可在效果前拒绝，不假想恢复；Root USER 自身停用、缺失或身份不符均拒绝。
@@ -258,9 +258,9 @@ Audit 原双 schema/受限 recorder/封闭 action/不可变链真库门禁5.324s
 
 GOMAXPROCS2/GOMEMLIMIT768MiB 下全仓 Go race/vet、模块验证、API生成字节稳定及 Linux amd64 构建通过；最终 SID/随机测试增量再次通过 API/architecture race。沿原编译规范往返 fuzz 加总承诺与当前请求检查，15秒、2workers、每样本最小化1秒，通过342088次执行，不声称容量SLO。该纯函数片没有启动真实数据库、服务、浏览器或远端实验；默认跳过的外部环境测试不作为新增真库证据。固定 `f272d06f84d8a753f0a7ec2cf3dc4276f637d660` 的 [Verification 34935374957](https://github.com/xiak/matrix/actions/runs/34935374957) 已独立核实精确SHA及三项completed/success。其IAM21/Audit13/PaaS1及发布profile未变，不包含上述IAM22存储/求值WIP，也不替代后继真实门禁。
 
-### 编译版本存储与当前求值本地证据
+### 编译版本存储与当前求值证据
 
-2026-09-15，本片本地纵向门禁已通过，独立固定提交 CI 尚待确认，不能视为整个005或IAM目标验收。公开版本严格区分contract1/2；新发布只由当前受信声明编译，SQL与适配器保留原作者内容、完整编译承诺和精确archive引用。私有快照包装不泄漏到公共响应/证据；外来声明不存在、同revision不同内容、非规范原存储字节、缺少版本标记/编译内容、SID/动作替换及扩大私有函数权限均失败关闭。重新计算攻击载荷摘要后仍须拒绝错误引用和绑定，不以普通hash不符代替深层校验。
+2026-09-15，固定 `32dc1a4aab4a69d1c6cb4d04437dd7f8fd739cb0` 的 [Verification 34944465086](https://github.com/xiak/matrix/actions/runs/34944465086) 已经GitHub API核实精确SHA，Go、authority-process、node-process全部completed/success；整个005和IAM目标仍未验收。公开版本严格区分contract1/2；新发布只由当前受信声明编译，SQL与适配器保留原作者内容、完整编译承诺和精确archive引用。私有快照包装不泄漏到公共响应/证据；外来声明不存在、同revision不同内容、非规范原存储字节、缺少版本标记/编译内容、SID/动作替换及扩大私有函数权限均失败关闭。重新计算攻击载荷摘要后仍须拒绝错误引用和绑定，不以普通hash不符代替深层校验。
 
 独立限额PG18.6（1 CPU、768 MiB、128 PIDs、64连接），Go2/768MiB、race-p1串行：完整策略门禁198.844s（父195.67s）；原组规模单独94.864s（流程82.84s），未减少分页/竞争/成员规模，未扩大两分钟流程与四分钟总预算。初次完整运行曾超时，定位为重复声明/编译校验开销；同栈去重及源码完整内容相等的编码复用后重新通过。原生单策略微基准由329µs降至59µs，但这不代表端到端容量或HA/SLO验收，011仍须独立证明。
 
