@@ -1,6 +1,6 @@
 # FEAT-IAM-001：业务授权能力目录
 
-- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 未实施，本 FEAT 整体未验收。
+- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 纯声明契约已实现，注册/实际决定与产品接入尚未实施，本 FEAT 整体未验收。
 - 依赖：[产品契约](./FEAT-IAM-000-product-contract.md)。
 - Owner：IAM 公共契约与现有 authority；产品拥有其业务词汇。
 - 首片：把现有已接受的动作、允许调用服务、资源种类和 scope 收敛为一份不可变目录，所有当前验证和决定路径消费该目录。
@@ -31,9 +31,13 @@
 
 ### CAT-05 下一纵向切片：可验证的产品 Profile
 
-该切片尚未实施，不改变当前静态目录的验收状态。先把已有真实 PEP 的语义显式登记并绑定不可变 revision/contentDigest，再由005消费冻结的动作集合；不能先在求值器加入字符串 Action 前缀匹配，最后补历史证明。
+该切片先实现纯声明契约，尚未改变当前静态目录或实际授权入口。先把已有真实 PEP 的语义显式登记并绑定不可变 revision/contentDigest，再由005消费冻结的动作集合；不能先在求值器加入字符串 Action 前缀匹配，最后补历史证明。
 
 产品 Profile 必须同时约束产品标识、允许调用的已认证服务、Action、scope、资源种类、请求目标模式、集合行为与可信条件能力。产品名或 Action 字符串只作为标识，不能推导调用权限或粒度。内容不可变、同产品同 revision 不得对应另一 digest；digest 覆盖所有影响授权解释的字段。返回副本不能修改注册目录。注册来源仍由可信产品发布/服务组合控制，不开放租户上传 Profile 或借此注册平台动作。
+
+纯声明编码由 `api/iam/v1/authorization_profile.go` 唯一拥有；它保护产品能力内容与引用的不可变边界，不复制 Policy/Audit 编码，不提供第二份活跃动作目录。`AuthorizationProfile` 包含 `apiVersion/kind/product/revision/callingService/actions`；每个动作显式给出 `resourceKind/scope/resourceShapes/conditions`。`INSTANCE` 可以声明租户实例前缀；`COLLECTION` 只能声明 `COLLECTION_LIST` 或携带 `resultResourceKind` 的 `COLLECTION_CREATE`，不支持 prefix、filter 或 batch。创建结果类型不是最终资源ID或payload证明。
+
+`DecodeAuthorizationProfile` 沿现有严格 JSON owner 拒绝重复/未知/大小写别名字段，输入与程序内声明都受64KiB、128动作上限约束。动作/形状/条件分别按集合排序，输入保持不变；`CanonicalizeAuthorizationProfile` 使用 `matrix.iam.authorization-profile.v1` 域分隔摘要，`CheckAuthorizationProfileReference` 精确比较 `product/revision/contentDigest`，不接受“更新版本即可兼容”。可选条件省略、null、空集合都规范为不声明任何条件能力；来源仍复用唯一 IAM 封闭定义。产品/服务标识的语法允许未来产品，但语法通过、摘要匹配均不构成注册、签名认证或授权；当前未知动作仍被原目录拒绝。可信发布、同revision变体拒绝与历史保存必须在后续注册事务中落实，不能由纯编码测试冒充。
 
 目标模式不能只有一个从动作后缀推断的 INSTANCE 标记。当前真实调用者至少存在三种情况，必须在首片全部覆盖：
 
@@ -78,4 +82,6 @@
 
 - 固定实现 `3b11eb9dbabd70211e665c00e4e665658b461bd1` 已推送；GitHub API 核实 [Verification 34565145241](https://github.com/xiak/matrix/actions/runs/34565145241) 的精确 SHA 与 go、authority-process、node-process 全部 `completed/success`。独立 Linux PG18 job 还复跑了既有各旧版本保留升级门禁；这不等于新增跨 profile 签名升级许可。
 
-CAT-05、策略替换及最终 IAM6 组合仍分别按 owning FEAT 实施。
+2026-09-15 CAT-05 纯契约前置门禁：既有 `api/iam/v1/contract_test.go` 覆盖集合排序与输入不变、授权字段的摘要绑定、精确三元引用、同动作集合/实例声明、重复/未知/越产品能力拒绝及程序内/JSON 双重字节上限。未来产品通过声明语法不会进入当前动作目录，也不会获得条件或请求权限。API、IAM、Audit 与 architecture 的 `-race -p 2` 回归、对应 vet 和 API 生成通过，生成契约无变化；最终集合命名下2-worker、20s规范往返 fuzz 通过478589次执行。该片没有 SQL/线上入口/安装 profile 变更；默认跳过的真实数据库测试不作验收证据，两个真实产品的 Profile 注册/决定/历史重放门禁仍待实施。
+
+CAT-05、策略替换及最终组合仍分别按 owning FEAT 实施。

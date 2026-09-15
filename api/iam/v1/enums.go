@@ -41,6 +41,12 @@ func LookupActionConditionDefinition(action Action, key ConditionKey) (Condition
 	if !known || definition.AuthorityScope != AuthorityScopeTenant {
 		return ConditionKeyDefinition{}, false
 	}
+	return lookupConditionDefinition(key)
+}
+
+// A source declaration is not an action capability or permission. Admission
+// must additionally check the action's explicitly declared scope/capabilities.
+func lookupConditionDefinition(key ConditionKey) (ConditionKeyDefinition, bool) {
 	switch key {
 	case ConditionIAMCurrentTime:
 		return ConditionKeyDefinition{key, ConditionTime, ConditionIAMTransactionTime}, true

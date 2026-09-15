@@ -25,6 +25,274 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func authorizationProfileFixture() AuthorizationProfile {
+	return AuthorizationProfile{
+		APIVersion: APIVersion, Kind: "AuthorizationProfile", Product: ProductManagedService,
+		Revision: 1, CallingService: ServicePaaS,
+		Actions: []AuthorizationProfileAction{{
+			Action: ActionManagedServiceOfferingRead, ResourceKind: ResourceServiceOffering, Scope: AuthorityScopeTenant,
+			ResourceShapes: []AuthorizationResourceShape{
+				{Mode: AuthorizationResourceInstance},
+				{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList},
+			},
+			Conditions: []AuthorizationProfileCondition{
+				{Key: ConditionIAMCurrentTime, ValueType: ConditionTime, Source: ConditionIAMTransactionTime},
+				{Key: ConditionIAMAccountID, ValueType: ConditionString, Source: ConditionIAMIdentity},
+			},
+		}},
+	}
+}
+
+func TestAuthorizationProfileCanonicalSetsAndExactReferences(t *testing.T) {
+	profile := authorizationProfileFixture()
+	profile.Actions = append(profile.Actions, AuthorizationProfileAction{
+		Action: "managedservice.sample.create", ResourceKind: "SAMPLE", Scope: AuthorityScopeTenant,
+		ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate, ResultResourceKind: "SAMPLE"}},
+	})
+	original, _ := json.Marshal(profile)
+	document, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := json.Marshal(profile)
+	if !bytes.Equal(original, after) {
+		t.Fatal("canonicalization mutated the caller's nested declaration")
+	}
+	profile.Actions[0], profile.Actions[1] = profile.Actions[1], profile.Actions[0]
+	action := &profile.Actions[1]
+	action.ResourceShapes[0], action.ResourceShapes[1] = action.ResourceShapes[1], action.ResourceShapes[0]
+	action.Conditions[0], action.Conditions[1] = action.Conditions[1], action.Conditions[0]
+	reordered, reorderedDigest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil || reordered != document || reorderedDigest != digest {
+		t.Fatal("set order changed the immutable profile identity", err)
+	}
+	decoded, err := DecodeAuthorizationProfile(strings.NewReader(document))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+	if err := CheckAuthorizationProfileReference(decoded, reference); err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*AuthorizationProfileReference){
+		"other product":    func(v *AuthorizationProfileReference) { v.Product = ProductPaaS },
+		"newer revision":   func(v *AuthorizationProfileReference) { v.Revision++ },
+		"missing digest":   func(v *AuthorizationProfileReference) { v.ContentDigest = "" },
+		"different digest": func(v *AuthorizationProfileReference) { v.ContentDigest = "sha256:" + strings.Repeat("0", 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			variant := reference
+			change(&variant)
+			if !errors.Is(CheckAuthorizationProfileReference(decoded, variant), ErrInvalidAuthorizationProfile) {
+				t.Fatal("accepted a nonexact profile reference")
+			}
+		})
+	}
+}
+
+func TestAuthorizationProfileDigestBindsAuthorizationSemantics(t *testing.T) {
+	_, baseline, err := CanonicalizeAuthorizationProfile(authorizationProfileFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*AuthorizationProfile){
+		"product": func(v *AuthorizationProfile) {
+			v.Product = "otherproduct"
+			v.Actions[0].Action = "otherproduct.offering.read"
+		},
+		"revision":        func(v *AuthorizationProfile) { v.Revision++ },
+		"calling service": func(v *AuthorizationProfile) { v.CallingService = "ANOTHER_SERVICE" },
+		"action":          func(v *AuthorizationProfile) { v.Actions[0].Action = "managedservice.offering.inspect" },
+		"resource kind":   func(v *AuthorizationProfile) { v.Actions[0].ResourceKind = "ANOTHER_KIND" },
+		"scope": func(v *AuthorizationProfile) {
+			v.Actions[0].Scope = AuthorityScopeInstallation
+			v.Actions[0].Conditions = nil
+		},
+		"prefix":      func(v *AuthorizationProfile) { v.Actions[0].ResourceShapes[0].PrefixAllowed = true },
+		"target mode": func(v *AuthorizationProfile) { v.Actions[0].ResourceShapes = v.Actions[0].ResourceShapes[:1] },
+		"collection semantics": func(v *AuthorizationProfile) {
+			v.Actions[0].ResourceShapes[1].CollectionUsage = AuthorizationCollectionCreate
+			v.Actions[0].ResourceShapes[1].ResultResourceKind = "RESULT"
+		},
+		"trusted conditions":  func(v *AuthorizationProfile) { v.Actions[0].Conditions = nil },
+		"identity source key": func(v *AuthorizationProfile) { v.Actions[0].Conditions[1].Key = ConditionIAMPrincipalID },
+	} {
+		t.Run(name, func(t *testing.T) {
+			variant := authorizationProfileFixture()
+			change(&variant)
+			_, digest, err := CanonicalizeAuthorizationProfile(variant)
+			if err != nil || digest == baseline {
+				t.Fatal("authorization semantics missing from digest", err)
+			}
+		})
+	}
+}
+
+func TestAuthorizationProfileRejectsUndeclaredOrAmbiguousCapabilities(t *testing.T) {
+	for name, change := range map[string]func(*AuthorizationProfile){
+		"version":          func(v *AuthorizationProfile) { v.APIVersion = "other/v1" },
+		"kind":             func(v *AuthorizationProfile) { v.Kind = "PolicyDocument" },
+		"zero revision":    func(v *AuthorizationProfile) { v.Revision = 0 },
+		"unsafe revision":  func(v *AuthorizationProfile) { v.Revision = 1 << 53 },
+		"product spelling": func(v *AuthorizationProfile) { v.Product = "ManagedService" },
+		"service spelling": func(v *AuthorizationProfile) { v.CallingService = "paas" },
+		"empty actions":    func(v *AuthorizationProfile) { v.Actions = nil },
+		"action wildcard":  func(v *AuthorizationProfile) { v.Actions[0].Action = "managedservice.*" },
+		"other namespace":  func(v *AuthorizationProfile) { v.Actions[0].Action = ActionPaaSApplicationRead },
+		"duplicate action": func(v *AuthorizationProfile) { v.Actions = append(v.Actions, v.Actions[0]) },
+		"oversized action set": func(v *AuthorizationProfile) {
+			v.Actions = make([]AuthorizationProfileAction, MaxAuthorizationProfileActions+1)
+		},
+		"unknown scope": func(v *AuthorizationProfile) { v.Actions[0].Scope = "ANY" },
+		"kind spelling": func(v *AuthorizationProfile) { v.Actions[0].ResourceKind = "serviceOffering" },
+		"no shape":      func(v *AuthorizationProfile) { v.Actions[0].ResourceShapes = nil },
+		"batch":         func(v *AuthorizationProfile) { v.Actions[0].ResourceShapes[0].Mode = "BATCH" },
+		"duplicate shape": func(v *AuthorizationProfile) {
+			v.Actions[0].ResourceShapes = append(v.Actions[0].ResourceShapes, v.Actions[0].ResourceShapes[0])
+		},
+		"collection prefix": func(v *AuthorizationProfile) { v.Actions[0].ResourceShapes[1].PrefixAllowed = true },
+		"filtered list":     func(v *AuthorizationProfile) { v.Actions[0].ResourceShapes[1].CollectionUsage = "FILTERED" },
+		"creation result absent": func(v *AuthorizationProfile) {
+			v.Actions[0].ResourceShapes[1].CollectionUsage = AuthorizationCollectionCreate
+		},
+		"list claiming creation": func(v *AuthorizationProfile) { v.Actions[0].ResourceShapes[1].ResultResourceKind = "RESULT" },
+		"instance claiming collection": func(v *AuthorizationProfile) {
+			v.Actions[0].ResourceShapes[0].CollectionUsage = AuthorizationCollectionCreate
+		},
+		"instance claiming result": func(v *AuthorizationProfile) { v.Actions[0].ResourceShapes[0].ResultResourceKind = "RESULT" },
+		"platform prefix": func(v *AuthorizationProfile) {
+			v.Actions[0].Conditions = nil
+			v.Actions[0].Scope = AuthorityScopeInstallation
+			v.Actions[0].ResourceShapes[0].PrefixAllowed = true
+		},
+		"probe tenant conditions": func(v *AuthorizationProfile) { v.Actions[0].Scope = AuthorityScopeInstallationProbe },
+		"duplicate condition": func(v *AuthorizationProfile) {
+			v.Actions[0].Conditions = append(v.Actions[0].Conditions, v.Actions[0].Conditions[0])
+		},
+		"caller conditions":  func(v *AuthorizationProfile) { v.Actions[0].Conditions[0].Source = "CALLER_ATTRIBUTES" },
+		"unknown source key": func(v *AuthorizationProfile) { v.Actions[0].Conditions[0].Key = "paas.arbitrary" },
+		"wrong source type":  func(v *AuthorizationProfile) { v.Actions[0].Conditions[0].ValueType = ConditionString },
+	} {
+		t.Run(name, func(t *testing.T) {
+			variant := authorizationProfileFixture()
+			change(&variant)
+			if !errors.Is(ValidateAuthorizationProfile(variant), ErrInvalidAuthorizationProfile) {
+				t.Fatal("accepted invalid declaration")
+			}
+			if document, digest, err := CanonicalizeAuthorizationProfile(variant); document != "" || digest != "" || !errors.Is(err, ErrInvalidAuthorizationProfile) {
+				t.Fatal("invalid declaration produced usable evidence")
+			}
+		})
+	}
+}
+
+func TestAuthorizationProfileStrictDecodeAndNonAdmission(t *testing.T) {
+	document, _, err := CanonicalizeAuthorizationProfile(authorizationProfileFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, source := range map[string]string{
+		"unknown":          strings.Replace(document, `"revision":1`, `"revision":1,"permit":true`, 1),
+		"duplicate":        strings.Replace(document, `"revision":1`, `"revision":1,"revision":2`, 1),
+		"case alias":       strings.Replace(document, `"revision":1`, `"Revision":1`, 1),
+		"nested unknown":   strings.Replace(document, `"prefixAllowed":false`, `"prefixAllowed":false,"authority":"ANY"`, 1),
+		"nested duplicate": strings.Replace(document, `"prefixAllowed":false`, `"prefixAllowed":false,"prefixAllowed":true`, 1),
+		"trailing":         document + `{}`,
+		"null":             `null`,
+		"oversized":        document + strings.Repeat(" ", int(MaxAuthorizationProfileBytes)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, err := DecodeAuthorizationProfile(strings.NewReader(source))
+			if !errors.Is(err, ErrInvalidAuthorizationProfile) || value.Product != "" || value.Actions != nil {
+				t.Fatal("invalid input returned a usable declaration", err)
+			}
+		})
+	}
+	// Product/action spelling cannot enroll a new service or change the active
+	// action catalog, even when a prospective declaration is syntactically valid.
+	profile := authorizationProfileFixture()
+	profile.Product = "observability"
+	profile.CallingService = "OBSERVABILITY"
+	profile.Actions[0].Action = "observability.sample.inspect"
+	if err := ValidateAuthorizationProfile(profile); err != nil {
+		t.Fatal("new product syntax must not require a product-name switch", err)
+	}
+	if _, known := LookupActionDefinition(profile.Actions[0].Action); known {
+		t.Fatal("validating a profile registered an action")
+	}
+	if _, known := LookupActionConditionDefinition(profile.Actions[0].Action, ConditionIAMAccountID); known {
+		t.Fatal("source validation granted unknown action capabilities")
+	}
+	// Absence, null and empty optional condition sets all declare no condition
+	// capability. Their canonical form cannot accidentally enable one.
+	profile.Actions[0].Conditions = nil
+	without, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, empty := range []string{`null`, `[]`} {
+		input := strings.Replace(without, `"resourceShapes":`, `"conditions":`+empty+`,"resourceShapes":`, 1)
+		decoded, err := DecodeAuthorizationProfile(strings.NewReader(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, decodedDigest, err := CanonicalizeAuthorizationProfile(decoded)
+		if err != nil || decodedDigest != digest {
+			t.Fatal("empty condition capability changed meaning", err)
+		}
+	}
+}
+
+func FuzzAuthorizationProfileCanonicalRoundTrip(f *testing.F) {
+	document, _, err := CanonicalizeAuthorizationProfile(authorizationProfileFixture())
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(document)
+	f.Add(`{"kind":"AuthorizationProfile","actions":null}`)
+	f.Add(`{"revision":1,"revision":2}`)
+	f.Fuzz(func(t *testing.T, source string) {
+		profile, err := DecodeAuthorizationProfile(strings.NewReader(source))
+		if err != nil {
+			return
+		}
+		canonical, digest, err := CanonicalizeAuthorizationProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := DecodeAuthorizationProfile(strings.NewReader(canonical))
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, secondDigest, err := CanonicalizeAuthorizationProfile(decoded)
+		if err != nil || second != canonical || secondDigest != digest {
+			t.Fatal("accepted declaration is not canonically stable", err)
+		}
+		if err := CheckAuthorizationProfileReference(decoded, AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestAuthorizationProfileBoundsTypedDeclarations(t *testing.T) {
+	profile := authorizationProfileFixture()
+	profile.Actions = make([]AuthorizationProfileAction, MaxAuthorizationProfileActions)
+	for index := range profile.Actions {
+		action := authorizationProfileFixture().Actions[0]
+		action.Action = Action(fmt.Sprintf("managedservice.%s.action%d", strings.Repeat("a", 64), index))
+		action.ResourceKind = ResourceKind(strings.Repeat("K", 64))
+		action.ResourceShapes = append(action.ResourceShapes, AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate, ResultResourceKind: ResourceKind(strings.Repeat("R", 64))})
+		profile.Actions[index] = action
+	}
+	encoded, err := json.Marshal(profile)
+	if err != nil || int64(len(encoded)) <= MaxAuthorizationProfileBytes {
+		t.Fatal("fixture must exceed the byte budget", err)
+	}
+	if !errors.Is(ValidateAuthorizationProfile(profile), ErrInvalidAuthorizationProfile) {
+		t.Fatal("typed input bypassed the byte budget")
+	}
+}
+
 func TestLocalRecoveryCapabilityBindsOnePrivateIntent(t *testing.T) {
 	secret := func(value string) Secret {
 		t.Helper()
