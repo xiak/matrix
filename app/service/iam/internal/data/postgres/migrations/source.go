@@ -3,6 +3,7 @@ package migrations
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -41,15 +42,51 @@ func Source() postgresmigration.Source {
 		// A corrupt code-owned policy must stop bootstrap/apply, never omit a seed.
 		return postgresmigration.Source{Context: "iam"}
 	}
-	verification := authorityVerifySQL + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL + "\n" + policyVerifySQL + "\n" + groupsVerifySQL
+	profileSeeds, err := authorizationProfileSeeds()
+	const profilePlaceholder = "__AUTHORIZATION_PROFILE_SEEDS__"
+	if err != nil || strings.Count(authorityUpSQL, profilePlaceholder) != 1 || strings.Count(authorityVerifySQL, profilePlaceholder) != 1 {
+		return postgresmigration.Source{Context: "iam"}
+	}
+	profileLiteral := "'" + strings.ReplaceAll(profileSeeds, "'", "''") + "'::jsonb"
+	authoritySQL := strings.Replace(authorityUpSQL, profilePlaceholder, profileLiteral, 1)
+	verification := strings.Replace(authorityVerifySQL, profilePlaceholder, profileLiteral, 1) + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL + "\n" + policyVerifySQL + "\n" + groupsVerifySQL
 	return postgresmigration.Source{
 		Context: "iam", BootstrapSQL: bootstrapSQL,
 		// IAM owns one commit boundary across schema, retained-state changes and
 		// its final invariant verification. A late failure exposes none of them.
-		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authorityUpSQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + verification + "\nCOMMIT;",
+		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authoritySQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + verification + "\nCOMMIT;",
 		VerifySQL:     verification,
 		ExecutionRole: "matrix_iam_migrator",
 	}
+}
+
+// Archive insertion and current selection are distinct release decisions.
+// First registration contains only revision1. Future revisions must include
+// required historical declarations here, never infer heads from archive order.
+func authorizationProfileSeeds() (string, error) {
+	type registration struct {
+		iamv1.AuthorizationProfileReference
+		CanonicalDocument string `json:"canonicalDocument"`
+	}
+	seeds := struct {
+		Archive []registration                        `json:"archive"`
+		Heads   []iamv1.AuthorizationProfileReference `json:"heads"`
+	}{}
+	profiles := iamv1.AllAuthorizationProfiles()
+	if len(profiles) == 0 || len(profiles) > iamv1.MaxPolicyCompilationProfiles {
+		return "", errors.New("invalid IAM profile registration set")
+	}
+	for _, profile := range profiles {
+		canonical, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+		if err != nil {
+			return "", err
+		}
+		reference := iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+		seeds.Archive = append(seeds.Archive, registration{reference, canonical})
+		seeds.Heads = append(seeds.Heads, reference)
+	}
+	encoded, err := json.Marshal(seeds)
+	return string(encoded), err
 }
 
 const policyCutoverPreflight = `SET LOCAL ROLE matrix_iam_owner;

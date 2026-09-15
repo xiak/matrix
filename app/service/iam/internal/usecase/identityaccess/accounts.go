@@ -21,6 +21,9 @@ func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.
 		if err != nil {
 			return err
 		}
+		if err := tx.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+			return err
+		}
 		subject := binding.Subject
 		account, err := tx.ReadAccount(ctx, subject.Organization.ID, subject.Principal.ID)
 		if err != nil {

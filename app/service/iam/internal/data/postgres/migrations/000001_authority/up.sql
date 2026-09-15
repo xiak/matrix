@@ -251,6 +251,132 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='IAM policy history is immutable';
 END $function$;
 
+-- Product declarations are installation-wide release metadata, not tenant
+-- permissions. Only the migration owner may register or select a declaration.
+CREATE TABLE IF NOT EXISTS iam.authorization_profiles (
+    product text NOT NULL,
+    revision bigint NOT NULL,
+    canonical_document text NOT NULL,
+    content_digest text NOT NULL,
+    created_at timestamptz(6) NOT NULL DEFAULT transaction_timestamp(),
+    PRIMARY KEY(product,revision),
+    CONSTRAINT authorization_profiles_valid CHECK (
+        product COLLATE "C" ~ '^[a-z][a-z0-9_-]{0,63}$'
+        AND revision BETWEEN 1 AND 9007199254740991
+        AND octet_length(canonical_document) BETWEEN 1 AND 65536
+        AND jsonb_typeof(canonical_document::jsonb)='object'
+        AND canonical_document::jsonb ?& ARRAY['apiVersion','kind','product','revision','callingService','actions']
+        AND canonical_document::jsonb-ARRAY['apiVersion','kind','product','revision','callingService','actions']='{}'::jsonb
+        AND jsonb_typeof(canonical_document::jsonb->'apiVersion')='string'
+        AND jsonb_typeof(canonical_document::jsonb->'kind')='string'
+        AND jsonb_typeof(canonical_document::jsonb->'product')='string'
+        AND jsonb_typeof(canonical_document::jsonb->'callingService')='string'
+        AND canonical_document::jsonb->>'apiVersion'='iam.matrix.xiak.com/v1'
+        AND canonical_document::jsonb->>'kind'='AuthorizationProfile'
+        AND canonical_document::jsonb->>'product'=product
+        AND jsonb_typeof(canonical_document::jsonb->'revision')='number'
+        AND (canonical_document::jsonb->>'revision')::bigint=revision
+        AND canonical_document::jsonb->>'callingService' COLLATE "C" ~ '^[A-Z][A-Z0-9_-]{0,63}$'
+        AND jsonb_typeof(canonical_document::jsonb->'actions')='array'
+        AND jsonb_array_length(canonical_document::jsonb->'actions') BETWEEN 1 AND 128
+        AND content_digest='sha256:'||encode(sha256(
+            convert_to('matrix.iam.authorization-profile.v1','UTF8')||decode('00','hex')||convert_to(canonical_document,'UTF8')),'hex')
+    )
+);
+CREATE TABLE IF NOT EXISTS iam.authorization_profile_heads (
+    product text PRIMARY KEY,
+    revision bigint NOT NULL,
+    adopted_at timestamptz(6) NOT NULL DEFAULT transaction_timestamp(),
+    FOREIGN KEY(product,revision) REFERENCES iam.authorization_profiles(product,revision)
+);
+CREATE OR REPLACE FUNCTION iam.guard_authorization_profile_head_change()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF NEW.product IS DISTINCT FROM OLD.product OR NEW.revision<=OLD.revision
+        OR NEW.adopted_at IS DISTINCT FROM transaction_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='IAM profile current selection is invalid';
+    END IF;
+    RETURN NEW;
+END
+$function$;
+DROP TRIGGER IF EXISTS authorization_profiles_are_immutable ON iam.authorization_profiles;
+CREATE TRIGGER authorization_profiles_are_immutable BEFORE UPDATE OR DELETE ON iam.authorization_profiles
+FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+DROP TRIGGER IF EXISTS authorization_profiles_cannot_be_truncated ON iam.authorization_profiles;
+CREATE TRIGGER authorization_profiles_cannot_be_truncated BEFORE TRUNCATE ON iam.authorization_profiles
+FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
+DROP TRIGGER IF EXISTS authorization_profile_heads_advance ON iam.authorization_profile_heads;
+CREATE TRIGGER authorization_profile_heads_advance BEFORE UPDATE ON iam.authorization_profile_heads
+FOR EACH ROW EXECUTE FUNCTION iam.guard_authorization_profile_head_change();
+DROP TRIGGER IF EXISTS authorization_profile_heads_cannot_be_deleted ON iam.authorization_profile_heads;
+CREATE TRIGGER authorization_profile_heads_cannot_be_deleted BEFORE DELETE ON iam.authorization_profile_heads
+FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+DROP TRIGGER IF EXISTS authorization_profile_heads_cannot_be_truncated ON iam.authorization_profile_heads;
+CREATE TRIGGER authorization_profile_heads_cannot_be_truncated BEFORE TRUNCATE ON iam.authorization_profile_heads
+FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.authorization_profiles ENABLE ALWAYS TRIGGER authorization_profiles_are_immutable;
+ALTER TABLE iam.authorization_profiles ENABLE ALWAYS TRIGGER authorization_profiles_cannot_be_truncated;
+ALTER TABLE iam.authorization_profile_heads ENABLE ALWAYS TRIGGER authorization_profile_heads_advance;
+ALTER TABLE iam.authorization_profile_heads ENABLE ALWAYS TRIGGER authorization_profile_heads_cannot_be_deleted;
+ALTER TABLE iam.authorization_profile_heads ENABLE ALWAYS TRIGGER authorization_profile_heads_cannot_be_truncated;
+
+DO $profile_registration$
+DECLARE
+    seeds jsonb := __AUTHORIZATION_PROFILE_SEEDS__;
+    seed jsonb;
+BEGIN
+    LOCK TABLE iam.authorization_profile_heads IN SHARE ROW EXCLUSIVE MODE;
+    FOR seed IN SELECT value FROM jsonb_array_elements(seeds->'archive')
+        ORDER BY value->>'product',(value->>'revision')::bigint LOOP
+        INSERT INTO iam.authorization_profiles(product,revision,canonical_document,content_digest)
+        VALUES(seed->>'product',(seed->>'revision')::bigint,seed->>'canonicalDocument',seed->>'contentDigest')
+        ON CONFLICT(product,revision) DO NOTHING;
+        IF NOT EXISTS(SELECT 1 FROM iam.authorization_profiles archive
+            WHERE archive.product=seed->>'product' AND archive.revision=(seed->>'revision')::bigint
+              AND archive.canonical_document=seed->>'canonicalDocument' AND archive.content_digest=seed->>'contentDigest') THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='IAM immutable product registration conflicts';
+        END IF;
+    END LOOP;
+    FOR seed IN SELECT value FROM jsonb_array_elements(seeds->'heads') ORDER BY value->>'product' LOOP
+        IF NOT EXISTS(SELECT 1 FROM iam.authorization_profiles archive
+            WHERE archive.product=seed->>'product' AND archive.revision=(seed->>'revision')::bigint
+              AND archive.content_digest=seed->>'contentDigest')
+            OR EXISTS(SELECT 1 FROM iam.authorization_profile_heads head
+                WHERE head.product=seed->>'product' AND head.revision>(seed->>'revision')::bigint) THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='IAM current product selection conflicts';
+        END IF;
+        INSERT INTO iam.authorization_profile_heads(product,revision)
+        VALUES(seed->>'product',(seed->>'revision')::bigint)
+        ON CONFLICT(product) DO UPDATE SET revision=EXCLUDED.revision,adopted_at=transaction_timestamp()
+        WHERE iam.authorization_profile_heads.revision<EXCLUDED.revision;
+    END LOOP;
+    IF EXISTS(SELECT 1 FROM iam.authorization_profile_heads head
+        WHERE NOT EXISTS(SELECT 1 FROM jsonb_array_elements(seeds->'heads') expected
+            WHERE expected->>'product'=head.product)) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='IAM current product set conflicts';
+    END IF;
+END
+$profile_registration$;
+
+CREATE OR REPLACE FUNCTION iam.current_authorization_profiles()
+RETURNS TABLE(product text,revision bigint,canonical_document text,content_digest text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    -- Hold the selected heads until this authorization transaction completes.
+    RETURN QUERY SELECT archive.product,archive.revision,archive.canonical_document,archive.content_digest
+    FROM iam.authorization_profile_heads head JOIN iam.authorization_profiles archive
+      ON archive.product=head.product AND archive.revision=head.revision
+    ORDER BY head.product FOR SHARE OF head;
+END
+$function$;
+CREATE OR REPLACE FUNCTION iam.lookup_authorization_profile(expected_product text,expected_revision bigint,expected_digest text)
+RETURNS TABLE(product text,revision bigint,canonical_document text,content_digest text)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT archive.product,archive.revision,archive.canonical_document,archive.content_digest
+    FROM iam.authorization_profiles archive
+    WHERE archive.product=expected_product AND archive.revision=expected_revision AND archive.content_digest=expected_digest
+$function$;
+
 CREATE OR REPLACE FUNCTION iam.guard_policy_metadata_change()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
@@ -997,6 +1123,9 @@ BEGIN
                SELECT 1 FROM iam.bootstrap_receipts AS receipt
                 WHERE receipt.singleton
            ) AND to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)') IS NOT NULL
+           AND to_regprocedure('iam.current_authorization_profiles()') IS NOT NULL
+           AND to_regprocedure('iam.lookup_authorization_profile(text,bigint,text)') IS NOT NULL
+           AND EXISTS(SELECT 1 FROM iam.authorization_profile_heads)
            AND to_regclass('iam.role_bindings') IS NULL
            AND (SELECT count(*) FROM pg_catalog.pg_class AS group_table
                 WHERE group_table.oid IN (to_regclass('iam.groups'),to_regclass('iam.group_memberships'))
@@ -1133,7 +1262,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           19::bigint,
+           20::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -2573,6 +2702,8 @@ REVOKE ALL ON SCHEMA iam FROM matrix_iam_api, matrix_iam_worker;
 GRANT USAGE ON SCHEMA iam TO matrix_iam_api, matrix_iam_worker;
 GRANT EXECUTE ON FUNCTION iam.bootstrap_status() TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.readiness() TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.current_authorization_profiles() TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.lookup_authorization_profile(text,bigint,text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_login(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.apply_bootstrap(
     text, text, text, text, text, text, text, text, jsonb, jsonb

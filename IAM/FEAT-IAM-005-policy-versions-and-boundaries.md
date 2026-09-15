@@ -212,11 +212,13 @@ Audit 原双 schema/受限 recorder/封闭 action/不可变链真库门禁5.324s
 
 2026-09-15，现有契约测试验证最小多产品引用、唯一SID与精确动作集合、原文档/编译物/声明重排稳定、无可修改切片共享、作者Effect/资源/条件均进入整体摘要。篡改revision/digest、缺项/多项、跨SID搬移动作、重复、超限、未知字段及大小写别名均拒绝；当前发布请求仍拒绝客户端传入profiles、resolvedStatements或compilationVersion。合成产品通过显式声明走同一校验器，但不能注册到当前目录；冻结声明缺少前缀/条件/动作时不能借用全局当前能力。既有全部Action的ALLOW/DENY文档与当前校验、canonical保持一致。
 
-当前Profile尚无真实registry/已发布消费者，因此PaaS完整12项与Audit完整链读取/验证收敛为各自唯一r1。原错误草案只保存在Git，不建立兼容注册记录；这不允许未来覆盖真正已登记的相同revision。该声明修正没有改变当前action/resource/scope/caller投影，不把纯声明当作新请求mode已生效。
+初次注册使用PaaS完整12项与Audit完整链读取/验证的各自唯一r1。原未发布错误草案只保存在Git，不建立兼容注册记录；这不允许覆盖真正已登记的相同revision。该声明修正没有改变当前action/resource/scope/caller投影，不把纯声明当作新请求mode已生效；运行时registry由001独立拥有。
 
 单一校验器重构后的专属PG18.6（固定镜像 `postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280`，1CPU/768MiB/PIDs128、64连接）串行race-p1回归通过：`TestIAMPolicyAuthorityStoragePostgres` 124.45s（包127.374s），独立IAM双实例/Audit/PaaS及双dispatcher 65.68s（包68.494s）。保留当前版本/附件/边界、凭据竞争、RLS、受限runtime登录、双租户资源/Operation/outbox、撤权与不可变历史。这些是原线上授权的回归证据，不是新compilation持久化、Profile绑定决定或产品mode执行的验收。
 
 最终声明收敛后的全仓 Go race/vet、模块校验、API生成稳定和Linux amd64全仓构建通过；编译物严格解码/规范往返fuzz以15秒、2workers、1秒样本最小化预算通过482263次执行，不作容量或完整语言证明。当前PolicyVersion HTTP/SQL、readiness、安装profile、lookup_service、七列claim及Audit canonical均未改；最终UI仍由独立UX/UI owner负责。初建internal测试网络未产生loopback端口，未开始任何数据库门禁即按精确自有ID重建普通专属网络；没有改共享网络配置。两项真库回归结束并确认零客户端后清理本轮PG容器、网络及仅含两个合成数据库的卷，不涉及用户数据。
+
+固定纯编译实现 `d3a08bfa7c248793ffb51499186486efa2ebb377` 的 [Verification 34925618255](https://github.com/xiak/matrix/actions/runs/34925618255) 已由GitHub API核实精确SHA及go、authority-process、node-process全部completed/success；不据此验收registry、编译内容持久化或新wire。
 
 ### 当前首片证据与未完成边界
 

@@ -158,6 +158,9 @@ func (service *Authority) decideAndRecord(
 	actor authorizationActor,
 	decide func(iamv1.DecisionID) (authority.AuthorizationEvaluation, error),
 ) (iamv1.AuthorizationDecision, error) {
+	if err := transaction.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+		return iamv1.AuthorizationDecision{}, err
+	}
 	decisionID, err := service.config.NewID("decision")
 	if err != nil {
 		return iamv1.AuthorizationDecision{}, ErrUnavailable

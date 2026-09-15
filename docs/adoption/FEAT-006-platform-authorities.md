@@ -364,3 +364,14 @@ Its unpublished PaaS revision2 and Audit instance-verification declaration are
 declarations before runtime registration. There is no published Profile consumer
 to justify preserving either draft. Immutable revisions after actual registration
 remain mandatory; this is not permission to rewrite registered content.
+
+For IAM/001 immutable registration and current-source admission, fixed
+`d3a08bfa7c248793ffb51499186486efa2ebb377` is `REUSE` for the only Profile
+canonical encoder, exact-reference validation and complete first declarations.
+Its existing authority migration transaction, owner/runtime separation and
+immutable policy history protection are `ADAPT` for the archive/current-head
+boundary. Current selection is explicit, not the last or maximum archived
+revision. Exact historical lookup never substitutes the current head.
+Runtime registration, current-head fallback, same-tuple replacement and a
+copied JSON canonicalizer are `REJECT`. No legacy dependency, host runtime,
+new product HTTP API or published installation profile is imported.

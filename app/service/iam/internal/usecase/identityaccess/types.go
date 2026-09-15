@@ -35,6 +35,8 @@ type Repository interface {
 
 type Transaction interface {
 	TransactionTime(context.Context) (time.Time, error)
+	CheckCurrentAuthorizationProfiles(context.Context) error
+	LookupAuthorizationProfile(context.Context, iamv1.AuthorizationProfileReference) (iamv1.AuthorizationProfile, bool, error)
 	BootstrapStatus(context.Context) (iamv1.BootstrapStatus, error)
 	ApplyBootstrap(context.Context, BootstrapMutation) (authority.BootstrapOutcome, error)
 	LookupLogin(context.Context, string) (LoginAccount, bool, error)

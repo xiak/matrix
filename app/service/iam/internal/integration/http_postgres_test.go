@@ -296,8 +296,43 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if err := admin.QueryRow(ctx, `SELECT to_regclass('iam.principals') IS NULL
 		AND to_regclass('iam.policy_attachments') IS NULL AND to_regclass('iam.authorization_decisions') IS NULL
 		AND to_regclass('iam.audit_outbox') IS NULL AND to_regclass('iam.groups') IS NULL
+		AND to_regclass('iam.authorization_profiles') IS NULL AND to_regclass('iam.authorization_profile_heads') IS NULL
 		AND to_regclass('iam.group_memberships') IS NULL AND to_regprocedure('iam.readiness()') IS NULL`).Scan(&emptyAuthority); err != nil || !emptyAuthority {
 		t.Fatal("failed current installation exposed a partial authority")
+	}
+	// Insert a valid but different declaration at the exact source tuple before
+	// normal seed registration. This is an isolated trusted-migrator collision,
+	// not a runtime API, a legacy marker, or disabled immutability protection.
+	variantProfile := iamv1.AllAuthorizationProfiles()[0]
+	if len(variantProfile.Actions) < 2 {
+		t.Fatal("profile collision fixture requires multiple declared actions")
+	}
+	variantProfile.Actions = variantProfile.Actions[:len(variantProfile.Actions)-1]
+	variantCanonical, variantDigest, err := iamv1.CanonicalizeAuthorizationProfile(variantProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quote := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
+	collisionSQL := fmt.Sprintf(`CREATE FUNCTION public.matrix_current_iam_fault() RETURNS event_trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF EXISTS(SELECT 1 FROM pg_event_trigger_ddl_commands() WHERE object_identity='iam.authorization_profiles')
+		THEN INSERT INTO iam.authorization_profiles(product,revision,canonical_document,content_digest)
+		VALUES(%s,%d,%s,%s); RAISE NOTICE 'matrix-current-iam-fault'; END IF; END $body$;
+		CREATE EVENT TRIGGER matrix_current_iam_fault ON ddl_command_end EXECUTE FUNCTION public.matrix_current_iam_fault()`,
+		quote(string(variantProfile.Product)), variantProfile.Revision, quote(variantCanonical), quote(variantDigest))
+	migrationFaultReached.Store(false)
+	if _, err := admin.Exec(ctx, collisionSQL); err != nil {
+		t.Fatal("install exact-tuple collision fixture")
+	}
+	if err := iammigration.Up(ctx, admin); err == nil || !migrationFaultReached.Load() {
+		t.Fatal("valid same-revision profile variant did not reject registration")
+	}
+	if _, err := admin.Exec(ctx, "ROLLBACK; DROP EVENT TRIGGER matrix_current_iam_fault; DROP FUNCTION public.matrix_current_iam_fault()"); err != nil {
+		t.Fatal("finish exact-tuple collision fixture")
+	}
+	if err := admin.QueryRow(ctx, `SELECT to_regclass('iam.authorization_profiles') IS NULL
+		AND to_regclass('iam.authorization_profile_heads') IS NULL AND to_regclass('iam.principals') IS NULL
+		AND to_regclass('iam.policy_attachments') IS NULL AND to_regclass('iam.audit_outbox') IS NULL`).Scan(&emptyAuthority); err != nil || !emptyAuthority {
+		t.Fatal("same-revision conflict exposed partial IAM state")
 	}
 	applyIAMSchema(t, ctx, admin)
 	applyIAMSchema(t, ctx, admin)
@@ -683,6 +718,233 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if identity.Code != http.StatusOK || json.Unmarshal(identity.Body.Bytes(), &service) != nil ||
 		service.Purpose != iamv1.ServiceInstallationVerifier || service.InstallationID != document.InstallationID {
 		t.Fatal("policy migration changed sealed verifier purpose or installation")
+	}
+	// This final fixture deliberately advances a trusted release head. The old
+	// source must refuse it, not downgrade it during cleanup or migration replay.
+	t.Run("immutable profile registry and current source admission", func(t *testing.T) {
+		proveAuthorizationProfileRegistry(t, ctx, dsn, admin, handler, primary)
+	})
+}
+
+func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn string, admin *pgx.Conn, handler http.Handler, bearer string) {
+	t.Helper()
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.User, config.ConnConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+	config.MaxConns = 2
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal("open restricted profile reader")
+	}
+	defer pool.Close()
+	repository, err := iampostgres.NewRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := func() []byte {
+		t.Helper()
+		var result []byte
+		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
+			'archive',(SELECT jsonb_agg(to_jsonb(a) ORDER BY product,revision) FROM iam.authorization_profiles a),
+			'heads',(SELECT jsonb_agg(to_jsonb(h) ORDER BY product) FROM iam.authorization_profile_heads h))`).Scan(&result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	before := snapshot()
+	applyIAMSchema(t, ctx, admin)
+	if !bytes.Equal(before, snapshot()) {
+		t.Fatal("equal registration replay changed immutable content or registration/adoption time")
+	}
+	checkCurrent := func() error {
+		return repository.WithinTransaction(ctx, func(ctx context.Context, tx identityaccess.Transaction) error {
+			return tx.CheckCurrentAuthorizationProfiles(ctx)
+		})
+	}
+	if err := checkCurrent(); err != nil {
+		t.Fatalf("current registry differs from running source: %v", err)
+	}
+	var historicalEvent auditv1.Event
+	var historicalBytes []byte
+	if err := admin.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox
+		WHERE event_document->>'action'='iam.bootstrap.applied' LIMIT 1`).Scan(&historicalBytes); err != nil || json.Unmarshal(historicalBytes, &historicalEvent) != nil {
+		t.Fatal("read original committed IAM fact")
+	}
+	resolveHistory := func() {
+		t.Helper()
+		body, err := json.Marshal(iamv1.ResolveAuditProducerRequest{Event: historicalEvent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequest(handler, http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, body)
+		var proof iamv1.AuditProducerAuthorization
+		_, expectedDigest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, historicalEvent)
+		if err != nil || response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &proof) != nil ||
+			iamv1.ValidateAuditProducerAuthorization(proof) != nil || proof.ContentDigest != expectedDigest {
+			t.Fatal("current catalog drift changed original fact admission or content commitment")
+		}
+	}
+	resolveHistory()
+	profile := iamv1.AllAuthorizationProfiles()[0]
+	original, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+	lookup := func(expected iamv1.AuthorizationProfileReference, want bool) {
+		t.Helper()
+		err := repository.WithinTransaction(ctx, func(ctx context.Context, tx identityaccess.Transaction) error {
+			actual, found, err := tx.LookupAuthorizationProfile(ctx, expected)
+			if err != nil {
+				return err
+			}
+			if found != want || (found && iamv1.CheckAuthorizationProfileReference(actual, expected) != nil) {
+				t.Error("historical lookup changed the requested product/revision/digest")
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	lookup(reference, true)
+	wrong := reference
+	wrong.ContentDigest = "sha256:" + strings.Repeat("0", 64)
+	lookup(wrong, false)
+	wrong = reference
+	wrong.Revision++
+	lookup(wrong, false)
+	wrong = reference
+	wrong.Product = "unregistered-product"
+	lookup(wrong, false)
+	rejectSQL := func(role, statement, code string, args ...any) {
+		t.Helper()
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+pgx.Identifier{role}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, statement, args...)
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != code {
+			t.Fatalf("profile mutation/read did not fail with %s: %v", code, err)
+		}
+	}
+	for _, statement := range []string{
+		`UPDATE iam.authorization_profiles SET content_digest=content_digest`,
+		`DELETE FROM iam.authorization_profiles`,
+		`TRUNCATE iam.authorization_profiles CASCADE`,
+		`UPDATE iam.authorization_profile_heads SET revision=revision`,
+		`DELETE FROM iam.authorization_profile_heads`,
+		`TRUNCATE iam.authorization_profile_heads`,
+	} {
+		rejectSQL("matrix_iam_owner", statement, "42501")
+	}
+	for _, role := range []string{"matrix_iam_api", "matrix_iam_worker", "matrix_iam_credential_recovery"} {
+		rejectSQL(role, `INSERT INTO iam.authorization_profiles(product,revision,canonical_document,content_digest) VALUES($1,2,$2,$3)`, "42501", profile.Product, original, digest)
+		rejectSQL(role, `UPDATE iam.authorization_profile_heads SET revision=revision+1,adopted_at=transaction_timestamp()`, "42501")
+		rejectSQL(role, `SELECT * FROM iam.authorization_profiles`, "42501")
+		if role != "matrix_iam_api" {
+			rejectSQL(role, `SELECT * FROM iam.current_authorization_profiles()`, "42501")
+			rejectSQL(role, `SELECT * FROM iam.lookup_authorization_profile($1,$2,$3)`, "42501", reference.Product, reference.Revision, reference.ContentDigest)
+		}
+	}
+	// Trusted release fixture only: an archived declaration is not implicitly
+	// current. Runtime identities never acquire this insertion capability.
+	profile.Revision++
+	canonical, futureDigest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: futureDigest}
+	rejectSQL("matrix_iam_owner", `UPDATE iam.authorization_profile_heads SET revision=$2,adopted_at=transaction_timestamp() WHERE product=$1`, "23503", future.Product, future.Revision)
+	rejectSQL("matrix_iam_owner", `INSERT INTO iam.authorization_profiles(product,revision,canonical_document,content_digest) VALUES($1,$2,$3,$4)`, "23514", future.Product, future.Revision, canonical, digest)
+	if _, err := admin.Exec(ctx, `INSERT INTO iam.authorization_profiles(product,revision,canonical_document,content_digest) VALUES($1,$2,$3,$4)`, profile.Product, profile.Revision, canonical, futureDigest); err != nil {
+		t.Fatal(err)
+	}
+	lookup(future, true)
+	lookup(reference, true)
+	if err := checkCurrent(); err != nil {
+		t.Fatal("non-current archive was incorrectly treated as current source drift")
+	}
+	applyIAMSchema(t, ctx, admin)
+	lookup(future, true)
+	// A checked authorization transaction holds the selected head until commit.
+	// Prove the competing publisher actually reaches PostgreSQL and is blocked,
+	// rather than relying on goroutine scheduling or an incidental sleep.
+	if err := repository.WithinTransaction(ctx, func(ctx context.Context, tx identityaccess.Transaction) error {
+		if err := tx.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+			return err
+		}
+		competing, err := admin.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer competing.Rollback(ctx)
+		if _, err := competing.Exec(ctx, `SET LOCAL lock_timeout='150ms'`); err != nil {
+			return err
+		}
+		_, err = competing.Exec(ctx, `UPDATE iam.authorization_profile_heads SET revision=$2,adopted_at=transaction_timestamp() WHERE product=$1`, future.Product, future.Revision)
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != "55P03" {
+			return fmt.Errorf("current profile head was not held through the authority transaction: %v", err)
+		}
+		return tx.CheckCurrentAuthorizationProfiles(ctx)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `UPDATE iam.authorization_profile_heads SET revision=$2,adopted_at=transaction_timestamp() WHERE product=$1`, future.Product, future.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(checkCurrent(), identityaccess.ErrUnavailable) {
+		t.Fatal("new current declaration was accepted by an old source")
+	}
+	for _, path := range []string{"/ready", "/v1/auth/me", "/v1/users"} {
+		if response := performIAMRequest(handler, http.MethodGet, path, bearer, nil); response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("source mismatch %s: status=%d", path, response.Code)
+		}
+	}
+	request, _ := json.Marshal(iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "registry-drift"}, RequestID: "registry-drift", CorrelationID: "registry-drift"})
+	if response := performIAMRequestWithSubject(handler, request, paasCredential, bearer); response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("current decision continued with a different registered meaning: status=%d", response.Code)
+	}
+	var decisions int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.authorization_decisions WHERE request_id='registry-drift'`).Scan(&decisions); err != nil || decisions != 0 {
+		t.Fatal("source mismatch partially committed a current decision")
+	}
+	lookup(reference, true)
+	lookup(future, true)
+	wrong = reference
+	wrong.ContentDigest = futureDigest
+	lookup(wrong, false)
+	resolveHistory()
+	var currentBytes []byte
+	if err := admin.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE event_id=$1`, historicalEvent.EventID).Scan(&currentBytes); err != nil || !bytes.Equal(currentBytes, historicalBytes) {
+		t.Fatal("profile advance rewrote old outbox bytes")
+	}
+	// Credential revocation is not a new permission decision and must remain
+	// available even while the product release combination is unavailable.
+	if response := performIAMRequest(handler, http.MethodPost, "/v1/auth/logout", bearer, []byte(`{"requestId":"registry-logout"}`)); response.Code != http.StatusOK {
+		t.Fatalf("profile mismatch prevented self logout: status=%d", response.Code)
+	}
+	retained := snapshot()
+	if err := iammigration.Up(ctx, admin); err == nil {
+		t.Fatal("old migration silently downgraded a registered current head")
+	}
+	if _, err := admin.Exec(ctx, "ROLLBACK"); err != nil || !bytes.Equal(retained, snapshot()) {
+		t.Fatal("rejected downgrade partially changed registry or archive")
+	}
+	if err := iammigration.Verify(ctx, admin); err == nil {
+		t.Fatal("migration verify accepted a different current profile")
+	}
+	if _, err := admin.Exec(ctx, "ROLLBACK"); err != nil {
+		t.Fatal(err)
 	}
 }
 

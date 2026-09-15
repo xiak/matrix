@@ -1126,6 +1126,16 @@ func (transaction *coreTransaction) Readiness(context.Context) (ReadinessSnapsho
 	}, nil
 }
 
+func (*coreTransaction) CheckCurrentAuthorizationProfiles(context.Context) error { return nil }
+
+func (*coreTransaction) LookupAuthorizationProfile(_ context.Context, reference iamv1.AuthorizationProfileReference) (iamv1.AuthorizationProfile, bool, error) {
+	profile, found := iamv1.LookupAuthorizationProfile(reference.Product)
+	if !found || iamv1.CheckAuthorizationProfileReference(profile, reference) != nil {
+		return iamv1.AuthorizationProfile{}, false, nil
+	}
+	return profile, true, nil
+}
+
 func coreBootstrap(t *testing.T) iamv1.BootstrapDocument {
 	t.Helper()
 	service := func(purpose iamv1.ServicePurpose, principalID, credential string) iamv1.BootstrapServiceCredential {

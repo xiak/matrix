@@ -279,3 +279,57 @@ BEGIN
     END IF;
 END
 $matrix_iam_verify$;
+
+DO $matrix_profile_verify$
+DECLARE
+    seeds jsonb := __AUTHORIZATION_PROFILE_SEEDS__;
+    seed jsonb;
+    entry regprocedure;
+BEGIN
+    IF (SELECT schema_version FROM iam.readiness())<>20 THEN
+        RAISE EXCEPTION 'IAM profile registry schema is invalid';
+    END IF;
+    FOR seed IN SELECT value FROM jsonb_array_elements(seeds->'archive') LOOP
+        IF NOT EXISTS(SELECT 1 FROM iam.authorization_profiles archive
+            WHERE archive.product=seed->>'product' AND archive.revision=(seed->>'revision')::bigint
+              AND archive.content_digest=seed->>'contentDigest' AND archive.canonical_document=seed->>'canonicalDocument') THEN
+            RAISE EXCEPTION 'IAM immutable profile registration is missing or changed';
+        END IF;
+    END LOOP;
+    IF (SELECT count(*) FROM iam.authorization_profile_heads)<>jsonb_array_length(seeds->'heads') THEN
+        RAISE EXCEPTION 'IAM current product set differs from source';
+    END IF;
+    FOR seed IN SELECT value FROM jsonb_array_elements(seeds->'heads') LOOP
+        IF NOT EXISTS(SELECT 1 FROM iam.authorization_profile_heads head
+            JOIN iam.authorization_profiles archive USING(product,revision)
+            WHERE head.product=seed->>'product' AND head.revision=(seed->>'revision')::bigint
+              AND archive.content_digest=seed->>'contentDigest') THEN
+            RAISE EXCEPTION 'IAM current product selection differs from source';
+        END IF;
+    END LOOP;
+    IF (SELECT count(*) FROM pg_trigger protection
+        WHERE protection.tgrelid IN ('iam.authorization_profiles'::regclass,'iam.authorization_profile_heads'::regclass)
+          AND protection.tgname IN ('authorization_profiles_are_immutable','authorization_profiles_cannot_be_truncated',
+            'authorization_profile_heads_advance','authorization_profile_heads_cannot_be_deleted','authorization_profile_heads_cannot_be_truncated')
+          AND NOT protection.tgisinternal AND protection.tgenabled='A')<>5 THEN
+        RAISE EXCEPTION 'IAM product registry mutation protection is invalid';
+    END IF;
+    FOREACH entry IN ARRAY ARRAY['iam.current_authorization_profiles()'::regprocedure,
+        'iam.lookup_authorization_profile(text,bigint,text)'::regprocedure] LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_proc entry_proc WHERE entry_proc.oid=entry AND entry_proc.prosecdef
+            AND entry_proc.proowner='matrix_iam_owner'::regrole AND entry_proc.proretset
+            AND entry_proc.proargnames[cardinality(entry_proc.proargnames)-3:cardinality(entry_proc.proargnames)]
+                =ARRAY['product','revision','canonical_document','content_digest']
+            AND entry_proc.proallargtypes[cardinality(entry_proc.proallargtypes)-3:cardinality(entry_proc.proallargtypes)]
+                =ARRAY['text'::regtype::oid,'bigint'::regtype::oid,'text'::regtype::oid,'text'::regtype::oid])
+            OR NOT has_function_privilege('matrix_iam_api',entry,'EXECUTE')
+            OR has_function_privilege('matrix_iam_worker',entry,'EXECUTE')
+            OR has_function_privilege('matrix_iam_credential_recovery',entry,'EXECUTE')
+            OR EXISTS(SELECT 1 FROM pg_proc entry_proc,
+                LATERAL aclexplode(COALESCE(entry_proc.proacl,acldefault('f',entry_proc.proowner))) grant_entry
+                WHERE entry_proc.oid=entry AND grant_entry.grantee=0 AND grant_entry.privilege_type='EXECUTE') THEN
+            RAISE EXCEPTION 'IAM product registry read boundary is invalid';
+        END IF;
+    END LOOP;
+END
+$matrix_profile_verify$;

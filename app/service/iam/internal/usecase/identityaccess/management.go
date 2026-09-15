@@ -563,6 +563,9 @@ func (service *Authority) managementDecision(
 	requestID string,
 	now time.Time,
 ) (iamv1.AuthorizationDecision, error) {
+	if err := transaction.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+		return iamv1.AuthorizationDecision{}, err
+	}
 	request := iamv1.AuthorizationRequest{
 		Action:        action,
 		Resource:      resource,

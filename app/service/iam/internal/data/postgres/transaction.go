@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -18,7 +19,81 @@ import (
 )
 
 type transaction struct {
-	tx pgx.Tx
+	tx              pgx.Tx
+	profilesChecked bool
+}
+
+// This cache is confined to one transaction, which retains share locks on the
+// current heads. It must never become an across-request catalog/permission cache.
+func (value *transaction) CheckCurrentAuthorizationProfiles(ctx context.Context) error {
+	if value.profilesChecked {
+		return nil
+	}
+	profiles := iamv1.AllAuthorizationProfiles()
+	expected := make(map[iamv1.ProductID]iamv1.AuthorizationProfile, len(profiles))
+	for _, profile := range profiles {
+		expected[profile.Product] = profile
+	}
+	rows, err := value.tx.Query(ctx, "SELECT * FROM iam.current_authorization_profiles()")
+	if err != nil {
+		return mapDatabaseError("read IAM current product registrations", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var reference iamv1.AuthorizationProfileReference
+		var canonical string
+		if rows.Scan(&reference.Product, &reference.Revision, &canonical, &reference.ContentDigest) != nil {
+			return identityaccess.ErrUnavailable
+		}
+		profile, found := expected[reference.Product]
+		if !found {
+			return identityaccess.ErrUnavailable
+		}
+		declared, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+		if err != nil || profile.Revision != reference.Revision || digest != reference.ContentDigest || canonical != declared {
+			return identityaccess.ErrUnavailable
+		}
+		delete(expected, reference.Product)
+	}
+	if err := rows.Err(); err != nil {
+		return mapDatabaseError("read IAM current product registrations", err)
+	}
+	if len(expected) != 0 {
+		return identityaccess.ErrUnavailable
+	}
+	value.profilesChecked = true
+	return nil
+}
+
+// Historical resolution does not read or validate the current head. A changed
+// release cannot make committed evidence disappear or choose a newer meaning.
+func (value *transaction) LookupAuthorizationProfile(ctx context.Context, reference iamv1.AuthorizationProfileReference) (iamv1.AuthorizationProfile, bool, error) {
+	if iamv1.ValidateID("product", string(reference.Product)) != nil || reference.Revision == 0 || reference.Revision > 9007199254740991 ||
+		iamv1.ValidateDigest("contentDigest", reference.ContentDigest) != nil {
+		return iamv1.AuthorizationProfile{}, false, identityaccess.ErrInvalidArgument
+	}
+	var actual iamv1.AuthorizationProfileReference
+	var canonical string
+	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.lookup_authorization_profile($1,$2,$3)", reference.Product, reference.Revision, reference.ContentDigest).
+		Scan(&actual.Product, &actual.Revision, &canonical, &actual.ContentDigest)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return iamv1.AuthorizationProfile{}, false, nil
+	}
+	if err != nil {
+		return iamv1.AuthorizationProfile{}, false, mapDatabaseError("read IAM immutable product registration", err)
+	}
+	if actual != reference || int64(len(canonical)) > iamv1.MaxAuthorizationProfileBytes {
+		return iamv1.AuthorizationProfile{}, false, identityaccess.ErrUnavailable
+	}
+	profile, err := iamv1.DecodeAuthorizationProfile(strings.NewReader(canonical))
+	if err != nil || iamv1.CheckAuthorizationProfileReference(profile, reference) != nil {
+		return iamv1.AuthorizationProfile{}, false, identityaccess.ErrUnavailable
+	}
+	normalized, _, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+	if err != nil || normalized != canonical {
+		return iamv1.AuthorizationProfile{}, false, identityaccess.ErrUnavailable
+	}
+	return profile, true, nil
 }
 
 func (value *transaction) TransactionTime(ctx context.Context) (time.Time, error) {
@@ -488,6 +563,9 @@ func (value *transaction) RecordAuthorization(
 	ctx context.Context,
 	mutation identityaccess.AuthorizationMutation,
 ) error {
+	if err := value.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+		return err
+	}
 	if iamv1.ValidateAuthorizationDecision(mutation.Decision) != nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return identityaccess.ErrInvalidArgument
@@ -767,6 +845,9 @@ func (value *transaction) RevokePolicyAttachment(ctx context.Context, mutation i
 func (value *transaction) Readiness(
 	ctx context.Context,
 ) (identityaccess.ReadinessSnapshot, error) {
+	if err := value.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+		return identityaccess.ReadinessSnapshot{}, err
+	}
 	var snapshot identityaccess.ReadinessSnapshot
 	if err := value.tx.QueryRow(ctx, "SELECT * FROM iam.readiness()").Scan(
 		&snapshot.Ready,
