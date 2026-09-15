@@ -1465,17 +1465,272 @@ func TestPolicyCompilationUsesFrozenDeclarationsNotCurrentCatalog(t *testing.T) 
 			t.Fatal("missing, ambiguous or over-budget declarations accepted")
 		}
 	}
-	pattern := document
-	pattern.Statements = append([]PolicyStatement(nil), document.Statements...)
-	pattern.Statements[0].Actions = []Action{"widgets.item.*"}
-	if _, err := CompilePolicyDocument(pattern, []AuthorizationProfile{profile}); !errors.Is(err, ErrInvalidPolicy) {
-		t.Fatal("pure binding slice silently enabled runtime action patterns")
-	}
 	if again, againDigest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{profile}); err != nil || again != canonical || againDigest != digest {
 		t.Fatal("frozen original content no longer validates independently", err)
 	}
 	if _, registered := LookupAuthorizationProfile(profile.Product); registered {
 		t.Fatal("pure compiler modified current product registration")
+	}
+}
+
+func TestPolicyFamilyCompilationFreezesExactActionsWithoutEnablingOnlinePatterns(t *testing.T) {
+	for _, product := range []ProductID{ProductPaaS, "widgets"} {
+		t.Run(string(product), func(t *testing.T) {
+			prefix := string(product) + ".item."
+			profile := declaredProductProfile(product, "TEST_SERVICE", 7,
+				declaredProfileAction(Action(prefix+"read"), "ITEM", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+				declaredProfileAction(Action(prefix+"update"), "ITEM", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+				declaredProfileAction(Action(string(product)+".item-extra.read"), "ITEM", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+				declaredProfileAction(Action(prefix+"child.read"), "ITEM", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}))
+			document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+				Statements: []PolicyStatement{{SID: "one", Effect: PolicyDeny, Actions: []Action{Action(prefix + "*"), Action(prefix + "read")},
+					Resources: []PolicyResourceSelector{{Kind: "ITEM", Match: PolicyResourceExact, ID: "item-one"}}}}}
+			authorBefore, _ := json.Marshal(document)
+			profileBefore, _ := json.Marshal(profile)
+			compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{profile})
+			if err != nil || !slices.Equal(compilation.ResolvedStatements[0].Actions, []Action{Action(prefix + "read"), Action(prefix + "update")}) {
+				t.Fatal("family expansion leaked a different family/nested action or duplicated overlap", err)
+			}
+			canonical, digest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{profile})
+			if err != nil || !strings.Contains(canonical, prefix+"*") {
+				t.Fatal("author pattern must remain in the entire commitment", err)
+			}
+			for name, change := range map[string]func(*PolicyCompilation){
+				"missing matched action": func(v *PolicyCompilation) { v.ResolvedStatements[0].Actions = v.ResolvedStatements[0].Actions[:1] },
+				"extra family": func(v *PolicyCompilation) {
+					v.ResolvedStatements[0].Actions = append(v.ResolvedStatements[0].Actions, Action(string(product)+".item-extra.read"))
+				},
+				"nested action": func(v *PolicyCompilation) {
+					v.ResolvedStatements[0].Actions = append(v.ResolvedStatements[0].Actions, Action(prefix+"child.read"))
+				},
+				"pattern as resolution": func(v *PolicyCompilation) { v.ResolvedStatements[0].Actions[0] = Action(prefix + "*") },
+				"different SID":         func(v *PolicyCompilation) { v.ResolvedStatements[0].SID = "other" },
+			} {
+				t.Run(name, func(t *testing.T) {
+					encoded, _ := json.Marshal(compilation)
+					var forged PolicyCompilation
+					if json.Unmarshal(encoded, &forged) != nil {
+						t.Fatal("invalid test compilation")
+					}
+					change(&forged)
+					if value, commitment, err := CanonicalizePolicyCompilation(document, forged, []AuthorizationProfile{profile}); !errors.Is(err, ErrInvalidPolicy) || value != "" || commitment != "" {
+						t.Fatal("forged family interpretation obtained a content commitment")
+					}
+				})
+			}
+			wire, _ := json.Marshal(compilation)
+			if _, err := DecodePolicyCompilation(bytes.NewReader(wire), document, []AuthorizationProfile{profile}); err != nil {
+				t.Fatal(err)
+			}
+			authorAfter, _ := json.Marshal(document)
+			profileAfter, _ := json.Marshal(profile)
+			if !bytes.Equal(authorBefore, authorAfter) || !bytes.Equal(profileBefore, profileAfter) {
+				t.Fatal("compilation mutated supplied values")
+			}
+			if ValidatePolicyDocument(document) == nil || ValidatePolicyVersion(PolicyVersion{PolicyID: "policy-one", ID: "version-one",
+				Document: document, ContentDigest: digest, ContractVersion: PolicyVersionCompiledContract, Compilation: &compilation}) == nil {
+				t.Fatal("compile-only pattern escaped into online document or version contract")
+			}
+			current := cloneAuthorizationProfile(profile)
+			current.Revision++
+			current.Actions = append(current.Actions, declaredProfileAction(Action(prefix+"delete"), "ITEM", AuthorityScopeTenant, "",
+				[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}))
+			if _, _, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{current}); !errors.Is(err, ErrInvalidPolicy) {
+				t.Fatal("current declaration re-expanded old author pattern")
+			}
+			updated, err := CompilePolicyDocument(document, []AuthorizationProfile{current})
+			if err != nil || !slices.Contains(updated.ResolvedStatements[0].Actions, Action(prefix+"delete")) {
+				t.Fatal("explicit new compilation did not use its selected revision", err)
+			}
+			_, updatedDigest, err := CanonicalizePolicyCompilation(document, updated, []AuthorizationProfile{current})
+			if err != nil || updatedDigest == digest {
+				t.Fatal("new expansion reused old commitment", err)
+			}
+			_, currentDigest, _ := CanonicalizeAuthorizationProfile(current)
+			request := AuthorizationRequest{Profile: AuthorizationProfileReference{current.Product, current.Revision, currentDigest},
+				Action: Action(prefix + "delete"), Resource: ResourceReference{Kind: "ITEM", ID: "item-one"}, ResourceMode: AuthorizationResourceInstance,
+				RequestID: "request-one", CorrelationID: "correlation-one"}
+			if err := CheckPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{profile}, current, request); err != nil ||
+				slices.Contains(compilation.ResolvedStatements[0].Actions, request.Action) {
+				t.Fatal("compatibility check changed the frozen action set", err)
+			}
+			// Same existing action with an incompatible caller must fail even
+			// for a Deny whose resource would not match this request.
+			current.CallingService = "CHANGED_SERVICE"
+			_, request.Profile.ContentDigest, _ = CanonicalizeAuthorizationProfile(current)
+			request.Action, request.Resource.ID = Action(prefix+"read"), "nonmatching-item"
+			if err := CheckPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{profile}, current, request); !errors.Is(err, ErrInvalidPolicy) {
+				t.Fatal("incompatible nonmatching Deny was silently skipped")
+			}
+			document.Statements[0].Actions[0], document.Statements[0].Actions[1] = document.Statements[0].Actions[1], document.Statements[0].Actions[0]
+			slices.Reverse(profile.Actions)
+			if again, againDigest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{profile}); err != nil || again != canonical || againDigest != digest {
+				t.Fatal("set reordering changed frozen content", err)
+			}
+			document.Statements[0].Actions = slices.Clone(compilation.ResolvedStatements[0].Actions)
+			if _, exactDigest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{profile}); err != nil || exactDigest == digest {
+				t.Fatal("author pattern and enumerated author were conflated", err)
+			}
+		})
+	}
+	// Also exercise actual source declarations, without treating a synthetic
+	// product bearing a familiar name as a registered source.
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+		Statements: []PolicyStatement{{SID: "application", Effect: PolicyAllow, Actions: []Action{"paas.application.*"},
+			Resources: []PolicyResourceSelector{{Kind: ResourceApplication, Match: PolicyResourceAnyInAuthority}}}}}
+	document.Statements = append(document.Statements, PolicyStatement{SID: "audit", Effect: PolicyDeny, Actions: []Action{"audit.record.*"},
+		Resources: []PolicyResourceSelector{{Kind: ResourceAuditRecord, Match: PolicyResourceAnyInAuthority}}})
+	result, err := CompilePolicyDocument(document, AllAuthorizationProfiles())
+	if err != nil || len(result.Profiles) != 2 {
+		t.Fatal("actual product declarations rejected minimal family expansion", err)
+	}
+	_, digest, err := CanonicalizePolicyCompilation(document, result, AllAuthorizationProfiles())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ValidateCreatePolicyRequest(CreatePolicyRequest{DisplayName: "family", Document: document, RequestID: "request-one"}) == nil ||
+		ValidateCreatePolicyVersionRequest(CreatePolicyVersionRequest{Document: document, ResourceVersion: 1, RequestID: "request-one"}) == nil ||
+		ValidatePolicyVersion(PolicyVersion{PolicyID: "policy-one", ID: "version-one", Document: document, ContentDigest: digest,
+			ContractVersion: PolicyVersionCompiledContract, Compilation: &result}) == nil {
+		t.Fatal("actual known products escaped the exact-only online contract")
+	}
+}
+
+func TestPolicyFamilyCompilationRejectsGrammarAndEveryIncompatibleMatch(t *testing.T) {
+	profile := declaredProductProfile("widgets", "WIDGET_SERVICE", 1,
+		declaredProfileAction("widgets.item.read", "WIDGET", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}}),
+		declaredProfileAction("widgets.item.update", "WIDGET", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}}))
+	base := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+		Statements: []PolicyStatement{{SID: "one", Effect: PolicyAllow, Actions: []Action{"widgets.item.*"},
+			Resources:  []PolicyResourceSelector{{Kind: "WIDGET", Match: PolicyResourcePrefixInAuthority, ID: "widget-"}},
+			Conditions: []PolicyCondition{{Key: ConditionIAMAccountID, Operator: PolicyStringEquals, Values: []string{"account-one"}}}}}}
+	for _, pattern := range []Action{"*", "widgets.*", "*.item.read", "widgets.it*", "widgets.item.r*", "widgets.item.?", "widgets.item.**",
+		"widgets.item.*.read", "widgets.item.child.*", "Widgets.item.*", "widgets..*", "widgets.item\\.*", "widgets.other.*", "absent.item.*", Action(strings.Repeat("w", 128) + ".item.*")} {
+		t.Run(string(pattern), func(t *testing.T) {
+			document := base
+			document.Statements = slices.Clone(base.Statements)
+			document.Statements[0].Actions = []Action{pattern}
+			document.Statements[0].Conditions = nil
+			_, err := CompilePolicyDocument(document, []AuthorizationProfile{profile})
+			var validation *PolicyValidationError
+			if !errors.As(err, &validation) || validation.Pointer != "/statements/0/actions/0" {
+				t.Fatal("invalid/empty pattern did not identify the original author token", err)
+			}
+		})
+	}
+	for _, effect := range []PolicyEffect{PolicyAllow, PolicyDeny} {
+		for name, change := range map[string]func(*AuthorizationProfile){
+			"wrong scope": func(v *AuthorizationProfile) {
+				v.Actions[1].Scope = AuthorityScopeInstallation
+				v.Actions[1].Conditions = nil
+				v.Actions[1].ResourceShapes[0].PrefixAllowed = false
+			},
+			"missing condition": func(v *AuthorizationProfile) { v.Actions[1].Conditions = nil },
+			"missing prefix":    func(v *AuthorizationProfile) { v.Actions[1].ResourceShapes[0].PrefixAllowed = false },
+			"wrong resource":    func(v *AuthorizationProfile) { v.Actions[1].ResourceKind = "OTHER" },
+		} {
+			t.Run(string(effect)+"/"+name, func(t *testing.T) {
+				changed := cloneAuthorizationProfile(profile)
+				change(&changed)
+				if ValidateAuthorizationProfile(changed) != nil {
+					t.Fatal("negative fixture must have a valid declaration")
+				}
+				document := base
+				document.Statements = slices.Clone(base.Statements)
+				document.Statements[0].Effect = effect
+				if _, err := CompilePolicyDocument(document, []AuthorizationProfile{changed}); !errors.Is(err, ErrInvalidPolicy) {
+					t.Fatal("incompatible matched action was filtered instead of rejecting the statement")
+				}
+			})
+		}
+	}
+	base.Statements[0].Actions = []Action{"widgets.item.*", "widgets.item.*"}
+	if _, err := CompilePolicyDocument(base, []AuthorizationProfile{profile}); !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatal("duplicate author pattern accepted")
+	}
+	base.Statements[0].Actions = []Action{"widgets.item.*"}
+	base.Scope = AuthorityScopeInstallation
+	if _, err := CompilePolicyDocument(base, []AuthorizationProfile{profile}); !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatal("installation author obtained pattern semantics")
+	}
+}
+
+func FuzzPolicyFamilyCompilationCanonicalRoundTrip(f *testing.F) {
+	for _, token := range []string{"widgets.item.*", "widgets.item.read", "widgets.item.update", "widgets.*", "widgets.item.child.*", "*", "widgets.item.?"} {
+		f.Add(token)
+	}
+	profile := declaredProductProfile("widgets", "WIDGET_SERVICE", 1,
+		declaredProfileAction("widgets.item.read", "WIDGET", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction("widgets.item.update", "WIDGET", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}))
+	f.Fuzz(func(t *testing.T, token string) {
+		document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+			Statements: []PolicyStatement{{SID: "one", Effect: PolicyDeny, Actions: []Action{Action(token)},
+				Resources: []PolicyResourceSelector{{Kind: "WIDGET", Match: PolicyResourceAnyInAuthority}}}}}
+		compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{profile})
+		if err != nil {
+			if !errors.Is(err, ErrInvalidPolicy) {
+				t.Fatal("unstable compiler error", err)
+			}
+			return
+		}
+		var expected []Action
+		switch token {
+		case "widgets.item.*":
+			expected = []Action{"widgets.item.read", "widgets.item.update"}
+		case "widgets.item.read", "widgets.item.update":
+			expected = []Action{Action(token)}
+		default:
+			t.Fatal("bounded declaration accepted unexpected author language")
+		}
+		if !slices.Equal(compilation.ResolvedStatements[0].Actions, expected) {
+			t.Fatal("incorrect resolved action set")
+		}
+		canonical, digest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{profile})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire, _ := json.Marshal(compilation)
+		decoded, err := DecodePolicyCompilation(bytes.NewReader(wire), document, []AuthorizationProfile{profile})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again, againDigest, err := CanonicalizePolicyCompilation(document, decoded, []AuthorizationProfile{profile}); err != nil || again != canonical || againDigest != digest {
+			t.Fatal("family canonical round trip changed commitment", err)
+		}
+	})
+}
+
+func TestPolicyFamilyCompilationBudgetsCountOverlapBeforeDeduplication(t *testing.T) {
+	profile := declaredProductProfile("w", "WIDGET_SERVICE", 1)
+	for index := 0; index < MaxStatementActions; index++ {
+		profile.Actions = append(profile.Actions, declaredProfileAction(Action(fmt.Sprintf("w.i.a%d", index)), "WIDGET", AuthorityScopeTenant, "",
+			[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}))
+	}
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+		Statements: []PolicyStatement{{SID: "one", Effect: PolicyAllow, Actions: []Action{"w.i.*"}, Resources: []PolicyResourceSelector{{Kind: "WIDGET", Match: PolicyResourceAnyInAuthority}}}}}
+	if result, err := CompilePolicyDocument(document, []AuthorizationProfile{profile}); err != nil || len(result.ResolvedStatements[0].Actions) != MaxStatementActions {
+		t.Fatal("exact resolved action budget rejected", err)
+	}
+	other := declaredProductProfile("other", "OTHER_SERVICE", 1, declaredProfileAction("other.item.read", "WIDGET", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}))
+	document.Statements[0].Actions = append(document.Statements[0].Actions, "other.item.read")
+	if _, err := CompilePolicyDocument(document, []AuthorizationProfile{profile, other}); !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatal("expanded action budget bypassed")
+	}
+	document.Statements[0].Actions = []Action{"w.i.*", "w.i.a0"}
+	statement := document.Statements[0]
+	document.Statements = nil
+	for index := 0; index < MaxPolicyStatements; index++ {
+		statement.SID = fmt.Sprintf("statement-%d", index)
+		document.Statements = append(document.Statements, statement)
+	}
+	if _, err := CompilePolicyDocument(document, []AuthorizationProfile{profile}); !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatal("deduplicated overlap concealed document work limit")
+	}
+	for index := range document.Statements {
+		document.Statements[index].Actions = []Action{"w.i.*"}
+	}
+	if _, err := CompilePolicyDocument(document, []AuthorizationProfile{profile}); err != nil {
+		t.Fatal("exact document work budget rejected", err)
 	}
 }
 

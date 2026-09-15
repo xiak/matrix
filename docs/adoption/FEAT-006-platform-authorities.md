@@ -411,3 +411,14 @@ compilation or a mutable name allowlist. CUSTOMER document-only content is
 compiled version and selects it. Root CUSTOMER attachments require old-API
 removal before cutover; privileged corrupt Root/group fixtures are negative
 tests, not old-version provenance or supported user workflows.
+
+For IAM/005 bounded action-family patterns, fixed
+`32dc1a4aab4a69d1c6cb4d04437dd7f8fd739cb0` is `REUSE` for the sole
+author/compilation canonical owner, exact Profile references and pre-match
+compatibility validation, and `ADAPT` for statement capability validation over
+the frozen resolved action set. Its exact-only SQL publication and PDP are
+`REFERENCE` for the subsequent atomic runtime cutover, not pattern support.
+Runtime glob evaluation, current-head expansion of old versions, silently
+filtering incompatible declarations, global/product-only wildcard authority,
+and a second policy grammar or encoder are `REJECT`. The pure compiler slice
+does not enable HTTP publication, change schemas, or import other worktrees.

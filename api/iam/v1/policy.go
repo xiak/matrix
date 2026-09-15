@@ -419,16 +419,17 @@ const (
 )
 
 const (
-	PolicyLanguageVersion                               = "1"
-	MaxPolicyBytes                  int64               = 64 * 1024
-	MaxPolicyStatements                                 = 64
-	MaxStatementActions                                 = 128
-	MaxStatementResources                               = 64
-	PolicyAllow                     PolicyEffect        = "ALLOW"
-	PolicyDeny                      PolicyEffect        = "DENY"
-	PolicyResourceExact             PolicyResourceMatch = "EXACT"
-	PolicyResourceAnyInAuthority    PolicyResourceMatch = "ANY_IN_AUTHORITY"
-	PolicyResourcePrefixInAuthority PolicyResourceMatch = "PREFIX_IN_AUTHORITY"
+	PolicyLanguageVersion                                = "1"
+	MaxPolicyBytes                   int64               = 64 * 1024
+	MaxPolicyStatements                                  = 64
+	MaxStatementActions                                  = 128
+	MaxPolicyCompilationActionVisits                     = MaxPolicyStatements * MaxStatementActions
+	MaxStatementResources                                = 64
+	PolicyAllow                      PolicyEffect        = "ALLOW"
+	PolicyDeny                       PolicyEffect        = "DENY"
+	PolicyResourceExact              PolicyResourceMatch = "EXACT"
+	PolicyResourceAnyInAuthority     PolicyResourceMatch = "ANY_IN_AUTHORITY"
+	PolicyResourcePrefixInAuthority  PolicyResourceMatch = "PREFIX_IN_AUTHORITY"
 )
 
 var ErrInvalidPolicy = errors.New("IAM policy is invalid")
@@ -683,6 +684,9 @@ func validatePolicyStructure(document PolicyDocument) error {
 type policyCapabilityLookup struct {
 	action    func(Action) (ActionDefinition, bool)
 	condition func(Action, ConditionKey) (ConditionKeyDefinition, bool)
+	// Only the explicit frozen compiler supplies this resolver. Online and
+	// document-only validation remain exact-only until the runtime cutover.
+	resolvePattern func(string) []Action
 	// Transport integrity can validate syntax without claiming a declaration
 	// was registered. Publication/evaluation must use explicit capabilities.
 	syntaxOnly bool
@@ -701,6 +705,7 @@ func validatePolicyStructureWithCapabilities(document PolicyDocument, capabiliti
 		return invalidPolicyAt(PolicyLimitExceeded, "/statements")
 	}
 	seenStatements := make(map[string]bool, len(document.Statements))
+	remainingVisits := MaxPolicyCompilationActionVisits
 	for index, statement := range document.Statements {
 		pointer := "/statements/" + strconv.Itoa(index)
 		if ValidateID("sid", statement.SID) != nil {
@@ -719,6 +724,17 @@ func validatePolicyStructureWithCapabilities(document PolicyDocument, capabiliti
 		if len(statement.Resources) == 0 || len(statement.Resources) > MaxStatementResources {
 			return invalidPolicyAt(PolicyLimitExceeded, pointer+"/resources")
 		}
+		actions, authorIndexes, err := resolvePolicyStatementActions(statement.Actions, document.Scope, pointer, capabilities, &remainingVisits)
+		if err != nil {
+			return err
+		}
+		statement.Actions = actions
+		actionPointer := func(index int) string {
+			if authorIndexes != nil {
+				index = authorIndexes[index]
+			}
+			return pointer + "/actions/" + strconv.Itoa(index)
+		}
 		if err := validatePolicyConditions(statement, pointer, capabilities); err != nil {
 			return err
 		}
@@ -726,7 +742,7 @@ func validatePolicyStructureWithCapabilities(document PolicyDocument, capabiliti
 		requiredKinds := make(map[ResourceKind]bool)
 		prefixUnsupportedKinds := make(map[ResourceKind]bool)
 		for index, action := range statement.Actions {
-			actionPointer := pointer + "/actions/" + strconv.Itoa(index)
+			actionPointer := actionPointer(index)
 			var definition ActionDefinition
 			if capabilities.syntaxOnly {
 				if !authorizationActionIdentifier(action) {
@@ -796,11 +812,76 @@ func validatePolicyStructureWithCapabilities(document PolicyDocument, capabiliti
 			}
 			definition, _ := capabilities.action(action)
 			if !requiredKinds[definition.ResourceKind] {
-				return invalidPolicyAt(PolicyResourceMismatch, pointer+"/actions/"+strconv.Itoa(index))
+				return invalidPolicyAt(PolicyResourceMismatch, actionPointer(index))
 			}
 		}
 	}
 	return nil
+}
+
+// Expansion is a compile-time operation over one bounded frozen product. It
+// never decides calling authority or filters out incompatible declarations.
+// Returned indexes keep diagnostics attached to the original author token.
+func resolvePolicyStatementActions(actions []Action, scope AuthorityScope, pointer string, capabilities policyCapabilityLookup, remainingVisits *int) ([]Action, []int, error) {
+	if capabilities.resolvePattern == nil || !slices.ContainsFunc(actions, func(action Action) bool { return strings.Contains(string(action), "*") }) {
+		*remainingVisits -= len(actions)
+		if *remainingVisits < 0 {
+			return nil, nil, invalidPolicyAt(PolicyLimitExceeded, pointer+"/actions")
+		}
+		return actions, nil, nil
+	}
+	seenAuthors := make(map[Action]bool, len(actions))
+	seenResolved := make(map[Action]bool)
+	var resolved []Action
+	var indexes []int
+	for index, action := range actions {
+		location := pointer + "/actions/" + strconv.Itoa(index)
+		if seenAuthors[action] {
+			return nil, nil, invalidPolicyAt(PolicyDuplicate, location)
+		}
+		seenAuthors[action] = true
+		matches := []Action{action}
+		if strings.Contains(string(action), "*") {
+			prefix, valid := policyActionPatternPrefix(action)
+			if !valid {
+				return nil, nil, invalidPolicyAt(PolicyUnsupported, location)
+			}
+			if scope != AuthorityScopeTenant {
+				return nil, nil, invalidPolicyAt(PolicyScopeMismatch, location)
+			}
+			matches = capabilities.resolvePattern(prefix)
+			if len(matches) == 0 {
+				return nil, nil, invalidPolicyAt(PolicyUnsupported, location)
+			}
+		}
+		// Charge before deduplication: overlap cannot conceal compile work.
+		*remainingVisits -= len(matches)
+		if *remainingVisits < 0 {
+			return nil, nil, invalidPolicyAt(PolicyLimitExceeded, location)
+		}
+		for _, match := range matches {
+			if !seenResolved[match] {
+				if len(resolved) == MaxStatementActions {
+					return nil, nil, invalidPolicyAt(PolicyLimitExceeded, location)
+				}
+				seenResolved[match] = true
+				resolved = append(resolved, match)
+				indexes = append(indexes, index)
+			}
+		}
+	}
+	return resolved, indexes, nil
+}
+
+func policyActionPatternPrefix(action Action) (string, bool) {
+	if len(action) > 128 || !strings.HasSuffix(string(action), ".*") {
+		return "", false
+	}
+	base := strings.TrimSuffix(string(action), ".*")
+	if strings.Count(base, ".") != 1 || !authorizationActionIdentifier(Action(base)) {
+		return "", false
+	}
+	return base + ".", true
 }
 
 func validatePolicyConditions(statement PolicyStatement, pointer string, capabilities policyCapabilityLookup) error {
@@ -927,10 +1008,11 @@ func canonicalPolicyDocument(document PolicyDocument, capabilities policyCapabil
 	return encoded, nil
 }
 
-// CompilePolicyDocument resolves exact actions using only the supplied
+// CompilePolicyDocument resolves author actions using only the supplied
 // declarations, never today's global catalog. The owning transaction must
 // authenticate and select its current registry heads before invoking it.
-// Pattern syntax is deliberately not enabled by this contract slice.
+// Bounded action-family patterns are compile-only: online document/version
+// validation deliberately rejects them until SQL and the PDP migrate together.
 func CompilePolicyDocument(document PolicyDocument, profiles []AuthorizationProfile) (PolicyCompilation, error) {
 	compilation, _, err := compilePolicyDocument(document, profiles)
 	return compilation, err
@@ -943,6 +1025,20 @@ func compilePolicyDocument(document PolicyDocument, profiles []AuthorizationProf
 	references := make(map[ProductID]AuthorizationProfileReference, len(profiles))
 	definitions := make(map[Action]ActionDefinition)
 	conditions := make(map[Action][]AuthorizationProfileCondition)
+	// Do not build or sort a family index for existing exact-only content.
+	// Bound this preliminary scan too; the sole validator reports malformed
+	// structures and budgets below, without traversing unbounded input here.
+	var families map[string][]Action
+	for _, statement := range document.Statements[:min(len(document.Statements), MaxPolicyStatements)] {
+		for _, action := range statement.Actions[:min(len(statement.Actions), MaxStatementActions)] {
+			if prefix, pattern := policyActionPatternPrefix(action); pattern {
+				if families == nil {
+					families = make(map[string][]Action)
+				}
+				families[prefix] = nil
+			}
+		}
+	}
 	for _, profile := range profiles {
 		_, digest, err := CanonicalizeAuthorizationProfile(profile)
 		if err != nil {
@@ -958,9 +1054,19 @@ func compilePolicyDocument(document PolicyDocument, profiles []AuthorizationProf
 			}
 			definitions[action.Action] = authorizationProfileActionDefinition(profile, action)
 			conditions[action.Action] = action.Conditions
+			if len(families) != 0 {
+				prefix := string(action.Action[:strings.LastIndexByte(string(action.Action), '.')+1])
+				if _, requested := families[prefix]; requested {
+					families[prefix] = append(families[prefix], action.Action)
+				}
+			}
 		}
 	}
+	for _, actions := range families {
+		slices.Sort(actions)
+	}
 	capabilities := policyCapabilityLookup{
+		resolvePattern: func(prefix string) []Action { return families[prefix] },
 		action: func(action Action) (ActionDefinition, bool) {
 			definition, known := definitions[action]
 			return definition, known
@@ -980,8 +1086,13 @@ func compilePolicyDocument(document PolicyDocument, profiles []AuthorizationProf
 	}
 	compilation := PolicyCompilation{CompilationVersion: PolicyCompilationVersion}
 	used := make(map[ProductID]bool)
-	for _, statement := range document.Statements {
-		actions := slices.Clone(statement.Actions)
+	remainingVisits := MaxPolicyCompilationActionVisits
+	for index, statement := range document.Statements {
+		actions, _, err := resolvePolicyStatementActions(statement.Actions, document.Scope, "/statements/"+strconv.Itoa(index), capabilities, &remainingVisits)
+		if err != nil {
+			return PolicyCompilation{}, nil, err
+		}
+		actions = slices.Clone(actions)
 		slices.Sort(actions)
 		compilation.ResolvedStatements = append(compilation.ResolvedStatements, PolicyResolvedStatement{statement.SID, actions})
 		for _, action := range actions {
