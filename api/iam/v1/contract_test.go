@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1426,6 +1427,243 @@ func TestPolicyCompilationUsesFrozenDeclarationsNotCurrentCatalog(t *testing.T) 
 	}
 }
 
+func TestPolicyCompilationRequestCompatibilityAcrossDeclaredTargets(t *testing.T) {
+	for _, frozen := range AllAuthorizationProfiles() {
+		current := cloneAuthorizationProfile(frozen)
+		current.Revision++ // A new revision with the same meaning is not drift.
+		_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, action := range frozen.Actions {
+			for _, effect := range []PolicyEffect{PolicyAllow, PolicyDeny} {
+				document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: action.Scope,
+					Statements: []PolicyStatement{{SID: "one", Effect: effect, Actions: []Action{action.Action},
+						Resources: []PolicyResourceSelector{{Kind: action.ResourceKind, Match: PolicyResourceAnyInAuthority}}}}}
+				compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{frozen})
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, digest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{frozen})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, shape := range action.ResourceShapes {
+					request := AuthorizationRequest{Profile: AuthorizationProfileReference{current.Product, current.Revision, currentDigest},
+						Action: action.Action, Resource: ResourceReference{Kind: action.ResourceKind, ID: "collection"},
+						ResourceMode: shape.Mode, CollectionUsage: shape.CollectionUsage, RequestID: "request-one", CorrelationID: "correlation-one"}
+					if err := CheckPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{frozen}, current, request); err != nil {
+						t.Fatalf("same explicit meaning rejected: %s/%s/%s: %v", action.Action, effect, shape.Mode, err)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestPolicyCompilationRequestSameIDDoesNotBridgeTargetModes(t *testing.T) {
+	shapes := []AuthorizationResourceShape{
+		{Mode: AuthorizationResourceInstance},
+		{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList},
+		{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate},
+	}
+	for originalIndex, originalShape := range shapes {
+		resultKind := ResourceKind("")
+		if originalShape.CollectionUsage == AuthorizationCollectionCreate {
+			resultKind = "WIDGET"
+		}
+		frozen := declaredProductProfile("widgets", "WIDGET_SERVICE", 7,
+			declaredProfileAction("widgets.item.access", "WIDGET", AuthorityScopeTenant, resultKind, []AuthorizationResourceShape{originalShape}))
+		for _, match := range []PolicyResourceMatch{PolicyResourceExact, PolicyResourceAnyInAuthority} {
+			selector := PolicyResourceSelector{Kind: "WIDGET", Match: match}
+			if match == PolicyResourceExact {
+				selector.ID = "collection"
+			}
+			document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+				Statements: []PolicyStatement{{SID: "one", Effect: PolicyDeny, Actions: []Action{"widgets.item.access"},
+					Resources: []PolicyResourceSelector{selector}}}}
+			compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{frozen})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, digest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{frozen})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for currentIndex, shape := range shapes {
+				current := cloneAuthorizationProfile(frozen)
+				current.Revision++
+				current.Actions[0].ResourceShapes = []AuthorizationResourceShape{shape}
+				current.Actions[0].ResultResourceKind = ""
+				if shape.CollectionUsage == AuthorizationCollectionCreate {
+					current.Actions[0].ResultResourceKind = "WIDGET"
+				}
+				_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request := AuthorizationRequest{Profile: AuthorizationProfileReference{current.Product, current.Revision, currentDigest},
+					Action: "widgets.item.access", Resource: ResourceReference{Kind: "WIDGET", ID: "collection"},
+					ResourceMode: shape.Mode, CollectionUsage: shape.CollectionUsage, RequestID: "request-one", CorrelationID: "correlation-one"}
+				err = CheckPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{frozen}, current, request)
+				if (err == nil) != (originalIndex == currentIndex) {
+					t.Fatalf("same opaque ID bridged different target modes: %d -> %d, %s: %v", originalIndex, currentIndex, match, err)
+				}
+			}
+		}
+	}
+}
+
+func TestPolicyCompilationRequestRejectsChangedMeaningBeforeStatementMatching(t *testing.T) {
+	frozen := declaredProductProfile("widgets", "WIDGET_SERVICE", 7,
+		declaredProfileAction("widgets.item.read", "WIDGET", AuthorityScopeTenant, "",
+			[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}}))
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+		Statements: []PolicyStatement{{SID: "guard", Effect: PolicyDeny, Actions: []Action{"widgets.item.read"},
+			Resources:  []PolicyResourceSelector{{Kind: "WIDGET", Match: PolicyResourcePrefixInAuthority, ID: "unmatched-"}},
+			Conditions: []PolicyCondition{{Key: ConditionIAMAccountID, Operator: PolicyStringNotEquals, Values: []string{"account-one"}}}}}}
+	compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{frozen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{frozen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*AuthorizationProfile, *AuthorizationRequest){
+		"caller": func(p *AuthorizationProfile, _ *AuthorizationRequest) { p.CallingService = "OTHER_SERVICE" },
+		"kind": func(p *AuthorizationProfile, r *AuthorizationRequest) {
+			p.Actions[0].ResourceKind, r.Resource.Kind = "OTHER_WIDGET", "OTHER_WIDGET"
+		},
+		"scope": func(p *AuthorizationProfile, _ *AuthorizationRequest) {
+			p.Actions[0].Scope, p.Actions[0].Conditions = AuthorityScopeInstallation, nil
+			p.Actions[0].ResourceShapes[0].PrefixAllowed = false
+		},
+		"result kind": func(p *AuthorizationProfile, _ *AuthorizationRequest) {
+			p.Actions[0].ResultResourceKind = "CHILD_WIDGET"
+		},
+		"new collection shape": func(p *AuthorizationProfile, r *AuthorizationRequest) {
+			p.Actions[0].ResourceShapes = append(p.Actions[0].ResourceShapes,
+				AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList})
+			r.ResourceMode, r.CollectionUsage = AuthorizationResourceCollection, AuthorizationCollectionList
+		},
+		"prefix removed": func(p *AuthorizationProfile, _ *AuthorizationRequest) {
+			p.Actions[0].ResourceShapes[0].PrefixAllowed = false
+		},
+		"used condition removed": func(p *AuthorizationProfile, _ *AuthorizationRequest) { p.Actions[0].Conditions = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			current := cloneAuthorizationProfile(frozen)
+			current.Revision++
+			request := AuthorizationRequest{Action: "widgets.item.read", Resource: ResourceReference{Kind: "WIDGET", ID: "collection"},
+				ResourceMode: AuthorizationResourceInstance, RequestID: "request-one", CorrelationID: "correlation-one"}
+			change(&current, &request)
+			_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
+			if err != nil {
+				t.Fatal("fixture must be a valid new declaration, not a grammar rejection", err)
+			}
+			request.Profile = AuthorizationProfileReference{current.Product, current.Revision, currentDigest}
+			if err := CheckAuthorizationProfileTarget(current, request.Profile, request.Action, request.Resource, request.ResourceMode, request.CollectionUsage); err != nil {
+				t.Fatal("fixture must independently be a legal current request", err)
+			}
+			if err := CheckPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{frozen}, current, request); !errors.Is(err, ErrInvalidPolicy) {
+				t.Fatal("incompatible old Deny disappeared before resource/condition matching", err)
+			}
+		})
+	}
+}
+
+func TestPolicyCompilationRequestDoesNotGrowActionsOrBorrowDeclarations(t *testing.T) {
+	frozen := declaredProductProfile("widgets", "WIDGET_SERVICE", 7,
+		declaredProfileAction("widgets.item.read", "WIDGET", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}))
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+		Statements: []PolicyStatement{{SID: "read", Effect: PolicyAllow, Actions: []Action{"widgets.item.read"},
+			Resources: []PolicyResourceSelector{{Kind: "WIDGET", Match: PolicyResourceExact, ID: "widget-one"}}}}}
+	compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{frozen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, digest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{frozen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := cloneAuthorizationProfile(frozen)
+	current.Revision++
+	current.Actions[0].Conditions = nil // Unused capabilities do not reinterpret this document.
+	current.Actions = append(current.Actions, declaredProfileAction("widgets.item.delete", "WIDGET", AuthorityScopeTenant, "",
+		[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}))
+	_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := AuthorizationRequest{Profile: AuthorizationProfileReference{current.Product, current.Revision, currentDigest},
+		Action: "widgets.item.read", Resource: ResourceReference{Kind: "WIDGET", ID: "widget-one"},
+		ResourceMode: AuthorizationResourceInstance, RequestID: "request-one", CorrelationID: "correlation-one"}
+	for _, action := range []Action{"widgets.item.read", "widgets.item.delete"} {
+		request.Action = action
+		if err := CheckPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{frozen}, current, request); err != nil {
+			t.Fatal("unrelated action or unused capability should not rewrite exact resolution", err)
+		}
+	}
+	if slices.Contains(compilation.ResolvedStatements[0].Actions, Action("widgets.item.delete")) {
+		t.Fatal("compatibility test granted a newly declared action")
+	}
+	// Even a nonparticipating policy must retain its entire original commitment.
+	for name, change := range map[string]func(*PolicyDocument, *PolicyCompilation, *string, *[]AuthorizationProfile, *AuthorizationRequest){
+		"different digest": func(_ *PolicyDocument, _ *PolicyCompilation, d *string, _ *[]AuthorizationProfile, _ *AuthorizationRequest) {
+			*d = "sha256:" + strings.Repeat("0", 64)
+		},
+		"author effect": func(d *PolicyDocument, _ *PolicyCompilation, _ *string, _ *[]AuthorizationProfile, _ *AuthorizationRequest) {
+			d.Statements[0].Effect = PolicyDeny
+		},
+		"no frozen source": func(_ *PolicyDocument, _ *PolicyCompilation, _ *string, p *[]AuthorizationProfile, _ *AuthorizationRequest) {
+			*p = nil
+		},
+		"current not original": func(_ *PolicyDocument, _ *PolicyCompilation, _ *string, p *[]AuthorizationProfile, _ *AuthorizationRequest) {
+			*p = []AuthorizationProfile{current}
+		},
+		"no compilation": func(_ *PolicyDocument, c *PolicyCompilation, _ *string, _ *[]AuthorizationProfile, _ *AuthorizationRequest) {
+			*c = PolicyCompilation{}
+		},
+		"stale request": func(_ *PolicyDocument, _ *PolicyCompilation, _ *string, _ *[]AuthorizationProfile, r *AuthorizationRequest) {
+			r.Profile.Revision--
+		},
+		"implicit mode": func(_ *PolicyDocument, _ *PolicyCompilation, _ *string, _ *[]AuthorizationProfile, r *AuthorizationRequest) {
+			r.ResourceMode = ""
+		},
+		"instance usage": func(_ *PolicyDocument, _ *PolicyCompilation, _ *string, _ *[]AuthorizationProfile, r *AuthorizationRequest) {
+			r.CollectionUsage = AuthorizationCollectionList
+		},
+		"missing request identity": func(_ *PolicyDocument, _ *PolicyCompilation, _ *string, _ *[]AuthorizationProfile, r *AuthorizationRequest) {
+			r.RequestID = ""
+		},
+		"missing correlation": func(_ *PolicyDocument, _ *PolicyCompilation, _ *string, _ *[]AuthorizationProfile, r *AuthorizationRequest) {
+			r.CorrelationID = ""
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var changedDocument PolicyDocument
+			var changedCompilation PolicyCompilation
+			encoded, _ := json.Marshal(document)
+			compiled, _ := json.Marshal(compilation)
+			if json.Unmarshal(encoded, &changedDocument) != nil || json.Unmarshal(compiled, &changedCompilation) != nil {
+				t.Fatal("invalid fixture")
+			}
+			changedDigest, profiles, changedRequest := digest, []AuthorizationProfile{frozen}, request
+			change(&changedDocument, &changedCompilation, &changedDigest, &profiles, &changedRequest)
+			if err := CheckPolicyCompilationRequest(changedDocument, changedCompilation, changedDigest, profiles, current, changedRequest); !errors.Is(err, ErrInvalidPolicy) {
+				t.Fatal("malformed commitment/request was ignored for a different action", err)
+			}
+		})
+	}
+	if after, afterDigest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{frozen}); err != nil || after != canonical || afterDigest != digest {
+		t.Fatal("current compatibility changed frozen content", err)
+	}
+	if _, registered := LookupAuthorizationProfile("widgets"); registered {
+		t.Fatal("pure compatibility check registered a product")
+	}
+}
+
 func TestPolicyCompilationAndCurrentValidationShareCapabilities(t *testing.T) {
 	for _, action := range AllActions() {
 		definition, _ := LookupActionDefinition(action)
@@ -1496,6 +1734,12 @@ func TestPolicyCompilationCannotBorrowCurrentProfileCapabilities(t *testing.T) {
 func FuzzPolicyCompilationCanonicalRoundTrip(f *testing.F) {
 	document := policyDocumentFixture()
 	profiles := AllAuthorizationProfiles()
+	current, known := LookupAuthorizationProfile(ProductPaaS)
+	request, err := NewAuthorizationRequest(ActionPaaSApplicationRead, ResourceReference{Kind: ResourceApplication, ID: "application-one"},
+		AuthorizationResourceInstance, "", "request-one", "correlation-one")
+	if !known || err != nil {
+		f.Fatal("invalid current request fixture", err)
+	}
 	compilation, err := CompilePolicyDocument(document, profiles)
 	if err != nil {
 		f.Fatal(err)
@@ -1522,6 +1766,12 @@ func FuzzPolicyCompilationCanonicalRoundTrip(f *testing.F) {
 		}
 		if again, againDigest, err := CanonicalizePolicyCompilation(document, repeated, profiles); err != nil || again != canonical || againDigest != digest {
 			t.Fatal("immutable compilation changed after round trip", err)
+		}
+		if err := CheckPolicyCompilationRequest(document, repeated, digest, profiles, current, request); err != nil {
+			t.Fatal("valid frozen content became incompatible after strict round trip", err)
+		}
+		if err := CheckPolicyCompilationRequest(document, repeated, "sha256:"+strings.Repeat("0", 64), profiles, current, request); !errors.Is(err, ErrInvalidPolicy) {
+			t.Fatal("request compatibility ignored the stored whole-content commitment", err)
 		}
 	})
 }

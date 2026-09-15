@@ -97,7 +97,27 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 编译预算沿用原文档/语句/动作/资源限制，输入最多16个 Profile（各自仍受001预算），完整规范编译内容最多128KiB；这不是放大当前HTTP请求/响应预算。输入与输出集合不共享可修改切片；重排不改变摘要，重复/多余/缺失引用、同产品多版本、SID错配、解析动作变体，以及用同revision的不同内容验证已冻结引用均拒绝。纯编译器不证明全局同revision不变性，该责任属于后续不可变registry。目录新增动作或形状只能改变新编译内容，旧结果按原 Profile 验证；两个实际产品以及没有当前全局目录条目的合法合成产品均走同一纯校验路径。后者只证明无产品名分支，不证明它被线上接入。
 
-后续真实评估须同时满足请求当前 Profile 与策略原 Profile 的目标模式、资源种类、scope、caller及可信条件解释；同名动作的解释冲突失败关闭，不能静默忽略旧 Deny。当前分支已有 ALLOW/DENY 及 Deny 优先，该规则不会被 Profile 绑定降级。目录更新不重编译旧版本、不移动默认指针，历史决定不查最新 head。注册持久化、模式绑定、数据库发布校验、实际PEP及最终be3组合仍是未完成硬门禁。
+后续真实评估须同时满足请求当前 Profile 与策略原 Profile 的目标模式、资源种类、scope、caller及可信条件解释；同名动作的解释冲突失败关闭，不能静默忽略旧 Deny。当前分支已有 ALLOW/DENY 及 Deny 优先，该规则不会被 Profile 绑定降级。目录更新不重编译旧版本、不移动默认指针，历史决定不查最新 head。001 已在固定1dc完成注册、当前请求与决定绑定；本 owner 的数据库发布/求值及最终be3消费者组合仍是未完成硬门禁。
+
+#### 编译持久化切换与支持边界
+
+本节是下一切片的设计和验收目标，尚未作为已实现的数据库能力。沿现有 policy_versions、发布事务、默认指针及唯一 evaluator 替换，不新建平行策略库或权限引擎。新版本由服务端在同一事务锁住受信 current heads 后编译，保存完整不可变编译内容和唯一摘要；客户端仍只提交作者文档与原并发/幂等字段。源码目录、SQL实际登记与当前 head 不一致时发布失败关闭，不从 archive 最大 revision 或请求中选择产品版本。相同作者文档在不同合法 Profile 下会形成不同内容承诺，须显式发布再显式 set-default，不自动更新附件。
+
+policy_versions 拟增加无默认、必填的 contract_version，1只标识切换前真实完整存储行，2代表新编译契约；缺列/缺字段/null 不是可由运行时提交的旧格式选择器。一次性 cutover 持锁、整事务检查既有行后标记；旧 document/canonical/contentDigest、创建时间、默认指针和附件均不改，不回填编译结果。重复迁移不得补齐不完整新行或复活退休内容。新存储列/函数参数、readiness 精确形状与公开响应需在实现时一起校验；当前尚未分配下一 schema 或更改发行 profile。
+
+**历史存在不等于旧语义已获证明。** contract1 仅证明在切换前存在，不证明记录来自哪一版程序；首版 archive 恰好存在同样不是来源证明。固定 `1dc1079c4e7bec80f5345d06929875b492ba9a86` 是此切片明确的解释基线，不是每份旧策略的作者声明。若保存 migration/legacy interpretation 上限，它不能伪装成作者 profiles、compilationVersion 或修改旧摘要。最终 host 固定 be3 的权限 parity 是消费者验收，不补造旧数据来源。
+
+- CUSTOMER 旧版本只在明确支持的固定能力契约及真实旧 binary→当前 PEP 非扩权矩阵下恢复当前求值；必须逐项证明精确 action、kind、scope、caller、mode/usage、所用条件来源/算子及 EXACT/ANY/PREFIX 语义。未知来源、未覆盖形状或冲突使整次决定失败关闭，不能跳过 Deny 后使用另一 Allow。未获正向证明的内容仅保留管理/历史读取和原事实 proof，不能授予当前权限。
+- Account Root 必须沿既有当前授权路径显式发布新编译版本并 set-default 才完成重审。首片 preflight 要求原 Root USER 为 ACTIVE、原 SYSTEM 默认精确匹配已证明的固定管理 seed，并拒绝 Root 任何当前直接或实际组继承的 legacy CUSTOMER 附件；即使该文档在普通 User 兼容集合中也不例外，受支持的 Deny/时间条件仍可能封锁管理。操作者须在旧版本按已有权限显式解除这些 Root 附件再重试，迁移不自动解除。真实切换后还必须证明 policy.read/create、version.create/set-default 及必要 attachment.revoke 可达，不以 seed 存在代替。若资格或路径不满足，在 marker/schema/default/outbox 变化前整事务拒绝；不先切换再将用户锁死，不新增绕过 PDP 的在线修复权限。以后若允许 Root 的旧CUSTOMER附件，需要另证完整有效快照及所有必需管理操作的可达矩阵。
+- SYSTEM 种子是有确定源码 canonical/digest 的另一种输入。已有种子只有精确匹配受支持固定内容及已验证能力上限才可继续当前求值；名字相同、管理类型相同不足。新装直接产生新编译版本；已有默认值不得因 schema/bootstrap 等值重放被替换，旧平台撤权不恢复。
+- ACTIVE Root 指原 USER，不允许迁移启用暂停 Account。ACTIVE/DISABLED Account 都检查原 Root 归属、ACTIVE USER、精确管理 seed 和零 Root legacy CUSTOMER 直接/实际组附件；暂停不能豁免资格。ACTIVE Account 验证当前管理可达；DISABLED Account 只承诺原状态和访问冻结保持，并须真实完成暂停带数据切换→仍拒绝→既有平台显式 enable→Root 管理可达的分支，enable 有自己的决定/事实。该分支未经验证前可在效果前拒绝，不假想恢复；Root USER 自身停用、缺失或身份不符均拒绝。
+- 本片不支持任意未发布 schema 的自动兼容。保留已提交历史 bytes/proof 与允许旧策略参与当前授权是两个独立判断；不能以历史能读取、数字升高或当前新装通过作为正向许可证明。
+
+**编译内容与当前请求相容性。** 在唯一编译契约 owner 校验完整冻结内容后，只比较该请求命中的精确动作解释，不要求整份产品新旧 revision 相等。每个包含该动作的语句无论 Allow/Deny、资源值或条件是否会匹配，都先检查原声明与当前声明的 product/caller、kind/scope、结果种类和明确 mode/usage；所用条件必须仍有相同类型/来源，所用实例前缀必须仍被该实例 shape 声明。未知/变化解释不能被“不匹配语句”掩盖。增加无关动作或未使用条件不会自动扩大旧 resolvedActions；新动作没有进入原编译内容，不能由旧版本授权。缺冻结引用、错摘要或畸形当前请求不是普通策略 Deny。
+
+相容性检查只证明两份已提供声明的语义约束，不认证注册、当前 producer、tenant 或资源归属，也不返回 Allow。PDP 必须另外验证当前身份、受信 current head、全部附件/边界及语句匹配；资源 ID 恰为 collection 不选 mode。PREFIX 仅适用 INSTANCE，不能因同 Action 另外支持集合而获得目录权限。历史 proof 仍按原冻结材料，不将该当前相容性检查用于重新授权历史事件。
+
+**增量验收。** 沿现有契约/authority、IAM HTTP/PG、Audit proof 和 authorityprocess 测试：新装编译种子、真实发布与显式默认切换、跨产品最小引用、篡改编译物/旧引用/未知字段、完整响应预算；新 head 增加动作/shape 不使旧 Allow 扩权且不跳过旧 Deny；条件/prefix/同ID三种模式、边界交集和旧 cursor 拒绝；发布与 head/default/附件变更的真实并发及 outbox 末尾失败回滚。明确固定 predecessor 的原 document/default/附件/决定及原 proof 保留，未知旧CUSTOMER和改写SYSTEM种子拒绝，Root自救或效果前preflight拒绝，重复迁移/重启不扩大权限。纯相容性测试不替代上述实际存储、PDP和PEP门禁。
 
 #### 条件首片：IAM 权威时间
 
@@ -219,6 +239,14 @@ Audit 原双 schema/受限 recorder/封闭 action/不可变链真库门禁5.324s
 最终声明收敛后的全仓 Go race/vet、模块校验、API生成稳定和Linux amd64全仓构建通过；编译物严格解码/规范往返fuzz以15秒、2workers、1秒样本最小化预算通过482263次执行，不作容量或完整语言证明。当前PolicyVersion HTTP/SQL、readiness、安装profile、lookup_service、七列claim及Audit canonical均未改；最终UI仍由独立UX/UI owner负责。初建internal测试网络未产生loopback端口，未开始任何数据库门禁即按精确自有ID重建普通专属网络；没有改共享网络配置。两项真库回归结束并确认零客户端后清理本轮PG容器、网络及仅含两个合成数据库的卷，不涉及用户数据。
 
 固定纯编译实现 `d3a08bfa7c248793ffb51499186486efa2ebb377` 的 [Verification 34925618255](https://github.com/xiak/matrix/actions/runs/34925618255) 已由GitHub API核实精确SHA及go、authority-process、node-process全部completed/success；不据此验收registry、编译内容持久化或新wire。
+
+### 编译内容与请求相容性基础证据
+
+2026-09-15，现有纯契约 owner 增加 `CheckPolicyCompilationRequest`，复用唯一编译 canonical/digest 和明确目标模式校验，不新增 JSON 语言、登记 API 或授权结果。测试先因缺实现失败，接入后通过所有已声明 Action/shape 的 Allow/Deny 相容矩阵；同 kind/id=collection 的实例/列表/创建3×3以及 EXACT/ANY 两种选择器仅自身模式相容。语法合法的新版声明改变 caller/kind/scope/result、增加原未有 shape、撤掉所用 prefix/condition 时，原未匹配资源的 Deny 也不能被静默跳过；全摘要、缺冻结声明、错引用、无编译结果或畸形当前请求先失败。
+
+独立于全局目录的合成产品验证新 revision 同义可用、无关新动作不进入原 resolvedActions、移除未使用条件不重写内容；即使策略没有当前请求动作，损坏内容仍拒绝。检查按冻结 resolvedActions 选择 SID，不从作者 Action 字符串或资源 ID 推导模式；该纯函数不返回 Allow、不认证来源且不用于历史重新授权。当前线上 PolicyVersion 格式、SQL发布和PDP仍未接入编译内容，不能用这些纯测试替代后续纵向闭环。
+
+GOMAXPROCS2/GOMEMLIMIT768MiB 下全仓 Go race/vet、模块验证、API生成字节稳定及 Linux amd64 构建通过；最终 SID/随机测试增量再次通过 API/architecture race。沿原编译规范往返 fuzz 加总承诺与当前请求检查，15秒、2workers、每样本最小化1秒，通过342088次执行，不声称容量SLO。此次没有启动真实数据库、服务、浏览器或远端实验；默认跳过的外部环境测试不作为新增真库证据。IAM21/Audit13/PaaS1和已发布安装profile保持原值；独立CI须按提交另行确认。
 
 ### 当前首片证据与未完成边界
 

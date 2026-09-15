@@ -1,6 +1,6 @@
 # FEAT-IAM-001：业务授权能力目录
 
-- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 已实现源码Profile、不可变注册、当前一致性及请求/决定绑定，后者正在收口独立验证；PolicyVersion 编译内容持久化尚未完成，本 FEAT 整体未验收。
+- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 的源码Profile、不可变注册、当前一致性及请求/决定绑定已通过固定源码独立验证；PolicyVersion 编译内容持久化尚未完成，本 FEAT 整体未验收。
 - 依赖：[产品契约](./FEAT-IAM-000-product-contract.md)。
 - Owner：IAM 公共契约与现有 authority；产品拥有其业务词汇。
 - 首片：把现有已接受的动作、允许调用服务、资源种类和 scope 收敛为一份不可变目录，所有当前验证和决定路径消费该目录。
@@ -136,7 +136,7 @@ IAM私有assert_allowed_decision由6参替换为8参，追加显式resource_mode
 
 ### 请求、决定及受保护历史契约
 
-2026-09-15，本分支独占PG18.6固定镜像`postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280`，1CPU/768MiB/PIDs128、64连接、专属网络/卷及loopback端口；Go限GOMAXPROCS2/GOMEMLIMIT768MiB，重型真库门禁串行race-p1。尚未完成精确提交的独立CI，不将本地证据宣称为发布验收。
+2026-09-15，本分支独占PG18.6固定镜像`postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280`，1CPU/768MiB/PIDs128、64连接、专属网络/卷及loopback端口；Go限GOMAXPROCS2/GOMEMLIMIT768MiB，重型真库门禁串行race-p1。固定 `1dc1079c4e7bec80f5345d06929875b492ba9a86` 的 [Verification 34933760954](https://github.com/xiak/matrix/actions/runs/34933760954) 已通过 GitHub API 核实精确 SHA，go、authority-process、node-process 全部 completed/success；它证明本片源码组合，不是签名发行或真实 host 组合验收。
 
 - 当前API、PDP与实际PEP共同绑定Profile/product/revision/digest、action/resource、mode/usage、requestId/correlationId；Allow/Deny均逐字段核对。严格解码拒绝重复、未知、缺失、null及INSTANCE中多出的usage；真实未知/错版本请求不能记录成普通Deny。原请求摘要仍走唯一领域编码，域分离与字段变化测试保留。
 - 新装及带数据重放、真实Allow/Deny后对受限API记录函数的攻击通过：缺原request、变体envelope、错profile/action/resource/request/correlation/mode/usage、显式1/NULL版本与旧六参入口均拒绝，决定/outbox无部分事实。同SERVICE_INSTALLATION/id=collection的INSTANCE、COLLECTION_LIST、COLLECTION_CREATE三条真实决定，分别在同事务记录并由私有assert消费；仅精确自身可用，所有交叉组合拒绝。该测试以owner调用私有函数验证不变量，不声称API获得了该函数权限。

@@ -1021,6 +1021,103 @@ func DecodePolicyCompilation(reader io.Reader, document PolicyDocument, profiles
 	return compilation, nil
 }
 
+// CheckPolicyCompilationRequest checks the compatibility of frozen content
+// with one explicitly supplied current request declaration. It is not an Allow:
+// callers still authenticate the current head/subject and evaluate all grants,
+// boundaries and selectors. Historical proofs must not call this current check.
+// Neither supplied declaration is authenticated by this pure contract function.
+func CheckPolicyCompilationRequest(document PolicyDocument, compilation PolicyCompilation, contentDigest string,
+	frozenProfiles []AuthorizationProfile, current AuthorizationProfile, request AuthorizationRequest,
+) error {
+	_, digest, err := CanonicalizePolicyCompilation(document, compilation, frozenProfiles)
+	if err != nil || digest != contentDigest || ValidateID("requestId", request.RequestID) != nil ||
+		ValidateID("correlationId", request.CorrelationID) != nil ||
+		CheckAuthorizationProfileTarget(current, request.Profile, request.Action, request.Resource, request.ResourceMode, request.CollectionUsage) != nil {
+		return ErrInvalidPolicy
+	}
+	participatingStatements := make(map[string]bool)
+	for _, statement := range compilation.ResolvedStatements {
+		if slices.Contains(statement.Actions, request.Action) {
+			participatingStatements[statement.SID] = true
+		}
+	}
+	if len(participatingStatements) == 0 {
+		// New actions cannot enter the immutable resolved set. This policy
+		// contributes no statement, but its complete integrity was still checked.
+		return nil
+	}
+	var currentAction AuthorizationProfileAction
+	for _, action := range current.Actions {
+		if action.Action == request.Action {
+			currentAction = action
+			break
+		}
+	}
+	var frozenAction AuthorizationProfileAction
+	for _, profile := range frozenProfiles {
+		if profile.Product != current.Product {
+			continue
+		}
+		if profile.CallingService != current.CallingService {
+			return ErrInvalidPolicy
+		}
+		for _, reference := range compilation.Profiles {
+			if reference.Product == profile.Product &&
+				CheckAuthorizationProfileTarget(profile, reference, request.Action, request.Resource, request.ResourceMode, request.CollectionUsage) != nil {
+				return ErrInvalidPolicy
+			}
+		}
+		for _, action := range profile.Actions {
+			if action.Action == request.Action {
+				frozenAction = action
+				break
+			}
+		}
+	}
+	if frozenAction.Action != request.Action || frozenAction.ResourceKind != currentAction.ResourceKind ||
+		frozenAction.Scope != currentAction.Scope || frozenAction.ResultResourceKind != currentAction.ResultResourceKind {
+		return ErrInvalidPolicy
+	}
+	for _, statement := range document.Statements {
+		if !participatingStatements[statement.SID] {
+			continue
+		}
+		// Check before evaluating values, selectors or Effect. An old Deny
+		// cannot disappear merely because its meaning is no longer understood.
+		for _, condition := range statement.Conditions {
+			var original, present AuthorizationProfileCondition
+			for _, declared := range frozenAction.Conditions {
+				if declared.Key == condition.Key {
+					original = declared
+				}
+			}
+			for _, declared := range currentAction.Conditions {
+				if declared.Key == condition.Key {
+					present = declared
+				}
+			}
+			if original.Key != condition.Key || original != present {
+				return ErrInvalidPolicy
+			}
+		}
+		if request.ResourceMode == AuthorizationResourceInstance {
+			for _, selector := range statement.Resources {
+				if selector.Kind != request.Resource.Kind || selector.Match != PolicyResourcePrefixInAuthority {
+					continue
+				}
+				prefixAllowed := false
+				for _, shape := range currentAction.ResourceShapes {
+					prefixAllowed = prefixAllowed || shape.Mode == AuthorizationResourceInstance && shape.PrefixAllowed
+				}
+				if !prefixAllowed {
+					return ErrInvalidPolicy
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func ValidatePolicyVersion(version PolicyVersion) error {
 	if ValidateID("policyId", string(version.PolicyID)) != nil || ValidateID("versionId", string(version.ID)) != nil ||
 		ValidateDigest("contentDigest", version.ContentDigest) != nil {

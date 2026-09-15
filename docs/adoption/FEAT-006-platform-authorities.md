@@ -388,3 +388,16 @@ actual old-executable retained decisions and atomic corruption rejection in
 the existing process gate, not a supported cross-profile release path. Its
 original document/outbox and policy evidence remain unchanged; no historical
 boundary evidence or Profile is fabricated from current permissions.
+
+For IAM/005 compiled-version cutover, fixed
+`1dc1079c4e7bec80f5345d06929875b492ba9a86` is `REUSE` for the sole
+policy compiler/canonical encoder, immutable Profile archive and explicit
+request target contract; existing publication, version retirement, defaults,
+attachments and history are `ADAPT` owners. Its document-only policy rows are
+`REFERENCE` for retained bytes, not proof of each row's originating executable
+or permission to infer a missing compilation. A supported legacy interpretation
+requires fixed-source and actual predecessor/PEP non-expansion evidence.
+Automatic recompilation/default movement, current-head historical fallback,
+and treating an old row or an existing r1 archive as provenance are `REJECT`.
+No host implementation, published release profile or other worktree state is
+adopted by this slice.
