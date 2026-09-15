@@ -5,11 +5,17 @@
 - Updated: 2026-09-15
 - Repository: https://github.com/xiak/matrix.git
 - Branch: `feat/iam`
-- Latest pushed backend foundation: `c6bd0788c8978d34537c28020115352d23722ede`.
-  Pure AuthorizationProfile declaration encoding/reference, not registration,
-  runtime admission or CAT-05 acceptance. API/IAM/Audit/architecture race, vet,
-  generated-output stability and bounded 2-worker fuzz passed. Exact CI
-  34920036532 is in_progress, not yet accepted.001 owns details and remaining gates.
+- Latest pushed backend slice: `8afc1f94c47671c9b4d01081099572ed6183953b`.
+  Source-registered Profiles now own the current action catalog; all existing
+  action/scope/caller/resource/prefix/condition admission reads their projection.
+  ResultResourceKind belongs to the Action, not its authorization target shape.
+  No new online request/result, SQL or installation profile. Local race/vet,
+  generation stability/Linux build, real PG18 HTTP/policy storage/five-process
+  gates and bounded fuzz passed;001 owns exact evidence. Exact CI34921642856
+  is in_progress, not yet accepted. Both peers received the fixed candidate.
+- Previous pure contract: `c6bd0788c8978d34537c28020115352d23722ede`.
+  CI34920036532 exact SHA and all three jobs independently confirmed success.
+  Its shape-local result field is replaced, without alias, by8afc1f94.
 - Previous pushed handoff: `cc5e38822d3c3856306e0eafbbc4f377ad2c8346`.
   Browser fixture and long boundary-reference wrapping; exact CI34918584314
   independently checked, all three jobs completed/success; both peers notified.
@@ -58,10 +64,13 @@ Next backend target fixed in e5a88b13:001 CAT-05 immutable product Profile,
 explicit collection/instance/create target modes before005 action wildcard
 expansion. Real offering.read currently serves both collection and detail;
 do not infer modes from names. Requirements/acceptance in001, fixed donor6292
-in adoption. c6bd0788 supplies only pure declaration validation/canonical/reference:
+in adoption.8afc1f94 supplies declaration validation/canonical/reference and the
+single current source catalog (not persisted historical Profile registration):
 COLLECTION_LIST/COLLECTION_CREATE, instance-only tenant prefix capability,
-separate successful resultResourceKind, explicit callingService/scope/conditions.
-No online wire, SQL or installation profile changed; no registry implemented.
+separate action-level successful resultResourceKind, explicit callingService/
+scope/conditions. Parent Account INSTANCE creates User/Group/Policy; collection
+is not inferred from the action's name. No online wire, SQL or install profile
+changed. Actual decisions and PolicyVersion do not bind a Profile reference yet.
 Installation peer received the window pre-notice; exact wire/storage surface
 must be aligned before shared implementation. Installation peer accepted this
 pure contract boundary and final collection enum names. UX peer requested and
@@ -76,6 +85,15 @@ Remaining action wildcards with fixed catalog expansion, trusted IP, Role/STS,
 programmatic credentials, extensible product/service-role/ABAC, governance,
 complete UI, HA/capacity/final release and explicit external-integration deferrals
 remain in their FEATs. Do not reduce completion to policy CRUD or User boundaries.
+
+Final PaaS ABI must ADAPT the full12 platform actions/NODE_ENROLLMENT/constraints
+and explicit new system-policy versions from fixedbe3c4a96b4381426c01cd6315eaa3713c2855982.
+Current5 platform actions are an intermediate PaaS Profile only. Its pool/target
+read supports collection+instance; create/register uses exact body IDs. Enrollment
+create is collection-to-ExecutionTarget, others exact enrollment; retainca7 history.
+Advance the PaaS Profile revision/digest for the final12, not same-revision mutation.
+Do not import host implementations or assume their acceptance. Phase3 confirmed
+this boundary. No own DB/container/network/volume or process test remains running.
 
 User schema agreement is in011: final converged schema is first supported release
 baseline. No per-FEAT schema1..N unpublished upgrade matrix. Current fresh/replay/
