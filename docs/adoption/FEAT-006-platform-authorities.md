@@ -375,3 +375,16 @@ revision. Exact historical lookup never substitutes the current head.
 Runtime registration, current-head fallback, same-tuple replacement and a
 copied JSON canonicalizer are `REJECT`. No legacy dependency, host runtime,
 new product HTTP API or published installation profile is imported.
+
+For IAM/001 current request/decision binding, fixed
+`fdb880345e4e46d296330f25f7072dbfef408c87` is `REUSE` for exact immutable
+Profile lookup, source-head admission and the existing request digest owner;
+its recorder/evidence and product PEPs are `ADAPT` for explicit target modes
+and protected decision contract metadata. Reconstructing an original request
+in a production adapter, accepting absent fields as legacy eligibility, and
+retaining the old recorder/private assertion overloads are `REJECT`.
+Fixed `384d6d76b65498ed6b428ba9a2905ef67831b919` is `REFERENCE` only for
+actual old-executable retained decisions and atomic corruption rejection in
+the existing process gate, not a supported cross-profile release path. Its
+original document/outbox and policy evidence remain unchanged; no historical
+boundary evidence or Profile is fabricated from current permissions.

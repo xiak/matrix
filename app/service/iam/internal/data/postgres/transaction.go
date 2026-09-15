@@ -442,24 +442,46 @@ func (value *transaction) ReadAuditEvidence(
 	var result identityaccess.AuditEvidence
 	var storedEvent, decision []byte
 	var verifier *string
+	var decisionContract *int
 	err = value.tx.QueryRow(ctx, "SELECT * FROM iam.read_audit_evidence($1,$2,$3,$4,$5::jsonb)",
 		identity.AccountID, identity.PrincipalID, identity.Purpose, identity.InstallationID, encoded,
-	).Scan(&result.InstallationID, &storedEvent, &decision, &verifier)
+	).Scan(&result.InstallationID, &storedEvent, &decision, &verifier, &decisionContract)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.AuditEvidence{}, false, nil
 	}
 	if err != nil {
 		return identityaccess.AuditEvidence{}, false, mapDatabaseError("read historical IAM Audit evidence", err)
 	}
-	if json.Unmarshal(storedEvent, &result.Event) != nil {
+	if iamv1.DecodeRequest(bytes.NewReader(storedEvent), &result.Event) != nil {
 		return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
 	}
 	result.Event.OccurredAt = result.Event.OccurredAt.UTC()
 	if len(decision) > 0 {
-		if json.Unmarshal(decision, &result.Decision) != nil || result.Decision == nil {
+		var decoded iamv1.AuthorizationDecision
+		if decisionContract == nil || iamv1.DecodeRequest(bytes.NewReader(decision), &decoded) != nil {
 			return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
 		}
-		result.Decision.DecidedAt = result.Decision.DecidedAt.UTC()
+		decoded.DecidedAt = decoded.DecidedAt.UTC()
+		result.Decision, result.DecisionContractVersion = &decoded, *decisionContract
+		switch *decisionContract {
+		case 1:
+			if iamv1.ValidateLegacyAuthorizationDecision(decoded) != nil {
+				return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
+			}
+		case 2:
+			if decoded.Profile == nil {
+				return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
+			}
+			profile, found, err := value.LookupAuthorizationProfile(ctx, *decoded.Profile)
+			if err != nil || !found || iamv1.ValidateAuthorizationDecisionForProfile(decoded, profile) != nil {
+				return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
+			}
+			result.DecisionProfile = &profile
+		default:
+			return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
+		}
+	} else if decisionContract != nil {
+		return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
 	}
 	if verifier != nil {
 		result.VerifierPrincipalID = iamv1.PrincipalID(*verifier)
@@ -566,11 +588,14 @@ func (value *transaction) RecordAuthorization(
 	if err := value.CheckCurrentAuthorizationProfiles(ctx); err != nil {
 		return err
 	}
-	if iamv1.ValidateAuthorizationDecision(mutation.Decision) != nil ||
+	if iamv1.CheckAuthorizationDecisionForRequest(mutation.Decision, mutation.Request) != nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return identityaccess.ErrInvalidArgument
 	}
-	decision, err := json.Marshal(mutation.Decision)
+	decision, err := json.Marshal(struct {
+		Request  iamv1.AuthorizationRequest  `json:"request"`
+		Decision iamv1.AuthorizationDecision `json:"decision"`
+	}{mutation.Request, mutation.Decision})
 	if err != nil {
 		return identityaccess.ErrUnavailable
 	}
@@ -595,13 +620,14 @@ func (value *transaction) RecordAuthorization(
 	defer clear(boundary)
 	_, err = value.tx.Exec(
 		ctx,
-		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb)",
+		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::integer)",
 		string(mutation.AccountID),
 		string(mutation.PrincipalID),
 		decision,
 		event,
 		evidence,
 		boundary,
+		2,
 	)
 	clear(decision)
 	clear(event)

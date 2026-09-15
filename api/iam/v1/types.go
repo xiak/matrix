@@ -433,10 +433,13 @@ type Revocation struct {
 // from the subject credential and authenticates the calling service
 // independently at the HTTP boundary.
 type AuthorizationRequest struct {
-	Action        Action            `json:"action"`
-	Resource      ResourceReference `json:"resource"`
-	RequestID     string            `json:"requestId"`
-	CorrelationID string            `json:"correlationId"`
+	Action          Action                        `json:"action"`
+	Resource        ResourceReference             `json:"resource"`
+	Profile         AuthorizationProfileReference `json:"profile"`
+	ResourceMode    AuthorizationResourceMode     `json:"resourceMode"`
+	CollectionUsage AuthorizationCollectionUsage  `json:"collectionUsage,omitempty"`
+	RequestID       string                        `json:"requestId"`
+	CorrelationID   string                        `json:"correlationId"`
 }
 
 type AuthorizationDecision struct {
@@ -454,6 +457,12 @@ type AuthorizationDecision struct {
 	Resource       ResourceReference `json:"resource"`
 	RequestID      string            `json:"requestId"`
 	DecidedAt      time.Time         `json:"decidedAt"`
+	// Only the protected historical loader may decode absent binding fields.
+	// Current decisions, including Deny, always carry the complete binding.
+	Profile         *AuthorizationProfileReference `json:"profile,omitempty"`
+	ResourceMode    AuthorizationResourceMode      `json:"resourceMode,omitempty"`
+	CollectionUsage AuthorizationCollectionUsage   `json:"collectionUsage,omitempty"`
+	CorrelationID   string                         `json:"correlationId,omitempty"`
 }
 
 type Readiness struct {

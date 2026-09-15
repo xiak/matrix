@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 )
 
@@ -42,10 +43,12 @@ const (
 )
 
 type AuthorizationRequest struct {
-	Credential string
-	Action     string
-	Resource   ResourceReference
-	RequestID  string
+	Credential      string
+	Action          string
+	Resource        ResourceReference
+	ResourceMode    iamv1.AuthorizationResourceMode
+	CollectionUsage iamv1.AuthorizationCollectionUsage
+	RequestID       string
 }
 
 type Authorization struct {
@@ -78,8 +81,20 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	if value.Credential == "" {
 		return errors.New("authorization credential is required")
 	}
-	if expectedResourceKind(value.Action) != value.Resource.Kind {
+	if value.Resource.Kind == "" || expectedResourceKind(value.Action) != value.Resource.Kind {
 		return errors.New("authorization action and resource kind differ")
+	}
+	switch value.ResourceMode {
+	case iamv1.AuthorizationResourceInstance:
+		if value.CollectionUsage != "" {
+			return errors.New("instance authorization cannot carry collection usage")
+		}
+	case iamv1.AuthorizationResourceCollection:
+		if value.Resource.ID != "collection" || (value.CollectionUsage != iamv1.AuthorizationCollectionCreate && value.CollectionUsage != iamv1.AuthorizationCollectionList) {
+			return errors.New("collection authorization target is invalid")
+		}
+	default:
+		return errors.New("authorization resource mode is required")
 	}
 	return errors.Join(
 		managedservicev1.ValidateID("authorization.resource.id", value.Resource.ID),

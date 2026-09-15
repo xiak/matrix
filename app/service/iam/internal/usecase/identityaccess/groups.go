@@ -12,7 +12,7 @@ func (service *Authority) ListGroups(ctx context.Context, credential iamv1.Secre
 	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.GroupList{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupList,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupList, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.GroupList, error) {
 			position, query, err := service.directoryPosition(ctx, tx, subject, decision, after, now)
@@ -42,7 +42,7 @@ func (service *Authority) GetGroup(ctx context.Context, credential iamv1.Secret,
 	if iamv1.ValidateID("groupId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
 		return iamv1.GroupAccess{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupRead,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupRead, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceGroup, ID: string(id)}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.GroupAccess, error) {
 			result, err := tx.ReadGroup(ctx, GroupRead{AccountRead: AccountRead{AccountID: subject.Subject.Organization.ID,
@@ -80,7 +80,7 @@ func groupCapabilities(subject SessionCredential, target iamv1.GroupAccess, now 
 	}
 	result := make([]iamv1.ActionCapability, 0, len(requests))
 	for _, request := range requests {
-		capability, err := projectCapability(subject, request.action, request.resource, now)
+		capability, err := projectCapability(subject, request.action, request.resource, iamv1.AuthorizationResourceInstance, "", now)
 		if err != nil {
 			return nil, err
 		}
@@ -97,7 +97,7 @@ func (service *Authority) CreateGroup(ctx context.Context, credential iamv1.Secr
 	if err != nil {
 		return iamv1.Group{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupCreate,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupCreate, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Group, error) {
 			identityDigest, err := digestSanitized("group-identity", struct {
@@ -133,7 +133,7 @@ func (service *Authority) UpdateGroup(ctx context.Context, credential iamv1.Secr
 	if err != nil {
 		return iamv1.Group{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupUpdate,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupUpdate, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceGroup, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Group, error) {
 			event, err := service.newManagementEvent(subject, auditv1.ActionIAMGroupUpdated, auditv1.TargetGroup,
@@ -159,7 +159,7 @@ func (service *Authority) DeleteGroup(ctx context.Context, credential iamv1.Secr
 	if err != nil {
 		return iamv1.GroupDeletion{}, err
 	}
-	result, err := withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupDelete,
+	result, err := withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupDelete, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceGroup, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.GroupDeletion, error) {
 			event, err := service.newManagementEvent(subject, auditv1.ActionIAMGroupDeleted, auditv1.TargetGroup,
@@ -185,7 +185,7 @@ func (service *Authority) ListGroupMemberships(ctx context.Context, credential i
 		(after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.GroupMembershipList{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupMembershipList,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupMembershipList, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceGroup, ID: string(groupID)}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.GroupMembershipList, error) {
 			position, query, err := service.directoryPosition(ctx, tx, subject, decision, after, now)
@@ -200,7 +200,7 @@ func (service *Authority) ListGroupMemberships(ctx context.Context, credential i
 			for index := range result.Items {
 				membership := result.Items[index].Membership
 				capability, err := projectCapability(subject, iamv1.ActionIAMGroupMembershipRemove,
-					iamv1.ResourceReference{Kind: iamv1.ResourceGroupMembership, ID: string(membership.ID)}, now)
+					iamv1.ResourceReference{Kind: iamv1.ResourceGroupMembership, ID: string(membership.ID)}, iamv1.AuthorizationResourceInstance, "", now)
 				if err != nil {
 					return iamv1.GroupMembershipList{}, err
 				}
@@ -225,7 +225,7 @@ func (service *Authority) CreateGroupMembership(ctx context.Context, credential 
 	if err != nil {
 		return iamv1.GroupMembership{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupMembershipCreate,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupMembershipCreate, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceGroup, ID: string(groupID)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.GroupMembership, error) {
 			if request.UserID == subject.Subject.Principal.ID {
@@ -269,7 +269,7 @@ func (service *Authority) RemoveGroupMembership(ctx context.Context, credential 
 	if err != nil {
 		return iamv1.GroupMembership{}, err
 	}
-	result, err := withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupMembershipRemove,
+	result, err := withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMGroupMembershipRemove, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceGroupMembership, ID: string(membershipID)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.GroupMembership, error) {
 			event, err := service.newManagementEvent(subject, auditv1.ActionIAMGroupMembershipRemoved,

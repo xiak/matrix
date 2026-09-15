@@ -45,19 +45,20 @@ func TestSessionAuthenticationUsesBindingDigestRevocationAndDatabaseTime(t *test
 func TestSystemPolicyAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testing.T) {
 	now := authorityTestTime()
 	context := authoritySubject(now, iamv1.SystemPolicyPaaSDeveloper)
-	request := iamv1.AuthorizationRequest{
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{
 		Action:    iamv1.ActionPaaSDeploymentCreate,
-		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "deployment-example"},
+		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "collection"},
 		RequestID: "request-authorize", CorrelationID: "correlation-authorize",
-	}
+	}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate)
 	allowed, err := Decide(context, iamv1.ServicePaaS, request, "decision-allowed", now)
 	if err != nil || !allowed.Allowed || allowed.TenantID != context.Organization.ID ||
 		allowed.Subject == nil || allowed.Subject.ID != context.Principal.ID {
 		t.Fatalf("developer decision = %#v err=%v", allowed, err)
 	}
 
-	request.Action = iamv1.ActionIAMUserCreate
-	request.Resource.Kind = iamv1.ResourceAccount
+	request = boundAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionIAMUserCreate,
+		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "organization-example"},
+		RequestID: "request-denied", CorrelationID: "correlation-denied"}, iamv1.AuthorizationResourceInstance, "")
 	denied, err := Decide(context, iamv1.ServicePaaS, request, "decision-denied", now)
 	if err != nil || denied.Allowed || denied.TenantID != "" || denied.Subject != nil {
 		t.Fatalf("denied decision = %#v err=%v", denied, err)
@@ -66,13 +67,17 @@ func TestSystemPolicyAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testin
 	if err != nil {
 		t.Fatalf("encode denied decision: %v", err)
 	}
-	if bytes.Contains(encoded, []byte("organization-example")) || bytes.Contains(encoded, []byte("principal-developer")) {
+	if bytes.Contains(encoded, []byte(`"tenantId"`)) || bytes.Contains(encoded, []byte(`"installationId"`)) || bytes.Contains(encoded, []byte("principal-developer")) {
 		t.Fatalf("denied decision leaked authority context: %s", encoded)
+	}
+	if iamv1.CheckAuthorizationDecisionForRequest(denied.AuthorizationDecision, request) != nil {
+		t.Fatal("denial did not preserve the caller's complete request binding")
 	}
 
 	context.Policies = nil
-	request.Action = iamv1.ActionPaaSDeploymentCreate
-	request.Resource.Kind = iamv1.ResourceDeployment
+	request = boundAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSDeploymentCreate,
+		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "collection"},
+		RequestID: "request-revoked", CorrelationID: "correlation-revoked"}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate)
 	afterRevocation, err := Decide(context, iamv1.ServicePaaS, request, "decision-after-revocation", now)
 	if err != nil || afterRevocation.Allowed {
 		t.Fatalf("decision after binding revocation = %#v err=%v", afterRevocation, err)
@@ -96,13 +101,13 @@ func TestInstallationVerifierServiceCanAuthorizeOnlyItsFixedAction(t *testing.T)
 		PrincipalID:    "service-installation-verifier",
 		Purpose:        iamv1.ServiceInstallationVerifier,
 	}
-	request := iamv1.AuthorizationRequest{
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{
 		Action: iamv1.ActionInstallationVerify,
 		Resource: iamv1.ResourceReference{
 			Kind: iamv1.ResourceInstallation, ID: "installation-example",
 		},
 		RequestID: "request-installation-verify", CorrelationID: "correlation-installation-verify",
-	}
+	}, iamv1.AuthorizationResourceInstance, "")
 	allowed, err := DecideService(
 		identity,
 		authorityServicePolicies(now, identity, iamv1.SystemPolicyInstallationVerifier),
@@ -144,9 +149,9 @@ func attachedSystemPolicyAllows(t *testing.T, policyID iamv1.PolicyID, action ia
 	if _, err := SystemPolicyVersion(policyID); err != nil {
 		return false
 	}
-	request := iamv1.AuthorizationRequest{Action: action,
+	request := declaredAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: action,
 		Resource:  iamv1.ResourceReference{Kind: definition.ResourceKind, ID: "resource-example"},
-		RequestID: "request-policy", CorrelationID: "correlation-policy"}
+		RequestID: "request-policy", CorrelationID: "correlation-policy"})
 	now := authorityTestTime()
 	var decision AuthorizationEvaluation
 	var err error
@@ -227,13 +232,77 @@ func TestRetiredRoleActionsCannotObtainNewDecisions(t *testing.T) {
 	}
 }
 
+func TestDeclaredModesBindBothDecisionsAndRejectUntrustedProfileContexts(t *testing.T) {
+	now := authorityTestTime()
+	for _, profile := range iamv1.AllAuthorizationProfiles() {
+		for _, action := range profile.Actions {
+			for _, shape := range action.ResourceShapes {
+				t.Run(fmt.Sprintf("%s/%s/%s", action.Action, shape.Mode, shape.CollectionUsage), func(t *testing.T) {
+					// The same spelling can be a real instance; mode, not ID, controls interpretation.
+					request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: action.Action,
+						Resource:  iamv1.ResourceReference{Kind: action.ResourceKind, ID: "collection"},
+						RequestID: "mode-request", CorrelationID: "mode-correlation"}, shape.Mode, shape.CollectionUsage)
+					for _, granted := range []bool{false, true} {
+						subject := authoritySubject(now)
+						subject.InstallationID = "installation-example"
+						if granted {
+							subject.Policies = authoritySubject(now, iamv1.SystemPolicyAccountAdministrator, iamv1.SystemPolicyPlatformOperator).Policies
+						}
+						var decision AuthorizationEvaluation
+						var err error
+						if action.Scope == iamv1.AuthorityScopeInstallationProbe {
+							identity := iamv1.ServiceIdentity{APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity", AccountID: subject.Organization.ID,
+								InstallationID: "collection", PrincipalID: "service-verifier", Purpose: iamv1.ServiceInstallationVerifier}
+							var policies []AttachedPolicy
+							if granted {
+								policies = authorityServicePolicies(now, identity, iamv1.SystemPolicyInstallationVerifier)
+							}
+							decision, err = DecideService(identity, policies, request, "mode-decision", now)
+						} else {
+							decision, err = Decide(subject, profile.CallingService, request, "mode-decision", now)
+						}
+						if err != nil || decision.Allowed != granted || iamv1.CheckAuthorizationDecisionForRequest(decision.AuthorizationDecision, request) != nil {
+							t.Fatalf("granted=%v binding=%+v err=%v", granted, decision.AuthorizationDecision, err)
+						}
+					}
+				})
+			}
+		}
+	}
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"},
+		RequestID: "trusted-request", CorrelationID: "trusted-correlation"}, iamv1.AuthorizationResourceInstance, "")
+	for name, mutate := range map[string]func(*iamv1.AuthorizationRequest){
+		"missing profile":     func(r *iamv1.AuthorizationRequest) { r.Profile = iamv1.AuthorizationProfileReference{} },
+		"unknown profile":     func(r *iamv1.AuthorizationRequest) { r.Profile.Product = "unknown" },
+		"noncurrent revision": func(r *iamv1.AuthorizationRequest) { r.Profile.Revision++ },
+		"wrong digest":        func(r *iamv1.AuthorizationRequest) { r.Profile.ContentDigest = "sha256:" + strings.Repeat("0", 64) },
+		"missing mode":        func(r *iamv1.AuthorizationRequest) { r.ResourceMode = "" },
+		"undeclared collection": func(r *iamv1.AuthorizationRequest) {
+			r.ResourceMode = iamv1.AuthorizationResourceCollection
+			r.CollectionUsage = iamv1.AuthorizationCollectionList
+		},
+		"instance usage":      func(r *iamv1.AuthorizationRequest) { r.CollectionUsage = iamv1.AuthorizationCollectionCreate },
+		"missing correlation": func(r *iamv1.AuthorizationRequest) { r.CorrelationID = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := request
+			mutate(&changed)
+			decision, err := Decide(authoritySubject(now, iamv1.SystemPolicyPaaSDeveloper), iamv1.ServicePaaS, changed, "invalid-context", now)
+			if !errors.Is(err, ErrInvalidAuthorizationRequest) || decision.ID != "" || decision.Profile != nil || len(decision.PolicyEvidence) != 0 {
+				t.Fatalf("invalid context became ordinary decision: %+v err=%v", decision, err)
+			}
+		})
+	}
+}
+
 func TestCatalogConfinementIsEnforcedByActualDecisions(t *testing.T) {
 	now := authorityTestTime()
 	for _, definition := range iamv1.AllActionDefinitions() {
 		t.Run(string(definition.Action), func(t *testing.T) {
-			request := iamv1.AuthorizationRequest{Action: definition.Action,
+			request := declaredAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: definition.Action,
 				Resource:  iamv1.ResourceReference{Kind: definition.ResourceKind, ID: "resource-example"},
-				RequestID: "request-catalog", CorrelationID: "correlation-catalog"}
+				RequestID: "request-catalog", CorrelationID: "correlation-catalog"})
 			for _, service := range iamv1.AllServicePurposes() {
 				var decision AuthorizationEvaluation
 				var err error
@@ -306,8 +375,8 @@ func policyVersionForTest(t *testing.T, id iamv1.PolicyID, effect iamv1.PolicyEf
 
 func TestUserBoundaryIntersectsAllGrantsWithoutGrantingAuthority(t *testing.T) {
 	now := authorityTestTime()
-	request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
-		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-prod"}, RequestID: "boundary-test", CorrelationID: "boundary-test"}
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-prod"}, RequestID: "boundary-test", CorrelationID: "boundary-test"}, iamv1.AuthorizationResourceInstance, "")
 	for _, test := range []struct {
 		name     string
 		grants   bool
@@ -364,7 +433,7 @@ func TestUserBoundarySeparatesPlatformAuthorityAndEvaluatesCurrentConditions(t *
 		t.Fatal(err)
 	}
 	subject.Boundary = userBoundaryForTest(subject, version)
-	request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-prod-api"}, RequestID: "boundary-condition", CorrelationID: "boundary-condition"}
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-prod-api"}, RequestID: "boundary-condition", CorrelationID: "boundary-condition"}, iamv1.AuthorizationResourceInstance, "")
 	for _, offset := range []time.Duration{0, time.Minute} {
 		result, err := Decide(subject, iamv1.ServicePaaS, request, "decision-condition", now.Add(offset))
 		if err != nil || result.Allowed != (offset == 0) || result.BoundaryEvidence.Version == nil {
@@ -384,7 +453,7 @@ func TestUserBoundarySeparatesPlatformAuthorityAndEvaluatesCurrentConditions(t *
 
 func TestUserBoundaryCorruptionCannotBecomeUnbounded(t *testing.T) {
 	now := authorityTestTime()
-	request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-prod"}, RequestID: "boundary-invalid", CorrelationID: "boundary-invalid"}
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-prod"}, RequestID: "boundary-invalid", CorrelationID: "boundary-invalid"}, iamv1.AuthorizationResourceInstance, "")
 	for _, test := range []struct {
 		name   string
 		mutate func(*SubjectContext)
@@ -455,7 +524,7 @@ func TestIdentityConditionsUseTheAuthenticatedSubjectAndExactSetSemantics(t *tes
 				row.Version.ContentDigest = digest
 			}
 			refresh()
-			request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "identity-app"}, RequestID: "identity-read", CorrelationID: "identity-read"}
+			request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "identity-app"}, RequestID: "identity-read", CorrelationID: "identity-read"}, iamv1.AuthorizationResourceInstance, "")
 			decision, err := Decide(context, iamv1.ServicePaaS, request, "decision-identity", now)
 			if err != nil || decision.Allowed != test.allow {
 				t.Fatalf("actual identity decision allowed=%t want=%t err=%v", decision.Allowed, test.allow, err)
@@ -566,7 +635,7 @@ func TestPolicyTimeWindowsUseOneAuthorityClockAndDenyAcrossSources(t *testing.T)
 	window.Document.Statements[0].Effect = iamv1.PolicyAllow
 	refresh(&window)
 	context.Policies[0].Version = window
-	request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: resource, RequestID: "request-time", CorrelationID: "request-time"}
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: resource, RequestID: "request-time", CorrelationID: "request-time"}, iamv1.AuthorizationResourceInstance, "")
 	for _, offset := range []time.Duration{0, time.Minute} {
 		result, err := Decide(context, iamv1.ServicePaaS, request, "decision-time", now.Add(offset))
 		if err != nil || result.Allowed != (offset == 0) || !result.DecidedAt.Equal(now.Add(offset)) {
@@ -951,9 +1020,9 @@ func TestPlatformAuthorityRequiresAnExplicitPolicyAndInstallationBinding(t *test
 		}
 		t.Run(string(action), func(t *testing.T) {
 			kind, _ := iamv1.ResourceKindForAction(action)
-			request := iamv1.AuthorizationRequest{Action: action,
+			request := declaredAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: action,
 				Resource:  iamv1.ResourceReference{Kind: kind, ID: "resource-example"},
-				RequestID: "request-platform", CorrelationID: "request-platform"}
+				RequestID: "request-platform", CorrelationID: "request-platform"})
 			service := iamv1.ServicePaaS
 			if ServiceCanRequest(iamv1.ServiceIAM, action) {
 				service = iamv1.ServiceIAM
@@ -1008,13 +1077,13 @@ func TestAccountUserCommandsRemainAccountAdministratorOnly(t *testing.T) {
 func TestAuthorizationDeniesAServiceOutsideItsProductBoundary(t *testing.T) {
 	now := authorityTestTime()
 	context := authoritySubject(now, iamv1.SystemPolicyPaaSDeveloper)
-	request := iamv1.AuthorizationRequest{
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{
 		Action: iamv1.ActionPaaSDeploymentCreate,
 		Resource: iamv1.ResourceReference{
-			Kind: iamv1.ResourceDeployment, ID: "deployment-example",
+			Kind: iamv1.ResourceDeployment, ID: "collection",
 		},
 		RequestID: "request-authorize", CorrelationID: "correlation-authorize",
-	}
+	}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate)
 	decision, err := Decide(context, iamv1.ServiceAudit, request, "decision-wrong-service", now)
 	if err != nil || decision.Allowed {
 		t.Fatalf("cross-service decision = %#v err=%v", decision, err)
@@ -1026,11 +1095,11 @@ func TestAuthorizationDeniesAServiceOutsideItsProductBoundary(t *testing.T) {
 
 func TestAuthorizationFailsClosedOnInconsistentOrInactiveAuthority(t *testing.T) {
 	now := authorityTestTime()
-	request := iamv1.AuthorizationRequest{
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{
 		Action:    iamv1.ActionPaaSApplicationRead,
 		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-example"},
 		RequestID: "request-authorize", CorrelationID: "correlation-authorize",
-	}
+	}, iamv1.AuthorizationResourceInstance, "")
 	context := authoritySubject(now, iamv1.SystemPolicyPaaSViewer)
 	context.Session.AccountID = "organization-other"
 	if _, err := Decide(context, iamv1.ServicePaaS, request, "decision-mismatch", now); !errors.Is(err, ErrAuthorityUnavailable) {
@@ -1114,4 +1183,39 @@ func authorityTestTime() time.Time {
 
 func policyContextForTest(now time.Time) policyEvaluationContext {
 	return policyEvaluationContext{databaseTime: now, accountID: "organization-example", subject: iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"}}
+}
+
+func boundAuthorizationRequest(t *testing.T, request iamv1.AuthorizationRequest, mode iamv1.AuthorizationResourceMode, usage iamv1.AuthorizationCollectionUsage) iamv1.AuthorizationRequest {
+	t.Helper()
+	result, err := iamv1.NewAuthorizationRequest(request.Action, request.Resource, mode, usage, request.RequestID, request.CorrelationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+// Catalog-wide authority tests need a declared target for each action. Tests
+// that distinguish modes supply the shape explicitly instead of this fixture.
+func declaredAuthorizationRequest(t *testing.T, request iamv1.AuthorizationRequest) iamv1.AuthorizationRequest {
+	t.Helper()
+	definition, known := iamv1.LookupActionDefinition(request.Action)
+	if !known {
+		t.Fatal("unknown fixture action")
+	}
+	profile, known := iamv1.LookupAuthorizationProfile(definition.Product)
+	if !known {
+		t.Fatal("unknown fixture product")
+	}
+	for _, action := range profile.Actions {
+		if action.Action != request.Action {
+			continue
+		}
+		shape := action.ResourceShapes[0]
+		if shape.Mode == iamv1.AuthorizationResourceCollection {
+			request.Resource.ID = "collection"
+		}
+		return boundAuthorizationRequest(t, request, shape.Mode, shape.CollectionUsage)
+	}
+	t.Fatal("missing declared fixture shape")
+	return iamv1.AuthorizationRequest{}
 }

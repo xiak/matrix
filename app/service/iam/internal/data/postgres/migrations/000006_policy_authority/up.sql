@@ -320,7 +320,7 @@ RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_te
 DECLARE result jsonb;
 BEGIN
     PERFORM iam.read_account(tenant,actor);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.read','POLICY',policy_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.read','POLICY',policy_id,'INSTANCE',NULL);
     result:=iam.policy_detail_snapshot(tenant,policy_id);
     IF result IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy is unavailable'; END IF;
     RETURN result;
@@ -345,7 +345,7 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy actor is unavailable'; END IF;
     PERFORM 1 FROM iam.account_roots WHERE account_id=tenant AND principal_id=actor FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy publisher is unavailable'; END IF;
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.create','ACCOUNT',tenant);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.create','ACCOUNT',tenant,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.policy.created','POLICY',policy_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy decision correlation is invalid'; END IF;
@@ -404,7 +404,7 @@ RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_te
 DECLARE policy jsonb; versions jsonb;
 BEGIN
     PERFORM iam.read_account(tenant,actor);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy-version.list','POLICY',policy_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy-version.list','POLICY',policy_id,'INSTANCE',NULL);
     policy:=iam.lookup_policy(tenant,policy_id);
     IF policy IS NULL OR policy->>'management'<>'CUSTOMER' OR policy->>'accountId' IS DISTINCT FROM tenant OR policy->>'status'<>'ACTIVE' THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy is unavailable';
@@ -419,7 +419,7 @@ CREATE OR REPLACE FUNCTION iam.read_policy_version(tenant text,actor text,decisi
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
     PERFORM iam.read_account(tenant,actor);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy-version.read','POLICY',policy_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy-version.read','POLICY',policy_id,'INSTANCE',NULL);
     RETURN iam.policy_version_detail(tenant,policy_id,version_id);
 END $function$;
 
@@ -471,7 +471,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy version input is invalid';
     END IF;
     policy:=iam.lock_customer_policy_publisher(tenant,actor,policy_id);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy-version.create','POLICY',policy_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy-version.create','POLICY',policy_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.policy-version.created','POLICY',policy_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy version decision is invalid'; END IF;
@@ -503,7 +503,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy revision is invalid';
     END IF;
     policy:=iam.lock_customer_policy_publisher(tenant,actor,policy_id);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.set-default-version','POLICY',policy_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.set-default-version','POLICY',policy_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.policy.default-version-set','POLICY',policy_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy version decision is invalid'; END IF;
@@ -543,7 +543,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy metadata input is invalid';
     END IF;
     policy:=iam.lock_customer_policy_publisher(tenant,actor,policy_id);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.update','POLICY',policy_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.update','POLICY',policy_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.policy.updated','POLICY',policy_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy metadata decision is invalid'; END IF;
@@ -575,7 +575,7 @@ BEGIN
     SELECT * INTO policy FROM iam.policies AS p WHERE p.id=policy_id AND p.owner_tenant_id=tenant
       AND p.management='CUSTOMER' AND p.authority_scope='TENANT' FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy is unavailable'; END IF;
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.delete','POLICY',policy_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy.delete','POLICY',policy_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.policy.deleted','POLICY',policy_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy deletion decision is invalid'; END IF;
@@ -607,7 +607,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy revision is invalid';
     END IF;
     policy:=iam.lock_customer_policy_publisher(tenant,actor,policy_id);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy-version.delete','POLICY',policy_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.policy-version.delete','POLICY',policy_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.policy-version.deleted','POLICY',policy_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy version decision is invalid'; END IF;
@@ -647,7 +647,7 @@ CREATE OR REPLACE FUNCTION iam.read_user_permission_boundary(tenant text,actor t
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.read','USER',user_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.read','USER',user_id,'INSTANCE',NULL);
     RETURN iam.user_permission_boundary_snapshot(tenant,user_id);
 END $function$;
 
@@ -688,7 +688,7 @@ BEGIN
     END IF;
     action_name:=CASE WHEN policy_id='' THEN 'iam.user.permission-boundary.remove' ELSE 'iam.user.permission-boundary.set' END;
     fact_name:=CASE WHEN policy_id='' THEN 'iam.user.permission-boundary.removed' ELSE 'iam.user.permission-boundary.set' END;
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,action_name,'USER',user_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,action_name,'USER',user_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,fact_name,'USER',user_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='boundary decision is invalid'; END IF;

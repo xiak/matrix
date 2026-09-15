@@ -418,6 +418,13 @@ func TestRetiredActionsAreHistoricalDecisionsNotRequestsOrPolicies(t *testing.T)
 		t.Run(string(test.action), func(t *testing.T) {
 			request := AuthorizationRequest{Action: test.action, Resource: ResourceReference{Kind: test.kind, ID: "target-one"},
 				RequestID: "request-one", CorrelationID: "correlation-one"}
+			if test.current {
+				var err error
+				request, err = NewAuthorizationRequest(test.action, request.Resource, AuthorizationResourceInstance, "", request.RequestID, request.CorrelationID)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			if (ValidateAuthorizationRequest(request) == nil) != test.current || (requestSchema.Validate(instance(request)) == nil) != test.current {
 				t.Fatal("request schema/validator disagrees with current-only catalog")
 			}
@@ -439,9 +446,15 @@ func TestRetiredActionsAreHistoricalDecisionsNotRequestsOrPolicies(t *testing.T)
 			if test.scope == AuthorityScopeInstallation {
 				decision.TenantID, decision.InstallationID = "", "installation-one"
 			}
+			if test.current {
+				decision.Profile, decision.ResourceMode, decision.CorrelationID = &request.Profile, request.ResourceMode, request.CorrelationID
+			}
 			check := func(value AuthorizationDecision, valid bool) {
 				t.Helper()
-				if (ValidateAuthorizationDecision(value) == nil) != valid || (decisionSchema.Validate(instance(value)) == nil) != valid {
+				if !test.current && (ValidateLegacyAuthorizationDecision(value) == nil) != valid {
+					t.Fatal("explicit legacy validator lost the original evidence contract")
+				}
+				if (ValidateAuthorizationDecision(value) == nil) != (valid && test.current) || (decisionSchema.Validate(instance(value)) == nil) != (valid && test.current) {
 					t.Fatalf("decision schema/validator: action=%s resource=%s expected valid=%t", value.Action, value.Resource.Kind, valid)
 				}
 			}
@@ -962,6 +975,8 @@ func TestIAMOpenAPIEnforcesAuthorizationAndBootstrapSemantics(t *testing.T) {
 	delete(platform, "tenantId")
 	platform["action"] = string(ActionPaaSExecutionTargetRegister)
 	platform["resource"].(map[string]any)["kind"] = string(ResourceExecutionTarget)
+	platform["resourceMode"] = string(AuthorizationResourceInstance)
+	delete(platform, "collectionUsage")
 	platform["installationId"] = "installation-example"
 	if err := decisionSchema.Validate(platform); err != nil {
 		t.Fatalf("installation-bound platform decision failed schema validation: %v", err)

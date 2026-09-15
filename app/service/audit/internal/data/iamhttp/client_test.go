@@ -62,7 +62,8 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 				Action:     authorization.Action,
 				Resource:   authorization.Resource,
 				RequestID:  authorization.RequestID,
-				DecidedAt:  now,
+				Profile:    &authorization.Profile, ResourceMode: authorization.ResourceMode, CollectionUsage: authorization.CollectionUsage, CorrelationID: authorization.CorrelationID,
+				DecidedAt: now,
 			})
 		case "/v1/installation:verify":
 			if request.Method != http.MethodPost || request.URL.RawQuery != "" ||
@@ -84,6 +85,7 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 				},
 				Action: authorization.Action, Resource: authorization.Resource,
 				RequestID: authorization.RequestID, DecidedAt: now,
+				Profile: &authorization.Profile, ResourceMode: authorization.ResourceMode, CollectionUsage: authorization.CollectionUsage, CorrelationID: authorization.CorrelationID,
 			})
 		default:
 			http.NotFound(response, request)
@@ -108,11 +110,11 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 		identity.Producer.AccountID != "organization-example" || identity.TenantID != "organization-second" {
 		t.Fatalf("IAM service identity=%#v err=%v", identity, err)
 	}
-	authorization := iamv1.AuthorizationRequest{
-		Action:        iamv1.ActionAuditRecordRead,
-		Resource:      iamv1.ResourceReference{Kind: iamv1.ResourceAuditRecord, ID: "records"},
-		RequestID:     "request-authorize",
-		CorrelationID: "request-authorize",
+	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionAuditRecordRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourceAuditRecord, ID: "collection"},
+		iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList, "request-authorize", "request-authorize")
+	if err != nil {
+		t.Fatal(err)
 	}
 	decision, err := client.Authorize(
 		context.Background(),
@@ -123,14 +125,11 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 		decision.RequestID != authorization.RequestID {
 		t.Fatalf("IAM authorization decision=%#v err=%v", decision, err)
 	}
-	verificationRequest := iamv1.AuthorizationRequest{
-		Action: iamv1.ActionInstallationVerify,
-		Resource: iamv1.ResourceReference{
-			Kind: iamv1.ResourceInstallation,
-			ID:   "mxi-0123456789abcdef0123456789abcdef",
-		},
-		RequestID:     "request-installation-verifier",
-		CorrelationID: "request-installation-verifier",
+	verificationRequest, err := iamv1.NewAuthorizationRequest(iamv1.ActionInstallationVerify,
+		iamv1.ResourceReference{Kind: iamv1.ResourceInstallation, ID: "mxi-0123456789abcdef0123456789abcdef"},
+		iamv1.AuthorizationResourceInstance, "", "request-installation-verifier", "request-installation-verifier")
+	if err != nil {
+		t.Fatal(err)
 	}
 	decision, err = client.VerifyInstallation(
 		context.Background(),

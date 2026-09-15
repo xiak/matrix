@@ -207,6 +207,73 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 			if err != nil || proofErr != nil || got != expected {
 				t.Fatalf("valid historical proof rejected: %v/%v", err, proofErr)
 			}
+			unmarked := evidence
+			unmarked.DecisionContractVersion = 0
+			if _, err := auditContentDigest(identity, event, unmarked); !errors.Is(err, ErrForbidden) {
+				t.Fatal("missing fields alone granted legacy eligibility")
+			}
+			// Exercise the same immutable business fact with a separately stored v2
+			// decision and exact frozen declaration, including a noncurrent revision.
+			current := evidence
+			decision := *evidence.Decision
+			current.Decision = &decision
+			current.DecisionContractVersion = 2
+			action, id, mode, usage := auditDecisionTarget(event, decision.Action, 2)
+			request := coreAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: action,
+				Resource:  iamv1.ResourceReference{Kind: decision.Resource.Kind, ID: id},
+				RequestID: event.RequestID, CorrelationID: event.CorrelationID}, mode, usage)
+			profile, found := iamv1.LookupAuthorizationProfile(request.Profile.Product)
+			if !found {
+				t.Fatal("missing fixture profile")
+			}
+			profile.Revision += 10 // Pure archived fixture, never registered or made current.
+			_, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Profile.Revision, request.Profile.ContentDigest = profile.Revision, digest
+			current.DecisionProfile = &profile
+			decision.Profile, decision.Resource = &request.Profile, request.Resource
+			decision.ResourceMode, decision.CollectionUsage, decision.CorrelationID = mode, usage, request.CorrelationID
+			if got, err := auditContentDigest(identity, event, current); err != nil || got != expected {
+				t.Fatalf("frozen v2 proof borrowed current head or changed fact: %v", err)
+			}
+			// Exact archive validation must also govern producer admission: a
+			// coherent frozen declaration with a different caller cannot borrow
+			// the current catalog's permission for this producer.
+			wrongProducerProfile := profile
+			wrongProducerProfile.CallingService = iamv1.ServiceIAM
+			_, wrongProducerDigest, err := iamv1.CanonicalizeAuthorizationProfile(wrongProducerProfile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wrongProducerEvidence, wrongProducerDecision := current, *current.Decision
+			wrongProducerReference := *current.Decision.Profile
+			wrongProducerReference.ContentDigest = wrongProducerDigest
+			wrongProducerDecision.Profile = &wrongProducerReference
+			wrongProducerEvidence.Decision, wrongProducerEvidence.DecisionProfile = &wrongProducerDecision, &wrongProducerProfile
+			if _, err := auditContentDigest(identity, event, wrongProducerEvidence); !errors.Is(err, ErrForbidden) {
+				t.Fatal("historical producer borrowed current calling-service authority")
+			}
+			for name, mutate := range map[string]func(*AuditEvidence){
+				"version absent":      func(e *AuditEvidence) { e.DecisionContractVersion = 0 },
+				"version unknown":     func(e *AuditEvidence) { e.DecisionContractVersion = 3 },
+				"downgrade to legacy": func(e *AuditEvidence) { e.DecisionContractVersion = 1 },
+				"archive absent":      func(e *AuditEvidence) { e.DecisionProfile = nil },
+				"profile absent":      func(e *AuditEvidence) { e.Decision.Profile = nil },
+				"request correlation": func(e *AuditEvidence) { e.Decision.CorrelationID = "another-correlation" },
+				"mode absent":         func(e *AuditEvidence) { e.Decision.ResourceMode = "" },
+			} {
+				t.Run("v2/"+name, func(t *testing.T) {
+					changed := current
+					copyDecision := *current.Decision
+					changed.Decision = &copyDecision
+					mutate(&changed)
+					if _, err := auditContentDigest(identity, event, changed); !errors.Is(err, ErrForbidden) {
+						t.Fatal("inconsistent protected contract accepted")
+					}
+				})
+			}
 			for name, attack := range map[string]func(*iamv1.ServiceIdentity, *auditv1.Event, *AuditEvidence){
 				"producer purpose": func(i *iamv1.ServiceIdentity, e *auditv1.Event, a *AuditEvidence) {
 					i.Purpose = iamv1.ServiceInstallationVerifier
@@ -377,7 +444,7 @@ func historicalAuditFixture(eventAction auditv1.Action, decisionAction iamv1.Act
 	if contract.PlatformOnly {
 		original.TenantID = auditv1.TenantID(identity.AccountID)
 	}
-	return identity, event, AuditEvidence{InstallationID: identity.InstallationID, Event: original, Decision: &decision}
+	return identity, event, AuditEvidence{InstallationID: identity.InstallationID, Event: original, Decision: &decision, DecisionContractVersion: 1}
 }
 
 func mustAuditSource(t *testing.T, action auditv1.Action) auditv1.Source {
@@ -447,7 +514,7 @@ func TestPasswordChangeRetainsCurrentAndHonorsEffectiveSessionPolicy(t *testing.
 				valid   bool
 			}{{current, true}, {other, scenario.otherValid}, {loggedOut, false}} {
 				decision, err := service.Authorize(context.Background(), coreServiceCredential(t, document, iamv1.ServicePaaS), check.session.Credential,
-					iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-policy"}, RequestID: "request-policy-authorize", CorrelationID: "correlation-policy"})
+					coreAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-policy"}, RequestID: "request-policy-authorize", CorrelationID: "correlation-policy"}, iamv1.AuthorizationResourceInstance, ""))
 				if check.valid && (err != nil || !decision.Allowed) || !check.valid && !errors.Is(err, ErrUnauthenticated) {
 					t.Fatalf("password policy current=%t valid=%t allowed=%t error=%v", check.session.Session.ID == current.Session.ID, check.valid, decision.Allowed, err)
 				}
@@ -489,13 +556,13 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 		t.Fatalf("resolve PaaS service identity: identity=%#v err=%v", identity, err)
 	}
 	verifierCredential := coreServiceCredential(t, document, iamv1.ServiceInstallationVerifier)
-	verificationRequest := iamv1.AuthorizationRequest{
+	verificationRequest := coreAuthorizationRequest(t, iamv1.AuthorizationRequest{
 		Action: iamv1.ActionInstallationVerify,
 		Resource: iamv1.ResourceReference{
 			Kind: iamv1.ResourceInstallation, ID: document.InstallationID,
 		},
 		RequestID: "request-installation-verify", CorrelationID: "correlation-installation-verify",
-	}
+	}, iamv1.AuthorizationResourceInstance, "")
 	verificationDecision, err := service.VerifyInstallation(
 		context.Background(), verifierCredential, verificationRequest,
 	)
@@ -532,12 +599,12 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	if !login.MustChangePassword {
 		t.Fatal("initial administrator login did not require a password change")
 	}
-	request := iamv1.AuthorizationRequest{
+	request := coreAuthorizationRequest(t, iamv1.AuthorizationRequest{
 		Action:        iamv1.ActionPaaSApplicationCreate,
-		Resource:      iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-example"},
+		Resource:      iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"},
 		RequestID:     "request-authorize-before-password",
 		CorrelationID: "correlation-authorize-before-password",
-	}
+	}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate)
 	decision, err := service.Authorize(
 		context.Background(),
 		paasCredential,
@@ -990,6 +1057,9 @@ func (transaction *coreTransaction) RecordAuthorization(
 	_ context.Context,
 	mutation AuthorizationMutation,
 ) error {
+	if iamv1.CheckAuthorizationDecisionForRequest(mutation.Decision, mutation.Request) != nil {
+		return ErrInvalidArgument
+	}
 	transaction.authorizations = append(transaction.authorizations, mutation)
 	return nil
 }
@@ -1187,4 +1257,56 @@ func coreSecret(t *testing.T, value string) iamv1.Secret {
 		t.Fatalf("create IAM test secret: %v", err)
 	}
 	return secret
+}
+
+func coreAuthorizationRequest(t *testing.T, request iamv1.AuthorizationRequest, mode iamv1.AuthorizationResourceMode, usage iamv1.AuthorizationCollectionUsage) iamv1.AuthorizationRequest {
+	t.Helper()
+	result, err := iamv1.NewAuthorizationRequest(request.Action, request.Resource, mode, usage, request.RequestID, request.CorrelationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func TestAuthorizationRequestDigestCommitsEveryBindingAndDomain(t *testing.T) {
+	request := coreAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionIAMAccountRead,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "collection"}, RequestID: "request-digest", CorrelationID: "correlation-digest"},
+		iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList)
+	for _, domain := range []string{"authorization", "installation-verification"} {
+		baseline, err := digestSanitized(domain, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, mutate := range map[string]func(*iamv1.AuthorizationRequest){
+			"product":      func(r *iamv1.AuthorizationRequest) { r.Profile.Product = "other" },
+			"revision":     func(r *iamv1.AuthorizationRequest) { r.Profile.Revision++ },
+			"digest":       func(r *iamv1.AuthorizationRequest) { r.Profile.ContentDigest = "sha256:" + strings.Repeat("0", 64) },
+			"mode":         func(r *iamv1.AuthorizationRequest) { r.ResourceMode = iamv1.AuthorizationResourceInstance },
+			"usage":        func(r *iamv1.AuthorizationRequest) { r.CollectionUsage = iamv1.AuthorizationCollectionCreate },
+			"usage absent": func(r *iamv1.AuthorizationRequest) { r.CollectionUsage = "" },
+			"action":       func(r *iamv1.AuthorizationRequest) { r.Action = iamv1.ActionIAMAccountCreate },
+			"kind":         func(r *iamv1.AuthorizationRequest) { r.Resource.Kind = iamv1.ResourceUser },
+			"id":           func(r *iamv1.AuthorizationRequest) { r.Resource.ID = "account-other" },
+			"request":      func(r *iamv1.AuthorizationRequest) { r.RequestID = "request-other" },
+			"correlation":  func(r *iamv1.AuthorizationRequest) { r.CorrelationID = "correlation-other" },
+		} {
+			t.Run(domain+"/"+name, func(t *testing.T) {
+				changed := request
+				mutate(&changed)
+				digest, err := digestSanitized(domain, changed)
+				if err != nil || digest == baseline {
+					t.Fatalf("binding not committed: %v", err)
+				}
+			})
+		}
+		repeated, err := digestSanitized(domain, request)
+		if err != nil || repeated != baseline {
+			t.Fatal("original digest changed")
+		}
+	}
+	ordinary, _ := digestSanitized("authorization", request)
+	probe, _ := digestSanitized("installation-verification", request)
+	if ordinary == probe {
+		t.Fatal("probe and ordinary authorization share a digest domain")
+	}
 }

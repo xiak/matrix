@@ -25,6 +25,210 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func TestAuthorizationProfileTargetsUseExplicitDeclaredModes(t *testing.T) {
+	for _, profile := range AllAuthorizationProfiles() {
+		before, digest, err := CanonicalizeAuthorizationProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reference := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+		for _, declared := range profile.Actions {
+			t.Run(string(declared.Action), func(t *testing.T) {
+				for _, candidate := range []AuthorizationResourceShape{
+					{Mode: AuthorizationResourceInstance},
+					{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList},
+					{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate},
+					{Mode: AuthorizationResourceCollection},
+					{Mode: AuthorizationResourceInstance, CollectionUsage: AuthorizationCollectionList},
+					{Mode: "FILTERED", CollectionUsage: AuthorizationCollectionList},
+					{},
+				} {
+					for _, id := range []string{"real-instance", "collection", "records", "chain", ""} {
+						want := false
+						for _, shape := range declared.ResourceShapes {
+							if shape.Mode == candidate.Mode && shape.CollectionUsage == candidate.CollectionUsage {
+								want = id != "" && (shape.Mode == AuthorizationResourceInstance || id == "collection")
+							}
+						}
+						resource := ResourceReference{Kind: declared.ResourceKind, ID: id}
+						actual := CheckAuthorizationProfileTarget(profile, reference, declared.Action, resource, candidate.Mode, candidate.CollectionUsage)
+						if (actual == nil) != want {
+							t.Fatalf("mode=%s usage=%s id=%q accepted=%t want=%t", candidate.Mode, candidate.CollectionUsage, id, actual == nil, want)
+						}
+						resource.Kind = ResourceKind("UNDECLARED")
+						if CheckAuthorizationProfileTarget(profile, reference, declared.Action, resource, candidate.Mode, candidate.CollectionUsage) == nil {
+							t.Fatal("wrong resource kind borrowed a declared mode")
+						}
+					}
+				}
+				shape := declared.ResourceShapes[0]
+				resource := ResourceReference{Kind: declared.ResourceKind, ID: "collection"}
+				for _, wrong := range []AuthorizationProfileReference{
+					{},
+					{Product: "other-product", Revision: reference.Revision, ContentDigest: reference.ContentDigest},
+					{Product: reference.Product, Revision: reference.Revision + 1, ContentDigest: reference.ContentDigest},
+					{Product: reference.Product, Revision: reference.Revision, ContentDigest: "sha256:" + strings.Repeat("0", 64)},
+				} {
+					if CheckAuthorizationProfileTarget(profile, wrong, declared.Action, resource, shape.Mode, shape.CollectionUsage) == nil {
+						t.Fatal("target admitted without its exact declaration")
+					}
+				}
+				if CheckAuthorizationProfileTarget(profile, reference, "unregistered.inspect", resource, shape.Mode, shape.CollectionUsage) == nil {
+					t.Fatal("unregistered action borrowed a known resource shape")
+				}
+			})
+		}
+		after, afterDigest, err := CanonicalizeAuthorizationProfile(profile)
+		if err != nil || before != after || digest != afterDigest {
+			t.Fatal("target validation modified immutable declaration content")
+		}
+	}
+}
+
+func TestProfileBoundAuthorizationRequestAndResponse(t *testing.T) {
+	request, err := NewAuthorizationRequest(ActionPaaSApplicationRead, ResourceReference{Kind: ResourceApplication, ID: "collection"}, AuthorizationResourceInstance, "", "request-one", "correlation-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, allowed := range []bool{false, true} {
+		decision := AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-one",
+			Allowed: allowed, Reason: DecisionDenied, Action: request.Action, Resource: request.Resource,
+			Profile: &request.Profile, ResourceMode: request.ResourceMode, RequestID: request.RequestID,
+			CorrelationID: request.CorrelationID, DecidedAt: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)}
+		if allowed {
+			decision.Reason, decision.TenantID = DecisionAllowed, "account-one"
+			decision.Subject = &Subject{Type: PrincipalUser, ID: "user-one"}
+		}
+		if err := CheckAuthorizationDecisionForRequest(decision, request); err != nil {
+			t.Fatal(err)
+		}
+		for name, mutate := range map[string]func(*AuthorizationDecision){
+			"profile missing": func(value *AuthorizationDecision) { value.Profile = nil },
+			"profile version": func(value *AuthorizationDecision) {
+				copy := *value.Profile
+				copy.Revision++
+				value.Profile = &copy
+			},
+			"resource":    func(value *AuthorizationDecision) { value.Resource.ID = "another-instance" },
+			"mode":        func(value *AuthorizationDecision) { value.ResourceMode = AuthorizationResourceCollection },
+			"usage":       func(value *AuthorizationDecision) { value.CollectionUsage = AuthorizationCollectionList },
+			"request":     func(value *AuthorizationDecision) { value.RequestID = "other-request" },
+			"correlation": func(value *AuthorizationDecision) { value.CorrelationID = "other-correlation" },
+		} {
+			t.Run(fmt.Sprintf("allowed=%t/%s", allowed, name), func(t *testing.T) {
+				changed := decision
+				mutate(&changed)
+				if CheckAuthorizationDecisionForRequest(changed, request) == nil {
+					t.Fatal("response did not bind the full original request")
+				}
+			})
+		}
+		legacy := decision
+		legacy.Profile, legacy.ResourceMode, legacy.CollectionUsage, legacy.CorrelationID = nil, "", "", ""
+		if ValidateAuthorizationDecision(legacy) == nil || ValidateLegacyAuthorizationDecision(legacy) != nil {
+			t.Fatal("legacy evidence was either admitted online or lost its explicit read-only validator")
+		}
+		legacy.CorrelationID = request.CorrelationID
+		if ValidateLegacyAuthorizationDecision(legacy) == nil {
+			t.Fatal("partial new fields were admitted as legacy")
+		}
+		encoded, _ := json.Marshal(decision)
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(encoded, &fields) != nil {
+			t.Fatal("decode response fixture")
+		}
+		for _, field := range []string{"profile", "resourceMode", "correlationId"} {
+			changed := make(map[string]json.RawMessage, len(fields))
+			for key, value := range fields {
+				changed[key] = value
+			}
+			delete(changed, field)
+			raw, _ := json.Marshal(changed)
+			var parsed AuthorizationDecision
+			if DecodeRequest(bytes.NewReader(raw), &parsed) == nil && ValidateAuthorizationDecision(parsed) == nil {
+				t.Fatalf("current response accepted missing %s", field)
+			}
+		}
+	}
+	for _, mode := range []AuthorizationResourceMode{"", "BATCH", AuthorizationResourceCollection} {
+		if _, err := NewAuthorizationRequest(request.Action, request.Resource, mode, "", request.RequestID, request.CorrelationID); err == nil {
+			t.Fatal("constructor inferred a mode or accepted undeclared usage")
+		}
+	}
+}
+
+func TestAuthorizationEncodingRejectsPartialAndPresentEmptyBindings(t *testing.T) {
+	for _, shape := range []AuthorizationResourceShape{
+		{Mode: AuthorizationResourceInstance},
+		{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList},
+	} {
+		request, err := NewAuthorizationRequest(ActionIAMAccountRead, ResourceReference{Kind: ResourceAccount, ID: "collection"}, shape.Mode, shape.CollectionUsage, "request-encoding", "correlation-encoding")
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision := AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-encoding", Reason: DecisionDenied,
+			Action: request.Action, Resource: request.Resource, Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage,
+			RequestID: request.RequestID, CorrelationID: request.CorrelationID, DecidedAt: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)}
+		for _, input := range []any{request, decision} {
+			encoded, err := json.Marshal(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"profile", "resourceMode", "correlationId", "collectionUsage"} {
+				for _, raw := range []json.RawMessage{json.RawMessage("null"), json.RawMessage(`""`)} {
+					var document map[string]json.RawMessage
+					if json.Unmarshal(encoded, &document) != nil {
+						t.Fatal("invalid baseline")
+					}
+					document[key] = raw
+					changed, _ := json.Marshal(document)
+					var err error
+					if _, ok := input.(AuthorizationRequest); ok {
+						var decoded AuthorizationRequest
+						err = DecodeRequest(bytes.NewReader(changed), &decoded)
+						if err == nil {
+							err = ValidateAuthorizationRequest(decoded)
+						}
+					} else {
+						var decoded AuthorizationDecision
+						err = DecodeRequest(bytes.NewReader(changed), &decoded)
+						if err == nil {
+							err = ValidateAuthorizationDecision(decoded)
+						}
+					}
+					if err == nil {
+						t.Fatalf("%T/%s accepted %s=%s", input, shape.Mode, key, raw)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
+	profile, _ := LookupAuthorizationProfile(ProductAudit)
+	for index := range profile.Actions {
+		profile.Actions[index].ResourceShapes = []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}
+	}
+	profile.Revision++
+	_, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "historical-one",
+		Reason: DecisionDenied, Action: ActionAuditIntegrityVerify, Resource: ResourceReference{Kind: ResourceAuditChain, ID: "frozen-instance"},
+		Profile:      &AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest},
+		ResourceMode: AuthorizationResourceInstance, RequestID: "request-one", CorrelationID: "correlation-one",
+		DecidedAt: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)}
+	if ValidateAuthorizationDecisionForProfile(decision, profile) != nil || ValidateAuthorizationDecision(decision) == nil || ValidateLegacyAuthorizationDecision(decision) == nil {
+		t.Fatal("frozen evidence borrowed current collection meaning or became legacy")
+	}
+	current, _ := LookupAuthorizationProfile(ProductAudit)
+	if ValidateAuthorizationDecisionForProfile(decision, current) == nil {
+		t.Fatal("historical validator selected current head instead of exact supplied content")
+	}
+}
+
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
 	if !found || profile.Revision != 1 {
@@ -222,8 +426,8 @@ func TestProductProfilesDeclareParentInstanceAndCollectionResults(t *testing.T) 
 		})
 	}
 	// A child/result kind is not an alternative authorization target.
-	request := AuthorizationRequest{Action: ActionIAMUserCreate, Resource: ResourceReference{Kind: ResourceAccount, ID: "account-one"}, RequestID: "request-one", CorrelationID: "request-one"}
-	if err := ValidateAuthorizationRequest(request); err != nil {
+	request, err := NewAuthorizationRequest(ActionIAMUserCreate, ResourceReference{Kind: ResourceAccount, ID: "account-one"}, AuthorizationResourceInstance, "", "request-one", "request-one")
+	if err != nil || ValidateAuthorizationRequest(request) != nil {
 		t.Fatal(err)
 	}
 	request.Resource = ResourceReference{Kind: ResourceUser, ID: "user-child"}
@@ -742,6 +946,7 @@ func TestPlatformDecisionsCannotMasqueradeAsTenantAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid.Action, valid.Resource.Kind = ActionPaaSExecutionTargetRegister, ResourceExecutionTarget
+	valid.ResourceMode, valid.CollectionUsage = AuthorizationResourceInstance, ""
 	valid.TenantID, valid.InstallationID = "", "installation-example"
 	if err := ValidateAuthorizationDecision(valid); err != nil {
 		t.Fatal(err)
@@ -813,7 +1018,19 @@ func TestIAMExamplesPassDomainValidation(t *testing.T) {
 }
 
 func TestIAMAuthorizationInputCannotForgeAuthorityContext(t *testing.T) {
-	valid := `{"action":"paas.deployment.create","resource":{"kind":"DEPLOYMENT","id":"deployment-example"},"requestId":"request-authorize","correlationId":"correlation-authorize"}`
+	baseline, err := NewAuthorizationRequest(ActionPaaSDeploymentCreate, ResourceReference{Kind: ResourceDeployment, ID: "collection"}, AuthorizationResourceCollection, AuthorizationCollectionCreate, "request-authorize", "correlation-authorize")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := string(encoded)
+	var baselineDecoded AuthorizationRequest
+	if DecodeRequest(strings.NewReader(valid), &baselineDecoded) != nil || ValidateAuthorizationRequest(baselineDecoded) != nil {
+		t.Fatal("baseline request is invalid")
+	}
 	for name, forged := range map[string]string{
 		"tenant":  strings.Replace(valid, `"action"`, `"tenantId":"organization-forged","action"`, 1),
 		"subject": strings.Replace(valid, `"action"`, `"subject":{"type":"USER","id":"principal-forged"},"action"`, 1),
@@ -821,8 +1038,8 @@ func TestIAMAuthorizationInputCannotForgeAuthorityContext(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			var request AuthorizationRequest
 			err := DecodeRequest(strings.NewReader(forged), &request)
-			if !errors.Is(err, contractjson.ErrUnknownField) {
-				t.Fatalf("forged %s context error = %v, want unknown field", name, err)
+			if err == nil {
+				t.Fatalf("forged %s context was accepted", name)
 			}
 		})
 	}
@@ -848,16 +1065,22 @@ func TestIAMActionCatalogHasOneResourceKind(t *testing.T) {
 		if !known || kind == "" {
 			t.Fatalf("action %q has no resource kind", action)
 		}
-		request := AuthorizationRequest{
-			Action: action, Resource: ResourceReference{Kind: kind, ID: "resource-example"},
-			RequestID: "request-example", CorrelationID: "correlation-example",
-		}
-		if err := ValidateAuthorizationRequest(request); err != nil {
-			t.Fatalf("valid catalog entry %q/%q rejected: %v", action, kind, err)
-		}
-		request.Resource.Kind = ResourceKind("NOT_A_RESOURCE")
-		if err := ValidateAuthorizationRequest(request); err == nil {
-			t.Fatalf("action %q accepted an unbound resource kind", action)
+		definition, _ := LookupActionDefinition(action)
+		profile, _ := LookupAuthorizationProfile(definition.Product)
+		for _, declared := range profile.Actions {
+			if declared.Action != action {
+				continue
+			}
+			for _, shape := range declared.ResourceShapes {
+				request, err := NewAuthorizationRequest(action, ResourceReference{Kind: kind, ID: "collection"}, shape.Mode, shape.CollectionUsage, "request-example", "correlation-example")
+				if err != nil || ValidateAuthorizationRequest(request) != nil {
+					t.Fatalf("valid catalog entry %q/%q rejected: %v", action, kind, err)
+				}
+				request.Resource.Kind = ResourceKind("NOT_A_RESOURCE")
+				if ValidateAuthorizationRequest(request) == nil {
+					t.Fatalf("action %q accepted an unbound resource kind", action)
+				}
+			}
 		}
 	}
 	if _, known := ResourceKindForAction(Action("paas.unregistered.execute")); known {
@@ -1881,8 +2104,8 @@ func TestCurrentIdentityUsesOnlyItsLivePolicyGrantSources(t *testing.T) {
 			AccountID: "account-a", Target: PolicyAttachmentTarget{Kind: PolicyTargetUser, ID: "user-a"},
 			PolicyID: SystemPolicyAccountAdministrator, Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}}},
 		Capabilities: []ActionCapability{
-			blocked(ActionIAMAccountCreate, ResourceAccount, "accounts"),
-			blocked(ActionIAMAccountRead, ResourceAccount, "accounts"),
+			blocked(ActionIAMAccountCreate, ResourceAccount, "collection"),
+			blocked(ActionIAMAccountRead, ResourceAccount, "collection"),
 			blocked(ActionIAMAccountAliasSet, ResourceAccount, "account-a"),
 			blocked(ActionIAMUserList, ResourceAccount, "account-a"),
 			blocked(ActionIAMUserCreate, ResourceAccount, "account-a"),

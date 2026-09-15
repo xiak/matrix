@@ -297,8 +297,10 @@ type ServiceCredential struct {
 }
 
 type AuthorizationMutation struct {
-	AccountID        iamv1.AccountID
-	PrincipalID      iamv1.PrincipalID
+	AccountID   iamv1.AccountID
+	PrincipalID iamv1.PrincipalID
+	// Request is the original validated input, not reconstructed from Decision.
+	Request          iamv1.AuthorizationRequest
 	Decision         iamv1.AuthorizationDecision
 	PolicyEvidence   []authority.PolicyAttachmentEvidence
 	BoundaryEvidence authority.UserBoundaryEvidence

@@ -113,7 +113,7 @@ func proveDirectPolicyAttachments(t *testing.T, ctx context.Context, handler htt
 	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 	authorize := func(want bool) {
 		t.Helper()
-		body, _ := json.Marshal(iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "attachment-app"}, RequestID: "attachment-read", CorrelationID: "attachment-read"})
+		body, _ := json.Marshal(profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "attachment-app"}, RequestID: "attachment-read", CorrelationID: "attachment-read"}, iamv1.AuthorizationResourceInstance, ""))
 		response := performIAMRequestWithSubject(handler, body, paasCredential, bearer)
 		var decision iamv1.AuthorizationDecision
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || decision.Allowed != want {
@@ -242,6 +242,15 @@ func proveDirectPolicyAttachments(t *testing.T, ctx context.Context, handler htt
 	if rows.Err() != nil || facts != 2 {
 		t.Fatal("missing platform attachment facts")
 	}
+}
+
+func profileBoundIAMRequest(t *testing.T, request iamv1.AuthorizationRequest, mode iamv1.AuthorizationResourceMode, usage iamv1.AuthorizationCollectionUsage) iamv1.AuthorizationRequest {
+	t.Helper()
+	result, err := iamv1.NewAuthorizationRequest(request.Action, request.Resource, mode, usage, request.RequestID, request.CorrelationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }
 
 func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
@@ -397,9 +406,11 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		if _, current := iamv1.LookupActionDefinition(definition.Action); current {
 			continue
 		}
-		body, err := json.Marshal(iamv1.AuthorizationRequest{Action: definition.Action,
-			Resource:  iamv1.ResourceReference{Kind: definition.ResourceKind, ID: "retired-target"},
-			RequestID: "retired-action-request", CorrelationID: "retired-action-request"})
+		retired := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionIAMUserRead,
+			Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: "retired-target"},
+			RequestID: "retired-action-request", CorrelationID: "retired-action-request"}, iamv1.AuthorizationResourceInstance, "")
+		retired.Action, retired.Resource.Kind = definition.Action, definition.ResourceKind
+		body, err := json.Marshal(retired)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -423,7 +434,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		if err != nil || result.Allowed != allowed || (allowed && len(evidence) == 0) {
 			t.Fatalf("stored policy decision action=%s allowed=%t error=%v", action, result.Allowed, err)
 		}
-		body, err := json.Marshal(iamv1.AuthorizationRequest{Action: action, Resource: resource, RequestID: "policy-storage-authorize", CorrelationID: "policy-storage-authorize"})
+		body, err := json.Marshal(profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: action, Resource: resource, RequestID: "policy-storage-authorize", CorrelationID: "policy-storage-authorize"}, iamv1.AuthorizationResourceInstance, ""))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -442,6 +453,31 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		}
 	}
 	assertDecision(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"}, true)
+	// Establish history while the original attachment is valid. Later fixtures
+	// revoke that attachment and retire policies before advancing a profile head.
+	for _, source := range []struct {
+		credential string
+		action     iamv1.Action
+		kind       iamv1.ResourceKind
+		usage      iamv1.AuthorizationCollectionUsage
+	}{
+		{paasCredential, iamv1.ActionPaaSApplicationCreate, iamv1.ResourceApplication, iamv1.AuthorizationCollectionCreate},
+		{auditCredential, iamv1.ActionAuditRecordRead, iamv1.ResourceAuditRecord, iamv1.AuthorizationCollectionList},
+	} {
+		request := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: source.action,
+			Resource: iamv1.ResourceReference{Kind: source.kind, ID: "collection"}, RequestID: "registry-historical", CorrelationID: "registry-historical"}, iamv1.AuthorizationResourceCollection, source.usage)
+		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), source.credential, primary)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || !decision.Allowed || iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil {
+			t.Fatal("missing original profile-bound business authority")
+		}
+	}
+	t.Run("profile-bound recorder rejects incomplete and substituted authority", func(t *testing.T) {
+		proveProfileBoundRecorder(t, ctx, admin, handler, primary)
+	})
+	t.Run("instance list and creation decisions cannot be interchanged", func(t *testing.T) {
+		proveDecisionTargetConsumption(t, ctx, admin, handler, primary)
+	})
 	runFlow := func(name string, prove func(*testing.T, context.Context, http.Handler, *pgx.Conn, string)) {
 		t.Run(name, func(t *testing.T) {
 			flowContext, cancel := context.WithTimeout(ctx, 2*time.Minute)
@@ -507,9 +543,10 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		{"boundary-evidence-stale-user", `jsonb_set(boundary_evidence,'{userResourceVersion}','9007199254740991'::jsonb)`},
 	} {
 		assertRejected(attack.name, `SELECT iam.record_authorization($1,$2,
+			jsonb_build_object('request',document-'apiVersion'-'kind'-'id'-'allowed'-'reason'-'decidedAt'-'tenantId'-'installationId'-'subject','decision',
 			document||jsonb_build_object('id','forged-boundary-decision','decidedAt',
-			to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')),
-			'{}'::jsonb,policy_evidence,`+attack.evidence+`) FROM iam.authorization_decisions
+			to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),
+			'{}'::jsonb,policy_evidence,`+attack.evidence+`,2) FROM iam.authorization_decisions
 			WHERE principal_id=$2 AND action_name='paas.application.read' AND allowed ORDER BY decided_at,id LIMIT 1`,
 			"42501", document.Organization.ID, document.Administrator.ID)
 	}
@@ -523,9 +560,10 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		// Refresh only the decision identity/time. Bad evidence must be refused
 		// before the deliberately absent audit fact can be accepted or written.
 		assertRejected(attack.name, `SELECT iam.record_authorization($1,$2,
+			jsonb_build_object('request',document-'apiVersion'-'kind'-'id'-'allowed'-'reason'-'decidedAt'-'tenantId'-'installationId'-'subject','decision',
 			document||jsonb_build_object('id','forged-policy-decision','decidedAt',
-			to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')),
-			'{}'::jsonb,`+attack.evidence+`,boundary_evidence) FROM iam.authorization_decisions WHERE allowed ORDER BY decided_at,id LIMIT 1`,
+			to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),
+			'{}'::jsonb,`+attack.evidence+`,boundary_evidence,2) FROM iam.authorization_decisions WHERE allowed ORDER BY decided_at,id LIMIT 1`,
 			attack.code, document.Organization.ID, document.Administrator.ID)
 	}
 	assertRejected("immutable-version-truncate", `TRUNCATE iam.policy_versions`, "0A000") // Referenced defaults also prohibit truncation.
@@ -633,9 +671,9 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.authorization_decisions`).Scan(&beforeBudget); err != nil {
 		t.Fatal(err)
 	}
-	budgetRequest, _ := json.Marshal(iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+	budgetRequest, _ := json.Marshal(profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
 		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"},
-		RequestID: "policy-over-budget", CorrelationID: "policy-over-budget"})
+		RequestID: "policy-over-budget", CorrelationID: "policy-over-budget"}, iamv1.AuthorizationResourceInstance, ""))
 	if response := performIAMRequestWithSubject(handler, budgetRequest, paasCredential, primary); response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("overflow policy snapshot was truncated or accepted: %d", response.Code)
 	}
@@ -726,6 +764,225 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	})
 }
 
+func proveDecisionTargetConsumption(t *testing.T, ctx context.Context, admin *pgx.Conn, handler http.Handler, bearer string) {
+	t.Helper()
+	targets := []struct {
+		action iamv1.Action
+		mode   iamv1.AuthorizationResourceMode
+		usage  iamv1.AuthorizationCollectionUsage
+	}{
+		{iamv1.ActionManagedServiceInstallationRead, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionManagedServiceInstallationRead, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList},
+		{iamv1.ActionManagedServiceInstallationCreate, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate},
+	}
+	for index, original := range targets {
+		request := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: original.action,
+			Resource: iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "collection"}, RequestID: "target-consumption", CorrelationID: "target-consumption"}, original.mode, original.usage)
+		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, bearer)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || iamv1.DecodeRequest(response.Body, &decision) != nil || !decision.Allowed || iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil {
+			t.Fatal("missing actual target-mode decision")
+		}
+		var policy, boundary, event []byte
+		if err := admin.QueryRow(ctx, `SELECT d.policy_evidence,d.boundary_evidence,o.event_document
+			FROM iam.authorization_decisions d JOIN iam.audit_outbox o ON o.tenant_id=d.tenant_id
+			AND o.event_document->>'action'='iam.authorization.decided' AND o.event_document->>'iamDecisionId'=d.id
+			WHERE d.tenant_id=$1 AND d.id=$2`, decision.TenantID, decision.ID).Scan(&policy, &boundary, &event); err != nil {
+			t.Fatal(err)
+		}
+		var fact auditv1.Event
+		if json.Unmarshal(event, &fact) != nil {
+			t.Fatal("invalid source authority fact")
+		}
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(ctx)
+		var now time.Time
+		if err := tx.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&now); err != nil {
+			t.Fatal(err)
+		}
+		decision.ID, decision.DecidedAt = "target-consumption-fixture", now.UTC()
+		fact.EventID, fact.IAMDecisionID, fact.Target.ID, fact.OccurredAt = "target-consumption-fact", auditv1.DecisionID(decision.ID), string(decision.ID), now.UTC()
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+pgx.Identifier{iamHTTPTestRole}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+		envelope := struct {
+			Request  iamv1.AuthorizationRequest  `json:"request"`
+			Decision iamv1.AuthorizationDecision `json:"decision"`
+		}{request, decision}
+		if _, err := tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,2)`,
+			decision.TenantID, decision.Subject.ID, string(mustIAMJSON(t, envelope)), string(mustIAMJSON(t, fact)), string(policy), string(boundary)); err != nil {
+			t.Fatalf("record target fixture: %v", err)
+		}
+		// The assertion is private; its owning SECURITY DEFINER entrypoints call
+		// it as owner. Switching here tests that exact invariant, not a new grant.
+		if _, err := tx.Exec(ctx, "RESET ROLE; SET LOCAL ROLE matrix_iam_owner"); err != nil {
+			t.Fatal(err)
+		}
+		for candidateIndex, candidate := range targets {
+			if _, err := tx.Exec(ctx, "SAVEPOINT target_consumer"); err != nil {
+				t.Fatal(err)
+			}
+			var usage any
+			if candidate.usage != "" {
+				usage = string(candidate.usage)
+			}
+			_, err := tx.Exec(ctx, `SELECT iam.assert_allowed_decision($1,$2,$3,$4,'SERVICE_INSTALLATION','collection',$5,$6)`,
+				decision.TenantID, decision.Subject.ID, decision.ID, candidate.action, candidate.mode, usage)
+			if candidateIndex == index {
+				if err != nil {
+					t.Fatalf("matching target rejected: %v", err)
+				}
+			} else {
+				var failure *pgconn.PgError
+				if !errors.As(err, &failure) || failure.Code != "42501" {
+					t.Fatalf("different target mode consumed a decision: %v", err)
+				}
+			}
+			if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT target_consumer"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tx.Rollback(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func proveProfileBoundRecorder(t *testing.T, ctx context.Context, admin *pgx.Conn, handler http.Handler, bearer string) {
+	t.Helper()
+	request := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}, RequestID: "wire-proof", CorrelationID: "wire-correlation"}, iamv1.AuthorizationResourceInstance, "")
+	for _, allowed := range []bool{false, true} {
+		credential := auditCredential
+		if allowed {
+			credential = paasCredential
+		}
+		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), credential, bearer)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || iamv1.DecodeRequest(response.Body, &decision) != nil || decision.Allowed != allowed || iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil {
+			t.Fatalf("actual bound authorization failed: status=%d", response.Code)
+		}
+		var version int
+		var product, digest, mode, tenant, principal string
+		var revision uint64
+		var usage *string
+		var factBytes, policyBytes, boundaryBytes []byte
+		if err := admin.QueryRow(ctx, `SELECT d.tenant_id,d.principal_id,d.contract_version,d.profile_product,d.profile_revision,d.profile_content_digest,d.resource_mode,d.collection_usage,
+			o.event_document,d.policy_evidence,d.boundary_evidence FROM iam.authorization_decisions d JOIN iam.audit_outbox o
+			ON o.tenant_id=d.tenant_id AND o.event_document->>'action'='iam.authorization.decided' AND o.event_document->>'iamDecisionId'=d.id WHERE d.id=$1`, decision.ID).
+			Scan(&tenant, &principal, &version, &product, &revision, &digest, &mode, &usage, &factBytes, &policyBytes, &boundaryBytes); err != nil {
+			t.Fatal(err)
+		}
+		if version != 2 || product != string(request.Profile.Product) || revision != request.Profile.Revision || digest != request.Profile.ContentDigest || mode != string(request.ResourceMode) || usage != nil {
+			t.Fatal("stored row did not preserve exact contract/instance binding")
+		}
+		var fact auditv1.Event
+		if json.Unmarshal(factBytes, &fact) != nil {
+			t.Fatal("invalid original fact")
+		}
+		for name, mutate := range map[string]func(map[string]any){
+			"valid":            func(map[string]any) {},
+			"missing request":  func(e map[string]any) { delete(e, "request") },
+			"missing decision": func(e map[string]any) { delete(e, "decision") },
+			"extra envelope":   func(e map[string]any) { e["permit"] = true },
+			"null request":     func(e map[string]any) { e["request"] = nil },
+			"profile":          func(e map[string]any) { e["request"].(map[string]any)["profile"] = nil },
+			"resource":         func(e map[string]any) { e["request"].(map[string]any)["resource"].(map[string]any)["id"] = "other" },
+			"action":           func(e map[string]any) { e["request"].(map[string]any)["action"] = "paas.application.create" },
+			"requestId":        func(e map[string]any) { e["request"].(map[string]any)["requestId"] = "other-request" },
+			"correlationId":    func(e map[string]any) { e["request"].(map[string]any)["correlationId"] = "other-correlation" },
+			"mode":             func(e map[string]any) { e["request"].(map[string]any)["resourceMode"] = "COLLECTION" },
+			"usage presence":   func(e map[string]any) { e["request"].(map[string]any)["collectionUsage"] = nil },
+			"both stale revision": func(e map[string]any) {
+				for _, k := range []string{"request", "decision"} {
+					e[k].(map[string]any)["profile"].(map[string]any)["revision"] = 1000
+				}
+			},
+			"both wrong digest": func(e map[string]any) {
+				for _, k := range []string{"request", "decision"} {
+					e[k].(map[string]any)["profile"].(map[string]any)["contentDigest"] = "sha256:" + strings.Repeat("0", 64)
+				}
+			},
+			"both null usage": func(e map[string]any) {
+				for _, k := range []string{"request", "decision"} {
+					e[k].(map[string]any)["collectionUsage"] = nil
+				}
+			},
+			"both missing profile": func(e map[string]any) {
+				for _, k := range []string{"request", "decision"} {
+					delete(e[k].(map[string]any), "profile")
+				}
+			},
+		} {
+			t.Run(fmt.Sprintf("allowed=%v/%s", allowed, name), func(t *testing.T) {
+				tx, err := admin.Begin(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer tx.Rollback(ctx)
+				var now time.Time
+				if err := tx.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&now); err != nil {
+					t.Fatal(err)
+				}
+				copyDecision, copyFact := decision, fact
+				copyDecision.ID, copyDecision.DecidedAt = "recorder-fixture", now.UTC()
+				copyFact.EventID, copyFact.IAMDecisionID, copyFact.Target.ID, copyFact.OccurredAt = "recorder-fixture-event", "recorder-fixture", "recorder-fixture", now.UTC()
+				envelope := map[string]any{}
+				if json.Unmarshal(mustIAMJSON(t, struct {
+					Request  iamv1.AuthorizationRequest  `json:"request"`
+					Decision iamv1.AuthorizationDecision `json:"decision"`
+				}{request, copyDecision}), &envelope) != nil {
+					t.Fatal("invalid envelope")
+				}
+				mutate(envelope)
+				if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+pgx.Identifier{iamHTTPTestRole}.Sanitize()); err != nil {
+					t.Fatal(err)
+				}
+				_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,2)", tenant, principal, string(mustIAMJSON(t, envelope)), string(mustIAMJSON(t, copyFact)), string(policyBytes), string(boundaryBytes))
+				if name == "valid" {
+					if err != nil {
+						t.Fatalf("restricted recorder rejected complete original input: %v", err)
+					}
+				} else {
+					var failure *pgconn.PgError
+					if !errors.As(err, &failure) || failure.Code != "22023" {
+						t.Fatalf("bad binding error=%v", err)
+					}
+				}
+				if err := tx.Rollback(ctx); err != nil {
+					t.Fatal(err)
+				}
+				var count int
+				if err := admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.authorization_decisions WHERE id='recorder-fixture')+(SELECT count(*) FROM iam.audit_outbox WHERE event_id='recorder-fixture-event')`).Scan(&count); err != nil || count != 0 {
+					t.Fatal("recorder fixture exposed partial facts")
+				}
+			})
+		}
+	}
+	for _, call := range []struct{ sql, code string }{
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}')`, "42883"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',1)`, "22023"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',NULL)`, "22023"},
+	} {
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, "SET LOCAL ROLE "+pgx.Identifier{iamHTTPTestRole}.Sanitize()); err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, call.sql)
+		_ = tx.Rollback(ctx)
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != call.code {
+			t.Fatalf("old/unspecified contract admitted: %v", err)
+		}
+	}
+}
+
 func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn string, admin *pgx.Conn, handler http.Handler, bearer string) {
 	t.Helper()
 	config, err := pgxpool.ParseConfig(dsn)
@@ -787,7 +1044,72 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 		}
 	}
 	resolveHistory()
-	profile := iamv1.AllAuthorizationProfiles()[0]
+	// Original source facts are synthetic, but their authority is obtained from
+	// actual HTTP decisions. Replaying them must use each immutable archive, not
+	// a current-head check or a newly inferred request shape.
+	var businessHistory []struct {
+		credential string
+		event      auditv1.Event
+		document   []byte
+	}
+	for _, source := range []struct {
+		credential string
+		action     iamv1.Action
+		resource   iamv1.ResourceKind
+		usage      iamv1.AuthorizationCollectionUsage
+		fact       auditv1.Action
+		target     auditv1.TargetReference
+		operation  auditv1.OperationID
+	}{
+		{paasCredential, iamv1.ActionPaaSApplicationCreate, iamv1.ResourceApplication, iamv1.AuthorizationCollectionCreate, auditv1.ActionPaaSApplicationCreated, auditv1.TargetReference{Kind: auditv1.TargetApplication, ID: "registry-history-app"}, "registry-history-operation"},
+		{auditCredential, iamv1.ActionAuditRecordRead, iamv1.ResourceAuditRecord, iamv1.AuthorizationCollectionList, auditv1.ActionAuditRecordsRead, auditv1.TargetReference{Kind: auditv1.TargetAuditRecords, ID: "records"}, ""},
+	} {
+		request := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: source.action,
+			Resource: iamv1.ResourceReference{Kind: source.resource, ID: "collection"}, RequestID: "registry-historical", CorrelationID: "registry-historical"}, iamv1.AuthorizationResourceCollection, source.usage)
+		var document []byte
+		if err := admin.QueryRow(ctx, `SELECT document FROM iam.authorization_decisions
+			WHERE request_id='registry-historical' AND action_name=$1 AND contract_version=2`, source.action).Scan(&document); err != nil {
+			t.Fatal("missing original protected business decision")
+		}
+		var decision iamv1.AuthorizationDecision
+		if json.Unmarshal(document, &decision) != nil || !decision.Allowed ||
+			iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil || decision.Subject == nil {
+			t.Fatal("missing real profile-bound historical decision")
+		}
+		fact := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: auditv1.EventID("history-" + decision.ID),
+			TenantID: auditv1.TenantID(decision.TenantID), Actor: auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(decision.Subject.ID)},
+			IAMDecisionID: auditv1.DecisionID(decision.ID), Action: source.fact, Target: source.target, Result: auditv1.ResultSucceeded,
+			RequestDigest: "sha256:" + strings.Repeat("1", 64), RequestID: request.RequestID, CorrelationID: request.CorrelationID,
+			OperationID: source.operation, OccurredAt: decision.DecidedAt.Add(time.Microsecond)}
+		businessHistory = append(businessHistory, struct {
+			credential string
+			event      auditv1.Event
+			document   []byte
+		}{source.credential, fact, document})
+	}
+	resolveBusinessHistory := func() {
+		t.Helper()
+		for _, original := range businessHistory {
+			response := performIAMRequest(handler, http.MethodPost, "/v1/audit-producer:resolve", original.credential,
+				mustIAMJSON(t, iamv1.ResolveAuditProducerRequest{Event: original.event}))
+			var proof iamv1.AuditProducerAuthorization
+			contract, _ := auditv1.ContractForAction(original.event.Action)
+			_, digest, err := auditv1.CanonicalizeEvent(contract.Source, original.event)
+			if err != nil || response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &proof) != nil ||
+				iamv1.ValidateAuditProducerAuthorization(proof) != nil || proof.ContentDigest != digest {
+				t.Fatal("historical business proof consulted a current head or changed its event commitment")
+			}
+			var current []byte
+			if err := admin.QueryRow(ctx, `SELECT document FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2 AND contract_version=2`, original.event.TenantID, original.event.IAMDecisionID).Scan(&current); err != nil || !bytes.Equal(current, original.document) {
+				t.Fatal("historical decision changed while current profile advanced")
+			}
+		}
+	}
+	resolveBusinessHistory()
+	profile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	if !found {
+		t.Fatal("missing PaaS source profile")
+	}
 	original, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
 	if err != nil {
 		t.Fatal(err)
@@ -882,7 +1204,8 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 	}
 	applyIAMSchema(t, ctx, admin)
 	lookup(future, true)
-	for _, function := range []string{"iam.current_authorization_profiles()", "iam.lookup_authorization_profile(text,bigint,text)"} {
+	for _, function := range []string{"iam.current_authorization_profiles()", "iam.lookup_authorization_profile(text,bigint,text)",
+		"iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer)", "iam.read_audit_evidence(text,text,text,text,jsonb)"} {
 		// Configuration spelling is not the boundary: accept the same two
 		// PostgreSQL identifiers with different whitespace, then roll it back.
 		equivalent, err := admin.Begin(ctx)
@@ -919,6 +1242,32 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 			if err == nil {
 				t.Fatal("verification accepted unsafe function search_path or execute privilege")
 			}
+		}
+	}
+	for _, mutation := range []string{
+		"ALTER TABLE iam.authorization_decisions ALTER COLUMN contract_version SET DEFAULT 1",
+		"ALTER TABLE iam.authorization_decisions ALTER COLUMN contract_version DROP NOT NULL",
+		"ALTER TABLE iam.authorization_decisions DROP CONSTRAINT authorization_decision_contract_valid",
+		"ALTER TABLE iam.authorization_decisions DISABLE TRIGGER authorization_decisions_are_immutable",
+		"ALTER TABLE iam.authorization_decisions DISABLE TRIGGER authorization_decisions_cannot_be_truncated",
+	} {
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, mutation); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal("install isolated decision contract drift")
+		}
+		var ready bool
+		if err := tx.QueryRow(ctx, "SELECT ready FROM iam.readiness()").Scan(&ready); err != nil || ready {
+			_ = tx.Rollback(ctx)
+			t.Fatal("readiness accepted missing decision history protection")
+		}
+		err = iammigration.Verify(ctx, tx)
+		_ = tx.Rollback(ctx)
+		if err == nil {
+			t.Fatal("verification accepted missing decision history protection")
 		}
 	}
 	if err := iammigration.Verify(ctx, admin); err != nil {
@@ -959,8 +1308,8 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 			t.Fatalf("source mismatch %s: status=%d", path, response.Code)
 		}
 	}
-	request, _ := json.Marshal(iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
-		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "registry-drift"}, RequestID: "registry-drift", CorrelationID: "registry-drift"})
+	request, _ := json.Marshal(profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "registry-drift"}, RequestID: "registry-drift", CorrelationID: "registry-drift"}, iamv1.AuthorizationResourceInstance, ""))
 	if response := performIAMRequestWithSubject(handler, request, paasCredential, bearer); response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("current decision continued with a different registered meaning: status=%d", response.Code)
 	}
@@ -974,6 +1323,7 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 	wrong.ContentDigest = futureDigest
 	lookup(wrong, false)
 	resolveHistory()
+	resolveBusinessHistory()
 	var currentBytes []byte
 	if err := admin.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE event_id=$1`, historicalEvent.EventID).Scan(&currentBytes); err != nil || !bytes.Equal(currentBytes, historicalBytes) {
 		t.Fatal("profile advance rewrote old outbox bytes")
@@ -1052,7 +1402,7 @@ func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler ht
 	}
 	authorize := func(id string, want bool) iamv1.AuthorizationDecision {
 		t.Helper()
-		request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: id}, RequestID: "boundary-read", CorrelationID: "boundary-read"}
+		request := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: id}, RequestID: "boundary-read", CorrelationID: "boundary-read"}, iamv1.AuthorizationResourceInstance, "")
 		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, bearer)
 		var result iamv1.AuthorizationDecision
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil || result.Allowed != want {
@@ -1610,8 +1960,8 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	post("/v1/policies", bearer, create, http.StatusForbidden, nil)
 	authorize := func(id string, want bool) {
 		t.Helper()
-		body := mustIAMJSON(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
-			Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: id}, RequestID: "customer-policy-read", CorrelationID: "customer-policy-read"})
+		body := mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+			Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: id}, RequestID: "customer-policy-read", CorrelationID: "customer-policy-read"}, iamv1.AuthorizationResourceInstance, ""))
 		response := performIAMRequestWithSubject(handler, body, paasCredential, bearer)
 		var decision iamv1.AuthorizationDecision
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || decision.Allowed != want {
@@ -1872,7 +2222,7 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: initial.Policy.ID, PolicyResourceVersion: 2, RequestID: "version-member-grant"}, http.StatusOK, nil)
 	authorize := func(requestID string, want bool, wantVersion iamv1.PolicyVersionID) iamv1.DecisionID {
 		t.Helper()
-		body := mustIAMJSON(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "version-application"}, RequestID: requestID, CorrelationID: requestID})
+		body := mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "version-application"}, RequestID: requestID, CorrelationID: requestID}, iamv1.AuthorizationResourceInstance, ""))
 		response := performIAMRequestWithSubject(handler, body, paasCredential, bearer)
 		var decision iamv1.AuthorizationDecision
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || decision.Allowed != want {
@@ -2244,7 +2594,7 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 	var timedPolicy iamv1.PolicyDetail
 	post("/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Time limited application read", Document: timedDocument, RequestID: "time-policy-create"}, http.StatusCreated, &timedPolicy)
 	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(timedGroup.ID)}, PolicyID: timedPolicy.Policy.ID, PolicyResourceVersion: 1, RequestID: "time-policy-attach"}, http.StatusOK, nil)
-	timeRequest := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "time-window-application"}, RequestID: "time-policy-allowed", CorrelationID: "time-policy"}
+	timeRequest := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "time-window-application"}, RequestID: "time-policy-allowed", CorrelationID: "time-policy"}, iamv1.AuthorizationResourceInstance, "")
 	timeDecision := func(want bool) iamv1.AuthorizationDecision {
 		t.Helper()
 		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, timeRequest), paasCredential, bearer)
@@ -2352,7 +2702,7 @@ func proveIdentityStringConditions(t *testing.T, ctx context.Context, handler ht
 	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}, PolicyID: policy.Policy.ID, PolicyResourceVersion: 1, RequestID: "identity-policy-attach"}, http.StatusOK, &attachment)
 	authorize := func(credential string, user iamv1.User, want bool, version iamv1.PolicyVersionID, membership iamv1.GroupMembershipID) iamv1.AuthorizationDecision {
 		t.Helper()
-		request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "identity-application"}, RequestID: "identity-read", CorrelationID: "identity-read"}
+		request := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "identity-application"}, RequestID: "identity-read", CorrelationID: "identity-read"}, iamv1.AuthorizationResourceInstance, "")
 		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, credential)
 		var decision iamv1.AuthorizationDecision
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || decision.Allowed != want ||
@@ -2373,7 +2723,7 @@ func proveIdentityStringConditions(t *testing.T, ctx context.Context, handler ht
 	}
 	original := authorize(bearer, member, true, policy.Version.ID, memberships[0].ID)
 	authorize(otherBearer, other, false, "", "")
-	serviceAsUser := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "identity-application"}, RequestID: "identity-service-as-user", CorrelationID: "identity-service-as-user"}
+	serviceAsUser := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "identity-application"}, RequestID: "identity-service-as-user", CorrelationID: "identity-service-as-user"}, iamv1.AuthorizationResourceInstance, "")
 	if response := performIAMRequestWithSubject(handler, mustIAMJSON(t, serviceAsUser), paasCredential, paasCredential); response.Code != http.StatusUnauthorized {
 		t.Fatal("service credential supplied USER identity conditions")
 	}
@@ -2443,8 +2793,8 @@ func proveIdentityStringConditions(t *testing.T, ctx context.Context, handler ht
 	post("/v1/policies", foreignRoot, iamv1.CreatePolicyRequest{DisplayName: creation.DisplayName, Document: document, RequestID: "identity-policy-b"}, http.StatusCreated, &foreignPolicy)
 	post("/v1/policy-attachments", foreignRoot, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(foreignGroup.ID)}, PolicyID: foreignPolicy.Policy.ID, PolicyResourceVersion: 1, RequestID: "identity-attach-b"}, http.StatusOK, nil)
 	authorize(foreignBearer, foreignMember, false, "", "")
-	forgedRequest := httptest.NewRequest(http.MethodPost, "/v1/authorize", bytes.NewReader(mustIAMJSON(t, iamv1.AuthorizationRequest{
-		Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "identity-application"}, RequestID: "identity-header-forged", CorrelationID: "identity-header-forged"})))
+	forgedRequest := httptest.NewRequest(http.MethodPost, "/v1/authorize", bytes.NewReader(mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{
+		Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "identity-application"}, RequestID: "identity-header-forged", CorrelationID: "identity-header-forged"}, iamv1.AuthorizationResourceInstance, ""))))
 	forgedRequest.Header.Set("Content-Type", "application/json")
 	forgedRequest.Header.Set("Authorization", "Bearer "+paasCredential)
 	forgedRequest.Header.Set("Matrix-Subject-Credential", foreignBearer)
@@ -2480,7 +2830,7 @@ func proveIdentityStringConditions(t *testing.T, ctx context.Context, handler ht
 		}}
 	prefixDecide := func(credential string, user iamv1.User, resource string, want bool) iamv1.AuthorizationDecision {
 		t.Helper()
-		request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: resource}, RequestID: "prefix-read-" + resource, CorrelationID: "prefix-read"}
+		request := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: resource}, RequestID: "prefix-read-" + resource, CorrelationID: "prefix-read"}, iamv1.AuthorizationResourceInstance, "")
 		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, credential)
 		var decision iamv1.AuthorizationDecision
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || iamv1.ValidateAuthorizationDecision(decision) != nil || decision.Allowed != want {
@@ -3224,7 +3574,7 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 	}
 	authorize := func(want bool) iamv1.AuthorizationDecision {
 		t.Helper()
-		body, _ := json.Marshal(iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "group-application"}, RequestID: "group-application-read", CorrelationID: "group-application-read"})
+		body, _ := json.Marshal(profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "group-application"}, RequestID: "group-application-read", CorrelationID: "group-application-read"}, iamv1.AuthorizationResourceInstance, ""))
 		response := performIAMRequestWithSubject(handler, body, paasCredential, bearer)
 		var decision iamv1.AuthorizationDecision
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || decision.Allowed != want {
@@ -3248,7 +3598,7 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 		if _, err = tx.Exec(ctx, `SET LOCAL ROLE matrix_iam_owner; SELECT set_config('matrix.iam_tenant_id',$1,true)`, member.AccountID); err != nil {
 			t.Fatal(err)
 		}
-		_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,document||jsonb_build_object('id','forged-group-decision','decidedAt',to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')),'{}'::jsonb,`+expression+`,boundary_evidence) FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$3`, member.AccountID, member.ID, decision.ID)
+		_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,jsonb_build_object('request',document-'apiVersion'-'kind'-'id'-'allowed'-'reason'-'decidedAt'-'tenantId'-'installationId'-'subject','decision',document||jsonb_build_object('id','forged-group-decision','decidedAt',to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),'{}'::jsonb,`+expression+`,boundary_evidence,2) FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$3`, member.AccountID, member.ID, decision.ID)
 		var databaseError *pgconn.PgError
 		if !errors.As(err, &databaseError) || databaseError.Code != code {
 			t.Fatalf("group evidence attack: %v want=%s", err, code)
@@ -3570,7 +3920,7 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 	}
 	decisionsBefore, outboxBefore = counts()
 	get("/v1/auth/me", capacityBearer, http.StatusServiceUnavailable, nil)
-	body, _ := json.Marshal(iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "capacity-app"}, RequestID: "capacity-overflow-decide", CorrelationID: "capacity-overflow-decide"})
+	body, _ := json.Marshal(profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "capacity-app"}, RequestID: "capacity-overflow-decide", CorrelationID: "capacity-overflow-decide"}, iamv1.AuthorizationResourceInstance, ""))
 	if response := performIAMRequestWithSubject(handler, body, paasCredential, capacityBearer); response.Code != http.StatusServiceUnavailable {
 		t.Fatal("authority overflow was evaluated after truncating sources")
 	}
@@ -3947,9 +4297,9 @@ func provePolicyDefaultAttachmentRaces(t *testing.T, ctx context.Context, handle
 			}
 			assertEvaluation := func(version string, digest string, allowed bool) []byte {
 				t.Helper()
-				body, _ := json.Marshal(iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+				body, _ := json.Marshal(profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
 					Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "publication-resource"},
-					RequestID: requestID + "-evaluate-" + version, CorrelationID: requestID})
+					RequestID: requestID + "-evaluate-" + version, CorrelationID: requestID}, iamv1.AuthorizationResourceInstance, ""))
 				response := performIAMRequestWithSubject(handler, body, paasCredential, session)
 				var decision iamv1.AuthorizationDecision
 				if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil ||
@@ -4232,7 +4582,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		serviceIdentity.Purpose != iamv1.ServicePaaS || serviceIdentity.PrincipalID != "service-paas" {
 		t.Fatalf("IAM service identity=%#v err=%v", serviceIdentity, err)
 	}
-	verificationBody := []byte(`{"action":"installation.verify","resource":{"kind":"INSTALLATION","id":"installation-http-integration"},"requestId":"request-installation-verify","correlationId":"correlation-installation-verify"}`)
+	verificationBody := mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionInstallationVerify, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceInstallation, ID: "installation-http-integration"}, RequestID: "request-installation-verify", CorrelationID: "correlation-installation-verify"}, iamv1.AuthorizationResourceInstance, ""))
 	verification := performIAMRequest(
 		handler, http.MethodPost, "/v1/installation:verify", verifierCredential, verificationBody,
 	)
@@ -4247,7 +4597,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 			verification.Code, verificationDecision, verification.Body.String(),
 		)
 	}
-	verificationBody = []byte(`{"action":"installation.verify","resource":{"kind":"INSTALLATION","id":"installation-other"},"requestId":"request-installation-other","correlationId":"correlation-installation-other"}`)
+	verificationBody = mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionInstallationVerify, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceInstallation, ID: "installation-other"}, RequestID: "request-installation-other", CorrelationID: "correlation-installation-other"}, iamv1.AuthorizationResourceInstance, ""))
 	verification = performIAMRequest(
 		handler, http.MethodPost, "/v1/installation:verify", verifierCredential, verificationBody,
 	)
@@ -4285,7 +4635,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	if secondInitialLogin.Code != http.StatusOK || json.Unmarshal(secondInitialLogin.Body.Bytes(), &secondInitialSession) != nil || secondInitialSession.Credential == "" {
 		t.Fatal("could not establish the second initial-password session")
 	}
-	authorizeBody := []byte(`{"action":"paas.application.create","resource":{"kind":"APPLICATION","id":"application-example"},"requestId":"request-authorize","correlationId":"correlation-authorize"}`)
+	authorizeBody := mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationCreate, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}, RequestID: "request-authorize", CorrelationID: "correlation-authorize"}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate))
 	authorize := performIAMRequestWithSubject(handler, authorizeBody, paasCredential, loginWire.Credential)
 	if authorize.Code != http.StatusOK {
 		t.Fatalf("IAM authorize status=%d body=%s", authorize.Code, authorize.Body.String())
@@ -4327,7 +4677,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		bytes.Contains(weakPassword.Body.Bytes(), []byte("weak")) {
 		t.Fatalf("IAM weak password status=%d body=%s", weakPassword.Code, weakPassword.Body.String())
 	}
-	authorizeBody = []byte(`{"action":"paas.application.create","resource":{"kind":"APPLICATION","id":"application-example"},"requestId":"request-authorize-allowed","correlationId":"correlation-authorize-allowed"}`)
+	authorizeBody = mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationCreate, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}, RequestID: "request-authorize-allowed", CorrelationID: "correlation-authorize-allowed"}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate))
 	authorize = performIAMRequestWithSubject(handler, authorizeBody, paasCredential, loginWire.Credential)
 	if authorize.Code != http.StatusOK {
 		t.Fatalf("IAM allowed authorize status=%d body=%s", authorize.Code, authorize.Body.String())
@@ -4336,7 +4686,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		decision.TenantID != "organization-http-integration" {
 		t.Fatalf("administrator allowed decision=%#v err=%v", decision, err)
 	}
-	managedServiceAuthorizeBody := []byte(`{"action":"managedservice.offering.read","resource":{"kind":"SERVICE_OFFERING","id":"collection"},"requestId":"request-managedservice-offering","correlationId":"correlation-managedservice-offering"}`)
+	managedServiceAuthorizeBody := mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionManagedServiceOfferingRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceServiceOffering, ID: "collection"}, RequestID: "request-managedservice-offering", CorrelationID: "correlation-managedservice-offering"}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList))
 	managedServiceAuthorize := performIAMRequestWithSubject(
 		handler, managedServiceAuthorizeBody, paasCredential, loginWire.Credential,
 	)
@@ -4406,7 +4756,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		developerWire.Credential == "" || !developerWire.MustChangePassword {
 		t.Fatalf("decode IAM developer login=%#v err=%v", developerWire.Session, err)
 	}
-	developerAuthorizeBody := []byte(`{"action":"paas.application.create","resource":{"kind":"APPLICATION","id":"application-developer"},"requestId":"request-developer-before-password","correlationId":"correlation-developer-before-password"}`)
+	developerAuthorizeBody := mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationCreate, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}, RequestID: "request-developer-before-password", CorrelationID: "correlation-developer-before-password"}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate))
 	developerAuthorize := performIAMRequestWithSubject(
 		handler, developerAuthorizeBody, paasCredential, developerWire.Credential,
 	)
@@ -4441,7 +4791,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		bytes.Contains(deniedUser.Body.Bytes(), []byte("Denied-User-Password")) {
 		t.Fatalf("IAM denied role action status=%d body=%s", deniedUser.Code, deniedUser.Body.String())
 	}
-	developerAuthorizeBody = []byte(`{"action":"paas.application.create","resource":{"kind":"APPLICATION","id":"application-developer"},"requestId":"request-developer-allowed","correlationId":"correlation-developer-allowed"}`)
+	developerAuthorizeBody = mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationCreate, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}, RequestID: "request-developer-allowed", CorrelationID: "correlation-developer-allowed"}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate))
 	developerAuthorize = performIAMRequestWithSubject(
 		handler, developerAuthorizeBody, paasCredential, developerWire.Credential,
 	)
@@ -4481,7 +4831,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	if revokeBinding.Code != http.StatusOK {
 		t.Fatalf("IAM revoke binding status=%d body=%s", revokeBinding.Code, revokeBinding.Body.String())
 	}
-	developerAuthorizeBody = []byte(`{"action":"paas.application.create","resource":{"kind":"APPLICATION","id":"application-developer"},"requestId":"request-developer-after-binding","correlationId":"correlation-developer-after-binding"}`)
+	developerAuthorizeBody = mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationCreate, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}, RequestID: "request-developer-after-binding", CorrelationID: "correlation-developer-after-binding"}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate))
 	developerAuthorize = performIAMRequestWithSubject(
 		handler, developerAuthorizeBody, paasCredential, developerWire.Credential,
 	)
@@ -4526,7 +4876,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	if _, err := admin.Exec(ctx, "UPDATE iam.policy_attachments SET revoked_at=transaction_timestamp(),updated_at=transaction_timestamp(),resource_version=resource_version+1 WHERE tenant_id=$1 AND id='bootstrap-verifier-binding'", document.Organization.ID); err != nil {
 		t.Fatal(err)
 	}
-	verificationBody = []byte(`{"action":"installation.verify","resource":{"kind":"INSTALLATION","id":"installation-http-integration"},"requestId":"request-installation-revoked","correlationId":"correlation-installation-revoked"}`)
+	verificationBody = mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionInstallationVerify, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceInstallation, ID: "installation-http-integration"}, RequestID: "request-installation-revoked", CorrelationID: "correlation-installation-revoked"}, iamv1.AuthorizationResourceInstance, ""))
 	verification = performIAMRequest(
 		handler, http.MethodPost, "/v1/installation:verify", verifierCredential, verificationBody,
 	)
@@ -5126,10 +5476,10 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 		}
 		return result
 	}
-	assertPaasDecision := func(bearer string, action iamv1.Action, expected bool, tenant string) {
+	assertPaasDecision := func(bearer string, action iamv1.Action, usage iamv1.AuthorizationCollectionUsage, expected bool, tenant string) {
 		t.Helper()
 		kind, _ := iamv1.ResourceKindForAction(action)
-		body, _ := json.Marshal(iamv1.AuthorizationRequest{Action: action, Resource: iamv1.ResourceReference{Kind: kind, ID: "shared-account-resource"}, RequestID: "request-account-paas", CorrelationID: "request-account-paas"})
+		body, _ := json.Marshal(profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: action, Resource: iamv1.ResourceReference{Kind: kind, ID: "collection"}, RequestID: "request-account-paas", CorrelationID: "request-account-paas"}, iamv1.AuthorizationResourceCollection, usage))
 		response := performIAMRequestWithSubject(handler, body, paasCredential, bearer)
 		var result iamv1.AuthorizationDecision
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil || result.Allowed != expected || (expected && string(result.TenantID) != tenant) {
@@ -5137,8 +5487,8 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 		}
 	}
 	rootIdentity := identity(root)
-	rootCreate, rootCanCreate := findIAMCapability(rootIdentity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts")
-	rootRead, rootCanRead := findIAMCapability(rootIdentity.Capabilities, iamv1.ActionIAMAccountRead, iamv1.ResourceAccount, "accounts")
+	rootCreate, rootCanCreate := findIAMCapability(rootIdentity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "collection")
+	rootRead, rootCanRead := findIAMCapability(rootIdentity.Capabilities, iamv1.ActionIAMAccountRead, iamv1.ResourceAccount, "collection")
 	if !rootCanCreate || !rootCreate.Available || !rootCanRead || !rootRead.Available || rootIdentity.Account.RootIdentity.PrincipalID != "principal-admin" {
 		t.Fatal("bootstrap identity not recognized")
 	}
@@ -5151,10 +5501,10 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	request(http.MethodPost, "/v1/accounts", root, newTenantBody, http.StatusConflict)
 	primaryB := login("customer.admin", primaryBPassword, http.StatusOK)
 	primaryIdentity := identity(primaryB)
-	if capability, found := findIAMCapability(primaryIdentity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts"); !found || capability.Available {
+	if capability, found := findIAMCapability(primaryIdentity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "collection"); !found || capability.Available {
 		t.Fatal("new primary inherited platform account-opening capability")
 	}
-	if capability, found := findIAMCapability(primaryIdentity.Capabilities, iamv1.ActionIAMAccountRead, iamv1.ResourceAccount, "accounts"); !found || capability.Available {
+	if capability, found := findIAMCapability(primaryIdentity.Capabilities, iamv1.ActionIAMAccountRead, iamv1.ResourceAccount, "collection"); !found || capability.Available {
 		t.Fatal("new primary inherited platform account-directory capability")
 	}
 	passwordChange(primaryB, primaryBPassword, primaryBChanged)
@@ -5187,7 +5537,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	passwordChange(childSessionB, childPassword, childChangedB)
 	login("shared.user@customer-b", childChangedA, http.StatusUnauthorized)
 	if id := identity(childSessionA); id.User.ID != childA.ID || id.Account.ID != tenantA || func() bool {
-		capability, found := findIAMCapability(id.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts")
+		capability, found := findIAMCapability(id.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "collection")
 		return !found || capability.Available
 	}() {
 		t.Fatal("wrong tenant or platform capability in child identity")
@@ -5195,9 +5545,9 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	if len(identity(childSessionB).PolicySources) != 0 {
 		t.Fatal("new child gained implicit business permissions")
 	}
-	assertPaasDecision(childSessionA, iamv1.ActionManagedServiceInstallationRead, true, tenantA)
-	assertPaasDecision(childSessionA, iamv1.ActionManagedServiceInstallationCreate, false, "")
-	assertPaasDecision(childSessionB, iamv1.ActionManagedServiceInstallationRead, false, "")
+	assertPaasDecision(childSessionA, iamv1.ActionManagedServiceInstallationRead, iamv1.AuthorizationCollectionList, true, tenantA)
+	assertPaasDecision(childSessionA, iamv1.ActionManagedServiceInstallationCreate, iamv1.AuthorizationCollectionCreate, false, "")
+	assertPaasDecision(childSessionB, iamv1.ActionManagedServiceInstallationRead, iamv1.AuthorizationCollectionList, false, "")
 	request(http.MethodGet, "/v1/users", childSessionA, nil, http.StatusForbidden)
 	setAlias(childSessionA, "forged-alias", 2, http.StatusForbidden)
 	request(http.MethodPost, "/v1/policy-attachments", childSessionA, map[string]any{"target": iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(childA.ID)}, "policyId": iamv1.SystemPolicyAccountAdministrator, "policyResourceVersion": 1, "requestId": "request-escalate"}, http.StatusForbidden)
@@ -5264,7 +5614,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	delegated := createUser(root, "delegated.admin", iamv1.SystemPolicyAccountAdministrator, http.StatusCreated)
 	delegatedSession := login("delegated.admin@customer-a", childPassword, http.StatusOK)
 	passwordChange(delegatedSession, childPassword, childChangedA)
-	if capability, found := findIAMCapability(identity(delegatedSession).Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts"); !found || capability.Available {
+	if capability, found := findIAMCapability(identity(delegatedSession).Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "collection"); !found || capability.Available {
 		t.Fatal("assignable administrator role granted platform access")
 	}
 	request(http.MethodGet, "/v1/accounts", delegatedSession, nil, http.StatusForbidden)
@@ -5307,12 +5657,12 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	login("shared.user@customer-a", childChangedA, http.StatusOK)
 
 	request(http.MethodPost, "/v1/policy-attachments/"+string(childBinding)+":revoke", root, map[string]any{"resourceVersion": 1, "requestId": "request-child-revoke"}, http.StatusOK)
-	assertPaasDecision(childSessionA, iamv1.ActionManagedServiceInstallationRead, false, "")
+	assertPaasDecision(childSessionA, iamv1.ActionManagedServiceInstallationRead, iamv1.AuthorizationCollectionList, false, "")
 	grant := request(http.MethodPost, "/v1/policy-attachments", primaryB, map[string]any{"target": iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(childB.ID)}, "policyId": iamv1.SystemPolicyPaaSDeveloper, "policyResourceVersion": 1, "requestId": "request-child-grant"}, http.StatusOK)
 	if bytes.Contains(grant.Body.Bytes(), []byte(tenantA)) {
 		t.Fatal("grant selected the wrong tenant")
 	}
-	assertPaasDecision(childSessionB, iamv1.ActionManagedServiceInstallationCreate, true, tenantB)
+	assertPaasDecision(childSessionB, iamv1.ActionManagedServiceInstallationCreate, iamv1.AuthorizationCollectionCreate, true, tenantB)
 
 	statusPath := "/v1/users/" + string(childA.ID) + ":set-status"
 	request(http.MethodPost, statusPath, root, map[string]any{"status": "DISABLED", "resourceVersion": 1, "requestId": "request-stale-status"}, http.StatusConflict)
@@ -5374,7 +5724,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	if !foundPending {
 		t.Fatal("password-change target missing from user directory")
 	}
-	assertPaasDecision(resetSession, iamv1.ActionManagedServiceInstallationRead, false, "")
+	assertPaasDecision(resetSession, iamv1.ActionManagedServiceInstallationRead, iamv1.AuthorizationCollectionList, false, "")
 	if identity(childSessionB).User.ID != childB.ID {
 		t.Fatal("reset leaked across tenants")
 	}
@@ -5886,7 +6236,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	if json.Unmarshal(operatorIdentity.Body.Bytes(), &identity) != nil {
 		t.Fatal("platform operator identity is invalid")
 	}
-	operatorCreate, operatorCanCreate := findIAMCapability(identity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts")
+	operatorCreate, operatorCanCreate := findIAMCapability(identity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "collection")
 	if !operatorCanCreate || !operatorCreate.Available || len(identity.PolicySources) != 1 || identity.User.ID == identity.Account.RootIdentity.PrincipalID {
 		t.Fatal("tenant lifecycle still requires bootstrap/primary or tenant-admin identity")
 	}
@@ -6033,7 +6383,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	if json.Unmarshal(current.Body.Bytes(), &identity) != nil {
 		t.Fatal("recovered root identity is invalid")
 	}
-	recoveredCreate, recoveredCanCreate := findIAMCapability(identity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "accounts")
+	recoveredCreate, recoveredCanCreate := findIAMCapability(identity.Capabilities, iamv1.ActionIAMAccountCreate, iamv1.ResourceAccount, "collection")
 	if !identity.User.MustChangePassword || !recoveredCanCreate || recoveredCreate.Available ||
 		recoveredCreate.RestrictionReason != iamv1.CapabilityCurrentCredentialChangeRequired || len(identity.PolicySources) != 1 || identity.PolicySources[0].Attachment.PolicyID != iamv1.SystemPolicyAccountAdministrator {
 		t.Fatal("primary recovery gained platform access or skipped required password change")
@@ -6248,11 +6598,12 @@ func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http
 			kind        iamv1.ResourceKind
 			targetKind  auditv1.TargetKind
 			target      string
+			usage       iamv1.AuthorizationCollectionUsage
 		}{
-			{paasCredential, iamv1.ActionPaaSApplicationCreate, auditv1.ActionPaaSApplicationCreated, iamv1.ResourceApplication, auditv1.TargetApplication, "collection"},
-			{auditCredential, iamv1.ActionAuditRecordRead, auditv1.ActionAuditRecordsRead, iamv1.ResourceAuditRecord, auditv1.TargetAuditRecords, "records"},
+			{paasCredential, iamv1.ActionPaaSApplicationCreate, auditv1.ActionPaaSApplicationCreated, iamv1.ResourceApplication, auditv1.TargetApplication, "collection", iamv1.AuthorizationCollectionCreate},
+			{auditCredential, iamv1.ActionAuditRecordRead, auditv1.ActionAuditRecordsRead, iamv1.ResourceAuditRecord, auditv1.TargetAuditRecords, "records", iamv1.AuthorizationCollectionList},
 		} {
-			body, _ := json.Marshal(iamv1.AuthorizationRequest{Action: producer.action, Resource: iamv1.ResourceReference{Kind: producer.kind, ID: producer.target}, RequestID: "request-proof-business", CorrelationID: "correlation-proof-business"})
+			body, _ := json.Marshal(profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: producer.action, Resource: iamv1.ResourceReference{Kind: producer.kind, ID: "collection"}, RequestID: "request-proof-business", CorrelationID: "correlation-proof-business"}, iamv1.AuthorizationResourceCollection, producer.usage))
 			response := performIAMRequestWithSubject(handler, body, producer.credential, session.Credential)
 			var decision iamv1.AuthorizationDecision
 			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || !decision.Allowed || decision.Subject == nil {
@@ -6312,16 +6663,18 @@ func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http
 		action   iamv1.Action
 		fact     auditv1.Action
 		resource string
+		mode     iamv1.AuthorizationResourceMode
+		usage    iamv1.AuthorizationCollectionUsage
 	}{
-		{iamv1.ActionPaaSNodeEnrollmentCreate, auditv1.ActionPaaSExecutionTargetRegistered, "collection"},
-		{iamv1.ActionPaaSExecutionTargetRegister, auditv1.ActionPaaSExecutionTargetRegistered, "execution-target-proof"},
-		{iamv1.ActionPaaSExecutionTargetDrain, auditv1.ActionPaaSExecutionTargetDrained, "execution-target-proof"},
-		{iamv1.ActionPaaSExecutionTargetActivate, auditv1.ActionPaaSExecutionTargetActivated, "execution-target-proof"},
-		{iamv1.ActionPaaSExecutionTargetRemove, auditv1.ActionPaaSExecutionTargetRemoved, "execution-target-proof"},
+		{iamv1.ActionPaaSNodeEnrollmentCreate, auditv1.ActionPaaSExecutionTargetRegistered, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate},
+		{iamv1.ActionPaaSExecutionTargetRegister, auditv1.ActionPaaSExecutionTargetRegistered, "execution-target-proof", iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionPaaSExecutionTargetDrain, auditv1.ActionPaaSExecutionTargetDrained, "execution-target-proof", iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionPaaSExecutionTargetActivate, auditv1.ActionPaaSExecutionTargetActivated, "execution-target-proof", iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionPaaSExecutionTargetRemove, auditv1.ActionPaaSExecutionTargetRemoved, "execution-target-proof", iamv1.AuthorizationResourceInstance, ""},
 	} {
 		kind, _ := iamv1.ResourceKindForAction(mapping.action)
-		request := iamv1.AuthorizationRequest{Action: mapping.action, Resource: iamv1.ResourceReference{Kind: kind, ID: mapping.resource},
-			RequestID: "proof-" + string(mapping.action), CorrelationID: "correlation-platform-proof"}
+		request := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: mapping.action, Resource: iamv1.ResourceReference{Kind: kind, ID: mapping.resource},
+			RequestID: "proof-" + string(mapping.action), CorrelationID: "correlation-platform-proof"}, mapping.mode, mapping.usage)
 		encoded, err := json.Marshal(request)
 		if err != nil {
 			t.Fatal(err)
@@ -6349,7 +6702,7 @@ func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http
 		}
 		forged := event
 		forged.Target.ID = "execution-target-other"
-		if mapping.resource == "collection" {
+		if mapping.mode == iamv1.AuthorizationResourceCollection {
 			// The source transaction, not this authority receipt, proves the final ID.
 			resolve(paasCredential, forged, http.StatusOK)
 			forged.Action = auditv1.ActionPaaSExecutionTargetRemoved
@@ -6553,7 +6906,7 @@ func provePlatformCredentialProtection(t *testing.T, ctx context.Context, handle
 
 func assertPlatformDecisionHTTP(t *testing.T, handler http.Handler, subject, caller string, allowed bool) {
 	t.Helper()
-	body := []byte(`{"action":"paas.execution-target.register","resource":{"kind":"EXECUTION_TARGET","id":"target-example"},"requestId":"request-node-register","correlationId":"request-node-register"}`)
+	body := mustIAMJSON(t, profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSExecutionTargetRegister, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceExecutionTarget, ID: "target-example"}, RequestID: "request-node-register", CorrelationID: "request-node-register"}, iamv1.AuthorizationResourceInstance, ""))
 	response := performIAMRequestWithSubject(handler, body, caller, subject)
 	var decision iamv1.AuthorizationDecision
 	if response.Code != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body.Bytes()), &decision) != nil ||

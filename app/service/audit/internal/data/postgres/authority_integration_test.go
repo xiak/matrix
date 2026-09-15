@@ -895,7 +895,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 20 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 21 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
@@ -976,7 +976,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 20 || checkedAt.IsZero() {
+	if ready || schemaVersion != 21 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -1792,13 +1792,30 @@ func assertIAMAuthorizationCatalog(
 	probeEvidence := evidenceFor(verifier, iamv1.SystemPolicyInstallationVerifier)
 	var historicalDecision iamv1.AuthorizationDecision
 	var historicalEvent auditv1.Event
-	for index, action := range iamv1.AllActions() {
-		resourceKind, known := iamv1.ResourceKindForAction(action)
-		if !known {
-			t.Fatalf("IAM action %q has no Go resource contract", action)
+	var requests []iamv1.AuthorizationRequest
+	for _, profile := range iamv1.AllAuthorizationProfiles() {
+		for _, declaration := range profile.Actions {
+			for _, shape := range declaration.ResourceShapes {
+				resource := iamv1.ResourceReference{Kind: declaration.ResourceKind, ID: fmt.Sprintf("resource-catalog-%d", len(requests))}
+				if shape.Mode == iamv1.AuthorizationResourceCollection {
+					resource.ID = "collection"
+				}
+				if declaration.Action == iamv1.ActionInstallationVerify {
+					resource.ID = fixture.InstallationID
+				}
+				requestID := fmt.Sprintf("request-catalog-%d", len(requests))
+				request, err := iamv1.NewAuthorizationRequest(declaration.Action, resource, shape.Mode, shape.CollectionUsage, requestID, requestID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				requests = append(requests, request)
+			}
 		}
+	}
+	for index, request := range requests {
+		action := request.Action
 		decisionID := fmt.Sprintf("decision-catalog-%d", index)
-		requestID := fmt.Sprintf("request-catalog-%d", index)
+		requestID := request.RequestID
 		tx, err := iamAPI.Begin(ctx)
 		if err != nil {
 			t.Fatalf("begin IAM authorization catalog transaction: %v", err)
@@ -1817,9 +1834,10 @@ func assertIAMAuthorizationCatalog(
 			TenantID:   iamv1.AccountID(fixture.TenantID),
 			Subject:    &iamv1.Subject{Type: iamv1.PrincipalUser, ID: iamv1.PrincipalID(fixture.Administrator)},
 			Action:     action,
-			Resource:   iamv1.ResourceReference{Kind: resourceKind, ID: fmt.Sprintf("resource-catalog-%d", index)},
+			Resource:   request.Resource,
 			RequestID:  requestID,
 			DecidedAt:  transactionTime.UTC(),
+			Profile:    &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
 		}
 		if iamv1.IsPlatformAction(action) {
 			decision.TenantID, decision.InstallationID = "", fixture.InstallationID
@@ -1854,16 +1872,17 @@ func assertIAMAuthorizationCatalog(
 		event.Target.ID = decisionID
 		event.Result = auditv1.ResultAllowed
 		event.RequestID = requestID
+		event.CorrelationID = request.CorrelationID
 		event.OccurredAt = transactionTime.UTC()
 		if action == iamv1.ActionPaaSExecutionTargetRegister {
 			historicalDecision, historicalEvent = decision, event
 		}
 		_, err = tx.Exec(
 			ctx,
-			"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb)",
+			"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb,2)",
 			string(fixture.TenantID),
 			actorID,
-			authorityJSON(t, decision),
+			authorityJSON(t, map[string]any{"request": request, "decision": decision}),
 			authorityJSON(t, event),
 			string(evidence),
 			string(boundary),
@@ -1876,7 +1895,7 @@ func assertIAMAuthorizationCatalog(
 			t.Fatalf("commit IAM authorization action %q: %v", action, err)
 		}
 		var matches bool
-		if err := admin.QueryRow(ctx, `SELECT document=$3::jsonb AND policy_evidence=$4::jsonb AND boundary_evidence=$5::jsonb
+		if err := admin.QueryRow(ctx, `SELECT contract_version=2 AND document=$3::jsonb AND policy_evidence=$4::jsonb AND boundary_evidence=$5::jsonb
 			FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, string(fixture.TenantID), decisionID,
 			authorityJSON(t, decision), string(evidence), string(boundary)).Scan(&matches); err != nil || !matches {
 			t.Fatalf("persisted catalog decision lost its exact policy evidence: %v", err)
@@ -1919,12 +1938,20 @@ func assertIAMAuthorizationCatalog(
 				decision.Reason, decision.TenantID, decision.InstallationID, decision.Subject = iamv1.DecisionDenied, "", "", nil
 				event.Result, evidence = auditv1.ResultDenied, json.RawMessage(`[]`)
 			}
-			if iamv1.ValidateAuthorizationDecision(decision) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil {
+			if iamv1.ValidateLegacyAuthorizationDecision(decision) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil {
 				_ = tx.Rollback(ctx)
 				t.Fatal("retired action fixture is not a valid historical document")
 			}
-			_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb)",
-				string(fixture.TenantID), fixture.Administrator, authorityJSON(t, decision), authorityJSON(t, event), string(evidence), string(boundary))
+			// A fully bound envelope still cannot register a retired action by
+			// borrowing the current IAM profile. No missing-field shortcut here.
+			request, err := iamv1.NewAuthorizationRequest(iamv1.ActionIAMUserRead, iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: "retired-target"}, iamv1.AuthorizationResourceInstance, "", decision.RequestID, event.CorrelationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Action, request.Resource = decision.Action, decision.Resource
+			decision.Profile, decision.ResourceMode, decision.CorrelationID = &request.Profile, request.ResourceMode, request.CorrelationID
+			_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,2)",
+				string(fixture.TenantID), fixture.Administrator, authorityJSON(t, map[string]any{"request": request, "decision": decision}), authorityJSON(t, event), string(evidence), string(boundary))
 			_ = tx.Rollback(ctx)
 			assertAuthorityPostgresCode(t, err, "22023")
 		}
@@ -1938,8 +1965,8 @@ func assertIAMAuthorizationCatalog(
 	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.authorization_decisions").Scan(&decisionCount); err != nil {
 		t.Fatalf("count stored IAM authorization decisions: %v", err)
 	}
-	if decisionCount != len(iamv1.AllActions()) {
-		t.Fatalf("stored IAM authorization decisions=%d want=%d", decisionCount, len(iamv1.AllActions()))
+	if decisionCount != len(requests) {
+		t.Fatalf("stored IAM authorization decisions=%d want=%d", decisionCount, len(requests))
 	}
 
 	transaction, err := iamAPI.Begin(ctx)
@@ -1976,12 +2003,18 @@ func assertIAMAuthorizationCatalog(
 	event.Result = auditv1.ResultAllowed
 	event.RequestID = decision.RequestID
 	event.OccurredAt = databaseTime.UTC()
+	request, err := iamv1.NewAuthorizationRequest(decision.Action, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: decision.Resource.ID}, iamv1.AuthorizationResourceInstance, "", decision.RequestID, event.CorrelationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Resource = decision.Resource
+	decision.Profile, decision.ResourceMode, decision.CorrelationID = &request.Profile, request.ResourceMode, request.CorrelationID
 	_, err = transaction.Exec(
 		ctx,
-		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb)",
+		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb,2)",
 		string(fixture.TenantID),
 		fixture.Administrator,
-		authorityJSON(t, decision),
+		authorityJSON(t, map[string]any{"request": request, "decision": decision}),
 		authorityJSON(t, event),
 		string(tenantEvidence),
 		string(tenantBoundary),
@@ -2010,14 +2043,19 @@ func assertIAMAuthorizationCatalog(
 		decision.Resource.Kind = iamv1.ResourceExecutionTarget
 		decision.TenantID, decision.InstallationID = "", fixture.InstallationID
 		decision.DecidedAt, event.OccurredAt = databaseTime.UTC(), databaseTime.UTC()
+		request, err := iamv1.NewAuthorizationRequest(decision.Action, decision.Resource, iamv1.AuthorizationResourceInstance, "", decision.RequestID, event.CorrelationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision.Profile, decision.ResourceMode, decision.CorrelationID = &request.Profile, request.ResourceMode, request.CorrelationID
 		if attack == "mixed authority" {
 			decision.TenantID = iamv1.AccountID(fixture.TenantID)
 		}
 		if attack == "wrong installation" {
 			decision.InstallationID = "installation-other"
 		}
-		_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb)",
-			string(fixture.TenantID), fixture.Administrator, authorityJSON(t, decision), authorityJSON(t, event), string(platformEvidence), string(notApplicableBoundary))
+		_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,2)",
+			string(fixture.TenantID), fixture.Administrator, authorityJSON(t, map[string]any{"request": request, "decision": decision}), authorityJSON(t, event), string(platformEvidence), string(notApplicableBoundary))
 		_ = tx.Rollback(ctx)
 		code := "22023"
 		if attack == "revoked platform attachment" {

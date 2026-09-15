@@ -195,7 +195,7 @@ RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_te
 DECLARE result jsonb;
 BEGIN
     PERFORM iam.assert_group_actor(tenant,actor);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group.list','ACCOUNT',tenant);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group.list','ACCOUNT',tenant,'INSTANCE',NULL);
     IF COALESCE(after_id,'')<>'' AND after_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='group page is invalid';
     END IF;
@@ -210,7 +210,7 @@ RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_te
 DECLARE result jsonb;
 BEGIN
     PERFORM iam.assert_group_actor(tenant,actor);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group.read','GROUP',group_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group.read','GROUP',group_id,'INSTANCE',NULL);
     result := iam.group_access_snapshot(tenant,group_id);
     IF result IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='group is unavailable'; END IF;
     RETURN result;
@@ -226,7 +226,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='group input is invalid';
     END IF;
     PERFORM iam.assert_group_actor(tenant,actor);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group.create','ACCOUNT',tenant);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group.create','ACCOUNT',tenant,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.group.created','GROUP',group_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='group decision correlation is invalid'; END IF;
@@ -258,7 +258,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='group update input is invalid';
     END IF;
     PERFORM iam.assert_group_actor(tenant,actor);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group.update','GROUP',group_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group.update','GROUP',group_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.group.updated','GROUP',group_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='group decision correlation is invalid'; END IF;
@@ -289,7 +289,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='group deletion input is invalid';
     END IF;
     PERFORM iam.assert_group_actor(tenant,actor);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group.delete','GROUP',group_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group.delete','GROUP',group_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.group.deleted','GROUP',group_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='group decision correlation is invalid'; END IF;
@@ -333,7 +333,7 @@ RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_te
 DECLARE result jsonb;
 BEGIN
     PERFORM iam.assert_group_actor(tenant,actor);
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group-membership.list','GROUP',group_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group-membership.list','GROUP',group_id,'INSTANCE',NULL);
     PERFORM 1 FROM iam.groups WHERE tenant_id=tenant AND id=group_id AND deleted_at IS NULL FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='group is unavailable'; END IF;
     IF COALESCE(after_id,'')<>'' AND after_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
@@ -361,7 +361,7 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='membership user is unavailable'; END IF;
     PERFORM 1 FROM iam.groups WHERE tenant_id=tenant AND id=group_id AND deleted_at IS NULL FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='membership group is unavailable'; END IF;
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group-membership.create','GROUP',group_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group-membership.create','GROUP',group_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.group-membership.created','GROUP_MEMBERSHIP',membership_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='membership decision correlation is invalid'; END IF;
@@ -398,7 +398,7 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='membership group is unavailable'; END IF;
     SELECT m.* INTO stored FROM iam.group_memberships AS m WHERE m.tenant_id=tenant AND m.id=membership_id AND m.group_id=remove_group_membership.group_id FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='membership is unavailable'; END IF;
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group-membership.remove','GROUP_MEMBERSHIP',membership_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.group-membership.remove','GROUP_MEMBERSHIP',membership_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(event,tenant,'iam.group-membership.removed','GROUP_MEMBERSHIP',membership_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,actor,event);
     IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='membership decision correlation is invalid'; END IF;

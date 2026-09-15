@@ -212,7 +212,8 @@ func ValidateRevocation(value Revocation) error {
 
 func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	var problems []error
-	if !knownAction(value.Action) {
+	profile, known := LookupAuthorizationProfile(value.Profile.Product)
+	if !known || CheckAuthorizationProfileTarget(profile, value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil {
 		problems = append(problems, errors.New("authorization action is invalid"))
 	}
 	problems = append(problems,
@@ -223,15 +224,47 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	return errors.Join(problems...)
 }
 
-// ValidateAuthorizationDecision validates immutable evidence, including exact
-// published retired actions. It does not admit a new authorization request;
-// that boundary must use ValidateAuthorizationRequest and the current catalog.
+// ValidateAuthorizationDecision is the current response contract. Historical
+// loaders must first authenticate the stored row's contract version and use the
+// explicit frozen-profile or legacy validator, never infer it from missing JSON.
 func ValidateAuthorizationDecision(value AuthorizationDecision) error {
-	var problems []error
-	definition, known := lookupRecordedActionDefinition(value.Action)
-	if !known || value.Resource.Kind != definition.ResourceKind {
-		problems = append(problems, errors.New("recorded action and resource kind are invalid"))
+	if value.Profile == nil {
+		return errors.New("authorization decision has no product binding")
 	}
+	profile, known := LookupAuthorizationProfile(value.Profile.Product)
+	if !known {
+		return errors.New("authorization decision product is not current")
+	}
+	return ValidateAuthorizationDecisionForProfile(value, profile)
+}
+
+// This validates immutable evidence against explicit declaration bytes; it does
+// not establish that a producer or caller is entitled to select that profile.
+func ValidateAuthorizationDecisionForProfile(value AuthorizationDecision, profile AuthorizationProfile) error {
+	if value.Profile == nil || CheckAuthorizationProfileTarget(profile, *value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil ||
+		ValidateID("correlationId", value.CorrelationID) != nil {
+		return errors.New("authorization decision product binding is invalid")
+	}
+	for _, action := range profile.Actions {
+		if action.Action == value.Action {
+			return validateAuthorizationDecision(value, authorizationProfileActionDefinition(profile, action))
+		}
+	}
+	return errors.New("authorization decision action is not declared")
+}
+
+// Legacy syntax is only usable for an existing immutable row whose protected
+// database metadata says contract1. This function alone is not legacy admission.
+func ValidateLegacyAuthorizationDecision(value AuthorizationDecision) error {
+	definition, known := lookupRecordedActionDefinition(value.Action)
+	if !known || value.Resource.Kind != definition.ResourceKind || value.Profile != nil || value.ResourceMode != "" || value.CollectionUsage != "" || value.CorrelationID != "" {
+		return errors.New("legacy decision contains an invalid or current binding")
+	}
+	return validateAuthorizationDecision(value, definition)
+}
+
+func validateAuthorizationDecision(value AuthorizationDecision, definition ActionDefinition) error {
+	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "AuthorizationDecision" {
 		problems = append(problems, errors.New("authorization decision type metadata is invalid"))
 	}
@@ -687,11 +720,11 @@ func ValidateCurrentIdentity(value CurrentIdentity) error {
 		struct {
 			Action   Action
 			Resource ResourceReference
-		}{ActionIAMAccountCreate, ResourceReference{Kind: ResourceAccount, ID: "accounts"}},
+		}{ActionIAMAccountCreate, ResourceReference{Kind: ResourceAccount, ID: "collection"}},
 		struct {
 			Action   Action
 			Resource ResourceReference
-		}{ActionIAMAccountRead, ResourceReference{Kind: ResourceAccount, ID: "accounts"}},
+		}{ActionIAMAccountRead, ResourceReference{Kind: ResourceAccount, ID: "collection"}},
 		struct {
 			Action   Action
 			Resource ResourceReference

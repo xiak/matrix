@@ -614,6 +614,33 @@ CREATE TABLE IF NOT EXISTS iam.session_index (
     )
 );
 
+-- Exact archived meaning is a stored decision invariant, independent of heads.
+-- This private predicate does not authenticate a producer or grant permission.
+CREATE OR REPLACE FUNCTION iam.authorization_decision_profile_matches(decision jsonb)
+RETURNS boolean LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $function$
+    SELECT COALESCE(EXISTS(
+        SELECT 1 FROM iam.authorization_profiles archive
+        CROSS JOIN LATERAL jsonb_array_elements(archive.canonical_document::jsonb->'actions') action
+        CROSS JOIN LATERAL jsonb_array_elements(action->'resourceShapes') shape
+        WHERE decision->'profile'=jsonb_build_object('product',archive.product,'revision',archive.revision,'contentDigest',archive.content_digest)
+          AND action->'action'=decision->'action'
+          AND action->'resourceKind'=decision#>'{resource,kind}'
+          AND (CASE WHEN decision->'allowed'='true'::jsonb THEN
+            CASE WHEN action->>'scope'='INSTALLATION' THEN
+              decision ? 'installationId' AND NOT decision ? 'tenantId' AND decision#>>'{subject,type}'='USER'
+            WHEN action->>'scope' IN ('TENANT','INSTALLATION_PROBE') THEN
+              decision ? 'tenantId' AND NOT decision ? 'installationId'
+            ELSE false END
+          ELSE decision->'allowed'='false'::jsonb AND NOT decision ?| ARRAY['tenantId','installationId','subject'] END)
+          AND shape->'mode'=decision->'resourceMode'
+          AND (CASE WHEN shape->>'mode'='INSTANCE' THEN NOT decision ? 'collectionUsage'
+               WHEN shape->>'mode'='COLLECTION' THEN decision#>>'{resource,id}'='collection'
+                 AND decision->'collectionUsage'=shape->'collectionUsage'
+                 AND decision->>'collectionUsage' IN ('COLLECTION_LIST','COLLECTION_CREATE')
+               ELSE false END)
+    ),false)
+$function$;
+
 CREATE TABLE IF NOT EXISTS iam.authorization_decisions (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
@@ -646,6 +673,73 @@ CREATE TABLE IF NOT EXISTS iam.authorization_decisions (
 -- current permissions. Every new record must use the evidence-bound function.
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS policy_evidence jsonb;
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS boundary_evidence jsonb;
+-- No default, fallback, or repeat-time backfill. Only pre-cutover rows enter
+-- contract1, and the enclosing transaction must validate every complete row.
+-- ACCESS EXCLUSIVE plus transactional DDL exposes no mutable/RLS-free window.
+DO $decision_contract_cutover$
+BEGIN
+    LOCK TABLE iam.authorization_decisions IN ACCESS EXCLUSIVE MODE;
+    IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute
+        WHERE attrelid='iam.authorization_decisions'::regclass AND attname='contract_version' AND NOT attisdropped) THEN
+        ALTER TABLE iam.authorization_decisions NO FORCE ROW LEVEL SECURITY;
+        DROP TRIGGER IF EXISTS authorization_decisions_are_immutable ON iam.authorization_decisions;
+        ALTER TABLE iam.authorization_decisions ADD COLUMN contract_version integer;
+        UPDATE iam.authorization_decisions SET contract_version=1;
+        ALTER TABLE iam.authorization_decisions ALTER COLUMN contract_version SET NOT NULL;
+        ALTER TABLE iam.authorization_decisions FORCE ROW LEVEL SECURITY;
+    END IF;
+END $decision_contract_cutover$;
+ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS profile_product text COLLATE "C";
+ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS profile_revision bigint;
+ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS profile_content_digest text COLLATE "C";
+ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS resource_mode text COLLATE "C";
+ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS collection_usage text COLLATE "C";
+ALTER TABLE iam.authorization_decisions DROP CONSTRAINT IF EXISTS authorization_decision_contract_valid;
+ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_contract_valid CHECK (COALESCE(
+    contract_version IN (1,2)
+    AND jsonb_typeof(document)='object'
+    AND document ?& ARRAY['apiVersion','kind','id','allowed','reason','action','resource','requestId','decidedAt']
+    AND (document-ARRAY['apiVersion','kind','id','allowed','reason','action','resource','requestId','decidedAt',
+        'tenantId','installationId','subject','profile','resourceMode','collectionUsage','correlationId'])='{}'::jsonb
+    AND jsonb_typeof(document->'allowed')='boolean' AND document->>'allowed'=allowed::text
+    AND jsonb_typeof(document->'apiVersion')='string' AND jsonb_typeof(document->'kind')='string'
+    AND jsonb_typeof(document->'id')='string' AND jsonb_typeof(document->'action')='string'
+    AND jsonb_typeof(document->'requestId')='string' AND jsonb_typeof(document->'reason')='string'
+    AND document->>'reason'=CASE WHEN allowed THEN 'ALLOWED' ELSE 'DENIED' END
+    AND document->>'apiVersion'='iam.matrix.xiak.com/v1' AND document->>'kind'='AuthorizationDecision'
+    AND document->>'id'=id AND document->>'action'=action_name AND document->>'requestId'=request_id
+    AND jsonb_typeof(document->'resource')='object' AND document->'resource'=jsonb_build_object('kind',target_kind,'id',target_id)
+    AND jsonb_typeof(document->'decidedAt')='string'
+    AND document->>'decidedAt' COLLATE "C" ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}([.][0-9]{1,6})?Z$'
+    AND pg_input_is_valid(document->>'decidedAt','timestamptz')
+    AND (document->>'decidedAt')::timestamptz=decided_at
+    AND (CASE WHEN allowed THEN
+        jsonb_typeof(document->'subject')='object'
+        AND document->'subject' ?& ARRAY['type','id']
+        AND ((document->'subject')-ARRAY['type','id'])='{}'::jsonb
+        AND document#>>'{subject,id}'=principal_id
+        AND jsonb_typeof(document#>'{subject,id}')='string'
+        AND jsonb_typeof(document#>'{subject,type}')='string'
+        AND document#>>'{subject,type}' IN ('USER','SERVICE_ACCOUNT')
+        AND ((document ? 'tenantId' AND NOT document ? 'installationId' AND jsonb_typeof(document->'tenantId')='string' AND document->>'tenantId'=tenant_id)
+          OR (document ? 'installationId' AND NOT document ? 'tenantId'
+            AND jsonb_typeof(document->'installationId')='string' AND document->>'installationId' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'))
+      ELSE NOT document ?| ARRAY['tenantId','installationId','subject'] END)
+    AND (CASE WHEN contract_version=1 THEN
+        profile_product IS NULL AND profile_revision IS NULL AND profile_content_digest IS NULL AND resource_mode IS NULL AND collection_usage IS NULL
+        AND NOT document ?| ARRAY['profile','resourceMode','collectionUsage','correlationId']
+      WHEN contract_version=2 THEN
+        profile_product IS NOT NULL AND profile_revision IS NOT NULL AND profile_content_digest IS NOT NULL AND resource_mode IS NOT NULL
+        AND document ?& ARRAY['profile','resourceMode','correlationId']
+        AND document->'profile'=jsonb_build_object('product',profile_product,'revision',profile_revision,'contentDigest',profile_content_digest)
+        AND document->>'resourceMode'=resource_mode
+        AND jsonb_typeof(document->'correlationId')='string'
+        AND document->>'correlationId' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (CASE WHEN resource_mode='INSTANCE' THEN collection_usage IS NULL AND NOT document ? 'collectionUsage'
+             WHEN resource_mode='COLLECTION' THEN collection_usage IS NOT NULL AND document->>'collectionUsage'=collection_usage
+             ELSE false END)
+        AND iam.authorization_decision_profile_matches(document)
+      ELSE false END),false));
 ALTER TABLE iam.authorization_decisions DROP CONSTRAINT IF EXISTS authorization_boundary_evidence_valid;
 ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_boundary_evidence_valid CHECK (
     boundary_evidence IS NULL OR jsonb_typeof(boundary_evidence)='object'
@@ -1110,6 +1204,51 @@ BEGIN
 END
 $function$;
 
+-- Shared private ABI/row-protection verification, valid even before bootstrap.
+CREATE OR REPLACE FUNCTION iam.authorization_decision_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS recorder
+                WHERE recorder.oid=to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer)')
+                  AND recorder.prosecdef AND recorder.proowner='matrix_iam_owner'::regrole
+                  AND recorder.proargnames[3]='input_authorization' AND recorder.proargnames[7]='input_contract_version'
+                  AND recorder.pronargdefaults=0)
+           AND to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb)') IS NULL
+           AND (SELECT count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+                WHERE n.nspname='iam' AND p.proname='record_authorization')=1
+           AND NOT EXISTS(SELECT 1 FROM (VALUES
+                ('contract_version','integer'::regtype,true),('profile_product','text'::regtype,false),
+                ('profile_revision','bigint'::regtype,false),('profile_content_digest','text'::regtype,false),
+                ('resource_mode','text'::regtype,false),('collection_usage','text'::regtype,false)) expected(name,type_oid,required)
+                LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid='iam.authorization_decisions'::regclass AND a.attname=expected.name AND NOT a.attisdropped
+                WHERE a.attnum IS NULL OR a.atttypid<>expected.type_oid OR a.attnotnull<>expected.required OR a.atthasdef)
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid='iam.authorization_decisions'::regclass
+                AND c.conname='authorization_decision_contract_valid' AND c.contype='c' AND c.convalidated)
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc evidence
+                WHERE evidence.oid=to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)')
+                  AND evidence.prosecdef AND evidence.proowner='matrix_iam_owner'::regrole AND evidence.proretset
+                  AND cardinality(evidence.proallargtypes)=10
+                  AND evidence.proallargtypes[6:10]=ARRAY['text'::regtype::oid,'jsonb'::regtype::oid,'jsonb'::regtype::oid,'text'::regtype::oid,'integer'::regtype::oid]
+                  AND evidence.proargnames[6:10]=ARRAY['installation_id','event_document','decision_document','verifier_principal_id','decision_contract_version'])
+           AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc p CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) permission
+                WHERE p.oid IN (to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer)'),to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)'))
+                  AND (permission.grantee NOT IN (p.proowner,'matrix_iam_api'::regrole)
+                    OR (permission.grantee='matrix_iam_api'::regrole AND (permission.is_grantable OR permission.privilege_type<>'EXECUTE'))))
+           AND has_function_privilege('matrix_iam_api','iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer)','EXECUTE')
+           AND has_function_privilege('matrix_iam_api','iam.read_audit_evidence(text,text,text,text,jsonb)','EXECUTE')
+           AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc p
+                WHERE p.oid IN (to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer)'),to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)'))
+                  AND NOT COALESCE((SELECT count(*)=1 AND bool_and(
+                    (SELECT array_agg(parse_ident(btrim(component.name),true) ORDER BY component.position)
+                     FROM unnest(string_to_array(substr(config.setting,strpos(config.setting,'=')+1),','))
+                       WITH ORDINALITY AS component(name,position))=ARRAY[ARRAY['pg_catalog'],ARRAY['pg_temp']])
+                    FROM unnest(p.proconfig) AS config(setting) WHERE split_part(config.setting,'=',1)='search_path'),false))
+           AND to_regprocedure('iam.assert_allowed_decision(text,text,text,text,text,text)') IS NULL
+           AND to_regprocedure('iam.assert_allowed_decision(text,text,text,text,text,text,text,text)') IS NOT NULL
+           AND (SELECT count(*) FROM pg_catalog.pg_trigger protection WHERE protection.tgrelid='iam.authorization_decisions'::regclass
+                AND protection.tgname IN ('authorization_decisions_are_immutable','authorization_decisions_cannot_be_truncated')
+                AND protection.tgenabled='A' AND NOT protection.tgisinternal AND protection.tgfoid=to_regprocedure('iam.reject_policy_history_change()'))=2
+$function$;
+
 CREATE OR REPLACE FUNCTION iam.readiness()
 RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
 LANGUAGE plpgsql
@@ -1166,9 +1305,7 @@ BEGIN
                 WHERE directory.oid=to_regprocedure('iam.list_policies(text,text,text,text)')
                   AND directory.prorettype='jsonb'::regtype AND NOT directory.proretset
                   AND directory.prosecdef AND directory.proowner='matrix_iam_owner'::regrole)
-           AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS recorder
-                WHERE recorder.oid=to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb)')
-                  AND recorder.prosecdef AND recorder.proowner='matrix_iam_owner'::regrole)
+           AND iam.authorization_decision_contract_ready()
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS lookup
                 WHERE lookup.oid=to_regprocedure('iam.lookup_session(text)')
                   AND cardinality(lookup.proallargtypes)=24 AND lookup.proargnames[23:24]=ARRAY['policies','boundary']
@@ -1262,7 +1399,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           20::bigint,
+           21::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1671,13 +1808,15 @@ $function$;
 
 DROP FUNCTION IF EXISTS iam.record_authorization(text,text,jsonb,jsonb);
 DROP FUNCTION IF EXISTS iam.record_authorization(text,text,jsonb,jsonb,jsonb);
+DROP FUNCTION IF EXISTS iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb);
 CREATE OR REPLACE FUNCTION iam.record_authorization(
     submitted_tenant_id text,
     submitted_principal_id text,
-    submitted_decision jsonb,
+    input_authorization jsonb,
     submitted_audit_event jsonb,
     submitted_policy_evidence jsonb,
-    submitted_boundary_evidence jsonb
+    submitted_boundary_evidence jsonb,
+    input_contract_version integer
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -1693,7 +1832,49 @@ DECLARE
     platform_action boolean;
     evidence jsonb;
     previous_attachment text COLLATE "C" := '';
+    submitted_request jsonb;
+    submitted_decision jsonb;
+    binding_key text;
 BEGIN
+    IF input_contract_version IS DISTINCT FROM 2 THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization contract version is invalid';
+    END IF;
+    IF jsonb_typeof(input_authorization) IS DISTINCT FROM 'object'
+        OR NOT input_authorization ?& ARRAY['request','decision']
+        OR (input_authorization-ARRAY['request','decision'])<>'{}'::jsonb
+        OR jsonb_typeof(input_authorization->'request') IS DISTINCT FROM 'object'
+        OR jsonb_typeof(input_authorization->'decision') IS DISTINCT FROM 'object' THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization command is invalid';
+    END IF;
+    submitted_request := input_authorization->'request';
+    submitted_decision := input_authorization->'decision';
+    IF NOT submitted_request ?& ARRAY['action','resource','requestId','correlationId','profile','resourceMode']
+        OR (submitted_request-ARRAY['action','resource','requestId','correlationId','profile','resourceMode','collectionUsage'])<>'{}'::jsonb THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization request is invalid';
+    END IF;
+    FOREACH binding_key IN ARRAY ARRAY['action','resource','requestId','correlationId','profile','resourceMode','collectionUsage'] LOOP
+        IF (submitted_request ? binding_key)<>(submitted_decision ? binding_key)
+            OR submitted_request->binding_key IS DISTINCT FROM submitted_decision->binding_key THEN
+            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization request binding differs';
+        END IF;
+    END LOOP;
+    FOREACH binding_key IN ARRAY ARRAY['action','requestId','correlationId','resourceMode'] LOOP
+        IF jsonb_typeof(submitted_request->binding_key) IS DISTINCT FROM 'string' THEN
+            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization request binding is invalid';
+        END IF;
+    END LOOP;
+    IF jsonb_typeof(submitted_request->'profile') IS DISTINCT FROM 'object'
+        OR COALESCE(submitted_request->>'correlationId','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization request profile is invalid';
+    END IF;
+    -- Lock current selection for the complete transaction, not merely lookup.
+    PERFORM * FROM iam.current_authorization_profiles();
+    IF NOT EXISTS(SELECT 1 FROM iam.authorization_profile_heads head
+        JOIN iam.authorization_profiles archive ON archive.product=head.product AND archive.revision=head.revision
+        WHERE submitted_request->'profile'=jsonb_build_object('product',archive.product,'revision',archive.revision,'contentDigest',archive.content_digest))
+        OR NOT iam.authorization_decision_profile_matches(submitted_decision) THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization profile or target is not current';
+    END IF;
     IF submitted_tenant_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_principal_id COLLATE "C"
@@ -1703,11 +1884,11 @@ BEGIN
        OR jsonb_typeof(submitted_decision->'allowed') <> 'boolean'
        OR NOT (submitted_decision ?& ARRAY[
             'apiVersion', 'kind', 'id', 'allowed', 'reason', 'action',
-            'resource', 'requestId', 'decidedAt'
+            'resource', 'requestId', 'decidedAt', 'profile', 'resourceMode', 'correlationId'
        ])
        OR (submitted_decision - ARRAY[
             'apiVersion', 'kind', 'id', 'allowed', 'reason', 'tenantId',
-            'subject', 'installationId', 'action', 'resource', 'requestId', 'decidedAt'
+            'subject', 'installationId', 'action', 'resource', 'requestId', 'decidedAt', 'profile', 'resourceMode', 'collectionUsage', 'correlationId'
        ]) <> '{}'::jsonb
        OR NOT ((submitted_decision->'resource') ?& ARRAY['kind', 'id'])
        OR ((submitted_decision->'resource') - ARRAY['kind', 'id']) <> '{}'::jsonb
@@ -1865,6 +2046,8 @@ BEGIN
             submitted_decision->>'id'
        OR submitted_audit_event->>'requestId' IS DISTINCT FROM
             submitted_decision->>'requestId'
+       OR submitted_audit_event->>'correlationId' IS DISTINCT FROM
+            submitted_decision->>'correlationId'
        OR submitted_audit_event#>>'{actor,type}' IS DISTINCT FROM actor_type
        OR submitted_audit_event#>>'{actor,id}' IS DISTINCT FROM
             submitted_principal_id THEN
@@ -1875,7 +2058,8 @@ BEGIN
 
     INSERT INTO iam.authorization_decisions (
         tenant_id, id, principal_id, allowed, action_name, target_kind,
-        target_id, request_id, decided_at, document, policy_evidence, boundary_evidence
+        target_id, request_id, decided_at, document, policy_evidence, boundary_evidence,
+        contract_version, profile_product, profile_revision, profile_content_digest, resource_mode, collection_usage
     ) VALUES (
         submitted_tenant_id,
         submitted_decision->>'id',
@@ -1888,7 +2072,13 @@ BEGIN
         effective_now,
         submitted_decision,
         submitted_policy_evidence,
-        submitted_boundary_evidence
+        submitted_boundary_evidence,
+        2,
+        submitted_decision#>>'{profile,product}',
+        (submitted_decision#>>'{profile,revision}')::bigint,
+        submitted_decision#>>'{profile,contentDigest}',
+        submitted_decision->>'resourceMode',
+        submitted_decision->>'collectionUsage'
     );
     INSERT INTO iam.audit_outbox (
         tenant_id, event_id, event_document, next_attempt_at,
@@ -1904,13 +2094,16 @@ BEGIN
 END
 $function$;
 
+DROP FUNCTION IF EXISTS iam.assert_allowed_decision(text,text,text,text,text,text);
 CREATE OR REPLACE FUNCTION iam.assert_allowed_decision(
     submitted_tenant_id text,
     submitted_actor_principal_id text,
     submitted_decision_id text,
     submitted_action text,
     submitted_target_kind text,
-    submitted_target_id text
+    submitted_target_id text,
+    submitted_resource_mode text,
+    submitted_collection_usage text
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -1942,6 +2135,13 @@ BEGIN
            AND decision.action_name = submitted_action
            AND decision.target_kind = submitted_target_kind
            AND decision.target_id = submitted_target_id
+           AND decision.contract_version = 2
+           AND EXISTS(SELECT 1 FROM iam.authorization_profile_heads head
+             JOIN iam.authorization_profiles archive ON archive.product=head.product AND archive.revision=head.revision
+             WHERE head.product=decision.profile_product AND head.revision=decision.profile_revision
+               AND archive.content_digest=decision.profile_content_digest)
+           AND decision.resource_mode = submitted_resource_mode
+           AND decision.collection_usage IS NOT DISTINCT FROM submitted_collection_usage
            AND decision.decided_at = transaction_timestamp()
     ) THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'authorization decision is unavailable';
@@ -2188,7 +2388,7 @@ BEGIN
         PERFORM iam.assert_allowed_decision(
             submitted_tenant_id, submitted_actor_principal_id,
             submitted_decision_id, 'iam.session.revoke', 'SESSION', submitted_session_id
-        );
+        ,'INSTANCE',NULL);
         IF submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM submitted_decision_id THEN
             RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'session decision correlation is invalid';
         END IF;
@@ -2252,7 +2452,7 @@ BEGIN
     PERFORM iam.assert_allowed_decision(
         submitted_tenant_id, submitted_actor_principal_id,
         submitted_decision_id, 'iam.user.create', 'ACCOUNT', submitted_tenant_id
-    );
+    ,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(
         submitted_audit_event, submitted_tenant_id,
         'iam.user.created', 'USER', submitted_principal_id, 'SUCCEEDED'
@@ -2356,10 +2556,10 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy directory installation is unavailable';
         END IF;
         PERFORM iam.assert_allowed_decision(submitted_tenant_id,submitted_actor_principal_id,submitted_decision_id,
-            'iam.platform-policy.list','INSTALLATION',installation);
+            'iam.platform-policy.list','INSTALLATION',installation,'INSTANCE',NULL);
     ELSE
         PERFORM iam.assert_allowed_decision(submitted_tenant_id,submitted_actor_principal_id,submitted_decision_id,
-            'iam.policy.list','ACCOUNT',submitted_tenant_id);
+            'iam.policy.list','ACCOUNT',submitted_tenant_id,'INSTANCE',NULL);
     END IF;
     SELECT COALESCE(jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
         'apiVersion','iam.matrix.xiak.com/v1','kind','Policy','id',p.id,'management',p.management,
@@ -2433,7 +2633,7 @@ BEGIN
     event_action := CASE policy.authority_scope WHEN 'INSTALLATION' THEN 'iam.platform-policy-attachment.created'
                     ELSE 'iam.policy-attachment.created' END;
     PERFORM iam.assert_allowed_decision(submitted_tenant_id,submitted_actor_principal_id,submitted_decision_id,
-        action_name,submitted_target_kind,submitted_target_id);
+        action_name,submitted_target_kind,submitted_target_id,'INSTANCE',NULL);
     PERFORM iam.assert_audit_event(submitted_audit_event,submitted_tenant_id,event_action,'POLICY_ATTACHMENT',submitted_attachment_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_actor_principal_id,submitted_audit_event);
     IF submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM submitted_decision_id THEN
@@ -2503,7 +2703,7 @@ BEGIN
     event_action := CASE stored.authority_scope WHEN 'INSTALLATION' THEN 'iam.platform-policy-attachment.revoked'
                     ELSE 'iam.policy-attachment.revoked' END;
     PERFORM iam.assert_allowed_decision(submitted_tenant_id,submitted_actor_principal_id,submitted_decision_id,
-        action_name,'POLICY_ATTACHMENT',submitted_attachment_id);
+        action_name,'POLICY_ATTACHMENT',submitted_attachment_id,'INSTANCE',NULL);
     IF stored.target_kind='USER' AND stored.policy_id='system.account-administrator' AND EXISTS (
         SELECT 1 FROM iam.account_roots WHERE account_id=submitted_tenant_id AND principal_id=stored.target_id
     ) THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='primary authority is protected'; END IF;
@@ -2716,7 +2916,7 @@ GRANT EXECUTE ON FUNCTION iam.lookup_service(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_service_policies(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_password(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.record_authorization(
-    text, text, jsonb, jsonb, jsonb, jsonb
+    text, text, jsonb, jsonb, jsonb, jsonb, integer
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.change_password(
     text, text, text, text, jsonb, text, boolean

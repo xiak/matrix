@@ -48,7 +48,7 @@ func (service *Service) queryRecords(
 		subjectCredential,
 		requestID,
 		action,
-		iamv1.ResourceReference{Kind: iamv1.ResourceAuditRecord, ID: "records"},
+		iamv1.ResourceReference{Kind: iamv1.ResourceAuditRecord, ID: "collection"},
 	)
 	if err != nil {
 		return auditv1.RecordPage{}, err
@@ -176,7 +176,7 @@ func (service *Service) verifyChain(
 		subjectCredential,
 		requestID,
 		action,
-		iamv1.ResourceReference{Kind: iamv1.ResourceAuditChain, ID: "chain"},
+		iamv1.ResourceReference{Kind: iamv1.ResourceAuditChain, ID: "collection"},
 	)
 	if err != nil {
 		return auditv1.ChainVerification{}, err
@@ -288,15 +288,15 @@ func (service *Service) authorize(
 	action iamv1.Action,
 	resource iamv1.ResourceReference,
 ) (iamv1.AuthorizationDecision, error) {
-	request := iamv1.AuthorizationRequest{
-		Action: action, Resource: resource, RequestID: requestID, CorrelationID: requestID,
+	request, err := iamv1.NewAuthorizationRequest(action, resource, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList, requestID, requestID)
+	if err != nil {
+		return iamv1.AuthorizationDecision{}, ErrUnavailable
 	}
 	decision, err := service.iam.Authorize(ctx, subjectCredential, request)
 	if err != nil {
 		return iamv1.AuthorizationDecision{}, err
 	}
-	if iamv1.ValidateAuthorizationDecision(decision) != nil ||
-		decision.Action != action || decision.Resource != resource || decision.RequestID != requestID {
+	if iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil {
 		return iamv1.AuthorizationDecision{}, ErrUnavailable
 	}
 	if !decision.Allowed {

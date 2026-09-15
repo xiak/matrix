@@ -731,6 +731,7 @@ func (client *integrationIAM) Authorize(
 		Resource:   request.Resource,
 		RequestID:  request.RequestID,
 		DecidedAt:  client.now,
+		Profile:    &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
 	}
 	switch {
 	case secretEquals(credential, readerCredentialA):
@@ -769,6 +770,7 @@ func (client *integrationIAM) VerifyInstallation(
 		},
 		Action: request.Action, Resource: request.Resource,
 		RequestID: request.RequestID, DecidedAt: client.now,
+		Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
 	}, nil
 }
 

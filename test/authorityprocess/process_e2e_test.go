@@ -170,10 +170,28 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	revokeIAMPolicyAttachment(t, endpoint, primary.Credential, "bootstrap-platform-operator-binding", 1, "policy-upgrade-platform-revoke")
 	retired := loginIAM(t, endpoint, "retained.policy@organization-process", changedReaderPassword, "policy-upgrade-retired-login")
 	revokeIAMSession(t, endpoint, primary.Credential, retired.Session.ID, "policy-upgrade-session-revoke")
+	// Send the actual fixed binary its original public request, not a current
+	// request stripped by a production compatibility path.
+	legacyResponse := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "",
+		map[string]any{"action": "paas.application.create", "resource": map[string]string{"kind": "APPLICATION", "id": "collection"},
+			"requestId": "policy-upgrade-old-business", "correlationId": "policy-upgrade-old-business"},
+		map[string]string{"Matrix-Subject-Credential": primary.Credential})
+	var originalDecision iamv1.AuthorizationDecision
+	if legacyResponse.Status != http.StatusOK || json.Unmarshal(legacyResponse.Body, &originalDecision) != nil ||
+		iamv1.ValidateLegacyAuthorizationDecision(originalDecision) != nil || !originalDecision.Allowed || originalDecision.Subject == nil {
+		t.Fatal("old binary did not issue an original business decision")
+	}
+	oldFact := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "policy-upgrade-old-business-event",
+		TenantID: auditv1.TenantID(originalDecision.TenantID), Actor: auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(originalDecision.Subject.ID)},
+		IAMDecisionID: auditv1.DecisionID(originalDecision.ID), Action: auditv1.ActionPaaSApplicationCreated,
+		Target: auditv1.TargetReference{Kind: auditv1.TargetApplication, ID: "policy-upgrade-old-app"}, Result: auditv1.ResultSucceeded,
+		RequestDigest: "sha256:" + strings.Repeat("1", 64), RequestID: originalDecision.RequestID, CorrelationID: "policy-upgrade-old-business",
+		OperationID: "policy-upgrade-old-operation", OccurredAt: originalDecision.DecidedAt.Add(time.Microsecond)}
 	old.stop()
 	// Compare durable authority values, not SQL text or a generated schema
-	// inventory. Only the target-column name changes; seed replay may append a
-	// new immutable policy version but must preserve the old default pointer.
+	// inventory. Normalize only the renamed attachment target and columns absent
+	// from this actual schema8 source. Check those new columns separately below;
+	// the original decision document and policy evidence must remain byte-equal.
 	snapshot := func(targetColumn string) []byte {
 		t.Helper()
 		var state []byte
@@ -185,7 +203,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 			'principals',(SELECT jsonb_agg(to_jsonb(p) ORDER BY tenant_id,id) FROM iam.principals p),
 			'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.user_credentials c),
 			'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY tenant_id,id) FROM iam.sessions s),
-			'decisions',(SELECT jsonb_agg(to_jsonb(d) ORDER BY tenant_id,id) FROM iam.authorization_decisions d),
+			'decisions',(SELECT jsonb_agg(to_jsonb(d)-'boundary_evidence'-'contract_version'-'profile_product'-'profile_revision'-'profile_content_digest'-'resource_mode'-'collection_usage' ORDER BY tenant_id,id) FROM iam.authorization_decisions d),
 			'outbox',(SELECT jsonb_agg(to_jsonb(e) ORDER BY tenant_id,event_id) FROM iam.audit_outbox e))`, targetColumn).Scan(&state); err != nil {
 			t.Fatal("read retained policy authority")
 		}
@@ -217,12 +235,55 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	if err := unmigrated.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
 		t.Fatal("current IAM accepted an unmigrated policy database")
 	}
+	// Negative corruption fixture in this disposable database only. A real old
+	// row missing required content must abort the entire cutover, not acquire a
+	// legacy marker merely because its new wire fields are absent.
+	for _, expression := range []string{"document-'reason'", "jsonb_set(document,'{reason}','null'::jsonb)", "document||'{\"profile\":null}'::jsonb"} {
+		if _, err := admin.Exec(ctx, `BEGIN; ALTER TABLE iam.authorization_decisions DISABLE TRIGGER authorization_decisions_are_immutable;
+			UPDATE iam.authorization_decisions SET document=`+expression+` WHERE (tenant_id,id)=(SELECT tenant_id,id FROM iam.authorization_decisions ORDER BY tenant_id,id LIMIT 1)`); err != nil {
+			t.Fatal("install isolated incomplete old-decision fixture")
+		}
+		if err := iammigration.Up(ctx, admin); err == nil {
+			t.Fatal("incomplete old decision was admitted as historical authority")
+		}
+		if _, err := admin.Exec(ctx, "ROLLBACK"); err != nil {
+			t.Fatal("rollback incomplete old-decision fixture")
+		}
+		var originalShape bool
+		if err := admin.QueryRow(ctx, `SELECT schema_version=8 AND NOT EXISTS(SELECT 1 FROM pg_attribute
+			WHERE attrelid='iam.authorization_decisions'::regclass AND attname='contract_version' AND NOT attisdropped)
+			FROM iam.readiness()`).Scan(&originalShape); err != nil || !originalShape || !bytes.Equal(before, snapshot("principal_id")) {
+			t.Fatal("rejected historical cutover committed a marker or changed original history")
+		}
+	}
 	for range 2 {
 		if err := iammigration.Up(ctx, admin); err != nil {
 			t.Fatalf("upgrade actual schema8 policy data: %v", err)
 		}
-		if err := iammigration.Verify(ctx, admin); err != nil || !bytes.Equal(before, snapshot("target_id")) {
-			t.Fatal("group migration changed direct attachment, default policy, session, decision or outbox history")
+		if err := iammigration.Verify(ctx, admin); err != nil {
+			t.Fatalf("retained authority verification failed: %v", err)
+		}
+		after := snapshot("target_id")
+		if !bytes.Equal(before, after) {
+			var oldSections, newSections map[string]json.RawMessage
+			if json.Unmarshal(before, &oldSections) != nil || json.Unmarshal(after, &newSections) != nil {
+				t.Fatal("invalid retained authority snapshot")
+			}
+			for name, value := range oldSections {
+				if !bytes.Equal(value, newSections[name]) {
+					t.Errorf("migration changed retained authority section %s", name)
+				}
+			}
+			t.Fatal("migration changed original authority; sensitive values are not logged")
+		}
+		var legacyOnly bool
+		if err := admin.QueryRow(ctx, `SELECT count(*)>0 AND bool_and(contract_version=1
+			AND boundary_evidence IS NULL
+			AND profile_product IS NULL AND profile_revision IS NULL AND profile_content_digest IS NULL
+			AND resource_mode IS NULL AND collection_usage IS NULL
+			AND NOT document ?| ARRAY['profile','resourceMode','collectionUsage','correlationId'])
+			FROM iam.authorization_decisions`).Scan(&legacyOnly); err != nil || !legacyOnly {
+			t.Fatal("retained original decisions acquired a fabricated current profile")
 		}
 	}
 	obsolete := startChild(t, root, oldBinary, environment)
@@ -232,6 +293,13 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	}
 	for range 2 {
 		current := start(currentBinary)
+		proofResponse := performJSON(t, http.MethodPost, endpoint+"/v1/audit-producer:resolve", paasServiceCredential, iamv1.ResolveAuditProducerRequest{Event: oldFact})
+		var proof iamv1.AuditProducerAuthorization
+		_, expectedDigest, err := auditv1.CanonicalizeEvent(auditv1.SourcePaaS, oldFact)
+		if err != nil || proofResponse.Status != http.StatusOK || json.Unmarshal(proofResponse.Body, &proof) != nil ||
+			iamv1.ValidateAuditProducerAuthorization(proof) != nil || proof.ContentDigest != expectedDigest || proof.TenantID != originalDecision.TenantID {
+			t.Fatal("retained original business proof was reinterpreted or lost after restart")
+		}
 		identityResponse := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", member.Credential, nil)
 		var identity iamv1.CurrentIdentity
 		if identityResponse.Status != http.StatusOK || json.Unmarshal(identityResponse.Body, &identity) != nil || iamv1.ValidateCurrentIdentity(identity) != nil ||
@@ -796,7 +864,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 20, Audit: 13, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 21, Audit: 13, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -904,18 +972,20 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	for index, mapping := range []struct {
 		action iamv1.Action
 		fact   auditv1.Action
+		mode   iamv1.AuthorizationResourceMode
+		usage  iamv1.AuthorizationCollectionUsage
 	}{
-		{iamv1.ActionPaaSNodeEnrollmentCreate, auditv1.ActionPaaSExecutionTargetRegistered},
-		{iamv1.ActionPaaSExecutionTargetDrain, auditv1.ActionPaaSExecutionTargetDrained},
-		{iamv1.ActionPaaSExecutionTargetActivate, auditv1.ActionPaaSExecutionTargetActivated},
-		{iamv1.ActionPaaSExecutionTargetRemove, auditv1.ActionPaaSExecutionTargetRemoved},
+		{iamv1.ActionPaaSNodeEnrollmentCreate, auditv1.ActionPaaSExecutionTargetRegistered, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate},
+		{iamv1.ActionPaaSExecutionTargetDrain, auditv1.ActionPaaSExecutionTargetDrained, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionPaaSExecutionTargetActivate, auditv1.ActionPaaSExecutionTargetActivated, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionPaaSExecutionTargetRemove, auditv1.ActionPaaSExecutionTargetRemoved, iamv1.AuthorizationResourceInstance, ""},
 	} {
 		kind, _ := iamv1.ResourceKindForAction(mapping.action)
 		resource := iamv1.ResourceReference{Kind: kind, ID: "execution-target-process"}
-		if mapping.action == iamv1.ActionPaaSNodeEnrollmentCreate {
+		if mapping.mode == iamv1.AuthorizationResourceCollection {
 			resource.ID = "collection"
 		}
-		decision := assertPlatformActionAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", fmt.Sprintf("platform-proof-%d", index), mapping.action, resource, true)
+		decision := assertPlatformActionAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", fmt.Sprintf("platform-proof-%d", index), mapping.action, resource, mapping.mode, mapping.usage, true)
 		event := platformAuditRecord.Event
 		event.EventID, event.Action = auditv1.EventID(fmt.Sprintf("event-platform-proof-%d", index)), mapping.fact
 		event.OperationID = auditv1.OperationID(fmt.Sprintf("operation-platform-proof-%d", index))
@@ -1321,9 +1391,11 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusServiceUnavailable)
 	assertReplicaRead := func(requestID string, status int) {
 		t.Helper()
-		request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
-			Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-process"},
-			RequestID: requestID, CorrelationID: requestID}
+		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-process"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+		if err != nil {
+			t.Fatal(err)
+		}
 		response := performJSONWithHeaders(t, http.MethodPost, replicaEndpoint+"/v1/authorize", paasServiceCredential, "", request,
 			map[string]string{"Matrix-Subject-Credential": adminLogin.Credential})
 		if response.Status != status {
@@ -2027,8 +2099,11 @@ func proveUserBoundaryProcesses(t *testing.T, ctx context.Context, database *pgx
 				id      string
 				allowed bool
 			}{{"application-process", selected}, {"application-nonprefix", other}} {
-				request := iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
-					Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: candidate.id}, RequestID: "process-boundary-read", CorrelationID: "process-boundary-read"}
+				request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+					iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: candidate.id}, iamv1.AuthorizationResourceInstance, "", "process-boundary-read", "process-boundary-read")
+				if err != nil {
+					t.Fatal(err)
+				}
 				response := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "", request, map[string]string{"Matrix-Subject-Credential": bearer})
 				var decision iamv1.AuthorizationDecision
 				if response.Status != http.StatusOK || json.Unmarshal(response.Body, &decision) != nil || iamv1.ValidateAuthorizationDecision(decision) != nil || decision.Allowed != candidate.allowed {
@@ -2117,19 +2192,20 @@ func assertPlatformAuthorization(
 			if shape.Mode == iamv1.AuthorizationResourceCollection {
 				resource.ID = "collection"
 			}
-			assertPlatformActionAuthorization(t, endpoint, credential, principalID, fmt.Sprintf("%s-%d-%d", requestID, index, shapeIndex), declaration.Action, resource, allowed)
+			assertPlatformActionAuthorization(t, endpoint, credential, principalID, fmt.Sprintf("%s-%d-%d", requestID, index, shapeIndex), declaration.Action, resource, shape.Mode, shape.CollectionUsage, allowed)
 		}
 	}
 	resource := iamv1.ResourceReference{Kind: iamv1.ResourceExecutionTarget, ID: "execution-target-process"}
-	return assertPlatformActionAuthorization(t, endpoint, credential, principalID, requestID, iamv1.ActionPaaSExecutionTargetRegister, resource, allowed)
+	return assertPlatformActionAuthorization(t, endpoint, credential, principalID, requestID, iamv1.ActionPaaSExecutionTargetRegister, resource, iamv1.AuthorizationResourceInstance, "", allowed)
 }
 
-func assertPlatformActionAuthorization(t *testing.T, endpoint, credential, principalID, requestID string, action iamv1.Action, resource iamv1.ResourceReference, allowed bool) iamv1.AuthorizationDecision {
+func assertPlatformActionAuthorization(t *testing.T, endpoint, credential, principalID, requestID string, action iamv1.Action, resource iamv1.ResourceReference, mode iamv1.AuthorizationResourceMode, usage iamv1.AuthorizationCollectionUsage, allowed bool) iamv1.AuthorizationDecision {
 	t.Helper()
-	body, err := json.Marshal(iamv1.AuthorizationRequest{
-		Action: action, Resource: resource,
-		RequestID: requestID, CorrelationID: requestID,
-	})
+	authorization, err := iamv1.NewAuthorizationRequest(action, resource, mode, usage, requestID, requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(authorization)
 	if err != nil {
 		t.Fatalf("encode platform authorization request: %v", err)
 	}
@@ -2148,7 +2224,7 @@ func assertPlatformActionAuthorization(t *testing.T, endpoint, credential, princ
 	var decision iamv1.AuthorizationDecision
 	if response.StatusCode != http.StatusOK ||
 		iamv1.DecodeRequest(response.Body, &decision) != nil ||
-		iamv1.ValidateAuthorizationDecision(decision) != nil ||
+		iamv1.CheckAuthorizationDecisionForRequest(decision, authorization) != nil ||
 		decision.Allowed != allowed || decision.TenantID != "" ||
 		decision.RequestID != requestID || decision.Action != action ||
 		decision.Resource != resource {

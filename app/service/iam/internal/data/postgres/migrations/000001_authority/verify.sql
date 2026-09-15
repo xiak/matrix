@@ -123,7 +123,7 @@ BEGIN
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_password(text,text)', 'EXECUTE')
        OR NOT has_function_privilege(
             'matrix_iam_api',
-            'iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb)',
+            'iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(
@@ -178,7 +178,7 @@ BEGIN
        )
        OR has_function_privilege('matrix_iam_api', 'iam.is_platform_action(text)', 'EXECUTE')
        OR has_function_privilege(
-            'matrix_iam_api', 'iam.assert_allowed_decision(text,text,text,text,text,text)', 'EXECUTE'
+            'matrix_iam_api', 'iam.assert_allowed_decision(text,text,text,text,text,text,text,text)', 'EXECUTE'
        )
        OR has_function_privilege(
             'matrix_iam_api', 'iam.assert_user_audit_actor(text,text,jsonb)', 'EXECUTE'
@@ -286,9 +286,17 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>20 THEN
+    IF (SELECT schema_version FROM iam.readiness())<>21 OR NOT iam.authorization_decision_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';
     END IF;
+    FOREACH entry IN ARRAY ARRAY['iam.authorization_decision_contract_ready()'::regprocedure,
+        'iam.authorization_decision_profile_matches(jsonb)'::regprocedure,
+        'iam.assert_allowed_decision(text,text,text,text,text,text,text,text)'::regprocedure] LOOP
+        IF has_function_privilege('matrix_iam_api',entry,'EXECUTE') OR has_function_privilege('matrix_iam_worker',entry,'EXECUTE')
+            OR has_function_privilege('matrix_iam_credential_recovery',entry,'EXECUTE') OR has_function_privilege('public',entry,'EXECUTE') THEN
+            RAISE EXCEPTION 'IAM internal decision boundary is exposed';
+        END IF;
+    END LOOP;
     FOR seed IN SELECT value FROM jsonb_array_elements(seeds->'archive') LOOP
         IF NOT EXISTS(SELECT 1 FROM iam.authorization_profiles archive
             WHERE archive.product=seed->>'product' AND archive.revision=(seed->>'revision')::bigint

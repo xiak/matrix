@@ -6,17 +6,19 @@ import (
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
-	"github.com/xiak/matrix/app/service/iam/internal/authority"
 )
 
 // AuditEvidence is read from IAM's own immutable decision/outbox facts, never
 // supplied by a producer. Installation and verifier identity come from sealed
 // installation ownership; no current user, session, or role is reauthorized.
 type AuditEvidence struct {
-	InstallationID      string
-	Event               auditv1.Event
-	Decision            *iamv1.AuthorizationDecision
-	VerifierPrincipalID iamv1.PrincipalID
+	InstallationID string
+	Event          auditv1.Event
+	Decision       *iamv1.AuthorizationDecision
+	// Both fields come only from protected storage metadata and exact archive lookup.
+	DecisionContractVersion int
+	DecisionProfile         *iamv1.AuthorizationProfile
+	VerifierPrincipalID     iamv1.PrincipalID
 }
 
 func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evidence AuditEvidence) (string, error) {
@@ -47,7 +49,7 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 		return digest, nil
 	}
 	decision := evidence.Decision
-	if decision == nil || iamv1.ValidateAuthorizationDecision(*decision) != nil || !decision.Allowed || decision.Subject == nil ||
+	if !validHistoricalDecision(evidence) || !decision.Allowed || decision.Subject == nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, evidence.Event) != nil ||
 		evidence.Event.Action != auditv1.ActionIAMAuthorizationDecided || evidence.Event.Result != auditv1.ResultAllowed ||
 		evidence.Event.IAMDecisionID != auditv1.DecisionID(decision.ID) || evidence.Event.Target.ID != string(decision.ID) ||
@@ -57,6 +59,9 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 		evidence.Event.Actor != event.Actor || event.Actor.ID != auditv1.ActorID(decision.Subject.ID) ||
 		string(event.Actor.Type) != string(decision.Subject.Type) ||
 		event.TenantID != auditv1.TenantID(decision.TenantID) || event.InstallationID != decision.InstallationID {
+		return "", ErrForbidden
+	}
+	if evidence.DecisionContractVersion == 2 && decision.CorrelationID != evidence.Event.CorrelationID {
 		return "", ErrForbidden
 	}
 	originalTenant := decision.TenantID
@@ -74,63 +79,101 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 		}
 		return digest, nil
 	}
-	expectedAction, expectedID := auditDecisionTarget(event, decision.Action)
-	expectedKind, known := iamv1.ResourceKindForAction(expectedAction)
-	if !known || decision.Subject.Type != iamv1.PrincipalUser || decision.Action != expectedAction ||
-		decision.Resource.Kind != expectedKind || decision.Resource.ID != expectedID || !authority.ServiceCanRequest(identity.Purpose, expectedAction) {
+	expectedAction, expectedID, mode, usage := auditDecisionTarget(event, decision.Action, evidence.DecisionContractVersion)
+	if decision.Subject.Type != iamv1.PrincipalUser || decision.Action != expectedAction ||
+		decision.Resource.ID != expectedID || !historicalProducerMatches(evidence, identity.Purpose) {
+		return "", ErrForbidden
+	}
+	if evidence.DecisionContractVersion == 2 && (decision.ResourceMode != mode || decision.CollectionUsage != usage) {
 		return "", ErrForbidden
 	}
 	return digest, nil
 }
 
-func auditDecisionTarget(event auditv1.Event, decisionAction iamv1.Action) (iamv1.Action, string) {
+// Current product heads and the current source catalog cannot redefine a
+// producer's historical admission. The closed fact mapping above still selects
+// the original action; its calling service and resource kind come from the
+// protected original contract, never from the producer request.
+func historicalProducerMatches(evidence AuditEvidence, purpose iamv1.ServicePurpose) bool {
+	if evidence.DecisionContractVersion == 2 && evidence.DecisionProfile != nil {
+		return evidence.DecisionProfile.CallingService == purpose
+	}
+	if evidence.DecisionContractVersion == 1 {
+		for _, definition := range iamv1.AllRecordedActionDefinitions() {
+			if definition.Action == evidence.Decision.Action {
+				return definition.CallingService == purpose && definition.ResourceKind == evidence.Decision.Resource.Kind
+			}
+		}
+	}
+	return false
+}
+
+func validHistoricalDecision(evidence AuditEvidence) bool {
+	if evidence.Decision == nil {
+		return false
+	}
+	switch evidence.DecisionContractVersion {
+	case 1:
+		return evidence.DecisionProfile == nil && iamv1.ValidateLegacyAuthorizationDecision(*evidence.Decision) == nil
+	case 2:
+		return evidence.DecisionProfile != nil && iamv1.ValidateAuthorizationDecisionForProfile(*evidence.Decision, *evidence.DecisionProfile) == nil
+	default:
+		return false
+	}
+}
+
+func auditDecisionTarget(event auditv1.Event, decisionAction iamv1.Action, contractVersion int) (iamv1.Action, string, iamv1.AuthorizationResourceMode, iamv1.AuthorizationCollectionUsage) {
+	records, chain := "collection", "collection"
+	if contractVersion == 1 {
+		records, chain = "records", "chain"
+	}
 	switch event.Action {
 	case auditv1.ActionPaaSApplicationCreated:
-		return iamv1.ActionPaaSApplicationCreate, "collection"
+		return iamv1.ActionPaaSApplicationCreate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
 	case auditv1.ActionPaaSConfigurationCreated:
-		return iamv1.ActionPaaSConfigurationCreate, "collection"
+		return iamv1.ActionPaaSConfigurationCreate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
 	case auditv1.ActionPaaSConfigurationRevisionCreated:
-		return iamv1.ActionPaaSConfigurationRevisionCreate, "collection"
+		return iamv1.ActionPaaSConfigurationRevisionCreate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
 	case auditv1.ActionPaaSApplicationRevisionCreated:
-		return iamv1.ActionPaaSApplicationRevisionCreate, "collection"
+		return iamv1.ActionPaaSApplicationRevisionCreate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
 	case auditv1.ActionPaaSDeploymentCreated:
-		return iamv1.ActionPaaSDeploymentCreate, "collection"
+		return iamv1.ActionPaaSDeploymentCreate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
 	case auditv1.ActionPaaSDeploymentUpdated:
-		return iamv1.ActionPaaSDeploymentUpdate, event.Target.ID
+		return iamv1.ActionPaaSDeploymentUpdate, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
 	case auditv1.ActionPaaSDeploymentStopped:
-		return iamv1.ActionPaaSDeploymentStop, event.Target.ID
+		return iamv1.ActionPaaSDeploymentStop, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
 	case auditv1.ActionPaaSDeploymentRolledBack:
-		return iamv1.ActionPaaSDeploymentRollback, event.Target.ID
+		return iamv1.ActionPaaSDeploymentRollback, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
 	case auditv1.ActionPaaSExecutionPoolCreated:
-		return iamv1.ActionPaaSExecutionPoolCreate, event.Target.ID
+		return iamv1.ActionPaaSExecutionPoolCreate, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
 	case auditv1.ActionPaaSExecutionTargetRegistered:
 		// Enrollment authorized its ceremony before the final target existed.
 		// The PaaS transaction/outbox, not this authority proof, binds that
 		// successful result. Other target mutations never use collection proof.
 		if decisionAction == iamv1.ActionPaaSNodeEnrollmentCreate {
-			return iamv1.ActionPaaSNodeEnrollmentCreate, "collection"
+			return iamv1.ActionPaaSNodeEnrollmentCreate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
 		}
-		return iamv1.ActionPaaSExecutionTargetRegister, event.Target.ID
+		return iamv1.ActionPaaSExecutionTargetRegister, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
 	case auditv1.ActionPaaSExecutionTargetDrained:
-		return iamv1.ActionPaaSExecutionTargetDrain, event.Target.ID
+		return iamv1.ActionPaaSExecutionTargetDrain, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
 	case auditv1.ActionPaaSExecutionTargetActivated:
-		return iamv1.ActionPaaSExecutionTargetActivate, event.Target.ID
+		return iamv1.ActionPaaSExecutionTargetActivate, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
 	case auditv1.ActionPaaSExecutionTargetRemoved:
-		return iamv1.ActionPaaSExecutionTargetRemove, event.Target.ID
+		return iamv1.ActionPaaSExecutionTargetRemove, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
 	case auditv1.ActionManagedServiceQuotaEntitlementActivated:
-		return iamv1.ActionManagedServiceQuotaEntitlementActivate, "collection"
+		return iamv1.ActionManagedServiceQuotaEntitlementActivate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
 	case auditv1.ActionManagedServiceInstallationCreated, auditv1.ActionManagedServiceInstallationReady:
-		return iamv1.ActionManagedServiceInstallationCreate, "collection"
+		return iamv1.ActionManagedServiceInstallationCreate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
 	case auditv1.ActionAuditRecordsRead:
-		return iamv1.ActionAuditRecordRead, "records"
+		return iamv1.ActionAuditRecordRead, records, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList
 	case auditv1.ActionAuditIntegrityVerified:
-		return iamv1.ActionAuditIntegrityVerify, "chain"
+		return iamv1.ActionAuditIntegrityVerify, chain, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList
 	case auditv1.ActionAuditPlatformRecordsRead:
-		return iamv1.ActionAuditPlatformRecordRead, "records"
+		return iamv1.ActionAuditPlatformRecordRead, records, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList
 	case auditv1.ActionAuditPlatformIntegrityVerified:
-		return iamv1.ActionAuditPlatformIntegrityVerify, "chain"
+		return iamv1.ActionAuditPlatformIntegrityVerify, chain, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList
 	default:
-		return "", ""
+		return "", "", "", ""
 	}
 }
 

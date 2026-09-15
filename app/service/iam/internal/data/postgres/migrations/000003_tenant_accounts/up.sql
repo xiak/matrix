@@ -163,9 +163,10 @@ DROP FUNCTION IF EXISTS iam.can_produce_audit(text,text,text,text);
 CREATE INDEX IF NOT EXISTS audit_outbox_decision_fact_idx
 ON iam.audit_outbox (tenant_id,(event_document->>'iamDecisionId'))
 WHERE event_document->>'action'='iam.authorization.decided';
+DROP FUNCTION IF EXISTS iam.read_audit_evidence(text,text,text,text,jsonb);
 CREATE OR REPLACE FUNCTION iam.read_audit_evidence(origin_tenant text, producer text,
     producer_purpose text, producer_installation text, event jsonb)
-RETURNS TABLE (installation_id text, event_document jsonb, decision_document jsonb, verifier_principal_id text)
+RETURNS TABLE (installation_id text, event_document jsonb, decision_document jsonb, verifier_principal_id text, decision_contract_version integer)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE
     proof_tenant text;
@@ -195,10 +196,10 @@ BEGIN
     WHERE credential.tenant_id=origin_tenant AND credential.purpose='INSTALLATION_VERIFIER';
     PERFORM set_config('matrix.iam_tenant_id',proof_tenant,true);
     IF producer_purpose='IAM' THEN
-        RETURN QUERY SELECT sealed_installation, outbox.event_document, NULL::jsonb, verifier_id
+        RETURN QUERY SELECT sealed_installation, outbox.event_document, NULL::jsonb, verifier_id, NULL::integer
         FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=proof_tenant AND outbox.event_id=event->>'eventId';
     ELSE
-        RETURN QUERY SELECT sealed_installation, outbox.event_document, decision.document, verifier_id
+        RETURN QUERY SELECT sealed_installation, outbox.event_document, decision.document, verifier_id, decision.contract_version
         FROM iam.authorization_decisions AS decision
         JOIN iam.audit_outbox AS outbox ON outbox.tenant_id=decision.tenant_id
             AND outbox.event_document->>'action'='iam.authorization.decided'
@@ -297,7 +298,7 @@ CREATE OR REPLACE FUNCTION iam.list_users(tenant text, actor text, decision text
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE result jsonb;
 BEGIN
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.list','ACCOUNT',tenant);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.list','ACCOUNT',tenant,'INSTANCE',NULL);
     PERFORM set_config('matrix.iam_tenant_id', tenant, true);
     IF after_id IS NULL OR (after_id <> '' AND after_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='page boundary is invalid';
@@ -317,7 +318,7 @@ CREATE OR REPLACE FUNCTION iam.read_user(tenant text, actor text, decision text,
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE result jsonb;
 BEGIN
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.read','USER',user_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.read','USER',user_id,'INSTANCE',NULL);
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     PERFORM 1 FROM iam.accounts AS account WHERE account.id=tenant AND account.status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user account is unavailable'; END IF;
@@ -331,7 +332,7 @@ CREATE OR REPLACE FUNCTION iam.list_accounts(tenant text, actor text, decision t
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE result jsonb := '[]'::jsonb; candidate record;
 BEGIN
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.read','ACCOUNT','accounts');
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.read','ACCOUNT','collection','COLLECTION','COLLECTION_LIST');
     IF after_id IS NULL OR (after_id <> '' AND after_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='page boundary is invalid';
     END IF;
@@ -347,7 +348,7 @@ CREATE OR REPLACE FUNCTION iam.read_account_as_platform(tenant text, actor text,
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE result jsonb;
 BEGIN
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.read','ACCOUNT',target_tenant);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.read','ACCOUNT',target_tenant,'INSTANCE',NULL);
     result := iam.account_management_snapshot(target_tenant);
     IF result IS NULL OR result->'account' IS NULL THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable';
@@ -360,7 +361,7 @@ CREATE OR REPLACE FUNCTION iam.read_account_root(tenant text, actor text, decisi
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE result jsonb;
 BEGIN
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.recover-root-credentials','ACCOUNT',target_tenant);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.recover-root-credentials','ACCOUNT',target_tenant,'INSTANCE',NULL);
     PERFORM set_config('matrix.iam_tenant_id',target_tenant,true);
     SELECT jsonb_build_object('principalId',root.principal_id,'loginName',root.login_name)
       INTO result FROM iam.account_roots AS root WHERE root.account_id=target_tenant;
@@ -393,7 +394,7 @@ CREATE OR REPLACE FUNCTION iam.create_account(tenant text, actor text, decision 
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE result jsonb; effective_now timestamptz := transaction_timestamp();
 BEGIN
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.create','ACCOUNT',new_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.create','ACCOUNT','collection','COLLECTION','COLLECTION_CREATE');
     IF new_id IS NULL OR primary_id IS NULL OR login_name IS NULL OR password_hash IS NULL
         OR new_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         OR primary_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -429,7 +430,7 @@ CREATE OR REPLACE FUNCTION iam.set_account_status(tenant text, actor text, decis
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE stored iam.accounts%ROWTYPE;
 BEGIN
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.set-status','ACCOUNT',target_tenant);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.set-status','ACCOUNT',target_tenant,'INSTANCE',NULL);
     IF new_status IS NULL OR new_status NOT IN ('ACTIVE','DISABLED') OR expected_version IS NULL OR expected_version < 1 THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='account status change is invalid';
     END IF;
@@ -460,7 +461,7 @@ CREATE OR REPLACE FUNCTION iam.recover_root_credentials(tenant text, actor text,
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE stored_version bigint;
 BEGIN
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.recover-root-credentials','ACCOUNT',target_tenant);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.recover-root-credentials','ACCOUNT',target_tenant,'INSTANCE',NULL);
     IF expected_version IS NULL OR expected_version < 1 OR new_password_hash IS NULL
         OR new_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
         OR event#>>'{target,tenantId}' IS DISTINCT FROM target_tenant
@@ -505,7 +506,7 @@ CREATE OR REPLACE FUNCTION iam.set_account_alias(tenant text, actor text, decisi
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
 DECLARE stored_version bigint;
 BEGIN
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.alias-set','ACCOUNT',tenant);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.alias-set','ACCOUNT',tenant,'INSTANCE',NULL);
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     IF new_alias IS NULL OR new_alias COLLATE "C" !~ '^[a-z][a-z0-9-]{1,61}[a-z0-9]$'
         OR expected_version IS NULL OR expected_version < 1 THEN
@@ -538,7 +539,7 @@ BEGIN
         OR btrim(submitted_display_name)<>submitted_display_name OR expected_version IS NULL OR expected_version<1 THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='user profile mutation is invalid';
     END IF;
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.update','USER',user_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.update','USER',user_id,'INSTANCE',NULL);
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     PERFORM 1 FROM iam.accounts AS account WHERE account.id=tenant AND account.status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user account is unavailable'; END IF;
@@ -577,7 +578,7 @@ BEGIN
     IF expected_version IS NULL OR expected_version<1 THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='user deletion is invalid';
     END IF;
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.delete','USER',user_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.delete','USER',user_id,'INSTANCE',NULL);
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     PERFORM 1 FROM iam.accounts AS account WHERE account.id=tenant AND account.status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user account is unavailable'; END IF;
@@ -655,7 +656,7 @@ BEGIN
     END IF;
     IF new_status IS NOT NULL THEN action := 'iam.user.set-status'; event_action := 'iam.user.status-set';
     ELSE action := 'iam.user.reset-password'; event_action := 'iam.user.password-reset'; END IF;
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,action,'USER',user_id);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,action,'USER',user_id,'INSTANCE',NULL);
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     PERFORM 1 FROM iam.accounts AS organization
         WHERE organization.id=tenant AND organization.status='ACTIVE' FOR SHARE;

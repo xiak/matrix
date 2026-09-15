@@ -30,6 +30,73 @@ func DecodeRequest(reader io.Reader, destination any) error {
 	return contractjson.DecodeObject(reader, MaxRequestBytes, destination)
 }
 
+func (request *AuthorizationRequest) UnmarshalJSON(source []byte) error {
+	type wire AuthorizationRequest
+	var decoded wire
+	if err := contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded); err != nil {
+		return err
+	}
+	if checkAuthorizationTargetEncoding(source, decoded.ResourceMode) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*request = AuthorizationRequest(decoded)
+	return nil
+}
+
+func (decision *AuthorizationDecision) UnmarshalJSON(source []byte) error {
+	type wire AuthorizationDecision
+	var decoded wire
+	if err := contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	current := false
+	for _, key := range []string{"profile", "resourceMode", "collectionUsage", "correlationId"} {
+		if _, exists := fields[key]; exists {
+			current = true
+		}
+	}
+	// This preserves only historical syntax. It does not establish legacy row
+	// eligibility; current consumers validate the mandatory full binding.
+	if current {
+		if checkAuthorizationTargetEncoding(source, decoded.ResourceMode) != nil || decoded.Profile == nil || decoded.CorrelationID == "" {
+			return contractjson.ErrInvalidDocument
+		}
+	}
+	*decision = AuthorizationDecision(decoded)
+	return nil
+}
+
+func checkAuthorizationTargetEncoding(source []byte, mode AuthorizationResourceMode) error {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	for _, key := range []string{"profile", "resourceMode", "correlationId"} {
+		if value, exists := fields[key]; !exists || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return contractjson.ErrInvalidDocument
+		}
+	}
+	usage, exists := fields["collectionUsage"]
+	switch mode {
+	case AuthorizationResourceInstance:
+		if exists {
+			return contractjson.ErrInvalidDocument
+		}
+	case AuthorizationResourceCollection:
+		var value AuthorizationCollectionUsage
+		if !exists || json.Unmarshal(usage, &value) != nil || (value != AuthorizationCollectionCreate && value != AuthorizationCollectionList) {
+			return contractjson.ErrInvalidDocument
+		}
+	default:
+		return contractjson.ErrInvalidDocument
+	}
+	return nil
+}
+
 func (value *UserPermissionBoundary) UnmarshalJSON(source []byte) error {
 	type wire UserPermissionBoundary
 	var decoded wire

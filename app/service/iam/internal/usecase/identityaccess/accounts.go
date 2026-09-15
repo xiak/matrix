@@ -66,10 +66,12 @@ func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.
 	return result, nil
 }
 
-func projectCapability(subject SessionCredential, action iamv1.Action, resource iamv1.ResourceReference, now time.Time) (iamv1.ActionCapability, error) {
-	evaluation, err := authority.Decide(subject.Subject, iamv1.ServiceIAM, iamv1.AuthorizationRequest{
-		Action: action, Resource: resource, RequestID: "capability-projection", CorrelationID: "capability-projection",
-	}, "capability-projection", now)
+func projectCapability(subject SessionCredential, action iamv1.Action, resource iamv1.ResourceReference, mode iamv1.AuthorizationResourceMode, usage iamv1.AuthorizationCollectionUsage, now time.Time) (iamv1.ActionCapability, error) {
+	request, err := iamv1.NewAuthorizationRequest(action, resource, mode, usage, "capability-projection", "capability-projection")
+	if err != nil {
+		return iamv1.ActionCapability{}, ErrUnavailable
+	}
+	evaluation, err := authority.Decide(subject.Subject, iamv1.ServiceIAM, request, "capability-projection", now)
 	if err != nil {
 		return iamv1.ActionCapability{}, ErrUnavailable
 	}
@@ -95,19 +97,21 @@ func currentIdentityCapabilities(subject SessionCredential, now time.Time) ([]ia
 	requests := []struct {
 		action   iamv1.Action
 		resource iamv1.ResourceReference
+		mode     iamv1.AuthorizationResourceMode
+		usage    iamv1.AuthorizationCollectionUsage
 	}{
-		{iamv1.ActionIAMAccountCreate, iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "accounts"}},
-		{iamv1.ActionIAMAccountRead, iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "accounts"}},
-		{iamv1.ActionIAMAccountAliasSet, account},
-		{iamv1.ActionIAMUserList, account},
-		{iamv1.ActionIAMUserCreate, account},
-		{iamv1.ActionIAMPolicyList, account},
-		{iamv1.ActionIAMGroupList, account},
-		{iamv1.ActionIAMGroupCreate, account},
+		{iamv1.ActionIAMAccountCreate, iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "collection"}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate},
+		{iamv1.ActionIAMAccountRead, iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "collection"}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList},
+		{iamv1.ActionIAMAccountAliasSet, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMUserList, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMUserCreate, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMPolicyList, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMGroupList, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMGroupCreate, account, iamv1.AuthorizationResourceInstance, ""},
 	}
 	result := make([]iamv1.ActionCapability, 0, len(requests))
 	for _, request := range requests {
-		capability, err := projectCapability(subject, request.action, request.resource, now)
+		capability, err := projectCapability(subject, request.action, request.resource, request.mode, request.usage, now)
 		if err != nil {
 			return nil, err
 		}
@@ -119,7 +123,7 @@ func currentIdentityCapabilities(subject SessionCredential, now time.Time) ([]ia
 // This boundary keeps authenticated tenant derivation, denied-decision Audit,
 // and the admitted account workflow in the same serializable transaction.
 func withAccountAuthorization[T any](service *Authority, ctx context.Context, credential iamv1.Secret,
-	action iamv1.Action, target iamv1.ResourceReference, requestID string,
+	action iamv1.Action, mode iamv1.AuthorizationResourceMode, usage iamv1.AuthorizationCollectionUsage, target iamv1.ResourceReference, requestID string,
 	apply func(context.Context, Transaction, SessionCredential, iamv1.AuthorizationDecision, time.Time) (T, error)) (T, error) {
 	var result T
 	denied := false
@@ -137,7 +141,7 @@ func withAccountAuthorization[T any](service *Authority, ctx context.Context, cr
 		if resource.ID == "" {
 			resource.ID = string(subject.Subject.Organization.ID)
 		}
-		decision, err := service.managementDecision(ctx, tx, subject, action, resource, requestID, now)
+		decision, err := service.managementDecision(ctx, tx, subject, action, resource, mode, usage, requestID, now)
 		if err != nil {
 			return err
 		}
@@ -197,7 +201,7 @@ func (service *Authority) ListUsers(ctx context.Context, credential iamv1.Secret
 	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.UserList{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserList,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserList, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.UserList, error) {
 			position, query, err := service.directoryPosition(ctx, tx, subject, decision, after, now)
@@ -230,7 +234,7 @@ func (service *Authority) GetUser(ctx context.Context, credential iamv1.Secret, 
 	if iamv1.ValidateID("userId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
 		return iamv1.UserAccess{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserRead,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserRead, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.UserAccess, error) {
 			result, err := tx.ReadUser(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
@@ -285,7 +289,7 @@ func userCapabilities(subject SessionCredential, account iamv1.Account, target i
 	}
 	result := make([]iamv1.ActionCapability, 0, len(requests))
 	for _, request := range requests {
-		capability, err := projectCapability(subject, request.action, request.resource, now)
+		capability, err := projectCapability(subject, request.action, request.resource, iamv1.AuthorizationResourceInstance, "", now)
 		if err != nil {
 			return nil, err
 		}
@@ -347,7 +351,7 @@ func (service *Authority) ListPolicies(ctx context.Context, credential iamv1.Sec
 				return ErrForbidden
 			}
 		}
-		decision, err := service.managementDecision(ctx, tx, subject, action, target, requestID, now)
+		decision, err := service.managementDecision(ctx, tx, subject, action, target, iamv1.AuthorizationResourceInstance, "", requestID, now)
 		if err != nil {
 			return err
 		}
@@ -375,7 +379,7 @@ func (service *Authority) GetPolicy(ctx context.Context, credential iamv1.Secret
 	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
 		return iamv1.PolicyDetail{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyRead,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyRead, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
 			return tx.ReadPolicy(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
@@ -387,7 +391,7 @@ func (service *Authority) GetUserPermissionBoundary(ctx context.Context, credent
 	if iamv1.ValidateID("userId", string(user)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
 		return iamv1.UserPermissionBoundary{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserRead, iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(user)}, requestID,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserRead, iamv1.AuthorizationResourceInstance, "", iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(user)}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.UserPermissionBoundary, error) {
 			return tx.ReadUserPermissionBoundary(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, user)
 		})
@@ -422,7 +426,7 @@ func (service *Authority) changeUserPermissionBoundary(ctx context.Context, cred
 	if err != nil {
 		return iamv1.UserPermissionBoundary{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, action, iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(user)}, request.RequestID,
+	return withAccountAuthorization(service, ctx, credential, action, iamv1.AuthorizationResourceInstance, "", iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(user)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.UserPermissionBoundary, error) {
 			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
 				return iamv1.UserPermissionBoundary{}, err
@@ -464,7 +468,7 @@ func (service *Authority) CreatePolicy(ctx context.Context, credential iamv1.Sec
 	if err != nil {
 		return iamv1.PolicyDetail{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyCreate,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyCreate, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
 			account, err := tx.ReadAccount(ctx, subject.Subject.Organization.ID, subject.Subject.Principal.ID)
@@ -505,7 +509,7 @@ func (service *Authority) ListPolicyVersions(ctx context.Context, credential iam
 	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
 		return iamv1.PolicyVersionList{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionList,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionList, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyVersionList, error) {
 			return tx.ListPolicyVersions(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id)
@@ -516,7 +520,7 @@ func (service *Authority) GetPolicyVersion(ctx context.Context, credential iamv1
 	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateID("versionId", string(version)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
 		return iamv1.PolicyVersionDetail{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionRead,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionRead, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyVersionDetail, error) {
 			return tx.ReadPolicyVersion(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id, version)
@@ -551,7 +555,7 @@ func (service *Authority) CreatePolicyVersion(ctx context.Context, credential ia
 	if err != nil {
 		return iamv1.PolicyVersionDetail{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionCreate,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionCreate, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyVersionDetail, error) {
 			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
@@ -581,7 +585,7 @@ func (service *Authority) DeletePolicyVersion(ctx context.Context, credential ia
 	if err != nil {
 		return iamv1.PolicyDetail{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionDelete, iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionDelete, iamv1.AuthorizationResourceInstance, "", iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
 			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
 				return iamv1.PolicyDetail{}, err
@@ -607,7 +611,7 @@ func (service *Authority) SetDefaultPolicyVersion(ctx context.Context, credentia
 	if err != nil {
 		return iamv1.PolicyDetail{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicySetDefaultVersion,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicySetDefaultVersion, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
 			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
@@ -633,7 +637,7 @@ func (service *Authority) UpdatePolicy(ctx context.Context, credential iamv1.Sec
 	if err != nil {
 		return iamv1.PolicyDetail{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyUpdate,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyUpdate, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
 			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
@@ -659,7 +663,7 @@ func (service *Authority) DeletePolicy(ctx context.Context, credential iamv1.Sec
 	if err != nil {
 		return iamv1.Policy{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyDelete, iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyDelete, iamv1.AuthorizationResourceInstance, "", iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Policy, error) {
 			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
 				return iamv1.Policy{}, err
@@ -676,8 +680,8 @@ func (service *Authority) ListAccounts(ctx context.Context, credential iamv1.Sec
 	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.AccountList{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRead,
-		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "accounts"}, requestID,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRead, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList,
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "collection"}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.AccountList, error) {
 			position, query, err := service.directoryPosition(ctx, tx, subject, decision, after, now)
 			if err != nil {
@@ -708,7 +712,7 @@ func (service *Authority) GetAccount(ctx context.Context, credential iamv1.Secre
 	if iamv1.ValidateID("accountId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
 		return iamv1.AccountAccess{}, ErrInvalidArgument
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRead,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRead, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(id)}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.AccountAccess, error) {
 			account, err := tx.ReadAccountAsPlatform(ctx, AccountRead{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id)
@@ -721,14 +725,14 @@ func (service *Authority) GetAccount(ctx context.Context, credential iamv1.Secre
 
 func accountAccess(subject SessionCredential, target AccountManagementSnapshot, now time.Time) (iamv1.AccountAccess, error) {
 	resource := iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(target.Account.ID)}
-	status, err := projectCapability(subject, iamv1.ActionIAMAccountSetStatus, resource, now)
+	status, err := projectCapability(subject, iamv1.ActionIAMAccountSetStatus, resource, iamv1.AuthorizationResourceInstance, "", now)
 	if err != nil {
 		return iamv1.AccountAccess{}, err
 	}
 	if target.SystemAccount {
 		restrictCapability(&status, iamv1.CapabilitySystemAccountProtected)
 	}
-	recovery, err := projectCapability(subject, iamv1.ActionIAMAccountRootCredentialsRecover, resource, now)
+	recovery, err := projectCapability(subject, iamv1.ActionIAMAccountRootCredentialsRecover, resource, iamv1.AuthorizationResourceInstance, "", now)
 	if err != nil {
 		return iamv1.AccountAccess{}, err
 	}
@@ -754,8 +758,8 @@ func (service *Authority) CreateAccount(ctx context.Context, credential iamv1.Se
 	if err != nil {
 		return iamv1.Account{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountCreate,
-		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(request.ID)}, request.RequestID,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountCreate, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate,
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "collection"}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Account, error) {
 			hash, err := service.passwords.Hash(request.InitialPassword)
 			if err != nil {
@@ -787,7 +791,7 @@ func (service *Authority) SetAccountStatus(ctx context.Context, credential iamv1
 	if err != nil {
 		return iamv1.Account{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountSetStatus,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountSetStatus, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Account, error) {
 			action := auditv1.ActionIAMAccountDisabled
@@ -818,7 +822,7 @@ func (service *Authority) RecoverRootCredentials(ctx context.Context, credential
 	if err != nil {
 		return iamv1.Account{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRootCredentialsRecover,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRootCredentialsRecover, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Account, error) {
 			root, err := tx.ReadAccountRoot(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
@@ -869,7 +873,7 @@ func (service *Authority) SetAccountAlias(ctx context.Context, credential iamv1.
 	if err != nil {
 		return iamv1.Account{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountAliasSet,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountAliasSet, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Account, error) {
 			event, err := service.newManagementEvent(subject, auditv1.ActionIAMAccountAliasUpdated, auditv1.TargetAccount, string(subject.Subject.Organization.ID), decision.ID, digest, request.RequestID, now)
@@ -906,7 +910,7 @@ func (service *Authority) UpdateUser(ctx context.Context, credential iamv1.Secre
 	if err != nil {
 		return iamv1.User{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserUpdate,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserUpdate, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.User, error) {
 			event, err := service.newManagementEvent(subject, auditv1.ActionIAMUserUpdated, auditv1.TargetUser,
@@ -931,7 +935,7 @@ func (service *Authority) DeleteUser(ctx context.Context, credential iamv1.Secre
 	if err != nil {
 		return iamv1.UserDeletion{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserDelete,
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserDelete, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.UserDeletion, error) {
 			event, err := service.newManagementEvent(subject, auditv1.ActionIAMUserDeleted, auditv1.TargetUser,
@@ -962,7 +966,7 @@ func (service *Authority) ResetUserPassword(ctx context.Context, credential iamv
 
 func (service *Authority) changeUser(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, version uint64, status *iamv1.PrincipalStatus,
 	password iamv1.Secret, action iamv1.Action, auditAction auditv1.Action, digest, requestID string) (iamv1.User, error) {
-	return withAccountAuthorization(service, ctx, credential, action, iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, requestID,
+	return withAccountAuthorization(service, ctx, credential, action, iamv1.AuthorizationResourceInstance, "", iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, requestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.User, error) {
 			event, err := service.newManagementEvent(subject, auditAction, auditv1.TargetUser, string(id), decision.ID, digest, requestID, now)
 			if err != nil {

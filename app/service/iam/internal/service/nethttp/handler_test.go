@@ -50,7 +50,15 @@ func TestIAMHTTPExposesOnlyCredentialBoundCoreRoutes(t *testing.T) {
 		})
 	}
 
-	authorizeBody := `{"action":"paas.application.read","resource":{"kind":"APPLICATION","id":"application-example"},"requestId":"request-authorize","correlationId":"correlation-authorize"}`
+	authorizeValue, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead, workflow.decision.Resource, iamv1.AuthorizationResourceInstance, "", "request-authorize", "correlation-authorize")
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizeJSON, err := json.Marshal(authorizeValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizeBody := string(authorizeJSON)
 	missingSubject := httptest.NewRequest(http.MethodPost, "/v1/authorize", strings.NewReader(authorizeBody))
 	missingSubject.Header.Set("Content-Type", "application/json")
 	missingSubject.Header.Set("Authorization", "Bearer service-credential")
@@ -74,7 +82,15 @@ func TestIAMHTTPExposesOnlyCredentialBoundCoreRoutes(t *testing.T) {
 		t.Fatalf("decode authorization decision: decision=%#v err=%v", decision, err)
 	}
 
-	verifyBody := `{"action":"installation.verify","resource":{"kind":"INSTALLATION","id":"installation-example"},"requestId":"request-installation-verify","correlationId":"correlation-installation-verify"}`
+	verifyValue, err := iamv1.NewAuthorizationRequest(iamv1.ActionInstallationVerify, workflow.verificationDecision.Resource, iamv1.AuthorizationResourceInstance, "", "request-installation-verify", "correlation-installation-verify")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyJSON, err := json.Marshal(verifyValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifyBody := string(verifyJSON)
 	verifyRequest := httptest.NewRequest(
 		http.MethodPost, "/v1/installation:verify", strings.NewReader(verifyBody),
 	)
@@ -555,6 +571,15 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 		},
 		RequestID: "request-installation-verify",
 		DecidedAt: now,
+	}
+	for decision, correlation := range map[*iamv1.AuthorizationDecision]string{
+		&workflow.decision: "correlation-authorize", &workflow.verificationDecision: "correlation-installation-verify",
+	} {
+		request, err := iamv1.NewAuthorizationRequest(decision.Action, decision.Resource, iamv1.AuthorizationResourceInstance, "", decision.RequestID, correlation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision.Profile, decision.ResourceMode, decision.CorrelationID = &request.Profile, request.ResourceMode, request.CorrelationID
 	}
 	return workflow
 }

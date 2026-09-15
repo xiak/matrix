@@ -203,6 +203,7 @@ func (service *Authority) CreateUser(
 			subject,
 			iamv1.ActionIAMUserCreate,
 			iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Subject.Organization.ID)},
+			iamv1.AuthorizationResourceInstance, "",
 			request.RequestID,
 			now,
 		)
@@ -312,7 +313,7 @@ func (service *Authority) CreatePolicyAttachment(ctx context.Context, credential
 			action, fact = iamv1.ActionIAMPlatformPolicyAttachmentCreate, auditv1.ActionIAMPlatformPolicyAttachmentCreated
 		}
 		decision, err := service.managementDecision(ctx, tx, subject, action,
-			iamv1.ResourceReference{Kind: resourceKind, ID: request.Target.ID}, request.RequestID, now)
+			iamv1.ResourceReference{Kind: resourceKind, ID: request.Target.ID}, iamv1.AuthorizationResourceInstance, "", request.RequestID, now)
 		if err != nil {
 			return err
 		}
@@ -409,7 +410,7 @@ func (service *Authority) RevokePolicyAttachment(ctx context.Context, credential
 			return ErrForbidden
 		}
 		decision, err := service.managementDecision(ctx, tx, subject, action,
-			iamv1.ResourceReference{Kind: iamv1.ResourcePolicyAttachment, ID: string(id)}, request.RequestID, now)
+			iamv1.ResourceReference{Kind: iamv1.ResourcePolicyAttachment, ID: string(id)}, iamv1.AuthorizationResourceInstance, "", request.RequestID, now)
 		if err != nil {
 			return err
 		}
@@ -513,6 +514,7 @@ func (service *Authority) revokeManagedResource(
 			subject,
 			action,
 			resource,
+			iamv1.AuthorizationResourceInstance, "",
 			requestID,
 			now,
 		)
@@ -560,17 +562,17 @@ func (service *Authority) managementDecision(
 	subject SessionCredential,
 	action iamv1.Action,
 	resource iamv1.ResourceReference,
+	mode iamv1.AuthorizationResourceMode,
+	usage iamv1.AuthorizationCollectionUsage,
 	requestID string,
 	now time.Time,
 ) (iamv1.AuthorizationDecision, error) {
 	if err := transaction.CheckCurrentAuthorizationProfiles(ctx); err != nil {
 		return iamv1.AuthorizationDecision{}, err
 	}
-	request := iamv1.AuthorizationRequest{
-		Action:        action,
-		Resource:      resource,
-		RequestID:     requestID,
-		CorrelationID: requestID,
+	request, err := iamv1.NewAuthorizationRequest(action, resource, mode, usage, requestID, requestID)
+	if err != nil {
+		return iamv1.AuthorizationDecision{}, ErrUnavailable
 	}
 	requestDigest, err := digestSanitized("authorization", request)
 	if err != nil {
@@ -621,6 +623,7 @@ func (service *Authority) managementDecision(
 	if err := transaction.RecordAuthorization(ctx, AuthorizationMutation{
 		AccountID:        subject.Subject.Organization.ID,
 		PrincipalID:      subject.Subject.Principal.ID,
+		Request:          request,
 		Decision:         decision.AuthorizationDecision,
 		PolicyEvidence:   decision.PolicyEvidence,
 		BoundaryEvidence: decision.BoundaryEvidence,

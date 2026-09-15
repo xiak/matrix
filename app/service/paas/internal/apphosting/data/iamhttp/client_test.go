@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -41,6 +42,7 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 			TenantID: "organization-a",
 			Subject:  &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"},
 			Action:   body.Action, Resource: body.Resource, RequestID: body.RequestID,
+			Profile: &body.Profile, ResourceMode: body.ResourceMode, CollectionUsage: body.CollectionUsage, CorrelationID: body.CorrelationID,
 			DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 456_000, time.UTC),
 		})
 	}))
@@ -58,10 +60,11 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 		t.Fatalf("PaaS authorization=%#v", authorization)
 	}
 	stopRequest, err := toIAMRequest(port.AuthorizationRequest{
-		Credential: "Bearer " + testSubjectCredential,
-		Action:     port.AuthorizeDeploymentStop,
-		Resource:   paasv1.ResourceRef{Kind: "Deployment", ID: "deployment-a"},
-		RequestID:  "request-paas-stop",
+		Credential:   "Bearer " + testSubjectCredential,
+		Action:       port.AuthorizeDeploymentStop,
+		Resource:     paasv1.ResourceRef{Kind: "Deployment", ID: "deployment-a"},
+		ResourceMode: iamv1.AuthorizationResourceInstance,
+		RequestID:    "request-paas-stop",
 	})
 	if err != nil || stopRequest.Action != iamv1.ActionPaaSDeploymentStop {
 		t.Fatalf("map PaaS stop authorization=%#v err=%v", stopRequest, err)
@@ -82,6 +85,7 @@ func TestClientFailsClosedForDenialStatusAndInvalidResponse(t *testing.T) {
 					APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
 					ID: "decision-denied", Reason: iamv1.DecisionDenied,
 					Action: request.Action, Resource: request.Resource, RequestID: request.RequestID,
+					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
 					DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
 				})
 			},
@@ -105,6 +109,7 @@ func TestClientFailsClosedForDenialStatusAndInvalidResponse(t *testing.T) {
 					TenantID: "organization-a",
 					Subject:  &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"},
 					Action:   request.Action, Resource: request.Resource, RequestID: request.RequestID,
+					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
 					DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
 				})
 			},
@@ -145,6 +150,66 @@ func TestClientRejectsMalformedBearerBeforeIAMCall(t *testing.T) {
 	}
 }
 
+func TestClientRejectsEveryMismatchedDecisionBindingForAllowAndDeny(t *testing.T) {
+	for _, allowed := range []bool{false, true} {
+		for name, mutate := range map[string]func(*iamv1.AuthorizationDecision){
+			"missing profile":  func(d *iamv1.AuthorizationDecision) { d.Profile = nil },
+			"profile product":  func(d *iamv1.AuthorizationDecision) { d.Profile.Product = "audit" },
+			"profile revision": func(d *iamv1.AuthorizationDecision) { d.Profile.Revision++ },
+			"profile digest": func(d *iamv1.AuthorizationDecision) {
+				d.Profile.ContentDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+			},
+			"mode absent": func(d *iamv1.AuthorizationDecision) { d.ResourceMode = "" },
+			"mode altered": func(d *iamv1.AuthorizationDecision) {
+				d.ResourceMode = iamv1.AuthorizationResourceInstance
+				d.CollectionUsage = ""
+			},
+			"usage absent":  func(d *iamv1.AuthorizationDecision) { d.CollectionUsage = "" },
+			"usage altered": func(d *iamv1.AuthorizationDecision) { d.CollectionUsage = iamv1.AuthorizationCollectionList },
+			"resource":      func(d *iamv1.AuthorizationDecision) { d.Resource.ID = "another-instance" },
+			"action": func(d *iamv1.AuthorizationDecision) {
+				d.Action = iamv1.ActionPaaSApplicationRead
+				d.ResourceMode = iamv1.AuthorizationResourceInstance
+				d.CollectionUsage = ""
+			},
+			"request":     func(d *iamv1.AuthorizationDecision) { d.RequestID = "another-request" },
+			"correlation": func(d *iamv1.AuthorizationDecision) { d.CorrelationID = "another-correlation" },
+		} {
+			t.Run(fmt.Sprintf("allowed=%v/%s", allowed, name), func(t *testing.T) {
+				calls := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					calls++
+					var request iamv1.AuthorizationRequest
+					if iamv1.DecodeRequest(r.Body, &request) != nil || iamv1.ValidateAuthorizationRequest(request) != nil {
+						t.Error("invalid outgoing request")
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					decision := iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "decision-bound",
+						Allowed: allowed, Reason: iamv1.DecisionDenied, Action: request.Action, Resource: request.Resource,
+						Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage,
+						RequestID: request.RequestID, CorrelationID: request.CorrelationID, DecidedAt: time.Date(2026, 9, 15, 1, 2, 3, 0, time.UTC)}
+					if allowed {
+						decision.Reason, decision.TenantID = iamv1.DecisionAllowed, "organization-a"
+						decision.Subject = &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"}
+					}
+					if iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil {
+						t.Error("invalid baseline response")
+					}
+					mutate(&decision)
+					w.Header().Set("Content-Type", "application/json")
+					_ = json.NewEncoder(w).Encode(decision)
+				}))
+				defer server.Close()
+				result, err := newTestClient(t, server.URL).Authorize(context.Background(), testAuthorizationRequest())
+				if calls != 1 || !errors.Is(err, port.ErrAuthorizationUnavailable) || result != (port.Authorization{}) {
+					t.Fatalf("mismatched decision consumed: calls=%d result=%+v err=%v", calls, result, err)
+				}
+			})
+		}
+	}
+}
+
 func TestClientAuthorizesCredentialBoundInstallationVerifier(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/installation:verify" ||
@@ -170,6 +235,7 @@ func TestClientAuthorizesCredentialBoundInstallationVerifier(t *testing.T) {
 				Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
 			},
 			Action: body.Action, Resource: body.Resource, RequestID: body.RequestID,
+			Profile: &body.Profile, ResourceMode: body.ResourceMode, CollectionUsage: body.CollectionUsage, CorrelationID: body.CorrelationID,
 			DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 456_000, time.UTC),
 		})
 	}))
@@ -223,9 +289,10 @@ func newTestClient(t *testing.T, endpoint string) *Client {
 
 func testAuthorizationRequest() port.AuthorizationRequest {
 	return port.AuthorizationRequest{
-		Credential: "Bearer " + testSubjectCredential,
-		Action:     port.AuthorizeApplicationCreate,
-		Resource:   paasv1.ResourceRef{Kind: "Application", ID: "collection"},
-		RequestID:  "request-paas-authorize",
+		Credential:   "Bearer " + testSubjectCredential,
+		Action:       port.AuthorizeApplicationCreate,
+		Resource:     paasv1.ResourceRef{Kind: "Application", ID: "collection"},
+		ResourceMode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionCreate,
+		RequestID: "request-paas-authorize",
 	}
 }

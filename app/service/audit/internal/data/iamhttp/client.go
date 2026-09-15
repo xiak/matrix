@@ -115,7 +115,7 @@ func (client *Client) Authorize(
 	}
 	var decision iamv1.AuthorizationDecision
 	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &decision) != nil ||
-		iamv1.ValidateAuthorizationDecision(decision) != nil {
+		iamv1.CheckAuthorizationDecisionForRequest(decision, authorization) != nil {
 		return iamv1.AuthorizationDecision{}, auditlog.ErrUnavailable
 	}
 	return decision, nil
@@ -158,9 +158,7 @@ func (client *Client) VerifyInstallation(
 	}
 	var decision iamv1.AuthorizationDecision
 	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &decision) != nil ||
-		iamv1.ValidateAuthorizationDecision(decision) != nil ||
-		decision.Action != authorization.Action || decision.Resource != authorization.Resource ||
-		decision.RequestID != authorization.RequestID {
+		iamv1.CheckAuthorizationDecisionForRequest(decision, authorization) != nil {
 		return iamv1.AuthorizationDecision{}, auditlog.ErrUnavailable
 	}
 	return decision, nil

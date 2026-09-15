@@ -232,3 +232,80 @@ func CheckAuthorizationProfileReference(value AuthorizationProfile, reference Au
 	}
 	return nil
 }
+
+// CheckAuthorizationProfileTarget validates an explicitly selected target mode
+// against immutable declaration bytes. The caller must separately establish
+// trusted registration, current service identity and account/installation scope.
+// Neither an ID spelled "collection" nor an action name selects the mode.
+func CheckAuthorizationProfileTarget(
+	profile AuthorizationProfile,
+	reference AuthorizationProfileReference,
+	action Action,
+	resource ResourceReference,
+	mode AuthorizationResourceMode,
+	usage AuthorizationCollectionUsage,
+) error {
+	if CheckAuthorizationProfileReference(profile, reference) != nil || ValidateID("resource.id", resource.ID) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	switch mode {
+	case AuthorizationResourceInstance:
+		if usage != "" {
+			return ErrInvalidAuthorizationProfile
+		}
+	case AuthorizationResourceCollection:
+		if resource.ID != "collection" || (usage != AuthorizationCollectionList && usage != AuthorizationCollectionCreate) {
+			return ErrInvalidAuthorizationProfile
+		}
+	default:
+		return ErrInvalidAuthorizationProfile
+	}
+	for _, declared := range profile.Actions {
+		if declared.Action != action || declared.ResourceKind != resource.Kind {
+			continue
+		}
+		for _, shape := range declared.ResourceShapes {
+			if shape.Mode == mode && shape.CollectionUsage == usage {
+				return nil
+			}
+		}
+	}
+	return ErrInvalidAuthorizationProfile
+}
+
+// NewAuthorizationRequest is a current-source transport constructor. The PEP
+// explicitly chooses the target mode; this function never infers list/create
+// from a resource ID and does not authenticate or authorize the caller.
+func NewAuthorizationRequest(action Action, resource ResourceReference, mode AuthorizationResourceMode, usage AuthorizationCollectionUsage, requestID, correlationID string) (AuthorizationRequest, error) {
+	definition, known := LookupActionDefinition(action)
+	if !known {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	profile, known := LookupAuthorizationProfile(definition.Product)
+	if !known {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	_, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		return AuthorizationRequest{}, err
+	}
+	request := AuthorizationRequest{Action: action, Resource: resource,
+		Profile:      AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest},
+		ResourceMode: mode, CollectionUsage: usage, RequestID: requestID, CorrelationID: correlationID}
+	if err := ValidateAuthorizationRequest(request); err != nil {
+		return AuthorizationRequest{}, err
+	}
+	return request, nil
+}
+
+// CheckAuthorizationDecisionForRequest is the shared response-binding contract
+// used by PEPs before consuming either an Allow or a Deny.
+func CheckAuthorizationDecisionForRequest(decision AuthorizationDecision, request AuthorizationRequest) error {
+	if ValidateAuthorizationRequest(request) != nil || ValidateAuthorizationDecision(decision) != nil || decision.Profile == nil ||
+		*decision.Profile != request.Profile || decision.Action != request.Action || decision.Resource != request.Resource ||
+		decision.ResourceMode != request.ResourceMode || decision.CollectionUsage != request.CollectionUsage ||
+		decision.RequestID != request.RequestID || decision.CorrelationID != request.CorrelationID {
+		return ErrInvalidAuthorizationProfile
+	}
+	return nil
+}

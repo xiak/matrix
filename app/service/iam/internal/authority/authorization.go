@@ -151,16 +151,21 @@ func decide(
 	probeContext := request.Action != iamv1.ActionInstallationVerify ||
 		subject.Type == iamv1.PrincipalServiceAccount && request.Resource.ID == installationID
 	allowed := evaluation.Allowed && !mustChangePassword && platformContext && probeContext && ServiceCanRequest(callingService, request.Action)
+	profile := request.Profile
 	decision := iamv1.AuthorizationDecision{
-		APIVersion: iamv1.APIVersion,
-		Kind:       "AuthorizationDecision",
-		ID:         decisionID,
-		Allowed:    allowed,
-		Reason:     iamv1.DecisionDenied,
-		Action:     request.Action,
-		Resource:   request.Resource,
-		RequestID:  request.RequestID,
-		DecidedAt:  databaseTime,
+		APIVersion:      iamv1.APIVersion,
+		Kind:            "AuthorizationDecision",
+		ID:              decisionID,
+		Allowed:         allowed,
+		Reason:          iamv1.DecisionDenied,
+		Action:          request.Action,
+		Resource:        request.Resource,
+		RequestID:       request.RequestID,
+		DecidedAt:       databaseTime,
+		Profile:         &profile,
+		ResourceMode:    request.ResourceMode,
+		CollectionUsage: request.CollectionUsage,
+		CorrelationID:   request.CorrelationID,
 	}
 	if allowed {
 		decision.Reason = iamv1.DecisionAllowed
@@ -171,7 +176,7 @@ func decide(
 		}
 		decision.Subject = &subject
 	}
-	if err := iamv1.ValidateAuthorizationDecision(decision); err != nil {
+	if err := iamv1.CheckAuthorizationDecisionForRequest(decision, request); err != nil {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
 	return AuthorizationEvaluation{AuthorizationDecision: decision, PolicyEvidence: evidence, BoundaryEvidence: boundaryEvidence}, nil

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
@@ -35,10 +36,12 @@ const (
 // AuthorizationRequest carries transient credential material to the IAM
 // boundary. Credential must never be persisted, logged, or copied into Audit.
 type AuthorizationRequest struct {
-	Credential string
-	Action     string
-	Resource   paasv1.ResourceRef
-	RequestID  string
+	Credential      string
+	Action          string
+	Resource        paasv1.ResourceRef
+	ResourceMode    iamv1.AuthorizationResourceMode
+	CollectionUsage iamv1.AuthorizationCollectionUsage
+	RequestID       string
 }
 
 // Authorization is the trusted IAM result consumed by apphosting. Tenant and
@@ -70,6 +73,18 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	}
 	if strings.TrimSpace(value.Resource.Kind) == "" {
 		problems = append(problems, errors.New("authorization resource kind is required"))
+	}
+	switch value.ResourceMode {
+	case iamv1.AuthorizationResourceInstance:
+		if value.CollectionUsage != "" {
+			problems = append(problems, errors.New("instance authorization cannot carry collection usage"))
+		}
+	case iamv1.AuthorizationResourceCollection:
+		if value.Resource.ID != "collection" || (value.CollectionUsage != iamv1.AuthorizationCollectionCreate && value.CollectionUsage != iamv1.AuthorizationCollectionList) {
+			problems = append(problems, errors.New("collection authorization target is invalid"))
+		}
+	default:
+		problems = append(problems, errors.New("authorization resource mode is required"))
 	}
 	problems = append(problems,
 		paasv1.ValidateID("authorization.resource.id", string(value.Resource.ID)),

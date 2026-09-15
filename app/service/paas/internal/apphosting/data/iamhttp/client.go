@@ -112,9 +112,7 @@ func (client *Client) Authorize(
 	var decision iamv1.AuthorizationDecision
 	if !authorityhttp.ResponseIsJSON(response) ||
 		iamv1.DecodeRequest(response.Body, &decision) != nil ||
-		iamv1.ValidateAuthorizationDecision(decision) != nil ||
-		decision.Action != iamRequest.Action || decision.Resource != iamRequest.Resource ||
-		decision.RequestID != iamRequest.RequestID {
+		iamv1.CheckAuthorizationDecisionForRequest(decision, iamRequest) != nil {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	authorization, err := authorizationFromDecision(decision)
@@ -140,16 +138,10 @@ func (client *Client) VerifyInstallation(
 	if err != nil || ctx == nil {
 		return port.Authorization{}, port.ErrUnauthenticated
 	}
-	iamRequest := iamv1.AuthorizationRequest{
-		Action: iamv1.ActionInstallationVerify,
-		Resource: iamv1.ResourceReference{
-			Kind: iamv1.ResourceInstallation,
-			ID:   installationID,
-		},
-		RequestID:     requestID,
-		CorrelationID: requestID,
-	}
-	if iamv1.ValidateAuthorizationRequest(iamRequest) != nil {
+	iamRequest, err := iamv1.NewAuthorizationRequest(iamv1.ActionInstallationVerify,
+		iamv1.ResourceReference{Kind: iamv1.ResourceInstallation, ID: installationID},
+		iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+	if err != nil {
 		return port.Authorization{}, port.ErrUnauthenticated
 	}
 	body, err := json.Marshal(iamRequest)
@@ -176,10 +168,7 @@ func (client *Client) VerifyInstallation(
 	var decision iamv1.AuthorizationDecision
 	if !authorityhttp.ResponseIsJSON(response) ||
 		iamv1.DecodeRequest(response.Body, &decision) != nil ||
-		iamv1.ValidateAuthorizationDecision(decision) != nil ||
-		decision.Action != iamRequest.Action ||
-		decision.Resource != iamRequest.Resource ||
-		decision.RequestID != iamRequest.RequestID {
+		iamv1.CheckAuthorizationDecisionForRequest(decision, iamRequest) != nil {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	authorization, err := authorizationFromDecision(decision)
@@ -232,13 +221,10 @@ func toIAMRequest(request port.AuthorizationRequest) (iamv1.AuthorizationRequest
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, err
 	}
-	result := iamv1.AuthorizationRequest{
-		Action:        iamv1.Action(request.Action),
-		Resource:      iamv1.ResourceReference{Kind: resourceKind, ID: string(request.Resource.ID)},
-		RequestID:     request.RequestID,
-		CorrelationID: request.RequestID,
-	}
-	if iamv1.ValidateAuthorizationRequest(result) != nil {
+	result, err := iamv1.NewAuthorizationRequest(iamv1.Action(request.Action),
+		iamv1.ResourceReference{Kind: resourceKind, ID: string(request.Resource.ID)},
+		request.ResourceMode, request.CollectionUsage, request.RequestID, request.RequestID)
+	if err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("PaaS authorization cannot map to IAM")
 	}
 	return result, nil

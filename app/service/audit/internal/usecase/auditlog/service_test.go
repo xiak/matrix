@@ -490,7 +490,8 @@ func (client *auditIAM) Authorize(
 		Action:     request.Action,
 		Resource:   request.Resource,
 		RequestID:  request.RequestID,
-		DecidedAt:  client.now,
+		Profile:    &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
+		DecidedAt: client.now,
 	}
 	if iamv1.IsPlatformAction(request.Action) {
 		decision.TenantID, decision.InstallationID = "", client.identity.InstallationID
@@ -523,6 +524,7 @@ func (client *auditIAM) VerifyInstallation(
 		},
 		Action: request.Action, Resource: request.Resource,
 		RequestID: request.RequestID, DecidedAt: client.now,
+		Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
 	}
 	if client.deny {
 		decision.Reason = iamv1.DecisionDenied

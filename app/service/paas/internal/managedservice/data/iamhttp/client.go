@@ -95,9 +95,7 @@ func (client *Client) Authorize(
 	var decision iamv1.AuthorizationDecision
 	if !authorityhttp.ResponseIsJSON(response) ||
 		iamv1.DecodeRequest(response.Body, &decision) != nil ||
-		iamv1.ValidateAuthorizationDecision(decision) != nil ||
-		decision.Action != iamRequest.Action || decision.Resource != iamRequest.Resource ||
-		decision.RequestID != iamRequest.RequestID {
+		iamv1.CheckAuthorizationDecisionForRequest(decision, iamRequest) != nil {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	if !decision.Allowed {
@@ -122,12 +120,10 @@ func toIAMRequest(request port.AuthorizationRequest) (iamv1.AuthorizationRequest
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, err
 	}
-	result := iamv1.AuthorizationRequest{
-		Action:    iamv1.Action(request.Action),
-		Resource:  iamv1.ResourceReference{Kind: resourceKind, ID: request.Resource.ID},
-		RequestID: request.RequestID, CorrelationID: request.RequestID,
-	}
-	if iamv1.ValidateAuthorizationRequest(result) != nil {
+	result, err := iamv1.NewAuthorizationRequest(iamv1.Action(request.Action),
+		iamv1.ResourceReference{Kind: resourceKind, ID: request.Resource.ID},
+		request.ResourceMode, request.CollectionUsage, request.RequestID, request.RequestID)
+	if err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("managed-service authorization cannot map to IAM")
 	}
 	return result, nil

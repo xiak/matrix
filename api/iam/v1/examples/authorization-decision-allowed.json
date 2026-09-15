@@ -12,8 +12,16 @@
   "action": "paas.deployment.create",
   "resource": {
     "kind": "DEPLOYMENT",
-    "id": "deployment-example"
+    "id": "collection"
   },
   "requestId": "request-authorize",
-  "decidedAt": "2026-08-25T02:07:08.000000Z"
+  "decidedAt": "2026-08-25T02:07:08.000000Z",
+  "profile": {
+    "product": "paas",
+    "revision": 1,
+    "contentDigest": "sha256:f2409682d451b564cbd55b2b315543c2f4b333e3f027f3b4377b103ecc1e2876"
+  },
+  "resourceMode": "COLLECTION",
+  "collectionUsage": "COLLECTION_CREATE",
+  "correlationId": "correlation-authorize"
 }

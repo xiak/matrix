@@ -243,27 +243,30 @@ func scalarSchemas() object {
 	} {
 		result[name] = object{"allOf": []any{openapi31.Ref("ID")}}
 	}
+	result["ProductID"] = object{"type": "string", "pattern": `^[a-z][a-z0-9_-]{0,63}$`, "minLength": 1, "maxLength": 64}
 	return result
 }
 
 func enumSchemas() map[string][]string {
 	return map[string][]string{
-		"AccountStatus":              {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
-		"PrincipalType":              {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
-		"PrincipalStatus":            {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
-		"SessionStatus":              {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
-		"AuthorityScope":             {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
-		"IdentityKind":               {string(iamv1.IdentityRoot), string(iamv1.IdentityUser)},
-		"CapabilityRestriction":      openapi31.StringValues(iamv1.AllCapabilityRestrictions()),
-		"PolicyAttachmentTargetKind": {string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetService), string(iamv1.PolicyTargetGroup), string(iamv1.PolicyTargetRole)},
-		"PolicyGrantSourceKind":      {string(iamv1.PolicyGrantDirect), string(iamv1.PolicyGrantGroup)},
-		"PolicyManagement":           {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
-		"PolicyStatus":               {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
-		"PolicyEffect":               {string(iamv1.PolicyAllow), string(iamv1.PolicyDeny)},
-		"ConditionKey":               {string(iamv1.ConditionIAMCurrentTime), string(iamv1.ConditionIAMAccountID), string(iamv1.ConditionIAMPrincipalID)},
-		"PolicyConditionOperator":    {string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan), string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals)},
-		"PolicyResourceMatch":        {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority), string(iamv1.PolicyResourcePrefixInAuthority)},
-		"Action":                     openapi31.StringValues(iamv1.AllActions()),
+		"AccountStatus":                {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
+		"PrincipalType":                {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
+		"PrincipalStatus":              {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
+		"SessionStatus":                {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
+		"AuthorityScope":               {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
+		"AuthorizationResourceMode":    {string(iamv1.AuthorizationResourceInstance), string(iamv1.AuthorizationResourceCollection)},
+		"AuthorizationCollectionUsage": {string(iamv1.AuthorizationCollectionList), string(iamv1.AuthorizationCollectionCreate)},
+		"IdentityKind":                 {string(iamv1.IdentityRoot), string(iamv1.IdentityUser)},
+		"CapabilityRestriction":        openapi31.StringValues(iamv1.AllCapabilityRestrictions()),
+		"PolicyAttachmentTargetKind":   {string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetService), string(iamv1.PolicyTargetGroup), string(iamv1.PolicyTargetRole)},
+		"PolicyGrantSourceKind":        {string(iamv1.PolicyGrantDirect), string(iamv1.PolicyGrantGroup)},
+		"PolicyManagement":             {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
+		"PolicyStatus":                 {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
+		"PolicyEffect":                 {string(iamv1.PolicyAllow), string(iamv1.PolicyDeny)},
+		"ConditionKey":                 {string(iamv1.ConditionIAMCurrentTime), string(iamv1.ConditionIAMAccountID), string(iamv1.ConditionIAMPrincipalID)},
+		"PolicyConditionOperator":      {string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan), string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals)},
+		"PolicyResourceMatch":          {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority), string(iamv1.PolicyResourcePrefixInAuthority)},
+		"Action":                       openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
 			string(iamv1.ResourceAccount), string(iamv1.ResourceUser),
 			string(iamv1.ResourcePolicy),
@@ -275,7 +278,7 @@ func enumSchemas() map[string][]string {
 			string(iamv1.ResourceQuotaEntitlement), string(iamv1.ResourceServiceInstallation),
 			string(iamv1.ResourceAuditRecord),
 			string(iamv1.ResourceAuditChain), string(iamv1.ResourceInstallation),
-			string(iamv1.ResourceExecutionPool), string(iamv1.ResourceExecutionTarget),
+			string(iamv1.ResourceExecutionPool), string(iamv1.ResourceExecutionTarget), string(iamv1.ResourceNodeEnrollment),
 		},
 		"DecisionReason": {string(iamv1.DecisionAllowed), string(iamv1.DecisionDenied)},
 		"BootstrapState": {string(iamv1.BootstrapUninitialized), string(iamv1.BootstrapReady)},
@@ -288,6 +291,7 @@ func structContracts() map[string]reflect.Type {
 	return map[string]reflect.Type{
 		"Subject":                             openapi31.StructType[iamv1.Subject](),
 		"ResourceReference":                   openapi31.StructType[iamv1.ResourceReference](),
+		"AuthorizationProfileReference":       openapi31.StructType[iamv1.AuthorizationProfileReference](),
 		"PolicyAttachment":                    openapi31.StructType[iamv1.PolicyAttachment](),
 		"PolicyGrantSource":                   openapi31.StructType[iamv1.PolicyGrantSource](),
 		"Policy":                              openapi31.StructType[iamv1.Policy](),
@@ -433,7 +437,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		(jsonName == "id" || strings.HasSuffix(jsonName, "Id")) {
 		base = openapi31.Ref("ID")
 	}
-	if jsonName == "resourceVersion" || jsonName == "schemaVersion" || jsonName == "policyResourceVersion" {
+	if jsonName == "resourceVersion" || jsonName == "schemaVersion" || jsonName == "policyResourceVersion" || (owner == "AuthorizationProfileReference" && jsonName == "revision") {
 		base["minimum"] = 1
 	}
 	if owner == "ChangePasswordRequest" && jsonName == "revokeOtherSessions" {
@@ -560,13 +564,8 @@ func applySemanticOverlays(schemas object) {
 	}
 
 	decision := schemas["AuthorizationDecision"].(object)
-	var recordedActions []string
-	for _, definition := range iamv1.AllRecordedActionDefinitions() {
-		recordedActions = append(recordedActions, string(definition.Action))
-	}
-	// The shared Action enum remains current-only. Historical vocabulary is
-	// accepted only in immutable decision responses, never in requests/policies.
-	decision["properties"].(object)["action"] = object{"type": "string", "enum": recordedActions}
+	decision["required"] = append(decision["required"].([]string), "profile", "resourceMode", "correlationId")
+	decision["properties"].(object)["profile"] = openapi31.Ref("AuthorizationProfileReference")
 	decisionRules := []any{
 		object{
 			"if": object{"properties": object{"allowed": object{"const": true}}, "required": []string{"allowed"}},
@@ -583,7 +582,7 @@ func applySemanticOverlays(schemas object) {
 		},
 	}
 	var platformActions []string
-	for _, definition := range iamv1.AllRecordedActionDefinitions() {
+	for _, definition := range iamv1.AllActionDefinitions() {
 		if definition.AuthorityScope == iamv1.AuthorityScopeInstallation {
 			platformActions = append(platformActions, string(definition.Action))
 		}
@@ -598,8 +597,8 @@ func applySemanticOverlays(schemas object) {
 			"else": object{"required": []string{"tenantId"}, "properties": object{"installationId": false}},
 		},
 	})
-	decision["allOf"] = append(decisionRules, actionResourceRules(iamv1.AllRecordedActionDefinitions())...)
-	schemas["AuthorizationRequest"].(object)["allOf"] = actionResourceRules(iamv1.AllActionDefinitions())
+	decision["allOf"] = append(decisionRules, authorizationTargetRules()...)
+	schemas["AuthorizationRequest"].(object)["allOf"] = authorizationTargetRules()
 
 	session := schemas["Session"].(object)
 	session["allOf"] = []any{
@@ -611,23 +610,33 @@ func applySemanticOverlays(schemas object) {
 	}
 }
 
-func actionResourceRules(definitions []iamv1.ActionDefinition) []any {
-	rules := make([]any, 0, len(definitions))
-	for _, definition := range definitions {
-		rules = append(rules, object{
-			"if": object{
-				"properties": object{"action": object{"const": string(definition.Action)}},
-				"required":   []string{"action"},
-			},
-			"then": object{
-				"properties": object{
-					"resource": object{
-						"properties": object{"kind": object{"const": string(definition.ResourceKind)}},
-						"required":   []string{"kind"},
-					},
-				},
-			},
-		})
+func authorizationTargetRules() []any {
+	var rules []any
+	for _, profile := range iamv1.AllAuthorizationProfiles() {
+		_, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+		if err != nil {
+			panic(err)
+		}
+		for _, action := range profile.Actions {
+			var shapes []any
+			for _, shape := range action.ResourceShapes {
+				properties := object{"resourceMode": object{"const": string(shape.Mode)}, "collectionUsage": false}
+				required := []string{"resourceMode"}
+				if shape.Mode == iamv1.AuthorizationResourceCollection {
+					properties["collectionUsage"] = object{"const": string(shape.CollectionUsage)}
+					properties["resource"] = object{"properties": object{"id": object{"const": "collection"}}}
+					required = append(required, "collectionUsage")
+				}
+				shapes = append(shapes, object{"properties": properties, "required": required})
+			}
+			rules = append(rules, object{
+				"if": object{"properties": object{"action": object{"const": string(action.Action)}}, "required": []string{"action"}},
+				"then": object{"properties": object{
+					"profile":  object{"const": object{"product": string(profile.Product), "revision": profile.Revision, "contentDigest": digest}},
+					"resource": object{"properties": object{"kind": object{"const": string(action.ResourceKind)}}},
+				}, "oneOf": shapes},
+			})
+		}
 	}
 	return rules
 }

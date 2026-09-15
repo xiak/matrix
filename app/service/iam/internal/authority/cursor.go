@@ -123,20 +123,27 @@ func (codec CursorCodec) binding(subject SubjectContext, query DirectoryQuery, n
 		return nil, ErrInvalidCursor
 	}
 	validQuery := false
+	var mode iamv1.AuthorizationResourceMode
+	var usage iamv1.AuthorizationCollectionUsage
 	switch query.Action {
 	case iamv1.ActionIAMUserList, iamv1.ActionIAMGroupList:
 		validQuery = query.Resource == (iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Organization.ID)})
+		mode = iamv1.AuthorizationResourceInstance
 	case iamv1.ActionIAMAccountRead:
-		validQuery = query.Resource == (iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "accounts"})
+		validQuery = query.Resource == (iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "collection"})
+		mode, usage = iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList
 	case iamv1.ActionIAMGroupMembershipList:
 		validQuery = query.Resource.Kind == iamv1.ResourceGroup && iamv1.ValidateID("groupId", query.Resource.ID) == nil
+		mode = iamv1.AuthorizationResourceInstance
 	}
 	if !validQuery {
 		return nil, ErrInvalidCursor
 	}
-	evaluation, err := Decide(subject, iamv1.ServiceIAM, iamv1.AuthorizationRequest{
-		Action: query.Action, Resource: query.Resource, RequestID: "cursor-authorization", CorrelationID: "cursor-authorization",
-	}, "cursor-authorization", now)
+	request, err := iamv1.NewAuthorizationRequest(query.Action, query.Resource, mode, usage, "cursor-authorization", "cursor-authorization")
+	if err != nil {
+		return nil, ErrInvalidCursor
+	}
+	evaluation, err := Decide(subject, iamv1.ServiceIAM, request, "cursor-authorization", now)
 	if err != nil || !evaluation.Allowed {
 		return nil, ErrInvalidCursor
 	}

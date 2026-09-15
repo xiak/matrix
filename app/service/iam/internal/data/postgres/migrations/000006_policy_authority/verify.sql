@@ -49,7 +49,7 @@ BEGIN
         WHERE evidence.attrelid='iam.authorization_decisions'::regclass AND evidence.attname='policy_evidence'
           AND evidence.atttypid='jsonb'::regtype AND NOT evidence.attisdropped)
         OR NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS recorder
-            WHERE recorder.oid=to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb)')
+            WHERE recorder.oid=to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer)')
               AND recorder.prosecdef AND recorder.proowner='matrix_iam_owner'::regrole) THEN
         RAISE EXCEPTION 'IAM decision provenance contract is invalid';
     END IF;
@@ -77,7 +77,7 @@ END $verify_policy_authority$;
 DO $verify_customer_policy_publication$
 DECLARE function_name text;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 20::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 21::bigint THEN
         RAISE EXCEPTION 'IAM policy publication schema version is invalid';
     END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='iam.policy_versions'::regclass

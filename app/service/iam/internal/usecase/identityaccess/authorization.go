@@ -203,6 +203,7 @@ func (service *Authority) decideAndRecord(
 	if err := transaction.RecordAuthorization(ctx, AuthorizationMutation{
 		AccountID:        actor.organizationID,
 		PrincipalID:      actor.principalID,
+		Request:          request,
 		Decision:         decision.AuthorizationDecision,
 		PolicyEvidence:   decision.PolicyEvidence,
 		BoundaryEvidence: decision.BoundaryEvidence,

@@ -20,14 +20,11 @@ func (service *Service) VerifyInstallation(
 		auditv1.ValidateVerifyInstallationRequest(request) != nil {
 		return auditv1.InstallationVerification{}, ErrInvalidArgument
 	}
-	authorizationRequest := iamv1.AuthorizationRequest{
-		Action: iamv1.ActionInstallationVerify,
-		Resource: iamv1.ResourceReference{
-			Kind: iamv1.ResourceInstallation,
-			ID:   request.InstallationID,
-		},
-		RequestID:     requestID,
-		CorrelationID: requestID,
+	authorizationRequest, err := iamv1.NewAuthorizationRequest(iamv1.ActionInstallationVerify,
+		iamv1.ResourceReference{Kind: iamv1.ResourceInstallation, ID: request.InstallationID},
+		iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+	if err != nil {
+		return auditv1.InstallationVerification{}, ErrUnavailable
 	}
 	decision, err := service.iam.VerifyInstallation(
 		ctx, verifierCredential, authorizationRequest,
@@ -35,10 +32,7 @@ func (service *Service) VerifyInstallation(
 	if err != nil {
 		return auditv1.InstallationVerification{}, err
 	}
-	if iamv1.ValidateAuthorizationDecision(decision) != nil ||
-		decision.Action != authorizationRequest.Action ||
-		decision.Resource != authorizationRequest.Resource ||
-		decision.RequestID != requestID {
+	if iamv1.CheckAuthorizationDecisionForRequest(decision, authorizationRequest) != nil {
 		return auditv1.InstallationVerification{}, ErrUnavailable
 	}
 	if !decision.Allowed {

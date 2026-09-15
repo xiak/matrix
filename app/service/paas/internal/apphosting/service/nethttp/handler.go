@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
@@ -208,7 +209,7 @@ func (value *handler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 }
 
 func (value *handler) createApplication(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCollection(response, request, port.AuthorizeApplicationCreate, "Application")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeApplicationCreate, "Application")
 	if !ok {
 		return
 	}
@@ -224,7 +225,7 @@ func (value *handler) createApplication(response http.ResponseWriter, request *h
 }
 
 func (value *handler) createConfiguration(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCollection(response, request, port.AuthorizeConfigurationCreate, "Configuration")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeConfigurationCreate, "Configuration")
 	if !ok {
 		return
 	}
@@ -240,7 +241,7 @@ func (value *handler) createConfiguration(response http.ResponseWriter, request 
 }
 
 func (value *handler) createConfigurationRevision(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCollection(response, request, port.AuthorizeConfigurationRevisionCreate, "ConfigurationRevision")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeConfigurationRevisionCreate, "ConfigurationRevision")
 	if !ok {
 		return
 	}
@@ -256,7 +257,7 @@ func (value *handler) createConfigurationRevision(response http.ResponseWriter, 
 }
 
 func (value *handler) createApplicationRevision(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCollection(response, request, port.AuthorizeApplicationRevisionCreate, "ApplicationRevision")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeApplicationRevisionCreate, "ApplicationRevision")
 	if !ok {
 		return
 	}
@@ -272,7 +273,7 @@ func (value *handler) createApplicationRevision(response http.ResponseWriter, re
 }
 
 func (value *handler) createDeployment(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCollection(response, request, port.AuthorizeDeploymentCreate, "Deployment")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeDeploymentCreate, "Deployment")
 	if !ok {
 		return
 	}
@@ -311,6 +312,7 @@ func (value *handler) updateDeployment(response http.ResponseWriter, request *ht
 		action,
 		"Deployment",
 		deploymentID,
+		iamv1.AuthorizationResourceInstance, "",
 	)
 	if !ok {
 		return
@@ -331,7 +333,7 @@ func (value *handler) rollbackDeployment(response http.ResponseWriter, request *
 	if !ok {
 		return
 	}
-	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeDeploymentRollback, "Deployment", deploymentID)
+	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeDeploymentRollback, "Deployment", deploymentID, iamv1.AuthorizationResourceInstance, "")
 	if !ok {
 		return
 	}
@@ -419,7 +421,7 @@ func (value *handler) getOperation(response http.ResponseWriter, request *http.R
 	if !ok {
 		return
 	}
-	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeOperationRead, "Operation", paasv1.ResourceID(id))
+	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeOperationRead, "Operation", paasv1.ResourceID(id), iamv1.AuthorizationResourceInstance, "")
 	if !ok {
 		return
 	}
@@ -431,13 +433,13 @@ func (value *handler) getOperation(response http.ResponseWriter, request *http.R
 	writeResource(response, requestID, resource, etag, err)
 }
 
-func (value *handler) authorizeCollection(
+func (value *handler) authorizeCreationCollection(
 	response http.ResponseWriter,
 	request *http.Request,
 	action string,
 	kind string,
 ) (string, port.Authorization, bool) {
-	return value.authorize(response, request, action, kind, "collection")
+	return value.authorize(response, request, action, kind, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate)
 }
 
 func (value *handler) authorizePath(
@@ -451,7 +453,7 @@ func (value *handler) authorizePath(
 	if !ok {
 		return "", port.Authorization{}, "", false
 	}
-	requestID, authorization, ok := value.authorize(response, request, action, kind, id)
+	requestID, authorization, ok := value.authorize(response, request, action, kind, id, iamv1.AuthorizationResourceInstance, "")
 	return id, authorization, requestID, ok
 }
 
@@ -461,12 +463,14 @@ func (value *handler) authorize(
 	action string,
 	kind string,
 	id paasv1.ResourceID,
+	mode iamv1.AuthorizationResourceMode,
+	usage iamv1.AuthorizationCollectionUsage,
 ) (string, port.Authorization, bool) {
 	requestID, ok := value.beginRequest(response)
 	if !ok {
 		return "", port.Authorization{}, false
 	}
-	authorization, ok := value.authorizeRequest(response, request, requestID, action, kind, id)
+	authorization, ok := value.authorizeRequest(response, request, requestID, action, kind, id, mode, usage)
 	return requestID, authorization, ok
 }
 
@@ -487,12 +491,15 @@ func (value *handler) authorizeRequest(
 	action string,
 	kind string,
 	id paasv1.ResourceID,
+	mode iamv1.AuthorizationResourceMode,
+	usage iamv1.AuthorizationCollectionUsage,
 ) (port.Authorization, bool) {
 	authorizationRequest := port.AuthorizationRequest{
-		Credential: request.Header.Get("Authorization"),
-		Action:     action,
-		Resource:   paasv1.ResourceRef{Kind: kind, ID: id},
-		RequestID:  requestID,
+		Credential:   request.Header.Get("Authorization"),
+		Action:       action,
+		Resource:     paasv1.ResourceRef{Kind: kind, ID: id},
+		ResourceMode: mode, CollectionUsage: usage,
+		RequestID: requestID,
 	}
 	if err := port.ValidateAuthorizationRequest(authorizationRequest); err != nil {
 		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "a valid IAM credential is required", false)
