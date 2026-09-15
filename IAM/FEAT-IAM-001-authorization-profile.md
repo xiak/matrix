@@ -1,6 +1,6 @@
 # FEAT-IAM-001：业务授权能力目录
 
-- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 纯声明契约已实现，注册/实际决定与产品接入尚未实施，本 FEAT 整体未验收。
+- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 已实现源码登记的 Profile 及当前目录投影，实际决定/PolicyVersion 的版本绑定与历史注册尚未实施，本 FEAT 整体未验收。
 - 依赖：[产品契约](./FEAT-IAM-000-product-contract.md)。
 - Owner：IAM 公共契约与现有 authority；产品拥有其业务词汇。
 - 首片：把现有已接受的动作、允许调用服务、资源种类和 scope 收敛为一份不可变目录，所有当前验证和决定路径消费该目录。
@@ -31,23 +31,29 @@
 
 ### CAT-05 下一纵向切片：可验证的产品 Profile
 
-该切片先实现纯声明契约，尚未改变当前静态目录或实际授权入口。先把已有真实 PEP 的语义显式登记并绑定不可变 revision/contentDigest，再由005消费冻结的动作集合；不能先在求值器加入字符串 Action 前缀匹配，最后补历史证明。
+该切片以源码登记的 Profile 替换原平铺动作目录；当前授权校验和条件能力读取它的确定投影，保留既有动作顺序、scope、caller、resource与prefix语义，尚未改变请求/结果/SQL形状。之后须在实际决定中绑定不可变 revision/contentDigest，再由005消费冻结的动作集合；不能先在求值器加入字符串 Action 前缀匹配，最后补历史证明。
 
 产品 Profile 必须同时约束产品标识、允许调用的已认证服务、Action、scope、资源种类、请求目标模式、集合行为与可信条件能力。产品名或 Action 字符串只作为标识，不能推导调用权限或粒度。内容不可变、同产品同 revision 不得对应另一 digest；digest 覆盖所有影响授权解释的字段。返回副本不能修改注册目录。注册来源仍由可信产品发布/服务组合控制，不开放租户上传 Profile 或借此注册平台动作。
 
-纯声明编码由 `api/iam/v1/authorization_profile.go` 唯一拥有；它保护产品能力内容与引用的不可变边界，不复制 Policy/Audit 编码，不提供第二份活跃动作目录。`AuthorizationProfile` 包含 `apiVersion/kind/product/revision/callingService/actions`；每个动作显式给出 `resourceKind/scope/resourceShapes/conditions`。`INSTANCE` 可以声明租户实例前缀；`COLLECTION` 只能声明 `COLLECTION_LIST` 或携带 `resultResourceKind` 的 `COLLECTION_CREATE`，不支持 prefix、filter 或 batch。创建结果类型不是最终资源ID或payload证明。
+纯声明编码由 `api/iam/v1/authorization_profile.go` 唯一拥有，不复制 Policy/Audit 编码。`AuthorizationProfile` 包含 `apiVersion/kind/product/revision/callingService/actions`；每个动作显式给出 `resourceKind/scope/resourceShapes/conditions`，末尾可声明 `resultResourceKind`。后者与授权目标正交：既可表达集合创建，也可表达对父Account实例授权后创建User/Group/Policy。`INSTANCE` 可以声明租户实例前缀；`COLLECTION` 只能声明 `COLLECTION_LIST` 或 `COLLECTION_CREATE`，不支持 prefix、filter 或 batch。集合创建必须声明动作级result；含集合LIST时不得声明创建结果，不允许同动作LIST+CREATE。结果仅是成功事实种类，不是API返回载荷、最终ID或payload证明，不能替换原decision资源。shape不接受result字段或兼容别名。
 
-`DecodeAuthorizationProfile` 沿现有严格 JSON owner 拒绝重复/未知/大小写别名字段，输入与程序内声明都受64KiB、128动作上限约束。动作/形状/条件分别按集合排序，输入保持不变；`CanonicalizeAuthorizationProfile` 使用 `matrix.iam.authorization-profile.v1` 域分隔摘要，`CheckAuthorizationProfileReference` 精确比较 `product/revision/contentDigest`，不接受“更新版本即可兼容”。可选条件省略、null、空集合都规范为不声明任何条件能力；来源仍复用唯一 IAM 封闭定义。产品/服务标识的语法允许未来产品，但语法通过、摘要匹配均不构成注册、签名认证或授权；当前未知动作仍被原目录拒绝。可信发布、同revision变体拒绝与历史保存必须在后续注册事务中落实，不能由纯编码测试冒充。
+`DecodeAuthorizationProfile` 沿现有严格 JSON owner 拒绝重复/未知/大小写别名字段，输入与程序内声明都受64KiB、128动作上限约束。动作/形状/条件分别按集合排序，输入保持不变；`CanonicalizeAuthorizationProfile` 使用 `matrix.iam.authorization-profile.v1` 域分隔摘要，`CheckAuthorizationProfileReference` 精确比较 `product/revision/contentDigest`，不接受“更新版本即可兼容”。可选条件省略、null、空集合都规范为不声明任何条件能力；来源仍复用唯一 IAM 封闭定义。产品/服务标识的语法允许未来产品，但语法通过、摘要匹配均不构成注册、签名认证或授权。
+
+现有 `enums.go` 是源码登记owner，按产品组合的Profile声明是当前唯一数据源。`AllActions`、`ActionDefinition`、资源/scope/service admission、条件能力及生成器从它派生；不存在第二份可编辑的action map。源码登记每产品只有一个当前revision，缺项/无效声明/重复产品会在服务启动前关闭，公开读取深拷贝所有嵌套集合，不能修改授权目录。历史已退休动作只保留原有不可变决定解码边界，不进入当前Profile。声明注册不代表产品已取得目标Account权限；历史Profile保存、同revision变体的持久拒绝、签名发布及线上版本绑定仍须后续注册事务证明。
 
 目标模式不能只有一个从动作后缀推断的 INSTANCE 标记。当前真实调用者至少存在三种情况，必须在首片全部覆盖：
 
 | 当前拥有者与动作 | 必须登记并验证的语义 |
 | --- | --- |
+| IAM `iam.user.create` / `iam.group.create` / `iam.policy.create` | 对当前父Account实例授权；成功资源分别为User/Group/Policy，不能反过来拿子资源替代Account授权 |
+| IAM `iam.group-membership.create` | 对实际父Group实例授权，成功关系为GroupMembership；归属仍由原事务验证 |
 | PaaS `paas.application.create` | HTTP owner先检查集合，成功事实再绑定最终 Application；集合授权不是最终ID/payload证明 |
 | PaaS `paas.application.read` | 精确实例ID；已验证的资源前缀只对该入口声明支持，不替代数据库tenant隔离 |
 | managedservice `managedservice.offering.read` | 同一动作的列表入口检查集合、详情入口检查实例；列表当前是整体授权，不支持按策略实例过滤 |
 
 以上映射来自现有 apphosting/managedservice HTTP owner，不能用更改动作名称或假装拆成两个已经存在的 API 绕过混合模式。Profile 可声明同一动作允许的多个闭合目标模式；实际调用必须明确选择并被对应 PEP 校验。未知模式、未实现的 FILTERED 或 batch 能力、错服务/产品/scope、同 ResourceKind 的另一动作均关闭。
+
+本分支当前PaaS声明只包含已有5个平台动作，不是最终PaaS公共产品目录。固定 `be3c4a96b4381426c01cd6315eaa3713c2855982` 的实际PEP证明 pool.create/target.register 对body实际ID做INSTANCE授权，pool.read/target.read兼有集合列表与实例详情；此片只引用其形状，不导入host实现。最终ABI前须按该固定源适配完整12项平台动作、NODE_ENROLLMENT及对应约束/系统策略显式新版本，推进PaaS Profile revision/digest。node-enrollment.create的collection→ExecutionTarget历史映射和其余exact enrollment请求必须保留；中间5项目录不得冒充最终验收。
 
 首片的实质门禁是两个真实产品通过同一注册/校验路径，IAM实际决定与持久化证据绑定精确 Profile，PEP拒绝不匹配的回包；修改或增加 Profile 不能改变已经固定的旧版本解释。新增产品声明不得要求通用求值器按产品名称增加分支。未声明来源的条件不能启用；当前IAM自供身份/事务时间继续独立于产品属性，不增加任意 caller attributes map。
 
@@ -82,6 +88,11 @@
 
 - 固定实现 `3b11eb9dbabd70211e665c00e4e665658b461bd1` 已推送；GitHub API 核实 [Verification 34565145241](https://github.com/xiak/matrix/actions/runs/34565145241) 的精确 SHA 与 go、authority-process、node-process 全部 `completed/success`。独立 Linux PG18 job 还复跑了既有各旧版本保留升级门禁；这不等于新增跨 profile 签名升级许可。
 
-2026-09-15 CAT-05 纯契约前置门禁：既有 `api/iam/v1/contract_test.go` 覆盖集合排序与输入不变、授权字段的摘要绑定、精确三元引用、同动作集合/实例声明、重复/未知/越产品能力拒绝及程序内/JSON 双重字节上限。未来产品通过声明语法不会进入当前动作目录，也不会获得条件或请求权限。API、IAM、Audit 与 architecture 的 `-race -p 2` 回归、对应 vet 和 API 生成通过，生成契约无变化；最终集合命名下2-worker、20s规范往返 fuzz 通过478589次执行。该片没有 SQL/线上入口/安装 profile 变更；默认跳过的真实数据库测试不作验收证据，两个真实产品的 Profile 注册/决定/历史重放门禁仍待实施。
+2026-09-15 CAT-05 源码登记与当前目录投影门禁：
+
+- 既有 `api/iam/v1/contract_test.go` 验证产品声明与当前admission/条件能力一致、嵌套返回值不可修改目录、未知产品不被注册、重复/错命名空间声明启动前拒绝、父实例与集合创建结果分离、混合read形状和精确引用。使用不同名称的产品通过相同纯投影路径，不能修改全局目录或取得权限；没有依赖产品名称分支。
+- API、IAM、Audit、PaaS 与 architecture 的 `-race -p 2` 回归、对应 vet、API生成稳定及 Linux amd64 构建通过；包含父实例/集合创建种子的2-worker、20s规范往返 fuzz 通过94701次执行。原Action枚举与生成wire未变化。
+- 独立 PG18 固定镜像 `postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280`，1CPU/768MiB/PIDs128、max_connections64；三个专属数据库与loopback随机端口。串行 `-race -p 1` 实跑 IAM HTTP（82.52s；包85.579s）、独立 IAM/Audit/PaaS 与双dispatcher（56.47s；包59.724s）、策略存储门禁（141.91s；包145.201s）。保留实际受限runtime登录、两租户资源/Operation/outbox、组继承、边界竞争、条件与SQL目录一致性、当前撤权和历史证据不可修改。
+- 本轮容器、网络及包含三个临时数据库的卷已按精确ID/标签清理，连接归零后删除；不涉及其他任务资源。本片没有 SQL/线上请求结果/安装 profile 变化。以上真实运行证明当前目录替换不回归，不证明决定已携带Profile、历史Profile持久化、签名发布或最终12项PaaS目录；这些仍按001/008后续门禁完成。
 
 CAT-05、策略替换及最终组合仍分别按 owning FEAT 实施。

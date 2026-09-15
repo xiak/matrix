@@ -30,6 +30,9 @@ type AuthorizationProfileAction struct {
 	Scope          AuthorityScope                  `json:"scope"`
 	ResourceShapes []AuthorizationResourceShape    `json:"resourceShapes"`
 	Conditions     []AuthorizationProfileCondition `json:"conditions,omitempty"`
+	// The successful fact may concern a child/new resource. This declaration
+	// never changes the resource against which IAM makes its decision.
+	ResultResourceKind ResourceKind `json:"resultResourceKind,omitempty"`
 }
 
 type AuthorizationResourceMode string
@@ -45,13 +48,12 @@ const (
 )
 
 // Prefix support belongs to the instance shape, not every use of an Action.
-// Collection creation declares the resulting kind but cannot attest its ID or
-// payload; the product transaction/outbox still owns those facts.
+// Successful resource production is declared separately on the action:
+// both collection and parent-instance authorization may create a resource.
 type AuthorizationResourceShape struct {
-	Mode               AuthorizationResourceMode    `json:"mode"`
-	PrefixAllowed      bool                         `json:"prefixAllowed"`
-	CollectionUsage    AuthorizationCollectionUsage `json:"collectionUsage,omitempty"`
-	ResultResourceKind ResourceKind                 `json:"resultResourceKind,omitempty"`
+	Mode            AuthorizationResourceMode    `json:"mode"`
+	PrefixAllowed   bool                         `json:"prefixAllowed"`
+	CollectionUsage AuthorizationCollectionUsage `json:"collectionUsage,omitempty"`
 }
 
 type AuthorizationProfileCondition struct {
@@ -122,6 +124,9 @@ func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
 		if action.Scope != AuthorityScopeTenant && action.Scope != AuthorityScopeInstallation && action.Scope != AuthorityScopeInstallationProbe {
 			return ErrInvalidAuthorizationProfile
 		}
+		if action.ResultResourceKind != "" && !profileIdentifier(string(action.ResultResourceKind), true) {
+			return ErrInvalidAuthorizationProfile
+		}
 		shapes := make(map[string]bool, len(action.ResourceShapes))
 		for _, shape := range action.ResourceShapes {
 			key := string(shape.Mode) + ":" + string(shape.CollectionUsage)
@@ -131,7 +136,7 @@ func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
 			shapes[key] = true
 			switch shape.Mode {
 			case AuthorizationResourceInstance:
-				if shape.CollectionUsage != "" || shape.ResultResourceKind != "" || shape.PrefixAllowed && action.Scope != AuthorityScopeTenant {
+				if shape.CollectionUsage != "" || shape.PrefixAllowed && action.Scope != AuthorityScopeTenant {
 					return ErrInvalidAuthorizationProfile
 				}
 			case AuthorizationResourceCollection:
@@ -140,11 +145,11 @@ func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
 				}
 				switch shape.CollectionUsage {
 				case AuthorizationCollectionList:
-					if shape.ResultResourceKind != "" {
+					if action.ResultResourceKind != "" {
 						return ErrInvalidAuthorizationProfile
 					}
 				case AuthorizationCollectionCreate:
-					if !profileIdentifier(string(shape.ResultResourceKind), true) {
+					if action.ResultResourceKind == "" {
 						return ErrInvalidAuthorizationProfile
 					}
 				default:
@@ -177,11 +182,9 @@ func CanonicalizeAuthorizationProfile(value AuthorizationProfile) (string, strin
 	if validateAuthorizationProfileStructure(value) != nil {
 		return "", "", ErrInvalidAuthorizationProfile
 	}
-	value.Actions = slices.Clone(value.Actions)
+	value = cloneAuthorizationProfile(value)
 	for index := range value.Actions {
 		action := &value.Actions[index]
-		action.ResourceShapes = slices.Clone(action.ResourceShapes)
-		action.Conditions = slices.Clone(action.Conditions)
 		slices.SortFunc(action.ResourceShapes, func(left, right AuthorizationResourceShape) int {
 			if order := cmp.Compare(left.Mode, right.Mode); order != 0 {
 				return order
@@ -197,6 +200,15 @@ func CanonicalizeAuthorizationProfile(value AuthorizationProfile) (string, strin
 	}
 	digest := sha256.Sum256(append([]byte("matrix.iam.authorization-profile.v1\x00"), encoded...))
 	return string(encoded), "sha256:" + hex.EncodeToString(digest[:]), nil
+}
+
+func cloneAuthorizationProfile(value AuthorizationProfile) AuthorizationProfile {
+	value.Actions = slices.Clone(value.Actions)
+	for index := range value.Actions {
+		value.Actions[index].ResourceShapes = slices.Clone(value.Actions[index].ResourceShapes)
+		value.Actions[index].Conditions = slices.Clone(value.Actions[index].Conditions)
+	}
+	return value
 }
 
 // CheckAuthorizationProfileReference compares the exact tuple, never a

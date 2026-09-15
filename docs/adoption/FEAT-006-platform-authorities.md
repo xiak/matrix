@@ -317,3 +317,15 @@ Inferring instance/list behavior from an Action name, runtime wildcard growth
 from the latest catalog, and a tenant-editable product registry are `REJECT`.
 Registration and runtime acceptance belong to IAM/001 and008; no UI or legacy
 runtime is imported by this slice.
+
+For source-registered Profile projection, fixed Matrix
+`c6bd0788c8978d34537c28020115352d23722ede` is `ADAPT`: keep bounded canonical
+encoding and exact references, replace shape-local result kind with action-local
+successful resource kind to preserve actual Account-to-User/Group/Policy and
+Group-to-Membership authorization. Fixed
+`be3c4a96b4381426c01cd6315eaa3713c2855982` is `REFERENCE` for exact pool-create /
+target-register IDs and mixed pool/target list/detail shapes. Its host runtime
+is not imported. Its full twelve platform actions remain the final ABI difference
+gate; the current branch's five are not represented as the final PaaS product.
+Deriving collection semantics from action spelling or substituting a successful
+child ID for the authorized parent is `REJECT`.

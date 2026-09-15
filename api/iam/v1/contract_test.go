@@ -25,6 +25,161 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func TestProductProfilesOwnCurrentAdmissionAndDoNotExposeMutableState(t *testing.T) {
+	profiles := AllAuthorizationProfiles()
+	seen := map[Action]bool{}
+	for _, profile := range profiles {
+		document, digest, err := CanonicalizeAuthorizationProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, declaration := range profile.Actions {
+			if seen[declaration.Action] {
+				t.Fatal("action belongs to multiple products")
+			}
+			seen[declaration.Action] = true
+			definition, known := LookupActionDefinition(declaration.Action)
+			if !known || definition.Product != profile.Product || definition.CallingService != profile.CallingService || definition.ResourceKind != declaration.ResourceKind || definition.AuthorityScope != declaration.Scope {
+				t.Fatal("current admission diverged from the owning profile")
+			}
+			for _, condition := range declaration.Conditions {
+				actual, known := LookupActionConditionDefinition(declaration.Action, condition.Key)
+				if !known || actual.ValueType != condition.ValueType || actual.Source != condition.Source {
+					t.Fatal("condition capability diverged from its profile")
+				}
+			}
+		}
+		copy, known := LookupAuthorizationProfile(profile.Product)
+		if !known {
+			t.Fatal("declared product cannot be read")
+		}
+		copy.CallingService = "FORGED"
+		copy.Actions[0].ResourceShapes[0].Mode = "FORGED"
+		copy.Actions[0].Action = "forged.action"
+		for index := range copy.Actions {
+			if len(copy.Actions[index].Conditions) > 0 {
+				copy.Actions[index].Conditions[0].Source = "CALLER"
+			}
+		}
+		fresh, known := LookupAuthorizationProfile(profile.Product)
+		freshDocument, freshDigest, err := CanonicalizeAuthorizationProfile(fresh)
+		if !known || err != nil || freshDocument != document || freshDigest != digest {
+			t.Fatal("lookup exposed mutable catalog storage", err)
+		}
+	}
+	for _, action := range AllActions() {
+		if !seen[action] {
+			t.Fatal("current action lacks a product declaration", action)
+		}
+	}
+	if len(seen) != len(AllActions()) {
+		t.Fatal("declaration includes an unregistered action")
+	}
+	profiles[0].Actions[0].Action = "forged.action"
+	if actual, known := LookupActionDefinition(ActionIAMAccountCreate); !known || actual.Action != ActionIAMAccountCreate {
+		t.Fatal("returned profile changed runtime admission")
+	}
+	if _, known := LookupAuthorizationProfile("not-registered"); known {
+		t.Fatal("unknown product was guessed")
+	}
+}
+
+func TestProductProfilesDeclareParentInstanceAndCollectionResults(t *testing.T) {
+	for _, item := range []struct {
+		action           Action
+		resource, result ResourceKind
+		modes            []AuthorizationResourceShape
+	}{
+		{ActionIAMUserCreate, ResourceAccount, ResourceUser, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
+		{ActionIAMGroupCreate, ResourceAccount, ResourceGroup, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
+		{ActionIAMPolicyCreate, ResourceAccount, ResourcePolicy, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
+		{ActionIAMGroupMembershipCreate, ResourceGroup, ResourceGroupMembership, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
+		{ActionIAMAccountRead, ResourceAccount, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}},
+		{ActionPaaSApplicationCreate, ResourceApplication, ResourceApplication, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}},
+		{ActionPaaSApplicationRead, ResourceApplication, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}}},
+		{ActionPaaSExecutionPoolCreate, ResourceExecutionPool, ResourceExecutionPool, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
+		{ActionPaaSExecutionTargetRegister, ResourceExecutionTarget, ResourceExecutionTarget, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
+		{ActionPaaSExecutionPoolRead, ResourceExecutionPool, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}},
+		{ActionPaaSExecutionTargetRead, ResourceExecutionTarget, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}},
+		{ActionManagedServiceOfferingRead, ResourceServiceOffering, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}},
+	} {
+		t.Run(string(item.action), func(t *testing.T) {
+			definition, known := LookupActionDefinition(item.action)
+			if !known {
+				t.Fatal("missing current action")
+			}
+			profile, known := LookupAuthorizationProfile(definition.Product)
+			if !known {
+				t.Fatal("missing product")
+			}
+			for _, action := range profile.Actions {
+				if action.Action != item.action {
+					continue
+				}
+				if action.ResourceKind != item.resource || action.ResultResourceKind != item.result || len(action.ResourceShapes) != len(item.modes) {
+					t.Fatal("incorrect authorization versus successful resource mapping", action)
+				}
+				for _, want := range item.modes {
+					found := false
+					for _, got := range action.ResourceShapes {
+						if want == got {
+							found = true
+						}
+					}
+					if !found {
+						t.Fatal("missing proved target shape", want)
+					}
+				}
+				return
+			}
+			t.Fatal("action absent from declared product")
+		})
+	}
+	// A child/result kind is not an alternative authorization target.
+	request := AuthorizationRequest{Action: ActionIAMUserCreate, Resource: ResourceReference{Kind: ResourceAccount, ID: "account-one"}, RequestID: "request-one", CorrelationID: "request-one"}
+	if err := ValidateAuthorizationRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	request.Resource = ResourceReference{Kind: ResourceUser, ID: "user-child"}
+	if ValidateAuthorizationRequest(request) == nil {
+		t.Fatal("result resource widened parent authorization")
+	}
+}
+
+func TestProductProjectionIsIndependentOfProductName(t *testing.T) {
+	profile := authorizationProfileFixture()
+	profile.Product, profile.CallingService, profile.Actions[0].Action = "observability", "OBSERVABILITY", "observability.sample.inspect"
+	definitions := projectActionDefinitions([]AuthorizationProfile{profile})
+	if len(definitions) != 1 || definitions[0].Product != profile.Product || definitions[0].CallingService != profile.CallingService {
+		t.Fatal("generic product projection requires a product-name branch")
+	}
+	if _, known := LookupActionDefinition(profile.Actions[0].Action); known {
+		t.Fatal("pure projection modified the active registry")
+	}
+	for name, profiles := range map[string][]AuthorizationProfile{
+		"duplicate product": {profile, profile},
+		"same revision other content": {profile, func() AuthorizationProfile {
+			v := cloneAuthorizationProfile(profile)
+			v.Actions[0].ResourceKind = "OTHER"
+			return v
+		}()},
+		"foreign namespace": {func() AuthorizationProfile {
+			v := cloneAuthorizationProfile(profile)
+			v.Actions[0].Action = ActionIAMUserCreate
+			return v
+		}()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("invalid compiled registry did not fail closed")
+				}
+			}()
+			projectActionDefinitions(profiles)
+		})
+	}
+}
+
 func authorizationProfileFixture() AuthorizationProfile {
 	return AuthorizationProfile{
 		APIVersion: APIVersion, Kind: "AuthorizationProfile", Product: ProductManagedService,
@@ -47,7 +202,7 @@ func TestAuthorizationProfileCanonicalSetsAndExactReferences(t *testing.T) {
 	profile := authorizationProfileFixture()
 	profile.Actions = append(profile.Actions, AuthorizationProfileAction{
 		Action: "managedservice.sample.create", ResourceKind: "SAMPLE", Scope: AuthorityScopeTenant,
-		ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate, ResultResourceKind: "SAMPLE"}},
+		ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}, ResultResourceKind: "SAMPLE",
 	})
 	original, _ := json.Marshal(profile)
 	document, digest, err := CanonicalizeAuthorizationProfile(profile)
@@ -112,7 +267,7 @@ func TestAuthorizationProfileDigestBindsAuthorizationSemantics(t *testing.T) {
 		"target mode": func(v *AuthorizationProfile) { v.Actions[0].ResourceShapes = v.Actions[0].ResourceShapes[:1] },
 		"collection semantics": func(v *AuthorizationProfile) {
 			v.Actions[0].ResourceShapes[1].CollectionUsage = AuthorizationCollectionCreate
-			v.Actions[0].ResourceShapes[1].ResultResourceKind = "RESULT"
+			v.Actions[0].ResultResourceKind = "RESULT"
 		},
 		"trusted conditions":  func(v *AuthorizationProfile) { v.Actions[0].Conditions = nil },
 		"identity source key": func(v *AuthorizationProfile) { v.Actions[0].Conditions[1].Key = ConditionIAMPrincipalID },
@@ -155,11 +310,15 @@ func TestAuthorizationProfileRejectsUndeclaredOrAmbiguousCapabilities(t *testing
 		"creation result absent": func(v *AuthorizationProfile) {
 			v.Actions[0].ResourceShapes[1].CollectionUsage = AuthorizationCollectionCreate
 		},
-		"list claiming creation": func(v *AuthorizationProfile) { v.Actions[0].ResourceShapes[1].ResultResourceKind = "RESULT" },
+		"list claiming creation": func(v *AuthorizationProfile) { v.Actions[0].ResultResourceKind = "RESULT" },
+		"list and create": func(v *AuthorizationProfile) {
+			v.Actions[0].ResultResourceKind = "RESULT"
+			v.Actions[0].ResourceShapes = append(v.Actions[0].ResourceShapes, AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate})
+		},
 		"instance claiming collection": func(v *AuthorizationProfile) {
 			v.Actions[0].ResourceShapes[0].CollectionUsage = AuthorizationCollectionCreate
 		},
-		"instance claiming result": func(v *AuthorizationProfile) { v.Actions[0].ResourceShapes[0].ResultResourceKind = "RESULT" },
+		"result spelling": func(v *AuthorizationProfile) { v.Actions[0].ResultResourceKind = "bad-result" },
 		"platform prefix": func(v *AuthorizationProfile) {
 			v.Actions[0].Conditions = nil
 			v.Actions[0].Scope = AuthorityScopeInstallation
@@ -192,14 +351,15 @@ func TestAuthorizationProfileStrictDecodeAndNonAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, source := range map[string]string{
-		"unknown":          strings.Replace(document, `"revision":1`, `"revision":1,"permit":true`, 1),
-		"duplicate":        strings.Replace(document, `"revision":1`, `"revision":1,"revision":2`, 1),
-		"case alias":       strings.Replace(document, `"revision":1`, `"Revision":1`, 1),
-		"nested unknown":   strings.Replace(document, `"prefixAllowed":false`, `"prefixAllowed":false,"authority":"ANY"`, 1),
-		"nested duplicate": strings.Replace(document, `"prefixAllowed":false`, `"prefixAllowed":false,"prefixAllowed":true`, 1),
-		"trailing":         document + `{}`,
-		"null":             `null`,
-		"oversized":        document + strings.Repeat(" ", int(MaxAuthorizationProfileBytes)),
+		"unknown":                 strings.Replace(document, `"revision":1`, `"revision":1,"permit":true`, 1),
+		"duplicate":               strings.Replace(document, `"revision":1`, `"revision":1,"revision":2`, 1),
+		"case alias":              strings.Replace(document, `"revision":1`, `"Revision":1`, 1),
+		"nested unknown":          strings.Replace(document, `"prefixAllowed":false`, `"prefixAllowed":false,"authority":"ANY"`, 1),
+		"nested duplicate":        strings.Replace(document, `"prefixAllowed":false`, `"prefixAllowed":false,"prefixAllowed":true`, 1),
+		"result on request shape": strings.Replace(document, `"prefixAllowed":false`, `"prefixAllowed":false,"resultResourceKind":"USER"`, 1),
+		"trailing":                document + `{}`,
+		"null":                    `null`,
+		"oversized":               document + strings.Repeat(" ", int(MaxAuthorizationProfileBytes)),
 	} {
 		t.Run(name, func(t *testing.T) {
 			value, err := DecodeAuthorizationProfile(strings.NewReader(source))
@@ -249,6 +409,28 @@ func FuzzAuthorizationProfileCanonicalRoundTrip(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Add(document)
+	for _, selected := range []Action{ActionIAMUserCreate, ActionPaaSApplicationCreate} {
+		definition, known := LookupActionDefinition(selected)
+		if !known {
+			f.Fatal("missing declared action")
+		}
+		profile, known := LookupAuthorizationProfile(definition.Product)
+		if !known {
+			f.Fatal("missing declared product")
+		}
+		for _, action := range profile.Actions {
+			if action.Action != selected {
+				continue
+			}
+			profile.Actions = []AuthorizationProfileAction{action}
+			seed, _, err := CanonicalizeAuthorizationProfile(profile)
+			if err != nil {
+				f.Fatal(err)
+			}
+			f.Add(seed)
+			break
+		}
+	}
 	f.Add(`{"kind":"AuthorizationProfile","actions":null}`)
 	f.Add(`{"revision":1,"revision":2}`)
 	f.Fuzz(func(t *testing.T, source string) {
@@ -281,7 +463,8 @@ func TestAuthorizationProfileBoundsTypedDeclarations(t *testing.T) {
 		action := authorizationProfileFixture().Actions[0]
 		action.Action = Action(fmt.Sprintf("managedservice.%s.action%d", strings.Repeat("a", 64), index))
 		action.ResourceKind = ResourceKind(strings.Repeat("K", 64))
-		action.ResourceShapes = append(action.ResourceShapes, AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate, ResultResourceKind: ResourceKind(strings.Repeat("R", 64))})
+		action.ResourceShapes = []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}
+		action.ResultResourceKind = ResourceKind(strings.Repeat("R", 64))
 		profile.Actions[index] = action
 	}
 	encoded, err := json.Marshal(profile)
