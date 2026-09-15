@@ -318,6 +318,13 @@ BEGIN
         'iam.lookup_authorization_profile(text,bigint,text)'::regprocedure] LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_proc entry_proc WHERE entry_proc.oid=entry AND entry_proc.prosecdef
             AND entry_proc.proowner='matrix_iam_owner'::regrole AND entry_proc.proretset
+            AND (SELECT count(*)=1 AND bool_and(
+                (SELECT array_agg(parse_ident(btrim(component.name),true) ORDER BY component.position)
+                 FROM unnest(string_to_array(substr(config.setting,strpos(config.setting,'=')+1),','))
+                    WITH ORDINALITY AS component(name,position))
+                =ARRAY[ARRAY['pg_catalog'],ARRAY['pg_temp']])
+                FROM unnest(entry_proc.proconfig) AS config(setting)
+                WHERE split_part(config.setting,'=',1)='search_path')
             AND entry_proc.proargnames[cardinality(entry_proc.proargnames)-3:cardinality(entry_proc.proargnames)]
                 =ARRAY['product','revision','canonical_document','content_digest']
             AND entry_proc.proallargtypes[cardinality(entry_proc.proallargtypes)-3:cardinality(entry_proc.proallargtypes)]
@@ -327,7 +334,9 @@ BEGIN
             OR has_function_privilege('matrix_iam_credential_recovery',entry,'EXECUTE')
             OR EXISTS(SELECT 1 FROM pg_proc entry_proc,
                 LATERAL aclexplode(COALESCE(entry_proc.proacl,acldefault('f',entry_proc.proowner))) grant_entry
-                WHERE entry_proc.oid=entry AND grant_entry.grantee=0 AND grant_entry.privilege_type='EXECUTE') THEN
+                WHERE entry_proc.oid=entry AND grant_entry.privilege_type='EXECUTE'
+                  AND (grant_entry.grantee NOT IN (entry_proc.proowner,'matrix_iam_api'::regrole)
+                    OR (grant_entry.grantee='matrix_iam_api'::regrole AND grant_entry.is_grantable))) THEN
             RAISE EXCEPTION 'IAM product registry read boundary is invalid';
         END IF;
     END LOOP;

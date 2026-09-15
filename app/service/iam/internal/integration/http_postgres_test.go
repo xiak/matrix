@@ -793,6 +793,14 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 		t.Fatal(err)
 	}
 	reference := iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+	var returnedCanonical, archivedCanonical string
+	if err := pool.QueryRow(ctx, `SELECT canonical_document FROM iam.lookup_authorization_profile($1,$2,$3)`, reference.Product, reference.Revision, reference.ContentDigest).Scan(&returnedCanonical); err != nil {
+		t.Fatal("restricted exact lookup did not return archived content")
+	}
+	if err := admin.QueryRow(ctx, `SELECT canonical_document FROM iam.authorization_profiles WHERE product=$1 AND revision=$2`, reference.Product, reference.Revision).Scan(&archivedCanonical); err != nil ||
+		returnedCanonical != archivedCanonical || returnedCanonical != original {
+		t.Fatal("exact lookup rewrote original archive bytes")
+	}
 	lookup := func(expected iamv1.AuthorizationProfileReference, want bool) {
 		t.Helper()
 		err := repository.WithinTransaction(ctx, func(ctx context.Context, tx identityaccess.Transaction) error {
@@ -874,6 +882,48 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 	}
 	applyIAMSchema(t, ctx, admin)
 	lookup(future, true)
+	for _, function := range []string{"iam.current_authorization_profiles()", "iam.lookup_authorization_profile(text,bigint,text)"} {
+		// Configuration spelling is not the boundary: accept the same two
+		// PostgreSQL identifiers with different whitespace, then roll it back.
+		equivalent, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := equivalent.Exec(ctx, "SELECT set_config('search_path',' pg_catalog , pg_temp ',true); ALTER FUNCTION "+function+" SET search_path FROM CURRENT"); err != nil {
+			_ = equivalent.Rollback(ctx)
+			t.Fatal(err)
+		}
+		err = iammigration.Verify(ctx, equivalent)
+		_ = equivalent.Rollback(ctx)
+		if err != nil {
+			t.Fatal("verification compared configuration formatting rather than safe namespace semantics")
+		}
+		for _, mutation := range []string{
+			"ALTER FUNCTION " + function + " SET search_path=public,pg_catalog,pg_temp",
+			"ALTER FUNCTION " + function + " SET search_path=pg_temp,pg_catalog",
+			"ALTER FUNCTION " + function + " SET search_path TO 'pg_catalog , pg_temp'",
+			"GRANT EXECUTE ON FUNCTION " + function + " TO PUBLIC",
+			"GRANT EXECUTE ON FUNCTION " + function + " TO matrix_iam_worker",
+			"GRANT EXECUTE ON FUNCTION " + function + " TO matrix_iam_api WITH GRANT OPTION",
+		} {
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, mutation); err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal("install isolated registry read-boundary drift")
+			}
+			err = iammigration.Verify(ctx, tx)
+			_ = tx.Rollback(ctx)
+			if err == nil {
+				t.Fatal("verification accepted unsafe function search_path or execute privilege")
+			}
+		}
+	}
+	if err := iammigration.Verify(ctx, admin); err != nil {
+		t.Fatal("registry boundary drift fixture changed the installed authority")
+	}
 	// A checked authorization transaction holds the selected head until commit.
 	// Prove the competing publisher actually reaches PostgreSQL and is blocked,
 	// rather than relying on goroutine scheduling or an incidental sleep.

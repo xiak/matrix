@@ -132,6 +132,10 @@ API数据库角色仅能经封闭current与精确historical lookup读取非敏�
 - 全仓 `go test -race -p 2 ./...`、`go vet -p 2 ./...`、模块校验、API再次生成字节稳定及Linux amd64全仓构建通过。上述本地结果与后续精确提交的独立CI分开记录，不把默认跳过的数据库测试当真实运行证据。
 - 本轮零客户端后按精确ID与标签移除唯一PG容器、网络及仅含九个合成测试数据库的卷；数据为可重新生成的fixture，无用户数据、其他任务对象或远端操作。没有UI、公开请求结构、ServiceIdentity、lookup_service、七列claim、Audit canonical或安装profile改动。CAT-05完整请求/决定及策略编译绑定仍未完成。
 
+固定注册实现 `eb1aea493b6131cec4c0e6bca90adbb111cc41cb` 的 [Verification 34927744424](https://github.com/xiak/matrix/actions/runs/34927744424) 已由GitHub API核实精确SHA及go、authority-process、node-process全部completed/success。
+
+注册函数边界补充由同一verify/PG owner拥有：按配置键及PostgreSQL标识符语义解析proconfig，要求唯一有效search_path按序仅为pg_catalog、pg_temp，不快照数组空格。仅函数owner和API可有显式EXECUTE，API不能获得GRANT OPTION；worker/recovery/PUBLIC及任何额外grantee均拒绝。两个SECURITY DEFINER函数的业务表全部显式iam限定。真库事务故意改变搜索路径/顺序、授予PUBLIC或worker权限、授予API转授权，verify均失败且回滚后恢复；等价空格配置允许，把整条列表引号化为单个namespace仍拒绝。受限API直接exact lookup返回的canonical_document与源存档逐字节相等。独立同限额PG18最终聚焦包8.732s（父门禁5.88s）通过，IAM/architecture race、IAM vet及Linux构建通过；此补充不变schema/函数形状或发布profile。零客户端后精确清理该补充专属容器/网络及四个合成数据库的卷。
+
 2026-09-11 本分支首片证据：
 
 - `TestIAMActionDefinitionsDeclareProductServiceAndScope`、`TestIAMCatalogReadsCannotModifyAuthority` 和 `TestCatalogConfinementIsEnforcedByActualDecisions` 先因目录缺失失败，实现后通过。它们验证真实决定的调用服务/资源/scope、未知动作失败关闭及返回值不可修改目录，不快照 SQL 或文件布局。
