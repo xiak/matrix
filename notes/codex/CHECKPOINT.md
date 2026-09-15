@@ -3,10 +3,13 @@
 > Non-authoritative portable memory. Validate Git, exact CI and owning FEAT.
 
 - Updated: 2026-09-15. Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
-- Latest pushed implementation: `eb1aea493b6131cec4c0e6bca90adbb111cc41cb`.
-  Immutable Profile registry and current-source admission, IAM20/Audit13/PaaS1.
-  Exact Verification34927744424 is in_progress, not accepted yet. Both peers
-  received the candidate and local evidence; do not call CAT-05 complete.
+- Latest pushed implementation: `fdb880345e4e46d296330f25f7072dbfef408c87`.
+  Registry lookup security verification follow-up, same IAM20/Audit13/PaaS1.
+  Exact Verification34928316097 is in_progress, not accepted yet. Installation
+  peer received the fixed candidate and evidence; do not call CAT-05 complete.
+- Registry implementation `eb1aea493b6131cec4c0e6bca90adbb111cc41cb`:
+  Verification34927744424 exact SHA and all3 jobs completed/success independently
+  checked and recorded in001; installation peer informed. Checkpoints not donors.
 - Previous pure compilation `d3a08bfa7c248793ffb51499186486efa2ebb377`:
   Verification34925618255 exact SHA and go/authority-process/node-process all
   completed/success independently checked; both peers informed,005 records it.
@@ -54,6 +57,12 @@ Existing IAM authority SQL/Go owners only:
 - SQL check independently checks digest, bounded content and closed outer identity;
   it does not implement a second JSON canonicalizer or full nested Profile grammar.
   Trusted source registration plus exact runtime comparison owns that boundary.
+- fdb verify parses proconfig key and PostgreSQL identifiers semantically: unique
+  search_path must be pg_catalog,pg_temp in that order. Equal whitespace works;
+  unsafe/reversed/one quoted namespace fails. ACL permits only owner/API explicit
+  EXECUTE and no API GRANT OPTION, any extra grantee fails. Business tables in
+  both SECURITY DEFINER functions are explicitly iam-qualified. No separate IAM
+  verifier DB role exists; HTTP verifier gains no lookup endpoint/DB capability.
 - Existing recorder still lacks Profile/mode wire. The current adapter check is
   NOT the future independently persisted Profile-bound decision proof.
 
@@ -112,6 +121,11 @@ PG18.6 pinned4ef4dbc image,1CPU/768MiB/PIDs128/maxconnections64:
   runtime login, two-tenant resources/config/Operation/outbox, revocation/restart.
   Synthetic host protocol facts are not actual host implementation acceptance.
 - Full Go race/vet/modules, stable API generate, Linux amd64 all build passed.
+fdb final focused PG18 registry gate package8.732s(parent5.88s), IAM/architecture
+race, IAM vet/Linux build passed. Actual transactions exercise safe equivalent
+settings, bad function config/ACL drift and rollback; restricted raw exact lookup
+returns original archive bytes. Its separate fixture and four synthetic DBs were
+also removed by exact IDs/labels after zero clients. No new schema/runtime wire.
 No active tests/own fixture remain. Exact labelled container/network/volume with
 nine synthetic databases removed after zero clients. No shared/remote action.
 Use new unique names/labels, CPU/memory/concurrency limits next time; never prune.
