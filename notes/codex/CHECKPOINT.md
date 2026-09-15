@@ -3,7 +3,9 @@
 > Non-authoritative portable memory. Validate Git, exact CI and owning FEAT.
 
 - Updated 2026-09-15. Repository https://github.com/xiak/matrix.git, branch feat/iam.
-- Latest pushed implementation 32dc1a4aab4a69d1c6cb4d04437dd7f8fd739cb0.
+- Latest pushed candidate 9febf76690e96f98abbf265b3ce840b8bf3dbc2c;
+  pure action-family compiler, local checks passed, independent CI pending.
+- Latest independently verified implementation 32dc1a4aab4a69d1c6cb4d04437dd7f8fd739cb0.
   Verification34944465086 exact SHA independently checked: go,
   authority-process and node-process all completed/success.
 - Prior f272d06f84d8a753f0a7ec2cf3dc4276f637d660 /34935374957 and
@@ -15,12 +17,40 @@
 ## Goal and route
 
 Whole IAM goal ACTIVE. Read AGENTS, owning FEAT, then code/tests.
-005 owns current compiled publication/evaluation/history;001 owns Profile
+005 owns current compiled publication/evaluation/history and the next bounded
+family-pattern runtime cutover;001 owns Profile
 registration/request/decision;008 service/PEP/ABAC;010 UI;011 final capacity/HA.
 No new agents/tasks. UI entirely UX/UI peer-owned, no UI/style/embed/browser
 or other worktree/WIP reads. Withdrawn GitLab/root172.30.1.5 never accessed.
-005 owns final32dc evidence. Continue existing FEAT priorities after the fixed
-handoff; no UI implementation here. Do not call the whole goal complete.
+005 owns final32dc and local9feb evidence. First verify exact9feb CI; then
+continue the pending publication/SQL/PDP pattern vertical slice using the
+existing owners. No UI implementation here; whole goal remains incomplete.
+
+## Fixed9feb pure compiler boundary
+
+Only exact three-segment product.family.* patterns, TENANT only, star means
+one nonempty segment. No global/product-only, nested, partial, regex or alias.
+Same validator resolves against explicitly supplied frozen Profile content;
+no current/global fallback or filtering mismatched scope/resource/condition/
+prefix. Zero matches fail; author duplicates fail; overlap is union but charged
+before deduplication.128 resolved actions/statement,8192 visits/document;
+existing author64KiB/compilation128KiB/Profile16 limits retained.
+Author pattern stays in canonical commitment; resolved actions sorted/exact.
+New declaration affects only new compilation, never an old frozen interpretation.
+Current pre-match compatibility also checks nonmatching Deny with old patterns.
+
+Compile-only. Online document/Create/Publish/PolicyVersion, SQL and PDP continue
+rejecting pattern content. No schema/API wire/release profile change; actual
+source22/13/1 unchanged. Do not claim runtime pattern support or LANG-03 done.
+Next vertical cutover must jointly verify author/resolved SQL, transport and
+PDP matching exact resolved SID actions, real PaaS dual-tenant/Deny/revocation/
+historical proof. Only then enable HTTP publication. Existing private seven-
+column claim, Audit canonical and other Phase ownership remain unchanged.
+
+Local final full Go race/vet/modules/API generation/Linux build passed.
+Family/old compilation fuzz15s/2workers/1s minimization265354/284079 executions.
+Native exact policy sample80us/49989B/162alloc is not capacity/SLO acceptance.
+No own external fixture/service/browser/remote was started this slice.
 
 ## Fixed32dc compiled policies
 
@@ -83,7 +113,7 @@ and migrator (MATRIX_IAM_POLICY_UPGRADE_POSTGRES_TEST_DSN), mandatory in CI.
 384/schema8 is NOT a positive compiled-policy predecessor; no unpublished1..N
 matrix. Other historical optional diagnostics do not establish release support.
 
-## Local evidence (005 owns authoritative details)
+## Fixed32dc local evidence (005 owns authoritative details)
 
 PG18.6 pinned4ef4dbc,1CPU/768MiB/PIDs128/maxconn64, Go2/768MiB,
 heavy race-p1 serial. Full policy198.844s (parent195.67s), original group
