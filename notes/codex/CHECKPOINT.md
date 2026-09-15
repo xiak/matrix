@@ -5,164 +5,126 @@
 - Updated: 2026-09-15
 - Repository: https://github.com/xiak/matrix.git
 - Branch: `feat/iam`
-- Latest pushed backend slice: `8afc1f94c47671c9b4d01081099572ed6183953b`.
-  Source-registered Profiles now own the current action catalog; all existing
-  action/scope/caller/resource/prefix/condition admission reads their projection.
-  ResultResourceKind belongs to the Action, not its authorization target shape.
-  No new online request/result, SQL or installation profile. Local race/vet,
-  generation stability/Linux build, real PG18 HTTP/policy storage/five-process
-  gates and bounded fuzz passed;001 owns exact evidence. Exact CI34921642856
-  is in_progress, not yet accepted. Both peers received the fixed candidate.
-- Previous pure contract: `c6bd0788c8978d34537c28020115352d23722ede`.
-  CI34920036532 exact SHA and all three jobs independently confirmed success.
-  Its shape-local result field is replaced, without alias, by8afc1f94.
-- Previous pushed handoff: `cc5e38822d3c3856306e0eafbbc4f377ad2c8346`.
-  Browser fixture and long boundary-reference wrapping; exact CI34918584314
-  independently checked, all three jobs completed/success; both peers notified.
-  Desktop and rebuilt360px set/replace/remove/member refresh passed with actual
-  Audit facts/chains; the later automatic process handle disappeared without
-  captured completion, so its regression is not accepted.010 owns exact evidence.
-- Previous implementation: `6292fa09ad286960a1098ad3383a896c9374bffe`,
-  User boundary set/replace/remove UI and conservative exact-resource capabilities.
-  Local gates passed;
-  [Verification34853775664](https://github.com/xiak/matrix/actions/runs/34853775664)
-  exact SHA and all three jobs completed/success, independently checked;
-  both peers were notified.
-- Earlier client rollback: `ef51b1d509e7e38dfb2146416c7e057a97638765`,
-  strict CurrentIdentity boundary client and separate permission-limit display.
-  [Verification34850453837](https://github.com/xiak/matrix/actions/runs/34850453837)
-  exact SHA and Go/authority-process/node-process all completed/success,
-  independently checked. Both peers were notified.
-- Backend rollback point: `119f232ea7cf7ba7d91a1ef6433e132e0127f03f`,
-  User permission-boundary intersection and historical evidence.
-  [Verification34849128040](https://github.com/xiak/matrix/actions/runs/34849128040):
-  exact SHA and Go/authority-process/node-process all completed/success,
-  independently checked through GitHub API. Both existing peers were informed.
-- Earlier verified rollback: `b342e9da08515f9172b29d1ac237a088171c9e53`
-  /34839955131. Earlier candidate failures remain in IAM/005, not an all-green history.
+- Latest pushed backend: `2bcbe50afaa025380c76c9cd232cd204d87b67a3`.
+  Complete twelve PaaS platform actions/NODE_ENROLLMENT, PaaS Profile revision2,
+  explicit complete SYSTEM PlatformOperator content version, three target lifecycle
+  Audit facts and enrolled-target historical authority. Exact CI34923411012 is
+  in_progress, not independently accepted yet. Both peers received the candidate.
+- Previous verified source-catalog slice:
+  `8afc1f94c47671c9b4d01081099572ed6183953b`.
+  Exact CI34921642856 head SHA and go/authority-process/node-process all
+  completed/success independently checked through GitHub API; both peers informed.
+  Pure Profile predecessor c6bd0788/34920036532 also passed; its shape-local result
+  field was replaced by action-local result, without alias.
+- Current source readiness IAM19/Audit13/PaaS1. The existing published installation
+  profile is deliberately unchanged. The process owner verifies actual source
+  readiness AND rejects publication of this unmatched development combination.
+  No new signed release or cross-profile upgrade is accepted.
 
 ## Resume and full objective
 
 Whole IAM goal remains active. Read AGENTS.md, the owning IAM FEAT, then code/tests.
-005 owns language/boundaries;010 owns console;001/008 own product/profile;
-011 owns first-release, real runtime, HA/capacity and final acceptance.
+001 owns product declarations and registration;005 owns language/versions/boundaries;
+008 owns real PEP/service roles/ABAC;010 owns console;011 owns HA/capacity,
+first-release and complete acceptance. Do not reduce the goal to current policy CRUD.
 
-User explicitly assigns ALL UI work to the existing UX/UI engineer, who has
-their own branch. Do not resume UI forms, styling or browser development here.
-Continue backend contracts, authority, service integration and their real gates.
-UX task01a07b21-9a0d-7fd0-b090-7827ce18262e confirmed its sole IAM UI branch
-feat/cloud-console-ux at7a126d314496d71d2f64804d78bd4290754c839c. It will ADAPT
-fixed backend types/capabilities/revisions/errors, not our old renderer/styles/
-embed. It has advanced MOCK UI but no real User boundary HTTP integration yet.
-Never copy its WIP. Both owners have aligned progress per the user's request.
-Read-only fixed cloud-console-ux7a126d314496d71d2f64804d78bd4290754c839c already
-contains PolicyAuthoring and PermissionBoundary preview components; do not
-reimplement those in the old renderer or equate preview with live authorization.
-Forms and conservative capabilities exist in our fixed client baseline;
-final UX and remaining client integration belong to that engineer and010.
-Next backend target fixed in e5a88b13:001 CAT-05 immutable product Profile,
-explicit collection/instance/create target modes before005 action wildcard
-expansion. Real offering.read currently serves both collection and detail;
-do not infer modes from names. Requirements/acceptance in001, fixed donor6292
-in adoption.8afc1f94 supplies declaration validation/canonical/reference and the
-single current source catalog (not persisted historical Profile registration):
-COLLECTION_LIST/COLLECTION_CREATE, instance-only tenant prefix capability,
-separate action-level successful resultResourceKind, explicit callingService/
-scope/conditions. Parent Account INSTANCE creates User/Group/Policy; collection
-is not inferred from the action's name. No online wire, SQL or install profile
-changed. Actual decisions and PolicyVersion do not bind a Profile reference yet.
-Installation peer received the window pre-notice; exact wire/storage surface
-must be aligned before shared implementation. Installation peer accepted this
-pure contract boundary and final collection enum names. UX peer requested and
-received seven-point Profile UI guidance: objects/revisions/registration authority,
-query APIs/policy binding/fixed evidence/undecided fields. No catalog list/detail/
-version/publish API or draft/disable state machine is frozen yet; no fictitious
-UI capability. Future PolicyVersion must freeze exact profiles and expand action
-patterns at publish, not runtime. No UI work should resume in this thread.
-Do not infer eligibility from identityKind or policy name. Root-only
-backend management is an intermediate boundary, not completed safe delegation.
-Remaining action wildcards with fixed catalog expansion, trusted IP, Role/STS,
-programmatic credentials, extensible product/service-role/ABAC, governance,
-complete UI, HA/capacity/final release and explicit external-integration deferrals
-remain in their FEATs. Do not reduce completion to policy CRUD or User boundaries.
+Next backend work is CAT-05 actual request/decision Profile binding, immutable
+historical registration and exact policy-version references, then005 action-pattern
+expansion at publication. Current source declarations/getters/canonical references
+do NOT implement those runtime contracts. No request/result/storage surface for
+that next slice is frozen: align with installation peer before public edits.
+No online catalog list/detail/version/publish/disable APIs are implemented or frozen.
+Tenant admins consume published actions, not product registration authority.
+Product teams own their declared vocabulary and PEP; IAM validates controlled
+publication. Product registration never grants access to customer resources;
+service-role consent is a separate008 contract.
 
-Final PaaS ABI must ADAPT the full12 platform actions/NODE_ENROLLMENT/constraints
-and explicit new system-policy versions from fixedbe3c4a96b4381426c01cd6315eaa3713c2855982.
-Current5 platform actions are an intermediate PaaS Profile only. Its pool/target
-read supports collection+instance; create/register uses exact body IDs. Enrollment
-create is collection-to-ExecutionTarget, others exact enrollment; retainca7 history.
-Advance the PaaS Profile revision/digest for the final12, not same-revision mutation.
-Do not import host implementations or assume their acceptance. Phase3 confirmed
-this boundary. No own DB/container/network/volume or process test remains running.
+Current Profile owner: api/iam/v1/authorization_profile.go plus enums.go.
+One immutable source declaration per product; current action definitions, caller,
+scope, resource/prefix and conditions are projections, not another editable map.
+Strict bounded decoding/canonicalization/reference and nested defensive copies.
+INSTANCE and COLLECTION with COLLECTION_LIST/COLLECTION_CREATE; action-level
+resultResourceKind separates successful child/new facts from authorized parents.
+Only existing tenant instance application-read has prefix support. IAM-owned
+time/identity condition sources remain closed; no caller attribute map.
+Current PaaS revision2 changes its digest; revision1 must not mean new contents.
+No generic evaluator/UI branch by product name. Pure syntax/digest is not trust.
 
-User schema agreement is in011: final converged schema is first supported release
-baseline. No per-FEAT schema1..N unpublished upgrade matrix. Current fresh/replay/
-retained state/atomicity/RLS/revocation/Audit gates remain; real old consumers need
-explicit support evidence. No number reset or install-profile admission relaxation.
+## Full platform slice and evidence
 
-## Fixed implementation and evidence
+2bcbe50 selectively ADAPTed final fixed
+be3c4a96b4381426c01cd6315eaa3713c2855982 and its contained
+ca7f6940159e53fbae183b7b6d5f379705a0cba1 proof. No host runtime imported.
+001 owns the exact twelve-action table and acceptance; adoption owns decisions.
+pool.create/target.register use actual INSTANCE ID; their reads also support
+COLLECTION_LIST. Enrollment create authorizes NODE_ENROLLMENT collection and
+its successful fact is EXECUTION_TARGET; other enrollment commands exact INSTANCE.
+Direct target proof retains exact ID. Collection proof binds historical authority,
+not actual result payload/ID; PaaS transaction/outbox owns that relation. It cannot
+authorize drain/activate/remove. New target facts use installation scope.
+ServiceIdentity/lookup_service/claim7/old Audit canonical are unchanged.
 
-119 source IAM18/Audit12/PaaS1; installation profile unchanged.
-lookup_session appends boundary jsonb after policies (23output columns);
-record_authorization exactly six parameters with independent evidence, no old
-overload/fallback. Boundary mutation has ten private parameters including current
-bearer-derived session. ServiceIdentity/lookup_service/claim7/canonical unchanged.
-005 owns exact API, lock/replay/default-following semantics and evidence.
+Supported final predecessor be3 already has complete platform authority. Initial
+Role-to-SYSTEM-policy migration must preserve full allow/deny and each revoked
+binding, selecting the complete parity default; fresh final installation likewise.
+Do not require regrant of existing be3 rights. Old five-action unpublished CAM
+development data has no release compatibility obligation. After final release,
+genuinely new rights require explicit version adoption, not seed/default auto-growth.
+Installation owner will freeze final actual IAM/Audit plus PaaS5 and exact
+be3 predecessor after001-010; do not import its profile into this PaaS1 branch.
 
-One current TENANT boundary intersects ordinary direct/all-group authorization,
-grants nothing, fails closed on malformed/missing snapshots; root cannot be bound.
-Platform/probe/service authority is distinct. Root-only writes recheck credentials/
-session under principal-first locks; no implicit enable/credential/platform effect.
-References block Policy deletion; deleted User relations end but retain history.
-set-before-default may both succeed; reverse order rejects stale policy revision.
-Historical proof survives later default/removal/disable; producer must remain valid.
+Local gates on2bc: full Go race/vet/modules, stable generation, Linux amd64 all
+builds passed. Own PG18.6 1CPU/768MiB/PIDs128,64connections; serial race-p1:
+IAM HTTP101.14s, double-authority3.52s, independent processes51.26s,
+policy storage110.85s. Includes actual restricted runtime logins, all12 IAM
+allow/deny/attachment revocation/dual IAM/restart, original and new platform facts
+replay after revocation/Audit restart, current policy/RLS/conditions/credentials/
+boundary/group/outbox regressions. Synthetic platform facts prove authority wire,
+not real host Operation/PEP or final be3 release migration.
+Initial process fixture reused OperationID and correctly hit records_paas_operation_uq;
+only fixture IDs changed, then a new DB passed. No production retry/constraint
+relaxation.001 has detailed evidence and exact package timings.
+All five disposable databases, sole PG container/network/volume cleaned after
+zero clients and exact ID/label verification. No active own test session remains.
 
-Final serial PG18: IAM172.824s, Audit data5.412s, AuditHTTP2.650s,
-dualIAM/PaaS/Audit45.400s, PaaSdata4.310s. Multi-group/Deny, two actual apps,
-cross-account/scope, revision/default/delete competition, logout lock barrier,
-forced password, cursor and dispatchers/chains passed. Current data replay and
-restricted runtime identities retained. Full Go race/vet/modules/generation/
-Linuxbuild and exact backendCI passed. Detailed evidence belongs to005.
+## UI ownership and coordination
 
-ef51 requires explicit boundary account/user/RV and null or strict version
-reference. Missing/foreign/stale/root-bound responses reject, never become NONE.
-Boundary stays separate from policySources and does not reveal a policy body.
-Current display updates on refresh, clears on error, grants no UI capabilities.
-103 frontend tests/type/lint/architecture/20contrast checks passed; two2-worker
-static builds match59 embedded files. UI/architecture Go race, UI vet/Linuxbuild
-passed. No real-browser, boundary-management or complete010 acceptance claimed.
+User assigns ALL UI to existing UX/UI工程师, thread
+01a07b21-9a0d-7fd0-b090-7827ce18262e, own branch feat/cloud-console-ux,
+last confirmed fixed7a126d314496d71d2f64804d78bd4290754c839c.
+It has advanced MOCK Policy Wizard/boundary/users/groups/roles, not proof of
+live backend authorization. It will ADAPT fixed contracts into its own components,
+not our old AccountAccessRenderer/styles/embed. Do not resume UI/browser work.
+Peer knows product catalog is read-only tenant consumption; no fictional online
+registration capability. Public query surface must freeze before live adapter.
+Last old UI handoff cc5e38822d3c3856306e0eafbbc4f377ad2c8346 CI34918584314
+all3success;010 owns its actual browser evidence, not final new UX acceptance.
 
-6292 extends UserAccess to9mandatory base capabilities+attachment revocations;
-schema budget265, strict missing/foreign/unknown capability rejection. Same
-transaction reads actual AccountRoot once per page and intersects root-only
-write eligibility with current PDP. Root target protected; disabled User
-management permitted. No migration/function/action/profile changes from119.
-Existing GET/PUT/DELETE boundary methods validate exact target and result RV;
-accountId is only a client scope check, never sent as authority selector.
-Forms confirm changes/removal, use visible activeTENANT policies with frozen
-Policy/User revisions, retain original requestId on unknown results, reject
-unread/stale boundary, withdraw confirmation on revoked capability, and clear
-management scene on401. No local policy evaluation or global-role permit.
+Installation/Phase3 thread01a04149-5dbb-7300-9e4c-31d9e85c8ada coordinates
+shared IAM/Audit contracts and final release. It confirmed IAM19/Audit13 source
+readiness window, no CurrentDatabaseProfile edits, and be3 parity rule.
+Exchange only verified fixed patches, no WIP/host acceptance/checkpoint imports.
+No extra agents/tasks. Never write to another worktree or touch remote/shared
+machines, services, ports, Docker config or other tasks' resources.
 
-Final frontend109 tests/type/lint/architecture/20contrast checks and two2-worker
-builds matching59 embedded files passed. Full Go race/vet/modules/Linuxbuild
-passed, then final API/handler/UI/architecture race+vet/generation stability/
-LinuxUI build passed. RealPG focused boundary capability2.57s(parent7.39/package
-9.993); full IAM integration182.539s and dualIAM/PaaS/Audit44.791s passed on fresh
-databases, preserving prior credentials/concurrency/current replay/resources/
-Operation/outbox/chains. No default-skipped test counted as real environment.
-Fixture Response-body reuse caused one frontend retry test failure; each test
-fetch now returns a fresh Response, with no production parser relaxation.
-010 owns details; real browser and360px remain explicitly unaccepted.
+## Remaining boundaries
 
-## Isolation and coordination
+Current User-boundary implementation119f232ea7cf7ba7d91a1ef6433e132e0127f03f
+passed CI34849128040. ef51b1d/34850453837 strict identity and6292fa09/34853775664
+conservative capabilities passed.005/010 own those contracts/evidence.
+User boundary grants nothing, intersects ordinary direct/group permissions,
+keeps platform/probe separate, rechecks current session under owner locks and
+preserves historical proof. Root-only high-risk management is intermediate,
+not complete safe delegation. lookup_session23 columns; record_authorization
+six arguments with separate boundary evidence; no fallback overload.
+Current source19 changes catalog/readiness, not these function shapes.
 
-No local test process or owned PG fixture remains. Exact IDs/labels and zero clients
-were checked before removing own containers/networks/synthetic volumes. Never clean
-another named IAM resource or restart remote/shared services. Go GOMAXPROCS2,
-GOMEMLIMIT768MiB/-p2; realPG-p1 and1CPU/768MiB/PIDs128. Heavy gates run serially.
-
-Existing UX task01a07b21-9a0d-7fd0-b090-7827ce18262e and installation task
-01a04149-5dbb-7300-9e4c-31d9e85c8ada consume only fixed objects with their own gates.
-Both know119 exactCI success and ongoing client scope. No other Phase WIP/profile/
-environment/acceptance imported. No extra agents/tasks; only own branch writable.
+Action wildcards/frozen expansion, trusted IP, Role/STS, programmatic credentials,
+service-role/ABAC, governance, final UX, HA/capacity and complete release acceptance
+remain outstanding with explicit external-integration deferrals in their FEATs.
+User pre-v1 schema agreement: final converged schema is the first supported
+release baseline; no repeated unpublished1..N upgrade matrix. Current fresh,
+replay, retained state, atomicity, RLS, revocation and Audit gates remain required.
+Real predecessor/consumer compatibility needs explicit evidence, never number
+equality or a schema reset. Go GOMAXPROCS2/GOMEMLIMIT768MiB/-p2; heavy PG gates
+serial-p1, uniquely labelled fixtures and explicit limits.
