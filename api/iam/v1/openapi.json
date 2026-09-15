@@ -9242,61 +9242,81 @@
                       "actions": {
                         "items": {
                           "enum": [
+                            "audit.integrity.*",
+                            "audit.integrity.verify",
+                            "audit.record.*",
+                            "audit.record.read",
                             "iam.account.alias-set",
-                            "iam.user.list",
-                            "iam.policy.list",
-                            "iam.policy.create",
-                            "iam.policy.read",
-                            "iam.policy-version.list",
-                            "iam.policy-version.read",
-                            "iam.policy-version.create",
-                            "iam.policy-version.delete",
-                            "iam.policy.set-default-version",
-                            "iam.policy.update",
-                            "iam.policy.delete",
-                            "iam.user.set-status",
-                            "iam.user.reset-password",
-                            "iam.user.create",
-                            "iam.user.read",
-                            "iam.user.update",
-                            "iam.user.delete",
-                            "iam.user.permission-boundary.set",
-                            "iam.user.permission-boundary.remove",
-                            "iam.group.list",
-                            "iam.group.create",
-                            "iam.group.read",
-                            "iam.group.update",
-                            "iam.group.delete",
-                            "iam.group-membership.list",
+                            "iam.group-membership.*",
                             "iam.group-membership.create",
+                            "iam.group-membership.list",
                             "iam.group-membership.remove",
+                            "iam.group-policy-attachment.*",
                             "iam.group-policy-attachment.create",
                             "iam.group-policy-attachment.revoke",
+                            "iam.group.*",
+                            "iam.group.create",
+                            "iam.group.delete",
+                            "iam.group.list",
+                            "iam.group.read",
+                            "iam.group.update",
+                            "iam.policy-attachment.*",
                             "iam.policy-attachment.create",
                             "iam.policy-attachment.revoke",
+                            "iam.policy-version.*",
+                            "iam.policy-version.create",
+                            "iam.policy-version.delete",
+                            "iam.policy-version.list",
+                            "iam.policy-version.read",
+                            "iam.policy.*",
+                            "iam.policy.create",
+                            "iam.policy.delete",
+                            "iam.policy.list",
+                            "iam.policy.read",
+                            "iam.policy.set-default-version",
+                            "iam.policy.update",
+                            "iam.session.*",
                             "iam.session.revoke",
-                            "paas.application.create",
-                            "paas.application.read",
-                            "paas.configuration.create",
-                            "paas.configuration.read",
-                            "paas.configuration-revision.create",
-                            "paas.configuration-revision.read",
-                            "paas.application-revision.create",
-                            "paas.application-revision.read",
-                            "paas.deployment.create",
-                            "paas.deployment.update",
-                            "paas.deployment.rollback",
-                            "paas.deployment.stop",
-                            "paas.deployment.read",
-                            "paas.operation.read",
+                            "iam.user.*",
+                            "iam.user.create",
+                            "iam.user.delete",
+                            "iam.user.list",
+                            "iam.user.permission-boundary.remove",
+                            "iam.user.permission-boundary.set",
+                            "iam.user.read",
+                            "iam.user.reset-password",
+                            "iam.user.set-status",
+                            "iam.user.update",
+                            "managedservice.offering.*",
                             "managedservice.offering.read",
-                            "managedservice.region.read",
+                            "managedservice.quota-entitlement.*",
                             "managedservice.quota-entitlement.activate",
                             "managedservice.quota-entitlement.read",
+                            "managedservice.region.*",
+                            "managedservice.region.read",
+                            "managedservice.service-installation.*",
                             "managedservice.service-installation.create",
                             "managedservice.service-installation.read",
-                            "audit.record.read",
-                            "audit.integrity.verify"
+                            "paas.application-revision.*",
+                            "paas.application-revision.create",
+                            "paas.application-revision.read",
+                            "paas.application.*",
+                            "paas.application.create",
+                            "paas.application.read",
+                            "paas.configuration-revision.*",
+                            "paas.configuration-revision.create",
+                            "paas.configuration-revision.read",
+                            "paas.configuration.*",
+                            "paas.configuration.create",
+                            "paas.configuration.read",
+                            "paas.deployment.*",
+                            "paas.deployment.create",
+                            "paas.deployment.read",
+                            "paas.deployment.rollback",
+                            "paas.deployment.stop",
+                            "paas.deployment.update",
+                            "paas.operation.*",
+                            "paas.operation.read"
                           ]
                         }
                       }
@@ -9322,27 +9342,27 @@
                       "actions": {
                         "items": {
                           "enum": [
+                            "audit.platform-integrity.verify",
+                            "audit.platform-record.read",
                             "iam.account.create",
                             "iam.account.read",
-                            "iam.account.set-status",
                             "iam.account.recover-root-credentials",
-                            "iam.platform-policy.list",
+                            "iam.account.set-status",
                             "iam.platform-policy-attachment.create",
                             "iam.platform-policy-attachment.revoke",
+                            "iam.platform-policy.list",
                             "paas.execution-pool.create",
                             "paas.execution-pool.read",
-                            "paas.execution-target.register",
-                            "paas.execution-target.read",
-                            "paas.execution-target.drain",
                             "paas.execution-target.activate",
+                            "paas.execution-target.drain",
+                            "paas.execution-target.read",
+                            "paas.execution-target.register",
                             "paas.execution-target.remove",
                             "paas.node-enrollment.create",
                             "paas.node-enrollment.read",
-                            "paas.node-enrollment.revoke",
                             "paas.node-enrollment.regenerate",
-                            "paas.platform-operation.read",
-                            "audit.platform-record.read",
-                            "audit.platform-integrity.verify"
+                            "paas.node-enrollment.revoke",
+                            "paas.platform-operation.read"
                           ]
                         }
                       },
@@ -9715,7 +9735,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.account.create"
+                    "enum": [
+                      "iam.account.create"
+                    ]
                   }
                 }
               }
@@ -9739,7 +9761,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.account.create"
+                    "enum": [
+                      "iam.account.create"
+                    ]
                   }
                 }
               }
@@ -9773,17 +9797,20 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "iam.account.alias-set",
                         "iam.account.create",
                         "iam.account.read",
-                        "iam.account.set-status",
                         "iam.account.recover-root-credentials",
-                        "iam.account.alias-set",
-                        "iam.user.list",
-                        "iam.policy.list",
-                        "iam.policy.create",
-                        "iam.user.create",
+                        "iam.account.set-status",
+                        "iam.group.*",
+                        "iam.group.create",
                         "iam.group.list",
-                        "iam.group.create"
+                        "iam.policy.*",
+                        "iam.policy.create",
+                        "iam.policy.list",
+                        "iam.user.*",
+                        "iam.user.create",
+                        "iam.user.list"
                       ]
                     }
                   }
@@ -9810,17 +9837,20 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "iam.account.alias-set",
                       "iam.account.create",
                       "iam.account.read",
-                      "iam.account.set-status",
                       "iam.account.recover-root-credentials",
-                      "iam.account.alias-set",
-                      "iam.user.list",
-                      "iam.policy.list",
-                      "iam.policy.create",
-                      "iam.user.create",
+                      "iam.account.set-status",
+                      "iam.group.*",
+                      "iam.group.create",
                       "iam.group.list",
-                      "iam.group.create"
+                      "iam.policy.*",
+                      "iam.policy.create",
+                      "iam.policy.list",
+                      "iam.user.*",
+                      "iam.user.create",
+                      "iam.user.list"
                     ]
                   }
                 }
@@ -9832,7 +9862,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.account.read"
+                    "enum": [
+                      "iam.account.read"
+                    ]
                   }
                 }
               }
@@ -9856,7 +9888,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.account.read"
+                    "enum": [
+                      "iam.account.read"
+                    ]
                   }
                 }
               }
@@ -9872,7 +9906,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.account.set-status"
+                    "enum": [
+                      "iam.account.set-status"
+                    ]
                   }
                 }
               }
@@ -9896,7 +9932,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.account.set-status"
+                    "enum": [
+                      "iam.account.set-status"
+                    ]
                   }
                 }
               }
@@ -9912,7 +9950,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.account.recover-root-credentials"
+                    "enum": [
+                      "iam.account.recover-root-credentials"
+                    ]
                   }
                 }
               }
@@ -9936,7 +9976,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.account.recover-root-credentials"
+                    "enum": [
+                      "iam.account.recover-root-credentials"
+                    ]
                   }
                 }
               }
@@ -9952,7 +9994,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.account.alias-set"
+                    "enum": [
+                      "iam.account.alias-set"
+                    ]
                   }
                 }
               }
@@ -9976,7 +10020,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.user.list"
+                    "enum": [
+                      "iam.user.list",
+                      "iam.user.*"
+                    ]
                   }
                 }
               }
@@ -10000,7 +10047,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.policy.list"
+                    "enum": [
+                      "iam.policy.list",
+                      "iam.policy.*"
+                    ]
                   }
                 }
               }
@@ -10024,7 +10074,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.policy.create"
+                    "enum": [
+                      "iam.policy.create",
+                      "iam.policy.*"
+                    ]
                   }
                 }
               }
@@ -10045,93 +10098,100 @@
           },
           {
             "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "const": "iam.policy.read"
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "resources": {
-                  "contains": {
-                    "properties": {
-                      "kind": {
-                        "const": "POLICY"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "resources": {
-                  "contains": {
-                    "properties": {
-                      "kind": {
-                        "const": "POLICY"
-                      },
-                      "match": {
-                        "const": "PREFIX_IN_AUTHORITY"
-                      }
-                    }
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "actions": {
-                  "not": {
-                    "contains": {
-                      "enum": [
-                        "iam.policy.read",
-                        "iam.policy-version.list",
-                        "iam.policy-version.read",
-                        "iam.policy-version.create",
-                        "iam.policy-version.delete",
-                        "iam.policy.set-default-version",
-                        "iam.policy.update",
-                        "iam.policy.delete"
-                      ]
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "resources": {
-                  "contains": {
-                    "properties": {
-                      "kind": {
-                        "const": "POLICY"
-                      }
-                    }
-                  }
-                }
-              }
-            },
-            "then": {
               "properties": {
                 "actions": {
                   "contains": {
                     "enum": [
                       "iam.policy.read",
-                      "iam.policy-version.list",
-                      "iam.policy-version.read",
+                      "iam.policy.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "iam.policy-version.*",
+                        "iam.policy-version.create",
+                        "iam.policy-version.delete",
+                        "iam.policy-version.list",
+                        "iam.policy-version.read",
+                        "iam.policy.*",
+                        "iam.policy.delete",
+                        "iam.policy.read",
+                        "iam.policy.set-default-version",
+                        "iam.policy.update"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.policy-version.*",
                       "iam.policy-version.create",
                       "iam.policy-version.delete",
+                      "iam.policy-version.list",
+                      "iam.policy-version.read",
+                      "iam.policy.*",
+                      "iam.policy.delete",
+                      "iam.policy.read",
                       "iam.policy.set-default-version",
-                      "iam.policy.update",
-                      "iam.policy.delete"
+                      "iam.policy.update"
                     ]
                   }
                 }
@@ -10143,7 +10203,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.policy-version.list"
+                    "enum": [
+                      "iam.policy-version.list",
+                      "iam.policy-version.*"
+                    ]
                   }
                 }
               }
@@ -10167,7 +10230,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.policy-version.read"
+                    "enum": [
+                      "iam.policy-version.read",
+                      "iam.policy-version.*"
+                    ]
                   }
                 }
               }
@@ -10191,7 +10257,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.policy-version.create"
+                    "enum": [
+                      "iam.policy-version.create",
+                      "iam.policy-version.*"
+                    ]
                   }
                 }
               }
@@ -10215,7 +10284,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.policy-version.delete"
+                    "enum": [
+                      "iam.policy-version.delete",
+                      "iam.policy-version.*"
+                    ]
                   }
                 }
               }
@@ -10239,7 +10311,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.policy.set-default-version"
+                    "enum": [
+                      "iam.policy.set-default-version",
+                      "iam.policy.*"
+                    ]
                   }
                 }
               }
@@ -10263,7 +10338,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.policy.update"
+                    "enum": [
+                      "iam.policy.update",
+                      "iam.policy.*"
+                    ]
                   }
                 }
               }
@@ -10287,7 +10365,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.policy.delete"
+                    "enum": [
+                      "iam.policy.delete",
+                      "iam.policy.*"
+                    ]
                   }
                 }
               }
@@ -10311,7 +10392,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.platform-policy.list"
+                    "enum": [
+                      "iam.platform-policy.list"
+                    ]
                   }
                 }
               }
@@ -10335,7 +10418,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.platform-policy.list"
+                    "enum": [
+                      "iam.platform-policy.list"
+                    ]
                   }
                 }
               }
@@ -10410,7 +10495,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.user.set-status"
+                    "enum": [
+                      "iam.user.set-status",
+                      "iam.user.*"
+                    ]
                   }
                 }
               }
@@ -10452,15 +10540,17 @@
                   "not": {
                     "contains": {
                       "enum": [
-                        "iam.user.set-status",
-                        "iam.user.reset-password",
-                        "iam.user.read",
-                        "iam.user.update",
-                        "iam.user.delete",
-                        "iam.user.permission-boundary.set",
-                        "iam.user.permission-boundary.remove",
+                        "iam.platform-policy-attachment.create",
+                        "iam.policy-attachment.*",
                         "iam.policy-attachment.create",
-                        "iam.platform-policy-attachment.create"
+                        "iam.user.*",
+                        "iam.user.delete",
+                        "iam.user.permission-boundary.remove",
+                        "iam.user.permission-boundary.set",
+                        "iam.user.read",
+                        "iam.user.reset-password",
+                        "iam.user.set-status",
+                        "iam.user.update"
                       ]
                     }
                   }
@@ -10487,15 +10577,17 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "iam.user.set-status",
-                      "iam.user.reset-password",
-                      "iam.user.read",
-                      "iam.user.update",
-                      "iam.user.delete",
-                      "iam.user.permission-boundary.set",
-                      "iam.user.permission-boundary.remove",
+                      "iam.platform-policy-attachment.create",
+                      "iam.policy-attachment.*",
                       "iam.policy-attachment.create",
-                      "iam.platform-policy-attachment.create"
+                      "iam.user.*",
+                      "iam.user.delete",
+                      "iam.user.permission-boundary.remove",
+                      "iam.user.permission-boundary.set",
+                      "iam.user.read",
+                      "iam.user.reset-password",
+                      "iam.user.set-status",
+                      "iam.user.update"
                     ]
                   }
                 }
@@ -10507,7 +10599,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.user.reset-password"
+                    "enum": [
+                      "iam.user.reset-password",
+                      "iam.user.*"
+                    ]
                   }
                 }
               }
@@ -10531,7 +10626,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.user.create"
+                    "enum": [
+                      "iam.user.create",
+                      "iam.user.*"
+                    ]
                   }
                 }
               }
@@ -10555,7 +10653,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.user.read"
+                    "enum": [
+                      "iam.user.read",
+                      "iam.user.*"
+                    ]
                   }
                 }
               }
@@ -10579,7 +10680,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.user.update"
+                    "enum": [
+                      "iam.user.update",
+                      "iam.user.*"
+                    ]
                   }
                 }
               }
@@ -10603,7 +10707,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.user.delete"
+                    "enum": [
+                      "iam.user.delete",
+                      "iam.user.*"
+                    ]
                   }
                 }
               }
@@ -10627,7 +10734,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.user.permission-boundary.set"
+                    "enum": [
+                      "iam.user.permission-boundary.set"
+                    ]
                   }
                 }
               }
@@ -10651,7 +10760,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.user.permission-boundary.remove"
+                    "enum": [
+                      "iam.user.permission-boundary.remove"
+                    ]
                   }
                 }
               }
@@ -10675,7 +10786,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.group.list"
+                    "enum": [
+                      "iam.group.list",
+                      "iam.group.*"
+                    ]
                   }
                 }
               }
@@ -10699,7 +10813,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.group.create"
+                    "enum": [
+                      "iam.group.create",
+                      "iam.group.*"
+                    ]
                   }
                 }
               }
@@ -10720,89 +10837,98 @@
           },
           {
             "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "const": "iam.group.read"
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "resources": {
-                  "contains": {
-                    "properties": {
-                      "kind": {
-                        "const": "GROUP"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "resources": {
-                  "contains": {
-                    "properties": {
-                      "kind": {
-                        "const": "GROUP"
-                      },
-                      "match": {
-                        "const": "PREFIX_IN_AUTHORITY"
-                      }
-                    }
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "actions": {
-                  "not": {
-                    "contains": {
-                      "enum": [
-                        "iam.group.read",
-                        "iam.group.update",
-                        "iam.group.delete",
-                        "iam.group-membership.list",
-                        "iam.group-membership.create",
-                        "iam.group-policy-attachment.create"
-                      ]
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "resources": {
-                  "contains": {
-                    "properties": {
-                      "kind": {
-                        "const": "GROUP"
-                      }
-                    }
-                  }
-                }
-              }
-            },
-            "then": {
               "properties": {
                 "actions": {
                   "contains": {
                     "enum": [
                       "iam.group.read",
-                      "iam.group.update",
-                      "iam.group.delete",
-                      "iam.group-membership.list",
+                      "iam.group.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "GROUP"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "GROUP"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "iam.group-membership.*",
+                        "iam.group-membership.create",
+                        "iam.group-membership.list",
+                        "iam.group-policy-attachment.*",
+                        "iam.group-policy-attachment.create",
+                        "iam.group.*",
+                        "iam.group.delete",
+                        "iam.group.read",
+                        "iam.group.update"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "GROUP"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.group-membership.*",
                       "iam.group-membership.create",
-                      "iam.group-policy-attachment.create"
+                      "iam.group-membership.list",
+                      "iam.group-policy-attachment.*",
+                      "iam.group-policy-attachment.create",
+                      "iam.group.*",
+                      "iam.group.delete",
+                      "iam.group.read",
+                      "iam.group.update"
                     ]
                   }
                 }
@@ -10814,7 +10940,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.group.update"
+                    "enum": [
+                      "iam.group.update",
+                      "iam.group.*"
+                    ]
                   }
                 }
               }
@@ -10838,7 +10967,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.group.delete"
+                    "enum": [
+                      "iam.group.delete",
+                      "iam.group.*"
+                    ]
                   }
                 }
               }
@@ -10862,7 +10994,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.group-membership.list"
+                    "enum": [
+                      "iam.group-membership.list",
+                      "iam.group-membership.*"
+                    ]
                   }
                 }
               }
@@ -10886,7 +11021,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.group-membership.create"
+                    "enum": [
+                      "iam.group-membership.create",
+                      "iam.group-membership.*"
+                    ]
                   }
                 }
               }
@@ -10910,7 +11048,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.group-membership.remove"
+                    "enum": [
+                      "iam.group-membership.remove",
+                      "iam.group-membership.*"
+                    ]
                   }
                 }
               }
@@ -10952,6 +11093,7 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "iam.group-membership.*",
                         "iam.group-membership.remove"
                       ]
                     }
@@ -10979,6 +11121,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "iam.group-membership.*",
                       "iam.group-membership.remove"
                     ]
                   }
@@ -10991,7 +11134,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.group-policy-attachment.create"
+                    "enum": [
+                      "iam.group-policy-attachment.create",
+                      "iam.group-policy-attachment.*"
+                    ]
                   }
                 }
               }
@@ -11015,7 +11161,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.group-policy-attachment.revoke"
+                    "enum": [
+                      "iam.group-policy-attachment.revoke",
+                      "iam.group-policy-attachment.*"
+                    ]
                   }
                 }
               }
@@ -11057,9 +11206,11 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "iam.group-policy-attachment.*",
                         "iam.group-policy-attachment.revoke",
-                        "iam.policy-attachment.revoke",
-                        "iam.platform-policy-attachment.revoke"
+                        "iam.platform-policy-attachment.revoke",
+                        "iam.policy-attachment.*",
+                        "iam.policy-attachment.revoke"
                       ]
                     }
                   }
@@ -11086,9 +11237,11 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "iam.group-policy-attachment.*",
                       "iam.group-policy-attachment.revoke",
-                      "iam.policy-attachment.revoke",
-                      "iam.platform-policy-attachment.revoke"
+                      "iam.platform-policy-attachment.revoke",
+                      "iam.policy-attachment.*",
+                      "iam.policy-attachment.revoke"
                     ]
                   }
                 }
@@ -11100,7 +11253,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.policy-attachment.create"
+                    "enum": [
+                      "iam.policy-attachment.create",
+                      "iam.policy-attachment.*"
+                    ]
                   }
                 }
               }
@@ -11124,7 +11280,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.policy-attachment.revoke"
+                    "enum": [
+                      "iam.policy-attachment.revoke",
+                      "iam.policy-attachment.*"
+                    ]
                   }
                 }
               }
@@ -11148,7 +11307,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.session.revoke"
+                    "enum": [
+                      "iam.session.revoke",
+                      "iam.session.*"
+                    ]
                   }
                 }
               }
@@ -11190,6 +11352,7 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "iam.session.*",
                         "iam.session.revoke"
                       ]
                     }
@@ -11217,6 +11380,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "iam.session.*",
                       "iam.session.revoke"
                     ]
                   }
@@ -11229,7 +11393,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.platform-policy-attachment.create"
+                    "enum": [
+                      "iam.platform-policy-attachment.create"
+                    ]
                   }
                 }
               }
@@ -11253,7 +11419,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.platform-policy-attachment.create"
+                    "enum": [
+                      "iam.platform-policy-attachment.create"
+                    ]
                   }
                 }
               }
@@ -11269,7 +11437,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.platform-policy-attachment.revoke"
+                    "enum": [
+                      "iam.platform-policy-attachment.revoke"
+                    ]
                   }
                 }
               }
@@ -11293,7 +11463,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "iam.platform-policy-attachment.revoke"
+                    "enum": [
+                      "iam.platform-policy-attachment.revoke"
+                    ]
                   }
                 }
               }
@@ -11309,7 +11481,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-pool.create"
+                    "enum": [
+                      "paas.execution-pool.create"
+                    ]
                   }
                 }
               }
@@ -11333,7 +11507,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-pool.create"
+                    "enum": [
+                      "paas.execution-pool.create"
+                    ]
                   }
                 }
               }
@@ -11408,7 +11584,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-pool.read"
+                    "enum": [
+                      "paas.execution-pool.read"
+                    ]
                   }
                 }
               }
@@ -11432,7 +11610,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-pool.read"
+                    "enum": [
+                      "paas.execution-pool.read"
+                    ]
                   }
                 }
               }
@@ -11448,7 +11628,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-target.register"
+                    "enum": [
+                      "paas.execution-target.register"
+                    ]
                   }
                 }
               }
@@ -11472,7 +11654,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-target.register"
+                    "enum": [
+                      "paas.execution-target.register"
+                    ]
                   }
                 }
               }
@@ -11506,10 +11690,10 @@
                   "not": {
                     "contains": {
                       "enum": [
-                        "paas.execution-target.register",
-                        "paas.execution-target.read",
-                        "paas.execution-target.drain",
                         "paas.execution-target.activate",
+                        "paas.execution-target.drain",
+                        "paas.execution-target.read",
+                        "paas.execution-target.register",
                         "paas.execution-target.remove"
                       ]
                     }
@@ -11537,10 +11721,10 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "paas.execution-target.register",
-                      "paas.execution-target.read",
-                      "paas.execution-target.drain",
                       "paas.execution-target.activate",
+                      "paas.execution-target.drain",
+                      "paas.execution-target.read",
+                      "paas.execution-target.register",
                       "paas.execution-target.remove"
                     ]
                   }
@@ -11553,7 +11737,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-target.read"
+                    "enum": [
+                      "paas.execution-target.read"
+                    ]
                   }
                 }
               }
@@ -11577,7 +11763,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-target.read"
+                    "enum": [
+                      "paas.execution-target.read"
+                    ]
                   }
                 }
               }
@@ -11593,7 +11781,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-target.drain"
+                    "enum": [
+                      "paas.execution-target.drain"
+                    ]
                   }
                 }
               }
@@ -11617,7 +11807,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-target.drain"
+                    "enum": [
+                      "paas.execution-target.drain"
+                    ]
                   }
                 }
               }
@@ -11633,7 +11825,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-target.activate"
+                    "enum": [
+                      "paas.execution-target.activate"
+                    ]
                   }
                 }
               }
@@ -11657,7 +11851,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-target.activate"
+                    "enum": [
+                      "paas.execution-target.activate"
+                    ]
                   }
                 }
               }
@@ -11673,7 +11869,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-target.remove"
+                    "enum": [
+                      "paas.execution-target.remove"
+                    ]
                   }
                 }
               }
@@ -11697,7 +11895,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.execution-target.remove"
+                    "enum": [
+                      "paas.execution-target.remove"
+                    ]
                   }
                 }
               }
@@ -11713,7 +11913,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.node-enrollment.create"
+                    "enum": [
+                      "paas.node-enrollment.create"
+                    ]
                   }
                 }
               }
@@ -11737,7 +11939,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.node-enrollment.create"
+                    "enum": [
+                      "paas.node-enrollment.create"
+                    ]
                   }
                 }
               }
@@ -11773,8 +11977,8 @@
                       "enum": [
                         "paas.node-enrollment.create",
                         "paas.node-enrollment.read",
-                        "paas.node-enrollment.revoke",
-                        "paas.node-enrollment.regenerate"
+                        "paas.node-enrollment.regenerate",
+                        "paas.node-enrollment.revoke"
                       ]
                     }
                   }
@@ -11803,8 +12007,8 @@
                     "enum": [
                       "paas.node-enrollment.create",
                       "paas.node-enrollment.read",
-                      "paas.node-enrollment.revoke",
-                      "paas.node-enrollment.regenerate"
+                      "paas.node-enrollment.regenerate",
+                      "paas.node-enrollment.revoke"
                     ]
                   }
                 }
@@ -11816,7 +12020,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.node-enrollment.read"
+                    "enum": [
+                      "paas.node-enrollment.read"
+                    ]
                   }
                 }
               }
@@ -11840,7 +12046,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.node-enrollment.read"
+                    "enum": [
+                      "paas.node-enrollment.read"
+                    ]
                   }
                 }
               }
@@ -11856,7 +12064,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.node-enrollment.revoke"
+                    "enum": [
+                      "paas.node-enrollment.revoke"
+                    ]
                   }
                 }
               }
@@ -11880,7 +12090,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.node-enrollment.revoke"
+                    "enum": [
+                      "paas.node-enrollment.revoke"
+                    ]
                   }
                 }
               }
@@ -11896,7 +12108,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.node-enrollment.regenerate"
+                    "enum": [
+                      "paas.node-enrollment.regenerate"
+                    ]
                   }
                 }
               }
@@ -11920,7 +12134,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.node-enrollment.regenerate"
+                    "enum": [
+                      "paas.node-enrollment.regenerate"
+                    ]
                   }
                 }
               }
@@ -11936,7 +12152,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.platform-operation.read"
+                    "enum": [
+                      "paas.platform-operation.read"
+                    ]
                   }
                 }
               }
@@ -11960,7 +12178,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.platform-operation.read"
+                    "enum": [
+                      "paas.platform-operation.read"
+                    ]
                   }
                 }
               }
@@ -11994,8 +12214,9 @@
                   "not": {
                     "contains": {
                       "enum": [
-                        "paas.platform-operation.read",
-                        "paas.operation.read"
+                        "paas.operation.*",
+                        "paas.operation.read",
+                        "paas.platform-operation.read"
                       ]
                     }
                   }
@@ -12022,8 +12243,9 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "paas.platform-operation.read",
-                      "paas.operation.read"
+                      "paas.operation.*",
+                      "paas.operation.read",
+                      "paas.platform-operation.read"
                     ]
                   }
                 }
@@ -12035,7 +12257,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.application.create"
+                    "enum": [
+                      "paas.application.create",
+                      "paas.application.*"
+                    ]
                   }
                 }
               }
@@ -12077,6 +12302,7 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "paas.application.*",
                         "paas.application.create"
                       ]
                     }
@@ -12104,6 +12330,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "paas.application.*",
                       "paas.application.create",
                       "paas.application.read"
                     ]
@@ -12117,7 +12344,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.application.read"
+                    "enum": [
+                      "paas.application.read",
+                      "paas.application.*"
+                    ]
                   }
                 }
               }
@@ -12141,7 +12371,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.configuration.create"
+                    "enum": [
+                      "paas.configuration.create",
+                      "paas.configuration.*"
+                    ]
                   }
                 }
               }
@@ -12183,6 +12416,7 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "paas.configuration.*",
                         "paas.configuration.create",
                         "paas.configuration.read"
                       ]
@@ -12211,6 +12445,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "paas.configuration.*",
                       "paas.configuration.create",
                       "paas.configuration.read"
                     ]
@@ -12224,7 +12459,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.configuration.read"
+                    "enum": [
+                      "paas.configuration.read",
+                      "paas.configuration.*"
+                    ]
                   }
                 }
               }
@@ -12248,7 +12486,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.configuration-revision.create"
+                    "enum": [
+                      "paas.configuration-revision.create",
+                      "paas.configuration-revision.*"
+                    ]
                   }
                 }
               }
@@ -12290,6 +12531,7 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "paas.configuration-revision.*",
                         "paas.configuration-revision.create",
                         "paas.configuration-revision.read"
                       ]
@@ -12318,6 +12560,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "paas.configuration-revision.*",
                       "paas.configuration-revision.create",
                       "paas.configuration-revision.read"
                     ]
@@ -12331,7 +12574,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.configuration-revision.read"
+                    "enum": [
+                      "paas.configuration-revision.read",
+                      "paas.configuration-revision.*"
+                    ]
                   }
                 }
               }
@@ -12355,7 +12601,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.application-revision.create"
+                    "enum": [
+                      "paas.application-revision.create",
+                      "paas.application-revision.*"
+                    ]
                   }
                 }
               }
@@ -12397,6 +12646,7 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "paas.application-revision.*",
                         "paas.application-revision.create",
                         "paas.application-revision.read"
                       ]
@@ -12425,6 +12675,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "paas.application-revision.*",
                       "paas.application-revision.create",
                       "paas.application-revision.read"
                     ]
@@ -12438,7 +12689,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.application-revision.read"
+                    "enum": [
+                      "paas.application-revision.read",
+                      "paas.application-revision.*"
+                    ]
                   }
                 }
               }
@@ -12462,7 +12716,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.deployment.create"
+                    "enum": [
+                      "paas.deployment.create",
+                      "paas.deployment.*"
+                    ]
                   }
                 }
               }
@@ -12504,11 +12761,12 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "paas.deployment.*",
                         "paas.deployment.create",
-                        "paas.deployment.update",
+                        "paas.deployment.read",
                         "paas.deployment.rollback",
                         "paas.deployment.stop",
-                        "paas.deployment.read"
+                        "paas.deployment.update"
                       ]
                     }
                   }
@@ -12535,11 +12793,12 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "paas.deployment.*",
                       "paas.deployment.create",
-                      "paas.deployment.update",
+                      "paas.deployment.read",
                       "paas.deployment.rollback",
                       "paas.deployment.stop",
-                      "paas.deployment.read"
+                      "paas.deployment.update"
                     ]
                   }
                 }
@@ -12551,7 +12810,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.deployment.update"
+                    "enum": [
+                      "paas.deployment.update",
+                      "paas.deployment.*"
+                    ]
                   }
                 }
               }
@@ -12575,7 +12837,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.deployment.rollback"
+                    "enum": [
+                      "paas.deployment.rollback",
+                      "paas.deployment.*"
+                    ]
                   }
                 }
               }
@@ -12599,7 +12864,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.deployment.stop"
+                    "enum": [
+                      "paas.deployment.stop",
+                      "paas.deployment.*"
+                    ]
                   }
                 }
               }
@@ -12623,7 +12891,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.deployment.read"
+                    "enum": [
+                      "paas.deployment.read",
+                      "paas.deployment.*"
+                    ]
                   }
                 }
               }
@@ -12647,7 +12918,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "paas.operation.read"
+                    "enum": [
+                      "paas.operation.read",
+                      "paas.operation.*"
+                    ]
                   }
                 }
               }
@@ -12671,7 +12945,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "managedservice.offering.read"
+                    "enum": [
+                      "managedservice.offering.read",
+                      "managedservice.offering.*"
+                    ]
                   }
                 }
               }
@@ -12713,6 +12990,7 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "managedservice.offering.*",
                         "managedservice.offering.read"
                       ]
                     }
@@ -12740,6 +13018,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "managedservice.offering.*",
                       "managedservice.offering.read"
                     ]
                   }
@@ -12752,7 +13031,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "managedservice.region.read"
+                    "enum": [
+                      "managedservice.region.read",
+                      "managedservice.region.*"
+                    ]
                   }
                 }
               }
@@ -12794,6 +13076,7 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "managedservice.region.*",
                         "managedservice.region.read"
                       ]
                     }
@@ -12821,6 +13104,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "managedservice.region.*",
                       "managedservice.region.read"
                     ]
                   }
@@ -12833,7 +13117,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "managedservice.quota-entitlement.activate"
+                    "enum": [
+                      "managedservice.quota-entitlement.activate",
+                      "managedservice.quota-entitlement.*"
+                    ]
                   }
                 }
               }
@@ -12875,6 +13162,7 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "managedservice.quota-entitlement.*",
                         "managedservice.quota-entitlement.activate",
                         "managedservice.quota-entitlement.read"
                       ]
@@ -12903,6 +13191,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "managedservice.quota-entitlement.*",
                       "managedservice.quota-entitlement.activate",
                       "managedservice.quota-entitlement.read"
                     ]
@@ -12916,7 +13205,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "managedservice.quota-entitlement.read"
+                    "enum": [
+                      "managedservice.quota-entitlement.read",
+                      "managedservice.quota-entitlement.*"
+                    ]
                   }
                 }
               }
@@ -12940,7 +13232,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "managedservice.service-installation.create"
+                    "enum": [
+                      "managedservice.service-installation.create",
+                      "managedservice.service-installation.*"
+                    ]
                   }
                 }
               }
@@ -12982,6 +13277,7 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "managedservice.service-installation.*",
                         "managedservice.service-installation.create",
                         "managedservice.service-installation.read"
                       ]
@@ -13010,6 +13306,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "managedservice.service-installation.*",
                       "managedservice.service-installation.create",
                       "managedservice.service-installation.read"
                     ]
@@ -13023,7 +13320,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "managedservice.service-installation.read"
+                    "enum": [
+                      "managedservice.service-installation.read",
+                      "managedservice.service-installation.*"
+                    ]
                   }
                 }
               }
@@ -13047,7 +13347,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "audit.record.read"
+                    "enum": [
+                      "audit.record.read",
+                      "audit.record.*"
+                    ]
                   }
                 }
               }
@@ -13089,8 +13392,9 @@
                   "not": {
                     "contains": {
                       "enum": [
-                        "audit.record.read",
-                        "audit.platform-record.read"
+                        "audit.platform-record.read",
+                        "audit.record.*",
+                        "audit.record.read"
                       ]
                     }
                   }
@@ -13117,8 +13421,9 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "audit.record.read",
-                      "audit.platform-record.read"
+                      "audit.platform-record.read",
+                      "audit.record.*",
+                      "audit.record.read"
                     ]
                   }
                 }
@@ -13130,7 +13435,10 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "audit.integrity.verify"
+                    "enum": [
+                      "audit.integrity.verify",
+                      "audit.integrity.*"
+                    ]
                   }
                 }
               }
@@ -13172,6 +13480,7 @@
                   "not": {
                     "contains": {
                       "enum": [
+                        "audit.integrity.*",
                         "audit.integrity.verify",
                         "audit.platform-integrity.verify"
                       ]
@@ -13200,6 +13509,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "audit.integrity.*",
                       "audit.integrity.verify",
                       "audit.platform-integrity.verify"
                     ]
@@ -13213,7 +13523,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "audit.platform-record.read"
+                    "enum": [
+                      "audit.platform-record.read"
+                    ]
                   }
                 }
               }
@@ -13237,7 +13549,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "audit.platform-record.read"
+                    "enum": [
+                      "audit.platform-record.read"
+                    ]
                   }
                 }
               }
@@ -13253,7 +13567,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "audit.platform-integrity.verify"
+                    "enum": [
+                      "audit.platform-integrity.verify"
+                    ]
                   }
                 }
               }
@@ -13277,7 +13593,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "audit.platform-integrity.verify"
+                    "enum": [
+                      "audit.platform-integrity.verify"
+                    ]
                   }
                 }
               }
@@ -13293,7 +13611,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "installation.verify"
+                    "enum": [
+                      "installation.verify"
+                    ]
                   }
                 }
               }
@@ -13317,7 +13637,9 @@
               "properties": {
                 "actions": {
                   "contains": {
-                    "const": "installation.verify"
+                    "enum": [
+                      "installation.verify"
+                    ]
                   }
                 }
               }
@@ -13332,7 +13654,105 @@
         "properties": {
           "actions": {
             "items": {
-              "$ref": "#/components/schemas/Action"
+              "enum": [
+                "iam.account.create",
+                "iam.account.read",
+                "iam.account.set-status",
+                "iam.account.recover-root-credentials",
+                "iam.account.alias-set",
+                "iam.user.list",
+                "iam.policy.list",
+                "iam.policy.create",
+                "iam.policy.read",
+                "iam.policy-version.list",
+                "iam.policy-version.read",
+                "iam.policy-version.create",
+                "iam.policy-version.delete",
+                "iam.policy.set-default-version",
+                "iam.policy.update",
+                "iam.policy.delete",
+                "iam.platform-policy.list",
+                "iam.user.set-status",
+                "iam.user.reset-password",
+                "iam.user.create",
+                "iam.user.read",
+                "iam.user.update",
+                "iam.user.delete",
+                "iam.user.permission-boundary.set",
+                "iam.user.permission-boundary.remove",
+                "iam.group.list",
+                "iam.group.create",
+                "iam.group.read",
+                "iam.group.update",
+                "iam.group.delete",
+                "iam.group-membership.list",
+                "iam.group-membership.create",
+                "iam.group-membership.remove",
+                "iam.group-policy-attachment.create",
+                "iam.group-policy-attachment.revoke",
+                "iam.policy-attachment.create",
+                "iam.policy-attachment.revoke",
+                "iam.session.revoke",
+                "iam.platform-policy-attachment.create",
+                "iam.platform-policy-attachment.revoke",
+                "paas.execution-pool.create",
+                "paas.execution-pool.read",
+                "paas.execution-target.register",
+                "paas.execution-target.read",
+                "paas.execution-target.drain",
+                "paas.execution-target.activate",
+                "paas.execution-target.remove",
+                "paas.node-enrollment.create",
+                "paas.node-enrollment.read",
+                "paas.node-enrollment.revoke",
+                "paas.node-enrollment.regenerate",
+                "paas.platform-operation.read",
+                "paas.application.create",
+                "paas.application.read",
+                "paas.configuration.create",
+                "paas.configuration.read",
+                "paas.configuration-revision.create",
+                "paas.configuration-revision.read",
+                "paas.application-revision.create",
+                "paas.application-revision.read",
+                "paas.deployment.create",
+                "paas.deployment.update",
+                "paas.deployment.rollback",
+                "paas.deployment.stop",
+                "paas.deployment.read",
+                "paas.operation.read",
+                "managedservice.offering.read",
+                "managedservice.region.read",
+                "managedservice.quota-entitlement.activate",
+                "managedservice.quota-entitlement.read",
+                "managedservice.service-installation.create",
+                "managedservice.service-installation.read",
+                "audit.record.read",
+                "audit.integrity.verify",
+                "audit.platform-record.read",
+                "audit.platform-integrity.verify",
+                "installation.verify",
+                "audit.integrity.*",
+                "audit.record.*",
+                "iam.group-membership.*",
+                "iam.group-policy-attachment.*",
+                "iam.group.*",
+                "iam.policy-attachment.*",
+                "iam.policy-version.*",
+                "iam.policy.*",
+                "iam.session.*",
+                "iam.user.*",
+                "managedservice.offering.*",
+                "managedservice.quota-entitlement.*",
+                "managedservice.region.*",
+                "managedservice.service-installation.*",
+                "paas.application-revision.*",
+                "paas.application.*",
+                "paas.configuration-revision.*",
+                "paas.configuration.*",
+                "paas.deployment.*",
+                "paas.operation.*"
+              ]
             },
             "maxItems": 128,
             "minItems": 1,
@@ -13497,6 +13917,23 @@
               "compilation": false,
               "contractVersion": {
                 "const": 1
+              },
+              "document": {
+                "properties": {
+                  "statements": {
+                    "items": {
+                      "properties": {
+                        "actions": {
+                          "items": {
+                            "maxLength": 128,
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63}){1,4}$",
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
               }
             }
           },
@@ -13542,6 +13979,13 @@
                     "statements": {
                       "items": {
                         "properties": {
+                          "actions": {
+                            "items": {
+                              "maxLength": 128,
+                              "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63}){1,4}$",
+                              "type": "string"
+                            }
+                          },
                           "resources": {
                             "items": {
                               "properties": {
@@ -13574,9 +14018,18 @@
                   "properties": {
                     "actions": {
                       "items": {
-                        "maxLength": 128,
-                        "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
-                        "type": "string"
+                        "anyOf": [
+                          {
+                            "maxLength": 128,
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63}){1,4}$",
+                            "type": "string"
+                          },
+                          {
+                            "maxLength": 128,
+                            "pattern": "^[a-z][a-z0-9_-]{0,63}\\.[a-z][a-z0-9_-]{0,63}\\.\\*$",
+                            "type": "string"
+                          }
+                        ]
                       },
                       "maxItems": 128,
                       "minItems": 1,

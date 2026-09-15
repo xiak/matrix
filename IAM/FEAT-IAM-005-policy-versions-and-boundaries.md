@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串条件及资源前缀已有固定 CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过。动作通配、IP 条件、Role 边界及完整委派未完成；最终UI接入由UX/UI工程师在独立分支负责，当前进度归010，不以旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串条件及资源前缀已有固定 CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过。受限动作族通配已完成本地后端闭环，独立 CI 待确认；IP 条件、Role 边界及完整委派未完成。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -85,23 +85,43 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 验收沿用现有契约、求值器、HTTP/PG 与双 IAM/PaaS/Audit 门禁：前缀本身/较短 ID/匹配后缀/不匹配/大小写/最大长度、空与通配字符攻击、重复选择器、未知 kind、平台/probe 拒绝；组继承与匹配 Deny、时间/身份组合、跨账号同前缀/同 ID、旧 cursor/版本重放、受限 SQL 发布及末尾事务失败无部分效果。至少实际 PaaS 中一个匹配应用允许、一个非匹配应用拒绝，随后改变默认/撤销后同 bearer 下一请求拒绝；不能只增加 parser 单测。
 
-动作通配符仍是 LANG-03 的未完成部分，须结合 001/008 的版本化 Profile 冻结展开范围与历史证据：旧不可变 PolicyVersion 不能因产品以后注册了同前缀的新动作而自动取得这些权限。不以运行时字符串前缀判断 Action、服务或 scope，不把资源前缀子集宣称为完整 LANG-03。
+动作通配由下节的版本化 Profile 冻结展开范围与历史证据：旧不可变 PolicyVersion 不能因产品以后注册了同前缀的新动作而自动取得这些权限。不以运行时字符串前缀判断 Action、服务或 scope，不把资源前缀子集宣称为完整 LANG-03。
 
 #### 受限动作族通配：冻结目录的编译增量
 
-下一有界切片先在现有纯编译器实现并验证，不开放在线发布或改变数据库、PDP及发行契约。作者 `actions` 只允许精确三段 `product.family.*`，例如 `paas.application.*`；总长仍最多128字节。星号只匹配一个非空完整声明段；`paas.application.*` 不匹配 `paas.application-extra.read` 或 `paas.application.child.read`。全局 `*`、仅产品 `paas.*`、多层模式、中间星号、部分段前缀、问号、正则、转义、大小写折叠和未知命名空间不支持。
+纯编译基础已有固定 CI；当前纵向片已接入在线发布、数据库与唯一 PDP，并完成下述本地真实运行门禁，独立 CI 待确认。作者 `actions` 只允许精确三段 `product.family.*`，例如 `paas.application.*`；总长仍最多128字节。星号只匹配一个非空完整声明段；`paas.application.*` 不匹配 `paas.application-extra.read` 或 `paas.application.child.read`。全局 `*`、仅产品 `paas.*`、多层模式、中间星号、部分段前缀、问号、正则、转义、大小写折叠和未知命名空间不支持。
 
 仅 TENANT 作者可使用模式。编译器在调用边界明确提供、完整校验的冻结 Profile 中展开，不按 scope、资源或条件筛掉不便匹配的动作：任一展开动作范围不符、资源缺失、条件或前缀能力不符，整个语句拒绝。零匹配拒绝，不表示“未来可能允许”。重复作者 token 拒绝；不同模式以及模式与精确动作重叠时按集合去重。作者文档原样规范编码，resolvedStatements 只含排序、精确、去重的动作，逐语句仍最多128项；原64KiB作者、128KiB完整内容及16个Profile预算不增加。每次解析至多8192次动作访问（64语句×128动作），在去重之前计入所有展开结果与精确 token，重叠不能隐藏编译工作；展开表只从已验证且每个最多128动作的Profile一次构造，不逐模式扫描全局目录。产品名只用于语法命名空间与查找明确声明，不推导服务或授权资格。
 
 精确动作的旧 canonical/digest 不变；作者模式与显式枚举即使当前展开相同，也有不同内容承诺。新 Profile 可使新发布产生不同结果，但原内容始终用原精确 archive 验证，不移动默认值、不重新展开到当前 head；当前兼容性检查在 Effect/资源/条件之前执行，包含不匹配资源的 Deny。编译成功不是授权决定或目录注册证明。
 
-本片门禁覆盖真实产品和未注册合成产品的同一纯路径、段边界、零匹配、scope/条件/资源攻击、重复与重叠、展开上限、输入副本隔离、重排稳定、SID/摘要篡改、冻结与新目录分离，以及精确动作的全部原回归。在线 document/PolicyVersion decoder 和产品 Profile 声明仍拒绝模式，不能把纯编译成功当作可发布或可执行。后续纵向片必须同时替换 SQL 对作者与解析动作的核对、版本传输完整性以及 PDP 精确 resolved 集合匹配，并补 PG18/双租户真实PaaS允许与Deny/撤权/历史证明；在此之前 LANG-03 不验收，不推进 schema 数字或 release profile。
+本片门禁覆盖真实产品和未注册合成产品的同一纯路径、段边界、零匹配、scope/条件/资源攻击、重复与重叠、展开上限、输入副本隔离、重排稳定、SID/摘要篡改、冻结与新目录分离，以及精确动作的全部原回归。产品 Profile 声明只能登记精确动作；作者模式不能成为实际 AuthorizationRequest.action。纯编译成功仍不构成发布或执行授权。
 
-本地纯片验证（2026-09-15）：上述契约攻击、两个实际产品的最小引用、合成非全局目录、当前请求兼容以及在线创建/发布/版本合同仍拒绝模式的门禁通过；整个文档8192次访问恰好通过，去重前超限拒绝。全仓 Go race/vet、模块校验、API生成字节稳定及Linux amd64构建通过，Go限制2核/768MiB。模式规范往返与原编译内容往返分别以15秒/2workers/1秒最小化预算通过265354与284079次执行；不是容量SLO。原单策略评估样本约80μs、49989 B、162 allocs，无模式时不建立动作族索引；该单次本机样本不推导吞吐或尾延迟保证。本轮没有启动真库/服务/浏览器/远端环境，默认跳过的外部测试不作运行证据；SQL/PDP模式闭环、独立CI及完整LANG-03尚未在该本地结论中验收。
+共同闭环沿用 contractVersion2/compilationVersion1，原exact canonical/digest不变，legacy1和原document-only编码任何路径均禁止模式。传输codec从完整resolved集合验证作者语法覆盖与总承诺，但不证明可信目录的完整性；缺失或伪造的匹配成员必须再由trusted owner加载精确archive后重编译拒绝。当前发布仍只接受作者document，在原事务里锁定并核对当前源码heads；SQL私有断言独立从这些完整Profile展开全部成员，按同一去重前8192预算验证SID/精确集合/最小引用以及每个资源和条件。它不把模式当SQL LIKE/调用者正则，不根据scope过滤匹配集合。PDP先完成整个冻结内容与当前解释相容性验证，再且仅再按resolved SID的精确动作匹配；删除作者Action匹配兜底，默认指针/附件/边界下次请求生效，原事实不重新授权。
+
+本轮开发readiness为IAM23/Audit13/PaaS1，反映SQL与作者语义变化；create10/claim7/recorder7/evidence5外形、ServiceIdentity/lookup_service/Audit canonical保持。安装CurrentDatabaseProfile不改，其他Phase的PaaS5不导入。必须证明真正HTTP发布/关联后PaaS允许与Deny/撤销/隔离和历史投递；原exact版本/默认/退休/重放不变；新revision只能使用明确源码拥有的声明，不能覆盖r1。旧pattern不因新head新增动作而扩张，不移动default；新动作只有显式新Publish加set-default才取得权限。SQL升级或同schema数字不作跨发行兼容证明。上述真实目录前进、多进程与独立CI门禁未齐前，LANG-03继续未验收。
+
+当前 SQL 的 `resource_kind_for_action` / `is_platform_action` 删除原 CASE 双目录，沿既有私有函数读取已登记 current Profile 的精确 Action。它们是 STABLE、invoker、非并行、owner-only 投影，不是额外注册或授权入口。只有 INSTALLATION 为平台动作；TENANT/INSTALLATION_PROBE 为已知非平台，缺失返回 NULL，重复匹配以标量子查询失败，非法 scope 不降级为 tenant。recorder 和 boundary 显式拒绝缺失解释；管理消费还核对原决定的精确 current Profile。当前用例在原事务锁定源码一致的 heads 后使用投影，历史 proof 仍读取原 archive，封闭 event→decision 事实映射不改。
+
+真实可信 archive 读取负向门禁在现有PG18 policy owner验证：完整重算摘要且通过传输 codec 的缺失/伪造同族成员，在受限管理读取时仍因精确 archive 不符返回 sanitized 503；恢复测试投影后原内容可读，没有改写不可变历史。发布、PaaS Allow/Deny/撤销及资源/Operation/outbox隔离由下述最终完整回归证明，不将初期检查冒充最终固定源码验收。
+
+原 retained-process 门禁使用仅测试用 Go build overlay，独立构建 source-owned PaaS Profile r2 的 IAM executable 和 migrator，保留 r1 原声明，加入一个合成同族 inspect 并移除 read 的主体条件能力。原迁移器实际 apply 两次和 verify，未用 DML 直接造 head/版本/附件。r1 在线请求 422 且没有普通 Deny 决定；r2 请求中的旧动作保持允许，新动作在旧默认和仅发布阶段均拒绝，显式 set-default 后允许。重启/撤销及原 r1 决定、版本字节和业务 proof 保留。合成 inspect 仅证明 IAM 目录演进，不是生产 PaaS endpoint、运行时注册能力或签名发行升级。
+
+早期完整回归曾触及原120秒组流程及240秒综合上限，未计成功。CPU剖析定位能力投影反复反射比较完整Profile的开销。优化仅把同一源码承诺的完整内容相等检查改为类型化逐字段比较，嵌套shape/condition仍全部核对，任意不同内容仍走原完整编码器；没有身份/权限/current-head跨请求缓存。没有放宽时限、减少101成员/分页规模或并发攻击，失败由下述最终完整回归收口，不用聚焦成功替代。
+
+解码仅在完整有界输入与预先验证的源码canonical每字节相等时返回深拷贝，其他输入仍走原严格decoder/完整编码器。该路径不按product/revision/digest短路，不保留数据库状态；原/规范排序、全部标量变体、深拷贝隔离、尾随对象、重复字段和超限均验证。编译器仅为作者精确依赖与完整匹配族构建临时索引，仍先校验所有传入Profile，包括未引用声明的语法/重复/条件。所有改变只去除重复纯计算，不减少密码哈希强度，也不把快路径或CPU样本作为容量/HA验收。
+
+最终目录前进门禁在全新专属PG18通过20.72s（Go包24.066s）：原r1家族Deny使用的身份条件在新源码中移除时，即使资源不匹配也整次503且不写普通决定，显式撤销后恢复原Allow。首次登记的r2同时承诺inspect新增与read条件移除；不修改已登记r2，不复用先前仅inspect试验库。原固定21解释基线、Root preflight/末尾回滚、真实发布/默认/撤销/重启、原字节及历史proof均在同门禁保留。
+
+最终源码的整组PG18 policy race剖析通过158.43s：组流程74.41s、完整数据后的平台凭据保护13.64s、末尾原schema/bootstrap/退休/撤权重放及current Profile/私有ACL攻击全部完成。剖析二进制保留`-race`，局部`-ldflags=-w`只去除Windows调试段；随后使用普通链接的最终串行回归也通过，未以剖析代替正常运行：Audit数据库/保留升级7.741s、Audit HTTP3.593s、IAM integration308.117s、authorityprocess101.499s、PaaS数据库5.817s。IAM包包含完整policy、真实HTTP和本地恢复；进程包包含固定21 retained升级、首次r2条件冲突/新增动作，以及真实双IAM/PaaS/Audit、受限数据库身份、模式Allow/Deny/撤销、跨租户资源/配置/Operation/outbox与历史proof。环境为本任务独立PG18.6、1CPU/768MiB/PIDs128/maxconn64，Go2/768MiB、重型race-p1串行；无远端或其他Phase运行验收。
+
+最终全仓 Go race/vet、模块校验、API 生成字节稳定和 Linux amd64 全仓构建通过。受限动作族与原编译内容往返 fuzz 各15秒、2 workers、1秒最小化预算，通过212769/218535次执行。上述检查与真实PG重型门禁串行，原组120秒/综合240秒和101成员规模未放宽。精确提交独立 CI 待确认；不宣称容量/HA、UI或发布兼容。
+
+纯片固定 `9febf76690e96f98abbf265b3ce840b8bf3dbc2c` / [Verification 34947449762](https://github.com/xiak/matrix/actions/runs/34947449762) 已核实精确SHA，go/authority-process/node-process全部success。该固定仍22/13/1且线上拒绝模式，不含当前23纵向增量。其本地契约攻击、两个实际产品的最小引用、合成非全局目录、当前请求兼容、8192恰好通过及去重前超限拒绝均通过；全仓 Go race/vet、模块校验、生成稳定和Linux构建通过，Go2核/768MiB。模式/原编译内容往返分别15秒/2workers/1秒最小化预算通过265354/284079次；原单策略样本约80μs、49989B、162alloc，无模式不建索引；这些不是容量SLO。该纯片本地没有外部环境，CI真实进程只是既有exact授权回归，不能作为模式运行验收。
 
 #### CAT-05 的不可变编译内容
 
-版本绑定由现有 `api/iam/v1/policy.go` 拥有唯一契约，并贯穿注册事务、发布、当前评估与历史证明。保留唯一作者 `document`，编译结果显式使用 `compilationVersion="1"`、`profiles` 和 `resolvedStatements`。每个 resolved 项只有唯一 `sid` 与排序的精确 `actions`；与作者语句逐一对应。当前线上只接受既有精确动作；上述受限动作族模式在同一纯编译器展开，在线发布/SQL/PDP 尚未接入。未知动作继续拒绝，模式不能进入运行时字符串匹配。
+版本绑定由现有 `api/iam/v1/policy.go` 拥有唯一契约，并贯穿注册事务、发布、当前评估与历史证明。保留唯一作者 `document`，编译结果显式使用 `compilationVersion="1"`、`profiles` 和 `resolvedStatements`。每个 resolved 项只有唯一 `sid` 与排序的精确 `actions`；与作者语句逐一对应。本轮受限动作族模式沿上述共同闭环接入，未知动作继续拒绝，模式不能进入运行时字符串匹配。
 
 编译器消费显式的 Profile 集合，校验动作的范围、资源/前缀与条件能力，输出恰好实际涉及的产品引用，每产品一个精确 revision/digest；不能按产品名或动作后缀推导权限。输入 Profile 是调用边界提供的材料，纯语法/摘要校验不认证发布者、不注册新产品。实际 Create/Publish 只接受 document 和既有并发/幂等字段，在锁内核对受信 current head 与当前源码声明；用户不能提交 compilation 或选择旧 Profile。不可变内容加载核对注册的精确 Profile、重新验证整个编译结果及其摘要，不把缺失字段解释成旧格式。
 

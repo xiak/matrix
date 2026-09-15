@@ -323,8 +323,12 @@ func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVe
 			continue
 		}
 		matched := false
+		resolvedActions := make(map[string][]iamv1.Action, len(compilation.ResolvedStatements))
+		for _, resolved := range compilation.ResolvedStatements {
+			resolvedActions[resolved.SID] = resolved.Actions
+		}
 		for _, statement := range version.Document.Statements {
-			if !slices.Contains(statement.Actions, action) {
+			if !slices.Contains(resolvedActions[statement.SID], action) {
 				continue
 			}
 			conditionMatch, err := policyConditionsMatch(statement.Conditions, action, context)

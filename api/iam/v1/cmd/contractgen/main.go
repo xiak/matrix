@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -471,12 +472,15 @@ func applySemanticOverlays(schemas object) {
 	delete(versionDocument, "allOf")
 	delete(versionStatement, "allOf")
 	versionSelector["properties"].(map[string]any)["kind"] = object{"type": "string", "maxLength": 64, "pattern": `^[A-Z][A-Z0-9_-]*$`}
-	versionStatement["properties"].(map[string]any)["actions"].(map[string]any)["items"] = object{"type": "string", "maxLength": 128, "pattern": `^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$`}
+	exactPolicyAction := object{"type": "string", "maxLength": 128, "pattern": `^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$`}
+	versionStatement["properties"].(map[string]any)["actions"].(map[string]any)["items"] = object{"anyOf": []any{exactPolicyAction,
+		object{"type": "string", "maxLength": 128, "pattern": `^[a-z][a-z0-9_-]{0,63}\.[a-z][a-z0-9_-]{0,63}\.\*$`}}}
 	versionStatement["properties"].(map[string]any)["resources"].(map[string]any)["items"] = versionSelector
 	versionDocument["properties"].(map[string]any)["statements"].(map[string]any)["items"] = versionStatement
 	versionDocument["allOf"] = []any{object{
 		"if": object{"properties": object{"scope": object{"not": object{"const": "TENANT"}}}},
 		"then": object{"properties": object{"statements": object{"items": object{"properties": object{
+			"actions":   object{"items": exactPolicyAction},
 			"resources": object{"items": object{"properties": object{"match": object{"enum": []string{"EXACT", "ANY_IN_AUTHORITY"}}}}},
 		}}}}},
 	}}
@@ -485,7 +489,8 @@ func applySemanticOverlays(schemas object) {
 	boundary["required"] = []string{"apiVersion", "kind", "accountId", "userId", "resourceVersion", "policy"}
 	boundary["properties"].(object)["policy"] = object{"anyOf": []any{object{"type": "null"}, openapi31.Ref("PolicyVersionReference")}}
 	schemas["PolicyVersion"].(object)["oneOf"] = []any{
-		object{"properties": object{"contractVersion": object{"const": iamv1.PolicyVersionLegacyContract}, "compilation": false}},
+		object{"properties": object{"contractVersion": object{"const": iamv1.PolicyVersionLegacyContract}, "compilation": false,
+			"document": object{"properties": object{"statements": object{"items": object{"properties": object{"actions": object{"items": exactPolicyAction}}}}}}}},
 		object{"required": []string{"compilation"}, "properties": object{"contractVersion": object{"const": iamv1.PolicyVersionCompiledContract}}},
 	}
 	compiled := schemas["PolicyCompilation"].(object)["properties"].(object)
@@ -686,6 +691,24 @@ func authorizationTargetRules() []any {
 }
 
 func applyPolicyLanguageOverlays(schemas object) {
+	families := iamv1.PolicyActionFamilies()
+	patterns := make([]iamv1.Action, 0, len(families))
+	for pattern := range families {
+		patterns = append(patterns, pattern)
+	}
+	slices.Sort(patterns)
+	selectors := make(map[iamv1.Action][]string)
+	allSelectors := []string{}
+	for _, definition := range iamv1.AllActionDefinitions() {
+		selectors[definition.Action] = []string{string(definition.Action)}
+		allSelectors = append(allSelectors, string(definition.Action))
+	}
+	for _, pattern := range patterns {
+		allSelectors = append(allSelectors, string(pattern))
+		for _, action := range families[pattern] {
+			selectors[action] = append(selectors[action], string(pattern))
+		}
+	}
 	document := schemas["PolicyDocument"].(object)
 	documentProperties := document["properties"].(object)
 	documentProperties["languageVersion"] = object{"const": iamv1.PolicyLanguageVersion}
@@ -693,6 +716,7 @@ func applyPolicyLanguageOverlays(schemas object) {
 	documentProperties["statements"].(object)["maxItems"] = iamv1.MaxPolicyStatements
 	statement := schemas["PolicyStatement"].(object)
 	statementProperties := statement["properties"].(object)
+	statementProperties["actions"].(object)["items"] = object{"enum": allSelectors}
 	statementProperties["sid"] = openapi31.Ref("ID")
 	statementProperties["conditions"].(object)["minItems"] = 1
 	statementProperties["conditions"].(object)["maxItems"] = iamv1.MaxStatementConditions
@@ -742,9 +766,11 @@ func applyPolicyLanguageOverlays(schemas object) {
 		actions := []string{}
 		for _, definition := range iamv1.AllActionDefinitions() {
 			if definition.AuthorityScope == scope {
-				actions = append(actions, string(definition.Action))
+				actions = append(actions, selectors[definition.Action]...)
 			}
 		}
+		slices.Sort(actions)
+		actions = slices.Compact(actions)
 		properties := object{"actions": object{"items": object{"enum": actions}}}
 		if scope != iamv1.AuthorityScopeTenant {
 			properties["resources"] = object{"items": object{"properties": object{"match": object{"enum": []string{string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority)}}}}}
@@ -759,12 +785,12 @@ func applyPolicyLanguageOverlays(schemas object) {
 	seenKinds := map[iamv1.ResourceKind]bool{}
 	for _, definition := range iamv1.AllActionDefinitions() {
 		actionRules = append(actionRules, object{
-			"if":   object{"properties": object{"actions": object{"contains": object{"const": string(definition.Action)}}}},
+			"if":   object{"properties": object{"actions": object{"contains": object{"enum": selectors[definition.Action]}}}},
 			"then": object{"properties": object{"resources": object{"contains": object{"properties": object{"kind": object{"const": string(definition.ResourceKind)}}}}}},
 		})
 		if _, supported := iamv1.LookupActionConditionDefinition(definition.Action, iamv1.ConditionIAMCurrentTime); !supported {
 			actionRules = append(actionRules, object{
-				"if":   object{"properties": object{"actions": object{"contains": object{"const": string(definition.Action)}}}},
+				"if":   object{"properties": object{"actions": object{"contains": object{"enum": selectors[definition.Action]}}}},
 				"then": object{"properties": object{"conditions": false}},
 			})
 		}
@@ -776,12 +802,16 @@ func applyPolicyLanguageOverlays(schemas object) {
 		prefixUnsupported := []string{}
 		for _, candidate := range iamv1.AllActionDefinitions() {
 			if candidate.ResourceKind == definition.ResourceKind {
-				actions = append(actions, string(candidate.Action))
+				actions = append(actions, selectors[candidate.Action]...)
 				if !candidate.ResourcePrefixAllowed {
-					prefixUnsupported = append(prefixUnsupported, string(candidate.Action))
+					prefixUnsupported = append(prefixUnsupported, selectors[candidate.Action]...)
 				}
 			}
 		}
+		slices.Sort(actions)
+		actions = slices.Compact(actions)
+		slices.Sort(prefixUnsupported)
+		prefixUnsupported = slices.Compact(prefixUnsupported)
 		if len(prefixUnsupported) != 0 {
 			actionRules = append(actionRules, object{
 				"if": object{"properties": object{"resources": object{"contains": object{"properties": object{

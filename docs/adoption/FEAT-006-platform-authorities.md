@@ -422,3 +422,23 @@ Runtime glob evaluation, current-head expansion of old versions, silently
 filtering incompatible declarations, global/product-only wildcard authority,
 and a second policy grammar or encoder are `REJECT`. The pure compiler slice
 does not enable HTTP publication, change schemas, or import other worktrees.
+
+For the IAM/005 runtime family cutover, fixed
+`9febf76690e96f98abbf265b3ce840b8bf3dbc2c` is `REUSE` for the frozen
+three-segment compiler, unchanged exact commitments and pre-deduplication work
+budget. Existing32dc publication transactions, immutable archive loader,
+private SQL assertion, recorder and sole PDP are `ADAPT`: validate full
+resolution, then match only exact resolved SID actions. Transport integrity
+alone, author-action fallback, SQL LIKE/caller regex, scope-filtered expansion,
+automatic default advancement and rewriting registered r1 are `REJECT`.
+No new permission, runtime product-registration API or release profile is adopted.
+The same fixed32dc private SQL action CASE projections are `REJECT` as a second
+current catalog; their owner-only signatures are `ADAPT` to registered current
+Profile content. Historical exact-archive proof and closed event-to-decision
+mapping are `REUSE`, not replaced by current-head lookup. Source-commitment
+equality remains complete; reflective traversal is `ADAPT` to typed field
+comparison, never a reference-only trust shortcut or cached permission.
+Full supplied Profile validation is `REUSE`; building temporary indexes for
+unreferenced actions is `ADAPT` to exact author dependencies and all matching
+family members. Skipping malformed unrelated declarations or filtering a
+requested family's scope/condition conflicts is `REJECT`.

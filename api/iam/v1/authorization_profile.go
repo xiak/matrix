@@ -1,13 +1,13 @@
 package iamv1
 
 import (
+	"bytes"
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -89,8 +89,23 @@ func sourceAuthorizationProfileCommitment(profile AuthorizationProfile) authoriz
 var ErrInvalidAuthorizationProfile = errors.New("invalid IAM authorization profile")
 
 func DecodeAuthorizationProfile(reader io.Reader) (AuthorizationProfile, error) {
+	if reader == nil {
+		return AuthorizationProfile{}, ErrInvalidAuthorizationProfile
+	}
+	encoded, err := io.ReadAll(io.LimitReader(reader, MaxAuthorizationProfileBytes+1))
+	if err != nil || int64(len(encoded)) > MaxAuthorizationProfileBytes {
+		return AuthorizationProfile{}, ErrInvalidAuthorizationProfile
+	}
+	// Full byte equality with an already validated source constant proves the
+	// same syntax/content, not registration or authority. Return a deep copy;
+	// no caller can mutate the source. All other bytes use the strict decoder.
+	for _, source := range sourceProfileCommitments {
+		if string(encoded) == source.canonical {
+			return cloneAuthorizationProfile(source.normalized), nil
+		}
+	}
 	var value AuthorizationProfile
-	if contractjson.DecodeObject(reader, MaxAuthorizationProfileBytes, &value) != nil || ValidateAuthorizationProfile(value) != nil {
+	if contractjson.DecodeObject(bytes.NewReader(encoded), MaxAuthorizationProfileBytes, &value) != nil || ValidateAuthorizationProfile(value) != nil {
 		return AuthorizationProfile{}, ErrInvalidAuthorizationProfile
 	}
 	return value, nil
@@ -209,10 +224,31 @@ func CanonicalizeAuthorizationProfile(value AuthorizationProfile) (string, strin
 	// shapes and conditions. A tuple match alone is never sufficient. Unknown,
 	// reordered or changed declarations use the complete validator/encoder.
 	if source, known := sourceProfileCommitments[value.Product]; known &&
-		(reflect.DeepEqual(value, source.profile) || reflect.DeepEqual(value, source.normalized)) {
+		(equalAuthorizationProfile(value, source.profile) || equalAuthorizationProfile(value, source.normalized)) {
 		return source.canonical, source.reference.ContentDigest, nil
 	}
 	return canonicalizeAuthorizationProfile(value)
+}
+
+// Compare every declaration field without reflective pointer traversal on each
+// capability projection. This checks content, not just the reference tuple;
+// unknown/changed declarations still use the complete canonical encoder.
+func equalAuthorizationProfile(left, right AuthorizationProfile) bool {
+	if left.APIVersion != right.APIVersion || left.Kind != right.Kind || left.Product != right.Product ||
+		left.Revision != right.Revision || left.CallingService != right.CallingService ||
+		len(left.Actions) != len(right.Actions) || (left.Actions == nil) != (right.Actions == nil) {
+		return false
+	}
+	for index, action := range left.Actions {
+		other := right.Actions[index]
+		if action.Action != other.Action || action.ResourceKind != other.ResourceKind || action.Scope != other.Scope ||
+			action.ResultResourceKind != other.ResultResourceKind ||
+			(action.ResourceShapes == nil) != (other.ResourceShapes == nil) || !slices.Equal(action.ResourceShapes, other.ResourceShapes) ||
+			(action.Conditions == nil) != (other.Conditions == nil) || !slices.Equal(action.Conditions, other.Conditions) {
+			return false
+		}
+	}
+	return true
 }
 
 func canonicalizeAuthorizationProfile(value AuthorizationProfile) (string, string, error) {

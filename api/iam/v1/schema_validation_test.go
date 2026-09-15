@@ -23,6 +23,83 @@ func TestEveryIAMOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
 	}
 }
 
+func TestPolicyFamilySchemasUseAllMatchedCurrentCapabilities(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	documentSchema := compileIAMOpenAPISchema(t, api, "PolicyDocument")
+	versionSchema := compileIAMOpenAPISchema(t, api, "PolicyVersion")
+	instance := func(value any) any {
+		t.Helper()
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decoded
+	}
+	for pattern, actions := range PolicyActionFamilies() {
+		t.Run(string(pattern), func(t *testing.T) {
+			document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+				Statements: []PolicyStatement{{SID: "family", Effect: PolicyAllow, Actions: []Action{pattern}}}}
+			kinds := make(map[ResourceKind]bool)
+			for _, action := range actions {
+				definition, found := LookupActionDefinition(action)
+				if !found {
+					t.Fatal("projection contains unknown action")
+				}
+				if !kinds[definition.ResourceKind] {
+					kinds[definition.ResourceKind] = true
+					document.Statements[0].Resources = append(document.Statements[0].Resources, PolicyResourceSelector{Kind: definition.ResourceKind, Match: PolicyResourceAnyInAuthority})
+				}
+			}
+			for name, change := range map[string]func(*PolicyDocument){
+				"exact":        func(*PolicyDocument) {},
+				"missing kind": func(v *PolicyDocument) { v.Statements[0].Resources = v.Statements[0].Resources[1:] },
+				"wrong scope":  func(v *PolicyDocument) { v.Scope = AuthorityScopeInstallation },
+				"duplicate":    func(v *PolicyDocument) { v.Statements[0].Actions = []Action{pattern, pattern} },
+				"prefix": func(v *PolicyDocument) {
+					for index := range v.Statements[0].Resources {
+						v.Statements[0].Resources[index].Match = PolicyResourcePrefixInAuthority
+						v.Statements[0].Resources[index].ID = "prefix-"
+					}
+				},
+			} {
+				t.Run(name, func(t *testing.T) {
+					encoded, _ := json.Marshal(document)
+					var changed PolicyDocument
+					if json.Unmarshal(encoded, &changed) != nil {
+						t.Fatal("invalid fixture")
+					}
+					change(&changed)
+					accepted := ValidatePolicyDocument(changed) == nil
+					if (documentSchema.Validate(instance(changed)) == nil) != accepted || (name == "exact" && !accepted) {
+						t.Fatal("family schema and validator disagree on all-member capabilities")
+					}
+				})
+			}
+			compilation, err := CompilePolicyDocument(document, AllAuthorizationProfiles())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, digest, err := CanonicalizePolicyCompilation(document, compilation, AllAuthorizationProfiles())
+			if err != nil {
+				t.Fatal(err)
+			}
+			version := PolicyVersion{PolicyID: "policy-family", ID: "version-family", Document: document, ContentDigest: digest,
+				ContractVersion: PolicyVersionCompiledContract, Compilation: &compilation}
+			if ValidatePolicyVersion(version) != nil || versionSchema.Validate(instance(version)) != nil {
+				t.Fatal("compiled family response rejected")
+			}
+			version.ContractVersion, version.Compilation = PolicyVersionLegacyContract, nil
+			if ValidatePolicyVersion(version) == nil || versionSchema.Validate(instance(version)) == nil {
+				t.Fatal("legacy shape admitted a pattern")
+			}
+		})
+	}
+}
+
 func TestPolicyVersionResponseSchemaDoesNotSubstituteCurrentProductCatalog(t *testing.T) {
 	profile := AuthorizationProfile{APIVersion: APIVersion, Kind: "AuthorizationProfile", Product: "archiveproduct", Revision: 7, CallingService: "ARCHIVEPRODUCER",
 		Actions: []AuthorizationProfileAction{{Action: "archiveproduct.object.read", ResourceKind: "ARCHIVE_OBJECT", Scope: AuthorityScopeTenant,

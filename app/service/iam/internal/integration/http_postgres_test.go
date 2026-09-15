@@ -3,7 +3,9 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -680,6 +682,134 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 			t.Fatal("missing original profile-bound business authority")
 		}
 	}
+	t.Run("compiled_family_storage_contract", func(t *testing.T) {
+		policy := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "family", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{"paas.application.*"},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+		canonical, _, err := compileIAMPolicyForStorage(policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, mutate := range map[string]func(map[string]any){
+			"exact": func(map[string]any) {},
+			"missing member": func(value map[string]any) {
+				resolved := value["resolvedStatements"].([]any)[0].(map[string]any)
+				resolved["actions"] = resolved["actions"].([]any)[:1]
+			},
+			"added member": func(value map[string]any) {
+				resolved := value["resolvedStatements"].([]any)[0].(map[string]any)
+				resolved["actions"] = append(resolved["actions"].([]any), "paas.deployment.create")
+			},
+			"wrong SID":        func(value map[string]any) { value["resolvedStatements"].([]any)[0].(map[string]any)["sid"] = "another" },
+			"unknown revision": func(value map[string]any) { value["profiles"].([]any)[0].(map[string]any)["revision"] = 999 },
+			"partial glob": func(value map[string]any) {
+				value["document"].(map[string]any)["statements"].([]any)[0].(map[string]any)["actions"] = []string{"paas.application.r*"}
+			},
+			"empty family": func(value map[string]any) {
+				value["document"].(map[string]any)["statements"].([]any)[0].(map[string]any)["actions"] = []string{"paas.unknown.*"}
+			},
+			"duplicate token": func(value map[string]any) {
+				value["document"].(map[string]any)["statements"].([]any)[0].(map[string]any)["actions"] = []string{"paas.application.*", "paas.application.*"}
+			},
+			"unsupported prefix": func(value map[string]any) {
+				value["document"].(map[string]any)["statements"].([]any)[0].(map[string]any)["resources"] = []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourcePrefixInAuthority, ID: "app-"}}
+			},
+		} {
+			var value map[string]any
+			if json.Unmarshal([]byte(canonical), &value) != nil {
+				t.Fatal("invalid family fixture")
+			}
+			mutate(value)
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err != nil {
+				tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			_, err = tx.Exec(ctx, `SELECT iam.assert_policy_compilation($1,
+				'sha256:'||encode(sha256(convert_to('matrix.iam.policy-compilation.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'),'TENANT')`, string(mustIAMJSON(t, value)))
+			if name == "exact" && err != nil {
+				tx.Rollback(ctx)
+				t.Fatal("complete family rejected by SQL", err)
+			}
+			if name != "exact" {
+				var rejected *pgconn.PgError
+				if !errors.As(err, &rejected) || (rejected.Code != "22023" && rejected.Code != "23514") {
+					tx.Rollback(ctx)
+					t.Fatalf("SQL accepted rehashed family attack %s: %v", name, err)
+				}
+			}
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// A fully rehashed transport value can claim a smaller/larger family.
+		// The real restricted reader must still load its exact archive and
+		// reject it. This changes only a disposable projection, never history.
+		response := performIAMRequest(handler, http.MethodPost, "/v1/policies", primary,
+			mustIAMJSON(t, iamv1.CreatePolicyRequest{DisplayName: "Archive checked family", Document: policy, RequestID: "family-archive-create"}))
+		var created iamv1.PolicyDetail
+		if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &created) != nil || iamv1.ValidatePolicyDetail(created) != nil {
+			t.Fatal("create archive validation fixture")
+		}
+		var definition string
+		if err := admin.QueryRow(ctx, `SELECT pg_get_functiondef('iam.policy_version_snapshot(iam.policy_versions)'::regprocedure)`).Scan(&definition); err != nil {
+			t.Fatal(err)
+		}
+		restore := func() {
+			t.Helper()
+			if _, err := admin.Exec(ctx, definition); err != nil {
+				t.Fatal("restore own family projection fixture")
+			}
+		}
+		defer restore()
+		originalBytes, err := iamv1.CanonicalizePolicyVersion(created.Version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		originalActions := string(mustIAMJSON(t, created.Version.Compilation.ResolvedStatements[0].Actions))
+		for _, actions := range [][]iamv1.Action{
+			{iamv1.ActionPaaSApplicationRead},
+			{iamv1.ActionPaaSApplicationCreate, "paas.application.inspect", iamv1.ActionPaaSApplicationRead},
+		} {
+			var forged iamv1.PolicyVersion
+			if json.Unmarshal(mustIAMJSON(t, created.Version), &forged) != nil {
+				t.Fatal("copy family attack")
+			}
+			forged.Compilation.ResolvedStatements[0].Actions = actions
+			if strings.Count(originalBytes, originalActions) != 1 {
+				t.Fatal("attack must change exactly the resolved action array")
+			}
+			changed := strings.Replace(originalBytes, originalActions, string(mustIAMJSON(t, actions)), 1)
+			digest := sha256.Sum256(append([]byte("matrix.iam.policy-compilation.v1\x00"), changed...))
+			forged.ContentDigest = "sha256:" + hex.EncodeToString(digest[:])
+			if canonical, err := iamv1.CanonicalizePolicyVersion(forged); err != nil || canonical != changed {
+				t.Fatal("attack did not isolate transport integrity from archive completeness", err)
+			}
+			projection := string(mustIAMJSON(t, map[string]any{"value": forged, "canonical": changed}))
+			_, err := admin.Exec(ctx, `CREATE OR REPLACE FUNCTION iam.policy_version_snapshot(version iam.policy_versions)
+                RETURNS jsonb LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $fixture$
+                SELECT CASE WHEN version.id=`+"'"+strings.ReplaceAll(string(created.Version.ID), "'", "''")+"'"+` THEN `+
+				"'"+strings.ReplaceAll(projection, "'", "''")+"'::jsonb"+` ELSE
+                jsonb_build_object('value',jsonb_strip_nulls(jsonb_build_object(
+                  'policyId',version.policy_id,'versionId',version.id,'document',version.document,
+                  'contentDigest',version.content_digest,'contractVersion',version.contract_version,'compilation',version.compilation)),
+                  'canonical',version.canonical_document) END; $fixture$;`)
+			if err != nil {
+				t.Fatal("install isolated rehashed projection", err)
+			}
+			response := performIAMRequest(handler, http.MethodGet, "/v1/policies/"+string(created.Policy.ID), primary, nil)
+			if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "canonical") {
+				t.Fatal("archive-incomplete family became a trusted policy response")
+			}
+			restore()
+		}
+		if response := performIAMRequest(handler, http.MethodGet, "/v1/policies/"+string(created.Policy.ID), primary, nil); response.Code != http.StatusOK {
+			t.Fatal("original family projection did not recover")
+		}
+	})
 	t.Run("profile-bound recorder rejects incomplete and substituted authority", func(t *testing.T) {
 		proveProfileBoundRecorder(t, ctx, admin, handler, primary)
 	})
@@ -1413,7 +1543,8 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 	applyIAMSchema(t, ctx, admin)
 	lookup(future, true)
 	for _, function := range []string{"iam.current_authorization_profiles()", "iam.lookup_authorization_profile(text,bigint,text)",
-		"iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer)", "iam.read_audit_evidence(text,text,text,text,jsonb)"} {
+		"iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer)", "iam.read_audit_evidence(text,text,text,text,jsonb)",
+		"iam.resource_kind_for_action(text)", "iam.is_platform_action(text)"} {
 		// Configuration spelling is not the boundary: accept the same two
 		// PostgreSQL identifiers with different whitespace, then roll it back.
 		equivalent, err := admin.Begin(ctx)
@@ -2397,10 +2528,15 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 		request(http.MethodGet, path, bearer, nil, want, result)
 	}
 	allow := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
-		Statements: []iamv1.PolicyStatement{{SID: "selected", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+		Statements: []iamv1.PolicyStatement{{SID: "selected", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{"paas.application.*"},
 			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "version-application"}}}}}
 	var initial iamv1.PolicyDetail
 	post("/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Versioned application read", Document: allow, RequestID: "version-policy-create"}, http.StatusCreated, &initial)
+	if initial.Version.Compilation == nil || len(initial.Version.Compilation.ResolvedStatements) != 1 ||
+		!slices.Contains(initial.Version.Compilation.ResolvedStatements[0].Actions, iamv1.ActionPaaSApplicationRead) ||
+		!slices.Contains(initial.Version.Compilation.ResolvedStatements[0].Actions, iamv1.ActionPaaSApplicationCreate) {
+		t.Fatal("HTTP publication did not freeze every application-family member")
+	}
 	path := "/v1/policies/" + string(initial.Policy.ID)
 	deny := allow
 	deny.Statements = append([]iamv1.PolicyStatement(nil), allow.Statements...)

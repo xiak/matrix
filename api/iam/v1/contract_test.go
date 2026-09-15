@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -477,6 +478,63 @@ func TestCurrentProfileCommitmentsDoNotTrustMutableCopies(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		for _, encoded := range []string{canonical, canonical + "\n"} {
+			decoded, err := DecodeAuthorizationProfile(strings.NewReader(encoded))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if actual, actualDigest, err := canonicalizeAuthorizationProfile(decoded); err != nil || actual != canonical || actualDigest != digest {
+				t.Fatal("source-byte decode changed the complete declaration")
+			}
+			decoded.Actions[0].ResourceKind = "CHANGED_COPY"
+			again, err := DecodeAuthorizationProfile(strings.NewReader(encoded))
+			if err != nil || again.Actions[0].ResourceKind == "CHANGED_COPY" {
+				t.Fatal("source-byte decode leaked a mutable source slice")
+			}
+		}
+		for _, encoded := range []string{canonical + "{}", canonical + strings.Repeat(" ", int(MaxAuthorizationProfileBytes)),
+			strings.Replace(canonical, `"product":`, `"product":"forged","product":`, 1)} {
+			if _, err := DecodeAuthorizationProfile(strings.NewReader(encoded)); !errors.Is(err, ErrInvalidAuthorizationProfile) {
+				t.Fatal("source prefix bypassed complete bounded strict decoding")
+			}
+		}
+		// Mutate every scalar, including all nested shapes/conditions and any
+		// future declaration field. The fast path must equal the full encoder;
+		// omitting a field from typed equality must never reuse its commitment.
+		changed := cloneAuthorizationProfile(source)
+		var visit func(reflect.Value)
+		visit = func(value reflect.Value) {
+			switch value.Kind() {
+			case reflect.Struct:
+				for index := 0; index < value.NumField(); index++ {
+					visit(value.Field(index))
+				}
+			case reflect.Slice:
+				for index := 0; index < value.Len(); index++ {
+					visit(value.Index(index))
+				}
+			default:
+				original := reflect.New(value.Type()).Elem()
+				original.Set(value)
+				switch value.Kind() {
+				case reflect.String:
+					value.SetString(value.String() + "x")
+				case reflect.Uint64:
+					value.SetUint(value.Uint() + 1)
+				case reflect.Bool:
+					value.SetBool(!value.Bool())
+				default:
+					t.Fatal("declaration mutation gate needs its new scalar type")
+				}
+				actual, actualDigest, actualError := CanonicalizeAuthorizationProfile(changed)
+				want, wantDigest, wantError := canonicalizeAuthorizationProfile(changed)
+				if actual != want || actualDigest != wantDigest || (actualError == nil) != (wantError == nil) {
+					t.Fatal("changed declaration bypassed complete encoding")
+				}
+				value.Set(original)
+			}
+		}
+		visit(reflect.ValueOf(&changed).Elem())
 		for _, value := range []AuthorizationProfile{source, sourceProfileCommitments[source.Product].normalized} {
 			actual, actualDigest, err := CanonicalizeAuthorizationProfile(value)
 			if err != nil || actual != canonical || actualDigest != digest {
@@ -1345,6 +1403,34 @@ func TestPolicyCompilationBindsMinimalProductsAndEntireAuthorDocument(t *testing
 		t.Fatal("new compilation changed the retained document-only encoding", err)
 	}
 	authorBeforeMutation, _ := json.Marshal(document)
+	for _, source := range profiles {
+		if source.Product != ProductIAM {
+			continue
+		}
+		// IAM is unused by this document. Minimal dependency indexes must not
+		// become permission to skip the rest of a supplied declaration.
+		for name, mutate := range map[string]func(*AuthorizationProfile){
+			"unrelated action syntax":    func(v *AuthorizationProfile) { v.Actions[0].Action = "iam.*" },
+			"unrelated action duplicate": func(v *AuthorizationProfile) { v.Actions = append(v.Actions, v.Actions[0]) },
+			"unrelated condition": func(v *AuthorizationProfile) {
+				v.Actions[0].Conditions = []AuthorizationProfileCondition{{Key: "untrusted.key", ValueType: ConditionString, Source: ConditionIAMIdentity}}
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				changed := cloneAuthorizationProfile(source)
+				mutate(&changed)
+				declarations := slices.Clone(profiles)
+				for index := range declarations {
+					if declarations[index].Product == ProductIAM {
+						declarations[index] = changed
+					}
+				}
+				if _, err := CompilePolicyDocument(document, declarations); !errors.Is(err, ErrInvalidPolicy) {
+					t.Fatal("unused malformed Profile was ignored", err)
+				}
+			})
+		}
+	}
 	compilation.ResolvedStatements[0].Actions[0] = "tampered.action"
 	authorAfterMutation, _ := json.Marshal(document)
 	if !bytes.Equal(authorBeforeMutation, authorAfterMutation) {
@@ -1473,7 +1559,7 @@ func TestPolicyCompilationUsesFrozenDeclarationsNotCurrentCatalog(t *testing.T) 
 	}
 }
 
-func TestPolicyFamilyCompilationFreezesExactActionsWithoutEnablingOnlinePatterns(t *testing.T) {
+func TestPolicyFamilyCompilationFreezesExactActionsWithoutRegisteringProfiles(t *testing.T) {
 	for _, product := range []ProductID{ProductPaaS, "widgets"} {
 		t.Run(string(product), func(t *testing.T) {
 			prefix := string(product) + ".item."
@@ -1528,8 +1614,8 @@ func TestPolicyFamilyCompilationFreezesExactActionsWithoutEnablingOnlinePatterns
 				t.Fatal("compilation mutated supplied values")
 			}
 			if ValidatePolicyDocument(document) == nil || ValidatePolicyVersion(PolicyVersion{PolicyID: "policy-one", ID: "version-one",
-				Document: document, ContentDigest: digest, ContractVersion: PolicyVersionCompiledContract, Compilation: &compilation}) == nil {
-				t.Fatal("compile-only pattern escaped into online document or version contract")
+				Document: document, ContentDigest: digest, ContractVersion: PolicyVersionCompiledContract, Compilation: &compilation}) != nil {
+				t.Fatal("transport integrity was confused with current profile registration")
 			}
 			current := cloneAuthorizationProfile(profile)
 			current.Revision++
@@ -1588,11 +1674,14 @@ func TestPolicyFamilyCompilationFreezesExactActionsWithoutEnablingOnlinePatterns
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ValidateCreatePolicyRequest(CreatePolicyRequest{DisplayName: "family", Document: document, RequestID: "request-one"}) == nil ||
-		ValidateCreatePolicyVersionRequest(CreatePolicyVersionRequest{Document: document, ResourceVersion: 1, RequestID: "request-one"}) == nil ||
+	if ValidateCreatePolicyRequest(CreatePolicyRequest{DisplayName: "family", Document: document, RequestID: "request-one"}) != nil ||
+		ValidateCreatePolicyVersionRequest(CreatePolicyVersionRequest{Document: document, ResourceVersion: 1, RequestID: "request-one"}) != nil ||
 		ValidatePolicyVersion(PolicyVersion{PolicyID: "policy-one", ID: "version-one", Document: document, ContentDigest: digest,
-			ContractVersion: PolicyVersionCompiledContract, Compilation: &result}) == nil {
-		t.Fatal("actual known products escaped the exact-only online contract")
+			ContractVersion: PolicyVersionCompiledContract, Compilation: &result}) != nil {
+		t.Fatal("actual known product family rejected by the compiled contract")
+	}
+	if _, _, err := CanonicalizePolicyDocument(document); !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatal("pattern obtained a document-only legacy commitment")
 	}
 }
 

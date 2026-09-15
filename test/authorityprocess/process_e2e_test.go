@@ -489,8 +489,237 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &selected) != nil || iamv1.CheckAuthorizationDecisionForRequest(selected, request) != nil || !selected.Allowed {
 		t.Fatal("explicitly selected compiled version did not authorize its resource")
 	}
+	proveFrozenFamilyProfileAdvance(t, ctx, admin, root, temporary, endpoint, primary.Credential, customerLogin.Credential,
+		migrationEnvironment, start, current, oldFact)
 	current.stop()
-	t.Log("actual fixed IAM21 -> compiled22: original bytes/defaults/history retained; Root preflight and late rollback; old binary rejected; unknown CUSTOMER remains closed until explicit publish and select")
+	t.Log("actual fixed IAM21 -> current compiled authority: original bytes/defaults/history retained; Root preflight and late rollback; unknown CUSTOMER remains closed until explicit publish and select")
+}
+
+// This is an independently built future-source fixture, not a mutable runtime
+// catalog or a production PaaS action. The existing migrator registers its r2;
+// no test DML installs a head, version, attachment or authorization decision.
+func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *pgx.Conn, root, temporary, endpoint, primary, member string,
+	migrationEnvironment []string, start func(string) *childProcess, current *childProcess, originalFact auditv1.Event) {
+	t.Helper()
+	const addedAction iamv1.Action = "paas.application.inspect"
+	profile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	if !found || profile.Revision != 1 {
+		t.Fatal("future-source fixture requires its explicit original PaaS revision")
+	}
+	originalProfile, _, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var added iamv1.AuthorizationProfileAction
+	for index, action := range profile.Actions {
+		if action.Action == iamv1.ActionPaaSApplicationRead {
+			added = action
+			profile.Actions[index].Conditions = nil
+			for _, condition := range action.Conditions {
+				if condition.Key != iamv1.ConditionIAMPrincipalID {
+					profile.Actions[index].Conditions = append(profile.Actions[index].Conditions, condition)
+				}
+			}
+		}
+	}
+	added.Action = addedAction
+	profile.Revision++
+	profile.Actions = append(profile.Actions, added)
+	_, futureDigest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	futureReference := iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: futureDigest}
+	author := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "family", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{"paas.application.*"},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "family-retained"}}}}}
+	response := performJSON(t, http.MethodPost, endpoint+"/v1/policies", primary,
+		iamv1.CreatePolicyRequest{DisplayName: "Frozen family", Document: author, RequestID: "family-profile-create"})
+	var original iamv1.PolicyDetail
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &original) != nil || iamv1.ValidatePolicyDetail(original) != nil {
+		t.Fatal("original executable did not publish the real family version")
+	}
+	identityResponse := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", member, nil)
+	var identity iamv1.CurrentIdentity
+	if identityResponse.Status != http.StatusOK || json.Unmarshal(identityResponse.Body, &identity) != nil || iamv1.ValidateCurrentIdentity(identity) != nil {
+		t.Fatal("retained family member identity unavailable")
+	}
+	attachment := createIAMPolicyAttachment(t, endpoint, primary, identity.User.ID, original.Policy.ID, "family-profile-attach")
+	denyAuthor := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "nonmatching-deny", Effect: iamv1.PolicyDeny, Actions: []iamv1.Action{"paas.application.*"},
+			Resources:  []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "different-family-resource"}},
+			Conditions: []iamv1.PolicyCondition{{Key: iamv1.ConditionIAMPrincipalID, Operator: iamv1.PolicyStringEquals, Values: []string{string(identity.User.ID)}}}}}}
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/policies", primary,
+		iamv1.CreatePolicyRequest{DisplayName: "Frozen nonmatching Deny", Document: denyAuthor, RequestID: "family-deny-create"})
+	var frozenDeny iamv1.PolicyDetail
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &frozenDeny) != nil || iamv1.ValidatePolicyDetail(frozenDeny) != nil {
+		t.Fatal("original executable did not publish frozen nonmatching Deny")
+	}
+	originalVersionBytes, err := iamv1.CanonicalizePolicyVersion(original.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "family-retained"}, iamv1.AuthorizationResourceInstance, "", "family-before", "family-before")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decide := func(profile iamv1.AuthorizationProfile, request iamv1.AuthorizationRequest, allowed bool) iamv1.AuthorizationDecision {
+		t.Helper()
+		response := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "", request,
+			map[string]string{"Matrix-Subject-Credential": member})
+		var decision iamv1.AuthorizationDecision
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &decision) != nil ||
+			iamv1.ValidateAuthorizationDecisionForProfile(decision, profile) != nil || decision.Profile == nil || *decision.Profile != request.Profile ||
+			decision.Action != request.Action || decision.Resource != request.Resource || decision.ResourceMode != request.ResourceMode ||
+			decision.RequestID != request.RequestID || decision.CorrelationID != request.CorrelationID || decision.Allowed != allowed {
+			t.Fatalf("family source transition request %s: status=%d allowed=%v want=%v", request.RequestID, response.Status, decision.Allowed, allowed)
+		}
+		return decision
+	}
+	originalDeclaration, _ := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	before := decide(originalDeclaration, request, true)
+	var retainedDecision []byte
+	if err := admin.QueryRow(ctx, "SELECT document FROM iam.authorization_decisions WHERE id=$1", before.ID).Scan(&retainedDecision); err != nil {
+		t.Fatal(err)
+	}
+	// Go's overlay changes only this build's source declaration. The checked-out
+	// catalog and all other executables retain r1; no runtime selector is added.
+	sourcePath := filepath.Join(root, "api/iam/v1/enums.go")
+	source, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const declaration = "declaredProductProfile(ProductPaaS, ServicePaaS, 1,"
+	if strings.Count(string(source), declaration) != 1 {
+		t.Fatal("future source declaration anchor is not unique")
+	}
+	replacement := "declaredProductProfile(ProductPaaS, ServicePaaS, 2,\n" +
+		"declaredProfileAction(Action(\"paas.application.inspect\"), ResourceApplication, AuthorityScopeTenant, \"\", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}}),"
+	const readDeclaration = `declaredProfileAction(ActionPaaSApplicationRead, ResourceApplication, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}})`
+	if strings.Count(string(source), readDeclaration) != 1 {
+		t.Fatal("future condition fixture anchor is not unique")
+	}
+	// The added action keeps the original capabilities; only read loses this
+	// condition in the future build. Even a resource-nonmatching old Deny must
+	// then fail closed, rather than disappear behind another Allow.
+	changedRead := `func() AuthorizationProfileAction { action := ` + readDeclaration + `; original := action.Conditions; action.Conditions = nil; for _, condition := range original { if condition.Key != ConditionIAMPrincipalID { action.Conditions = append(action.Conditions, condition) } }; return action }()`
+	futureSource := strings.Replace(string(source), declaration, replacement, 1)
+	futureSource = strings.Replace(futureSource, readDeclaration, changedRead, 1)
+	overlaySource := writeProtectedFile(t, temporary, "future-profile-enums.go", []byte(futureSource))
+	overlayJSON, err := json.Marshal(map[string]any{"Replace": map[string]string{sourcePath: overlaySource}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overlay := writeProtectedFile(t, temporary, "future-profile-overlay.json", overlayJSON)
+	build := func(name, packagePath string) string {
+		t.Helper()
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		path := filepath.Join(temporary, name)
+		command := exec.CommandContext(ctx, "go", "build", "-p", "2", "-overlay", overlay, "-o", path, packagePath)
+		command.Dir = root
+		command.Env = append(os.Environ(), "GOMAXPROCS=2", "GOMEMLIMIT=512MiB")
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("build future declaration consumer: %v\n%s", err, output)
+		}
+		return path
+	}
+	futureBinary := build("matrix-iam-future-profile", "./app/service/iam/cmd/matrix-iam")
+	futureMigrator := build("matrix-iam-future-profile-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	current.stop()
+	for _, action := range []string{"apply", "apply", "verify"} {
+		child := startChild(t, root, futureMigrator, migrationEnvironment, action)
+		err := child.wait(30 * time.Second)
+		child.stop()
+		assertProcessOutputsSanitized(t, []*childProcess{child}, processDBPassword)
+		if err != nil {
+			t.Fatalf("future-source migrator %s failed: %v", action, err)
+		}
+	}
+	future := start(futureBinary)
+	defer future.stop()
+	assertOriginal := func() {
+		t.Helper()
+		var canonical, archive string
+		var document []byte
+		if err := admin.QueryRow(ctx, "SELECT canonical_document FROM iam.policy_versions WHERE policy_id=$1 AND id=$2", original.Policy.ID, original.Version.ID).Scan(&canonical); err != nil || canonical != originalVersionBytes {
+			t.Fatal("future registration rewrote frozen policy bytes")
+		}
+		if err := admin.QueryRow(ctx, "SELECT canonical_document FROM iam.authorization_profiles WHERE product='paas' AND revision=1").Scan(&archive); err != nil || archive != originalProfile {
+			t.Fatal("future registration replaced original profile archive")
+		}
+		if err := admin.QueryRow(ctx, "SELECT document FROM iam.authorization_decisions WHERE id=$1", before.ID).Scan(&document); err != nil || !bytes.Equal(document, retainedDecision) {
+			t.Fatal("future registration changed historical decision evidence")
+		}
+		proofResponse := performJSON(t, http.MethodPost, endpoint+"/v1/audit-producer:resolve", paasServiceCredential, iamv1.ResolveAuditProducerRequest{Event: originalFact})
+		var proof iamv1.AuditProducerAuthorization
+		_, expectedDigest, err := auditv1.CanonicalizeEvent(auditv1.SourcePaaS, originalFact)
+		if err != nil || proofResponse.Status != http.StatusOK || json.Unmarshal(proofResponse.Body, &proof) != nil ||
+			iamv1.ValidateAuditProducerAuthorization(proof) != nil || proof.ContentDigest != expectedDigest || string(proof.TenantID) != string(originalFact.TenantID) {
+			t.Fatal("new head lost exact archived business proof")
+		}
+	}
+	assertOriginal()
+	request.RequestID = "family-old-online-protocol"
+	response = performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "", request,
+		map[string]string{"Matrix-Subject-Credential": member})
+	var mismatchDecisions int
+	if response.Status != http.StatusUnprocessableEntity {
+		t.Fatalf("old online request was not a protocol mismatch: status=%d", response.Status)
+	}
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.authorization_decisions WHERE request_id=$1", request.RequestID).Scan(&mismatchDecisions); err != nil || mismatchDecisions != 0 {
+		t.Fatal("protocol mismatch became an ordinary policy DENY")
+	}
+	request.Profile, request.Action, request.RequestID, request.CorrelationID = futureReference, addedAction, "family-new-before-publication", "family-new-before-publication"
+	decide(profile, request, false)
+	request.Action, request.RequestID = iamv1.ActionPaaSApplicationRead, "family-old-after-registration"
+	decide(profile, request, true)
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/policies/"+string(original.Policy.ID)+"/versions", primary,
+		iamv1.CreatePolicyVersionRequest{Document: author, ResourceVersion: original.Policy.ResourceVersion, RequestID: "family-new-publish"})
+	var published iamv1.PolicyVersionDetail
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &published) != nil || iamv1.ValidatePolicyVersionDetail(published) != nil ||
+		published.Policy.DefaultVersionID != original.Version.ID || published.Version.ContentDigest == original.Version.ContentDigest ||
+		published.Version.Compilation == nil || len(published.Version.Compilation.Profiles) != 1 || published.Version.Compilation.Profiles[0] != futureReference {
+		t.Fatalf("explicit future publication lost frozen/default contract: status=%d", response.Status)
+	}
+	if _, _, err := iamv1.CanonicalizePolicyCompilation(author, *published.Version.Compilation, []iamv1.AuthorizationProfile{profile}); err != nil {
+		t.Fatal("future binary returned an incomplete expanded version", err)
+	}
+	request.Action, request.RequestID = addedAction, "family-new-published-not-selected"
+	decide(profile, request, false)
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/policies/"+string(original.Policy.ID)+":set-default-version", primary,
+		iamv1.SetDefaultPolicyVersionRequest{VersionID: published.Version.ID, ResourceVersion: published.Policy.ResourceVersion, RequestID: "family-new-select"})
+	if response.Status != http.StatusOK {
+		t.Fatal("explicit future default selection failed")
+	}
+	request.RequestID = "family-new-selected"
+	decide(profile, request, true)
+	future.stop()
+	future = start(futureBinary)
+	defer future.stop()
+	request.RequestID = "family-new-after-restart"
+	decide(profile, request, true)
+	denyAttachment := createIAMPolicyAttachment(t, endpoint, primary, identity.User.ID, frozenDeny.Policy.ID, "family-deny-attach")
+	request.Action, request.RequestID = iamv1.ActionPaaSApplicationRead, "family-incompatible-nonmatching-deny"
+	response = performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "", request,
+		map[string]string{"Matrix-Subject-Credential": member})
+	if response.Status != http.StatusServiceUnavailable {
+		t.Fatalf("incompatible nonmatching frozen Deny was skipped: status=%d", response.Status)
+	}
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.authorization_decisions WHERE request_id=$1", request.RequestID).Scan(&mismatchDecisions); err != nil || mismatchDecisions != 0 {
+		t.Fatal("incompatible frozen policy produced an ordinary decision")
+	}
+	revokeIAMPolicyAttachment(t, endpoint, primary, denyAttachment.ID, denyAttachment.ResourceVersion, "family-deny-revoke")
+	request.RequestID = "family-after-incompatible-deny-revoke"
+	decide(profile, request, true)
+	revokeIAMPolicyAttachment(t, endpoint, primary, attachment.ID, attachment.ResourceVersion, "family-new-revoke")
+	request.Action = addedAction
+	request.RequestID = "family-new-after-revoke"
+	decide(profile, request, false)
+	assertOriginal()
+	t.Log("source-built Profile r2: old family frozen; new publication does not select; explicit selection grants; restart/revocation hold; not a production PaaS inspect endpoint or release-upgrade gate")
 }
 
 func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, qualifiedChild bool) {
@@ -1039,7 +1268,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 22, Audit: 13, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 23, Audit: 13, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -1257,7 +1486,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	customRequest := iamv1.CreatePolicyRequest{DisplayName: "Selected process application", RequestID: "request-process-custom-policy",
 		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
 			Statements: []iamv1.PolicyStatement{{SID: "read-selected", Effect: iamv1.PolicyAllow,
-				Actions:   []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+				Actions:   []iamv1.Action{"paas.application.*"},
 				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "application-process"}}}}}}
 	publication := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/policies", adminLogin.Credential, customRequest)
 	var customPolicy iamv1.PolicyDetail
@@ -1342,6 +1571,9 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	timedRequest := customRequest
 	timedRequest.DisplayName, timedRequest.RequestID = "Time bound process application", "request-process-time-policy"
 	timedRequest.Document.Statements = append([]iamv1.PolicyStatement(nil), customRequest.Document.Statements...)
+	// Keep the independent instance-prefix gate narrow: application.create
+	// is part of the family but does not support a resource prefix.
+	timedRequest.Document.Statements[0].Actions = []iamv1.Action{iamv1.ActionPaaSApplicationRead}
 	timedRequest.Document.Statements[0].Resources = []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourcePrefixInAuthority, ID: "application-pro"}}
 	timedRequest.Document.Statements[0].Conditions = []iamv1.PolicyCondition{
 		{Key: iamv1.ConditionIAMAccountID, Operator: iamv1.PolicyStringEquals, Values: []string{string(developer.AccountID)}},
@@ -1373,6 +1605,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	var untimedVersion iamv1.PolicyVersionDetail
 	untimedDocument := customRequest.Document
 	untimedDocument.Statements = append([]iamv1.PolicyStatement(nil), customRequest.Document.Statements...)
+	untimedDocument.Statements[0].Actions = []iamv1.Action{iamv1.ActionPaaSApplicationRead}
 	untimedDocument.Statements[0].Conditions = []iamv1.PolicyCondition{
 		{Key: iamv1.ConditionIAMAccountID, Operator: iamv1.PolicyStringEquals, Values: []string{string(developer.AccountID)}},
 		{Key: iamv1.ConditionIAMPrincipalID, Operator: iamv1.PolicyStringNotEquals, Values: []string{"excluded-principal-a", "excluded-principal-b"}},

@@ -417,6 +417,35 @@ func TestUserBoundaryIntersectsAllGrantsWithoutGrantingAuthority(t *testing.T) {
 	}
 }
 
+func TestFamilyPolicyUsesVerifiedResolvedActionsForAllowAndDeny(t *testing.T) {
+	allow := policyVersionForTest(t, "family-allow", iamv1.PolicyAllow, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceAnyInAuthority, "")
+	allow.Document.Statements[0].Actions = []iamv1.Action{"paas.application.*"}
+	compilePolicyVersionForTest(t, &allow)
+	deny := policyVersionForTest(t, "family-deny", iamv1.PolicyDeny, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceExact, "blocked-application")
+	deny.Document.Statements[0].Actions = []iamv1.Action{"paas.application.*"}
+	compilePolicyVersionForTest(t, &deny)
+	context := policyContextForTest(authorityTestTime())
+	for _, id := range []string{"allowed-application", "blocked-application"} {
+		request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: id})
+		for _, versions := range [][]iamv1.PolicyVersion{{allow, deny}, {deny, allow}} {
+			result, err := evaluatePolicies(context, versions, request)
+			if err != nil || result.Allowed != (id == "allowed-application") || result.ExplicitDeny != (id == "blocked-application") {
+				t.Fatalf("family effect/resource composition failed: allowed=%v deny=%v err=%v", result.Allowed, result.ExplicitDeny, err)
+			}
+		}
+	}
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationCreate,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}, RequestID: "family-create", CorrelationID: "family-create"},
+		iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate)
+	if result, err := evaluatePolicies(context, []iamv1.PolicyVersion{allow}, request); err != nil || !result.Allowed {
+		t.Fatal("resolved create action was replaced by author-string matching", err)
+	}
+	request = policyEvaluationRequestForTest(t, iamv1.ActionPaaSDeploymentCreate, iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "collection"})
+	if result, err := evaluatePolicies(context, []iamv1.PolicyVersion{allow}, request); err != nil || result.Allowed {
+		t.Fatal("family evaluation leaked into another action family", err)
+	}
+}
+
 func TestUserBoundarySeparatesPlatformAuthorityAndEvaluatesCurrentConditions(t *testing.T) {
 	now := authorityTestTime()
 	subject := authoritySubject(now, iamv1.SystemPolicyPaaSDeveloper, iamv1.SystemPolicyPlatformOperator)

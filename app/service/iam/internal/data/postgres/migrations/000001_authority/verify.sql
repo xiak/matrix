@@ -269,13 +269,20 @@ BEGIN
                'iam.role-binding.put', 'iam.role-binding.revoke',
                'iam.platform-role-binding.put', 'iam.platform-role-binding.revoke'
            ]) AS retired(action)
-           WHERE iam.resource_kind_for_action(retired.action) IS NOT NULL OR iam.is_platform_action(retired.action)
+           WHERE iam.resource_kind_for_action(retired.action) IS NOT NULL OR iam.is_platform_action(retired.action) IS NOT NULL
        )
        OR iam.resource_kind_for_action('unsupported') IS NOT NULL
        OR NOT iam.is_platform_action('paas.execution-target.register')
        OR iam.is_platform_action('paas.application.create')
-       OR iam.is_platform_action('unsupported') THEN
+       OR iam.is_platform_action('unsupported') IS NOT NULL THEN
         RAISE EXCEPTION 'IAM authorization action mapping is invalid';
+    END IF;
+    IF EXISTS(SELECT 1 FROM iam.authorization_profile_heads head
+        JOIN iam.authorization_profiles archive ON archive.product=head.product AND archive.revision=head.revision
+        CROSS JOIN LATERAL jsonb_array_elements(archive.canonical_document::jsonb->'actions') action
+        WHERE iam.resource_kind_for_action(action->>'action') IS DISTINCT FROM action->>'resourceKind'
+          OR iam.is_platform_action(action->>'action') IS DISTINCT FROM (action->>'scope'='INSTALLATION')) THEN
+        RAISE EXCEPTION 'IAM current action projections differ from registered declarations';
     END IF;
 END
 $matrix_iam_verify$;
@@ -286,15 +293,27 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>22 OR NOT iam.authorization_decision_contract_ready() THEN
+    IF (SELECT schema_version FROM iam.readiness())<>23 OR NOT iam.authorization_decision_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';
     END IF;
     FOREACH entry IN ARRAY ARRAY['iam.authorization_decision_contract_ready()'::regprocedure,
         'iam.authorization_decision_profile_matches(jsonb)'::regprocedure,
+        'iam.resource_kind_for_action(text)'::regprocedure,'iam.is_platform_action(text)'::regprocedure,
         'iam.assert_allowed_decision(text,text,text,text,text,text,text,text)'::regprocedure] LOOP
         IF has_function_privilege('matrix_iam_api',entry,'EXECUTE') OR has_function_privilege('matrix_iam_worker',entry,'EXECUTE')
             OR has_function_privilege('matrix_iam_credential_recovery',entry,'EXECUTE') OR has_function_privilege('public',entry,'EXECUTE') THEN
             RAISE EXCEPTION 'IAM internal decision boundary is exposed';
+        END IF;
+    END LOOP;
+    FOREACH entry IN ARRAY ARRAY['iam.resource_kind_for_action(text)'::regprocedure,'iam.is_platform_action(text)'::regprocedure] LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_proc p WHERE p.oid=entry AND p.provolatile='s' AND p.proparallel='u'
+            AND NOT p.prosecdef AND NOT p.proretset AND p.proowner='matrix_iam_owner'::regrole
+            AND (SELECT count(*)=1 AND bool_and(
+                (SELECT array_agg(parse_ident(btrim(component.name),true) ORDER BY component.position)
+                 FROM unnest(string_to_array(substr(config.setting,strpos(config.setting,'=')+1),','))
+                    WITH ORDINALITY AS component(name,position))=ARRAY[ARRAY['pg_catalog'],ARRAY['pg_temp']])
+                FROM unnest(p.proconfig) AS config(setting) WHERE split_part(config.setting,'=',1)='search_path')) THEN
+            RAISE EXCEPTION 'IAM current projection function boundary is invalid';
         END IF;
     END LOOP;
     FOR seed IN SELECT value FROM jsonb_array_elements(seeds->'archive') LOOP

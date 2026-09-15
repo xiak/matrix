@@ -109,6 +109,9 @@ BEGIN
     IF actor_type='USER' THEN
         boundary:=iam.current_user_boundary(tenant,actor);
     END IF;
+    IF iam.resource_kind_for_action(action_name) IS NULL OR iam.is_platform_action(action_name) IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='boundary action is not registered';
+    END IF;
     IF actor_type<>'USER' OR iam.is_platform_action(action_name) OR action_name='installation.verify' THEN
         expected:=jsonb_build_object('state','NOT_APPLICABLE');
     ELSE
@@ -135,7 +138,8 @@ DECLARE document jsonb; statement jsonb; selected_action jsonb; selector jsonb; 
     condition jsonb; condition_value jsonb; condition_identity text; seen_conditions text[];
     boundary timestamptz; starts_at timestamptz; ends_at timestamptz;
     envelope jsonb; reference jsonb; declaration jsonb; declared_action jsonb; resolved jsonb;
-    registered_actions jsonb:='{}'; seen_products text[]:='{}'; used_product boolean;
+    registered_actions jsonb:='{}'; action_products jsonb:='{}'; seen_products text[]:='{}'; used_products text[]:='{}';
+    action_token text; token_matches text[]; expanded_actions text[]; action_visits integer:=0;
 BEGIN
     IF canonical IS NULL OR octet_length(canonical) NOT BETWEEN 1 AND 131072
        OR NOT (canonical IS JSON OBJECT WITH UNIQUE KEYS)
@@ -175,14 +179,11 @@ BEGIN
           WHERE head.product=reference->>'product' AND head.revision=(reference->>'revision')::bigint AND archive.content_digest=reference->>'contentDigest';
         IF declaration IS NULL THEN RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='policy compilation requires exact current declarations'; END IF;
         seen_products:=array_append(seen_products,reference->>'product');
-        used_product:=false;
         FOR declared_action IN SELECT value FROM jsonb_array_elements(declaration->'actions') LOOP
             IF registered_actions ? (declared_action->>'action') THEN RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='policy compilation action is ambiguous'; END IF;
             registered_actions:=registered_actions||jsonb_build_object(declared_action->>'action',declared_action);
-            IF EXISTS(SELECT 1 FROM jsonb_array_elements(envelope#>'{document,statements}') author_statement
-                WHERE author_statement->'actions' ? (declared_action->>'action')) THEN used_product:=true; END IF;
+            action_products:=action_products||jsonb_build_object(declared_action->>'action',reference->>'product');
         END LOOP;
-        IF NOT used_product THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy compilation has an unused declaration'; END IF;
     END LOOP;
     document:=envelope->'document';
     IF NOT (document ?& ARRAY['languageVersion','scope','statements'])
@@ -210,11 +211,48 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy statement is invalid';
         END IF;
         seen_sids:=array_append(seen_sids,statement->>'sid');
+        IF jsonb_array_length(statement->'actions') NOT BETWEEN 1 AND 128
+           OR jsonb_array_length(statement->'resources') NOT BETWEEN 1 AND 64
+           OR (SELECT count(DISTINCT value) FROM jsonb_array_elements(statement->'actions'))<>jsonb_array_length(statement->'actions')
+           OR (SELECT count(DISTINCT value) FROM jsonb_array_elements(statement->'resources'))<>jsonb_array_length(statement->'resources') THEN
+            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy statement collections are invalid';
+        END IF;
+        expanded_actions:='{}';
+        FOR selected_action IN SELECT value FROM jsonb_array_elements(statement->'actions') LOOP
+            action_token:=selected_action#>>'{}';
+            IF jsonb_typeof(selected_action) IS DISTINCT FROM 'string' OR octet_length(action_token) NOT BETWEEN 1 AND 128 THEN
+                RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy author action is invalid';
+            END IF;
+            IF position('*' IN action_token)>0 THEN
+                IF required_scope<>'TENANT' OR action_token COLLATE "C" !~ '^[a-z][a-z0-9_-]{0,63}\.[a-z][a-z0-9_-]{0,63}\.\*$' THEN
+                    RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy action family is invalid';
+                END IF;
+                -- Exact segment comparison, not SQL LIKE or a caller regex.
+                -- Do not filter scope/capabilities: every match is checked below.
+                SELECT COALESCE(array_agg(item ORDER BY item COLLATE "C"),'{}') INTO token_matches
+                    FROM jsonb_object_keys(registered_actions) item
+                    WHERE cardinality(string_to_array(item,'.'))=3
+                      AND split_part(item,'.',1)=split_part(action_token,'.',1)
+                      AND split_part(item,'.',2)=split_part(action_token,'.',2);
+                IF cardinality(token_matches)=0 THEN
+                    RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy action family is empty';
+                END IF;
+            ELSE
+                token_matches:=ARRAY[action_token];
+            END IF;
+            action_visits:=action_visits+cardinality(token_matches);
+            IF action_visits>8192 THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy action work limit exceeded'; END IF;
+            expanded_actions:=expanded_actions||token_matches;
+        END LOOP;
+        SELECT array_agg(DISTINCT item COLLATE "C" ORDER BY item COLLATE "C") INTO expanded_actions FROM unnest(expanded_actions) item;
+        IF cardinality(expanded_actions) NOT BETWEEN 1 AND 128 THEN
+            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy resolved action limit exceeded';
+        END IF;
         SELECT value INTO resolved FROM jsonb_array_elements(envelope->'resolvedStatements') item
             WHERE item->>'sid'=statement->>'sid';
         IF resolved IS NULL OR jsonb_typeof(resolved) IS DISTINCT FROM 'object' OR NOT(resolved ?& ARRAY['sid','actions'])
            OR resolved-ARRAY['sid','actions']<>'{}'::jsonb OR jsonb_typeof(resolved->'sid') IS DISTINCT FROM 'string'
-           OR resolved->'actions' IS DISTINCT FROM statement->'actions'
+           OR resolved->'actions' IS DISTINCT FROM to_jsonb(expanded_actions)
            OR (SELECT count(*) FROM jsonb_array_elements(envelope->'resolvedStatements') item WHERE item->>'sid'=statement->>'sid')<>1 THEN
             RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy compilation statement binding is invalid';
         END IF;
@@ -274,13 +312,7 @@ BEGIN
                 END IF;
             END LOOP;
         END IF;
-        IF jsonb_array_length(statement->'actions') NOT BETWEEN 1 AND 128
-           OR jsonb_array_length(statement->'resources') NOT BETWEEN 1 AND 64
-           OR (SELECT count(DISTINCT value) FROM jsonb_array_elements(statement->'actions'))<>jsonb_array_length(statement->'actions')
-           OR (SELECT count(DISTINCT value) FROM jsonb_array_elements(statement->'resources'))<>jsonb_array_length(statement->'resources') THEN
-            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy statement collections are invalid';
-        END IF;
-        FOR selected_action IN SELECT value FROM jsonb_array_elements(statement->'actions') LOOP
+        FOR selected_action IN SELECT value FROM jsonb_array_elements(resolved->'actions') LOOP
             declared_action:=registered_actions->(selected_action#>>'{}');
             expected_kind:=declared_action->>'resourceKind';
             IF jsonb_typeof(selected_action) IS DISTINCT FROM 'string' OR expected_kind IS NULL
@@ -288,6 +320,7 @@ BEGIN
                OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements(statement->'resources') AS item WHERE item->>'kind'=expected_kind) THEN
                 RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy action is invalid';
             END IF;
+            used_products:=array_append(used_products,action_products->>(selected_action#>>'{}'));
             FOR condition IN SELECT value FROM jsonb_array_elements(COALESCE(statement->'conditions','[]'::jsonb)) LOOP
                 IF NOT EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(declared_action->'conditions','[]'::jsonb)) item
                     WHERE item->>'key'=condition->>'key') THEN
@@ -300,11 +333,11 @@ BEGIN
                OR selector-ARRAY['kind','match','id']<>'{}'::jsonb
                OR jsonb_typeof(selector->'kind') IS DISTINCT FROM 'string'
                OR COALESCE(selector->>'match','') NOT IN ('EXACT','ANY_IN_AUTHORITY','PREFIX_IN_AUTHORITY')
-               OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(statement->'actions') AS item
+               OR NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(resolved->'actions') AS item
                     WHERE registered_actions->item->>'resourceKind'=selector->>'kind')
                OR (selector->>'match'='ANY_IN_AUTHORITY' AND selector ? 'id')
                OR (selector->>'match'='PREFIX_IN_AUTHORITY' AND (required_scope<>'TENANT' OR EXISTS(
-                    SELECT 1 FROM jsonb_array_elements_text(statement->'actions') AS item
+                    SELECT 1 FROM jsonb_array_elements_text(resolved->'actions') AS item
                     WHERE registered_actions->item->>'resourceKind'=selector->>'kind' AND NOT EXISTS(
                         SELECT 1 FROM jsonb_array_elements(registered_actions->item->'resourceShapes') shape
                         WHERE shape->>'mode'='INSTANCE' AND shape->'prefixAllowed'='true'::jsonb))))
@@ -314,6 +347,9 @@ BEGIN
             END IF;
         END LOOP;
     END LOOP;
+    IF NOT seen_products <@ used_products THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy compilation has an unused declaration';
+    END IF;
 END $function$;
 
 -- The seed document is supplied by the IAM Go policy/canonicalization owner.

@@ -1349,6 +1349,13 @@ BEGIN
            AND to_regprocedure('iam.current_authorization_profiles()') IS NOT NULL
            AND to_regprocedure('iam.lookup_authorization_profile(text,bigint,text)') IS NOT NULL
            AND EXISTS(SELECT 1 FROM iam.authorization_profile_heads)
+           AND (SELECT count(*) FROM pg_catalog.pg_proc p
+                WHERE p.oid IN (to_regprocedure('iam.resource_kind_for_action(text)'),to_regprocedure('iam.is_platform_action(text)'))
+                  AND p.provolatile='s' AND p.proparallel='u' AND NOT p.prosecdef AND NOT p.proretset AND p.proowner='matrix_iam_owner'::regrole
+                  AND NOT has_function_privilege('public',p.oid,'EXECUTE')
+                  AND NOT has_function_privilege('matrix_iam_api',p.oid,'EXECUTE')
+                  AND NOT has_function_privilege('matrix_iam_worker',p.oid,'EXECUTE')
+                  AND NOT has_function_privilege('matrix_iam_credential_recovery',p.oid,'EXECUTE'))=2
            AND to_regclass('iam.role_bindings') IS NULL
            AND (SELECT count(*) FROM pg_catalog.pg_class AS group_table
                 WHERE group_table.oid IN (to_regclass('iam.groups'),to_regclass('iam.group_memberships'))
@@ -1484,119 +1491,34 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           22::bigint,
+           23::bigint,
            transaction_timestamp();
 END
 $function$;
 
+-- Current projections come from the registered source declaration, never a
+-- second CASE catalog. Callers hold current_authorization_profiles() locks for
+-- the transaction; historical proof uses exact archive references separately.
 CREATE OR REPLACE FUNCTION iam.resource_kind_for_action(submitted_action text)
-RETURNS text
-LANGUAGE sql
-IMMUTABLE
-PARALLEL SAFE
-SET search_path = pg_catalog, pg_temp
-AS $function$
-    SELECT CASE submitted_action
-        WHEN 'iam.account.create' THEN 'ACCOUNT'
-        WHEN 'iam.account.read' THEN 'ACCOUNT'
-        WHEN 'iam.account.set-status' THEN 'ACCOUNT'
-        WHEN 'iam.account.recover-root-credentials' THEN 'ACCOUNT'
-        WHEN 'iam.account.alias-set' THEN 'ACCOUNT'
-        WHEN 'iam.user.list' THEN 'ACCOUNT'
-        WHEN 'iam.group.list' THEN 'ACCOUNT'
-        WHEN 'iam.group.create' THEN 'ACCOUNT'
-        WHEN 'iam.group.read' THEN 'GROUP'
-        WHEN 'iam.group.update' THEN 'GROUP'
-        WHEN 'iam.group.delete' THEN 'GROUP'
-        WHEN 'iam.group-membership.list' THEN 'GROUP'
-        WHEN 'iam.group-membership.create' THEN 'GROUP'
-        WHEN 'iam.group-membership.remove' THEN 'GROUP_MEMBERSHIP'
-        WHEN 'iam.group-policy-attachment.create' THEN 'GROUP'
-        WHEN 'iam.group-policy-attachment.revoke' THEN 'POLICY_ATTACHMENT'
-        WHEN 'iam.user.set-status' THEN 'USER'
-        WHEN 'iam.user.reset-password' THEN 'USER'
-        WHEN 'iam.user.create' THEN 'ACCOUNT'
-        WHEN 'iam.user.read' THEN 'USER'
-        WHEN 'iam.user.update' THEN 'USER'
-        WHEN 'iam.user.delete' THEN 'USER'
-        WHEN 'iam.policy.list' THEN 'ACCOUNT'
-        WHEN 'iam.policy.create' THEN 'ACCOUNT'
-        WHEN 'iam.policy.read' THEN 'POLICY'
-        WHEN 'iam.policy-version.list' THEN 'POLICY'
-        WHEN 'iam.policy-version.read' THEN 'POLICY'
-        WHEN 'iam.policy-version.create' THEN 'POLICY'
-        WHEN 'iam.policy-version.delete' THEN 'POLICY'
-        WHEN 'iam.user.permission-boundary.set' THEN 'USER'
-        WHEN 'iam.user.permission-boundary.remove' THEN 'USER'
-        WHEN 'iam.policy.set-default-version' THEN 'POLICY'
-        WHEN 'iam.policy.update' THEN 'POLICY'
-        WHEN 'iam.policy.delete' THEN 'POLICY'
-        WHEN 'iam.platform-policy.list' THEN 'INSTALLATION'
-        WHEN 'iam.policy-attachment.create' THEN 'USER'
-        WHEN 'iam.policy-attachment.revoke' THEN 'POLICY_ATTACHMENT'
-        WHEN 'iam.platform-policy-attachment.create' THEN 'USER'
-        WHEN 'iam.platform-policy-attachment.revoke' THEN 'POLICY_ATTACHMENT'
-        WHEN 'iam.session.revoke' THEN 'SESSION'
-        WHEN 'paas.execution-pool.create' THEN 'EXECUTION_POOL'
-        WHEN 'paas.execution-pool.read' THEN 'EXECUTION_POOL'
-        WHEN 'paas.execution-target.register' THEN 'EXECUTION_TARGET'
-        WHEN 'paas.execution-target.read' THEN 'EXECUTION_TARGET'
-        WHEN 'paas.execution-target.drain' THEN 'EXECUTION_TARGET'
-        WHEN 'paas.execution-target.activate' THEN 'EXECUTION_TARGET'
-        WHEN 'paas.execution-target.remove' THEN 'EXECUTION_TARGET'
-        WHEN 'paas.node-enrollment.create' THEN 'NODE_ENROLLMENT'
-        WHEN 'paas.node-enrollment.read' THEN 'NODE_ENROLLMENT'
-        WHEN 'paas.node-enrollment.revoke' THEN 'NODE_ENROLLMENT'
-        WHEN 'paas.node-enrollment.regenerate' THEN 'NODE_ENROLLMENT'
-        WHEN 'paas.platform-operation.read' THEN 'OPERATION'
-        WHEN 'paas.application.create' THEN 'APPLICATION'
-        WHEN 'paas.application.read' THEN 'APPLICATION'
-        WHEN 'paas.configuration.create' THEN 'CONFIGURATION'
-        WHEN 'paas.configuration.read' THEN 'CONFIGURATION'
-        WHEN 'paas.configuration-revision.create' THEN 'CONFIGURATION_REVISION'
-        WHEN 'paas.configuration-revision.read' THEN 'CONFIGURATION_REVISION'
-        WHEN 'paas.application-revision.create' THEN 'APPLICATION_REVISION'
-        WHEN 'paas.application-revision.read' THEN 'APPLICATION_REVISION'
-        WHEN 'paas.deployment.create' THEN 'DEPLOYMENT'
-        WHEN 'paas.deployment.update' THEN 'DEPLOYMENT'
-        WHEN 'paas.deployment.rollback' THEN 'DEPLOYMENT'
-        WHEN 'paas.deployment.stop' THEN 'DEPLOYMENT'
-        WHEN 'paas.deployment.read' THEN 'DEPLOYMENT'
-        WHEN 'paas.operation.read' THEN 'OPERATION'
-        WHEN 'managedservice.offering.read' THEN 'SERVICE_OFFERING'
-        WHEN 'managedservice.region.read' THEN 'REGION'
-        WHEN 'managedservice.quota-entitlement.activate' THEN 'QUOTA_ENTITLEMENT'
-        WHEN 'managedservice.quota-entitlement.read' THEN 'QUOTA_ENTITLEMENT'
-        WHEN 'managedservice.service-installation.create' THEN 'SERVICE_INSTALLATION'
-        WHEN 'managedservice.service-installation.read' THEN 'SERVICE_INSTALLATION'
-        WHEN 'audit.record.read' THEN 'AUDIT_RECORD'
-        WHEN 'audit.integrity.verify' THEN 'AUDIT_CHAIN'
-        WHEN 'audit.platform-record.read' THEN 'AUDIT_RECORD'
-        WHEN 'audit.platform-integrity.verify' THEN 'AUDIT_CHAIN'
-        WHEN 'installation.verify' THEN 'INSTALLATION'
-        ELSE NULL
-    END
+RETURNS text LANGUAGE sql STABLE PARALLEL UNSAFE
+SET search_path = pg_catalog, pg_temp AS $function$
+    SELECT (SELECT action->>'resourceKind'
+      FROM iam.authorization_profile_heads head
+      JOIN iam.authorization_profiles archive ON archive.product=head.product AND archive.revision=head.revision
+      CROSS JOIN LATERAL jsonb_array_elements(archive.canonical_document::jsonb->'actions') action
+     WHERE head.product=split_part(submitted_action,'.',1) AND action->>'action'=submitted_action)
 $function$;
 
 CREATE OR REPLACE FUNCTION iam.is_platform_action(submitted_action text)
-RETURNS boolean
-LANGUAGE sql
-IMMUTABLE
-PARALLEL SAFE
-SET search_path = pg_catalog, pg_temp
-AS $function$
-    SELECT COALESCE(submitted_action IN (
-        'iam.account.create', 'iam.account.read',
-        'iam.account.set-status', 'iam.account.recover-root-credentials',
-        'iam.platform-policy-attachment.create', 'iam.platform-policy-attachment.revoke', 'iam.platform-policy.list',
-        'paas.execution-pool.create', 'paas.execution-pool.read',
-        'paas.execution-target.register', 'paas.execution-target.read',
-        'paas.execution-target.drain', 'paas.execution-target.activate', 'paas.execution-target.remove',
-        'paas.node-enrollment.create', 'paas.node-enrollment.read',
-        'paas.node-enrollment.revoke', 'paas.node-enrollment.regenerate',
-        'paas.platform-operation.read', 'audit.platform-record.read',
-        'audit.platform-integrity.verify'
-    ), false)
+RETURNS boolean LANGUAGE sql STABLE PARALLEL UNSAFE
+SET search_path = pg_catalog, pg_temp AS $function$
+    SELECT (SELECT CASE WHEN action->>'scope' IN ('TENANT','INSTALLATION','INSTALLATION_PROBE')
+                        THEN action->>'scope'='INSTALLATION' END
+        FROM iam.authorization_profile_heads head
+        JOIN iam.authorization_profiles archive ON archive.product=head.product AND archive.revision=head.revision
+        CROSS JOIN LATERAL jsonb_array_elements(archive.canonical_document::jsonb->'actions') action
+        WHERE head.product=split_part(submitted_action,'.',1)
+          AND action->>'action'=submitted_action)
 $function$;
 
 CREATE OR REPLACE FUNCTION iam.lookup_login(submitted_login_name text)
@@ -1999,7 +1921,8 @@ BEGIN
     END IF;
 
     expected_kind := iam.resource_kind_for_action(submitted_decision->>'action');
-    IF expected_kind IS NULL
+    platform_action := iam.is_platform_action(submitted_decision->>'action');
+    IF expected_kind IS NULL OR platform_action IS NULL
        OR submitted_decision#>>'{resource,kind}' IS DISTINCT FROM expected_kind THEN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
@@ -2022,7 +1945,6 @@ BEGIN
     END IF;
 
     decision_allowed := (submitted_decision->>'allowed')::boolean;
-    platform_action := iam.is_platform_action(submitted_decision->>'action');
     IF decision_allowed AND actor_type='USER' AND EXISTS(SELECT 1 FROM iam.principals AS principal
         WHERE principal.tenant_id=submitted_tenant_id AND principal.id=submitted_principal_id AND principal.must_change_password) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='authorization subject requires credential replacement';
