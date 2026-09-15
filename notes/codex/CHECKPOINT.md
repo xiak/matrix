@@ -2,14 +2,20 @@
 
 > Non-authoritative portable memory. Validate against Git, exact CI and owning FEAT.
 
-- Updated: 2026-09-14
+- Updated: 2026-09-15
 - Repository: https://github.com/xiak/matrix.git
 - Branch: `feat/iam`
-- Latest pushed implementation: `6292fa09ad286960a1098ad3383a896c9374bffe`,
+- Latest pushed handoff: `cc5e38822d3c3856306e0eafbbc4f377ad2c8346`.
+  Browser fixture and long boundary-reference wrapping; own CI not yet checked.
+  Desktop and rebuilt360px set/replace/remove/member refresh passed with actual
+  Audit facts/chains; the later automatic process handle disappeared without
+  captured completion, so its regression is not accepted.010 owns exact evidence.
+- Previous implementation: `6292fa09ad286960a1098ad3383a896c9374bffe`,
   User boundary set/replace/remove UI and conservative exact-resource capabilities.
   Local gates passed;
   [Verification34853775664](https://github.com/xiak/matrix/actions/runs/34853775664)
-  is confirmed live/in_progress, not yet accepted.
+  exact SHA and all three jobs completed/success, independently checked;
+  both peers were notified.
 - Earlier client rollback: `ef51b1d509e7e38dfb2146416c7e057a97638765`,
   strict CurrentIdentity boundary client and separate permission-limit display.
   [Verification34850453837](https://github.com/xiak/matrix/actions/runs/34850453837)
@@ -29,9 +35,16 @@ Whole IAM goal remains active. Read AGENTS.md, the owning IAM FEAT, then code/te
 005 owns language/boundaries;010 owns console;001/008 own product/profile;
 011 owns first-release, real runtime, HA/capacity and final acceptance.
 
-Next inspect6292 exactCI and perform actual isolated browser/360px acceptance
-of User boundary set/replace/remove, current default references and denied states.
-Forms and conservative capabilities now exist; policy editor still absent.
+User explicitly assigns ALL UI work to the existing UX/UI engineer, who has
+their own branch. Do not resume UI forms, styling or browser development here.
+Continue backend contracts, authority, service integration and their real gates.
+UX task01a07b21-9a0d-7fd0-b090-7827ce18262e received fixed cc5/6292 handoff and
+must confirm its active UI branch and adaptation; never copy its WIP.
+Read-only fixed cloud-console-ux7a126d314496d71d2f64804d78bd4290754c839c already
+contains PolicyAuthoring and PermissionBoundary preview components; do not
+reimplement those in the old renderer or equate preview with live authorization.
+Forms and conservative capabilities exist in our fixed client baseline;
+final UX and remaining client integration belong to that engineer and010.
 Do not infer eligibility from identityKind or policy name. Root-only
 backend management is an intermediate boundary, not completed safe delegation.
 Remaining action wildcards with fixed catalog expansion, trusted IP, Role/STS,
