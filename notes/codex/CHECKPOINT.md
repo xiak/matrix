@@ -5,8 +5,14 @@
 - Updated: 2026-09-15
 - Repository: https://github.com/xiak/matrix.git
 - Branch: `feat/iam`
-- Latest pushed handoff: `cc5e38822d3c3856306e0eafbbc4f377ad2c8346`.
-  Browser fixture and long boundary-reference wrapping; own CI not yet checked.
+- Latest pushed backend foundation: `c6bd0788c8978d34537c28020115352d23722ede`.
+  Pure AuthorizationProfile declaration encoding/reference, not registration,
+  runtime admission or CAT-05 acceptance. API/IAM/Audit/architecture race, vet,
+  generated-output stability and bounded 2-worker fuzz passed. Exact CI
+  34920036532 is in_progress, not yet accepted.001 owns details and remaining gates.
+- Previous pushed handoff: `cc5e38822d3c3856306e0eafbbc4f377ad2c8346`.
+  Browser fixture and long boundary-reference wrapping; exact CI34918584314
+  independently checked, all three jobs completed/success; both peers notified.
   Desktop and rebuilt360px set/replace/remove/member refresh passed with actual
   Audit facts/chains; the later automatic process handle disappeared without
   captured completion, so its regression is not accepted.010 owns exact evidence.
@@ -52,10 +58,18 @@ Next backend target fixed in e5a88b13:001 CAT-05 immutable product Profile,
 explicit collection/instance/create target modes before005 action wildcard
 expansion. Real offering.read currently serves both collection and detail;
 do not infer modes from names. Requirements/acceptance in001, fixed donor6292
-in adoption; no production shape/revision changed or Profile implemented yet.
+in adoption. c6bd0788 supplies only pure declaration validation/canonical/reference:
+COLLECTION_LIST/COLLECTION_CREATE, instance-only tenant prefix capability,
+separate successful resultResourceKind, explicit callingService/scope/conditions.
+No online wire, SQL or installation profile changed; no registry implemented.
 Installation peer received the window pre-notice; exact wire/storage surface
-must be aligned before shared implementation. cc5 CI34918584314 was live when
-last observed; not yet accepted. No UI work should resume in this thread.
+must be aligned before shared implementation. Installation peer accepted this
+pure contract boundary and final collection enum names. UX peer requested and
+received seven-point Profile UI guidance: objects/revisions/registration authority,
+query APIs/policy binding/fixed evidence/undecided fields. No catalog list/detail/
+version/publish API or draft/disable state machine is frozen yet; no fictitious
+UI capability. Future PolicyVersion must freeze exact profiles and expand action
+patterns at publish, not runtime. No UI work should resume in this thread.
 Do not infer eligibility from identityKind or policy name. Root-only
 backend management is an intermediate boundary, not completed safe delegation.
 Remaining action wildcards with fixed catalog expansion, trusted IP, Role/STS,
