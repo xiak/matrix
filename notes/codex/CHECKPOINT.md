@@ -3,162 +3,162 @@
 > Non-authoritative portable memory. Validate Git, exact CI and owning FEAT.
 
 - Updated 2026-09-15. Repository https://github.com/xiak/matrix.git, branch feat/iam.
-- Latest pushed candidate 9febf76690e96f98abbf265b3ce840b8bf3dbc2c;
-  pure action-family compiler, local checks passed, independent CI pending.
-- Latest independently verified implementation 32dc1a4aab4a69d1c6cb4d04437dd7f8fd739cb0.
-  Verification34944465086 exact SHA independently checked: go,
-  authority-process and node-process all completed/success.
-- Prior f272d06f84d8a753f0a7ec2cf3dc4276f637d660 /34935374957 and
-  1dc1079c4e7bec80f5345d06929875b492ba9a86 /34933760954 exact all3 success.
-  Those are the verified rollback points; checkpoints are never donors.
-- Actual source IAM22/Audit13/PaaS1. Published installation
+- Latest pushed candidate f15cc983a69092528a66eb49b0509b760392187c:
+  frozen action-family HTTP/SQL/PDP cutover; all local gates passed.
+  Verification34955695756 exact SHA checked: go and node-process success,
+  authority-process still running. Do not call the candidate CI accepted.
+- Latest fully verified rollback point 9febf76690e96f98abbf265b3ce840b8bf3dbc2c,
+  Verification34947449762 exact SHA, all three jobs completed/success.
+  It is pure family compilation only; online grammar remains exact-only.
+- Prior verified runtime32dc1a4aab4a69d1c6cb4d04437dd7f8fd739cb0 /
+  Verification34944465086 all3 success. Checkpoints are never donors.
+- Actual candidate source IAM23/Audit13/PaaS1. Published installation
   CurrentDatabaseProfile deliberately unchanged; no release upgrade permission.
 
 ## Goal and route
 
 Whole IAM goal ACTIVE. Read AGENTS, owning FEAT, then code/tests.
-005 owns current compiled publication/evaluation/history and the next bounded
-family-pattern runtime cutover;001 owns Profile
-registration/request/decision;008 service/PEP/ABAC;010 UI;011 final capacity/HA.
-No new agents/tasks. UI entirely UX/UI peer-owned, no UI/style/embed/browser
-or other worktree/WIP reads. Withdrawn GitLab/root172.30.1.5 never accessed.
-005 owns final32dc and local9feb evidence. First verify exact9feb CI; then
-continue the pending publication/SQL/PDP pattern vertical slice using the
-existing owners. No UI implementation here; whole goal remains incomplete.
+005 owns policy compilation, publication, evaluation and historical proof;
+001 owns Profile declarations, registration/current binding and discovery;
+006 owns Role/Trust/STS;008 product/PEP/ABAC;010 UI;011 final capacity/HA.
+No subagents or new tasks. UI entirely UX/UI peer-owned. No other worktree/WIP
+reads or external environment sharing. Withdrawn GitLab/root172.30.1.5 task
+remains excluded. Current user additionally authorized cleanup of stopped local
+Docker containers and unused custom networks; completed without deleting
+images/volumes or touching running foreign containers or remote/shared services.
 
-## Fixed9feb pure compiler boundary
+First check exact f15 CI, then update only the owning evidence and this checkpoint.
+Do not restart passed heavy local gates merely because CI is pending.
+Next backend work must address 005 remaining conditions/delegation and 006
+Role/STS, plus the real readonly product catalog needed by the UI. Freeze each
+narrow contract before code; no runtime product registration or hardcoded UI
+permission engine. Entire goal remains incomplete.
 
-Only exact three-segment product.family.* patterns, TENANT only, star means
-one nonempty segment. No global/product-only, nested, partial, regex or alias.
-Same validator resolves against explicitly supplied frozen Profile content;
-no current/global fallback or filtering mismatched scope/resource/condition/
-prefix. Zero matches fail; author duplicates fail; overlap is union but charged
-before deduplication.128 resolved actions/statement,8192 visits/document;
-existing author64KiB/compilation128KiB/Profile16 limits retained.
-Author pattern stays in canonical commitment; resolved actions sorted/exact.
-New declaration affects only new compilation, never an old frozen interpretation.
-Current pre-match compatibility also checks nonmatching Deny with old patterns.
+## Candidate f15 family runtime contract
 
-Compile-only. Online document/Create/Publish/PolicyVersion, SQL and PDP continue
-rejecting pattern content. No schema/API wire/release profile change; actual
-source22/13/1 unchanged. Do not claim runtime pattern support or LANG-03 done.
-Next vertical cutover must jointly verify author/resolved SQL, transport and
-PDP matching exact resolved SID actions, real PaaS dual-tenant/Deny/revocation/
-historical proof. Only then enable HTTP publication. Existing private seven-
-column claim, Audit canonical and other Phase ownership remain unchanged.
+Author patterns are TENANT-only, exactly product.family.*; star matches one
+nonempty complete declaration segment. No global/product-only, nested, partial,
+regex or alias syntax. Profile declarations and actual authorization requests
+remain exact-action-only. Original document-only and contract1 reject patterns.
 
-Local final full Go race/vet/modules/API generation/Linux build passed.
-Family/old compilation fuzz15s/2workers/1s minimization265354/284079 executions.
-Native exact policy sample80us/49989B/162alloc is not capacity/SLO acceptance.
-No own external fixture/service/browser/remote was started this slice.
+Compilation uses explicitly supplied, fully validated frozen Profile content.
+Never filter mismatched scope/resource/condition/prefix members from a family.
+Zero matches and duplicate author tokens fail. Overlap is a union, but work is
+charged before deduplication:8192 visits/document,128 resolved actions/statement,
+64KiB author,128KiB compilation,16 Profiles. Old exact commitments unchanged.
+Current publication accepts only author document and original intent/revision;
+caller compilation or head selection is forbidden.
 
-## Fixed32dc compiled policies
+SQL independently expands every matching declaration from exact current heads
+locked by the original workflow, verifies SID/full exact sets/minimal references
+and all capabilities. No LIKE or caller regex. Trusted adapter reads exact
+archive and recompiles; a rehashed transport-valid missing/invented member is
+still rejected. Codec integrity is not registered-completeness proof.
 
-PolicyVersion requires contractVersion1|2.1 forbids compilation even null;
-2 requires complete compilation. Strict response integrity does not use the
-current catalog to reject readable historical namespaces. Single
-CanonicalizePolicyVersion verifies transport/canonical/digest, not admission.
+One PDP verifies full frozen/current interpretation before Effect/resource/
+conditions, then matches exact resolved SID actions only. No author-action
+fallback or runtime wildcard. Boundary uses the same evaluator. New catalog
+actions do not expand old versions; explicit publish AND set-default required.
 
-New publication derives minimal references/resolved SIDs from trusted current
-heads locked inside the original transaction. No caller compilation or head
-selector. create_policy/create_policy_version now10 mandatory args, last
-integer submitted_contract=2; old9 removed, no overload/default.
+Private resource_kind_for_action/is_platform_action replace the old CASE catalog
+with exact registered-current projections. Same signatures, SQL STABLE,
+PARALLEL UNSAFE, invoker, owner-only. Missing/invalid scope returns NULL;
+duplicate match errors. Recorder and boundary explicitly reject NULL.
+Readiness/verify check exact ABI/ACL/owner/search_path and current mappings.
+Historical proof still uses original archive and closed fact mapping.
 
-policy_versions contract_version integer NOT NULL has NO default;
-compilation jsonb nullable NO default, required exactly for2. Only actual
-complete original rows receive1 during atomic cutover, before new seeds.
-Original documents/canonical/digests/defaults/attachments are not rewritten.
-New SYSTEM compiled versions do not advance existing defaults.
+Create10/claim7/recorder7/evidence5 outer shapes, ServiceIdentity/lookup_service
+and Audit canonical unchanged. IAM23 reflects changed author/SQL behavior,
+not binary N-1 or signed-release compatibility.
 
-Private owner-only policy_version_snapshot returns {value,canonical}. Only
-existing restricted readers/session/service snapshots embed it. Adapter
-strictly decodes, loads exact archive references, validates full compiler
-semantics and byte equality, then immediately unwraps. No storage wrapper/raw
-canonical in public response/evidence/outbox. Archive cache lives in one Tx.
-lookup_session/service nested JSON changes in this slice; outer
-lookup_service /claim7 /recorder7 /read_audit_evidence5 shapes unchanged.
+## Performance and final local evidence
 
-New attachment/BOUND evidence has contractVersion and complete compilation.
-Recorder compares exact current row in lock. Private
-recorded_policy_version_matches(jsonb) authenticates historical row/ref/digest;
-original absent metadata allowed only against protected1.2 requires complete
-matching evidence and exact archive, never current head/default/user authority.
-Readiness/verify checks metadata, exact function ABI and private ACL.
+Only repeated pure work removed: complete typed source Profile equality replaces
+reflection; exact bounded source canonical bytes decode to a deep copy; compiler
+temporary indexes cover author exact dependencies and ALL matching members after
+FULL validation of every supplied declaration. Other values use the sole strict
+decoder/canonical encoder. No identity, permission or DB head cache; no password
+hash weakening. Complete-field mutation/deep-copy/malformed-unreferenced tests.
 
-One PDP checks frozen/current caller/kind/scope/result/mode/usage/used conditions
-before Effect/resource matching. Incompatible nonmatching Deny fails WHOLE
-evaluation, not skip-and-Allow. PREFIX remains INSTANCE-only; no new wildcard
-action language yet. Current request stays bound to exact source Profile.
-Performance uses same-stack de-duplication and precomputed fixed source
-declaration bytes ONLY after complete nested-content equality. No permission,
-subject, DB head or cross-request decision cache.
+Final fresh PG18.6,1CPU/768MiB/PIDs128/maxconn64, Go2/768MiB, race-p1 serial:
+Audit database/retained upgrade7.741s; Audit HTTP3.593s;
+IAM integration308.117s; authorityprocess101.499s; PaaS database5.817s.
+IAM package includes full policy, HTTP and platform local recovery, not just
+targeted checks. Independent processes retain actual least-privilege logins,
+dual-IAM/PaaS/Audit+dispatchers, cross-tenant resources/configuration/Operation/
+outbox/cursors, current revocation/outage and historical proof.
 
-## Supported retained source and Root preflight
+Retained gate uses actual fixed1dc executable (schema21 interpretation baseline).
+Future-source test overlay first registers a fresh r2 containing BOTH synthetic
+paas.application.inspect and removal of read's principal-id condition capability.
+Real migrator apply twice/verify, no direct DML head/attachment construction.
+Old r1 request422/no ordinary decision; old default/new-only publication do not
+grant inspect; explicit default then allows. Original nonmatching-resource
+Deny with now-unsupported condition makes whole request503/no ordinary decision;
+revoke it then original Allow returns. Restart, original bytes/proof preserved.
+Final standalone gate20.72s/package24.066s, also in full process101.499s.
+Synthetic inspect is not a real PaaS endpoint or runtime registration API.
 
-Fixed1dc is the explicit interpretation predecessor, not provenance inferred
-from a row/marker/archive. Only exact6 SYSTEM seed IDs/digests and exact r1
-archive keys may retain a closed current interpretation. Unknown CUSTOMER is
-management/history-only until Root explicitly publishes2 AND sets default.
-No copied encoder, automatic recompilation/default movement, or current fallback.
+Original120s group/240s aggregate and101-member/pagination scale unchanged.
+Early full timeouts are not successes; final ordinary-linked full gates passed.
+Race profiler158.43s/group74.41s/platform13.64s used per-command Windows -w only
+to work around PE debug output, not permission or capacity evidence.
+Whole Go race/vet/modules/API generation byte stability/Linux amd64 build pass.
+Final family/original compilation fuzz each15s/2workers/1s minimization passed
+212769/218535 executions. Default-skipped DB tests are not runtime evidence.
+No own external fixture remains running. Exact own container/network removed
+after zero-client/label/ID checks; synthetic data volume retained. Ignored local
+profiling files are not a deliverable, portable fixture or background process.
 
-Before marker/seeds/DDL, each original Root must be ACTIVE USER with exact
-known SYSTEM management default, no current CUSTOMER direct or actual group
-attachment. Sealed bootstrap Root tuple must agree. Failure rolls back all
-schema/data; no online bypass. Old API must explicitly remove Root attachments.
-Paused Account stays paused with qualified Root; actual platform enable later
-restores access with its own single fact. Never enable USER/Account in migration.
+## Preserved compiled-policy / historical boundary
 
-Existing TestIAMRetainedPolicyProcessUpgrade now runs actual fixed1dc executable
-and migrator (MATRIX_IAM_POLICY_UPGRADE_POSTGRES_TEST_DSN), mandatory in CI.
-384/schema8 is NOT a positive compiled-policy predecessor; no unpublished1..N
-matrix. Other historical optional diagnostics do not establish release support.
+PolicyVersion contract1 forbids compilation even null;2 requires full compilation.
+CanonicalizePolicyVersion validates transport without current catalog fallback.
+Private snapshot {value,canonical} never escapes into public evidence/outbox.
+Adapter authenticates exact immutable archive within the current transaction.
 
-## Fixed32dc local evidence (005 owns authoritative details)
+Create/create-version have10 mandatory args with submitted_contract=2; no old
+overload/default. contract_version NOT NULL has no default. Only genuine
+complete original rows were marked1 at atomic cutover; original bytes/defaults/
+attachments and old SYSTEM defaults never move on migration/bootstrap replay.
+Current attachment and BOUND evidence bind contractVersion+compilation;
+recorded_policy_version_matches authenticates original version/ref/digest.
 
-PG18.6 pinned4ef4dbc,1CPU/768MiB/PIDs128/maxconn64, Go2/768MiB,
-heavy race-p1 serial. Full policy198.844s (parent195.67s), original group
-standalone94.864s (flow82.84s). Initial full group timed out; removed duplicate
-encoding work and passed unchanged scale/2min flow/4min aggregate. Native
-one-policy benchmark329us ->59us is NOT end-to-end capacity acceptance.
-Final deep SQL compilation/reference/SID attacks+64KiB author budget19.008s.
-IAM HTTP176.101s, Audit HTTP3.143s, dual schema/RLS/immutability6.246s,
-independent dualIAM/PaaS/Audit+dispatchers95.547s. Real runtime role identity,
-dual tenant resources/configuration/Operation/outbox/cursor/expiry/revocation
-and historical proof retained. Not host/installed UI acceptance.
+Fixed1dc is explicit interpretation predecessor, not row/marker provenance.
+Only exact6 SYSTEM seed IDs/digests and exact r1 archive admit a closed ceiling.
+Unknown CUSTOMER is management/history-only until Root explicitly publishes2
+and selects it. Root preflight rejects current legacy CUSTOMER direct/actual
+group attachments; old API must remove them first. Paused Account stays paused;
+qualified original Root relation/management seed required before cutover.
+No new online repair, current-head historical fallback or unpublished1..N matrix.
 
-Final actual1dc->22 gate17.983s: all original sections preserved, Root CUSTOMER
-preflight+old-API detachment, clearly labelled corrupt Root/membership negatives,
-late DDL rollback, paused Account->explicit enable->Root publication, restart,
-revoked sessions/platform permissions stay revoked, Viewer read/create/platform
-ceiling old/new equal. Old CUSTOMER stays closed until explicit publish/select.
-Original platform local-recovery SQL and concurrent credential/attachment
-regression17.666s passed. No new local recovery API/permission.
+## Peer coordination / remaining boundary
 
-All Go race/vet/modules, stable API generation, Linux amd64 build passed.
-Final API/architecture race passed; existing compilation/Profile round-trip fuzz
-each15s/2workers/1s minimization572754/247876 executions, full version commitment
-and fixed source declaration seeds. Default skipped external tests not evidence.
+Phase3 thread01a04149-5dbb-7300-9e4c-31d9e85c8ada received f15 candidate and
+local evidence. It waits ONE cumulative final IAM/Role/STS donor, retaining
+its PaaS5/host and predecessor5/4/5+r11. Final host donor
+be3c4a96b4381426c01cd6315eaa3713c2855982 includes platform12 and ca7 enrollment.
+Never import this branch PaaS1/profile, the other checkpoint or acceptance state.
 
-All clients ended. Exact-labelled own PG container/network/synthetic volume
-deleted after ownership and zero-client checks. Own test executable artifacts
-removed; no active own service/browser/test, no remote/shared operation.
-Next fixture must use new unique names/labels/ports/limits. Ignored profiling
-sample is not a deliverable or portable runtime resource.
+UX/UI thread01a07b21-9a0d-7fd0-b090-7827ce18262e, title UX/UI工程师,
+own feat/cloud-console-ux at610fef1954be84be5b4bc16e4dd2d9f6e9ff209c.
+User explicitly asked proactive start/handoff notifications. Sent fixed32dc
+ready scope and f15 design-only pendingCI; never require waiting for all IAM.
+Peer confirms Account/User/Group clients/pages exist; strict collection and
+CurrentIdentity/UserAccess boundary adaptation underway. Policy versions and
+User boundary still require live wiring; full editor/Role/STS are labelledMOCK.
+Readonly product catalog HTTP is genuinely missing; no fake/live hardcoding.
 
-## Peers / remaining boundary
+Sent existing fixed32dc TestIAMConsoleBrowser/runIAMConsoleBrowser entrypoint
+in test/authorityprocess. Opt-in MATRIX_IAM_CONSOLE_BROWSER=1 plus unique
+MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN (matrix_authority_process_ prefix),
+Go2/768MiB, race-p1, test timeout35m while fixture bounded30m. It launches real
+services/own embedded UI on random loopback and logs BROWSER_FIXTURE URL/finish.
+Existing synthetic constants only; setA/replaceB/remove then completion verifies
+real2set/1remove and chain. Own visual observations still required. No new
+fixture started, no peer environment touched, no old browser acceptance inherited.
 
-Installation thread01a04149-5dbb-7300-9e4c-31d9e85c8ada received32dc candidate;
-final all3 CI success is confirmed. Will preserve own PaaS5/host
-and predecessor5/4/5+r11; no import of this branch PaaS1/profile/FEAT/checkpoint.
-Final host donor be3c4a96b4381426c01cd6315eaa3713c2855982 includes platform12
-and ca7f694 enrollment history. Final consumer parity remains its own gate.
-
-UX/UI thread01a07b21-9a0d-7fd0-b090-7827ce18262e, feat/cloud-console-ux,
-fixed610fef1954be84be5b4bc16e4dd2d9f6e9ff209c, received32dc wire change;
-creation inputs unchanged, no client-submitted compilation. CI now all3 success.
-MOCK/live separate; do not implement its UI here.
-
-Role/STS/programmatic/service identity policy/ABAC/governance/product runtime
-onboarding/full UX, capacity/HA/final signed release remain outstanding.
-Pre-v1 converged schema is the first supported release baseline. Schema numbers
-alone never establish binary, SQL ABI or cross-release-profile compatibility.
+Role/Trust/STS, programmatic credentials, service role/ABAC, governance, live
+catalog/complete peer UI, capacity/HA and final signed release remain open.
+Pre-v1 converged schema becomes first supported release; schema digits never
+prove SQL ABI or cross-release-profile compatibility.
