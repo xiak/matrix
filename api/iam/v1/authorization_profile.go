@@ -211,6 +211,18 @@ func cloneAuthorizationProfile(value AuthorizationProfile) AuthorizationProfile 
 	return value
 }
 
+// All current and immutable policy lookups project the same capability shape.
+// This is derived data, never an independently editable action registry.
+func authorizationProfileActionDefinition(profile AuthorizationProfile, action AuthorizationProfileAction) ActionDefinition {
+	definition := ActionDefinition{Action: action.Action, Product: profile.Product, CallingService: profile.CallingService, ResourceKind: action.ResourceKind, AuthorityScope: action.Scope}
+	for _, shape := range action.ResourceShapes {
+		if shape.Mode == AuthorizationResourceInstance {
+			definition.ResourcePrefixAllowed = shape.PrefixAllowed
+		}
+	}
+	return definition
+}
+
 // CheckAuthorizationProfileReference compares the exact tuple, never a
 // numerically newer revision. It does not authenticate the profile publisher.
 func CheckAuthorizationProfileReference(value AuthorizationProfile, reference AuthorizationProfileReference) error {

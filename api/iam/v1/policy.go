@@ -548,6 +548,27 @@ type PolicyVersionReference struct {
 	ContentDigest string          `json:"contentDigest"`
 }
 
+const (
+	PolicyCompilationVersion           = "1"
+	MaxPolicyCompilationProfiles       = 16
+	MaxPolicyCompilationBytes    int64 = 128 * 1024
+)
+
+// PolicyCompilation freezes how one author document was resolved against
+// explicit product declarations. It is not accepted from policy publishers,
+// does not authenticate those declarations, and is not an authorization permit.
+// The current PolicyVersion wire remains separate until its storage cutover.
+type PolicyCompilation struct {
+	CompilationVersion string                          `json:"compilationVersion"`
+	Profiles           []AuthorizationProfileReference `json:"profiles"`
+	ResolvedStatements []PolicyResolvedStatement       `json:"resolvedStatements"`
+}
+
+type PolicyResolvedStatement struct {
+	SID     string   `json:"sid"`
+	Actions []Action `json:"actions"`
+}
+
 // UserPermissionBoundary describes a limit, never a positive grant. A null
 // Policy explicitly means no tenant boundary at this User revision.
 type UserPermissionBoundary struct {
@@ -626,6 +647,20 @@ func ValidatePolicyDocument(document PolicyDocument) error {
 }
 
 func validatePolicyStructure(document PolicyDocument) error {
+	return validatePolicyStructureWithCapabilities(document, currentPolicyCapabilities)
+}
+
+// Both current publication validation and immutable compilation use this
+// validator. Only the source of declared capabilities differs; there is no
+// second policy grammar or permissive historical-policy parser.
+type policyCapabilityLookup struct {
+	action    func(Action) (ActionDefinition, bool)
+	condition func(Action, ConditionKey) (ConditionKeyDefinition, bool)
+}
+
+var currentPolicyCapabilities = policyCapabilityLookup{LookupActionDefinition, LookupActionConditionDefinition}
+
+func validatePolicyStructureWithCapabilities(document PolicyDocument, capabilities policyCapabilityLookup) error {
 	if document.LanguageVersion != PolicyLanguageVersion {
 		return invalidPolicyAt(PolicyUnsupported, "/languageVersion")
 	}
@@ -654,7 +689,7 @@ func validatePolicyStructure(document PolicyDocument) error {
 		if len(statement.Resources) == 0 || len(statement.Resources) > MaxStatementResources {
 			return invalidPolicyAt(PolicyLimitExceeded, pointer+"/resources")
 		}
-		if err := validatePolicyConditions(statement, pointer); err != nil {
+		if err := validatePolicyConditions(statement, pointer, capabilities); err != nil {
 			return err
 		}
 		seenActions := make(map[Action]bool, len(statement.Actions))
@@ -662,7 +697,7 @@ func validatePolicyStructure(document PolicyDocument) error {
 		prefixUnsupportedKinds := make(map[ResourceKind]bool)
 		for index, action := range statement.Actions {
 			actionPointer := pointer + "/actions/" + strconv.Itoa(index)
-			definition, known := LookupActionDefinition(action)
+			definition, known := capabilities.action(action)
 			if !known {
 				return invalidPolicyAt(PolicyUnsupported, actionPointer)
 			}
@@ -715,7 +750,7 @@ func validatePolicyStructure(document PolicyDocument) error {
 		// Select the first uncovered action in input order, not map iteration
 		// order, so repeated analysis always identifies the same field.
 		for index, action := range statement.Actions {
-			definition, _ := LookupActionDefinition(action)
+			definition, _ := capabilities.action(action)
 			if !requiredKinds[definition.ResourceKind] {
 				return invalidPolicyAt(PolicyResourceMismatch, pointer+"/actions/"+strconv.Itoa(index))
 			}
@@ -724,7 +759,7 @@ func validatePolicyStructure(document PolicyDocument) error {
 	return nil
 }
 
-func validatePolicyConditions(statement PolicyStatement, pointer string) error {
+func validatePolicyConditions(statement PolicyStatement, pointer string, capabilities policyCapabilityLookup) error {
 	if statement.Conditions != nil && (len(statement.Conditions) == 0 || len(statement.Conditions) > MaxStatementConditions) {
 		return invalidPolicyAt(PolicyLimitExceeded, pointer+"/conditions")
 	}
@@ -739,7 +774,7 @@ func validatePolicyConditions(statement PolicyStatement, pointer string) error {
 			return invalidPolicyAt(PolicyUnsupported, location+"/key")
 		}
 		for _, action := range statement.Actions {
-			if _, supported := LookupActionConditionDefinition(action, condition.Key); !supported {
+			if _, supported := capabilities.condition(action, condition.Key); !supported {
 				return invalidPolicyAt(PolicyUnsupported, location+"/key")
 			}
 		}
@@ -797,8 +832,17 @@ func validatePolicyConditions(statement PolicyStatement, pointer string) error {
 // Collection ordering is normalized without mutating caller-owned slices.
 // This digest is not an Audit event digest and cannot replace its encoding.
 func CanonicalizePolicyDocument(document PolicyDocument) (string, string, error) {
-	if err := validatePolicyStructure(document); err != nil {
+	encoded, err := canonicalPolicyDocument(document, currentPolicyCapabilities)
+	if err != nil {
 		return "", "", err
+	}
+	digest := sha256.Sum256(append([]byte("matrix.iam.policy.v1\x00"), encoded...))
+	return string(encoded), "sha256:" + hex.EncodeToString(digest[:]), nil
+}
+
+func canonicalPolicyDocument(document PolicyDocument, capabilities policyCapabilityLookup) ([]byte, error) {
+	if err := validatePolicyStructureWithCapabilities(document, capabilities); err != nil {
+		return nil, err
 	}
 	document.Statements = append([]PolicyStatement(nil), document.Statements...)
 	for index := range document.Statements {
@@ -831,10 +875,150 @@ func CanonicalizePolicyDocument(document PolicyDocument) (string, string, error)
 	slices.SortFunc(document.Statements, func(left, right PolicyStatement) int { return cmp.Compare(left.SID, right.SID) })
 	encoded, err := json.Marshal(document)
 	if err != nil || int64(len(encoded)) > MaxPolicyBytes {
-		return "", "", invalidPolicyAt(PolicyLimitExceeded, "")
+		return nil, invalidPolicyAt(PolicyLimitExceeded, "")
 	}
-	digest := sha256.Sum256(append([]byte("matrix.iam.policy.v1\x00"), encoded...))
+	return encoded, nil
+}
+
+// CompilePolicyDocument resolves exact actions using only the supplied
+// declarations, never today's global catalog. The owning transaction must
+// authenticate and select its current registry heads before invoking it.
+// Pattern syntax is deliberately not enabled by this contract slice.
+func CompilePolicyDocument(document PolicyDocument, profiles []AuthorizationProfile) (PolicyCompilation, error) {
+	compilation, _, err := compilePolicyDocument(document, profiles)
+	return compilation, err
+}
+
+func compilePolicyDocument(document PolicyDocument, profiles []AuthorizationProfile) (PolicyCompilation, []byte, error) {
+	if len(profiles) == 0 || len(profiles) > MaxPolicyCompilationProfiles {
+		return PolicyCompilation{}, nil, invalidPolicyAt(PolicyLimitExceeded, "/profiles")
+	}
+	references := make(map[ProductID]AuthorizationProfileReference, len(profiles))
+	definitions := make(map[Action]ActionDefinition)
+	conditions := make(map[Action][]AuthorizationProfileCondition)
+	for _, profile := range profiles {
+		_, digest, err := CanonicalizeAuthorizationProfile(profile)
+		if err != nil {
+			return PolicyCompilation{}, nil, invalidPolicyAt(PolicyInvalidValue, "/profiles")
+		}
+		if _, duplicate := references[profile.Product]; duplicate {
+			return PolicyCompilation{}, nil, invalidPolicyAt(PolicyDuplicate, "/profiles")
+		}
+		references[profile.Product] = AuthorizationProfileReference{profile.Product, profile.Revision, digest}
+		for _, action := range profile.Actions {
+			if _, duplicate := definitions[action.Action]; duplicate {
+				return PolicyCompilation{}, nil, invalidPolicyAt(PolicyDuplicate, "/profiles")
+			}
+			definitions[action.Action] = authorizationProfileActionDefinition(profile, action)
+			conditions[action.Action] = action.Conditions
+		}
+	}
+	capabilities := policyCapabilityLookup{
+		action: func(action Action) (ActionDefinition, bool) {
+			definition, known := definitions[action]
+			return definition, known
+		},
+		condition: func(action Action, key ConditionKey) (ConditionKeyDefinition, bool) {
+			for _, condition := range conditions[action] {
+				if condition.Key == key {
+					return ConditionKeyDefinition{condition.Key, condition.ValueType, condition.Source}, true
+				}
+			}
+			return ConditionKeyDefinition{}, false
+		},
+	}
+	canonical, err := canonicalPolicyDocument(document, capabilities)
+	if err != nil {
+		return PolicyCompilation{}, nil, err
+	}
+	compilation := PolicyCompilation{CompilationVersion: PolicyCompilationVersion}
+	used := make(map[ProductID]bool)
+	for _, statement := range document.Statements {
+		actions := slices.Clone(statement.Actions)
+		slices.Sort(actions)
+		compilation.ResolvedStatements = append(compilation.ResolvedStatements, PolicyResolvedStatement{statement.SID, actions})
+		for _, action := range actions {
+			used[definitions[action].Product] = true
+		}
+	}
+	for product := range used {
+		compilation.Profiles = append(compilation.Profiles, references[product])
+	}
+	slices.SortFunc(compilation.Profiles, func(left, right AuthorizationProfileReference) int { return cmp.Compare(left.Product, right.Product) })
+	slices.SortFunc(compilation.ResolvedStatements, func(left, right PolicyResolvedStatement) int { return cmp.Compare(left.SID, right.SID) })
+	content := struct {
+		Document json.RawMessage `json:"document"`
+		PolicyCompilation
+	}{json.RawMessage(canonical), compilation}
+	encoded, err := json.Marshal(content)
+	if err != nil || int64(len(encoded)) > MaxPolicyCompilationBytes {
+		return PolicyCompilation{}, nil, invalidPolicyAt(PolicyLimitExceeded, "")
+	}
+	return compilation, encoded, nil
+}
+
+// CanonicalizePolicyCompilation commits the author document and its exact
+// interpretation together. SID equality binds statements without an independent
+// statement digest/ordinal. The supplied profiles must later be verified against
+// immutable registry records, not caller claims or a newer compatible revision.
+func CanonicalizePolicyCompilation(document PolicyDocument, compilation PolicyCompilation, profiles []AuthorizationProfile) (string, string, error) {
+	expected, encoded, err := compilePolicyDocument(document, profiles)
+	if err != nil {
+		return "", "", err
+	}
+	if compilation.CompilationVersion != PolicyCompilationVersion ||
+		len(compilation.Profiles) != len(expected.Profiles) || len(compilation.ResolvedStatements) != len(expected.ResolvedStatements) {
+		return "", "", ErrInvalidPolicy
+	}
+	// Copy all mutable sets before normalization. Equality with the compiler's
+	// exact output also rejects duplicates, unused refs and unbound statements.
+	compilation.Profiles = slices.Clone(compilation.Profiles)
+	compilation.ResolvedStatements = slices.Clone(compilation.ResolvedStatements)
+	for _, reference := range compilation.Profiles {
+		if !profileIdentifier(string(reference.Product), false) || validatePositiveVersion(reference.Revision) != nil ||
+			ValidateDigest("contentDigest", reference.ContentDigest) != nil {
+			return "", "", ErrInvalidPolicy
+		}
+	}
+	for index := range compilation.ResolvedStatements {
+		statement := &compilation.ResolvedStatements[index]
+		if ValidateID("sid", statement.SID) != nil || len(statement.Actions) == 0 || len(statement.Actions) > MaxStatementActions {
+			return "", "", ErrInvalidPolicy
+		}
+		for _, action := range statement.Actions {
+			if len(action) == 0 || len(action) > 128 {
+				return "", "", ErrInvalidPolicy
+			}
+		}
+		statement.Actions = slices.Clone(statement.Actions)
+		slices.Sort(statement.Actions)
+	}
+	slices.SortFunc(compilation.Profiles, func(left, right AuthorizationProfileReference) int { return cmp.Compare(left.Product, right.Product) })
+	slices.SortFunc(compilation.ResolvedStatements, func(left, right PolicyResolvedStatement) int { return cmp.Compare(left.SID, right.SID) })
+	if !slices.Equal(compilation.Profiles, expected.Profiles) {
+		return "", "", ErrInvalidPolicy
+	}
+	for index, statement := range compilation.ResolvedStatements {
+		if statement.SID != expected.ResolvedStatements[index].SID || !slices.Equal(statement.Actions, expected.ResolvedStatements[index].Actions) {
+			return "", "", ErrInvalidPolicy
+		}
+	}
+	digest := sha256.Sum256(append([]byte("matrix.iam.policy-compilation.v1\x00"), encoded...))
 	return string(encoded), "sha256:" + hex.EncodeToString(digest[:]), nil
+}
+
+// DecodePolicyCompilation is for owner-loaded immutable content, not a new
+// northbound publication API. Incomplete or forged compilation never falls
+// back to the document-only version contract.
+func DecodePolicyCompilation(reader io.Reader, document PolicyDocument, profiles []AuthorizationProfile) (PolicyCompilation, error) {
+	var compilation PolicyCompilation
+	if contractjson.DecodeObject(reader, MaxPolicyCompilationBytes, &compilation) != nil {
+		return PolicyCompilation{}, ErrInvalidPolicy
+	}
+	if _, _, err := CanonicalizePolicyCompilation(document, compilation, profiles); err != nil {
+		return PolicyCompilation{}, err
+	}
+	return compilation, nil
 }
 
 func ValidatePolicyVersion(version PolicyVersion) error {

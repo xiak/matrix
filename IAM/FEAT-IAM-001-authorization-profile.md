@@ -55,7 +55,7 @@
 
 以上映射来自现有 apphosting/managedservice HTTP owner，不能用更改动作名称或假装拆成两个已经存在的 API 绕过混合模式。Profile 可声明同一动作允许的多个闭合目标模式；实际调用必须明确选择并被对应 PEP 校验。未知模式、未实现的 FILTERED 或 batch 能力、错服务/产品/scope、同 ResourceKind 的另一动作均关闭。
 
-本分支已按固定 `be3c4a96b4381426c01cd6315eaa3713c2855982` 适配完整12项平台动作、NODE_ENROLLMENT及对应约束/系统策略显式新版本，PaaS Profile推进revision2。其实际PEP证明 pool.create/target.register 对body实际ID做INSTANCE授权，pool.read/target.read兼有集合列表与实例详情；此片只适配IAM/Audit拥有的公共能力，不导入host实现。node-enrollment.create的collection→ExecutionTarget历史映射来自该固定树已包含的 `ca7f6940159e53fbae183b7b6d5f379705a0cba1`，其余enrollment操作仍为exact实例。本片局部门禁见下；最终ABI尚未验收。
+本分支已按固定 `be3c4a96b4381426c01cd6315eaa3713c2855982` 适配完整12项平台动作、NODE_ENROLLMENT及对应约束/系统策略显式新版本，PaaS Profile是尚未运行时登记的完整首版声明。其实际PEP证明 pool.create/target.register 对body实际ID做INSTANCE授权，pool.read/target.read兼有集合列表与实例详情；此片只适配IAM/Audit拥有的公共能力，不导入host实现。node-enrollment.create的collection→ExecutionTarget历史映射来自该固定树已包含的 `ca7f6940159e53fbae183b7b6d5f379705a0cba1`，其余enrollment操作仍为exact实例。本片局部门禁见下；最终ABI尚未验收。
 
 ### 平台产品目录补齐的最小验收切片
 
@@ -76,7 +76,7 @@
 | `node-enrollment.regenerate` | NODE_ENROLLMENT | INSTANCE | 不声明创建结果 |
 | `platform-operation.read` | OPERATION | INSTANCE | 无创建结果 |
 
-补齐不能覆盖旧 PaaS revision1 的内容解释，当前声明发布为 revision2，旧摘要不得被当成新目录引用。平台 SYSTEM 策略形成新的不可变内容版本。最终支持的 predecessor be3 原 RolePlatformOperator 已有完整平台集合，因此首次 role→policy 切换须创建与其完整权限等价的 SYSTEM 默认版本，逐条迁移未撤销和已撤销绑定，保留原允许/拒绝结果；这不是新增权限，也不能要求操作者重新授权原有能力。新建最终安装使用同一完整版本。未发布的旧5项CAM开发库不是最终支持基线，不为它增加兼容发行通道。最终发布之后新增、predecessor从未拥有的动作，才适用追加不可变版本但不自动切换已有SYSTEM默认值的规则；明确受权采用由相应发行边界实施，不借此增加在线恢复或首授权接口。
+Profile 尚未进入运行时 registry、决定或已发布消费者，源码草案直接替换并收敛为每产品唯一 revision1；不登记或保留错误旧草案，Git 保存其历史。此规则不适用于真正已登记/发布的 Profile：届时同revision异digest拒绝，后续内容变化必须新revision。平台 SYSTEM 策略形成新的不可变内容版本。最终支持的 predecessor be3 原 RolePlatformOperator 已有完整平台集合，因此首次 role→policy 切换须创建与其完整权限等价的 SYSTEM 默认版本，逐条迁移未撤销和已撤销绑定，保留原允许/拒绝结果；这不是新增权限，也不能要求操作者重新授权原有能力。新建最终安装使用同一完整版本。未发布的旧5项CAM开发库不是最终支持基线，不为它增加兼容发行通道。最终发布之后新增、predecessor从未拥有的动作，才适用追加不可变版本但不自动切换已有SYSTEM默认值的规则；明确受权采用由相应发行边界实施，不借此增加在线恢复或首授权接口。
 
 此开发切片的实际readiness为 IAM19/Audit13/PaaS1；变化来自IAM动作约束/系统策略与Audit封闭事实，不能因函数签名相同沿用旧兼容声明。现有独立进程门禁必须读取三服务实际版本并与sourceProfile逐项比较，同时继续证明已发布installation profile与此组合不同，在副作用前拒绝未发布组合。不修改CurrentDatabaseProfile、不开放安装或跨profile升级；001–010冻结后由安装owner组合实际IAM/Audit和其PaaS5，验证确切predecessor及最终发行。
 
@@ -85,6 +85,12 @@
 首片的实质门禁是两个真实产品通过同一注册/校验路径，IAM实际决定与持久化证据绑定精确 Profile，PEP拒绝不匹配的回包；修改或增加 Profile 不能改变已经固定的旧版本解释。新增产品声明不得要求通用求值器按产品名称增加分支。未声明来源的条件不能启用；当前IAM自供身份/事务时间继续独立于产品属性，不增加任意 caller attributes map。
 
 历史决定和 outbox 使用发生时的不可变 Profile/PolicyVersion 证据，当前生产者凭据仍需有效；不能在重放时拿最新注册目录重新扩张或重新授权。对外请求/结果的精确字段、持久化形状和消费者切换须在这组语义完成代码核对后统一冻结，当前不提前改schema/profile数字。真实旧消费者无法原子切换时单列支持或拒绝边界，不用未发布schema编号相等作兼容证明。
+
+下一在线绑定切片的已对齐边界：AuthorizationRequest 必填精确 `profile` 引用与 `resourceMode`；COLLECTION 必填 `collectionUsage` 且 `resource.id` 固定为 `collection`，INSTANCE 禁止集合用途并使用实际资源 ID。不能从 ID 或动作后缀反推模式；同名为 `collection` 的真实实例也必须显式声明 INSTANCE。该组合必须由相应 Profile 声明，调用服务从当前有效凭据取得。Allow/Deny 都回绑完整请求目标与 Profile，PEP 逐字段核对；这些字段进入原 request digest 和不可变决定。当前线上结构尚未包含这些字段，不把设计当作已实施。
+
+Audit 的租户/平台 record.read 与 integrity.verify 均对当前权威的完整集合操作：统一声明 COLLECTION/COLLECTION_LIST，verify 的动作表示完整链验证而非选择某条链实例；资源种类仍分别为 AUDIT_RECORD/AUDIT_CHAIN，scope仍分别为TENANT/INSTALLATION，调用服务为AUDIT，不声明result。Audit未发布首版Profile直接修正该语义。线上 `records`/`chain` sentinel 的替换须与新wire及受保护legacy loader一起落地，不改旧事件target、canonical或链身份。
+
+历史兼容只由受保护的既有数据库行身份认定：迁移给迁移前完整旧形状的决定记录契约标记，不改原 JSON、outbox 或链字节；缺少新字段本身不是 legacy 资格。新 HTTP、记录函数及在线响应校验不允许旧形状或部分绑定；历史 loader 只能按对应记录的原契约读取旧 sentinel。不可变 Profile 内容和受信当前选择由迁移角色在单一事务登记，禁止普通 USER/API/worker 注册或切换；旧服务与新服务不承诺混跑，版本不匹配失败关闭。PolicyVersion 的作者文档、冻结产品引用与逐语句解析结果由005拥有，注册、SQL、wire和实际PEP须共同通过后才完成 CAT-05。
 
 验收沿现有契约、authority、IAM/PG和authorityprocess owner：定义重排的稳定摘要、变体/重复/未知能力拒绝、注册副本隔离、两产品集合/实例正反例、实际不同服务与scope拒绝、同账号/跨账号同ID、旧决定在目录更新后的精确重放。011的当前数据重放与受限runtime门禁保留；完整签名Profile发行、list过滤、batch和业务标签未证明前不得声明CAT-05/008整体完成。
 
@@ -127,9 +133,9 @@ CAT-05、策略替换及最终组合仍分别按 owning FEAT 实施。
 
 2026-09-15 完整平台目录增量的本分支证据：
 
-- `TestPaaSProfileDeclaresCompletePlatformProduct` 先因仍为revision1失败；补齐后验证12项闭合资源/形状/结果、PAAS调用来源、平台范围及无prefix/条件能力，并拒绝用revision1引用新内容。现有唯一求值器的全Action/系统策略矩阵和API schema验证覆盖新增动作；enrollment负向proof拒绝read/revoke/regenerate原决定、错kind/集合ID及drain/activate/remove目标事实。API/IAM/Audit/architecture race已通过。
+- `TestPaaSProfileDeclaresCompletePlatformProduct` 验证12项闭合资源/形状/结果、PAAS调用来源、平台范围及无prefix/条件能力，精确引用不能以数值更高的revision替代。现有唯一求值器的全Action/系统策略矩阵和API schema验证覆盖新增动作；enrollment负向proof拒绝read/revoke/regenerate原决定、错kind/集合ID及drain/activate/remove目标事实。API/IAM/Audit/architecture race已通过。
 - 专属PG18.6固定镜像 `postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280`，1CPU/768MiB/PIDs128、64连接、loopback随机端口，串行 `-race -p 1`。IAM HTTP通过101.14s（包104.374s），包含实际平台决定与producer映射攻击、原凭据竞争、tenant生命周期和七列outbox所有权；双authority存储通过3.52s（包6.203s），逐项验证所有当前IAM/Audit动作与受限数据库权限、不可变记录及查询。
 - 独立IAM双实例/Audit/PaaS及双dispatcher通过51.26s（包54.320s）。对12项按已声明的目标形状发送真实IAM请求，验证现有身份、显式平台附件授予/撤销、另一IAM实例和进程重启后的Allow/Deny；实际受限runtime登录仍由数据库探针确认。节点接入登记及三种target生命周期事实通过真实producer/Audit入链，在操作者撤权及Audit重启后保持原记录与等值重放；篡改installation/producer拒绝。此为authority协议门禁，合成的host事实不是本分支不存在的真实PaaS主机Operation或纳管验收，也不证明请求已携带Profile模式字段。
 - 进程门禁首轮因新增fixture复用既有Operation ID收到409；PG明确报告 `records_paas_operation_uq` 冲突。修正为每个独立fixture使用自己的Operation ID后在新库通过，没有放宽生产唯一性、鉴权或重试行为。实际sourceProfile19/13/1与服务readiness相符，已发布安装profile仍不同且保持副作用前拒绝。
 - 同一限额下的新数据库策略存储完整回归通过110.85s（包114.052s）：默认版本/内容不变性、来源证据、组继承、用户边界与策略竞争、平台凭据保护、事务失败回滚和当前带数据schema/bootstrap重放保持。此当前源码回归不替代最终be3保留数据的完整权限parity与签名发行验收。
-- 收口全仓 `go test -race -p 2 ./...`、`go vet -p 2 ./...`、模块校验、API再次生成字节稳定及Linux amd64全仓构建通过。连接归零后按精确ID/标签清理本轮唯一PG容器、网络和包含五个临时数据库的卷；无UI/安装/PaaS生产变更，无其他Phase资源操作。独立CI待固定提交后单独确认；Profile绑定决定/策略版本、历史注册及001/008整体仍未完成。
+- 收口全仓 `go test -race -p 2 ./...`、`go vet -p 2 ./...`、模块校验、API再次生成字节稳定及Linux amd64全仓构建通过。连接归零后按精确ID/标签清理本轮唯一PG容器、网络和包含五个临时数据库的卷；无UI/安装/PaaS生产变更，无其他Phase资源操作。固定 `2bcbe50afaa025380c76c9cd232cd204d87b67a3` 的 [Verification 34923411012](https://github.com/xiak/matrix/actions/runs/34923411012) 已经 GitHub API 核实精确SHA及go、authority-process、node-process全部completed/success；Profile绑定决定/策略版本、历史注册及001/008整体仍未完成。

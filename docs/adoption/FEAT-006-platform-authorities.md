@@ -325,8 +325,8 @@ successful resource kind to preserve actual Account-to-User/Group/Policy and
 Group-to-Membership authorization. Fixed
 `be3c4a96b4381426c01cd6315eaa3713c2855982` is `REFERENCE` for exact pool-create /
 target-register IDs and mixed pool/target list/detail shapes. Its host runtime
-is not imported. Its full twelve platform actions remain the final ABI difference
-gate; the current branch's five are not represented as the final PaaS product.
+is not imported. Its full twelve platform actions define the final ABI difference
+gate; the unpublished five-action draft is not represented as the final product.
 Deriving collection semantics from action spelling or substituting a successful
 child ID for the authorized parent is `REJECT`.
 
@@ -344,3 +344,23 @@ explicit SYSTEM policy document. Same-revision content replacement, automatic
 existing-default advancement during seed replay, and treating collection
 authority as exact final payload evidence are `REJECT`. This source decision
 does not claim that the new actions, storage or runtime gates are implemented.
+
+For immutable policy-compilation content in IAM/005, fixed Matrix
+`2bcbe50afaa025380c76c9cd232cd204d87b67a3` is `REUSE` for its strict
+policy grammar, document canonical bytes, Profile encoder and complete product
+declarations, and `ADAPT` for the validator's capability lookup. Explicit frozen
+Profile inputs replace a dependency on the current global catalog when validating
+compiled content; current publication continues to use the same validator with
+current capabilities. The complete author document plus exact product references
+and SID-bound resolved actions form one new domain-separated commitment.
+Caller-selected profile heads, runtime pattern growth, and a second policy
+grammar or copied canonical implementation are `REJECT`. This contract-only
+adoption does not change the current PolicyVersion wire or prove registered
+history, SQL publication, real Profile-bound decisions or product PEP behavior.
+The same fixed source's Audit query/verify sentinels are `REFERENCE` for
+authority-wide collection semantics, not caller-selectable chain instances.
+Its unpublished PaaS revision2 and Audit instance-verification declaration are
+`REJECT` as release contracts: replace the drafts with complete first-revision
+declarations before runtime registration. There is no published Profile consumer
+to justify preserving either draft. Immutable revisions after actual registration
+remain mandatory; this is not permission to rewrite registered content.

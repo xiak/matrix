@@ -27,8 +27,8 @@ var removedBuiltinRoleNames = []string{
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 2 {
-		t.Fatal("complete platform product requires a new PaaS profile revision")
+	if !found || profile.Revision != 1 {
+		t.Fatal("unpublished product drafts must converge to one complete first profile")
 	}
 	expected := map[Action]struct {
 		kind       ResourceKind
@@ -79,8 +79,35 @@ func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 		t.Fatalf("platform product is missing declarations: %v", expected)
 	}
 	_, digest, err := CanonicalizeAuthorizationProfile(profile)
-	if err != nil || CheckAuthorizationProfileReference(profile, AuthorizationProfileReference{Product: ProductPaaS, Revision: 1, ContentDigest: digest}) == nil {
-		t.Fatal("new product content accepted under predecessor revision")
+	if err != nil || CheckAuthorizationProfileReference(profile, AuthorizationProfileReference{Product: ProductPaaS, Revision: profile.Revision + 1, ContentDigest: digest}) == nil {
+		t.Fatal("numerically newer revision was treated as an exact reference")
+	}
+}
+
+func TestAuditProfileDeclaresAuthorityWideReadAndVerification(t *testing.T) {
+	profile, found := LookupAuthorizationProfile(ProductAudit)
+	if !found || profile.Revision != 1 || profile.CallingService != ServiceAudit {
+		t.Fatal("invalid first Audit product declaration")
+	}
+	expected := map[Action]struct {
+		kind  ResourceKind
+		scope AuthorityScope
+	}{
+		ActionAuditRecordRead:              {ResourceAuditRecord, AuthorityScopeTenant},
+		ActionAuditIntegrityVerify:         {ResourceAuditChain, AuthorityScopeTenant},
+		ActionAuditPlatformRecordRead:      {ResourceAuditRecord, AuthorityScopeInstallation},
+		ActionAuditPlatformIntegrityVerify: {ResourceAuditChain, AuthorityScopeInstallation},
+	}
+	for _, action := range profile.Actions {
+		want, exists := expected[action.Action]
+		if !exists || action.ResourceKind != want.kind || action.Scope != want.scope || action.ResultResourceKind != "" ||
+			len(action.ResourceShapes) != 1 || action.ResourceShapes[0] != (AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}) {
+			t.Fatal("Audit complete-chain verification cannot select a caller-chosen instance")
+		}
+		delete(expected, action.Action)
+	}
+	if len(expected) != 0 {
+		t.Fatal("Audit declaration omitted an authority-wide read action")
 	}
 }
 
@@ -965,6 +992,315 @@ func policyDocumentFixture() PolicyDocument {
 			{Kind: ResourceApplication, Match: PolicyResourceAnyInAuthority},
 		}},
 	}}
+}
+
+func TestPolicyCompilationBindsMinimalProductsAndEntireAuthorDocument(t *testing.T) {
+	document := policyDocumentFixture()
+	document.Statements = append(document.Statements, PolicyStatement{SID: "audit", Effect: PolicyAllow,
+		Actions: []Action{ActionAuditRecordRead}, Resources: []PolicyResourceSelector{{Kind: ResourceAuditRecord, Match: PolicyResourceAnyInAuthority}}})
+	profiles := AllAuthorizationProfiles()
+	documentBefore, _ := json.Marshal(document)
+	profilesBefore, _ := json.Marshal(profiles)
+	legacyCanonical, legacyDigest, err := CanonicalizePolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compilation, err := CompilePolicyDocument(document, profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compilation.CompilationVersion != "1" || len(compilation.Profiles) != 2 || compilation.Profiles[0].Product != ProductAudit || compilation.Profiles[1].Product != ProductPaaS {
+		t.Fatal("compilation did not select the exact sorted product set")
+	}
+	canonical, digest, err := CanonicalizePolicyCompilation(document, compilation, profiles)
+	if err != nil || ValidateDigest("digest", digest) != nil || digest == legacyDigest {
+		t.Fatal("compilation must have a distinct complete content commitment", err)
+	}
+	var content struct {
+		Document json.RawMessage `json:"document"`
+		PolicyCompilation
+	}
+	if err := json.Unmarshal([]byte(canonical), &content); err != nil || string(content.Document) != legacyCanonical {
+		t.Fatal("compilation changed the unique canonical author document", err)
+	}
+	for _, reference := range compilation.Profiles {
+		profile, found := LookupAuthorizationProfile(reference.Product)
+		if !found || CheckAuthorizationProfileReference(profile, reference) != nil {
+			t.Fatal("compiled reference did not bind exact product content")
+		}
+	}
+	documentAfter, _ := json.Marshal(document)
+	profilesAfter, _ := json.Marshal(profiles)
+	if !bytes.Equal(documentBefore, documentAfter) || !bytes.Equal(profilesBefore, profilesAfter) {
+		t.Fatal("compilation mutated the author or declaration inputs")
+	}
+	compilationBefore, _ := json.Marshal(compilation)
+	compilation.Profiles[0], compilation.Profiles[1] = compilation.Profiles[1], compilation.Profiles[0]
+	compilation.ResolvedStatements[0], compilation.ResolvedStatements[2] = compilation.ResolvedStatements[2], compilation.ResolvedStatements[0]
+	compilation.ResolvedStatements[0].Actions[0], compilation.ResolvedStatements[0].Actions[1] = compilation.ResolvedStatements[0].Actions[1], compilation.ResolvedStatements[0].Actions[0]
+	document.Statements[0], document.Statements[2] = document.Statements[2], document.Statements[0]
+	profiles[0], profiles[4] = profiles[4], profiles[0]
+	before, _ := json.Marshal(compilation)
+	if reordered, reorderedDigest, err := CanonicalizePolicyCompilation(document, compilation, profiles); err != nil || reordered != canonical || reorderedDigest != digest {
+		t.Fatal("set order changed compilation semantics", err)
+	}
+	after, _ := json.Marshal(compilation)
+	if !bytes.Equal(before, after) || bytes.Equal(compilationBefore, after) {
+		t.Fatal("canonicalization must not reorder the caller's compilation in place")
+	}
+	for _, change := range []func(*PolicyDocument){
+		func(v *PolicyDocument) { v.Statements[0].Effect = PolicyDeny },
+		func(v *PolicyDocument) { v.Statements[2].Resources[0].ID = "different-resource" },
+		func(v *PolicyDocument) {
+			v.Statements[0].Conditions = []PolicyCondition{{Key: ConditionIAMAccountID, Operator: PolicyStringEquals, Values: []string{"account-one"}}}
+		},
+	} {
+		var changed PolicyDocument
+		encoded, _ := json.Marshal(document)
+		if json.Unmarshal(encoded, &changed) != nil {
+			t.Fatal("invalid fixture")
+		}
+		change(&changed)
+		if _, changedDigest, err := CanonicalizePolicyCompilation(changed, compilation, profiles); err != nil || changedDigest == digest {
+			t.Fatal("author effect, resource and condition must enter the whole commitment", err)
+		}
+	}
+	if retained, retainedDigest, err := CanonicalizePolicyDocument(document); err != nil || retained != legacyCanonical || retainedDigest != legacyDigest {
+		t.Fatal("new compilation changed the retained document-only encoding", err)
+	}
+	authorBeforeMutation, _ := json.Marshal(document)
+	compilation.ResolvedStatements[0].Actions[0] = "tampered.action"
+	authorAfterMutation, _ := json.Marshal(document)
+	if !bytes.Equal(authorBeforeMutation, authorAfterMutation) {
+		t.Fatal("compiler output aliases the author input")
+	}
+}
+
+func TestPolicyCompilationRejectsForgedOrIncompleteInterpretation(t *testing.T) {
+	document := policyDocumentFixture()
+	profiles := AllAuthorizationProfiles()
+	valid, err := CompilePolicyDocument(document, profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(valid)
+	for name, change := range map[string]func(*PolicyCompilation){
+		"no version":       func(v *PolicyCompilation) { v.CompilationVersion = "" },
+		"unknown version":  func(v *PolicyCompilation) { v.CompilationVersion = "2" },
+		"no profiles":      func(v *PolicyCompilation) { v.Profiles = nil },
+		"extra profile":    func(v *PolicyCompilation) { v.Profiles = append(v.Profiles, v.Profiles[0]) },
+		"wrong product":    func(v *PolicyCompilation) { v.Profiles[0].Product = ProductAudit },
+		"wrong revision":   func(v *PolicyCompilation) { v.Profiles[0].Revision++ },
+		"wrong digest":     func(v *PolicyCompilation) { v.Profiles[0].ContentDigest = "sha256:" + strings.Repeat("0", 64) },
+		"no statements":    func(v *PolicyCompilation) { v.ResolvedStatements = nil },
+		"duplicate SID":    func(v *PolicyCompilation) { v.ResolvedStatements[0].SID = v.ResolvedStatements[1].SID },
+		"unknown SID":      func(v *PolicyCompilation) { v.ResolvedStatements[0].SID = "not-in-author-document" },
+		"missing action":   func(v *PolicyCompilation) { v.ResolvedStatements[1].Actions = v.ResolvedStatements[1].Actions[:1] },
+		"duplicate action": func(v *PolicyCompilation) { v.ResolvedStatements[1].Actions[1] = v.ResolvedStatements[1].Actions[0] },
+		"action moved across SID": func(v *PolicyCompilation) {
+			v.ResolvedStatements[0].Actions[0], v.ResolvedStatements[1].Actions[0] = v.ResolvedStatements[1].Actions[0], v.ResolvedStatements[0].Actions[0]
+		},
+		"unbounded action": func(v *PolicyCompilation) {
+			v.ResolvedStatements[0].Actions[0] = Action(strings.Repeat("x", int(MaxPolicyCompilationBytes)))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var changed PolicyCompilation
+			if json.Unmarshal(encoded, &changed) != nil {
+				t.Fatal("invalid fixture")
+			}
+			change(&changed)
+			if canonical, digest, err := CanonicalizePolicyCompilation(document, changed, profiles); !errors.Is(err, ErrInvalidPolicy) || canonical != "" || digest != "" {
+				t.Fatal("forged compilation returned authoritative bytes", err)
+			}
+		})
+	}
+	for _, invalid := range []string{
+		`{}`, `null`, `[]`, string(encoded) + `{}`,
+		strings.Replace(string(encoded), `"compilationVersion":`, `"unknown":true,"compilationVersion":`, 1),
+		strings.Replace(string(encoded), `"compilationVersion":"1"`, `"compilationVersion":"1","compilationVersion":"1"`, 1),
+		strings.Replace(string(encoded), `"profiles":`, `"Profiles":`, 1),
+		strings.Replace(string(encoded), `"revision":`, `"unknown":true,"revision":`, 1),
+		strings.Replace(string(encoded), `"sid":`, `"Sid":`, 1),
+		strings.Replace(string(encoded), `"sid":`, `"permit":true,"sid":`, 1),
+		strings.Repeat(" ", int(MaxPolicyCompilationBytes)) + string(encoded),
+	} {
+		if _, err := DecodePolicyCompilation(strings.NewReader(invalid), document, profiles); !errors.Is(err, ErrInvalidPolicy) {
+			t.Fatal("strict immutable-content loader accepted malformed compilation", err)
+		}
+	}
+	// This is not an additive caller-selected publication capability.
+	canonicalDocument, _, err := CanonicalizePolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, extra := range []string{`"profiles":[]`, `"resolvedStatements":[]`, `"compilationVersion":"1"`} {
+		request := `{"displayName":"Example","document":` + canonicalDocument + `,"requestId":"request-one",` + extra + `}`
+		var publication CreatePolicyRequest
+		if contractjson.DecodeObject(strings.NewReader(request), MaxPolicyBytes, &publication) == nil {
+			t.Fatal("author request accepted server-owned profile selection or compilation")
+		}
+	}
+}
+
+func TestPolicyCompilationUsesFrozenDeclarationsNotCurrentCatalog(t *testing.T) {
+	profile := declaredProductProfile("widgets", "WIDGET_SERVICE", 7,
+		declaredProfileAction("widgets.item.read", "WIDGET", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}}))
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+		Statements: []PolicyStatement{{SID: "read", Effect: PolicyDeny, Actions: []Action{"widgets.item.read"},
+			Resources:  []PolicyResourceSelector{{Kind: "WIDGET", Match: PolicyResourcePrefixInAuthority, ID: "widget-"}},
+			Conditions: []PolicyCondition{{Key: ConditionIAMAccountID, Operator: PolicyStringNotEquals, Values: []string{"account-one"}}}}}}
+	if ValidatePolicyDocument(document) == nil {
+		t.Fatal("syntactic declaration registered an unknown product in current authority")
+	}
+	compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{profile})
+	if err != nil {
+		t.Fatal("same compiler rejected an explicit non-global product declaration", err)
+	}
+	canonical, digest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*AuthorizationProfile){
+		"next revision": func(v *AuthorizationProfile) { v.Revision++ },
+		"new action": func(v *AuthorizationProfile) {
+			v.Actions = append(v.Actions, declaredProfileAction("widgets.item.delete", "WIDGET", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}))
+		},
+		"new shape": func(v *AuthorizationProfile) {
+			v.Actions[0].ResourceShapes = append(v.Actions[0].ResourceShapes, AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList})
+		},
+		"different caller":  func(v *AuthorizationProfile) { v.CallingService = "ANOTHER_SERVICE" },
+		"removed prefix":    func(v *AuthorizationProfile) { v.Actions[0].ResourceShapes[0].PrefixAllowed = false },
+		"removed condition": func(v *AuthorizationProfile) { v.Actions[0].Conditions = nil },
+		"wrong source":      func(v *AuthorizationProfile) { v.Actions[0].Conditions[0].Source = "CALLER" },
+		"wrong scope":       func(v *AuthorizationProfile) { v.Actions[0].Scope = AuthorityScopeInstallation },
+		"wrong kind":        func(v *AuthorizationProfile) { v.Actions[0].ResourceKind = "OTHER_RESOURCE" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := cloneAuthorizationProfile(profile)
+			change(&changed)
+			if value, commitment, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{changed}); !errors.Is(err, ErrInvalidPolicy) || value != "" || commitment != "" {
+				t.Fatal("different declaration reinterpreted a frozen compilation", err)
+			}
+		})
+	}
+	for _, supplied := range [][]AuthorizationProfile{nil, {profile, profile}, make([]AuthorizationProfile, MaxPolicyCompilationProfiles+1)} {
+		if _, err := CompilePolicyDocument(document, supplied); !errors.Is(err, ErrInvalidPolicy) {
+			t.Fatal("missing, ambiguous or over-budget declarations accepted")
+		}
+	}
+	pattern := document
+	pattern.Statements = append([]PolicyStatement(nil), document.Statements...)
+	pattern.Statements[0].Actions = []Action{"widgets.item.*"}
+	if _, err := CompilePolicyDocument(pattern, []AuthorizationProfile{profile}); !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatal("pure binding slice silently enabled runtime action patterns")
+	}
+	if again, againDigest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{profile}); err != nil || again != canonical || againDigest != digest {
+		t.Fatal("frozen original content no longer validates independently", err)
+	}
+	if _, registered := LookupAuthorizationProfile(profile.Product); registered {
+		t.Fatal("pure compiler modified current product registration")
+	}
+}
+
+func TestPolicyCompilationAndCurrentValidationShareCapabilities(t *testing.T) {
+	for _, action := range AllActions() {
+		definition, _ := LookupActionDefinition(action)
+		for _, effect := range []PolicyEffect{PolicyAllow, PolicyDeny} {
+			document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: definition.AuthorityScope,
+				Statements: []PolicyStatement{{SID: "one", Effect: effect, Actions: []Action{action}, Resources: []PolicyResourceSelector{{Kind: definition.ResourceKind, Match: PolicyResourceAnyInAuthority}}}}}
+			canonical, _, currentErr := CanonicalizePolicyDocument(document)
+			compiled, compileErr := CompilePolicyDocument(document, AllAuthorizationProfiles())
+			if (currentErr == nil) != (compileErr == nil) {
+				t.Fatalf("action %s has two policy grammars: %v / %v", action, currentErr, compileErr)
+			}
+			if currentErr != nil {
+				continue
+			}
+			encoded, _, err := CanonicalizePolicyCompilation(document, compiled, AllAuthorizationProfiles())
+			if err != nil || !strings.Contains(encoded, `"document":`+canonical+`,`) {
+				t.Fatal("current and explicit declarations changed document encoding", err)
+			}
+		}
+	}
+}
+
+func TestPolicyCompilationCannotBorrowCurrentProfileCapabilities(t *testing.T) {
+	profile, _ := LookupAuthorizationProfile(ProductPaaS)
+	document := policyDocumentFixture()
+	document.Statements = document.Statements[:1]
+	document.Statements[0].Actions = []Action{ActionPaaSApplicationRead}
+	document.Statements[0].Resources = []PolicyResourceSelector{{Kind: ResourceApplication, Match: PolicyResourcePrefixInAuthority, ID: "app-"}}
+	document.Statements[0].Conditions = []PolicyCondition{{Key: ConditionIAMPrincipalID, Operator: PolicyStringEquals, Values: []string{"user-one"}}}
+	if ValidatePolicyDocument(document) != nil {
+		t.Fatal("current source must support the fixture capabilities")
+	}
+	for _, capability := range []string{"prefix", "condition", "action"} {
+		t.Run(capability, func(t *testing.T) {
+			restricted := cloneAuthorizationProfile(profile)
+			for index := range restricted.Actions {
+				if restricted.Actions[index].Action != ActionPaaSApplicationRead {
+					continue
+				}
+				switch capability {
+				case "prefix":
+					restricted.Actions[index].ResourceShapes[0].PrefixAllowed = false
+				case "condition":
+					restricted.Actions[index].Conditions = nil
+				case "action":
+					restricted.Actions = append(restricted.Actions[:index], restricted.Actions[index+1:]...)
+				}
+				break
+			}
+			if _, err := CompilePolicyDocument(document, []AuthorizationProfile{restricted}); !errors.Is(err, ErrInvalidPolicy) {
+				t.Fatal("explicit historical capability borrowed from global current catalog")
+			}
+		})
+	}
+	large := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant}
+	for index := 0; index < MaxPolicyStatements; index++ {
+		statement := PolicyStatement{SID: fmt.Sprintf("statement-%d", index), Effect: PolicyAllow, Actions: []Action{ActionPaaSApplicationRead}}
+		for resource := 0; resource < MaxStatementResources; resource++ {
+			statement.Resources = append(statement.Resources, PolicyResourceSelector{Kind: ResourceApplication, Match: PolicyResourceExact, ID: fmt.Sprintf("app-%03d-", resource) + strings.Repeat("x", 112)})
+		}
+		large.Statements = append(large.Statements, statement)
+	}
+	if _, err := CompilePolicyDocument(large, []AuthorizationProfile{profile}); !errors.Is(err, ErrInvalidPolicy) {
+		t.Fatal("typed compilation bypassed the original author document byte budget")
+	}
+}
+
+func FuzzPolicyCompilationCanonicalRoundTrip(f *testing.F) {
+	document := policyDocumentFixture()
+	profiles := AllAuthorizationProfiles()
+	compilation, err := CompilePolicyDocument(document, profiles)
+	if err != nil {
+		f.Fatal(err)
+	}
+	encoded, _ := json.Marshal(compilation)
+	f.Add(string(encoded))
+	f.Add(`{"compilationVersion":"1","profiles":[],"resolvedStatements":[]}`)
+	f.Fuzz(func(t *testing.T, source string) {
+		value, err := DecodePolicyCompilation(strings.NewReader(source), document, profiles)
+		if err != nil {
+			return
+		}
+		canonical, digest, err := CanonicalizePolicyCompilation(document, value, profiles)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		repeated, err := DecodePolicyCompilation(bytes.NewReader(wire), document, profiles)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again, againDigest, err := CanonicalizePolicyCompilation(document, repeated, profiles); err != nil || again != canonical || againDigest != digest {
+			t.Fatal("immutable compilation changed after round trip", err)
+		}
+	})
 }
 
 func TestPolicyResourcePrefixesAreLiteralAndScopeBounded(t *testing.T) {

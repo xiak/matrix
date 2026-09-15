@@ -420,7 +420,7 @@ var authorizationProfiles = [...]AuthorizationProfile{
 		declaredProfileAction(ActionIAMPlatformPolicyAttachmentCreate, ResourceUser, AuthorityScopeInstallation, ResourcePolicyAttachment, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionIAMPlatformPolicyAttachmentRevoke, ResourcePolicyAttachment, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 	),
-	declaredProductProfile(ProductPaaS, ServicePaaS, 2,
+	declaredProductProfile(ProductPaaS, ServicePaaS, 1,
 		declaredProfileAction(ActionPaaSExecutionPoolCreate, ResourceExecutionPool, AuthorityScopeInstallation, ResourceExecutionPool, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionPaaSExecutionPoolRead, ResourceExecutionPool, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
 		declaredProfileAction(ActionPaaSExecutionTargetRegister, ResourceExecutionTarget, AuthorityScopeInstallation, ResourceExecutionTarget, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
@@ -458,9 +458,9 @@ var authorizationProfiles = [...]AuthorizationProfile{
 	),
 	declaredProductProfile(ProductAudit, ServiceAudit, 1,
 		declaredProfileAction(ActionAuditRecordRead, ResourceAuditRecord, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
-		declaredProfileAction(ActionAuditIntegrityVerify, ResourceAuditChain, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionAuditIntegrityVerify, ResourceAuditChain, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
 		declaredProfileAction(ActionAuditPlatformRecordRead, ResourceAuditRecord, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
-		declaredProfileAction(ActionAuditPlatformIntegrityVerify, ResourceAuditChain, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionAuditPlatformIntegrityVerify, ResourceAuditChain, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
 	),
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
 		declaredProfileAction(ActionInstallationVerify, ResourceInstallation, AuthorityScopeInstallationProbe, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
@@ -520,13 +520,7 @@ func projectActionDefinitions(profiles []AuthorizationProfile) []ActionDefinitio
 				panic("duplicate release-owned IAM action declaration")
 			}
 			actions[declaration.Action] = true
-			definition := ActionDefinition{Action: declaration.Action, Product: profile.Product, CallingService: profile.CallingService, ResourceKind: declaration.ResourceKind, AuthorityScope: declaration.Scope}
-			for _, shape := range declaration.ResourceShapes {
-				if shape.Mode == AuthorizationResourceInstance {
-					definition.ResourcePrefixAllowed = shape.PrefixAllowed
-				}
-			}
-			result = append(result, definition)
+			result = append(result, authorizationProfileActionDefinition(profile, declaration))
 		}
 	}
 	return result
