@@ -1,6 +1,7 @@
 import { type AccessWorkspace } from "./accessWorkspace";
 import { parsePolicyDocument, type PolicyCondition } from "./policyDocument";
-import { actionMatches, parsePolicyResource, policyActions, resourceMatches, sourceIpMatches, utcTimeValid, type PolicyResource } from "./policyLanguage";
+import { actionMatches, parsePolicyResource, resourceMatches, sourceIpMatches, utcTimeValid, type PolicyResource } from "./policyLanguage";
+import { policyActions } from "./previewAuthorizationCatalog";
 import { roleServicePrincipals, roleSessionStatus, type RoleSessionCaller } from "./roleTrust";
 
 export type AccessTestRequest = { principalId: string; action: string; resourceId: string; sourceIp?: string; at?: string };

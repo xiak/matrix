@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { applyAccessWorkspaceCommand, policyUsageCounts, type AccessWorkspace } from "../domain/accessWorkspace";
 import { parsePolicyDocument, type PolicyCondition, type PolicyDocument } from "../domain/policyDocument";
 import { evaluateUserAccess, evaluateRoleAssumption, evaluateRoleSessionAccess, type AccessTestRequest } from "../domain/policyEvaluation";
-import { actionPatternValid, expandPolicyActions, formatPolicyResource, parsePolicyResource, policyActions, policyConditionsForActions, policyConditionKeys, sourceCidrValid, sourceIpMatches, utcTimeValid } from "../domain/policyLanguage";
+import { actionPatternValid, expandPolicyActions, formatPolicyResource, parsePolicyResource, sourceCidrValid, sourceIpMatches, utcTimeValid } from "../domain/policyLanguage";
+import { policyActions, policyConditionsForActions, policyConditionKeys } from "../domain/previewAuthorizationCatalog";
 import { initialAccessWorkspace } from "./previewAccessWorkspace";
 
 const userIds = ["principal-lin", "principal-chen"];

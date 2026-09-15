@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Checkbox, SearchInput } from "@ui/xiak";
-import { policyActions, policyServices } from "../domain/policyLanguage";
+import { policyActions, policyServices } from "../domain/previewAuthorizationCatalog";
 import type { PolicyDocument } from "../domain/policyDocument";
 import styles from "./PolicyAuthoringWizard.module.css";
 

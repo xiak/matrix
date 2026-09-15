@@ -1,4 +1,5 @@
-import { actionPatternValid, expandPolicyActions, parsePolicyResource, policyConditionKeys, policyConditionsForActions, policyServices, sourceCidrValid, utcTimeValid, type PolicyAction, type PolicyService } from "./policyLanguage";
+import { actionPatternValid, expandPolicyActions, parsePolicyResource, sourceCidrValid, utcTimeValid } from "./policyLanguage";
+import { policyConditionKeys, policyConditionsForActions, policyServices, type PolicyAction, type PolicyService } from "./previewAuthorizationCatalog";
 import { AccessWorkspaceError } from "./accessWorkspaceError";
 
 export type PolicyCondition = { resourceTag?: { key: string; value: string }[]; sourceIp?: string[]; notBefore?: string; notAfter?: string };

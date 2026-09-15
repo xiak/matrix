@@ -21,19 +21,6 @@
 .codeEditor { font-family: var(--xiak-font-mono); font-size: var(--xiak-font-size-small); }
 .actionPicker { min-width: 0; display: grid; gap: var(--xiak-spacing-default); }
 .actionToolbar { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: var(--xiak-spacing-default); }
-.actionOptions { display: grid; grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; align-content: start; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); max-height: clamp(280px, 42vh, 380px); overflow-y: auto; scrollbar-gutter: stable; }
-.actionOption { width: 100%; height: auto; min-height: 0; align-items: flex-start; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); }
-.actionOption + .actionOption { border-top: var(--xiak-border-subtle); }
-.actionOption:hover { background: var(--xiak-color-bg-panel-hover); }
-.actionOption:has(input:checked) { background: var(--xiak-color-accent-haze); }
-.actionOption > input { margin-top: 3px; }
-.actionOption > span { display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: start; gap: var(--xiak-spacing-default); flex: 1; }
-.actionCopy { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); overflow-wrap: anywhere; }
-.actionIdentity { display: flex; min-width: 0; flex-wrap: wrap; align-items: baseline; gap: var(--xiak-spacing-narrow) var(--xiak-spacing-default); }
-.actionIdentity strong { color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); }
-.actionIdentity code, .actionScope { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
-.actionDescription { color: var(--xiak-color-text-base); line-height: var(--xiak-line-height-body); }
-.actionScope { line-height: var(--xiak-line-height-body); }
 .resourceRow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: var(--xiak-spacing-default); align-items: end; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); }
 .resourcePreview { grid-column: 1 / -1; font-size: var(--xiak-font-size-small); overflow-wrap: anywhere; color: var(--xiak-color-text-muted); }
 .conditionTime { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-tight); align-content: start; min-width: 0; }

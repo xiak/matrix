@@ -5,7 +5,8 @@ import { ArrowLeft } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Badge, Button, SearchInput, Table, TablePagination, Tabs } from "@ui/xiak";
 import { resourcesForPolicyActions, summarizePolicyServices, type PolicyCondition, type PolicyDocument, type PolicyServiceSummary } from "../domain/policyDocument";
-import { expandPolicyActions, parsePolicyResource, policyActions } from "../domain/policyLanguage";
+import { expandPolicyActions, parsePolicyResource } from "../domain/policyLanguage";
+import { policyActions } from "../domain/previewAuthorizationCatalog";
 import styles from "./AccountAccessRenderer.module.css";
 import policyStyles from "./PolicyWorkspace.module.css";
 

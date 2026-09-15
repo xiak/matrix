@@ -7,7 +7,8 @@ import { Badge, Button, Card, ContentPage, EmptyState, TableSelectionCell, Table
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { defaultPolicyDirectoryView, useAccountAccess, type PolicyDirectoryView } from "../application/AccountAccessProvider";
 import { type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
-import { expandPolicyActions, policyServices } from "../domain/policyLanguage";
+import { expandPolicyActions } from "../domain/policyLanguage";
+import { policyServices } from "../domain/previewAuthorizationCatalog";
 import { WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./PolicyWorkspace.module.css";
 

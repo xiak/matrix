@@ -1,6 +1,7 @@
 import { applyAccessWorkspaceCommand, type AccessWorkspace } from "../domain/accessWorkspace";
 import { type PolicyDocument } from "../domain/policyDocument";
-import { formatPolicyResource, policyActions, policyServices, type PolicyService } from "../domain/policyLanguage";
+import { formatPolicyResource } from "../domain/policyLanguage";
+import { policyActions, policyServices, type PolicyService } from "../domain/previewAuthorizationCatalog";
 import type { AccountRepository } from "./iamRepository";
 
 const at = "2026-09-08T09:00:00Z";

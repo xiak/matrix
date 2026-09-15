@@ -111,6 +111,33 @@ generic provider schemas before a real second implementation exists.
     are interaction references; Matrix retains its own theme, components and
     supported account contracts. This is primary-workflow coverage, not a
     claim of complete Tencent CAM feature or authorization compatibility.
+    Product authorization definitions are server-owned capability metadata,
+    not tenant-managed IAM objects and not grants by themselves. Product teams
+    own their declarations from Product management; IAM owns trusted
+    validation, immutable publication, revision and digest governance; tenant
+    administrators only consume published definitions while authoring and
+    attaching policies. The policy editor consumes one exact product-profile
+    revision and digest to present stable action keys, declared authorization
+    targets, resource shapes and trusted condition sources. A create action's
+    optional result resource kind describes the resource produced on success;
+    it never replaces the parent, instance or collection resource against
+    which IAM authorizes the request. `callingService` constrains the
+    authenticated calling service and is not a service role or delegated grant.
+    Unavailable or unknown capabilities fail closed and never become wildcard
+    access. Publishing a policy fixes the resolved action set, so later catalog
+    additions cannot silently expand an existing policy. The isolated MOCK
+    adapter may demonstrate this interaction, but the live console must not
+    invent a catalog response or expose tenant publish, disable or registration
+    controls before IAM owns a fixed query and lifecycle contract. Operators
+    reach read-only permission definitions contextually from policy authoring;
+    a Product-management publisher workspace is deferred until that authority
+    and API exist. This follows the provider-owned permission inventories and
+    contextual editors documented by the AWS
+    [Service Authorization Reference](https://docs.aws.amazon.com/service-authorization/latest/reference/reference_policies_actions-resources-contextkeys.html),
+    Azure [resource-provider permissions](https://learn.microsoft.com/en-us/azure/role-based-access-control/resource-provider-operations),
+    Google Cloud [custom-role permission selection](https://cloud.google.com/iam/docs/creating-custom-roles),
+    and Tencent CAM [policy generator](https://cloud.tencent.com/document/product/598/37739),
+    without copying their object models or visual systems.
     Account settings follow the
     [Tencent alias workflow](https://cloud.tencent.com/document/product/598/118709);
     the qualified-login convention is also documented by
@@ -2115,9 +2142,18 @@ and `git diff --check` gates must pass on the same committed worktree.
   performed for these component checks. A development CSS hot-update cache
   error cleared after reload; the refreshed interaction checks produced no
   new runtime errors. Production assets are verified separately from HMR.
-  The responsive page-command regression passes all 510 frontend tests plus
-  three static-export normalization tests. Type, lint, architecture and 228
-  semantic contrast checks pass. Fresh development-browser checks at `360px`
+  The responsive page-command and authorization-catalog regressions pass all
+  513 frontend tests plus three static-export normalization tests. Type, lint,
+  architecture and 228 semantic contrast checks pass. Policy authoring uses
+  the shared native Table for the preview action catalog: its header checkbox
+  selects only the current filtered results, retained selections survive
+  filters, and read-only permission definitions expand in the content region
+  without a Dialog. The definition separates the authorization target from an
+  optional result resource kind and explicitly says that MOCK metadata is not
+  an effective grant or product registration. Browser checks at default and
+  `390 × 844px` widths verify bounded table scrolling, no page-wide horizontal
+  overflow, automatic disclosure visibility below the sticky table header and
+  compact mobile rows. Fresh development-browser checks at `360px`
   confirm a `56px` title bar and an identical trailing menu position on Users,
   Groups, Roles, Role SSO, API keys and tenant directories. Policy selection
   leaves the title/trigger in place. Association now replaces the content area

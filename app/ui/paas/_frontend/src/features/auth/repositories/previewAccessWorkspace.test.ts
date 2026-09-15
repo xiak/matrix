@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { applyAccessWorkspaceCommand, policyUsageCounts } from "../domain/accessWorkspace";
 import { analyzePolicyDocument, includesPermissionManagement, parsePolicyDocument, policyStatementKey, resourcesForPolicyActions, summarizePolicyServices, type PolicyDocument } from "../domain/policyDocument";
-import { expandPolicyActions, policyActions, policyServices } from "../domain/policyLanguage";
+import { expandPolicyActions } from "../domain/policyLanguage";
+import { policyActions, policyServices } from "../domain/previewAuthorizationCatalog";
 import { createPreviewAccessWorkspace, initialAccessWorkspace } from "./previewAccessWorkspace";
 import { previewAccountRepository, previewCredential, previewIamRepository } from "./previewIamRepository";
 import type { AccountCommand } from "../domain/accounts";

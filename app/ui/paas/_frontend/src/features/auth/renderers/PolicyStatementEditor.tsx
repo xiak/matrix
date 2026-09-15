@@ -3,10 +3,12 @@
 import { useId, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
-import { Alert, Badge, Button, Checkbox, Dialog, FormField, Input, SearchInput, Select, TagEditor, TextArea } from "@ui/xiak";
+import { Alert, Button, Checkbox, Dialog, FormField, Input, SearchInput, Select, TagEditor, TextArea } from "@ui/xiak";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { PolicyCondition } from "../domain/policyDocument";
-import { expandPolicyActions, formatPolicyResource, parsePolicyResource, policyActions, policyConditionsForActions, policyServices, type PolicyAction, type PolicyConditionKey, type PolicyResource, type PolicyService } from "../domain/policyLanguage";
+import { expandPolicyActions, formatPolicyResource, parsePolicyResource, type PolicyResource } from "../domain/policyLanguage";
+import { policyActions, policyConditionsForActions, policyServices, type PolicyAction, type PolicyConditionKey, type PolicyService } from "../domain/previewAuthorizationCatalog";
+import { PolicyActionCatalog } from "./PolicyActionCatalog";
 import styles from "./PolicyAuthoringWizard.module.css";
 
 export type StatementDraft = { id: number; effect: "allow" | "deny"; service: string; actions: string; resources: string; condition?: PolicyCondition };
@@ -95,7 +97,6 @@ export function PolicyStatementEditor({ value, index, total, accountId, resource
   const t = useTranslations("PolicyRules");
   const w = useTranslations("IamWorkspace");
   const wizard = useTranslations("PolicyWizard");
-  const p = useTranslations("PolicyWorkspace");
   const id = useId();
   const [query, setQuery] = useState("");
   const [level, setLevel] = useState("all");
@@ -119,8 +120,8 @@ export function PolicyStatementEditor({ value, index, total, accountId, resource
     </div>
     {value.service === "custom" ? <FormField id={id + "-actions"} label={w("action")} hint={wizard("actionsHint")}><TextArea id={id + "-actions"} aria-describedby={id + "-actions-hint"} rows={4} maxLength={16000} value={value.actions} spellCheck={false} onChange={(event) => onChange({ ...value, actions: event.target.value })} /></FormField> : value.service ? <section className={styles.actionPicker} aria-label={t("actions")}>
       <div className={styles.actionToolbar}><SearchInput aria-label={t("actionSearch")} placeholder={t("actionSearch")} value={query} onChange={(event) => setQuery(event.target.value)} /><Select aria-label={w("type")} value={level} onValueChange={setLevel} options={[{ value: "all", label: w("all") }, ...(["read", "list", "write", "permissions"] as const).map((value) => ({ value, label: t(`levels.${value}`) }))]} /></div>
-      <div className={styles.row}><span className={styles.note}>{t("selectedActions", { count: selected.length })}</span><div className={styles.actions}><Button variant="ghost" size="small" disabled={!available.length} onClick={() => onChange({ ...value, actions: [...new Set([...selected, ...available.map((action) => action.id)])].join("\n") })}>{t("allActions")}</Button><Button variant="ghost" size="small" disabled={!selected.length} onClick={() => onChange({ ...value, actions: "" })}>{t("clearActions")}</Button></div></div>
-      <div className={styles.actionOptions}>{available.map((action) => <Checkbox className={styles.actionOption} key={action.id} aria-label={action.id} checked={selected.includes(action.id)} onChange={(event) => onChange({ ...value, actions: (event.target.checked ? [...selected, action.id] : selected.filter((entry) => entry !== action.id)).join("\n") })}><span className={styles.actionCopy}><span className={styles.actionIdentity}><strong>{t(`actionNames.${action.id}`)}</strong><code>{action.id}</code></span><span className={styles.actionDescription}>{t(`actionDescriptions.${action.id}`)}</span><small className={styles.actionScope}>{action.granularity === "operation" ? p("operationGranularity") : p("resourceGranularity", { type: t(`types.${action.resourceType}`) })}</small></span><Badge>{t(`levels.${action.level}`)}</Badge></Checkbox>)}{!available.length ? <p className={styles.note}>{t("noActions")}</p> : null}</div>
+      <div className={styles.row}><span className={styles.note}>{t("actionResultSummary", { results: available.length, selected: selected.length })}</span><Button variant="ghost" size="small" disabled={!selected.length} onClick={() => onChange({ ...value, actions: "" })}>{t("clearActions")}</Button></div>
+      <PolicyActionCatalog actions={available} selected={selected} service={value.service as PolicyService} onChange={(actions) => onChange({ ...value, actions: actions.join("\n") })} />
     </section> : null}
     <ResourceScopeEditor resources={resources} key={value.service} text={value.resources} actions={lines(value.actions)} service={value.service} accountId={accountId} onChange={(resources) => onChange({ ...value, resources })} />
     <ConditionsEditor tagMode={tagMode} actions={expandPolicyActions(lines(value.actions))} value={value.condition} onChange={(condition) => onChange({ ...value, condition })} />
