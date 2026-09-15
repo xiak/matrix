@@ -29,6 +29,28 @@
 
 ## 事务与权限
 
+### CAT-05 下一纵向切片：可验证的产品 Profile
+
+该切片尚未实施，不改变当前静态目录的验收状态。先把已有真实 PEP 的语义显式登记并绑定不可变 revision/contentDigest，再由005消费冻结的动作集合；不能先在求值器加入字符串 Action 前缀匹配，最后补历史证明。
+
+产品 Profile 必须同时约束产品标识、允许调用的已认证服务、Action、scope、资源种类、请求目标模式、集合行为与可信条件能力。产品名或 Action 字符串只作为标识，不能推导调用权限或粒度。内容不可变、同产品同 revision 不得对应另一 digest；digest 覆盖所有影响授权解释的字段。返回副本不能修改注册目录。注册来源仍由可信产品发布/服务组合控制，不开放租户上传 Profile 或借此注册平台动作。
+
+目标模式不能只有一个从动作后缀推断的 INSTANCE 标记。当前真实调用者至少存在三种情况，必须在首片全部覆盖：
+
+| 当前拥有者与动作 | 必须登记并验证的语义 |
+| --- | --- |
+| PaaS `paas.application.create` | HTTP owner先检查集合，成功事实再绑定最终 Application；集合授权不是最终ID/payload证明 |
+| PaaS `paas.application.read` | 精确实例ID；已验证的资源前缀只对该入口声明支持，不替代数据库tenant隔离 |
+| managedservice `managedservice.offering.read` | 同一动作的列表入口检查集合、详情入口检查实例；列表当前是整体授权，不支持按策略实例过滤 |
+
+以上映射来自现有 apphosting/managedservice HTTP owner，不能用更改动作名称或假装拆成两个已经存在的 API 绕过混合模式。Profile 可声明同一动作允许的多个闭合目标模式；实际调用必须明确选择并被对应 PEP 校验。未知模式、未实现的 FILTERED 或 batch 能力、错服务/产品/scope、同 ResourceKind 的另一动作均关闭。
+
+首片的实质门禁是两个真实产品通过同一注册/校验路径，IAM实际决定与持久化证据绑定精确 Profile，PEP拒绝不匹配的回包；修改或增加 Profile 不能改变已经固定的旧版本解释。新增产品声明不得要求通用求值器按产品名称增加分支。未声明来源的条件不能启用；当前IAM自供身份/事务时间继续独立于产品属性，不增加任意 caller attributes map。
+
+历史决定和 outbox 使用发生时的不可变 Profile/PolicyVersion 证据，当前生产者凭据仍需有效；不能在重放时拿最新注册目录重新扩张或重新授权。对外请求/结果的精确字段、持久化形状和消费者切换须在这组语义完成代码核对后统一冻结，当前不提前改schema/profile数字。真实旧消费者无法原子切换时单列支持或拒绝边界，不用未发布schema编号相等作兼容证明。
+
+验收沿现有契约、authority、IAM/PG和authorityprocess owner：定义重排的稳定摘要、变体/重复/未知能力拒绝、注册副本隔离、两产品集合/实例正反例、实际不同服务与scope拒绝、同账号/跨账号同ID、旧决定在目录更新后的精确重放。011的当前数据重放与受限runtime门禁保留；完整签名Profile发行、list过滤、batch和业务标签未证明前不得声明CAT-05/008整体完成。
+
 005 的资源前缀切片在同一 `ActionDefinition` 增加 `ResourcePrefixAllowed`，默认 false；当前只为已验证传入精确实例 ID 的 `paas.application.read` 声明 true。语法验证、生成 schema 和唯一 PDP 均读取该能力，不依据服务名称、Action 后缀或 ResourceKind 推断。create/list/collection、platform/probe 以及新加入但未声明的动作均不支持 PREFIX；其他实例能力须随真实 PEP/粒度门禁逐项登记。SQL 发布不变量由既有存储 owner 执行，并以所有当前 Action 的真实 PG 正/负校验对照该目录，不把手写 SQL 约束声称为另一可编辑目录。此声明不是完整 Profile/granularity 或所有业务前缀能力验收。
 
 目录是发布源码常量，读取无副作用；既有 IAM 当前凭据、SERIALIZABLE 决定持久化和 outbox 事务不变。后续可写 Profile 发布必须受产品注册权威管理，不能由租户管理员声明新的 platform Action。

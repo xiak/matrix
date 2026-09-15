@@ -306,3 +306,14 @@ in the UI. Root eligibility comes from the current transaction's Account
 relation plus PDP, not a browser role-name check. Automatic new request IDs
 after uncertain results and a failed read presented as no boundary are
 `REJECT`. No new navigation framework, policy evaluator or legacy dependency.
+
+For the next CAT-05 product-profile slice, fixed Matrix
+`6292fa09ad286960a1098ad3383a896c9374bffe` is `ADAPT`: retain its single action
+catalog, IAM-owned condition sources and actual apphosting/managedservice PEPs.
+Its application-create collection, exact application-read and shared
+offering-read collection/detail entry points are `REFERENCE` for explicit
+target modes, not evidence of already implemented Profile admission.
+Inferring instance/list behavior from an Action name, runtime wildcard growth
+from the latest catalog, and a tenant-editable product registry are `REJECT`.
+Registration and runtime acceptance belong to IAM/001 and008; no UI or legacy
+runtime is imported by this slice.
