@@ -329,3 +329,18 @@ is not imported. Its full twelve platform actions remain the final ABI differenc
 gate; the current branch's five are not represented as the final PaaS product.
 Deriving collection semantics from action spelling or substituting a successful
 child ID for the authorized parent is `REJECT`.
+
+For the full platform-catalog target recorded in IAM/001, fixed Matrix
+`be3c4a96b4381426c01cd6315eaa3713c2855982` is `ADAPT` for its twelve platform
+Action/resource/scope definitions and closed drain/activate/remove Audit facts;
+its PaaS HTTP handlers are `REFERENCE` for target modes, not an imported host
+implementation. Its file history identifies
+`ca7f6940159e53fbae183b7b6d5f379705a0cba1`, also contained in be3, as `ADAPT`
+for the explicit node-enrollment.create collection-to-ExecutionTarget proof
+and negative tests. Unrelated terminal/session actions in be3 are not part of
+this slice. Fixed `8afc1f94c47671c9b4d01081099572ed6183953b` is `REUSE` for
+the sole Profile encoding/projection and `ADAPT` for its PaaS declaration and
+explicit SYSTEM policy document. Same-revision content replacement, automatic
+existing-default advancement during seed replay, and treating collection
+authority as exact final payload evidence are `REJECT`. This source decision
+does not claim that the new actions, storage or runtime gates are implemented.

@@ -185,6 +185,13 @@
           "paas.execution-pool.read",
           "paas.execution-target.register",
           "paas.execution-target.read",
+          "paas.execution-target.drain",
+          "paas.execution-target.activate",
+          "paas.execution-target.remove",
+          "paas.node-enrollment.create",
+          "paas.node-enrollment.read",
+          "paas.node-enrollment.revoke",
+          "paas.node-enrollment.regenerate",
           "paas.platform-operation.read",
           "paas.application.create",
           "paas.application.read",
@@ -411,6 +418,13 @@
                       "paas.execution-pool.read",
                       "paas.execution-target.register",
                       "paas.execution-target.read",
+                      "paas.execution-target.drain",
+                      "paas.execution-target.activate",
+                      "paas.execution-target.remove",
+                      "paas.node-enrollment.create",
+                      "paas.node-enrollment.read",
+                      "paas.node-enrollment.revoke",
+                      "paas.node-enrollment.regenerate",
                       "paas.platform-operation.read",
                       "audit.platform-record.read",
                       "audit.platform-integrity.verify",
@@ -1592,6 +1606,188 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "paas.execution-target.drain"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.activate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.remove"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.node-enrollment.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "NODE_ENROLLMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.node-enrollment.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "NODE_ENROLLMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.node-enrollment.revoke"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "NODE_ENROLLMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.node-enrollment.regenerate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "NODE_ENROLLMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "paas.platform-operation.read"
                 }
               },
@@ -2676,6 +2872,13 @@
               "paas.execution-pool.read",
               "paas.execution-target.register",
               "paas.execution-target.read",
+              "paas.execution-target.drain",
+              "paas.execution-target.activate",
+              "paas.execution-target.remove",
+              "paas.node-enrollment.create",
+              "paas.node-enrollment.read",
+              "paas.node-enrollment.revoke",
+              "paas.node-enrollment.regenerate",
               "paas.platform-operation.read",
               "paas.application.create",
               "paas.application.read",
@@ -3904,6 +4107,188 @@
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.drain"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.activate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.execution-target.remove"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "EXECUTION_TARGET"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.node-enrollment.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "NODE_ENROLLMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.node-enrollment.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "NODE_ENROLLMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.node-enrollment.revoke"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "NODE_ENROLLMENT"
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "paas.node-enrollment.regenerate"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "NODE_ENROLLMENT"
                     }
                   },
                   "required": [
@@ -6144,6 +6529,13 @@
                             "paas.execution-pool.read",
                             "paas.execution-target.register",
                             "paas.execution-target.read",
+                            "paas.execution-target.drain",
+                            "paas.execution-target.activate",
+                            "paas.execution-target.remove",
+                            "paas.node-enrollment.create",
+                            "paas.node-enrollment.read",
+                            "paas.node-enrollment.revoke",
+                            "paas.node-enrollment.regenerate",
                             "paas.platform-operation.read",
                             "audit.platform-record.read",
                             "audit.platform-integrity.verify"
@@ -6461,6 +6853,7 @@
               "SESSION",
               "EXECUTION_POOL",
               "EXECUTION_TARGET",
+              "NODE_ENROLLMENT",
               "OPERATION",
               "APPLICATION",
               "CONFIGURATION",
@@ -8285,7 +8678,10 @@
                     "contains": {
                       "enum": [
                         "paas.execution-target.register",
-                        "paas.execution-target.read"
+                        "paas.execution-target.read",
+                        "paas.execution-target.drain",
+                        "paas.execution-target.activate",
+                        "paas.execution-target.remove"
                       ]
                     }
                   }
@@ -8313,7 +8709,10 @@
                   "contains": {
                     "enum": [
                       "paas.execution-target.register",
-                      "paas.execution-target.read"
+                      "paas.execution-target.read",
+                      "paas.execution-target.drain",
+                      "paas.execution-target.activate",
+                      "paas.execution-target.remove"
                     ]
                   }
                 }
@@ -8350,6 +8749,349 @@
                 "actions": {
                   "contains": {
                     "const": "paas.execution-target.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.execution-target.drain"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "EXECUTION_TARGET"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.execution-target.drain"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.execution-target.activate"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "EXECUTION_TARGET"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.execution-target.activate"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.execution-target.remove"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "EXECUTION_TARGET"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.execution-target.remove"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.node-enrollment.create"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "NODE_ENROLLMENT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.node-enrollment.create"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "NODE_ENROLLMENT"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "paas.node-enrollment.create",
+                        "paas.node-enrollment.read",
+                        "paas.node-enrollment.revoke",
+                        "paas.node-enrollment.regenerate"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "NODE_ENROLLMENT"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "paas.node-enrollment.create",
+                      "paas.node-enrollment.read",
+                      "paas.node-enrollment.revoke",
+                      "paas.node-enrollment.regenerate"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.node-enrollment.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "NODE_ENROLLMENT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.node-enrollment.read"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.node-enrollment.revoke"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "NODE_ENROLLMENT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.node-enrollment.revoke"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.node-enrollment.regenerate"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "NODE_ENROLLMENT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "const": "paas.node-enrollment.regenerate"
                   }
                 }
               }

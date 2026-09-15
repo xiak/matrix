@@ -796,7 +796,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 18, Audit: 12, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 19, Audit: 13, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -900,6 +900,28 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 			waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
 		})...)
 	platformAuditRecord := ingestPlatformAuditFixture(t, auditEndpoint, platformDecisions[0])
+	platformAuditRecords := []auditv1.AuditRecord{platformAuditRecord}
+	for index, mapping := range []struct {
+		action iamv1.Action
+		fact   auditv1.Action
+	}{
+		{iamv1.ActionPaaSNodeEnrollmentCreate, auditv1.ActionPaaSExecutionTargetRegistered},
+		{iamv1.ActionPaaSExecutionTargetDrain, auditv1.ActionPaaSExecutionTargetDrained},
+		{iamv1.ActionPaaSExecutionTargetActivate, auditv1.ActionPaaSExecutionTargetActivated},
+		{iamv1.ActionPaaSExecutionTargetRemove, auditv1.ActionPaaSExecutionTargetRemoved},
+	} {
+		kind, _ := iamv1.ResourceKindForAction(mapping.action)
+		resource := iamv1.ResourceReference{Kind: kind, ID: "execution-target-process"}
+		if mapping.action == iamv1.ActionPaaSNodeEnrollmentCreate {
+			resource.ID = "collection"
+		}
+		decision := assertPlatformActionAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", fmt.Sprintf("platform-proof-%d", index), mapping.action, resource, true)
+		event := platformAuditRecord.Event
+		event.EventID, event.Action = auditv1.EventID(fmt.Sprintf("event-platform-proof-%d", index)), mapping.fact
+		event.OperationID = auditv1.OperationID(fmt.Sprintf("operation-platform-proof-%d", index))
+		event.IAMDecisionID, event.RequestID, event.CorrelationID, event.OccurredAt = auditv1.DecisionID(decision.ID), decision.RequestID, decision.RequestID, decision.DecidedAt
+		platformAuditRecords = append(platformAuditRecords, ingestPlatformAuditEvent(t, auditEndpoint, event))
+	}
 	assertPlatformAuditAccess(t, auditEndpoint, adminLogin.Credential, http.StatusOK)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	adminPage := queryAudit(t, auditEndpoint, adminLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
@@ -1405,12 +1427,14 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	waitPaaSOutboxRetry(t, ctx, admin)
 	auditProcess = start(binaries.audit, auditEnvironment)
 	waitHTTPStatus(t, ctx, auditProcess, auditEndpoint+"/ready", http.StatusOK)
-	platformReplay := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", paasServiceCredential, platformAuditRecord.Event)
-	var platformDuplicate auditv1.IngestionResult
-	if platformReplay.Status != http.StatusOK || json.Unmarshal(platformReplay.Body, &platformDuplicate) != nil ||
-		auditv1.ValidateIngestionResult(platformDuplicate) != nil || platformDuplicate.Record != platformAuditRecord ||
-		platformDuplicate.Outcome != auditv1.IngestionDuplicate {
-		t.Fatal("Audit restart changed the retained platform record or equal replay")
+	for _, platformRecord := range platformAuditRecords {
+		platformReplay := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", paasServiceCredential, platformRecord.Event)
+		var platformDuplicate auditv1.IngestionResult
+		if platformReplay.Status != http.StatusOK || json.Unmarshal(platformReplay.Body, &platformDuplicate) != nil ||
+			auditv1.ValidateIngestionResult(platformDuplicate) != nil || platformDuplicate.Record != platformRecord ||
+			platformDuplicate.Outcome != auditv1.IngestionDuplicate {
+			t.Fatal("Audit restart changed the retained platform record or equal replay")
+		}
 	}
 	assertPlatformAuditAccess(t, auditEndpoint, adminLogin.Credential, http.StatusForbidden)
 	assertPlatformAuditStoredFacts(t, ctx, admin)
@@ -2080,9 +2104,30 @@ func assertPlatformAuthorization(
 	allowed bool,
 ) iamv1.AuthorizationDecision {
 	t.Helper()
+	profile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	if !found {
+		t.Fatal("missing platform profile")
+	}
+	for index, declaration := range profile.Actions {
+		if declaration.Scope != iamv1.AuthorityScopeInstallation || declaration.Action == iamv1.ActionPaaSExecutionTargetRegister {
+			continue
+		}
+		for shapeIndex, shape := range declaration.ResourceShapes {
+			resource := iamv1.ResourceReference{Kind: declaration.ResourceKind, ID: "resource-platform-process"}
+			if shape.Mode == iamv1.AuthorizationResourceCollection {
+				resource.ID = "collection"
+			}
+			assertPlatformActionAuthorization(t, endpoint, credential, principalID, fmt.Sprintf("%s-%d-%d", requestID, index, shapeIndex), declaration.Action, resource, allowed)
+		}
+	}
 	resource := iamv1.ResourceReference{Kind: iamv1.ResourceExecutionTarget, ID: "execution-target-process"}
+	return assertPlatformActionAuthorization(t, endpoint, credential, principalID, requestID, iamv1.ActionPaaSExecutionTargetRegister, resource, allowed)
+}
+
+func assertPlatformActionAuthorization(t *testing.T, endpoint, credential, principalID, requestID string, action iamv1.Action, resource iamv1.ResourceReference, allowed bool) iamv1.AuthorizationDecision {
+	t.Helper()
 	body, err := json.Marshal(iamv1.AuthorizationRequest{
-		Action: iamv1.ActionPaaSExecutionTargetRegister, Resource: resource,
+		Action: action, Resource: resource,
 		RequestID: requestID, CorrelationID: requestID,
 	})
 	if err != nil {
@@ -2105,7 +2150,7 @@ func assertPlatformAuthorization(
 		iamv1.DecodeRequest(response.Body, &decision) != nil ||
 		iamv1.ValidateAuthorizationDecision(decision) != nil ||
 		decision.Allowed != allowed || decision.TenantID != "" ||
-		decision.RequestID != requestID || decision.Action != iamv1.ActionPaaSExecutionTargetRegister ||
+		decision.RequestID != requestID || decision.Action != action ||
 		decision.Resource != resource {
 		t.Fatalf("invalid platform authorization: status=%d allowed=%t request=%s", response.StatusCode, allowed, requestID)
 	}
@@ -2130,6 +2175,11 @@ func ingestPlatformAuditFixture(t *testing.T, endpoint string, decision iamv1.Au
 		RequestID: decision.RequestID, CorrelationID: decision.RequestID,
 		OperationID: "operation-platform-audit-fixture", OccurredAt: decision.DecidedAt,
 	}
+	return ingestPlatformAuditEvent(t, endpoint, event)
+}
+
+func ingestPlatformAuditEvent(t *testing.T, endpoint string, event auditv1.Event) auditv1.AuditRecord {
+	t.Helper()
 	response := performJSON(t, http.MethodPost, endpoint+"/v1/events", paasServiceCredential, event)
 	var result auditv1.IngestionResult
 	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &result) != nil ||

@@ -1133,7 +1133,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           18::bigint,
+           19::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1190,6 +1190,13 @@ AS $function$
         WHEN 'paas.execution-pool.read' THEN 'EXECUTION_POOL'
         WHEN 'paas.execution-target.register' THEN 'EXECUTION_TARGET'
         WHEN 'paas.execution-target.read' THEN 'EXECUTION_TARGET'
+        WHEN 'paas.execution-target.drain' THEN 'EXECUTION_TARGET'
+        WHEN 'paas.execution-target.activate' THEN 'EXECUTION_TARGET'
+        WHEN 'paas.execution-target.remove' THEN 'EXECUTION_TARGET'
+        WHEN 'paas.node-enrollment.create' THEN 'NODE_ENROLLMENT'
+        WHEN 'paas.node-enrollment.read' THEN 'NODE_ENROLLMENT'
+        WHEN 'paas.node-enrollment.revoke' THEN 'NODE_ENROLLMENT'
+        WHEN 'paas.node-enrollment.regenerate' THEN 'NODE_ENROLLMENT'
         WHEN 'paas.platform-operation.read' THEN 'OPERATION'
         WHEN 'paas.application.create' THEN 'APPLICATION'
         WHEN 'paas.application.read' THEN 'APPLICATION'
@@ -1233,6 +1240,9 @@ AS $function$
         'iam.platform-policy-attachment.create', 'iam.platform-policy-attachment.revoke', 'iam.platform-policy.list',
         'paas.execution-pool.create', 'paas.execution-pool.read',
         'paas.execution-target.register', 'paas.execution-target.read',
+        'paas.execution-target.drain', 'paas.execution-target.activate', 'paas.execution-target.remove',
+        'paas.node-enrollment.create', 'paas.node-enrollment.read',
+        'paas.node-enrollment.revoke', 'paas.node-enrollment.regenerate',
         'paas.platform-operation.read', 'audit.platform-record.read',
         'audit.platform-integrity.verify'
     ), false)

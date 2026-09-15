@@ -289,6 +289,7 @@ BEGIN
         'iam.installation-primary.credentials-recovered',
         'iam.platform-policy-attachment.created', 'iam.platform-policy-attachment.revoked',
         'paas.execution-pool.created', 'paas.execution-target.registered',
+        'paas.execution-target.drained', 'paas.execution-target.activated', 'paas.execution-target.removed',
         'audit.platform-records.read', 'audit.platform-integrity.verified'
     );
     SELECT contract.source, contract.target_kind, contract.result,
@@ -358,6 +359,9 @@ BEGIN
         ('audit.integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false),
         ('paas.execution-pool.created', 'PAAS', 'EXECUTION_POOL', 'SUCCEEDED', true, true, true),
         ('paas.execution-target.registered', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
+        ('paas.execution-target.drained', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
+        ('paas.execution-target.activated', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
+        ('paas.execution-target.removed', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
         ('audit.platform-records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false),
         ('audit.platform-integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false)
       ) AS contract(
@@ -497,7 +501,7 @@ AS $function$
         to_regclass('audit.chain_heads') IS NOT NULL
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL,
-        12::bigint,
+        13::bigint,
         transaction_timestamp()
 $function$;
 
@@ -826,6 +830,7 @@ BEGIN
             'managedservice.service-installation.ready', 'audit.records.read',
             'audit.integrity.verified',
             'paas.execution-pool.created', 'paas.execution-target.registered',
+            'paas.execution-target.drained', 'paas.execution-target.activated', 'paas.execution-target.removed',
             'audit.platform-records.read', 'audit.platform-integrity.verified'
        ))
        OR ((submitted_actor_type IS NULL) <> (submitted_actor_id IS NULL))

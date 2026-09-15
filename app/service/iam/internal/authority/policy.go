@@ -369,6 +369,9 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 			iamv1.ActionIAMPlatformPolicyAttachmentCreate, iamv1.ActionIAMPlatformPolicyAttachmentRevoke,
 			iamv1.ActionPaaSExecutionPoolCreate, iamv1.ActionPaaSExecutionPoolRead,
 			iamv1.ActionPaaSExecutionTargetRegister, iamv1.ActionPaaSExecutionTargetRead,
+			iamv1.ActionPaaSExecutionTargetDrain, iamv1.ActionPaaSExecutionTargetActivate, iamv1.ActionPaaSExecutionTargetRemove,
+			iamv1.ActionPaaSNodeEnrollmentCreate, iamv1.ActionPaaSNodeEnrollmentRead,
+			iamv1.ActionPaaSNodeEnrollmentRevoke, iamv1.ActionPaaSNodeEnrollmentRegenerate,
 			iamv1.ActionPaaSPlatformOperationRead,
 			iamv1.ActionAuditPlatformRecordRead, iamv1.ActionAuditPlatformIntegrityVerify,
 		}

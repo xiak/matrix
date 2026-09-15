@@ -35,6 +35,8 @@
 
 产品 Profile 必须同时约束产品标识、允许调用的已认证服务、Action、scope、资源种类、请求目标模式、集合行为与可信条件能力。产品名或 Action 字符串只作为标识，不能推导调用权限或粒度。内容不可变、同产品同 revision 不得对应另一 digest；digest 覆盖所有影响授权解释的字段。返回副本不能修改注册目录。注册来源仍由可信产品发布/服务组合控制，不开放租户上传 Profile 或借此注册平台动作。
 
+产品目录不是商品上架目录，也不是租户授权关系。产品研发 owner 提交动作、资源、条件与实际 PEP 的版本化声明；IAM owner 校验命名空间、调用服务、能力和版本不变性；受信发布流程决定组合中采用的准确声明。产品声明必须与对应业务实施一同通过门禁，不能只注册元数据就宣称业务已接入。租户管理员只消费已发布的只读目录来编写策略，不持有产品注册或发布权；一般平台运营者的租户/主机管理权限也不隐含产品发布权。首片以受审查源码发行作为注册权威，不新增在线产品管理接口或任意运行时上传入口。未来内部接入 API 应替换发行适配方式，不能在通用求值器增加产品名称分支。服务受托与账号同意仍由008单独拥有。
+
 纯声明编码由 `api/iam/v1/authorization_profile.go` 唯一拥有，不复制 Policy/Audit 编码。`AuthorizationProfile` 包含 `apiVersion/kind/product/revision/callingService/actions`；每个动作显式给出 `resourceKind/scope/resourceShapes/conditions`，末尾可声明 `resultResourceKind`。后者与授权目标正交：既可表达集合创建，也可表达对父Account实例授权后创建User/Group/Policy。`INSTANCE` 可以声明租户实例前缀；`COLLECTION` 只能声明 `COLLECTION_LIST` 或 `COLLECTION_CREATE`，不支持 prefix、filter 或 batch。集合创建必须声明动作级result；含集合LIST时不得声明创建结果，不允许同动作LIST+CREATE。结果仅是成功事实种类，不是API返回载荷、最终ID或payload证明，不能替换原decision资源。shape不接受result字段或兼容别名。
 
 `DecodeAuthorizationProfile` 沿现有严格 JSON owner 拒绝重复/未知/大小写别名字段，输入与程序内声明都受64KiB、128动作上限约束。动作/形状/条件分别按集合排序，输入保持不变；`CanonicalizeAuthorizationProfile` 使用 `matrix.iam.authorization-profile.v1` 域分隔摘要，`CheckAuthorizationProfileReference` 精确比较 `product/revision/contentDigest`，不接受“更新版本即可兼容”。可选条件省略、null、空集合都规范为不声明任何条件能力；来源仍复用唯一 IAM 封闭定义。产品/服务标识的语法允许未来产品，但语法通过、摘要匹配均不构成注册、签名认证或授权。
@@ -53,7 +55,32 @@
 
 以上映射来自现有 apphosting/managedservice HTTP owner，不能用更改动作名称或假装拆成两个已经存在的 API 绕过混合模式。Profile 可声明同一动作允许的多个闭合目标模式；实际调用必须明确选择并被对应 PEP 校验。未知模式、未实现的 FILTERED 或 batch 能力、错服务/产品/scope、同 ResourceKind 的另一动作均关闭。
 
-本分支当前PaaS声明只包含已有5个平台动作，不是最终PaaS公共产品目录。固定 `be3c4a96b4381426c01cd6315eaa3713c2855982` 的实际PEP证明 pool.create/target.register 对body实际ID做INSTANCE授权，pool.read/target.read兼有集合列表与实例详情；此片只引用其形状，不导入host实现。最终ABI前须按该固定源适配完整12项平台动作、NODE_ENROLLMENT及对应约束/系统策略显式新版本，推进PaaS Profile revision/digest。node-enrollment.create的collection→ExecutionTarget历史映射和其余exact enrollment请求必须保留；中间5项目录不得冒充最终验收。
+本分支已按固定 `be3c4a96b4381426c01cd6315eaa3713c2855982` 适配完整12项平台动作、NODE_ENROLLMENT及对应约束/系统策略显式新版本，PaaS Profile推进revision2。其实际PEP证明 pool.create/target.register 对body实际ID做INSTANCE授权，pool.read/target.read兼有集合列表与实例详情；此片只适配IAM/Audit拥有的公共能力，不导入host实现。node-enrollment.create的collection→ExecutionTarget历史映射来自该固定树已包含的 `ca7f6940159e53fbae183b7b6d5f379705a0cba1`，其余enrollment操作仍为exact实例。本片局部门禁见下；最终ABI尚未验收。
+
+### 平台产品目录补齐的最小验收切片
+
+以下均属于已认证 PAAS 调用服务及 INSTALLATION 权限范围，不开放租户条件、实例前缀或 verifier 业务许可。动作前缀均为 `paas.`；表中的结果资源只描述成功事实，不替代授权目标。
+
+| 动作 | 授权资源 | 实际目标模式 | 成功事实结果 |
+| --- | --- | --- | --- |
+| `execution-pool.create` | EXECUTION_POOL | INSTANCE，实际请求 ID | EXECUTION_POOL |
+| `execution-pool.read` | EXECUTION_POOL | INSTANCE / COLLECTION_LIST | 无创建结果 |
+| `execution-target.register` | EXECUTION_TARGET | INSTANCE，实际请求 ID | EXECUTION_TARGET |
+| `execution-target.read` | EXECUTION_TARGET | INSTANCE / COLLECTION_LIST | 无创建结果 |
+| `execution-target.drain` | EXECUTION_TARGET | INSTANCE | 不声明创建结果 |
+| `execution-target.activate` | EXECUTION_TARGET | INSTANCE | 不声明创建结果 |
+| `execution-target.remove` | EXECUTION_TARGET | INSTANCE | 不声明创建结果 |
+| `node-enrollment.create` | NODE_ENROLLMENT | COLLECTION_CREATE | EXECUTION_TARGET |
+| `node-enrollment.read` | NODE_ENROLLMENT | INSTANCE | 无创建结果 |
+| `node-enrollment.revoke` | NODE_ENROLLMENT | INSTANCE | 不声明创建结果 |
+| `node-enrollment.regenerate` | NODE_ENROLLMENT | INSTANCE | 不声明创建结果 |
+| `platform-operation.read` | OPERATION | INSTANCE | 无创建结果 |
+
+补齐不能覆盖旧 PaaS revision1 的内容解释，当前声明发布为 revision2，旧摘要不得被当成新目录引用。平台 SYSTEM 策略形成新的不可变内容版本。最终支持的 predecessor be3 原 RolePlatformOperator 已有完整平台集合，因此首次 role→policy 切换须创建与其完整权限等价的 SYSTEM 默认版本，逐条迁移未撤销和已撤销绑定，保留原允许/拒绝结果；这不是新增权限，也不能要求操作者重新授权原有能力。新建最终安装使用同一完整版本。未发布的旧5项CAM开发库不是最终支持基线，不为它增加兼容发行通道。最终发布之后新增、predecessor从未拥有的动作，才适用追加不可变版本但不自动切换已有SYSTEM默认值的规则；明确受权采用由相应发行边界实施，不借此增加在线恢复或首授权接口。
+
+此开发切片的实际readiness为 IAM19/Audit13/PaaS1；变化来自IAM动作约束/系统策略与Audit封闭事实，不能因函数签名相同沿用旧兼容声明。现有独立进程门禁必须读取三服务实际版本并与sourceProfile逐项比较，同时继续证明已发布installation profile与此组合不同，在副作用前拒绝未发布组合。不修改CurrentDatabaseProfile、不开放安装或跨profile升级；001–010冻结后由安装owner组合实际IAM/Audit和其PaaS5，验证确切predecessor及最终发行。
+
+实际验收须覆盖全部12项的 API/SQL/caller/scope 一致性、TENANT/错误服务/probe 拒绝、未声明 prefix/condition 拒绝、新 SYSTEM 版本在唯一求值器中的逐项允许与旧版本仍拒绝新增动作。当前带数据迁移重放后，旧 canonical、版本 ID、默认指针及已撤销附件不变；新版本不能暗改旧决定。独立 PG18 的真实授权、producer 及 Audit 投递分别证明直接 target.register 的精确 ID 与 enrollment.create 的原 collection 证据；错误原动作、资源种类、集合 ID、actor、request/correlation、installation 及其他目标变更均拒绝。collection 证据不证明最终业务 payload/ID 的真实性，该关联仍依赖 PaaS 已提交事务/outbox，不能将它推广为任意 target 变更许可。此分支不导入主机运行实现或继承其验收；公共 SQL/wire/发行组合须先与其 owner 冻结后实施。
 
 首片的实质门禁是两个真实产品通过同一注册/校验路径，IAM实际决定与持久化证据绑定精确 Profile，PEP拒绝不匹配的回包；修改或增加 Profile 不能改变已经固定的旧版本解释。新增产品声明不得要求通用求值器按产品名称增加分支。未声明来源的条件不能启用；当前IAM自供身份/事务时间继续独立于产品属性，不增加任意 caller attributes map。
 
@@ -94,5 +121,15 @@
 - API、IAM、Audit、PaaS 与 architecture 的 `-race -p 2` 回归、对应 vet、API生成稳定及 Linux amd64 构建通过；包含父实例/集合创建种子的2-worker、20s规范往返 fuzz 通过94701次执行。原Action枚举与生成wire未变化。
 - 独立 PG18 固定镜像 `postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280`，1CPU/768MiB/PIDs128、max_connections64；三个专属数据库与loopback随机端口。串行 `-race -p 1` 实跑 IAM HTTP（82.52s；包85.579s）、独立 IAM/Audit/PaaS 与双dispatcher（56.47s；包59.724s）、策略存储门禁（141.91s；包145.201s）。保留实际受限runtime登录、两租户资源/Operation/outbox、组继承、边界竞争、条件与SQL目录一致性、当前撤权和历史证据不可修改。
 - 本轮容器、网络及包含三个临时数据库的卷已按精确ID/标签清理，连接归零后删除；不涉及其他任务资源。本片没有 SQL/线上请求结果/安装 profile 变化。以上真实运行证明当前目录替换不回归，不证明决定已携带Profile、历史Profile持久化、签名发布或最终12项PaaS目录；这些仍按001/008后续门禁完成。
+- 固定 `8afc1f94c47671c9b4d01081099572ed6183953b` 的 [Verification 34921642856](https://github.com/xiak/matrix/actions/runs/34921642856) 已通过 GitHub API 核实精确 SHA；go、authority-process、node-process 全部 `completed/success`。该独立结果只验收此源码目录替换切片，不将 CAT-05 整体改为完成。
 
 CAT-05、策略替换及最终组合仍分别按 owning FEAT 实施。
+
+2026-09-15 完整平台目录增量的本分支证据：
+
+- `TestPaaSProfileDeclaresCompletePlatformProduct` 先因仍为revision1失败；补齐后验证12项闭合资源/形状/结果、PAAS调用来源、平台范围及无prefix/条件能力，并拒绝用revision1引用新内容。现有唯一求值器的全Action/系统策略矩阵和API schema验证覆盖新增动作；enrollment负向proof拒绝read/revoke/regenerate原决定、错kind/集合ID及drain/activate/remove目标事实。API/IAM/Audit/architecture race已通过。
+- 专属PG18.6固定镜像 `postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280`，1CPU/768MiB/PIDs128、64连接、loopback随机端口，串行 `-race -p 1`。IAM HTTP通过101.14s（包104.374s），包含实际平台决定与producer映射攻击、原凭据竞争、tenant生命周期和七列outbox所有权；双authority存储通过3.52s（包6.203s），逐项验证所有当前IAM/Audit动作与受限数据库权限、不可变记录及查询。
+- 独立IAM双实例/Audit/PaaS及双dispatcher通过51.26s（包54.320s）。对12项按已声明的目标形状发送真实IAM请求，验证现有身份、显式平台附件授予/撤销、另一IAM实例和进程重启后的Allow/Deny；实际受限runtime登录仍由数据库探针确认。节点接入登记及三种target生命周期事实通过真实producer/Audit入链，在操作者撤权及Audit重启后保持原记录与等值重放；篡改installation/producer拒绝。此为authority协议门禁，合成的host事实不是本分支不存在的真实PaaS主机Operation或纳管验收，也不证明请求已携带Profile模式字段。
+- 进程门禁首轮因新增fixture复用既有Operation ID收到409；PG明确报告 `records_paas_operation_uq` 冲突。修正为每个独立fixture使用自己的Operation ID后在新库通过，没有放宽生产唯一性、鉴权或重试行为。实际sourceProfile19/13/1与服务readiness相符，已发布安装profile仍不同且保持副作用前拒绝。
+- 同一限额下的新数据库策略存储完整回归通过110.85s（包114.052s）：默认版本/内容不变性、来源证据、组继承、用户边界与策略竞争、平台凭据保护、事务失败回滚和当前带数据schema/bootstrap重放保持。此当前源码回归不替代最终be3保留数据的完整权限parity与签名发行验收。
+- 收口全仓 `go test -race -p 2 ./...`、`go vet -p 2 ./...`、模块校验、API再次生成字节稳定及Linux amd64全仓构建通过。连接归零后按精确ID/标签清理本轮唯一PG容器、网络和包含五个临时数据库的卷；无UI/安装/PaaS生产变更，无其他Phase资源操作。独立CI待固定提交后单独确认；Profile绑定决定/策略版本、历史注册及001/008整体仍未完成。

@@ -74,7 +74,7 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 		}
 		return digest, nil
 	}
-	expectedAction, expectedID := auditDecisionTarget(event)
+	expectedAction, expectedID := auditDecisionTarget(event, decision.Action)
 	expectedKind, known := iamv1.ResourceKindForAction(expectedAction)
 	if !known || decision.Subject.Type != iamv1.PrincipalUser || decision.Action != expectedAction ||
 		decision.Resource.Kind != expectedKind || decision.Resource.ID != expectedID || !authority.ServiceCanRequest(identity.Purpose, expectedAction) {
@@ -83,7 +83,7 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 	return digest, nil
 }
 
-func auditDecisionTarget(event auditv1.Event) (iamv1.Action, string) {
+func auditDecisionTarget(event auditv1.Event, decisionAction iamv1.Action) (iamv1.Action, string) {
 	switch event.Action {
 	case auditv1.ActionPaaSApplicationCreated:
 		return iamv1.ActionPaaSApplicationCreate, "collection"
@@ -104,7 +104,19 @@ func auditDecisionTarget(event auditv1.Event) (iamv1.Action, string) {
 	case auditv1.ActionPaaSExecutionPoolCreated:
 		return iamv1.ActionPaaSExecutionPoolCreate, event.Target.ID
 	case auditv1.ActionPaaSExecutionTargetRegistered:
+		// Enrollment authorized its ceremony before the final target existed.
+		// The PaaS transaction/outbox, not this authority proof, binds that
+		// successful result. Other target mutations never use collection proof.
+		if decisionAction == iamv1.ActionPaaSNodeEnrollmentCreate {
+			return iamv1.ActionPaaSNodeEnrollmentCreate, "collection"
+		}
 		return iamv1.ActionPaaSExecutionTargetRegister, event.Target.ID
+	case auditv1.ActionPaaSExecutionTargetDrained:
+		return iamv1.ActionPaaSExecutionTargetDrain, event.Target.ID
+	case auditv1.ActionPaaSExecutionTargetActivated:
+		return iamv1.ActionPaaSExecutionTargetActivate, event.Target.ID
+	case auditv1.ActionPaaSExecutionTargetRemoved:
+		return iamv1.ActionPaaSExecutionTargetRemove, event.Target.ID
 	case auditv1.ActionManagedServiceQuotaEntitlementActivated:
 		return iamv1.ActionManagedServiceQuotaEntitlementActivate, "collection"
 	case auditv1.ActionManagedServiceInstallationCreated, auditv1.ActionManagedServiceInstallationReady:

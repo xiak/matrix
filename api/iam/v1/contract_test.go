@@ -25,6 +25,65 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
+	profile, found := LookupAuthorizationProfile(ProductPaaS)
+	if !found || profile.Revision != 2 {
+		t.Fatal("complete platform product requires a new PaaS profile revision")
+	}
+	expected := map[Action]struct {
+		kind       ResourceKind
+		collection AuthorizationCollectionUsage
+		instance   bool
+		result     ResourceKind
+	}{
+		"paas.execution-pool.create":      {ResourceExecutionPool, "", true, ResourceExecutionPool},
+		"paas.execution-pool.read":        {ResourceExecutionPool, AuthorizationCollectionList, true, ""},
+		"paas.execution-target.register":  {ResourceExecutionTarget, "", true, ResourceExecutionTarget},
+		"paas.execution-target.read":      {ResourceExecutionTarget, AuthorizationCollectionList, true, ""},
+		"paas.execution-target.drain":     {ResourceExecutionTarget, "", true, ""},
+		"paas.execution-target.activate":  {ResourceExecutionTarget, "", true, ""},
+		"paas.execution-target.remove":    {ResourceExecutionTarget, "", true, ""},
+		"paas.node-enrollment.create":     {"NODE_ENROLLMENT", AuthorizationCollectionCreate, false, ResourceExecutionTarget},
+		"paas.node-enrollment.read":       {"NODE_ENROLLMENT", "", true, ""},
+		"paas.node-enrollment.revoke":     {"NODE_ENROLLMENT", "", true, ""},
+		"paas.node-enrollment.regenerate": {"NODE_ENROLLMENT", "", true, ""},
+		"paas.platform-operation.read":    {ResourceOperation, "", true, ""},
+	}
+	for _, action := range profile.Actions {
+		if action.Scope != AuthorityScopeInstallation {
+			continue
+		}
+		want, ok := expected[action.Action]
+		if !ok || action.ResourceKind != want.kind || action.ResultResourceKind != want.result || len(action.Conditions) != 0 {
+			t.Fatalf("unexpected platform declaration: %s", action.Action)
+		}
+		instance, collection := false, AuthorizationCollectionUsage("")
+		for _, shape := range action.ResourceShapes {
+			if shape.PrefixAllowed {
+				t.Fatal("platform action gained prefix permission")
+			}
+			if shape.Mode == AuthorizationResourceInstance {
+				instance = true
+			} else {
+				collection = shape.CollectionUsage
+			}
+		}
+		definition, known := LookupActionDefinition(action.Action)
+		if !known || definition.CallingService != ServicePaaS || definition.ResourceKind != want.kind ||
+			definition.AuthorityScope != AuthorityScopeInstallation || instance != want.instance || collection != want.collection {
+			t.Fatalf("platform request shape or caller drift: %s", action.Action)
+		}
+		delete(expected, action.Action)
+	}
+	if len(expected) != 0 {
+		t.Fatalf("platform product is missing declarations: %v", expected)
+	}
+	_, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil || CheckAuthorizationProfileReference(profile, AuthorizationProfileReference{Product: ProductPaaS, Revision: 1, ContentDigest: digest}) == nil {
+		t.Fatal("new product content accepted under predecessor revision")
+	}
+}
+
 func TestProductProfilesOwnCurrentAdmissionAndDoNotExposeMutableState(t *testing.T) {
 	profiles := AllAuthorizationProfiles()
 	seen := map[Action]bool{}

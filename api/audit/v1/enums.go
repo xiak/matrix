@@ -83,6 +83,9 @@ const (
 	ActionPaaSDeploymentRolledBack                Action = "paas.deployment.rolled-back"
 	ActionPaaSExecutionPoolCreated                Action = "paas.execution-pool.created"
 	ActionPaaSExecutionTargetRegistered           Action = "paas.execution-target.registered"
+	ActionPaaSExecutionTargetDrained              Action = "paas.execution-target.drained"
+	ActionPaaSExecutionTargetActivated            Action = "paas.execution-target.activated"
+	ActionPaaSExecutionTargetRemoved              Action = "paas.execution-target.removed"
 	ActionManagedServiceQuotaEntitlementActivated Action = "managedservice.quota-entitlement.activated"
 	ActionManagedServiceInstallationCreated       Action = "managedservice.service-installation.created"
 	ActionManagedServiceInstallationReady         Action = "managedservice.service-installation.ready"
@@ -227,6 +230,9 @@ var allActions = []Action{
 	ActionPaaSDeploymentRolledBack,
 	ActionPaaSExecutionPoolCreated,
 	ActionPaaSExecutionTargetRegistered,
+	ActionPaaSExecutionTargetDrained,
+	ActionPaaSExecutionTargetActivated,
+	ActionPaaSExecutionTargetRemoved,
 	ActionManagedServiceQuotaEntitlementActivated,
 	ActionManagedServiceInstallationCreated,
 	ActionManagedServiceInstallationReady,
@@ -410,6 +416,18 @@ var actionContracts = map[Action]ActionContract{
 		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
 	},
 	ActionPaaSExecutionTargetRegistered: {
+		Source: SourcePaaS, Target: TargetExecutionTarget, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
+	},
+	ActionPaaSExecutionTargetDrained: {
+		Source: SourcePaaS, Target: TargetExecutionTarget, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
+	},
+	ActionPaaSExecutionTargetActivated: {
+		Source: SourcePaaS, Target: TargetExecutionTarget, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
+	},
+	ActionPaaSExecutionTargetRemoved: {
 		Source: SourcePaaS, Target: TargetExecutionTarget, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true, PlatformOnly: true,
 	},

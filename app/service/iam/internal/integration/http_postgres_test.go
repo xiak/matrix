@@ -4847,7 +4847,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	}
 	passwordChange(primaryB, primaryBPassword, primaryBChanged)
 	t.Run("event-bound historical producer authority", func(t *testing.T) {
-		proveHistoricalProducerHTTP(t, ctx, handler, admin, map[string]string{tenantA: root, tenantB: primaryB})
+		proveHistoricalProducerHTTP(t, ctx, handler, admin, root, map[string]string{tenantA: root, tenantB: primaryB})
 	})
 	request(http.MethodPost, "/v1/audit-producer:resolve", paasCredential,
 		map[string]any{"organizationId": tenantB}, http.StatusBadRequest)
@@ -5879,7 +5879,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	assertIAMSecretsAbsent(t, ctx, database, initial, changed, recovered, operator, primary, memberSession, delegateSession)
 }
 
-func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, tenants map[string]string) {
+func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, platformActor string, tenants map[string]string) {
 	t.Helper()
 	post := func(path, bearer string, body any, status int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -5995,6 +5995,58 @@ func proveHistoricalProducerHTTP(t *testing.T, ctx context.Context, handler http
 		if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", session.Credential, nil); response.Code != http.StatusUnauthorized {
 			t.Fatal("historical proof revived revoked session")
 		}
+	}
+	for _, mapping := range []struct {
+		action   iamv1.Action
+		fact     auditv1.Action
+		resource string
+	}{
+		{iamv1.ActionPaaSNodeEnrollmentCreate, auditv1.ActionPaaSExecutionTargetRegistered, "collection"},
+		{iamv1.ActionPaaSExecutionTargetRegister, auditv1.ActionPaaSExecutionTargetRegistered, "execution-target-proof"},
+		{iamv1.ActionPaaSExecutionTargetDrain, auditv1.ActionPaaSExecutionTargetDrained, "execution-target-proof"},
+		{iamv1.ActionPaaSExecutionTargetActivate, auditv1.ActionPaaSExecutionTargetActivated, "execution-target-proof"},
+		{iamv1.ActionPaaSExecutionTargetRemove, auditv1.ActionPaaSExecutionTargetRemoved, "execution-target-proof"},
+	} {
+		kind, _ := iamv1.ResourceKindForAction(mapping.action)
+		request := iamv1.AuthorizationRequest{Action: mapping.action, Resource: iamv1.ResourceReference{Kind: kind, ID: mapping.resource},
+			RequestID: "proof-" + string(mapping.action), CorrelationID: "correlation-platform-proof"}
+		encoded, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequestWithSubject(handler, encoded, paasCredential, platformActor)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || !decision.Allowed || decision.Subject == nil || decision.InstallationID != "installation-http-integration" {
+			t.Fatalf("platform action lacks real authority: %s status=%d", mapping.action, response.Code)
+		}
+		event := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: auditv1.EventID("event-" + string(decision.ID)),
+			InstallationID: decision.InstallationID, Actor: auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(decision.Subject.ID)},
+			IAMDecisionID: auditv1.DecisionID(decision.ID), Action: mapping.fact, Target: auditv1.TargetReference{Kind: auditv1.TargetExecutionTarget, ID: "execution-target-proof"},
+			Result: auditv1.ResultSucceeded, RequestDigest: "sha256:" + strings.Repeat("a", 64), RequestID: request.RequestID, CorrelationID: request.CorrelationID,
+			OperationID: "operation-platform-proof", OccurredAt: decision.DecidedAt.Add(time.Microsecond)}
+		resolve(paasCredential, event, http.StatusOK)
+		for _, attack := range []func(*auditv1.Event){
+			func(e *auditv1.Event) { e.RequestID = "request-forged" },
+			func(e *auditv1.Event) { e.CorrelationID = "correlation-forged" },
+			func(e *auditv1.Event) { e.InstallationID = "installation-forged" },
+			func(e *auditv1.Event) { e.Actor.ID = "principal-forged" },
+		} {
+			forged := event
+			attack(&forged)
+			resolve(paasCredential, forged, http.StatusForbidden)
+		}
+		forged := event
+		forged.Target.ID = "execution-target-other"
+		if mapping.resource == "collection" {
+			// The source transaction, not this authority receipt, proves the final ID.
+			resolve(paasCredential, forged, http.StatusOK)
+			forged.Action = auditv1.ActionPaaSExecutionTargetRemoved
+			resolve(paasCredential, forged, http.StatusForbidden)
+		} else {
+			resolve(paasCredential, forged, http.StatusForbidden)
+		}
+		resolve(verifierCredential, event, http.StatusForbidden)
+		resolve(auditCredential, event, http.StatusForbidden)
 	}
 	rows, err := database.Query(ctx, `SELECT DISTINCT ON (event_document->>'action') event_document FROM iam.audit_outbox ORDER BY event_document->>'action',event_id`)
 	if err != nil {

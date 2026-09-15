@@ -194,11 +194,18 @@ const (
 	ActionIAMPlatformPolicyAttachmentCreate Action = "iam.platform-policy-attachment.create"
 	ActionIAMPlatformPolicyAttachmentRevoke Action = "iam.platform-policy-attachment.revoke"
 
-	ActionPaaSExecutionPoolCreate     Action = "paas.execution-pool.create"
-	ActionPaaSExecutionPoolRead       Action = "paas.execution-pool.read"
-	ActionPaaSExecutionTargetRegister Action = "paas.execution-target.register"
-	ActionPaaSExecutionTargetRead     Action = "paas.execution-target.read"
-	ActionPaaSPlatformOperationRead   Action = "paas.platform-operation.read"
+	ActionPaaSExecutionPoolCreate      Action = "paas.execution-pool.create"
+	ActionPaaSExecutionPoolRead        Action = "paas.execution-pool.read"
+	ActionPaaSExecutionTargetRegister  Action = "paas.execution-target.register"
+	ActionPaaSExecutionTargetRead      Action = "paas.execution-target.read"
+	ActionPaaSExecutionTargetDrain     Action = "paas.execution-target.drain"
+	ActionPaaSExecutionTargetActivate  Action = "paas.execution-target.activate"
+	ActionPaaSExecutionTargetRemove    Action = "paas.execution-target.remove"
+	ActionPaaSNodeEnrollmentCreate     Action = "paas.node-enrollment.create"
+	ActionPaaSNodeEnrollmentRead       Action = "paas.node-enrollment.read"
+	ActionPaaSNodeEnrollmentRevoke     Action = "paas.node-enrollment.revoke"
+	ActionPaaSNodeEnrollmentRegenerate Action = "paas.node-enrollment.regenerate"
+	ActionPaaSPlatformOperationRead    Action = "paas.platform-operation.read"
 
 	ActionPaaSApplicationCreate           Action = "paas.application.create"
 	ActionPaaSApplicationRead             Action = "paas.application.read"
@@ -274,6 +281,7 @@ const (
 	ResourceInstallation          ResourceKind = "INSTALLATION"
 	ResourceExecutionPool         ResourceKind = "EXECUTION_POOL"
 	ResourceExecutionTarget       ResourceKind = "EXECUTION_TARGET"
+	ResourceNodeEnrollment        ResourceKind = "NODE_ENROLLMENT"
 )
 
 const (
@@ -412,11 +420,18 @@ var authorizationProfiles = [...]AuthorizationProfile{
 		declaredProfileAction(ActionIAMPlatformPolicyAttachmentCreate, ResourceUser, AuthorityScopeInstallation, ResourcePolicyAttachment, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionIAMPlatformPolicyAttachmentRevoke, ResourcePolicyAttachment, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 	),
-	declaredProductProfile(ProductPaaS, ServicePaaS, 1,
+	declaredProductProfile(ProductPaaS, ServicePaaS, 2,
 		declaredProfileAction(ActionPaaSExecutionPoolCreate, ResourceExecutionPool, AuthorityScopeInstallation, ResourceExecutionPool, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionPaaSExecutionPoolRead, ResourceExecutionPool, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
 		declaredProfileAction(ActionPaaSExecutionTargetRegister, ResourceExecutionTarget, AuthorityScopeInstallation, ResourceExecutionTarget, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionPaaSExecutionTargetRead, ResourceExecutionTarget, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+		declaredProfileAction(ActionPaaSExecutionTargetDrain, ResourceExecutionTarget, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionPaaSExecutionTargetActivate, ResourceExecutionTarget, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionPaaSExecutionTargetRemove, ResourceExecutionTarget, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionPaaSNodeEnrollmentCreate, ResourceNodeEnrollment, AuthorityScopeInstallation, ResourceExecutionTarget, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
+		declaredProfileAction(ActionPaaSNodeEnrollmentRead, ResourceNodeEnrollment, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionPaaSNodeEnrollmentRevoke, ResourceNodeEnrollment, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionPaaSNodeEnrollmentRegenerate, ResourceNodeEnrollment, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionPaaSPlatformOperationRead, ResourceOperation, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionPaaSApplicationCreate, ResourceApplication, AuthorityScopeTenant, ResourceApplication, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
 		declaredProfileAction(ActionPaaSApplicationRead, ResourceApplication, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}}),

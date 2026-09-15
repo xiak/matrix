@@ -188,6 +188,10 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 		{auditv1.ActionPaaSDeploymentRolledBack, iamv1.ActionPaaSDeploymentRollback, "resource-proof"},
 		{auditv1.ActionPaaSExecutionPoolCreated, iamv1.ActionPaaSExecutionPoolCreate, "resource-proof"},
 		{auditv1.ActionPaaSExecutionTargetRegistered, iamv1.ActionPaaSExecutionTargetRegister, "resource-proof"},
+		{auditv1.ActionPaaSExecutionTargetRegistered, iamv1.ActionPaaSNodeEnrollmentCreate, "collection"},
+		{auditv1.ActionPaaSExecutionTargetDrained, iamv1.ActionPaaSExecutionTargetDrain, "resource-proof"},
+		{auditv1.ActionPaaSExecutionTargetActivated, iamv1.ActionPaaSExecutionTargetActivate, "resource-proof"},
+		{auditv1.ActionPaaSExecutionTargetRemoved, iamv1.ActionPaaSExecutionTargetRemove, "resource-proof"},
 		{auditv1.ActionManagedServiceQuotaEntitlementActivated, iamv1.ActionManagedServiceQuotaEntitlementActivate, "collection"},
 		{auditv1.ActionManagedServiceInstallationCreated, iamv1.ActionManagedServiceInstallationCreate, "collection"},
 		{auditv1.ActionManagedServiceInstallationReady, iamv1.ActionManagedServiceInstallationCreate, "collection"},
@@ -259,6 +263,40 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 			changedPayload.RequestDigest = "sha256:" + strings.Repeat("b", 64)
 			if _, err := auditContentDigest(identity, changedPayload, evidence); err != nil {
 				t.Fatal("proof exceeded its declared historical authority boundary")
+			}
+		})
+	}
+}
+
+func TestAuditProofEnrollmentCannotAuthorizeAnotherMutation(t *testing.T) {
+	identity, event, evidence := historicalAuditFixture(auditv1.ActionPaaSExecutionTargetRegistered, iamv1.ActionPaaSNodeEnrollmentCreate, "collection")
+	for name, attack := range map[string]func(*auditv1.Event, *AuditEvidence){
+		"read ceremony": func(_ *auditv1.Event, proof *AuditEvidence) {
+			proof.Decision.Action = iamv1.ActionPaaSNodeEnrollmentRead
+		},
+		"revoke ceremony": func(_ *auditv1.Event, proof *AuditEvidence) {
+			proof.Decision.Action = iamv1.ActionPaaSNodeEnrollmentRevoke
+		},
+		"regenerate ceremony": func(_ *auditv1.Event, proof *AuditEvidence) {
+			proof.Decision.Action = iamv1.ActionPaaSNodeEnrollmentRegenerate
+		},
+		"wrong original ID": func(_ *auditv1.Event, proof *AuditEvidence) { proof.Decision.Resource.ID = "enrollment-forged" },
+		"wrong original kind": func(_ *auditv1.Event, proof *AuditEvidence) {
+			proof.Decision.Resource.Kind = iamv1.ResourceExecutionTarget
+		},
+		"drain target": func(event *auditv1.Event, _ *AuditEvidence) { event.Action = auditv1.ActionPaaSExecutionTargetDrained },
+		"activate target": func(event *auditv1.Event, _ *AuditEvidence) {
+			event.Action = auditv1.ActionPaaSExecutionTargetActivated
+		},
+		"remove target": func(event *auditv1.Event, _ *AuditEvidence) { event.Action = auditv1.ActionPaaSExecutionTargetRemoved },
+	} {
+		t.Run(name, func(t *testing.T) {
+			forged, proof := event, evidence
+			decision := *evidence.Decision
+			proof.Decision = &decision
+			attack(&forged, &proof)
+			if _, err := auditContentDigest(identity, forged, proof); !errors.Is(err, ErrForbidden) {
+				t.Fatalf("unrelated enrollment proof accepted: %v", err)
 			}
 		})
 	}

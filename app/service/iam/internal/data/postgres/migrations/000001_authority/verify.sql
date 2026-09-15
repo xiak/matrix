@@ -219,6 +219,22 @@ BEGIN
        OR iam.resource_kind_for_action('managedservice.service-installation.read') IS DISTINCT FROM 'SERVICE_INSTALLATION'
        OR iam.resource_kind_for_action('paas.execution-target.register') IS DISTINCT FROM 'EXECUTION_TARGET'
        OR iam.resource_kind_for_action('paas.execution-pool.create') IS DISTINCT FROM 'EXECUTION_POOL'
+       OR EXISTS (
+           SELECT 1 FROM (VALUES
+               ('paas.execution-pool.read','EXECUTION_POOL'),
+               ('paas.execution-target.read','EXECUTION_TARGET'),
+               ('paas.execution-target.drain','EXECUTION_TARGET'),
+               ('paas.execution-target.activate','EXECUTION_TARGET'),
+               ('paas.execution-target.remove','EXECUTION_TARGET'),
+               ('paas.node-enrollment.create','NODE_ENROLLMENT'),
+               ('paas.node-enrollment.read','NODE_ENROLLMENT'),
+               ('paas.node-enrollment.revoke','NODE_ENROLLMENT'),
+               ('paas.node-enrollment.regenerate','NODE_ENROLLMENT'),
+               ('paas.platform-operation.read','OPERATION')
+           ) AS platform(action,resource)
+           WHERE iam.resource_kind_for_action(platform.action) IS DISTINCT FROM platform.resource
+               OR NOT iam.is_platform_action(platform.action)
+       )
        OR iam.resource_kind_for_action('iam.account.create') IS DISTINCT FROM 'ACCOUNT'
        OR iam.resource_kind_for_action('iam.account.read') IS DISTINCT FROM 'ACCOUNT'
        OR iam.resource_kind_for_action('iam.account.set-status') IS DISTINCT FROM 'ACCOUNT'
