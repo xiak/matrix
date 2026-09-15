@@ -38,13 +38,24 @@ Whole IAM goal remains active. Read AGENTS.md, the owning IAM FEAT, then code/te
 User explicitly assigns ALL UI work to the existing UX/UI engineer, who has
 their own branch. Do not resume UI forms, styling or browser development here.
 Continue backend contracts, authority, service integration and their real gates.
-UX task01a07b21-9a0d-7fd0-b090-7827ce18262e received fixed cc5/6292 handoff and
-must confirm its active UI branch and adaptation; never copy its WIP.
+UX task01a07b21-9a0d-7fd0-b090-7827ce18262e confirmed its sole IAM UI branch
+feat/cloud-console-ux at7a126d314496d71d2f64804d78bd4290754c839c. It will ADAPT
+fixed backend types/capabilities/revisions/errors, not our old renderer/styles/
+embed. It has advanced MOCK UI but no real User boundary HTTP integration yet.
+Never copy its WIP. Both owners have aligned progress per the user's request.
 Read-only fixed cloud-console-ux7a126d314496d71d2f64804d78bd4290754c839c already
 contains PolicyAuthoring and PermissionBoundary preview components; do not
 reimplement those in the old renderer or equate preview with live authorization.
 Forms and conservative capabilities exist in our fixed client baseline;
 final UX and remaining client integration belong to that engineer and010.
+Next backend target fixed in e5a88b13:001 CAT-05 immutable product Profile,
+explicit collection/instance/create target modes before005 action wildcard
+expansion. Real offering.read currently serves both collection and detail;
+do not infer modes from names. Requirements/acceptance in001, fixed donor6292
+in adoption; no production shape/revision changed or Profile implemented yet.
+Installation peer received the window pre-notice; exact wire/storage surface
+must be aligned before shared implementation. cc5 CI34918584314 was live when
+last observed; not yet accepted. No UI work should resume in this thread.
 Do not infer eligibility from identityKind or policy name. Root-only
 backend management is an intermediate boundary, not completed safe delegation.
 Remaining action wildcards with fixed catalog expansion, trusted IP, Role/STS,
