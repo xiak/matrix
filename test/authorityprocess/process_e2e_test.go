@@ -108,10 +108,12 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	assertPostgres18(t, ctx, admin)
 	assertCleanSchemas(t, ctx, admin)
 	root, temporary := repositoryRoot(t), t.TempDir()
-	baseline := extractFixedIAMSource(t, ctx, root, temporary, "384d6d76b65498ed6b428ba9a2905ef67831b919")
-	oldMigrator := buildAuthorityBinary(t, ctx, baseline, temporary, "matrix-iam-schema8-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
-	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "matrix-iam-schema8", "./app/service/iam/cmd/matrix-iam")
-	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-iam-groups", "./app/service/iam/cmd/matrix-iam")
+	// This is the explicit interpretation predecessor, not a claim that an
+	// arbitrary pre-v1 database or an absent compilation proves its source.
+	baseline := extractFixedIAMSource(t, ctx, root, temporary, "1dc1079c4e7bec80f5345d06929875b492ba9a86")
+	oldMigrator := buildAuthorityBinary(t, ctx, baseline, temporary, "matrix-iam-schema21-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "matrix-iam-schema21", "./app/service/iam/cmd/matrix-iam")
+	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-iam-compiled-policies", "./app/service/iam/cmd/matrix-iam")
 	apiDSN := runtimeDSN(t, config, "matrix_iam_api_login", processDBPassword)
 	workerDSN := runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword)
 	recoveryDSN := runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword)
@@ -135,7 +137,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		child := startChild(t, baseline, oldMigrator, migrationEnvironment, action)
 		children = append(children, child)
 		if err := child.wait(30 * time.Second); err != nil {
-			t.Fatal("actual fixed schema8 migrator failed")
+			t.Fatal("actual fixed schema21 migrator failed")
 		}
 	}
 	encoded, err := iamv1.EncodeBootstrapDocument(processBootstrap(t))
@@ -161,6 +163,25 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	old := start(oldBinary)
 	primary := loginIAM(t, endpoint, "admin", initialAdminPassword, "policy-upgrade-primary-login")
 	changePasswordIAM(t, endpoint, primary.Credential, initialAdminPassword, changedAdminPassword, "policy-upgrade-primary-change")
+	keeper := createIAMUser(t, endpoint, primary.Credential, "retained.operator", "Retained platform operator", initialReaderPassword, "policy-upgrade-operator-create")
+	keeperLogin := loginIAM(t, endpoint, "retained.operator@organization-process", initialReaderPassword, "policy-upgrade-operator-login")
+	changePasswordIAM(t, endpoint, keeperLogin.Credential, initialReaderPassword, changedReaderPassword, "policy-upgrade-operator-change")
+	createIAMPolicyAttachment(t, endpoint, primary.Credential, keeper.ID, iamv1.SystemPolicyPlatformOperator, "policy-upgrade-operator-grant")
+	opened := performJSON(t, http.MethodPost, endpoint+"/v1/accounts", primary.Credential, map[string]any{
+		"id": "retained-paused", "displayName": "Retained paused account", "rootLoginName": "retained.paused.root",
+		"rootDisplayName": "Retained paused Root", "initialPassword": initialReaderPassword, "requestId": "policy-upgrade-paused-create",
+	})
+	var pausedAccount iamv1.Account
+	if opened.Status != http.StatusCreated || json.Unmarshal(opened.Body, &pausedAccount) != nil || iamv1.ValidateAccount(pausedAccount) != nil {
+		t.Fatal("old binary did not open the paused-account fixture")
+	}
+	pausedLogin := loginIAM(t, endpoint, "retained.paused.root", initialReaderPassword, "policy-upgrade-paused-login")
+	changePasswordIAM(t, endpoint, pausedLogin.Credential, initialReaderPassword, changedReaderPassword, "policy-upgrade-paused-password")
+	paused := performJSON(t, http.MethodPost, endpoint+"/v1/accounts/retained-paused:set-status", primary.Credential,
+		iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled, ResourceVersion: pausedAccount.ResourceVersion, RequestID: "policy-upgrade-paused-disable"})
+	if paused.Status != http.StatusOK || json.Unmarshal(paused.Body, &pausedAccount) != nil || pausedAccount.Status != iamv1.AccountDisabled {
+		t.Fatal("old binary did not explicitly pause the account")
+	}
 	user := createIAMUser(t, endpoint, primary.Credential, "retained.policy", "Retained policy user", initialReaderPassword, "policy-upgrade-user-create")
 	member := loginIAM(t, endpoint, "retained.policy@organization-process", initialReaderPassword, "policy-upgrade-member-login")
 	changePasswordIAM(t, endpoint, member.Credential, initialReaderPassword, changedReaderPassword, "policy-upgrade-member-change")
@@ -170,15 +191,44 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	revokeIAMPolicyAttachment(t, endpoint, primary.Credential, "bootstrap-platform-operator-binding", 1, "policy-upgrade-platform-revoke")
 	retired := loginIAM(t, endpoint, "retained.policy@organization-process", changedReaderPassword, "policy-upgrade-retired-login")
 	revokeIAMSession(t, endpoint, primary.Credential, retired.Session.ID, "policy-upgrade-session-revoke")
-	// Send the actual fixed binary its original public request, not a current
-	// request stripped by a production compatibility path.
+	assertViewerCeiling := func(stage string) {
+		t.Helper()
+		for _, mode := range []iamv1.AuthorizationResourceMode{iamv1.AuthorizationResourceInstance, iamv1.AuthorizationResourceCollection} {
+			action, usage, resourceID, allowed := iamv1.ActionPaaSApplicationRead, iamv1.AuthorizationCollectionUsage(""), "retained-selected", true
+			if mode == iamv1.AuthorizationResourceCollection {
+				action, usage, resourceID, allowed = iamv1.ActionPaaSApplicationCreate, iamv1.AuthorizationCollectionCreate, "collection", false
+			}
+			id := "retained-viewer-" + stage + "-" + string(mode)
+			request, err := iamv1.NewAuthorizationRequest(action, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: resourceID}, mode, usage, id, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "", request, map[string]string{"Matrix-Subject-Credential": member.Credential})
+			var decision iamv1.AuthorizationDecision
+			if response.Status != http.StatusOK || json.Unmarshal(response.Body, &decision) != nil || iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil || decision.Allowed != allowed {
+				t.Fatal("fixed SYSTEM read/create ceiling changed across cutover")
+			}
+			if allowed && (decision.Subject == nil || decision.Subject.ID != user.ID || decision.TenantID != user.AccountID) {
+				t.Fatal("fixed SYSTEM allowance changed its authenticated tenant/subject")
+			}
+		}
+		assertPlatformAuthorization(t, endpoint, member.Credential, string(user.ID), "retained-viewer-platform-"+stage, false)
+	}
+	assertViewerCeiling("old")
+	legacyRequest, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationCreate,
+		iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}, iamv1.AuthorizationResourceCollection,
+		iamv1.AuthorizationCollectionCreate, "policy-upgrade-old-business", "policy-upgrade-old-business")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The fixed predecessor already binds its request/decision to Profile r1;
+	// only its policy content is document-only. Do not strip current fields.
 	legacyResponse := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "",
-		map[string]any{"action": "paas.application.create", "resource": map[string]string{"kind": "APPLICATION", "id": "collection"},
-			"requestId": "policy-upgrade-old-business", "correlationId": "policy-upgrade-old-business"},
+		legacyRequest,
 		map[string]string{"Matrix-Subject-Credential": primary.Credential})
 	var originalDecision iamv1.AuthorizationDecision
 	if legacyResponse.Status != http.StatusOK || json.Unmarshal(legacyResponse.Body, &originalDecision) != nil ||
-		iamv1.ValidateLegacyAuthorizationDecision(originalDecision) != nil || !originalDecision.Allowed || originalDecision.Subject == nil {
+		iamv1.CheckAuthorizationDecisionForRequest(originalDecision, legacyRequest) != nil || !originalDecision.Allowed || originalDecision.Subject == nil {
 		t.Fatal("old binary did not issue an original business decision")
 	}
 	oldFact := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "policy-upgrade-old-business-event",
@@ -187,29 +237,109 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		Target: auditv1.TargetReference{Kind: auditv1.TargetApplication, ID: "policy-upgrade-old-app"}, Result: auditv1.ResultSucceeded,
 		RequestDigest: "sha256:" + strings.Repeat("1", 64), RequestID: originalDecision.RequestID, CorrelationID: "policy-upgrade-old-business",
 		OperationID: "policy-upgrade-old-operation", OccurredAt: originalDecision.DecidedAt.Add(time.Microsecond)}
+	customer := createIAMUser(t, endpoint, primary.Credential, "retained.customer", "Retained customer user", initialReaderPassword, "policy-upgrade-customer-create")
+	customerLogin := loginIAM(t, endpoint, "retained.customer@organization-process", initialReaderPassword, "policy-upgrade-customer-login")
+	changePasswordIAM(t, endpoint, customerLogin.Credential, initialReaderPassword, changedReaderPassword, "policy-upgrade-customer-change")
+	publication := iamv1.CreatePolicyRequest{DisplayName: "Retained author document", RequestID: "policy-upgrade-customer-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "selected", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "retained-selected"}}}}}}
+	// Decode only this real predecessor's old wire shape in the test. The
+	// current production decoder must reject missing contractVersion.
+	var oldPolicy struct {
+		Policy  iamv1.Policy    `json:"policy"`
+		Version json.RawMessage `json:"version"`
+	}
+	response := performJSON(t, http.MethodPost, endpoint+"/v1/policies", primary.Credential, publication)
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &oldPolicy) != nil || iamv1.ValidatePolicy(oldPolicy.Policy) != nil {
+		t.Fatal("actual predecessor did not publish the customer document")
+	}
+	createIAMPolicyAttachment(t, endpoint, primary.Credential, customer.ID, oldPolicy.Policy.ID, "policy-upgrade-customer-attach")
+	var inheritedGroup iamv1.Group
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/groups", primary.Credential, iamv1.CreateGroupRequest{Name: "Retained Root preflight group", RequestID: "policy-upgrade-group-create"})
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &inheritedGroup) != nil || iamv1.ValidateGroup(inheritedGroup) != nil {
+		t.Fatal("old binary did not create the retained group")
+	}
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/policy-attachments", primary.Credential,
+		iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(inheritedGroup.ID)}, PolicyID: oldPolicy.Policy.ID,
+			PolicyResourceVersion: oldPolicy.Policy.ResourceVersion, RequestID: "policy-upgrade-group-attach"})
+	if response.Status != http.StatusOK {
+		t.Fatal("old binary did not attach the retained group policy")
+	}
+	rootAttachment := createIAMPolicyAttachment(t, endpoint, primary.Credential, "principal-admin", oldPolicy.Policy.ID, "policy-upgrade-root-attach")
 	old.stop()
-	// Compare durable authority values, not SQL text or a generated schema
-	// inventory. Normalize only the renamed attachment target and columns absent
-	// from this actual schema8 source. Check those new columns separately below;
-	// the original decision document and policy evidence must remain byte-equal.
-	snapshot := func(targetColumn string) []byte {
+	var originalVersions []string
+	if err := admin.QueryRow(ctx, `SELECT array_agg(id ORDER BY id) FROM iam.policy_versions`).Scan(&originalVersions); err != nil {
+		t.Fatal("read predecessor version identities")
+	}
+	// Only original content rows are compared: the migration may insert new
+	// compiled SYSTEM versions, but never advance existing defaults or rewrite
+	// old canonical bytes, evidence, credentials, attachments or receipts.
+	snapshot := func() []byte {
 		t.Helper()
 		var state []byte
 		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
-			'attachments',(SELECT jsonb_agg((to_jsonb(a)-'principal_id'-'target_id') ||
-				jsonb_build_object('target_id',to_jsonb(a)->$1::text) ORDER BY tenant_id,id) FROM iam.policy_attachments a),
+			'accounts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM iam.accounts a),
+			'roots',(SELECT jsonb_agg(to_jsonb(r) ORDER BY account_id) FROM iam.account_roots r),
+			'groups',(SELECT jsonb_agg(to_jsonb(g) ORDER BY tenant_id,id) FROM iam.groups g),
+			'memberships',(SELECT jsonb_agg(to_jsonb(m) ORDER BY tenant_id,id) FROM iam.group_memberships m),
+			'attachments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY tenant_id,id) FROM iam.policy_attachments a),
 			'policies',(SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM iam.policies p),
+			'versions',(SELECT jsonb_agg(to_jsonb(v)-'contract_version'-'compilation' ORDER BY policy_id,id) FROM iam.policy_versions v WHERE id=ANY($1::text[])),
 			'receipt',(SELECT jsonb_agg(to_jsonb(r)) FROM iam.bootstrap_receipts r),
 			'principals',(SELECT jsonb_agg(to_jsonb(p) ORDER BY tenant_id,id) FROM iam.principals p),
 			'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.user_credentials c),
 			'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY tenant_id,id) FROM iam.sessions s),
-			'decisions',(SELECT jsonb_agg(to_jsonb(d)-'boundary_evidence'-'contract_version'-'profile_product'-'profile_revision'-'profile_content_digest'-'resource_mode'-'collection_usage' ORDER BY tenant_id,id) FROM iam.authorization_decisions d),
-			'outbox',(SELECT jsonb_agg(to_jsonb(e) ORDER BY tenant_id,event_id) FROM iam.audit_outbox e))`, targetColumn).Scan(&state); err != nil {
+			'decisions',(SELECT jsonb_agg(to_jsonb(d) ORDER BY tenant_id,id) FROM iam.authorization_decisions d),
+			'outbox',(SELECT jsonb_agg(to_jsonb(e) ORDER BY tenant_id,event_id) FROM iam.audit_outbox e))`, originalVersions).Scan(&state); err != nil {
 			t.Fatal("read retained policy authority")
 		}
 		return state
 	}
-	before := snapshot("principal_id")
+	before := snapshot()
+	assertUnchanged := func() {
+		t.Helper()
+		var originalShape bool
+		if err := admin.QueryRow(ctx, `SELECT schema_version=21 AND NOT EXISTS(SELECT 1 FROM pg_attribute
+			WHERE attrelid='iam.policy_versions'::regclass AND attname='contract_version' AND NOT attisdropped) FROM iam.readiness()`).Scan(&originalShape); err != nil || !originalShape || !bytes.Equal(before, snapshot()) {
+			t.Fatal("rejected cutover changed schema, marker or original authority")
+		}
+	}
+	if err := iammigration.Up(ctx, admin); err == nil {
+		t.Fatal("Root legacy CUSTOMER attachment was accepted by cutover")
+	}
+	if _, err := admin.Exec(ctx, "ROLLBACK"); err != nil {
+		t.Fatal("finish rejected Root cutover")
+	}
+	assertUnchanged()
+	old = start(oldBinary)
+	revokeIAMPolicyAttachment(t, endpoint, primary.Credential, rootAttachment.ID, rootAttachment.ResourceVersion, "policy-upgrade-root-detach")
+	old.stop()
+	before = snapshot()
+	// Privileged corruption fixtures are negative tests, not reachable old API
+	// states or evidence of legacy provenance. The old API forbids Root group
+	// membership. Every temporary change and disabled trigger rolls back.
+	for _, fixture := range []string{
+		`ALTER TABLE iam.principals DISABLE TRIGGER USER;
+		 UPDATE iam.principals SET status='DISABLED' WHERE tenant_id='organization-process' AND id='principal-admin'`,
+		`ALTER TABLE iam.account_roots DISABLE TRIGGER USER;
+		 DELETE FROM iam.account_roots WHERE account_id='organization-process'`,
+		`ALTER TABLE iam.group_memberships DISABLE TRIGGER USER;
+		 INSERT INTO iam.group_memberships(tenant_id,id,group_id,user_id,created_by,resource_version,created_at,updated_at)
+		 SELECT 'organization-process','synthetic-root-membership',id,'principal-admin','principal-admin',1,transaction_timestamp(),transaction_timestamp()
+		 FROM iam.groups WHERE tenant_id='organization-process' AND name='Retained Root preflight group'`,
+	} {
+		if _, err := admin.Exec(ctx, "BEGIN; "+fixture); err != nil {
+			t.Fatal("install isolated invalid Root qualification")
+		}
+		if err := iammigration.Up(ctx, admin); err == nil {
+			t.Fatal("invalid Root qualification crossed the cutover")
+		}
+		if _, err := admin.Exec(ctx, "ROLLBACK"); err != nil {
+			t.Fatal("restore original Root qualification")
+		}
+		assertUnchanged()
+	}
 	var historicalEvidence bool
 	if err := admin.QueryRow(ctx, "SELECT count(*)>0 AND bool_and(policy_evidence IS NOT NULL) FROM iam.authorization_decisions").Scan(&historicalEvidence); err != nil || !historicalEvidence {
 		t.Fatal("old executable did not create real version-bound decisions")
@@ -226,10 +356,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	if _, err := admin.Exec(ctx, "ROLLBACK; DROP EVENT TRIGGER matrix_group_upgrade_fault; DROP FUNCTION public.matrix_group_upgrade_fault()"); err != nil {
 		t.Fatal("finish isolated migration failure")
 	}
-	var unchangedShape bool
-	if err := admin.QueryRow(ctx, "SELECT schema_version=8 AND to_regclass('iam.groups') IS NULL AND to_regclass('iam.group_memberships') IS NULL FROM iam.readiness()").Scan(&unchangedShape); err != nil || !unchangedShape || !bytes.Equal(before, snapshot("principal_id")) {
-		t.Fatal("failed group migration partially renamed authority or changed retained data")
-	}
+	assertUnchanged()
 	unmigrated := startChild(t, root, currentBinary, environment)
 	children = append(children, unmigrated)
 	if err := unmigrated.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
@@ -238,32 +365,28 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	// Negative corruption fixture in this disposable database only. A real old
 	// row missing required content must abort the entire cutover, not acquire a
 	// legacy marker merely because its new wire fields are absent.
-	for _, expression := range []string{"document-'reason'", "jsonb_set(document,'{reason}','null'::jsonb)", "document||'{\"profile\":null}'::jsonb"} {
-		if _, err := admin.Exec(ctx, `BEGIN; ALTER TABLE iam.authorization_decisions DISABLE TRIGGER authorization_decisions_are_immutable;
-			UPDATE iam.authorization_decisions SET document=`+expression+` WHERE (tenant_id,id)=(SELECT tenant_id,id FROM iam.authorization_decisions ORDER BY tenant_id,id LIMIT 1)`); err != nil {
-			t.Fatal("install isolated incomplete old-decision fixture")
+	for _, expression := range []string{"document-'languageVersion'", "jsonb_set(document,'{statements}','null'::jsonb)"} {
+		if _, err := admin.Exec(ctx, `BEGIN; ALTER TABLE iam.policy_versions DISABLE TRIGGER policy_versions_are_immutable;
+			ALTER TABLE iam.policy_versions DROP CONSTRAINT policy_versions_content_valid;
+			UPDATE iam.policy_versions SET document=`+expression+` WHERE policy_id=$1`, oldPolicy.Policy.ID); err != nil {
+			t.Fatal("install isolated incomplete old-policy fixture")
 		}
 		if err := iammigration.Up(ctx, admin); err == nil {
-			t.Fatal("incomplete old decision was admitted as historical authority")
+			t.Fatal("incomplete old policy was admitted as historical authority")
 		}
 		if _, err := admin.Exec(ctx, "ROLLBACK"); err != nil {
 			t.Fatal("rollback incomplete old-decision fixture")
 		}
-		var originalShape bool
-		if err := admin.QueryRow(ctx, `SELECT schema_version=8 AND NOT EXISTS(SELECT 1 FROM pg_attribute
-			WHERE attrelid='iam.authorization_decisions'::regclass AND attname='contract_version' AND NOT attisdropped)
-			FROM iam.readiness()`).Scan(&originalShape); err != nil || !originalShape || !bytes.Equal(before, snapshot("principal_id")) {
-			t.Fatal("rejected historical cutover committed a marker or changed original history")
-		}
+		assertUnchanged()
 	}
 	for range 2 {
 		if err := iammigration.Up(ctx, admin); err != nil {
-			t.Fatalf("upgrade actual schema8 policy data: %v", err)
+			t.Fatalf("upgrade actual schema21 policy data: %v", err)
 		}
 		if err := iammigration.Verify(ctx, admin); err != nil {
 			t.Fatalf("retained authority verification failed: %v", err)
 		}
-		after := snapshot("target_id")
+		after := snapshot()
 		if !bytes.Equal(before, after) {
 			var oldSections, newSections map[string]json.RawMessage
 			if json.Unmarshal(before, &oldSections) != nil || json.Unmarshal(after, &newSections) != nil {
@@ -277,22 +400,19 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 			t.Fatal("migration changed original authority; sensitive values are not logged")
 		}
 		var legacyOnly bool
-		if err := admin.QueryRow(ctx, `SELECT count(*)>0 AND bool_and(contract_version=1
-			AND boundary_evidence IS NULL
-			AND profile_product IS NULL AND profile_revision IS NULL AND profile_content_digest IS NULL
-			AND resource_mode IS NULL AND collection_usage IS NULL
-			AND NOT document ?| ARRAY['profile','resourceMode','collectionUsage','correlationId'])
-			FROM iam.authorization_decisions`).Scan(&legacyOnly); err != nil || !legacyOnly {
-			t.Fatal("retained original decisions acquired a fabricated current profile")
+		if err := admin.QueryRow(ctx, `SELECT count(*)>0 AND bool_and(contract_version=1 AND compilation IS NULL)
+			FROM iam.policy_versions WHERE id=ANY($1::text[])`, originalVersions).Scan(&legacyOnly); err != nil || !legacyOnly {
+			t.Fatal("retained original versions acquired fabricated compilation")
 		}
 	}
 	obsolete := startChild(t, root, oldBinary, environment)
 	children = append(children, obsolete)
 	if err := obsolete.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
-		t.Fatal("old principal-only executable accepted group authority")
+		t.Fatal("old document-only executable accepted compiled policy authority")
 	}
-	for range 2 {
+	for restart := range 2 {
 		current := start(currentBinary)
+		assertViewerCeiling(fmt.Sprintf("current-%d", restart))
 		proofResponse := performJSON(t, http.MethodPost, endpoint+"/v1/audit-producer:resolve", paasServiceCredential, iamv1.ResolveAuditProducerRequest{Event: oldFact})
 		var proof iamv1.AuditProducerAuthorization
 		_, expectedDigest, err := auditv1.CanonicalizeEvent(auditv1.SourcePaaS, oldFact)
@@ -310,12 +430,67 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 			t.Fatal("upgrade or bootstrap restart revived a revoked session")
 		}
 		assertPlatformAuthorization(t, endpoint, primary.Credential, "principal-admin", "policy-upgrade-platform-denied", false)
-		if response := performJSON(t, http.MethodGet, endpoint+"/v1/groups", primary.Credential, nil); response.Status != http.StatusForbidden {
-			t.Fatal("seed replay silently expanded the existing account administrator default policy")
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/groups", primary.Credential, nil); response.Status != http.StatusOK {
+			t.Fatal("fixed SYSTEM management ceiling became unreachable")
+		}
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", customerLogin.Credential, nil); response.Status != http.StatusServiceUnavailable {
+			t.Fatal("unknown legacy CUSTOMER interpretation became current authority")
+		}
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", pausedLogin.Credential, nil); response.Status != http.StatusUnauthorized {
+			t.Fatal("cutover or restart implicitly enabled a paused account")
 		}
 		current.stop()
 	}
-	t.Log("actual IAM8 executable/migrator retained history and credential-bound sessions; late group DDL rolls back, old binary rejected, defaults never auto-expand")
+	current := start(currentBinary)
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/accounts/retained-paused:set-status", keeperLogin.Credential,
+		iamv1.SetAccountStatusRequest{Status: iamv1.AccountActive, ResourceVersion: pausedAccount.ResourceVersion, RequestID: "policy-upgrade-paused-enable"})
+	if response.Status != http.StatusOK {
+		t.Fatal("retained platform operator cannot explicitly resume the account")
+	}
+	resumedLogin := loginIAM(t, endpoint, "retained.paused.root", changedReaderPassword, "policy-upgrade-paused-resumed-login")
+	resumedPublication := publication
+	resumedPublication.RequestID = "policy-upgrade-resumed-root-publish"
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/policies", resumedLogin.Credential, resumedPublication)
+	var resumedPolicy iamv1.PolicyDetail
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &resumedPolicy) != nil || iamv1.ValidatePolicyDetail(resumedPolicy) != nil || resumedPolicy.Version.ContractVersion != 2 {
+		t.Fatal("explicitly resumed Root cannot create a compiled policy")
+	}
+	var enableFacts int
+	if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action'='iam.account.enabled'
+		AND event_document#>>'{target,id}'='retained-paused' AND event_document->>'requestId'='policy-upgrade-paused-enable'`).Scan(&enableFacts); err != nil || enableFacts != 1 {
+		t.Fatal("explicit resume lost its single correlated lifecycle fact")
+	}
+	var retained iamv1.PolicyDetail
+	response = performJSON(t, http.MethodGet, endpoint+"/v1/policies/"+string(oldPolicy.Policy.ID), primary.Credential, nil)
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &retained) != nil || iamv1.ValidatePolicyDetail(retained) != nil || retained.Version.ContractVersion != 1 || retained.Version.Compilation != nil {
+		t.Fatal("Root cannot inspect original CUSTOMER content without authorizing it")
+	}
+	var published iamv1.PolicyVersionDetail
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/policies/"+string(oldPolicy.Policy.ID)+"/versions", primary.Credential,
+		iamv1.CreatePolicyVersionRequest{Document: publication.Document, ResourceVersion: retained.Policy.ResourceVersion, RequestID: "policy-upgrade-explicit-publication"})
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &published) != nil || iamv1.ValidatePolicyVersionDetail(published) != nil || published.Version.ContractVersion != 2 || published.Policy.DefaultVersionID != retained.Version.ID {
+		t.Fatal("Root publication did not preserve the original default")
+	}
+	if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", customerLogin.Credential, nil); response.Status != http.StatusServiceUnavailable {
+		t.Fatal("publication alone advanced legacy CUSTOMER authority")
+	}
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/policies/"+string(oldPolicy.Policy.ID)+":set-default-version", primary.Credential,
+		iamv1.SetDefaultPolicyVersionRequest{VersionID: published.Version.ID, ResourceVersion: published.Policy.ResourceVersion, RequestID: "policy-upgrade-explicit-default"})
+	if response.Status != http.StatusOK {
+		t.Fatal("Root cannot explicitly select the compiled version")
+	}
+	request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "retained-selected"},
+		iamv1.AuthorizationResourceInstance, "", "policy-upgrade-selected", "policy-upgrade-selected")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "", request, map[string]string{"Matrix-Subject-Credential": customerLogin.Credential})
+	var selected iamv1.AuthorizationDecision
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &selected) != nil || iamv1.CheckAuthorizationDecisionForRequest(selected, request) != nil || !selected.Allowed {
+		t.Fatal("explicitly selected compiled version did not authorize its resource")
+	}
+	current.stop()
+	t.Log("actual fixed IAM21 -> compiled22: original bytes/defaults/history retained; Root preflight and late rollback; old binary rejected; unknown CUSTOMER remains closed until explicit publish and select")
 }
 
 func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, qualifiedChild bool) {
@@ -864,7 +1039,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 21, Audit: 13, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 22, Audit: 13, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")

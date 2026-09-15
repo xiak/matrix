@@ -253,6 +253,15 @@ func profileBoundIAMRequest(t *testing.T, request iamv1.AuthorizationRequest, mo
 	return result
 }
 
+func compileIAMPolicyForStorage(document iamv1.PolicyDocument) (string, string, error) {
+	profiles := iamv1.AllAuthorizationProfiles()
+	compilation, err := iamv1.CompilePolicyDocument(document, profiles)
+	if err != nil {
+		return "", "", err
+	}
+	return iamv1.CanonicalizePolicyCompilation(document, compilation, profiles)
+}
+
 func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	const environment = "MATRIX_IAM_POLICY_POSTGRES_TEST_DSN"
 	dsn := os.Getenv(environment)
@@ -384,9 +393,35 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		if err := tx.QueryRow(ctx, `SELECT iam.current_policy_snapshot($1,$2)`, document.Organization.ID, document.Administrator.ID).Scan(&encoded); err != nil {
 			t.Fatal(err)
 		}
-		var rows []authority.AttachedPolicy
-		if json.Unmarshal(encoded, &rows) != nil {
+		var stored []struct {
+			authority.AttachedPolicy
+			Version struct {
+				Value     iamv1.PolicyVersion `json:"value"`
+				Canonical string              `json:"canonical"`
+			} `json:"version"`
+		}
+		if json.Unmarshal(encoded, &stored) != nil {
 			t.Fatal("decode stored policy snapshot")
+		}
+		rows := make([]authority.AttachedPolicy, len(stored))
+		for index, item := range stored {
+			canonical, err := iamv1.CanonicalizePolicyVersion(item.Version.Value)
+			if err != nil || canonical != item.Version.Canonical {
+				t.Fatal("stored policy bytes differ from their complete commitment")
+			}
+			rows[index] = item.AttachedPolicy
+			rows[index].Version = item.Version.Value
+			for _, reference := range item.Version.Value.Compilation.Profiles {
+				var declared string
+				if err := tx.QueryRow(ctx, `SELECT canonical_document FROM iam.authorization_profiles WHERE product=$1 AND revision=$2 AND content_digest=$3`, reference.Product, reference.Revision, reference.ContentDigest).Scan(&declared); err != nil {
+					t.Fatal(err)
+				}
+				profile, err := iamv1.DecodeAuthorizationProfile(strings.NewReader(declared))
+				if err != nil {
+					t.Fatal(err)
+				}
+				rows[index].Profiles = append(rows[index].Profiles, profile)
+			}
 		}
 		for index := range rows {
 			row := &rows[index]
@@ -402,6 +437,178 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if len(initial) != 2 {
 		t.Fatalf("bootstrap must create separate account/platform attachments, got %d", len(initial))
 	}
+	t.Run("compiled_policy_storage_contract", func(t *testing.T) {
+		var ready bool
+		if err := admin.QueryRow(ctx, `SELECT iam.policy_version_contract_ready()`).Scan(&ready); err != nil || !ready {
+			t.Fatal("compiled version metadata, exact functions or private boundary unavailable")
+		}
+		compiled, err := authority.SystemPolicyVersion(iamv1.SystemPolicyPaaSViewer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		canonical, _, err := compileIAMPolicyForStorage(compiled.Document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, mutate := range map[string]func(map[string]any){
+			"exact":            func(map[string]any) {},
+			"missing profiles": func(value map[string]any) { delete(value, "profiles") },
+			"null profiles":    func(value map[string]any) { value["profiles"] = nil },
+			"duplicate product": func(value map[string]any) {
+				items := value["profiles"].([]any)
+				value["profiles"] = append(items, items[0])
+			},
+			"same revision wrong digest": func(value map[string]any) {
+				value["profiles"].([]any)[0].(map[string]any)["contentDigest"] = "sha256:" + strings.Repeat("0", 64)
+			},
+			"unregistered revision": func(value map[string]any) { value["profiles"].([]any)[0].(map[string]any)["revision"] = 999 },
+			"missing statement":     func(value map[string]any) { value["resolvedStatements"] = []any{} },
+			"wrong sid": func(value map[string]any) {
+				value["resolvedStatements"].([]any)[0].(map[string]any)["sid"] = "substituted"
+			},
+			"different resolved action": func(value map[string]any) {
+				value["resolvedStatements"].([]any)[0].(map[string]any)["actions"] = []string{"paas.application.create"}
+			},
+			"foreign field": func(value map[string]any) { value["caller"] = "PAAS" },
+			"oversized author": func(value map[string]any) {
+				var references []any
+				for _, reference := range value["profiles"].([]any) {
+					if reference.(map[string]any)["product"] == "paas" {
+						references = append(references, reference)
+					}
+				}
+				value["profiles"] = references
+				var statements []iamv1.PolicyStatement
+				var resolved []iamv1.PolicyResolvedStatement
+				for index := 0; index < 64; index++ {
+					statement := iamv1.PolicyStatement{SID: fmt.Sprintf("large-%02d", index), Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}}
+					for resource := 0; resource < 8; resource++ {
+						statement.Resources = append(statement.Resources, iamv1.PolicyResourceSelector{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact,
+							ID: fmt.Sprintf("resource-%03d-%03d-%s", index, resource, strings.Repeat("x", 100))})
+					}
+					statements = append(statements, statement)
+					resolved = append(resolved, iamv1.PolicyResolvedStatement{SID: statement.SID, Actions: statement.Actions})
+				}
+				value["document"] = iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant, Statements: statements}
+				value["resolvedStatements"] = resolved
+				if len(mustIAMJSON(t, value["document"])) <= int(iamv1.MaxPolicyBytes) || len(mustIAMJSON(t, value)) > int(iamv1.MaxPolicyCompilationBytes) {
+					t.Fatal("oversized author fixture did not isolate the document budget")
+				}
+			},
+		} {
+			var variant map[string]any
+			if json.Unmarshal([]byte(canonical), &variant) != nil {
+				t.Fatal("decode compiled SQL fixture")
+			}
+			mutate(variant)
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err != nil {
+				tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			// Recompute the envelope digest so that the negative case reaches
+			// reference/statement validation, not a trivial hash mismatch.
+			_, err = tx.Exec(ctx, `SELECT iam.assert_policy_compilation($1,
+				'sha256:'||encode(sha256(convert_to('matrix.iam.policy-compilation.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'),'TENANT')`, string(mustIAMJSON(t, variant)))
+			if name == "exact" {
+				if err != nil {
+					tx.Rollback(ctx)
+					t.Fatal("exact compiled SQL content rejected")
+				}
+			} else {
+				var rejected *pgconn.PgError
+				if !errors.As(err, &rejected) || (rejected.Code != "22023" && rejected.Code != "23514") {
+					tx.Rollback(ctx)
+					t.Fatalf("compiled SQL attack %s was not rejected", name)
+				}
+			}
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, statement := range []string{
+			`ALTER TABLE iam.policy_versions ALTER COLUMN contract_version SET DEFAULT 2`,
+			`ALTER TABLE iam.policy_versions ALTER COLUMN compilation SET DEFAULT '{}'::jsonb`,
+			`GRANT EXECUTE ON FUNCTION iam.policy_version_snapshot(iam.policy_versions) TO matrix_iam_api`,
+			`GRANT EXECUTE ON FUNCTION iam.recorded_policy_version_matches(jsonb) TO matrix_iam_worker`,
+			`ALTER FUNCTION iam.recorded_policy_version_matches(jsonb) SECURITY DEFINER`,
+		} {
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = tx.Exec(ctx, statement); err != nil {
+				tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			if err = tx.QueryRow(ctx, `SELECT iam.policy_version_contract_ready()`).Scan(&ready); err != nil || ready {
+				tx.Rollback(ctx)
+				t.Fatal("readiness accepted a widened compiled storage contract")
+			}
+			if err := tx.Rollback(ctx); err != nil {
+				t.Fatal(err)
+			}
+		}
+		var definition string
+		if err := admin.QueryRow(ctx, `SELECT pg_get_functiondef('iam.policy_version_snapshot(iam.policy_versions)'::regprocedure)`).Scan(&definition); err != nil {
+			t.Fatal(err)
+		}
+		restore := func() {
+			t.Helper()
+			if _, err := admin.Exec(ctx, definition); err != nil {
+				t.Fatal("restore own private projection fixture")
+			}
+		}
+		defer restore()
+		for _, suffix := range []string{`||' '`, `||E'\n'`} {
+			// Valid JSON with the same parsed content is not the original
+			// canonical commitment. Only this test database is changed.
+			_, err := admin.Exec(ctx, `CREATE OR REPLACE FUNCTION iam.policy_version_snapshot(version iam.policy_versions)
+                RETURNS jsonb LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $fixture$
+                SELECT jsonb_build_object('value',jsonb_strip_nulls(jsonb_build_object(
+                  'policyId',version.policy_id,'versionId',version.id,'document',version.document,
+                  'contentDigest',version.content_digest,'contractVersion',version.contract_version,'compilation',version.compilation)),
+                  'canonical',version.canonical_document`+suffix+`); $fixture$;`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", primary, nil)
+			if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "canonical") || strings.Contains(response.Body.String(), string(initial[0].Version.ID)) {
+				t.Fatal("noncanonical stored bytes did not fail closed with a sanitized response")
+			}
+			restore()
+		}
+		if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", primary, nil); response.Code != http.StatusOK {
+			t.Fatal("restored exact immutable projection did not recover")
+		}
+		version := initial[0].Version
+		evidence := map[string]any{"version": iamv1.PolicyVersionReference{PolicyID: version.PolicyID, VersionID: version.ID, ContentDigest: version.ContentDigest},
+			"contractVersion": version.ContractVersion, "compilation": version.Compilation}
+		for _, variant := range []string{"exact", "missing contract", "missing compilation", "null compilation", "legacy claim"} {
+			encoded := mustIAMJSON(t, evidence)
+			var changed map[string]any
+			if json.Unmarshal(encoded, &changed) != nil {
+				t.Fatal("decode fixture evidence")
+			}
+			switch variant {
+			case "missing contract":
+				delete(changed, "contractVersion")
+			case "missing compilation":
+				delete(changed, "compilation")
+			case "null compilation":
+				changed["compilation"] = nil
+			case "legacy claim":
+				changed["contractVersion"] = 1
+				delete(changed, "compilation")
+			}
+			if err := admin.QueryRow(ctx, `SELECT iam.recorded_policy_version_matches($1::jsonb)`, string(mustIAMJSON(t, changed))).Scan(&ready); err != nil || ready != (variant == "exact") {
+				t.Fatal("recorded version contract was guessed from missing or caller-selected fields", variant, err)
+			}
+		}
+	})
 	for _, definition := range iamv1.AllRecordedActionDefinitions() {
 		if _, current := iamv1.LookupActionDefinition(definition.Action); current {
 			continue
@@ -430,7 +637,8 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 		result, evidence, err := authority.EvaluateAttachedPolicies(databaseTime.UTC(), document.Organization.ID, document.InstallationID,
-			iamv1.Subject{Type: iamv1.PrincipalUser, ID: document.Administrator.ID}, readSnapshot(), action, resource)
+			iamv1.Subject{Type: iamv1.PrincipalUser, ID: document.Administrator.ID}, readSnapshot(),
+			profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: action, Resource: resource, RequestID: "policy-storage-check", CorrelationID: "policy-storage-check"}, iamv1.AuthorizationResourceInstance, ""))
 		if err != nil || result.Allowed != allowed || (allowed && len(evidence) == 0) {
 			t.Fatalf("stored policy decision action=%s allowed=%t error=%v", action, result.Allowed, err)
 		}
@@ -448,7 +656,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 		var actual []authority.PolicyAttachmentEvidence
-		if json.Unmarshal(stored, &actual) != nil || actual == nil || !slices.Equal(actual, evidence) {
+		if json.Unmarshal(stored, &actual) != nil || actual == nil || !reflect.DeepEqual(actual, evidence) {
 			t.Fatal("HTTP decision did not persist exact evaluated attachment/version evidence")
 		}
 	}
@@ -596,7 +804,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		Statements: []iamv1.PolicyStatement{{SID: "deny-application-read", Effect: iamv1.PolicyDeny,
 			Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{
 				{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
-	canonical, digest, err := iamv1.CanonicalizePolicyDocument(denyDocument)
+	canonical, digest, err := compileIAMPolicyForStorage(denyDocument)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,8 +829,8 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
 		VALUES('customer.local','CUSTOMER',$1,'Same policy name','TENANT','ACTIVE','same-version-id',1,transaction_timestamp(),transaction_timestamp()),
 		('customer.other','CUSTOMER','policy-other-account','Same policy name','TENANT','ACTIVE','same-version-id',1,transaction_timestamp(),transaction_timestamp());
-		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
-		SELECT id,'same-version-id','TENANT',$2::jsonb,$2,$3,transaction_timestamp() FROM iam.policies WHERE id IN ('customer.local','customer.other');
+		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at,contract_version,compilation)
+		SELECT id,'same-version-id','TENANT',$2::jsonb->'document',$2,$3,transaction_timestamp(),2,$2::jsonb-'document' FROM iam.policies WHERE id IN ('customer.local','customer.other');
 		COMMIT;`, document.Organization.ID, canonical, digest); err != nil {
 		t.Fatal(err)
 	}
@@ -645,7 +853,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	allowDocument := denyDocument
 	allowDocument.Statements = append([]iamv1.PolicyStatement{}, denyDocument.Statements...)
 	allowDocument.Statements[0].Effect = iamv1.PolicyAllow
-	allowCanonical, allowDigest, err := iamv1.CanonicalizePolicyDocument(allowDocument)
+	allowCanonical, allowDigest, err := compileIAMPolicyForStorage(allowDocument)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -654,9 +862,9 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if _, err := admin.Exec(ctx, `BEGIN;
 		INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
 		SELECT 'budget-policy-'||i,'CUSTOMER',$1,'Budget policy '||i,'TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp() FROM generate_series(1,255) i;
-		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
-		SELECT 'budget-policy-'||i,'v1','TENANT',CASE WHEN i=255 THEN $4::jsonb ELSE $2::jsonb END,
-		CASE WHEN i=255 THEN $4 ELSE $2 END,CASE WHEN i=255 THEN $5 ELSE $3 END,transaction_timestamp() FROM generate_series(1,255) i;
+		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at,contract_version,compilation)
+		SELECT 'budget-policy-'||i,'v1','TENANT',(CASE WHEN i=255 THEN $4::jsonb ELSE $2::jsonb END)->'document',
+		CASE WHEN i=255 THEN $4 ELSE $2 END,CASE WHEN i=255 THEN $5 ELSE $3 END,transaction_timestamp(),2,(CASE WHEN i=255 THEN $4::jsonb ELSE $2::jsonb END)-'document' FROM generate_series(1,255) i;
 		INSERT INTO iam.policy_attachments(tenant_id,id,target_id,policy_id,resource_version,created_at,updated_at)
 		SELECT $1,'budget-attachment-'||i,$6,'budget-policy-'||i,1,transaction_timestamp(),transaction_timestamp() FROM generate_series(1,254) i;
 		COMMIT;`, document.Organization.ID, allowCanonical, allowDigest, canonical, digest, document.Administrator.ID); err != nil {
@@ -685,8 +893,8 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := admin.Exec(ctx, `BEGIN;
-		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
-		VALUES('system.account-administrator','storage-deny-v2','TENANT',$1::jsonb,$1,$2,transaction_timestamp());
+		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at,contract_version,compilation)
+		VALUES('system.account-administrator','storage-deny-v2','TENANT',$1::jsonb->'document',$1,$2,transaction_timestamp(),2,$1::jsonb-'document');
 		UPDATE iam.policies SET default_version_id='storage-deny-v2',resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE id='system.account-administrator'; COMMIT;`, canonical, digest); err != nil {
 		t.Fatal(err)
 	}
@@ -2024,8 +2232,8 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		if _, err = tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err != nil {
 			t.Fatal(err)
 		}
-		_, err = tx.Exec(ctx, `SELECT iam.assert_customer_policy_document($1,
-			'sha256:'||encode(sha256(convert_to('matrix.iam.policy.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'))`, canonical)
+		_, err = tx.Exec(ctx, `SELECT iam.assert_policy_compilation($1,
+			'sha256:'||encode(sha256(convert_to('matrix.iam.policy-compilation.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'),'TENANT')`, canonical)
 		if allowed {
 			if err != nil {
 				t.Fatalf("valid customer document was rejected: %v", err)
@@ -2041,19 +2249,18 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: action.AuthorityScope,
 			Statements: []iamv1.PolicyStatement{{SID: "one", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{action.Action},
 				Resources: []iamv1.PolicyResourceSelector{{Kind: action.ResourceKind, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
-		canonical, _, err := iamv1.CanonicalizePolicyDocument(document)
+		canonical, _, err := compileIAMPolicyForStorage(document)
 		if err != nil {
 			t.Fatal(err)
 		}
 		checkDocument(canonical, action.AuthorityScope == iamv1.AuthorityScopeTenant)
-		document.Statements[0].Resources[0] = iamv1.PolicyResourceSelector{Kind: action.ResourceKind, Match: iamv1.PolicyResourcePrefixInAuthority, ID: "resource-"}
-		checkDocument(string(mustIAMJSON(t, document)), action.ResourcePrefixAllowed)
+		prefix := strings.Replace(canonical, `"match":"ANY_IN_AUTHORITY"`, `"match":"PREFIX_IN_AUTHORITY","id":"resource-"`, 1)
+		checkDocument(prefix, action.ResourcePrefixAllowed)
 		if action.AuthorityScope != iamv1.AuthorityScopeTenant {
-			document.Scope = iamv1.AuthorityScopeTenant
-			checkDocument(string(mustIAMJSON(t, document)), false)
+			checkDocument(strings.Replace(canonical, `"scope":"`+string(action.AuthorityScope)+`"`, `"scope":"TENANT"`, 1), false)
 		}
 	}
-	canonical, _, err := iamv1.CanonicalizePolicyDocument(create.Document)
+	canonical, _, err := compileIAMPolicyForStorage(create.Document)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2063,7 +2270,7 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 		strings.Replace(canonical, `"paas.application.read"`, `"paas.future.allow"`, 1),
 		strings.Replace(canonical, `"kind":"APPLICATION"`, `"kind":"USER","kind":"APPLICATION"`, 1),
 		strings.Replace(canonical, `"id":"customer-selected-app"`, `"id":"*"`, 1),
-		strings.Repeat(" ", int(iamv1.MaxPolicyBytes)) + canonical,
+		strings.Repeat(" ", int(iamv1.MaxPolicyCompilationBytes)) + canonical,
 	} {
 		checkDocument(malformed, false)
 	}
@@ -2454,7 +2661,7 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 	if err := database.QueryRow(ctx, `SELECT canonical_document,content_digest,retired_at IS NOT NULL FROM iam.policy_versions WHERE policy_id=$1 AND id=$2`, initial.Policy.ID, initial.Version.ID).Scan(&retainedCanonical, &retainedDigest, &isRetired); err != nil || !isRetired || retainedDigest != initial.Version.ContentDigest {
 		t.Fatal("retired content disappeared")
 	}
-	wantCanonical, _, err := iamv1.CanonicalizePolicyDocument(initial.Version.Document)
+	wantCanonical, _, err := iamv1.CanonicalizePolicyCompilation(initial.Version.Document, *initial.Version.Compilation, iamv1.AllAuthorizationProfiles())
 	if err != nil || retainedCanonical != wantCanonical {
 		t.Fatal("retirement rewrote canonical history")
 	}
@@ -2465,8 +2672,8 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 	}
 	post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: retirementEvent}, http.StatusOK, nil)
 	for _, attack := range []string{
-		`INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at,retired_at)
-		 SELECT policy_id,'forged-retired-version',authority_scope,document,canonical_document,content_digest,transaction_timestamp(),transaction_timestamp()
+		`INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at,retired_at,contract_version,compilation)
+		 SELECT policy_id,'forged-retired-version',authority_scope,document,canonical_document,content_digest,transaction_timestamp(),transaction_timestamp(),contract_version,compilation
 		 FROM iam.policy_versions WHERE policy_id=$1 AND id=$2`,
 		`UPDATE iam.policy_versions SET retired_at=NULL WHERE policy_id=$1 AND id=$2`,
 		`UPDATE iam.policy_versions SET canonical_document='{}' WHERE policy_id=$1 AND id=$2`,
@@ -2641,7 +2848,7 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 		t.Fatal("expiration gate did not observe the database boundary")
 	}
 	post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: timeEvent}, http.StatusOK, nil)
-	canonicalTimed, _, err := iamv1.CanonicalizePolicyDocument(timedDocument)
+	canonicalTimed, _, err := compileIAMPolicyForStorage(timedDocument)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2650,7 +2857,7 @@ func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http
 		strings.Replace(canonicalTimed, "DATE_LESS_THAN", "DATE_GREATER_THAN_EQUALS", 1),
 		strings.Replace(canonicalTimed, expires.Format(time.RFC3339Nano), "2026-02-30T00:00:00Z", 1),
 	} {
-		_, err := database.Exec(ctx, `SELECT iam.assert_customer_policy_document($1,'sha256:'||encode(sha256(convert_to('matrix.iam.policy.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'))`, malformed)
+		_, err := database.Exec(ctx, `SELECT iam.assert_policy_compilation($1,'sha256:'||encode(sha256(convert_to('matrix.iam.policy-compilation.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'),'TENANT')`, malformed)
 		var failure *pgconn.PgError
 		if !errors.As(err, &failure) || failure.Code != "22023" {
 			t.Fatalf("storage admitted malformed conditions: %v", err)
@@ -2738,7 +2945,7 @@ func proveIdentityStringConditions(t *testing.T, ctx context.Context, handler ht
 			t.Fatal("caller supplied an identity condition source")
 		}
 	}
-	canonical, _, err := iamv1.CanonicalizePolicyDocument(document)
+	canonical, _, err := compileIAMPolicyForStorage(document)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2749,7 +2956,7 @@ func proveIdentityStringConditions(t *testing.T, ctx context.Context, handler ht
 		strings.Replace(canonical, "unrelated-user", string(member.ID), 1),
 		strings.Replace(canonical, "unrelated-user", "user-*", 1),
 	} {
-		_, err := database.Exec(ctx, `SELECT iam.assert_customer_policy_document($1,'sha256:'||encode(sha256(convert_to('matrix.iam.policy.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'))`, malformed)
+		_, err := database.Exec(ctx, `SELECT iam.assert_policy_compilation($1,'sha256:'||encode(sha256(convert_to('matrix.iam.policy-compilation.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'),'TENANT')`, malformed)
 		var failure *pgconn.PgError
 		if !errors.As(err, &failure) || failure.Code != "22023" {
 			t.Fatal("storage admitted malformed identity conditions")
@@ -2886,12 +3093,12 @@ func proveIdentityStringConditions(t *testing.T, ctx context.Context, handler ht
 		prefixDecide(account.bearer, account.user, "prefix-other-api", false)
 		post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: prefixFact}, http.StatusOK, nil)
 	}
-	prefixCanonical, _, err := iamv1.CanonicalizePolicyDocument(prefixDocument)
+	prefixCanonical, _, err := compileIAMPolicyForStorage(prefixDocument)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, malformed := range []string{strings.Replace(prefixCanonical, `"id":"prefix-app-"`, `"id":""`, 1), strings.Replace(prefixCanonical, `"id":"prefix-app-"`, `"id":"prefix-app-*"`, 1), strings.Replace(prefixCanonical, "PREFIX_IN_AUTHORITY", "REGEX", 1)} {
-		_, err := database.Exec(ctx, `SELECT iam.assert_customer_policy_document($1,'sha256:'||encode(sha256(convert_to('matrix.iam.policy.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'))`, malformed)
+		_, err := database.Exec(ctx, `SELECT iam.assert_policy_compilation($1,'sha256:'||encode(sha256(convert_to('matrix.iam.policy-compilation.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'),'TENANT')`, malformed)
 		var failure *pgconn.PgError
 		if !errors.As(err, &failure) || failure.Code != "22023" {
 			t.Fatal("storage admitted malformed resource prefix")
@@ -3243,8 +3450,8 @@ func proveCustomerPolicyDeletion(t *testing.T, ctx context.Context, handler http
 	if _, err := database.Exec(ctx, `BEGIN;
 		INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
 		SELECT 'delete-history-'||i,'CUSTOMER',$1,'Retired history '||i,'TENANT','RETIRED','v1',1,transaction_timestamp(),transaction_timestamp() FROM generate_series(1,257) i;
-		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
-		SELECT 'delete-history-'||i,'v1','TENANT',$2::jsonb,$2,$3,transaction_timestamp() FROM generate_series(1,257) i;COMMIT;`, retired.AccountID, canonical, digest); err != nil {
+		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at,contract_version,compilation)
+		SELECT 'delete-history-'||i,'v1','TENANT',$2::jsonb->'document',$2,$3,transaction_timestamp(),2,$2::jsonb-'document' FROM generate_series(1,257) i;COMMIT;`, retired.AccountID, canonical, digest); err != nil {
 		t.Fatal(err)
 	}
 	var replacement iamv1.PolicyDetail
@@ -3638,7 +3845,7 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 	denyDocument := iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
 		Statements: []iamv1.PolicyStatement{{SID: "group-deny", Effect: iamv1.PolicyDeny, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
 			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
-	canonical, digest, err := iamv1.CanonicalizePolicyDocument(denyDocument)
+	canonical, digest, err := compileIAMPolicyForStorage(denyDocument)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3647,8 +3854,8 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 	if _, err := database.Exec(ctx, `BEGIN;
 		INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
 		VALUES('customer.group-deny','CUSTOMER',$1,'Group deny','TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp());
-		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
-		VALUES('customer.group-deny','v1','TENANT',$2::jsonb,$2,$3,transaction_timestamp()); COMMIT;`, member.AccountID, canonical, digest); err != nil {
+		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at,contract_version,compilation)
+		VALUES('customer.group-deny','v1','TENANT',$2::jsonb->'document',$2,$3,transaction_timestamp(),2,$2::jsonb-'document'); COMMIT;`, member.AccountID, canonical, digest); err != nil {
 		t.Fatal(err)
 	}
 	var deniedAttachment iamv1.PolicyAttachment
@@ -4044,7 +4251,7 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
 		Statements: []iamv1.PolicyStatement{{SID: "catalog", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyList},
 			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
-	canonical, digest, err := iamv1.CanonicalizePolicyDocument(document)
+	canonical, digest, err := compileIAMPolicyForStorage(document)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4055,8 +4262,8 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 		if _, err := database.Exec(ctx, `BEGIN;
 			INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
 			VALUES($1,'CUSTOMER',$2,'Same display name','TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp());
-			INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
-			VALUES($1,'v1','TENANT',$3::jsonb,$3,$4,transaction_timestamp()); COMMIT;`, fixture.id, fixture.account, canonical, digest); err != nil {
+			INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at,contract_version,compilation)
+			VALUES($1,'v1','TENANT',$3::jsonb->'document',$3,$4,transaction_timestamp(),2,$3::jsonb-'document'); COMMIT;`, fixture.id, fixture.account, canonical, digest); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -4152,8 +4359,8 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 		if _, err := database.Exec(ctx, `BEGIN;
 			INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
 			SELECT 'catalog-budget-'||i,'CUSTOMER',$1,'Catalog budget '||i,'TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp() FROM generate_series($4::int,$5::int) i;
-			INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
-			SELECT 'catalog-budget-'||i,'v1','TENANT',$2::jsonb,$2,$3,transaction_timestamp() FROM generate_series($4::int,$5::int) i;
+			INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at,contract_version,compilation)
+			SELECT 'catalog-budget-'||i,'v1','TENANT',$2::jsonb->'document',$2,$3,transaction_timestamp(),2,$2::jsonb-'document' FROM generate_series($4::int,$5::int) i;
 			COMMIT;`, otherAccount, canonical, digest, first, last); err != nil {
 			t.Fatal(err)
 		}
@@ -4196,21 +4403,21 @@ func provePolicyDefaultAttachmentRaces(t *testing.T, ctx context.Context, handle
 				Statements: []iamv1.PolicyStatement{{SID: "read", Effect: iamv1.PolicyAllow,
 					Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{
 						{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
-			allow, allowDigest, err := iamv1.CanonicalizePolicyDocument(document)
+			allow, allowDigest, err := compileIAMPolicyForStorage(document)
 			if err != nil {
 				t.Fatal(err)
 			}
 			document.Statements[0].Effect = iamv1.PolicyDeny
-			deny, denyDigest, err := iamv1.CanonicalizePolicyDocument(document)
+			deny, denyDigest, err := compileIAMPolicyForStorage(document)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if _, err := database.Exec(ctx, `BEGIN;
 				INSERT INTO iam.policies(id,management,owner_tenant_id,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
 				VALUES($1,'CUSTOMER',$2,'Publication race '||$1,'TENANT','ACTIVE','v1',1,transaction_timestamp(),transaction_timestamp());
-				INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
-				VALUES($1,'v1','TENANT',$3::jsonb,$3,$4,transaction_timestamp()),
-				($1,'v2','TENANT',$5::jsonb,$5,$6,transaction_timestamp()); COMMIT;`,
+				INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at,contract_version,compilation)
+				VALUES($1,'v1','TENANT',$3::jsonb->'document',$3,$4,transaction_timestamp(),2,$3::jsonb-'document'),
+				($1,'v2','TENANT',$5::jsonb->'document',$5,$6,transaction_timestamp(),2,$5::jsonb-'document'); COMMIT;`,
 				policyID, member.AccountID, allow, allowDigest, deny, denyDigest); err != nil {
 				t.Fatal(err)
 			}
@@ -4374,15 +4581,15 @@ func provePolicyScopeCredentialProtection(t *testing.T, ctx context.Context, han
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonical, digest, err := iamv1.CanonicalizePolicyDocument(version.Document)
+	canonical, digest, err := compileIAMPolicyForStorage(version.Document)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(ctx, `BEGIN;
 		INSERT INTO iam.policies(id,management,display_name,authority_scope,status,default_version_id,resource_version,created_at,updated_at)
 		VALUES('system.scope-protection','SYSTEM','Scope protection','INSTALLATION','ACTIVE','scope-v1',1,transaction_timestamp(),transaction_timestamp());
-		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at)
-		VALUES('system.scope-protection','scope-v1','INSTALLATION',$1::jsonb,$1,$2,transaction_timestamp());
+		INSERT INTO iam.policy_versions(policy_id,id,authority_scope,document,canonical_document,content_digest,created_at,contract_version,compilation)
+		VALUES('system.scope-protection','scope-v1','INSTALLATION',$1::jsonb->'document',$1,$2,transaction_timestamp(),2,$1::jsonb-'document');
 		INSERT INTO iam.policy_attachments(tenant_id,id,target_id,policy_id,resource_version,created_at,updated_at)
 		VALUES($3,'scope-protection-attachment',$4,'system.scope-protection',1,transaction_timestamp(),transaction_timestamp()); COMMIT;`,
 		canonical, digest, member.AccountID, member.ID); err != nil {

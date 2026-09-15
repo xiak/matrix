@@ -895,7 +895,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 21 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 22 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
@@ -976,7 +976,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 21 || checkedAt.IsZero() {
+	if ready || schemaVersion != 22 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -1662,8 +1662,11 @@ func assertIAMSessionLookup(
 	// This consumer checks the persisted wire relationship, not a second policy
 	// evaluator or a dependency on the other service's internal domain package.
 	var attached []struct {
-		Policy     iamv1.Policy           `json:"policy"`
-		Version    iamv1.PolicyVersion    `json:"version"`
+		Policy  iamv1.Policy `json:"policy"`
+		Version struct {
+			Value     iamv1.PolicyVersion `json:"value"`
+			Canonical string              `json:"canonical"`
+		} `json:"version"`
 		Attachment iamv1.PolicyAttachment `json:"attachment"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(policies))
@@ -1673,14 +1676,16 @@ func assertIAMSessionLookup(
 	}
 	seen := make(map[iamv1.PolicyID]bool)
 	for _, row := range attached {
+		version := row.Version.Value
+		canonical, err := iamv1.CanonicalizePolicyVersion(version)
 		row.Policy.CreatedAt, row.Policy.UpdatedAt = row.Policy.CreatedAt.UTC(), row.Policy.UpdatedAt.UTC()
 		row.Attachment.CreatedAt, row.Attachment.UpdatedAt = row.Attachment.CreatedAt.UTC(), row.Attachment.UpdatedAt.UTC()
-		if iamv1.ValidatePolicy(row.Policy) != nil || iamv1.ValidatePolicyVersion(row.Version) != nil ||
+		if iamv1.ValidatePolicy(row.Policy) != nil || err != nil || canonical != row.Version.Canonical ||
 			iamv1.ValidatePolicyAttachment(row.Attachment) != nil || row.Policy.Status != iamv1.PolicyActive ||
 			row.Attachment.RevokedAt != nil || row.Attachment.AccountID != iamv1.AccountID(fixture.TenantID) ||
 			row.Attachment.Target.ID != fixture.Administrator || string(row.Attachment.Target.Kind) != "USER" ||
-			row.Attachment.PolicyID != row.Policy.ID || row.Version.PolicyID != row.Policy.ID ||
-			row.Version.ID != row.Policy.DefaultVersionID || row.Version.Document.Scope != row.Policy.Scope ||
+			row.Attachment.PolicyID != row.Policy.ID || version.PolicyID != row.Policy.ID ||
+			version.ID != row.Policy.DefaultVersionID || version.Document.Scope != row.Policy.Scope ||
 			row.Attachment.Scope != row.Policy.Scope || seen[row.Policy.ID] {
 			t.Fatal("IAM session returned an invalid policy relationship")
 		}
@@ -1754,10 +1759,11 @@ func assertIAMAuthorizationCatalog(
 	evidenceFor := func(principal string, policy iamv1.PolicyID) json.RawMessage {
 		t.Helper()
 		var evidence json.RawMessage
-		if err := admin.QueryRow(ctx, `SELECT jsonb_build_array(jsonb_build_object(
+		if err := admin.QueryRow(ctx, `SELECT jsonb_build_array(jsonb_strip_nulls(jsonb_build_object(
 			'attachmentId', attachment.id, 'resourceVersion', attachment.resource_version,
+			'contractVersion',version.contract_version,'compilation',version.compilation,
 			'version', jsonb_build_object('policyId', policy.id, 'versionId', version.id,
-			'contentDigest', version.content_digest)))
+			'contentDigest', version.content_digest))))
 			FROM iam.policy_attachments AS attachment
 			JOIN iam.principals AS subject ON subject.tenant_id=attachment.tenant_id
 			AND subject.id=attachment.target_id AND subject.principal_type=attachment.target_kind

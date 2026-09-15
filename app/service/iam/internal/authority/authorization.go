@@ -132,14 +132,14 @@ func decide(
 	if !knownServicePurpose(callingService) {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
-	evaluation, evidence, err := EvaluateAttachedPolicies(databaseTime, tenantID, installationID, subject, policies, request.Action, request.Resource)
+	evaluation, evidence, err := EvaluateAttachedPolicies(databaseTime, tenantID, installationID, subject, policies, request)
 	if err != nil {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
 	boundaryEvidence := UserBoundaryEvidence{State: "NOT_APPLICABLE"}
 	definition, _ := iamv1.LookupActionDefinition(request.Action)
 	if subject.Type == iamv1.PrincipalUser && definition.AuthorityScope == iamv1.AuthorityScopeTenant {
-		limit, proof, err := evaluateUserBoundary(boundary, policyEvaluationContext{databaseTime, tenantID, subject}, request.Action, request.Resource)
+		limit, proof, err := evaluateUserBoundary(boundary, policyEvaluationContext{databaseTime: databaseTime, accountID: tenantID, subject: subject}, request)
 		if err != nil {
 			return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 		}

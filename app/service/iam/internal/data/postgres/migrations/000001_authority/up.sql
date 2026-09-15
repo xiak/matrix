@@ -169,26 +169,108 @@ CREATE TABLE IF NOT EXISTS iam.policy_versions (
     content_digest text COLLATE "C" NOT NULL,
     created_at timestamptz(6) NOT NULL,
     retired_at timestamptz(6),
+    contract_version integer NOT NULL,
+    compilation jsonb,
     PRIMARY KEY (policy_id,id),
     FOREIGN KEY (policy_id,authority_scope) REFERENCES iam.policies(id,authority_scope),
     CONSTRAINT policy_versions_content_valid CHECK (
         id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND octet_length(canonical_document) BETWEEN 1 AND 65536
+        AND octet_length(canonical_document) BETWEEN 1 AND 131072
         AND jsonb_typeof(document)='object' AND document ?& ARRAY['languageVersion','scope','statements']
         AND jsonb_typeof(document->'languageVersion')='string'
         AND jsonb_typeof(document->'scope')='string'
         AND document->>'languageVersion'='1' AND document->>'scope'=authority_scope
         AND jsonb_typeof(document->'statements')='array'
         AND jsonb_array_length(document->'statements') BETWEEN 1 AND 64
-        AND canonical_document::jsonb=document
-        AND content_digest = 'sha256:' || encode(sha256(
-            convert_to('matrix.iam.policy.v1','UTF8') || decode('00','hex') || convert_to(canonical_document,'UTF8')), 'hex')
+        AND contract_version IN (1,2)
     )
 );
 
 ALTER TABLE iam.policy_versions ADD COLUMN IF NOT EXISTS retired_at timestamptz(6);
+-- Only rows present before this transaction's seed/publication phase can be
+-- legacy. The preflight has already checked Root management eligibility.
+DO $policy_version_contract_cutover$
+BEGIN
+    LOCK TABLE iam.policy_versions IN ACCESS EXCLUSIVE MODE;
+    IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='iam.policy_versions'::regclass
+        AND attname='contract_version' AND NOT attisdropped) THEN
+        ALTER TABLE iam.policy_versions NO FORCE ROW LEVEL SECURITY;
+        DROP TRIGGER IF EXISTS policy_versions_are_immutable ON iam.policy_versions;
+        ALTER TABLE iam.policy_versions ADD COLUMN contract_version integer;
+        UPDATE iam.policy_versions SET contract_version=1;
+        ALTER TABLE iam.policy_versions ALTER COLUMN contract_version SET NOT NULL;
+        ALTER TABLE iam.policy_versions FORCE ROW LEVEL SECURITY;
+    END IF;
+END $policy_version_contract_cutover$;
+ALTER TABLE iam.policy_versions ADD COLUMN IF NOT EXISTS compilation jsonb;
+ALTER TABLE iam.policy_versions DROP CONSTRAINT IF EXISTS policy_versions_content_valid;
+ALTER TABLE iam.policy_versions ADD CONSTRAINT policy_versions_content_valid CHECK (COALESCE(
+    id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    AND octet_length(canonical_document) BETWEEN 1 AND 131072
+    AND (canonical_document IS JSON OBJECT WITH UNIQUE KEYS)
+    AND jsonb_typeof(document)='object' AND document ?& ARRAY['languageVersion','scope','statements']
+    AND document-ARRAY['languageVersion','scope','statements']='{}'::jsonb
+    AND jsonb_typeof(document->'languageVersion')='string' AND document->>'languageVersion'='1'
+    AND jsonb_typeof(document->'scope')='string' AND document->>'scope'=authority_scope
+    AND jsonb_typeof(document->'statements')='array' AND jsonb_array_length(document->'statements') BETWEEN 1 AND 64
+    AND contract_version IN (1,2)
+    AND CASE WHEN contract_version=1 THEN
+        compilation IS NULL AND octet_length(canonical_document)<=65536 AND canonical_document::jsonb=document
+        AND content_digest='sha256:'||encode(sha256(convert_to('matrix.iam.policy.v1','UTF8')||decode('00','hex')||convert_to(canonical_document,'UTF8')),'hex')
+      ELSE
+        compilation IS NOT NULL AND jsonb_typeof(compilation)='object'
+        AND compilation ?& ARRAY['compilationVersion','profiles','resolvedStatements']
+        AND compilation-ARRAY['compilationVersion','profiles','resolvedStatements']='{}'::jsonb
+        AND compilation->>'compilationVersion'='1' AND jsonb_typeof(compilation->'compilationVersion')='string'
+        AND jsonb_typeof(compilation->'profiles')='array' AND jsonb_array_length(compilation->'profiles') BETWEEN 1 AND 16
+        AND jsonb_typeof(compilation->'resolvedStatements')='array' AND jsonb_array_length(compilation->'resolvedStatements')=jsonb_array_length(document->'statements')
+        AND canonical_document::jsonb=compilation||jsonb_build_object('document',document)
+        AND content_digest='sha256:'||encode(sha256(convert_to('matrix.iam.policy-compilation.v1','UTF8')||decode('00','hex')||convert_to(canonical_document,'UTF8')),'hex')
+      END, false));
 ALTER TABLE iam.policy_versions DROP CONSTRAINT IF EXISTS policy_versions_retirement_valid;
 ALTER TABLE iam.policy_versions ADD CONSTRAINT policy_versions_retirement_valid CHECK (retired_at IS NULL OR retired_at>=created_at);
+
+CREATE OR REPLACE FUNCTION iam.policy_version_snapshot(version iam.policy_versions)
+RETURNS jsonb LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT jsonb_build_object('canonical',version.canonical_document,'value',jsonb_strip_nulls(jsonb_build_object('policyId',version.policy_id,'versionId',version.id,
+        'document',version.document,'contentDigest',version.content_digest,'contractVersion',version.contract_version,
+        'compilation',version.compilation)));
+$function$;
+REVOKE ALL ON FUNCTION iam.policy_version_snapshot(iam.policy_versions) FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+
+CREATE OR REPLACE FUNCTION iam.policy_version_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute a
+        WHERE a.attrelid='iam.policy_versions'::regclass AND a.attname='contract_version'
+          AND a.atttypid='integer'::regtype AND a.attnotnull AND NOT a.attisdropped
+          AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attrdef d WHERE d.adrelid=a.attrelid AND d.adnum=a.attnum))
+      AND EXISTS(SELECT 1 FROM pg_catalog.pg_attribute a
+        WHERE a.attrelid='iam.policy_versions'::regclass AND a.attname='compilation'
+          AND a.atttypid='jsonb'::regtype AND NOT a.attnotnull AND NOT a.attisdropped
+          AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attrdef d WHERE d.adrelid=a.attrelid AND d.adnum=a.attnum))
+      AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid='iam.policy_versions'::regclass
+          AND c.conname='policy_versions_content_valid' AND c.contype='c' AND c.convalidated)
+      AND (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.pronamespace='iam'::regnamespace
+          AND p.proname IN ('create_policy','create_policy_version'))=2
+      AND (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.oid IN (
+          to_regprocedure('iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer)'),
+          to_regprocedure('iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer)'))
+          AND p.pronargdefaults=0 AND p.pronargs=10 AND p.prorettype='jsonb'::regtype
+          AND NOT p.proretset AND p.prosecdef AND p.proowner='matrix_iam_owner'::regrole)=2
+      AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('iam.policy_version_snapshot(iam.policy_versions)')
+          AND p.pronargs=1 AND p.pronargdefaults=0 AND p.prorettype='jsonb'::regtype AND NOT p.proretset
+          AND NOT p.prosecdef AND p.proowner='matrix_iam_owner'::regrole)
+      AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('iam.recorded_policy_version_matches(jsonb)')
+          AND p.pronargs=1 AND p.pronargdefaults=0 AND p.prorettype='boolean'::regtype AND NOT p.proretset
+          AND NOT p.prosecdef AND p.proowner='matrix_iam_owner'::regrole)
+      AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc p CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a
+          WHERE p.oid IN (to_regprocedure('iam.policy_version_snapshot(iam.policy_versions)'),to_regprocedure('iam.assert_policy_compilation(text,text,text)'),
+              to_regprocedure('iam.recorded_policy_version_matches(jsonb)'))
+          AND a.privilege_type='EXECUTE' AND a.grantee<>p.proowner)
+      AND to_regprocedure('iam.assert_policy_compilation(text,text,text)') IS NOT NULL
+      AND to_regprocedure('iam.assert_customer_policy_document(text,text)') IS NULL;
+$function$;
+REVOKE ALL ON FUNCTION iam.policy_version_contract_ready() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 
 ALTER TABLE iam.policies DROP CONSTRAINT IF EXISTS policies_default_version_fk;
 ALTER TABLE iam.policies ADD CONSTRAINT policies_default_version_fk
@@ -394,6 +476,8 @@ CREATE OR REPLACE FUNCTION iam.guard_policy_version_change()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
     IF TG_OP='INSERT' THEN
+        IF NEW.contract_version IS DISTINCT FROM 2 THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='IAM new policy version requires compiled content'; END IF;
+        PERFORM iam.assert_policy_compilation(NEW.canonical_document,NEW.content_digest,NEW.authority_scope);
         IF NEW.retired_at IS NOT NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='IAM policy version must begin active'; END IF;
         RETURN NEW;
     END IF;
@@ -1279,10 +1363,10 @@ BEGIN
            AND to_regprocedure('iam.create_group(text,text,text,text,text,text,jsonb)') IS NOT NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc AS policy_entry
                 WHERE policy_entry.oid IN (to_regprocedure('iam.read_policy(text,text,text,text)'),
-                    to_regprocedure('iam.create_policy(text,text,text,text,text,text,text,text,jsonb)'),
+                    to_regprocedure('iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer)'),
                     to_regprocedure('iam.list_policy_versions(text,text,text,text)'),
                     to_regprocedure('iam.read_policy_version(text,text,text,text,text)'),
-                    to_regprocedure('iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb)'),
+                    to_regprocedure('iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer)'),
                     to_regprocedure('iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)'),
                     to_regprocedure('iam.update_policy(text,text,text,text,bigint,text,jsonb)'),
                     to_regprocedure('iam.delete_policy(text,text,text,text,bigint,jsonb)'),
@@ -1306,6 +1390,7 @@ BEGIN
                   AND directory.prorettype='jsonb'::regtype AND NOT directory.proretset
                   AND directory.prosecdef AND directory.proowner='matrix_iam_owner'::regrole)
            AND iam.authorization_decision_contract_ready()
+           AND iam.policy_version_contract_ready()
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS lookup
                 WHERE lookup.oid=to_regprocedure('iam.lookup_session(text)')
                   AND cardinality(lookup.proallargtypes)=24 AND lookup.proargnames[23:24]=ARRAY['policies','boundary']
@@ -1399,7 +1484,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           21::bigint,
+           22::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1627,7 +1712,7 @@ BEGIN
             'id',p.id,'management',p.management,'accountId',p.owner_tenant_id,'displayName',p.display_name,
             'scope',p.authority_scope,'status',p.status,'defaultVersionId',p.default_version_id,
             'resourceVersion',p.resource_version,'createdAt',p.created_at,'updatedAt',p.updated_at)),
-        'version',jsonb_build_object('policyId',v.policy_id,'versionId',v.id,'document',v.document,'contentDigest',v.content_digest),
+        'version',iam.policy_version_snapshot(v),
         'attachment',jsonb_strip_nulls(jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','PolicyAttachment',
             'id',a.id,'accountId',a.tenant_id,'target',jsonb_build_object('kind',a.target_kind,'id',a.target_id),
             'policyId',a.policy_id,'scope',a.authority_scope,'installationId',a.installation_id,
@@ -1949,8 +2034,8 @@ BEGIN
     END IF;
     FOR evidence IN SELECT value FROM jsonb_array_elements(submitted_policy_evidence) LOOP
         IF jsonb_typeof(evidence) IS DISTINCT FROM 'object'
-            OR NOT evidence ?& ARRAY['attachmentId','resourceVersion','version']
-            OR (evidence-ARRAY['attachmentId','resourceVersion','version','membershipId','membershipResourceVersion']) <> '{}'::jsonb
+            OR NOT evidence ?& ARRAY['attachmentId','resourceVersion','version','contractVersion']
+            OR (evidence-ARRAY['attachmentId','resourceVersion','version','membershipId','membershipResourceVersion','contractVersion','compilation']) <> '{}'::jsonb
             OR COALESCE(evidence->>'attachmentId','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
             OR evidence->>'attachmentId' COLLATE "C" <= previous_attachment
             OR jsonb_typeof(evidence->'resourceVersion') IS DISTINCT FROM 'number'
@@ -1984,6 +2069,9 @@ BEGIN
               AND (policy.owner_tenant_id IS NULL OR policy.owner_tenant_id=submitted_tenant_id)
               AND policy.id=evidence#>>'{version,policyId}' AND version.id=evidence#>>'{version,versionId}'
               AND version.content_digest=evidence#>>'{version,contentDigest}'
+              AND evidence->'contractVersion'=to_jsonb(version.contract_version)
+              AND ((version.contract_version=1 AND NOT evidence ? 'compilation')
+                  OR (version.contract_version=2 AND evidence->'compilation'=version.compilation))
               AND attachment.authority_scope=CASE WHEN platform_action THEN 'INSTALLATION'
                   WHEN submitted_decision->>'action'='installation.verify' THEN 'INSTALLATION_PROBE' ELSE 'TENANT' END) THEN
             RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='authorization policy evidence is not current for its subject';

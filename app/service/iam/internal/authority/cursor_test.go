@@ -24,11 +24,7 @@ func TestDirectoryCursorCannotBypassExpiredPolicyConditions(t *testing.T) {
 	row.Policy.ID, row.Version.PolicyID, row.Attachment.PolicyID = "timed-directory-policy", "timed-directory-policy", "timed-directory-policy"
 	row.Policy.Management, row.Policy.AccountID = iamv1.PolicyCustomerManaged, subject.Organization.ID
 	row.Version.Document.Statements[0].Conditions = []iamv1.PolicyCondition{{Key: iamv1.ConditionIAMCurrentTime, Operator: iamv1.PolicyDateLessThan, Values: []string{now.Add(10 * time.Second).Format(time.RFC3339Nano)}}}
-	_, digest, err := iamv1.CanonicalizePolicyDocument(row.Version.Document)
-	if err != nil {
-		t.Fatal(err)
-	}
-	row.Version.ContentDigest = digest
+	compilePolicyVersionForTest(t, &row.Version)
 	query := DirectoryQuery{InstallationID: subject.InstallationID, Action: iamv1.ActionIAMGroupList, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Organization.ID)}}
 	cursor, err := codec.Encode(subject, query, "group-last", now)
 	if err != nil {
@@ -69,10 +65,7 @@ func TestResourcePrefixCannotGrantDirectoryAccessOrPreserveStaleCursor(t *testin
 	changed.Version.Document.Statements[0].Resources[0].ID = "application-other-"
 	changed.Version.ID, changed.Policy.DefaultVersionID = "prefix-next-version", "prefix-next-version"
 	changed.Policy.ResourceVersion++
-	_, changed.Version.ContentDigest, err = iamv1.CanonicalizePolicyDocument(changed.Version.Document)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compilePolicyVersionForTest(t, &changed.Version)
 	if _, err := codec.Decode(cursor, subject, query, now); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatal("cursor retained stale prefix policy snapshot")
 	}
@@ -104,10 +97,7 @@ func TestDirectoryCursorRechecksBoundaryAndBindsItsDefaultRevision(t *testing.T)
 		t.Fatal("equally allowed new snapshot rejected")
 	}
 	subject.Boundary.Version.Document.Statements[0].Effect = iamv1.PolicyDeny
-	_, subject.Boundary.Version.ContentDigest, err = iamv1.CanonicalizePolicyDocument(subject.Boundary.Version.Document)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compilePolicyVersionForTest(t, subject.Boundary.Version)
 	if _, err := codec.Encode(subject, query, "group-last", now); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatal("directory bypassed boundary deny")
 	}
@@ -124,10 +114,7 @@ func TestDirectoryCursorRechecksIdentityConditionsAfterDefaultChange(t *testing.
 	row.Policy.ID, row.Version.PolicyID, row.Attachment.PolicyID = "identity-directory-policy", "identity-directory-policy", "identity-directory-policy"
 	row.Policy.Management, row.Policy.AccountID = iamv1.PolicyCustomerManaged, subject.Organization.ID
 	row.Version.Document.Statements[0].Conditions = []iamv1.PolicyCondition{{Key: iamv1.ConditionIAMPrincipalID, Operator: iamv1.PolicyStringEquals, Values: []string{string(subject.Principal.ID)}}}
-	_, row.Version.ContentDigest, err = iamv1.CanonicalizePolicyDocument(row.Version.Document)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compilePolicyVersionForTest(t, &row.Version)
 	query := DirectoryQuery{InstallationID: subject.InstallationID, Action: iamv1.ActionIAMGroupList, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Organization.ID)}}
 	cursor, err := codec.Encode(subject, query, "group-last", now)
 	if err != nil {
@@ -139,10 +126,7 @@ func TestDirectoryCursorRechecksIdentityConditionsAfterDefaultChange(t *testing.
 	row.Version.ID, row.Policy.DefaultVersionID = "version-identity-excluded", "version-identity-excluded"
 	row.Policy.ResourceVersion++
 	row.Version.Document.Statements[0].Conditions[0].Operator = iamv1.PolicyStringNotEquals
-	_, row.Version.ContentDigest, err = iamv1.CanonicalizePolicyDocument(row.Version.Document)
-	if err != nil {
-		t.Fatal(err)
-	}
+	compilePolicyVersionForTest(t, &row.Version)
 	if _, err := codec.Encode(subject, query, "group-last", now); !errors.Is(err, ErrInvalidCursor) {
 		t.Fatal("excluded identity issued a cursor")
 	}

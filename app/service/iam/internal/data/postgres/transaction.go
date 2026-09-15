@@ -19,8 +19,9 @@ import (
 )
 
 type transaction struct {
-	tx              pgx.Tx
-	profilesChecked bool
+	tx               pgx.Tx
+	profilesChecked  bool
+	archivedProfiles map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile
 }
 
 // This cache is confined to one transaction, which retains share locks on the
@@ -72,6 +73,9 @@ func (value *transaction) LookupAuthorizationProfile(ctx context.Context, refere
 		iamv1.ValidateDigest("contentDigest", reference.ContentDigest) != nil {
 		return iamv1.AuthorizationProfile{}, false, identityaccess.ErrInvalidArgument
 	}
+	if profile, found := value.archivedProfiles[reference]; found {
+		return profile, true, nil
+	}
 	var actual iamv1.AuthorizationProfileReference
 	var canonical string
 	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.lookup_authorization_profile($1,$2,$3)", reference.Product, reference.Revision, reference.ContentDigest).
@@ -93,7 +97,55 @@ func (value *transaction) LookupAuthorizationProfile(ctx context.Context, refere
 	if err != nil || normalized != canonical {
 		return iamv1.AuthorizationProfile{}, false, identityaccess.ErrUnavailable
 	}
+	if value.archivedProfiles == nil {
+		value.archivedProfiles = make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)
+	}
+	value.archivedProfiles[reference] = profile
 	return profile, true, nil
+}
+
+// This is only the private storage projection of the existing version. Raw
+// canonical bytes never leave this adapter or become authorization evidence.
+type storedPolicyVersion struct {
+	Value     *iamv1.PolicyVersion `json:"value"`
+	Canonical string               `json:"canonical"`
+}
+
+const maxStoredPolicyVersionBytes = 3*iamv1.MaxPolicyCompilationBytes + 8192
+
+func (value *transaction) resolvePolicyVersion(ctx context.Context, stored storedPolicyVersion) (iamv1.PolicyVersion, []iamv1.AuthorizationProfile, error) {
+	if stored.Value == nil || stored.Canonical == "" || int64(len(stored.Canonical)) > iamv1.MaxPolicyCompilationBytes {
+		return iamv1.PolicyVersion{}, nil, identityaccess.ErrUnavailable
+	}
+	version := *stored.Value
+	canonical, err := iamv1.CanonicalizePolicyVersion(version)
+	if err != nil || canonical != stored.Canonical {
+		return iamv1.PolicyVersion{}, nil, identityaccess.ErrUnavailable
+	}
+	var references []iamv1.AuthorizationProfileReference
+	if version.ContractVersion == iamv1.PolicyVersionLegacyContract {
+		// Unknown legacy content remains management/history-readable, never a
+		// current permit. Known SYSTEM content requires its exact ceiling.
+		references, _ = authority.LegacySystemPolicyReferences(version)
+	} else {
+		references = version.Compilation.Profiles
+	}
+	profiles := make([]iamv1.AuthorizationProfile, 0, len(references))
+	for _, reference := range references {
+		profile, found, err := value.LookupAuthorizationProfile(ctx, reference)
+		if err != nil || !found {
+			return iamv1.PolicyVersion{}, nil, identityaccess.ErrUnavailable
+		}
+		profiles = append(profiles, profile)
+	}
+	if version.ContractVersion == iamv1.PolicyVersionLegacyContract {
+		return version, profiles, nil
+	}
+	canonical, digest, err := iamv1.CanonicalizePolicyCompilation(version.Document, *version.Compilation, profiles)
+	if err != nil || canonical != stored.Canonical || digest != version.ContentDigest {
+		return iamv1.PolicyVersion{}, nil, identityaccess.ErrUnavailable
+	}
+	return version, profiles, nil
 }
 
 func (value *transaction) TransactionTime(ctx context.Context) (time.Time, error) {
@@ -364,14 +416,33 @@ func (value *transaction) LookupSession(
 			RevokedAt:   revokedAt,
 		},
 	}
-	subject.Policies, err = decodeAttachedPolicies(policies)
+	subject.Policies, err = value.decodeAttachedPolicies(ctx, policies)
 	if err != nil {
 		return identityaccess.SessionCredential{}, false, err
 	}
 	defer clear(boundary)
-	var resolved authority.ResolvedUserBoundary
-	if contractjson.DecodeObjectBytes(boundary, 2*iamv1.MaxPolicyBytes, &resolved) != nil {
+	var storedBoundary struct {
+		State               string               `json:"state"`
+		AccountID           iamv1.AccountID      `json:"accountId"`
+		UserID              iamv1.PrincipalID    `json:"userId"`
+		UserResourceVersion uint64               `json:"userResourceVersion"`
+		BoundaryID          string               `json:"boundaryId,omitempty"`
+		ResourceVersion     uint64               `json:"resourceVersion,omitempty"`
+		Policy              *iamv1.Policy        `json:"policy,omitempty"`
+		Version             *storedPolicyVersion `json:"version,omitempty"`
+	}
+	if contractjson.DecodeObjectBytes(boundary, maxStoredPolicyVersionBytes+4096, &storedBoundary) != nil {
 		return identityaccess.SessionCredential{}, false, identityaccess.ErrUnavailable
+	}
+	resolved := authority.ResolvedUserBoundary{State: storedBoundary.State, AccountID: storedBoundary.AccountID,
+		UserID: storedBoundary.UserID, UserResourceVersion: storedBoundary.UserResourceVersion,
+		BoundaryID: storedBoundary.BoundaryID, ResourceVersion: storedBoundary.ResourceVersion, Policy: storedBoundary.Policy}
+	if storedBoundary.Version != nil {
+		version, profiles, err := value.resolvePolicyVersion(ctx, *storedBoundary.Version)
+		if err != nil {
+			return identityaccess.SessionCredential{}, false, err
+		}
+		resolved.Version, resolved.Profiles = &version, profiles
 	}
 	if resolved.Policy != nil {
 		resolved.Policy.CreatedAt, resolved.Policy.UpdatedAt = resolved.Policy.CreatedAt.UTC(), resolved.Policy.UpdatedAt.UTC()
@@ -511,28 +582,44 @@ func (value *transaction) LookupServicePolicies(
 	if err != nil {
 		return nil, mapDatabaseError("lookup IAM service policies", err)
 	}
-	return decodeAttachedPolicies(stored)
+	return value.decodeAttachedPolicies(ctx, stored)
 }
 
-func decodeAttachedPolicies(encoded []byte) ([]authority.AttachedPolicy, error) {
+func (value *transaction) decodeAttachedPolicies(ctx context.Context, encoded []byte) ([]authority.AttachedPolicy, error) {
 	// The SQL projection returns at most budget+1 records, so excess authority
 	// fails closed instead of silently discarding a later Deny.
-	const maxSnapshotBytes = (iamv1.MaxPolicyBytes + 4096) * authority.MaxEvaluationPolicies
+	const maxSnapshotBytes = (maxStoredPolicyVersionBytes + 4096) * authority.MaxEvaluationPolicies
 	if int64(len(encoded)) > maxSnapshotBytes {
 		return nil, identityaccess.ErrUnavailable
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
-	var policies []authority.AttachedPolicy
-	if decoder.Decode(&policies) != nil || policies == nil || len(policies) > authority.MaxEvaluationPolicies {
+	var stored []json.RawMessage
+	if decoder.Decode(&stored) != nil || stored == nil || len(stored) > authority.MaxEvaluationPolicies {
 		return nil, identityaccess.ErrUnavailable
 	}
 	var trailing any
 	if decoder.Decode(&trailing) != io.EOF {
 		return nil, identityaccess.ErrUnavailable
 	}
-	for index := range policies {
+	policies := make([]authority.AttachedPolicy, len(stored))
+	for index := range stored {
+		var item struct {
+			Policy     iamv1.Policy           `json:"policy"`
+			Version    storedPolicyVersion    `json:"version"`
+			Attachment iamv1.PolicyAttachment `json:"attachment"`
+			Membership *iamv1.GroupMembership `json:"membership,omitempty"`
+		}
+		if contractjson.DecodeObjectBytes(stored[index], maxStoredPolicyVersionBytes+4096, &item) != nil {
+			return nil, identityaccess.ErrUnavailable
+		}
 		row := &policies[index]
+		*row = authority.AttachedPolicy{Policy: item.Policy, Attachment: item.Attachment, Membership: item.Membership}
+		version, profiles, err := value.resolvePolicyVersion(ctx, item.Version)
+		if err != nil {
+			return nil, err
+		}
+		row.Version, row.Profiles = version, profiles
 		row.Policy.CreatedAt, row.Policy.UpdatedAt = row.Policy.CreatedAt.UTC(), row.Policy.UpdatedAt.UTC()
 		row.Attachment.CreatedAt, row.Attachment.UpdatedAt = row.Attachment.CreatedAt.UTC(), row.Attachment.UpdatedAt.UTC()
 		if row.Attachment.RevokedAt != nil {

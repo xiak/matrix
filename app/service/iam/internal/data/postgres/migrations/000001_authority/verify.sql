@@ -286,7 +286,7 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>21 OR NOT iam.authorization_decision_contract_ready() THEN
+    IF (SELECT schema_version FROM iam.readiness())<>22 OR NOT iam.authorization_decision_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';
     END IF;
     FOREACH entry IN ARRAY ARRAY['iam.authorization_decision_contract_ready()'::regprocedure,

@@ -77,8 +77,11 @@ END $verify_policy_authority$;
 DO $verify_customer_policy_publication$
 DECLARE function_name text;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 21::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 22::bigint THEN
         RAISE EXCEPTION 'IAM policy publication schema version is invalid';
+    END IF;
+    IF iam.policy_version_contract_ready() IS DISTINCT FROM true THEN
+        RAISE EXCEPTION 'IAM compiled policy contract is invalid';
     END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='iam.policy_versions'::regclass
        AND attname='retired_at' AND atttypid='timestamptz'::regtype AND NOT attnotnull AND NOT attisdropped)
@@ -90,9 +93,9 @@ BEGIN
     FOREACH function_name IN ARRAY ARRAY['iam.read_policy(text,text,text,text)',
         'iam.read_user_permission_boundary(text,text,text,text)',
         'iam.change_user_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text)',
-        'iam.create_policy(text,text,text,text,text,text,text,text,jsonb)',
+        'iam.create_policy(text,text,text,text,text,text,text,text,jsonb,integer)',
         'iam.list_policy_versions(text,text,text,text)','iam.read_policy_version(text,text,text,text,text)',
-        'iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb)','iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)',
+        'iam.create_policy_version(text,text,text,text,bigint,text,text,text,jsonb,integer)','iam.set_default_policy_version(text,text,text,text,bigint,text,jsonb)',
         'iam.update_policy(text,text,text,text,bigint,text,jsonb)','iam.delete_policy(text,text,text,text,bigint,jsonb)','iam.delete_policy_version(text,text,text,text,text,bigint,jsonb)'] LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS entry WHERE entry.oid=to_regprocedure(function_name)
             AND entry.prorettype='jsonb'::regtype AND NOT entry.proretset AND entry.prosecdef
@@ -104,7 +107,9 @@ BEGIN
             RAISE EXCEPTION 'IAM policy publication function boundary is invalid';
         END IF;
     END LOOP;
-    FOREACH function_name IN ARRAY ARRAY['iam.assert_customer_policy_document(text,text)','iam.policy_detail_snapshot(text,text)',
+    FOREACH function_name IN ARRAY ARRAY['iam.policy_version_contract_ready()','iam.policy_version_snapshot(iam.policy_versions)',
+        'iam.recorded_policy_version_matches(jsonb)',
+        'iam.assert_policy_compilation(text,text,text)','iam.policy_detail_snapshot(text,text)',
         'iam.policy_version_detail(text,text,text)','iam.guard_policy_version_change()','iam.lock_policy_publisher(text,text)','iam.lock_customer_policy_publisher(text,text,text)','iam.policy_version_intent_replayed(text,text,jsonb)'] LOOP
         IF to_regprocedure(function_name) IS NULL OR has_function_privilege('matrix_iam_api',function_name,'EXECUTE')
            OR has_function_privilege('matrix_iam_worker',function_name,'EXECUTE')

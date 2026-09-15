@@ -471,6 +471,51 @@ func TestProductProjectionIsIndependentOfProductName(t *testing.T) {
 	}
 }
 
+func TestCurrentProfileCommitmentsDoNotTrustMutableCopies(t *testing.T) {
+	for _, source := range AllAuthorizationProfiles() {
+		canonical, digest, err := canonicalizeAuthorizationProfile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, value := range []AuthorizationProfile{source, sourceProfileCommitments[source.Product].normalized} {
+			actual, actualDigest, err := CanonicalizeAuthorizationProfile(value)
+			if err != nil || actual != canonical || actualDigest != digest {
+				t.Fatal("immutable source encoding differs from complete encoding")
+			}
+			changed := cloneAuthorizationProfile(value)
+			changed.Actions[0].ResourceKind = "DIFFERENT_KIND"
+			if CheckAuthorizationProfileReference(changed, AuthorizationProfileReference{Product: source.Product, Revision: source.Revision, ContentDigest: digest}) == nil {
+				t.Fatal("nested content substitution reused a source commitment")
+			}
+		}
+		for _, action := range source.Actions {
+			for _, shape := range action.ResourceShapes {
+				resource := ResourceReference{Kind: action.ResourceKind, ID: "target-one"}
+				if shape.Mode == AuthorizationResourceCollection {
+					resource.ID = "collection"
+				}
+				request, err := NewAuthorizationRequest(action.Action, resource, shape.Mode, shape.CollectionUsage, "request-one", "correlation-one")
+				if err != nil || request.Profile != (AuthorizationProfileReference{Product: source.Product, Revision: source.Revision, ContentDigest: digest}) || ValidateAuthorizationRequest(request) != nil {
+					t.Fatal("current request differs from its full source commitment")
+				}
+				variant := cloneAuthorizationProfile(source)
+				variant.CallingService = "DIFFERENT_CALLER"
+				if CheckAuthorizationProfileTarget(variant, request.Profile, request.Action, resource, shape.Mode, shape.CollectionUsage) == nil {
+					t.Fatal("supplied same-tuple bytes bypassed full validation")
+				}
+				_, variantDigest, err := CanonicalizeAuthorizationProfile(variant)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request.Profile.ContentDigest = variantDigest
+				if ValidateAuthorizationRequest(request) == nil {
+					t.Fatal("valid foreign content changed current source admission")
+				}
+			}
+		}
+	}
+}
+
 func authorizationProfileFixture() AuthorizationProfile {
 	return AuthorizationProfile{
 		APIVersion: APIVersion, Kind: "AuthorizationProfile", Product: ProductManagedService,
@@ -700,6 +745,13 @@ func FuzzAuthorizationProfileCanonicalRoundTrip(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Add(document)
+	for _, profile := range AllAuthorizationProfiles() {
+		canonical, _, err := CanonicalizeAuthorizationProfile(profile)
+		if err != nil {
+			f.Fatal(err)
+		}
+		f.Add(canonical)
+	}
 	for _, selected := range []Action{ActionIAMUserCreate, ActionPaaSApplicationCreate} {
 		definition, known := LookupActionDefinition(selected)
 		if !known {
@@ -1427,6 +1479,83 @@ func TestPolicyCompilationUsesFrozenDeclarationsNotCurrentCatalog(t *testing.T) 
 	}
 }
 
+func TestCompiledPolicyVersionHasExplicitCompleteTransportContract(t *testing.T) {
+	document := policyDocumentFixture()
+	profiles := AllAuthorizationProfiles()
+	compilation, err := CompilePolicyDocument(document, profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := CanonicalizePolicyCompilation(document, compilation, profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := PolicyVersion{PolicyID: "policy-one", ID: "version-one", Document: document, ContentDigest: digest,
+		ContractVersion: PolicyVersionCompiledContract, Compilation: &compilation}
+	if err := ValidatePolicyVersion(version); err != nil {
+		t.Fatal("complete compiled transport rejected", err)
+	}
+	encoded, _ := json.Marshal(version)
+	var decoded PolicyVersion
+	if json.Unmarshal(encoded, &decoded) != nil || ValidatePolicyVersion(decoded) != nil {
+		t.Fatal("compiled version did not round trip")
+	}
+	for name, mutate := range map[string]func(*PolicyVersion){
+		"missing contract":        func(v *PolicyVersion) { v.ContractVersion = 0 },
+		"unknown contract":        func(v *PolicyVersion) { v.ContractVersion = 3 },
+		"legacy with compilation": func(v *PolicyVersion) { v.ContractVersion = PolicyVersionLegacyContract },
+		"missing compilation":     func(v *PolicyVersion) { v.Compilation = nil },
+		"changed effect": func(v *PolicyVersion) {
+			if v.Document.Statements[0].Effect == PolicyAllow {
+				v.Document.Statements[0].Effect = PolicyDeny
+			} else {
+				v.Document.Statements[0].Effect = PolicyAllow
+			}
+		},
+		"changed digest": func(v *PolicyVersion) { v.ContentDigest = "sha256:" + strings.Repeat("0", 64) },
+		"missing refs":   func(v *PolicyVersion) { v.Compilation.Profiles = nil },
+		"duplicate refs": func(v *PolicyVersion) {
+			v.Compilation.Profiles = append(v.Compilation.Profiles, v.Compilation.Profiles[0])
+		},
+		"wrong resolved action": func(v *PolicyVersion) { v.Compilation.ResolvedStatements[0].Actions[0] = "paas.unexpected.action" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var candidate PolicyVersion
+			if json.Unmarshal(encoded, &candidate) != nil {
+				t.Fatal("bad fixture")
+			}
+			mutate(&candidate)
+			if ValidatePolicyVersion(candidate) == nil {
+				t.Fatal("incomplete or changed compiled version accepted")
+			}
+		})
+	}
+	for _, wire := range []string{
+		strings.Replace(string(encoded), `,"contractVersion":2`, "", 1),
+		strings.Replace(string(encoded), `"contractVersion":2`, `"contractVersion":null`, 1),
+		strings.Replace(string(encoded), `"contractVersion":2`, `"contractVersion":2,"contractVersion":2`, 1),
+		strings.Replace(string(encoded), `"compilation":`, `"compiled":`, 1),
+		strings.Replace(string(encoded), `"policyId":`, `"permit":true,"policyId":`, 1),
+	} {
+		if json.Unmarshal([]byte(wire), &decoded) == nil {
+			t.Fatal("strict version codec accepted absent/aliased/duplicate fields")
+		}
+	}
+	_, legacyDigest, err := CanonicalizePolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := PolicyVersion{PolicyID: version.PolicyID, ID: "legacy-version", Document: document, ContentDigest: legacyDigest, ContractVersion: PolicyVersionLegacyContract}
+	if ValidatePolicyVersion(legacy) != nil {
+		t.Fatal("explicit retained document contract rejected")
+	}
+	legacyWire, _ := json.Marshal(legacy)
+	legacyWire = bytes.Replace(legacyWire, []byte(`"contractVersion":1`), []byte(`"contractVersion":1,"compilation":null`), 1)
+	if json.Unmarshal(legacyWire, &decoded) == nil {
+		t.Fatal("legacy transport admitted a partial compilation")
+	}
+}
+
 func TestPolicyCompilationRequestCompatibilityAcrossDeclaredTargets(t *testing.T) {
 	for _, frozen := range AllAuthorizationProfiles() {
 		current := cloneAuthorizationProfile(frozen)
@@ -1773,6 +1902,19 @@ func FuzzPolicyCompilationCanonicalRoundTrip(f *testing.F) {
 		if err := CheckPolicyCompilationRequest(document, repeated, "sha256:"+strings.Repeat("0", 64), profiles, current, request); !errors.Is(err, ErrInvalidPolicy) {
 			t.Fatal("request compatibility ignored the stored whole-content commitment", err)
 		}
+		version := PolicyVersion{PolicyID: "policy-fuzz", ID: "version-fuzz", Document: document, ContentDigest: digest,
+			ContractVersion: PolicyVersionCompiledContract, Compilation: &repeated}
+		encodedVersion, err := json.Marshal(version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decodedVersion PolicyVersion
+		if json.Unmarshal(encodedVersion, &decodedVersion) != nil {
+			t.Fatal("compiled version wire round trip failed")
+		}
+		if actual, err := CanonicalizePolicyVersion(decodedVersion); err != nil || actual != canonical {
+			t.Fatal("version transport lost its complete author/compilation commitment")
+		}
 	})
 }
 
@@ -1987,7 +2129,7 @@ func TestPolicyContentCanonicalizationIsStableAndDoesNotMutateTheDocument(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	version := PolicyVersion{PolicyID: "policy-example", ID: "version-first", Document: decoded, ContentDigest: digest}
+	version := PolicyVersion{PolicyID: "policy-example", ID: "version-first", Document: decoded, ContentDigest: digest, ContractVersion: PolicyVersionLegacyContract}
 	if ValidatePolicyVersion(version) != nil {
 		t.Fatal("valid immutable version rejected")
 	}
@@ -2228,7 +2370,7 @@ func TestPolicyMetadataAndAttachmentOwnershipContracts(t *testing.T) {
 		t.Fatal(err)
 	}
 	detail := PolicyDetail{APIVersion: APIVersion, Kind: "PolicyDetail", Policy: policy,
-		Version: PolicyVersion{PolicyID: policy.ID, ID: policy.DefaultVersionID, Document: document, ContentDigest: digest}}
+		Version: PolicyVersion{PolicyID: policy.ID, ID: policy.DefaultVersionID, Document: document, ContentDigest: digest, ContractVersion: PolicyVersionLegacyContract}}
 	if ValidatePolicyDetail(detail) != nil {
 		t.Fatal("valid policy detail rejected")
 	}

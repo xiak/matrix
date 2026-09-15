@@ -19,10 +19,11 @@ var ErrInvalidPolicyState = errors.New("IAM policy authority state is invalid")
 // permission document. A non-nil Membership proves one live group inheritance
 // path; both direct and inherited authority enter the same evaluator.
 type AttachedPolicy struct {
-	Policy     iamv1.Policy           `json:"policy"`
-	Version    iamv1.PolicyVersion    `json:"version"`
-	Attachment iamv1.PolicyAttachment `json:"attachment"`
-	Membership *iamv1.GroupMembership `json:"membership,omitempty"`
+	Policy     iamv1.Policy                 `json:"policy"`
+	Version    iamv1.PolicyVersion          `json:"version"`
+	Attachment iamv1.PolicyAttachment       `json:"attachment"`
+	Membership *iamv1.GroupMembership       `json:"membership,omitempty"`
+	Profiles   []iamv1.AuthorizationProfile `json:"-"`
 }
 
 type PolicyAttachmentEvidence struct {
@@ -31,20 +32,23 @@ type PolicyAttachmentEvidence struct {
 	MembershipID              iamv1.GroupMembershipID      `json:"membershipId,omitempty"`
 	MembershipResourceVersion uint64                       `json:"membershipResourceVersion,omitempty"`
 	Version                   iamv1.PolicyVersionReference `json:"version"`
+	ContractVersion           uint64                       `json:"contractVersion"`
+	Compilation               *iamv1.PolicyCompilation     `json:"compilation,omitempty"`
 }
 
 // ResolvedUserBoundary is a current database snapshot, never a request field
 // or an attachment. NONE is explicit so a missing row/decoder result fails
 // closed rather than silently dropping an upper bound.
 type ResolvedUserBoundary struct {
-	State               string               `json:"state"`
-	AccountID           iamv1.AccountID      `json:"accountId"`
-	UserID              iamv1.PrincipalID    `json:"userId"`
-	UserResourceVersion uint64               `json:"userResourceVersion"`
-	BoundaryID          string               `json:"boundaryId,omitempty"`
-	ResourceVersion     uint64               `json:"resourceVersion,omitempty"`
-	Policy              *iamv1.Policy        `json:"policy,omitempty"`
-	Version             *iamv1.PolicyVersion `json:"version,omitempty"`
+	State               string                       `json:"state"`
+	AccountID           iamv1.AccountID              `json:"accountId"`
+	UserID              iamv1.PrincipalID            `json:"userId"`
+	UserResourceVersion uint64                       `json:"userResourceVersion"`
+	BoundaryID          string                       `json:"boundaryId,omitempty"`
+	ResourceVersion     uint64                       `json:"resourceVersion,omitempty"`
+	Policy              *iamv1.Policy                `json:"policy,omitempty"`
+	Version             *iamv1.PolicyVersion         `json:"version,omitempty"`
+	Profiles            []iamv1.AuthorizationProfile `json:"-"`
 }
 
 type UserBoundaryEvidence struct {
@@ -53,6 +57,8 @@ type UserBoundaryEvidence struct {
 	BoundaryID          string                        `json:"boundaryId,omitempty"`
 	ResourceVersion     uint64                        `json:"resourceVersion,omitempty"`
 	Version             *iamv1.PolicyVersionReference `json:"version,omitempty"`
+	ContractVersion     uint64                        `json:"contractVersion,omitempty"`
+	Compilation         *iamv1.PolicyCompilation      `json:"compilation,omitempty"`
 }
 
 func ValidateUserBoundary(value *ResolvedUserBoundary, account iamv1.AccountID, user iamv1.PrincipalID, revision uint64) error {
@@ -86,17 +92,22 @@ func ValidateUserBoundary(value *ResolvedUserBoundary, account iamv1.AccountID, 
 
 // Boundary statements use the same evaluator and current typed context as
 // grants; their result and provenance must not be merged into grant sources.
-func evaluateUserBoundary(value *ResolvedUserBoundary, context policyEvaluationContext, action iamv1.Action, resource iamv1.ResourceReference) (PolicyEvaluation, UserBoundaryEvidence, error) {
+func evaluateUserBoundary(value *ResolvedUserBoundary, context policyEvaluationContext, request iamv1.AuthorizationRequest) (PolicyEvaluation, UserBoundaryEvidence, error) {
 	evidence := UserBoundaryEvidence{State: value.State, UserResourceVersion: value.UserResourceVersion}
 	if value.State == "NONE" {
 		return PolicyEvaluation{Allowed: true}, evidence, nil
 	}
-	result, err := evaluatePolicies(context, []iamv1.PolicyVersion{*value.Version}, action, resource)
+	context.profiles = make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)
+	if context.includeProfiles(value.Profiles) != nil {
+		return PolicyEvaluation{}, UserBoundaryEvidence{}, ErrInvalidPolicyState
+	}
+	result, err := evaluatePolicies(context, []iamv1.PolicyVersion{*value.Version}, request)
 	if err != nil {
 		return PolicyEvaluation{}, UserBoundaryEvidence{}, err
 	}
 	evidence.BoundaryID, evidence.ResourceVersion = value.BoundaryID, value.ResourceVersion
 	evidence.Version = &iamv1.PolicyVersionReference{PolicyID: value.Policy.ID, VersionID: value.Version.ID, ContentDigest: value.Version.ContentDigest}
+	evidence.ContractVersion, evidence.Compilation = value.Version.ContractVersion, value.Version.Compilation
 	return result, evidence, nil
 }
 
@@ -112,13 +123,88 @@ type policyEvaluationContext struct {
 	databaseTime time.Time
 	accountID    iamv1.AccountID
 	subject      iamv1.Subject
+	profiles     map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile
+}
+
+func (context *policyEvaluationContext) includeProfiles(profiles []iamv1.AuthorizationProfile) error {
+	for _, profile := range profiles {
+		_, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+		if err != nil {
+			return ErrInvalidPolicyState
+		}
+		reference := iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+		context.profiles[reference] = profile
+	}
+	return nil
+}
+
+// LegacySystemPolicyReferences describes only the exact source-owned seeds at
+// the supported interpretation baseline. It is NOT proof of a row's binary
+// provenance, a CUSTOMER compatibility path or a migration backfill.
+func LegacySystemPolicyReferences(version iamv1.PolicyVersion) ([]iamv1.AuthorizationProfileReference, bool) {
+	if version.ContractVersion != iamv1.PolicyVersionLegacyContract || iamv1.ValidatePolicyVersion(version) != nil {
+		return nil, false
+	}
+	seeds := map[iamv1.PolicyID]string{
+		iamv1.SystemPolicyAccountAdministrator: "2202a829e32905bb3d522996f01b4b5141430a25d0733fa1c75ad620deb24273",
+		iamv1.SystemPolicyPlatformOperator:     "3f4d1db89d94ef13aca81c5da190bf67d03f1c24d217387981f983ec911de3b7",
+		iamv1.SystemPolicyPaaSDeveloper:        "a3483d842d049b77a7406f8ba068ad74147b75e6a27d7a53d1e475090c59949c",
+		iamv1.SystemPolicyPaaSViewer:           "f50cb1247177f209740ac2b8487b12be62c7d00d575ae382be1e64af0aed1305",
+		iamv1.SystemPolicyAuditReader:          "51ac082ac0e5053510ae920a4af9b870f0b08c4c8854b28d59650e695625f890",
+		iamv1.SystemPolicyInstallationVerifier: "230e3de1d9a19cd85b53e268f1f3fc7680489e52e05fb1ac362fa62724451823",
+	}
+	hex, found := seeds[version.PolicyID]
+	if !found || version.ContentDigest != "sha256:"+hex || version.ID != iamv1.PolicyVersionID("version-"+hex) {
+		return nil, false
+	}
+	// Exact archive keys, never a lookup of today's head or a guessed revision.
+	return []iamv1.AuthorizationProfileReference{
+		{Product: iamv1.ProductIAM, Revision: 1, ContentDigest: "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44"},
+		{Product: iamv1.ProductPaaS, Revision: 1, ContentDigest: "sha256:f2409682d451b564cbd55b2b315543c2f4b333e3f027f3b4377b103ecc1e2876"},
+		{Product: iamv1.ProductManagedService, Revision: 1, ContentDigest: "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f"},
+		{Product: iamv1.ProductAudit, Revision: 1, ContentDigest: "sha256:6bae9c16c05ad781662190c02ab2adb1e552ef2889c0a05d78de7d4553147052"},
+		{Product: iamv1.ProductInstallation, Revision: 1, ContentDigest: "sha256:04493b4c1dfacebbb6a2ed0d47b38c686c6d56a5526acdcf2a886d00ac45b730"},
+	}, true
+}
+
+func (context policyEvaluationContext) policyInterpretation(version iamv1.PolicyVersion) (iamv1.PolicyCompilation, string, []iamv1.AuthorizationProfile, error) {
+	var references []iamv1.AuthorizationProfileReference
+	if version.ContractVersion == iamv1.PolicyVersionCompiledContract && version.Compilation != nil {
+		references = version.Compilation.Profiles
+	} else {
+		var supported bool
+		references, supported = LegacySystemPolicyReferences(version)
+		if !supported {
+			return iamv1.PolicyCompilation{}, "", nil, ErrInvalidPolicyState
+		}
+	}
+	profiles := make([]iamv1.AuthorizationProfile, 0, len(references))
+	for _, reference := range references {
+		profile, found := context.profiles[reference]
+		if !found {
+			return iamv1.PolicyCompilation{}, "", nil, ErrInvalidPolicyState
+		}
+		profiles = append(profiles, profile)
+	}
+	if version.ContractVersion == iamv1.PolicyVersionCompiledContract {
+		return *version.Compilation, version.ContentDigest, profiles, nil
+	}
+	// Interpret the fixed legacy SYSTEM bytes against their explicit ceiling
+	// using the sole grammar. Nothing is written back or presented as the
+	// author's compilation; the original version/digest remains the evidence.
+	compilation, err := iamv1.CompilePolicyDocument(version.Document, profiles)
+	if err != nil {
+		return iamv1.PolicyCompilation{}, "", nil, ErrInvalidPolicyState
+	}
+	_, digest, err := iamv1.CanonicalizePolicyCompilation(version.Document, compilation, profiles)
+	return compilation, digest, profiles, err
 }
 
 // EvaluateAttachedPolicies joins current policy metadata, immutable content and
 // a live attachment inside an already authenticated authority snapshot. It
 // invokes the sole statement evaluator only after every ownership link agrees.
 func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID, installationID string, subject iamv1.Subject,
-	attached []AttachedPolicy, action iamv1.Action, resource iamv1.ResourceReference,
+	attached []AttachedPolicy, request iamv1.AuthorizationRequest,
 ) (PolicyEvaluation, []PolicyAttachmentEvidence, error) {
 	if iamv1.ValidateID("accountId", string(accountID)) != nil ||
 		iamv1.ValidateID("subject.id", string(subject.ID)) != nil ||
@@ -128,6 +214,8 @@ func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID,
 		return PolicyEvaluation{}, nil, ErrInvalidPolicyState
 	}
 	versions := make([]iamv1.PolicyVersion, 0, len(attached))
+	context := policyEvaluationContext{databaseTime: databaseTime, accountID: accountID, subject: subject,
+		profiles: make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)}
 	seen := make(map[iamv1.PolicyAttachmentID]bool, len(attached))
 	for _, row := range attached {
 		policy, attachment := row.Policy, row.Attachment
@@ -149,6 +237,9 @@ func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID,
 			return PolicyEvaluation{}, nil, ErrInvalidPolicyState
 		}
 		seen[attachment.ID] = true
+		if err := context.includeProfiles(row.Profiles); err != nil {
+			return PolicyEvaluation{}, nil, err
+		}
 		if subject.Type != iamv1.PrincipalUser {
 			for _, statement := range row.Version.Document.Statements {
 				if len(statement.Conditions) != 0 {
@@ -158,7 +249,7 @@ func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID,
 		}
 		versions = append(versions, row.Version)
 	}
-	result, err := evaluatePolicies(policyEvaluationContext{databaseTime, accountID, subject}, versions, action, resource)
+	result, err := evaluatePolicies(context, versions, request)
 	if err != nil {
 		return PolicyEvaluation{}, nil, err
 	}
@@ -170,7 +261,8 @@ func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID,
 	for _, row := range attached {
 		if version, found := matched[row.Policy.ID]; found {
 			item := PolicyAttachmentEvidence{AttachmentID: row.Attachment.ID,
-				ResourceVersion: row.Attachment.ResourceVersion, Version: version}
+				ResourceVersion: row.Attachment.ResourceVersion, Version: version,
+				ContractVersion: row.Version.ContractVersion, Compilation: row.Version.Compilation}
 			if row.Membership != nil {
 				item.MembershipID = row.Membership.ID
 				item.MembershipResourceVersion = row.Membership.ResourceVersion
@@ -187,14 +279,19 @@ func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID,
 // evaluatePolicies evaluates a current, owner-validated policy snapshot. It
 // does not authenticate a subject, resolve ownership, or authorize attachment
 // management. Those checks surround it in the existing authority transaction.
-func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVersion, action iamv1.Action, resource iamv1.ResourceReference) (PolicyEvaluation, error) {
+func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVersion, request iamv1.AuthorizationRequest) (PolicyEvaluation, error) {
 	if validateAuthorityTime(context.databaseTime) != nil || iamv1.ValidateID("accountId", string(context.accountID)) != nil ||
 		iamv1.ValidateID("subject.id", string(context.subject.ID)) != nil ||
 		(context.subject.Type != iamv1.PrincipalUser && context.subject.Type != iamv1.PrincipalServiceAccount) {
 		return PolicyEvaluation{}, ErrInvalidPolicyState
 	}
-	definition, known := iamv1.LookupActionDefinition(action)
-	if !known || resource.Kind != definition.ResourceKind || iamv1.ValidateID("resource.id", resource.ID) != nil {
+	if iamv1.ValidateAuthorizationRequest(request) != nil {
+		return PolicyEvaluation{}, ErrInvalidAuthorizationRequest
+	}
+	action, resource := request.Action, request.Resource
+	definition, _ := iamv1.LookupActionDefinition(action)
+	currentProfile, found := iamv1.LookupAuthorizationProfile(request.Profile.Product)
+	if !found {
 		return PolicyEvaluation{}, ErrInvalidAuthorizationRequest
 	}
 	if len(versions) > MaxEvaluationPolicies {
@@ -206,7 +303,12 @@ func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVe
 	hasAllow := false
 	for _, version := range versions {
 		statementCount += len(version.Document.Statements)
-		if statementCount > MaxEvaluationStatements || iamv1.ValidatePolicyVersion(version) != nil {
+		if statementCount > MaxEvaluationStatements || iamv1.ValidateID("policyId", string(version.PolicyID)) != nil ||
+			iamv1.ValidateID("versionId", string(version.ID)) != nil {
+			return PolicyEvaluation{}, ErrInvalidPolicyState
+		}
+		compilation, digest, profiles, err := context.policyInterpretation(version)
+		if err != nil || iamv1.CheckPolicyCompilationRequest(version.Document, compilation, digest, profiles, currentProfile, request) != nil {
 			return PolicyEvaluation{}, ErrInvalidPolicyState
 		}
 		reference := iamv1.PolicyVersionReference{PolicyID: version.PolicyID, VersionID: version.ID, ContentDigest: version.ContentDigest}
@@ -243,7 +345,7 @@ func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVe
 				case iamv1.PolicyResourceAnyInAuthority:
 					resourceMatches = true
 				case iamv1.PolicyResourcePrefixInAuthority:
-					resourceMatches = strings.HasPrefix(resource.ID, selector.ID)
+					resourceMatches = request.ResourceMode == iamv1.AuthorizationResourceInstance && strings.HasPrefix(resource.ID, selector.ID)
 				default:
 					return PolicyEvaluation{}, ErrInvalidPolicyState
 				}
@@ -418,9 +520,14 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 	}
 	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: scope,
 		Statements: []iamv1.PolicyStatement{{SID: "permissions", Effect: iamv1.PolicyAllow, Actions: actions, Resources: resources}}}
-	_, digest, err := iamv1.CanonicalizePolicyDocument(document)
+	compilation, err := iamv1.CompilePolicyDocument(document, iamv1.AllAuthorizationProfiles())
 	if err != nil {
 		return iamv1.PolicyVersion{}, ErrInvalidPolicyState
 	}
-	return iamv1.PolicyVersion{PolicyID: id, ID: iamv1.PolicyVersionID("version-" + digest[len("sha256:"):]), Document: document, ContentDigest: digest}, nil
+	_, digest, err := iamv1.CanonicalizePolicyCompilation(document, compilation, iamv1.AllAuthorizationProfiles())
+	if err != nil {
+		return iamv1.PolicyVersion{}, ErrInvalidPolicyState
+	}
+	return iamv1.PolicyVersion{PolicyID: id, ID: iamv1.PolicyVersionID("version-" + digest[len("sha256:"):]), Document: document, ContentDigest: digest,
+		ContractVersion: iamv1.PolicyVersionCompiledContract, Compilation: &compilation}, nil
 }

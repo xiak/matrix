@@ -383,11 +383,11 @@ its recorder/evidence and product PEPs are `ADAPT` for explicit target modes
 and protected decision contract metadata. Reconstructing an original request
 in a production adapter, accepting absent fields as legacy eligibility, and
 retaining the old recorder/private assertion overloads are `REJECT`.
-Fixed `384d6d76b65498ed6b428ba9a2905ef67831b919` is `REFERENCE` only for
-actual old-executable retained decisions and atomic corruption rejection in
-the existing process gate, not a supported cross-profile release path. Its
-original document/outbox and policy evidence remain unchanged; no historical
-boundary evidence or Profile is fabricated from current permissions.
+Fixed `384d6d76b65498ed6b428ba9a2905ef67831b919` remains `REFERENCE` for
+the earlier decision-contract cutover, but is `REJECT` as a positive source
+for the compiled-policy cutover: it does not satisfy this slice's explicitly
+proved Root management/interpretation baseline. The existing retained-policy
+gate now uses fixed1dc rather than expanding unpublished schema1..N support.
 
 For IAM/005 compiled-version cutover, fixed
 `1dc1079c4e7bec80f5345d06929875b492ba9a86` is `REUSE` for the sole
@@ -401,3 +401,13 @@ Automatic recompilation/default movement, current-head historical fallback,
 and treating an old row or an existing r1 archive as provenance are `REJECT`.
 No host implementation, published release profile or other worktree state is
 adopted by this slice.
+
+Fixed `f272d06f84d8a753f0a7ec2cf3dc4276f637d660` is `REUSE` for the pure
+frozen/current compatibility check before any selector, condition or Effect.
+The selected1dc source's exact SYSTEM seed IDs/digests and immutable r1
+declarations are `ADAPT` as a closed interpretation ceiling, never an author
+compilation or a mutable name allowlist. CUSTOMER document-only content is
+`REFERENCE` for management/history only until Root explicitly publishes a
+compiled version and selects it. Root CUSTOMER attachments require old-API
+removal before cutover; privileged corrupt Root/group fixtures are negative
+tests, not old-version provenance or supported user workflows.

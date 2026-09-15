@@ -469,6 +469,18 @@ var authorizationProfiles = [...]AuthorizationProfile{
 
 var actionDefinitions = projectActionDefinitions(authorizationProfiles[:])
 
+// Source declarations cannot change during this executable's lifetime. Compute
+// their commitments once, not for every projected capability. This contains no
+// database head, subject, attachment, decision or permission cache. Supplied
+// archive/profile values still go through the full public commitment checker.
+var sourceProfileCommitments = func() map[ProductID]authorizationProfileCommitment {
+	result := make(map[ProductID]authorizationProfileCommitment, len(authorizationProfiles))
+	for _, profile := range authorizationProfiles {
+		result[profile.Product] = sourceAuthorizationProfileCommitment(profile)
+	}
+	return result
+}()
+
 // Current source declarations have one revision per product. This is release
 // registration, not a tenant-writable registry or an authorization result.
 func AllAuthorizationProfiles() []AuthorizationProfile {

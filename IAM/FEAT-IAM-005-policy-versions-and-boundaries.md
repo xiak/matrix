@@ -101,9 +101,19 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 #### 编译持久化切换与支持边界
 
-本节是下一切片的设计和验收目标，尚未作为已实现的数据库能力。沿现有 policy_versions、发布事务、默认指针及唯一 evaluator 替换，不新建平行策略库或权限引擎。新版本由服务端在同一事务锁住受信 current heads 后编译，保存完整不可变编译内容和唯一摘要；客户端仍只提交作者文档与原并发/幂等字段。源码目录、SQL实际登记与当前 head 不一致时发布失败关闭，不从 archive 最大 revision 或请求中选择产品版本。相同作者文档在不同合法 Profile 下会形成不同内容承诺，须显式发布再显式 set-default，不自动更新附件。
+本节的切片正在实施，尚未验收。沿现有 policy_versions、发布事务、默认指针及唯一 evaluator 替换，不新建平行策略库或权限引擎。新版本由服务端在同一事务锁住受信 current heads 后编译，保存完整不可变编译内容和唯一摘要；客户端仍只提交作者文档与原并发/幂等字段。源码目录、SQL实际登记与当前 head 不一致时发布失败关闭，不从 archive 最大 revision 或请求中选择产品版本。相同作者文档在不同合法 Profile 下会形成不同内容承诺，须显式发布再显式 set-default，不自动更新附件。
 
-policy_versions 拟增加无默认、必填的 contract_version，1只标识切换前真实完整存储行，2代表新编译契约；缺列/缺字段/null 不是可由运行时提交的旧格式选择器。一次性 cutover 持锁、整事务检查既有行后标记；旧 document/canonical/contentDigest、创建时间、默认指针和附件均不改，不回填编译结果。重复迁移不得补齐不完整新行或复活退休内容。新存储列/函数参数、readiness 精确形状与公开响应需在实现时一起校验；当前尚未分配下一 schema 或更改发行 profile。
+policy_versions 增加无默认、必填的 contract_version，1只标识切换前真实完整存储行，2代表新编译契约；缺列/缺字段/null 不是可由运行时提交的旧格式选择器。一次性 cutover 持锁、整事务检查既有行后标记；旧 document/canonical/contentDigest、创建时间、默认指针和附件均不改，不回填编译结果。重复迁移不得补齐不完整新行或复活退休内容。本片开发契约已对齐为 IAM22/Audit13，本分支 PaaS1 不变；发布 CurrentDatabaseProfile 不变，数字不授权旧二进制或发行升级。
+
+公开 PolicyVersion 必填 contractVersion：1禁止出现 compilation（含null），2要求完整 compilation。版本响应验证语言结构和全部摘要，但不能用当前目录枚举拒绝受保护历史内容；发布请求继续使用受信当前声明，响应能解析不代表可参与当前授权。唯一 `CanonicalizePolicyVersion` 只返回校验过的传输规范字节，不认证声明来源。
+
+发布 SQL 沿现有 create_policy/create_policy_version，末尾增加必填 integer submitted_contract，只接受2；旧九参数函数在同事务移除，不保留默认参数或 overload。SQL检查完整承诺、逐SID精确动作集合、最小引用与当前头，并按稳定产品顺序持锁至事务结束，不另写 canonical 编码器。policy_versions.compilation 仅2必填，并与 canonical_document 中的作者文档和编译部分一致；新SYSTEM种子直接使用2，既有默认指针不前移。
+
+私有 policy_version_snapshot 仅返回 `{value:完整PolicyVersion,canonical:原存储字节}`，owner-only、API/PUBLIC/worker/recovery无直接EXECUTE，只嵌入已有受限管理读取和会话/服务快照。adapter严格解包，依据版本中的精确引用加载不可变archive，重验编译语义、规范字节和digest；没有当前head或解析失败fallback。随后立即还原既有用例/领域值，raw canonical和storage wrapper不进入公共响应、决定、证据、outbox、日志或支持导出。声明缓存只活在当前事务，不能缓存为跨请求permit。
+
+能力列表复用同一求值器，不以性能为由跳过旧 Deny 或降低完整性校验。同一次校验栈已验证的精确声明不重复散列；程序内固定声明可预计算规范编码，但外来值只有包括嵌套目标形状、条件和 caller 的完整内容相等时才复用该编码，只有 product/revision/digest 相等不够。其他声明仍走唯一完整编码器；此源码常量优化不保存数据库 head、主体状态、附件或授权结果，撤权和默认版本变化仍按下一请求读取。
+
+当前附件与BOUND边界的决定证据显式绑定版本contractVersion和compilation；不是存储wrapper或策略正文。新recorder在锁内对照实际默认行，拒绝省略/伪造。旧不可变证据没有这些字段时，仅受保护contract1精确版本可按原格式验证，不能由缺字段推定版本；contract2历史必须有完整匹配。历史proof按原行和精确archive校验，不读取当前默认、当前head或当前用户权限。lookup_session及service快照嵌套JSON随片更新，但lookup_service、claim七列、recorder七参数、read_audit_evidence五输出及Audit canonical不变。
 
 **历史存在不等于旧语义已获证明。** contract1 仅证明在切换前存在，不证明记录来自哪一版程序；首版 archive 恰好存在同样不是来源证明。固定 `1dc1079c4e7bec80f5345d06929875b492ba9a86` 是此切片明确的解释基线，不是每份旧策略的作者声明。若保存 migration/legacy interpretation 上限，它不能伪装成作者 profiles、compilationVersion 或修改旧摘要。最终 host 固定 be3 的权限 parity 是消费者验收，不补造旧数据来源。
 
@@ -246,7 +256,19 @@ Audit 原双 schema/受限 recorder/封闭 action/不可变链真库门禁5.324s
 
 独立于全局目录的合成产品验证新 revision 同义可用、无关新动作不进入原 resolvedActions、移除未使用条件不重写内容；即使策略没有当前请求动作，损坏内容仍拒绝。检查按冻结 resolvedActions 选择 SID，不从作者 Action 字符串或资源 ID 推导模式；该纯函数不返回 Allow、不认证来源且不用于历史重新授权。当前线上 PolicyVersion 格式、SQL发布和PDP仍未接入编译内容，不能用这些纯测试替代后续纵向闭环。
 
-GOMAXPROCS2/GOMEMLIMIT768MiB 下全仓 Go race/vet、模块验证、API生成字节稳定及 Linux amd64 构建通过；最终 SID/随机测试增量再次通过 API/architecture race。沿原编译规范往返 fuzz 加总承诺与当前请求检查，15秒、2workers、每样本最小化1秒，通过342088次执行，不声称容量SLO。此次没有启动真实数据库、服务、浏览器或远端实验；默认跳过的外部环境测试不作为新增真库证据。IAM21/Audit13/PaaS1和已发布安装profile保持原值；独立CI须按提交另行确认。
+GOMAXPROCS2/GOMEMLIMIT768MiB 下全仓 Go race/vet、模块验证、API生成字节稳定及 Linux amd64 构建通过；最终 SID/随机测试增量再次通过 API/architecture race。沿原编译规范往返 fuzz 加总承诺与当前请求检查，15秒、2workers、每样本最小化1秒，通过342088次执行，不声称容量SLO。该纯函数片没有启动真实数据库、服务、浏览器或远端实验；默认跳过的外部环境测试不作为新增真库证据。固定 `f272d06f84d8a753f0a7ec2cf3dc4276f637d660` 的 [Verification 34935374957](https://github.com/xiak/matrix/actions/runs/34935374957) 已独立核实精确SHA及三项completed/success。其IAM21/Audit13/PaaS1及发布profile未变，不包含上述IAM22存储/求值WIP，也不替代后继真实门禁。
+
+### 编译版本存储与当前求值本地证据
+
+2026-09-15，本片本地纵向门禁已通过，独立固定提交 CI 尚待确认，不能视为整个005或IAM目标验收。公开版本严格区分contract1/2；新发布只由当前受信声明编译，SQL与适配器保留原作者内容、完整编译承诺和精确archive引用。私有快照包装不泄漏到公共响应/证据；外来声明不存在、同revision不同内容、非规范原存储字节、缺少版本标记/编译内容、SID/动作替换及扩大私有函数权限均失败关闭。重新计算攻击载荷摘要后仍须拒绝错误引用和绑定，不以普通hash不符代替深层校验。
+
+独立限额PG18.6（1 CPU、768 MiB、128 PIDs、64连接），Go2/768MiB、race-p1串行：完整策略门禁198.844s（父195.67s）；原组规模单独94.864s（流程82.84s），未减少分页/竞争/成员规模，未扩大两分钟流程与四分钟总预算。初次完整运行曾超时，定位为重复声明/编译校验开销；同栈去重及源码完整内容相等的编码复用后重新通过。原生单策略微基准由329µs降至59µs，但这不代表端到端容量或HA/SLO验收，011仍须独立证明。
+
+实际固定`1dc1079c4e7bec80f5345d06929875b492ba9a86`旧IAM executable/migrator产生真实数据，再切换当前源码，最终17.983s（流程14.95s）：Root旧CUSTOMER直接附件使整次切换无副作用拒绝，须用旧HTTP显式解除；另有明确标为管理员腐败夹具的Root停用/缺失及Root实际组继承负向。原accounts/roots、策略/default、原版本canonical/digest、附件/组、凭据/会话、决定/evidence、bootstrap receipt及outbox保持；仅原版本取得contract1/null编译标记，新SYSTEM版本不成为原默认。late DDL故障整事务回滚，旧binary拒绝新schema，重启/等值bootstrap不复活撤销。旧SYSTEM Viewer在真实旧/新IAM HTTP上保持读允许、创建/平台拒绝；普通旧CUSTOMER保持当前访问失败关闭，Root读取后显式发布contract2仍不获权，必须另作set-default才允许准确目标。暂停账号保持暂停，随后现有平台操作员显式enable产生唯一关联事实，原Root才能继续新策略发布。此门禁不证明其他旧来源或任何签名跨profile升级。
+
+真实IAM HTTP176.101s；Audit HTTP3.143s；双schema/受限登录/RLS/不可变链最终6.246s；原独立双IAM/PaaS/Audit+dispatcher95.547s。后者保留真实应用、配置、配额/托管服务、Operation/outbox、跨账号ID/cursor、版本默认改变和撤销即时生效、历史producer proof及失联/重启路径；没有用额外模拟进程替代已有业务路径。原本地平台凭据恢复及并发真实PG回归17.666s。双库测试的旧schema数字与直读私有快照夹具已按新形状替换并复跑，不保留旧格式兼容旁路。
+
+最终SQL引用/绑定攻击及原作者64KiB预算（完整编译128KiB不是放大作者文档预算）聚焦19.008s通过；全仓Go race/vet、模块校验、API生成稳定和Linux amd64构建通过。最终API/architecture race再次通过；既有编译内容与Profile规范往返fuzz各15秒、2workers、每样本最小化1秒，分别572754和247876次执行通过，包含完整版本传输承诺与固定源码声明种子。源码为IAM22/Audit13/PaaS1，发布CurrentDatabaseProfile不变；本片不包含UI、host、完整动作通配、Role/STS、运行时产品接入或最终容量/签名发行验收。
 
 ### 当前首片证据与未完成边界
 

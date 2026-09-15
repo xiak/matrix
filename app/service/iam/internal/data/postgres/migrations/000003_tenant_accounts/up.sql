@@ -164,6 +164,25 @@ CREATE INDEX IF NOT EXISTS audit_outbox_decision_fact_idx
 ON iam.audit_outbox (tenant_id,(event_document->>'iamDecisionId'))
 WHERE event_document->>'action'='iam.authorization.decided';
 DROP FUNCTION IF EXISTS iam.read_audit_evidence(text,text,text,text,jsonb);
+-- Historical version evidence is checked against immutable storage, never a
+-- current default/head, live attachment or present user permission. Only a
+-- protected contract-1 row permits the original evidence without new fields.
+CREATE OR REPLACE FUNCTION iam.recorded_policy_version_matches(evidence jsonb)
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT EXISTS(SELECT 1 FROM iam.policy_versions v
+        WHERE v.policy_id=evidence#>>'{version,policyId}' AND v.id=evidence#>>'{version,versionId}'
+          AND v.content_digest=evidence#>>'{version,contentDigest}'
+          AND ((v.contract_version=1 AND NOT evidence ? 'compilation'
+                AND (NOT evidence ? 'contractVersion' OR evidence->'contractVersion'='1'::jsonb))
+            OR (v.contract_version=2 AND evidence->'contractVersion'='2'::jsonb
+                AND evidence->'compilation'=v.compilation
+                AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(v.compilation->'profiles') r
+                    WHERE NOT EXISTS(SELECT 1 FROM iam.authorization_profiles p
+                        WHERE p.product=r->>'product' AND to_jsonb(p.revision)=r->'revision'
+                          AND p.content_digest=r->>'contentDigest')))));
+$function$;
+REVOKE ALL ON FUNCTION iam.recorded_policy_version_matches(jsonb) FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+
 CREATE OR REPLACE FUNCTION iam.read_audit_evidence(origin_tenant text, producer text,
     producer_purpose text, producer_installation text, event jsonb)
 RETURNS TABLE (installation_id text, event_document jsonb, decision_document jsonb, verifier_principal_id text, decision_contract_version integer)
@@ -204,7 +223,12 @@ BEGIN
         JOIN iam.audit_outbox AS outbox ON outbox.tenant_id=decision.tenant_id
             AND outbox.event_document->>'action'='iam.authorization.decided'
             AND outbox.event_document->>'iamDecisionId'=decision.id
-        WHERE decision.tenant_id=proof_tenant AND decision.id=event->>'iamDecisionId' AND decision.allowed;
+        WHERE decision.tenant_id=proof_tenant AND decision.id=event->>'iamDecisionId' AND decision.allowed
+          AND (decision.policy_evidence IS NULL OR NOT EXISTS(
+              SELECT 1 FROM jsonb_array_elements(decision.policy_evidence) e
+              WHERE iam.recorded_policy_version_matches(e) IS DISTINCT FROM true))
+          AND (decision.boundary_evidence IS NULL OR decision.boundary_evidence->>'state'<>'BOUND'
+              OR iam.recorded_policy_version_matches(decision.boundary_evidence));
     END IF;
 END
 $function$;

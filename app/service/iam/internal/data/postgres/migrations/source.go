@@ -91,6 +91,7 @@ func authorizationProfileSeeds() (string, error) {
 
 const policyCutoverPreflight = `SET LOCAL ROLE matrix_iam_owner;
 DO $policy_preflight$
+DECLARE target record; table_name text;
 BEGIN
     IF to_regclass('iam.role_bindings') IS NOT NULL THEN
         IF to_regclass('iam.policy_attachments') IS NOT NULL THEN
@@ -98,18 +99,77 @@ BEGIN
         END IF;
         LOCK TABLE iam.role_bindings IN ACCESS EXCLUSIVE MODE;
     END IF;
+    IF to_regclass('iam.policy_versions') IS NOT NULL AND NOT EXISTS(
+        SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid=to_regclass('iam.policy_versions')
+          AND attname='contract_version' AND NOT attisdropped) THEN
+        -- This qualification precedes every legacy marker and new seed. Do not
+        -- transform existing Root Deny/conditional attachments into a lockout.
+        LOCK TABLE iam.accounts,iam.principals,iam.account_roots,iam.policies,iam.policy_versions,iam.policy_attachments IN ACCESS EXCLUSIVE MODE;
+        FOREACH table_name IN ARRAY ARRAY['accounts','principals','account_roots','policies','policy_versions','policy_attachments'] LOOP
+            EXECUTE format('ALTER TABLE iam.%I NO FORCE ROW LEVEL SECURITY',table_name);
+        END LOOP;
+        IF to_regclass('iam.group_memberships') IS NOT NULL THEN
+            LOCK TABLE iam.groups,iam.group_memberships IN ACCESS EXCLUSIVE MODE;
+            ALTER TABLE iam.groups NO FORCE ROW LEVEL SECURITY;
+            ALTER TABLE iam.group_memberships NO FORCE ROW LEVEL SECURITY;
+        END IF;
+        IF EXISTS(SELECT 1 FROM iam.bootstrap_receipts receipt WHERE receipt.singleton AND NOT EXISTS(
+            SELECT 1 FROM iam.account_roots root WHERE root.account_id=receipt.organization_id
+              AND root.principal_id=receipt.administrator_principal_id)) THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='IAM policy cutover bootstrap Root differs';
+        END IF;
+        FOR target IN SELECT account.id,root.principal_id FROM iam.accounts account
+            LEFT JOIN iam.account_roots root ON root.account_id=account.id LOOP
+            IF target.principal_id IS NULL OR NOT EXISTS(SELECT 1 FROM iam.principals p
+                WHERE p.tenant_id=target.id AND p.id=target.principal_id AND p.principal_type='USER'
+                  AND p.status='ACTIVE' AND p.deleted_at IS NULL) OR NOT EXISTS(
+                SELECT 1 FROM iam.policy_attachments attachment JOIN iam.policies policy ON policy.id=attachment.policy_id
+                  JOIN iam.policy_versions version ON version.policy_id=policy.id AND version.id=policy.default_version_id
+                WHERE attachment.tenant_id=target.id AND attachment.target_kind='USER' AND attachment.target_id=target.principal_id
+                  AND attachment.revoked_at IS NULL AND policy.id='system.account-administrator' AND policy.management='SYSTEM'
+                  AND policy.status='ACTIVE' AND policy.authority_scope='TENANT' AND version.retired_at IS NULL
+                  AND version.id='version-2202a829e32905bb3d522996f01b4b5141430a25d0733fa1c75ad620deb24273'
+                  AND version.content_digest='sha256:2202a829e32905bb3d522996f01b4b5141430a25d0733fa1c75ad620deb24273') THEN
+                RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='IAM policy cutover Root management is unsupported';
+            END IF;
+            IF EXISTS(SELECT 1 FROM iam.policy_attachments attachment JOIN iam.policies policy ON policy.id=attachment.policy_id
+                WHERE attachment.tenant_id=target.id AND attachment.target_kind='USER' AND attachment.target_id=target.principal_id
+                  AND attachment.revoked_at IS NULL AND policy.management='CUSTOMER') THEN
+                RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='IAM policy cutover requires prior Root attachment removal';
+            END IF;
+            IF to_regclass('iam.group_memberships') IS NOT NULL THEN
+              IF EXISTS(
+                SELECT 1 FROM iam.group_memberships membership JOIN iam.groups group_subject
+                  ON group_subject.tenant_id=membership.tenant_id AND group_subject.id=membership.group_id AND group_subject.deleted_at IS NULL
+                JOIN iam.policy_attachments attachment ON attachment.tenant_id=membership.tenant_id
+                  AND attachment.target_kind='GROUP' AND attachment.target_id=membership.group_id AND attachment.revoked_at IS NULL
+                JOIN iam.policies policy ON policy.id=attachment.policy_id AND policy.management='CUSTOMER'
+                WHERE membership.tenant_id=target.id AND membership.user_id=target.principal_id AND membership.removed_at IS NULL) THEN
+                RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='IAM policy cutover requires prior Root group attachment removal';
+              END IF;
+            END IF;
+        END LOOP;
+        FOREACH table_name IN ARRAY ARRAY['accounts','principals','account_roots','policies','policy_versions','policy_attachments'] LOOP
+            EXECUTE format('ALTER TABLE iam.%I FORCE ROW LEVEL SECURITY',table_name);
+        END LOOP;
+        IF to_regclass('iam.group_memberships') IS NOT NULL THEN
+            ALTER TABLE iam.groups FORCE ROW LEVEL SECURITY;
+            ALTER TABLE iam.group_memberships FORCE ROW LEVEL SECURITY;
+        END IF;
+    END IF;
 END $policy_preflight$;`
 
 func systemPolicySQL() (string, error) {
 	type seed struct {
-		LegacyRole        string                `json:"legacyRole"`
-		PolicyID          iamv1.PolicyID        `json:"policyId"`
-		DisplayName       string                `json:"displayName"`
-		VersionID         iamv1.PolicyVersionID `json:"versionId"`
-		Scope             iamv1.AuthorityScope  `json:"scope"`
-		Document          json.RawMessage       `json:"document"`
-		CanonicalDocument string                `json:"canonicalDocument"`
-		ContentDigest     string                `json:"contentDigest"`
+		LegacyRole        string                   `json:"legacyRole"`
+		PolicyID          iamv1.PolicyID           `json:"policyId"`
+		DisplayName       string                   `json:"displayName"`
+		VersionID         iamv1.PolicyVersionID    `json:"versionId"`
+		Scope             iamv1.AuthorityScope     `json:"scope"`
+		Document          json.RawMessage          `json:"document"`
+		CanonicalDocument string                   `json:"canonicalDocument"`
+		ContentDigest     string                   `json:"contentDigest"`
+		Compilation       *iamv1.PolicyCompilation `json:"compilation"`
 	}
 	seeds := []seed{
 		{LegacyRole: "ORGANIZATION_ADMIN", PolicyID: iamv1.SystemPolicyAccountAdministrator, DisplayName: "AccountAdministrator"},
@@ -124,12 +184,19 @@ func systemPolicySQL() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		canonical, digest, err := iamv1.CanonicalizePolicyDocument(version.Document)
+		canonical, digest, err := iamv1.CanonicalizePolicyCompilation(version.Document, *version.Compilation, iamv1.AllAuthorizationProfiles())
 		if err != nil {
 			return "", err
 		}
 		seeds[index].VersionID, seeds[index].Scope = version.ID, version.Document.Scope
-		seeds[index].Document, seeds[index].CanonicalDocument, seeds[index].ContentDigest = json.RawMessage(canonical), canonical, digest
+		var content struct {
+			Document json.RawMessage `json:"document"`
+		}
+		if err := json.Unmarshal([]byte(canonical), &content); err != nil {
+			return "", err
+		}
+		seeds[index].Document, seeds[index].CanonicalDocument, seeds[index].ContentDigest = content.Document, canonical, digest
+		seeds[index].Compilation = version.Compilation
 	}
 	encoded, err := json.Marshal(seeds)
 	if err != nil {

@@ -456,18 +456,6 @@ func (service *Authority) CreatePolicy(ctx context.Context, credential iamv1.Sec
 	if iamv1.ValidateCreatePolicyRequest(request) != nil {
 		return iamv1.PolicyDetail{}, ErrInvalidArgument
 	}
-	_, contentDigest, err := iamv1.CanonicalizePolicyDocument(request.Document)
-	if err != nil {
-		return iamv1.PolicyDetail{}, ErrInvalidArgument
-	}
-	requestDigest, err := digestSanitized("policy-create", struct {
-		DisplayName   string `json:"displayName"`
-		ContentDigest string `json:"contentDigest"`
-		RequestID     string `json:"requestId"`
-	}{request.DisplayName, contentDigest, request.RequestID})
-	if err != nil {
-		return iamv1.PolicyDetail{}, err
-	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyCreate, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
@@ -480,6 +468,25 @@ func (service *Authority) CreatePolicy(ctx context.Context, credential iamv1.Sec
 			if account.RootIdentity.PrincipalID != subject.Subject.Principal.ID {
 				return iamv1.PolicyDetail{}, ErrForbidden
 			}
+			if err := tx.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+				return iamv1.PolicyDetail{}, err
+			}
+			compilation, err := iamv1.CompilePolicyDocument(request.Document, iamv1.AllAuthorizationProfiles())
+			if err != nil {
+				return iamv1.PolicyDetail{}, ErrInvalidArgument
+			}
+			_, contentDigest, err := iamv1.CanonicalizePolicyCompilation(request.Document, compilation, iamv1.AllAuthorizationProfiles())
+			if err != nil {
+				return iamv1.PolicyDetail{}, ErrInvalidArgument
+			}
+			requestDigest, err := digestSanitized("policy-create", struct {
+				DisplayName   string `json:"displayName"`
+				ContentDigest string `json:"contentDigest"`
+				RequestID     string `json:"requestId"`
+			}{request.DisplayName, contentDigest, request.RequestID})
+			if err != nil {
+				return iamv1.PolicyDetail{}, err
+			}
 			identityDigest, err := digestSanitized("policy-identity", struct {
 				AccountID iamv1.AccountID   `json:"accountId"`
 				ActorID   iamv1.PrincipalID `json:"actorId"`
@@ -490,7 +497,7 @@ func (service *Authority) CreatePolicy(ctx context.Context, credential iamv1.Sec
 			}
 			id := iamv1.PolicyID("policy-" + identityDigest[len("sha256:"):])
 			version := iamv1.PolicyVersion{PolicyID: id, ID: iamv1.PolicyVersionID("version-" + contentDigest[len("sha256:"):]),
-				Document: request.Document, ContentDigest: contentDigest}
+				Document: request.Document, ContentDigest: contentDigest, ContractVersion: iamv1.PolicyVersionCompiledContract, Compilation: &compilation}
 			policy := iamv1.Policy{APIVersion: iamv1.APIVersion, Kind: "Policy", ID: id,
 				Management: iamv1.PolicyCustomerManaged, AccountID: account.ID, DisplayName: request.DisplayName,
 				Scope: iamv1.AuthorityScopeTenant, Status: iamv1.PolicyActive, DefaultVersionID: version.ID,
@@ -542,23 +549,30 @@ func (service *Authority) CreatePolicyVersion(ctx context.Context, credential ia
 	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateCreatePolicyVersionRequest(request) != nil {
 		return iamv1.PolicyVersionDetail{}, ErrInvalidArgument
 	}
-	_, digest, err := iamv1.CanonicalizePolicyDocument(request.Document)
-	if err != nil {
-		return iamv1.PolicyVersionDetail{}, ErrInvalidArgument
-	}
-	requestDigest, err := digestSanitized("policy-version-create", struct {
-		PolicyID        iamv1.PolicyID `json:"policyId"`
-		ContentDigest   string         `json:"contentDigest"`
-		ResourceVersion uint64         `json:"resourceVersion"`
-		RequestID       string         `json:"requestId"`
-	}{id, digest, request.ResourceVersion, request.RequestID})
-	if err != nil {
-		return iamv1.PolicyVersionDetail{}, err
-	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyVersionCreate, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyVersionDetail, error) {
 			if err := requirePolicyPublisher(ctx, tx, subject); err != nil {
+				return iamv1.PolicyVersionDetail{}, err
+			}
+			if err := tx.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+				return iamv1.PolicyVersionDetail{}, err
+			}
+			compilation, err := iamv1.CompilePolicyDocument(request.Document, iamv1.AllAuthorizationProfiles())
+			if err != nil {
+				return iamv1.PolicyVersionDetail{}, ErrInvalidArgument
+			}
+			_, digest, err := iamv1.CanonicalizePolicyCompilation(request.Document, compilation, iamv1.AllAuthorizationProfiles())
+			if err != nil {
+				return iamv1.PolicyVersionDetail{}, ErrInvalidArgument
+			}
+			requestDigest, err := digestSanitized("policy-version-create", struct {
+				PolicyID        iamv1.PolicyID `json:"policyId"`
+				ContentDigest   string         `json:"contentDigest"`
+				ResourceVersion uint64         `json:"resourceVersion"`
+				RequestID       string         `json:"requestId"`
+			}{id, digest, request.ResourceVersion, request.RequestID})
+			if err != nil {
 				return iamv1.PolicyVersionDetail{}, err
 			}
 			event, err := service.newManagementEvent(subject, auditv1.ActionIAMPolicyVersionCreated, auditv1.TargetPolicy, string(id), decision.ID, requestDigest, request.RequestID, now)
@@ -567,7 +581,8 @@ func (service *Authority) CreatePolicyVersion(ctx context.Context, credential ia
 			}
 			// A publication is distinct from its content. Re-publishing retired
 			// content must not revive the old version identity.
-			version := iamv1.PolicyVersion{PolicyID: id, ID: iamv1.PolicyVersionID("version-" + digest[len("sha256:"):] + "-" + strconv.FormatUint(request.ResourceVersion+1, 10)), Document: request.Document, ContentDigest: digest}
+			version := iamv1.PolicyVersion{PolicyID: id, ID: iamv1.PolicyVersionID("version-" + digest[len("sha256:"):] + "-" + strconv.FormatUint(request.ResourceVersion+1, 10)), Document: request.Document, ContentDigest: digest,
+				ContractVersion: iamv1.PolicyVersionCompiledContract, Compilation: &compilation}
 			return tx.CreatePolicyVersion(ctx, PolicyVersionCreation{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
 				DecisionID: decision.ID, Version: version, ResourceVersion: request.ResourceVersion, AuditEvent: event})
 		})

@@ -300,6 +300,8 @@ func structContracts() map[string]reflect.Type {
 		"PolicyCondition":                     openapi31.StructType[iamv1.PolicyCondition](),
 		"PolicyResourceSelector":              openapi31.StructType[iamv1.PolicyResourceSelector](),
 		"PolicyVersion":                       openapi31.StructType[iamv1.PolicyVersion](),
+		"PolicyCompilation":                   openapi31.StructType[iamv1.PolicyCompilation](),
+		"PolicyResolvedStatement":             openapi31.StructType[iamv1.PolicyResolvedStatement](),
 		"PolicyVersionReference":              openapi31.StructType[iamv1.PolicyVersionReference](),
 		"UserPermissionBoundary":              openapi31.StructType[iamv1.UserPermissionBoundary](),
 		"SetUserPermissionBoundaryRequest":    openapi31.StructType[iamv1.SetUserPermissionBoundaryRequest](),
@@ -449,9 +451,51 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 
 func applySemanticOverlays(schemas object) {
 	applyPolicyLanguageOverlays(schemas)
+	// Immutable response content checks syntax, not today's action catalog.
+	// Publication keeps the current declaration overlays above. This is an
+	// inline projection of the same language, not another policy model.
+	cloneSchema := func(value any) object {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			panic(err)
+		}
+		var copied object
+		if err := json.Unmarshal(encoded, &copied); err != nil {
+			panic(err)
+		}
+		return copied
+	}
+	versionDocument := cloneSchema(schemas["PolicyDocument"])
+	versionStatement := cloneSchema(schemas["PolicyStatement"])
+	versionSelector := cloneSchema(schemas["PolicyResourceSelector"])
+	delete(versionDocument, "allOf")
+	delete(versionStatement, "allOf")
+	versionSelector["properties"].(map[string]any)["kind"] = object{"type": "string", "maxLength": 64, "pattern": `^[A-Z][A-Z0-9_-]*$`}
+	versionStatement["properties"].(map[string]any)["actions"].(map[string]any)["items"] = object{"type": "string", "maxLength": 128, "pattern": `^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$`}
+	versionStatement["properties"].(map[string]any)["resources"].(map[string]any)["items"] = versionSelector
+	versionDocument["properties"].(map[string]any)["statements"].(map[string]any)["items"] = versionStatement
+	versionDocument["allOf"] = []any{object{
+		"if": object{"properties": object{"scope": object{"not": object{"const": "TENANT"}}}},
+		"then": object{"properties": object{"statements": object{"items": object{"properties": object{
+			"resources": object{"items": object{"properties": object{"match": object{"enum": []string{"EXACT", "ANY_IN_AUTHORITY"}}}}},
+		}}}}},
+	}}
+	schemas["PolicyVersion"].(object)["properties"].(object)["document"] = versionDocument
 	boundary := schemas["UserPermissionBoundary"].(object)
 	boundary["required"] = []string{"apiVersion", "kind", "accountId", "userId", "resourceVersion", "policy"}
 	boundary["properties"].(object)["policy"] = object{"anyOf": []any{object{"type": "null"}, openapi31.Ref("PolicyVersionReference")}}
+	schemas["PolicyVersion"].(object)["oneOf"] = []any{
+		object{"properties": object{"contractVersion": object{"const": iamv1.PolicyVersionLegacyContract}, "compilation": false}},
+		object{"required": []string{"compilation"}, "properties": object{"contractVersion": object{"const": iamv1.PolicyVersionCompiledContract}}},
+	}
+	compiled := schemas["PolicyCompilation"].(object)["properties"].(object)
+	compiled["compilationVersion"] = object{"const": iamv1.PolicyCompilationVersion}
+	compiled["profiles"] = object{"type": "array", "minItems": 1, "maxItems": iamv1.MaxPolicyCompilationProfiles, "uniqueItems": true, "items": openapi31.Ref("AuthorizationProfileReference")}
+	compiled["resolvedStatements"] = object{"type": "array", "minItems": 1, "maxItems": iamv1.MaxPolicyStatements, "uniqueItems": true, "items": openapi31.Ref("PolicyResolvedStatement")}
+	resolved := schemas["PolicyResolvedStatement"].(object)["properties"].(object)
+	resolved["sid"] = openapi31.Ref("ID")
+	resolved["actions"] = object{"type": "array", "minItems": 1, "maxItems": iamv1.MaxStatementActions, "uniqueItems": true,
+		"items": object{"type": "string", "minLength": 1, "maxLength": 128, "pattern": `^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*){1,4}$`}}
 	schemas["Policy"].(object)["oneOf"] = []any{
 		object{"properties": object{"management": object{"const": "SYSTEM"}, "accountId": false,
 			"id": object{"pattern": `^system\..+`}}},

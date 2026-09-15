@@ -212,8 +212,7 @@ func ValidateRevocation(value Revocation) error {
 
 func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	var problems []error
-	profile, known := LookupAuthorizationProfile(value.Profile.Product)
-	if !known || CheckAuthorizationProfileTarget(profile, value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil {
+	if checkSourceProfileTarget(value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil {
 		problems = append(problems, errors.New("authorization action is invalid"))
 	}
 	problems = append(problems,
@@ -231,11 +230,15 @@ func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 	if value.Profile == nil {
 		return errors.New("authorization decision has no product binding")
 	}
-	profile, known := LookupAuthorizationProfile(value.Profile.Product)
-	if !known {
-		return errors.New("authorization decision product is not current")
+	if checkSourceProfileTarget(*value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil ||
+		ValidateID("correlationId", value.CorrelationID) != nil {
+		return errors.New("authorization decision product binding is invalid")
 	}
-	return ValidateAuthorizationDecisionForProfile(value, profile)
+	definition, known := LookupActionDefinition(value.Action)
+	if !known {
+		return errors.New("authorization decision action is not declared")
+	}
+	return validateAuthorizationDecision(value, definition)
 }
 
 // This validates immutable evidence against explicit declaration bytes; it does

@@ -23,6 +23,64 @@ func TestEveryIAMOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
 	}
 }
 
+func TestPolicyVersionResponseSchemaDoesNotSubstituteCurrentProductCatalog(t *testing.T) {
+	profile := AuthorizationProfile{APIVersion: APIVersion, Kind: "AuthorizationProfile", Product: "archiveproduct", Revision: 7, CallingService: "ARCHIVEPRODUCER",
+		Actions: []AuthorizationProfileAction{{Action: "archiveproduct.object.read", ResourceKind: "ARCHIVE_OBJECT", Scope: AuthorityScopeTenant,
+			ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}}}}
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+		Statements: []PolicyStatement{{SID: "read", Effect: PolicyAllow, Actions: []Action{"archiveproduct.object.read"},
+			Resources: []PolicyResourceSelector{{Kind: "ARCHIVE_OBJECT", Match: PolicyResourceAnyInAuthority}}}}}
+	compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{profile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	version := PolicyVersion{PolicyID: "policy-archive", ID: "version-archive", Document: document, ContentDigest: digest,
+		ContractVersion: PolicyVersionCompiledContract, Compilation: &compilation}
+	encoded, err := json.Marshal(version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := loadIAMOpenAPI(t)
+	schema := compileIAMOpenAPISchema(t, api, "PolicyVersion")
+	for _, test := range []struct {
+		name     string
+		source   string
+		accepted bool
+	}{
+		{"exact frozen response", string(encoded), true},
+		{"missing explicit contract", strings.Replace(string(encoded), `"contractVersion":2,`, "", 1), false},
+		{"unsupported contract", strings.Replace(string(encoded), `"contractVersion":2`, `"contractVersion":3`, 1), false},
+		{"legacy cannot carry compilation", strings.Replace(string(encoded), `"contractVersion":2`, `"contractVersion":1`, 1), false},
+		{"storage wrapper not public", `{"value":` + string(encoded) + `,"canonical":"private"}`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			instance, err := jsonschema.UnmarshalJSON(strings.NewReader(test.source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (schema.Validate(instance) == nil) != test.accepted {
+				t.Fatal("response schema changed archived syntax or admitted an invalid format")
+			}
+			var decoded PolicyVersion
+			if (json.Unmarshal([]byte(test.source), &decoded) == nil && ValidatePolicyVersion(decoded) == nil) != test.accepted {
+				t.Fatal("strict version codec differs from response format")
+			}
+		})
+	}
+	author, _ := json.Marshal(document)
+	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(author))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compileIAMOpenAPISchema(t, api, "PolicyDocument").Validate(instance) == nil || ValidatePolicyDocument(document) == nil {
+		t.Fatal("historical response syntax widened the current publisher")
+	}
+}
+
 func TestUserPermissionBoundarySchemaAgreesWithStrictCodec(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	for _, name := range []string{"UserPermissionBoundary", "SetUserPermissionBoundaryRequest", "RemoveUserPermissionBoundaryRequest"} {
@@ -348,7 +406,7 @@ func TestPolicyVersionCommandsBindOwnerRevisionAndImmutableContent(t *testing.T)
 		t.Fatal(err)
 	}
 	policy := Policy{APIVersion: APIVersion, Kind: "Policy", ID: "policy-version-example", Management: PolicyCustomerManaged, AccountID: "account-one", DisplayName: "Versioned policy", Scope: AuthorityScopeTenant, Status: PolicyActive, DefaultVersionID: "version-a", ResourceVersion: 2, CreatedAt: now, UpdatedAt: now}
-	version := PolicyVersion{PolicyID: policy.ID, ID: "version-b", Document: document, ContentDigest: digest}
+	version := PolicyVersion{PolicyID: policy.ID, ID: "version-b", Document: document, ContentDigest: digest, ContractVersion: PolicyVersionLegacyContract}
 	detail := PolicyVersionDetail{APIVersion: APIVersion, Kind: "PolicyVersionDetail", Policy: policy, Version: version}
 	if ValidatePolicyVersionDetail(detail) != nil {
 		t.Fatal("nondefault version read rejected")

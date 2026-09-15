@@ -9059,6 +9059,38 @@
         ],
         "type": "string"
       },
+      "PolicyCompilation": {
+        "additionalProperties": false,
+        "properties": {
+          "compilationVersion": {
+            "const": "1"
+          },
+          "profiles": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationProfileReference"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "resolvedStatements": {
+            "items": {
+              "$ref": "#/components/schemas/PolicyResolvedStatement"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "compilationVersion",
+          "profiles",
+          "resolvedStatements"
+        ],
+        "type": "object"
+      },
       "PolicyCondition": {
         "additionalProperties": false,
         "oneOf": [
@@ -9575,6 +9607,31 @@
           "CUSTOMER"
         ],
         "type": "string"
+      },
+      "PolicyResolvedStatement": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*){1,4}$",
+              "type": "string"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "sid": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "actions",
+          "sid"
+        ],
+        "type": "object"
       },
       "PolicyResourceMatch": {
         "enum": [
@@ -13434,13 +13491,293 @@
       },
       "PolicyVersion": {
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "compilation": false,
+              "contractVersion": {
+                "const": 1
+              }
+            }
+          },
+          {
+            "properties": {
+              "contractVersion": {
+                "const": 2
+              }
+            },
+            "required": [
+              "compilation"
+            ]
+          }
+        ],
         "properties": {
+          "compilation": {
+            "$ref": "#/components/schemas/PolicyCompilation"
+          },
           "contentDigest": {
             "pattern": "^sha256:[0-9a-f]{64}$",
             "type": "string"
           },
+          "contractVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
           "document": {
-            "$ref": "#/components/schemas/PolicyDocument"
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "scope": {
+                      "not": {
+                        "const": "TENANT"
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "statements": {
+                      "items": {
+                        "properties": {
+                          "resources": {
+                            "items": {
+                              "properties": {
+                                "match": {
+                                  "enum": [
+                                    "EXACT",
+                                    "ANY_IN_AUTHORITY"
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "properties": {
+              "languageVersion": {
+                "const": "1"
+              },
+              "scope": {
+                "$ref": "#/components/schemas/AuthorityScope"
+              },
+              "statements": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "actions": {
+                      "items": {
+                        "maxLength": 128,
+                        "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$",
+                        "type": "string"
+                      },
+                      "maxItems": 128,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    "conditions": {
+                      "allOf": [
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "iam.current-time"
+                              },
+                              "operator": {
+                                "const": "DATE_GREATER_THAN_EQUALS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "iam.current-time"
+                              },
+                              "operator": {
+                                "const": "DATE_LESS_THAN"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "iam.account-id"
+                              },
+                              "operator": {
+                                "const": "STRING_EQUALS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "iam.account-id"
+                              },
+                              "operator": {
+                                "const": "STRING_NOT_EQUALS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "iam.principal-id"
+                              },
+                              "operator": {
+                                "const": "STRING_EQUALS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "iam.principal-id"
+                              },
+                              "operator": {
+                                "const": "STRING_NOT_EQUALS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        }
+                      ],
+                      "items": {
+                        "$ref": "#/components/schemas/PolicyCondition"
+                      },
+                      "maxItems": 16,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    "effect": {
+                      "$ref": "#/components/schemas/PolicyEffect"
+                    },
+                    "resources": {
+                      "items": {
+                        "additionalProperties": false,
+                        "oneOf": [
+                          {
+                            "properties": {
+                              "match": {
+                                "enum": [
+                                  "EXACT",
+                                  "PREFIX_IN_AUTHORITY"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "id"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "id": false,
+                              "match": {
+                                "const": "ANY_IN_AUTHORITY"
+                              }
+                            }
+                          }
+                        ],
+                        "properties": {
+                          "id": {
+                            "$ref": "#/components/schemas/ID"
+                          },
+                          "kind": {
+                            "maxLength": 64,
+                            "pattern": "^[A-Z][A-Z0-9_-]*$",
+                            "type": "string"
+                          },
+                          "match": {
+                            "$ref": "#/components/schemas/PolicyResourceMatch"
+                          }
+                        },
+                        "required": [
+                          "kind",
+                          "match"
+                        ],
+                        "type": "object"
+                      },
+                      "maxItems": 64,
+                      "minItems": 1,
+                      "type": "array",
+                      "uniqueItems": true
+                    },
+                    "sid": {
+                      "$ref": "#/components/schemas/ID"
+                    }
+                  },
+                  "required": [
+                    "actions",
+                    "effect",
+                    "resources",
+                    "sid"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": [
+              "languageVersion",
+              "scope",
+              "statements"
+            ],
+            "type": "object"
           },
           "policyId": {
             "$ref": "#/components/schemas/ID"
@@ -13451,6 +13788,7 @@
         },
         "required": [
           "contentDigest",
+          "contractVersion",
           "document",
           "policyId",
           "versionId"

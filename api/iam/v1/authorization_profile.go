@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -68,6 +69,23 @@ type AuthorizationProfileReference struct {
 	ContentDigest string    `json:"contentDigest"`
 }
 
+type authorizationProfileCommitment struct {
+	profile    AuthorizationProfile
+	normalized AuthorizationProfile
+	canonical  string
+	reference  AuthorizationProfileReference
+}
+
+func sourceAuthorizationProfileCommitment(profile AuthorizationProfile) authorizationProfileCommitment {
+	canonical, digest, err := canonicalizeAuthorizationProfile(profile)
+	var normalized AuthorizationProfile
+	if err != nil || json.Unmarshal([]byte(canonical), &normalized) != nil {
+		panic("invalid release-owned IAM product declaration")
+	}
+	return authorizationProfileCommitment{cloneAuthorizationProfile(profile), normalized, canonical,
+		AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}}
+}
+
 var ErrInvalidAuthorizationProfile = errors.New("invalid IAM authorization profile")
 
 func DecodeAuthorizationProfile(reader io.Reader) (AuthorizationProfile, error) {
@@ -110,15 +128,10 @@ func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
 	}
 	seen := make(map[Action]bool, len(value.Actions))
 	for _, action := range value.Actions {
-		parts := strings.Split(string(action.Action), ".")
-		if len(parts) < 2 || len(parts) > 5 || parts[0] != string(value.Product) || len(action.Action) > 128 || seen[action.Action] ||
+		product, _, _ := strings.Cut(string(action.Action), ".")
+		if !authorizationActionIdentifier(action.Action) || product != string(value.Product) || seen[action.Action] ||
 			!profileIdentifier(string(action.ResourceKind), true) || len(action.ResourceShapes) == 0 || len(action.ResourceShapes) > 3 || len(action.Conditions) > 3 {
 			return ErrInvalidAuthorizationProfile
-		}
-		for _, part := range parts {
-			if !profileIdentifier(part, false) {
-				return ErrInvalidAuthorizationProfile
-			}
 		}
 		seen[action.Action] = true
 		if action.Scope != AuthorityScopeTenant && action.Scope != AuthorityScopeInstallation && action.Scope != AuthorityScopeInstallationProbe {
@@ -176,9 +189,33 @@ func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
 	return nil
 }
 
+func authorizationActionIdentifier(action Action) bool {
+	parts := strings.Split(string(action), ".")
+	if len(parts) < 2 || len(parts) > 5 || len(action) > 128 {
+		return false
+	}
+	for _, part := range parts {
+		if !profileIdentifier(part, false) {
+			return false
+		}
+	}
+	return true
+}
+
 // CanonicalizeAuthorizationProfile normalizes declaration sets without
 // mutating inputs. Its domain-separated digest is not a Policy or Audit hash.
 func CanonicalizeAuthorizationProfile(value AuthorizationProfile) (string, string, error) {
+	// Equality covers every supplied byte-bearing field, including nested
+	// shapes and conditions. A tuple match alone is never sufficient. Unknown,
+	// reordered or changed declarations use the complete validator/encoder.
+	if source, known := sourceProfileCommitments[value.Product]; known &&
+		(reflect.DeepEqual(value, source.profile) || reflect.DeepEqual(value, source.normalized)) {
+		return source.canonical, source.reference.ContentDigest, nil
+	}
+	return canonicalizeAuthorizationProfile(value)
+}
+
+func canonicalizeAuthorizationProfile(value AuthorizationProfile) (string, string, error) {
 	if validateAuthorizationProfileStructure(value) != nil {
 		return "", "", ErrInvalidAuthorizationProfile
 	}
@@ -245,7 +282,18 @@ func CheckAuthorizationProfileTarget(
 	mode AuthorizationResourceMode,
 	usage AuthorizationCollectionUsage,
 ) error {
-	if CheckAuthorizationProfileReference(profile, reference) != nil || ValidateID("resource.id", resource.ID) != nil {
+	if CheckAuthorizationProfileReference(profile, reference) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	return checkValidatedProfileTarget(profile, action, resource, mode, usage)
+}
+
+// Private: only call after this exact profile's complete canonical commitment
+// has already been validated in the same stack. Never expose an unchecked PEP
+// entrypoint or retain this as an authorization result.
+func checkValidatedProfileTarget(profile AuthorizationProfile, action Action, resource ResourceReference,
+	mode AuthorizationResourceMode, usage AuthorizationCollectionUsage) error {
+	if ValidateID("resource.id", resource.ID) != nil {
 		return ErrInvalidAuthorizationProfile
 	}
 	switch mode {
@@ -273,6 +321,22 @@ func CheckAuthorizationProfileTarget(
 	return ErrInvalidAuthorizationProfile
 }
 
+// Only select the private, immutable executable declaration here. A caller-
+// supplied Profile with an equal tuple must never enter this fast path.
+func checkSourceProfileTarget(reference AuthorizationProfileReference, action Action, resource ResourceReference,
+	mode AuthorizationResourceMode, usage AuthorizationCollectionUsage) error {
+	expected, known := sourceProfileCommitments[reference.Product]
+	if !known || expected.reference != reference {
+		return ErrInvalidAuthorizationProfile
+	}
+	for _, profile := range authorizationProfiles {
+		if profile.Product == reference.Product {
+			return checkValidatedProfileTarget(profile, action, resource, mode, usage)
+		}
+	}
+	return ErrInvalidAuthorizationProfile
+}
+
 // NewAuthorizationRequest is a current-source transport constructor. The PEP
 // explicitly chooses the target mode; this function never infers list/create
 // from a resource ID and does not authenticate or authorize the caller.
@@ -281,16 +345,12 @@ func NewAuthorizationRequest(action Action, resource ResourceReference, mode Aut
 	if !known {
 		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
 	}
-	profile, known := LookupAuthorizationProfile(definition.Product)
+	source, known := sourceProfileCommitments[definition.Product]
 	if !known {
 		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
 	}
-	_, digest, err := CanonicalizeAuthorizationProfile(profile)
-	if err != nil {
-		return AuthorizationRequest{}, err
-	}
 	request := AuthorizationRequest{Action: action, Resource: resource,
-		Profile:      AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest},
+		Profile:      source.reference,
 		ResourceMode: mode, CollectionUsage: usage, RequestID: requestID, CorrelationID: correlationID}
 	if err := ValidateAuthorizationRequest(request); err != nil {
 		return AuthorizationRequest{}, err

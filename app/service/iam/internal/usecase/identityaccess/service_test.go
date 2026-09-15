@@ -1048,7 +1048,7 @@ func (transaction *coreTransaction) attachedPolicies(principalID iamv1.Principal
 		if err != nil {
 			panic(err)
 		}
-		result = append(result, authority.AttachedPolicy{Attachment: attachment, Policy: policy, Version: version})
+		result = append(result, authority.AttachedPolicy{Attachment: attachment, Policy: policy, Version: version, Profiles: iamv1.AllAuthorizationProfiles()})
 	}
 	return result
 }
