@@ -3,9 +3,11 @@
 > Non-authoritative portable memory. Validate Git, exact CI and owning FEAT.
 
 - Updated2026-09-15. Repository https://github.com/xiak/matrix.git, branch feat/iam.
-- Latest pushed implementation1dc1079c4e7bec80f5345d06929875b492ba9a86.
-  Exact Verification34933760954 in_progress, not accepted yet. Both peers received
-  this fixed candidate;001 owns local evidence. Checkpoints are never donors.
+- Latest pushed pure005 implementation f272d06f84d8a753f0a7ec2cf3dc4276f637d660.
+  Exact Verification34935374957 in_progress, not accepted yet;005 owns evidence.
+  Parent production1dc1079c4e7bec80f5345d06929875b492ba9a86/34933760954 now
+  independently exact-SHA/all3 success. Both peers received final1dc confirmation;
+  installation received fixedf272 candidate. Checkpoints are never donors.
 - Earlier eb1aea493b6131cec4c0e6bca90adbb111cc41cb/34927744424,
   fdb880345e4e46d296330f25f7072dbfef408c87/34928316097,
   d3a08bfa7c248793ffb51499186486efa2ebb377/34925618255 and
@@ -20,8 +22,29 @@ Whole IAM goal ACTIVE. Read AGENTS, one owning FEAT, then code/tests.
 evaluation/history;008 PEP/service-role/ABAC;010 UI;011 capacity/HA/final release.
 No new agents/tasks. UI entirely UX/UI peer-owned; no UI/style/embed/browser or
 other worktree/WIP reads. Withdrawn GitLab/root172.30.1.5 request never accessed.
-Next confirm exact1dc CI, then freeze005 compiled PolicyVersion storage/history
-boundary before implementation. CAT-05 and whole goal remain incomplete.
+Next confirm exactf272 CI, then implement005 compiled PolicyVersion storage and
+current evaluation with frozen legacy/preflight boundary below; SQL/publication
+surface still needs final coordination. CAT-05 and whole goal remain incomplete.
+
+## Fixed f272 pure compatibility
+
+api/iam/v1/policy.go CheckPolicyCompilationRequest(document,compilation,digest,
+frozenProfiles,currentProfile,request) checks complete canonical/digest then
+candidate SID where frozen resolvedActions contains request.action, before
+Effect/resource/condition matching. Compares caller/kind/scope/result/mode/usage,
+used condition source/type and instance prefix. No Allow, registry authentication,
+current permission cache or historical reauthorization. Unrelated new actions do
+not enter resolved set; valid unused capability changes need not reject content.
+Existing PolicyVersion wire/SQL/PDP still document-only: this is a pure foundation,
+not the compiled publication/authorization vertical slice.
+
+All declared Allow/Deny shapes, same kind/id collection 3x3 INSTANCE/LIST/CREATE
+with EXACT/ANY, valid changed declarations versus nonmatching Deny, unknown/frozen
+source/digest/malformed request and independent synthetic product checks passed.
+Full Go race/vet/modules, stable API generate, Linux amd64 build; final API and
+architecture race after SID/fuzz additions. Existing compiler fuzz15s/2workers/
+1s minimization342088 executions passed. No PG/service/browser/remote started;
+default skipped integration tests are not new runtime evidence. No active process.
 
 ## Fixed1dc implementation
 
@@ -75,10 +98,27 @@ must use new unique names/labels/ports and limits, not old checkpoint resources.
 ## Next005 boundary / peers
 
 Installation thread01a04149-5dbb-7300-9e4c-31d9e85c8ada waits final cumulative ABI,
-does not consume WIP. NextPolicyVersion boundary NOT frozen: it requests protected
-legacy marker only for real stored rows, no absent-field inference, recompile/
-rewrite of old digest/document/default or silent attachment advance. Define exact
-legacy action/resource/mode under current v2 without expanding old permissions.
+does not consume WIP. 005 design support boundary frozen, SQL shape not yet:
+protected policy_versions contract_version1/2, no default; legacy marker only real
+complete stored rows, never missing-field inference, recompile/rewrite of old
+digest/document/default or silent attachment advance. Real old row and r1 archive
+do NOT prove originating executable.1dc is an interpretation baseline, not row
+provenance. Unknown CUSTOMER only management/history/proof, not current permits;
+positive legacy needs fixed capabilities+actual predecessor/PEP no-expansion proof.
+SYSTEM needs exact fixed canonical/digest seed plus supported capabilities.
+Any unknown/changed explanation fails whole evaluation, never skip old Deny.
+
+Root hard preflight: original sealed Root must be ACTIVE USER, exact known
+SYSTEM management default, ZERO current legacy CUSTOMER direct/actual group
+attachments (even if otherwise supported); remove those under old permissions
+before retry, never migration auto-remove. True post-cutover policy.read/create,
+version.create/set-default/attachment.revoke must be demonstrated; seed presence
+alone insufficient. Preflight failure rolls back marker/schema/default/outbox.
+Account DISABLED need not blanket fail: same Root qualification mandatory,
+preserve disabled/access frozen, then real existing platform explicit enable with
+its own decision/fact -> Root management reachable. If branch not verified,
+reject before effects. Never activate Account/USER or add online PDP exception.
+
 Server chooses current heads and derives minimal refs/resolved statements in one
 locked transaction; caller cannot submit compilation or select historical refs.
 Current policy wire/SQL still author document/digest; pure compiler not yet used
