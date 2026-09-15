@@ -11,6 +11,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -563,11 +565,28 @@ func extractFixedIAMSource(t *testing.T, ctx context.Context, root, temporary, f
 }
 
 func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
+	testIndependentAuthorityProcesses(t, false)
+}
+
+// This opt-in fixture is for observed browser acceptance, not an unattended
+// substitute for TestIndependentIAMAuditAndPaaSProcesses or signed APISIX gates.
+func TestIAMConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_CONSOLE_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_CONSOLE_BROWSER=1 for the bounded local browser fixture")
+	}
+	testIndependentAuthorityProcesses(t, true)
+}
+
+func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	dsn := os.Getenv(authorityProcessDSN)
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", authorityProcessDSN)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	duration := 6 * time.Minute
+	if browser {
+		duration = 30 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
 	root := repositoryRoot(t)
 	adminConfig, err := pgx.ParseConfig(dsn)
@@ -845,6 +864,10 @@ func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
 		changedAdminPassword,
 		"request-admin-password",
 	)
+	if browser {
+		runIAMConsoleBrowser(t, ctx, admin, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start)
+		return
+	}
 	platformDecisions := []iamv1.AuthorizationDecision{
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin", true),
 	}
@@ -1538,6 +1561,138 @@ type binarySet struct {
 	dispatcher     string
 	paas           string
 	paasDispatcher string
+}
+
+func runIAMConsoleBrowser(t *testing.T, ctx context.Context, database *pgx.Conn, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, bearer string, start func(string, []string) *childProcess) {
+	t.Helper()
+	var member iamv1.User
+	for _, candidate := range []struct {
+		login, name string
+		policy      iamv1.PolicyID
+	}{
+		{"browser.admin", "Browser Administrator", iamv1.SystemPolicyAccountAdministrator},
+		{"browser.member", "Browser Member", iamv1.SystemPolicyPaaSDeveloper},
+	} {
+		user := createIAMUser(t, iamEndpoint, bearer, candidate.login, candidate.name, initialDeveloperPassword, "browser-create-"+candidate.login)
+		createIAMPolicyAttachment(t, iamEndpoint, bearer, user.ID, candidate.policy, "browser-grant-"+candidate.login)
+		login := loginIAM(t, iamEndpoint, candidate.login+"@organization-process", initialDeveloperPassword, "browser-login-"+candidate.login)
+		changePasswordIAM(t, iamEndpoint, login.Credential, initialDeveloperPassword, changedDeveloperPassword, "browser-password-"+candidate.login)
+		if candidate.login == "browser.member" {
+			member = user
+		}
+	}
+	for _, candidate := range []struct{ name, application string }{
+		{"Browser boundary A", "application-browser-a"},
+		{"Browser boundary B", "application-browser-b"},
+	} {
+		createPaaSApplication(t, paasEndpoint, bearer, paasv1.ResourceID(candidate.application), candidate.application, "browser-create-"+candidate.application, http.StatusCreated)
+		document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "selected-application", Effect: iamv1.PolicyAllow,
+				Actions:   []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: candidate.application}}}}}
+		response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", bearer,
+			iamv1.CreatePolicyRequest{DisplayName: candidate.name, Document: document, RequestID: "browser-policy-" + candidate.application})
+		var policy iamv1.PolicyDetail
+		if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &policy) != nil || iamv1.ValidatePolicyDetail(policy) != nil {
+			t.Fatal("browser fixture could not publish a real boundary policy")
+		}
+	}
+	uiAddress := freeAddress(t)
+	uiBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-ui", "./app/ui/paas/cmd/matrix-paas-ui")
+	ui := start(uiBinary, []string{"MATRIX_PAAS_UI_LISTEN_ADDRESS=" + uiAddress})
+	waitHTTPStatus(t, ctx, ui, "http://"+uiAddress+"/ready", http.StatusOK)
+
+	// Same-origin loopback routing only. No credentials/selectors are injected;
+	// actual services enforce every request. This is not production APISIX.
+	mux := http.NewServeMux()
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxConnsPerHost = 8
+	transport.MaxIdleConnsPerHost = 8
+	transport.ResponseHeaderTimeout = 15 * time.Second
+	defer transport.CloseIdleConnections()
+	for _, route := range []struct{ prefix, strip, endpoint string }{
+		{"/api/iam/", "/api/iam", iamEndpoint},
+		{"/api/audit/", "/api/audit", auditEndpoint},
+		{"/api/managed-services/", "/api", paasEndpoint},
+		{"/", "", "http://" + uiAddress},
+	} {
+		target, err := url.Parse(route.endpoint)
+		if err != nil {
+			t.Fatal("invalid local browser upstream")
+		}
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		proxy.Transport = transport
+		proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
+			http.Error(w, "upstream unavailable", http.StatusBadGateway)
+		}
+		mux.Handle(route.prefix, http.StripPrefix(route.strip, proxy))
+	}
+	requests := make(chan struct{}, 16)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case requests <- struct{}{}:
+			defer func() { <-requests }()
+			mux.ServeHTTP(w, r)
+		default:
+			http.Error(w, "browser fixture capacity exceeded", http.StatusServiceUnavailable)
+		}
+	}))
+	server.Config.ReadHeaderTimeout = 5 * time.Second
+	server.Config.ReadTimeout = 30 * time.Second
+	server.Config.WriteTimeout = 30 * time.Second
+	server.Config.IdleTimeout = 30 * time.Second
+	server.Start()
+	defer server.Close()
+	finish := filepath.Join(temporary, "browser-finished")
+	t.Logf("BROWSER_FIXTURE url=%s/console/access finish=%s member=%s; synthetic credentials are the existing changed test constants", server.URL, finish, member.ID)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatal("browser observation timed out; not accepted")
+		case <-ticker.C:
+			if exited, _ := ui.poll(); exited {
+				t.Fatal("browser UI exited during observation")
+			}
+			info, err := os.Lstat(finish)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil || !info.Mode().IsRegular() {
+				t.Fatal("invalid browser completion marker")
+			}
+			goto finished
+		}
+	}
+finished:
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	waitAllPaaSOutboxDelivered(t, ctx, database)
+	page := queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 200}, http.StatusOK)
+	sets, removals := 0, 0
+	for _, record := range page.Records {
+		if record.Event.Target.ID != string(member.ID) {
+			continue
+		}
+		switch record.Event.Action {
+		case auditv1.ActionIAMUserPermissionBoundarySet:
+			sets++
+		case auditv1.ActionIAMUserPermissionBoundaryRemoved:
+			removals++
+		}
+	}
+	if sets != 2 || removals != 1 {
+		t.Fatalf("observed boundary facts set=%d remove=%d, want set+replace+remove", sets, removals)
+	}
+	response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/users/"+string(member.ID)+"/permission-boundary", bearer, nil)
+	var boundary iamv1.UserPermissionBoundary
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &boundary) != nil || iamv1.ValidateUserPermissionBoundary(boundary) != nil || boundary.Policy != nil {
+		t.Fatal("browser removal did not leave an explicit unbound user")
+	}
+	if verification := verifyAudit(t, auditEndpoint, bearer); verification.State != auditv1.VerificationVerified {
+		t.Fatal("browser facts failed the real Audit chain verification")
+	}
+	t.Log("browser fixture finished with real set/replace/remove facts; visual assertions belong to recorded browser observations")
 }
 
 func buildAuthorityBinaries(

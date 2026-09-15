@@ -154,6 +154,11 @@
   margin: 0;
 }
 
+.detail,
+.note {
+  overflow-wrap: anywhere;
+}
+
 .facts {
   margin: 0;
   display: grid;
