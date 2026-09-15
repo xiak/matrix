@@ -27,6 +27,86 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func currentAuthorizationProfileList(t *testing.T) AuthorizationProfileList {
+	t.Helper()
+	value := AuthorizationProfileList{APIVersion: APIVersion, Kind: "AuthorizationProfileList", AccountID: "account-catalog"}
+	for _, profile := range AllAuthorizationProfiles() {
+		_, digest, err := CanonicalizeAuthorizationProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		value.Items = append(value.Items, AuthorizationProfileEntry{Profile: profile, ContentDigest: digest})
+	}
+	slices.SortFunc(value.Items, func(left, right AuthorizationProfileEntry) int {
+		return strings.Compare(string(left.Profile.Product), string(right.Profile.Product))
+	})
+	return value
+}
+
+func TestAuthorizationProfileListCommitmentsAndWholeResponseBudget(t *testing.T) {
+	value := currentAuthorizationProfileList(t)
+	encoded, err := json.Marshal(value)
+	if err != nil || ValidateAuthorizationProfileList(value) != nil || int64(len(encoded)) > MaxRequestBytes {
+		t.Fatal("current complete product directory exceeds its response contract")
+	}
+	t.Logf("complete current product directory: %d products, %d bytes", len(value.Items), len(encoded))
+	decoded, err := DecodeAuthorizationProfileList(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(value, decoded) {
+		t.Fatal("current product directory did not round trip")
+	}
+	for _, mutate := range []func(*AuthorizationProfileList){
+		func(v *AuthorizationProfileList) { v.Kind = "PolicyList" },
+		func(v *AuthorizationProfileList) { v.AccountID = "" },
+		func(v *AuthorizationProfileList) { v.Items = nil },
+		func(v *AuthorizationProfileList) { v.Items = []AuthorizationProfileEntry{} },
+		func(v *AuthorizationProfileList) { v.Items[0], v.Items[1] = v.Items[1], v.Items[0] },
+		func(v *AuthorizationProfileList) { v.Items = append(v.Items, v.Items[0]) },
+		func(v *AuthorizationProfileList) { v.Items[0].ContentDigest = "sha256:" + strings.Repeat("0", 64) },
+		func(v *AuthorizationProfileList) { v.Items[0].Profile.Actions[0].ResourceKind = "FORGED" },
+		func(v *AuthorizationProfileList) {
+			v.Items = make([]AuthorizationProfileEntry, MaxAuthorizationProfileListItems+1)
+		},
+	} {
+		candidate, _ := DecodeAuthorizationProfileList(bytes.NewReader(encoded))
+		mutate(&candidate)
+		if ValidateAuthorizationProfileList(candidate) == nil {
+			t.Fatal("directory accepted an incomplete, ambiguous or altered commitment")
+		}
+	}
+	for _, body := range []string{
+		string(encoded) + `{}`,
+		strings.Repeat(" ", int(MaxRequestBytes)) + string(encoded),
+		strings.Replace(string(encoded), `"items":`, `"permit":true,"items":`, 1),
+		strings.Replace(string(encoded), `"items":`, `"items":[],"items":`, 1),
+		strings.Replace(string(encoded), `"contentDigest":`, `"callingService":"FORGED","contentDigest":`, 1),
+		strings.Replace(string(encoded), `"accountId":`, `"AccountId":"forged","accountId":`, 1),
+	} {
+		if _, err := DecodeAuthorizationProfileList(strings.NewReader(body)); err == nil {
+			t.Fatal("directory decoder accepted an unknown field, ambiguity or unbounded response")
+		}
+	}
+	// Legitimate individual declarations can collectively exceed the ordinary
+	// wire budget. Reject the whole response; never truncate its product set.
+	value.Items = nil
+	for index := 0; index < MaxAuthorizationProfileListItems; index++ {
+		profile, _ := LookupAuthorizationProfile(ProductIAM)
+		profile.Product = ProductID(fmt.Sprintf("product-%02d", index))
+		for actionIndex := range profile.Actions {
+			_, suffix, _ := strings.Cut(string(profile.Actions[actionIndex].Action), ".")
+			profile.Actions[actionIndex].Action = Action(string(profile.Product) + "." + suffix)
+		}
+		_, digest, err := CanonicalizeAuthorizationProfile(profile)
+		if err != nil {
+			t.Fatal("whole-budget fixture must contain individually valid profiles")
+		}
+		value.Items = append(value.Items, AuthorizationProfileEntry{Profile: profile, ContentDigest: digest})
+	}
+	oversized, _ := json.Marshal(value)
+	if int64(len(oversized)) <= MaxRequestBytes || ValidateAuthorizationProfileList(value) == nil {
+		t.Fatal("per-profile limits replaced the complete response budget")
+	}
+}
+
 func TestAuthorizationProfileTargetsUseExplicitDeclaredModes(t *testing.T) {
 	for _, profile := range AllAuthorizationProfiles() {
 		before, digest, err := CanonicalizeAuthorizationProfile(profile)

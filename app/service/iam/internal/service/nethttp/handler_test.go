@@ -13,6 +13,7 @@ import (
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 )
 
 func TestIAMHTTPExposesOnlyCredentialBoundCoreRoutes(t *testing.T) {
@@ -122,6 +123,74 @@ func TestIAMHTTPExposesOnlyCredentialBoundCoreRoutes(t *testing.T) {
 			"unexpected installation subject status=%d calls=%d",
 			unexpectedSubjectResponse.Code, workflow.verifyInstallationCalls,
 		)
+	}
+}
+
+func TestIAMHTTPAuthorizationProfileDiscoveryRequiresUserSession(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	handler := newTestHandler(t, workflow)
+	for _, test := range []struct {
+		name, method, suffix, body, bearer string
+		status                             int
+	}{
+		{"current metadata", http.MethodGet, "", "", "catalog-session", http.StatusOK},
+		{"no bearer", http.MethodGet, "", "", "", http.StatusUnauthorized},
+		{"account selector", http.MethodGet, "?accountId=other", "", "catalog-session", http.StatusBadRequest},
+		{"history selector", http.MethodGet, "?revision=1", "", "catalog-session", http.StatusBadRequest},
+		{"scope body", http.MethodGet, "", `{"scope":"INSTALLATION"}`, "catalog-session", http.StatusBadRequest},
+		{"registration", http.MethodPost, "", `{}`, "catalog-session", http.StatusMethodNotAllowed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := workflow.policyCalls
+			request := httptest.NewRequest(test.method, "/v1/authorization-profiles"+test.suffix, strings.NewReader(test.body))
+			if test.bearer != "" {
+				request.Header.Set("Authorization", "Bearer "+test.bearer)
+			}
+			request.Header.Set("Matrix-Tenant-ID", "forged-account")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("discovery status=%d want=%d", response.Code, test.status)
+			}
+			if test.status == http.StatusOK {
+				wantedCredential, _ := iamv1.NewSecret(test.bearer)
+				if workflow.policyCalls != before+1 || workflow.policyCredential != wantedCredential || response.Header().Get("Cache-Control") != "no-store" {
+					t.Fatal("discovery lost its authenticated noncacheable workflow")
+				}
+				var result map[string]json.RawMessage
+				if json.Unmarshal(response.Body.Bytes(), &result) != nil || string(result["kind"]) != `"AuthorizationProfileList"` || string(result["accountId"]) != `"account-catalog"` || len(result) != 4 {
+					t.Fatal("discovery lost its strict current account envelope")
+				}
+			} else if workflow.policyCalls != before {
+				t.Fatal("invalid discovery request reached the authority workflow")
+			}
+		})
+	}
+}
+
+func TestIAMHTTPAuthorizationProfileDiscoveryRejectsInvalidMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		failure error
+		invalid bool
+		status  int
+	}{
+		{"unauthenticated", identityaccess.ErrUnauthenticated, false, http.StatusUnauthorized},
+		{"forbidden", identityaccess.ErrForbidden, false, http.StatusForbidden},
+		{"unavailable", identityaccess.ErrUnavailable, false, http.StatusServiceUnavailable},
+		{"invalid metadata", nil, true, http.StatusServiceUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			workflow.profileErr, workflow.invalidProfile = test.failure, test.invalid
+			request := httptest.NewRequest(http.MethodGet, "/v1/authorization-profiles", nil)
+			request.Header.Set("Authorization", "Bearer catalog-session")
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != test.status || workflow.policyCalls != 1 || strings.Contains(response.Body.String(), "AuthorizationProfileList") || strings.Contains(response.Body.String(), "contentDigest") {
+				t.Fatal("directory failure leaked partial metadata or bypassed authority")
+			}
+		})
 	}
 }
 
@@ -432,6 +501,8 @@ type httpWorkflow struct {
 	policyCalls             int
 	policyPlatform          bool
 	policyCredential        iamv1.Secret
+	profileErr              error
+	invalidProfile          bool
 	readiness               iamv1.Readiness
 	status                  iamv1.BootstrapStatus
 	identity                iamv1.ServiceIdentity
@@ -449,6 +520,18 @@ type httpWorkflow struct {
 	deleteUser              iamv1.DeleteUserRequest
 	authorizeCalls          int
 	verifyInstallationCalls int
+}
+
+func (value *httpWorkflow) ListAuthorizationProfiles(_ context.Context, credential iamv1.Secret, _ string) (iamv1.AuthorizationProfileList, error) {
+	value.policyCalls++
+	value.policyCredential = credential
+	profile, _ := iamv1.LookupAuthorizationProfile(iamv1.ProductIAM)
+	_, digest, _ := iamv1.CanonicalizeAuthorizationProfile(profile)
+	if value.invalidProfile {
+		digest = "invalid-digest"
+	}
+	return iamv1.AuthorizationProfileList{APIVersion: iamv1.APIVersion, Kind: "AuthorizationProfileList", AccountID: "account-catalog",
+		Items: []iamv1.AuthorizationProfileEntry{{Profile: profile, ContentDigest: digest}}}, value.profileErr
 }
 
 func (value *httpWorkflow) ListPolicies(_ context.Context, credential iamv1.Secret, platform bool, _ string) (iamv1.PolicyList, error) {

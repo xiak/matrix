@@ -1,7 +1,9 @@
 package identityaccess
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"strconv"
 	"time"
 
@@ -324,6 +326,36 @@ func userCapabilities(subject SessionCredential, account iamv1.Account, target i
 		result = append(result, capability)
 	}
 	return result, nil
+}
+
+func (service *Authority) ListAuthorizationProfiles(ctx context.Context, credential iamv1.Secret, requestID string) (iamv1.AuthorizationProfileList, error) {
+	if iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.AuthorizationProfileList{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyList, iamv1.AuthorizationResourceInstance, "",
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, requestID,
+		func(_ context.Context, _ Transaction, subject SessionCredential, _ iamv1.AuthorizationDecision, _ time.Time) (iamv1.AuthorizationProfileList, error) {
+			// managementDecision has locked and checked the COMPLETE registry
+			// against this source in the same transaction. Never expose source
+			// constants from an anonymous or registry-unavailable fast path.
+			profiles := iamv1.AllAuthorizationProfiles()
+			slices.SortFunc(profiles, func(left, right iamv1.AuthorizationProfile) int {
+				return cmp.Compare(left.Product, right.Product)
+			})
+			result := iamv1.AuthorizationProfileList{APIVersion: iamv1.APIVersion, Kind: "AuthorizationProfileList",
+				AccountID: subject.Subject.Organization.ID, Items: make([]iamv1.AuthorizationProfileEntry, 0, len(profiles))}
+			for _, profile := range profiles {
+				_, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+				if err != nil {
+					return iamv1.AuthorizationProfileList{}, ErrUnavailable
+				}
+				result.Items = append(result.Items, iamv1.AuthorizationProfileEntry{Profile: profile, ContentDigest: digest})
+			}
+			if iamv1.ValidateAuthorizationProfileList(result) != nil {
+				return iamv1.AuthorizationProfileList{}, ErrUnavailable
+			}
+			return result, nil
+		})
 }
 
 func (service *Authority) ListPolicies(ctx context.Context, credential iamv1.Secret, platform bool, requestID string) (iamv1.PolicyList, error) {

@@ -1,6 +1,6 @@
 # FEAT-IAM-001：业务授权能力目录
 
-- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 的源码Profile、不可变注册、当前一致性及请求/决定绑定已通过固定源码独立验证；PolicyVersion 编译内容持久化尚未完成，本 FEAT 整体未验收。
+- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 的源码 Profile、不可变注册、当前一致性及请求/决定绑定已有固定验证，编译版本及冻结动作族的运行证据归005。CAT-06 只读编辑目录已实现并通过本地真实门禁，待本片独立CI确认；最终产品消费者组合仍待验收，本 FEAT 整体未验收。
 - 依赖：[产品契约](./FEAT-IAM-000-product-contract.md)。
 - Owner：IAM 公共契约与现有 authority；产品拥有其业务词汇。
 - 首片：把现有已接受的动作、允许调用服务、资源种类和 scope 收敛为一份不可变目录，所有当前验证和决定路径消费该目录。
@@ -14,6 +14,7 @@
 | IAM-CAT-03 | 租户动作、平台动作、安装 verifier probe 独立；probe 不能成为业务许可 |
 | IAM-CAT-04 | 校验器、生成 schema、授权服务使用同一目录；返回副本不能修改全局定义 |
 | IAM-CAT-05 | 后续 Profile 明确声明 revision、digest、资源粒度、创建/列表/批量和可信条件来源；未声明的能力不能启用 |
+| IAM-CAT-06 | 当前有效 User 在既有策略目录权限内读取完整、有限、版本绑定的产品能力；目录不是授权、发布或注册许可 |
 
 ## 首片详细设计
 
@@ -28,6 +29,18 @@
 005 字符串切片在同一目录增加 `iam.account-id` 与 `iam.principal-id`：类型 STRING，来源 IAM_AUTHENTICATED_IDENTITY。分别绑定当前 IAM 权威身份的 Account 和主体稳定 ID，仅对 TENANT/USER 启用；不接受产品请求自报的值，不将 Group/策略/资源的归属误作当前调用者身份。它们是 IAM 内置身份条件，不按产品名称分叉，也不开放租户自行注册来源。契约与唯一求值器已经接入，运行证据、算子、集合、缺失和 canonical 行为归 005；完整 Profile 与业务条件仍按 CAT-05/008 验收。
 
 ## 事务与权限
+
+### CAT-06：策略编辑器的只读能力目录
+
+沿现有管理 HTTP 与 identityaccess 事务增加 `GET /v1/authorization-profiles`，无请求 body、query、分页或历史版本 selector。有效 USER bearer 决定当前 Account；在同一事务按既有 `iam.policy.list`、真实 Account 的 INSTANCE 做普通 PDP、当前边界和 Deny 检查。它是策略编写元数据读取，不另发一个目录管理权限；读取成功不意味着能发布 CUSTOMER 文档、承担角色、注册产品或读取租户业务数据。platform-only、service/verifier 凭据不能替代租户许可。
+
+响应为 `AuthorizationProfileList{apiVersion,kind,accountId,items}`；每项 `AuthorizationProfileEntry{profile,contentDigest}`，profile 直接复用完整 AuthorizationProfile。accountId 仅绑定本次读取身份，不代表这些产品声明由租户拥有。条目按 product 严格升序、每产品一个当前 revision，1–16项；整个 JSON（含 envelope）不超过现有64KiB请求/普通契约解码预算，单项仍受原 Profile 校验。超限/缺项/冲突整次503，不截断、分页或返回空成功。摘要由唯一 CanonicalizeAuthorizationProfile 得到，不能加入新摘要算法或并行目录。
+
+管理决定原路径锁定并检查完整 registry/source current 集合后，才返回其源码等值的深拷贝；数据库不可用或 current head 漂移失败关闭，不能只返回编译时常量。声明保持完整以保留 revision/digest：其中 INSTALLATION/INSTALLATION_PROBE 能力只是元数据，UI 必须标明范围且在 CUSTOMER 编辑器禁用；不能裁剪声明后沿用原摘要。scope/caller/shape/conditions 不能由 UI 覆盖授权，Publish 仍逐项完整校验。语法算子与预算继续由005及生成契约拥有，目录不是新的策略语言或客户端求值器。
+
+新读取只产生既有普通 `iam.authorization.decided` 及原 outbox，不产生新 lifecycle 事件，不改 immutable Profile、SQL/claim/lookup_service 或发布 profile。无缓存 permit、ETag 免鉴权或历史 lookup 接口。全部服务端返回前校验 Account、完整条目和字节预算；严格 decoder/Go 契约拒绝未知字段、重复产品、错误摘要、非法声明及伪造 allowedActions/permit/selector。生成 schema 闭合字段、类型、scope/shape/条件来源，不声称它能独立验证摘要或 registry 完整性。
+
+验收沿原契约、HTTP、用例与真库/authorityprocess owner：完整多产品条目与真实 registry 精确相等；两个账号读取相同公开声明但各自身份正确；普通无权/服务/平台-only/forced-change拒绝，授予既有列表权限后允许，撤销/边界Deny/会话失效后下次请求拒绝；query/body/header不能换租户或目录版本；当前头漂移503且无普通决定。从返回的真实声明编译、HTTP发布并显式关联策略后，由独立PaaS验证真实授权及撤销；普通决定/历史投递仍可验证。Schema与解码器验证完整结构，字节上限及摘要等跨字段语义由同一Go契约验证，不把纯schema验证当成内容认证。此片不宣称运行时产品注册、编辑器或整套IAM验收。
 
 ### CAT-05：可验证的产品 Profile
 
@@ -78,7 +91,7 @@
 
 初次运行时注册使用已收敛的每产品唯一 revision1；不登记或保留错误旧草案，Git 保存其历史。真正已登记/发布的 Profile 必须同revision异digest拒绝，后续内容变化必须新revision。平台 SYSTEM 策略形成新的不可变内容版本。最终支持的 predecessor be3 原 RolePlatformOperator 已有完整平台集合，因此首次 role→policy 切换须创建与其完整权限等价的 SYSTEM 默认版本，逐条迁移未撤销和已撤销绑定，保留原允许/拒绝结果；这不是新增权限，也不能要求操作者重新授权原有能力。新建最终安装使用同一完整版本。未发布的旧5项CAM开发库不是最终支持基线，不为它增加兼容发行通道。最终发布之后新增、predecessor从未拥有的动作，才适用追加不可变版本但不自动切换已有SYSTEM默认值的规则；明确受权采用由相应发行边界实施，不借此增加在线恢复或首授权接口。
 
-当前开发readiness为 IAM21/Audit13/PaaS1；IAM包含不可变目录注册、当前一致性及版本化决定记录，Audit保持现有封闭事实，不能因其他函数签名相同沿用旧兼容声明。现有独立进程门禁必须读取三服务实际版本并与sourceProfile逐项比较，同时继续证明已发布installation profile与此组合不同，在副作用前拒绝未发布组合。不修改CurrentDatabaseProfile、不开放安装或跨profile升级；001–010冻结后由安装owner组合实际IAM/Audit和其PaaS5，验证确切predecessor及最终发行。
+当前源码还包含005的编译与冻结动作族，实际readiness为 IAM23/Audit13/PaaS1；CAT-06不改变它们。IAM包含不可变目录注册、当前一致性及版本化决定记录，Audit保持现有封闭事实，不能因其他函数签名相同沿用旧兼容声明。现有独立进程门禁必须读取三服务实际版本并与sourceProfile逐项比较，同时继续证明已发布installation profile与此组合不同，在副作用前拒绝未发布组合。不修改CurrentDatabaseProfile、不开放安装或跨profile升级；001–010冻结后由安装owner组合实际IAM/Audit和其PaaS5，验证确切predecessor及最终发行。
 
 实际验收须覆盖全部12项的 API/SQL/caller/scope 一致性、TENANT/错误服务/probe 拒绝、未声明 prefix/condition 拒绝、新 SYSTEM 版本在唯一求值器中的逐项允许与旧版本仍拒绝新增动作。当前带数据迁移重放后，旧 canonical、版本 ID、默认指针及已撤销附件不变；新版本不能暗改旧决定。独立 PG18 的真实授权、producer 及 Audit 投递分别证明直接 target.register 的精确 ID 与 enrollment.create 的原 collection 证据；错误原动作、资源种类、集合 ID、actor、request/correlation、installation 及其他目标变更均拒绝。collection 证据不证明最终业务 payload/ID 的真实性，该关联仍依赖 PaaS 已提交事务/outbox，不能将它推广为任意 target 变更许可。此分支不导入主机运行实现或继承其验收；公共 SQL/wire/发行组合须先与其 owner 冻结后实施。
 
@@ -104,7 +117,7 @@ API数据库角色仅能经封闭current与精确historical lookup读取非敏�
 
 ### CAT-05 请求、决定及历史契约切换
 
-下一片按已对齐的IAM21实施，Audit13/PaaS1与发布profile不变。新AuthorizationRequest必填profile/resourceMode，集合额外必填collectionUsage；AuthorizationDecision的Allow与Deny均返回相同profile/mode/usage/resource/requestId/correlationId。未知、非current、错摘要或畸形目标模式属于不能建立可信上下文，错误返回且不记录普通策略Deny。当前可信Profile下的策略判断保留Deny优先；策略冻结Profile不兼容不得跳过原Deny。所有新解码和SQL记录只允许完整新契约，不暴露legacy selector。
+已实现的在线绑定要求AuthorizationRequest必填profile/resourceMode，集合额外必填collectionUsage；AuthorizationDecision的Allow与Deny均返回相同profile/mode/usage/resource/requestId/correlationId。未知、非current、错摘要或畸形目标模式属于不能建立可信上下文，错误返回且不记录普通策略Deny。当前可信Profile下的策略判断保留Deny优先；策略冻结Profile不兼容不得跳过原Deny。所有新解码和SQL记录只允许完整新契约，不暴露legacy selector。
 
 既有authorization_decisions以contract_version受保护行元数据区别1/2：无默认值、NOT NULL；v1的Profile/mode/usage列必须NULL，v2必须完整保存product/revision/digest/resource_mode及按模式决定的collection_usage，与document逐项一致，并由精确archive验证action/kind/shape。迁移在同一DDL事务持有旧表锁，首次加nullable列时仅标记加列前真实完整旧行，再收紧约束及不可变保护并替换记录函数；新函数显式写2，撤销旧签名，缺字段不构成旧行资格，后续重放不回填。原JSON/outbox字节不变，不能通过UPDATE旧记录补造Profile。
 
@@ -134,6 +147,18 @@ IAM私有assert_allowed_decision由6参替换为8参，追加显式resource_mode
 
 复用 owner 和固定源见 [adoption](../docs/adoption/FEAT-006-platform-authorities.md)。
 
+### CAT-06：只读编辑目录
+
+2026-09-15，本分支专属PG18.6固定镜像`postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280`，1CPU/768MiB/PIDs128、64连接、专属网络/卷及loopback端口；Go限GOMAXPROCS2/GOMEMLIMIT768MiB，真实门禁串行race-p1。
+
+- 原HTTP门禁先以404失败，实现后通过。现有契约/用例/HTTP owner验证完整响应往返、产品升序唯一、原Profile摘要、深拷贝、未知/重复/别名字段、无效声明和整体64KiB上限；16个分别合法的Profile在整体超限时全部拒绝。当前合成`account-catalog`响应包含5个产品、28861字节，这不是固定产品枚举或容量承诺。生成OpenAPI闭合结构、scope/shape和条件来源；摘要、跨字段语义和可信注册由Go及真实事务验证，schema本身不是注册证明。
+- 原策略目录真库流程复用其两个真实账号和成员，完整HTTP响应逐项与当前registry canonical/digest相等；两个账号只改变读取上下文，不复制产品归属。无bearer、服务/verifier、临时强制改密、普通无权和platform-only拒绝；授予原`iam.policy.list`后允许，但不能发布策略或自行附加权限。普通Deny、权限边界、撤销附件、策略退休和退出在下一请求生效；body/query/header不能选账号或历史。每次成功读取关联原ACCOUNT/INSTANCE决定与单一普通outbox，不新增目录安全事实。
+- 当前head在真实受信fixture推进后，新目录与原readiness/identity/用户入口一起503，决定与outbox总量不变；不存在常量兜底或部分响应。最终完整策略门禁119.31s，其中目录3.60s、当前registry3.31s；与原账号/凭据HTTP90.77s和原本地恢复19.04s一起，IAM integration包232.562s通过，保留101成员、原120s子流程/240s聚合预算、并发改密/撤权/恢复和当前数据重放。
+- 独立双IAM/Audit/PaaS及双dispatcher最终54.76s（包57.486s）通过：从两台IAM实际读取相同完整目录，只用该响应声明编译动作族，真实HTTP发布返回完全相同的版本canonical/digest，再显式关联并由PaaS验证Allow/Deny、默认版本切换及撤权。实际受限runtime登录、双租户资源/配置/Operation/outbox与历史链保持；断开本fixture的replica数据库登录时目录503且不返回旧内容，重连及IAM进程重启后内容/账号一致。这不是数据库主备切换或完整HA验收；本轮未运行opt-in浏览器和旧binary门禁，不把SKIP当通过。
+- 全仓Go race、vet、模块校验、API再生成字节稳定及Linux amd64构建通过。没有UI、SQL/Action/数据库版本、ServiceIdentity/lookup_service/claim7/Audit canonical或安装profile变更。各服务实际23/13/1和发布组合拒绝仍由原process门禁核对；不新增跨profile或签名升级许可。全部客户端退出后按精确ID/标签移除本轮唯一PG容器和空网络，保留合成数据卷；未操作其他任务或远端。
+
+本片独立CI与固定对象确认后交给UX/UI owner接入；页面、客户端、静态host和实际浏览器验收由010独立完成，不继承本后端门禁为UI验收。
+
 ### 请求、决定及受保护历史契约
 
 2026-09-15，本分支独占PG18.6固定镜像`postgres@sha256:4ef4dbc939d61acea57712655ddb4b4ab27419c913f94cca0cd57cb3ea3c2280`，1CPU/768MiB/PIDs128、64连接、专属网络/卷及loopback端口；Go限GOMAXPROCS2/GOMEMLIMIT768MiB，重型真库门禁串行race-p1。固定 `1dc1079c4e7bec80f5345d06929875b492ba9a86` 的 [Verification 34933760954](https://github.com/xiak/matrix/actions/runs/34933760954) 已通过 GitHub API 核实精确 SHA，go、authority-process、node-process 全部 completed/success；它证明本片源码组合，不是签名发行或真实 host 组合验收。
@@ -145,7 +170,7 @@ IAM私有assert_allowed_decision由6参替换为8参，追加显式resource_mode
 - 既有process owner运行真实固定`384d6d76b65498ed6b428ba9a2905ef67831b919`旧程序生成决定、业务authority、策略附件、撤权与会话，再迁移/重放/重启当前IAM。原document/outbox/policy evidence不变，仅新增contract1和NULL Profile/mode/usage；旧源本来没有的boundary_evidence保持NULL，不能伪造。原业务事实在重启后继续验摘要，撤销权限/会话不复活。缺reason、null reason或预先夹带profile的旧行使整次切换回滚，schema8和原数据保持。最终14.167s通过；这不是普通跨profile发行升级许可，也不是重复所有未发布schema编号的兼容矩阵。
 - IAM真实HTTP90.795s、双authority数据库6.604s、Audit真实HTTP/PG4.066s通过。双authority逐一覆盖每个已声明Action/target shape、原策略/边界证据和受限数据库身份；Audit HTTP的IAM依赖是受控fixture，不冒充独立IAM运行。
 - 独立双IAM/Audit/PaaS及双dispatcher最后复验82.358s通过，保留实际受限runtime登录、双租户应用/配置/Operation/outbox、目录游标、撤权/重启和安装verifier历史事实；读取真实sourceProfile21/13/1，与已发布安装profile不同且保持效果前拒绝。平台host事实是authority协议fixture，不代表本分支不存在的真实主机实现。
-- 全仓race、vet、模块验证、API再次生成稳定与Linux amd64构建通过；最终变更的测试/历史校验owner另做聚焦race及真库复验。无UI、ServiceIdentity/lookup_service/claim7/Audit canonical、安装profile或其他Phase工作区/环境变更。PolicyVersion编译持久化及CAT-05整体仍未完成。
+- 全仓race、vet、模块验证、API再次生成稳定与Linux amd64构建通过；最终变更的测试/历史校验owner另做聚焦race及真库复验。无UI、ServiceIdentity/lookup_service/claim7/Audit canonical、安装profile或其他Phase工作区/环境变更。本次绑定证据不覆盖PolicyVersion编译持久化，其后续证据归005；CAT-05整体仍待最终产品消费者组合验收。
 - 所有客户端退出后，按精确ID与任务标签停止/移除本轮唯一PG容器、专属网络和仅含可再生合成数据库的卷；未清理其他任务对象或操作远端。
 
 ### 不可变注册与当前源码一致性

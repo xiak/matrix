@@ -1642,10 +1642,18 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 	if !errors.Is(checkCurrent(), identityaccess.ErrUnavailable) {
 		t.Fatal("new current declaration was accepted by an old source")
 	}
-	for _, path := range []string{"/ready", "/v1/auth/me", "/v1/users"} {
+	var beforeDecisions, beforeFacts int
+	if err := admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.authorization_decisions),(SELECT count(*) FROM iam.audit_outbox)`).Scan(&beforeDecisions, &beforeFacts); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/ready", "/v1/auth/me", "/v1/users", "/v1/authorization-profiles"} {
 		if response := performIAMRequest(handler, http.MethodGet, path, bearer, nil); response.Code != http.StatusServiceUnavailable {
 			t.Fatalf("source mismatch %s: status=%d", path, response.Code)
 		}
+	}
+	var afterDecisions, afterFacts int
+	if err := admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.authorization_decisions),(SELECT count(*) FROM iam.audit_outbox)`).Scan(&afterDecisions, &afterFacts); err != nil || beforeDecisions != afterDecisions || beforeFacts != afterFacts {
+		t.Fatal("source mismatch exposed partial directory authority or outbox")
 	}
 	request, _ := json.Marshal(profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
 		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "registry-drift"}, RequestID: "registry-drift", CorrelationID: "registry-drift"}, iamv1.AuthorizationResourceInstance, ""))
@@ -4353,14 +4361,85 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 		}
 		return result
 	}
+	discover := func(suffix, bearer string, want int) iamv1.AuthorizationProfileList {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodGet, "/v1/authorization-profiles"+suffix, nil)
+		request.Header.Set("Matrix-Request-ID", "caller-cannot-select-request")
+		request.Header.Set("Matrix-Tenant-ID", "caller-cannot-select-account")
+		request.Header.Set("Matrix-Installation-ID", "caller-cannot-select-installation")
+		if bearer != "" {
+			request.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != want {
+			t.Fatalf("product discovery status=%d want=%d: %s", response.Code, want, response.Body.String())
+		}
+		if want != http.StatusOK {
+			return iamv1.AuthorizationProfileList{}
+		}
+		requestID := response.Header().Get("Matrix-Request-ID")
+		if requestID == "caller-cannot-select-request" || iamv1.ValidateID("requestId", requestID) != nil {
+			t.Fatal("directory audit correlation was selected by the caller")
+		}
+		if response.Header().Get("Cache-Control") != "no-store" || int64(response.Body.Len()) > iamv1.MaxRequestBytes {
+			t.Fatal("product discovery became a cacheable or unbounded authority response")
+		}
+		result, err := iamv1.DecodeAuthorizationProfileList(response.Body)
+		if err != nil {
+			t.Fatal("invalid complete product discovery response")
+		}
+		var count int
+		if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.authorization_profile_heads`).Scan(&count); err != nil || count != len(result.Items) {
+			t.Fatal("discovery did not return the complete current registry")
+		}
+		for _, entry := range result.Items {
+			var stored, digest string
+			if err := database.QueryRow(ctx, `SELECT p.canonical_document,p.content_digest FROM iam.authorization_profiles p
+				JOIN iam.authorization_profile_heads h ON h.product=p.product AND h.revision=p.revision
+				WHERE p.product=$1 AND p.revision=$2`, entry.Profile.Product, entry.Profile.Revision).Scan(&stored, &digest); err != nil {
+				t.Fatal("discovered tuple is not the selected registered declaration")
+			}
+			canonical, _, err := iamv1.CanonicalizeAuthorizationProfile(entry.Profile)
+			if err != nil || canonical != stored || entry.ContentDigest != digest {
+				t.Fatal("discovery filtered or changed registered scope/caller/shape/condition content")
+			}
+		}
+		var encoded, event []byte
+		if err := database.QueryRow(ctx, `SELECT d.document,o.event_document FROM iam.authorization_decisions d
+			JOIN iam.audit_outbox o ON o.tenant_id=d.tenant_id AND o.event_document->>'iamDecisionId'=d.id
+			AND o.event_document->>'action'='iam.authorization.decided' WHERE d.request_id=$1`, requestID).Scan(&encoded, &event); err != nil {
+			t.Fatal("directory read lost its normal authority/outbox transaction")
+		}
+		var decision iamv1.AuthorizationDecision
+		var fact auditv1.Event
+		if json.Unmarshal(encoded, &decision) != nil || iamv1.ValidateAuthorizationDecision(decision) != nil ||
+			!decision.Allowed || decision.Action != iamv1.ActionIAMPolicyList || decision.TenantID != result.AccountID ||
+			decision.InstallationID != "" || decision.ResourceMode != iamv1.AuthorizationResourceInstance ||
+			decision.Resource != (iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(result.AccountID)}) ||
+			json.Unmarshal(event, &fact) != nil || fact.Action != auditv1.ActionIAMAuthorizationDecided ||
+			fact.TenantID != auditv1.TenantID(result.AccountID) || fact.IAMDecisionID != auditv1.DecisionID(decision.ID) {
+			t.Fatal("discovery used another account, a platform permission or a new lifecycle fact")
+		}
+		return result
+	}
 	home := read("/v1/policies", operator, http.StatusOK)
 	platform := read("/v1/platform-policies", operator, http.StatusOK)
+	homeProfiles := discover("", operator, http.StatusOK)
+	if homeProfiles.AccountID != home.AccountID {
+		t.Fatal("discovery accepted caller tenant headers")
+	}
 	if home.Scope != iamv1.AuthorityScopeTenant || platform.Scope != iamv1.AuthorityScopeInstallation || platform.AccountID != home.AccountID || platform.InstallationID != iamHTTPBootstrap(t).InstallationID {
 		t.Fatal("directory scope was not derived from authoritative account and installation")
 	}
 	for _, secret := range []string{iamProducerCredential, paasCredential, verifierCredential} {
 		read("/v1/policies", secret, http.StatusUnauthorized)
 		read("/v1/platform-policies", secret, http.StatusUnauthorized)
+		discover("", secret, http.StatusUnauthorized)
+	}
+	discover("", "", http.StatusUnauthorized)
+	for _, suffix := range []string{"?accountId=other", "?revision=1", "?product=paas", "?scope=TENANT", "?after=opaque"} {
+		discover(suffix, operator, http.StatusBadRequest)
 	}
 	for _, path := range []string{"/v1/policies?accountId=other", "/v1/policies?scope=INSTALLATION", "/v1/platform-policies?installationId=other", "/v1/policies?after=other"} {
 		read(path, operator, http.StatusBadRequest)
@@ -4368,7 +4447,11 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 	const otherAccount = "organization-policy-catalog"
 	post("/v1/accounts", operator, map[string]any{"id": otherAccount, "displayName": "Directory isolation", "rootLoginName": "catalog.primary", "rootDisplayName": "Catalog owner", "initialPassword": initialDeveloperPassword, "requestId": "catalog-account-create"}, http.StatusCreated)
 	other := localRecoveryLogin(t, handler, "catalog.primary", initialDeveloperPassword, true)
+	discover("", other, http.StatusForbidden)
 	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
+	if got := discover("", other, http.StatusOK); got.AccountID != otherAccount || !reflect.DeepEqual(got.Items, homeProfiles.Items) {
+		t.Fatal("product discovery confused public product declarations with account ownership")
+	}
 	if got := read("/v1/policies", other, http.StatusOK); got.AccountID != otherAccount {
 		t.Fatal("foreign primary used home account directory")
 	}
@@ -4382,6 +4465,7 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
 	read("/v1/policies", bearer, http.StatusForbidden)
 	read("/v1/platform-policies", bearer, http.StatusForbidden)
+	discover("", bearer, http.StatusForbidden)
 	// Fixture publication creates arbitrary customer IDs with identical display
 	// names. Runtime authorization must not depend on a predefined role name.
 	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
@@ -4422,10 +4506,59 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 		}
 	}
 	request := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}, PolicyID: "customer.catalog-a", PolicyResourceVersion: 1, RequestID: "catalog-reader-grant"}
-	post("/v1/policy-attachments", operator, request, http.StatusOK)
+	grant := post("/v1/policy-attachments", operator, request, http.StatusOK)
+	var catalogAttachment iamv1.PolicyAttachment
+	if json.Unmarshal(grant.Body.Bytes(), &catalogAttachment) != nil || iamv1.ValidatePolicyAttachment(catalogAttachment) != nil {
+		t.Fatal("invalid discovery list grant")
+	}
 	if got := read("/v1/policies", bearer, http.StatusOK); find(got, request.PolicyID) == nil {
 		t.Fatal("list-only policy did not permit its actual directory")
 	}
+	discover("", bearer, http.StatusOK)
+	post("/v1/policies", bearer, iamv1.CreatePolicyRequest{DisplayName: "Not a publication permit", Document: document, RequestID: "catalog-reader-publish"}, http.StatusForbidden)
+	// The same ordinary PDP and boundary must govern discovery on every call.
+	denyDocument := document
+	denyDocument.Statements = append([]iamv1.PolicyStatement(nil), document.Statements...)
+	denyDocument.Statements[0].Effect = iamv1.PolicyDeny
+	denyResponse := post("/v1/policies", operator, iamv1.CreatePolicyRequest{DisplayName: "Deny product discovery", Document: denyDocument, RequestID: "catalog-discovery-deny"}, http.StatusCreated)
+	var denyPolicy iamv1.PolicyDetail
+	if json.Unmarshal(denyResponse.Body.Bytes(), &denyPolicy) != nil || iamv1.ValidatePolicyDetail(denyPolicy) != nil {
+		t.Fatal("invalid discovery deny publication")
+	}
+	denyGrant := post("/v1/policy-attachments", operator, iamv1.CreatePolicyAttachmentRequest{
+		Target: request.Target, PolicyID: denyPolicy.Policy.ID, PolicyResourceVersion: 1, RequestID: "catalog-discovery-deny-grant"}, http.StatusOK)
+	var denyAttachment iamv1.PolicyAttachment
+	if json.Unmarshal(denyGrant.Body.Bytes(), &denyAttachment) != nil || iamv1.ValidatePolicyAttachment(denyAttachment) != nil {
+		t.Fatal("invalid ordinary discovery deny attachment")
+	}
+	discover("", bearer, http.StatusForbidden)
+	post("/v1/policy-attachments/"+string(denyAttachment.ID)+":revoke", operator,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: denyAttachment.ResourceVersion, RequestID: "catalog-discovery-deny-revoke"}, http.StatusOK)
+	discover("", bearer, http.StatusOK)
+	boundaryPath := "/v1/users/" + string(member.ID) + "/permission-boundary"
+	var boundary iamv1.UserPermissionBoundary
+	boundaryResponse := performIAMRequest(handler, http.MethodGet, boundaryPath, operator, nil)
+	if boundaryResponse.Code != http.StatusOK || json.Unmarshal(boundaryResponse.Body.Bytes(), &boundary) != nil || iamv1.ValidateUserPermissionBoundary(boundary) != nil {
+		t.Fatal("read discovery user boundary")
+	}
+	boundaryResponse = performIAMRequest(handler, http.MethodPut, boundaryPath, operator, mustIAMJSON(t, iamv1.SetUserPermissionBoundaryRequest{
+		PolicyID: denyPolicy.Policy.ID, PolicyResourceVersion: 1, ResourceVersion: boundary.ResourceVersion, RequestID: "catalog-discovery-boundary"}))
+	if boundaryResponse.Code != http.StatusOK || json.Unmarshal(boundaryResponse.Body.Bytes(), &boundary) != nil || iamv1.ValidateUserPermissionBoundary(boundary) != nil {
+		t.Fatal("set discovery deny boundary")
+	}
+	discover("", bearer, http.StatusForbidden)
+	boundaryResponse = performIAMRequest(handler, http.MethodDelete, boundaryPath, operator, mustIAMJSON(t, iamv1.RemoveUserPermissionBoundaryRequest{
+		ResourceVersion: boundary.ResourceVersion, RequestID: "catalog-discovery-unbound"}))
+	if boundaryResponse.Code != http.StatusOK {
+		t.Fatal("remove discovery boundary")
+	}
+	discover("", bearer, http.StatusOK)
+	post("/v1/policy-attachments/"+string(catalogAttachment.ID)+":revoke", operator,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: catalogAttachment.ResourceVersion, RequestID: "catalog-discovery-revoke"}, http.StatusOK)
+	discover("", bearer, http.StatusForbidden)
+	request.RequestID = "catalog-reader-regrant"
+	post("/v1/policy-attachments", operator, request, http.StatusOK)
+	discover("", bearer, http.StatusOK)
 	request.PolicyID, request.RequestID = iamv1.SystemPolicyPaaSViewer, "catalog-reader-escalation"
 	post("/v1/policy-attachments", bearer, request, http.StatusForbidden)
 	read("/v1/platform-policies", bearer, http.StatusForbidden)
@@ -4445,6 +4578,7 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 	}
 	read("/v1/platform-policies", platformBearer, http.StatusOK)
 	read("/v1/policies", platformBearer, http.StatusForbidden)
+	discover("", platformBearer, http.StatusForbidden)
 	post("/v1/policy-attachments/"+string(platformAttachment.ID)+":revoke", operator,
 		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: platformAttachment.ResourceVersion, RequestID: "catalog-platform-revoke"}, http.StatusOK)
 	read("/v1/platform-policies", platformBearer, http.StatusForbidden)
@@ -4456,6 +4590,9 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 		t.Fatal("retired policy occupied the active management directory")
 	}
 	read("/v1/policies", bearer, http.StatusForbidden)
+	discover("", bearer, http.StatusForbidden)
+	post("/v1/auth/logout", bearer, map[string]any{"requestId": "catalog-discovery-logout"}, http.StatusOK)
+	discover("", bearer, http.StatusUnauthorized)
 	// A prior read decision is a historical fact, not a reusable SQL permit.
 	var oldDecision string
 	if err := database.QueryRow(ctx, `SELECT id FROM iam.authorization_decisions WHERE tenant_id=$1 AND action_name='iam.policy.list' AND allowed ORDER BY decided_at DESC LIMIT 1`, home.AccountID).Scan(&oldDecision); err != nil {

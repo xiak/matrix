@@ -69,6 +69,53 @@ type AuthorizationProfileReference struct {
 	ContentDigest string    `json:"contentDigest"`
 }
 
+// AuthorizationProfileList is complete current product metadata, not the
+// requesting user's permissions. AccountID binds the read context only.
+type AuthorizationProfileList struct {
+	APIVersion string                      `json:"apiVersion"`
+	Kind       string                      `json:"kind"`
+	AccountID  AccountID                   `json:"accountId"`
+	Items      []AuthorizationProfileEntry `json:"items"`
+}
+
+// Keep the declaration whole: filtering actions would invalidate its digest.
+type AuthorizationProfileEntry struct {
+	Profile       AuthorizationProfile `json:"profile"`
+	ContentDigest string               `json:"contentDigest"`
+}
+
+const MaxAuthorizationProfileListItems = 16
+
+func DecodeAuthorizationProfileList(reader io.Reader) (AuthorizationProfileList, error) {
+	var value AuthorizationProfileList
+	if contractjson.DecodeObject(reader, MaxRequestBytes, &value) != nil || ValidateAuthorizationProfileList(value) != nil {
+		return AuthorizationProfileList{}, ErrInvalidAuthorizationProfile
+	}
+	return value, nil
+}
+
+func ValidateAuthorizationProfileList(value AuthorizationProfileList) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthorizationProfileList" ||
+		ValidateID("accountId", string(value.AccountID)) != nil || len(value.Items) < 1 || len(value.Items) > MaxAuthorizationProfileListItems {
+		return ErrInvalidAuthorizationProfile
+	}
+	var previous ProductID
+	for _, entry := range value.Items {
+		if entry.Profile.Product <= previous || CheckAuthorizationProfileReference(entry.Profile,
+			AuthorizationProfileReference{Product: entry.Profile.Product, Revision: entry.Profile.Revision, ContentDigest: entry.ContentDigest}) != nil {
+			return ErrInvalidAuthorizationProfile
+		}
+		previous = entry.Profile.Product
+	}
+	// This endpoint uses the existing ordinary contract/HTTP decode budget,
+	// not the much larger sum of every individual declaration's maximum.
+	encoded, err := json.Marshal(value)
+	if err != nil || int64(len(encoded)) > MaxRequestBytes {
+		return ErrInvalidAuthorizationProfile
+	}
+	return nil
+}
+
 type authorizationProfileCommitment struct {
 	profile    AuthorizationProfile
 	normalized AuthorizationProfile

@@ -1481,6 +1481,39 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 		string(developer.ID),
 	)
 	revokeIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, developerBinding.ID, 1, "request-revoke-developer-binding")
+	// The policy editor's real read path returns whole registered declarations,
+	// not a second embedded catalog or a reusable permission. Compile only from
+	// these response values; the publication API independently recompiles them.
+	discoverProfiles := func(endpoint string, want int) iamv1.AuthorizationProfileList {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/authorization-profiles", adminLogin.Credential, nil)
+		if response.Status != want {
+			t.Fatalf("real product discovery status=%d want=%d", response.Status, want)
+		}
+		if want != http.StatusOK {
+			if bytes.Contains(response.Body, []byte(`"items"`)) || bytes.Contains(response.Body, []byte(`"contentDigest"`)) {
+				t.Fatal("unavailable discovery returned source constants or stale metadata")
+			}
+			return iamv1.AuthorizationProfileList{}
+		}
+		catalog, err := iamv1.DecodeAuthorizationProfileList(bytes.NewReader(response.Body))
+		if err != nil || catalog.AccountID != "organization-process" {
+			t.Fatal("invalid actual product discovery")
+		}
+		return catalog
+	}
+	var discovery iamv1.AuthorizationProfileList
+	for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+		catalog := discoverProfiles(endpoint, http.StatusOK)
+		if discovery.Kind != "" && !reflect.DeepEqual(discovery, catalog) {
+			t.Fatal("IAM replicas disagreed about current product declarations")
+		}
+		discovery = catalog
+	}
+	profiles := make([]iamv1.AuthorizationProfile, 0, len(discovery.Items))
+	for _, entry := range discovery.Items {
+		profiles = append(profiles, entry.Profile)
+	}
 	// Publish through the real IAM API, then consume the exact resource rule
 	// through the independent PaaS PEP. No owner-side policy fixtures are used.
 	customRequest := iamv1.CreatePolicyRequest{DisplayName: "Selected process application", RequestID: "request-process-custom-policy",
@@ -1488,10 +1521,22 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 			Statements: []iamv1.PolicyStatement{{SID: "read-selected", Effect: iamv1.PolicyAllow,
 				Actions:   []iamv1.Action{"paas.application.*"},
 				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "application-process"}}}}}}
+	compiled, err := iamv1.CompilePolicyDocument(customRequest.Document, profiles)
+	if err != nil {
+		t.Fatal("cannot compile a product family from actual discovered declarations")
+	}
+	compiledCanonical, compiledDigest, err := iamv1.CanonicalizePolicyCompilation(customRequest.Document, compiled, profiles)
+	if err != nil {
+		t.Fatal(err)
+	}
 	publication := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/policies", adminLogin.Credential, customRequest)
 	var customPolicy iamv1.PolicyDetail
 	if publication.Status != http.StatusCreated || json.Unmarshal(publication.Body, &customPolicy) != nil || iamv1.ValidatePolicyDetail(customPolicy) != nil {
 		t.Fatalf("process customer policy publication status=%d", publication.Status)
+	}
+	publishedCanonical, err := iamv1.CanonicalizePolicyVersion(customPolicy.Version)
+	if err != nil || publishedCanonical != compiledCanonical || customPolicy.Version.ContentDigest != compiledDigest {
+		t.Fatal("HTTP publication did not bind the exact complete discovered interpretation")
 	}
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
 	customAttachment := createIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, developer.ID, customPolicy.Policy.ID, "request-process-custom-attach")
@@ -1832,11 +1877,15 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 		t.Fatal(err)
 	}
 	assertReplicaRead("request-replica-database-unavailable", http.StatusServiceUnavailable)
+	discoverProfiles(replicaEndpoint, http.StatusServiceUnavailable)
 	if _, err := admin.Exec(ctx, `ALTER ROLE matrix_authority_process_iam_replica LOGIN`); err != nil {
 		t.Fatal(err)
 	}
 	waitHTTPStatus(t, ctx, replicaProcess, replicaEndpoint+"/ready", http.StatusOK)
 	assertReplicaRead("request-replica-database-restored", http.StatusOK)
+	if !reflect.DeepEqual(discovery, discoverProfiles(replicaEndpoint, http.StatusOK)) {
+		t.Fatal("database reconnection changed the exact product discovery")
+	}
 	replicaProcess.stop()
 	createPaaSApplication(
 		t,
@@ -1861,6 +1910,9 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin-restarted", false),
 	)
+	if !reflect.DeepEqual(discovery, discoverProfiles(iamEndpoint, http.StatusOK)) {
+		t.Fatal("IAM restart changed the original account or product metadata")
+	}
 	assertPlatformAuditAccess(t, auditEndpoint, adminLogin.Credential, http.StatusForbidden)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	verifyHistoricalRecovery()

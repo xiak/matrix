@@ -442,3 +442,13 @@ Full supplied Profile validation is `REUSE`; building temporary indexes for
 unreferenced actions is `ADAPT` to exact author dependencies and all matching
 family members. Skipping malformed unrelated declarations or filtering a
 requested family's scope/condition conflicts is `REJECT`.
+
+For IAM/001 readonly editor discovery, fixed
+`f15cc983a69092528a66eb49b0509b760392187c` is `REUSE` for the single
+AuthorizationProfile declaration/canonical owner and locked registry/source
+consistency. Its existing Account management transaction, iam.policy.list
+decision, strict HTTP boundary and contract generator are `ADAPT` for a bounded
+metadata response. A copied UI action catalog, caller-selected current/history,
+filtered declarations retaining an original digest, directory-as-permit,
+registration/write APIs and a new audit event are `REJECT`. No legacy runtime,
+other worktree or product implementation is imported; acceptance belongs to001.

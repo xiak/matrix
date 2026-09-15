@@ -14,6 +14,67 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestAuthorizationProfileDiscoverySchemaPreservesDeclaredScopeAndShape(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AuthorizationProfileList")
+	base := currentAuthorizationProfileList(t)
+	for _, test := range []struct {
+		name   string
+		mutate func(*AuthorizationProfileList)
+		valid  bool
+	}{
+		{"complete current catalog", func(*AuthorizationProfileList) {}, true},
+		{"empty", func(v *AuthorizationProfileList) { v.Items = []AuthorizationProfileEntry{} }, false},
+		{"null items", func(v *AuthorizationProfileList) { v.Items = nil }, false},
+		{"unknown kind", func(v *AuthorizationProfileList) { v.Kind = "PolicyList" }, false},
+		{"zero revision", func(v *AuthorizationProfileList) { v.Items[0].Profile.Revision = 0 }, false},
+		{"unknown scope", func(v *AuthorizationProfileList) { v.Items[0].Profile.Actions[0].Scope = "GLOBAL" }, false},
+		{"pattern declaration", func(v *AuthorizationProfileList) { v.Items[0].Profile.Actions[0].Action = "audit.record.*" }, false},
+		{"collection prefix", func(v *AuthorizationProfileList) {
+			v.Items[0].Profile.Actions[0].ResourceShapes[0] = AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList, PrefixAllowed: true}
+		}, false},
+		{"collection create no result", func(v *AuthorizationProfileList) {
+			v.Items[0].Profile.Actions[0].ResourceShapes[0] = AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}
+			v.Items[0].Profile.Actions[0].ResultResourceKind = ""
+		}, false},
+		{"list with create result", func(v *AuthorizationProfileList) {
+			v.Items[0].Profile.Actions[0].ResourceShapes[0] = AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}
+			v.Items[0].Profile.Actions[0].ResultResourceKind = "AUDIT_RECORD"
+		}, false},
+		{"platform condition", func(v *AuthorizationProfileList) {
+			v.Items[0].Profile.Actions[0].Scope = AuthorityScopeInstallation
+			v.Items[0].Profile.Actions[0].Conditions = []AuthorizationProfileCondition{{Key: ConditionIAMCurrentTime, ValueType: ConditionTime, Source: ConditionIAMTransactionTime}}
+		}, false},
+		{"forged condition source", func(v *AuthorizationProfileList) {
+			v.Items[0].Profile.Actions[0].Scope = AuthorityScopeTenant
+			v.Items[0].Profile.Actions[0].Conditions = []AuthorizationProfileCondition{{Key: ConditionIAMCurrentTime, ValueType: ConditionTime, Source: "CALLER"}}
+		}, false},
+		{"future declared namespace syntax", func(v *AuthorizationProfileList) {
+			profile := &v.Items[0].Profile
+			profile.Product, profile.CallingService = "future-product", "FUTURE_SERVICE"
+			profile.Actions = []AuthorizationProfileAction{{Action: "future-product.resource.read", ResourceKind: "FUTURE_RESOURCE", Scope: AuthorityScopeTenant, ResourceShapes: []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}}}
+			v.Items = v.Items[:1]
+		}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, _ := json.Marshal(base)
+			candidate, _ := DecodeAuthorizationProfileList(bytes.NewReader(encoded))
+			test.mutate(&candidate)
+			encoded, _ = json.Marshal(candidate)
+			wire, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+			if err != nil || (schema.Validate(wire) == nil) != test.valid {
+				t.Fatal("profile response schema disagrees with declared syntax/scope/shape")
+			}
+		})
+	}
+	encoded, _ := json.Marshal(base)
+	for _, fragment := range []string{`"permit":true,`, `"nextAfter":"hidden-partial-catalog",`, `"callingService":"CALLER",`} {
+		wire, err := jsonschema.UnmarshalJSON(strings.NewReader("{" + fragment + string(encoded[1:])))
+		if err != nil || schema.Validate(wire) == nil {
+			t.Fatal("discovery schema accepted an authority or partial-directory selector")
+		}
+	}
+}
+
 func TestEveryIAMOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	for name := range iamOpenAPISchemas(t, document) {

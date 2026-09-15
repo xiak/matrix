@@ -4114,6 +4114,289 @@
         ],
         "type": "object"
       },
+      "AuthorizationProfile": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationProfileAction"
+            },
+            "maxItems": 128,
+            "minItems": 1,
+            "type": "array"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "callingService": {
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "kind": {
+            "const": "AuthorizationProfile"
+          },
+          "product": {
+            "$ref": "#/components/schemas/ProductID"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "actions",
+          "apiVersion",
+          "callingService",
+          "kind",
+          "product",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "AuthorizationProfileAction": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "not": {
+                    "const": "TENANT"
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "conditions": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "maxItems": 0,
+                      "type": "array"
+                    }
+                  ]
+                },
+                "resourceShapes": {
+                  "items": {
+                    "properties": {
+                      "prefixAllowed": {
+                        "const": false
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resourceShapes": {
+                  "contains": {
+                    "properties": {
+                      "collectionUsage": {
+                        "const": "COLLECTION_LIST"
+                      }
+                    },
+                    "required": [
+                      "collectionUsage"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resultResourceKind": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resourceShapes": {
+                  "contains": {
+                    "properties": {
+                      "collectionUsage": {
+                        "const": "COLLECTION_CREATE"
+                      }
+                    },
+                    "required": [
+                      "collectionUsage"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "resultResourceKind"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "action": {
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9_-]{0,63}(\\.[a-z][a-z0-9_-]{0,63}){1,4}$",
+            "type": "string"
+          },
+          "conditions": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/AuthorizationProfileCondition"
+                },
+                "maxItems": 3,
+                "type": "array"
+              }
+            ]
+          },
+          "resourceKind": {
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "resourceShapes": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationResourceShape"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "type": "array"
+          },
+          "resultResourceKind": {
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Z0-9_-]{0,63}$",
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/AuthorityScope"
+          }
+        },
+        "required": [
+          "action",
+          "resourceKind",
+          "resourceShapes",
+          "scope"
+        ],
+        "type": "object"
+      },
+      "AuthorizationProfileCondition": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "key": {
+                "const": "iam.account-id"
+              },
+              "source": {
+                "const": "IAM_AUTHENTICATED_IDENTITY"
+              },
+              "valueType": {
+                "const": "STRING"
+              }
+            }
+          },
+          {
+            "properties": {
+              "key": {
+                "const": "iam.current-time"
+              },
+              "source": {
+                "const": "IAM_TRANSACTION_TIME"
+              },
+              "valueType": {
+                "const": "TIME"
+              }
+            }
+          },
+          {
+            "properties": {
+              "key": {
+                "const": "iam.principal-id"
+              },
+              "source": {
+                "const": "IAM_AUTHENTICATED_IDENTITY"
+              },
+              "valueType": {
+                "const": "STRING"
+              }
+            }
+          }
+        ],
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/ConditionKey"
+          },
+          "source": {
+            "type": "string"
+          },
+          "valueType": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "source",
+          "valueType"
+        ],
+        "type": "object"
+      },
+      "AuthorizationProfileEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/AuthorizationProfile"
+          }
+        },
+        "required": [
+          "contentDigest",
+          "profile"
+        ],
+        "type": "object"
+      },
+      "AuthorizationProfileList": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationProfileEntry"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+          },
+          "kind": {
+            "const": "AuthorizationProfileList"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
       "AuthorizationProfileReference": {
         "additionalProperties": false,
         "properties": {
@@ -7768,6 +8051,48 @@
           "COLLECTION"
         ],
         "type": "string"
+      },
+      "AuthorizationResourceShape": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "collectionUsage": false,
+              "mode": {
+                "const": "INSTANCE"
+              }
+            }
+          },
+          {
+            "properties": {
+              "mode": {
+                "const": "COLLECTION"
+              },
+              "prefixAllowed": {
+                "const": false
+              }
+            },
+            "required": [
+              "collectionUsage"
+            ]
+          }
+        ],
+        "properties": {
+          "collectionUsage": {
+            "$ref": "#/components/schemas/AuthorizationCollectionUsage"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/AuthorizationResourceMode"
+          },
+          "prefixAllowed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mode",
+          "prefixAllowed"
+        ],
+        "type": "object"
       },
       "BootstrapDocument": {
         "additionalProperties": false,
@@ -15921,6 +16246,36 @@
           }
         },
         "summary": "Change the current user password"
+      }
+    },
+    "/v1/authorization-profiles": {
+      "get": {
+        "operationId": "listAuthorizationProfiles",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationProfileList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read complete current product declarations under current account policy-list permission; metadata is not a permit or registration capability. Maximum complete response 64 KiB."
       }
     },
     "/v1/authorize": {

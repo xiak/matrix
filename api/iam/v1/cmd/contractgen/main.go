@@ -87,7 +87,8 @@ func buildPaths() object {
 		"/v1/auth/login": object{"post": mutationOperation(
 			"login", "Log in with a password", "LoginRequest", "LoginResponse", "200", []any{}, nil,
 		)},
-		"/v1/auth/me": object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
+		"/v1/auth/me":                object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
+		"/v1/authorization-profiles": object{"get": readOperation("listAuthorizationProfiles", "Read complete current product declarations under current account policy-list permission; metadata is not a permit or registration capability. Maximum complete response 64 KiB.", "AuthorizationProfileList", nil, nil)},
 		"/v1/policies": object{
 			"get":  readOperation("listPolicies", "Read the complete bounded current account policy metadata directory", "PolicyList", nil, nil),
 			"post": mutationOperation("createPolicy", "Create an account-owned policy and its initial immutable version without attaching it", "CreatePolicyRequest", "PolicyDetail", "201", nil, nil),
@@ -293,6 +294,12 @@ func structContracts() map[string]reflect.Type {
 		"Subject":                             openapi31.StructType[iamv1.Subject](),
 		"ResourceReference":                   openapi31.StructType[iamv1.ResourceReference](),
 		"AuthorizationProfileReference":       openapi31.StructType[iamv1.AuthorizationProfileReference](),
+		"AuthorizationProfileList":            openapi31.StructType[iamv1.AuthorizationProfileList](),
+		"AuthorizationProfileEntry":           openapi31.StructType[iamv1.AuthorizationProfileEntry](),
+		"AuthorizationProfile":                openapi31.StructType[iamv1.AuthorizationProfile](),
+		"AuthorizationProfileAction":          openapi31.StructType[iamv1.AuthorizationProfileAction](),
+		"AuthorizationResourceShape":          openapi31.StructType[iamv1.AuthorizationResourceShape](),
+		"AuthorizationProfileCondition":       openapi31.StructType[iamv1.AuthorizationProfileCondition](),
 		"PolicyAttachment":                    openapi31.StructType[iamv1.PolicyAttachment](),
 		"PolicyGrantSource":                   openapi31.StructType[iamv1.PolicyGrantSource](),
 		"Policy":                              openapi31.StructType[iamv1.Policy](),
@@ -376,6 +383,30 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if owner == "AuthorizationProfileList" && jsonName == "items" {
+		base["minItems"], base["maxItems"] = 1, iamv1.MaxAuthorizationProfileListItems
+	}
+	if owner == "AuthorizationProfile" {
+		switch jsonName {
+		case "callingService":
+			base = object{"type": "string", "pattern": `^[A-Z][A-Z0-9_-]{0,63}$`, "maxLength": 64}
+		case "actions":
+			base["minItems"], base["maxItems"] = 1, iamv1.MaxAuthorizationProfileActions
+		}
+	}
+	if owner == "AuthorizationProfileAction" {
+		switch jsonName {
+		case "action":
+			base = object{"type": "string", "pattern": `^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$`, "maxLength": 128}
+		case "resourceKind", "resultResourceKind":
+			base = object{"type": "string", "pattern": `^[A-Z][A-Z0-9_-]{0,63}$`, "maxLength": 64}
+		case "resourceShapes":
+			base["minItems"], base["maxItems"] = 1, 3
+		case "conditions":
+			base["maxItems"] = 3
+			base = object{"anyOf": []any{object{"type": "null"}, base}}
+		}
+	}
 	if (owner == "Policy" || owner == "CreatePolicyRequest" || owner == "UpdatePolicyRequest" || owner == "UpdateUserRequest") && jsonName == "displayName" {
 		base["minLength"], base["maxLength"] = 1, 128
 	}
@@ -440,7 +471,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		(jsonName == "id" || strings.HasSuffix(jsonName, "Id")) {
 		base = openapi31.Ref("ID")
 	}
-	if jsonName == "resourceVersion" || jsonName == "schemaVersion" || jsonName == "policyResourceVersion" || (owner == "AuthorizationProfileReference" && jsonName == "revision") {
+	if jsonName == "resourceVersion" || jsonName == "schemaVersion" || jsonName == "policyResourceVersion" || ((owner == "AuthorizationProfileReference" || owner == "AuthorizationProfile") && jsonName == "revision") {
 		base["minimum"] = 1
 	}
 	if owner == "ChangePasswordRequest" && jsonName == "revokeOtherSessions" {
@@ -452,6 +483,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 
 func applySemanticOverlays(schemas object) {
 	applyPolicyLanguageOverlays(schemas)
+	applyAuthorizationProfileOverlays(schemas)
 	// Immutable response content checks syntax, not today's action catalog.
 	// Publication keeps the current declaration overlays above. This is an
 	// inline projection of the same language, not another policy model.
@@ -553,6 +585,7 @@ func applySemanticOverlays(schemas object) {
 		object{"required": []string{"installationId"}, "properties": object{"tenantId": false}},
 	}
 	kinds := map[string]string{
+		"AuthorizationProfileList": "AuthorizationProfileList", "AuthorizationProfile": "AuthorizationProfile",
 		"UserPermissionBoundary": "UserPermissionBoundary",
 		"Policy":                 "Policy",
 		"PolicyList":             "PolicyList",
@@ -657,6 +690,49 @@ func applySemanticOverlays(schemas object) {
 			"else": object{"properties": object{"revokedAt": false}},
 		},
 	}
+}
+
+func applyAuthorizationProfileOverlays(schemas object) {
+	shape := schemas["AuthorizationResourceShape"].(object)
+	shape["oneOf"] = []any{
+		object{"properties": object{"mode": object{"const": "INSTANCE"}, "collectionUsage": false}},
+		object{"required": []string{"collectionUsage"}, "properties": object{"mode": object{"const": "COLLECTION"}, "prefixAllowed": object{"const": false}}},
+	}
+	conditions := map[iamv1.ConditionKey]iamv1.AuthorizationProfileCondition{}
+	for _, profile := range iamv1.AllAuthorizationProfiles() {
+		for _, action := range profile.Actions {
+			for _, condition := range action.Conditions {
+				conditions[condition.Key] = condition
+			}
+		}
+	}
+	keys := make([]iamv1.ConditionKey, 0, len(conditions))
+	for key := range conditions {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	conditionRules := []any{}
+	for _, key := range keys {
+		condition := conditions[key]
+		conditionRules = append(conditionRules, object{"properties": object{"key": object{"const": key}, "valueType": object{"const": condition.ValueType}, "source": object{"const": condition.Source}}})
+	}
+	schemas["AuthorizationProfileCondition"].(object)["oneOf"] = conditionRules
+	actionRules := []any{
+		object{"if": object{"properties": object{"scope": object{"not": object{"const": "TENANT"}}}},
+			"then": object{"properties": object{"conditions": object{"anyOf": []any{object{"type": "null"}, object{"type": "array", "maxItems": 0}}},
+				"resourceShapes": object{"items": object{"properties": object{"prefixAllowed": object{"const": false}}}}}}},
+	}
+	for _, usage := range []string{"COLLECTION_LIST", "COLLECTION_CREATE"} {
+		then := object{"properties": object{"resultResourceKind": false}}
+		if usage == "COLLECTION_CREATE" {
+			then = object{"required": []string{"resultResourceKind"}}
+		}
+		actionRules = append(actionRules, object{
+			"if":   object{"properties": object{"resourceShapes": object{"contains": object{"required": []string{"collectionUsage"}, "properties": object{"collectionUsage": object{"const": usage}}}}}},
+			"then": then,
+		})
+	}
+	schemas["AuthorizationProfileAction"].(object)["allOf"] = actionRules
 }
 
 func authorizationTargetRules() []any {

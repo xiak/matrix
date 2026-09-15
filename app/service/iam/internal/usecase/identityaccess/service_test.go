@@ -17,6 +17,56 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 )
 
+func TestAuthorizationProfileDiscoveryRequiresCurrentAuthorityAndNoPermitCache(t *testing.T) {
+	tx := newCoreTransaction()
+	service, err := NewAuthority(&coreRepository{transaction: tx}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "catalog-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ListAuthorizationProfiles(t.Context(), login.Credential, "catalog-forced"); !errors.Is(err, ErrForbidden) {
+		t.Fatal("temporary forced-change session obtained product metadata")
+	}
+	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: bootstrap.Administrator.Password, NewPassword: coreSecret(t, "Catalog-Changed-Password-57!"), RequestID: "catalog-change"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.ListAuthorizationProfiles(t.Context(), login.Credential, "catalog-allowed")
+	if err != nil || iamv1.ValidateAuthorizationProfileList(result) != nil || result.AccountID != bootstrap.Organization.ID || len(result.Items) != len(iamv1.AllAuthorizationProfiles()) {
+		t.Fatalf("authenticated complete directory failed: %v", err)
+	}
+	last := tx.authorizations[len(tx.authorizations)-1]
+	if last.Decision.Action != iamv1.ActionIAMPolicyList || last.Decision.Resource.Kind != iamv1.ResourceAccount || last.Decision.Resource.ID != string(result.AccountID) || last.Decision.ResourceMode != iamv1.AuthorizationResourceInstance || last.AuditEvent.Action != auditv1.ActionIAMAuthorizationDecided {
+		t.Fatal("discovery substituted an installation scope or invented catalog authority")
+	}
+	result.Items[0].Profile.Actions[0].ResourceKind = "MUTATED"
+	fresh, err := service.ListAuthorizationProfiles(t.Context(), login.Credential, "catalog-fresh")
+	if err != nil || fresh.Items[0].Profile.Actions[0].ResourceKind == "MUTATED" {
+		t.Fatal("caller mutated source profile")
+	}
+	before := len(tx.authorizations)
+	tx.profileErr = ErrUnavailable
+	if _, err := service.ListAuthorizationProfiles(t.Context(), login.Credential, "catalog-drift"); !errors.Is(err, ErrUnavailable) || len(tx.authorizations) != before {
+		t.Fatal("discovery bypassed registry verification or recorded an ordinary decision for drift")
+	}
+	tx.profileErr = nil
+	if _, err := service.ListAuthorizationProfiles(t.Context(), coreServiceCredential(t, bootstrap, iamv1.ServicePaaS), "catalog-service"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("service credential substituted for a user")
+	}
+	if _, err := service.Logout(t.Context(), login.Credential, iamv1.LogoutRequest{RequestID: "catalog-logout"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ListAuthorizationProfiles(t.Context(), login.Credential, "catalog-revoked"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("revoked session reused catalog access")
+	}
+}
+
 func TestTransactionRetryYieldsToContendingCommit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service, err := NewAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
@@ -821,6 +871,7 @@ type coreTransaction struct {
 	localRecoveryInspection iamv1.LocalCredentialRecoveryInspection
 	localRecoveryResult     iamv1.LocalCredentialRecoveryResult
 	localRecoveryMutation   *LocalCredentialRecoveryMutation
+	profileErr              error
 }
 
 func (transaction *coreTransaction) InspectLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, *iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, error) {
@@ -1196,7 +1247,9 @@ func (transaction *coreTransaction) Readiness(context.Context) (ReadinessSnapsho
 	}, nil
 }
 
-func (*coreTransaction) CheckCurrentAuthorizationProfiles(context.Context) error { return nil }
+func (transaction *coreTransaction) CheckCurrentAuthorizationProfiles(context.Context) error {
+	return transaction.profileErr
+}
 
 func (*coreTransaction) LookupAuthorizationProfile(_ context.Context, reference iamv1.AuthorizationProfileReference) (iamv1.AuthorizationProfile, bool, error) {
 	profile, found := iamv1.LookupAuthorizationProfile(reference.Product)
