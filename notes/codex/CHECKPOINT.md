@@ -27,10 +27,29 @@
   profile/revision unchanged; record8/evidence5/claim7, ServiceIdentity,
   lookup_service and old Audit canonical unchanged.
 
+## Programmatic-credential foundation
+
+Pure material implementation is pushed as
+be4974e68fc167b418c9eee00c96aaf1b844693f. Exact Verification35142407084
+was confirmed live; poll that run to terminal, do not infer success. The
+existing credential owner implements the agreed record-bound HKDF/AES-GCM
+format, private structured envelope and independent Node/Go attack vectors.
+Local whole-source race/architecture/vet/modules/generation/Linux passed.
+This is not AccessKey API, transaction, once-only Seal, signature, installation
+or whole007 acceptance. No new schema, profile, FILE env or public actor ABI.
+The uncommitted direct-KEK draft was replaced, not retained as compatibility.
+
+Next K1 lifecycle/management constraints and their real-runtime gates belong
+only to IAM/007. Installation owns the still-unfrozen production keyring
+injection/custody contract; request that boundary before wiring files or
+claiming deployment. Existing password/session semantics must not be silently
+reinterpreted as long-term key revocation. Do not turn remaining work into a
+generic credential service or a second PDP.
+
 ## Continue the full goal
 
 Whole IAM goal remains ACTIVE. Read AGENTS,
-IAM/FEAT-IAM-007-programmatic-credentials.md, then the owning credential,
+IAM/FEAT-IAM-007-programmatic-credentials.md and ADR-0004, then owning credential,
 PDP and PEP code. Further policy delegation/IP, program credentials,
 product/service integration, governance, UI and cumulative HA/capacity/release
 acceptance remain in their FEAT owners. Do not shrink the goal to Role/STS
