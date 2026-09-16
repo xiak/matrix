@@ -521,8 +521,12 @@ restricted runtime logins, two-account resources/outboxes and installation
 verification. The same isolated candidate passes the real dual-schema/RLS
 regression (5.776s) and Audit HTTP gate (3.729s), full-repository race/vet,
 module verification, byte-stable generation and Linux amd64 builds. These
-checks exclude uncommitted Role work. Independent CI for this correction
-remains pending; none of this is Role/STS or HA acceptance.
+checks exclude uncommitted Role work. The correction is fixed at
+`f9ca482df5bde3c8689e9d105f382e178a6abdab`;
+[Verification35054751383](https://github.com/xiak/matrix/actions/runs/35054751383)
+was independently checked against that exact SHA: Go, authority-process and
+node-process all completed successfully. This closes the attachment
+prerequisite's Audit regression, not Role/STS or HA acceptance.
 
 Phase 1 retention is `INDEFINITE`: there is no purge, overwrite, truncate, or
 tenant deletion path. Configurable expiry, archive tiers, legal hold, and
