@@ -1112,15 +1112,28 @@ React frame state. The active child alone receives the compositor hint, and
 reduced-motion preference presents a stationary indicator. Determinate task
 progress remains a native element driven by real values.
 Dashboard, table, card, list and access layouts share semantic Theme
-tokens and a single announced loading label. The outgoing content becomes hidden
-and inert immediately; its draft remains mounted until the visit commits or is
-cancelled. The content viewport remains mounted across a committed visit rather
-than replacing its background/scroll boundary. Only keyed route content is
-replaced, with no full-canvas opacity transition. Initial resource loading and
-load recovery keep the real Header, navigation and title mounted, changing only
-the data area; they never substitute a second all-skeleton console frame or
-present an empty count as a successful read. Mutation controls appear only with
-their owned data/capabilities, not from the destination frame. A thin indeterminate progress
+tokens and a single announced loading label. For a service-local destination
+whose committed scene already owns the required service data, the shell projects
+the destination view into the keyed content boundary immediately. This applies
+to IAM, logs, DevOps and observability view navigation; it does not fabricate
+cross-service data. The projected content is visible but inert until Next
+commits the route, consumes the pending destination query for detail/workflow
+identity, and keeps the same content key across the commit so the target is not
+mounted twice. Any read that the destination itself still needs, such as a live
+group directory or entity detail, owns loading and retry feedback inside that
+data region. It does not cause the shell to reload the cached IAM identity,
+policy or capability scene.
+
+When no complete service-local projection exists, the outgoing content becomes
+hidden and inert immediately; its draft remains mounted until the visit commits
+or is cancelled, and regional loading feedback replaces only the content area.
+The content viewport remains mounted across a committed visit rather than
+replacing its background/scroll boundary. Only keyed route content is replaced,
+with no full-canvas opacity transition. Initial resource loading and load
+recovery keep the real Header, navigation and title mounted, changing only the
+data area; they never substitute a second all-skeleton console frame or present
+an empty count as a successful read. Mutation controls appear only with their
+owned data/capabilities, not from the destination frame. A thin indeterminate progress
 line communicates real route and scoped background activity without inventing a completion
 percentage. Fast cached routes finish immediately; interrupted visits cannot overwrite a newer
 destination. Reduced-motion preferences disable skeleton and progress motion.
@@ -1539,17 +1552,17 @@ and `git diff --check` gates must pass on the same committed worktree.
 ### Current shared-navigation development evidence
 
 Verified on 2026-09-16 against pushed UI source
-[`ae7d2363055cb38cd9dd12fbfc470c43f3b0ca64`](https://github.com/xiak/matrix/commit/ae7d2363055cb38cd9dd12fbfc470c43f3b0ca64).
+[`c1dfb5bb9ce0ed9b1d78ad397cb08a813e7ce952`](https://github.com/xiak/matrix/commit/c1dfb5bb9ce0ed9b1d78ad397cb08a813e7ce952).
 
 | Gate | Evidence |
 | --- | --- |
-| Supported frontend runtime | Node 24.19.0; complete `build:embedded` and `check` passed: type checking, lint, architecture, styles, 540 Vitest cases across 36 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
+| Supported frontend runtime | Node 24.19.0; complete `build:embedded` and `check` passed: type checking, lint, architecture, styles, 544 Vitest cases across 36 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
 | Theme and static-export boundary | 228 semantic contrast pairs passed across light, mixed and dark workspace/shell surfaces. Production preview was disabled; all 214 embedded files matched the normalized immutable export. |
 | UI host and architecture | Go UI/architecture race tests, UI vet and Linux/amd64 UI build passed. |
 | Static query boundary | Supported client detail/creation queries retained identical HTML and CSP; ambiguous, malformed and authority-bearing selectors were rejected. |
-| Destination/frame boundary | Tests compare route-known metadata with loaded scenes for all seven directory services without constructing empty resource snapshots or mutation workspaces. Real suspended transitions expose the destination immediately and hide outgoing controls before placeholder DOM exists. |
-| Loading/render isolation | Regional PageSkeleton/TableSkeleton tests verify immediate localized status, a local 200ms placeholder delay, fast-unmount cancellation and destination reset. Suspended-shell tests verify unchanged Header/viewport nodes, no account-menu render from the skeleton timer and no additional resource load. Initial data waits retain the real navigation, title and account menu. |
-| Real DEV browser | Normal application-to-IAM directory navigation completed without an artificial delay. A loopback-only proxy delayed real Next route payloads by five seconds: Logs displayed its target frame immediately; an interrupted DevOps-to-Monitoring visit committed only Monitoring; PostgreSQL retained its target title at 360 × 800px in English/light mode. Desktop checks used the normal 1280 × 720px viewport and dark/light surfaces. |
+| Destination/frame boundary | Tests compare route-known metadata with loaded scenes for all seven directory services without constructing empty resource snapshots or mutation workspaces. Real suspended transitions expose the destination immediately and hide outgoing controls before placeholder DOM exists. Same-service tests additionally prove that only supported cached views can be projected and that cross-service or data-owning sections cannot reuse unrelated content. |
+| Loading/render isolation | Regional PageSkeleton/TableSkeleton tests verify immediate localized status, a local 200ms placeholder delay, fast-unmount cancellation and destination reset. Suspended-shell tests verify unchanged Header/viewport nodes, no account-menu render from the skeleton timer and no additional resource load. IAM users-to-groups and policies-to-JSON-workflow tests keep the projected target DOM stable across route commit, disable it only while pending, preserve the pending query and read the IAM identity once. Initial data waits retain the real navigation, title and account menu. |
+| Real DEV browser | Normal application-to-IAM directory navigation completed without an artificial delay. A loopback-only proxy delayed real Next route payloads by five seconds: Logs displayed its target frame immediately; an interrupted DevOps-to-Monitoring visit committed only Monitoring; IAM Users-to-Groups and rapid Users-to-Policies switches immediately displayed the target table without a page skeleton; JSON policy creation immediately selected the query-owned JSON editor. PostgreSQL retained its target title at 360 × 800px in English/light mode. Desktop checks used the normal 1280 × 720px viewport and dark/light surfaces. |
 | Draft-leave browser behavior | A temporary, unsubmitted JSON draft remained intact after Continue editing. Discard and leave then immediately displayed the Regions frame; the old editor and loading feedback were absent after the actual route commit. No policy or association was created or changed. |
 
 Same-path detail-query tests retain encoded IDs, draft-leave protection and
@@ -1559,10 +1572,12 @@ and browser back/forward observations belong to the
 The one-click DEV MOCK entry still returns to the requested User directory.
 The slow proxy was stopped and its temporary browser tab closed; the normal
 DEV preview remains independent. ContentPage and PageSkeleton own the shared
-transition behavior; individual pages select a placeholder layout rather than
-implementing their own navigation timers. The committed URL and business
-selection remain Next-owned until the real page transition completes; the
-immediate frame is presentation feedback, not fabricated data or authority.
+transition behavior; individual pages select a placeholder layout or a
+feature-owned data-region placeholder rather than implementing their own
+navigation timers. The committed URL and business selection remain Next-owned
+until the real page transition completes; an immediate service-local projection
+reuses only its already-authoritative cached scene and cannot create data or
+authority.
 These gates do not establish a universal click-latency budget, a new whole-repository
 or PostgreSQL runtime regression, a new APISIX installation/upgrade, or complete
 IAM acceptance. Earlier live User-boundary evidence retains its named source
