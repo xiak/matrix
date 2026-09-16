@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1 同账号自定义 Role 管理事务/HTTP/审计及本地真实运行已实现并验证，整仓回归已通过，候选待独立 CI 收口；尚不作为已验收的角色/STS 产品交付。后续必须完成 R2 真实角色会话、业务授权及 R3/UI，不能以管理目录代替本 FEAT 验收。原审计查询竞争的已验证回滚点为 f9ca482df5bde3c8689e9d105f382e178a6abdab / Verification35054751383，三项独立 CI 全部通过。
+- 状态：R1 同账号自定义 Role 管理事务/HTTP/审计已完成本地真实运行、整仓回归及独立 CI 验收，固定提交 bf7e8fbbdffe96b8af5b250edd1ed746c5b99265；尚不作为完整角色/STS 产品交付。后续必须完成 R2 真实角色会话、业务授权及 R3/UI，不能以管理目录代替本 FEAT 验收。原审计查询竞争的已验证回滚点为 f9ca482df5bde3c8689e9d105f382e178a6abdab / Verification35054751383，三项独立 CI 全部通过。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -109,12 +109,13 @@ RoleSession必须绑定account、role、原USER、直接承担者、source sessi
 
 - 原IAM HTTP完整回归106.296s，新增R1聚焦回归36.857s：双Account同名Role、原Root与真实当前PDP、非Root显式Allow仍不能写、服务/forced/跨账号拒绝；CRUD、信任版本及精确/冲突重放、100项目录和101版历史、跨用户/账号/目录/Role及伪造游标拒绝。角色不会产生USER凭据。
 - 五类Role写入与USER/ROLE附件共81项私有会话引用检查11.345s：缺失、畸形、未知、另一USER、撤销、过期、旧/NULL generation失败关闭，有效引用通过；北向session selector拒绝。此为真实PDP之后对私有参数的负向故障注入，不把合成会话行称为旧binary来源证据。
+- 原附件会话完整回归66.139s，保留USER/GROUP/平台USER的48项可控安全变更交错，并包含上述81项私有引用及原重放检查；未以新增Role聚焦检查替代现有授权与会话回归。
 - 十项数据库可观测交错包含logout、日常改密省略/true/false/保留当前、原Root恢复/强制改密、Account暂停先提交，以及Role写入先提交后logout/恢复。前者拒绝失效请求、保留的有效会话可继续；后者保留单一成功事实，旧会话和原命令不能重新生效。还验证同修订更新/停用/信任/删除竞争，以及删除与附件赋予/撤销竞争；没有活动孤儿附件。末尾outbox失败使Role、信任版本、附件与对应事实一并回滚。
 - Role函数授权、search_path、security模式、额外重载、表RLS、信任保护与外键漂移关闭readiness；Role墓碑和历史不可改。停用USER仍可被明确写入信任，删除USER不改旧Role/Trust，新的已删除USER引用拒绝且无部分状态（额外HTTP聚焦14.090s）。
 - 独立IAM两实例/Audit/PaaS及真实dispatcher进程53.475s：六种ROLE事实及附件经真实outbox入正确tenant chain；Audit断线期间提交、原操作会话退出后继续投递/精确重放，伪造目标/账号拒绝；两IAM及重启不复活Role。受信任USER的登录会话不继承角色策略，Role ID不能登录，未实现的STS入口关闭；原USER应用/Operation归属保持。此项不证明R2临时凭据或角色业务授权。
 - 固定IAM21解释前驱`1dc1079c4e7bec80f5345d06929875b492ba9a86`真实binary保留数据门禁24.775s：迁移/重启保留原SYSTEM默认、字节、receipt、会话与历史proof；原Root的新Role动作先拒绝，显式发布/关联当前TENANT策略后成功，撤销与Role墓碑在再次迁移/重启后保持。仅这个明确解释边界，不恢复从schema1开始的整条未发布开发升级链，也不证明跨release-profile准入。Audit双schema与HTTP分别7.999s/4.017s通过。
 
-准确Git候选源码的独立干净导出通过全仓race/p2、架构、vet/p2、模块校验、API生成字节稳定与Linux amd64构建；工作目录中遗留的验收源码副本未作为产品源码导入，原架构检查未放宽。独立CI及最终发布/容量状态另按实际完成记录；上述证据不是RoleSession、完整006、UI或公有云HA验收。
+准确Git候选源码的独立干净导出通过全仓race/p2、架构、vet/p2、模块校验、API生成字节稳定与Linux amd64构建；工作目录中遗留的验收源码副本未作为产品源码导入，原架构检查未放宽。固定`bf7e8fbbdffe96b8af5b250edd1ed746c5b99265`已推送；GitHub API核实[Verification35060352506](https://github.com/xiak/matrix/actions/runs/35060352506)精确SHA、go/authority-process/node-process三项全部completed/success。上述证据不是RoleSession、完整006、UI、发布或公有云HA验收。
 
 ## 验收
 
