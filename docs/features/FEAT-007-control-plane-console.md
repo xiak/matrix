@@ -1118,7 +1118,7 @@ cancelled. The content viewport remains mounted across a committed visit rather
 than replacing its background/scroll boundary. Only keyed route content is
 replaced, with no full-canvas opacity transition. Initial resource loading and
 load recovery keep the real Header, navigation and title mounted, changing only
-the data area; they never substitute a second all-skeleton LoadingShell or
+the data area; they never substitute a second all-skeleton console frame or
 present an empty count as a successful read. Mutation controls appear only with
 their owned data/capabilities, not from the destination frame. A thin indeterminate progress
 line communicates real route and scoped background activity without inventing a completion
@@ -1536,26 +1536,37 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-### Current User-boundary/navigation development evidence
+### Current shared-navigation development evidence
 
 Verified on 2026-09-16 against pushed UI source
-[`7e01a4176764ffff2fc9b81db8f059e334ac9c76`](https://github.com/xiak/matrix/commit/7e01a4176764ffff2fc9b81db8f059e334ac9c76).
+[`ae7d2363055cb38cd9dd12fbfc470c43f3b0ca64`](https://github.com/xiak/matrix/commit/ae7d2363055cb38cd9dd12fbfc470c43f3b0ca64).
 
 | Gate | Evidence |
 | --- | --- |
-| Supported frontend runtime | Node 24.19.0; complete `build:embedded` and `check` passed: type checking, lint, architecture, styles, 528 Vitest cases across 36 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
-| Theme and static-export boundary | 228 semantic contrast pairs passed across light, mixed and dark workspace/shell surfaces. Production preview was disabled; all 213 embedded files matched the normalized immutable export. |
+| Supported frontend runtime | Node 24.19.0; complete `build:embedded` and `check` passed: type checking, lint, architecture, styles, 540 Vitest cases across 36 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
+| Theme and static-export boundary | 228 semantic contrast pairs passed across light, mixed and dark workspace/shell surfaces. Production preview was disabled; all 214 embedded files matched the normalized immutable export. |
 | UI host and architecture | Go UI/architecture race tests, UI vet and Linux/amd64 UI build passed. |
-| Repository regression | Complete `go test -race -p1 -count1 ./...` passed. Unconfigured PG/release opt-ins are not evidence of new database or release acceptance. |
 | Static query boundary | Supported client detail/creation queries retained identical HTML and CSP; ambiguous, malformed and authority-bearing selectors were rejected. |
+| Destination/frame boundary | Tests compare route-known metadata with loaded scenes for all seven directory services without constructing empty resource snapshots or mutation workspaces. Real suspended transitions expose the destination immediately and hide outgoing controls before placeholder DOM exists. |
+| Loading/render isolation | Regional PageSkeleton/TableSkeleton tests verify immediate localized status, a local 200ms placeholder delay, fast-unmount cancellation and destination reset. Suspended-shell tests verify unchanged Header/viewport nodes, no account-menu render from the skeleton timer and no additional resource load. Initial data waits retain the real navigation, title and account menu. |
+| Real DEV browser | Normal application-to-IAM directory navigation completed without an artificial delay. A loopback-only proxy delayed real Next route payloads by five seconds: Logs displayed its target frame immediately; an interrupted DevOps-to-Monitoring visit committed only Monitoring; PostgreSQL retained its target title at 360 × 800px in English/light mode. Desktop checks used the normal 1280 × 720px viewport and dark/light surfaces. |
+| Draft-leave browser behavior | A temporary, unsubmitted JSON draft remained intact after Continue editing. Discard and leave then immediately displayed the Regions frame; the old editor and loading feedback were absent after the actual route commit. No policy or association was created or changed. |
 
 Same-path detail-query tests retain encoded IDs, draft-leave protection and
 replace semantics without a Next page-tree navigation. Real static deep links
 and browser back/forward observations belong to the
 [User-boundary evidence](../../IAM/FEAT-IAM-010-console.md#user-权限边界片的开发联调证据).
 The one-click DEV MOCK entry still returns to the requested User directory.
-These gates do not establish a universal click-latency budget, a new APISIX
-installation/upgrade, or complete IAM acceptance.
+The slow proxy was stopped and its temporary browser tab closed; the normal
+DEV preview remains independent. ContentPage and PageSkeleton own the shared
+transition behavior; individual pages select a placeholder layout rather than
+implementing their own navigation timers. The committed URL and business
+selection remain Next-owned until the real page transition completes; the
+immediate frame is presentation feedback, not fabricated data or authority.
+These gates do not establish a universal click-latency budget, a new whole-repository
+or PostgreSQL runtime regression, a new APISIX installation/upgrade, or complete
+IAM acceptance. Earlier live User-boundary evidence retains its named source
+and is not inherited as a new backend acceptance result.
 
 ### Retained shared UX and earlier named release evidence
 
