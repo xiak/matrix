@@ -1526,12 +1526,30 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- The current Theme/component, navigation and CAM-style IAM slice has 528 frontend
-  tests across 36 test files. The complete suite passed on 2026-09-16 with the
-  existing bounded worker configuration and timeouts; no timeout was extended
-  for this slice. Functional test success is not a browser-performance
-  acceptance claim.
-  Live user and tenant cursor actions own their repository reads independently:
+### Current User-boundary/navigation development evidence
+
+Verified on 2026-09-16 against pushed UI source
+[`7e01a4176764ffff2fc9b81db8f059e334ac9c76`](https://github.com/xiak/matrix/commit/7e01a4176764ffff2fc9b81db8f059e334ac9c76).
+
+| Gate | Evidence |
+| --- | --- |
+| Supported frontend runtime | Node 24.19.0; complete `build:embedded` and `check` passed: type checking, lint, architecture, styles, 528 Vitest cases across 36 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
+| Theme and static-export boundary | 228 semantic contrast pairs passed across light, mixed and dark workspace/shell surfaces. Production preview was disabled; all 213 embedded files matched the normalized immutable export. |
+| UI host and architecture | Go UI/architecture race tests, UI vet and Linux/amd64 UI build passed. |
+| Repository regression | Complete `go test -race -p1 -count1 ./...` passed. Unconfigured PG/release opt-ins are not evidence of new database or release acceptance. |
+| Static query boundary | Supported client detail/creation queries retained identical HTML and CSP; ambiguous, malformed and authority-bearing selectors were rejected. |
+
+Same-path detail-query tests retain encoded IDs, draft-leave protection and
+replace semantics without a Next page-tree navigation. Real static deep links
+and browser back/forward observations belong to the
+[User-boundary evidence](../../IAM/FEAT-IAM-010-console.md#user-权限边界片的开发联调证据).
+The one-click DEV MOCK entry still returns to the requested User directory.
+These gates do not establish a universal click-latency budget, a new APISIX
+installation/upgrade, or complete IAM acceptance.
+
+### Retained shared UX and earlier named release evidence
+
+- Live user and tenant cursor actions own their repository reads independently:
   user paging does not reload the current identity, tenant directory, policy
   directories or preview graph, and tenant paging does not reload the user or
   policy directories. The full refresh remains the explicit owner for related

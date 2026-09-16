@@ -3,22 +3,18 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-08-27
+- Updated: 2026-09-16
 - Repository: `https://github.com/xiak/matrix.git`
-- Branch: `feat/control-plane-console`
-- Pushed account-console source: `6a0f417743948a5303d3a3342cb1e8902c9d17f2`
-- Prior installed-release source: `44fa1c7bb4cd20f2f807e12ec1e8a753b65688b3`
-- Goal: Matrix PaaS Phase 2 control-plane console
+- Branch: `feat/cloud-console-ux`
+- Pushed UI source: `7e01a4176764ffff2fc9b81db8f059e334ac9c76`
 
 ## Authoritative route
 
-- Account and authority requirements, status, acceptance gates, and evidence:
-  [`FEAT-006`](../../docs/features/FEAT-006-platform-authorities.md).
-- Console requirements, status, acceptance gates, and evidence:
+- IAM client requirements, status and boundary integration evidence:
+  [`FEAT-IAM-010`](../../IAM/FEAT-IAM-010-console.md).
+- Shared UX requirements, status and verification evidence:
   [`FEAT-007`](../../docs/features/FEAT-007-control-plane-console.md).
-- Fixed-source decisions:
-  [`FEAT-006 adoption review`](../../docs/adoption/FEAT-006-platform-authorities.md)
-  and
+- Fixed-source UI adoption decisions:
   [`FEAT-007 adoption review`](../../docs/adoption/FEAT-007-control-plane-console.md).
 - Shared product boundary:
   [`ADR-0002`](../../docs/architecture/ADR-0002-product-boundary.md).
@@ -28,26 +24,23 @@ handoff, then validate it against Git and the linked FEAT.
 
 ## Durable pushed state
 
-The account-console source above is committed and pushed to the feature
-branch. Its development verification is not final release acceptance. The
-earlier installed-release evidence applies only to its named source; this
-milestone did not upgrade a user's installation. Evidence, current limitations,
-and remaining acceptance work belong only to the linked FEAT owners.
-
-Phase 2 continues in Docker-in-Docker. The user has started separate Phase 3
-host-management work; do not move its branch, alter its working tree, or add
-host-management features to this slice. Inspect `git worktree list` and use the
-checkout of `feat/control-plane-console`, not whichever branch happens to be
-in the original repository directory.
+The UI source above is committed and pushed to this feature branch. Its
+development verification is not complete IAM, installation, upgrade or release
+acceptance. Evidence, limitations and remaining work belong only to the linked
+FEAT owners. Integrate fixed backend contracts while preserving this branch's
+UI, full static host/export and independent MOCK entry; do not replace them
+with another branch's renderer or inherit that branch's UI acceptance.
 
 ## Continuation
 
-Continue from the owning FEAT's open acceptance items. Coordinate the separate
-IAM and Phase 3 work through fixed pushed commits, never another task's dirty
-working tree. This checkpoint does not authorize a merge or runtime upgrade.
-Preserve existing user installations and perform release tests only in a fresh
-owned Docker namespace. Do not substitute API-only checks for real browser
-acceptance, duplicate the donor application, or move installer-owned secrets
+Continue from the owning FEAT's open acceptance items. Coordinate IAM through
+fixed pushed commits, never another task's dirty working tree. Inspect Git and
+worktrees and select `feat/cloud-console-ux`, not the unrelated CI/CD or IAM
+checkout in the original directory. Do not move those branches or introduce
+their unrelated features. This checkpoint does not authorize a merge or runtime
+upgrade. Preserve existing user installations; use an owned fresh test
+environment. Real browser acceptance cannot be replaced by MOCK or API-only
+checks. Do not duplicate the donor application or move installer-owned secrets
 into the UI.
 
 Replace this file only at another committed-and-pushed milestone. Do not append

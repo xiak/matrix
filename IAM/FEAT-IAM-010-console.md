@@ -72,3 +72,22 @@ Role/trust/STS、SSO、高级凭据与登录安全专项按各自固定后端契
 独立 PG18、IAM/Audit/PaaS 和 dispatcher，搭配本分支完整静态 UI 宿主与导出，使用现有合成测试身份完成真实浏览器路径。不注入 bearer、Account selector 或授权响应。固定后端 CI 只能证明该后端，不继承它的 UI、导出、视觉或浏览器结果；这个联调环境不是 APISIX、安装升级或完整 release 验收。
 
 User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前身份投影相应变化，普通管理员保持只读，正向附件不被删除。桌面与 360px 验证长引用、内容区操作和目录返回；fixture 最终检查实际两个设置事实、一个移除事实、明确无边界与 Audit 链。completion marker 不能代替页面观察。键盘专项仍待补，不宣称已验收。
+
+### User 权限边界片的开发联调证据
+
+2026-09-16，UI 固定来源为已推送的
+[`7e01a4176764ffff2fc9b81db8f059e334ac9c76`](https://github.com/xiak/matrix/commit/7e01a4176764ffff2fc9b81db8f059e334ac9c76)，
+搭配固定 IAM 后端 `f15cc983a69092528a66eb49b0509b760392187c`；固定来源和取舍归
+[FEAT-007 adoption](../docs/adoption/FEAT-007-control-plane-console.md) 所有。
+
+- `TestIAMConsoleBrowser` 在新的隔离 PG fixture 中以 race 模式通过，包耗时 447.178 秒；该耗时包含编译、初始化及人工页面观察，不是点击或 API 延迟。完整 Go UI 二进制从本 UX 来源编译，不继承后端分支的渲染器、CSS、静态导出或浏览器结果。
+- root 经现有合成身份登录，从目录打开 `browser.member`：设置 A、替换 B、移除，使 User resourceVersion 从 2 依次变为 3、4、5。原 PaaSDeveloper 直接附件始终保留。
+- 同一成员分别重新登录/读取，CurrentIdentity 显示 A、B、明确无边界；正向策略来源独立保留，没有因自身边界引用而获得 IAM 管理目录或 Policy 正文读取权。
+- 普通 `browser.admin` 可读取 User 详情，但边界保持只读、无编辑入口。当前浏览器为深色；360 × 900 验证三次边界操作及长引用完整换行，边界区域 clientWidth 与 scrollWidth 均为 276；1280 × 900 验证桌面详情、长版本引用及直接静态详情 query。
+- 返回目录、浏览器后退重新读取 User revision 5、前进回到目录均完成；root/member 页面捕获的 error 日志为空。
+- 页面观察结束后才写 completion marker。fixture 最终核对真实的两个设置事实、一个移除事实、明确 `policy: null` 及 Audit `VERIFIED`，随后通过；不是仅靠 marker 或 API 调用替代 UX 验收。临时数据库环境及其合成数据已清理，不是用户安装验收。
+- 严格 HTTP/组件用例覆盖不确定提交、409 新意图、迟到旧凭据的 401 和成功写入后读取失败；本次浏览器未执行这些故障注入，不把自动化用例标为浏览器证据。
+
+公共 UI、生产导出、完整前端及 Go 回归证据只归
+[FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-user-boundarynavigation-development-evidence)
+所有。真实 PolicyVersion/授权目录作者流程、Role/trust/STS、SSO、高级凭据，以及本边界片的浅色/混色浏览器与键盘专项尚未完成。仍需与固定后端原子整合并执行相应发布门禁；本 UX 分支独立运行不等于完整 IAM 安装候选已验收。
