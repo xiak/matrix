@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1 角色管理固定 `bf7e8fbbdffe96b8af5b250edd1ed746c5b99265`、R2 同账号承担及 tenant PaaS/Audit 真实授权闭环固定 `0752c602ab4ce6d73a21094c8e9f75a1c8750183` 均已完成本地真实运行、整仓与独立 CI 验收。R3 自服务发现/当前角色显示、管理型会话目录及 UX/UI、容量和发布仍未完成，整体006未验收；不以R2后端通过代替最终页面与发布验收。
+- 状态：R1 角色管理固定 `bf7e8fbbdffe96b8af5b250edd1ed746c5b99265`、R2 同账号承担及 tenant PaaS/Audit 真实授权闭环固定 `0752c602ab4ce6d73a21094c8e9f75a1c8750183` 均已完成本地真实运行、整仓与独立 CI 验收。R3 自服务发现/当前角色显示后端已有本地真实运行证据，固定提交/独立CI待确认；管理型会话目录及 UX/UI、容量和发布未完成，整体006未验收。临时新增再撤销Deny是否复活旧RoleSession还需独立真实请求门禁，不扩大原12类ABA结论。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -91,7 +91,7 @@ RoleSession必须绑定account、role、原USER、直接承担者、source sessi
 
 #### R2 实施契约与集成准入
 
-R2从已验证R1固定`bf7e8fbbdffe96b8af5b250edd1ed746c5b99265`继续。以下身份/记录器和tenant PaaS消费窗口已与Phase 3对齐。原纯规则、凭据、用例和受限数据库owner共同实现有界载体、到期、目的隔离、严格发行HTTP与真实业务权限；不能把其中的纯规则或身份读取通过当作完整AssumeRole验收。当前工作区实际开发schema为IAM25/Audit15/PaaS2，发布profile未改变；新增源码能力不得作为旧发布二进制或跨profile兼容证据。
+R2从已验证R1固定`bf7e8fbbdffe96b8af5b250edd1ed746c5b99265`继续。以下身份/记录器和tenant PaaS消费窗口已与Phase 3对齐。原纯规则、凭据、用例和受限数据库owner共同实现有界载体、到期、目的隔离、严格发行HTTP与真实业务权限；不能把其中的纯规则或身份读取通过当作完整AssumeRole验收。R2固定源码的开发schema为IAM25/Audit15/PaaS2，发布profile未改变；新增源码能力不得作为旧发布二进制或跨profile兼容证据。
 
 同账号USER信任匹配必须先完整验证Role、当前RoleTrustVersion与来源身份的归属和摘要；未知/损坏文档不能因前面有Allow而被跳过。匹配Deny优先，空信任/无匹配均不信任；暂停Account、停用/forced USER、失效来源会话和停用Role不能承担。这个载体判断只证明Trust一侧，不授予`iam.role.assume`或任何业务许可。发行用例还必须在同一真实事务核对当前Assume决定和实际bearer的generation。
 
@@ -148,11 +148,19 @@ R2同片实现原Root+当前PDP守护的RoleBoundary read/set/remove，不引用
 
 ### R3 自服务发现与角色显示上下文
 
-本节为下一后端切片的目标，不属于R2已实现接口。UX/UI工程师已确认：普通USER可能具有Assume权限却没有Role管理目录/read权限；角色模式也不能依赖切换前偶然保留的名称缓存。先补这两个权威投影和详情能力，再由010接入真实页面。管理型RoleSession目录/代他人撤销仍是后续独立验收项，不能拿当前by-request自服务或MOCK Sessions tab冒充完成。
+本节后端已实现并通过下述本地真实门禁，不属于R2已验收接口；固定提交和独立CI待确认。UX/UI工程师已确认：普通USER可能具有Assume权限却没有Role管理目录/read权限；角色模式也不能依赖切换前偶然保留的名称缓存。先交付这两个权威投影和详情能力，再由010接入真实页面。管理型RoleSession目录/代他人撤销仍是后续独立验收项，不能拿当前by-request自服务或MOCK Sessions tab冒充完成。
 
 `GET /v1/auth/assumable-roles`是当前有效USER的同账号自服务发现，不要求`iam.role.list/read`，不接受caller account/user/source-session selector。仅返回当次读取中USER的精确Assume权限、Trust、Role状态及必需边界检查通过的候选；不能把本账号所有Role加一个forbidden字段暴露给无目录权限的人。沿现有纯求值/信任/边界拥有者复用规则，不创建第二PDP或新增业务许可，不生成一次虚构的Assume成功决定。
 
-结果绑定真实accountId/sourceUserId，items只含roleId/accountId/name/status/maxSessionDurationSeconds/resourceVersion和精确`iam.role.assume` capability；无Trust、Policy、附件、秘密或未授权总数。每次读取有固定候选扫描和响应预算，复用既有签名游标owner，绑定实际账号/来源USER、用途和查询顺序。稀疏授权允许空items仍有nextAfter；客户端以nextAfter是否存在判断结束，不无限自动翻页。每页重新检查当前资格，cursor和availability不是permit；发行仍检查当前版本/来源/边界/时长/请求策略及会话配额。只读发现不走发行配额或Account排他锁，不能把全账号串行化当成分页实现。
+结果绑定真实accountId/sourceUserId，items只含roleId/accountId/name/status/maxSessionDurationSeconds/resourceVersion和精确`iam.role.assume` capability；无Trust、Policy、附件、秘密或未授权总数。每页最多求值20个候选，最多64KiB公开响应，不扫描到凑满20个可见角色。稀疏授权允许空items仍有nextAfter；客户端以nextAfter是否存在判断结束，不无限自动翻页。每页重新检查当前资格，cursor和availability不是permit；发行仍检查当前版本/来源/边界/时长/请求策略及会话配额。只读发现不走发行配额或Account排他锁，不能把全账号串行化当成分页实现。
+
+沿现有CursorCodec保护续页：绑定安装、账号/修订、来源USER/修订、实际登录Session及credential generation、完整当前附件/组成员/Policy默认与边界修订、独立自服务用途、固定顺序/候选预算和单调目录水位；不是只绑定命中的Allow。相关安全变化再恢复也不复活旧cursor。自服务`ir1.`与管理`ic1.`用途/版本分离：同一owner从封存cursor密钥按用途和快照派生AES-GCM密钥，使用标准库随机nonce及独立AAD保护最后扫描位置；该位置可能属于被过滤的Role，不能只base64+MAC后公开。原管理cursor不整体改格式。私有读取仅取21个有序ID，完整解析/求值前20个，第21个只作是否续页的探针，不为凑可见结果继续扫描。损坏的Trust、冻结Profile或来源证据使整页失败关闭，不跳过错误凑成功结果；只读发现不产生虚构授权决定或生命周期事实。
+
+`role_directory_revisions`仅是每Account单调分页水位，不是会话generation或权限。Role变化、CUSTOMER/TENANT Policy修订、USER/GROUP租户附件及组成员变化在原业务事务内推进；当前活跃附件集合相同仍不能抹去临时Deny添加/撤销或入组/退组。User boundary/Account状态变化另由原User/Account修订绑定，改密另绑定credential generation，不以水位替代这些证据。使用具体的AFTER ROW、DEFERRABLE INITIALLY DEFERRED约束触发器，在正常事务末端取得水位锁；不是异步回调或通用commit hook，产品事务不调用SET CONSTRAINTS提前触发。业务行、outbox和水位共同提交或回滚，等值replay/冲突/失败不推进。角色显示元数据会改变目录投影，因此会失效该目录cursor，但不改变R2角色安全generation。触发器的闭合表分支/不可变tenant确定归属，不接受请求scope；专用函数不授API/worker直接调用权。
+
+当前开发schema为IAM26/Audit15/PaaS2，发布profile不变。新增私有`read_role_discovery_revision(tenant,actor,source_session text)->jsonb`与`read_role_candidates(tenant,actor,source_session,after_id,role_id text)->jsonb`只由API角色调用；后两个位置/目标参数互斥，精确Role分支仅在现有RoleRead成功后使用。读取按Account→USER→credential/session→水位共享锁核对同一SERIALIZABLE快照，水位之后不反向取得Role/Policy行锁，不使用发行配额锁。真实ACL、参数顺序、返回类型、RLS、触发器时机和水位不可回退保护纳入readiness。record8/evidence5/claim7、ServiceIdentity、lookup_service和历史canonical不改。
+
+发现/详情的Assume capability只承诺当次承担资格，不承诺某个未来业务动作必然Allow，也不预留发行配额。冻结且完整的旧USER-only业务策略不会因角色出现在目录而获得ROLE能力；未来业务仍按R2当前Profile与编译相容性关闭，不能跳过不相容来源或从原USER继承业务Allow。OpenAPI operationId沿现有owner为`listAssumableRoles`与`currentRoleIdentity`，详情仍是原RoleAccess接口。
 
 现有`GET /v1/auth/role-session`在R3直接替换为严格`CurrentRoleIdentity{apiVersion,kind,session,account,role,sourceUser}`：account仅id/displayName，role仅id/name，sourceUser仅id/loginName/displayName；各ID与session精确一致，由同一次当前IAM权威读取推导。RoleSession发行记录和该当前身份投影不是同一种结果；按pre-v1规则不保留旧形状兼容分支或平行别名入口，固定消费者须同步适配。完整Account/RootIdentity、平台绑定、Trust/Policy、sourceSessionId、代际和秘密均不公开。
 
@@ -223,6 +231,19 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 准确候选Git树 `71d240364ce3095e3218860cd5f35ee127617a83` 的干净导出通过全仓race/p2（含架构）、vet/p2、模块校验、API生成逐字节稳定与Linux amd64构建；外部真库由上述独立门禁证明，不把默认跳过的测试当成真实运行。固定源码另通过Assume请求及产品Profile canonical各15秒/2worker/1秒最小化预算的既有fuzz门禁。
 
 累计实现 `0752c602ab4ce6d73a21094c8e9f75a1c8750183` 已推送，[Verification35096275242](https://github.com/xiak/matrix/actions/runs/35096275242)已通过GitHub API核实精确SHA，go、authority-process、node-process全部completed/success。此为R2后端运行闭环；UI、容量/HA和签名发布按各自owner继续，不改变发布profile，不把SQL解释保留门禁当成跨release-profile准入。
+
+### R3 自服务后端本地证据
+
+2026-09-16，沿用本任务独立PG18.4（1CPU/768MiB/PIDs128/64连接），Go2/512MiB、race/p1串行，每项使用全新专属数据库。当前生产源码对应准确候选树`87981f241b7a8529d45fa18a08b8431c177bc336`；以下不包含管理员会话目录、浏览器或发布验收。
+
+- **实际发现和承担**：真实HTTP证明仅有Assume、没有list/read的普通USER可发现并承担；20个不可见候选产生空items和加密续页，下一页只返回实际有权的Role。另一Account独立21个Role，用户/账号/用途/来源Session/caller selector及篡改cursor拒绝。RoleAccess逐资源Assume能力与原root管理能力分开。停启Role、Trust Deny、USER/GROUP Deny、入退组、边界、保留当前会话改密、USER及Account停复用均检查当前资格与旧cursor拒绝。
+- **已复现并修复的目录ABA**：原活跃来源向量在新增再撤销USER Deny后恢复原值，旧self cursor实际错误返回200。加入原事务内单调目录水位后，旧cursor返回422，新请求仍可发现；USER/GROUP附件、成员关系、Policy修订和Role目录变化均覆盖。此证据只属于分页，不能据此宣称旧RoleSession的同类情况已解决。
+- **显示和失败关闭**：CurrentRoleIdentity只含精确会话与account/role/sourceUser显示；Role改名可取得新名称，不因纯显示修改撤销RoleSession。无权/失效/forced/错误目的的凭据关闭；持有失效ROLE秘密仍可自退出。私有投影缺失/null修订或续页、错误账号、缺失/损坏边界、未知字段和隐藏候选Trust损坏均整页503，不以跳过坏行产生成功列表。
+- **真实事务与数据库边界**：受限runtime读取水位共享锁；实际HTTP写者的锁等待由pg_blocking_pids确认。读取不反向等待Role锁，看到完整原快照；释放后写入一次成功。outbox末尾故障和延迟水位更新故障都回滚Role、目录水位、决定和成功事实，旧cursor仍可用；成功变更推进水位，精确replay不推进。RLS/函数形状/ACL/触发器配置漂移关闭readiness，counter不可回退/删除/截断，双迁移及等值bootstrap保持原状态。
+- **相关回归**：包含上述发现与既有Role授权/竞争、策略、附件会话、账号HTTP和本地恢复的IAM真库串行门禁450.248秒通过。独立进程包91.069秒通过，其中固定IAM21解释门禁23.07秒、R1 USER-only编译门禁11.45秒、双IAM/PaaS/Audit与dispatcher流程53.72秒；后者真实跨实例续页、当前撤权、重启及完整业务/历史proof保持。不是所有开发schema升级链或跨release-profile许可。
+- **Audit与业务存储回归**：Audit双authority/旧tenant分区6.930秒、Audit HTTP3.440秒、PaaS数据4.728秒通过。双authority首轮暴露测试仍断言IAM25；只更新为当前26后在新数据库重跑，没有删除版本/函数形状检查或放宽生产实现。公开actor、record8/evidence5/claim7和旧canonical不改。
+
+准确源码干净导出通过全仓race/p2（含架构）、vet/p2、模块校验、全部OpenAPI生成字节稳定及Linux amd64构建。外部真库不以默认跳过的整仓测试代替。该切片仍待固定提交和精确SHA独立CI；已知后续检查包括新增临时Deny撤销及临时组成员关系消失后旧RoleSession的永久失效，目录水位不得复用为会话代际或历史proof。
 
 ## 验收
 

@@ -276,6 +276,107 @@
         ],
         "type": "object"
       },
+      "AssumableRole": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "capability": {
+            "$ref": "#/components/schemas/ActionCapability",
+            "properties": {
+              "action": {
+                "const": "iam.role.assume"
+              },
+              "available": {
+                "const": true
+              },
+              "resource": {
+                "properties": {
+                  "kind": {
+                    "const": "ROLE"
+                  }
+                }
+              },
+              "restrictionReason": false
+            }
+          },
+          "maxSessionDurationSeconds": {
+            "maximum": 43200,
+            "minimum": 60,
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "roleId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "status": {
+            "const": "ACTIVE"
+          }
+        },
+        "required": [
+          "accountId",
+          "capability",
+          "maxSessionDurationSeconds",
+          "name",
+          "resourceVersion",
+          "roleId",
+          "status"
+        ],
+        "type": "object"
+      },
+      "AssumableRoleList": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "items": {
+            "description": "Only eligible roles from a bounded candidate window. Empty items may still have nextAfter; no total-count or page-count semantics.",
+            "items": {
+              "$ref": "#/components/schemas/AssumableRole"
+            },
+            "maxItems": 20,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "kind": {
+            "const": "AssumableRoleList"
+          },
+          "nextAfter": {
+            "maxLength": 384,
+            "minLength": 5,
+            "not": {
+              "pattern": "[^A-Za-z0-9._-]"
+            },
+            "pattern": "^ir1\\.[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "sourceUserId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "items",
+          "kind",
+          "sourceUserId"
+        ],
+        "type": "object"
+      },
       "AssumeRoleRequest": {
         "additionalProperties": false,
         "properties": {
@@ -10609,6 +10710,44 @@
         ],
         "type": "object"
       },
+      "CurrentRoleIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/RoleAccountDisplay"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "CurrentRoleIdentity"
+          },
+          "role": {
+            "$ref": "#/components/schemas/RoleDisplay"
+          },
+          "session": {
+            "$ref": "#/components/schemas/RoleSession",
+            "properties": {
+              "revokedAt": false,
+              "status": {
+                "const": "ACTIVE"
+              }
+            }
+          },
+          "sourceUser": {
+            "$ref": "#/components/schemas/RoleSourceUserDisplay"
+          }
+        },
+        "required": [
+          "account",
+          "apiVersion",
+          "kind",
+          "role",
+          "session",
+          "sourceUser"
+        ],
+        "type": "object"
+      },
       "DecisionID": {
         "allOf": [
           {
@@ -17582,7 +17721,7 @@
             "items": {
               "$ref": "#/components/schemas/ActionCapability"
             },
-            "maxItems": 264,
+            "maxItems": 265,
             "type": "array"
           },
           "policyAttachments": {
@@ -17620,6 +17759,24 @@
           "policyAttachments",
           "role",
           "trustVersion"
+        ],
+        "type": "object"
+      },
+      "RoleAccountDisplay": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "displayName",
+          "id"
         ],
         "type": "object"
       },
@@ -17673,6 +17830,24 @@
           "name",
           "resourceVersion",
           "revokedPolicyAttachments"
+        ],
+        "type": "object"
+      },
+      "RoleDisplay": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
         ],
         "type": "object"
       },
@@ -17875,6 +18050,31 @@
         "required": [
           "sessionId",
           "sourceUserId"
+        ],
+        "type": "object"
+      },
+      "RoleSourceUserDisplay": {
+        "additionalProperties": false,
+        "properties": {
+          "displayName": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "loginName": {
+            "maxLength": 64,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9._-]{2,63}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "displayName",
+          "id",
+          "loginName"
         ],
         "type": "object"
       },
@@ -19239,6 +19439,53 @@
         "summary": "Prove one Audit event against committed IAM authority"
       }
     },
+    "/v1/auth/assumable-roles": {
+      "get": {
+        "operationId": "listAssumableRoles",
+        "parameters": [
+          {
+            "description": "Confidential self-discovery continuation. Pass nextAfter unchanged, including after an empty page; no account/user/session selectors.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "maxLength": 384,
+              "minLength": 5,
+              "not": {
+                "pattern": "[^A-Za-z0-9._-]"
+              },
+              "pattern": "^ir1\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssumableRoleList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Discover only currently assumable roles for the authenticated USER; bounded sparse pages may be empty with a continuation"
+      }
+    },
     "/v1/auth/login": {
       "post": {
         "operationId": "login",
@@ -19437,13 +19684,13 @@
     },
     "/v1/auth/role-session": {
       "get": {
-        "operationId": "currentRoleSession",
+        "operationId": "currentRoleIdentity",
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RoleSession"
+                  "$ref": "#/components/schemas/CurrentRoleIdentity"
                 }
               }
             },
@@ -19462,7 +19709,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           }
         },
-        "summary": "Resolve the current role bearer with current source eligibility; never a USER login"
+        "summary": "Resolve the current role bearer and bound minimal display context; cached display is never authority"
       }
     },
     "/v1/auth/role-session:logout": {

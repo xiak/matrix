@@ -1583,7 +1583,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           25::bigint,
+           26::bigint,
            transaction_timestamp();
 END
 $function$;

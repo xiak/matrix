@@ -27,6 +27,84 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func TestCurrentRoleIdentityHasOnlyBoundDisplayContext(t *testing.T) {
+	session := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSession","id":"role-session-a","accountId":"account-a","roleId":"role-a","sourceUserId":"user-a","status":"ACTIVE","issuedAt":"2026-09-16T00:00:00Z","expiresAt":"2026-09-16T01:00:00Z"}`
+	wire := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"CurrentRoleIdentity","session":` + session +
+		`,"account":{"id":"account-a","displayName":"Account A"},"role":{"id":"role-a","name":"Reader"},"sourceUser":{"id":"user-a","loginName":"member","displayName":"Member"}}`
+	var identity CurrentRoleIdentity
+	if DecodeRequest(strings.NewReader(wire), &identity) != nil || ValidateCurrentRoleIdentity(identity) != nil {
+		t.Fatal("valid current role display was rejected")
+	}
+	encoded, err := json.Marshal(identity)
+	var repeated CurrentRoleIdentity
+	if err != nil || DecodeRequest(bytes.NewReader(encoded), &repeated) != nil || !reflect.DeepEqual(identity, repeated) {
+		t.Fatal("current role display changed through its strict codec")
+	}
+	for name, candidate := range map[string]string{
+		"old receipt":       session,
+		"wrong kind":        strings.Replace(wire, `"CurrentRoleIdentity"`, `"RoleSession"`, 1),
+		"foreign account":   strings.Replace(wire, `"id":"account-a"`, `"id":"account-b"`, 1),
+		"foreign role":      strings.Replace(wire, `"id":"role-a"`, `"id":"role-b"`, 1),
+		"foreign source":    strings.Replace(wire, `"id":"user-a"`, `"id":"user-b"`, 1),
+		"empty source name": strings.Replace(wire, `"displayName":"Member"`, `"displayName":""`, 1),
+		"root relation":     strings.Replace(wire, `"displayName":"Account A"`, `"displayName":"Account A","rootIdentity":{"principalId":"root"}`, 1),
+		"private lineage":   strings.Replace(wire, `"sourceUserId":"user-a"`, `"sourceUserId":"user-a","sourceSessionId":"private"`, 1),
+		"private epoch":     strings.Replace(wire, `"sourceUserId":"user-a"`, `"sourceUserId":"user-a","credentialGeneration":1`, 1),
+		"revoked receipt":   strings.Replace(wire, `"status":"ACTIVE"`, `"status":"REVOKED","revokedAt":"2026-09-16T00:01:00Z"`, 1),
+		"null revocation":   strings.Replace(wire, `"status":"ACTIVE"`, `"status":"ACTIVE","revokedAt":null`, 1),
+		"secret":            strings.TrimSuffix(wire, "}") + `,"credential":"private"}`,
+		"trust":             strings.Replace(wire, `"name":"Reader"`, `"name":"Reader","trustPolicy":{"statements":[]}`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var rejected CurrentRoleIdentity
+			if DecodeRequest(strings.NewReader(candidate), &rejected) == nil && ValidateCurrentRoleIdentity(rejected) == nil {
+				t.Fatal("unbound or private display context was admitted")
+			}
+		})
+	}
+}
+
+func TestAssumableRoleDirectoryIsMinimalBoundedAndAllowsEmptyContinuation(t *testing.T) {
+	item := `{"roleId":"role-a","accountId":"account-a","name":"Reader","status":"ACTIVE","maxSessionDurationSeconds":3600,"resourceVersion":2,"capability":{"action":"iam.role.assume","resource":{"kind":"ROLE","id":"role-a"},"available":true}}`
+	empty := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AssumableRoleList","accountId":"account-a","sourceUserId":"user-a","items":[]}`
+	withItem := strings.Replace(empty, `"items":[]`, `"items":[`+item+`]`, 1)
+	continued := strings.TrimSuffix(empty, "}") + `,"nextAfter":"ir1.opaque-candidate"}`
+	for _, valid := range []string{empty, continued, withItem} {
+		var result AssumableRoleList
+		if DecodeRequest(strings.NewReader(valid), &result) != nil || ValidateAssumableRoleList(result) != nil {
+			t.Fatal("valid bounded discovery response was rejected")
+		}
+		encoded, err := json.Marshal(result)
+		var repeated AssumableRoleList
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), &repeated) != nil || !reflect.DeepEqual(result, repeated) {
+			t.Fatal("discovery response changed through its strict codec")
+		}
+	}
+	for name, candidate := range map[string]string{
+		"null items":        strings.Replace(empty, `"items":[]`, `"items":null`, 1),
+		"null cursor":       strings.TrimSuffix(empty, "}") + `,"nextAfter":null}`,
+		"raw cursor":        strings.TrimSuffix(empty, "}") + `,"nextAfter":"role-a"}`,
+		"unbound source":    strings.Replace(empty, `,"sourceUserId":"user-a"`, "", 1),
+		"total count":       strings.TrimSuffix(empty, "}") + `,"total":20}`,
+		"foreign item":      strings.Replace(withItem, `"roleId":"role-a","accountId":"account-a"`, `"roleId":"role-a","accountId":"account-b"`, 1),
+		"wrong action":      strings.Replace(withItem, `"action":"iam.role.assume"`, `"action":"iam.role.read"`, 1),
+		"wrong target":      strings.Replace(withItem, `"id":"role-a"`, `"id":"role-b"`, 1),
+		"denied candidate":  strings.Replace(withItem, `"available":true`, `"available":false,"restrictionReason":"AUTHORITY_REQUIRED"`, 1),
+		"disabled role":     strings.Replace(withItem, `"status":"ACTIVE"`, `"status":"DISABLED"`, 1),
+		"empty restriction": strings.Replace(withItem, `"available":true`, `"available":true,"restrictionReason":""`, 1),
+		"private trust":     strings.Replace(withItem, `"name":"Reader"`, `"name":"Reader","trustVersionId":"private"`, 1),
+		"duplicate role":    strings.Replace(empty, `"items":[]`, `"items":[`+item+`,`+item+`]`, 1),
+		"excess candidates": strings.Replace(empty, `"items":[]`, `"items":[`+strings.Repeat(item+",", RoleDiscoveryPageSize)+item+`]`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			var rejected AssumableRoleList
+			if DecodeRequest(strings.NewReader(candidate), &rejected) == nil && ValidateAssumableRoleList(rejected) == nil {
+				t.Fatal("invalid discovery response was admitted")
+			}
+		})
+	}
+}
+
 func FuzzAssumeRoleIntentRoundTrip(f *testing.F) {
 	for _, seed := range []string{
 		`{"resourceVersion":1,"requestId":"assume-a"}`,
@@ -111,7 +189,7 @@ func TestRoleMetadataAndAccessAreSeparateFromLoginAuthority(t *testing.T) {
 	access := RoleAccess{Role: role, TrustVersion: RoleTrustVersion{APIVersion: APIVersion, Kind: "RoleTrustVersion", ID: "trust-a",
 		AccountID: role.AccountID, RoleID: role.ID, Document: document, ContentDigest: digest, CreatedAt: now}, PolicyAttachments: []PolicyAttachment{}}
 	for _, action := range []Action{ActionIAMRoleRead, ActionIAMRoleUpdate, ActionIAMRoleSetStatus, ActionIAMRoleDelete, ActionIAMRoleTrustSet,
-		ActionIAMRolePolicyAttachmentCreate, ActionIAMRolePermissionBoundarySet, ActionIAMRolePermissionBoundaryRemove} {
+		ActionIAMRolePolicyAttachmentCreate, ActionIAMRolePermissionBoundarySet, ActionIAMRolePermissionBoundaryRemove, ActionIAMRoleAssume} {
 		access.Capabilities = append(access.Capabilities, ActionCapability{Action: action, Resource: ResourceReference{Kind: ResourceRole, ID: string(role.ID)}, RestrictionReason: CapabilityAuthorityRequired})
 	}
 	if ValidateRoleAccess(access) != nil {
@@ -142,6 +220,7 @@ func TestRoleMetadataAndAccessAreSeparateFromLoginAuthority(t *testing.T) {
 	page := RoleList{APIVersion: APIVersion, Kind: "RoleList", AccountID: role.AccountID, Items: []RoleListing{}}
 	for index := range DirectoryPageSize {
 		item := RoleListing{Role: role, Capabilities: slices.Clone(access.Capabilities)}
+		item.Capabilities = slices.DeleteFunc(item.Capabilities, func(capability ActionCapability) bool { return capability.Action == ActionIAMRoleAssume })
 		item.Role.ID = RoleID(fmt.Sprintf("role-%03d", index))
 		item.Role.Name = strings.Repeat("<", 64)
 		item.Role.Description = strings.Repeat("&", 512)

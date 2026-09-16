@@ -68,6 +68,8 @@ type Transaction interface {
 	ReadGroup(context.Context, GroupRead) (iamv1.GroupAccess, error)
 	ListRoles(context.Context, AccountRead) (iamv1.RoleList, error)
 	ReadRole(context.Context, RoleRead) (iamv1.RoleAccess, error)
+	ReadRoleDiscoveryRevision(context.Context, RoleDiscoveryRead) (authority.RoleDiscoveryRevision, error)
+	ReadRoleCandidates(context.Context, RoleDiscoveryRead) (RoleCandidates, error)
 	ReadRolePermissionBoundary(context.Context, RoleRead) (iamv1.RolePermissionBoundary, error)
 	ReadRoleAssumption(context.Context, RoleAssumptionRead) (RoleAssumption, error)
 	IssueRoleSession(context.Context, RoleSessionIssuance) (iamv1.RoleSession, error)
@@ -129,6 +131,29 @@ type GroupRead struct {
 type RoleRead struct {
 	AccountRead
 	RoleID iamv1.RoleID
+}
+
+// Private authenticated references, not public account/user/session selectors.
+// RoleID selects one already-authorized management detail; otherwise After is
+// the decoded self-directory position. Neither is an issuance request ID.
+type RoleDiscoveryRead struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
+	RoleID           iamv1.RoleID
+	After            string
+}
+
+type RoleCandidate struct {
+	Role     iamv1.Role
+	Trust    iamv1.RoleTrustVersion
+	Boundary *authority.ResolvedRoleBoundary
+}
+
+type RoleCandidates struct {
+	Revision  authority.RoleDiscoveryRevision
+	Items     []RoleCandidate
+	NextAfter string
 }
 
 type RoleCreation struct {

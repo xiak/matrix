@@ -989,7 +989,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 25 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 26 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
@@ -1070,7 +1070,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 25 || checkedAt.IsZero() {
+	if ready || schemaVersion != 26 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }

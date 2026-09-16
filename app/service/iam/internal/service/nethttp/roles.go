@@ -28,7 +28,7 @@ func (value *handler) logoutRoleSession(response http.ResponseWriter, request *h
 	writeJSON(response, http.StatusOK, result)
 }
 
-func (value *handler) currentRoleSession(response http.ResponseWriter, request *http.Request) {
+func (value *handler) currentRoleIdentity(response http.ResponseWriter, request *http.Request) {
 	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
 		return
 	}
@@ -36,7 +36,27 @@ func (value *handler) currentRoleSession(response http.ResponseWriter, request *
 	if !ok {
 		return
 	}
-	result, err := value.workflow.CurrentRoleSession(request.Context(), credential)
+	result, err := value.workflow.CurrentRoleIdentity(request.Context(), credential)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) assumableRoles(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodGet) {
+		return
+	}
+	after, ok := directoryPage(response, request, iamv1.ValidateRoleDiscoveryCursor)
+	if !ok {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.ListAssumableRoles(request.Context(), credential, after)
 	if err != nil {
 		value.writeError(response, request, err)
 		return
@@ -50,7 +70,7 @@ func (value *handler) roles(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	if request.Method == http.MethodGet {
-		after, ok := accountPage(response, request)
+		after, ok := directoryPage(response, request, iamv1.ValidatePageCursor)
 		if !ok {
 			return
 		}
@@ -133,7 +153,7 @@ func (value *handler) role(response http.ResponseWriter, request *http.Request) 
 			return
 		}
 		if len(parts) == 2 {
-			after, ok := accountPage(response, request)
+			after, ok := directoryPage(response, request, iamv1.ValidatePageCursor)
 			if !ok {
 				return
 			}

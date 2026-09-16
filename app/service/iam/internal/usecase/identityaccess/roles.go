@@ -37,8 +37,8 @@ func (service *Authority) authenticateRoleSession(ctx context.Context, tx Transa
 	return binding, nil
 }
 
-func (service *Authority) CurrentRoleSession(ctx context.Context, credential iamv1.Secret) (iamv1.RoleSession, error) {
-	var result iamv1.RoleSession
+func (service *Authority) CurrentRoleIdentity(ctx context.Context, credential iamv1.Secret) (iamv1.CurrentRoleIdentity, error) {
+	var result iamv1.CurrentRoleIdentity
 	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
 		now, err := transactionTime(ctx, tx)
 		if err != nil {
@@ -48,11 +48,18 @@ func (service *Authority) CurrentRoleSession(ctx context.Context, credential iam
 		if err != nil {
 			return err
 		}
-		result = binding.Subject.Session
+		result = iamv1.CurrentRoleIdentity{APIVersion: iamv1.APIVersion, Kind: "CurrentRoleIdentity", Session: binding.Subject.Session,
+			Account: iamv1.RoleAccountDisplay{ID: binding.Subject.Source.Organization.ID, DisplayName: binding.Subject.Source.Organization.DisplayName},
+			Role:    iamv1.RoleDisplay{ID: binding.Subject.Role.ID, Name: binding.Subject.Role.Name},
+			SourceUser: iamv1.RoleSourceUserDisplay{ID: binding.Subject.Source.Principal.ID, LoginName: binding.Subject.Source.Principal.LoginName,
+				DisplayName: binding.Subject.Source.Principal.DisplayName}}
+		if iamv1.ValidateCurrentRoleIdentity(result) != nil {
+			return ErrUnavailable
+		}
 		return nil
 	})
 	if err != nil {
-		return iamv1.RoleSession{}, err
+		return iamv1.CurrentRoleIdentity{}, err
 	}
 	return result, nil
 }
@@ -353,6 +360,98 @@ func roleCapabilities(subject SessionCredential, role iamv1.Role, attachments []
 	return result, nil
 }
 
+// Shared by self discovery and management detail. It does not issue a session
+// or record a fabricated decision, and root-only management protection must
+// never be used as the rule for an ordinary USER assuming a role.
+func roleAssumeCapability(subject SessionCredential, candidate RoleCandidate, now time.Time) (iamv1.ActionCapability, error) {
+	trusted, err := authority.RoleTrustAllowsUser(subject.Subject, candidate.Role, candidate.Trust, now)
+	if err != nil || (candidate.Boundary != nil && authority.ValidateRoleBoundary(candidate.Boundary, candidate.Role.AccountID) != nil) {
+		return iamv1.ActionCapability{}, ErrUnavailable
+	}
+	capability, err := projectCapability(subject, iamv1.ActionIAMRoleAssume,
+		iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: string(candidate.Role.ID)}, iamv1.AuthorizationResourceInstance, "", now)
+	if err != nil {
+		return iamv1.ActionCapability{}, err
+	}
+	if candidate.Role.Status != iamv1.RoleActive {
+		restrictCapability(&capability, iamv1.CapabilityTargetDisabled)
+	} else if !trusted || candidate.Boundary == nil {
+		restrictCapability(&capability, iamv1.CapabilityAuthorityRequired)
+	}
+	return capability, nil
+}
+
+func (service *Authority) ListAssumableRoles(ctx context.Context, credential iamv1.Secret, after string) (iamv1.AssumableRoleList, error) {
+	if after != "" && iamv1.ValidateRoleDiscoveryCursor(after) != nil {
+		return iamv1.AssumableRoleList{}, ErrInvalidArgument
+	}
+	if service.cursors == nil {
+		return iamv1.AssumableRoleList{}, ErrUnavailable
+	}
+	var result iamv1.AssumableRoleList
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		source, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		if source.Subject.Principal.Type != iamv1.PrincipalUser || source.Subject.Principal.MustChangePassword {
+			return ErrForbidden
+		}
+		if err := tx.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+			return err
+		}
+		read := RoleDiscoveryRead{AccountID: source.Subject.Organization.ID, ActorPrincipalID: source.Subject.Principal.ID, ActorSessionID: source.Subject.Session.ID}
+		revision, err := tx.ReadRoleDiscoveryRevision(ctx, read)
+		if err != nil {
+			return err
+		}
+		bootstrap, err := tx.BootstrapStatus(ctx)
+		if err != nil || iamv1.ValidateBootstrapStatus(bootstrap) != nil || bootstrap.State != iamv1.BootstrapReady {
+			return ErrUnavailable
+		}
+		query := authority.DirectoryQuery{InstallationID: bootstrap.InstallationID, AssumableRoles: &revision}
+		if after != "" {
+			read.After, err = service.cursors.Decode(after, source.Subject, query, now)
+			if err != nil {
+				return ErrInvalidArgument
+			}
+		}
+		candidates, err := tx.ReadRoleCandidates(ctx, read)
+		if err != nil {
+			return err
+		}
+		if candidates.Revision != revision {
+			return ErrUnavailable
+		}
+		result = iamv1.AssumableRoleList{APIVersion: iamv1.APIVersion, Kind: "AssumableRoleList", AccountID: read.AccountID,
+			SourceUserID: read.ActorPrincipalID, Items: make([]iamv1.AssumableRole, 0, len(candidates.Items))}
+		for _, candidate := range candidates.Items {
+			capability, err := roleAssumeCapability(source, candidate, now)
+			if err != nil {
+				return err
+			}
+			if capability.Available {
+				role := candidate.Role
+				result.Items = append(result.Items, iamv1.AssumableRole{RoleID: role.ID, AccountID: role.AccountID, Name: role.Name,
+					Status: role.Status, MaxSessionDurationSeconds: role.MaxSessionDurationSeconds, ResourceVersion: role.ResourceVersion, Capability: capability})
+			}
+		}
+		result.NextAfter, err = service.sealDirectoryPage(source, query, candidates.NextAfter, now)
+		if err != nil || iamv1.ValidateAssumableRoleList(result) != nil {
+			return ErrUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.AssumableRoleList{}, err
+	}
+	return result, nil
+}
+
 func (service *Authority) ListRoles(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.RoleList, error) {
 	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
 		return iamv1.RoleList{}, ErrInvalidArgument
@@ -408,7 +507,23 @@ func (service *Authority) GetRole(ctx context.Context, credential iamv1.Secret, 
 				return iamv1.RoleAccess{}, err
 			}
 			result.Capabilities, err = roleCapabilities(subject, result.Role, result.PolicyAttachments, root, now)
-			if err != nil || iamv1.ValidateRoleAccess(result) != nil {
+			if err != nil {
+				return iamv1.RoleAccess{}, err
+			}
+			candidates, err := tx.ReadRoleCandidates(ctx, RoleDiscoveryRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, ActorSessionID: subject.Subject.Session.ID, RoleID: id})
+			if err != nil {
+				return iamv1.RoleAccess{}, err
+			}
+			if len(candidates.Items) != 1 || candidates.Items[0].Role.ID != result.Role.ID || candidates.Items[0].Role.ResourceVersion != result.Role.ResourceVersion {
+				return iamv1.RoleAccess{}, ErrUnavailable
+			}
+			assume, err := roleAssumeCapability(subject, candidates.Items[0], now)
+			if err != nil {
+				return iamv1.RoleAccess{}, err
+			}
+			result.Capabilities = append(result.Capabilities, assume)
+			if iamv1.ValidateRoleAccess(result) != nil {
 				return iamv1.RoleAccess{}, ErrUnavailable
 			}
 			return result, nil

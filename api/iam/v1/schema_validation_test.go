@@ -14,6 +14,60 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestRoleDisplayAndSelfDiscoverySchemasStayClosed(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	session := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSession","id":"role-session-a","accountId":"account-a","roleId":"role-a","sourceUserId":"user-a","status":"ACTIVE","issuedAt":"2026-09-16T00:00:00Z","expiresAt":"2026-09-16T01:00:00Z"}`
+	identity := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"CurrentRoleIdentity","session":` + session +
+		`,"account":{"id":"account-a","displayName":"Account A"},"role":{"id":"role-a","name":"Reader"},"sourceUser":{"id":"user-a","loginName":"member","displayName":"Member"}}`
+	item := `{"roleId":"role-a","accountId":"account-a","name":"Reader","status":"ACTIVE","maxSessionDurationSeconds":3600,"resourceVersion":2,"capability":{"action":"iam.role.assume","resource":{"kind":"ROLE","id":"role-a"},"available":true}}`
+	empty := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AssumableRoleList","accountId":"account-a","sourceUserId":"user-a","items":[]}`
+	listed := strings.Replace(empty, `"items":[]`, `"items":[`+item+`]`, 1)
+	for index, sample := range []struct {
+		kind, wire         string
+		schemaValid, valid bool
+	}{
+		{"CurrentRoleIdentity", identity, true, true},
+		{"CurrentRoleIdentity", session, false, false},
+		{"CurrentRoleIdentity", strings.Replace(identity, `"displayName":"Member"`, `"displayName":""`, 1), false, false},
+		{"CurrentRoleIdentity", strings.Replace(identity, `"name":"Reader"`, `"name":"Reader","trustVersionId":"private"`, 1), false, false},
+		{"CurrentRoleIdentity", strings.Replace(identity, `"status":"ACTIVE"`, `"status":"ACTIVE","revokedAt":null`, 1), false, false},
+		{"CurrentRoleIdentity", strings.Replace(identity, `"id":"user-a"`, `"id":"user-b"`, 1), true, false}, // ID equality is an authoritative invariant.
+		{"AssumableRoleList", empty, true, true},
+		{"AssumableRoleList", strings.TrimSuffix(empty, "}") + `,"nextAfter":"ir1.opaque-candidate"}`, true, true},
+		{"AssumableRoleList", strings.TrimSuffix(empty, "}") + `,"nextAfter":"ic1.opaque-management"}`, false, false},
+		{"AssumableRoleList", listed, true, true},
+		{"AssumableRoleList", strings.Replace(listed, `"status":"ACTIVE"`, `"status":"DISABLED"`, 1), false, false},
+		{"AssumableRoleList", strings.Replace(listed, `"iam.role.assume"`, `"iam.role.read"`, 1), false, false},
+		{"AssumableRoleList", strings.Replace(listed, `"available":true`, `"available":false,"restrictionReason":"AUTHORITY_REQUIRED"`, 1), false, false},
+		{"AssumableRoleList", strings.Replace(listed, `"available":true`, `"available":true,"restrictionReason":""`, 1), false, false},
+		{"AssumableRoleList", strings.TrimSuffix(empty, "}") + `,"nextAfter":null}`, false, false},
+		{"AssumableRoleList", strings.TrimSuffix(empty, "}") + `,"total":20}`, false, false},
+		{"AssumableRoleList", strings.Replace(listed, `"id":"role-a"`, `"id":"role-b"`, 1), true, false},
+		{"AssumableRoleList", strings.Replace(empty, `"items":[]`, `"items":[`+strings.Repeat(item+",", RoleDiscoveryPageSize)+item+`]`, 1), false, false},
+	} {
+		schema := compileIAMOpenAPISchema(t, api, sample.kind)
+		value, err := jsonschema.UnmarshalJSON(strings.NewReader(sample.wire))
+		if err != nil {
+			t.Fatalf("sample %d has invalid fixture JSON", index)
+		}
+		schemaErr := schema.Validate(value)
+		if (schemaErr == nil) != sample.schemaValid {
+			t.Fatalf("sample %d %s schema changed the display/discovery boundary: %v", index, sample.kind, schemaErr)
+		}
+		var valid bool
+		if sample.kind == "CurrentRoleIdentity" {
+			var decoded CurrentRoleIdentity
+			valid = DecodeRequest(strings.NewReader(sample.wire), &decoded) == nil && ValidateCurrentRoleIdentity(decoded) == nil
+		} else {
+			var decoded AssumableRoleList
+			valid = DecodeRequest(strings.NewReader(sample.wire), &decoded) == nil && ValidateAssumableRoleList(decoded) == nil
+		}
+		if valid != sample.valid {
+			t.Fatalf("%s codec lost the stricter authoritative binding", sample.kind)
+		}
+	}
+}
+
 func TestAssumeRoleRequestSchemaMatchesTheClosedIntent(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AssumeRoleRequest")
 	base := `{"resourceVersion":1,"requestId":"assume-role"}`

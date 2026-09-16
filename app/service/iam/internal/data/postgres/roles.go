@@ -221,6 +221,96 @@ func (value *transaction) ReadRoleAssumption(ctx context.Context, read identitya
 	return result, nil
 }
 
+func (value *transaction) ReadRoleDiscoveryRevision(ctx context.Context, read identityaccess.RoleDiscoveryRead) (authority.RoleDiscoveryRevision, error) {
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.read_role_discovery_revision($1,$2,$3)", read.AccountID, read.ActorPrincipalID, read.ActorSessionID).Scan(&encoded); err != nil {
+		return authority.RoleDiscoveryRevision{}, mapAuthorizationDatabaseError("read IAM role discovery authority", err)
+	}
+	defer clear(encoded)
+	return decodeRoleDiscoveryRevision(encoded)
+}
+
+func decodeRoleDiscoveryRevision(encoded []byte) (authority.RoleDiscoveryRevision, error) {
+	var stored struct {
+		CredentialGeneration *uint64 `json:"credentialGeneration"`
+		DirectoryRevision    *uint64 `json:"directoryRevision"`
+	}
+	// An explicit zero is the empty-account watermark. Missing or null must
+	// not acquire that meaning when private storage/consumer shapes drift.
+	if contractjson.DecodeObjectBytes(encoded, 1024, &stored) != nil || stored.CredentialGeneration == nil || stored.DirectoryRevision == nil ||
+		*stored.CredentialGeneration == 0 || *stored.CredentialGeneration > 9007199254740991 || *stored.DirectoryRevision > 9007199254740991 {
+		return authority.RoleDiscoveryRevision{}, identityaccess.ErrUnavailable
+	}
+	return authority.RoleDiscoveryRevision{CredentialGeneration: *stored.CredentialGeneration, DirectoryRevision: *stored.DirectoryRevision}, nil
+}
+
+func (value *transaction) ReadRoleCandidates(ctx context.Context, read identityaccess.RoleDiscoveryRead) (identityaccess.RoleCandidates, error) {
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.read_role_candidates($1,$2,$3,$4,$5)", read.AccountID, read.ActorPrincipalID,
+		read.ActorSessionID, read.After, read.RoleID).Scan(&encoded); err != nil {
+		return identityaccess.RoleCandidates{}, mapAuthorizationDatabaseError("read IAM role candidates", err)
+	}
+	defer clear(encoded)
+	var stored struct {
+		Revision json.RawMessage `json:"revision"`
+		Items    []struct {
+			Role     iamv1.Role             `json:"role"`
+			Trust    iamv1.RoleTrustVersion `json:"trust"`
+			Boundary json.RawMessage        `json:"boundary"`
+		} `json:"items"`
+		NextAfter *string `json:"nextAfter"`
+	}
+	const candidateBudget = iamv1.RoleDiscoveryPageSize * (maxStoredPolicyVersionBytes + 128*1024)
+	if contractjson.DecodeObjectBytes(encoded, candidateBudget, &stored) != nil || stored.Items == nil ||
+		len(stored.Items) > iamv1.RoleDiscoveryPageSize || stored.NextAfter == nil ||
+		(read.RoleID != "" && (len(stored.Items) != 1 || *stored.NextAfter != "" || read.After != "")) {
+		return identityaccess.RoleCandidates{}, identityaccess.ErrUnavailable
+	}
+	revision, err := decodeRoleDiscoveryRevision(stored.Revision)
+	if err != nil || (len(stored.Items) > 0 && revision.DirectoryRevision == 0) {
+		return identityaccess.RoleCandidates{}, identityaccess.ErrUnavailable
+	}
+	result := identityaccess.RoleCandidates{Revision: revision, Items: make([]identityaccess.RoleCandidate, 0, len(stored.Items)), NextAfter: *stored.NextAfter}
+	previous := iamv1.RoleID(read.After)
+	for _, item := range stored.Items {
+		normalizeRole(&item.Role)
+		item.Trust.CreatedAt = item.Trust.CreatedAt.UTC()
+		if iamv1.ValidateRole(item.Role) != nil || iamv1.ValidateRoleTrustVersion(item.Trust) != nil || item.Role.AccountID != read.AccountID ||
+			item.Role.ID <= previous || (read.RoleID != "" && item.Role.ID != read.RoleID) || item.Trust.AccountID != read.AccountID ||
+			item.Trust.RoleID != item.Role.ID || item.Trust.ID != item.Role.CurrentTrustVersionID || len(item.Boundary) == 0 {
+			return identityaccess.RoleCandidates{}, identityaccess.ErrUnavailable
+		}
+		candidate := identityaccess.RoleCandidate{Role: item.Role, Trust: item.Trust}
+		if string(item.Boundary) != "null" {
+			var boundary struct {
+				BoundaryID      string              `json:"boundaryId"`
+				ResourceVersion uint64              `json:"resourceVersion"`
+				Policy          iamv1.Policy        `json:"policy"`
+				Version         storedPolicyVersion `json:"version"`
+			}
+			if contractjson.DecodeObjectBytes(item.Boundary, maxStoredPolicyVersionBytes+4096, &boundary) != nil {
+				return identityaccess.RoleCandidates{}, identityaccess.ErrUnavailable
+			}
+			version, profiles, err := value.resolvePolicyVersion(ctx, boundary.Version)
+			if err != nil {
+				return identityaccess.RoleCandidates{}, err
+			}
+			boundary.Policy.CreatedAt, boundary.Policy.UpdatedAt = boundary.Policy.CreatedAt.UTC(), boundary.Policy.UpdatedAt.UTC()
+			candidate.Boundary = &authority.ResolvedRoleBoundary{BoundaryID: boundary.BoundaryID, ResourceVersion: boundary.ResourceVersion,
+				Policy: boundary.Policy, Version: version, Profiles: profiles}
+			if authority.ValidateRoleBoundary(candidate.Boundary, read.AccountID) != nil {
+				return identityaccess.RoleCandidates{}, identityaccess.ErrUnavailable
+			}
+		}
+		result.Items = append(result.Items, candidate)
+		previous = item.Role.ID
+	}
+	if result.NextAfter != "" && (len(result.Items) != iamv1.RoleDiscoveryPageSize || result.NextAfter != string(previous)) {
+		return identityaccess.RoleCandidates{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
 func decodeRoleSession(encoded []byte, read identityaccess.RoleAssumptionRead) (iamv1.RoleSession, error) {
 	defer clear(encoded)
 	var result iamv1.RoleSession

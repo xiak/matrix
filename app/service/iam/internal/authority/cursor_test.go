@@ -13,6 +13,104 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
+func TestSelfRoleCursorHidesFilteredPositionAndBindsCurrentSnapshot(t *testing.T) {
+	now := authorityTestTime()
+	key := bytes.Repeat([]byte{0x75}, 32)
+	codec, _ := NewCursorCodec(key)
+	replica, _ := NewCursorCodec(key)
+	subject := authoritySubject(now, iamv1.SystemPolicyAccountAdministrator, iamv1.SystemPolicyPaaSViewer)
+	query := DirectoryQuery{InstallationID: subject.InstallationID, AssumableRoles: &RoleDiscoveryRevision{CredentialGeneration: 3, DirectoryRevision: 17}}
+	position := "role-filtered-from-this-user-"
+	position += strings.Repeat("x", 128-len(position))
+	cursor, err := codec.Encode(subject, query, position, now)
+	if err != nil || iamv1.ValidateRoleDiscoveryCursor(cursor) != nil || iamv1.ValidatePageCursor(cursor) == nil {
+		t.Fatal("self cursor rejected bounded position", err)
+	}
+	envelope, err := base64.RawURLEncoding.Strict().DecodeString(cursor[4:])
+	if err != nil || bytes.Contains(envelope, []byte(position)) || bytes.Contains(envelope, []byte("role-filtered")) {
+		t.Fatal("self cursor disclosed a filtered role position")
+	}
+	for _, verifier := range []CursorCodec{codec, replica} {
+		if after, err := verifier.Decode(cursor, subject, query, now.Add(time.Minute)); err != nil || after != position {
+			t.Fatal("self cursor did not continue on another authority instance", err)
+		}
+	}
+	// Empty pages still need continuation even when no candidate is assumable.
+	// Self discovery cannot be conditioned on the management list/read action.
+	ordinary := subject
+	ordinary.Policies = nil
+	self, err := codec.Encode(ordinary, query, "role-not-returned", now)
+	if err != nil {
+		t.Fatal("self discovery incorrectly required a management grant", err)
+	}
+	if after, err := replica.Decode(self, ordinary, query, now); err != nil || after != "role-not-returned" {
+		t.Fatal("sparse self page could not continue", err)
+	}
+	management := DirectoryQuery{InstallationID: query.InstallationID, Action: iamv1.ActionIAMRoleList,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Organization.ID)}}
+	if _, err := codec.Encode(ordinary, management, "role-not-returned", now); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("self discovery bypassed management authorization")
+	}
+	listed, err := codec.Encode(subject, management, position, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := codec.Decode(listed, subject, query, now); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("management cursor was accepted as private self continuation")
+	}
+	if _, err := codec.Decode(cursor, subject, management, now); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("self cursor was accepted as management continuation")
+	}
+	for name, change := range map[string]func(*SubjectContext, *DirectoryQuery){
+		"credential generation": func(_ *SubjectContext, q *DirectoryQuery) { q.AssumableRoles.CredentialGeneration++ },
+		"directory ABA":         func(_ *SubjectContext, q *DirectoryQuery) { q.AssumableRoles.DirectoryRevision += 2 },
+		"source session":        func(s *SubjectContext, _ *DirectoryQuery) { s.Session.ID = "another-session" },
+		"account revision":      func(s *SubjectContext, _ *DirectoryQuery) { s.Organization.ResourceVersion++ },
+		"unmatched source removed": func(s *SubjectContext, _ *DirectoryQuery) {
+			s.Policies = slices.DeleteFunc(s.Policies, func(row AttachedPolicy) bool { return row.Policy.ID == iamv1.SystemPolicyPaaSViewer })
+		},
+		"policy revision ABA": func(s *SubjectContext, _ *DirectoryQuery) { s.Policies[0].Policy.ResourceVersion += 2 },
+		"attachment identity": func(s *SubjectContext, _ *DirectoryQuery) { s.Policies[0].Attachment.ID = "reattached-source" },
+		"boundary identity": func(s *SubjectContext, _ *DirectoryQuery) {
+			s.Boundary = userBoundaryForTest(*s, policyVersionForTest(t, "self-boundary", iamv1.PolicyAllow, iamv1.ActionIAMRoleAssume, iamv1.PolicyResourceAnyInAuthority, ""))
+		},
+		"forced password": func(s *SubjectContext, _ *DirectoryQuery) { s.Principal.MustChangePassword = true },
+		"foreign account": func(s *SubjectContext, _ *DirectoryQuery) {
+			s.Organization.ID, s.Principal.AccountID, s.Session.AccountID = "other-account", "other-account", "other-account"
+			s.Boundary.AccountID = "other-account"
+		},
+		"foreign user": func(s *SubjectContext, _ *DirectoryQuery) {
+			s.Principal.ID, s.Session.PrincipalID, s.Boundary.UserID = "other-user", "other-user", "other-user"
+		},
+		"zero generation":   func(_ *SubjectContext, q *DirectoryQuery) { q.AssumableRoles.CredentialGeneration = 0 },
+		"zero watermark":    func(_ *SubjectContext, q *DirectoryQuery) { q.AssumableRoles.DirectoryRevision = 0 },
+		"mixed purpose":     func(_ *SubjectContext, q *DirectoryQuery) { q.Action = iamv1.ActionIAMRoleList },
+		"resource selector": func(_ *SubjectContext, q *DirectoryQuery) { q.Resource = management.Resource },
+	} {
+		t.Run(name, func(t *testing.T) {
+			current := authoritySubject(now, iamv1.SystemPolicyAccountAdministrator, iamv1.SystemPolicyPaaSViewer)
+			revision := *query.AssumableRoles
+			changed := query
+			changed.AssumableRoles = &revision
+			change(&current, &changed)
+			if after, err := codec.Decode(cursor, current, changed, now); !errors.Is(err, ErrInvalidCursor) || after != "" {
+				t.Fatal("changed self authority disclosed a continuation position")
+			}
+		})
+	}
+	for index := range envelope {
+		envelope[index] ^= 1
+		forged := "ir1." + base64.RawURLEncoding.EncodeToString(envelope)
+		if after, err := codec.Decode(forged, subject, query, now); !errors.Is(err, ErrInvalidCursor) || after != "" {
+			t.Fatalf("changed self cursor byte %d passed", index)
+		}
+		envelope[index] ^= 1
+	}
+	if _, err := codec.Decode(cursor, subject, query, now.Add(cursorLifetime)); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("self continuation outlived its bounded expiry")
+	}
+}
+
 func TestDirectoryCursorCannotBypassExpiredPolicyConditions(t *testing.T) {
 	now := authorityTestTime()
 	codec, err := NewCursorCodec(bytes.Repeat([]byte{0x36}, 32))

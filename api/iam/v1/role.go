@@ -31,6 +31,8 @@ const (
 	MaxRoleSessionDurationSeconds     uint32         = 43200
 	MaxRoleListBytes                  int64          = 4 * 1024 * 1024
 	MaxRoleAccessBytes                int64          = 512 * 1024
+	RoleDiscoveryPageSize                            = 20
+	MaxAssumableRoleListBytes         int64          = 64 * 1024
 )
 
 // Tags are bounded literal metadata, never an authenticated condition source.
@@ -146,6 +148,155 @@ type RoleSession struct {
 	IssuedAt     time.Time     `json:"issuedAt"`
 	ExpiresAt    time.Time     `json:"expiresAt"`
 	RevokedAt    *time.Time    `json:"revokedAt,omitempty"`
+}
+
+// These display projections deliberately omit the Account root relationship,
+// login-session lineage and role authorization evidence.
+type RoleAccountDisplay struct {
+	ID          AccountID `json:"id"`
+	DisplayName string    `json:"displayName"`
+}
+
+type RoleDisplay struct {
+	ID   RoleID `json:"id"`
+	Name string `json:"name"`
+}
+
+type RoleSourceUserDisplay struct {
+	ID          PrincipalID `json:"id"`
+	LoginName   string      `json:"loginName"`
+	DisplayName string      `json:"displayName"`
+}
+
+// CurrentRoleIdentity is a current authenticated projection, not the durable
+// issuance receipt. A cached copy never establishes continuing authority.
+type CurrentRoleIdentity struct {
+	APIVersion string                `json:"apiVersion"`
+	Kind       string                `json:"kind"`
+	Session    RoleSession           `json:"session"`
+	Account    RoleAccountDisplay    `json:"account"`
+	Role       RoleDisplay           `json:"role"`
+	SourceUser RoleSourceUserDisplay `json:"sourceUser"`
+}
+
+type AssumableRole struct {
+	RoleID                    RoleID           `json:"roleId"`
+	AccountID                 AccountID        `json:"accountId"`
+	Name                      string           `json:"name"`
+	Status                    RoleStatus       `json:"status"`
+	MaxSessionDurationSeconds uint32           `json:"maxSessionDurationSeconds"`
+	ResourceVersion           uint64           `json:"resourceVersion"`
+	Capability                ActionCapability `json:"capability"`
+}
+
+// Items contains only eligible results from one bounded candidate window.
+// Empty Items with NextAfter still means another window is available.
+type AssumableRoleList struct {
+	APIVersion   string          `json:"apiVersion"`
+	Kind         string          `json:"kind"`
+	AccountID    AccountID       `json:"accountId"`
+	SourceUserID PrincipalID     `json:"sourceUserId"`
+	Items        []AssumableRole `json:"items"`
+	NextAfter    string          `json:"nextAfter,omitempty"`
+}
+
+func ValidateCurrentRoleIdentity(value CurrentRoleIdentity) error {
+	if value.APIVersion != APIVersion || value.Kind != "CurrentRoleIdentity" || ValidateRoleSession(value.Session) != nil ||
+		value.Session.Status != SessionActive || value.Account.ID != value.Session.AccountID || value.Role.ID != value.Session.RoleID ||
+		value.SourceUser.ID != value.Session.SourceUserID {
+		return errors.New("current role identity is invalid")
+	}
+	return errors.Join(validateText("account.displayName", value.Account.DisplayName, 1, 128),
+		validateText("role.name", value.Role.Name, 1, 64), validateLoginName(value.SourceUser.LoginName),
+		validateText("sourceUser.displayName", value.SourceUser.DisplayName, 1, 128))
+}
+
+func (value *CurrentRoleIdentity) UnmarshalJSON(source []byte) error {
+	type wire CurrentRoleIdentity
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateCurrentRoleIdentity(CurrentRoleIdentity(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields struct {
+		Session map[string]json.RawMessage `json:"session"`
+	}
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	if _, supplied := fields.Session["revokedAt"]; supplied {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = CurrentRoleIdentity(decoded)
+	return nil
+}
+
+func ValidateAssumableRole(value AssumableRole) error {
+	if value.Status != RoleActive || value.MaxSessionDurationSeconds < MinRoleSessionDurationSeconds || value.MaxSessionDurationSeconds > MaxRoleSessionDurationSeconds ||
+		value.Capability.Action != ActionIAMRoleAssume || value.Capability.Resource != (ResourceReference{Kind: ResourceRole, ID: string(value.RoleID)}) ||
+		!value.Capability.Available || value.Capability.RestrictionReason != "" {
+		return errors.New("assumable role is invalid")
+	}
+	return errors.Join(ValidateID("roleId", string(value.RoleID)), ValidateID("accountId", string(value.AccountID)),
+		validateText("name", value.Name, 1, 64), validatePositiveVersion(value.ResourceVersion))
+}
+
+func ValidateAssumableRoleList(value AssumableRoleList) error {
+	if value.APIVersion != APIVersion || value.Kind != "AssumableRoleList" || ValidateID("accountId", string(value.AccountID)) != nil ||
+		ValidateID("sourceUserId", string(value.SourceUserID)) != nil || value.Items == nil || len(value.Items) > RoleDiscoveryPageSize ||
+		(value.NextAfter != "" && ValidateRoleDiscoveryCursor(value.NextAfter) != nil) {
+		return errors.New("assumable role list is invalid")
+	}
+	var previous RoleID
+	for _, item := range value.Items {
+		if ValidateAssumableRole(item) != nil || item.AccountID != value.AccountID || item.RoleID <= previous {
+			return errors.New("assumable role list item is invalid")
+		}
+		previous = item.RoleID
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || int64(len(encoded)) > MaxAssumableRoleListBytes {
+		return errors.New("assumable role list exceeds its byte budget")
+	}
+	return nil
+}
+
+func (value *AssumableRole) UnmarshalJSON(source []byte) error {
+	type wire AssumableRole
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxAssumableRoleListBytes, &decoded) != nil || ValidateAssumableRole(AssumableRole(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields struct {
+		Capability map[string]json.RawMessage `json:"capability"`
+	}
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	if _, supplied := fields.Capability["restrictionReason"]; supplied {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = AssumableRole(decoded)
+	return nil
+}
+
+func (value *AssumableRoleList) UnmarshalJSON(source []byte) error {
+	type wire AssumableRoleList
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxAssumableRoleListBytes, &decoded) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	if _, supplied := fields["nextAfter"]; supplied && ValidateRoleDiscoveryCursor(decoded.NextAfter) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	if ValidateAssumableRoleList(AssumableRoleList(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = AssumableRoleList(decoded)
+	return nil
 }
 
 type AssumeRoleResponse struct {
@@ -461,6 +612,7 @@ func ValidateRoleAccess(value RoleAccess) error {
 		return errors.New("role access is invalid")
 	}
 	expected := roleCapabilitySet(value.Role.ID)
+	expected[capabilityKey(ActionIAMRoleAssume, ResourceReference{Kind: ResourceRole, ID: string(value.Role.ID)})] = struct{}{}
 	attachments, policies := map[PolicyAttachmentID]bool{}, map[PolicyID]bool{}
 	for _, attachment := range value.PolicyAttachments {
 		if ValidatePolicyAttachment(attachment) != nil || attachment.AccountID != value.Role.AccountID || attachment.Target.Kind != PolicyTargetRole ||

@@ -30,7 +30,8 @@ type Workflow interface {
 	ListRoles(context.Context, iamv1.Secret, string, string) (iamv1.RoleList, error)
 	GetRole(context.Context, iamv1.Secret, iamv1.RoleID, string) (iamv1.RoleAccess, error)
 	AssumeRole(context.Context, iamv1.Secret, iamv1.RoleID, iamv1.AssumeRoleRequest) (iamv1.AssumeRoleResponse, error)
-	CurrentRoleSession(context.Context, iamv1.Secret) (iamv1.RoleSession, error)
+	CurrentRoleIdentity(context.Context, iamv1.Secret) (iamv1.CurrentRoleIdentity, error)
+	ListAssumableRoles(context.Context, iamv1.Secret, string) (iamv1.AssumableRoleList, error)
 	LogoutRoleSession(context.Context, iamv1.Secret, iamv1.LogoutRequest) (iamv1.RoleSession, error)
 	GetRoleSessionByRequest(context.Context, iamv1.Secret, string) (iamv1.RoleSession, bool, error)
 	RevokeRoleSessionByRequest(context.Context, iamv1.Secret, string, iamv1.RevokeRoleSessionRequest) (iamv1.RoleSession, error)
@@ -150,7 +151,8 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/roles", value.roles)
 	routes.HandleFunc("/v1/roles/", value.role)
 	routes.HandleFunc("/v1/auth/role-sessions/by-request/", value.roleSessionByRequest)
-	routes.HandleFunc("/v1/auth/role-session", value.currentRoleSession)
+	routes.HandleFunc("/v1/auth/role-session", value.currentRoleIdentity)
+	routes.HandleFunc("/v1/auth/assumable-roles", value.assumableRoles)
 	routes.HandleFunc("/v1/auth/role-session:logout", value.logoutRoleSession)
 	routes.HandleFunc("/v1/policy-attachments", value.createPolicyAttachment)
 	routes.HandleFunc("/v1/policy-attachments/", value.revokePolicyAttachment)
@@ -527,7 +529,7 @@ func (value *handler) users(response http.ResponseWriter, request *http.Request)
 
 func (value *handler) groups(response http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodGet {
-		after, ok := accountPage(response, request)
+		after, ok := directoryPage(response, request, iamv1.ValidatePageCursor)
 		if !ok {
 			return
 		}
@@ -705,7 +707,7 @@ func (value *handler) currentIdentity(response http.ResponseWriter, request *htt
 	writeJSON(response, http.StatusOK, result)
 }
 
-func accountPage(response http.ResponseWriter, request *http.Request) (string, bool) {
+func directoryPage(response http.ResponseWriter, request *http.Request, validateCursor func(string) error) (string, bool) {
 	query, err := url.ParseQuery(request.URL.RawQuery)
 	if err != nil || len(request.URL.RawQuery) > 512 || len(query) > 1 || request.ContentLength != 0 || len(request.TransferEncoding) > 0 {
 		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.query.unsupported", "IAM page request invalid")
@@ -715,7 +717,7 @@ func accountPage(response http.ResponseWriter, request *http.Request) (string, b
 		return "", true
 	}
 	values, ok := query["after"]
-	if !ok || len(values) != 1 || iamv1.ValidatePageCursor(values[0]) != nil {
+	if !ok || len(values) != 1 || validateCursor(values[0]) != nil {
 		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.query.unsupported", "IAM page request invalid")
 		return "", false
 	}
@@ -723,7 +725,7 @@ func accountPage(response http.ResponseWriter, request *http.Request) (string, b
 }
 
 func (value *handler) listUsers(response http.ResponseWriter, request *http.Request) {
-	after, ok := accountPage(response, request)
+	after, ok := directoryPage(response, request, iamv1.ValidatePageCursor)
 	if !ok {
 		return
 	}
@@ -741,7 +743,7 @@ func (value *handler) listUsers(response http.ResponseWriter, request *http.Requ
 
 func (value *handler) accounts(response http.ResponseWriter, request *http.Request) {
 	if request.Method == http.MethodGet {
-		after, ok := accountPage(response, request)
+		after, ok := directoryPage(response, request, iamv1.ValidatePageCursor)
 		if !ok {
 			return
 		}
@@ -1038,7 +1040,7 @@ func (value *handler) group(response http.ResponseWriter, request *http.Request)
 			return
 		}
 		if request.Method == http.MethodGet {
-			after, ok := accountPage(response, request)
+			after, ok := directoryPage(response, request, iamv1.ValidatePageCursor)
 			if !ok {
 				return
 			}

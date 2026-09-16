@@ -790,7 +790,17 @@ const MaxPageCursorBytes = 384
 // ValidatePageCursor checks only the public bounded opaque envelope. Signature,
 // current authority, query and expiry are verified exclusively by IAM.
 func ValidatePageCursor(value string) error {
-	if len(value) <= 4 || len(value) > MaxPageCursorBytes || value[:4] != "ic1." {
+	return validateCursorEnvelope(value, "ic1.")
+}
+
+// Self discovery has a distinct confidential cursor kind; management cursors
+// cannot be used to supply its private scan position (or vice versa).
+func ValidateRoleDiscoveryCursor(value string) error {
+	return validateCursorEnvelope(value, "ir1.")
+}
+
+func validateCursorEnvelope(value, prefix string) error {
+	if len(value) <= 4 || len(value) > MaxPageCursorBytes || value[:4] != prefix {
 		return errors.New("IAM page cursor is invalid")
 	}
 	for _, character := range value[4:] {

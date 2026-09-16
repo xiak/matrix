@@ -92,7 +92,11 @@ func buildPaths() object {
 			"get": readOperation("getRoleSessionByRequest", "Read only the authenticated source user's non-secret issuance result", "RoleSession", nil, []any{openapi31.PathIDParameter("requestId")}),
 		},
 		"/v1/auth/role-session": object{
-			"get": readOperation("currentRoleSession", "Resolve the current role bearer with current source eligibility; never a USER login", "RoleSession", nil, nil),
+			"get": readOperation("currentRoleIdentity", "Resolve the current role bearer and bound minimal display context; cached display is never authority", "CurrentRoleIdentity", nil, nil),
+		},
+		"/v1/auth/assumable-roles": object{
+			"get": readOperation("listAssumableRoles", "Discover only currently assumable roles for the authenticated USER; bounded sparse pages may be empty with a continuation", "AssumableRoleList", nil,
+				[]any{object{"name": "after", "in": "query", "required": false, "schema": roleDiscoveryCursorSchema(), "description": "Confidential self-discovery continuation. Pass nextAfter unchanged, including after an empty page; no account/user/session selectors."}}),
 		},
 		"/v1/auth/role-session:logout": object{
 			"post": mutationOperation("logoutRoleSession", "Revoke only the possessed role credential, including after loss of business eligibility; no login session is issued", "LogoutRequest", "RoleSession", "200", nil, nil),
@@ -210,6 +214,10 @@ func accountPageParameters() []any {
 
 func pageCursorSchema() object {
 	return object{"type": "string", "pattern": `^ic1\.[A-Za-z0-9_-]+$`, "not": object{"pattern": `[^A-Za-z0-9._-]`}, "minLength": 5, "maxLength": iamv1.MaxPageCursorBytes}
+}
+
+func roleDiscoveryCursorSchema() object {
+	return object{"type": "string", "pattern": `^ir1\.[A-Za-z0-9_-]+$`, "not": object{"pattern": `[^A-Za-z0-9._-]`}, "minLength": 5, "maxLength": iamv1.MaxPageCursorBytes}
 }
 
 func mutationOperation(
@@ -404,6 +412,12 @@ func structContracts() map[string]reflect.Type {
 		"AssumeRoleRequest":                   openapi31.StructType[iamv1.AssumeRoleRequest](),
 		"AssumeRoleResponse":                  openapi31.StructType[iamv1.AssumeRoleResponse](),
 		"RoleSession":                         openapi31.StructType[iamv1.RoleSession](),
+		"CurrentRoleIdentity":                 openapi31.StructType[iamv1.CurrentRoleIdentity](),
+		"RoleAccountDisplay":                  openapi31.StructType[iamv1.RoleAccountDisplay](),
+		"RoleDisplay":                         openapi31.StructType[iamv1.RoleDisplay](),
+		"RoleSourceUserDisplay":               openapi31.StructType[iamv1.RoleSourceUserDisplay](),
+		"AssumableRole":                       openapi31.StructType[iamv1.AssumableRole](),
+		"AssumableRoleList":                   openapi31.StructType[iamv1.AssumableRoleList](),
 		"RevokeRoleSessionRequest":            openapi31.StructType[iamv1.RevokeRoleSessionRequest](),
 		"UpdateRoleRequest":                   openapi31.StructType[iamv1.UpdateRoleRequest](),
 		"SetRoleStatusRequest":                openapi31.StructType[iamv1.SetRoleStatusRequest](),
@@ -457,7 +471,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			base["properties"] = object{"scope": object{"const": string(iamv1.AuthorityScopeTenant)}}
 		}
 	}
-	if owner == "Role" || owner == "CreateRoleRequest" || owner == "UpdateRoleRequest" || owner == "RoleDeletion" {
+	if owner == "Role" || owner == "CreateRoleRequest" || owner == "UpdateRoleRequest" || owner == "RoleDeletion" || owner == "RoleDisplay" || owner == "AssumableRole" {
 		switch jsonName {
 		case "name":
 			base["minLength"], base["maxLength"] = 1, 64
@@ -473,6 +487,23 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			}
 		}
 	}
+	if owner == "AssumableRole" {
+		switch jsonName {
+		case "status":
+			base = object{"const": string(iamv1.RoleActive)}
+		case "capability":
+			base["properties"] = object{"action": object{"const": string(iamv1.ActionIAMRoleAssume)},
+				"resource":  object{"properties": object{"kind": object{"const": string(iamv1.ResourceRole)}}},
+				"available": object{"const": true}, "restrictionReason": false}
+		}
+	}
+	if owner == "AssumableRoleList" && jsonName == "items" {
+		base["maxItems"], base["uniqueItems"] = iamv1.RoleDiscoveryPageSize, true
+		base["description"] = "Only eligible roles from a bounded candidate window. Empty items may still have nextAfter; no total-count or page-count semantics."
+	}
+	if owner == "CurrentRoleIdentity" && jsonName == "session" {
+		base["properties"] = object{"status": object{"const": string(iamv1.SessionActive)}, "revokedAt": false}
+	}
 	if owner == "RoleTag" {
 		if jsonName == "key" {
 			base["minLength"], base["maxLength"] = 1, 64
@@ -487,7 +518,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if (owner == "RoleListing" || owner == "RoleAccess") && jsonName == "capabilities" {
 		base["maxItems"] = 8
 		if owner == "RoleAccess" {
-			base["maxItems"] = 264
+			base["maxItems"] = 265
 		}
 	}
 	if owner == "TrustPolicyDocument" {
@@ -536,7 +567,8 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			base = object{"anyOf": []any{object{"type": "null"}, base}}
 		}
 	}
-	if (owner == "Policy" || owner == "CreatePolicyRequest" || owner == "UpdatePolicyRequest" || owner == "UpdateUserRequest") && jsonName == "displayName" {
+	if (owner == "Policy" || owner == "CreatePolicyRequest" || owner == "UpdatePolicyRequest" || owner == "UpdateUserRequest" ||
+		owner == "RoleAccountDisplay" || owner == "RoleSourceUserDisplay") && jsonName == "displayName" {
 		base["minLength"], base["maxLength"] = 1, 128
 	}
 	if (owner == "Group" || owner == "GroupDeletion" || owner == "CreateGroupRequest" || owner == "UpdateGroupRequest") && jsonName == "name" {
@@ -562,6 +594,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	}
 	if jsonName == "nextAfter" {
 		base = pageCursorSchema()
+		if owner == "AssumableRoleList" {
+			base = roleDiscoveryCursorSchema()
+		}
 	}
 	if owner == "CreatePolicyAttachmentRequest" && jsonName == "target" {
 		base = object{"allOf": []any{openapi31.Ref("PolicyAttachmentTarget"), object{"properties": object{"kind": object{"enum": []string{string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetGroup), string(iamv1.PolicyTargetRole)}}}}}}
@@ -735,6 +770,7 @@ func applySemanticOverlays(schemas object) {
 		object{"required": []string{"installationId"}, "properties": object{"tenantId": false}},
 	}
 	kinds := map[string]string{
+		"CurrentRoleIdentity": "CurrentRoleIdentity", "AssumableRoleList": "AssumableRoleList",
 		"RoleSession": "RoleSession",
 		"Role":        "Role", "RoleList": "RoleList", "RoleDeletion": "RoleDeletion", "RoleTrustVersion": "RoleTrustVersion", "RoleTrustVersionList": "RoleTrustVersionList",
 		"AuthorizationProfileList": "AuthorizationProfileList", "AuthorizationProfile": "AuthorizationProfile",
