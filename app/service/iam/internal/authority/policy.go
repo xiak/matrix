@@ -65,6 +65,48 @@ type UserBoundaryEvidence struct {
 	Compilation         *iamv1.PolicyCompilation      `json:"compilation,omitempty"`
 }
 
+// A role ceiling is mandatory, unlike a USER's explicit NONE boundary. These
+// records are resolved from IAM's frozen/current state, never from a request.
+type ResolvedRoleBoundary struct {
+	BoundaryID      string
+	ResourceVersion uint64
+	Policy          iamv1.Policy
+	Version         iamv1.PolicyVersion
+	Profiles        []iamv1.AuthorizationProfile
+}
+
+// A session restriction has no Policy or PolicyVersion identity. Its immutable
+// compilation is bound to issuance and uses the same statement evaluator.
+type ResolvedSessionPolicy struct {
+	Document      iamv1.PolicyDocument
+	Compilation   iamv1.PolicyCompilation
+	ContentDigest string
+	Profiles      []iamv1.AuthorizationProfile
+}
+
+func ValidateRoleBoundary(value *ResolvedRoleBoundary, account iamv1.AccountID) error {
+	if value == nil || iamv1.ValidateID("boundaryId", value.BoundaryID) != nil ||
+		value.ResourceVersion == 0 || value.ResourceVersion > 9007199254740991 ||
+		iamv1.ValidatePolicy(value.Policy) != nil || iamv1.ValidatePolicyVersion(value.Version) != nil ||
+		value.Policy.Status != iamv1.PolicyActive || value.Policy.Scope != iamv1.AuthorityScopeTenant ||
+		(value.Policy.Management == iamv1.PolicyCustomerManaged && value.Policy.AccountID != account) ||
+		value.Version.PolicyID != value.Policy.ID || value.Version.ID != value.Policy.DefaultVersionID || value.Version.Document.Scope != value.Policy.Scope {
+		return ErrInvalidPolicyState
+	}
+	return nil
+}
+
+func ValidateSessionPolicy(value *ResolvedSessionPolicy) error {
+	if value == nil {
+		return nil
+	}
+	_, digest, err := iamv1.CanonicalizePolicyCompilation(value.Document, value.Compilation, value.Profiles)
+	if err != nil || value.Document.Scope != iamv1.AuthorityScopeTenant || digest != value.ContentDigest {
+		return ErrInvalidPolicyState
+	}
+	return nil
+}
+
 func ValidateUserBoundary(value *ResolvedUserBoundary, account iamv1.AccountID, user iamv1.PrincipalID, revision uint64) error {
 	if iamv1.ValidateID("accountId", string(account)) != nil || iamv1.ValidateID("userId", string(user)) != nil ||
 		value == nil || value.AccountID != account || value.UserID != user ||
@@ -211,8 +253,7 @@ func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID,
 	attached []AttachedPolicy, request iamv1.AuthorizationRequest,
 ) (PolicyEvaluation, []PolicyAttachmentEvidence, error) {
 	if iamv1.ValidateID("accountId", string(accountID)) != nil ||
-		iamv1.ValidateID("subject.id", string(subject.ID)) != nil ||
-		(subject.Type != iamv1.PrincipalUser && subject.Type != iamv1.PrincipalServiceAccount) ||
+		iamv1.ValidateSubject(subject) != nil ||
 		(installationID != "" && iamv1.ValidateID("installationId", installationID) != nil) ||
 		len(attached) > MaxEvaluationPolicies {
 		return PolicyEvaluation{}, nil, ErrInvalidPolicyState
@@ -225,10 +266,10 @@ func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID,
 		policy, attachment := row.Policy, row.Attachment
 		directSource := row.Membership == nil && attachment.Target.ID == string(subject.ID) &&
 			string(attachment.Target.Kind) == string(subject.Type)
-		groupSource := row.Membership != nil && subject.Type == iamv1.PrincipalUser &&
+		groupSource := row.Membership != nil && subject.Type == iamv1.SubjectUser &&
 			iamv1.ValidateGroupMembership(*row.Membership) == nil && row.Membership.RemovedAt == nil &&
 			attachment.Scope == iamv1.AuthorityScopeTenant && attachment.Target.Kind == iamv1.PolicyTargetGroup &&
-			row.Membership.AccountID == accountID && row.Membership.UserID == subject.ID &&
+			row.Membership.AccountID == accountID && string(row.Membership.UserID) == subject.ID &&
 			string(row.Membership.GroupID) == attachment.Target.ID
 		if iamv1.ValidatePolicy(policy) != nil || iamv1.ValidatePolicyAttachment(attachment) != nil ||
 			policy.Status != iamv1.PolicyActive || attachment.RevokedAt != nil || seen[attachment.ID] ||
@@ -244,7 +285,7 @@ func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID,
 		if err := context.includeProfiles(row.Profiles); err != nil {
 			return PolicyEvaluation{}, nil, err
 		}
-		if subject.Type != iamv1.PrincipalUser {
+		if subject.Type == iamv1.SubjectServiceAccount {
 			for _, statement := range row.Version.Document.Statements {
 				if len(statement.Conditions) != 0 {
 					return PolicyEvaluation{}, nil, ErrInvalidPolicyState
@@ -284,22 +325,9 @@ func EvaluateAttachedPolicies(databaseTime time.Time, accountID iamv1.AccountID,
 // does not authenticate a subject, resolve ownership, or authorize attachment
 // management. Those checks surround it in the existing authority transaction.
 func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVersion, request iamv1.AuthorizationRequest) (PolicyEvaluation, error) {
-	if validateAuthorityTime(context.databaseTime) != nil || iamv1.ValidateID("accountId", string(context.accountID)) != nil ||
-		iamv1.ValidateID("subject.id", string(context.subject.ID)) != nil ||
-		(context.subject.Type != iamv1.PrincipalUser && context.subject.Type != iamv1.PrincipalServiceAccount) {
-		return PolicyEvaluation{}, ErrInvalidPolicyState
-	}
-	if iamv1.ValidateAuthorizationRequest(request) != nil {
-		return PolicyEvaluation{}, ErrInvalidAuthorizationRequest
-	}
-	action, resource := request.Action, request.Resource
-	definition, _ := iamv1.LookupActionDefinition(action)
-	currentProfile, found := iamv1.LookupAuthorizationProfile(request.Profile.Product)
-	if !found {
-		return PolicyEvaluation{}, ErrInvalidAuthorizationRequest
-	}
-	if iamv1.CheckAuthorizationProfileSubject(currentProfile, request.Profile, action, iamv1.SubjectType(context.subject.Type)) != nil {
-		return PolicyEvaluation{}, errUnsupportedPolicySubject
+	currentProfile, err := policyRequestProfile(context, request)
+	if err != nil {
+		return PolicyEvaluation{}, err
 	}
 	if len(versions) > MaxEvaluationPolicies {
 		return PolicyEvaluation{}, ErrInvalidPolicyState
@@ -326,53 +354,13 @@ func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVe
 			continue
 		}
 		seen[version.PolicyID] = reference
-		if version.Document.Scope != definition.AuthorityScope {
-			continue
+		part, err := evaluateCompiledStatements(context, version.Document, compilation, request)
+		if err != nil {
+			return PolicyEvaluation{}, err
 		}
-		matched := false
-		resolvedActions := make(map[string][]iamv1.Action, len(compilation.ResolvedStatements))
-		for _, resolved := range compilation.ResolvedStatements {
-			resolvedActions[resolved.SID] = resolved.Actions
-		}
-		for _, statement := range version.Document.Statements {
-			if !slices.Contains(resolvedActions[statement.SID], action) {
-				continue
-			}
-			conditionMatch, err := policyConditionsMatch(statement.Conditions, action, context)
-			if err != nil {
-				return PolicyEvaluation{}, err
-			}
-			if !conditionMatch {
-				continue
-			}
-			for _, selector := range statement.Resources {
-				if selector.Kind != resource.Kind {
-					continue
-				}
-				resourceMatches := false
-				switch selector.Match {
-				case iamv1.PolicyResourceExact:
-					resourceMatches = selector.ID == resource.ID
-				case iamv1.PolicyResourceAnyInAuthority:
-					resourceMatches = true
-				case iamv1.PolicyResourcePrefixInAuthority:
-					resourceMatches = request.ResourceMode == iamv1.AuthorizationResourceInstance && strings.HasPrefix(resource.ID, selector.ID)
-				default:
-					return PolicyEvaluation{}, ErrInvalidPolicyState
-				}
-				if !resourceMatches {
-					continue
-				}
-				matched = true
-				if statement.Effect == iamv1.PolicyDeny {
-					result.ExplicitDeny = true
-				} else {
-					hasAllow = true
-				}
-				break
-			}
-		}
-		if matched {
+		hasAllow = hasAllow || part.Allowed
+		result.ExplicitDeny = result.ExplicitDeny || part.ExplicitDeny
+		if part.Allowed || part.ExplicitDeny {
 			result.MatchedVersions = append(result.MatchedVersions, reference)
 		}
 	}
@@ -383,11 +371,92 @@ func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVe
 	return result, nil
 }
 
+func policyRequestProfile(context policyEvaluationContext, request iamv1.AuthorizationRequest) (iamv1.AuthorizationProfile, error) {
+	if validateAuthorityTime(context.databaseTime) != nil || iamv1.ValidateID("accountId", string(context.accountID)) != nil || iamv1.ValidateSubject(context.subject) != nil {
+		return iamv1.AuthorizationProfile{}, ErrInvalidPolicyState
+	}
+	if iamv1.ValidateAuthorizationRequest(request) != nil {
+		return iamv1.AuthorizationProfile{}, ErrInvalidAuthorizationRequest
+	}
+	profile, found := iamv1.LookupAuthorizationProfile(request.Profile.Product)
+	if !found {
+		return iamv1.AuthorizationProfile{}, ErrInvalidAuthorizationRequest
+	}
+	if iamv1.CheckAuthorizationProfileSubject(profile, request.Profile, request.Action, context.subject.Type) != nil {
+		return iamv1.AuthorizationProfile{}, errUnsupportedPolicySubject
+	}
+	return profile, nil
+}
+
+// Used for both persisted policy versions and the issuance-bound restriction.
+// The caller has checked the complete compilation against the exact profiles;
+// a session document does not acquire a fabricated PolicyVersion identity.
+func evaluateCompiledStatements(context policyEvaluationContext, document iamv1.PolicyDocument, compilation iamv1.PolicyCompilation, request iamv1.AuthorizationRequest) (PolicyEvaluation, error) {
+	result := PolicyEvaluation{}
+	definition, _ := iamv1.LookupActionDefinition(request.Action)
+	if document.Scope != definition.AuthorityScope {
+		return result, nil
+	}
+	resolvedActions := make(map[string][]iamv1.Action, len(compilation.ResolvedStatements))
+	for _, resolved := range compilation.ResolvedStatements {
+		resolvedActions[resolved.SID] = resolved.Actions
+	}
+	for _, statement := range document.Statements {
+		if !slices.Contains(resolvedActions[statement.SID], request.Action) {
+			continue
+		}
+		matched, err := policyConditionsMatch(statement.Conditions, request.Action, context)
+		if err != nil {
+			return PolicyEvaluation{}, err
+		}
+		if !matched {
+			continue
+		}
+		for _, selector := range statement.Resources {
+			if selector.Kind != request.Resource.Kind {
+				continue
+			}
+			resourceMatches := false
+			switch selector.Match {
+			case iamv1.PolicyResourceExact:
+				resourceMatches = selector.ID == request.Resource.ID
+			case iamv1.PolicyResourceAnyInAuthority:
+				resourceMatches = true
+			case iamv1.PolicyResourcePrefixInAuthority:
+				resourceMatches = request.ResourceMode == iamv1.AuthorizationResourceInstance && strings.HasPrefix(request.Resource.ID, selector.ID)
+			default:
+				return PolicyEvaluation{}, ErrInvalidPolicyState
+			}
+			if resourceMatches {
+				result.Allowed = result.Allowed || statement.Effect == iamv1.PolicyAllow
+				result.ExplicitDeny = result.ExplicitDeny || statement.Effect == iamv1.PolicyDeny
+				break
+			}
+		}
+	}
+	result.Allowed = result.Allowed && !result.ExplicitDeny
+	return result, nil
+}
+
+func evaluateSessionPolicy(value *ResolvedSessionPolicy, context policyEvaluationContext, request iamv1.AuthorizationRequest) (PolicyEvaluation, error) {
+	if value == nil {
+		return PolicyEvaluation{Allowed: true}, nil
+	}
+	profile, err := policyRequestProfile(context, request)
+	if err != nil {
+		return PolicyEvaluation{}, err
+	}
+	if ValidateSessionPolicy(value) != nil || iamv1.CheckPolicyCompilationRequest(value.Document, value.Compilation, value.ContentDigest, value.Profiles, profile, request, context.subject.Type) != nil {
+		return PolicyEvaluation{}, ErrInvalidPolicyState
+	}
+	return evaluateCompiledStatements(context, value.Document, value.Compilation, request)
+}
+
 func policyConditionsMatch(conditions []iamv1.PolicyCondition, action iamv1.Action, context policyEvaluationContext) (bool, error) {
 	matched := true
 	for _, condition := range conditions {
 		definition, supported := iamv1.LookupActionConditionDefinition(action, condition.Key)
-		if !supported || context.subject.Type != iamv1.PrincipalUser {
+		if !supported || (context.subject.Type != iamv1.SubjectUser && context.subject.Type != iamv1.SubjectRole) {
 			return false, ErrInvalidPolicyState
 		}
 		if definition.Source == iamv1.ConditionIAMIdentity {
@@ -464,6 +533,7 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 			iamv1.ActionIAMRoleList, iamv1.ActionIAMRoleCreate, iamv1.ActionIAMRoleRead, iamv1.ActionIAMRoleUpdate,
 			iamv1.ActionIAMRoleSetStatus, iamv1.ActionIAMRoleDelete, iamv1.ActionIAMRoleTrustSet,
 			iamv1.ActionIAMRolePolicyAttachmentCreate, iamv1.ActionIAMRolePolicyAttachmentRevoke,
+			iamv1.ActionIAMRolePermissionBoundarySet, iamv1.ActionIAMRolePermissionBoundaryRemove, iamv1.ActionIAMRoleAssume,
 			iamv1.ActionIAMSessionRevoke,
 			iamv1.ActionPaaSApplicationCreate, iamv1.ActionPaaSApplicationRead,
 			iamv1.ActionPaaSConfigurationCreate, iamv1.ActionPaaSConfigurationRead,

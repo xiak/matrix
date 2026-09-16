@@ -102,7 +102,7 @@ func (client *Client) Ingest(ctx context.Context, event auditv1.Event) error {
 	var result auditv1.IngestionResult
 	if !authorityhttp.ResponseIsJSON(response) || auditv1.DecodeRequest(response.Body, &result) != nil ||
 		auditv1.ValidateIngestionResult(result) != nil || result.Outcome != expectedOutcome ||
-		result.Record.Source != auditv1.SourceIAM || result.Record.Event != event {
+		result.Record.Source != auditv1.SourceIAM || !result.Record.Event.Equal(event) {
 		return auditdispatch.ErrIngestUnavailable
 	}
 	return nil

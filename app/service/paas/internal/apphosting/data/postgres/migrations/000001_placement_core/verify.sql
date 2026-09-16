@@ -2,6 +2,9 @@ DO $matrix_verify$
 DECLARE
     missing text;
 BEGIN
+    IF NOT paas.role_subject_contract_ready() THEN
+        RAISE EXCEPTION 'PaaS role subject storage contract is invalid';
+    END IF;
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
       FROM (

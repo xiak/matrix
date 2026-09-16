@@ -876,7 +876,7 @@ func (client *integrationIAM) Authorize(
 		ID:         iamv1.DecisionID(fmt.Sprintf("decision-http-%d", client.sequence)),
 		Allowed:    true,
 		Reason:     iamv1.DecisionAllowed,
-		Subject:    &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-reader"},
+		Subject:    &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-reader"},
 		Action:     request.Action,
 		Resource:   request.Resource,
 		RequestID:  request.RequestID,
@@ -916,7 +916,7 @@ func (client *integrationIAM) VerifyInstallation(
 		Allowed: true, Reason: iamv1.DecisionAllowed,
 		TenantID: "organization-a",
 		Subject: &iamv1.Subject{
-			Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+			Type: iamv1.SubjectServiceAccount, ID: "service-installation-verifier",
 		},
 		Action: request.Action, Resource: request.Resource,
 		RequestID: request.RequestID, DecidedAt: client.now,

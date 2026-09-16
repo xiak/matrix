@@ -78,8 +78,28 @@ func buildPaths() object {
 			"patch":  mutationOperation("updateRole", "Replace editable role metadata at the expected revision", "UpdateRoleRequest", "Role", "200", nil, []any{openapi31.PathIDParameter("roleId")}),
 			"delete": mutationOperation("deleteRole", "Tombstone a role and revoke its active attachments", "DeleteRoleRequest", "RoleDeletion", "200", nil, []any{openapi31.PathIDParameter("roleId")}),
 		},
-		"/v1/roles/{roleId}:set-status":                 object{"post": mutationOperation("setRoleStatus", "Set role availability without stopping tenant workloads", "SetRoleStatusRequest", "Role", "200", nil, []any{openapi31.PathIDParameter("roleId")})},
-		"/v1/roles/{roleId}/trust-policy":               object{"put": mutationOperation("setRoleTrustPolicy", "Publish and select one immutable trust version", "SetRoleTrustPolicyRequest", "Role", "200", nil, []any{openapi31.PathIDParameter("roleId")})},
+		"/v1/roles/{roleId}:set-status":   object{"post": mutationOperation("setRoleStatus", "Set role availability without stopping tenant workloads", "SetRoleStatusRequest", "Role", "200", nil, []any{openapi31.PathIDParameter("roleId")})},
+		"/v1/roles/{roleId}/trust-policy": object{"put": mutationOperation("setRoleTrustPolicy", "Publish and select one immutable trust version", "SetRoleTrustPolicyRequest", "Role", "200", nil, []any{openapi31.PathIDParameter("roleId")})},
+		"/v1/roles/{roleId}/permission-boundary": object{
+			"get":    readOperation("getRolePermissionBoundary", "Read the role's required permission ceiling; null closes role assumption", "RolePermissionBoundary", nil, []any{openapi31.PathIDParameter("roleId")}),
+			"put":    mutationOperation("setRolePermissionBoundary", "Set the role ceiling without granting permissions", "SetRolePermissionBoundaryRequest", "RolePermissionBoundary", "200", nil, []any{openapi31.PathIDParameter("roleId")}),
+			"delete": mutationOperation("removeRolePermissionBoundary", "Remove the role ceiling and close assumption", "RemoveRolePermissionBoundaryRequest", "RolePermissionBoundary", "200", nil, []any{openapi31.PathIDParameter("roleId")}),
+		},
+		"/v1/roles/{roleId}:assume": object{
+			"post": mutationOperation("assumeRole", "Issue an account-local role credential once; equal replay never returns a secret", "AssumeRoleRequest", "AssumeRoleResponse", "200", nil, []any{openapi31.PathIDParameter("roleId")}),
+		},
+		"/v1/auth/role-sessions/by-request/{requestId}": object{
+			"get": readOperation("getRoleSessionByRequest", "Read only the authenticated source user's non-secret issuance result", "RoleSession", nil, []any{openapi31.PathIDParameter("requestId")}),
+		},
+		"/v1/auth/role-session": object{
+			"get": readOperation("currentRoleSession", "Resolve the current role bearer with current source eligibility; never a USER login", "RoleSession", nil, nil),
+		},
+		"/v1/auth/role-session:logout": object{
+			"post": mutationOperation("logoutRoleSession", "Revoke only the possessed role credential, including after loss of business eligibility; no login session is issued", "LogoutRequest", "RoleSession", "200", nil, nil),
+		},
+		"/v1/auth/role-sessions/by-request/{requestId}:revoke": object{
+			"post": mutationOperation("revokeRoleSessionByRequest", "Revoke the source user's original issuance without requiring current assume authority", "RevokeRoleSessionRequest", "RoleSession", "200", nil, []any{openapi31.PathIDParameter("requestId")}),
+		},
 		"/v1/roles/{roleId}/trust-versions":             object{"get": readOperation("listRoleTrustVersions", "List this role's immutable trust versions", "RoleTrustVersionList", nil, append([]any{openapi31.PathIDParameter("roleId")}, accountPageParameters()...))},
 		"/v1/roles/{roleId}/trust-versions/{versionId}": object{"get": readOperation("getRoleTrustVersion", "Read an exact version in this role", "RoleTrustVersion", nil, []any{openapi31.PathIDParameter("roleId"), openapi31.PathIDParameter("versionId")})},
 		"/ready": object{"get": readOperation(
@@ -220,6 +240,9 @@ func readOperation(
 	parameters []any,
 ) object {
 	responses := openapi31.ProblemResponses("401", "403", "500", "503")
+	if operationID == "getRoleSessionByRequest" {
+		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No committed issuance found for this source user and request. This does not authorize a new intent."}
+	}
 	responses["200"] = openapi31.JSONResponse("Current authority state.", responseSchema)
 	operation := object{
 		"operationId": operationID,
@@ -253,7 +276,7 @@ func scalarSchemas() object {
 		},
 	}
 	for _, name := range []string{
-		"AccountID", "PrincipalID", "GroupID", "GroupMembershipID", "RoleBindingID", "RoleID", "RoleTrustVersionID", "SessionID", "DecisionID",
+		"AccountID", "PrincipalID", "GroupID", "GroupMembershipID", "RoleBindingID", "RoleID", "RoleTrustVersionID", "RoleSessionID", "SessionID", "DecisionID",
 		"PolicyID", "PolicyVersionID", "PolicyAttachmentID",
 	} {
 		result[name] = object{"allOf": []any{openapi31.Ref("ID")}}
@@ -308,6 +331,7 @@ func enumSchemas() map[string][]string {
 func structContracts() map[string]reflect.Type {
 	return map[string]reflect.Type{
 		"Subject":                             openapi31.StructType[iamv1.Subject](),
+		"RoleSessionReference":                openapi31.StructType[iamv1.RoleSessionReference](),
 		"ResourceReference":                   openapi31.StructType[iamv1.ResourceReference](),
 		"AuthorizationProfileReference":       openapi31.StructType[iamv1.AuthorizationProfileReference](),
 		"AuthorizationProfileList":            openapi31.StructType[iamv1.AuthorizationProfileList](),
@@ -372,9 +396,15 @@ func structContracts() map[string]reflect.Type {
 		"RoleListing":                         openapi31.StructType[iamv1.RoleListing](),
 		"RoleList":                            openapi31.StructType[iamv1.RoleList](),
 		"RoleAccess":                          openapi31.StructType[iamv1.RoleAccess](),
+		"RolePermissionBoundary":              openapi31.StructType[iamv1.RolePermissionBoundary](),
+		"SetRolePermissionBoundaryRequest":    openapi31.StructType[iamv1.SetRolePermissionBoundaryRequest](),
+		"RemoveRolePermissionBoundaryRequest": openapi31.StructType[iamv1.RemoveRolePermissionBoundaryRequest](),
 		"RoleTrustVersionList":                openapi31.StructType[iamv1.RoleTrustVersionList](),
 		"CreateRoleRequest":                   openapi31.StructType[iamv1.CreateRoleRequest](),
 		"AssumeRoleRequest":                   openapi31.StructType[iamv1.AssumeRoleRequest](),
+		"AssumeRoleResponse":                  openapi31.StructType[iamv1.AssumeRoleResponse](),
+		"RoleSession":                         openapi31.StructType[iamv1.RoleSession](),
+		"RevokeRoleSessionRequest":            openapi31.StructType[iamv1.RevokeRoleSessionRequest](),
 		"UpdateRoleRequest":                   openapi31.StructType[iamv1.UpdateRoleRequest](),
 		"SetRoleStatusRequest":                openapi31.StructType[iamv1.SetRoleStatusRequest](),
 		"SetRoleTrustPolicyRequest":           openapi31.StructType[iamv1.SetRoleTrustPolicyRequest](),
@@ -455,9 +485,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		base["maxItems"] = iamv1.DirectoryPageSize
 	}
 	if (owner == "RoleListing" || owner == "RoleAccess") && jsonName == "capabilities" {
-		base["maxItems"] = 6
+		base["maxItems"] = 8
 		if owner == "RoleAccess" {
-			base["maxItems"] = 262
+			base["maxItems"] = 264
 		}
 	}
 	if owner == "TrustPolicyDocument" {
@@ -622,6 +652,24 @@ func applySemanticOverlays(schemas object) {
 	boundary := schemas["UserPermissionBoundary"].(object)
 	boundary["required"] = []string{"apiVersion", "kind", "accountId", "userId", "resourceVersion", "policy"}
 	boundary["properties"].(object)["policy"] = object{"anyOf": []any{object{"type": "null"}, openapi31.Ref("PolicyVersionReference")}}
+	roleBoundary := schemas["RolePermissionBoundary"].(object)
+	roleBoundary["required"] = []string{"apiVersion", "kind", "accountId", "roleId", "resourceVersion", "policy"}
+	roleBoundary["properties"].(object)["policy"] = object{"anyOf": []any{object{"type": "null"}, openapi31.Ref("PolicyVersionReference")},
+		"description": "Null closes role assumption; it never means an unlimited ceiling."}
+	roleResponse := schemas["AssumeRoleResponse"].(object)
+	schemas["Subject"].(object)["oneOf"] = []any{
+		object{"required": []string{"roleSession"}, "properties": object{"type": object{"const": "ROLE"}}},
+		object{"properties": object{"type": object{"enum": []string{"USER", "SERVICE_ACCOUNT"}}, "roleSession": false}},
+	}
+	roleResponse["required"] = []string{"outcome", "session"}
+	roleResponse["oneOf"] = []any{
+		object{"required": []string{"credential"}, "properties": object{"outcome": object{"const": "APPLIED"}, "session": object{"properties": object{"status": object{"const": "ACTIVE"}}}}},
+		object{"properties": object{"outcome": object{"const": "EQUAL_REPLAY"}, "credential": false}},
+	}
+	schemas["RoleSession"].(object)["oneOf"] = []any{
+		object{"properties": object{"status": object{"const": "ACTIVE"}, "revokedAt": false}},
+		object{"required": []string{"revokedAt"}, "properties": object{"status": object{"const": "REVOKED"}}},
+	}
 	schemas["PolicyVersion"].(object)["oneOf"] = []any{
 		object{"properties": object{"contractVersion": object{"const": iamv1.PolicyVersionLegacyContract}, "compilation": false,
 			"document": object{"properties": object{"statements": object{"items": object{"properties": object{"actions": object{"items": exactPolicyAction}}}}}}}},
@@ -687,9 +735,11 @@ func applySemanticOverlays(schemas object) {
 		object{"required": []string{"installationId"}, "properties": object{"tenantId": false}},
 	}
 	kinds := map[string]string{
-		"Role": "Role", "RoleList": "RoleList", "RoleDeletion": "RoleDeletion", "RoleTrustVersion": "RoleTrustVersion", "RoleTrustVersionList": "RoleTrustVersionList",
+		"RoleSession": "RoleSession",
+		"Role":        "Role", "RoleList": "RoleList", "RoleDeletion": "RoleDeletion", "RoleTrustVersion": "RoleTrustVersion", "RoleTrustVersionList": "RoleTrustVersionList",
 		"AuthorizationProfileList": "AuthorizationProfileList", "AuthorizationProfile": "AuthorizationProfile",
 		"UserPermissionBoundary": "UserPermissionBoundary",
+		"RolePermissionBoundary": "RolePermissionBoundary",
 		"Policy":                 "Policy",
 		"PolicyList":             "PolicyList",
 		"CurrentIdentity":        "CurrentIdentity", "UserList": "UserList", "GroupList": "GroupList", "GroupMembershipList": "GroupMembershipList", "AccountList": "AccountList",
@@ -1029,7 +1079,7 @@ func applyPolicyLanguageOverlays(schemas object) {
 		"policy":  object{"properties": object{"scope": object{"const": "TENANT"}, "status": object{"const": "ACTIVE"}}},
 		"version": object{"properties": object{"document": object{"properties": object{"scope": object{"const": "TENANT"}}}}},
 	}}}
-	for _, name := range []string{"CreatePolicyVersionRequest", "SetDefaultPolicyVersionRequest", "UpdatePolicyRequest", "DeletePolicyRequest", "DeletePolicyVersionRequest", "SetUserPermissionBoundaryRequest", "RemoveUserPermissionBoundaryRequest"} {
+	for _, name := range []string{"CreatePolicyVersionRequest", "SetDefaultPolicyVersionRequest", "UpdatePolicyRequest", "DeletePolicyRequest", "DeletePolicyVersionRequest", "SetUserPermissionBoundaryRequest", "RemoveUserPermissionBoundaryRequest", "SetRolePermissionBoundaryRequest", "RemoveRolePermissionBoundaryRequest"} {
 		schemas[name].(object)["properties"].(object)["resourceVersion"].(object)["maximum"] = 9007199254740990
 	}
 	schemas["CreatePolicyVersionRequest"].(object)["allOf"] = schemas["CreatePolicyRequest"].(object)["allOf"]

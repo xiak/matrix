@@ -292,7 +292,7 @@ func validateAuthorizationDecision(value AuthorizationDecision, definition Actio
 		}
 		if definition.AuthorityScope == AuthorityScopeInstallation {
 			problems = append(problems, ValidateID("installationId", value.InstallationID))
-			if value.TenantID != "" || value.Subject != nil && value.Subject.Type != PrincipalUser {
+			if value.TenantID != "" || value.Subject != nil && value.Subject.Type != SubjectUser {
 				problems = append(problems, errors.New("platform decision contains invalid authority"))
 			}
 		} else {
@@ -309,10 +309,20 @@ func validateAuthorizationDecision(value AuthorizationDecision, definition Actio
 
 func ValidateSubject(value Subject) error {
 	var problems []error
-	if value.Type != PrincipalUser && value.Type != PrincipalServiceAccount {
+	if value.Type != SubjectUser && value.Type != SubjectServiceAccount && value.Type != SubjectRole {
 		problems = append(problems, errors.New("subject type is invalid"))
 	}
-	problems = append(problems, ValidateID("subject.id", string(value.ID)))
+	problems = append(problems, ValidateID("subject.id", value.ID))
+	if value.Type == SubjectRole {
+		if value.RoleSession == nil {
+			problems = append(problems, errors.New("role subject has no session reference"))
+		} else {
+			problems = append(problems, ValidateID("roleSession.sessionId", string(value.RoleSession.SessionID)),
+				ValidateID("roleSession.sourceUserId", string(value.RoleSession.SourceUserID)))
+		}
+	} else if value.RoleSession != nil {
+		problems = append(problems, errors.New("non-role subject contains role session"))
+	}
 	return errors.Join(problems...)
 }
 

@@ -56,12 +56,16 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 		!evidence.Event.OccurredAt.Equal(decision.DecidedAt) || event.OccurredAt.Before(decision.DecidedAt) ||
 		event.IAMDecisionID != auditv1.DecisionID(decision.ID) || event.RequestID != decision.RequestID ||
 		evidence.Event.RequestID != decision.RequestID || evidence.Event.CorrelationID != event.CorrelationID ||
-		evidence.Event.Actor != event.Actor || event.Actor.ID != auditv1.ActorID(decision.Subject.ID) ||
+		!evidence.Event.Actor.Equal(event.Actor) || event.Actor.ID != auditv1.ActorID(decision.Subject.ID) ||
 		string(event.Actor.Type) != string(decision.Subject.Type) ||
 		event.TenantID != auditv1.TenantID(decision.TenantID) || event.InstallationID != decision.InstallationID {
 		return "", ErrForbidden
 	}
-	if evidence.DecisionContractVersion == 2 && decision.CorrelationID != evidence.Event.CorrelationID {
+	expectedActor, actorErr := auditActorForSubject(*decision.Subject)
+	if actorErr != nil || !expectedActor.Equal(event.Actor) {
+		return "", ErrForbidden
+	}
+	if evidence.DecisionContractVersion >= 2 && decision.CorrelationID != evidence.Event.CorrelationID {
 		return "", ErrForbidden
 	}
 	originalTenant := decision.TenantID
@@ -72,19 +76,19 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 		return "", ErrForbidden
 	}
 	if decision.Action == iamv1.ActionInstallationVerify {
-		if decision.Subject.Type != iamv1.PrincipalServiceAccount || evidence.VerifierPrincipalID == "" ||
-			decision.Subject.ID != evidence.VerifierPrincipalID || decision.Resource.ID != identity.InstallationID ||
+		if decision.Subject.Type != iamv1.SubjectServiceAccount || evidence.VerifierPrincipalID == "" ||
+			decision.Subject.ID != string(evidence.VerifierPrincipalID) || decision.Resource.ID != identity.InstallationID ||
 			decision.TenantID != identity.AccountID || !fixedVerificationFact(source, event) {
 			return "", ErrForbidden
 		}
 		return digest, nil
 	}
 	expectedAction, expectedID, mode, usage := auditDecisionTarget(event, decision.Action, evidence.DecisionContractVersion)
-	if decision.Subject.Type != iamv1.PrincipalUser || decision.Action != expectedAction ||
+	if (decision.Subject.Type != iamv1.SubjectUser && !(evidence.DecisionContractVersion == 3 && decision.Subject.Type == iamv1.SubjectRole)) || decision.Action != expectedAction ||
 		decision.Resource.ID != expectedID || !historicalProducerMatches(evidence, identity.Purpose) {
 		return "", ErrForbidden
 	}
-	if evidence.DecisionContractVersion == 2 && (decision.ResourceMode != mode || decision.CollectionUsage != usage) {
+	if evidence.DecisionContractVersion >= 2 && (decision.ResourceMode != mode || decision.CollectionUsage != usage) {
 		return "", ErrForbidden
 	}
 	return digest, nil
@@ -95,7 +99,7 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 // the original action; its calling service and resource kind come from the
 // protected original contract, never from the producer request.
 func historicalProducerMatches(evidence AuditEvidence, purpose iamv1.ServicePurpose) bool {
-	if evidence.DecisionContractVersion == 2 && evidence.DecisionProfile != nil {
+	if (evidence.DecisionContractVersion == 2 || evidence.DecisionContractVersion == 3) && evidence.DecisionProfile != nil {
 		return evidence.DecisionProfile.CallingService == purpose
 	}
 	if evidence.DecisionContractVersion == 1 {
@@ -116,6 +120,8 @@ func validHistoricalDecision(evidence AuditEvidence) bool {
 	case 1:
 		return evidence.DecisionProfile == nil && iamv1.ValidateLegacyAuthorizationDecision(*evidence.Decision) == nil
 	case 2:
+		return (evidence.Decision.Subject == nil || evidence.Decision.Subject.Type != iamv1.SubjectRole) && evidence.DecisionProfile != nil && iamv1.ValidateAuthorizationDecisionForProfile(*evidence.Decision, *evidence.DecisionProfile) == nil
+	case 3:
 		return evidence.DecisionProfile != nil && iamv1.ValidateAuthorizationDecisionForProfile(*evidence.Decision, *evidence.DecisionProfile) == nil
 	default:
 		return false

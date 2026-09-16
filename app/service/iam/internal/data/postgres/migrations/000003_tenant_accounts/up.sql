@@ -228,7 +228,12 @@ BEGIN
               SELECT 1 FROM jsonb_array_elements(decision.policy_evidence) e
               WHERE iam.recorded_policy_version_matches(e) IS DISTINCT FROM true))
           AND (decision.boundary_evidence IS NULL OR decision.boundary_evidence->>'state'<>'BOUND'
-              OR iam.recorded_policy_version_matches(decision.boundary_evidence));
+              OR iam.recorded_policy_version_matches(decision.boundary_evidence))
+          AND (CASE WHEN decision.contract_version=3 AND decision.subject_type='ROLE' THEN
+            decision.principal_id IS NULL AND decision.role_evidence IS NOT NULL
+            AND iam.role_authorization_evidence(proof_tenant,decision.role_evidence->>'sessionId')=decision.role_evidence
+            AND decision.role_id=decision.role_evidence->>'roleId' AND decision.source_principal_id=decision.role_evidence->>'sourceUserId'
+            ELSE decision.role_evidence IS NULL END);
     END IF;
 END
 $function$;

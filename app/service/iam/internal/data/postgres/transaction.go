@@ -539,7 +539,10 @@ func (value *transaction) ReadAuditEvidence(
 			if iamv1.ValidateLegacyAuthorizationDecision(decoded) != nil {
 				return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
 			}
-		case 2:
+		case 2, 3:
+			if *decisionContract == 2 && decoded.Subject != nil && decoded.Subject.Type == iamv1.SubjectRole {
+				return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
+			}
 			if decoded.Profile == nil {
 				return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
 			}
@@ -676,6 +679,8 @@ func (value *transaction) RecordAuthorization(
 		return err
 	}
 	if iamv1.CheckAuthorizationDecisionForRequest(mutation.Decision, mutation.Request) != nil ||
+		iamv1.ValidateSubject(mutation.Subject) != nil ||
+		(mutation.Subject.Type == iamv1.SubjectRole) != (mutation.RoleEvidence != nil) ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return identityaccess.ErrInvalidArgument
 	}
@@ -705,16 +710,25 @@ func (value *transaction) RecordAuthorization(
 		return identityaccess.ErrUnavailable
 	}
 	defer clear(boundary)
+	roleEvidence, err := json.Marshal(mutation.RoleEvidence)
+	if err != nil {
+		clear(decision)
+		clear(event)
+		clear(evidence)
+		return identityaccess.ErrUnavailable
+	}
+	defer clear(roleEvidence)
 	_, err = value.tx.Exec(
 		ctx,
-		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::integer)",
+		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::integer, $8::jsonb)",
 		string(mutation.AccountID),
-		string(mutation.PrincipalID),
+		mutation.Subject.ID,
 		decision,
 		event,
 		evidence,
 		boundary,
-		2,
+		3,
+		roleEvidence,
 	)
 	clear(decision)
 	clear(event)

@@ -445,7 +445,7 @@ func validateApplicationSubmission(
 		auditEvent.TenantID != tenantID ||
 		auditEvent.Target != operation.Target ||
 		auditEvent.OperationID != operation.ID ||
-		auditEvent.Actor != operation.RequestedBy ||
+		!auditEvent.Actor.Equal(operation.RequestedBy) ||
 		auditEvent.RequestDigest != operation.RequestDigest ||
 		!auditEvent.OccurredAt.Equal(operation.CreatedAt) ||
 		generation.ContentDigest != paasv1.DeploymentSpecContentDigest(deployment.Spec) {

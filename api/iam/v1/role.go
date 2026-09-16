@@ -18,6 +18,7 @@ import (
 
 type RoleID string
 type RoleTrustVersionID string
+type RoleSessionID string
 type RoleStatus string
 type RoleManagement string
 
@@ -129,6 +130,131 @@ type AssumeRoleRequest struct {
 	DurationSeconds *uint32         `json:"durationSeconds,omitempty"`
 	SessionPolicy   *PolicyDocument `json:"sessionPolicy,omitempty"`
 	RequestID       string          `json:"requestId"`
+}
+
+// RoleSession is the non-secret issuance record, not a cached authorization.
+// ACTIVE means not explicitly revoked; expiry and current source/role authority
+// must still be checked for every protected request.
+type RoleSession struct {
+	APIVersion   string        `json:"apiVersion"`
+	Kind         string        `json:"kind"`
+	ID           RoleSessionID `json:"id"`
+	AccountID    AccountID     `json:"accountId"`
+	RoleID       RoleID        `json:"roleId"`
+	SourceUserID PrincipalID   `json:"sourceUserId"`
+	Status       SessionStatus `json:"status"`
+	IssuedAt     time.Time     `json:"issuedAt"`
+	ExpiresAt    time.Time     `json:"expiresAt"`
+	RevokedAt    *time.Time    `json:"revokedAt,omitempty"`
+}
+
+type AssumeRoleResponse struct {
+	Outcome    string      `json:"outcome"`
+	Session    RoleSession `json:"session"`
+	Credential Secret      `json:"credential"`
+}
+
+type RevokeRoleSessionRequest struct {
+	RequestID string `json:"requestId"`
+}
+
+func ValidateRoleSession(value RoleSession) error {
+	if value.APIVersion != APIVersion || value.Kind != "RoleSession" ||
+		(value.Status != SessionActive && value.Status != SessionRevoked) ||
+		(value.Status == SessionRevoked) != (value.RevokedAt != nil) ||
+		!value.ExpiresAt.After(value.IssuedAt) || value.ExpiresAt.Sub(value.IssuedAt) > time.Duration(MaxRoleSessionDurationSeconds)*time.Second {
+		return errors.New("role session is invalid")
+	}
+	if value.RevokedAt != nil && (validateTime("revokedAt", *value.RevokedAt) != nil || value.RevokedAt.Before(value.IssuedAt)) {
+		return errors.New("role session revocation is invalid")
+	}
+	return errors.Join(ValidateID("sessionId", string(value.ID)), ValidateID("accountId", string(value.AccountID)),
+		ValidateID("roleId", string(value.RoleID)), ValidateID("sourceUserId", string(value.SourceUserID)),
+		validateTime("issuedAt", value.IssuedAt), validateTime("expiresAt", value.ExpiresAt))
+}
+
+func ValidateAssumeRoleResponse(value AssumeRoleResponse) error {
+	if ValidateRoleSession(value.Session) != nil {
+		return errors.New("role session response is invalid")
+	}
+	switch value.Outcome {
+	case "APPLIED":
+		if !value.Credential.Present() || value.Session.Status != SessionActive {
+			return errors.New("role session credential is missing")
+		}
+	case "EQUAL_REPLAY":
+		if value.Credential.Present() {
+			return errors.New("role session replay cannot emit a credential")
+		}
+	default:
+		return errors.New("role session outcome is invalid")
+	}
+	return nil
+}
+
+// A nil Policy closes role assumption; unlike a User boundary it does not
+// mean unlimited authority. The revision is the owning Role's revision.
+type RolePermissionBoundary struct {
+	APIVersion      string                  `json:"apiVersion"`
+	Kind            string                  `json:"kind"`
+	AccountID       AccountID               `json:"accountId"`
+	RoleID          RoleID                  `json:"roleId"`
+	ResourceVersion uint64                  `json:"resourceVersion"`
+	Policy          *PolicyVersionReference `json:"policy"`
+}
+
+type SetRolePermissionBoundaryRequest struct {
+	PolicyID              PolicyID `json:"policyId"`
+	PolicyResourceVersion uint64   `json:"policyResourceVersion"`
+	ResourceVersion       uint64   `json:"resourceVersion"`
+	RequestID             string   `json:"requestId"`
+}
+
+type RemoveRolePermissionBoundaryRequest struct {
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+func (value *RolePermissionBoundary) UnmarshalJSON(source []byte) error {
+	type wire RolePermissionBoundary
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil || fields["policy"] == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = RolePermissionBoundary(decoded)
+	return nil
+}
+
+func ValidateRolePermissionBoundary(value RolePermissionBoundary) error {
+	if value.APIVersion != APIVersion || value.Kind != "RolePermissionBoundary" ||
+		ValidateID("accountId", string(value.AccountID)) != nil || ValidateID("roleId", string(value.RoleID)) != nil ||
+		validatePositiveVersion(value.ResourceVersion) != nil {
+		return ErrInvalidPolicy
+	}
+	if value.Policy != nil {
+		return errors.Join(ValidateID("policyId", string(value.Policy.PolicyID)),
+			ValidateID("versionId", string(value.Policy.VersionID)), ValidateDigest("contentDigest", value.Policy.ContentDigest))
+	}
+	return nil
+}
+
+func ValidateSetRolePermissionBoundaryRequest(value SetRolePermissionBoundaryRequest) error {
+	if validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
+		return ErrInvalidPolicy
+	}
+	return errors.Join(ValidateID("policyId", string(value.PolicyID)),
+		validatePositiveVersion(value.PolicyResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateRemoveRolePermissionBoundaryRequest(value RemoveRolePermissionBoundaryRequest) error {
+	if validatePositiveVersion(value.ResourceVersion) != nil || value.ResourceVersion == 9007199254740991 {
+		return ErrInvalidPolicy
+	}
+	return ValidateID("requestId", value.RequestID)
 }
 
 func (request *AssumeRoleRequest) UnmarshalJSON(source []byte) error {
@@ -296,8 +422,9 @@ func ValidateRoleDeletion(value RoleDeletion) error {
 }
 
 func roleCapabilitySet(id RoleID) map[string]struct{} {
-	result := make(map[string]struct{}, 6)
-	for _, action := range []Action{ActionIAMRoleRead, ActionIAMRoleUpdate, ActionIAMRoleSetStatus, ActionIAMRoleDelete, ActionIAMRoleTrustSet, ActionIAMRolePolicyAttachmentCreate} {
+	result := make(map[string]struct{}, 8)
+	for _, action := range []Action{ActionIAMRoleRead, ActionIAMRoleUpdate, ActionIAMRoleSetStatus, ActionIAMRoleDelete, ActionIAMRoleTrustSet,
+		ActionIAMRolePolicyAttachmentCreate, ActionIAMRolePermissionBoundarySet, ActionIAMRolePermissionBoundaryRemove} {
 		result[capabilityKey(action, ResourceReference{Kind: ResourceRole, ID: string(id)})] = struct{}{}
 	}
 	return result

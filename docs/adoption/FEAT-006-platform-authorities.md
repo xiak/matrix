@@ -518,3 +518,15 @@ recompiling defaults, dropping an incompatible old Deny, and a second
 product/scope-based ROLE allowlist are `REJECT`. Subject capability does not
 prove an authenticated RoleSession or a working PaaS/Audit consumer. The actual
 R2 source revisions and SQL/actor cutover remain owned by006.
+
+For R2 retained subject-capability acceptance, fixed
+`d45402d91c89a5bb23f52fcfde65491435cd0f55` is `REFERENCE` as the actual R1
+executable that issues USER-only compiled policy content and real Role
+attachments. Its source is built only inside the existing authority-process
+fixture, never imported as a runtime dependency. The existing fixed IAM21
+`1dc1079c4e7bec80f5345d06929875b492ba9a86` gate remains `REFERENCE` for the
+distinct document-to-compilation interpretation boundary. Both use their
+actual registered declaration and preserve original bytes/defaults; inventing
+legacy state by deleting current fields, granting ROLE by replacing an old
+Profile, and replaying every unpublished schema revision are `REJECT`.
+Implementation status and runtime evidence belong only to IAM/006.

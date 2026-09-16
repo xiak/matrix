@@ -695,7 +695,8 @@ BEGIN
     END IF;
     IF policy.status<>'ACTIVE' OR policy.resource_version<>expected_version OR EXISTS(
         SELECT 1 FROM iam.policy_attachments AS a WHERE a.policy_id=delete_policy.policy_id AND a.revoked_at IS NULL)
-        OR EXISTS(SELECT 1 FROM iam.user_permission_boundaries AS b WHERE b.policy_id=delete_policy.policy_id AND b.revoked_at IS NULL) THEN
+        OR EXISTS(SELECT 1 FROM iam.user_permission_boundaries AS b WHERE b.policy_id=delete_policy.policy_id AND b.revoked_at IS NULL)
+        OR EXISTS(SELECT 1 FROM iam.role_permission_boundaries AS b WHERE b.policy_id=delete_policy.policy_id AND b.revoked_at IS NULL) THEN
         RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='policy revision or live reference conflicts';
     END IF;
     UPDATE iam.policies AS p SET status='RETIRED',resource_version=resource_version+1,updated_at=effective_now WHERE p.id=policy_id;

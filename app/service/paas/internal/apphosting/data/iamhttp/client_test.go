@@ -40,7 +40,7 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 			APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
 			ID: "decision-paas-authorize", Allowed: true, Reason: iamv1.DecisionAllowed,
 			TenantID: "organization-a",
-			Subject:  &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"},
+			Subject:  &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"},
 			Action:   body.Action, Resource: body.Resource, RequestID: body.RequestID,
 			Profile: &body.Profile, ResourceMode: body.ResourceMode, CollectionUsage: body.CollectionUsage, CorrelationID: body.CorrelationID,
 			DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 456_000, time.UTC),
@@ -107,7 +107,7 @@ func TestClientFailsClosedForDenialStatusAndInvalidResponse(t *testing.T) {
 					APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
 					ID: "decision-mismatch", Allowed: true, Reason: iamv1.DecisionAllowed,
 					TenantID: "organization-a",
-					Subject:  &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"},
+					Subject:  &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"},
 					Action:   request.Action, Resource: request.Resource, RequestID: request.RequestID,
 					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
 					DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
@@ -131,6 +131,20 @@ func TestClientFailsClosedForDenialStatusAndInvalidResponse(t *testing.T) {
 				t.Fatalf("authorization error=%v want=%v", err, test.want)
 			}
 		})
+	}
+}
+
+func TestRoleDecisionMapsCompleteSubjectAndRejectsMissingLineage(t *testing.T) {
+	subject := &iamv1.Subject{Type: iamv1.SubjectRole, ID: "role-a", RoleSession: &iamv1.RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}}
+	decision := iamv1.AuthorizationDecision{Allowed: true, TenantID: "account-a", Subject: subject, ID: "decision-a", RequestID: "request-a"}
+	authorization, err := authorizationFromDecision(decision)
+	want := paasv1.SubjectRef{Type: paasv1.SubjectRole, ID: "role-a", RoleSession: &paasv1.RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}}
+	if err != nil || !authorization.Subject.Equal(want) || authorization.TenantID != "account-a" {
+		t.Fatal("role business consumer lost authoritative lineage", err)
+	}
+	subject.RoleSession = nil
+	if _, err := authorizationFromDecision(decision); !errors.Is(err, port.ErrAuthorizationUnavailable) {
+		t.Fatal("role without lineage was accepted", err)
 	}
 }
 
@@ -191,7 +205,7 @@ func TestClientRejectsEveryMismatchedDecisionBindingForAllowAndDeny(t *testing.T
 						RequestID: request.RequestID, CorrelationID: request.CorrelationID, DecidedAt: time.Date(2026, 9, 15, 1, 2, 3, 0, time.UTC)}
 					if allowed {
 						decision.Reason, decision.TenantID = iamv1.DecisionAllowed, "organization-a"
-						decision.Subject = &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"}
+						decision.Subject = &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"}
 					}
 					if iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil {
 						t.Error("invalid baseline response")
@@ -232,7 +246,7 @@ func TestClientAuthorizesCredentialBoundInstallationVerifier(t *testing.T) {
 			ID: "decision-installation-verify", Allowed: true, Reason: iamv1.DecisionAllowed,
 			TenantID: "organization-default",
 			Subject: &iamv1.Subject{
-				Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+				Type: iamv1.SubjectServiceAccount, ID: "service-installation-verifier",
 			},
 			Action: body.Action, Resource: body.Resource, RequestID: body.RequestID,
 			Profile: &body.Profile, ResourceMode: body.ResourceMode, CollectionUsage: body.CollectionUsage, CorrelationID: body.CorrelationID,

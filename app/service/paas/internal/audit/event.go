@@ -96,6 +96,9 @@ func ValidateEvent(value Event) error {
 }
 
 func ToV1(value Event) (auditv1.Event, error) {
+	if err := paasv1.ValidateSubjectRef(value.Actor); err != nil {
+		return auditv1.Event{}, err
+	}
 	actorType, err := actorTypeToV1(value.Actor.Type)
 	if err != nil {
 		return auditv1.Event{}, err
@@ -108,10 +111,14 @@ func ToV1(value Event) (auditv1.Event, error) {
 	if correlationID == "" {
 		correlationID = value.RequestID
 	}
+	actor := auditv1.ActorReference{Type: actorType, ID: auditv1.ActorID(value.Actor.ID)}
+	if value.Actor.RoleSession != nil {
+		actor.RoleSession = &auditv1.RoleSessionReference{SessionID: value.Actor.RoleSession.SessionID, SourceUserID: auditv1.ActorID(value.Actor.RoleSession.SourceUserID)}
+	}
 	return auditv1.Event{
 		APIVersion: auditv1.APIVersion, Kind: "AuditEvent",
 		EventID: auditv1.EventID(value.EventID), TenantID: auditv1.TenantID(value.TenantID),
-		Actor:         auditv1.ActorReference{Type: actorType, ID: auditv1.ActorID(value.Actor.ID)},
+		Actor:         actor,
 		IAMDecisionID: auditv1.DecisionID(value.IAMDecisionID),
 		Action:        auditv1.Action(value.Action),
 		Target:        auditv1.TargetReference{Kind: targetKind, ID: string(value.Target.ID)},
@@ -126,6 +133,8 @@ func actorTypeToV1(value paasv1.SubjectType) (auditv1.ActorType, error) {
 	switch value {
 	case paasv1.SubjectUser:
 		return auditv1.ActorUser, nil
+	case paasv1.SubjectRole:
+		return auditv1.ActorRole, nil
 	case paasv1.SubjectServiceAccount:
 		return auditv1.ActorServiceAccount, nil
 	case paasv1.SubjectAgent, paasv1.SubjectSystemUser:

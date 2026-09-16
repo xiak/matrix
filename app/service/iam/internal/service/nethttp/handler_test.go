@@ -561,7 +561,14 @@ func TestIAMRoleRoutesRejectSelectorsBeforeWorkflow(t *testing.T) {
 		{http.MethodPatch, "/v1/roles/role-a", `{"name":"Readers","tags":[],"maxSessionDurationSeconds":3600,"resourceVersion":1,"requestId":"update"}`, http.StatusBadRequest},
 		{http.MethodPost, "/v1/roles/role-a:set-status", `{"status":"ACTIVE","resourceVersion":1,"actorSessionId":"other","requestId":"status"}`, http.StatusBadRequest},
 		{http.MethodDelete, "/v1/roles/role-a?installationId=other", `{"resourceVersion":1,"requestId":"delete"}`, http.StatusBadRequest},
-		{http.MethodPost, "/v1/roles/role-a:assume", `{}`, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/v1/roles/role-a:assume", `{}`, http.StatusUnprocessableEntity},
+		{http.MethodPost, "/v1/roles/role-a:assume", `{"resourceVersion":1,"requestId":"x","sourceSessionId":"injected"}`, http.StatusBadRequest},
+		{http.MethodPost, "/v1/roles/role-a:assume?tenantId=other", `{"resourceVersion":1,"requestId":"x"}`, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/role-sessions/by-request/x?userId=other", ``, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/role-session?roleId=other", ``, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/role-session", `{"sourceUserId":"other"}`, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/role-session", `{}`, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/v1/auth/role-sessions/by-request/x:revoke", `{"requestId":"y","roleId":"injected"}`, http.StatusBadRequest},
 		{http.MethodPost, "/v1/sts/assume-role", `{}`, http.StatusNotFound},
 		{http.MethodPost, "/v1/roles/role-a/trust-policy", `{}`, http.StatusMethodNotAllowed},
 	} {
@@ -617,7 +624,7 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 	if err != nil {
 		t.Fatalf("create HTTP test credential: %v", err)
 	}
-	subject := &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-admin"}
+	subject := &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-admin"}
 	workflow := &httpWorkflow{
 		readiness: iamv1.Readiness{
 			APIVersion:    iamv1.APIVersion,
@@ -672,7 +679,7 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 		},
 	}
 	verificationSubject := &iamv1.Subject{
-		Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+		Type: iamv1.SubjectServiceAccount, ID: "service-installation-verifier",
 	}
 	workflow.verificationDecision = iamv1.AuthorizationDecision{
 		APIVersion: iamv1.APIVersion,

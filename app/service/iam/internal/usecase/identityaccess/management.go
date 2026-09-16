@@ -648,7 +648,7 @@ func (service *Authority) managementDecision(
 	}
 	if err := transaction.RecordAuthorization(ctx, AuthorizationMutation{
 		AccountID:        subject.Subject.Organization.ID,
-		PrincipalID:      subject.Subject.Principal.ID,
+		Subject:          iamv1.Subject{Type: iamv1.SubjectType(subject.Subject.Principal.Type), ID: string(subject.Subject.Principal.ID)},
 		Request:          request,
 		Decision:         decision.AuthorizationDecision,
 		PolicyEvidence:   decision.PolicyEvidence,

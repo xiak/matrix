@@ -201,6 +201,9 @@ func authorizationFromDecision(
 		DecisionID: string(decision.ID),
 		RequestID:  decision.RequestID,
 	}
+	if decision.Subject.RoleSession != nil {
+		authorization.Subject.RoleSession = &paasv1.RoleSessionReference{SessionID: string(decision.Subject.RoleSession.SessionID), SourceUserID: string(decision.Subject.RoleSession.SourceUserID)}
+	}
 	if port.ValidateAuthorization(authorization) != nil {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
@@ -249,11 +252,13 @@ func toIAMResourceKind(kind string) (iamv1.ResourceKind, error) {
 	}
 }
 
-func toPaaSSubjectType(value iamv1.PrincipalType) (paasv1.SubjectType, error) {
+func toPaaSSubjectType(value iamv1.SubjectType) (paasv1.SubjectType, error) {
 	switch value {
-	case iamv1.PrincipalUser:
+	case iamv1.SubjectUser:
 		return paasv1.SubjectUser, nil
-	case iamv1.PrincipalServiceAccount:
+	case iamv1.SubjectRole:
+		return paasv1.SubjectRole, nil
+	case iamv1.SubjectServiceAccount:
 		return paasv1.SubjectServiceAccount, nil
 	default:
 		return "", errors.New("IAM subject type cannot map to PaaS")

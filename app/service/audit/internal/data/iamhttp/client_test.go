@@ -58,7 +58,7 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 				Allowed:    true,
 				Reason:     iamv1.DecisionAllowed,
 				TenantID:   "organization-example",
-				Subject:    &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-reader"},
+				Subject:    &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-reader"},
 				Action:     authorization.Action,
 				Resource:   authorization.Resource,
 				RequestID:  authorization.RequestID,
@@ -81,7 +81,7 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 				ID: "decision-installation-verifier", Allowed: true, Reason: iamv1.DecisionAllowed,
 				TenantID: "organization-example",
 				Subject: &iamv1.Subject{
-					Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+					Type: iamv1.SubjectServiceAccount, ID: "service-installation-verifier",
 				},
 				Action: authorization.Action, Resource: authorization.Resource,
 				RequestID: authorization.RequestID, DecidedAt: now,
@@ -137,7 +137,7 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 		verificationRequest,
 	)
 	if err != nil || !decision.Allowed || decision.Subject == nil ||
-		decision.Subject.Type != iamv1.PrincipalServiceAccount {
+		decision.Subject.Type != iamv1.SubjectServiceAccount {
 		t.Fatalf("IAM verifier decision=%#v err=%v", decision, err)
 	}
 }

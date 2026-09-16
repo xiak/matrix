@@ -153,25 +153,27 @@ func (value *transaction) ReadRecords(
 	if query.Action != "" {
 		action = string(query.Action)
 	}
-	var actorType, actorID any
+	var actor any
 	if query.Actor != nil {
-		actorType = string(query.Actor.Type)
-		actorID = string(query.Actor.ID)
+		encoded, err := json.Marshal(query.Actor)
+		if err != nil || auditv1.ValidateActor(*query.Actor) != nil {
+			return nil, auditlog.ErrInvalidArgument
+		}
+		actor = string(encoded)
 	}
 	rows, err := value.tx.Query(
 		ctx,
 		`SELECT chain_id, sequence, source, event_id, event_document,
 			   canonical_document, content_digest, previous_hash, record_hash,
 			   ingested_at, retention
-		  FROM audit.read_records($1, $2, $3, $4, $5, $6, $7, $8)`,
+		  FROM audit.read_records($1, $2, $3, $4, $5, $6, $7::jsonb)`,
 		string(query.ChainID),
 		int64(query.BeforeSequence),
 		query.Limit,
 		query.From,
 		query.To,
 		action,
-		actorType,
-		actorID,
+		actor,
 	)
 	if err != nil {
 		return nil, mapDatabaseError("query Audit records", err)

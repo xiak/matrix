@@ -17,6 +17,46 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 )
 
+func TestRoleSelfExitUsesOnlyExactCredentialPossession(t *testing.T) {
+	tx := newCoreTransaction()
+	service, err := NewAuthority(&coreRepository{transaction: tx}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := authority.NewCredentialIssuer(nil).Issue(authority.CredentialRoleSession, "exit-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Expired by construction, with no USER/login/PDP context in this adapter.
+	// Possession is deliberately not a business authentication substitute.
+	session := iamv1.RoleSession{APIVersion: iamv1.APIVersion, Kind: "RoleSession", ID: "exit-session", AccountID: "exit-account",
+		RoleID: "exit-role", SourceUserID: "exit-source", Status: iamv1.SessionActive, IssuedAt: tx.now.Add(-2 * time.Hour), ExpiresAt: tx.now.Add(-time.Hour)}
+	tx.roleExitCredentials = map[string]RoleSessionExitCredential{issued.LookupDigest: {Session: session, VerificationDigest: issued.VerificationDigest}}
+	result, err := service.LogoutRoleSession(t.Context(), issued.Credential, iamv1.LogoutRequest{RequestID: "exit-intent"})
+	if err != nil || result.Status != iamv1.SessionRevoked || len(tx.roleExitEvents) != 1 || len(tx.authorizations) != 0 || len(tx.sessions) != 0 {
+		t.Fatal("self-exit required current business authority or issued a login", err)
+	}
+	fact := tx.roleExitEvents[0]
+	if auditv1.ValidateEventForSource(auditv1.SourceIAM, fact) != nil || fact.Action != auditv1.ActionIAMRoleSessionExited || fact.IAMDecisionID != "" ||
+		fact.Actor.Type != auditv1.ActorRole || fact.Actor.ID != auditv1.ActorID(session.RoleID) || fact.Actor.RoleSession == nil ||
+		fact.Actor.RoleSession.SessionID != string(session.ID) || fact.Actor.RoleSession.SourceUserID != auditv1.ActorID(session.SourceUserID) || fact.Target.ID != string(session.ID) {
+		t.Fatal("self-exit lost immutable actor/session linkage")
+	}
+	for _, purpose := range []authority.CredentialType{authority.CredentialSession, authority.CredentialService} {
+		other, err := authority.NewCredentialIssuer(nil).Issue(purpose, string(session.ID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.LogoutRoleSession(t.Context(), other.Credential, iamv1.LogoutRequest{RequestID: "exit-wrong-purpose"}); !errors.Is(err, ErrUnauthenticated) {
+			t.Fatal("non-role credential reached self-exit", err)
+		}
+	}
+	tx.roleExitCredentials[issued.LookupDigest] = RoleSessionExitCredential{Session: session, VerificationDigest: "sha256:" + strings.Repeat("0", 64)}
+	if _, err := service.LogoutRoleSession(t.Context(), issued.Credential, iamv1.LogoutRequest{RequestID: "exit-wrong-proof"}); !errors.Is(err, ErrUnauthenticated) || len(tx.roleExitEvents) != 1 {
+		t.Fatal("lookup alone proved possession", err)
+	}
+}
+
 func TestAuthorizationProfileDiscoveryRequiresCurrentAuthorityAndNoPermitCache(t *testing.T) {
 	tx := newCoreTransaction()
 	service, err := NewAuthority(&coreRepository{transaction: tx}, Config{})
@@ -307,7 +347,7 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 			}
 			for name, mutate := range map[string]func(*AuditEvidence){
 				"version absent":      func(e *AuditEvidence) { e.DecisionContractVersion = 0 },
-				"version unknown":     func(e *AuditEvidence) { e.DecisionContractVersion = 3 },
+				"version unknown":     func(e *AuditEvidence) { e.DecisionContractVersion = 4 },
 				"downgrade to legacy": func(e *AuditEvidence) { e.DecisionContractVersion = 1 },
 				"archive absent":      func(e *AuditEvidence) { e.DecisionProfile = nil },
 				"profile absent":      func(e *AuditEvidence) { e.Decision.Profile = nil },
@@ -441,7 +481,7 @@ func TestAuditProofVerifierIsNotGenericServiceAuthority(t *testing.T) {
 				event.Target.ID += strings.Repeat("a", 24)
 			}
 			evidence.Decision.TenantID = identity.AccountID
-			evidence.Decision.Subject = &iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: "service-verifier"}
+			evidence.Decision.Subject = &iamv1.Subject{Type: iamv1.SubjectServiceAccount, ID: "service-verifier"}
 			evidence.Event.TenantID = event.TenantID
 			evidence.Event.Actor = event.Actor
 			evidence.VerifierPrincipalID = "service-verifier"
@@ -469,7 +509,7 @@ func historicalAuditFixture(eventAction auditv1.Action, decisionAction iamv1.Act
 	if contract.Source == auditv1.SourceAudit {
 		identity.Purpose = iamv1.ServiceAudit
 	}
-	decision := iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "decision-proof", Allowed: true, Reason: iamv1.DecisionAllowed, TenantID: "tenant-customer", Subject: &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-actor"}, Action: decisionAction, Resource: iamv1.ResourceReference{Kind: resourceKind, ID: resource}, RequestID: "request-proof", DecidedAt: now}
+	decision := iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "decision-proof", Allowed: true, Reason: iamv1.DecisionAllowed, TenantID: "tenant-customer", Subject: &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-actor"}, Action: decisionAction, Resource: iamv1.ResourceReference{Kind: resourceKind, ID: resource}, RequestID: "request-proof", DecidedAt: now}
 	event := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "event-proof", TenantID: auditv1.TenantID(decision.TenantID), Actor: auditv1.ActorReference{Type: auditv1.ActorUser, ID: "principal-actor"}, IAMDecisionID: "decision-proof", Action: eventAction, Target: auditv1.TargetReference{Kind: contract.Target, ID: "resource-proof"}, Result: contract.Results[0], RequestDigest: "sha256:" + strings.Repeat("a", 64), RequestID: "request-proof", CorrelationID: "correlation-proof", OccurredAt: now.Add(time.Second)}
 	if contract.OperationRequired {
 		event.OperationID = "operation-proof"
@@ -617,7 +657,7 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 		context.Background(), verifierCredential, verificationRequest,
 	)
 	if err != nil || !verificationDecision.Allowed || verificationDecision.Subject == nil ||
-		verificationDecision.Subject.Type != iamv1.PrincipalServiceAccount ||
+		verificationDecision.Subject.Type != iamv1.SubjectServiceAccount ||
 		verificationDecision.Subject.ID != "service-verifier" {
 		t.Fatalf("installation verification decision=%#v err=%v", verificationDecision, err)
 	}
@@ -755,7 +795,7 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	request.RequestID = "request-developer-allowed"
 	request.CorrelationID = request.RequestID
 	decision, err = service.Authorize(context.Background(), paasCredential, developerLogin.Credential, request)
-	if err != nil || !decision.Allowed || decision.Subject == nil || decision.Subject.ID != created.ID {
+	if err != nil || !decision.Allowed || decision.Subject == nil || decision.Subject.ID != string(created.ID) {
 		t.Fatalf("developer decision=%#v err=%v, want allowed", decision, err)
 	}
 	revokedBinding, err := service.RevokePolicyAttachment(
@@ -870,6 +910,9 @@ type coreTransaction struct {
 	principal               iamv1.Principal
 	services                map[string]ServiceCredential
 	sessions                map[string]SessionCredential
+	roleSessions            map[string]RoleSessionCredential
+	roleExitCredentials     map[string]RoleSessionExitCredential
+	roleExitEvents          []auditv1.Event
 	authorizations          []AuthorizationMutation
 	passwords               map[iamv1.PrincipalID]authority.PasswordHash
 	users                   map[iamv1.PrincipalID]iamv1.Principal
@@ -880,6 +923,23 @@ type coreTransaction struct {
 	localRecoveryResult     iamv1.LocalCredentialRecoveryResult
 	localRecoveryMutation   *LocalCredentialRecoveryMutation
 	profileErr              error
+}
+
+func (transaction *coreTransaction) LookupRoleSession(_ context.Context, digest string) (RoleSessionCredential, bool, error) {
+	value, found := transaction.roleSessions[digest]
+	return value, found, nil
+}
+
+func (transaction *coreTransaction) LookupRoleSessionForExit(_ context.Context, digest string) (RoleSessionExitCredential, bool, error) {
+	value, found := transaction.roleExitCredentials[digest]
+	return value, found, nil
+}
+
+func (transaction *coreTransaction) ExitRoleSession(_ context.Context, digest string, event auditv1.Event) (iamv1.RoleSession, error) {
+	transaction.roleExitEvents = append(transaction.roleExitEvents, event)
+	result := transaction.roleExitCredentials[digest].Session
+	result.Status, result.RevokedAt = iamv1.SessionRevoked, &transaction.now
+	return result, nil
 }
 
 func (transaction *coreTransaction) InspectLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, *iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, error) {

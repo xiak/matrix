@@ -151,6 +151,10 @@ func filterDigest(query auditv1.QueryRecordsRequest) [sha256.Size]byte {
 		digest.Write([]byte{1})
 		writeCursorString(digest, string(query.Actor.Type))
 		writeCursorString(digest, string(query.Actor.ID))
+		if query.Actor.RoleSession != nil {
+			writeCursorString(digest, query.Actor.RoleSession.SessionID)
+			writeCursorString(digest, string(query.Actor.RoleSession.SourceUserID))
+		}
 	}
 	var result [sha256.Size]byte
 	copy(result[:], digest.Sum(nil))

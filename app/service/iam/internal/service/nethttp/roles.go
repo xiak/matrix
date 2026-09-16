@@ -5,7 +5,44 @@ import (
 	"strings"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 )
+
+func (value *handler) logoutRoleSession(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.LogoutRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.LogoutRoleSession(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) currentRoleSession(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.CurrentRoleSession(request.Context(), credential)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
 
 func (value *handler) roles(response http.ResponseWriter, request *http.Request) {
 	credential, ok := bearerCredential(response, request)
@@ -48,6 +85,10 @@ func (value *handler) role(response http.ResponseWriter, request *http.Request) 
 		return
 	}
 	id := parts[0]
+	assume := len(parts) == 1 && strings.HasSuffix(id, ":assume")
+	if assume {
+		id = strings.TrimSuffix(id, ":assume")
+	}
 	status := len(parts) == 1 && strings.HasSuffix(id, ":set-status")
 	if status {
 		id = strings.TrimSuffix(id, ":set-status")
@@ -59,6 +100,32 @@ func (value *handler) role(response http.ResponseWriter, request *http.Request) 
 	roleID := iamv1.RoleID(id)
 	credential, ok := bearerCredential(response, request)
 	if !ok {
+		return
+	}
+	if assume {
+		if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+			return
+		}
+		body, ok := decodeJSON[iamv1.AssumeRoleRequest](value, response, request)
+		if !ok {
+			return
+		}
+		if iamv1.ValidateAssumeRoleRequest(body) != nil {
+			value.writeError(response, request, identityaccess.ErrInvalidArgument)
+			return
+		}
+		result, err := value.workflow.AssumeRole(request.Context(), credential, roleID, body)
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		encoded, err := iamv1.EncodeAssumeRoleResponse(result)
+		if err != nil {
+			value.writeError(response, request, identityaccess.ErrUnavailable)
+			return
+		}
+		defer clear(encoded)
+		writeEncodedJSON(response, http.StatusOK, encoded)
 		return
 	}
 	if len(parts) >= 2 && parts[1] == "trust-versions" {
@@ -91,6 +158,10 @@ func (value *handler) role(response http.ResponseWriter, request *http.Request) 
 			return
 		}
 		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "permission-boundary" {
+		value.rolePermissionBoundary(response, request, credential, roleID)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "trust-policy" {
@@ -169,4 +240,89 @@ func (value *handler) role(response http.ResponseWriter, request *http.Request) 
 		response.Header().Set("Allow", "GET, PATCH, DELETE")
 		writeProblem(response, requestID(request), http.StatusMethodNotAllowed, "iam.method.invalid", "IAM method not allowed")
 	}
+}
+
+func (value *handler) roleSessionByRequest(response http.ResponseWriter, request *http.Request) {
+	id := strings.TrimPrefix(request.URL.Path, "/v1/auth/role-sessions/by-request/")
+	revoke := strings.HasSuffix(id, ":revoke")
+	if revoke {
+		id = strings.TrimSuffix(id, ":revoke")
+	}
+	if iamv1.ValidateID("requestId", id) != nil {
+		value.notFound(response, request)
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	if revoke {
+		if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+			return
+		}
+		body, ok := decodeJSON[iamv1.RevokeRoleSessionRequest](value, response, request)
+		if !ok {
+			return
+		}
+		if iamv1.ValidateID("requestId", body.RequestID) != nil {
+			value.writeError(response, request, identityaccess.ErrInvalidArgument)
+			return
+		}
+		result, err := value.workflow.RevokeRoleSessionByRequest(request.Context(), credential, id, body)
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	result, found, err := value.workflow.GetRoleSessionByRequest(request.Context(), credential, id)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	if !found {
+		value.notFound(response, request)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) rolePermissionBoundary(response http.ResponseWriter, request *http.Request, credential iamv1.Secret, id iamv1.RoleID) {
+	if !rejectQuery(response, request) {
+		return
+	}
+	var result iamv1.RolePermissionBoundary
+	var err error
+	switch request.Method {
+	case http.MethodGet:
+		if !rejectQueryAndBody(response, request) {
+			return
+		}
+		result, err = value.workflow.GetRolePermissionBoundary(request.Context(), credential, id, requestID(request))
+	case http.MethodPut:
+		body, ok := decodeJSON[iamv1.SetRolePermissionBoundaryRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.SetRolePermissionBoundary(request.Context(), credential, id, body)
+	case http.MethodDelete:
+		body, ok := decodeJSON[iamv1.RemoveRolePermissionBoundaryRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err = value.workflow.RemoveRolePermissionBoundary(request.Context(), credential, id, body)
+	default:
+		response.Header().Set("Allow", "GET, PUT, DELETE")
+		writeProblem(response, requestID(request), http.StatusMethodNotAllowed, "iam.method.invalid", "IAM method not allowed")
+		return
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
 }

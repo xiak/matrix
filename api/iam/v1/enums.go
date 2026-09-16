@@ -208,6 +208,9 @@ const (
 	ActionIAMRoleTrustSet                   Action = "iam.role-trust.set"
 	ActionIAMRolePolicyAttachmentCreate     Action = "iam.role-policy-attachment.create"
 	ActionIAMRolePolicyAttachmentRevoke     Action = "iam.role-policy-attachment.revoke"
+	ActionIAMRolePermissionBoundarySet      Action = "iam.role.permission-boundary.set"
+	ActionIAMRolePermissionBoundaryRemove   Action = "iam.role.permission-boundary.remove"
+	ActionIAMRoleAssume                     Action = "iam.role.assume"
 	ActionIAMSessionRevoke                  Action = "iam.session.revoke"
 	ActionIAMPolicyAttachmentCreate         Action = "iam.policy-attachment.create"
 	ActionIAMPolicyAttachmentRevoke         Action = "iam.policy-attachment.revoke"
@@ -399,35 +402,8 @@ func AllServicePurposes() []ServicePurpose {
 // ActionDefinition and contract enum order are derived projections, not a second
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
-	iamRoleManagementProfile(),
-	declaredProductProfile(ProductPaaS, ServicePaaS, 1,
-		declaredProfileAction(ActionPaaSExecutionPoolCreate, ResourceExecutionPool, AuthorityScopeInstallation, ResourceExecutionPool, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSExecutionPoolRead, ResourceExecutionPool, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
-		declaredProfileAction(ActionPaaSExecutionTargetRegister, ResourceExecutionTarget, AuthorityScopeInstallation, ResourceExecutionTarget, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSExecutionTargetRead, ResourceExecutionTarget, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
-		declaredProfileAction(ActionPaaSExecutionTargetDrain, ResourceExecutionTarget, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSExecutionTargetActivate, ResourceExecutionTarget, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSExecutionTargetRemove, ResourceExecutionTarget, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSNodeEnrollmentCreate, ResourceNodeEnrollment, AuthorityScopeInstallation, ResourceExecutionTarget, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
-		declaredProfileAction(ActionPaaSNodeEnrollmentRead, ResourceNodeEnrollment, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSNodeEnrollmentRevoke, ResourceNodeEnrollment, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSNodeEnrollmentRegenerate, ResourceNodeEnrollment, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSPlatformOperationRead, ResourceOperation, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSApplicationCreate, ResourceApplication, AuthorityScopeTenant, ResourceApplication, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
-		declaredProfileAction(ActionPaaSApplicationRead, ResourceApplication, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}}),
-		declaredProfileAction(ActionPaaSConfigurationCreate, ResourceConfiguration, AuthorityScopeTenant, ResourceConfiguration, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
-		declaredProfileAction(ActionPaaSConfigurationRead, ResourceConfiguration, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSConfigurationRevisionCreate, ResourceConfigurationRevision, AuthorityScopeTenant, ResourceConfigurationRevision, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
-		declaredProfileAction(ActionPaaSConfigurationRevisionRead, ResourceConfigurationRevision, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSApplicationRevisionCreate, ResourceApplicationRevision, AuthorityScopeTenant, ResourceApplicationRevision, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
-		declaredProfileAction(ActionPaaSApplicationRevisionRead, ResourceApplicationRevision, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSDeploymentCreate, ResourceDeployment, AuthorityScopeTenant, ResourceDeployment, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
-		declaredProfileAction(ActionPaaSDeploymentUpdate, ResourceDeployment, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSDeploymentRollback, ResourceDeployment, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSDeploymentStop, ResourceDeployment, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSDeploymentRead, ResourceDeployment, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-		declaredProfileAction(ActionPaaSOperationRead, ResourceOperation, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
-	),
+	iamRoleSessionProfile(),
+	roleBusinessProfile(paasProfileRevisionOne),
 	declaredProductProfile(ProductManagedService, ServicePaaS, 1,
 		declaredProfileAction(ActionManagedServiceOfferingRead, ResourceServiceOffering, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
 		declaredProfileAction(ActionManagedServiceRegionRead, ResourceRegion, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
@@ -436,12 +412,7 @@ var authorizationProfiles = [...]AuthorizationProfile{
 		declaredProfileAction(ActionManagedServiceInstallationCreate, ResourceServiceInstallation, AuthorityScopeTenant, ResourceServiceInstallation, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
 		declaredProfileAction(ActionManagedServiceInstallationRead, ResourceServiceInstallation, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
 	),
-	declaredProductProfile(ProductAudit, ServiceAudit, 1,
-		declaredProfileAction(ActionAuditRecordRead, ResourceAuditRecord, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
-		declaredProfileAction(ActionAuditIntegrityVerify, ResourceAuditChain, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
-		declaredProfileAction(ActionAuditPlatformRecordRead, ResourceAuditRecord, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
-		declaredProfileAction(ActionAuditPlatformIntegrityVerify, ResourceAuditChain, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
-	),
+	roleBusinessProfile(auditProfileRevisionOne),
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
 		declaredProfileAction(ActionInstallationVerify, ResourceInstallation, AuthorityScopeInstallationProbe, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 	),
@@ -493,7 +464,55 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionOne)}
+}
+
+var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
+	declaredProfileAction(ActionPaaSExecutionPoolCreate, ResourceExecutionPool, AuthorityScopeInstallation, ResourceExecutionPool, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSExecutionPoolRead, ResourceExecutionPool, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+	declaredProfileAction(ActionPaaSExecutionTargetRegister, ResourceExecutionTarget, AuthorityScopeInstallation, ResourceExecutionTarget, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSExecutionTargetRead, ResourceExecutionTarget, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+	declaredProfileAction(ActionPaaSExecutionTargetDrain, ResourceExecutionTarget, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSExecutionTargetActivate, ResourceExecutionTarget, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSExecutionTargetRemove, ResourceExecutionTarget, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSNodeEnrollmentCreate, ResourceNodeEnrollment, AuthorityScopeInstallation, ResourceExecutionTarget, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
+	declaredProfileAction(ActionPaaSNodeEnrollmentRead, ResourceNodeEnrollment, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSNodeEnrollmentRevoke, ResourceNodeEnrollment, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSNodeEnrollmentRegenerate, ResourceNodeEnrollment, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSPlatformOperationRead, ResourceOperation, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSApplicationCreate, ResourceApplication, AuthorityScopeTenant, ResourceApplication, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
+	declaredProfileAction(ActionPaaSApplicationRead, ResourceApplication, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}}),
+	declaredProfileAction(ActionPaaSConfigurationCreate, ResourceConfiguration, AuthorityScopeTenant, ResourceConfiguration, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
+	declaredProfileAction(ActionPaaSConfigurationRead, ResourceConfiguration, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSConfigurationRevisionCreate, ResourceConfigurationRevision, AuthorityScopeTenant, ResourceConfigurationRevision, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
+	declaredProfileAction(ActionPaaSConfigurationRevisionRead, ResourceConfigurationRevision, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSApplicationRevisionCreate, ResourceApplicationRevision, AuthorityScopeTenant, ResourceApplicationRevision, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
+	declaredProfileAction(ActionPaaSApplicationRevisionRead, ResourceApplicationRevision, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSDeploymentCreate, ResourceDeployment, AuthorityScopeTenant, ResourceDeployment, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
+	declaredProfileAction(ActionPaaSDeploymentUpdate, ResourceDeployment, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSDeploymentRollback, ResourceDeployment, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSDeploymentStop, ResourceDeployment, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSDeploymentRead, ResourceDeployment, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionPaaSOperationRead, ResourceOperation, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+)
+
+var auditProfileRevisionOne = declaredProductProfile(ProductAudit, ServiceAudit, 1,
+	declaredProfileAction(ActionAuditRecordRead, ResourceAuditRecord, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+	declaredProfileAction(ActionAuditIntegrityVerify, ResourceAuditChain, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+	declaredProfileAction(ActionAuditPlatformRecordRead, ResourceAuditRecord, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+	declaredProfileAction(ActionAuditPlatformIntegrityVerify, ResourceAuditChain, AuthorityScopeInstallation, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+)
+
+func roleBusinessProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision = 2
+	for index := range profile.Actions {
+		profile.Actions[index].SubjectTypes = []SubjectType{SubjectUser}
+		if profile.Actions[index].Scope == AuthorityScopeTenant {
+			profile.Actions[index].SubjectTypes = []SubjectType{SubjectRole, SubjectUser}
+		}
+	}
+	return profile
 }
 
 func iamRoleManagementProfile() AuthorizationProfile {
@@ -510,6 +529,20 @@ func iamRoleManagementProfile() AuthorizationProfile {
 		declaredProfileAction(ActionIAMRolePolicyAttachmentCreate, ResourceRole, AuthorityScopeTenant, ResourcePolicyAttachment, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionIAMRolePolicyAttachmentRevoke, ResourcePolicyAttachment, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 	)
+	return profile
+}
+
+func iamRoleSessionProfile() AuthorizationProfile {
+	profile := iamRoleManagementProfile()
+	profile.Revision = 3
+	profile.Actions = append(profile.Actions,
+		declaredProfileAction(ActionIAMRolePermissionBoundarySet, ResourceRole, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMRolePermissionBoundaryRemove, ResourceRole, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMRoleAssume, ResourceRole, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	)
+	for index := range profile.Actions {
+		profile.Actions[index].SubjectTypes = []SubjectType{SubjectUser}
+	}
 	return profile
 }
 

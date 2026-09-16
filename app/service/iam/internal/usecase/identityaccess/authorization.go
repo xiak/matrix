@@ -2,6 +2,7 @@ package identityaccess
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
@@ -11,8 +12,7 @@ import (
 
 type authorizationActor struct {
 	organizationID iamv1.AccountID
-	principalID    iamv1.PrincipalID
-	principalType  iamv1.PrincipalType
+	subject        iamv1.Subject
 }
 
 func (service *Authority) Authorize(
@@ -49,6 +49,19 @@ func (service *Authority) Authorize(
 			now,
 		)
 		if err != nil {
+			if errors.Is(err, ErrUnauthenticated) {
+				role, roleErr := service.authenticateRoleSession(transactionContext, transaction, subjectCredential, now)
+				if roleErr != nil {
+					return roleErr
+				}
+				decision, roleErr = service.decideAndRecord(transactionContext, transaction, request, requestDigest, now,
+					authorizationActor{organizationID: role.Subject.Session.AccountID, subject: iamv1.Subject{Type: iamv1.SubjectRole, ID: string(role.Subject.Role.ID),
+						RoleSession: &iamv1.RoleSessionReference{SessionID: role.Subject.Session.ID, SourceUserID: role.Subject.Session.SourceUserID}}},
+					func(id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
+						return authority.DecideRole(role.Subject, caller.Identity.Purpose, request, id, now)
+					})
+				return roleErr
+			}
 			return err
 		}
 		decision, err = service.decideAndRecord(
@@ -59,8 +72,7 @@ func (service *Authority) Authorize(
 			now,
 			authorizationActor{
 				organizationID: subject.Subject.Organization.ID,
-				principalID:    subject.Subject.Principal.ID,
-				principalType:  subject.Subject.Principal.Type,
+				subject:        iamv1.Subject{Type: iamv1.SubjectType(subject.Subject.Principal.Type), ID: string(subject.Subject.Principal.ID)},
 			},
 			func(decisionID iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
 				return authority.Decide(
@@ -131,8 +143,7 @@ func (service *Authority) VerifyInstallation(
 			now,
 			authorizationActor{
 				organizationID: caller.Identity.AccountID,
-				principalID:    caller.Identity.PrincipalID,
-				principalType:  iamv1.PrincipalServiceAccount,
+				subject:        iamv1.Subject{Type: iamv1.SubjectServiceAccount, ID: string(caller.Identity.PrincipalID)},
 			},
 			func(decisionID iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
 				return authority.DecideService(caller.Identity, policies, request, decisionID, now)
@@ -177,14 +188,15 @@ func (service *Authority) decideAndRecord(
 	if decision.Allowed {
 		result = auditv1.ResultAllowed
 	}
+	auditActor, err := auditActorForSubject(actor.subject)
+	if err != nil {
+		return iamv1.AuthorizationDecision{}, err
+	}
 	event, err := newAuditEvent(
 		eventID,
 		actor.organizationID,
 		"",
-		auditv1.ActorReference{
-			Type: auditv1.ActorType(actor.principalType),
-			ID:   auditv1.ActorID(actor.principalID),
-		},
+		auditActor,
 		auditv1.ActionIAMAuthorizationDecided,
 		auditv1.TargetReference{
 			Kind: auditv1.TargetAuthorizationDecision,
@@ -202,14 +214,29 @@ func (service *Authority) decideAndRecord(
 	}
 	if err := transaction.RecordAuthorization(ctx, AuthorizationMutation{
 		AccountID:        actor.organizationID,
-		PrincipalID:      actor.principalID,
+		Subject:          actor.subject,
 		Request:          request,
 		Decision:         decision.AuthorizationDecision,
 		PolicyEvidence:   decision.PolicyEvidence,
 		BoundaryEvidence: decision.BoundaryEvidence,
+		RoleEvidence:     decision.RoleEvidence,
 		AuditEvent:       event,
 	}); err != nil {
 		return iamv1.AuthorizationDecision{}, err
 	}
 	return decision.AuthorizationDecision, nil
+}
+
+func auditActorForSubject(subject iamv1.Subject) (auditv1.ActorReference, error) {
+	if iamv1.ValidateSubject(subject) != nil {
+		return auditv1.ActorReference{}, ErrUnavailable
+	}
+	actor := auditv1.ActorReference{Type: auditv1.ActorType(subject.Type), ID: auditv1.ActorID(subject.ID)}
+	if subject.RoleSession != nil {
+		actor.RoleSession = &auditv1.RoleSessionReference{SessionID: string(subject.RoleSession.SessionID), SourceUserID: auditv1.ActorID(subject.RoleSession.SourceUserID)}
+	}
+	if auditv1.ValidateActor(actor) != nil {
+		return auditv1.ActorReference{}, ErrUnavailable
+	}
+	return actor, nil
 }

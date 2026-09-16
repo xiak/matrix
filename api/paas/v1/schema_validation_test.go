@@ -19,6 +19,48 @@ func TestEveryOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
 	}
 }
 
+func TestRoleSubjectLineageIsStrictAndIdentityBearing(t *testing.T) {
+	schema := compileOpenAPISchema(t, loadOpenAPI(t), "SubjectRef")
+	for _, test := range []struct {
+		wire  string
+		valid bool
+	}{
+		{`{"type":"USER","id":"user-a"}`, true},
+		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"session-a","sourceUserId":"user-a"}}`, true},
+		{`{"type":"ROLE","id":"role-a"}`, false},
+		{`{"type":"ROLE","id":"role-a","roleSession":null}`, false},
+		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"session-a"}}`, false},
+		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"session-a","sourceUserId":"user-a","sourceSessionId":"private"}}`, false},
+		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"","sourceUserId":"user-a"}}`, false},
+		{`{"type":"USER","id":"user-a","roleSession":null}`, false},
+		{`{"type":"SERVICE_ACCOUNT","id":"service-a","roleSession":{"sessionId":"session-a","sourceUserId":"user-a"}}`, false},
+		{`{"type":"AGENT","id":"agent-a","roleSession":null}`, false},
+		{`{"type":"SYSTEM_USER","id":"system-a","roleSession":null}`, false},
+	} {
+		var subject SubjectRef
+		if err := json.Unmarshal([]byte(test.wire), &subject); (err == nil) != test.valid {
+			t.Fatalf("subject decoder valid=%v: %s", err == nil, test.wire)
+		}
+		instance, err := jsonschema.UnmarshalJSON(bytes.NewBufferString(test.wire))
+		if err != nil || (schema.Validate(instance) == nil) != test.valid {
+			t.Fatalf("subject schema disagrees: %s", test.wire)
+		}
+		if test.valid {
+			encoded, err := json.Marshal(subject)
+			var other SubjectRef
+			if err != nil || string(encoded) != test.wire || json.Unmarshal(encoded, &other) != nil || !subject.Equal(other) {
+				t.Fatal("exact subject bytes or independently decoded identity changed")
+			}
+			if other.RoleSession != nil {
+				other.RoleSession.SessionID = "session-b"
+				if subject.Equal(other) {
+					t.Fatal("another role session reused the same identity")
+				}
+			}
+		}
+	}
+}
+
 func TestExamplesValidateAgainstOpenAPISchemas(t *testing.T) {
 	document := loadOpenAPI(t)
 	examples := map[string]string{

@@ -204,18 +204,25 @@ func (service *Authority) authenticateSession(
 		}
 		return SessionCredential{}, ErrUnavailable
 	}
-	binding.Subject.InstallationID = ""
-	for _, policy := range binding.Subject.Policies {
+	if err := service.resolveSubjectInstallation(ctx, transaction, &binding.Subject); err != nil {
+		return SessionCredential{}, err
+	}
+	return binding, nil
+}
+
+func (service *Authority) resolveSubjectInstallation(ctx context.Context, transaction Transaction, subject *authority.SubjectContext) error {
+	subject.InstallationID = ""
+	for _, policy := range subject.Policies {
 		if policy.Attachment.Scope == iamv1.AuthorityScopeTenant {
 			continue
 		}
 		status, err := transaction.BootstrapStatus(ctx)
 		if err != nil || iamv1.ValidateBootstrapStatus(status) != nil ||
-			status.State != iamv1.BootstrapReady || status.AccountID != binding.Subject.Organization.ID {
-			return SessionCredential{}, ErrUnavailable
+			status.State != iamv1.BootstrapReady || status.AccountID != subject.Organization.ID {
+			return ErrUnavailable
 		}
-		binding.Subject.InstallationID = status.InstallationID
+		subject.InstallationID = status.InstallationID
 		break
 	}
-	return binding, nil
+	return nil
 }

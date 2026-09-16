@@ -30,6 +30,24 @@ func DecodeRequest(reader io.Reader, destination any) error {
 	return contractjson.DecodeObject(reader, MaxRequestBytes, destination)
 }
 
+func (subject *Subject) UnmarshalJSON(source []byte) error {
+	type wire Subject
+	var decoded wire
+	if err := contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	_, hasRoleSession := fields["roleSession"]
+	if (decoded.Type == SubjectRole) != hasRoleSession || ValidateSubject(Subject(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*subject = Subject(decoded)
+	return nil
+}
+
 func (request *AuthorizationRequest) UnmarshalJSON(source []byte) error {
 	type wire AuthorizationRequest
 	var decoded wire
@@ -195,8 +213,7 @@ func EncodeBootstrapDocument(document BootstrapDocument) ([]byte, error) {
 	return encoded, nil
 }
 
-// EncodeLoginResponse is the only response encoder that intentionally emits
-// a newly issued session credential.
+// EncodeLoginResponse explicitly emits a newly issued login credential.
 func EncodeLoginResponse(response LoginResponse) ([]byte, error) {
 	if err := ValidateLoginResponse(response); err != nil {
 		return nil, err
@@ -210,6 +227,24 @@ func EncodeLoginResponse(response LoginResponse) ([]byte, error) {
 		Credential:         response.Credential.reveal(),
 		MustChangePassword: response.MustChangePassword,
 	}
+	encoded, err := json.Marshal(wire)
+	if err != nil {
+		return nil, ErrEncodingFailed
+	}
+	return encoded, nil
+}
+
+// EncodeAssumeRoleResponse is the sole role-credential response encoder.
+// An equal replay carries only the original non-secret issuance record.
+func EncodeAssumeRoleResponse(response AssumeRoleResponse) ([]byte, error) {
+	if err := ValidateAssumeRoleResponse(response); err != nil {
+		return nil, err
+	}
+	wire := struct {
+		Outcome    string      `json:"outcome"`
+		Session    RoleSession `json:"session"`
+		Credential string      `json:"credential,omitempty"`
+	}{response.Outcome, response.Session, response.Credential.reveal()}
 	encoded, err := json.Marshal(wire)
 	if err != nil {
 		return nil, ErrEncodingFailed

@@ -13,6 +13,48 @@ import (
 
 var lifecycleTime = time.Date(2026, 8, 25, 16, 0, 0, 123_000, time.UTC)
 
+func TestRoleSessionSeparatesBothBusinessIdempotencySpaces(t *testing.T) {
+	for _, fingerprint := range []struct {
+		name  string
+		value func(port.Authorization) (string, error)
+	}{
+		{"deployment", func(authorization port.Authorization) (string, error) {
+			return idempotencyFingerprint(mutation{authorization: authorization, deploymentID: "same-resource", kind: "SUBMIT_DEPLOYMENT", idempotencyKey: "same-key"})
+		}},
+		{"resource", func(authorization port.Authorization) (string, error) {
+			return resourceCreationFingerprint(resourceCreation[paasv1.Application]{authorization: authorization, id: "same-resource", action: paasv1.OperationCreateApplication, idempotencyKey: "same-key"})
+		}},
+	} {
+		t.Run(fingerprint.name, func(t *testing.T) {
+			original := lifecycleAuthorization()
+			original.Subject = paasv1.SubjectRef{Type: paasv1.SubjectRole, ID: "role-a", RoleSession: &paasv1.RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}}
+			want, err := fingerprint.value(original)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, subject := range []paasv1.SubjectRef{
+				{Type: paasv1.SubjectRole, ID: "role-a", RoleSession: &paasv1.RoleSessionReference{SessionID: "session-b", SourceUserID: "user-a"}},
+				{Type: paasv1.SubjectRole, ID: "role-a", RoleSession: &paasv1.RoleSessionReference{SessionID: "session-a", SourceUserID: "user-b"}},
+				{Type: paasv1.SubjectRole, ID: "role-b", RoleSession: &paasv1.RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}},
+				{Type: paasv1.SubjectUser, ID: "user-a"},
+			} {
+				changed := original
+				changed.Subject = subject
+				got, err := fingerprint.value(changed)
+				if err != nil || got == want {
+					t.Fatal("different subject could replay the accepted command", err)
+				}
+			}
+			same := original
+			same.Subject.RoleSession = &paasv1.RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}
+			got, err := fingerprint.value(same)
+			if err != nil || got != want {
+				t.Fatal("same role session lost exact replay", err)
+			}
+		})
+	}
+}
+
 func TestSubmitCreatesDeploymentGenerationAndOperationAtomically(t *testing.T) {
 	transaction := lifecycleTransaction()
 	repository := &fakeLifecycleRepository{transaction: transaction}

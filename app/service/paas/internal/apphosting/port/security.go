@@ -108,16 +108,10 @@ func ValidateAuthorization(value Authorization) error {
 	var problems []error
 	problems = append(problems,
 		paasv1.ValidateID("authorization.tenantId", string(value.TenantID)),
-		paasv1.ValidateID("authorization.subject.id", value.Subject.ID),
+		paasv1.ValidateSubjectRef(value.Subject),
 		paasv1.ValidateID("authorization.decisionId", value.DecisionID),
 		paasv1.ValidateID("authorization.requestId", value.RequestID),
 	)
-	if value.Subject.Type != paasv1.SubjectUser &&
-		value.Subject.Type != paasv1.SubjectServiceAccount &&
-		value.Subject.Type != paasv1.SubjectAgent &&
-		value.Subject.Type != paasv1.SubjectSystemUser {
-		problems = append(problems, fmt.Errorf("unknown authorized subject type %q", value.Subject.Type))
-	}
 	if value.AuditID != "" {
 		problems = append(problems, paasv1.ValidateID("authorization.auditId", value.AuditID))
 	}

@@ -289,6 +289,25 @@ CREATE TABLE IF NOT EXISTS paas.deployment_generations (
     )
 );
 
+-- A ROLE is a virtual identity plus the exact session and original USER.
+-- This validates persisted lineage; it never grants permission or looks up IAM.
+CREATE OR REPLACE FUNCTION paas.subject_reference_valid(subject jsonb)
+RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT COALESCE(jsonb_typeof(subject)='object' AND subject ?& ARRAY['type','id']
+      AND jsonb_typeof(subject->'id')='string' AND subject->>'id' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND CASE WHEN subject->>'type'='ROLE' THEN
+        subject ? 'roleSession' AND subject-ARRAY['type','id','roleSession']='{}'::jsonb
+        AND jsonb_typeof(subject->'roleSession')='object' AND (subject->'roleSession') ?& ARRAY['sessionId','sourceUserId']
+        AND (subject->'roleSession')-ARRAY['sessionId','sourceUserId']='{}'::jsonb
+        AND jsonb_typeof(subject#>'{roleSession,sessionId}')='string'
+        AND subject#>>'{roleSession,sessionId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND jsonb_typeof(subject#>'{roleSession,sourceUserId}')='string'
+        AND subject#>>'{roleSession,sourceUserId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      ELSE subject->>'type' IN ('USER','SERVICE_ACCOUNT','AGENT','SYSTEM_USER') AND subject-ARRAY['type','id']='{}'::jsonb END,false)
+$function$;
+REVOKE ALL ON FUNCTION paas.subject_reference_valid(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.subject_reference_valid(jsonb) TO matrix_paas_api,matrix_paas_worker;
+
 CREATE TABLE IF NOT EXISTS paas.operations (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
@@ -461,6 +480,31 @@ CREATE TABLE IF NOT EXISTS paas.audit_outbox (
         AND (document->>'occurredAt')::timestamptz = created_at
     )
 );
+
+ALTER TABLE paas.operations DROP CONSTRAINT IF EXISTS operations_subject_valid;
+ALTER TABLE paas.operations ADD CONSTRAINT operations_subject_valid CHECK(paas.subject_reference_valid(document->'requestedBy'));
+ALTER TABLE paas.audit_outbox DROP CONSTRAINT IF EXISTS audit_outbox_subject_valid;
+ALTER TABLE paas.audit_outbox ADD CONSTRAINT audit_outbox_subject_valid CHECK(paas.subject_reference_valid(document->'actor'));
+
+CREATE OR REPLACE FUNCTION paas.role_subject_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+        WHERE n.nspname='paas' AND p.proname='subject_reference_valid')=1
+      AND EXISTS(SELECT 1 FROM pg_proc p WHERE p.oid=to_regprocedure('paas.subject_reference_valid(jsonb)')
+        AND p.proowner=(SELECT relowner FROM pg_class WHERE oid='paas.operations'::regclass)
+        AND NOT p.prosecdef AND p.provolatile='i' AND p.proparallel='s' AND NOT p.proisstrict AND NOT p.proleakproof
+        AND p.pronargdefaults=0 AND p.provariadic=0 AND p.prorettype='boolean'::regtype AND NOT p.proretset
+        AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+        AND has_function_privilege('matrix_paas_api',p.oid,'EXECUTE') AND has_function_privilege('matrix_paas_worker',p.oid,'EXECUTE')
+        AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a
+          WHERE a.grantee NOT IN(p.proowner,'matrix_paas_api'::regrole,'matrix_paas_worker'::regrole)
+            OR (a.grantee<>p.proowner AND a.is_grantable)))
+      AND NOT EXISTS(SELECT 1 FROM (VALUES ('operations','operations_subject_valid'),('audit_outbox','audit_outbox_subject_valid')) expected(table_name,name)
+        WHERE NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass('paas.'||expected.table_name)
+          AND c.conname=expected.name AND c.contype='c' AND c.convalidated))
+$function$;
+REVOKE ALL ON FUNCTION paas.role_subject_contract_ready() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.role_subject_contract_ready() TO matrix_paas_api,matrix_paas_worker;
 
 ALTER TABLE paas.operations
     DROP CONSTRAINT IF EXISTS operations_action_valid;
@@ -1033,8 +1077,7 @@ BEGIN
             'requestDigest', 'result', 'requestId', 'auditId',
             'traceparent', 'occurredAt'
        ]) <> '{}'::jsonb
-       OR ((submitted_audit_event->'actor') - ARRAY['type', 'id'])
-            <> '{}'::jsonb
+       OR NOT paas.subject_reference_valid(submitted_audit_event->'actor')
        OR ((submitted_audit_event->'target') - ARRAY['kind', 'id'])
             <> '{}'::jsonb THEN
         RAISE EXCEPTION USING
@@ -1071,9 +1114,6 @@ BEGIN
        OR submitted_audit_event->>'tenantId' <> effective_tenant_id
        OR COALESCE(submitted_audit_event#>>'{actor,id}', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_audit_event#>>'{actor,type}' NOT IN (
-            'USER', 'SERVICE_ACCOUNT', 'AGENT', 'SYSTEM_USER'
-       )
        OR submitted_audit_event->'actor'
             IS DISTINCT FROM submitted_operation->'requestedBy'
        OR COALESCE(submitted_audit_event->>'iamDecisionId', '') COLLATE "C"
@@ -1734,13 +1774,14 @@ AS $function$
         to_regclass('paas.applications') IS NOT NULL
         AND to_regclass('paas.operations') IS NOT NULL
         AND to_regclass('paas.audit_outbox') IS NOT NULL
+        AND paas.role_subject_contract_ready()
         AND NOT EXISTS (
             SELECT 1
               FROM paas.audit_outbox AS outbox
              WHERE outbox.status = 'DEAD_LETTER'
                 OR outbox.attempts >= 100
         ),
-        1::bigint,
+        2::bigint,
         transaction_timestamp()
 $function$;
 
@@ -1758,11 +1799,12 @@ AS $function$
         to_regclass('paas.operations') IS NOT NULL
         AND to_regclass('paas.execution_targets') IS NOT NULL
         AND to_regclass('paas.adapter_commands') IS NOT NULL
+        AND paas.role_subject_contract_ready()
         AND to_regprocedure('paas.claim_operation(text,integer)') IS NOT NULL
         AND to_regprocedure(
             'paas.advance_operation(text,text,bigint,text,jsonb,timestamptz,boolean)'
         ) IS NOT NULL,
-        1::bigint,
+        2::bigint,
         transaction_timestamp()
 $function$;
 

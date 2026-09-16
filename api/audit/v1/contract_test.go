@@ -138,6 +138,10 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		if contract.UserActorRequired {
 			event.Actor.Type = ActorUser
 		}
+		if contract.RoleActorRequired {
+			event.Actor = ActorReference{Type: ActorRole, ID: "role-example",
+				RoleSession: &RoleSessionReference{SessionID: event.Target.ID, SourceUserID: "source-example"}}
+		}
 		if action == ActionIAMInstallationPrimaryCredentialsRecovered {
 			event.Actor = ActorReference{Type: ActorSystem, ID: "iam-local-recovery"}
 		}
@@ -146,6 +150,15 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		}
 		if err := ValidateEventForSource(contract.Source, event); err != nil {
 			t.Fatalf("valid action contract %q rejected: %v", action, err)
+		}
+		if contract.RoleActorRequired {
+			for _, actorType := range []ActorType{ActorUser, ActorSystem, ActorServiceAccount} {
+				forged := event
+				forged.Actor = ActorReference{Type: actorType, ID: event.Actor.ID}
+				if ValidateEvent(forged) == nil {
+					t.Fatal("role exit accepted another actor type")
+				}
+			}
 		}
 		if contract.UserActorRequired {
 			for _, actorType := range []ActorType{ActorSystem, ActorServiceAccount} {

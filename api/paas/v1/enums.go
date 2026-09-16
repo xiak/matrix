@@ -199,6 +199,7 @@ type SubjectType string
 
 const (
 	SubjectUser           SubjectType = "USER"
+	SubjectRole           SubjectType = "ROLE"
 	SubjectServiceAccount SubjectType = "SERVICE_ACCOUNT"
 	SubjectAgent          SubjectType = "AGENT"
 	SubjectSystemUser     SubjectType = "SYSTEM_USER"

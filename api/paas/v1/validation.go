@@ -967,6 +967,21 @@ func ValidateProblem(value Problem) error {
 	return errors.Join(problems...)
 }
 
+func ValidateSubjectRef(value SubjectRef) error {
+	if !contains([]SubjectType{SubjectUser, SubjectRole, SubjectServiceAccount, SubjectAgent, SubjectSystemUser}, value.Type) {
+		return fmt.Errorf("unknown subject type %q", value.Type)
+	}
+	if (value.Type == SubjectRole) != (value.RoleSession != nil) {
+		return errors.New("only a ROLE requires exact role session lineage")
+	}
+	if value.RoleSession != nil {
+		if err := errors.Join(ValidateID("roleSession.sessionId", value.RoleSession.SessionID), ValidateID("roleSession.sourceUserId", value.RoleSession.SourceUserID)); err != nil {
+			return err
+		}
+	}
+	return ValidateID("subject.id", value.ID)
+}
+
 func ValidateOperation(value Operation) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "Operation" {
@@ -1012,11 +1027,9 @@ func ValidateOperation(value Operation) error {
 	if strings.TrimSpace(value.Target.Kind) == "" {
 		problems = append(problems, errors.New("operation target kind is required"))
 	}
-	if !contains(
-		[]SubjectType{SubjectUser, SubjectServiceAccount, SubjectAgent, SubjectSystemUser},
-		value.RequestedBy.Type,
-	) {
-		problems = append(problems, fmt.Errorf("unknown requester type %q", value.RequestedBy.Type))
+	problems = append(problems, ValidateSubjectRef(value.RequestedBy))
+	if value.RequestedBy.Type == SubjectRole && value.Scope.Kind != AuthorityTenant {
+		problems = append(problems, errors.New("role operation requires tenant scope"))
 	}
 	if value.UpdatedAt.Before(value.CreatedAt) {
 		problems = append(problems, errors.New("operation.updatedAt cannot precede createdAt"))

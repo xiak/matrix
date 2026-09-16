@@ -38,7 +38,7 @@ func (service *Service) VerifyInstallation(
 	if !decision.Allowed {
 		return auditv1.InstallationVerification{}, ErrForbidden
 	}
-	if decision.Subject == nil || decision.Subject.Type != iamv1.PrincipalServiceAccount {
+	if decision.Subject == nil || decision.Subject.Type != iamv1.SubjectServiceAccount {
 		return auditv1.InstallationVerification{}, ErrUnavailable
 	}
 	actor, err := actorForDecision(decision)
@@ -159,7 +159,7 @@ func installationProbeRecordMatches(
 	if auditv1.ValidateAuditRecord(record) != nil ||
 		record.Source != auditv1.SourcePaaS ||
 		record.Event.TenantID != tenantID ||
-		record.Event.Actor != actor ||
+		!record.Event.Actor.Equal(actor) ||
 		record.Event.OperationID != request.OperationID ||
 		record.Event.Target != (auditv1.TargetReference{
 			Kind: auditv1.TargetDeployment,

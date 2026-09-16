@@ -107,7 +107,7 @@ func (client *Client) Ingest(ctx context.Context, event audit.Event) error {
 		auditv1.DecodeRequest(response.Body, &result) != nil ||
 		auditv1.ValidateIngestionResult(result) != nil ||
 		result.Outcome != wantOutcome || result.Record.Source != auditv1.SourcePaaS ||
-		result.Record.Event != auditEvent {
+		!result.Record.Event.Equal(auditEvent) {
 		return audit.ErrUnavailable
 	}
 	return nil

@@ -87,6 +87,202 @@ func TestIAMRetainedSessionProcessUpgrade(t *testing.T) {
 	testIAMRetainedProcessUpgrade(t, "MATRIX_IAM_SESSION_UPGRADE_POSTGRES_TEST_DSN", "a36cf9817f522549b995ea9c1f0d873499b4fe62", true)
 }
 
+func TestIAMRetainedRoleCapabilityProcessUpgrade(t *testing.T) {
+	const variable = "MATRIX_IAM_ROLE_PROFILE_UPGRADE_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(variable)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_upgrade_roles_") {
+		t.Fatal("role capability predecessor requires its own disposable database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	admin, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect role capability predecessor database")
+	}
+	defer admin.Close(context.Background())
+	assertPostgres18(t, ctx, admin)
+	assertCleanSchemas(t, ctx, admin)
+	root, temporary := repositoryRoot(t), t.TempDir()
+	// This accepted R1 executable actually publishes USER-only compiled
+	// policies. It is a distinct interpretation boundary from IAM21's author
+	// documents, not a replay of every unpublished development migration.
+	baseline := extractFixedIAMSource(t, ctx, root, temporary, "d45402d91c89a5bb23f52fcfde65491435cd0f55")
+	oldMigrator := buildAuthorityBinary(t, ctx, baseline, temporary, "matrix-iam-role-r1-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "matrix-iam-role-r1", "./app/service/iam/cmd/matrix-iam")
+	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-iam-role-r2", "./app/service/iam/cmd/matrix-iam")
+	apiDSN := runtimeDSN(t, config, "matrix_iam_api_login", processDBPassword)
+	migrationEnvironment := []string{}
+	for _, value := range []struct{ name, dsn string }{
+		{"MATRIX_MIGRATION_DATABASE_DSN_FILE", dsn},
+		{"MATRIX_MIGRATION_IAM_API_DSN_FILE", localRecoveryMigrationDSN(t, apiDSN)},
+		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword))},
+		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword))},
+	} {
+		migrationEnvironment = append(migrationEnvironment, value.name+"="+writeProtectedFile(t, temporary, value.name, []byte(value.dsn)))
+	}
+	var children []*childProcess
+	sensitive := []string{initialAdminPassword, changedAdminPassword, processDBPassword}
+	defer func() {
+		for _, child := range children {
+			child.stop()
+		}
+		assertProcessOutputsSanitized(t, children, sensitive...)
+	}()
+	for _, action := range []string{"apply", "verify"} {
+		child := startChild(t, baseline, oldMigrator, migrationEnvironment, action)
+		children = append(children, child)
+		if err := child.wait(30 * time.Second); err != nil {
+			t.Fatal("actual R1 migrator failed")
+		}
+	}
+	bootstrap, err := iamv1.EncodeBootstrapDocument(processBootstrap(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrapPath := writeProtectedFile(t, temporary, "iam-bootstrap", bootstrap)
+	clear(bootstrap)
+	address := freeAddress(t)
+	endpoint := "http://" + address
+	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-api-dsn", []byte(apiDSN)),
+		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
+		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("36", 32)))}
+	start := func(binary string) *childProcess {
+		child := startChild(t, root, binary, environment)
+		children = append(children, child)
+		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
+		assertRuntimeProcessLogins(t, ctx, admin, "matrix_iam_api_login")
+		return child
+	}
+	old := start(oldBinary)
+	primary := loginIAM(t, endpoint, "admin", initialAdminPassword, "role-profile-login")
+	changePasswordIAM(t, endpoint, primary.Credential, initialAdminPassword, changedAdminPassword, "role-profile-password")
+	sensitive = append(sensitive, primary.Credential)
+	call := func(method, path string, body any, want int, result any) {
+		t.Helper()
+		response := performJSON(t, method, endpoint+path, primary.Credential, body)
+		if response.Status != want || result != nil && json.Unmarshal(response.Body, result) != nil {
+			t.Fatalf("retained role capability %s %s status=%d want=%d", method, path, response.Status, want)
+		}
+	}
+	var role iamv1.Role
+	call(http.MethodPost, "/v1/roles", iamv1.CreateRoleRequest{Name: "Retained USER-only role grant", Tags: []iamv1.RoleTag{}, RequestID: "role-profile-create",
+		TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "root", Effect: iamv1.PolicyAllow,
+			Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: "principal-admin"}}}}}}, http.StatusCreated, &role)
+	var frozen iamv1.PolicyDetail
+	call(http.MethodGet, "/v1/policies/"+string(iamv1.SystemPolicyPaaSViewer), nil, http.StatusOK, &frozen)
+	if iamv1.ValidatePolicyDetail(frozen) != nil || frozen.Version.ContractVersion != 2 || frozen.Version.Compilation == nil {
+		t.Fatal("actual R1 did not provide a compiled policy")
+	}
+	var reference iamv1.AuthorizationProfileReference
+	for _, candidate := range frozen.Version.Compilation.Profiles {
+		if candidate.Product == iamv1.ProductPaaS {
+			reference = candidate
+		}
+	}
+	if reference.Product != iamv1.ProductPaaS {
+		t.Fatal("actual R1 compilation has no PaaS declaration")
+	}
+	var archive string
+	if err := admin.QueryRow(ctx, `SELECT canonical_document FROM iam.authorization_profiles WHERE product=$1 AND revision=$2 AND content_digest=$3`, reference.Product, reference.Revision, reference.ContentDigest).Scan(&archive); err != nil {
+		t.Fatal("read actual R1 frozen profile", err)
+	}
+	declaration, err := iamv1.DecodeAuthorizationProfile(strings.NewReader(archive))
+	if err != nil || iamv1.CheckAuthorizationProfileSubject(declaration, reference, iamv1.ActionPaaSApplicationRead, iamv1.SubjectUser) != nil ||
+		iamv1.CheckAuthorizationProfileSubject(declaration, reference, iamv1.ActionPaaSApplicationRead, iamv1.SubjectRole) == nil {
+		t.Fatal("R1 fixture is not a proven USER-only compilation")
+	}
+	var attachment iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)},
+		PolicyID: frozen.Policy.ID, PolicyResourceVersion: frozen.Policy.ResourceVersion, RequestID: "role-profile-attach-frozen"}, http.StatusOK, &attachment)
+	createIAMPolicyAttachment(t, endpoint, primary.Credential, "principal-admin", frozen.Policy.ID, "role-profile-attach-old-user")
+	old.stop()
+	for range 2 {
+		if err := iammigration.Up(ctx, admin); err != nil {
+			t.Fatal("upgrade real R1 role capability data", err)
+		}
+		if err := iammigration.Verify(ctx, admin); err != nil {
+			t.Fatal("verify role capability schema", err)
+		}
+	}
+	current := start(currentBinary)
+	rolePath := "/v1/roles/" + string(role.ID)
+	call(http.MethodPost, rolePath+":assume", iamv1.AssumeRoleRequest{ResourceVersion: role.ResourceVersion, RequestID: "role-profile-implicit-assume"}, http.StatusForbidden, nil)
+	var management iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", iamv1.CreatePolicyRequest{DisplayName: "Explicit current STS management", RequestID: "role-profile-management",
+		Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant, Statements: []iamv1.PolicyStatement{{SID: "sts", Effect: iamv1.PolicyAllow,
+			Actions: []iamv1.Action{iamv1.ActionIAMRoleAssume, iamv1.ActionIAMRolePermissionBoundarySet}, Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRole, Match: iamv1.PolicyResourceAnyInAuthority}}}}}}, http.StatusCreated, &management)
+	createIAMPolicyAttachment(t, endpoint, primary.Credential, "principal-admin", management.Policy.ID, "role-profile-management-attach")
+	var replacement iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", iamv1.CreatePolicyRequest{DisplayName: "Explicit current ROLE business", Document: frozen.Version.Document, RequestID: "role-profile-recompile"}, http.StatusCreated, &replacement)
+	var boundary iamv1.RolePermissionBoundary
+	call(http.MethodPut, rolePath+"/permission-boundary", iamv1.SetRolePermissionBoundaryRequest{PolicyID: replacement.Policy.ID, PolicyResourceVersion: replacement.Policy.ResourceVersion,
+		ResourceVersion: role.ResourceVersion, RequestID: "role-profile-boundary"}, http.StatusOK, &boundary)
+	issue := func(id string) (iamv1.AssumeRoleResponse, string) {
+		t.Helper()
+		var access iamv1.RoleAccess
+		call(http.MethodGet, rolePath, nil, http.StatusOK, &access)
+		var issued iamv1.AssumeRoleResponse
+		call(http.MethodPost, rolePath+":assume", iamv1.AssumeRoleRequest{ResourceVersion: access.Role.ResourceVersion, RequestID: id}, http.StatusOK, &issued)
+		if iamv1.ValidateAssumeRoleResponse(issued) != nil || issued.Outcome != "APPLIED" {
+			t.Fatal("retained role explicit issuance failed")
+		}
+		secret := issued.Credential.CopyBytes()
+		token := string(secret)
+		clear(secret)
+		sensitive = append(sensitive, token)
+		return issued, token
+	}
+	_, initialToken := issue("role-profile-issued-frozen")
+	request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "retained-role-application"}, iamv1.AuthorizationResourceInstance, "", "role-profile-frozen-business", "role-profile-business")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decide := func(token string, want int, allow bool) {
+		t.Helper()
+		response := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "", request, map[string]string{"Matrix-Subject-Credential": token})
+		var decision iamv1.AuthorizationDecision
+		if response.Status != want || want == http.StatusOK && (json.Unmarshal(response.Body, &decision) != nil || iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil || decision.Allowed != allow) {
+			t.Fatalf("frozen subject capability status=%d want=%d", response.Status, want)
+		}
+	}
+	decide(initialToken, http.StatusServiceUnavailable, false)
+	decide(primary.Credential, http.StatusOK, true) // The same old compilation remains valid for USER.
+	// Merely adding a new Allow cannot erase an incompatible frozen source.
+	call(http.MethodPost, "/v1/policy-attachments", iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)},
+		PolicyID: replacement.Policy.ID, PolicyResourceVersion: replacement.Policy.ResourceVersion, RequestID: "role-profile-attach-current"}, http.StatusOK, nil)
+	_, mixedToken := issue("role-profile-issued-mixed")
+	request.RequestID = "role-profile-mixed-business"
+	decide(mixedToken, http.StatusServiceUnavailable, false)
+	call(http.MethodPost, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: "role-profile-revoke-frozen"}, http.StatusOK, nil)
+	_, freshToken := issue("role-profile-issued-current")
+	request.RequestID = "role-profile-explicit-business"
+	decide(freshToken, http.StatusOK, true)
+	decide(initialToken, http.StatusUnauthorized, false)
+	decide(mixedToken, http.StatusUnauthorized, false)
+	for restart := 0; restart < 2; restart++ {
+		current.stop()
+		if err := iammigration.Up(ctx, admin); err != nil {
+			t.Fatal("replay role capability schema", err)
+		}
+		current = start(currentBinary)
+		var retained iamv1.PolicyDetail
+		call(http.MethodGet, "/v1/policies/"+string(frozen.Policy.ID), nil, http.StatusOK, &retained)
+		if !reflect.DeepEqual(retained, frozen) {
+			t.Fatal("new role capability changed old SYSTEM policy/default/compilation")
+		}
+		request.RequestID = fmt.Sprintf("role-profile-restart-%d", restart)
+		decide(freshToken, http.StatusOK, true)
+		decide(primary.Credential, http.StatusOK, true)
+		decide(initialToken, http.StatusUnauthorized, false)
+		decide(mixedToken, http.StatusUnauthorized, false)
+	}
+}
+
 func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_POLICY_UPGRADE_POSTGRES_TEST_DSN"
 	dsn := os.Getenv(variable)
@@ -161,6 +357,28 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		return child
 	}
 	old := start(oldBinary)
+	// Requests sent to the actual predecessor must use its authenticated
+	// declaration, not this test executable's newer ROLE-capable PaaS profile.
+	// This is a test-only old-consumer boundary; current production admission
+	// remains exact and never accepts a caller-selected old profile.
+	var oldPaaSBytes, oldPaaSDigest string
+	if err := admin.QueryRow(ctx, `SELECT canonical_document,content_digest FROM iam.authorization_profiles WHERE product='paas' AND revision=1`).Scan(&oldPaaSBytes, &oldPaaSDigest); err != nil {
+		t.Fatal("read actual predecessor PaaS declaration", err)
+	}
+	oldPaaS, err := iamv1.DecodeAuthorizationProfile(strings.NewReader(oldPaaSBytes))
+	if err != nil {
+		t.Fatal("decode actual predecessor PaaS declaration", err)
+	}
+	oldPaaSReference := iamv1.AuthorizationProfileReference{Product: oldPaaS.Product, Revision: oldPaaS.Revision, ContentDigest: oldPaaSDigest}
+	if iamv1.CheckAuthorizationProfileReference(oldPaaS, oldPaaSReference) != nil || oldPaaS.Product != iamv1.ProductPaaS {
+		t.Fatal("predecessor declaration commitment is invalid")
+	}
+	checkOldDecision := func(decision iamv1.AuthorizationDecision, request iamv1.AuthorizationRequest) bool {
+		return iamv1.CheckAuthorizationProfileTarget(oldPaaS, request.Profile, request.Action, request.Resource, request.ResourceMode, request.CollectionUsage) == nil &&
+			iamv1.ValidateAuthorizationDecisionForProfile(decision, oldPaaS) == nil && decision.Profile != nil && *decision.Profile == request.Profile &&
+			decision.Action == request.Action && decision.Resource == request.Resource && decision.ResourceMode == request.ResourceMode &&
+			decision.CollectionUsage == request.CollectionUsage && decision.RequestID == request.RequestID && decision.CorrelationID == request.CorrelationID
+	}
 	primary := loginIAM(t, endpoint, "admin", initialAdminPassword, "policy-upgrade-primary-login")
 	changePasswordIAM(t, endpoint, primary.Credential, initialAdminPassword, changedAdminPassword, "policy-upgrade-primary-change")
 	keeper := createIAMUser(t, endpoint, primary.Credential, "retained.operator", "Retained platform operator", initialReaderPassword, "policy-upgrade-operator-create")
@@ -203,16 +421,47 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if stage == "old" {
+				request.Profile = oldPaaSReference
+			}
 			response := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "", request, map[string]string{"Matrix-Subject-Credential": member.Credential})
 			var decision iamv1.AuthorizationDecision
-			if response.Status != http.StatusOK || json.Unmarshal(response.Body, &decision) != nil || iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil || decision.Allowed != allowed {
+			valid := response.Status == http.StatusOK && json.Unmarshal(response.Body, &decision) == nil
+			if stage == "old" {
+				valid = valid && checkOldDecision(decision, request)
+			} else {
+				valid = valid && iamv1.CheckAuthorizationDecisionForRequest(decision, request) == nil
+			}
+			if !valid || decision.Allowed != allowed {
 				t.Fatal("fixed SYSTEM read/create ceiling changed across cutover")
 			}
-			if allowed && (decision.Subject == nil || decision.Subject.ID != user.ID || decision.TenantID != user.AccountID) {
+			if allowed && (decision.Subject == nil || decision.Subject.ID != string(user.ID) || decision.TenantID != user.AccountID) {
 				t.Fatal("fixed SYSTEM allowance changed its authenticated tenant/subject")
 			}
 		}
-		assertPlatformAuthorization(t, endpoint, member.Credential, string(user.ID), "retained-viewer-platform-"+stage, false)
+		if stage != "old" {
+			assertPlatformAuthorization(t, endpoint, member.Credential, string(user.ID), "retained-viewer-platform-"+stage, false)
+		} else {
+			for index, action := range oldPaaS.Actions {
+				if action.Scope != iamv1.AuthorityScopeInstallation {
+					continue
+				}
+				for shapeIndex, shape := range action.ResourceShapes {
+					resourceID := "retained-platform-resource"
+					if shape.Mode == iamv1.AuthorizationResourceCollection {
+						resourceID = "collection"
+					}
+					id := fmt.Sprintf("retained-old-platform-%d-%d", index, shapeIndex)
+					request := iamv1.AuthorizationRequest{Action: action.Action, Resource: iamv1.ResourceReference{Kind: action.ResourceKind, ID: resourceID},
+						Profile: oldPaaSReference, ResourceMode: shape.Mode, CollectionUsage: shape.CollectionUsage, RequestID: id, CorrelationID: id}
+					response := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "", request, map[string]string{"Matrix-Subject-Credential": member.Credential})
+					var decision iamv1.AuthorizationDecision
+					if response.Status != http.StatusOK || json.Unmarshal(response.Body, &decision) != nil || !checkOldDecision(decision, request) || decision.Allowed {
+						t.Fatal("actual predecessor granted platform authority to its viewer")
+					}
+				}
+			}
+		}
 	}
 	assertViewerCeiling("old")
 	legacyRequest, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationCreate,
@@ -223,12 +472,13 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	}
 	// The fixed predecessor already binds its request/decision to Profile r1;
 	// only its policy content is document-only. Do not strip current fields.
+	legacyRequest.Profile = oldPaaSReference
 	legacyResponse := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "",
 		legacyRequest,
 		map[string]string{"Matrix-Subject-Credential": primary.Credential})
 	var originalDecision iamv1.AuthorizationDecision
 	if legacyResponse.Status != http.StatusOK || json.Unmarshal(legacyResponse.Body, &originalDecision) != nil ||
-		iamv1.CheckAuthorizationDecisionForRequest(originalDecision, legacyRequest) != nil || !originalDecision.Allowed || originalDecision.Subject == nil {
+		!checkOldDecision(originalDecision, legacyRequest) || !originalDecision.Allowed || originalDecision.Subject == nil {
 		t.Fatal("old binary did not issue an original business decision")
 	}
 	oldFact := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "policy-upgrade-old-business-event",
@@ -290,7 +540,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 			'principals',(SELECT jsonb_agg(to_jsonb(p) ORDER BY tenant_id,id) FROM iam.principals p),
 			'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.user_credentials c),
 			'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY tenant_id,id) FROM iam.sessions s),
-			'decisions',(SELECT jsonb_agg(to_jsonb(d) ORDER BY tenant_id,id) FROM iam.authorization_decisions d),
+			'decisions',(SELECT jsonb_agg(to_jsonb(d)-'subject_type'-'role_id'-'source_principal_id'-'role_evidence' ORDER BY tenant_id,id) FROM iam.authorization_decisions d),
 			'outbox',(SELECT jsonb_agg(to_jsonb(e) ORDER BY tenant_id,event_id) FROM iam.audit_outbox e))`, originalVersions).Scan(&state); err != nil {
 			t.Fatal("read retained policy authority")
 		}
@@ -403,6 +653,12 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		if err := admin.QueryRow(ctx, `SELECT count(*)>0 AND bool_and(contract_version=1 AND compilation IS NULL)
 			FROM iam.policy_versions WHERE id=ANY($1::text[])`, originalVersions).Scan(&legacyOnly); err != nil || !legacyOnly {
 			t.Fatal("retained original versions acquired fabricated compilation")
+		}
+		var originalSubjects bool
+		if err := admin.QueryRow(ctx, `SELECT count(*)>0 AND bool_and(contract_version IN (1,2) AND principal_id IS NOT NULL
+			 AND subject_type IS NULL AND role_id IS NULL AND source_principal_id IS NULL AND role_evidence IS NULL)
+			 FROM iam.authorization_decisions`).Scan(&originalSubjects); err != nil || !originalSubjects {
+			t.Fatal("migration fabricated ROLE metadata or replaced original USER authority", err)
 		}
 	}
 	obsolete := startChild(t, root, oldBinary, environment)
@@ -545,16 +801,17 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 }
 
 // This is an independently built future-source fixture, not a mutable runtime
-// catalog or a production PaaS action. The existing migrator registers its r2;
+// catalog or a production PaaS action. The existing migrator registers its next revision;
 // no test DML installs a head, version, attachment or authorization decision.
 func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *pgx.Conn, root, temporary, endpoint, primary, member string,
 	migrationEnvironment []string, start func(string) *childProcess, current *childProcess, originalFact auditv1.Event) {
 	t.Helper()
 	const addedAction iamv1.Action = "paas.application.inspect"
 	profile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
-	if !found || profile.Revision != 1 {
+	if !found {
 		t.Fatal("future-source fixture requires its explicit original PaaS revision")
 	}
+	originalRevision := profile.Revision
 	originalProfile, _, err := iamv1.CanonicalizeAuthorizationProfile(profile)
 	if err != nil {
 		t.Fatal(err)
@@ -633,28 +890,38 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 		t.Fatal(err)
 	}
 	// Go's overlay changes only this build's source declaration. The checked-out
-	// catalog and all other executables retain r1; no runtime selector is added.
+	// catalog and all other executables retain the current revision; no runtime
+	// selector is added, and archived declarations are not changed by the overlay.
 	sourcePath := filepath.Join(root, "api/iam/v1/enums.go")
 	source, err := os.ReadFile(sourcePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const declaration = "declaredProductProfile(ProductPaaS, ServicePaaS, 1,"
+	const declaration = "\troleBusinessProfile(paasProfileRevisionOne),"
 	if strings.Count(string(source), declaration) != 1 {
 		t.Fatal("future source declaration anchor is not unique")
-	}
-	replacement := "declaredProductProfile(ProductPaaS, ServicePaaS, 2,\n" +
-		"declaredProfileAction(Action(\"paas.application.inspect\"), ResourceApplication, AuthorityScopeTenant, \"\", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}}),"
-	const readDeclaration = `declaredProfileAction(ActionPaaSApplicationRead, ResourceApplication, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}})`
-	if strings.Count(string(source), readDeclaration) != 1 {
-		t.Fatal("future condition fixture anchor is not unique")
 	}
 	// The added action keeps the original capabilities; only read loses this
 	// condition in the future build. Even a resource-nonmatching old Deny must
 	// then fail closed, rather than disappear behind another Allow.
-	changedRead := `func() AuthorizationProfileAction { action := ` + readDeclaration + `; original := action.Conditions; action.Conditions = nil; for _, condition := range original { if condition.Key != ConditionIAMPrincipalID { action.Conditions = append(action.Conditions, condition) } }; return action }()`
+	replacement := fmt.Sprintf(`func() AuthorizationProfile {
+		profile := roleBusinessProfile(paasProfileRevisionOne)
+		profile.Revision = %d
+		var added AuthorizationProfileAction
+		for index, action := range profile.Actions {
+			if action.Action == ActionPaaSApplicationRead {
+				added = action
+				profile.Actions[index].Conditions = nil
+				for _, condition := range action.Conditions {
+					if condition.Key != ConditionIAMPrincipalID { profile.Actions[index].Conditions = append(profile.Actions[index].Conditions, condition) }
+				}
+			}
+		}
+		added.Action = Action("paas.application.inspect")
+		profile.Actions = append(profile.Actions, added)
+		return profile
+	}(),`, profile.Revision)
 	futureSource := strings.Replace(string(source), declaration, replacement, 1)
-	futureSource = strings.Replace(futureSource, readDeclaration, changedRead, 1)
 	overlaySource := writeProtectedFile(t, temporary, "future-profile-enums.go", []byte(futureSource))
 	overlayJSON, err := json.Marshal(map[string]any{"Replace": map[string]string{sourcePath: overlaySource}})
 	if err != nil {
@@ -696,7 +963,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 		if err := admin.QueryRow(ctx, "SELECT canonical_document FROM iam.policy_versions WHERE policy_id=$1 AND id=$2", original.Policy.ID, original.Version.ID).Scan(&canonical); err != nil || canonical != originalVersionBytes {
 			t.Fatal("future registration rewrote frozen policy bytes")
 		}
-		if err := admin.QueryRow(ctx, "SELECT canonical_document FROM iam.authorization_profiles WHERE product='paas' AND revision=1").Scan(&archive); err != nil || archive != originalProfile {
+		if err := admin.QueryRow(ctx, "SELECT canonical_document FROM iam.authorization_profiles WHERE product='paas' AND revision=$1", originalRevision).Scan(&archive); err != nil || archive != originalProfile {
 			t.Fatal("future registration replaced original profile archive")
 		}
 		if err := admin.QueryRow(ctx, "SELECT document FROM iam.authorization_decisions WHERE id=$1", before.ID).Scan(&document); err != nil || !bytes.Equal(document, retainedDecision) {
@@ -1317,7 +1584,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 24, Audit: 14, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 25, Audit: 15, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -2740,7 +3007,7 @@ func assertPlatformActionAuthorization(t *testing.T, endpoint, credential, princ
 		t.Fatalf("invalid platform authorization: status=%d allowed=%t request=%s", response.StatusCode, allowed, requestID)
 	}
 	if allowed && (decision.InstallationID != "installation-process" || decision.Subject == nil ||
-		decision.Subject.Type != iamv1.PrincipalUser || string(decision.Subject.ID) != principalID) {
+		decision.Subject.Type != iamv1.SubjectUser || string(decision.Subject.ID) != principalID) {
 		t.Fatal("platform authorization lost the exact installation or user identity")
 	}
 	return decision
@@ -3266,6 +3533,8 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	empty := iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}}
 	create := iamv1.CreateRoleRequest{Name: "Application readers", Tags: []iamv1.RoleTag{}, TrustPolicy: empty, RequestID: "process-role-create"}
 	var home, role, replay iamv1.Role
+	var issued iamv1.AssumeRoleResponse
+	roleCredential := ""
 	call(http.MethodPost, iamEndpoint, "/v1/roles", homeBearer, create, http.StatusCreated, &home)
 	create.TrustPolicy = trust
 	var actor iamv1.CurrentIdentity
@@ -3301,6 +3570,62 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		assertPaaSApplicationAbsent(t, ctx, admin, "application-role-implicit-denied")
 		call(http.MethodGet, iamEndpoint, "/v1/auth/me", string(role.ID), nil, http.StatusUnauthorized, nil)
 		call(http.MethodPost, iamEndpoint, "/v1/sts/assume-role", member.Credential, map[string]any{"roleId": role.ID, "requestId": "process-role-not-issued"}, http.StatusNotFound, nil)
+		var boundary iamv1.RolePermissionBoundary
+		call(http.MethodGet, replicaEndpoint, path+"/permission-boundary", roleBearer, nil, http.StatusOK, &boundary)
+		if boundary.Policy != nil {
+			t.Fatal("new role has an implicit boundary")
+		}
+		call(http.MethodPut, iamEndpoint, path+"/permission-boundary", roleBearer, iamv1.SetRolePermissionBoundaryRequest{PolicyID: iamv1.SystemPolicyPaaSViewer,
+			PolicyResourceVersion: 1, ResourceVersion: role.ResourceVersion, RequestID: "process-role-boundary-set"}, http.StatusOK, &boundary)
+		if boundary.Policy == nil || boundary.Policy.PolicyID != iamv1.SystemPolicyPaaSViewer {
+			t.Fatal("role boundary write lost its selected ceiling")
+		}
+		var sourceGrant iamv1.PolicyAttachment
+		call(http.MethodPost, iamEndpoint, "/v1/policy-attachments", roleBearer, iamv1.CreatePolicyAttachmentRequest{
+			Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(user.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator,
+			PolicyResourceVersion: 1, RequestID: "process-role-assume-grant"}, http.StatusOK, &sourceGrant)
+		assume := iamv1.AssumeRoleRequest{ResourceVersion: boundary.ResourceVersion, RequestID: "process-role-session-issue"}
+		call(http.MethodPost, iamEndpoint, path+":assume", member.Credential, assume, http.StatusOK, &issued)
+		if iamv1.ValidateAssumeRoleResponse(issued) != nil || issued.Outcome != "APPLIED" {
+			t.Fatal("role process did not issue one credential")
+		}
+		credentialBytes := issued.Credential.CopyBytes()
+		roleCredential = string(credentialBytes)
+		clear(credentialBytes)
+		var equal iamv1.AssumeRoleResponse
+		call(http.MethodPost, replicaEndpoint, path+":assume", member.Credential, assume, http.StatusOK, &equal)
+		if equal.Outcome != "EQUAL_REPLAY" || equal.Credential.Present() || !reflect.DeepEqual(equal.Session, issued.Session) {
+			t.Fatal("replica reissued or replaced role credential")
+		}
+		call(http.MethodGet, replicaEndpoint, "/v1/auth/me", roleCredential, nil, http.StatusUnauthorized, nil)
+		for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+			var current iamv1.RoleSession
+			call(http.MethodGet, endpoint, "/v1/auth/role-session", roleCredential, nil, http.StatusOK, &current)
+			if !reflect.DeepEqual(current, issued.Session) {
+				t.Fatal("replica role identity differs")
+			}
+		}
+		getPaaSApplication(t, paasEndpoint, roleCredential, operation.Target.ID, http.StatusOK)
+		createPaaSApplication(t, paasEndpoint, roleCredential, "application-readonly-role-denied", "readonly-role-denied", "readonly-role-create", http.StatusForbidden)
+		assertPaaSApplicationAbsent(t, ctx, admin, "application-readonly-role-denied")
+		call(http.MethodPost, replicaEndpoint, "/v1/policy-attachments/"+string(sourceGrant.ID)+":revoke", roleBearer,
+			iamv1.RevokePolicyAttachmentRequest{ResourceVersion: sourceGrant.ResourceVersion, RequestID: "process-role-assume-revoke"}, http.StatusOK, nil)
+		for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+			call(http.MethodGet, endpoint, "/v1/auth/role-session", roleCredential, nil, http.StatusUnauthorized, nil)
+		}
+		var own iamv1.RoleSession
+		intentPath := "/v1/auth/role-sessions/by-request/process-role-session-issue"
+		call(http.MethodGet, iamEndpoint, intentPath, member.Credential, nil, http.StatusOK, &own)
+		call(http.MethodGet, replicaEndpoint, intentPath, ownerBearer, nil, http.StatusNotFound, nil)
+		call(http.MethodPost, replicaEndpoint, intentPath+":revoke", member.Credential, iamv1.RevokeRoleSessionRequest{RequestID: "process-role-session-revoke"}, http.StatusOK, &own)
+		if own.Status != iamv1.SessionRevoked || own.ID != issued.Session.ID {
+			t.Fatal("role source could not revoke its original issuance")
+		}
+		call(http.MethodDelete, replicaEndpoint, path+"/permission-boundary", roleBearer, iamv1.RemoveRolePermissionBoundaryRequest{ResourceVersion: boundary.ResourceVersion, RequestID: "process-role-boundary-remove"}, http.StatusOK, &boundary)
+		if boundary.Policy != nil {
+			t.Fatal("role boundary removal retained a ceiling")
+		}
+		role.ResourceVersion = boundary.ResourceVersion
 		call(http.MethodPatch, replicaEndpoint, path, roleBearer, iamv1.UpdateRoleRequest{Name: role.Name, Description: "Current managed role", Tags: []iamv1.RoleTag{}, MaxSessionDurationSeconds: 900,
 			ResourceVersion: role.ResourceVersion, RequestID: "process-role-update"}, http.StatusOK, &role)
 		call(http.MethodPost, iamEndpoint, path+":set-status", roleBearer, iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: role.ResourceVersion, RequestID: "process-role-disable"}, http.StatusOK, &role)
@@ -3319,12 +3644,14 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			t.Fatal("role deletion did not atomically close its attachment once")
 		}
 		call(http.MethodPost, iamEndpoint, "/v1/auth/logout", roleBearer, map[string]any{"requestId": "process-role-operator-logout"}, http.StatusOK, nil)
+		call(http.MethodPost, replicaEndpoint, "/v1/auth/logout", member.Credential, map[string]any{"requestId": "process-role-source-logout"}, http.StatusOK, nil)
 		call(http.MethodGet, replicaEndpoint, "/v1/auth/me", roleBearer, nil, http.StatusUnauthorized, nil)
 	})
 	// Delivery uses committed IAM facts, not the now-revoked original session.
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	waitAllPaaSOutboxDelivered(t, ctx, admin)
-	for _, action := range []auditv1.Action{auditv1.ActionIAMRoleCreated, auditv1.ActionIAMRoleUpdated, auditv1.ActionIAMRoleDisabled, auditv1.ActionIAMRoleEnabled, auditv1.ActionIAMRoleTrustSet, auditv1.ActionIAMRoleDeleted} {
+	for _, action := range []auditv1.Action{auditv1.ActionIAMRoleCreated, auditv1.ActionIAMRoleUpdated, auditv1.ActionIAMRoleDisabled, auditv1.ActionIAMRoleEnabled, auditv1.ActionIAMRoleTrustSet, auditv1.ActionIAMRoleDeleted,
+		auditv1.ActionIAMRolePermissionBoundarySet, auditv1.ActionIAMRolePermissionBoundaryRemoved} {
 		page := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
 		if page.TenantID != tenant || len(page.Records) != 1 || page.NextCursor != "" {
 			t.Fatalf("role action %s did not append exactly one tenant fact", action)
@@ -3345,12 +3672,37 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		forged.TenantID = "organization-process"
 		call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, forged, http.StatusForbidden, nil)
 	}
+	for _, action := range []auditv1.Action{auditv1.ActionIAMRoleSessionIssued, auditv1.ActionIAMRoleSessionRevoked} {
+		page := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
+		if page.TenantID != tenant || len(page.Records) != 1 {
+			t.Fatal("role issuance fact did not reach its tenant chain", action)
+		}
+		event := page.Records[0].Event
+		if event.Actor.Type != auditv1.ActorUser || event.Actor.ID != auditv1.ActorID(user.ID) || event.Target.Kind != auditv1.TargetRoleSession ||
+			event.Target.ID != string(issued.Session.ID) || (event.IAMDecisionID != "") != (action == auditv1.ActionIAMRoleSessionIssued) {
+			t.Fatal("role issuance history changed actor or original decision")
+		}
+		var duplicate auditv1.IngestionResult
+		call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, event, http.StatusOK, &duplicate)
+		if duplicate.Outcome != auditv1.IngestionDuplicate {
+			t.Fatal("role receipt replay appended a second historical fact")
+		}
+		event.Target.ID = "role-session-forged"
+		call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, event, http.StatusForbidden, nil)
+	}
 	restartIAM()
 	for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
 		call(http.MethodGet, endpoint, "/v1/roles/"+string(role.ID), ownerBearer, nil, http.StatusForbidden, nil)
 		call(http.MethodPost, endpoint, "/v1/roles", ownerBearer, create, http.StatusConflict, nil)
 		call(http.MethodGet, endpoint, "/v1/roles/"+string(home.ID), homeBearer, nil, http.StatusOK, nil)
 		call(http.MethodGet, endpoint, "/v1/auth/me", roleBearer, nil, http.StatusUnauthorized, nil)
+	}
+	currentSource := loginIAM(t, replicaEndpoint, "role.candidate@"+tenant, changedDeveloperPassword, "process-role-source-relogin")
+	var retainedSession iamv1.RoleSession
+	call(http.MethodGet, iamEndpoint, "/v1/auth/role-sessions/by-request/process-role-session-issue", currentSource.Credential, nil, http.StatusOK, &retainedSession)
+	call(http.MethodGet, iamEndpoint, "/v1/auth/role-session", roleCredential, nil, http.StatusUnauthorized, nil)
+	if retainedSession.Status != iamv1.SessionRevoked || retainedSession.ID != issued.Session.ID {
+		t.Fatal("IAM restart revived or lost the original role receipt")
 	}
 	getPaaSApplication(t, paasEndpoint, ownerBearer, operation.Target.ID, http.StatusOK)
 	var retained paasv1.Operation
@@ -3362,7 +3714,165 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	if chain.TenantID != tenant || chain.State != auditv1.VerificationVerified || !chain.Complete {
 		t.Fatal("role lifecycle broke the immutable tenant chain")
 	}
-	return []string{member.Credential}
+	sensitive := []string{member.Credential, roleCredential, currentSource.Credential}
+	return append(sensitive, proveRoleBusinessProcesses(t, ctx, admin, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, ownerBearer, currentSource.Credential, user, withAuditOutage, restartIAM)...)
+}
+
+func proveRoleBusinessProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, ownerBearer, sourceBearer string,
+	user iamv1.User, withAuditOutage func(func()), restartIAM func()) []string {
+	t.Helper()
+	call := func(method, endpoint, path, bearer string, body any, want int, result any) {
+		t.Helper()
+		response := performJSON(t, method, endpoint+path, bearer, body)
+		if response.Status != want || result != nil && json.Unmarshal(response.Body, result) != nil {
+			t.Fatalf("role business %s %s status=%d want=%d", method, path, response.Status, want)
+		}
+	}
+	var role iamv1.Role
+	call(http.MethodPost, iamEndpoint, "/v1/roles", ownerBearer, iamv1.CreateRoleRequest{Name: "Business session", Tags: []iamv1.RoleTag{}, RequestID: "role-business-create",
+		TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "source", Effect: iamv1.PolicyAllow,
+			Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: user.ID}}}}}}, http.StatusCreated, &role)
+	path := "/v1/roles/" + string(role.ID)
+	for index, policy := range []iamv1.PolicyID{iamv1.SystemPolicyPaaSDeveloper, iamv1.SystemPolicyAuditReader} {
+		call(http.MethodPost, iamEndpoint, "/v1/policy-attachments", ownerBearer, iamv1.CreatePolicyAttachmentRequest{
+			Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)}, PolicyID: policy, PolicyResourceVersion: 1,
+			RequestID: fmt.Sprintf("role-business-grant-%d", index)}, http.StatusOK, nil)
+	}
+	var sourceGrant iamv1.PolicyAttachment
+	call(http.MethodPost, iamEndpoint, "/v1/policy-attachments", ownerBearer, iamv1.CreatePolicyAttachmentRequest{
+		Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(user.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator,
+		PolicyResourceVersion: 1, RequestID: "role-business-assume-grant"}, http.StatusOK, &sourceGrant)
+	var boundary iamv1.RolePermissionBoundary
+	call(http.MethodPut, iamEndpoint, path+"/permission-boundary", ownerBearer, iamv1.SetRolePermissionBoundaryRequest{PolicyID: iamv1.SystemPolicyAccountAdministrator,
+		PolicyResourceVersion: 1, ResourceVersion: role.ResourceVersion, RequestID: "role-business-boundary"}, http.StatusOK, &boundary)
+	issue := func(endpoint, requestID string) (iamv1.RoleSession, string) {
+		t.Helper()
+		var response iamv1.AssumeRoleResponse
+		call(http.MethodPost, endpoint, path+":assume", sourceBearer, iamv1.AssumeRoleRequest{ResourceVersion: boundary.ResourceVersion, RequestID: requestID}, http.StatusOK, &response)
+		if iamv1.ValidateAssumeRoleResponse(response) != nil || response.Outcome != "APPLIED" {
+			t.Fatal("real business role was not issued")
+		}
+		secret := response.Credential.CopyBytes()
+		defer clear(secret)
+		return response.Session, string(secret)
+	}
+	session, credential := issue(iamEndpoint, "role-business-session-one")
+	otherSession, otherCredential := issue(replicaEndpoint, "role-business-session-two")
+	actor := paasv1.SubjectRef{Type: paasv1.SubjectRole, ID: string(role.ID), RoleSession: &paasv1.RoleSessionReference{SessionID: string(session.ID), SourceUserID: string(user.ID)}}
+	first := createPaaSApplication(t, paasEndpoint, credential, "application-role-business-one", "role-business-one", "role-business-one", http.StatusCreated)
+	second := createPaaSApplication(t, paasEndpoint, credential, "application-role-business-two", "role-business-two", "role-business-two", http.StatusCreated)
+	for _, operation := range []paasv1.Operation{first, second} {
+		if operation.Scope.TenantID != paasv1.TenantID(user.AccountID) || !operation.RequestedBy.Equal(actor) {
+			t.Fatal("Operation replaced role session with source USER or lost tenant ownership")
+		}
+		var stored paasv1.Operation
+		call(http.MethodGet, paasEndpoint, "/v1/operations/"+string(operation.ID), otherCredential, nil, http.StatusOK, &stored)
+		if !stored.RequestedBy.Equal(actor) {
+			t.Fatal("querying Operation as another session rewrote its original actor")
+		}
+		getPaaSApplication(t, paasEndpoint, homeBearer, operation.Target.ID, http.StatusNotFound)
+	}
+	replayed := createPaaSApplication(t, paasEndpoint, credential, first.Target.ID, "role-business-one", "role-business-one", http.StatusOK)
+	if replayed.ID != first.ID || !replayed.RequestedBy.Equal(actor) {
+		t.Fatal("exact role session lost business idempotency")
+	}
+	createPaaSApplication(t, paasEndpoint, otherCredential, first.Target.ID, "role-business-one", "role-business-one", http.StatusConflict)
+	configuration := performJSONWithIdempotency(t, http.MethodPost, paasEndpoint+"/v1/configurations", credential, "role-business-configuration",
+		paasv1.CreateConfigurationRequest{ID: "configuration-role-business", Name: "role-configuration", ApplicationID: first.Target.ID})
+	var configured paasv1.Operation
+	if configuration.Status != http.StatusCreated || json.Unmarshal(configuration.Body, &configured) != nil || !configured.RequestedBy.Equal(actor) {
+		t.Fatal("role configuration creation lost actor or authority")
+	}
+	call(http.MethodGet, iamEndpoint, "/v1/users", credential, nil, http.StatusUnauthorized, nil)
+	assertPlatformAuditAccess(t, auditEndpoint, credential, http.StatusForbidden)
+	call(http.MethodGet, paasEndpoint, "/managed-services/v1/quota-entitlements", credential, nil, http.StatusForbidden, nil)
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	auditActor := auditv1.ActorReference{Type: auditv1.ActorRole, ID: auditv1.ActorID(role.ID), RoleSession: &auditv1.RoleSessionReference{SessionID: string(session.ID), SourceUserID: auditv1.ActorID(user.ID)}}
+	query := auditv1.QueryRecordsRequest{PageSize: 1, Action: auditv1.ActionPaaSApplicationCreated, Actor: &auditActor}
+	page := queryAudit(t, auditEndpoint, credential, query, http.StatusOK)
+	if len(page.Records) != 1 || page.NextCursor == "" || !page.Records[0].Event.Actor.Equal(auditActor) {
+		t.Fatal("real role Audit query lost its exact actor page")
+	}
+	query.Cursor = page.NextCursor
+	queryAudit(t, auditEndpoint, homeBearer, query, http.StatusUnprocessableEntity)
+	changed := query
+	changed.Actor = &auditv1.ActorReference{Type: auditv1.ActorRole, ID: auditv1.ActorID(role.ID), RoleSession: &auditv1.RoleSessionReference{SessionID: string(otherSession.ID), SourceUserID: auditv1.ActorID(user.ID)}}
+	queryAudit(t, auditEndpoint, otherCredential, changed, http.StatusUnprocessableEntity)
+	last := queryAudit(t, auditEndpoint, credential, query, http.StatusOK)
+	if len(last.Records) != 1 || last.NextCursor != "" || !last.Records[0].Event.Actor.Equal(auditActor) || last.Records[0].Event.EventID == page.Records[0].Event.EventID {
+		t.Fatal("role actor pagination duplicated or crossed session filters")
+	}
+	exitRequest := iamv1.LogoutRequest{RequestID: "role-business-self-exit"}
+	var exited iamv1.RoleSession
+	withAuditOutage(func() {
+		createPaaSApplication(t, paasEndpoint, credential, "application-role-business-delayed", "role-delayed", "role-business-delayed", http.StatusCreated)
+		call(http.MethodPost, replicaEndpoint, "/v1/policy-attachments/"+string(sourceGrant.ID)+":revoke", ownerBearer,
+			iamv1.RevokePolicyAttachmentRequest{ResourceVersion: sourceGrant.ResourceVersion, RequestID: "role-business-source-revoke"}, http.StatusOK, nil)
+		for _, bearer := range []string{credential, otherCredential} {
+			getPaaSApplication(t, paasEndpoint, bearer, first.Target.ID, http.StatusUnauthorized)
+			for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+				call(http.MethodGet, endpoint, "/v1/auth/role-session", bearer, nil, http.StatusUnauthorized, nil)
+			}
+		}
+		// Lost current source authority does not prevent destroying this exact
+		// credential, and a delayed IAM fact does not need a fabricated decision.
+		call(http.MethodPost, replicaEndpoint, "/v1/auth/role-session:logout", credential, exitRequest, http.StatusOK, &exited)
+		if exited.ID != session.ID || exited.Status != iamv1.SessionRevoked || exited.RevokedAt == nil {
+			t.Fatal("revoked business identity could not exit its exact role session")
+		}
+	})
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	_, historical := findPaaSEvent(t, ctx, admin, auditv1.ActionPaaSApplicationCreated, "application-role-business-delayed")
+	if !historical.Actor.Equal(auditActor) {
+		t.Fatal("delayed role fact changed its original actor")
+	}
+	var duplicate auditv1.IngestionResult
+	call(http.MethodPost, auditEndpoint, "/v1/events", paasServiceCredential, historical, http.StatusOK, &duplicate)
+	if duplicate.Outcome != auditv1.IngestionDuplicate || !duplicate.Record.Event.Equal(historical) {
+		t.Fatal("post-revocation role business replay changed history")
+	}
+	forged := historical
+	forged.Actor = *changed.Actor
+	call(http.MethodPost, auditEndpoint, "/v1/events", paasServiceCredential, forged, http.StatusForbidden, nil)
+	queryAudit(t, auditEndpoint, credential, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusUnauthorized)
+	exitPage := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{PageSize: 10, Action: auditv1.ActionIAMRoleSessionExited, Actor: &auditActor}, http.StatusOK)
+	if len(exitPage.Records) != 1 || exitPage.Records[0].Event.Target.ID != string(session.ID) || exitPage.Records[0].Event.IAMDecisionID != "" {
+		t.Fatal("independent IAM dispatcher did not deliver one exact role self-exit")
+	}
+	exitFact := exitPage.Records[0].Event
+	var exitDuplicate auditv1.IngestionResult
+	call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, exitFact, http.StatusOK, &exitDuplicate)
+	if exitDuplicate.Outcome != auditv1.IngestionDuplicate || !exitDuplicate.Record.Event.Equal(exitFact) {
+		t.Fatal("historical role self-exit duplicate changed its actor or chain")
+	}
+	forgedExit := exitFact
+	lineage := *forgedExit.Actor.RoleSession
+	lineage.SessionID, forgedExit.Target.ID = string(otherSession.ID), string(otherSession.ID)
+	forgedExit.Actor.RoleSession = &lineage
+	call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, forgedExit, http.StatusForbidden, nil)
+	restartIAM()
+	var exitReplay iamv1.RoleSession
+	call(http.MethodPost, iamEndpoint, "/v1/auth/role-session:logout", credential, exitRequest, http.StatusOK, &exitReplay)
+	if !reflect.DeepEqual(exited, exitReplay) {
+		t.Fatal("restart re-executed an already committed role exit")
+	}
+	call(http.MethodPost, replicaEndpoint, "/v1/auth/role-session:logout", credential, iamv1.LogoutRequest{RequestID: "role-business-exit-variant"}, http.StatusConflict, nil)
+	for _, bearer := range []string{credential, otherCredential} {
+		getPaaSApplication(t, paasEndpoint, bearer, first.Target.ID, http.StatusUnauthorized)
+	}
+	getPaaSApplication(t, paasEndpoint, ownerBearer, first.Target.ID, http.StatusOK)
+	var retained paasv1.Operation
+	call(http.MethodGet, paasEndpoint, "/v1/operations/"+string(first.ID), ownerBearer, nil, http.StatusOK, &retained)
+	if retained.Scope != first.Scope || !retained.RequestedBy.Equal(actor) {
+		t.Fatal("source revocation or restart changed the accepted role Operation")
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if !chain.Complete || chain.State != auditv1.VerificationVerified || chain.TenantID != auditv1.TenantID(user.AccountID) {
+		t.Fatal("role business facts broke the immutable tenant chain")
+	}
+	return []string{credential, otherCredential}
 }
 
 func proveGroupResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, ownerBearer string,

@@ -35,6 +35,11 @@
           "iam.role.enabled",
           "iam.role.trust-set",
           "iam.role.deleted",
+          "iam.role.permission-boundary.set",
+          "iam.role.permission-boundary.removed",
+          "iam.role-session.issued",
+          "iam.role-session.revoked",
+          "iam.role-session.exited",
           "iam.policy.created",
           "iam.policy-version.created",
           "iam.policy-version.deleted",
@@ -98,9 +103,36 @@
       },
       "ActorReference": {
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "type": {
+                "const": "ROLE"
+              }
+            },
+            "required": [
+              "roleSession"
+            ]
+          },
+          {
+            "properties": {
+              "roleSession": false,
+              "type": {
+                "enum": [
+                  "USER",
+                  "SERVICE_ACCOUNT",
+                  "SYSTEM"
+                ]
+              }
+            }
+          }
+        ],
         "properties": {
           "id": {
             "$ref": "#/components/schemas/ID"
+          },
+          "roleSession": {
+            "$ref": "#/components/schemas/RoleSessionReference"
           },
           "type": {
             "$ref": "#/components/schemas/ActorType"
@@ -115,6 +147,7 @@
       "ActorType": {
         "enum": [
           "USER",
+          "ROLE",
           "SERVICE_ACCOUNT",
           "SYSTEM"
         ],
@@ -624,6 +657,136 @@
                   "properties": {
                     "action": {
                       "const": "iam.role.deleted"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.role.permission-boundary.set"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.role.permission-boundary.removed"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.role-session.issued"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.role-session.revoked"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.role-session.exited"
                     }
                   },
                   "required": [
@@ -3061,6 +3224,231 @@
             "if": {
               "properties": {
                 "action": {
+                  "const": "iam.role.permission-boundary.set"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.permission-boundary.removed"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-session.issued"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE_SESSION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-session.revoked"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE_SESSION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-session.exited"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "ROLE"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE_SESSION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
                   "const": "iam.policy.created"
                 }
               },
@@ -3520,6 +3908,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "installationId": false,
                 "operationId": false,
                 "result": {
@@ -3786,6 +4185,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "installationId": false,
                 "operationId": false,
                 "result": {
@@ -3824,6 +4234,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "installationId": false,
                 "operationId": false,
                 "result": {
@@ -3862,6 +4283,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "installationId": false,
                 "operationId": false,
                 "result": {
@@ -3900,6 +4332,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "iamDecisionId": false,
                 "installationId": false,
                 "operationId": false,
@@ -3938,6 +4381,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "iamDecisionId": false,
                 "installationId": false,
                 "operationId": false,
@@ -3976,6 +4430,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "installationId": false,
                 "operationId": false,
                 "result": {
@@ -4013,6 +4478,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "iamDecisionId": false,
                 "installationId": false,
                 "operationId": false,
@@ -4051,6 +4527,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "installationId": false,
                 "operationId": false,
                 "result": {
@@ -4089,6 +4576,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "installationId": false,
                 "operationId": false,
                 "result": {
@@ -4127,6 +4625,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "installationId": false,
                 "operationId": false,
                 "result": {
@@ -4913,6 +5422,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "installationId": false,
                 "operationId": false,
                 "result": {
@@ -4951,6 +5471,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "installationId": false,
                 "result": {
                   "enum": [
@@ -4989,6 +5520,17 @@
             },
             "then": {
               "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER",
+                        "SERVICE_ACCOUNT",
+                        "SYSTEM"
+                      ]
+                    }
+                  }
+                },
                 "installationId": false,
                 "operationId": false,
                 "result": {
@@ -5579,6 +6121,22 @@
         ],
         "type": "string"
       },
+      "RoleSessionReference": {
+        "additionalProperties": false,
+        "properties": {
+          "sessionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "sourceUserId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "sessionId",
+          "sourceUserId"
+        ],
+        "type": "object"
+      },
       "Source": {
         "enum": [
           "IAM",
@@ -5593,6 +6151,7 @@
           "USER",
           "GROUP",
           "ROLE",
+          "ROLE_SESSION",
           "POLICY",
           "GROUP_MEMBERSHIP",
           "ORGANIZATION",

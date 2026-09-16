@@ -299,7 +299,7 @@ func (service *Service) observe(
 		generation.CreatedByOperationID != operation.ID ||
 		operation.Target.Kind != "Deployment" ||
 		operation.Target.ID != deployment.Metadata.ID ||
-		operation.RequestedBy != authorization.Subject {
+		!operation.RequestedBy.Equal(authorization.Subject) {
 		return paasv1.InstallationVerification{}, ErrUnavailable
 	}
 

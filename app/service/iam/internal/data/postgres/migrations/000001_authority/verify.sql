@@ -123,7 +123,7 @@ BEGIN
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_password(text,text)', 'EXECUTE')
        OR NOT has_function_privilege(
             'matrix_iam_api',
-            'iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer)',
+            'iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(
@@ -293,7 +293,7 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>24 OR NOT iam.authorization_decision_contract_ready()
+    IF (SELECT schema_version FROM iam.readiness())<>25 OR NOT iam.authorization_decision_contract_ready()
         OR NOT iam.policy_attachment_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';
     END IF;

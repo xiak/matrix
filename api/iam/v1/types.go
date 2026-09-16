@@ -15,8 +15,16 @@ type SessionID string
 type DecisionID string
 
 type Subject struct {
-	Type PrincipalType `json:"type"`
-	ID   PrincipalID   `json:"id"`
+	Type        SubjectType           `json:"type"`
+	ID          string                `json:"id"`
+	RoleSession *RoleSessionReference `json:"roleSession,omitempty"`
+}
+
+// RoleSessionReference is the public actor lineage, not the private source
+// login session, trust revision, credential generation or authority evidence.
+type RoleSessionReference struct {
+	SessionID    RoleSessionID `json:"sessionId"`
+	SourceUserID PrincipalID   `json:"sourceUserId"`
 }
 
 type ResourceReference struct {

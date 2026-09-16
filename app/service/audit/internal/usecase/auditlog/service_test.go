@@ -486,7 +486,7 @@ func (client *auditIAM) Authorize(
 		Allowed:    !client.deny,
 		Reason:     iamv1.DecisionAllowed,
 		TenantID:   "organization-example",
-		Subject:    &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-reader"},
+		Subject:    &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-reader"},
 		Action:     request.Action,
 		Resource:   request.Resource,
 		RequestID:  request.RequestID,
@@ -520,7 +520,7 @@ func (client *auditIAM) VerifyInstallation(
 		Allowed: !client.deny, Reason: iamv1.DecisionAllowed,
 		TenantID: "organization-example",
 		Subject: &iamv1.Subject{
-			Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+			Type: iamv1.SubjectServiceAccount, ID: "service-installation-verifier",
 		},
 		Action: request.Action, Resource: request.Resource,
 		RequestID: request.RequestID, DecidedAt: client.now,

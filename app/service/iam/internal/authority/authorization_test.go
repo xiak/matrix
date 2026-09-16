@@ -152,6 +152,82 @@ func TestRoleSessionDeadlineCannotExtendAnyIssuanceLimit(t *testing.T) {
 	}
 }
 
+func roleSessionContextForTest(now time.Time) RoleSessionContext {
+	source := authoritySubject(now, iamv1.SystemPolicyAccountAdministrator)
+	role := iamv1.Role{APIVersion: iamv1.APIVersion, Kind: "Role", ID: "role-reader", AccountID: source.Organization.ID,
+		Name: "reader", Tags: []iamv1.RoleTag{}, Management: iamv1.RoleCustomerManaged, Status: iamv1.RoleActive,
+		MaxSessionDurationSeconds: 3600, ResourceVersion: 1, CurrentTrustVersionID: "trust-reader", CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}
+	trust := iamv1.RoleTrustVersion{APIVersion: iamv1.APIVersion, Kind: "RoleTrustVersion", ID: role.CurrentTrustVersionID, AccountID: role.AccountID,
+		RoleID: role.ID, CreatedAt: role.CreatedAt, Document: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "user", Effect: iamv1.PolicyAllow,
+			Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: source.Principal.ID}}}}}}
+	_, trust.ContentDigest, _ = iamv1.CanonicalizeTrustPolicyDocument(trust.Document)
+	limit := authorityPolicies(now, role.AccountID, iamv1.Subject{Type: iamv1.SubjectRole, ID: string(role.ID)}, "", iamv1.SystemPolicyPaaSViewer)[0]
+	return RoleSessionContext{Source: source, SourceSessionID: source.Session.ID, Role: role, Trust: trust,
+		CredentialGeneration: 1, SecurityGeneration: 1, AssumeDecisionID: "assume-original",
+		Session: iamv1.RoleSession{APIVersion: iamv1.APIVersion, Kind: "RoleSession", ID: "role-session-one", AccountID: role.AccountID,
+			RoleID: role.ID, SourceUserID: source.Principal.ID, Status: iamv1.SessionActive, IssuedAt: now, ExpiresAt: now.Add(30 * time.Minute)},
+		Boundary: &ResolvedRoleBoundary{BoundaryID: "role-ceiling", ResourceVersion: 1, Policy: limit.Policy, Version: limit.Version, Profiles: limit.Profiles}}
+}
+
+func TestRoleSessionAuthenticationRechecksTheCurrentSource(t *testing.T) {
+	now := authorityTestTime()
+	fixture := func() RoleSessionContext { return roleSessionContextForTest(now) }
+	issued, err := NewCredentialIssuer(nil).Issue(CredentialRoleSession, "role-session-one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AuthenticateRoleSession(fixture(), issued.VerificationDigest, issued.Credential, now); err != nil {
+		t.Fatal("current role rejected", err)
+	}
+	for name, change := range map[string]func(*RoleSessionContext){
+		"missing boundary":     func(v *RoleSessionContext) { v.Boundary = nil },
+		"wrong account":        func(v *RoleSessionContext) { v.Session.AccountID = "another-account" },
+		"wrong role":           func(v *RoleSessionContext) { v.Session.RoleID = "another-role" },
+		"wrong source user":    func(v *RoleSessionContext) { v.Session.SourceUserID = "another-user" },
+		"wrong source session": func(v *RoleSessionContext) { v.SourceSessionID = "another-session" },
+		"future issue":         func(v *RoleSessionContext) { v.Session.IssuedAt = now.Add(time.Second) },
+		"expired":              func(v *RoleSessionContext) { v.Session.IssuedAt = now.Add(-time.Minute); v.Session.ExpiresAt = now },
+		"exceeds source":       func(v *RoleSessionContext) { v.Session.ExpiresAt = v.Source.Session.ExpiresAt.Add(time.Second) },
+		"revoked":              func(v *RoleSessionContext) { v.Session.Status = iamv1.SessionRevoked; v.Session.RevokedAt = &now },
+		"account disabled":     func(v *RoleSessionContext) { v.Source.Organization.Status = iamv1.AccountDisabled },
+		"source disabled":      func(v *RoleSessionContext) { v.Source.Principal.Status = iamv1.PrincipalDisabled },
+		"source forced change": func(v *RoleSessionContext) { v.Source.Principal.MustChangePassword = true },
+		"source session revoked": func(v *RoleSessionContext) {
+			v.Source.Session.Status = iamv1.SessionRevoked
+			v.Source.Session.RevokedAt = &now
+		},
+		"source no assume":         func(v *RoleSessionContext) { v.Source.Policies = nil },
+		"role disabled":            func(v *RoleSessionContext) { v.Role.Status = iamv1.RoleDisabled },
+		"different selected trust": func(v *RoleSessionContext) { v.Role.CurrentTrustVersionID = "different-trust" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := fixture()
+			change(&value)
+			if AuthenticateRoleSession(value, issued.VerificationDigest, issued.Credential, now) == nil {
+				t.Fatal("inactive or inconsistent role authenticated")
+			}
+		})
+	}
+	for _, purpose := range []CredentialType{CredentialSession, CredentialService} {
+		digest, err := DigestCredential(purpose, "role-session-one", issued.Credential)
+		if err != nil || AuthenticateRoleSession(fixture(), digest, issued.Credential, now) == nil {
+			t.Fatal("role accepted another credential purpose")
+		}
+	}
+	value := fixture()
+	version := policyVersionForTest(t, iamv1.SystemPolicyAccountAdministrator, iamv1.PolicyAllow, iamv1.ActionIAMRoleAssume, iamv1.PolicyResourceExact, string(value.Role.ID))
+	version.Document.Statements[0].Conditions = []iamv1.PolicyCondition{{Key: iamv1.ConditionIAMCurrentTime, Operator: iamv1.PolicyDateLessThan, Values: []string{now.Add(time.Second).Format(time.RFC3339Nano)}}}
+	compilePolicyVersionForTest(t, &version)
+	value.Source.Policies[0].Version = version
+	value.Source.Policies[0].Policy.DefaultVersionID = version.ID
+	if err := AuthenticateRoleSession(value, issued.VerificationDigest, issued.Credential, now); err != nil {
+		t.Fatal("current conditional assume rejected", err)
+	}
+	if err := AuthenticateRoleSession(value, issued.VerificationDigest, issued.Credential, now.Add(time.Second)); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("unchanged revision cached an expired source Allow", err)
+	}
+}
+
 func TestSessionAuthenticationUsesBindingDigestRevocationAndDatabaseTime(t *testing.T) {
 	now := authorityTestTime()
 	context := authoritySubject(now, iamv1.SystemPolicyPaaSDeveloper)
@@ -181,6 +257,129 @@ func TestSessionAuthenticationUsesBindingDigestRevocationAndDatabaseTime(t *test
 	}
 }
 
+func TestRoleDecisionIntersectsThreeSourcesWithoutUserPermissionInheritance(t *testing.T) {
+	now := authorityTestTime()
+	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-prod"})
+	grant := func(value *RoleSessionContext, version iamv1.PolicyVersion) {
+		row := authorityPolicies(now, value.Session.AccountID, iamv1.Subject{Type: iamv1.SubjectRole, ID: string(value.Role.ID)}, "", iamv1.SystemPolicyPaaSViewer)[0]
+		row.Policy.ID, row.Policy.DefaultVersionID = version.PolicyID, version.ID
+		row.Policy.Management, row.Policy.AccountID = iamv1.PolicyCustomerManaged, value.Session.AccountID
+		row.Attachment.ID, row.Attachment.PolicyID = iamv1.PolicyAttachmentID("attachment-"+string(version.PolicyID)), version.PolicyID
+		row.Version = version
+		value.Policies = append(value.Policies, row)
+	}
+	restriction := func(value *RoleSessionContext, effect iamv1.PolicyEffect, resource string) {
+		version := policyVersionForTest(t, "test-document-only", effect, request.Action, iamv1.PolicyResourceExact, resource)
+		value.SessionPolicy = &ResolvedSessionPolicy{Document: version.Document, Compilation: *version.Compilation,
+			ContentDigest: version.ContentDigest, Profiles: iamv1.AllAuthorizationProfiles()}
+	}
+	for _, test := range []struct {
+		name        string
+		change      func(*RoleSessionContext)
+		want        bool
+		unavailable bool
+	}{
+		{"role and boundary", func(*RoleSessionContext) {}, true, false},
+		{"source administrator is not a role grant", func(v *RoleSessionContext) { v.Policies = nil }, false, false},
+		{"source only has assume", func(v *RoleSessionContext) {
+			version := policyVersionForTest(t, iamv1.SystemPolicyAccountAdministrator, iamv1.PolicyAllow, iamv1.ActionIAMRoleAssume, iamv1.PolicyResourceExact, string(v.Role.ID))
+			v.Source.Policies[0].Version = version
+			v.Source.Policies[0].Policy.DefaultVersionID = version.ID
+		}, true, false},
+		{"mandatory boundary missing", func(v *RoleSessionContext) { v.Boundary = nil }, false, true},
+		{"boundary misses resource", func(v *RoleSessionContext) {
+			version := policyVersionForTest(t, v.Boundary.Policy.ID, iamv1.PolicyAllow, request.Action, iamv1.PolicyResourceExact, "other-resource")
+			v.Boundary.Version = version
+			v.Boundary.Policy.DefaultVersionID = version.ID
+		}, false, false},
+		{"boundary deny", func(v *RoleSessionContext) {
+			version := policyVersionForTest(t, v.Boundary.Policy.ID, iamv1.PolicyDeny, request.Action, iamv1.PolicyResourceAnyInAuthority, "")
+			v.Boundary.Version = version
+			v.Boundary.Policy.DefaultVersionID = version.ID
+		}, false, false},
+		{"session intersection", func(v *RoleSessionContext) { restriction(v, iamv1.PolicyAllow, request.Resource.ID) }, true, false},
+		{"session misses resource", func(v *RoleSessionContext) { restriction(v, iamv1.PolicyAllow, "other-resource") }, false, false},
+		{"session deny", func(v *RoleSessionContext) { restriction(v, iamv1.PolicyDeny, request.Resource.ID) }, false, false},
+		{"role deny wins over both ceilings", func(v *RoleSessionContext) {
+			grant(v, policyVersionForTest(t, "role-explicit-deny", iamv1.PolicyDeny, request.Action, iamv1.PolicyResourceExact, request.Resource.ID))
+			restriction(v, iamv1.PolicyAllow, request.Resource.ID)
+		}, false, false},
+		{"corrupt restriction cannot disappear", func(v *RoleSessionContext) {
+			restriction(v, iamv1.PolicyAllow, request.Resource.ID)
+			v.SessionPolicy.ContentDigest = "sha256:" + strings.Repeat("0", 64)
+		}, false, true},
+		{"corrupt private generation", func(v *RoleSessionContext) { v.CredentialGeneration = 0 }, false, true},
+		{"missing issuance decision", func(v *RoleSessionContext) { v.AssumeDecisionID = "" }, false, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := roleSessionContextForTest(now)
+			grant(&value, policyVersionForTest(t, "role-read", iamv1.PolicyAllow, request.Action, iamv1.PolicyResourceAnyInAuthority, ""))
+			test.change(&value)
+			result, err := DecideRole(value, iamv1.ServicePaaS, request, "role-business-decision", now)
+			if result.Allowed != test.want || (errors.Is(err, ErrAuthorityUnavailable) != test.unavailable) || (!test.unavailable && err != nil) {
+				t.Fatalf("allowed=%v error=%v", result.Allowed, err)
+			}
+			if err != nil {
+				return
+			}
+			if result.RoleEvidence == nil || result.RoleEvidence.AssumeDecisionID != value.AssumeDecisionID || result.RoleEvidence.SourceSessionID != value.Source.Session.ID ||
+				result.BoundaryEvidence.State != "NOT_APPLICABLE" || result.RoleEvidence.Boundary.Version.VersionID != value.Boundary.Version.ID {
+				t.Fatal("role provenance was dropped or confused with USER boundary")
+			}
+			for _, evidence := range result.PolicyEvidence {
+				if evidence.Version.PolicyID == iamv1.SystemPolicyAccountAdministrator || evidence.Version.PolicyID == iamv1.SystemPolicyPaaSViewer || evidence.MembershipID != "" {
+					t.Fatal("a source USER or ceiling became a positive role attachment")
+				}
+			}
+			if test.want && (result.Subject == nil || result.Subject.Type != iamv1.SubjectRole || result.Subject.ID != string(value.Role.ID) ||
+				result.Subject.RoleSession == nil || result.Subject.RoleSession.SessionID != value.Session.ID || result.Subject.RoleSession.SourceUserID != value.Source.Principal.ID) {
+				t.Fatal("public subject is not the exact ROLE lineage")
+			}
+			encoded, err := json.Marshal(result)
+			if err != nil || bytes.Contains(encoded, []byte("sourceSessionId")) || bytes.Contains(encoded, []byte("credentialGeneration")) || bytes.Contains(encoded, []byte("boundaryId")) || bytes.Contains(encoded, []byte("assumeDecisionId")) {
+				t.Fatal("private proof leaked into decision")
+			}
+			if !test.want && (result.Subject != nil || result.TenantID != "" || result.InstallationID != "") {
+				t.Fatal("Deny leaked authority")
+			}
+		})
+	}
+}
+
+func TestRoleDecisionUsesRoleIdentityAndRejectsUndeclaredProducts(t *testing.T) {
+	now := authorityTestTime()
+	value := roleSessionContextForTest(now)
+	value.Policies = authorityPolicies(now, value.Session.AccountID, iamv1.Subject{Type: iamv1.SubjectRole, ID: string(value.Role.ID)}, "", iamv1.SystemPolicyPaaSViewer)
+	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-prod"})
+	for _, expected := range []string{string(value.Role.ID), string(value.Source.Principal.ID), "another-role"} {
+		version := policyVersionForTest(t, value.Policies[0].Policy.ID, iamv1.PolicyAllow, request.Action, iamv1.PolicyResourceAnyInAuthority, "")
+		version.Document.Statements[0].Conditions = []iamv1.PolicyCondition{
+			{Key: iamv1.ConditionIAMPrincipalID, Operator: iamv1.PolicyStringEquals, Values: []string{expected}},
+			{Key: iamv1.ConditionIAMAccountID, Operator: iamv1.PolicyStringEquals, Values: []string{string(value.Session.AccountID)}},
+			{Key: iamv1.ConditionIAMCurrentTime, Operator: iamv1.PolicyDateLessThan, Values: []string{now.Add(time.Second).Format(time.RFC3339)}},
+		}
+		compilePolicyVersionForTest(t, &version)
+		value.Policies[0].Version, value.Policies[0].Policy.DefaultVersionID = version, version.ID
+		for _, offset := range []time.Duration{0, time.Second} {
+			result, err := DecideRole(value, iamv1.ServicePaaS, request, "role-conditions", now.Add(offset))
+			if err != nil || result.Allowed != (expected == string(value.Role.ID) && offset == 0) {
+				t.Fatal("role conditions used source USER identity or stale time", err)
+			}
+		}
+	}
+	for _, action := range []iamv1.Action{iamv1.ActionIAMRoleRead, iamv1.ActionPaaSExecutionTargetRead, iamv1.ActionInstallationVerify, iamv1.ActionManagedServiceOfferingRead} {
+		definition, _ := iamv1.LookupActionDefinition(action)
+		request := policyEvaluationRequestForTest(t, action, iamv1.ResourceReference{Kind: definition.ResourceKind, ID: "target-one"})
+		result, err := DecideRole(value, definition.CallingService, request, "role-unsupported", now)
+		if err != nil || result.Allowed || result.RoleEvidence == nil {
+			t.Fatal("ROLE gained an undeclared management/platform/probe/product capability", action, err)
+		}
+	}
+	if result, err := DecideRole(value, iamv1.ServiceAudit, request, "role-wrong-producer", now); err != nil || result.Allowed {
+		t.Fatal("wrong producer authorized a role", err)
+	}
+}
+
 func TestSystemPolicyAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testing.T) {
 	now := authorityTestTime()
 	context := authoritySubject(now, iamv1.SystemPolicyPaaSDeveloper)
@@ -191,7 +390,7 @@ func TestSystemPolicyAllowsCurrentBindingAndDeniesWithoutAuthorityLeak(t *testin
 	}, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate)
 	allowed, err := Decide(context, iamv1.ServicePaaS, request, "decision-allowed", now)
 	if err != nil || !allowed.Allowed || allowed.TenantID != context.Organization.ID ||
-		allowed.Subject == nil || allowed.Subject.ID != context.Principal.ID {
+		allowed.Subject == nil || allowed.Subject.ID != string(context.Principal.ID) {
 		t.Fatalf("developer decision = %#v err=%v", allowed, err)
 	}
 
@@ -255,8 +454,8 @@ func TestInstallationVerifierServiceCanAuthorizeOnlyItsFixedAction(t *testing.T)
 		now,
 	)
 	if err != nil || !allowed.Allowed || allowed.TenantID != identity.AccountID ||
-		allowed.Subject == nil || allowed.Subject.Type != iamv1.PrincipalServiceAccount ||
-		allowed.Subject.ID != identity.PrincipalID {
+		allowed.Subject == nil || allowed.Subject.Type != iamv1.SubjectServiceAccount ||
+		allowed.Subject.ID != string(identity.PrincipalID) {
 		t.Fatalf("installation verifier decision=%#v err=%v", allowed, err)
 	}
 
@@ -467,13 +666,13 @@ func TestCatalogConfinementIsEnforcedByActualDecisions(t *testing.T) {
 					continue
 				}
 				if definition.AuthorityScope == iamv1.AuthorityScopeInstallation {
-					if decision.InstallationID != "installation-example" || decision.TenantID != "" || decision.Subject.Type != iamv1.PrincipalUser {
+					if decision.InstallationID != "installation-example" || decision.TenantID != "" || decision.Subject.Type != iamv1.SubjectUser {
 						t.Fatal("platform action lost its installation/user authority")
 					}
 				} else if decision.TenantID != "organization-example" || decision.InstallationID != "" {
 					t.Fatal("tenant/probe decision changed its bound home tenant")
 				}
-				if definition.AuthorityScope == iamv1.AuthorityScopeInstallationProbe && decision.Subject.Type != iamv1.PrincipalServiceAccount {
+				if definition.AuthorityScope == iamv1.AuthorityScopeInstallationProbe && decision.Subject.Type != iamv1.SubjectServiceAccount {
 					t.Fatal("probe no longer identifies the authenticated service")
 				}
 			}
@@ -628,7 +827,7 @@ func TestPolicyEvaluationChecksSubjectCapabilityBeforeUnmatchedEffects(t *testin
 		}
 	}
 	context := policyContextForTest(now)
-	context.subject.Type = iamv1.PrincipalServiceAccount
+	context.subject.Type = iamv1.SubjectServiceAccount
 	for _, versions := range [][]iamv1.PolicyVersion{nil, {allow}} {
 		if result, err := evaluatePolicies(context, versions, request); !errors.Is(err, errUnsupportedPolicySubject) || result.Allowed {
 			t.Fatal("business request bypassed current subject admission")
@@ -774,8 +973,8 @@ func TestIdentityConditionDenyAndMissingAuthorityFailClosed(t *testing.T) {
 			}
 			for _, invalid := range []policyEvaluationContext{
 				{databaseTime: context.databaseTime, subject: context.subject},
-				{databaseTime: context.databaseTime, accountID: context.accountID, subject: iamv1.Subject{Type: iamv1.PrincipalUser}},
-				{databaseTime: context.databaseTime, accountID: context.accountID, subject: iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: context.subject.ID}},
+				{databaseTime: context.databaseTime, accountID: context.accountID, subject: iamv1.Subject{Type: iamv1.SubjectUser}},
+				{databaseTime: context.databaseTime, accountID: context.accountID, subject: iamv1.Subject{Type: iamv1.SubjectServiceAccount, ID: context.subject.ID}},
 			} {
 				decision, err := evaluatePolicies(invalid, versions, policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, resource))
 				if !errors.Is(err, ErrInvalidPolicyState) || decision.Allowed || len(decision.MatchedVersions) != 0 {
@@ -924,7 +1123,7 @@ func TestAttachedPolicyEvaluationRequiresCurrentOwnedRelationships(t *testing.T)
 			Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: "user-a"}, PolicyID: version.PolicyID,
 			Scope: iamv1.AuthorityScopeTenant, ResourceVersion: 7, CreatedAt: now, UpdatedAt: now},
 	}
-	subject := iamv1.Subject{Type: iamv1.PrincipalUser, ID: "user-a"}
+	subject := iamv1.Subject{Type: iamv1.SubjectUser, ID: "user-a"}
 	resource := iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-a"}
 	result, evidence, err := EvaluateAttachedPolicies(authorityTestTime(), "account-a", "installation-a", subject, []AttachedPolicy{row}, policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, resource))
 	if err != nil || !result.Allowed || len(evidence) != 1 || evidence[0].AttachmentID != row.Attachment.ID ||
@@ -933,7 +1132,7 @@ func TestAttachedPolicyEvaluationRequiresCurrentOwnedRelationships(t *testing.T)
 		t.Fatal("valid attachment lost its authority evidence")
 	}
 	membership := iamv1.GroupMembership{APIVersion: iamv1.APIVersion, Kind: "GroupMembership", ID: "membership-a",
-		AccountID: "account-a", GroupID: "group-a", UserID: subject.ID, CreatedBy: "user-admin",
+		AccountID: "account-a", GroupID: "group-a", UserID: iamv1.PrincipalID(subject.ID), CreatedBy: "user-admin",
 		ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
 	groupRow := row
 	groupRow.Attachment.ID = "attachment-group"
@@ -967,7 +1166,7 @@ func TestAttachedPolicyEvaluationRequiresCurrentOwnedRelationships(t *testing.T)
 			}
 		})
 	}
-	serviceSubject := iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: subject.ID}
+	serviceSubject := iamv1.Subject{Type: iamv1.SubjectServiceAccount, ID: subject.ID}
 	if result, evidence, err := EvaluateAttachedPolicies(authorityTestTime(), "account-a", "installation-a", serviceSubject, []AttachedPolicy{groupRow}, policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, resource)); !errors.Is(err, ErrInvalidPolicyState) || result.Allowed || len(evidence) != 0 {
 		t.Fatal("service identity inherited a user group policy")
 	}
@@ -1335,7 +1534,7 @@ func authoritySubject(now time.Time, policyIDs ...iamv1.PolicyID) SubjectContext
 			AccountID: "organization-example", PrincipalID: "principal-developer",
 			Status: iamv1.SessionActive, IssuedAt: createdAt, ExpiresAt: now.Add(time.Hour),
 		},
-		Policies:       authorityPolicies(now, "organization-example", iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"}, "installation-example", policyIDs...),
+		Policies:       authorityPolicies(now, "organization-example", iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"}, "installation-example", policyIDs...),
 		Boundary:       &ResolvedUserBoundary{State: "NONE", AccountID: "organization-example", UserID: "principal-developer", UserResourceVersion: 1},
 		InstallationID: "installation-example",
 	}
@@ -1351,7 +1550,7 @@ var testSystemPolicyIDs = []iamv1.PolicyID{
 }
 
 func authorityServicePolicies(now time.Time, identity iamv1.ServiceIdentity, policyIDs ...iamv1.PolicyID) []AttachedPolicy {
-	return authorityPolicies(now, identity.AccountID, iamv1.Subject{Type: iamv1.PrincipalServiceAccount, ID: identity.PrincipalID}, identity.InstallationID, policyIDs...)
+	return authorityPolicies(now, identity.AccountID, iamv1.Subject{Type: iamv1.SubjectServiceAccount, ID: string(identity.PrincipalID)}, identity.InstallationID, policyIDs...)
 }
 
 func authorityPolicies(now time.Time, account iamv1.AccountID, subject iamv1.Subject, installation string, policyIDs ...iamv1.PolicyID) []AttachedPolicy {
@@ -1382,7 +1581,7 @@ func authorityTestTime() time.Time {
 }
 
 func policyContextForTest(now time.Time) policyEvaluationContext {
-	result := policyEvaluationContext{databaseTime: now, accountID: "organization-example", subject: iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"}, profiles: make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)}
+	result := policyEvaluationContext{databaseTime: now, accountID: "organization-example", subject: iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"}, profiles: make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)}
 	if result.includeProfiles(iamv1.AllAuthorizationProfiles()) != nil {
 		panic("invalid source profiles")
 	}
@@ -1557,7 +1756,7 @@ func TestLegacySystemInterpretationDoesNotAdmitUnprovedCustomerVersions(t *testi
 		t.Fatal("fixed legacy seed changed without an interpretation decision")
 	}
 	context := policyContextForTest(authorityTestTime())
-	if context.includeProfiles([]iamv1.AuthorizationProfile{oldIAM}) != nil {
+	if context.includeProfiles(iamv1.HistoricalAuthorizationProfiles()) != nil {
 		t.Fatal("invalid fixed legacy profile")
 	}
 	request := policyEvaluationRequestForTest(t, iamv1.ActionIAMPolicyCreate, iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(context.accountID)})

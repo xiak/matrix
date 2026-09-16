@@ -10,8 +10,22 @@ type OperationID string
 type Cursor string
 
 type ActorReference struct {
-	Type ActorType `json:"type"`
-	ID   ActorID   `json:"id"`
+	Type        ActorType             `json:"type"`
+	ID          ActorID               `json:"id"`
+	RoleSession *RoleSessionReference `json:"roleSession,omitempty"`
+}
+
+type RoleSessionReference struct {
+	SessionID    string  `json:"sessionId"`
+	SourceUserID ActorID `json:"sourceUserId"`
+}
+
+// Lineage is part of the actor identity, not pointer identity or an attribute.
+func (actor ActorReference) Equal(other ActorReference) bool {
+	if actor.Type != other.Type || actor.ID != other.ID || (actor.RoleSession == nil) != (other.RoleSession == nil) {
+		return false
+	}
+	return actor.RoleSession == nil || *actor.RoleSession == *other.RoleSession
 }
 
 type TargetReference struct {
@@ -41,6 +55,16 @@ type Event struct {
 	OperationID    OperationID     `json:"operationId,omitempty"`
 	TraceParent    string          `json:"traceparent,omitempty"`
 	OccurredAt     time.Time       `json:"occurredAt"`
+}
+
+// Equal compares the complete fact, including independently decoded lineage.
+func (event Event) Equal(other Event) bool {
+	if !event.Actor.Equal(other.Actor) || !event.OccurredAt.Equal(other.OccurredAt) {
+		return false
+	}
+	event.Actor, other.Actor = ActorReference{}, ActorReference{}
+	event.OccurredAt, other.OccurredAt = time.Time{}, time.Time{}
+	return event == other
 }
 
 type AuditRecord struct {

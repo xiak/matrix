@@ -110,7 +110,8 @@ func TestRoleMetadataAndAccessAreSeparateFromLoginAuthority(t *testing.T) {
 	}
 	access := RoleAccess{Role: role, TrustVersion: RoleTrustVersion{APIVersion: APIVersion, Kind: "RoleTrustVersion", ID: "trust-a",
 		AccountID: role.AccountID, RoleID: role.ID, Document: document, ContentDigest: digest, CreatedAt: now}, PolicyAttachments: []PolicyAttachment{}}
-	for _, action := range []Action{ActionIAMRoleRead, ActionIAMRoleUpdate, ActionIAMRoleSetStatus, ActionIAMRoleDelete, ActionIAMRoleTrustSet, ActionIAMRolePolicyAttachmentCreate} {
+	for _, action := range []Action{ActionIAMRoleRead, ActionIAMRoleUpdate, ActionIAMRoleSetStatus, ActionIAMRoleDelete, ActionIAMRoleTrustSet,
+		ActionIAMRolePolicyAttachmentCreate, ActionIAMRolePermissionBoundarySet, ActionIAMRolePermissionBoundaryRemove} {
 		access.Capabilities = append(access.Capabilities, ActionCapability{Action: action, Resource: ResourceReference{Kind: ResourceRole, ID: string(role.ID)}, RestrictionReason: CapabilityAuthorityRequired})
 	}
 	if ValidateRoleAccess(access) != nil {
@@ -165,24 +166,80 @@ func TestRoleMetadataAndAccessAreSeparateFromLoginAuthority(t *testing.T) {
 	}
 }
 
-func TestRoleManagementProfilePreservesRegisteredRevisionOne(t *testing.T) {
+func TestRoleProfilesPreserveRegisteredAuthority(t *testing.T) {
 	archives := HistoricalAuthorizationProfiles()
-	if len(archives) != 1 {
-		t.Fatal("missing exact IAM archive")
-	}
-	_, digest, err := CanonicalizeAuthorizationProfile(archives[0])
-	if err != nil || digest != "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44" {
-		t.Fatal("registered IAM revision one was rewritten")
-	}
-	for _, action := range archives[0].Actions {
-		if action.Action == ActionIAMRoleCreate {
-			t.Fatal("historical IAM profile silently gained role authority")
+	for revision, expected := range map[uint64]string{
+		1: "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+		2: "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+	} {
+		index := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
+			return profile.Product == ProductIAM && profile.Revision == revision
+		})
+		if index < 0 {
+			t.Fatal("missing retained IAM revision")
+		}
+		_, digest, err := CanonicalizeAuthorizationProfile(archives[index])
+		if err != nil || digest != expected {
+			t.Fatal("registered IAM declaration was rewritten")
+		}
+		for _, action := range archives[index].Actions {
+			if action.Action == ActionIAMRoleAssume || action.Action == ActionIAMRolePermissionBoundarySet ||
+				(revision == 1 && action.Action == ActionIAMRoleCreate) || len(action.SubjectTypes) != 0 {
+				t.Fatal("historical IAM declaration silently gained authority")
+			}
+		}
+		archives[index].Actions[0].Action = "iam.invalid.mutation"
+		_, again, err := CanonicalizeAuthorizationProfile(HistoricalAuthorizationProfiles()[index])
+		if err != nil || again != digest {
+			t.Fatal("caller changed archived source declaration")
 		}
 	}
-	archives[0].Actions[0].Action = "iam.invalid.mutation"
-	_, again, err := CanonicalizeAuthorizationProfile(HistoricalAuthorizationProfiles()[0])
-	if err != nil || again != digest {
-		t.Fatal("caller changed archived source declaration")
+	current, found := LookupAuthorizationProfile(ProductIAM)
+	if !found || current.Revision != 3 {
+		t.Fatal("missing current IAM role-session declaration")
+	}
+	for _, action := range current.Actions {
+		if !slices.Equal(action.SubjectTypes, []SubjectType{SubjectUser}) {
+			t.Fatal("role management or assumption accepts a non-USER caller")
+		}
+	}
+}
+
+func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
+	for product, digest := range map[ProductID]string{
+		ProductPaaS:  "sha256:f2409682d451b564cbd55b2b315543c2f4b333e3f027f3b4377b103ecc1e2876",
+		ProductAudit: "sha256:6bae9c16c05ad781662190c02ab2adb1e552ef2889c0a05d78de7d4553147052",
+	} {
+		archives := HistoricalAuthorizationProfiles()
+		index := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool { return profile.Product == product && profile.Revision == 1 })
+		if index < 0 {
+			t.Fatal("missing previously registered product")
+		}
+		_, original, err := CanonicalizeAuthorizationProfile(archives[index])
+		if err != nil || original != digest {
+			t.Fatal("registered product bytes changed")
+		}
+		current, found := LookupAuthorizationProfile(product)
+		if !found || current.Revision != 2 {
+			t.Fatal("missing explicit new product revision")
+		}
+		_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
+		if err != nil || currentDigest == original {
+			t.Fatal("subject capability change did not change commitment")
+		}
+		for _, action := range current.Actions {
+			ref := AuthorizationProfileReference{Product: product, Revision: current.Revision, ContentDigest: currentDigest}
+			if CheckAuthorizationProfileSubject(current, ref, action.Action, SubjectUser) != nil ||
+				(CheckAuthorizationProfileSubject(current, ref, action.Action, SubjectRole) == nil) != (action.Scope == AuthorityScopeTenant) ||
+				CheckAuthorizationProfileSubject(current, ref, action.Action, SubjectServiceAccount) == nil {
+				t.Fatal("product granted an undeclared subject capability", action.Action)
+			}
+			old := AuthorizationProfileReference{Product: product, Revision: 1, ContentDigest: original}
+			if CheckAuthorizationProfileSubject(archives[index], old, action.Action, SubjectRole) == nil ||
+				CheckAuthorizationProfileSubject(archives[index], old, action.Action, SubjectUser) != nil {
+				t.Fatal("old declaration gained ROLE or lost USER semantics")
+			}
+		}
 	}
 }
 
@@ -528,7 +585,7 @@ func TestProfileBoundAuthorizationRequestAndResponse(t *testing.T) {
 			CorrelationID: request.CorrelationID, DecidedAt: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)}
 		if allowed {
 			decision.Reason, decision.TenantID = DecisionAllowed, "account-one"
-			decision.Subject = &Subject{Type: PrincipalUser, ID: "user-one"}
+			decision.Subject = &Subject{Type: SubjectUser, ID: "user-one"}
 		}
 		if err := CheckAuthorizationDecisionForRequest(decision, request); err != nil {
 			t.Fatal(err)
@@ -662,8 +719,8 @@ func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 1 {
-		t.Fatal("unpublished product drafts must converge to one complete first profile")
+	if !found || profile.Revision != 2 {
+		t.Fatal("missing current PaaS role-capable declaration")
 	}
 	expected := map[Action]struct {
 		kind       ResourceKind
@@ -721,8 +778,8 @@ func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 
 func TestAuditProfileDeclaresAuthorityWideReadAndVerification(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductAudit)
-	if !found || profile.Revision != 1 || profile.CallingService != ServiceAudit {
-		t.Fatal("invalid first Audit product declaration")
+	if !found || profile.Revision != 2 || profile.CallingService != ServiceAudit {
+		t.Fatal("invalid current Audit role-capable declaration")
 	}
 	expected := map[Action]struct {
 		kind  ResourceKind
@@ -1018,6 +1075,37 @@ func authorizationProfileFixture() AuthorizationProfile {
 				{Key: ConditionIAMAccountID, ValueType: ConditionString, Source: ConditionIAMIdentity},
 			},
 		}},
+	}
+}
+
+func TestRoleBoundaryIsAnExplicitRevisionBoundLimit(t *testing.T) {
+	value := RolePermissionBoundary{APIVersion: APIVersion, Kind: "RolePermissionBoundary", AccountID: "account-a", RoleID: "role-a", ResourceVersion: 1}
+	if err := ValidateRolePermissionBoundary(value); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || !bytes.Contains(encoded, []byte(`"policy":null`)) {
+		t.Fatalf("missing role boundary must be explicit: %s, %v", encoded, err)
+	}
+	for _, invalid := range []string{
+		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RolePermissionBoundary","accountId":"account-a","roleId":"role-a","resourceVersion":1}`,
+		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RolePermissionBoundary","accountId":"account-a","roleId":"role-a","resourceVersion":1,"policy":null,"allow":true}`,
+	} {
+		var decoded RolePermissionBoundary
+		if DecodeRequest(strings.NewReader(invalid), &decoded) == nil {
+			t.Fatalf("accepted ambiguous boundary %s", invalid)
+		}
+	}
+	set := SetRolePermissionBoundaryRequest{PolicyID: "policy-a", PolicyResourceVersion: 1, ResourceVersion: 1, RequestID: "set-boundary"}
+	if ValidateSetRolePermissionBoundaryRequest(set) != nil {
+		t.Fatal("valid role boundary intent rejected")
+	}
+	set.PolicyID = ""
+	if ValidateSetRolePermissionBoundaryRequest(set) == nil {
+		t.Fatal("set with missing policy became remove")
+	}
+	if ValidateRemoveRolePermissionBoundaryRequest(RemoveRolePermissionBoundaryRequest{ResourceVersion: 9007199254740991, RequestID: "remove-boundary"}) == nil {
+		t.Fatal("exhausted role revision accepted")
 	}
 }
 
@@ -1677,7 +1765,7 @@ func TestPlatformDecisionsCannotMasqueradeAsTenantAuthority(t *testing.T) {
 		},
 		"service authority": func(value *AuthorizationDecision) {
 			subject := *value.Subject
-			subject.Type = PrincipalServiceAccount
+			subject.Type = SubjectServiceAccount
 			value.Subject = &subject
 		},
 	} {
@@ -4016,6 +4104,48 @@ func mustIAMObject(t *testing.T, value any, name string) map[string]any {
 		t.Fatalf("%s contains %T, want object", name, value)
 	}
 	return object
+}
+
+func TestRoleSessionSecretIsOnceOnly(t *testing.T) {
+	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	session := RoleSession{APIVersion: APIVersion, Kind: "RoleSession", ID: "role-session-a", AccountID: "account-a", RoleID: "role-a",
+		SourceUserID: "user-a", Status: SessionActive, IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
+	secret, err := NewSecret("mx1.RoleSessionTestCredential000000000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := AssumeRoleResponse{Outcome: "APPLIED", Session: session, Credential: secret}
+	if _, err := json.Marshal(response); !errors.Is(err, ErrSecretSerialization) {
+		t.Fatal("ordinary JSON exposed role credential")
+	}
+	encoded, err := EncodeAssumeRoleResponse(response)
+	if err != nil || !bytes.Contains(encoded, []byte(`"credential"`)) {
+		t.Fatal("explicit issuance encoder omitted credential", err)
+	}
+	response.Outcome = "EQUAL_REPLAY"
+	if _, err := EncodeAssumeRoleResponse(response); err == nil {
+		t.Fatal("role replay emitted secret")
+	}
+	response.Credential = Secret{}
+	encoded, err = EncodeAssumeRoleResponse(response)
+	if err != nil || bytes.Contains(encoded, []byte(`"credential"`)) {
+		t.Fatal("role replay included credential field", err)
+	}
+	response.Outcome = "APPLIED"
+	if _, err := EncodeAssumeRoleResponse(response); err == nil {
+		t.Fatal("fresh issuance accepted absent credential")
+	}
+	for _, mutate := range []func(*RoleSession){
+		func(s *RoleSession) { s.ID = "" }, func(s *RoleSession) { s.SourceUserID = "" }, func(s *RoleSession) { s.ExpiresAt = s.IssuedAt },
+		func(s *RoleSession) { s.ExpiresAt = s.IssuedAt.Add(13 * time.Hour) }, func(s *RoleSession) { s.Status = SessionRevoked },
+		func(s *RoleSession) { s.RevokedAt = &now }, func(s *RoleSession) { s.IssuedAt = s.IssuedAt.Add(time.Nanosecond) },
+	} {
+		invalid := session
+		mutate(&invalid)
+		if ValidateRoleSession(invalid) == nil {
+			t.Fatal("accepted malformed role session")
+		}
+	}
 }
 
 func assertNoAuthoritySelectorHeader(t *testing.T, value any) {

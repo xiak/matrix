@@ -1,8 +1,11 @@
 package paasv1
 
 import (
+	"encoding/json"
 	"slices"
 	"time"
+
+	"github.com/xiak/matrix/api/contractjson"
 )
 
 type TenantID string
@@ -403,8 +406,39 @@ type DeploymentGeneration struct {
 }
 
 type SubjectRef struct {
-	Type SubjectType `json:"type"`
-	ID   string      `json:"id"`
+	Type        SubjectType           `json:"type"`
+	ID          string                `json:"id"`
+	RoleSession *RoleSessionReference `json:"roleSession,omitempty"`
+}
+
+type RoleSessionReference struct {
+	SessionID    string `json:"sessionId"`
+	SourceUserID string `json:"sourceUserId"`
+}
+
+func (subject SubjectRef) Equal(other SubjectRef) bool {
+	if subject.Type != other.Type || subject.ID != other.ID || (subject.RoleSession == nil) != (other.RoleSession == nil) {
+		return false
+	}
+	return subject.RoleSession == nil || *subject.RoleSession == *other.RoleSession
+}
+
+func (subject *SubjectRef) UnmarshalJSON(source []byte) error {
+	type wire SubjectRef
+	var decoded wire
+	if err := contractjson.DecodeObjectBytes(source, 1024, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	_, hasLineage := fields["roleSession"]
+	if (decoded.Type == SubjectRole) != hasLineage || ValidateSubjectRef(SubjectRef(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*subject = SubjectRef(decoded)
+	return nil
 }
 
 type ResourceRef struct {

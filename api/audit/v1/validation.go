@@ -65,8 +65,17 @@ func ValidateEvent(value Event) error {
 		problems = append(problems, errors.New("Audit action is invalid"))
 	} else {
 		localRecovery := value.Action == ActionIAMInstallationPrimaryCredentialsRecovered
+		if value.Actor.Type == ActorRole && !contract.RoleActorPermitted {
+			problems = append(problems, errors.New("Audit action cannot contain a ROLE actor"))
+		}
 		if contract.UserActorRequired && value.Actor.Type != ActorUser {
 			problems = append(problems, errors.New("Audit action requires a USER actor"))
+		}
+		if contract.RoleActorRequired && value.Actor.Type != ActorRole {
+			problems = append(problems, errors.New("Audit action requires a ROLE actor"))
+		}
+		if value.Action == ActionIAMRoleSessionExited && (value.Actor.RoleSession == nil || value.Target.ID != value.Actor.RoleSession.SessionID) {
+			problems = append(problems, errors.New("role self-exit must target the actor's exact session"))
 		}
 		if contract.PlatformOnly != (value.InstallationID != "") ||
 			contract.PlatformOnly && !localRecovery && value.Actor.Type != ActorUser ||
@@ -127,10 +136,19 @@ func ValidateEventForSource(source Source, value Event) error {
 
 func ValidateActor(value ActorReference) error {
 	var problems []error
-	if value.Type != ActorUser && value.Type != ActorServiceAccount && value.Type != ActorSystem {
+	if value.Type != ActorUser && value.Type != ActorServiceAccount && value.Type != ActorSystem && value.Type != ActorRole {
 		problems = append(problems, errors.New("actor type is invalid"))
 	}
 	problems = append(problems, ValidateID("actor.id", string(value.ID)))
+	if value.Type == ActorRole {
+		if value.RoleSession == nil {
+			problems = append(problems, errors.New("ROLE actor requires its session lineage"))
+		} else {
+			problems = append(problems, ValidateID("actor.roleSession.sessionId", value.RoleSession.SessionID), ValidateID("actor.roleSession.sourceUserId", string(value.RoleSession.SourceUserID)))
+		}
+	} else if value.RoleSession != nil {
+		problems = append(problems, errors.New("non-ROLE actor cannot contain session lineage"))
+	}
 	return errors.Join(problems...)
 }
 

@@ -152,16 +152,21 @@ func actorForDecision(decision iamv1.AuthorizationDecision) (auditv1.ActorRefere
 	}
 	var actorType auditv1.ActorType
 	switch decision.Subject.Type {
-	case iamv1.PrincipalUser:
+	case iamv1.SubjectUser:
 		actorType = auditv1.ActorUser
-	case iamv1.PrincipalServiceAccount:
+	case iamv1.SubjectServiceAccount:
 		actorType = auditv1.ActorServiceAccount
+	case iamv1.SubjectRole:
+		actorType = auditv1.ActorRole
 	default:
 		return auditv1.ActorReference{}, ErrUnavailable
 	}
 	actor := auditv1.ActorReference{
 		Type: actorType,
 		ID:   auditv1.ActorID(decision.Subject.ID),
+	}
+	if decision.Subject.RoleSession != nil {
+		actor.RoleSession = &auditv1.RoleSessionReference{SessionID: string(decision.Subject.RoleSession.SessionID), SourceUserID: auditv1.ActorID(decision.Subject.RoleSession.SourceUserID)}
 	}
 	if auditv1.ValidateActor(actor) != nil {
 		return auditv1.ActorReference{}, ErrUnavailable

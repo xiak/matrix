@@ -389,7 +389,7 @@ func recordMatchesQuery(
 	if request.Action != "" && record.Event.Action != request.Action {
 		return false
 	}
-	if request.Actor != nil && record.Event.Actor != *request.Actor {
+	if request.Actor != nil && !record.Event.Actor.Equal(*request.Actor) {
 		return false
 	}
 	return true

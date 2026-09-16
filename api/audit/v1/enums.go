@@ -19,6 +19,7 @@ const (
 
 const (
 	ActorUser           ActorType = "USER"
+	ActorRole           ActorType = "ROLE"
 	ActorServiceAccount ActorType = "SERVICE_ACCOUNT"
 	ActorSystem         ActorType = "SYSTEM"
 )
@@ -43,6 +44,11 @@ const (
 	ActionIAMRoleEnabled                     Action = "iam.role.enabled"
 	ActionIAMRoleTrustSet                    Action = "iam.role.trust-set"
 	ActionIAMRoleDeleted                     Action = "iam.role.deleted"
+	ActionIAMRolePermissionBoundarySet       Action = "iam.role.permission-boundary.set"
+	ActionIAMRolePermissionBoundaryRemoved   Action = "iam.role.permission-boundary.removed"
+	ActionIAMRoleSessionIssued               Action = "iam.role-session.issued"
+	ActionIAMRoleSessionRevoked              Action = "iam.role-session.revoked"
+	ActionIAMRoleSessionExited               Action = "iam.role-session.exited"
 	ActionIAMGroupCreated                    Action = "iam.group.created"
 	ActionIAMPolicyCreated                   Action = "iam.policy.created"
 	ActionIAMPolicyVersionCreated            Action = "iam.policy-version.created"
@@ -107,6 +113,7 @@ const (
 	TargetUser                  TargetKind = "USER"
 	TargetGroup                 TargetKind = "GROUP"
 	TargetRole                  TargetKind = "ROLE"
+	TargetRoleSession           TargetKind = "ROLE_SESSION"
 	TargetPolicy                TargetKind = "POLICY"
 	TargetGroupMembership       TargetKind = "GROUP_MEMBERSHIP"
 	TargetOrganization          TargetKind = "ORGANIZATION"
@@ -166,6 +173,8 @@ type ActionContract struct {
 	OperationRequired    bool
 	PlatformOnly         bool
 	UserActorRequired    bool
+	RoleActorPermitted   bool
+	RoleActorRequired    bool
 }
 
 func AllActions() []Action {
@@ -202,6 +211,11 @@ var allActions = []Action{
 	ActionIAMRoleEnabled,
 	ActionIAMRoleTrustSet,
 	ActionIAMRoleDeleted,
+	ActionIAMRolePermissionBoundarySet,
+	ActionIAMRolePermissionBoundaryRemoved,
+	ActionIAMRoleSessionIssued,
+	ActionIAMRoleSessionRevoked,
+	ActionIAMRoleSessionExited,
 	ActionIAMPolicyCreated,
 	ActionIAMPolicyVersionCreated,
 	ActionIAMPolicyVersionDeleted,
@@ -298,12 +312,17 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMGroupCreated: {
 		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
-	ActionIAMRoleCreated:  {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRoleUpdated:  {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRoleDisabled: {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRoleEnabled:  {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRoleTrustSet: {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRoleDeleted:  {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleCreated:                   {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleUpdated:                   {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleDisabled:                  {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleEnabled:                   {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleTrustSet:                  {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleDeleted:                   {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRolePermissionBoundarySet:     {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRolePermissionBoundaryRemoved: {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleSessionIssued:             {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleSessionRevoked:            {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMRoleSessionExited:             {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, RoleActorPermitted: true, RoleActorRequired: true},
 	ActionIAMPolicyCreated: {
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
@@ -385,6 +404,7 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMAuthorizationDecided: {
 		Source: SourceIAM, Target: TargetAuthorizationDecision,
 		Results: []Result{ResultAllowed, ResultDenied}, IAMDecisionRequired: true,
+		RoleActorPermitted: true,
 	},
 	ActionIAMPolicyAttachmentCreated: {
 		Source: SourceIAM, Target: TargetPolicyAttachment, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
@@ -401,34 +421,42 @@ var actionContracts = map[Action]ActionContract{
 	ActionPaaSApplicationCreated: {
 		Source: SourcePaaS, Target: TargetApplication, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true,
 	},
 	ActionPaaSConfigurationCreated: {
 		Source: SourcePaaS, Target: TargetConfiguration, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true,
 	},
 	ActionPaaSConfigurationRevisionCreated: {
 		Source: SourcePaaS, Target: TargetConfigurationRevision, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true,
 	},
 	ActionPaaSApplicationRevisionCreated: {
 		Source: SourcePaaS, Target: TargetApplicationRevision, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true,
 	},
 	ActionPaaSDeploymentCreated: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true,
 	},
 	ActionPaaSDeploymentUpdated: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true,
 	},
 	ActionPaaSDeploymentStopped: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true,
 	},
 	ActionPaaSDeploymentRolledBack: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true,
 	},
 	ActionPaaSExecutionPoolCreated: {
 		Source: SourcePaaS, Target: TargetExecutionPool, Results: []Result{ResultSucceeded},
@@ -464,9 +492,11 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionAuditRecordsRead: {
 		Source: SourceAudit, Target: TargetAuditRecords, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
+		RoleActorPermitted: true,
 	},
 	ActionAuditIntegrityVerified: {
 		Source: SourceAudit, Target: TargetAuditChain, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
+		RoleActorPermitted: true,
 	},
 	ActionAuditPlatformRecordsRead: {
 		Source: SourceAudit, Target: TargetAuditRecords, Results: []Result{ResultSucceeded},

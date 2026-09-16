@@ -245,7 +245,7 @@ func validateResourceSubmission(
 		operation.Target.ID != id || operation.Action != expectedAction ||
 		operation.State != paasv1.OperationSucceeded ||
 		auditEvent.TenantID != tenantID || auditEvent.Target != operation.Target ||
-		auditEvent.OperationID != operation.ID || auditEvent.Actor != operation.RequestedBy ||
+		auditEvent.OperationID != operation.ID || !auditEvent.Actor.Equal(operation.RequestedBy) ||
 		auditEvent.RequestDigest != operation.RequestDigest ||
 		!auditEvent.OccurredAt.Equal(operation.CreatedAt) {
 		problems = append(problems, errors.New("resource, Operation, and Audit identities do not match"))

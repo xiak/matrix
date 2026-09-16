@@ -42,6 +42,9 @@ type Transaction interface {
 	LookupLogin(context.Context, string) (LoginAccount, bool, error)
 	IssueSession(context.Context, SessionMutation) (iamv1.Session, error)
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
+	LookupRoleSession(context.Context, string) (RoleSessionCredential, bool, error)
+	LookupRoleSessionForExit(context.Context, string) (RoleSessionExitCredential, bool, error)
+	ExitRoleSession(context.Context, string, auditv1.Event) (iamv1.RoleSession, error)
 	LookupPassword(context.Context, iamv1.AccountID, iamv1.PrincipalID) (authority.PasswordHash, bool, error)
 	LookupService(context.Context, string) (ServiceCredential, bool, error)
 	ReadAuditEvidence(context.Context, iamv1.ServiceIdentity, auditv1.Event) (AuditEvidence, bool, error)
@@ -65,6 +68,12 @@ type Transaction interface {
 	ReadGroup(context.Context, GroupRead) (iamv1.GroupAccess, error)
 	ListRoles(context.Context, AccountRead) (iamv1.RoleList, error)
 	ReadRole(context.Context, RoleRead) (iamv1.RoleAccess, error)
+	ReadRolePermissionBoundary(context.Context, RoleRead) (iamv1.RolePermissionBoundary, error)
+	ReadRoleAssumption(context.Context, RoleAssumptionRead) (RoleAssumption, error)
+	IssueRoleSession(context.Context, RoleSessionIssuance) (iamv1.RoleSession, error)
+	ReadRoleSessionByRequest(context.Context, RoleAssumptionRead) (iamv1.RoleSession, bool, error)
+	RevokeRoleSessionByRequest(context.Context, RoleSessionRevocation) (iamv1.RoleSession, error)
+	ChangeRolePermissionBoundary(context.Context, RoleBoundaryMutation) (iamv1.RolePermissionBoundary, error)
 	CreateRole(context.Context, RoleCreation) (iamv1.Role, error)
 	UpdateRole(context.Context, RoleProfileMutation) (iamv1.Role, error)
 	SetRoleStatus(context.Context, RoleStatusMutation) (iamv1.Role, error)
@@ -141,6 +150,65 @@ type RoleMutation struct {
 	DecisionID       iamv1.DecisionID
 	ResourceVersion  uint64
 	AuditEvent       auditv1.Event
+}
+
+type RoleBoundaryMutation struct {
+	RoleMutation
+	PolicyID              iamv1.PolicyID
+	PolicyResourceVersion uint64
+	BoundaryID            string
+}
+
+// Only the authenticated login bearer supplies these private references.
+type RoleAssumptionRead struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
+	RoleID           iamv1.RoleID
+	RequestID        string
+}
+
+type RoleSessionReceipt struct {
+	Session              iamv1.RoleSession `json:"session"`
+	SourceSessionID      iamv1.SessionID   `json:"sourceSessionId"`
+	CredentialGeneration uint64            `json:"credentialGeneration"`
+	RequestDigest        string            `json:"requestDigest"`
+}
+
+type RoleAssumption struct {
+	Role                 iamv1.Role
+	Trust                iamv1.RoleTrustVersion
+	CredentialGeneration uint64
+	SecurityGeneration   uint64
+	Existing             *RoleSessionReceipt
+}
+
+type RoleSessionIssuance struct {
+	RoleAssumptionRead
+	Session                iamv1.RoleSession
+	ExpectedRoleVersion    uint64
+	CredentialGeneration   uint64
+	SecurityGeneration     uint64
+	DurationSeconds        uint32
+	RequestDigest          string
+	SessionPolicyCanonical string
+	SessionPolicyDigest    string
+	LookupDigest           string
+	VerificationDigest     string
+	DecisionID             iamv1.DecisionID
+	AuditEvent             auditv1.Event
+}
+
+type RoleSessionRevocation struct {
+	RoleAssumptionRead
+	AuditEvent auditv1.Event
+}
+
+// Possession permits only irreversible self-exit, even after business access
+// has expired or been revoked. This is not a current authentication context.
+type RoleSessionExitCredential struct {
+	Session            iamv1.RoleSession `json:"session"`
+	VerificationDigest string            `json:"verificationDigest"`
 }
 
 type RoleProfileMutation struct {
@@ -344,19 +412,25 @@ type SessionCredential struct {
 	VerificationDigest string
 }
 
+type RoleSessionCredential struct {
+	Subject            authority.RoleSessionContext
+	VerificationDigest string
+}
+
 type ServiceCredential struct {
 	Identity           iamv1.ServiceIdentity
 	VerificationDigest string
 }
 
 type AuthorizationMutation struct {
-	AccountID   iamv1.AccountID
-	PrincipalID iamv1.PrincipalID
+	AccountID iamv1.AccountID
+	Subject   iamv1.Subject
 	// Request is the original validated input, not reconstructed from Decision.
 	Request          iamv1.AuthorizationRequest
 	Decision         iamv1.AuthorizationDecision
 	PolicyEvidence   []authority.PolicyAttachmentEvidence
 	BoundaryEvidence authority.UserBoundaryEvidence
+	RoleEvidence     *authority.RoleAuthorizationEvidence
 	AuditEvent       auditv1.Event
 }
 

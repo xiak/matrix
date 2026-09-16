@@ -180,7 +180,7 @@ func enumSchemas() map[string][]string {
 	}
 	return map[string][]string{
 		"Source":                        sources,
-		"ActorType":                     {string(auditv1.ActorUser), string(auditv1.ActorServiceAccount), string(auditv1.ActorSystem)},
+		"ActorType":                     {string(auditv1.ActorUser), string(auditv1.ActorRole), string(auditv1.ActorServiceAccount), string(auditv1.ActorSystem)},
 		"Action":                        openapi31.StringValues(auditv1.AllActions()),
 		"TargetKind":                    targets,
 		"Result":                        results,
@@ -195,6 +195,7 @@ func enumSchemas() map[string][]string {
 func structContracts() map[string]reflect.Type {
 	return map[string]reflect.Type{
 		"ActorReference":            openapi31.StructType[auditv1.ActorReference](),
+		"RoleSessionReference":      openapi31.StructType[auditv1.RoleSessionReference](),
 		"TargetReference":           openapi31.StructType[auditv1.TargetReference](),
 		"Event":                     openapi31.StructType[auditv1.Event](),
 		"AuditRecord":               openapi31.StructType[auditv1.AuditRecord](),
@@ -212,7 +213,7 @@ func structContracts() map[string]reflect.Type {
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
 	switch jsonName {
-	case "id", "requestId", "correlationId", "installationId":
+	case "id", "requestId", "correlationId", "installationId", "sessionId", "sourceUserId":
 		if field.Type.Kind() == reflect.String {
 			base = openapi31.Ref("ID")
 		}
@@ -281,6 +282,10 @@ func applySemanticOverlays(schemas object) {
 			object{"required": []string{"installationId"}, "properties": object{"tenantId": false}},
 		}
 	}
+	schemas["ActorReference"].(object)["oneOf"] = []any{
+		object{"properties": object{"type": object{"const": string(auditv1.ActorRole)}}, "required": []string{"roleSession"}},
+		object{"properties": object{"type": object{"enum": []string{string(auditv1.ActorUser), string(auditv1.ActorServiceAccount), string(auditv1.ActorSystem)}}, "roleSession": false}},
+	}
 
 	installation := schemas["InstallationVerification"].(object)
 	installation["allOf"] = []any{
@@ -330,6 +335,10 @@ func actionRules() (eventRules []any, recordRules []any) {
 		}
 		if contract.UserActorRequired {
 			thenProperties["actor"] = object{"properties": object{"type": object{"const": string(auditv1.ActorUser)}}}
+		} else if contract.RoleActorRequired {
+			thenProperties["actor"] = object{"properties": object{"type": object{"const": string(auditv1.ActorRole)}}}
+		} else if !contract.RoleActorPermitted {
+			thenProperties["actor"] = object{"properties": object{"type": object{"enum": []string{string(auditv1.ActorUser), string(auditv1.ActorServiceAccount), string(auditv1.ActorSystem)}}}}
 		}
 		if contract.PlatformOnly {
 			thenRequired = append(thenRequired, "installationId")

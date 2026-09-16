@@ -74,6 +74,7 @@ func TestPostgresIntegration(t *testing.T) {
 	assertExecutionProfileRefresh(t, ctx, admin, workerPool, prefix)
 	fixture := seedIntegrationFixture(t, ctx, admin, prefix)
 	applicationResult := assertApplicationLifecycle(t, ctx, admin, apiPool, fixture, prefix)
+	assertRoleSubjectStorage(t, ctx, admin, applicationResult.Operation)
 	assertAuditPersistenceAndFencing(t, ctx, admin, apiPool, workerPool, applicationResult)
 	assertOperationQueue(t, ctx, admin, workerPool, applicationResult)
 	planner, err := placement.NewV1Planner(5 * time.Minute)
@@ -209,6 +210,69 @@ func integrationPlacementGuard(command createplacement.Command) operationqueue.L
 	return operationqueue.LeaseGuard{
 		TenantID: command.TenantID, OperationID: command.OperationID,
 		WorkerID: "worker-placement", FencingToken: 1,
+	}
+}
+
+func assertRoleSubjectStorage(t *testing.T, ctx context.Context, admin *pgx.Conn, operation paasv1.Operation) {
+	t.Helper()
+	// Privileged, rolled-back storage-shape attacks are not IAM authority or
+	// actual ROLE business acceptance; the independent process gate proves that.
+	for _, subject := range []struct {
+		encoded string
+		valid   bool
+	}{
+		{`{"type":"USER","id":"storage-user"}`, true},
+		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":"storage-user"}}`, true},
+		{`null`, false}, {`{}`, false}, {`{"type":"ROLE","id":"storage-role"}`, false},
+		{`{"type":"USER","id":"storage-user","roleSession":null}`, false},
+		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":""}}`, false},
+		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":"storage-user","sourceSessionId":"private"}}`, false},
+		{`{"type":"GROUP","id":"storage-group"}`, false},
+	} {
+		for _, target := range []struct{ statement, constraint string }{
+			{`UPDATE paas.operations SET document=jsonb_set(document,'{requestedBy}',$3::jsonb) WHERE tenant_id=$1 AND id=$2`, "operations_subject_valid"},
+			{`UPDATE paas.audit_outbox SET document=jsonb_set(document,'{actor}',$3::jsonb) WHERE tenant_id=$1 AND operation_id=$2`, "audit_outbox_subject_valid"},
+		} {
+			tx, err := admin.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			changed, err := tx.Exec(ctx, target.statement, operation.Scope.TenantID, operation.ID, subject.encoded)
+			_ = tx.Rollback(ctx)
+			if subject.valid {
+				if err != nil || changed.RowsAffected() == 0 {
+					t.Fatal("valid subject storage control did not reach real rows", err)
+				}
+			} else {
+				var pgErr *pgconn.PgError
+				if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != target.constraint {
+					t.Fatal("malformed role lineage escaped its real storage constraint", target.constraint, err)
+				}
+			}
+		}
+	}
+	for _, attack := range []string{
+		`ALTER TABLE paas.operations DROP CONSTRAINT operations_subject_valid`,
+		`ALTER TABLE paas.audit_outbox DROP CONSTRAINT audit_outbox_subject_valid`,
+		`GRANT EXECUTE ON FUNCTION paas.subject_reference_valid(jsonb) TO PUBLIC`,
+		`ALTER FUNCTION paas.subject_reference_valid(jsonb) STABLE`,
+		`ALTER FUNCTION paas.subject_reference_valid(jsonb) SECURITY DEFINER`,
+		`CREATE FUNCTION paas.subject_reference_valid(jsonb,text) RETURNS boolean LANGUAGE sql AS 'SELECT true'`,
+	} {
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, attack); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal("install scoped PaaS role contract drift", err)
+		}
+		var ready bool
+		err = tx.QueryRow(ctx, `SELECT paas.role_subject_contract_ready()`).Scan(&ready)
+		_ = tx.Rollback(ctx)
+		if err != nil || ready {
+			t.Fatal("PaaS role storage contract drift remained ready", err)
+		}
 	}
 }
 

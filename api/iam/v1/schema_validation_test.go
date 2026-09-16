@@ -48,6 +48,81 @@ func TestAssumeRoleRequestSchemaMatchesTheClosedIntent(t *testing.T) {
 	}
 }
 
+func TestRoleSessionResponseSchemaHasNoSecretReplayOrPrivateLineage(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	session := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSession","id":"role-session-a","accountId":"account-a","roleId":"role-a","sourceUserId":"user-a","status":"ACTIVE","issuedAt":"2026-09-16T00:00:00Z","expiresAt":"2026-09-16T01:00:00Z"}`
+	for _, sample := range []struct {
+		kind, wire string
+		valid      bool
+	}{
+		{"RoleSession", session, true},
+		{"RoleSession", strings.Replace(session, `"id":"role-session-a"`, `"id":""`, 1), false},
+		{"RoleSession", strings.Replace(session, `"status":"ACTIVE"`, `"status":"REVOKED"`, 1), false},
+		{"RoleSession", strings.Replace(session, `"status":"ACTIVE"`, `"status":"ACTIVE","sourceSessionId":"private"`, 1), false},
+		{"RoleSession", strings.Replace(session, `"status":"ACTIVE"`, `"status":"ACTIVE","credentialGeneration":4`, 1), false},
+		{"AssumeRoleResponse", `{"outcome":"APPLIED","session":` + session + `,"credential":"once-only"}`, true},
+		{"AssumeRoleResponse", `{"outcome":"EQUAL_REPLAY","session":` + session + `}`, true},
+		{"AssumeRoleResponse", `{"outcome":"EQUAL_REPLAY","session":` + session + `,"credential":""}`, false},
+		{"AssumeRoleResponse", `{"outcome":"APPLIED","session":` + session + `}`, false},
+		{"AssumeRoleResponse", `{"outcome":"APPLIED","session":` + session + `,"credential":null}`, false},
+		{"AssumeRoleResponse", `{"outcome":"UNKNOWN","session":` + session + `}`, false},
+		{"RevokeRoleSessionRequest", `{"requestId":"revoke"}`, true},
+		{"RevokeRoleSessionRequest", `{"requestId":"revoke","sourceUserId":"caller"}`, false},
+	} {
+		schema := compileIAMOpenAPISchema(t, api, sample.kind)
+		value, err := jsonschema.UnmarshalJSON(strings.NewReader(sample.wire))
+		if err != nil || (schema.Validate(value) == nil) != sample.valid {
+			t.Fatal("role session schema disagrees with closed response", sample.kind, sample.valid)
+		}
+	}
+}
+
+func TestRoleBoundarySchemaRequiresAnExplicitCeilingReference(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	base := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RolePermissionBoundary","accountId":"account-a","roleId":"role-a","resourceVersion":1,"policy":null}`
+	set := `{"policyId":"policy-a","policyResourceVersion":1,"resourceVersion":1,"requestId":"set-boundary"}`
+	remove := `{"resourceVersion":1,"requestId":"remove-boundary"}`
+	for _, sample := range []struct {
+		name, wire string
+		valid      bool
+	}{
+		{"RolePermissionBoundary", base, true},
+		{"RolePermissionBoundary", strings.Replace(base, `,"policy":null`, "", 1), false},
+		{"RolePermissionBoundary", strings.Replace(base, `"policy":null`, `"policy":{}`, 1), false},
+		{"RolePermissionBoundary", strings.Replace(base, `"policy":null`, `"policy":null,"allow":true`, 1), false},
+		{"RolePermissionBoundary", strings.Replace(base, `"roleId":"role-a"`, `"userId":"role-a"`, 1), false},
+		{"SetRolePermissionBoundaryRequest", set, true},
+		{"SetRolePermissionBoundaryRequest", strings.Replace(set, `"policyId":"policy-a"`, `"policyId":null`, 1), false},
+		{"SetRolePermissionBoundaryRequest", strings.Replace(set, `"policyResourceVersion":1,`, "", 1), false},
+		{"SetRolePermissionBoundaryRequest", strings.Replace(set, `"resourceVersion":1`, `"resourceVersion":9007199254740991`, 1), false},
+		{"SetRolePermissionBoundaryRequest", strings.Replace(set, `"requestId"`, `"actorSessionId":"caller","requestId"`, 1), false},
+		{"RemoveRolePermissionBoundaryRequest", remove, true},
+		{"RemoveRolePermissionBoundaryRequest", strings.Replace(remove, `"resourceVersion":1`, `"resourceVersion":0`, 1), false},
+		{"RemoveRolePermissionBoundaryRequest", strings.Replace(remove, `"resourceVersion":1`, `"resourceVersion":9007199254740991`, 1), false},
+		{"RemoveRolePermissionBoundaryRequest", strings.Replace(remove, `"requestId"`, `"policyId":"policy-a","requestId"`, 1), false},
+	} {
+		schema := compileIAMOpenAPISchema(t, api, sample.name)
+		decoded, err := jsonschema.UnmarshalJSON(strings.NewReader(sample.wire))
+		if err != nil || (schema.Validate(decoded) == nil) != sample.valid {
+			t.Fatalf("%s schema disagrees with explicit boundary input: %s", sample.name, sample.wire)
+		}
+		switch sample.name {
+		case "RolePermissionBoundary":
+			var value RolePermissionBoundary
+			err = errors.Join(DecodeRequest(strings.NewReader(sample.wire), &value), ValidateRolePermissionBoundary(value))
+		case "SetRolePermissionBoundaryRequest":
+			var value SetRolePermissionBoundaryRequest
+			err = errors.Join(DecodeRequest(strings.NewReader(sample.wire), &value), ValidateSetRolePermissionBoundaryRequest(value))
+		case "RemoveRolePermissionBoundaryRequest":
+			var value RemoveRolePermissionBoundaryRequest
+			err = errors.Join(DecodeRequest(strings.NewReader(sample.wire), &value), ValidateRemoveRolePermissionBoundaryRequest(value))
+		}
+		if (err == nil) != sample.valid {
+			t.Fatal("role boundary schema and authoritative validation disagree")
+		}
+	}
+}
+
 func TestRoleManagementRequestsKeepSelectorsAndDefaultsClosed(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	create := `{"name":"Readers","tags":[],"trustPolicy":{"languageVersion":"1","statements":[]},"requestId":"create-role"}`
@@ -218,34 +293,77 @@ func TestAuthorizationProfileSubjectSchemaKeepsPrincipalAndCapabilitySeparate(t 
 	}
 }
 
+func TestRoleSubjectKeepsExactPublicLineageAndPrincipalSeparation(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "Subject")
+	for _, test := range []struct {
+		name, source string
+		valid        bool
+	}{
+		{"user", `{"type":"USER","id":"user-one"}`, true},
+		{"service", `{"type":"SERVICE_ACCOUNT","id":"service-one"}`, true},
+		{"role", `{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"role-session-one","sourceUserId":"user-one"}}`, true},
+		{"missing lineage", `{"type":"ROLE","id":"role-one"}`, false},
+		{"null lineage", `{"type":"ROLE","id":"role-one","roleSession":null}`, false},
+		{"missing source", `{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"role-session-one"}}`, false},
+		{"user with lineage", `{"type":"USER","id":"user-one","roleSession":{"sessionId":"role-session-one","sourceUserId":"user-one"}}`, false},
+		{"user with null lineage", `{"type":"USER","id":"user-one","roleSession":null}`, false},
+		{"service with null lineage", `{"type":"SERVICE_ACCOUNT","id":"service-one","roleSession":null}`, false},
+		{"service with lineage", `{"type":"SERVICE_ACCOUNT","id":"service-one","roleSession":{"sessionId":"role-session-one","sourceUserId":"user-one"}}`, false},
+		{"private source session", `{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"role-session-one","sourceUserId":"user-one","sourceSessionId":"login-one"}}`, false},
+		{"private generation", `{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"role-session-one","sourceUserId":"user-one","credentialGeneration":1}}`, false},
+		{"unknown carrier", `{"type":"GROUP","id":"group-one"}`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wire, err := jsonschema.UnmarshalJSON(strings.NewReader(test.source))
+			if err != nil || (schema.Validate(wire) == nil) != test.valid {
+				t.Fatal("subject schema diverges", err)
+			}
+			var subject Subject
+			err = DecodeRequest(strings.NewReader(test.source), &subject)
+			if (err == nil && ValidateSubject(subject) == nil) != test.valid {
+				t.Fatal("subject validator diverges", err)
+			}
+			if test.valid {
+				encoded, err := json.Marshal(subject)
+				if err != nil || string(encoded) != test.source {
+					t.Fatal("subject public bytes changed", err)
+				}
+			}
+		})
+	}
+}
+
 func TestDecisionSubjectCapabilityIsCheckedByPEPAndFrozenEvidence(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AuthorizationDecision")
 	for _, test := range []struct {
 		action Action
 		kind   ResourceKind
-		typeID PrincipalType
+		typeID SubjectType
 	}{
-		{ActionPaaSApplicationRead, ResourceApplication, PrincipalUser},
-		{ActionIAMRoleRead, ResourceRole, PrincipalUser},
-		{ActionPaaSExecutionTargetRead, ResourceExecutionTarget, PrincipalUser},
-		{ActionInstallationVerify, ResourceInstallation, PrincipalServiceAccount},
+		{ActionPaaSApplicationRead, ResourceApplication, SubjectUser},
+		{ActionIAMRoleRead, ResourceRole, SubjectUser},
+		{ActionPaaSExecutionTargetRead, ResourceExecutionTarget, SubjectUser},
+		{ActionInstallationVerify, ResourceInstallation, SubjectServiceAccount},
 	} {
 		request, err := NewAuthorizationRequest(test.action, ResourceReference{Kind: test.kind, ID: "target-one"}, AuthorizationResourceInstance, "", "request-one", "correlation-one")
 		if err != nil {
 			t.Fatal(err)
 		}
 		profile, _ := LookupAuthorizationProfile(request.Profile.Product)
-		for _, subjectType := range []PrincipalType{PrincipalUser, PrincipalServiceAccount, "ROLE", "GROUP"} {
+		for _, subjectType := range []SubjectType{SubjectUser, SubjectServiceAccount, SubjectRole, "GROUP"} {
 			decision := AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-one", Allowed: true, Reason: DecisionAllowed,
 				Action: request.Action, Resource: request.Resource, Profile: &request.Profile, ResourceMode: request.ResourceMode,
 				RequestID: request.RequestID, CorrelationID: request.CorrelationID, DecidedAt: time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC),
-				Subject: &Subject{Type: subjectType, ID: "subject-one"}, TenantID: "account-one"}
+				Subject: &Subject{Type: SubjectType(subjectType), ID: "subject-one"}, TenantID: "account-one"}
+			if subjectType == SubjectRole {
+				decision.Subject.RoleSession = &RoleSessionReference{SessionID: "role-session-one", SourceUserID: "source-user"}
+			}
 			if IsPlatformAction(test.action) {
 				decision.TenantID, decision.InstallationID = "", "installation-one"
 			}
 			encoded, _ := json.Marshal(decision)
 			wire, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
-			want := subjectType == test.typeID
+			want := subjectType == test.typeID || (test.action == ActionPaaSApplicationRead && subjectType == SubjectRole)
 			if err != nil || (schema.Validate(wire) == nil) != want || (CheckAuthorizationDecisionForRequest(decision, request) == nil) != want ||
 				(ValidateAuthorizationDecisionForProfile(decision, profile) == nil) != want {
 				t.Fatalf("PEP/schema/frozen evidence disagree for %s / %s", test.action, subjectType)
@@ -876,7 +994,7 @@ func TestRetiredActionsAreHistoricalDecisionsNotRequestsOrPolicies(t *testing.T)
 				t.Fatal("policy accepted retired authority or rejected current authority")
 			}
 			decision := AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-one",
-				Allowed: true, Reason: DecisionAllowed, TenantID: "account-one", Subject: &Subject{Type: PrincipalUser, ID: "user-one"},
+				Allowed: true, Reason: DecisionAllowed, TenantID: "account-one", Subject: &Subject{Type: SubjectUser, ID: "user-one"},
 				Action: test.action, Resource: request.Resource, RequestID: request.RequestID,
 				DecidedAt: time.Date(2026, 8, 25, 1, 2, 3, 0, time.UTC)}
 			if test.scope == AuthorityScopeInstallation {
@@ -913,7 +1031,7 @@ func TestRetiredActionsAreHistoricalDecisionsNotRequestsOrPolicies(t *testing.T)
 			check(wrong, false)
 			if test.scope == AuthorityScopeInstallation {
 				wrong = decision
-				wrong.Subject = &Subject{Type: PrincipalServiceAccount, ID: "service-one"}
+				wrong.Subject = &Subject{Type: SubjectServiceAccount, ID: "service-one"}
 				check(wrong, false)
 			}
 			decision.Allowed, decision.Reason, decision.Subject = false, DecisionDenied, nil
