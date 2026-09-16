@@ -15021,6 +15021,61 @@
           }
         ]
       },
+      "RoleID": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ID"
+          }
+        ]
+      },
+      "RoleTrustVersion": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "type": "string"
+          },
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "document": {
+            "$ref": "#/components/schemas/TrustPolicyDocument"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "roleId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "contentDigest",
+          "createdAt",
+          "document",
+          "id",
+          "kind",
+          "roleId"
+        ],
+        "type": "object"
+      },
+      "RoleTrustVersionID": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/ID"
+          }
+        ]
+      },
       "RootIdentity": {
         "additionalProperties": false,
         "properties": {
@@ -15308,6 +15363,70 @@
         "format": "date-time",
         "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$",
         "type": "string"
+      },
+      "TrustPolicyDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "languageVersion": {
+            "const": "1"
+          },
+          "statements": {
+            "description": "Empty means no trusted carriers. SID uniqueness, total encoded byte budget and account membership require authoritative validation.",
+            "items": {
+              "$ref": "#/components/schemas/TrustPolicyStatement"
+            },
+            "maxItems": 8,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "languageVersion",
+          "statements"
+        ],
+        "type": "object"
+      },
+      "TrustPolicyStatement": {
+        "additionalProperties": false,
+        "properties": {
+          "effect": {
+            "$ref": "#/components/schemas/PolicyEffect"
+          },
+          "principals": {
+            "items": {
+              "$ref": "#/components/schemas/TrustPrincipal"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "sid": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "effect",
+          "principals",
+          "sid"
+        ],
+        "type": "object"
+      },
+      "TrustPrincipal": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "type": {
+            "const": "USER"
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "type": "object"
       },
       "UpdateGroupRequest": {
         "additionalProperties": false,

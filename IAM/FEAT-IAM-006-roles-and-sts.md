@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1 详细设计及共享编辑窗口已对齐，待实施/验收。首个运行切片为同账号自定义角色管理，后续必须完成真实角色会话与业务授权，不能以管理目录代替本 FEAT 验收。
+- 状态：R1 信任内容纯契约已实现，管理事务/HTTP/真实运行待实施验收。首个运行切片为同账号自定义角色管理，后续必须完成真实角色会话与业务授权，不能以管理目录代替本 FEAT 验收。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -32,13 +32,13 @@ R2 的现会话退出与来源会话撤销是发行凭据的前置验收，不�
 
 ### R1 数据与信任文档
 
-Role 元数据包含 id、accountId、name、description、tags、management、status、maxSessionDurationSeconds、resourceVersion、currentTrustVersionId、createdAt、updatedAt。名称复用组名称的1–64字符规则，description最多512字符；ACTIVE/DISABLED共用账号内名称唯一约束，删除后可用同名创建新ID，不能复活旧ID。tags是最多50项的有界字面键值集合，同键拒绝，键1–64/值0–256字符、无控制字符；本片只是元数据，不能用这些标签或请求tags充当已认证条件来源。Role最大时长首版允许60–43200秒、默认3600秒；这不是服务吞吐指标，也不保证来源登录会话足够长。
+Role 元数据包含 id、accountId、name、description、tags、management、status、maxSessionDurationSeconds、resourceVersion、currentTrustVersionId、createdAt、updatedAt。名称复用组名称的1–64 UTF-8字节规则，description最多512字节；ACTIVE/DISABLED共用账号内名称唯一约束，删除后可用同名创建新ID，不能复活旧ID。tags是最多50项的有界字面键值集合，同键拒绝，键1–64/值0–256 UTF-8字节、无控制字符；本片只是元数据，不能用这些标签或请求tags充当已认证条件来源。Role最大时长首版允许60–43200秒、默认3600秒；这不是服务吞吐指标，也不保证来源登录会话足够长。
 
 `TrustPolicyDocument{languageVersion,statements}` 单独表达承担准入，初版 languageVersion="1"，每个 statement 仅 sid、effect、principals。effect为ALLOW/DENY；principals仅精确 `{type:"USER",id}`，Account来自Role而非文档。Root原primary也是USER，可被精确引用但不会转让root。首版至多8语句、每句32主体，总访问预算256，完整文档最多16KiB；SID及单句主体不重复。空statements表示默认不信任任何人，不能借空对象或缺字段启用全账号信任。匹配Deny优先；未知类型、`*`、账号通配、Group、ServiceIdentity、Role、显示名、外部ID、任意条件和资源/动作字段均拒绝。
 
 信任编辑必须在同账号内确认每个目标为真实未删除USER；允许引用已停用USER，但停用者不能承担。该判断不创建用户，不改变其状态、密码、附件或主账号关系。信任命中并不授予任何业务权限，必须另有调用者承担动作许可和目标角色权限。之后支持其他载体时应增加已验证的判别分支与来源证明，不能把主体解释变为自由字符串或服务名称前缀。
 
-TrustPolicy与005身份权限文档不是一个可互换的DSL。复用api/contractjson的严格JSON边界；在api/iam的角色契约owner中唯一规范化信任集合与摘要，域分隔为`matrix.iam.role-trust.v1`，不调用身份策略编码器来吞掉principal，也不复制Audit编码。RoleTrustVersion绑定roleId、versionId、完整document、contentDigest和createdAt，内容不可变。版本ID不透明；相同内容不等于同一次编辑。
+TrustPolicy与005身份权限文档不是一个可互换的DSL。复用api/contractjson的严格JSON边界；在api/iam的角色契约owner中唯一规范化信任集合与摘要，域分隔为`matrix.iam.role-trust.v1`，不调用身份策略编码器来吞掉principal，也不复制Audit编码。RoleTrustVersion的wire为`{apiVersion,kind,id,accountId,roleId,document,contentDigest,createdAt}`，内容不可变。版本ID不透明；相同内容不等于同一次编辑。摘要只承诺完整document，不承诺其被哪一Role选中、Account归属或当前承担许可；这些关系必须由权威读取及事务验证。
 
 信任PUT在一个事务产生新不可变版本并显式选择它，无另一个尚未实现的默认切换接口。每次带resourceVersion和原requestId；当前内容无变化的新意图冲突，精确重放只在原结果修订仍当前时返回原结果，后续编辑后旧命令不能重新切回。旧信任内容保留供历史事实读取，普通分页/精确查询仍要求当前Role读权限。
 
@@ -67,7 +67,11 @@ R1对应租户IAM/USER事实为`iam.role.created/updated/disabled/enabled/trust-
 
 在现有IAM authority内增加roles和role_trust_versions；Role关系有真实Account外键、名称唯一、不可逆墓碑、不可变信任及指针归属约束。扩展原policy_attachments的ROLE目标约束，不把ROLE伪装成USER或GROUP，不平行建立角色附件表。API只获封闭函数执行权，worker/recovery/verifier不能管理角色，所有表仍受现有owner/RLS隔离。
 
-沿现有adapter形状提案新增`list_roles/read_role`各4参、`list_role_trust_versions/read_role_trust_version`各5参；封闭写函数`create_role`8参、`update_role/set_role_status`各7参、`set_role_trust_policy`8参、`delete_role`6参，均返回jsonb。公共固定参数始终包含IAM推导的account、actor、decision；其他只为准确Role/预期修订/闭合元数据或信任承诺/单一event，不能是任意SQL命令。最终逐参类型及ACL必须在实现前与消费方核对；旧`create_policy_attachment`9参和`revoke_policy_attachment`6参保持形状、扩展ROLE语义。原record_authorization7/evidence5、ServiceIdentity、lookup_service、claim7不变。
+沿现有adapter形状设计`list_roles/read_role`各4参、`list_role_trust_versions/read_role_trust_version`各5参；封闭写函数`create_role/set_role_trust_policy`各9参、`update_role/set_role_status`各8参、`delete_role`7参，均返回jsonb。所有Role写函数末尾是私有`actor_session_id text`，只能由实际已认证bearer的Session.ID提供。公共固定参数始终包含IAM推导的account、actor、decision；其他只为准确Role/预期修订/闭合元数据或信任承诺/单一event，不能是任意SQL命令。最终完整逐参类型、ACL和proconfig随实施固定，不以参量数当兼容证明。
+
+现有授权决定不保存SessionID，`assert_allowed_decision`不能用于重建调用会话。先按稳定ID锁actor及涉及的USER目标，再检查指定Session的真实Account/USER、ACTIVE/未撤销/未过期、非临时改密及与user_credentials相同generation；空、NULL、其他USER或代际不符一律拒绝。不得任选actor的另一有效session，不把私有SessionID加入北向request、AuthorizationRequest/decision、摘要、outbox或历史proof，也不追称旧决定包含该lineage。
+
+因此现有附件ABI也在同一IAM24迁移中直接替换，末参同为私有SessionID；旧9/6参重载删除，无default、overload或兼容旁路。新增原Account Root规则仅ROLE分支，原USER/GROUP授权、平台USER附件与Root受保护关系保持。新形状为`create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb,text) -> jsonb`、`revoke_policy_attachment(text,text,bigint,text,text,jsonb,text) -> (resource_version bigint,revoked_at timestamptz,applied boolean)`。原record_authorization7/evidence5、ServiceIdentity、lookup_service、claim7不变。
 
 开发IAM schema24/Audit14窗口已确认，用于新增对象、受限函数和闭合事实；在实现前源码仍为23/13，不提前修改数字或发布profile。IAM产品Profile追加r2，不能覆盖已登记r1；当前SYSTEM默认值、已撤销附件和旧信任/决定不能由schema/bootstrap重放改写。新装使用新源码声明与系统种子；已有数据是否能调用新Role action仍取决于明确当前附件，不因注册目录而授予权限。保留数据正向资格由原root显式发布/关联当前TENANT策略证明，不暗改旧SYSTEM默认或重做安装bootstrap。完整release兼容仍由最终累计组合及安装owner验收，不为本管理切片单独分配发行revision。
 
@@ -89,11 +93,16 @@ RoleSession必须绑定account、role、原USER、直接承担者、source sessi
 
 沿现有`api/iam/v1`数据/严格编码、`authority`纯规则、`identityaccess`用例事务、postgres受限函数、nethttp、生成器及integration/authorityprocess测试拥有者实施。角色/信任契约如需独立源文件，是为区分承担准入与身份权限文档的编码和安全边界，不建立新服务、通用身份框架或另一套PDP。固定来源与REUSE/ADAPT/REFERENCE/REJECT决策归现有FEAT-006 adoption；UI和第三方provider没有运行时依赖。
 
+当前纯契约位于`api/iam/v1/role.go`：严格`TrustPolicyDocument`/`RoleTrustVersion`读取、静态校验及唯一`CanonicalizeTrustPolicyDocument(document) (canonical,contentDigest,error)`。规范化只排序副本，保留空`[]`，拒绝空缺/null、未知字段、重复/大小写歧义、未实现载体、权限文档字段和超预算输入。OpenAPI仅增加数据schema，没有Role HTTP路由、Action、subject、SQL、发行profile或schema数字变化。
+
+2026-09-16聚焦契约与JSONSchema、全仓`go test -race -p 2 -count=1 ./...`、`go vet -p 2 ./...`、模块校验、API生成字节稳定和Linux amd64构建通过（Go2/768MiB）。测试明确区分16KiB reader预算、Go语义及JSONSchema结构：schema不证明SID跨语句唯一、摘要相等、实际Account/USER或当前选中关系。该证据只覆盖纯契约与现有默认回归；本地未启动PG/独立进程/浏览器，不构成R1事务、R2承担或整个006验收。
+
 ## 验收
 
 - R1：两个真实Account可有同名Role；同名User/Role不混用。Root当前授权成功，普通用户/服务/platform-only/另一账号/过期或forced-change会话拒绝；读许可不能写或承担。真实同账号信任、Role策略附件、版本重放与并发更新/删除/撤权，所有失败无部分Role、信任、附件或成功事实。角色没有任何长期凭据或登录能力。
 - R1：运行数据库验证Role/信任/附件的范围、不可变性、RLS、函数形状/ACL、失联与当前Profile漂移；原root/current authority、source registry、User/Group/Boundary、平台凭据保护、claim及旧canonical回归保持。产品Profile追加不自动放大旧策略默认/附件；原数据重放、重启后删除和撤权不复活。
 - R1：旧SYSTEM默认下原Root的新Role动作在显式发布/关联TENANT策略前拒绝，原policy管理路径仍可达；非Root即使普通策略Allow仍被写保护拒绝。删除或停用User不改写旧Trust版本；新信任写入不接受已删除User。附件只接受真实同账号ROLE discriminator，不扩大原User/Group/Service或平台附件面。
+- R1：新的私有会话参数与Role/USER/GROUP/平台USER附件共同通过当前身份、logout、change(true/false/forced)、reset/recover、停用/撤权的并发锁序门禁；旧9/6调用机械失败，新函数ACL/proconfig/readiness形状准确，所有失败不产生部分关系或成功事实。不得靠有界重试掩盖actor/target的反向锁序。
 - R2：双边任一缺失拒绝；角色边界/SessionPolicy不能扩权；管理员承担只读Role后不能用原用户Allow写入。错误Role/Account/token/source/generation、会话过期/撤销、并发assume/revoke/delete/change/reset/logout失败关闭。反复停启、撤信任再恢复及原命令重放均不能复活旧RoleSession。
 - R2/R3：真实独立IAM/PaaS/Audit临时会话业务路径、原始actor与不可变Audit关联；身份变化后原outbox继续投递但当前producer凭据仍须有效；进程重启/两IAM路由无关、数据失联失败关闭。真实UI显示当前角色、账号、原身份与到期；退出角色不创建或复活原登录会话。
 - unit、架构/security、PG18、独立进程、UI及最终release/容量各按自己范围验收。没有外部环境的跨账号或IdP路径不以mock声称完成；也不把R1管理接口或后续纯规则通过当成R2/整套006已验收。

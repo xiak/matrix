@@ -27,6 +27,196 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func sampleRoleTrustDocument() TrustPolicyDocument {
+	return TrustPolicyDocument{LanguageVersion: TrustPolicyLanguageVersion, Statements: []TrustPolicyStatement{
+		{SID: "z-allow", Effect: PolicyAllow, Principals: []TrustPrincipal{{Type: PrincipalUser, ID: "user-b"}, {Type: PrincipalUser, ID: "user-a"}}},
+		{SID: "a-deny", Effect: PolicyDeny, Principals: []TrustPrincipal{{Type: PrincipalUser, ID: "user-a"}}},
+	}}
+}
+
+func TestRoleTrustCanonicalCommitmentIsBoundedAndPurposeSeparated(t *testing.T) {
+	document := sampleRoleTrustDocument()
+	before, _ := json.Marshal(document)
+	canonical, digest, err := CanonicalizeTrustPolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := json.Marshal(document)
+	if !bytes.Equal(before, after) {
+		t.Fatal("canonicalization changed caller-owned trust slices")
+	}
+	copy, err := DecodeTrustPolicyDocument(strings.NewReader(canonical))
+	if err != nil || copy.Statements[0].SID != "a-deny" || copy.Statements[1].Principals[0].ID != "user-a" {
+		t.Fatal("trust content did not round-trip in canonical order")
+	}
+	slices.Reverse(copy.Statements)
+	slices.Reverse(copy.Statements[0].Principals)
+	other, otherDigest, err := CanonicalizeTrustPolicyDocument(copy)
+	if err != nil || other != canonical || otherDigest != digest {
+		t.Fatal("set ordering changed the trust commitment")
+	}
+	expected := sha256.Sum256(append([]byte("matrix.iam.role-trust.v1\x00"), []byte(canonical)...))
+	policyPurpose := sha256.Sum256(append([]byte("matrix.iam.policy.v1\x00"), []byte(canonical)...))
+	if digest != "sha256:"+hex.EncodeToString(expected[:]) || expected == policyPurpose {
+		t.Fatal("trust commitment lost its distinct content purpose")
+	}
+	copy.Statements[0].Effect = PolicyDeny
+	_, changedDigest, err := CanonicalizeTrustPolicyDocument(copy)
+	if err != nil || changedDigest == digest {
+		t.Fatal("changing an effect retained the old content commitment")
+	}
+	empty := TrustPolicyDocument{LanguageVersion: TrustPolicyLanguageVersion, Statements: []TrustPolicyStatement{}}
+	emptyCanonical, _, err := CanonicalizeTrustPolicyDocument(empty)
+	if err != nil || emptyCanonical != `{"languageVersion":"1","statements":[]}` {
+		t.Fatal("explicit empty trust was lost or rewritten as null")
+	}
+}
+
+func TestRoleTrustStrictDecoderRejectsAuthoritySelectorsAndAmbiguity(t *testing.T) {
+	valid := `{"languageVersion":"1","statements":[{"sid":"read-carrier","effect":"ALLOW","principals":[{"type":"USER","id":"stable-user"}]}]}`
+	for name, wire := range map[string]string{
+		"missing statements":     `{"languageVersion":"1"}`,
+		"null statements":        `{"languageVersion":"1","statements":null}`,
+		"missing version":        `{"statements":[]}`,
+		"null":                   `null`,
+		"wrong version":          strings.Replace(valid, `"1"`, `"2"`, 1),
+		"duplicate version":      strings.Replace(valid, `"languageVersion":"1"`, `"languageVersion":"1","languageVersion":"1"`, 1),
+		"case fallback":          strings.Replace(valid, `"languageVersion"`, `"LanguageVersion"`, 1),
+		"account selector":       strings.Replace(valid, `"statements"`, `"accountId":"other","statements"`, 1),
+		"tenant selector":        strings.Replace(valid, `"statements"`, `"tenantId":"other","statements"`, 1),
+		"permission scope":       strings.Replace(valid, `"statements"`, `"scope":"TENANT","statements"`, 1),
+		"permission actions":     strings.Replace(valid, `"sid"`, `"actions":["iam.role.assume"],"sid"`, 1),
+		"permission resources":   strings.Replace(valid, `"sid"`, `"resources":[],"sid"`, 1),
+		"caller conditions":      strings.Replace(valid, `"sid"`, `"conditions":[],"sid"`, 1),
+		"service":                strings.Replace(valid, `"USER"`, `"SERVICE_ACCOUNT"`, 1),
+		"group":                  strings.Replace(valid, `"USER"`, `"GROUP"`, 1),
+		"role":                   strings.Replace(valid, `"USER"`, `"ROLE"`, 1),
+		"root discriminator":     strings.Replace(valid, `"USER"`, `"ROOT"`, 1),
+		"wildcard":               strings.Replace(valid, `"stable-user"`, `"*"`, 1),
+		"realm":                  strings.Replace(valid, `"stable-user"`, `"member@account"`, 1),
+		"null identity":          strings.Replace(valid, `"stable-user"`, `null`, 1),
+		"identity scope":         strings.Replace(valid, `"type":"USER"`, `"accountId":"other","type":"USER"`, 1),
+		"duplicate identity":     strings.Replace(valid, `"id":"stable-user"`, `"id":"stable-user","id":"different"`, 1),
+		"identity case fallback": strings.Replace(valid, `"type"`, `"Type"`, 1),
+		"missing principals":     `{"languageVersion":"1","statements":[{"sid":"allow","effect":"ALLOW"}]}`,
+		"null principals":        `{"languageVersion":"1","statements":[{"sid":"allow","effect":"ALLOW","principals":null}]}`,
+		"empty principals":       `{"languageVersion":"1","statements":[{"sid":"allow","effect":"ALLOW","principals":[]}]}`,
+		"trailing document":      valid + `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			decoded, err := DecodeTrustPolicyDocument(strings.NewReader(wire))
+			if !errors.Is(err, ErrInvalidTrustPolicy) || !reflect.DeepEqual(decoded, TrustPolicyDocument{}) {
+				t.Fatal("invalid trust was not rejected with a sanitized empty result")
+			}
+			prior := sampleRoleTrustDocument()
+			before, _ := json.Marshal(prior)
+			if json.Unmarshal([]byte(wire), &prior) == nil {
+				t.Fatal("ordinary nested JSON decode bypassed trust validation")
+			}
+			after, _ := json.Marshal(prior)
+			if !bytes.Equal(before, after) {
+				t.Fatal("failed trust decode partially replaced the destination")
+			}
+		})
+	}
+	// IDs are syntax, not a namespace convention. Even a valid looking ID must
+	// later be resolved to a real same-account USER under the transaction lock.
+	for _, id := range []string{"original-primary", "service-looking-id", "role-looking-id"} {
+		document, err := DecodeTrustPolicyDocument(strings.NewReader(strings.Replace(valid, "stable-user", id, 1)))
+		if err != nil || document.Statements[0].Principals[0].ID != PrincipalID(id) {
+			t.Fatal("contract tried to infer account or principal type from an ID prefix")
+		}
+	}
+	var identityPolicy PolicyDocument
+	if DecodeRequest(strings.NewReader(valid), &identityPolicy) == nil {
+		t.Fatal("identity policy decoder accepted a role trust document")
+	}
+}
+
+func TestRoleTrustBudgetsAndImmutableVersionBinding(t *testing.T) {
+	// Reader boundaries include whitespace. encoding/json alone strips outer
+	// whitespace before UnmarshalJSON and is not a replacement for this limit.
+	emptyWire := `{"languageVersion":"1","statements":[]}`
+	exactWire := emptyWire + strings.Repeat(" ", int(MaxTrustPolicyBytes)-len(emptyWire))
+	if _, err := DecodeTrustPolicyDocument(strings.NewReader(exactWire)); err != nil {
+		t.Fatal("exact input byte budget was rejected")
+	}
+	if _, err := DecodeTrustPolicyDocument(strings.NewReader(exactWire + " ")); !errors.Is(err, ErrInvalidTrustPolicy) {
+		t.Fatal("wire byte budget was bypassed with trailing whitespace")
+	}
+	document := TrustPolicyDocument{LanguageVersion: TrustPolicyLanguageVersion, Statements: make([]TrustPolicyStatement, MaxTrustPolicyStatements)}
+	for index := range document.Statements {
+		statement := &document.Statements[index]
+		statement.SID, statement.Effect = fmt.Sprintf("statement-%d", index), PolicyAllow
+		for principal := range MaxTrustStatementPrincipals {
+			statement.Principals = append(statement.Principals, TrustPrincipal{Type: PrincipalUser, ID: PrincipalID(fmt.Sprintf("user-%d", principal))})
+		}
+	}
+	if ValidateTrustPolicyDocument(document) != nil {
+		t.Fatal("valid bounded full trust document was rejected")
+	}
+	for name, change := range map[string]func(*TrustPolicyDocument){
+		"nil statements":     func(v *TrustPolicyDocument) { v.Statements = nil },
+		"statement overflow": func(v *TrustPolicyDocument) { v.Statements = append(v.Statements, v.Statements[0]) },
+		"principal overflow": func(v *TrustPolicyDocument) {
+			v.Statements[0].Principals = append(v.Statements[0].Principals, TrustPrincipal{Type: PrincipalUser, ID: "one-more"})
+		},
+		"duplicate SID":       func(v *TrustPolicyDocument) { v.Statements[1].SID = v.Statements[0].SID },
+		"duplicate principal": func(v *TrustPolicyDocument) { v.Statements[0].Principals[1] = v.Statements[0].Principals[0] },
+		"unbounded bytes": func(v *TrustPolicyDocument) {
+			for i := range v.Statements {
+				for j := range v.Statements[i].Principals {
+					v.Statements[i].Principals[j].ID = PrincipalID(fmt.Sprintf("u%03d", j) + strings.Repeat("a", 124))
+				}
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			encoded, _ := json.Marshal(document)
+			copy, _ := DecodeTrustPolicyDocument(bytes.NewReader(encoded))
+			change(&copy)
+			if ValidateTrustPolicyDocument(copy) == nil {
+				t.Fatal("invalid trust budget or duplicate accepted")
+			}
+			canonical, digest, err := CanonicalizeTrustPolicyDocument(copy)
+			if !errors.Is(err, ErrInvalidTrustPolicy) || canonical != "" || digest != "" {
+				t.Fatal("invalid trust acquired a canonical commitment")
+			}
+		})
+	}
+	document = sampleRoleTrustDocument()
+	_, digest, _ := CanonicalizeTrustPolicyDocument(document)
+	version := RoleTrustVersion{APIVersion: APIVersion, Kind: "RoleTrustVersion", ID: "trust-version-a", AccountID: "account-a", RoleID: "role-a",
+		Document: document, ContentDigest: digest, CreatedAt: time.Date(2026, 9, 16, 1, 0, 0, 0, time.UTC)}
+	encoded, _ := json.Marshal(version)
+	read, err := DecodeRoleTrustVersion(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(read, version) {
+		t.Fatal("immutable trust version failed strict content round-trip")
+	}
+	for name, change := range map[string]func(*RoleTrustVersion){
+		"missing account":          func(v *RoleTrustVersion) { v.AccountID = "" },
+		"missing role":             func(v *RoleTrustVersion) { v.RoleID = "" },
+		"missing version":          func(v *RoleTrustVersion) { v.ID = "" },
+		"wrong kind":               func(v *RoleTrustVersion) { v.Kind = "PolicyVersion" },
+		"changed content":          func(v *RoleTrustVersion) { v.Document.Statements[0].Effect = PolicyDeny },
+		"changed digest":           func(v *RoleTrustVersion) { v.ContentDigest = "sha256:" + strings.Repeat("0", 64) },
+		"non UTC timestamp":        func(v *RoleTrustVersion) { v.CreatedAt = v.CreatedAt.In(time.FixedZone("offset", 3600)) },
+		"submicrosecond timestamp": func(v *RoleTrustVersion) { v.CreatedAt = v.CreatedAt.Add(time.Nanosecond) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			copy, _ := DecodeRoleTrustVersion(bytes.NewReader(encoded))
+			change(&copy)
+			if ValidateRoleTrustVersion(copy) == nil {
+				t.Fatal("incomplete or mismatched immutable trust version accepted")
+			}
+		})
+	}
+	withPermit := strings.Replace(string(encoded), `"kind":"RoleTrustVersion"`, `"kind":"RoleTrustVersion","permit":true`, 1)
+	if _, err := DecodeRoleTrustVersion(strings.NewReader(withPermit)); err == nil {
+		t.Fatal("trust version accepted a permit extension")
+	}
+}
+
 func currentAuthorizationProfileList(t *testing.T) AuthorizationProfileList {
 	t.Helper()
 	value := AuthorizationProfileList{APIVersion: APIVersion, Kind: "AuthorizationProfileList", AccountID: "account-catalog"}

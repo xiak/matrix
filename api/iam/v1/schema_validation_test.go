@@ -14,6 +14,86 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestRoleTrustSchemasKeepCarrierAdmissionSeparateFromIdentityPolicies(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	schema := compileIAMOpenAPISchema(t, api, "TrustPolicyDocument")
+	valid := `{"languageVersion":"1","statements":[{"sid":"one","effect":"ALLOW","principals":[{"type":"USER","id":"user-a"}]}]}`
+	for name, wire := range map[string]string{
+		"explicit empty": `{"languageVersion":"1","statements":[]}`,
+		"allow":          valid,
+		"deny":           strings.Replace(valid, `"ALLOW"`, `"DENY"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, err := jsonschema.UnmarshalJSON(strings.NewReader(wire))
+			if err != nil || schema.Validate(value) != nil {
+				t.Fatal("valid closed role trust syntax rejected")
+			}
+		})
+	}
+	for name, wire := range map[string]string{
+		"missing statements":  `{"languageVersion":"1"}`,
+		"null statements":     `{"languageVersion":"1","statements":null}`,
+		"unknown language":    strings.Replace(valid, `"1"`, `"2"`, 1),
+		"unknown effect":      strings.Replace(valid, `"ALLOW"`, `"PERMIT"`, 1),
+		"permission scope":    strings.Replace(valid, `"statements"`, `"scope":"TENANT","statements"`, 1),
+		"account selector":    strings.Replace(valid, `"statements"`, `"accountId":"other","statements"`, 1),
+		"empty carriers":      strings.Replace(valid, `[{"type":"USER","id":"user-a"}]`, `[]`, 1),
+		"service carrier":     strings.Replace(valid, `"USER"`, `"SERVICE_ACCOUNT"`, 1),
+		"role carrier":        strings.Replace(valid, `"USER"`, `"ROLE"`, 1),
+		"group carrier":       strings.Replace(valid, `"USER"`, `"GROUP"`, 1),
+		"wildcard carrier":    strings.Replace(valid, `"user-a"`, `"*"`, 1),
+		"carrier realm":       strings.Replace(valid, `"user-a"`, `"user@account"`, 1),
+		"carrier account":     strings.Replace(valid, `"type":"USER"`, `"accountId":"other","type":"USER"`, 1),
+		"identity actions":    strings.Replace(valid, `"sid"`, `"actions":["iam.role.assume"],"sid"`, 1),
+		"identity resources":  strings.Replace(valid, `"sid"`, `"resources":[],"sid"`, 1),
+		"identity conditions": strings.Replace(valid, `"sid"`, `"conditions":[],"sid"`, 1),
+		"duplicate carrier":   strings.Replace(valid, `[{"type":"USER","id":"user-a"}]`, `[{"type":"USER","id":"user-a"},{"type":"USER","id":"user-a"}]`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, err := jsonschema.UnmarshalJSON(strings.NewReader(wire))
+			if err != nil || schema.Validate(value) == nil {
+				t.Fatal("role trust schema accepted authority confusion or an unimplemented carrier")
+			}
+		})
+	}
+	for _, tooManyStatements := range []bool{false, true} {
+		document := sampleRoleTrustDocument()
+		if tooManyStatements {
+			for len(document.Statements) <= MaxTrustPolicyStatements {
+				document.Statements = append(document.Statements, TrustPolicyStatement{SID: fmt.Sprintf("s%d", len(document.Statements)), Effect: PolicyAllow, Principals: []TrustPrincipal{{Type: PrincipalUser, ID: "user-a"}}})
+			}
+		} else {
+			for len(document.Statements[0].Principals) <= MaxTrustStatementPrincipals {
+				document.Statements[0].Principals = append(document.Statements[0].Principals, TrustPrincipal{Type: PrincipalUser, ID: PrincipalID(fmt.Sprintf("p%d", len(document.Statements[0].Principals)))})
+			}
+		}
+		encoded, _ := json.Marshal(document)
+		value, _ := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if schema.Validate(value) == nil {
+			t.Fatal("schema accepted an oversized carrier collection")
+		}
+	}
+	// JSON Schema does not establish digest equality, unique SID across
+	// different statements, current selection or real USER/account membership.
+	versionSchema := compileIAMOpenAPISchema(t, api, "RoleTrustVersion")
+	document := sampleRoleTrustDocument()
+	_, digest, _ := CanonicalizeTrustPolicyDocument(document)
+	version := RoleTrustVersion{APIVersion: APIVersion, Kind: "RoleTrustVersion", ID: "version-a", AccountID: "account-a", RoleID: "role-a", Document: document, ContentDigest: digest, CreatedAt: time.Date(2026, 9, 16, 1, 0, 0, 0, time.UTC)}
+	encoded, _ := json.Marshal(version)
+	value, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+	if err != nil || versionSchema.Validate(value) != nil {
+		t.Fatal("version schema rejected valid immutable content")
+	}
+	for _, field := range []string{"accountId", "roleId", "contentDigest", "document", "createdAt"} {
+		var candidate map[string]any
+		_ = json.Unmarshal(encoded, &candidate)
+		delete(candidate, field)
+		if versionSchema.Validate(candidate) == nil {
+			t.Fatal("version schema omitted required lineage or content")
+		}
+	}
+}
+
 func TestAuthorizationProfileDiscoverySchemaPreservesDeclaredScopeAndShape(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AuthorizationProfileList")
 	base := currentAuthorizationProfileList(t)

@@ -240,7 +240,7 @@ func scalarSchemas() object {
 		},
 	}
 	for _, name := range []string{
-		"AccountID", "PrincipalID", "GroupID", "GroupMembershipID", "RoleBindingID", "SessionID", "DecisionID",
+		"AccountID", "PrincipalID", "GroupID", "GroupMembershipID", "RoleBindingID", "RoleID", "RoleTrustVersionID", "SessionID", "DecisionID",
 		"PolicyID", "PolicyVersionID", "PolicyAttachmentID",
 	} {
 		result[name] = object{"allOf": []any{openapi31.Ref("ID")}}
@@ -347,6 +347,10 @@ func structContracts() map[string]reflect.Type {
 		"User":                                openapi31.StructType[iamv1.User](),
 		"Group":                               openapi31.StructType[iamv1.Group](),
 		"GroupMembership":                     openapi31.StructType[iamv1.GroupMembership](),
+		"TrustPolicyDocument":                 openapi31.StructType[iamv1.TrustPolicyDocument](),
+		"TrustPolicyStatement":                openapi31.StructType[iamv1.TrustPolicyStatement](),
+		"TrustPrincipal":                      openapi31.StructType[iamv1.TrustPrincipal](),
+		"RoleTrustVersion":                    openapi31.StructType[iamv1.RoleTrustVersion](),
 		"ActionCapability":                    openapi31.StructType[iamv1.ActionCapability](),
 		"CurrentIdentity":                     openapi31.StructType[iamv1.CurrentIdentity](),
 		"PolicyList":                          openapi31.StructType[iamv1.PolicyList](),
@@ -383,6 +387,26 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if owner == "TrustPolicyDocument" {
+		switch jsonName {
+		case "languageVersion":
+			base = object{"const": iamv1.TrustPolicyLanguageVersion}
+		case "statements":
+			base["maxItems"], base["uniqueItems"] = iamv1.MaxTrustPolicyStatements, true
+			base["description"] = "Empty means no trusted carriers. SID uniqueness, total encoded byte budget and account membership require authoritative validation."
+		}
+	}
+	if owner == "TrustPolicyStatement" {
+		switch jsonName {
+		case "sid":
+			base = openapi31.Ref("ID")
+		case "principals":
+			base["minItems"], base["maxItems"], base["uniqueItems"] = 1, iamv1.MaxTrustStatementPrincipals, true
+		}
+	}
+	if owner == "TrustPrincipal" && jsonName == "type" {
+		base = object{"const": string(iamv1.PrincipalUser)}
+	}
 	if owner == "AuthorizationProfileList" && jsonName == "items" {
 		base["minItems"], base["maxItems"] = 1, iamv1.MaxAuthorizationProfileListItems
 	}
