@@ -65,20 +65,24 @@ func (value *transaction) LookupRoleSession(ctx context.Context, digest string) 
 		return identityaccess.RoleSessionCredential{}, false, nil
 	}
 	var stored struct {
-		Session                iamv1.RoleSession `json:"session"`
-		SourceSessionID        iamv1.SessionID   `json:"sourceSessionId"`
-		SourceLookupDigest     string            `json:"sourceLookupDigest"`
-		CredentialGeneration   uint64            `json:"credentialGeneration"`
-		SecurityGeneration     uint64            `json:"securityGeneration"`
-		AssumeDecisionID       iamv1.DecisionID  `json:"assumeDecisionId"`
-		VerificationDigest     string            `json:"verificationDigest"`
-		Role                   iamv1.Role        `json:"role"`
-		AuthorityEvidence      json.RawMessage   `json:"authorityEvidence"`
-		SessionPolicyCanonical *string           `json:"sessionPolicyCanonical"`
-		SessionPolicyDigest    *string           `json:"sessionPolicyDigest"`
+		AuthorityContractVersion      uint64                                `json:"authorityContractVersion"`
+		SourceAuthorizationGeneration uint64                                `json:"sourceAuthorizationGeneration"`
+		SourceGroupGenerations        []authority.RoleSourceGroupGeneration `json:"sourceGroupGenerations"`
+		Session                       iamv1.RoleSession                     `json:"session"`
+		SourceSessionID               iamv1.SessionID                       `json:"sourceSessionId"`
+		SourceLookupDigest            string                                `json:"sourceLookupDigest"`
+		CredentialGeneration          uint64                                `json:"credentialGeneration"`
+		SecurityGeneration            uint64                                `json:"securityGeneration"`
+		AssumeDecisionID              iamv1.DecisionID                      `json:"assumeDecisionId"`
+		VerificationDigest            string                                `json:"verificationDigest"`
+		Role                          iamv1.Role                            `json:"role"`
+		AuthorityEvidence             json.RawMessage                       `json:"authorityEvidence"`
+		SessionPolicyCanonical        *string                               `json:"sessionPolicyCanonical"`
+		SessionPolicyDigest           *string                               `json:"sessionPolicyDigest"`
 	}
 	// The complete vector is bounded by the existing policy/attachment budgets.
 	if contractjson.DecodeObjectBytes(encoded, 2*257*maxStoredPolicyVersionBytes, &stored) != nil ||
+		authority.ValidateRoleSourceAuthority(stored.AuthorityContractVersion, stored.SourceAuthorizationGeneration, stored.SourceGroupGenerations) != nil ||
 		stored.CredentialGeneration == 0 || stored.CredentialGeneration > 9007199254740991 ||
 		stored.SecurityGeneration == 0 || stored.SecurityGeneration > 9007199254740991 ||
 		iamv1.ValidateID("assumeDecisionId", string(stored.AssumeDecisionID)) != nil ||
@@ -167,6 +171,7 @@ func (value *transaction) LookupRoleSession(ctx context.Context, digest string) 
 		}
 	}
 	return identityaccess.RoleSessionCredential{Subject: authority.RoleSessionContext{Session: stored.Session, Source: source.Subject,
+		AuthorityContractVersion: stored.AuthorityContractVersion, SourceAuthorizationGeneration: stored.SourceAuthorizationGeneration, SourceGroupGenerations: stored.SourceGroupGenerations,
 		CredentialGeneration: stored.CredentialGeneration, SecurityGeneration: stored.SecurityGeneration, AssumeDecisionID: stored.AssumeDecisionID,
 		SourceSessionID: stored.SourceSessionID, Role: stored.Role, Trust: evidence.Trust, Policies: rolePolicies, Boundary: boundary, SessionPolicy: restriction},
 		VerificationDigest: stored.VerificationDigest}, true, nil

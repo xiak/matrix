@@ -163,6 +163,7 @@ func roleSessionContextForTest(now time.Time) RoleSessionContext {
 	_, trust.ContentDigest, _ = iamv1.CanonicalizeTrustPolicyDocument(trust.Document)
 	limit := authorityPolicies(now, role.AccountID, iamv1.Subject{Type: iamv1.SubjectRole, ID: string(role.ID)}, "", iamv1.SystemPolicyPaaSViewer)[0]
 	return RoleSessionContext{Source: source, SourceSessionID: source.Session.ID, Role: role, Trust: trust,
+		AuthorityContractVersion: 2, SourceAuthorizationGeneration: 1, SourceGroupGenerations: []RoleSourceGroupGeneration{},
 		CredentialGeneration: 1, SecurityGeneration: 1, AssumeDecisionID: "assume-original",
 		Session: iamv1.RoleSession{APIVersion: iamv1.APIVersion, Kind: "RoleSession", ID: "role-session-one", AccountID: role.AccountID,
 			RoleID: role.ID, SourceUserID: source.Principal.ID, Status: iamv1.SessionActive, IssuedAt: now, ExpiresAt: now.Add(30 * time.Minute)},
@@ -180,18 +181,23 @@ func TestRoleSessionAuthenticationRechecksTheCurrentSource(t *testing.T) {
 		t.Fatal("current role rejected", err)
 	}
 	for name, change := range map[string]func(*RoleSessionContext){
-		"missing boundary":     func(v *RoleSessionContext) { v.Boundary = nil },
-		"wrong account":        func(v *RoleSessionContext) { v.Session.AccountID = "another-account" },
-		"wrong role":           func(v *RoleSessionContext) { v.Session.RoleID = "another-role" },
-		"wrong source user":    func(v *RoleSessionContext) { v.Session.SourceUserID = "another-user" },
-		"wrong source session": func(v *RoleSessionContext) { v.SourceSessionID = "another-session" },
-		"future issue":         func(v *RoleSessionContext) { v.Session.IssuedAt = now.Add(time.Second) },
-		"expired":              func(v *RoleSessionContext) { v.Session.IssuedAt = now.Add(-time.Minute); v.Session.ExpiresAt = now },
-		"exceeds source":       func(v *RoleSessionContext) { v.Session.ExpiresAt = v.Source.Session.ExpiresAt.Add(time.Second) },
-		"revoked":              func(v *RoleSessionContext) { v.Session.Status = iamv1.SessionRevoked; v.Session.RevokedAt = &now },
-		"account disabled":     func(v *RoleSessionContext) { v.Source.Organization.Status = iamv1.AccountDisabled },
-		"source disabled":      func(v *RoleSessionContext) { v.Source.Principal.Status = iamv1.PrincipalDisabled },
-		"source forced change": func(v *RoleSessionContext) { v.Source.Principal.MustChangePassword = true },
+		"missing authority contract": func(v *RoleSessionContext) { v.AuthorityContractVersion = 0 },
+		"legacy authority contract":  func(v *RoleSessionContext) { v.AuthorityContractVersion = 1 },
+		"future authority contract":  func(v *RoleSessionContext) { v.AuthorityContractVersion = 3 },
+		"missing source generation":  func(v *RoleSessionContext) { v.SourceAuthorizationGeneration = 0 },
+		"missing complete groups":    func(v *RoleSessionContext) { v.SourceGroupGenerations = nil },
+		"missing boundary":           func(v *RoleSessionContext) { v.Boundary = nil },
+		"wrong account":              func(v *RoleSessionContext) { v.Session.AccountID = "another-account" },
+		"wrong role":                 func(v *RoleSessionContext) { v.Session.RoleID = "another-role" },
+		"wrong source user":          func(v *RoleSessionContext) { v.Session.SourceUserID = "another-user" },
+		"wrong source session":       func(v *RoleSessionContext) { v.SourceSessionID = "another-session" },
+		"future issue":               func(v *RoleSessionContext) { v.Session.IssuedAt = now.Add(time.Second) },
+		"expired":                    func(v *RoleSessionContext) { v.Session.IssuedAt = now.Add(-time.Minute); v.Session.ExpiresAt = now },
+		"exceeds source":             func(v *RoleSessionContext) { v.Session.ExpiresAt = v.Source.Session.ExpiresAt.Add(time.Second) },
+		"revoked":                    func(v *RoleSessionContext) { v.Session.Status = iamv1.SessionRevoked; v.Session.RevokedAt = &now },
+		"account disabled":           func(v *RoleSessionContext) { v.Source.Organization.Status = iamv1.AccountDisabled },
+		"source disabled":            func(v *RoleSessionContext) { v.Source.Principal.Status = iamv1.PrincipalDisabled },
+		"source forced change":       func(v *RoleSessionContext) { v.Source.Principal.MustChangePassword = true },
 		"source session revoked": func(v *RoleSessionContext) {
 			v.Source.Session.Status = iamv1.SessionRevoked
 			v.Source.Session.RevokedAt = &now
@@ -225,6 +231,40 @@ func TestRoleSessionAuthenticationRechecksTheCurrentSource(t *testing.T) {
 	}
 	if err := AuthenticateRoleSession(value, issued.VerificationDigest, issued.Credential, now.Add(time.Second)); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatal("unchanged revision cached an expired source Allow", err)
+	}
+}
+
+func TestRoleSourceAuthorityRequiresCompleteBoundedEvidence(t *testing.T) {
+	groups := make([]RoleSourceGroupGeneration, 100)
+	for i := range groups {
+		groups[i] = RoleSourceGroupGeneration{GroupID: iamv1.GroupID(fmt.Sprintf("group-%03d", i)),
+			MembershipID: iamv1.GroupMembershipID(fmt.Sprintf("membership-%03d", i)), MembershipResourceVersion: 1, AuthorizationGeneration: 9007199254740991}
+	}
+	if ValidateRoleSourceAuthority(2, 9007199254740991, groups) != nil || ValidateRoleSourceAuthority(2, 1, []RoleSourceGroupGeneration{}) != nil {
+		t.Fatal("complete source authority at either budget boundary was rejected")
+	}
+	for name, mutate := range map[string]func(*RoleSessionContext){
+		"oversized generation":        func(v *RoleSessionContext) { v.SourceAuthorizationGeneration = 9007199254740992 },
+		"oversized groups":            func(v *RoleSessionContext) { v.SourceGroupGenerations = append(v.SourceGroupGenerations, groups[0]) },
+		"missing group":               func(v *RoleSessionContext) { v.SourceGroupGenerations[0].GroupID = "" },
+		"missing membership":          func(v *RoleSessionContext) { v.SourceGroupGenerations[0].MembershipID = "" },
+		"removed membership revision": func(v *RoleSessionContext) { v.SourceGroupGenerations[0].MembershipResourceVersion = 2 },
+		"missing membership revision": func(v *RoleSessionContext) { v.SourceGroupGenerations[0].MembershipResourceVersion = 0 },
+		"missing group generation":    func(v *RoleSessionContext) { v.SourceGroupGenerations[0].AuthorizationGeneration = 0 },
+		"oversized group generation":  func(v *RoleSessionContext) { v.SourceGroupGenerations[0].AuthorizationGeneration = 9007199254740992 },
+		"duplicate group":             func(v *RoleSessionContext) { v.SourceGroupGenerations[1].GroupID = v.SourceGroupGenerations[0].GroupID },
+		"unordered groups": func(v *RoleSessionContext) {
+			v.SourceGroupGenerations[0], v.SourceGroupGenerations[1] = v.SourceGroupGenerations[1], v.SourceGroupGenerations[0]
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := roleSessionContextForTest(authorityTestTime())
+			value.SourceGroupGenerations = slices.Clone(groups)
+			mutate(&value)
+			if !errors.Is(ValidateRoleSourceAuthority(value.AuthorityContractVersion, value.SourceAuthorizationGeneration, value.SourceGroupGenerations), ErrAuthorityUnavailable) {
+				t.Fatal("incomplete source authority remained current")
+			}
+		})
 	}
 }
 
@@ -323,7 +363,9 @@ func TestRoleDecisionIntersectsThreeSourcesWithoutUserPermissionInheritance(t *t
 				return
 			}
 			if result.RoleEvidence == nil || result.RoleEvidence.AssumeDecisionID != value.AssumeDecisionID || result.RoleEvidence.SourceSessionID != value.Source.Session.ID ||
-				result.BoundaryEvidence.State != "NOT_APPLICABLE" || result.RoleEvidence.Boundary.Version.VersionID != value.Boundary.Version.ID {
+				result.BoundaryEvidence.State != "NOT_APPLICABLE" || result.RoleEvidence.Boundary.Version.VersionID != value.Boundary.Version.ID ||
+				result.RoleEvidence.AuthorityContractVersion != 2 || result.RoleEvidence.SourceAuthorizationGeneration != value.SourceAuthorizationGeneration ||
+				result.RoleEvidence.SourceGroupGenerations == nil || !slices.Equal(result.RoleEvidence.SourceGroupGenerations, value.SourceGroupGenerations) {
 				t.Fatal("role provenance was dropped or confused with USER boundary")
 			}
 			for _, evidence := range result.PolicyEvidence {
@@ -336,7 +378,8 @@ func TestRoleDecisionIntersectsThreeSourcesWithoutUserPermissionInheritance(t *t
 				t.Fatal("public subject is not the exact ROLE lineage")
 			}
 			encoded, err := json.Marshal(result)
-			if err != nil || bytes.Contains(encoded, []byte("sourceSessionId")) || bytes.Contains(encoded, []byte("credentialGeneration")) || bytes.Contains(encoded, []byte("boundaryId")) || bytes.Contains(encoded, []byte("assumeDecisionId")) {
+			if err != nil || bytes.Contains(encoded, []byte("sourceSessionId")) || bytes.Contains(encoded, []byte("credentialGeneration")) || bytes.Contains(encoded, []byte("boundaryId")) || bytes.Contains(encoded, []byte("assumeDecisionId")) ||
+				bytes.Contains(encoded, []byte("sourceAuthorizationGeneration")) || bytes.Contains(encoded, []byte("sourceGroupGenerations")) || bytes.Contains(encoded, []byte("authorityContractVersion")) {
 				t.Fatal("private proof leaked into decision")
 			}
 			if !test.want && (result.Subject != nil || result.TenantID != "" || result.InstallationID != "") {

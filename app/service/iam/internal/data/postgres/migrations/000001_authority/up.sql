@@ -1583,7 +1583,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           26::bigint,
+           27::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -2725,9 +2725,11 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable'; END IF;
     -- Lock both real USER rows in one stable order, including self-targets.
     -- Credential, logout and platform-grant writers serialize on these rows.
+    -- The decision already holds an actor FK KEY SHARE: protect mutable
+    -- identity state without competing to upgrade that immutable key reference.
     PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id
         AND (p.id=submitted_actor_principal_id OR (submitted_target_kind='USER' AND p.id=submitted_target_id))
-        ORDER BY p.id FOR UPDATE;
+        ORDER BY p.id FOR NO KEY UPDATE;
     PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id AND p.id=submitted_actor_principal_id
         AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL AND NOT p.must_change_password;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment actor is unavailable'; END IF;
@@ -2740,7 +2742,7 @@ BEGIN
     IF submitted_target_kind='USER' THEN
         SELECT * INTO target_user FROM iam.principals
          WHERE tenant_id=submitted_tenant_id AND id=submitted_target_id AND principal_type='USER' AND status='ACTIVE'
-           AND deleted_at IS NULL FOR UPDATE;
+           AND deleted_at IS NULL FOR NO KEY UPDATE;
         IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment target is unavailable'; END IF;
     ELSIF submitted_target_kind='GROUP' THEN
         PERFORM 1 FROM iam.groups
@@ -2836,7 +2838,7 @@ BEGIN
     -- start with the same sorted actor/USER set as attachment creation.
     PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id
         AND (p.id=submitted_actor_principal_id OR (stored.target_kind='USER' AND p.id=stored.target_id))
-        ORDER BY p.id FOR UPDATE;
+        ORDER BY p.id FOR NO KEY UPDATE;
     PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id AND p.id=submitted_actor_principal_id
         AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL AND NOT p.must_change_password;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment actor is unavailable'; END IF;
@@ -2853,7 +2855,7 @@ BEGIN
         PERFORM 1 FROM iam.roles WHERE tenant_id=submitted_tenant_id AND id=stored.target_id AND deleted_at IS NULL FOR UPDATE;
         IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment role is unavailable'; END IF;
     ELSE
-        PERFORM 1 FROM iam.principals WHERE tenant_id=submitted_tenant_id AND id=stored.target_id FOR UPDATE;
+        PERFORM 1 FROM iam.principals WHERE tenant_id=submitted_tenant_id AND id=stored.target_id FOR NO KEY UPDATE;
     END IF;
     PERFORM 1 FROM iam.policies WHERE id=stored.policy_id FOR SHARE;
     SELECT * INTO stored FROM iam.policy_attachments

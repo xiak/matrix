@@ -53,6 +53,8 @@ JSON languageVersion 初版定义一次，PolicyVersion 以独立 versionId/dige
 
 同意图重放只在该命令结果仍是当前 Policy 修订时返回原结果；变体、过时 resourceVersion 或命令后已有其他修订均冲突，不能把历史命令重放成新的切换。新 requestId 重复创建管理集合中仍存在的内容，或选择当前默认版本，均冲突而不是悄悄制造新修订。退休内容再次发布是新意图、新身份，不恢复旧版本；普通精确读取和默认选择都拒绝退休版本。并发操作按同一 Policy 锁和预期修订只产生一个有效结果。
 
+发布事务不修改Principal不可变键，actor使用`FOR NO KEY UPDATE`保护身份可变状态并序列化发布者；User边界与策略附件的actor/USER目标也按稳定ID使用同一互斥方式，包括自身目标的后续读取。不能在已经记录decision、取得actor外键`KEY SHARE`之后，由两个并发写者都升级为`FOR UPDATE`。Account/root/当前PDP/实际会话检查、精确Policy锁、平台凭据保护及同修订冲突保持，不解除外键或依赖自动重试掩盖死锁。与006共享的修复必须覆盖实际策略/附件竞争、凭据/身份撤销以及runtime 40P01观测；当前候选的最终结果归006本轮组合证据，不能继承旧门禁的无死锁结论。
+
 成功事实分别为租户链 `iam.policy-version.created`、`iam.policy.default-version-set`，target 为所属 POLICY；原 request digest 绑定目标策略、预期修订及新 versionId/contentDigest，不记录策略正文。新增版本与 Policy 修订、历史决定、单一 outbox 同事务；切换后的新请求重读实际默认版本，已提交的旧决定仍使用其原版本证据。版本列表/精确版本读取的结果不能绕过另一次写入的当前授权与修订检查。
 
 #### 策略元数据生命周期

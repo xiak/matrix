@@ -543,3 +543,24 @@ role, revealing every account role with a forbidden flag, frontend Trust
 evaluation, cached identity as a permit and an old/new current-identity wire
 alias are `REJECT`. This is a target adoption decision, not R3 implementation
 or browser acceptance; those remain in IAM/006 and the UI owner.
+
+For irreversible RoleSession source authority, fixed
+`960416dd85adab225bd97ee89509df04173f978b` is `ADAPT` for the existing
+source/role snapshot, concrete transactional mutation triggers and current
+credential lookup. Its account directory row is `REUSE` only as an explicit
+writer lock barrier, never its numeric revision as session authority. The
+once-only issuer, recorder8/evidence5/claim7 and single Audit canonical owner
+are `REUSE`. Fixed `0752c602ab4ce6d73a21094c8e9f75a1c8750183` is `REFERENCE`
+for actual old IAM/PaaS executables producing retained RoleSessions,
+Operation, outbox and private evidence. Old proof bytes remain unchanged;
+only fully qualified old issuance receives a protected interpretation marker.
+Active-source-only ABA checks, fabricated old generations, a default legacy
+marker, account-wide session invalidation, event-history scans per request,
+counter reset during replay, and deadlocks hidden by retry are `REJECT`.
+The retained actor foreign keys are `REUSE`; Role/Policy publisher, User
+boundary and attachment actor/USER locks are `ADAPT` to preserve non-key
+identity-state exclusion without conflicting with the preceding decision's
+KEY SHARE, including self-target rereads. Removing referential integrity,
+dropping current actor/session or platform credential protection checks,
+or accepting conversion deadlocks is `REJECT`.
+This does not create a runtime donor dependency or a release upgrade promise.

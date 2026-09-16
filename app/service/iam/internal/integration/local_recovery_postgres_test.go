@@ -57,8 +57,8 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
         END $role$; GRANT matrix_iam_credential_recovery TO `+localRecoveryTestRole); err != nil {
 		t.Fatal(err)
 	}
-	api := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole)
-	local := localRecoveryWorkflow(t, ctx, dsn, localRecoveryTestRole)
+	api := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, nil)
+	local := localRecoveryWorkflow(t, ctx, dsn, localRecoveryTestRole, nil)
 	document := iamHTTPBootstrap(t)
 	status, err := api.Bootstrap(ctx, document)
 	if err != nil {
@@ -84,7 +84,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 	if _, err := api.RecoverLocalCredentials(ctx, authority, request); !errors.Is(err, identityaccess.ErrForbidden) {
 		t.Fatalf("API identity acquired offline recovery: %v", err)
 	}
-	worker := localRecoveryWorkflow(t, ctx, dsn, iamHTTPWorkerRole)
+	worker := localRecoveryWorkflow(t, ctx, dsn, iamHTTPWorkerRole, nil)
 	if _, err := worker.RecoverLocalCredentials(ctx, authority, request); !errors.Is(err, identityaccess.ErrForbidden) {
 		t.Fatalf("worker acquired offline recovery: %v", err)
 	}
@@ -627,13 +627,14 @@ func assertLocalRecoveryClosedSQLFact(t *testing.T, ctx context.Context, databas
 	}
 }
 
-func localRecoveryWorkflow(t *testing.T, ctx context.Context, dsn, user string) *identityaccess.Authority {
+func localRecoveryWorkflow(t *testing.T, ctx context.Context, dsn, user string, trace pgx.QueryTracer) *identityaccess.Authority {
 	t.Helper()
 	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	config.ConnConfig.User, config.ConnConfig.Password = user, iamHTTPTestPassword
+	config.ConnConfig.Tracer = trace
 	config.MaxConns = 2
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {

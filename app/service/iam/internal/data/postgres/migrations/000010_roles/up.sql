@@ -287,7 +287,9 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     PERFORM 1 FROM iam.accounts WHERE id=tenant AND status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role account is unavailable'; END IF;
-    PERFORM 1 FROM iam.principals p WHERE p.tenant_id=tenant AND (p.id=actor OR p.id=ANY(user_ids)) ORDER BY p.id FOR UPDATE;
+    -- Principal keys are immutable. Preserve exclusive state/credential
+    -- serialization without upgrading the preceding decision's FK KEY SHARE.
+    PERFORM 1 FROM iam.principals p WHERE p.tenant_id=tenant AND (p.id=actor OR p.id=ANY(user_ids)) ORDER BY p.id FOR NO KEY UPDATE;
     PERFORM 1 FROM iam.principals p JOIN iam.account_roots root ON root.account_id=p.tenant_id AND root.principal_id=p.id
       WHERE p.tenant_id=tenant AND p.id=actor AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL AND NOT p.must_change_password FOR SHARE OF root;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role publisher is unavailable'; END IF;
@@ -640,6 +642,141 @@ BEGIN
 END $function$;
 
 -- Issuance is its own immutable identity, never a USER session or password.
+-- Source authorization changes need their own irreversible clock. Active
+-- policy snapshots alone cannot retain a Deny that was added and removed.
+-- Separate rows keep late updates away from principal/group business locks.
+DO $source_authority_cutover$
+BEGIN
+    IF to_regclass('iam.role_source_authority_generations') IS NULL THEN
+        CREATE TABLE iam.role_source_authority_generations (
+            tenant_id text COLLATE "C" NOT NULL REFERENCES iam.accounts(id),
+            user_id text COLLATE "C",
+            group_id text COLLATE "C",
+            generation bigint NOT NULL,
+            CONSTRAINT role_source_exact_kind CHECK((user_id IS NULL)<>(group_id IS NULL)),
+            CONSTRAINT role_source_generation_range CHECK(generation BETWEEN 1 AND 9007199254740991),
+            UNIQUE(tenant_id,user_id), UNIQUE(tenant_id,group_id),
+            FOREIGN KEY(tenant_id,user_id) REFERENCES iam.principals(tenant_id,id),
+            FOREIGN KEY(tenant_id,group_id) REFERENCES iam.groups(tenant_id,id)
+        );
+        ALTER TABLE iam.principals NO FORCE ROW LEVEL SECURITY;
+        ALTER TABLE iam.groups NO FORCE ROW LEVEL SECURITY;
+        INSERT INTO iam.role_source_authority_generations(tenant_id,user_id,generation)
+          SELECT tenant_id,id,1 FROM iam.principals WHERE principal_type='USER';
+        INSERT INTO iam.role_source_authority_generations(tenant_id,group_id,generation)
+          SELECT tenant_id,id,1 FROM iam.groups;
+        ALTER TABLE iam.principals FORCE ROW LEVEL SECURITY;
+        ALTER TABLE iam.groups FORCE ROW LEVEL SECURITY;
+    END IF;
+END $source_authority_cutover$;
+ALTER TABLE iam.role_source_authority_generations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.role_source_authority_generations FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON iam.role_source_authority_generations;
+CREATE POLICY tenant_isolation ON iam.role_source_authority_generations
+  USING(tenant_id=iam.current_tenant_id()) WITH CHECK(tenant_id=iam.current_tenant_id());
+
+CREATE OR REPLACE FUNCTION iam.guard_role_source_authority_generation()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF TG_OP='INSERT' THEN
+        IF NEW.generation<>1 OR (NEW.user_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM iam.principals p
+            WHERE p.tenant_id=NEW.tenant_id AND p.id=NEW.user_id AND p.principal_type='USER')) THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role source authority identity is invalid'; END IF;
+    ELSIF TG_OP<>'UPDATE' OR ROW(NEW.tenant_id,NEW.user_id,NEW.group_id) IS DISTINCT FROM ROW(OLD.tenant_id,OLD.user_id,OLD.group_id)
+       OR NEW.generation<>OLD.generation+1 THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role source authority is irreversible';
+    END IF;
+    RETURN NEW;
+END $function$;
+DROP TRIGGER IF EXISTS source_authority_monotonic ON iam.role_source_authority_generations;
+CREATE TRIGGER source_authority_monotonic BEFORE INSERT OR UPDATE OR DELETE ON iam.role_source_authority_generations
+  FOR EACH ROW EXECUTE FUNCTION iam.guard_role_source_authority_generation();
+ALTER TABLE iam.role_source_authority_generations ENABLE ALWAYS TRIGGER source_authority_monotonic;
+DROP TRIGGER IF EXISTS cannot_truncate ON iam.role_source_authority_generations;
+CREATE TRIGGER cannot_truncate BEFORE TRUNCATE ON iam.role_source_authority_generations
+  FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.role_source_authority_generations ENABLE ALWAYS TRIGGER cannot_truncate;
+
+CREATE OR REPLACE FUNCTION iam.advance_role_source_authority_generation()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE tenant text; source_user text; source_group text; initializing boolean:=false;
+BEGIN
+    IF TG_RELID='iam.principals'::regclass THEN
+        IF TG_OP<>'INSERT' OR NEW.principal_type<>'USER' THEN RETURN NEW; END IF;
+        tenant:=NEW.tenant_id; source_user:=NEW.id; initializing:=true;
+    ELSIF TG_RELID='iam.groups'::regclass THEN
+        IF TG_OP<>'INSERT' THEN RETURN NEW; END IF;
+        tenant:=NEW.tenant_id; source_group:=NEW.id; initializing:=true;
+    ELSIF TG_RELID='iam.policy_attachments'::regclass THEN
+        tenant:=NEW.tenant_id;
+        IF NEW.target_kind='USER' THEN source_user:=NEW.target_id;
+        ELSIF NEW.target_kind='GROUP' THEN source_group:=NEW.target_id;
+        ELSE RETURN NEW; END IF;
+    ELSIF TG_RELID IN ('iam.group_memberships'::regclass,'iam.user_permission_boundaries'::regclass) THEN
+        tenant:=NEW.tenant_id; source_user:=NEW.user_id;
+    ELSE RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role source authority producer is invalid'; END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    IF initializing THEN
+        -- Only a newly inserted, not-yet-visible identity can initialize a key.
+        INSERT INTO iam.role_source_authority_generations(tenant_id,user_id,group_id,generation)
+          VALUES(tenant,source_user,source_group,1);
+        RETURN NEW;
+    END IF;
+    -- Explicit barrier BEFORE any counter lock, including multi-user cascades.
+    -- Its numeric value is neither read nor stored as session authority.
+    INSERT INTO iam.role_directory_revisions(tenant_id,revision) VALUES(tenant,1) ON CONFLICT(tenant_id) DO NOTHING;
+    PERFORM 1 FROM iam.role_directory_revisions WHERE tenant_id=tenant FOR UPDATE;
+    UPDATE iam.role_source_authority_generations g SET generation=g.generation+1
+      WHERE g.tenant_id=tenant AND g.user_id IS NOT DISTINCT FROM source_user AND g.group_id IS NOT DISTINCT FROM source_group;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='role source authority is unavailable'; END IF;
+    RETURN NEW;
+END $function$;
+DROP TRIGGER IF EXISTS principals_initialize_role_source ON iam.principals;
+CREATE CONSTRAINT TRIGGER principals_initialize_role_source AFTER INSERT ON iam.principals
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.advance_role_source_authority_generation();
+DROP TRIGGER IF EXISTS groups_initialize_role_source ON iam.groups;
+CREATE CONSTRAINT TRIGGER groups_initialize_role_source AFTER INSERT ON iam.groups
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.advance_role_source_authority_generation();
+DROP TRIGGER IF EXISTS attachments_advance_role_source ON iam.policy_attachments;
+CREATE CONSTRAINT TRIGGER attachments_advance_role_source AFTER INSERT OR UPDATE ON iam.policy_attachments
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.advance_role_source_authority_generation();
+DROP TRIGGER IF EXISTS memberships_advance_role_source ON iam.group_memberships;
+CREATE CONSTRAINT TRIGGER memberships_advance_role_source AFTER INSERT OR UPDATE ON iam.group_memberships
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.advance_role_source_authority_generation();
+DROP TRIGGER IF EXISTS boundaries_advance_role_source ON iam.user_permission_boundaries;
+CREATE CONSTRAINT TRIGGER boundaries_advance_role_source AFTER INSERT OR UPDATE ON iam.user_permission_boundaries
+  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.advance_role_source_authority_generation();
+ALTER TABLE iam.principals ENABLE ALWAYS TRIGGER principals_initialize_role_source;
+ALTER TABLE iam.groups ENABLE ALWAYS TRIGGER groups_initialize_role_source;
+ALTER TABLE iam.policy_attachments ENABLE ALWAYS TRIGGER attachments_advance_role_source;
+ALTER TABLE iam.group_memberships ENABLE ALWAYS TRIGGER memberships_advance_role_source;
+ALTER TABLE iam.user_permission_boundaries ENABLE ALWAYS TRIGGER boundaries_advance_role_source;
+
+CREATE OR REPLACE FUNCTION iam.role_source_authority_snapshot(tenant text,source_user text)
+RETURNS jsonb LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE source_generation bigint; group_generation bigint; member record; groups jsonb:='[]';
+BEGIN
+    SELECT generation INTO source_generation FROM iam.role_source_authority_generations g
+      WHERE g.tenant_id=tenant AND g.user_id=source_user FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='role source authority is unavailable'; END IF;
+    -- Include every effective membership, even groups with no policy yet.
+    -- Take no Group business lock after the existing Role lock.
+    FOR member IN SELECT m.id,m.group_id,m.resource_version FROM iam.group_memberships m
+        JOIN iam.groups g ON g.tenant_id=m.tenant_id AND g.id=m.group_id AND g.deleted_at IS NULL
+        WHERE m.tenant_id=tenant AND m.user_id=source_user AND m.removed_at IS NULL ORDER BY m.group_id LIMIT 101 LOOP
+        IF jsonb_array_length(groups)=100 THEN RAISE EXCEPTION USING ERRCODE='54000', MESSAGE='role source memberships exceed their budget'; END IF;
+        SELECT generation INTO group_generation FROM iam.role_source_authority_generations g
+          WHERE g.tenant_id=tenant AND g.group_id=member.group_id FOR SHARE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='role group authority is unavailable'; END IF;
+        groups:=groups||jsonb_build_array(jsonb_build_object('groupId',member.group_id,'membershipId',member.id,
+          'membershipResourceVersion',member.resource_version,'authorizationGeneration',group_generation));
+    END LOOP;
+    RETURN jsonb_build_object('userGeneration',source_generation,'groups',groups);
+END $function$;
+REVOKE ALL ON iam.role_source_authority_generations FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+REVOKE ALL ON FUNCTION iam.guard_role_source_authority_generation(),iam.advance_role_source_authority_generation(),iam.role_source_authority_snapshot(text,text)
+  FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+
 CREATE TABLE IF NOT EXISTS iam.role_sessions (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
@@ -648,6 +785,9 @@ CREATE TABLE IF NOT EXISTS iam.role_sessions (
     source_session_id text COLLATE "C" NOT NULL,
     credential_generation bigint NOT NULL CHECK(credential_generation BETWEEN 1 AND 9007199254740991),
     security_generation bigint NOT NULL CHECK(security_generation BETWEEN 1 AND 9007199254740991),
+    authority_contract_version integer NOT NULL,
+    source_authorization_generation bigint,
+    source_group_generations jsonb,
     trust_version_id text COLLATE "C" NOT NULL,
     request_id text COLLATE "C" NOT NULL CHECK(request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
     request_digest text NOT NULL CHECK(request_digest ~ '^sha256:[0-9a-f]{64}$'),
@@ -671,6 +811,37 @@ CREATE TABLE IF NOT EXISTS iam.role_sessions (
     CHECK((session_policy_canonical IS NULL AND session_policy_digest IS NULL) OR
       (session_policy_canonical IS NOT NULL AND session_policy_digest IS NOT NULL AND session_policy_digest ~ '^sha256:[0-9a-f]{64}$'))
 );
+DO $role_authority_contract_cutover$
+DECLARE original record;
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='iam.role_sessions'::regclass
+      AND attname='authority_contract_version' AND NOT attisdropped) THEN
+        LOCK TABLE iam.role_sessions IN ACCESS EXCLUSIVE MODE;
+        -- Only complete, actually retained issuances may receive the old
+        -- interpretation marker. Do not manufacture current generation proof.
+        ALTER TABLE iam.role_sessions NO FORCE ROW LEVEL SECURITY;
+        FOR original IN SELECT tenant_id,id FROM iam.role_sessions LOOP
+            PERFORM set_config('matrix.iam_tenant_id',original.tenant_id,true);
+            IF iam.role_authorization_evidence(original.tenant_id,original.id) IS NULL THEN
+                RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='retained role authority is incomplete'; END IF;
+        END LOOP;
+        ALTER TABLE iam.role_sessions ADD COLUMN authority_contract_version integer;
+        ALTER TABLE iam.role_sessions DISABLE TRIGGER role_session_terminal_state;
+        UPDATE iam.role_sessions SET authority_contract_version=1;
+        ALTER TABLE iam.role_sessions ENABLE ALWAYS TRIGGER role_session_terminal_state;
+        ALTER TABLE iam.role_sessions ALTER COLUMN authority_contract_version SET NOT NULL;
+        ALTER TABLE iam.role_sessions FORCE ROW LEVEL SECURITY;
+    END IF;
+END $role_authority_contract_cutover$;
+ALTER TABLE iam.role_sessions ADD COLUMN IF NOT EXISTS source_authorization_generation bigint;
+ALTER TABLE iam.role_sessions ADD COLUMN IF NOT EXISTS source_group_generations jsonb;
+ALTER TABLE iam.role_sessions DROP CONSTRAINT IF EXISTS role_sessions_authority_contract;
+ALTER TABLE iam.role_sessions ADD CONSTRAINT role_sessions_authority_contract CHECK(
+    (authority_contract_version=1 AND source_authorization_generation IS NULL AND source_group_generations IS NULL)
+    OR (authority_contract_version=2 AND source_authorization_generation IS NOT NULL
+      AND source_authorization_generation BETWEEN 1 AND 9007199254740991
+      AND source_group_generations IS NOT NULL AND jsonb_typeof(source_group_generations)='array'
+      AND jsonb_array_length(source_group_generations)<=100));
 CREATE INDEX IF NOT EXISTS role_sessions_live_account_idx ON iam.role_sessions(tenant_id,expires_at) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS role_sessions_live_user_idx ON iam.role_sessions(tenant_id,source_user_id,expires_at) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS role_sessions_live_role_idx ON iam.role_sessions(tenant_id,role_id,expires_at) WHERE revoked_at IS NULL;
@@ -688,6 +859,13 @@ CREATE POLICY tenant_isolation ON iam.role_sessions USING(tenant_id=iam.current_
 CREATE OR REPLACE FUNCTION iam.guard_role_session_change()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
+    IF TG_OP='INSERT' THEN
+        IF NEW.authority_contract_version IS DISTINCT FROM 2
+          OR jsonb_build_object('userGeneration',NEW.source_authorization_generation,'groups',NEW.source_group_generations)
+             IS DISTINCT FROM iam.role_source_authority_snapshot(NEW.tenant_id,NEW.source_user_id) THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role source authority is invalid'; END IF;
+        RETURN NEW;
+    END IF;
     IF TG_OP<>'UPDATE' THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role issuance history is immutable'; END IF;
     IF OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS DISTINCT FROM transaction_timestamp()
        OR to_jsonb(NEW)-'revoked_at' IS DISTINCT FROM to_jsonb(OLD)-'revoked_at' THEN
@@ -695,7 +873,7 @@ BEGIN
     RETURN NEW;
 END $function$;
 DROP TRIGGER IF EXISTS role_session_terminal_state ON iam.role_sessions;
-CREATE TRIGGER role_session_terminal_state BEFORE UPDATE OR DELETE ON iam.role_sessions FOR EACH ROW EXECUTE FUNCTION iam.guard_role_session_change();
+CREATE TRIGGER role_session_terminal_state BEFORE INSERT OR UPDATE OR DELETE ON iam.role_sessions FOR EACH ROW EXECUTE FUNCTION iam.guard_role_session_change();
 ALTER TABLE iam.role_sessions ENABLE ALWAYS TRIGGER role_session_terminal_state;
 DROP TRIGGER IF EXISTS role_sessions_cannot_truncate ON iam.role_sessions;
 CREATE TRIGGER role_sessions_cannot_truncate BEFORE TRUNCATE ON iam.role_sessions FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
@@ -838,7 +1016,7 @@ RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_te
 DECLARE admission jsonb; selected iam.roles%ROWTYPE; trust jsonb; boundary iam.role_permission_boundaries%ROWTYPE;
     boundary_policy iam.policies%ROWTYPE; boundary_version iam.policy_versions%ROWTYPE;
     deadline timestamptz(6); source_expiry timestamptz(6); now_at timestamptz(6):=transaction_timestamp(); evidence jsonb;
-    session_id text; canonical text; content_digest text; role_policies jsonb;
+    session_id text; canonical text; content_digest text; role_policies jsonb; source_authority jsonb;
 BEGIN
     IF intent IS NULL OR jsonb_typeof(intent)<>'object' OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(intent) key)
       IS DISTINCT FROM ARRAY['credentialGeneration','durationSeconds','expiresAt','issuedAt','requestDigest','requestId','resourceVersion','securityGeneration','sessionId']
@@ -898,9 +1076,12 @@ BEGIN
       'role',admission->'role','trust',admission->'trust','rolePolicies',role_policies,
       'roleBoundary',jsonb_build_object('boundaryId',boundary.id,'resourceVersion',boundary.resource_version,
         'policy',iam.lookup_policy(tenant,boundary_policy.id),'version',iam.policy_version_snapshot(boundary_version)));
+    source_authority:=iam.role_source_authority_snapshot(tenant,actor);
     INSERT INTO iam.role_sessions(tenant_id,id,role_id,source_user_id,source_session_id,credential_generation,security_generation,trust_version_id,
+      authority_contract_version,source_authorization_generation,source_group_generations,
       request_id,request_digest,verification_digest,decision_id,authority_evidence,session_policy_canonical,session_policy_digest,issued_at,expires_at)
     VALUES(tenant,session_id,role_id,actor,source_session,(admission->>'credentialGeneration')::bigint,selected.security_generation,selected.current_trust_version_id,
+      2,(source_authority->>'userGeneration')::bigint,source_authority->'groups',
       intent->>'requestId',intent->>'requestDigest',verification_digest,decision,evidence,canonical,content_digest,now_at,deadline);
     INSERT INTO iam.role_session_index VALUES(lookup_digest,tenant,session_id);
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
@@ -934,7 +1115,7 @@ BEGIN
     -- Read immutable linkage before locks, then use the same Account -> USER ->
     -- credential/session -> Role order as issuance and security mutations.
     SELECT * INTO stored FROM iam.role_sessions s WHERE s.tenant_id=located.tenant_id AND s.id=located.session_id;
-    IF NOT FOUND OR stored.revoked_at IS NOT NULL OR stored.expires_at<=clock_timestamp() THEN RETURN NULL; END IF;
+    IF NOT FOUND OR stored.authority_contract_version<>2 OR stored.revoked_at IS NOT NULL OR stored.expires_at<=clock_timestamp() THEN RETURN NULL; END IF;
     SELECT * INTO account_row FROM iam.accounts WHERE id=stored.tenant_id AND status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RETURN NULL; END IF;
     SELECT * INTO source_user FROM iam.principals WHERE tenant_id=stored.tenant_id AND id=stored.source_user_id
@@ -962,7 +1143,9 @@ BEGIN
     -- Full immutable relationship identities and mutable revisions prevent ABA:
     -- default selection, reattachment, group rejoin, boundary reset and source
     -- updates cannot silently renew an issued session. Role metadata is excluded.
-    IF stored.authority_evidence->'accountResourceVersion' IS DISTINCT FROM to_jsonb(account_row.resource_version)
+    IF jsonb_build_object('userGeneration',stored.source_authorization_generation,'groups',stored.source_group_generations)
+         IS DISTINCT FROM iam.role_source_authority_snapshot(stored.tenant_id,stored.source_user_id)
+      OR stored.authority_evidence->'accountResourceVersion' IS DISTINCT FROM to_jsonb(account_row.resource_version)
       OR stored.authority_evidence->'userResourceVersion' IS DISTINCT FROM to_jsonb(source_user.resource_version)
       OR stored.authority_evidence->'sourcePolicies' IS DISTINCT FROM iam.current_policy_snapshot(stored.tenant_id,stored.source_user_id)
       OR stored.authority_evidence->'sourceBoundary' IS DISTINCT FROM iam.current_user_boundary(stored.tenant_id,stored.source_user_id)
@@ -980,6 +1163,8 @@ BEGIN
     RETURN jsonb_build_object('session',iam.role_session_snapshot(stored.tenant_id,stored.id),'sourceSessionId',stored.source_session_id,
       'sourceLookupDigest',source_lookup,'credentialGeneration',stored.credential_generation,'securityGeneration',stored.security_generation,
 	  'assumeDecisionId',stored.decision_id,
+      'authorityContractVersion',stored.authority_contract_version,'sourceAuthorizationGeneration',stored.source_authorization_generation,
+      'sourceGroupGenerations',stored.source_group_generations,
       'verificationDigest',stored.verification_digest,'role',iam.role_snapshot(stored.tenant_id,stored.role_id),
       'authorityEvidence',stored.authority_evidence,'sessionPolicyCanonical',stored.session_policy_canonical,'sessionPolicyDigest',stored.session_policy_digest);
 END $function$;
@@ -1087,10 +1272,32 @@ $function$;
 CREATE OR REPLACE FUNCTION iam.role_authorization_evidence(tenant text,session_id text)
 RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE stored iam.role_sessions%ROWTYPE; original iam.authorization_decisions%ROWTYPE;
-    item jsonb; ceiling jsonb; version jsonb; restriction jsonb; result jsonb; vector jsonb;
+    item jsonb; ceiling jsonb; version jsonb; restriction jsonb; result jsonb; vector jsonb; previous_group text:='';
 BEGIN
     SELECT * INTO stored FROM iam.role_sessions s WHERE s.tenant_id=tenant AND s.id=session_id;
     IF NOT FOUND THEN RETURN NULL; END IF;
+    IF stored.authority_contract_version=1 THEN
+        IF stored.source_authorization_generation IS NOT NULL OR stored.source_group_generations IS NOT NULL THEN RETURN NULL; END IF;
+    ELSIF stored.authority_contract_version=2 THEN
+        IF stored.source_authorization_generation IS NULL OR stored.source_authorization_generation NOT BETWEEN 1 AND 9007199254740991
+          OR jsonb_typeof(stored.source_group_generations) IS DISTINCT FROM 'array' THEN RETURN NULL; END IF;
+        IF jsonb_array_length(stored.source_group_generations)>100 THEN RETURN NULL; END IF;
+        FOR item IN SELECT value FROM jsonb_array_elements(stored.source_group_generations) LOOP
+            IF jsonb_typeof(item) IS DISTINCT FROM 'object' THEN RETURN NULL; END IF;
+            IF (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(item) key) IS DISTINCT FROM
+                ARRAY['authorizationGeneration','groupId','membershipId','membershipResourceVersion']
+              OR jsonb_typeof(item->'authorizationGeneration') IS DISTINCT FROM 'number'
+              OR COALESCE(item->>'authorizationGeneration','') !~ '^[1-9][0-9]{0,15}$'
+              OR item->'membershipResourceVersion' IS DISTINCT FROM '1'::jsonb
+              OR jsonb_typeof(item->'groupId') IS DISTINCT FROM 'string' OR jsonb_typeof(item->'membershipId') IS DISTINCT FROM 'string'
+              OR (item->>'groupId') COLLATE "C"<=previous_group THEN RETURN NULL; END IF;
+            IF (item->>'authorizationGeneration')::bigint>9007199254740991 OR NOT EXISTS(
+                SELECT 1 FROM iam.group_memberships m WHERE m.tenant_id=tenant AND m.id=item->>'membershipId'
+                  AND m.group_id=item->>'groupId' AND m.user_id=stored.source_user_id) THEN RETURN NULL; END IF;
+            previous_group:=item->>'groupId';
+        END LOOP;
+    ELSE RETURN NULL;
+    END IF;
     vector:=stored.authority_evidence;
     IF (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(vector) key) IS DISTINCT FROM ARRAY[
        'accountResourceVersion','role','roleBoundary','rolePolicies','sourceBoundary','sourcePolicies','trust','userResourceVersion']
@@ -1141,6 +1348,10 @@ BEGIN
       'sourceSessionId',stored.source_session_id,'credentialGeneration',stored.credential_generation,'securityGeneration',stored.security_generation,
       'trustVersionId',stored.trust_version_id,'trustDigest',vector#>>'{trust,contentDigest}','assumeDecisionId',stored.decision_id,
       'boundary',ceiling,'sessionPolicy',restriction);
+    IF stored.authority_contract_version=2 THEN
+        result:=result||jsonb_build_object('authorityContractVersion',2,'sourceAuthorizationGeneration',stored.source_authorization_generation,
+          'sourceGroupGenerations',stored.source_group_generations);
+    END IF;
     RETURN result;
 END $function$;
 
@@ -1148,6 +1359,8 @@ CREATE OR REPLACE FUNCTION iam.assert_current_role_authorization(tenant text,rol
 RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE expected jsonb; lookup_digest text; current_identity jsonb;
 BEGIN
+    IF evidence->'authorityContractVersion' IS DISTINCT FROM '2'::jsonb THEN
+      RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role authority contract is not current'; END IF;
     expected:=iam.role_authorization_evidence(tenant,evidence->>'sessionId');
     IF expected IS NULL OR evidence IS DISTINCT FROM expected OR expected->>'roleId' IS DISTINCT FROM role_id THEN
       RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role authorization evidence is invalid'; END IF;
@@ -1177,7 +1390,7 @@ CREATE OR REPLACE FUNCTION iam.role_contract_ready()
 RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE table_name text; required record; entrypoint record; signature text; relation_oid oid;
 BEGIN
-    FOREACH table_name IN ARRAY ARRAY['roles','role_trust_versions','role_permission_boundaries','role_sessions','role_directory_revisions'] LOOP
+    FOREACH table_name IN ARRAY ARRAY['roles','role_trust_versions','role_permission_boundaries','role_sessions','role_directory_revisions','role_source_authority_generations'] LOOP
         relation_oid:=to_regclass('iam.'||table_name);
         IF relation_oid IS NULL OR NOT EXISTS(SELECT 1 FROM pg_class c WHERE c.oid=relation_oid
           AND c.relowner='matrix_iam_owner'::regrole AND c.relrowsecurity AND c.relforcerowsecurity) THEN RETURN false; END IF;
@@ -1189,6 +1402,10 @@ BEGIN
     FOR required IN SELECT * FROM (VALUES
       ('roles','security_generation','bigint'::regtype,true),
       ('role_directory_revisions','tenant_id','text'::regtype,true),('role_directory_revisions','revision','bigint'::regtype,true),
+      ('role_source_authority_generations','tenant_id','text'::regtype,true),
+      ('role_source_authority_generations','user_id','text'::regtype,false),
+      ('role_source_authority_generations','group_id','text'::regtype,false),
+      ('role_source_authority_generations','generation','bigint'::regtype,true),
       ('role_permission_boundaries','tenant_id','text'::regtype,true),
       ('role_permission_boundaries','id','text'::regtype,true),
       ('role_permission_boundaries','role_id','text'::regtype,true),
@@ -1200,6 +1417,9 @@ BEGIN
       ('role_sessions','tenant_id','text'::regtype,true),('role_sessions','id','text'::regtype,true),
       ('role_sessions','role_id','text'::regtype,true),('role_sessions','source_user_id','text'::regtype,true),
       ('role_sessions','source_session_id','text'::regtype,true),('role_sessions','credential_generation','bigint'::regtype,true),
+      ('role_sessions','authority_contract_version','integer'::regtype,true),
+      ('role_sessions','source_authorization_generation','bigint'::regtype,false),
+      ('role_sessions','source_group_generations','jsonb'::regtype,false),
       ('role_sessions','security_generation','bigint'::regtype,true),('role_sessions','trust_version_id','text'::regtype,true),
       ('role_sessions','decision_id','text'::regtype,true),('role_sessions','request_id','text'::regtype,true),
       ('role_sessions','request_digest','text'::regtype,true),('role_sessions','verification_digest','text'::regtype,true),
@@ -1211,9 +1431,15 @@ BEGIN
           AND a.attnum>0 AND NOT a.attisdropped AND a.attgenerated='' AND a.attidentity=''
           AND (a.atttypid<>'timestamptz'::regtype OR a.atttypmod=6)) THEN RETURN false; END IF;
     END LOOP;
+    IF EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid='iam.role_sessions'::regclass
+      AND a.attname IN ('authority_contract_version','source_authorization_generation','source_group_generations')
+      AND a.atthasdef) THEN RETURN false; END IF;
     FOR required IN SELECT * FROM (VALUES
       ('iam.role_sessions','iam.roles',ARRAY['tenant_id','role_id'],ARRAY['tenant_id','id']),
       ('iam.role_directory_revisions','iam.accounts',ARRAY['tenant_id'],ARRAY['id']),
+      ('iam.role_source_authority_generations','iam.accounts',ARRAY['tenant_id'],ARRAY['id']),
+      ('iam.role_source_authority_generations','iam.principals',ARRAY['tenant_id','user_id'],ARRAY['tenant_id','id']),
+      ('iam.role_source_authority_generations','iam.groups',ARRAY['tenant_id','group_id'],ARRAY['tenant_id','id']),
       ('iam.role_sessions','iam.principals',ARRAY['tenant_id','source_user_id'],ARRAY['tenant_id','id']),
       ('iam.role_sessions','iam.sessions',ARRAY['tenant_id','source_session_id'],ARRAY['tenant_id','id']),
       ('iam.role_sessions','iam.role_trust_versions',ARRAY['tenant_id','role_id','trust_version_id'],ARRAY['tenant_id','role_id','id']),
@@ -1230,9 +1456,11 @@ BEGIN
     FOR required IN SELECT * FROM (VALUES
       ('iam.role_sessions',ARRAY['tenant_id','source_user_id','request_id']),
       ('iam.role_directory_revisions',ARRAY['tenant_id']),
+      ('iam.role_source_authority_generations',ARRAY['tenant_id','user_id']),
+      ('iam.role_source_authority_generations',ARRAY['tenant_id','group_id']),
       ('iam.role_session_index',ARRAY['lookup_digest']),('iam.role_session_index',ARRAY['tenant_id','session_id'])) expected(table_name,column_names) LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=to_regclass(required.table_name)
-          AND i.indisunique AND i.indisvalid AND i.indisready AND i.indexprs IS NULL AND i.indpred IS NULL
+          AND i.indisunique AND i.indisvalid AND i.indisready AND NOT i.indnullsnotdistinct AND i.indexprs IS NULL AND i.indpred IS NULL
           AND i.indnkeyatts=cardinality(required.column_names) AND i.indnatts=i.indnkeyatts
           AND ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY k(number,position)
             JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.number ORDER BY k.position)=required.column_names) THEN RETURN false; END IF;
@@ -1249,7 +1477,9 @@ BEGIN
               JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.number ORDER BY k.position)=required.target_columns) THEN RETURN false; END IF;
     END LOOP;
     FOR required IN SELECT * FROM (VALUES ('roles','roles_security_generation_range'),
-      ('role_permission_boundaries','role_boundaries_terminal_state'),('role_directory_revisions','role_directory_revision_range')) expected(table_name,constraint_name) LOOP
+      ('role_permission_boundaries','role_boundaries_terminal_state'),('role_directory_revisions','role_directory_revision_range'),
+      ('role_source_authority_generations','role_source_exact_kind'),('role_source_authority_generations','role_source_generation_range'),
+      ('role_sessions','role_sessions_authority_contract')) expected(table_name,constraint_name) LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass('iam.'||required.table_name)
           AND c.conname=required.constraint_name AND c.contype='c' AND c.convalidated) THEN RETURN false; END IF;
     END LOOP;
@@ -1295,6 +1525,7 @@ BEGIN
     FOREACH signature IN ARRAY ARRAY['iam.role_metadata_valid(jsonb)','iam.role_trust_content_valid(text,text)',
       'iam.guard_role_change()','iam.assert_role_writer(text,text,text,jsonb)','iam.role_snapshot(text,text)',
       'iam.guard_role_directory_revision()','iam.advance_role_directory_revision()',
+      'iam.guard_role_source_authority_generation()','iam.advance_role_source_authority_generation()','iam.role_source_authority_snapshot(text,text)',
       'iam.role_trust_snapshot(text,text,text)','iam.role_access_snapshot(text,text)',
       'iam.guard_role_boundary_change()','iam.role_permission_boundary_snapshot(text,text)',
       'iam.guard_role_session_change()','iam.assert_role_session_source(text,text,text,boolean)',
@@ -1305,6 +1536,20 @@ BEGIN
         IF NOT FOUND THEN RETURN false; END IF;
         IF entrypoint.proowner<>'matrix_iam_owner'::regrole OR EXISTS(SELECT 1 FROM aclexplode(COALESCE(entrypoint.proacl,acldefault('f',entrypoint.proowner))) permission
           WHERE permission.grantee<>entrypoint.proowner) THEN RETURN false; END IF;
+    END LOOP;
+    FOR required IN SELECT * FROM (VALUES
+      ('iam.guard_role_source_authority_generation()','trigger'::regtype,false,ARRAY[]::text[]),
+      ('iam.advance_role_source_authority_generation()','trigger'::regtype,true,ARRAY[]::text[]),
+      ('iam.role_source_authority_snapshot(text,text)','jsonb'::regtype,false,ARRAY['tenant','source_user'])) expected(signature,result_type,defining,argument_names) LOOP
+        SELECT p.* INTO entrypoint FROM pg_proc p WHERE p.oid=to_regprocedure(required.signature);
+        IF NOT FOUND THEN RETURN false; END IF;
+        IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace=entrypoint.pronamespace AND p.proname=entrypoint.proname)<>1
+          OR entrypoint.prosecdef IS DISTINCT FROM required.defining OR entrypoint.proretset
+          OR entrypoint.prorettype<>required.result_type OR entrypoint.pronargdefaults<>0 OR entrypoint.provariadic<>0
+          OR entrypoint.provolatile<>'v' OR entrypoint.proparallel<>'u' OR entrypoint.proisstrict OR entrypoint.proleakproof
+          OR entrypoint.proallargtypes IS NOT NULL OR entrypoint.proargmodes IS NOT NULL
+          OR COALESCE(entrypoint.proargnames,ARRAY[]::text[]) IS DISTINCT FROM required.argument_names
+          OR entrypoint.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, pg_temp'] THEN RETURN false; END IF;
     END LOOP;
     IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass('iam.roles')
       AND c.confrelid=to_regclass('iam.role_trust_versions') AND c.conname='roles_current_trust_fk'
@@ -1320,22 +1565,35 @@ BEGIN
         IF NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass('iam.'||required.table_name)
           AND t.tgname=required.trigger_name AND t.tgenabled='A' AND NOT t.tgisinternal) THEN RETURN false; END IF;
     END LOOP;
-    IF (SELECT count(*) FROM pg_policy WHERE polrelid='iam.role_directory_revisions'::regclass)<>1
-       OR NOT EXISTS(SELECT 1 FROM pg_policy p WHERE p.polrelid='iam.role_directory_revisions'::regclass
+    FOREACH table_name IN ARRAY ARRAY['role_directory_revisions','role_source_authority_generations'] LOOP
+      relation_oid:=to_regclass('iam.'||table_name);
+      IF (SELECT count(*) FROM pg_policy WHERE polrelid=relation_oid)<>1
+       OR NOT EXISTS(SELECT 1 FROM pg_policy p WHERE p.polrelid=relation_oid
          AND p.polname='tenant_isolation' AND p.polcmd='*' AND p.polpermissive AND p.polroles=ARRAY[0::oid]
          AND pg_get_expr(p.polqual,p.polrelid)='(tenant_id = iam.current_tenant_id())'
          AND pg_get_expr(p.polwithcheck,p.polrelid)='(tenant_id = iam.current_tenant_id())') THEN RETURN false; END IF;
+    END LOOP;
     FOR required IN SELECT * FROM (VALUES
       ('roles','roles_advance_directory','iam.advance_role_directory_revision()',21),
       ('policies','policies_advance_role_directory','iam.advance_role_directory_revision()',17),
       ('policy_attachments','attachments_advance_role_directory','iam.advance_role_directory_revision()',21),
       ('group_memberships','memberships_advance_role_directory','iam.advance_role_directory_revision()',21),
+      ('principals','principals_initialize_role_source','iam.advance_role_source_authority_generation()',5),
+      ('groups','groups_initialize_role_source','iam.advance_role_source_authority_generation()',5),
+      ('policy_attachments','attachments_advance_role_source','iam.advance_role_source_authority_generation()',21),
+      ('group_memberships','memberships_advance_role_source','iam.advance_role_source_authority_generation()',21),
+      ('user_permission_boundaries','boundaries_advance_role_source','iam.advance_role_source_authority_generation()',21),
+      ('role_source_authority_generations','source_authority_monotonic','iam.guard_role_source_authority_generation()',31),
+      ('role_source_authority_generations','cannot_truncate','iam.reject_policy_history_change()',34),
+      ('role_sessions','role_session_terminal_state','iam.guard_role_session_change()',31),
       ('role_directory_revisions','role_directory_monotonic','iam.guard_role_directory_revision()',27),
       ('role_directory_revisions','cannot_truncate','iam.reject_policy_history_change()',34)) expected(table_name,trigger_name,signature,trigger_type) LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass('iam.'||required.table_name)
           AND t.tgname=required.trigger_name AND t.tgfoid=to_regprocedure(required.signature) AND t.tgtype=required.trigger_type
           AND t.tgenabled='A' AND t.tgnargs=0 AND NOT t.tgisinternal AND cardinality(t.tgattr::smallint[])=0
-          AND (required.signature<>'iam.advance_role_directory_revision()' OR (t.tgdeferrable AND t.tginitdeferred))) THEN RETURN false; END IF;
+          AND (required.signature='iam.advance_role_directory_revision()' OR t.tgqual IS NULL)
+          AND t.tgdeferrable=(required.signature IN ('iam.advance_role_directory_revision()','iam.advance_role_source_authority_generation()'))
+          AND t.tginitdeferred=t.tgdeferrable) THEN RETURN false; END IF;
     END LOOP;
     IF NOT EXISTS(SELECT 1 FROM pg_proc p WHERE p.oid='iam.advance_role_directory_revision()'::regprocedure
         AND p.prosecdef AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']) THEN RETURN false; END IF;

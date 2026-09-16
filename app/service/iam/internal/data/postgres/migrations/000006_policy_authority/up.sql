@@ -447,7 +447,7 @@ BEGIN
     PERFORM 1 FROM iam.accounts WHERE id=tenant AND status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy account is unavailable'; END IF;
     PERFORM 1 FROM iam.principals WHERE tenant_id=tenant AND id=actor AND principal_type='USER'
-        AND status='ACTIVE' AND NOT must_change_password AND deleted_at IS NULL FOR UPDATE;
+        AND status='ACTIVE' AND NOT must_change_password AND deleted_at IS NULL FOR NO KEY UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy actor is unavailable'; END IF;
     PERFORM 1 FROM iam.account_roots WHERE account_id=tenant AND principal_id=actor FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy publisher is unavailable'; END IF;
@@ -535,8 +535,10 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     PERFORM 1 FROM iam.accounts WHERE id=tenant AND status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy account is unavailable'; END IF;
+    -- Publication changes no principal key. Its prior decision holds a FK
+    -- KEY SHARE, which must coexist with another publisher's identity lock.
     PERFORM 1 FROM iam.principals WHERE tenant_id=tenant AND id=actor AND principal_type='USER'
-        AND status='ACTIVE' AND NOT must_change_password AND deleted_at IS NULL FOR UPDATE;
+        AND status='ACTIVE' AND NOT must_change_password AND deleted_at IS NULL FOR NO KEY UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy actor is unavailable'; END IF;
     PERFORM 1 FROM iam.account_roots WHERE account_id=tenant AND principal_id=actor FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='policy publisher is unavailable'; END IF;
@@ -777,7 +779,9 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     PERFORM 1 FROM iam.accounts WHERE id=tenant AND status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary account is unavailable'; END IF;
-    PERFORM 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id IN(actor,user_id) ORDER BY p.id FOR UPDATE;
+    -- Keep actor and target state exclusive in stable order, but allow the
+    -- immutable identity references from concurrent authorization decisions.
+    PERFORM 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id IN(actor,user_id) ORDER BY p.id FOR NO KEY UPDATE;
     PERFORM 1 FROM iam.principals p JOIN iam.account_roots r ON r.account_id=p.tenant_id AND r.principal_id=p.id
         WHERE p.tenant_id=tenant AND p.id=actor AND p.principal_type='USER' AND p.status='ACTIVE'
           AND p.deleted_at IS NULL AND NOT p.must_change_password FOR SHARE OF r;

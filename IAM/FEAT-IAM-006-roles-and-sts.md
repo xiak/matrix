@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1 角色管理固定 `bf7e8fbbdffe96b8af5b250edd1ed746c5b99265`、R2 同账号承担及 tenant PaaS/Audit 真实授权闭环固定 `0752c602ab4ce6d73a21094c8e9f75a1c8750183` 均已完成本地真实运行、整仓与独立 CI 验收。R3 自服务发现/当前角色显示后端已有本地真实运行证据，固定提交/独立CI待确认；管理型会话目录及 UX/UI、容量和发布未完成，整体006未验收。临时新增再撤销Deny是否复活旧RoleSession还需独立真实请求门禁，不扩大原12类ABA结论。
+- 状态：R1 角色管理固定 `bf7e8fbbdffe96b8af5b250edd1ed746c5b99265`、R2 同账号承担及 tenant PaaS/Audit 真实授权闭环固定 `0752c602ab4ce6d73a21094c8e9f75a1c8750183` 保留各自已通过的本地/CI证据；新增四类临时Deny/成员关系已真实复现旧RoleSession复活，来源代际及相关身份锁修复的完整真库/并发、实际旧R2保留数据、独立进程与全仓静态检查已通过，独立CI待完成。R3 自服务发现/当前角色显示后端固定 `960416dd85adab225bd97ee89509df04173f978b` 已推送，本地通过、独立CI因IAM测试进程累计超时未通过（执行范围修正归011）；管理型会话目录及 UX/UI、容量和发布未完成，整体006未验收。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -146,9 +146,23 @@ R2同片实现原Root+当前PDP守护的RoleBoundary read/set/remove，不引用
 
 **撤销后再授权不得复活旧角色会话。** 当前Assume资格仍须每次重算；此外绑定发行时的授权来源修订承诺，至少包含实际附件及修订、成员关系身份/修订、Policy修订/默认精确版本、边界关系/修订和User修订。只有“当前Allow”或当前内容digest不足以识别默认指针切走再切回。复用原目录快照中已经验证的修订素材，不复用cursor作为permit；完整来源的保守失效可能要求重新承担，即使仍有另一条Allow，也不能自动更新旧RoleSession的承诺。Role安全generation覆盖信任选择、状态、期限及角色授权/边界变更；来源credential generation单独固定。显示元数据变化与安全变更区分，最终通过真实ABA/并发和两实例门禁证明，不能仅靠字段命名声称完成。
 
+### 来源授权代际：临时撤权不复活
+
+在固定R3 `960416dd`上只增加真实请求测试，四个独立PG18库均复现：发行后新增USER Deny再撤销、现有GROUP新增Deny再撤销、发行时空组后来新增Deny再撤销、临时加入Deny组再退出后，旧ROLE的`paas.application.read`错误返回200/Allow而不是401。它们不在原12类ABA矩阵内；原向量只记录发行时的有效附件，无法记住后来出现又消失的来源。此处是待完成的安全修复，不回填R2/R3证据。
+
+最小修复仍属于本owner，不增加公共权限、服务或SessionStore。新增私有`role_source_authority_generations`关系，以真实Account+USER或GROUP双外键互斥列表示独立来源，准确主体唯一；generation为1..2^53-1的单调值。新主体显式初始化；已有主体只在首次数据切换初始化，重放不重置。USER附件create/revoke、UserBoundary set/remove、membership add/remove推进对应USER；GROUP附件create/revoke推进对应GROUP。Policy默认和生命周期由原已绑定Policy resourceVersion覆盖，不用内容digest代替修订。普通Group/Role显示元数据和另一USER的变更不推进本USER代际。
+
+RoleSession增加受保护的`authority_contract_version`，无默认。迁移在同一事务验证真实完整旧发行后仅标记1，保持其原私证、decision/outbox字节且不回填新代际；新发行只能显式2，并保存source USER代际及按Group ID排序的全部当前有效membership身份/修订/GROUP代际，包含当时没有策略附件的组，沿原每USER100组预算。新contract3角色私证明确绑定authorityContractVersion=2及发行代际；旧1的历史解释只由受保护行版本选择，不凭NULL/缺字段推断。旧1当前身份/业务请求关闭，非敏感by-request、来源自撤、持有ROLE秘密自退出和历史proof继续有效；历史校验绝不查当前代际重新授权。
+
+代际与原业务变更/outbox同事务提交；等值replay、冲突、无变化或失败不推进。具体延迟触发器每次先显式取得本Account现有目录水位行的排他锁，只作为写入序列化屏障，再锁/推进准确来源counter；这不是把目录值当作会话代际、账号全局失效或通用commit hook，也不依赖ROW触发器的偶然顺序。当前支持的级联均限定一个Account。ROLE读取保持原Account→USER→credential/session→Role顺序，随后仅共享锁该USER counter，再按Group ID顺序共享锁其GROUP counters，不反向取得Group业务行、不取得写屏障。所有失败重试必须有界，门禁不能以重试掩盖死锁反转。
+
+最终runtime观测额外暴露既有Role/User边界、Policy发布及附件创建/撤销的actor锁升级死锁：两笔真实decision外键都持有同一Principal的KEY SHARE，后续两方FOR UPDATE升级互相等待。两个决定完成后的有界并发屏障可稳定复现，业务最终成功不代表没有死锁。不修改Principal键的这些写者，actor/USER目标改用有序FOR NO KEY UPDATE，包括自身目标的后续读取，仍阻止身份、凭据和授权写者并发改变相关状态；兼容不可变外键引用，不放松root/PDP/当前会话与平台凭据保护。005沿同一不变量修复；原API/私有函数外形及IAM27不变，须重跑受影响矩阵而非删除诊断。
+
+开发契约使用IAM27/Audit15/PaaS2，实际切换后才推进readiness，发布profile不变。必须先使上述四个red转green，并验证精确原意图不刷新旧发行、新意图新发行可恢复；来源无关变更不影响另一USER会话，失败/重放不推进，末端counter失败无部分状态，多USER/Group级联与ROLE请求无死锁。固定0752真实R2 binary的旧RoleSession保留切换必须证明旧业务关闭、原Operation/outbox/proof仍可完成、自撤/退出可用；不能用手造NULL行冒充旧binary来源。record8/evidence5/claim7、ServiceIdentity和旧Audit canonical保持。
+
 ### R3 自服务发现与角色显示上下文
 
-本节后端已实现并通过下述本地真实门禁，不属于R2已验收接口；固定提交和独立CI待确认。UX/UI工程师已确认：普通USER可能具有Assume权限却没有Role管理目录/read权限；角色模式也不能依赖切换前偶然保留的名称缓存。先交付这两个权威投影和详情能力，再由010接入真实页面。管理型RoleSession目录/代他人撤销仍是后续独立验收项，不能拿当前by-request自服务或MOCK Sessions tab冒充完成。
+本节后端已实现并通过下述本地真实门禁，不属于R2已验收接口；固定提交为`960416dd`，独立CI结果与待复验执行边界归011。UX/UI工程师已确认：普通USER可能具有Assume权限却没有Role管理目录/read权限；角色模式也不能依赖切换前偶然保留的名称缓存。先交付这两个权威投影和详情能力，再由010接入真实页面。管理型RoleSession目录/代他人撤销仍是后续独立验收项，不能拿当前by-request自服务或MOCK Sessions tab冒充完成。
 
 `GET /v1/auth/assumable-roles`是当前有效USER的同账号自服务发现，不要求`iam.role.list/read`，不接受caller account/user/source-session selector。仅返回当次读取中USER的精确Assume权限、Trust、Role状态及必需边界检查通过的候选；不能把本账号所有Role加一个forbidden字段暴露给无目录权限的人。沿现有纯求值/信任/边界拥有者复用规则，不创建第二PDP或新增业务许可，不生成一次虚构的Assume成功决定。
 
@@ -158,7 +172,7 @@ R2同片实现原Root+当前PDP守护的RoleBoundary read/set/remove，不引用
 
 `role_directory_revisions`仅是每Account单调分页水位，不是会话generation或权限。Role变化、CUSTOMER/TENANT Policy修订、USER/GROUP租户附件及组成员变化在原业务事务内推进；当前活跃附件集合相同仍不能抹去临时Deny添加/撤销或入组/退组。User boundary/Account状态变化另由原User/Account修订绑定，改密另绑定credential generation，不以水位替代这些证据。使用具体的AFTER ROW、DEFERRABLE INITIALLY DEFERRED约束触发器，在正常事务末端取得水位锁；不是异步回调或通用commit hook，产品事务不调用SET CONSTRAINTS提前触发。业务行、outbox和水位共同提交或回滚，等值replay/冲突/失败不推进。角色显示元数据会改变目录投影，因此会失效该目录cursor，但不改变R2角色安全generation。触发器的闭合表分支/不可变tenant确定归属，不接受请求scope；专用函数不授API/worker直接调用权。
 
-当前开发schema为IAM26/Audit15/PaaS2，发布profile不变。新增私有`read_role_discovery_revision(tenant,actor,source_session text)->jsonb`与`read_role_candidates(tenant,actor,source_session,after_id,role_id text)->jsonb`只由API角色调用；后两个位置/目标参数互斥，精确Role分支仅在现有RoleRead成功后使用。读取按Account→USER→credential/session→水位共享锁核对同一SERIALIZABLE快照，水位之后不反向取得Role/Policy行锁，不使用发行配额锁。真实ACL、参数顺序、返回类型、RLS、触发器时机和水位不可回退保护纳入readiness。record8/evidence5/claim7、ServiceIdentity、lookup_service和历史canonical不改。
+R3固定提交的开发schema为IAM26/Audit15/PaaS2，发布profile不变；后继来源授权代际切片使用上节IAM27。新增私有`read_role_discovery_revision(tenant,actor,source_session text)->jsonb`与`read_role_candidates(tenant,actor,source_session,after_id,role_id text)->jsonb`只由API角色调用；后两个位置/目标参数互斥，精确Role分支仅在现有RoleRead成功后使用。读取按Account→USER→credential/session→水位共享锁核对同一SERIALIZABLE快照，水位之后不反向取得Role/Policy行锁，不使用发行配额锁。真实ACL、参数顺序、返回类型、RLS、触发器时机和水位不可回退保护纳入readiness。record8/evidence5/claim7、ServiceIdentity、lookup_service和历史canonical不改。
 
 发现/详情的Assume capability只承诺当次承担资格，不承诺某个未来业务动作必然Allow，也不预留发行配额。冻结且完整的旧USER-only业务策略不会因角色出现在目录而获得ROLE能力；未来业务仍按R2当前Profile与编译相容性关闭，不能跳过不相容来源或从原USER继承业务Allow。OpenAPI operationId沿现有owner为`listAssumableRoles`与`currentRoleIdentity`，详情仍是原RoleAccess接口。
 
@@ -243,7 +257,19 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 - **相关回归**：包含上述发现与既有Role授权/竞争、策略、附件会话、账号HTTP和本地恢复的IAM真库串行门禁450.248秒通过。独立进程包91.069秒通过，其中固定IAM21解释门禁23.07秒、R1 USER-only编译门禁11.45秒、双IAM/PaaS/Audit与dispatcher流程53.72秒；后者真实跨实例续页、当前撤权、重启及完整业务/历史proof保持。不是所有开发schema升级链或跨release-profile许可。
 - **Audit与业务存储回归**：Audit双authority/旧tenant分区6.930秒、Audit HTTP3.440秒、PaaS数据4.728秒通过。双authority首轮暴露测试仍断言IAM25；只更新为当前26后在新数据库重跑，没有删除版本/函数形状检查或放宽生产实现。公开actor、record8/evidence5/claim7和旧canonical不改。
 
-准确源码干净导出通过全仓race/p2（含架构）、vet/p2、模块校验、全部OpenAPI生成字节稳定及Linux amd64构建。外部真库不以默认跳过的整仓测试代替。该切片仍待固定提交和精确SHA独立CI；已知后续检查包括新增临时Deny撤销及临时组成员关系消失后旧RoleSession的永久失效，目录水位不得复用为会话代际或历史proof。
+准确源码干净导出通过全仓race/p2（含架构）、vet/p2、模块校验、全部OpenAPI生成字节稳定及Linux amd64构建。外部真库不以默认跳过的整仓测试代替。该切片已固定推送`960416dd`，独立CI因累计进程超时未通过，详见011。后续已复现的临时Deny及组成员关系撤销后旧RoleSession复活，由本文件来源授权代际切片修复；目录水位不得复用为会话代际或历史proof。
+
+### 来源授权代际本地证据
+
+2026-09-17，本任务独立PG18.4（1CPU/768MiB/PIDs128/64连接），Go2/512MiB、真库race/p1串行。每次重跑使用全新专属数据库；以下区分聚焦证据与最终组合，不据本地结果宣称独立CI或整个006完成。
+
+- 既有12类与新增4类授权ABA矩阵30.299秒通过。新增/撤销USER Deny、GROUP Deny（含发行时的空组）、临时入退Deny组均使旧ROLE下次以PaaS服务凭据发起的授权请求401；精确原发行重放不刷新权限，新意图重新承担可恢复。另一USER授权变化及Group纯显示修改不误伤当前会话。
+- USER/GROUP来源代际与原变更同事务；等值重放和错误resourceVersion不推进。原outbox及末端counter注入失败后，附件、目录水位、决定、成功事实及counter都保持原状态。重置、跳代、换主体、删除/截断、服务主体伪装与schema/RLS/函数ACL/触发器漂移拒绝；新私证删字段、降版本或篡改代际/组集合不能产生授权记录。
+- 36组真实业务先到/安全变更先到并发41.212秒通过，涵盖密码/退出/重置/恢复、身份/账号/Role、Trust/附件/边界和GROUP撤权/删除；使用真实行锁等待，不靠睡眠决定顺序。另有两个不同管理员并发删除含相同两USER的组，7.618秒门禁通过；两USER均准确推进两次，旧会话失效且两份成功事实完整。受限runtime tracer未观测到40P01，不能以应用自动重试掩盖反向锁序。
+- 固定0752真实旧IAM/PaaS产生两份RoleSession、业务Operation/outbox和原私证，当前切换门禁19.689秒通过。旧会话仅取得保护的version1解释标识，当前业务关闭；历史原意图查询、自撤/持有秘密退出及切换后真实dispatcher投递仍可完成。新version2会话实际访问业务，重启/双迁移不复活旧权限、不改原Operation与proof/canonical。故意移除本任务旧发行的必需历史前提时，迁移拒绝且schema/标识/数据无部分效果；恢复准确原字节后才进行正向切换。
+- 两个真实决定均已持有actor外键引用后的有界竞争，稳定复现Role/User边界与附件创建/撤销的锁升级死锁；Policy发布者的同类问题另由实际runtime观测确认。修复保留身份/凭据/平台附件的互斥保护；同修订只一个赢家、末尾单一成功事实、平台grant与reset/status不能绕过。最终策略、附件会话与整个Role/STS fixture均监测40P01，未观测到自动重试掩盖的死锁，不以先前HTTP成功响应作无死锁证据。
+- 准确生产源码树`41e73dfb3261f52cc3aab492879966f6b5603cd0`的干净导出通过Audit数据7.055秒/HTTP3.474秒、IAM非角色269.346秒及完整Role/STS193.866秒、PaaS数据4.825秒。组合进程的旧测试期望IAM26先拒绝真实IAM27；仅将该断言对齐27/15/2后的树`3d9de0f1caaba32732a1962564e2ae226cf7391f`，其余生产/测试代码未变，在新库通过独立进程107.652秒：实际固定IAM21保留22.11秒、R1主体能力保留10.73秒、R2来源保留18.40秒、双IAM/PaaS/Audit业务53.44秒。真实受限数据库登录、跨账号资源/Operation/outbox、角色当前撤权、历史投递及重启均保留；未运行默认延期的其他开发历史链或浏览器fixture，不将SKIP计为通过。
+- 最终同一干净导出通过全仓`go test -race -p 2 -count=1 ./...`（含架构）、`go vet -p 2 ./...`、模块校验、所有OpenAPI生成逐字节一致及Linux amd64全仓构建；外部真库由上述独立门禁证明。发布profile、ServiceIdentity/lookup_service、record8/evidence5/claim7与旧Audit canonical不变，没有容量、HA、UI或签名发行验收结论。独立CI必须绑定后续精确提交，不能复用R2或回填旧R3的失败结果。
 
 ## 验收
 

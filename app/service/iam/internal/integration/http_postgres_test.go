@@ -71,6 +71,55 @@ func (trace *iamTransactionFailureTrace) TraceQueryEnd(_ context.Context, _ *pgx
 	}
 }
 
+// Wait until two real decisions hold actor foreign-key references before
+// releasing their writers. Shared advisory locks do not serialize the writers
+// themselves; only the production identity/target locks may do that.
+func holdRecordedIdentityDecisions(t *testing.T, ctx context.Context, database *pgx.Conn, first, second string) func() {
+	t.Helper()
+	if first == second || iamv1.ValidateID("requestId", first) != nil || iamv1.ValidateID("requestId", second) != nil {
+		t.Fatal("invalid recorded identity barrier requests")
+	}
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_recorded_identity_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+	 BEGIN IF NEW.event_document->>'action'='iam.authorization.decided' AND NEW.event_document->>'requestId' IN (TG_ARGV[0],TG_ARGV[1])
+	 THEN PERFORM pg_advisory_xact_lock_shared(54841,26); END IF; RETURN NEW; END $body$;
+	 CREATE TRIGGER matrix_recorded_identity_barrier BEFORE INSERT ON iam.audit_outbox
+	 FOR EACH ROW EXECUTE FUNCTION public.matrix_recorded_identity_barrier('`+first+`','`+second+`'); SELECT pg_advisory_lock(54841,26)`); err != nil {
+		t.Fatal("install recorded identity barrier", err)
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := database.Exec(cleanup, `SELECT pg_advisory_unlock(54841,26);
+		 DROP TRIGGER IF EXISTS matrix_recorded_identity_barrier ON iam.audit_outbox;
+		 DROP FUNCTION IF EXISTS public.matrix_recorded_identity_barrier()`); err != nil {
+			t.Error("remove recorded identity barrier", err)
+		}
+	})
+	return func() {
+		t.Helper()
+		blocked, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for waiting := 0; waiting != 2; {
+			if err := database.QueryRow(blocked, `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			 AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54841 AND objid=26`).Scan(&waiting); err != nil {
+				t.Fatal("observe both recorded identities before writes", err)
+			}
+			if waiting != 2 {
+				select {
+				case <-ticker.C:
+				case <-blocked.Done():
+					t.Fatal("both transactions did not reach recorded identity references")
+				}
+			}
+		}
+		if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54841,26)`); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func findIAMCapability(values []iamv1.ActionCapability, action iamv1.Action, kind iamv1.ResourceKind, id string) (iamv1.ActionCapability, bool) {
 	for _, value := range values {
 		if value.Action == action && value.Resource.Kind == kind && value.Resource.ID == id {
@@ -212,6 +261,63 @@ func proveDirectPolicyAttachments(t *testing.T, ctx context.Context, handler htt
 	authorize(true) // Exact old revoke replay cannot revoke the new relationship.
 	post("/v1/policy-attachments/"+string(replacement.ID)+":revoke", primary, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: "policy-member-new-revoke"}, http.StatusOK)
 	authorize(false)
+	t.Run("concurrent attachment decisions", func(t *testing.T) {
+		var winner iamv1.PolicyAttachment
+		for _, operation := range []string{"create", "revoke"} {
+			t.Run(operation, func(t *testing.T) {
+				first, second := "attachment-"+operation+"-race-0", "attachment-"+operation+"-race-1"
+				releaseDecisions := holdRecordedIdentityDecisions(t, ctx, admin, first, second)
+				responses := make(chan *httptest.ResponseRecorder, 2)
+				for _, requestID := range []string{first, second} {
+					path := "/v1/policy-attachments"
+					var body []byte
+					if operation == "create" {
+						intent := request
+						intent.RequestID = requestID
+						body = mustIAMJSON(t, intent)
+					} else {
+						path += "/" + string(winner.ID) + ":revoke"
+						body = mustIAMJSON(t, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: requestID})
+					}
+					go func() { responses <- performIAMRequest(handler, http.MethodPost, path, primary, body) }()
+				}
+				releaseDecisions()
+				succeeded, conflicted := 0, 0
+				for range 2 {
+					select {
+					case response := <-responses:
+						switch response.Code {
+						case http.StatusOK:
+							succeeded++
+							if operation == "create" {
+								winner = parse(response)
+							}
+						case http.StatusConflict:
+							conflicted++
+						default:
+							t.Fatalf("concurrent attachment %s status=%d", operation, response.Code)
+						}
+					case <-ctx.Done():
+						t.Fatal("concurrent attachment decisions exceeded their deadline")
+					}
+				}
+				if succeeded != 1 || conflicted != 1 {
+					t.Fatal("concurrent attachment decisions did not produce one winner")
+				}
+				var facts int
+				if err := admin.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1
+				 AND event_document->>'action'=$2 AND event_document#>>'{target,id}'=$3
+				 AND event_document->>'requestId' IN ($4,$5)`, member.AccountID,
+					"iam.policy-attachment."+map[string]string{"create": "created", "revoke": "revoked"}[operation], winner.ID, first, second).Scan(&facts); err != nil || facts != 1 {
+					t.Fatal("concurrent attachment decisions lost their single success fact")
+				}
+			})
+			if t.Failed() {
+				return
+			}
+		}
+		authorize(false)
+	})
 	post("/v1/policy-attachments", primary, administratorRequest, http.StatusOK)
 	variant = administratorRequest
 	variant.RequestID = "policy-self-platform"
@@ -357,7 +463,13 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	applyIAMSchema(t, ctx, admin)
 	applyIAMSchema(t, ctx, admin)
 	createIAMHTTPRole(t, ctx, admin)
-	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole)
+	policyFailures := &iamTransactionFailureTrace{}
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, policyFailures)
+	t.Cleanup(func() {
+		if count := policyFailures.deadlock.Load(); count != 0 {
+			t.Errorf("policy gate hid %d database deadlocks behind retry", count)
+		}
+	})
 	document := iamHTTPBootstrap(t)
 	status, err := workflow.Bootstrap(ctx, document)
 	if err != nil || status.State != iamv1.BootstrapReady {
@@ -1916,6 +2028,7 @@ func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler ht
 	}
 	// Two valid set intents at the same User revision cannot overwrite each other.
 	completed := make(chan *httptest.ResponseRecorder, 2)
+	releaseDecisions := holdRecordedIdentityDecisions(t, ctx, database, "boundary-set-race-0", "boundary-set-race-1")
 	for index, policyID := range []iamv1.PolicyID{policy.Policy.ID, iamv1.SystemPolicyAccountAdministrator} {
 		policyRevision := uint64(1)
 		if policyID == policy.Policy.ID {
@@ -1924,6 +2037,7 @@ func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler ht
 		body := mustIAMJSON(t, iamv1.SetUserPermissionBoundaryRequest{PolicyID: policyID, PolicyResourceVersion: policyRevision, ResourceVersion: view.ResourceVersion, RequestID: fmt.Sprintf("boundary-set-race-%d", index)})
 		go func() { completed <- performIAMRequest(handler, http.MethodPut, path, root, body) }()
 	}
+	releaseDecisions()
 	winners, conflicts := 0, 0
 	for range 2 {
 		select {
@@ -2153,7 +2267,13 @@ func TestIAMPolicyAttachmentSessionPostgres(t *testing.T) {
 	assertCleanIAMSchema(t, ctx, database)
 	applyIAMSchema(t, ctx, database)
 	createIAMHTTPRole(t, ctx, database)
-	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole)
+	attachmentFailures := &iamTransactionFailureTrace{}
+	t.Cleanup(func() {
+		if count := attachmentFailures.deadlock.Load(); count != 0 {
+			t.Errorf("attachment session gate hid %d database deadlocks behind retry", count)
+		}
+	})
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, attachmentFailures)
 	document := iamHTTPBootstrap(t)
 	initial, err := workflow.Bootstrap(ctx, document)
 	if err != nil || initial.State != iamv1.BootstrapReady {
@@ -5627,7 +5747,13 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 			assertCleanIAMSchema(t, ctx, database)
 			applyIAMSchema(t, ctx, database)
 			createIAMHTTPRole(t, ctx, database)
-			workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole)
+			failures := &iamTransactionFailureTrace{}
+			workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, failures)
+			t.Cleanup(func() {
+				if count := failures.deadlock.Load(); count != 0 {
+					t.Errorf("management gate hid %d database deadlocks behind retry", count)
+				}
+			})
 			document := iamHTTPBootstrap(t)
 			initial, err := workflow.Bootstrap(ctx, document)
 			if err != nil || initial.State != iamv1.BootstrapReady {
@@ -5658,6 +5784,9 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 				proveRolePolicyIntersection(t, ctx, handler, database, root)
 			} else if gate.name == "role_security" {
 				proveRoleAuthorizationSecurityInterleavings(t, ctx, handler, database, root)
+				t.Run("overlapping-group-deletions", func(t *testing.T) {
+					proveRoleSourceCascadeSerialization(t, ctx, handler, database, root)
+				})
 			} else {
 				response := performIAMRequest(handler, http.MethodPost, "/v1/users", root, mustIAMJSON(t, map[string]any{
 					"loginName": "private-reference-target", "displayName": "Private reference target",
@@ -5674,6 +5803,7 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 			var before, after string
 			const retainedRoles = `SELECT jsonb_build_object('roles',(SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.tenant_id,r.id),'[]') FROM iam.roles r),
 				'directoryRevisions',(SELECT COALESCE(jsonb_agg(to_jsonb(d) ORDER BY d.tenant_id),'[]') FROM iam.role_directory_revisions d),
+				'sourceGenerations',(SELECT COALESCE(jsonb_agg(to_jsonb(g) ORDER BY g.tenant_id,g.user_id,g.group_id),'[]') FROM iam.role_source_authority_generations g),
 				'sessions',(SELECT COALESCE(jsonb_agg(to_jsonb(s) ORDER BY s.tenant_id,s.id),'[]') FROM iam.role_sessions s),
 				'index',(SELECT COALESCE(jsonb_agg(to_jsonb(i) ORDER BY i.lookup_digest),'[]') FROM iam.role_session_index i))::text`
 			if err := database.QueryRow(ctx, retainedRoles).Scan(&before); err != nil {
@@ -6681,6 +6811,26 @@ func proveRoleSessionIssuance(t *testing.T, ctx context.Context, handler http.Ha
 		for _, attack := range []string{
 			`ALTER TABLE iam.role_sessions NO FORCE ROW LEVEL SECURITY`,
 			`ALTER TABLE iam.role_sessions ALTER COLUMN credential_generation DROP NOT NULL`,
+			`ALTER TABLE iam.role_sessions ALTER COLUMN authority_contract_version SET DEFAULT 2`,
+			`ALTER TABLE iam.role_sessions ALTER COLUMN authority_contract_version DROP NOT NULL`,
+			`ALTER TABLE iam.role_sessions DROP CONSTRAINT role_sessions_authority_contract`,
+			`ALTER TABLE iam.role_source_authority_generations NO FORCE ROW LEVEL SECURITY`,
+			`ALTER POLICY tenant_isolation ON iam.role_source_authority_generations USING(true) WITH CHECK(true)`,
+			`ALTER TABLE iam.role_source_authority_generations DROP CONSTRAINT role_source_exact_kind`,
+			`ALTER TABLE iam.role_source_authority_generations DROP CONSTRAINT role_source_generation_range`,
+			`ALTER TABLE iam.role_source_authority_generations DROP CONSTRAINT role_source_authority_generations_tenant_id_user_id_fkey`,
+			`ALTER TABLE iam.role_source_authority_generations DROP CONSTRAINT role_source_authority_generations_tenant_id_group_id_fkey`,
+			`ALTER TABLE iam.role_source_authority_generations DISABLE TRIGGER source_authority_monotonic`,
+			`ALTER TABLE iam.role_source_authority_generations DISABLE TRIGGER cannot_truncate`,
+			`ALTER TABLE iam.principals DISABLE TRIGGER principals_initialize_role_source`,
+			`ALTER TABLE iam.groups DISABLE TRIGGER groups_initialize_role_source`,
+			`ALTER TABLE iam.policy_attachments DISABLE TRIGGER attachments_advance_role_source`,
+			`ALTER TABLE iam.group_memberships DISABLE TRIGGER memberships_advance_role_source`,
+			`ALTER TABLE iam.user_permission_boundaries DISABLE TRIGGER boundaries_advance_role_source`,
+			`GRANT SELECT ON iam.role_source_authority_generations TO matrix_iam_api`,
+			`GRANT EXECUTE ON FUNCTION iam.role_source_authority_snapshot(text,text) TO matrix_iam_api`,
+			`ALTER FUNCTION iam.role_source_authority_snapshot(text,text) STABLE`,
+			`ALTER FUNCTION iam.advance_role_source_authority_generation() SECURITY INVOKER`,
 			`GRANT SELECT ON iam.role_session_index TO matrix_iam_worker`,
 			`GRANT EXECUTE ON FUNCTION iam.assert_role_session_source(text,text,text,boolean) TO matrix_iam_api`,
 			`ALTER FUNCTION iam.issue_role_session(text,text,text,text,text,jsonb,text,text,jsonb,jsonb) SECURITY INVOKER`,
@@ -6787,6 +6937,7 @@ func proveRoleAuthorityRevisions(t *testing.T, ctx context.Context, handler http
 		"source-default", "role-default", "source-boundary-default", "role-boundary-default",
 		"source-attachment", "role-attachment", "group-membership", "group-attachment",
 		"source-boundary", "role-boundary", "trust", "maximum-duration",
+		"source-transient-deny", "group-transient-deny", "empty-group-transient-deny", "transient-deny-membership",
 	} {
 		if !t.Run(scenario, func(t *testing.T) {
 			prefix := fmt.Sprintf("role-aba-%02d", index)
@@ -6838,10 +6989,12 @@ func proveRoleAuthorityRevisions(t *testing.T, ctx context.Context, handler http
 			sourceTarget := iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)}
 			var group iamv1.Group
 			var membership iamv1.GroupMembership
-			if strings.HasPrefix(scenario, "group-") {
+			if strings.HasPrefix(scenario, "group-") || scenario == "empty-group-transient-deny" {
 				call(http.MethodPost, "/v1/groups", root, iamv1.CreateGroupRequest{Name: prefix, RequestID: prefix + "-group"}, http.StatusCreated, &group)
 				call(http.MethodPost, "/v1/groups/"+string(group.ID)+"/memberships", root, iamv1.CreateGroupMembershipRequest{UserID: member.ID, RequestID: prefix + "-join"}, http.StatusOK, &membership)
-				sourceTarget = iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}
+				if scenario != "empty-group-transient-deny" {
+					sourceTarget = iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}
+				}
 			}
 			sourceAttachment := attach(sourceTarget, sourcePolicy, "-source-attach")
 			roleTarget := iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)}
@@ -6912,8 +7065,8 @@ func proveRoleAuthorityRevisions(t *testing.T, ctx context.Context, handler http
 			}
 			invalid := func(suffix string) {
 				t.Helper()
-				call(http.MethodGet, "/v1/auth/role-session", token, nil, http.StatusUnauthorized, nil)
 				business(token, suffix, http.StatusUnauthorized)
+				call(http.MethodGet, "/v1/auth/role-session", token, nil, http.StatusUnauthorized, nil)
 			}
 			if changedPolicy != nil {
 				original := changedPolicy.Version.ID
@@ -6923,6 +7076,75 @@ func proveRoleAuthorityRevisions(t *testing.T, ctx context.Context, handler http
 				call(http.MethodPost, policyPath, root, iamv1.SetDefaultPolicyVersionRequest{VersionID: original, ResourceVersion: changedPolicy.Policy.ResourceVersion, RequestID: prefix + "-select-original"}, http.StatusOK, changedPolicy)
 			} else {
 				switch scenario {
+				case "source-transient-deny", "group-transient-deny", "empty-group-transient-deny", "transient-deny-membership":
+					// These sources did not exist in the issuance's active-policy
+					// vector. Removing them must not erase the intervening loss of
+					// authority and make that old credential current again.
+					denyDocument := assumeDocument
+					denyDocument.Statements = append([]iamv1.PolicyStatement(nil), assumeDocument.Statements...)
+					denyDocument.Statements[0].Effect = iamv1.PolicyDeny
+					denyPolicy := createPolicy("-temporary-deny", denyDocument)
+					target := sourceTarget
+					if scenario == "transient-deny-membership" {
+						call(http.MethodPost, "/v1/groups", root, iamv1.CreateGroupRequest{Name: prefix, RequestID: prefix + "-group"}, http.StatusCreated, &group)
+					}
+					if scenario == "empty-group-transient-deny" || scenario == "transient-deny-membership" {
+						target = iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}
+					}
+					readGeneration := func() int64 {
+						t.Helper()
+						var generation int64
+						if err := database.QueryRow(ctx, `SELECT generation FROM iam.role_source_authority_generations WHERE tenant_id=$1
+						 AND (($2='USER' AND user_id=$3) OR ($2='GROUP' AND group_id=$3))`, member.AccountID, target.Kind, target.ID).Scan(&generation); err != nil {
+							t.Fatal("read exact source generation", err)
+						}
+						return generation
+					}
+					if scenario == "source-transient-deny" {
+						// A different USER changes the shared directory, not this
+						// issuance's authority. Account-wide invalidation cannot pass.
+						var unrelated iamv1.User
+						call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": prefix + "-other", "displayName": "Unrelated",
+							"initialPassword": initialDeveloperPassword, "requestId": prefix + "-other"}, http.StatusCreated, &unrelated)
+						otherGrant := attach(iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(unrelated.ID)}, denyPolicy, "-other-deny")
+						business(token, "-unrelated-grant", http.StatusOK)
+						call(http.MethodPost, "/v1/policy-attachments/"+string(otherGrant.ID)+":revoke", root,
+							iamv1.RevokePolicyAttachmentRequest{ResourceVersion: otherGrant.ResourceVersion, RequestID: prefix + "-other-revoke"}, http.StatusOK, nil)
+						business(token, "-unrelated-revoke", http.StatusOK)
+						proveRoleSourceGenerationAtomicity(t, ctx, handler, database, root, member, denyPolicy)
+						business(token, "-failed-writes", http.StatusOK)
+					}
+					if scenario == "empty-group-transient-deny" {
+						before := readGeneration()
+						call(http.MethodPost, "/v1/groups/"+string(group.ID)+":update", root, iamv1.UpdateGroupRequest{Name: group.Name + " renamed",
+							ResourceVersion: group.ResourceVersion, RequestID: prefix + "-rename"}, http.StatusOK, &group)
+						if readGeneration() != before {
+							t.Fatal("display metadata advanced group authority")
+						}
+						business(token, "-group-display", http.StatusOK)
+					}
+					before := readGeneration()
+					denyAttachment := attach(target, denyPolicy, "-temporary-deny-attach")
+					if readGeneration() != before+1 {
+						t.Fatal("one attachment did not advance its exact authority once")
+					}
+					replayedAttachment := attach(target, denyPolicy, "-temporary-deny-attach")
+					if !reflect.DeepEqual(replayedAttachment, denyAttachment) || readGeneration() != before+1 {
+						t.Fatal("equal attachment replay advanced source authority")
+					}
+					groupPath := "/v1/groups/" + string(group.ID) + "/memberships"
+					if scenario == "transient-deny-membership" {
+						call(http.MethodPost, groupPath, root, iamv1.CreateGroupMembershipRequest{UserID: member.ID, RequestID: prefix + "-temporary-join"}, http.StatusOK, &membership)
+					}
+					invalid("-away")
+					if scenario == "transient-deny-membership" {
+						call(http.MethodPost, groupPath+"/"+string(membership.ID)+":remove", root, iamv1.RemoveGroupMembershipRequest{ResourceVersion: membership.ResourceVersion, RequestID: prefix + "-temporary-leave"}, http.StatusOK, nil)
+					} else {
+						call(http.MethodPost, "/v1/policy-attachments/"+string(denyAttachment.ID)+":revoke", root, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: denyAttachment.ResourceVersion, RequestID: prefix + "-temporary-deny-revoke"}, http.StatusOK, nil)
+						if readGeneration() != before+2 {
+							t.Fatal("attachment removal did not retain intervening authority change")
+						}
+					}
 				case "source-attachment", "group-attachment", "role-attachment":
 					attachment, target, policy := sourceAttachment, sourceTarget, sourcePolicy
 					if scenario == "role-attachment" {
@@ -7016,6 +7238,84 @@ func proveRoleAuthorityRevisions(t *testing.T, ctx context.Context, handler http
 			if err != nil || response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &authorization) != nil || iamv1.ValidateAuditProducerAuthorization(authorization) != nil || authorization.ContentDigest != digest {
 				t.Fatalf("original committed role fact was lost: status=%d", response.Code)
 			}
+		}
+	}
+}
+
+func proveRoleSourceGenerationAtomicity(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string, user iamv1.User, policy iamv1.PolicyDetail) {
+	t.Helper()
+	request := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(user.ID)},
+		PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion, RequestID: "source-generation-atomicity"}
+	snapshot := func() []byte {
+		t.Helper()
+		var state []byte
+		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+		 'generations',(SELECT jsonb_agg(to_jsonb(g) ORDER BY g.user_id,g.group_id) FROM iam.role_source_authority_generations g WHERE g.tenant_id=$1),
+		 'directory',(SELECT revision FROM iam.role_directory_revisions WHERE tenant_id=$1),
+		 'attachments',(SELECT jsonb_agg(to_jsonb(a) ORDER BY a.id) FROM iam.policy_attachments a WHERE a.tenant_id=$1),
+		 'decisions',(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1),
+		 'facts',(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1))`, user.AccountID).Scan(&state); err != nil {
+			t.Fatal("capture atomic source authority", err)
+		}
+		return state
+	}
+	for _, fault := range []struct{ table, event string }{{"iam.audit_outbox", "INSERT"}, {"iam.role_source_authority_generations", "UPDATE"}} {
+		func() {
+			before := snapshot()
+			if _, err := database.Exec(ctx, `CREATE FUNCTION public.role_source_atomic_fault() RETURNS trigger LANGUAGE plpgsql AS
+			 'BEGIN RAISE EXCEPTION ''owned source authority fault''; END';
+			 CREATE TRIGGER role_source_atomic_fault BEFORE `+fault.event+` ON `+fault.table+` FOR EACH ROW EXECUTE FUNCTION public.role_source_atomic_fault()`); err != nil {
+				t.Fatal("install isolated source authority fault", err)
+			}
+			defer func() {
+				if _, err := database.Exec(ctx, `DROP TRIGGER role_source_atomic_fault ON `+fault.table+`; DROP FUNCTION public.role_source_atomic_fault()`); err != nil {
+					t.Fatal("remove isolated source authority fault", err)
+				}
+			}()
+			response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", root, mustIAMJSON(t, request))
+			if response.Code != http.StatusServiceUnavailable || !bytes.Equal(before, snapshot()) {
+				t.Fatal("failed source write retained authority, attachment, decision or fact", response.Code)
+			}
+		}()
+	}
+	before := snapshot()
+	request.PolicyResourceVersion++
+	response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", root, mustIAMJSON(t, request))
+	if response.Code != http.StatusConflict || !bytes.Equal(before, snapshot()) {
+		t.Fatal("source conflict advanced authority or partially committed", response.Code)
+	}
+	for _, attack := range []string{
+		`UPDATE iam.role_source_authority_generations SET generation=1 WHERE tenant_id=$1 AND user_id=$2`,
+		`UPDATE iam.role_source_authority_generations SET generation=generation+2 WHERE tenant_id=$1 AND user_id=$2`,
+		`UPDATE iam.role_source_authority_generations SET user_id='different',generation=generation+1 WHERE tenant_id=$1 AND user_id=$2`,
+		`DELETE FROM iam.role_source_authority_generations WHERE tenant_id=$1 AND user_id=$2`,
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, attack, user.AccountID, user.ID)
+		var failure *pgconn.PgError
+		denied := errors.As(err, &failure) && failure.Code == "42501"
+		_ = tx.Rollback(ctx)
+		if !denied || !bytes.Equal(before, snapshot()) {
+			t.Fatal("source authority was reset, reassigned or removed", err)
+		}
+	}
+	for _, attack := range []string{
+		`TRUNCATE iam.role_source_authority_generations`,
+		`INSERT INTO iam.role_source_authority_generations(tenant_id,user_id,generation) SELECT tenant_id,id,1 FROM iam.principals WHERE principal_type='SERVICE_ACCOUNT' LIMIT 1`,
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, attack)
+		var failure *pgconn.PgError
+		denied := errors.As(err, &failure) && failure.Code == "42501"
+		_ = tx.Rollback(ctx)
+		if !denied || !bytes.Equal(before, snapshot()) {
+			t.Fatal("source table admitted an invalid authority kind or history deletion", err)
 		}
 	}
 }
@@ -7130,7 +7430,7 @@ func proveRoleAuthorizationSecurityInterleavings(t *testing.T, ctx context.Conte
 	t.Helper()
 	for _, businessFirst := range []bool{false, true} {
 		for index, change := range []string{"logout", "password-default", "password-true", "password-false", "reset", "disable-delete", "recover", "suspend",
-			"role-disable", "role-delete", "trust", "source-grant", "role-grant", "role-boundary", "source-revoke", "role-exit"} {
+			"role-disable", "role-delete", "trust", "source-grant", "role-grant", "role-boundary", "source-revoke", "role-exit", "group-grant", "group-delete"} {
 			if !t.Run(fmt.Sprintf("%s_business_first_%t", change, businessFirst), func(t *testing.T) {
 				prefix := fmt.Sprintf("role-interleaving-%t-%02d", businessFirst, index)
 				call := func(method, path, bearer string, body any, output any) {
@@ -7168,6 +7468,15 @@ func proveRoleAuthorizationSecurityInterleavings(t *testing.T, ctx context.Conte
 					login = localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
 					call(http.MethodPost, "/v1/policy-attachments", owner, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(user.ID)},
 						PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: prefix + "-source-grant"}, &sourceGrant)
+				}
+				var group iamv1.Group
+				var groupGrant iamv1.PolicyAttachment
+				if strings.HasPrefix(change, "group-") {
+					call(http.MethodPost, "/v1/groups", owner, iamv1.CreateGroupRequest{Name: prefix, RequestID: prefix + "-group"}, &group)
+					call(http.MethodPost, "/v1/groups/"+string(group.ID)+"/memberships", owner,
+						iamv1.CreateGroupMembershipRequest{UserID: user.ID, RequestID: prefix + "-join"}, nil)
+					call(http.MethodPost, "/v1/policy-attachments", owner, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)},
+						PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: prefix + "-group-grant"}, &groupGrant)
 				}
 				var role iamv1.Role
 				call(http.MethodPost, "/v1/roles", owner, iamv1.CreateRoleRequest{Name: prefix, Tags: []iamv1.RoleTag{}, RequestID: prefix + "-role",
@@ -7250,6 +7559,14 @@ func proveRoleAuthorizationSecurityInterleavings(t *testing.T, ctx context.Conte
 					securityBody = iamv1.RevokeRoleSessionRequest{RequestID: securityID}
 				case "role-exit":
 					securityPath, securityBearer = "/v1/auth/role-session:logout", token
+				case "group-grant":
+					securityPath, securityBearer = "/v1/policy-attachments/"+string(groupGrant.ID)+":revoke", owner
+					securityBody = iamv1.RevokePolicyAttachmentRequest{ResourceVersion: groupGrant.ResourceVersion, RequestID: securityID}
+				case "group-delete":
+					var access iamv1.GroupAccess
+					call(http.MethodGet, "/v1/groups/"+string(group.ID), owner, nil, &access)
+					securityPath, securityBearer = "/v1/groups/"+string(group.ID)+":delete", owner
+					securityBody = iamv1.DeleteGroupRequest{ResourceVersion: access.Group.ResourceVersion, RequestID: securityID}
 				}
 				request.RequestID = prefix + "-business"
 				businessBytes, securityBytes := mustIAMJSON(t, request), mustIAMJSON(t, securityBody)
@@ -7257,21 +7574,33 @@ func proveRoleAuthorizationSecurityInterleavings(t *testing.T, ctx context.Conte
 				if businessFirst {
 					barrierRequest = request.RequestID
 				}
-				// Hold the first real transaction at its final outbox insertion;
-				// observe the second backend blocked by its actual row locks. The
-				// barrier neither changes production locks nor reorders use cases.
-				if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_role_authority_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+				// Pause after the first transaction has acquired its authority
+				// locks. Group source counters advance after outbox insertion, so
+				// security-first group changes pause on the actual counter update.
+				barrierTable := "iam.audit_outbox"
+				barrierSQL := `CREATE FUNCTION public.matrix_role_authority_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
 				BEGIN IF NEW.event_document->>'requestId'=TG_ARGV[0] AND (NEW.event_document#>>'{actor,type}'='ROLE'
 				 OR NEW.event_document->>'action'<>'iam.authorization.decided') THEN PERFORM pg_advisory_xact_lock(54841,24); END IF; RETURN NEW; END $body$;
-				CREATE TRIGGER matrix_role_authority_barrier BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_role_authority_barrier('`+barrierRequest+`');
-				SELECT pg_advisory_lock(54841,24)`); err != nil {
+				CREATE TRIGGER matrix_role_authority_barrier BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_role_authority_barrier('` + barrierRequest + `');`
+				if !businessFirst && strings.HasPrefix(change, "group-") {
+					barrierTable = "iam.role_source_authority_generations"
+					column, target := "group_id", string(group.ID)
+					if change == "group-delete" {
+						column, target = "user_id", string(user.ID)
+					}
+					barrierSQL = `CREATE FUNCTION public.matrix_role_authority_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+					BEGIN IF NEW.` + column + `=TG_ARGV[0] THEN PERFORM pg_advisory_xact_lock(54841,24); END IF; RETURN NEW; END $body$;
+					CREATE TRIGGER matrix_role_authority_barrier BEFORE UPDATE ON iam.role_source_authority_generations
+					 FOR EACH ROW EXECUTE FUNCTION public.matrix_role_authority_barrier('` + target + `');`
+				}
+				if _, err := database.Exec(ctx, barrierSQL+`SELECT pg_advisory_lock(54841,24)`); err != nil {
 					t.Fatal("install owned role authority barrier", err)
 				}
 				blockedContext, cancel := context.WithTimeout(ctx, 5*time.Second)
 				defer func() {
 					cancel()
 					if _, err := database.Exec(context.Background(), `SELECT pg_advisory_unlock(54841,24);
-					DROP TRIGGER IF EXISTS matrix_role_authority_barrier ON iam.audit_outbox;
+					DROP TRIGGER IF EXISTS matrix_role_authority_barrier ON `+barrierTable+`;
 					DROP FUNCTION IF EXISTS public.matrix_role_authority_barrier()`); err != nil {
 						t.Error("remove owned role authority barrier", err)
 					}
@@ -7391,6 +7720,183 @@ func proveRoleAuthorizationSecurityInterleavings(t *testing.T, ctx context.Conte
 				t.FailNow()
 			}
 		}
+	}
+}
+
+func proveRoleSourceCascadeSerialization(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	call := func(method, path, bearer string, body any, output any) {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != http.StatusOK && response.Code != http.StatusCreated {
+			t.Fatalf("source cascade %s %s status=%d body=%s", method, path, response.Code, response.Body.String())
+		}
+		if output != nil && json.Unmarshal(response.Body.Bytes(), output) != nil {
+			t.Fatal("decode source cascade result")
+		}
+	}
+	var users [3]iamv1.User
+	var logins [3]string
+	for index := range users {
+		id := fmt.Sprintf("source-cascade-user-%d", index)
+		call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": id, "displayName": id,
+			"initialPassword": initialDeveloperPassword, "requestId": id}, &users[index])
+		login := localRecoveryLogin(t, handler, id+"@"+string(users[index].AccountID), initialDeveloperPassword, true)
+		logins[index] = localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
+		call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(users[index].ID)},
+			PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: id + "-grant"}, nil)
+	}
+	var groups [2]iamv1.Group
+	for index := range groups {
+		id := fmt.Sprintf("source-cascade-group-%d", index)
+		call(http.MethodPost, "/v1/groups", root, iamv1.CreateGroupRequest{Name: id, RequestID: id}, &groups[index])
+		// Both groups contain the same two sources, inserted in opposite order.
+		// The deleters are different users and neither is a group member.
+		for position := 0; position < 2; position++ {
+			user := users[(position+index)%2]
+			call(http.MethodPost, "/v1/groups/"+string(groups[index].ID)+"/memberships", root,
+				iamv1.CreateGroupMembershipRequest{UserID: user.ID, RequestID: fmt.Sprintf("%s-join-%d", id, position)}, nil)
+		}
+		call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(groups[index].ID)},
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: id + "-grant"}, nil)
+		var access iamv1.GroupAccess
+		call(http.MethodGet, "/v1/groups/"+string(groups[index].ID), root, nil, &access)
+		groups[index] = access.Group
+	}
+	var role iamv1.Role
+	call(http.MethodPost, "/v1/roles", root, iamv1.CreateRoleRequest{Name: "source-cascade-role", Tags: []iamv1.RoleTag{}, RequestID: "source-cascade-role",
+		TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "sources", Effect: iamv1.PolicyAllow,
+			Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: users[0].ID}, {Type: iamv1.PrincipalUser, ID: users[1].ID}}}}}}, &role)
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "source-cascade-role-grant"}, nil)
+	var boundary iamv1.RolePermissionBoundary
+	call(http.MethodPut, "/v1/roles/"+string(role.ID)+"/permission-boundary", root, iamv1.SetRolePermissionBoundaryRequest{
+		PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, ResourceVersion: role.ResourceVersion, RequestID: "source-cascade-boundary"}, &boundary)
+	var tokens [2]string
+	var generations [2]int64
+	for index := range tokens {
+		var issued iamv1.AssumeRoleResponse
+		call(http.MethodPost, "/v1/roles/"+string(role.ID)+":assume", logins[index], iamv1.AssumeRoleRequest{
+			ResourceVersion: boundary.ResourceVersion, RequestID: fmt.Sprintf("source-cascade-issue-%d", index)}, &issued)
+		if iamv1.ValidateAssumeRoleResponse(issued) != nil || issued.Outcome != "APPLIED" {
+			t.Fatal("source cascade has no actual issued role credential")
+		}
+		secret := issued.Credential.CopyBytes()
+		tokens[index] = string(secret)
+		clear(secret)
+		if err := database.QueryRow(ctx, `SELECT generation FROM iam.role_source_authority_generations WHERE tenant_id=$1 AND user_id=$2`, users[index].AccountID, users[index].ID).Scan(&generations[index]); err != nil {
+			t.Fatal("read source generation before cascades", err)
+		}
+	}
+	businessRequest, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "source-cascade-app"}, iamv1.AuthorizationResourceInstance, "", "source-cascade-business", "source-cascade")
+	if err != nil {
+		t.Fatal(err)
+	}
+	business := mustIAMJSON(t, businessRequest)
+	for _, token := range tokens {
+		response := performIAMRequestWithSubject(handler, business, paasCredential, token)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || !decision.Allowed {
+			t.Fatal("source cascade positive role business control failed")
+		}
+	}
+	deletionBodies := [2][]byte{}
+	for index := range groups {
+		deletionBodies[index] = mustIAMJSON(t, iamv1.DeleteGroupRequest{ResourceVersion: groups[index].ResourceVersion, RequestID: fmt.Sprintf("source-cascade-delete-%d", index)})
+	}
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_source_cascade_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+	 BEGIN PERFORM pg_advisory_xact_lock(54841,25); RETURN NEW; END $body$;
+	 CREATE TRIGGER matrix_source_cascade_barrier BEFORE UPDATE ON iam.role_source_authority_generations
+	 FOR EACH ROW EXECUTE FUNCTION public.matrix_source_cascade_barrier(); SELECT pg_advisory_lock(54841,25)`); err != nil {
+		t.Fatal("install owned cascade counter barrier", err)
+	}
+	blockedContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer func() {
+		cancel()
+		cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		if _, err := database.Exec(cleanup, `SELECT pg_advisory_unlock(54841,25);
+		 DROP TRIGGER IF EXISTS matrix_source_cascade_barrier ON iam.role_source_authority_generations;
+		 DROP FUNCTION IF EXISTS public.matrix_source_cascade_barrier()`); err != nil {
+			t.Error("remove owned cascade counter barrier", err)
+		}
+	}()
+	results := [2]chan *httptest.ResponseRecorder{make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)}
+	deleters := [2]string{root, logins[2]}
+	send := func(index int) {
+		request := httptest.NewRequest(http.MethodPost, "/v1/groups/"+string(groups[index].ID)+":delete", bytes.NewReader(deletionBodies[index])).WithContext(blockedContext)
+		request.Header.Set("Authorization", "Bearer "+deleters[index])
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		results[index] <- response
+	}
+	go send(0)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	firstPID := 0
+	for firstPID == 0 {
+		if err := database.QueryRow(blockedContext, `SELECT COALESCE((SELECT pid FROM pg_locks WHERE locktype='advisory' AND NOT granted
+		 AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54841 AND objid=25 LIMIT 1),0)`).Scan(&firstPID); err != nil {
+			t.Fatal("observe first cascade holding source counter", err)
+		}
+		if firstPID == 0 {
+			select {
+			case <-ticker.C:
+			case <-blockedContext.Done():
+				t.Fatal("first cascade did not reach source counter")
+			}
+		}
+	}
+	go send(1)
+	for waiting := false; !waiting; {
+		if err := database.QueryRow(blockedContext, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity a WHERE $1=ANY(pg_blocking_pids(a.pid))
+		 AND a.datid=(SELECT oid FROM pg_database WHERE datname=current_database()) AND EXISTS(SELECT 1 FROM pg_locks l
+		 WHERE l.pid=a.pid AND l.relation='iam.group_memberships'::regclass AND l.mode='RowExclusiveLock' AND l.granted))`, firstPID).Scan(&waiting); err != nil {
+			t.Fatal("observe second independent cascade serialized before counter writes", err)
+		}
+		if !waiting {
+			select {
+			case <-ticker.C:
+			case <-blockedContext.Done():
+				t.Fatal("second cascade never reached its protected commit")
+			}
+		}
+	}
+	if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54841,25)`); err != nil {
+		t.Fatal(err)
+	}
+	for index, done := range results {
+		select {
+		case response := <-done:
+			var deleted iamv1.GroupDeletion
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &deleted) != nil || iamv1.ValidateGroupDeletion(deleted) != nil ||
+				deleted.ID != groups[index].ID || deleted.RemovedMemberships != 2 || deleted.RevokedPolicyAttachments != 1 {
+				t.Fatalf("cascade %d failed: status=%d body=%s", index, response.Code, response.Body.String())
+			}
+		case <-blockedContext.Done():
+			t.Fatal("concurrent cascades did not finish within bounded lock wait")
+		}
+	}
+	for index, token := range tokens {
+		var generation int64
+		if err := database.QueryRow(ctx, `SELECT generation FROM iam.role_source_authority_generations WHERE tenant_id=$1 AND user_id=$2`, users[index].AccountID, users[index].ID).Scan(&generation); err != nil || generation != generations[index]+2 {
+			t.Fatalf("cascade lost or duplicated source generation: before=%d after=%d error=%v", generations[index], generation, err)
+		}
+		if response := performIAMRequestWithSubject(handler, business, paasCredential, token); response.Code != http.StatusUnauthorized {
+			t.Fatal("cascade retained a pre-change role authority")
+		}
+	}
+	var successes int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId' IN ('source-cascade-delete-0','source-cascade-delete-1')
+	 AND event_document->>'action'='iam.group.deleted'`).Scan(&successes); err != nil || successes != 2 {
+		t.Fatal("cascades lost or duplicated their atomic success facts", err)
 	}
 }
 
@@ -7750,6 +8256,12 @@ func proveRoleDecisionEvidence(t *testing.T, ctx context.Context, database *pgx.
 		{"source-user", []string{"sourceUserId"}, "other-user"},
 		{"source-session", []string{"sourceSessionId"}, "other-login"},
 		{"credential-generation", []string{"credentialGeneration"}, 9007199254740991},
+		{"missing-authority-contract", []string{"authorityContractVersion"}, nil},
+		{"old-authority-contract", []string{"authorityContractVersion"}, 1},
+		{"source-generation", []string{"sourceAuthorizationGeneration"}, 9007199254740991},
+		{"missing-source-generation", []string{"sourceAuthorizationGeneration"}, nil},
+		{"missing-complete-groups", []string{"sourceGroupGenerations"}, nil},
+		{"invented-source-group", []string{"sourceGroupGenerations"}, []any{map[string]any{"groupId": "invented", "membershipId": "invented", "membershipResourceVersion": 1, "authorizationGeneration": 1}}},
 		{"security-generation", []string{"securityGeneration"}, 9007199254740991},
 		{"trust-version", []string{"trustVersionId"}, "other-trust"},
 		{"trust-digest", []string{"trustDigest"}, "sha256:" + strings.Repeat("0", 64)},
@@ -8799,8 +9311,10 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 		results := make(chan *httptest.ResponseRecorder, 2)
 		setBytes := mustIAMJSON(t, iamv1.SetRolePermissionBoundaryRequest{PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, ResourceVersion: 8, RequestID: "role-boundary-race-set"})
 		removeBytes := mustIAMJSON(t, iamv1.RemoveRolePermissionBoundaryRequest{ResourceVersion: 8, RequestID: "role-boundary-race-remove"})
+		releaseDecisions := holdRecordedIdentityDecisions(t, ctx, database, "role-boundary-race-set", "role-boundary-race-remove")
 		go func() { results <- performIAMRequest(handler, http.MethodPut, boundaryPath, root, setBytes) }()
 		go func() { results <- performIAMRequest(handler, http.MethodDelete, boundaryPath, root, removeBytes) }()
+		releaseDecisions()
 		winners := 0
 		for range 2 {
 			select {

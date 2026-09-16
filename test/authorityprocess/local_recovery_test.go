@@ -65,7 +65,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	root, temporary := repositoryRoot(t), t.TempDir()
-	baseline := extractFixedIAMSource(t, ctx, root, temporary, "5721b7b1a985f25c9730ddb9229a51f7f6c3b63a")
+	baseline := extractFixedAuthoritySource(t, ctx, root, temporary, "5721b7b1a985f25c9730ddb9229a51f7f6c3b63a")
 	for _, name := range []string{"000001_authority", "000003_tenant_accounts"} {
 		oldSQL, err := os.ReadFile(filepath.Join(baseline, "app/service/iam/internal/data/postgres/migrations", name, "up.sql"))
 		if err != nil {

@@ -78,17 +78,44 @@ type SubjectContext struct {
 // checks the issued credential/security generations and complete revision
 // vectors; this context does not promote its source USER into a ROLE principal.
 type RoleSessionContext struct {
-	Session              iamv1.RoleSession
-	Source               SubjectContext
-	SourceSessionID      iamv1.SessionID
-	CredentialGeneration uint64
-	SecurityGeneration   uint64
-	AssumeDecisionID     iamv1.DecisionID
-	Role                 iamv1.Role
-	Trust                iamv1.RoleTrustVersion
-	Policies             []AttachedPolicy
-	Boundary             *ResolvedRoleBoundary
-	SessionPolicy        *ResolvedSessionPolicy
+	AuthorityContractVersion      uint64
+	SourceAuthorizationGeneration uint64
+	SourceGroupGenerations        []RoleSourceGroupGeneration
+	Session                       iamv1.RoleSession
+	Source                        SubjectContext
+	SourceSessionID               iamv1.SessionID
+	CredentialGeneration          uint64
+	SecurityGeneration            uint64
+	AssumeDecisionID              iamv1.DecisionID
+	Role                          iamv1.Role
+	Trust                         iamv1.RoleTrustVersion
+	Policies                      []AttachedPolicy
+	Boundary                      *ResolvedRoleBoundary
+	SessionPolicy                 *ResolvedSessionPolicy
+}
+
+// Private issuance evidence, not public group metadata or current permissions.
+type RoleSourceGroupGeneration struct {
+	GroupID                   iamv1.GroupID           `json:"groupId"`
+	MembershipID              iamv1.GroupMembershipID `json:"membershipId"`
+	MembershipResourceVersion uint64                  `json:"membershipResourceVersion"`
+	AuthorizationGeneration   uint64                  `json:"authorizationGeneration"`
+}
+
+func ValidateRoleSourceAuthority(contract, generation uint64, groups []RoleSourceGroupGeneration) error {
+	if contract != 2 || generation == 0 || generation > 9007199254740991 || groups == nil || len(groups) > 100 {
+		return ErrAuthorityUnavailable
+	}
+	var previous iamv1.GroupID
+	for _, group := range groups {
+		if iamv1.ValidateID("groupId", string(group.GroupID)) != nil || group.GroupID <= previous ||
+			iamv1.ValidateID("membershipId", string(group.MembershipID)) != nil || group.MembershipResourceVersion != 1 ||
+			group.AuthorizationGeneration == 0 || group.AuthorizationGeneration > 9007199254740991 {
+			return ErrAuthorityUnavailable
+		}
+		previous = group.GroupID
+	}
+	return nil
 }
 
 func AuthenticateRoleSession(value RoleSessionContext, storedDigest string, credential iamv1.Secret, now time.Time) error {
@@ -106,7 +133,8 @@ func AuthenticateRoleSession(value RoleSessionContext, storedDigest string, cred
 }
 
 func validateRoleSessionContext(value RoleSessionContext, now time.Time) error {
-	if iamv1.ValidateRoleSession(value.Session) != nil || validateAuthorityTime(now) != nil ||
+	if ValidateRoleSourceAuthority(value.AuthorityContractVersion, value.SourceAuthorizationGeneration, value.SourceGroupGenerations) != nil ||
+		iamv1.ValidateRoleSession(value.Session) != nil || validateAuthorityTime(now) != nil ||
 		value.Session.AccountID != value.Source.Organization.ID || value.Session.SourceUserID != value.Source.Principal.ID ||
 		value.Session.RoleID != value.Role.ID || value.SourceSessionID != value.Source.Session.ID ||
 		value.Session.ExpiresAt.After(value.Source.Session.ExpiresAt) || value.Session.IssuedAt.After(now) ||
@@ -161,17 +189,20 @@ type AuthorizationEvaluation struct {
 // full source and role authority vectors. The SQL recorder checks each field;
 // delivery checks the original vectors, never a current login or policy head.
 type RoleAuthorizationEvidence struct {
-	SessionID            iamv1.RoleSessionID        `json:"sessionId"`
-	RoleID               iamv1.RoleID               `json:"roleId"`
-	SourceUserID         iamv1.PrincipalID          `json:"sourceUserId"`
-	SourceSessionID      iamv1.SessionID            `json:"sourceSessionId"`
-	CredentialGeneration uint64                     `json:"credentialGeneration"`
-	SecurityGeneration   uint64                     `json:"securityGeneration"`
-	TrustVersionID       iamv1.RoleTrustVersionID   `json:"trustVersionId"`
-	TrustDigest          string                     `json:"trustDigest"`
-	AssumeDecisionID     iamv1.DecisionID           `json:"assumeDecisionId"`
-	Boundary             RoleBoundaryEvidence       `json:"boundary"`
-	SessionPolicy        *RoleSessionPolicyEvidence `json:"sessionPolicy"`
+	AuthorityContractVersion      uint64                      `json:"authorityContractVersion"`
+	SourceAuthorizationGeneration uint64                      `json:"sourceAuthorizationGeneration"`
+	SourceGroupGenerations        []RoleSourceGroupGeneration `json:"sourceGroupGenerations"`
+	SessionID                     iamv1.RoleSessionID         `json:"sessionId"`
+	RoleID                        iamv1.RoleID                `json:"roleId"`
+	SourceUserID                  iamv1.PrincipalID           `json:"sourceUserId"`
+	SourceSessionID               iamv1.SessionID             `json:"sourceSessionId"`
+	CredentialGeneration          uint64                      `json:"credentialGeneration"`
+	SecurityGeneration            uint64                      `json:"securityGeneration"`
+	TrustVersionID                iamv1.RoleTrustVersionID    `json:"trustVersionId"`
+	TrustDigest                   string                      `json:"trustDigest"`
+	AssumeDecisionID              iamv1.DecisionID            `json:"assumeDecisionId"`
+	Boundary                      RoleBoundaryEvidence        `json:"boundary"`
+	SessionPolicy                 *RoleSessionPolicyEvidence  `json:"sessionPolicy"`
 }
 
 type RoleBoundaryEvidence struct {
@@ -300,7 +331,9 @@ func DecideRole(value RoleSessionContext, callingService iamv1.ServicePurpose, r
 		}
 		grant.Allowed = grant.Allowed && boundary.Allowed && session.Allowed
 	}
-	proof := &RoleAuthorizationEvidence{SessionID: value.Session.ID, RoleID: value.Role.ID, SourceUserID: value.Session.SourceUserID,
+	proof := &RoleAuthorizationEvidence{AuthorityContractVersion: value.AuthorityContractVersion,
+		SourceAuthorizationGeneration: value.SourceAuthorizationGeneration, SourceGroupGenerations: append([]RoleSourceGroupGeneration{}, value.SourceGroupGenerations...),
+		SessionID: value.Session.ID, RoleID: value.Role.ID, SourceUserID: value.Session.SourceUserID,
 		SourceSessionID: value.SourceSessionID, CredentialGeneration: value.CredentialGeneration, SecurityGeneration: value.SecurityGeneration,
 		TrustVersionID: value.Trust.ID, TrustDigest: value.Trust.ContentDigest, AssumeDecisionID: value.AssumeDecisionID,
 		Boundary: RoleBoundaryEvidence{BoundaryID: value.Boundary.BoundaryID, ResourceVersion: value.Boundary.ResourceVersion,
