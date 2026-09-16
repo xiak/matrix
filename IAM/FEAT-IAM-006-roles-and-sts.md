@@ -162,6 +162,12 @@ R2同片实现原Root+当前PDP守护的RoleBoundary read/set/remove，不引用
 
 精确Git候选的独立干净导出通过全仓`go test -race -p 2 -count=1 ./...`（含架构）、`go vet -p 2 ./...`、模块校验、API生成字节稳定及Linux amd64构建。Go2/768MiB，现有请求round-trip fuzz为15秒/2workers/1秒最小化预算，通过120526次执行。该基础片没有新增本地PG、浏览器或运行发行进程；默认跳过的外部fixture不记为真实R2证据。当前HTTP仍无AssumeRole、ROLE业务身份或会话发行/撤销入口，record8/contract3及角色历史证据尚未实现；subjectTypes增量由001/005拥有，实际R2源码Profile切换尚未发生。开发源码仍24/14/1，发布profile不改。固定6ae975d9a65569d5215fca26ef65a16722d2cd13的Verification35063652730首轮Go/节点成功，但authority-process超过旧10分钟job预算后取消，不能记为全绿；整体作业预算与再次精确源码验证归011。
 
+### 当前管理门禁的独立测试范围
+
+角色管理和私有会话引用矩阵分别使用独立、全新PostgreSQL数据库，不再嵌套消耗原账号HTTP和附件会话矩阵的剩余总时限。沿用同一integration文件、原业务断言和受限runtime，每个新增独立fixture有120秒总预算；角色竞争的锁等待、密码成本、48项附件交错与81项私有引用均未减少或放宽。每个fixture末尾保留双次schema重放、等值bootstrap receipt及实际Role状态不变检查。
+
+2026-09-16，精确候选Git树`e496908ecea855d6300ad8e549774719f1d46b6a`的干净导出在独立PG18.4（1CPU/768MiB/PIDs128/64连接，Go2/512MiB、race/p1）通过原账号HTTP、附件会话及上述两项独立矩阵，合计263.159秒。同一干净导出随后通过全仓race/p2（含架构）、vet/p2、模块校验及Linux amd64构建。这只证明测试范围拆分后的当前R1回归，不包含尚未提交的RoleBoundary/RoleSession，也不把一次本地通过当作独立CI成功。
+
 ## 验收
 
 - R1：两个真实Account可有同名Role；同名User/Role不混用。Root当前授权成功，普通用户/服务/platform-only/另一账号/过期或forced-change会话拒绝；读许可不能写或承担。真实同账号信任、Role策略附件、版本重放与并发更新/删除/撤权，所有失败无部分Role、信任、附件或成功事实。角色没有任何长期凭据或登录能力。

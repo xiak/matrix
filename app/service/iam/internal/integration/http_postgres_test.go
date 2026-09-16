@@ -2243,9 +2243,6 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 		"requestId": "attachment-session-group"}, http.StatusCreated, &group)
 	defer call(t, "/v1/groups/"+string(group.ID)+":delete", root,
 		iamv1.DeleteGroupRequest{ResourceVersion: group.ResourceVersion, RequestID: "attachment-session-group-cleanup"}, http.StatusOK, nil)
-	t.Run("exact_private_reference", func(t *testing.T) {
-		proveManagementSessionReferences(t, ctx, handler, database, root, member)
-	})
 	for _, targetKind := range []string{"user", "group", "platform"} {
 		for _, mutation := range []string{"logout", "change-default", "change-true", "change-false", "change-current", "reset", "forced", "disable", "revoke-authority"} {
 			if targetKind == "platform" && (mutation == "reset" || mutation == "forced" || mutation == "disable") {
@@ -5558,6 +5555,89 @@ func provePolicyScopeCredentialProtection(t *testing.T, ctx context.Context, han
 	}
 }
 
+// These growing matrices have their own clean fixtures and the same two-minute
+// bound as the existing management session flow. They must not consume the
+// unrelated attachment matrix or account HTTP gate's remaining deadline.
+func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
+	for _, gate := range []struct {
+		name, environment, prefix string
+	}{
+		{"roles", "MATRIX_IAM_ROLE_POSTGRES_TEST_DSN", "matrix_iam_roles_"},
+		{"private_references", "MATRIX_IAM_MANAGEMENT_REFERENCE_POSTGRES_TEST_DSN", "matrix_iam_references_"},
+	} {
+		t.Run(gate.name, func(t *testing.T) {
+			dsn := os.Getenv(gate.environment)
+			if dsn == "" {
+				t.Skipf("set %s to a clean disposable PostgreSQL 18 database", gate.environment)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			config, err := pgx.ParseConfig(dsn)
+			if err != nil || !strings.HasPrefix(config.Database, gate.prefix) {
+				t.Fatal("management gate requires its own purpose-specific database")
+			}
+			config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+			database, err := pgx.ConnectConfig(ctx, config)
+			if err != nil {
+				t.Fatal("connect management gate database")
+			}
+			defer database.Close(context.Background())
+			assertIAMPostgres18(t, ctx, database)
+			assertCleanIAMSchema(t, ctx, database)
+			applyIAMSchema(t, ctx, database)
+			createIAMHTTPRole(t, ctx, database)
+			workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole)
+			document := iamHTTPBootstrap(t)
+			initial, err := workflow.Bootstrap(ctx, document)
+			if err != nil || initial.State != iamv1.BootstrapReady {
+				t.Fatal("bootstrap management gate")
+			}
+			endpoint, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				requestContext, cancelRequest := context.WithCancel(request.Context())
+				defer cancelRequest()
+				stop := context.AfterFunc(ctx, cancelRequest)
+				defer stop()
+				endpoint.ServeHTTP(response, request.WithContext(requestContext))
+			})
+			root := localRecoveryLogin(t, handler, "admin", adminPassword, true)
+			root = localRecoveryChangePassword(t, handler, root, adminPassword, changedAdminPassword)
+			if gate.name == "roles" {
+				proveRoleManagement(t, ctx, handler, database, root)
+			} else {
+				response := performIAMRequest(handler, http.MethodPost, "/v1/users", root, mustIAMJSON(t, map[string]any{
+					"loginName": "private-reference-target", "displayName": "Private reference target",
+					"initialPassword": initialDeveloperPassword, "requestId": "private-reference-target"}))
+				var member iamv1.User
+				if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &member) != nil {
+					t.Fatal("create private reference target")
+				}
+				bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
+				localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+				proveManagementSessionReferences(t, ctx, handler, database, root, member)
+			}
+			// Replaying schema/bootstrap must not assign new state to either fixture.
+			var before, after string
+			const retainedRoles = `SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.tenant_id,r.id),'[]')::text FROM iam.roles r`
+			if err := database.QueryRow(ctx, retainedRoles).Scan(&before); err != nil {
+				t.Fatal("capture retained role state")
+			}
+			applyIAMSchema(t, ctx, database)
+			applyIAMSchema(t, ctx, database)
+			replayed, err := workflow.Bootstrap(ctx, document)
+			if err != nil || replayed.ContentDigest != initial.ContentDigest || initial.AppliedAt == nil || replayed.AppliedAt == nil || *initial.AppliedAt != *replayed.AppliedAt {
+				t.Fatal("management gate replay changed bootstrap receipt")
+			}
+			if err := database.QueryRow(ctx, retainedRoles).Scan(&after); err != nil || before != after {
+				t.Fatal("schema/bootstrap replay changed retained role state")
+			}
+		})
+	}
+}
+
 func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	dsn := os.Getenv(iamHTTPPostgresDSN)
 	if dsn == "" {
@@ -5874,9 +5954,6 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	})
 	t.Run("password session races", func(t *testing.T) {
 		provePasswordSessionRaces(t, ctx, handler, admin, loginWire.Credential)
-	})
-	t.Run("role management and immutable trust", func(t *testing.T) {
-		proveRoleManagement(t, ctx, handler, admin, loginWire.Credential)
 	})
 	assertPlatformAuthorityHTTP(t, ctx, handler, admin, loginWire.Credential, developerWire.Credential, developer.ID)
 	if _, err := workflow.Bootstrap(ctx, document); err != nil {

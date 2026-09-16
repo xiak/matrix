@@ -1,6 +1,6 @@
 # FEAT-IAM-001：业务授权能力目录
 
-- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 的源码 Profile、不可变注册、当前一致性及请求/决定绑定已有固定验证，编译版本及冻结动作族的运行证据归005。CAT-06 只读编辑目录固定 `40407e27` 的真实门禁及独立CI已通过；CAT-07 主体能力契约/当前评估已过本地整仓与真库/多进程，精确SHA独立CI待确认。ROLE真实接入与最终产品消费者组合仍待验收，本 FEAT 整体未验收。
+- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 的源码 Profile、不可变注册、当前一致性及请求/决定绑定已有固定验证，编译版本及冻结动作族的运行证据归005。CAT-06 只读编辑目录固定 `40407e27` 的真实门禁及独立CI已通过；CAT-07 主体能力契约/当前评估已过本地整仓与真库/多进程，但固定7b597101的独立CI因两组集成测试共用总时限而失败，修复后的精确SHA仍须独立验收。ROLE真实接入与最终产品消费者组合仍待验收，本 FEAT 整体未验收。
 - 依赖：[产品契约](./FEAT-IAM-000-product-contract.md)。
 - Owner：IAM 公共契约与现有 authority；产品拥有其业务词汇。
 - 首片：把现有已接受的动作、允许调用服务、资源种类和 scope 收敛为一份不可变目录，所有当前验证和决定路径消费该目录。
@@ -170,7 +170,7 @@ IAM私有assert_allowed_decision由6参替换为8参，追加显式resource_mode
 
 最终独立双IAM/Audit/PaaS与双dispatcher在另一全新专属库串行race-p1通过，包63.154秒。真实受限runtime登录、跨副本撤权/重启、双账号资源/配置/Operation/outbox、原Profile/编译/历史链及installation verifier保持；实际source readiness仍24/14/1，与未改动的已发布安装profile分开验证。没有运行本轮UI或签名安装，也没有把协议host fixture当作真实主机验收。全部本地执行均终态成功后才进入固定提交；001/005的这一能力契约不代替006的RoleSession/ROLE业务身份与完整发行验收。
 
-固定`7b597101c55cbd782e611f8da794fc84da138ebb`已推送；[Verification35067085558](https://github.com/xiak/matrix/actions/runs/35067085558)精确SHA的Go/节点已成功，authority-process仍在运行，尚不记为独立验收完成。本地客户端归零后仅清理本任务PG容器及已空专属网络；带任务标签的合成测试数据卷保留，没有清理其他任务对象或远端环境。
+固定`7b597101c55cbd782e611f8da794fc84da138ebb`已推送；[Verification35067085558](https://github.com/xiak/matrix/actions/runs/35067085558)最终为failure：Go/节点成功，authority-process的IAM附件会话和HTTP聚合测试分别耗尽120秒/180秒上下文；同一作业内Audit、独立进程87.063秒及PaaS数据库均通过。该轮不能记为独立验收完成，测试隔离修复与重新验证归006/011。本地客户端归零后仅清理本任务PG容器及已空专属网络；带任务标签的合成测试数据卷保留，没有清理其他任务对象或远端环境。
 
 ### CAT-06：只读编辑目录
 
