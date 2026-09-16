@@ -151,7 +151,11 @@ wrappingKeyId永久对应唯一KEK原材料，移除后也不得复用该ID。re
 
 候选干净源码树`6d2fb41dd6c6ab72e0193ebc2fe29b932b267ce7`通过全仓race/p2（含架构）、vet、模块校验、生成文件集合/字节一致及Linux amd64构建。此后仅将既有IAM HTTP fixture按当前网络契约显式提供同bootstrap的wrapping配置，并复用原Key fixture；实际IAM HTTP race86.306秒、双authority权限/保留Audit数据回归7.850秒、Audit HTTP3.634秒通过。实际固定R1角色executable保留数据到当前源码门禁12.89秒通过，原SYSTEM策略/默认版本不自动增加当前能力；这不是完整未发布schema1链或跨release升级许可。
 
-首次全仓检查发现三组旧测试把新目录动作等同于系统默认授权；已改为真实显式策略求值，并独立证明五个新动作不被原内置策略授予。候选独立CI待确认；安装文件生成/挂载/备份与UI由各自owner以固定对象独立验收，当前不标记K1或整体007完成。
+首次全仓检查发现三组旧测试把新目录动作等同于系统默认授权；已改为真实显式策略求值，并独立证明五个新动作不被原内置策略授予。固定`caca31d065063963f1ef4189f46e45e775bab332`的[Verification35157659630](https://github.com/xiak/matrix/actions/runs/35157659630)精确SHA经GitHub API核实：Go和node-process成功，authority-process在20分钟job总限时后cancelled，不标记通过。日志中的Audit PG/HTTP、主IAM组、Role/References组分别6.504/1.989/543.700/390.357秒成功；末尾真实process组仍执行时被取消，缺少其终态证据。不得用本地进程通过替代独立失败，不自动重跑掩盖问题。安装文件生成/挂载/备份与UI由各自owner以固定对象独立验收，当前不标记K1或整体007完成。
+
+独立workflow修复`a435195dcbb7197556e5671a45a51769fb7eee8b`只拆分原有数据库/HTTP和真实进程两组，按`max-parallel=1`串行执行；每组仍20分钟，原20个DSN绑定、全部命令、race-p1及单项context/lock时限不变。两组分别使用唯一标签、运行/尝试ID数据库、随机端口和受限PG18；原`authority-process`检查以`if:always()`保留，只有两组都成功才通过。actionlint1.7.12、10段Bash语法、原数据库绑定/创建集合一致及汇总成功/失败/取消/跳过/空值五种状态已验证。[Verification35160554567](https://github.com/xiak/matrix/actions/runs/35160554567)已核对精确SHA：go、node-process、authority-storage成功，authority-runtime及汇总失败。这次是实际测试失败，不是总时限取消。
+
+失败位于原`TestIAMRetainedPolicyProcessUpgrade`的后继Profile真实程序启动：fixture只在二进制路径等于currentBinary时传入keyring，后继overlay构建的futureBinary因此缺少必填FILE。固定a435在专属PG18原样复现21.68秒失败；临时诊断仅输出封闭启动阶段，确认CONFIGURATION，数据库已保留实际后继PaaS Profile r3，未发现需要放宽生产schema/readiness的证据。修复在原进程测试owner显式区分predecessor与current/future环境；旧程序不接收不存在的契约，新程序共用完整custody配置。两处旧数据未迁移拒绝门禁也提供完整新配置，避免缺文件提前退出伪装schema拒绝；后继日志使用真实Profile revision。仅首处修复的干净树`f45a21aa6b6365cb02ffb7f17fc9f87ac7f11860`已通过原retained-policy真库race22.41秒；最终累计storage/runtime与五项独立CI仍需通过，不以此聚焦结果宣称K1、签名业务、安装或UI验收。
 
 ### 当前源码约束与替换边界
 

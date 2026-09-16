@@ -685,18 +685,22 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("35", 32))),
 	}
 	wrappingFile := writeProcessAccessKeyWrapping(t, temporary, processBootstrap(t))
-	start := func(binary string) *childProcess {
-		currentEnvironment := append([]string(nil), environment...)
-		if binary == currentBinary {
-			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
-		}
-		child := startChild(t, root, binary, currentEnvironment)
+	currentEnvironment := append(append([]string(nil), environment...), "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
+	start := func(binary string, configuration []string) *childProcess {
+		t.Helper()
+		child := startChild(t, root, binary, configuration)
 		children = append(children, child)
 		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
 		assertRuntimeProcessLogins(t, ctx, admin, "matrix_iam_api_login")
 		return child
 	}
-	old := start(oldBinary)
+	// Both the current binary and its later Profile fixture use current
+	// custody. The actual predecessor must never receive that new contract.
+	startCurrent := func(binary string) *childProcess {
+		t.Helper()
+		return start(binary, currentEnvironment)
+	}
+	old := start(oldBinary, environment)
 	// Requests sent to the actual predecessor must use its authenticated
 	// declaration, not this test executable's newer ROLE-capable PaaS profile.
 	// This is a test-only old-consumer boundary; current production admission
@@ -902,7 +906,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		t.Fatal("finish rejected Root cutover")
 	}
 	assertUnchanged()
-	old = start(oldBinary)
+	old = start(oldBinary, environment)
 	revokeIAMPolicyAttachment(t, endpoint, primary.Credential, rootAttachment.ID, rootAttachment.ResourceVersion, "policy-upgrade-root-detach")
 	old.stop()
 	before = snapshot()
@@ -947,7 +951,8 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		t.Fatal("finish isolated migration failure")
 	}
 	assertUnchanged()
-	unmigrated := startChild(t, root, currentBinary, environment)
+	// A missing custody input must not masquerade as schema rejection.
+	unmigrated := startChild(t, root, currentBinary, currentEnvironment)
 	children = append(children, unmigrated)
 	if err := unmigrated.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
 		t.Fatal("current IAM accepted an unmigrated policy database")
@@ -1007,7 +1012,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		t.Fatal("old document-only executable accepted compiled policy authority")
 	}
 	for restart := range 2 {
-		current := start(currentBinary)
+		current := startCurrent(currentBinary)
 		assertViewerCeiling(fmt.Sprintf("current-%d", restart))
 		proofResponse := performJSON(t, http.MethodPost, endpoint+"/v1/audit-producer:resolve", paasServiceCredential, iamv1.ResolveAuditProducerRequest{Event: oldFact})
 		var proof iamv1.AuditProducerAuthorization
@@ -1044,7 +1049,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		}
 		current.stop()
 	}
-	current := start(currentBinary)
+	current := startCurrent(currentBinary)
 	// A new product declaration never rewrites old SYSTEM defaults. The real
 	// retained Root must publish and attach explicit current TENANT authority.
 	var oldAdminDefault iamv1.PolicyVersionID
@@ -1076,7 +1081,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	if err := iammigration.Up(ctx, admin); err != nil {
 		t.Fatal("replay current schema with terminal role state", err)
 	}
-	current = start(currentBinary)
+	current = startCurrent(currentBinary)
 	if response := performJSON(t, http.MethodGet, endpoint+"/v1/roles", primary.Credential, nil); response.Status != http.StatusForbidden {
 		t.Fatal("replay or restart revived revoked Role authority")
 	}
@@ -1135,7 +1140,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		t.Fatal("explicitly selected compiled version did not authorize its resource")
 	}
 	proveFrozenFamilyProfileAdvance(t, ctx, admin, root, temporary, endpoint, primary.Credential, customerLogin.Credential,
-		migrationEnvironment, start, current, oldFact)
+		migrationEnvironment, startCurrent, current, oldFact)
 	current.stop()
 	t.Log("actual fixed IAM21 -> current compiled authority: original bytes/defaults/history retained; Root preflight and late rollback; unknown CUSTOMER remains closed until explicit publish and select")
 }
@@ -1375,7 +1380,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	request.RequestID = "family-new-after-revoke"
 	decide(profile, request, false)
 	assertOriginal()
-	t.Log("source-built Profile r2: old family frozen; new publication does not select; explicit selection grants; restart/revocation hold; not a production PaaS inspect endpoint or release-upgrade gate")
+	t.Logf("source-built Profile r%d: old family frozen; new publication does not select; explicit selection grants; restart/revocation hold; not a production PaaS inspect endpoint or release-upgrade gate", profile.Revision)
 }
 
 func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, qualifiedChild bool) {
@@ -1487,7 +1492,9 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 	if rows.Err() != nil || len(retained) == 0 {
 		t.Fatal("old installation has no retained facts")
 	}
-	unmigrated := startChild(t, root, currentBinary, environment)
+	// Exercise schema rejection with the current process's complete inputs.
+	unmigratedEnvironment := append(append([]string(nil), environment...), "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
+	unmigrated := startChild(t, root, currentBinary, unmigratedEnvironment)
 	children = append(children, unmigrated)
 	if err := unmigrated.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
 		t.Fatal("current IAM served an unmigrated authority schema")
