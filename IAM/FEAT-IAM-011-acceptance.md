@@ -70,7 +70,7 @@ AC-11 当前仅服务副本子项有证据：2026-09-11 现有 `TestIndependentI
 
 固定7b597101的Verification35067085558使用20分钟作业预算后，IAM包仍因两个测试聚合上下文到期失败：新增角色流程嵌在原180秒HTTP用例内，新增私有引用矩阵嵌在原120秒附件用例内。修复只在原integration owner把这两组拆到独立干净数据库并显式接入同一CI作业；保留原测试及每个独立矩阵120秒预算，不增大单包10分钟上限、并发、资源、重试或场景等待。263.159秒本地真库回归证据归006；修复固定`d45402d91c89a5bb23f52fcfde65491435cd0f55`的Verification35069879250三项全部success，不把旧失败或默认无DSN的SKIP改写为成功，也不改变原容量/HA未验收边界。
 
-固定`960416dd85adab225bd97ee89509df04173f978b`的[Verification35110913530](https://github.com/xiak/matrix/actions/runs/35110913530)已核实精确SHA：Go和node-process成功，authority-process失败。日志为IAM integration整个进程累计600.108秒到期，当时最后的原HTTP矩阵运行82秒，账号子流程78秒；不是已经证明了某个锁等待超时或死锁。独立进程包103.467秒与Audit/PaaS数据另已完成，不将本轮记为全绿。当前作业将原Role/STS矩阵和其余IAM矩阵按互补的`-run/-skip`拆为串行调用，保留全部fixture、原场景/锁预算、单进程10分钟及20分钟作业上限；不加并发或弱化密码/规模。执行拆分及后续安全修复已通过006记录的本地完整真库/独立进程组合，新精确SHA的独立CI仍待复验，不能当成性能验收。
+固定`960416dd85adab225bd97ee89509df04173f978b`的[Verification35110913530](https://github.com/xiak/matrix/actions/runs/35110913530)已核实精确SHA：Go和node-process成功，authority-process失败。日志为IAM integration整个进程累计600.108秒到期，当时最后的原HTTP矩阵运行82秒，账号子流程78秒；不是已经证明了某个锁等待超时或死锁。独立进程包103.467秒与Audit/PaaS数据另已完成，不将本轮记为全绿。当前作业将原Role/STS矩阵和其余IAM矩阵按互补的`-run/-skip`拆为串行调用，保留全部fixture、原场景/锁预算、单进程10分钟及20分钟作业上限；不加并发或弱化密码/规模。执行拆分及后续安全修复已通过006记录的本地完整真库/独立进程组合；累计固定`1ebab37aef4bce12b963f52d3919748a9d50d4c6`的[Verification35123738141](https://github.com/xiak/matrix/actions/runs/35123738141)已核实精确SHA及三项completed/success。该结果不回填旧失败，也不能当成性能、容量或整套IAM验收。
 
 ## 完成条件
 

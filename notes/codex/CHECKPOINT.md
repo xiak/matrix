@@ -4,12 +4,12 @@
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Only this
   task's independent worktree is writable. Updated 2026-09-17.
-- Latest locally verified, pushed implementation:
+- Latest locally and independently verified, pushed implementation:
   1ebab37aef4bce12b963f52d3919748a9d50d4c6, cumulative through R3 self-service
-  and irreversible RoleSession source authority. Exact Verification35123738141
-  is still running: go/node-process success, authority-process in_progress.
-  Recheck the exact run; do not mark this candidate independently accepted yet.
-- Last independently verified R2 fixed point:
+  and irreversible RoleSession source authority. GitHub API confirmed exact
+  Verification35123738141 completed/success: go, authority-process and
+  node-process all succeeded. It is the current verified rollback point.
+- Previous independently verified R2 fixed point:
   0752c602ab4ce6d73a21094c8e9f75a1c8750183, Verification35096275242 all three
   jobs success. Its original ABA matrix did not cover the four source changes
   now repaired. R3 fixed960416dd/35110913530 failed its aggregate IAM timeout;
@@ -21,8 +21,8 @@
 ## Continue the full goal
 
 Whole IAM goal remains ACTIVE. Read AGENTS, IAM/FEAT-IAM-006-roles-and-sts.md,
-then owning API/usecase/adapter/tests. Finish the exact candidate CI first;
-then implement the pending administrator RoleSession directory/revocation
+then owning API/usecase/adapter/tests. Implement the pending administrator
+RoleSession directory/revocation
 slice in006, followed by the remaining FEAT requirements. Do not shrink the
 goal to R2/R3, duplicate UI or create a generic SessionStore/Redis layer.
 
@@ -60,8 +60,8 @@ Audit canonical remain unchanged. No platform/service/cross-account assumption.
 ## Peers and next shared contract
 
 UX/UI工程师 01a07b21-9a0d-7fd0-b090-7827ce18262e owns independent
-feat/cloud-console-ux and all UI/browser work. Candidate1ebab37a was sent
-explicitly pending CI, not as an accepted donor. Send exact success afterward.
+feat/cloud-console-ux and all UI/browser work. Fixed1ebab37a's exact CI is now
+successful; send this final confirmation without inheriting UI acceptance.
 R3 public endpoints are listAssumableRoles and currentRoleIdentity; no further
 wire change in the source-generation repair. Sparse pages may be empty with
 nextAfter; no management permission needed for self discovery or cached permit.
@@ -76,8 +76,8 @@ The exact new action/read/write/receipt/cursor/audit contracts still need
 freezing and real lock/permission evidence before implementation handoff.
 
 Phase3 01a04149-5dbb-7300-9e4c-31d9e85c8ada receives fixed cumulative donors
-only and preserves its own host/PaaS/release composition. Candidate1ebab37a
-and pending exact CI were sent; do not import its WIP, profile or acceptance.
+only and preserves its own host/PaaS/release composition. Fixed1ebab37a's
+exact CI succeeded; do not import its WIP, profile or acceptance.
 Coordinate new shared actions/ABI before the next public implementation.
 
 ## Runtime discipline

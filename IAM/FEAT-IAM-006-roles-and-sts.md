@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1 角色管理固定 `bf7e8fbbdffe96b8af5b250edd1ed746c5b99265`、R2 同账号承担及 tenant PaaS/Audit 真实授权闭环固定 `0752c602ab4ce6d73a21094c8e9f75a1c8750183` 保留各自已通过的本地/CI证据；新增四类临时Deny/成员关系已真实复现旧RoleSession复活，来源代际及相关身份锁修复的完整真库/并发、实际旧R2保留数据、独立进程与全仓静态检查已通过，独立CI待完成。R3 自服务发现/当前角色显示后端固定 `960416dd85adab225bd97ee89509df04173f978b` 已推送，本地通过、独立CI因IAM测试进程累计超时未通过（执行范围修正归011）；管理型会话目录及 UX/UI、容量和发布未完成，整体006未验收。
+- 状态：R1 角色管理、R2 同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示，以及来源代际/身份锁安全修复，已在累计固定`1ebab37aef4bce12b963f52d3919748a9d50d4c6`通过本地完整真库、旧数据、独立进程、全仓检查和三项独立CI。原R2矩阵未覆盖的四类临时Deny/成员关系复活已补验；旧R3固定960416dd的CI失败不被回填为成功。管理型会话目录及UX/UI、容量和发布未完成，整体006未验收。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -163,7 +163,7 @@ RoleSession增加受保护的`authority_contract_version`，无默认。迁移�
 
 ### R3 自服务发现与角色显示上下文
 
-本节后端已实现并通过下述本地真实门禁，不属于R2已验收接口；固定提交为`960416dd`，独立CI结果与待复验执行边界归011。UX/UI工程师已确认：普通USER可能具有Assume权限却没有Role管理目录/read权限；角色模式也不能依赖切换前偶然保留的名称缓存。先交付这两个权威投影和详情能力，再由010接入真实页面。管理型RoleSession目录/代他人撤销仍是后续独立验收项，不能拿当前by-request自服务或MOCK Sessions tab冒充完成。
+本节后端已实现并通过下述本地真实门禁，初始固定960416dd的独立CI失败，后继累计1ebab37a的三项CI已通过；执行范围与预算归011。UX/UI工程师已确认：普通USER可能具有Assume权限却没有Role管理目录/read权限；角色模式也不能依赖切换前偶然保留的名称缓存。先交付这两个权威投影和详情能力，再由010接入真实页面。管理型RoleSession目录/代他人撤销仍是后续独立验收项，不能拿当前by-request自服务或MOCK Sessions tab冒充完成。
 
 `GET /v1/auth/assumable-roles`是当前有效USER的同账号自服务发现，不要求`iam.role.list/read`，不接受caller account/user/source-session selector。仅返回当次读取中USER的精确Assume权限、Trust、Role状态及必需边界检查通过的候选；不能把本账号所有Role加一个forbidden字段暴露给无目录权限的人。沿现有纯求值/信任/边界拥有者复用规则，不创建第二PDP或新增业务许可，不生成一次虚构的Assume成功决定。
 
@@ -282,7 +282,7 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 - 固定0752真实旧IAM/PaaS产生两份RoleSession、业务Operation/outbox和原私证，当前切换门禁19.689秒通过。旧会话仅取得保护的version1解释标识，当前业务关闭；历史原意图查询、自撤/持有秘密退出及切换后真实dispatcher投递仍可完成。新version2会话实际访问业务，重启/双迁移不复活旧权限、不改原Operation与proof/canonical。故意移除本任务旧发行的必需历史前提时，迁移拒绝且schema/标识/数据无部分效果；恢复准确原字节后才进行正向切换。
 - 两个真实决定均已持有actor外键引用后的有界竞争，稳定复现Role/User边界与附件创建/撤销的锁升级死锁；Policy发布者的同类问题另由实际runtime观测确认。修复保留身份/凭据/平台附件的互斥保护；同修订只一个赢家、末尾单一成功事实、平台grant与reset/status不能绕过。最终策略、附件会话与整个Role/STS fixture均监测40P01，未观测到自动重试掩盖的死锁，不以先前HTTP成功响应作无死锁证据。
 - 准确生产源码树`41e73dfb3261f52cc3aab492879966f6b5603cd0`的干净导出通过Audit数据7.055秒/HTTP3.474秒、IAM非角色269.346秒及完整Role/STS193.866秒、PaaS数据4.825秒。组合进程的旧测试期望IAM26先拒绝真实IAM27；仅将该断言对齐27/15/2后的树`3d9de0f1caaba32732a1962564e2ae226cf7391f`，其余生产/测试代码未变，在新库通过独立进程107.652秒：实际固定IAM21保留22.11秒、R1主体能力保留10.73秒、R2来源保留18.40秒、双IAM/PaaS/Audit业务53.44秒。真实受限数据库登录、跨账号资源/Operation/outbox、角色当前撤权、历史投递及重启均保留；未运行默认延期的其他开发历史链或浏览器fixture，不将SKIP计为通过。
-- 最终同一干净导出通过全仓`go test -race -p 2 -count=1 ./...`（含架构）、`go vet -p 2 ./...`、模块校验、所有OpenAPI生成逐字节一致及Linux amd64全仓构建；外部真库由上述独立门禁证明。发布profile、ServiceIdentity/lookup_service、record8/evidence5/claim7与旧Audit canonical不变，没有容量、HA、UI或签名发行验收结论。独立CI必须绑定后续精确提交，不能复用R2或回填旧R3的失败结果。
+- 最终同一干净导出通过全仓`go test -race -p 2 -count=1 ./...`（含架构）、`go vet -p 2 ./...`、模块校验、所有OpenAPI生成逐字节一致及Linux amd64全仓构建；外部真库由上述独立门禁证明。固定`1ebab37aef4bce12b963f52d3919748a9d50d4c6`的[Verification35123738141](https://github.com/xiak/matrix/actions/runs/35123738141)已通过GitHub API核实精确SHA，go、authority-process、node-process全部completed/success。发布profile、ServiceIdentity/lookup_service、record8/evidence5/claim7与旧Audit canonical不变，没有容量、HA、UI或签名发行验收结论，不回填旧R3的失败结果。
 
 ## 验收
 
