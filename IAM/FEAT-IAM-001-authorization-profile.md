@@ -1,6 +1,6 @@
 # FEAT-IAM-001：业务授权能力目录
 
-- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 的源码 Profile、不可变注册、当前一致性及请求/决定绑定已有固定验证，编译版本及冻结动作族的运行证据归005。CAT-06 只读编辑目录已实现并通过本地真实门禁，待本片独立CI确认；最终产品消费者组合仍待验收，本 FEAT 整体未验收。
+- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 的源码 Profile、不可变注册、当前一致性及请求/决定绑定已有固定验证，编译版本及冻结动作族的运行证据归005。CAT-06 只读编辑目录固定 `40407e27` 的真实门禁及独立CI已通过；最终产品消费者组合仍待验收，本 FEAT 整体未验收。
 - 依赖：[产品契约](./FEAT-IAM-000-product-contract.md)。
 - Owner：IAM 公共契约与现有 authority；产品拥有其业务词汇。
 - 首片：把现有已接受的动作、允许调用服务、资源种类和 scope 收敛为一份不可变目录，所有当前验证和决定路径消费该目录。
@@ -157,7 +157,7 @@ IAM私有assert_allowed_decision由6参替换为8参，追加显式resource_mode
 - 独立双IAM/Audit/PaaS及双dispatcher最终54.76s（包57.486s）通过：从两台IAM实际读取相同完整目录，只用该响应声明编译动作族，真实HTTP发布返回完全相同的版本canonical/digest，再显式关联并由PaaS验证Allow/Deny、默认版本切换及撤权。实际受限runtime登录、双租户资源/配置/Operation/outbox与历史链保持；断开本fixture的replica数据库登录时目录503且不返回旧内容，重连及IAM进程重启后内容/账号一致。这不是数据库主备切换或完整HA验收；本轮未运行opt-in浏览器和旧binary门禁，不把SKIP当通过。
 - 全仓Go race、vet、模块校验、API再生成字节稳定及Linux amd64构建通过。没有UI、SQL/Action/数据库版本、ServiceIdentity/lookup_service/claim7/Audit canonical或安装profile变更。各服务实际23/13/1和发布组合拒绝仍由原process门禁核对；不新增跨profile或签名升级许可。全部客户端退出后按精确ID/标签移除本轮唯一PG容器和空网络，保留合成数据卷；未操作其他任务或远端。
 
-本片独立CI与固定对象确认后交给UX/UI owner接入；页面、客户端、静态host和实际浏览器验收由010独立完成，不继承本后端门禁为UI验收。
+固定 `40407e2710a45ee1000552146cd362740074369a` 的 [Verification 34959581661](https://github.com/xiak/matrix/actions/runs/34959581661) 已通过GitHub API核实精确SHA，go、authority-process、node-process全部completed/success。独立authority job还按原CI复跑固定解释前驱的保留数据与Audit门禁，不增加新的发行兼容声明。固定对象已交给UX/UI owner接入；页面、客户端、完整静态host及实际浏览器验收由010独立完成，不继承本后端门禁为UI验收。
 
 ### 请求、决定及受保护历史契约
 
