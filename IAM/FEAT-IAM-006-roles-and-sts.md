@@ -15,6 +15,7 @@
 | IAM-ROLE-05 | 原始主体、直接承担者、Role、trust revision、source session 可审计 |
 | IAM-ROLE-06 | 主体/角色/信任/附件/边界撤销影响下次请求，不延长或复活旧会话 |
 | IAM-ROLE-07 | console 切换显式提示账号/角色和到期；恢复原身份需要原有效 session |
+| IAM-ROLE-08 | 获授权的管理员在精确Role范围分页查询非秘密会话记录，并显式撤销单个会话；读取、撤销和自服务承担权限分离 |
 
 ## 详细设计
 
@@ -258,6 +259,18 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 - **Audit与业务存储回归**：Audit双authority/旧tenant分区6.930秒、Audit HTTP3.440秒、PaaS数据4.728秒通过。双authority首轮暴露测试仍断言IAM25；只更新为当前26后在新数据库重跑，没有删除版本/函数形状检查或放宽生产实现。公开actor、record8/evidence5/claim7和旧canonical不改。
 
 准确源码干净导出通过全仓race/p2（含架构）、vet/p2、模块校验、全部OpenAPI生成字节稳定及Linux amd64构建。外部真库不以默认跳过的整仓测试代替。该切片已固定推送`960416dd`，独立CI因累计进程超时未通过，详见011。后续已复现的临时Deny及组成员关系撤销后旧RoleSession复活，由本文件来源授权代际切片修复；目录水位不得复用为会话代际或历史proof。
+
+### R3管理员会话目录：下一纵向增量
+
+本节为待实现需求，尚未冻结新增action/请求响应、schema或发布profile，也不把已有自服务按原意图查询/撤销冒充管理目录。UX/UI owner已确认真实页面位于“角色详情 > 角色会话”，整张目录在内容区，单条危险操作用确认框；不需要全账号会话产品页、批量接口或此处的创建/承担入口。其既有任意USER/SERVICE/FEDERATION caller和前端状态推导仅属于preview，不是需要保留的线上契约。
+
+- Account仍来自当前有效USER，Role由准确路径绑定；首片只包含现有真实USER来源的RoleSession。查询可按准确sourceUserId、sessionId和封闭生命周期过滤，不开放模糊全局搜索、IP、服务/联邦caller或来源登录会话信息。目录/逐项撤销使用各自精确权限，不能从Role名称、可读目录或可承担能力推导；受委派的会话管理不是创建策略/修改Trust的权限。
+- 默认列出未显式撤销且未过期的发行记录。服务端以同一数据库观测时间区分未撤销、已过期、已撤销；返回observedAt和每项完整非秘密session及匹配的最小sourceUser显示，避免UI逐项查询User目录。该生命周期不是当前业务许可，不逐行执行完整业务授权来制造“USABLE”，也不把ACTIVE或浏览器时钟当作有效凭据证明。
+- 有界opaque cursor绑定Account、Role、完整过滤、当前调用者授权与准确目录变更水位；每页仍检查当前身份和权限。不得返回秘密、原Assume意图/登录lineage、授权代际、Trust/Policy材料或未授权总数。空items与nextAfter可以同时存在，客户端原样继续；新发行、撤销、权限改变及跨Role/Account/过滤替换都须有真实分页门禁。
+- 每项返回精确ROLE_SESSION目标的撤销capability。UI在选择记录后通过页级命令发起单条危险确认，确认只显示Role、来源User、sessionId和发行/到期时间；capability不是permit。当前发行记录仅允许单向撤销，不为套用CRUD模式新增伪resourceVersion；唯一并发结果由不可变身份、原意图和单向终态确定。
+- 撤销原意图绑定Account/Role/Session、当前操作者和完整请求。同意图精确重放不重复事实，不同意图或已由其他路径撤销不得冒充自己的成功；网络/503等不确定结果保留原意图。必须与原来源自撤销、ROLE持有证明退出、自然到期、身份/Role安全变更串行化，无部分终态/成功事实，不复活旧会话。管理员事实必须携带其真实权限决定，不能套用原无业务decision的自撤销事实或伪造source actor。
+- 提供按精确Role+Session身份的独立单项读取，以当前读取权限核对终态；不能让默认目录过滤、空页或水位冲突代替确认。APPLIED/EQUAL_REPLAY、不同意图竞争、已撤销、已过期但未撤销、锁内资格失效的唯一结果须在接口实施前明确。未知结果时UI保留原requestId，只有权威响应或准确读取证明revokedAt/终态后才显示已撤销；读取资格丢失不补造成功。
+- 继续沿现有API、唯一PDP、Role/Session事务及outbox owner实现，并覆盖双Account、过滤/cursor攻击、同一Session多路径竞争、受限runtime/锁诊断、历史投递、重放/重启和真实消费者。先完成当前已推送安全回滚点的独立CI，再冻结该增量的具体共享契约；UI实现及浏览器验收仍由010 owner独立完成。
 
 ### 来源授权代际本地证据
 
