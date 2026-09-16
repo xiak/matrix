@@ -452,3 +452,29 @@ metadata response. A copied UI action catalog, caller-selected current/history,
 filtered declarations retaining an original digest, directory-as-permit,
 registration/write APIs and a new audit event are `REJECT`. No legacy runtime,
 other worktree or product implementation is imported; acceptance belongs to001.
+
+For IAM/006, the smallest first runtime target is current Account Root management
+of custom Role metadata, immutable same-account USER trust and tenant policy
+attachments. Role credentials and product authorization remain mandatory later
+gates, not implied by CRUD. Fixed `40407e2710a45ee1000552146cd362740074369a`
+Group/Policy transactions, restricted PostgreSQL functions, current PDP,
+credential-generation ownership, strict JSON and ordinary IAM fact/outbox are
+`REUSE`/`ADAPT`; never model a Role as a password-bearing USER or GROUP.
+Fixed `1ad6884ff1f844429b477d5578a039ec809211d7` roles-and-trust.md and
+temporary-credentials-and-sts.md were inspected as `REFERENCE` for product
+separation, double-sided admission, bounded sessions and lineage. Their generic
+signed-token/cache descriptions are `REJECT` as Matrix implementation: use the
+existing opaque, purpose-separated credentials and authoritative current reads.
+No legacy Role/Trust runtime implementation is imported or claimed reverified;
+the earlier fixed legacy rejection remains in force.
+
+On2026-09-16, the primary [AssumeRole API](https://cloud.tencent.com/document/product/1312/48197)
+was rechecked: caller permission and target carrier trust are separate, and
+session policy/duration are distinct inputs. These are `ADAPT` semantics, not
+permission to copy caller SourceIdentity, provider ARNs, provider-specific token
+triples, quotas or unimplemented MFA/IdP/service selectors. The primary
+[role-audit guide](https://cloud.tencent.com/document/product/598/115890) is
+`REFERENCE` for retaining the actual assumer, not authority to infer a stable
+identity from a caller-chosen session label. The role-concepts page timed out;
+its fresh contents were not used as new evidence. Exact Matrix fields, lock
+invariants, actions, budgets and acceptance remain owned by006.
