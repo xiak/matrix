@@ -165,9 +165,10 @@ function currentIdentity(): AccountIdentity {
     user,
     identityKind: "ROOT_IDENTITY",
     policySources: [],
+    permissionBoundary: { accountId: account.id, userId: user.id, resourceVersion: user.resourceVersion, policy: null },
     capabilities: [
-      capability("iam.account.create", "ACCOUNT", "accounts"),
-      capability("iam.account.read", "ACCOUNT", "accounts"),
+      capability("iam.account.create", "ACCOUNT", "collection"),
+      capability("iam.account.read", "ACCOUNT", "collection"),
       capability("iam.account.alias-set", "ACCOUNT", account.id),
       capability("iam.user.list", "ACCOUNT", account.id),
       capability("iam.user.create", "ACCOUNT", account.id),
@@ -234,6 +235,8 @@ function usersWithAttachments(source: AccessWorkspace): UserAccess[] {
       policyAttachments,
       capabilities: [
       capability("iam.user.read", "USER", user.id),
+      capability("iam.user.permission-boundary.set", "USER", user.id),
+      capability("iam.user.permission-boundary.remove", "USER", user.id),
       capability("iam.user.update", "USER", user.id),
       capability("iam.user.delete", "USER", user.id,
         hasInstallationAuthority ? "INSTALLATION_AUTHORITY_PROTECTED" : user.status === "ACTIVE" ? "TARGET_MUST_BE_DISABLED" : null),

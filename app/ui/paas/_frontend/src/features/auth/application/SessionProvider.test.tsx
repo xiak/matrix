@@ -19,6 +19,7 @@ function Probe() {
         type="button"
       >change</button>
       <button onClick={() => void session.logout()} type="button">logout</button>
+      <button onClick={() => session.expire(secretCredential)} type="button">expire</button>
     </div>
   );
 }
@@ -63,6 +64,27 @@ afterEach(() => {
 });
 
 describe("SessionProvider", () => {
+  it("clears private identity when the current bearer has expired", async () => {
+    const screen = render(<SessionProvider repository={repository()}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("expire")));
+    expect(screen.getByTestId("phase").textContent).toBe("anonymous");
+    expect(screen.getByTestId("principal").textContent).toBe("none");
+    expect(screen.container.textContent).not.toContain(secretCredential);
+  });
+
+  it("does not expire a new login because an older bearer's request returned late", async () => {
+    const iam = repository();
+    const initial = iam.login;
+    let logins = 0;
+    iam.login = async (command) => ({ ...await initial(command), credential: logins++ === 0 ? secretCredential : `${secretCredential}-new` });
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("expire")));
+    expect(screen.getByTestId("phase").textContent).toBe("authenticated");
+    expect(screen.getByTestId("principal").textContent).toBe("admin");
+  });
   it("keeps the bearer only in provider memory", async () => {
     const screen = render(<SessionProvider repository={repository()}><Probe /></SessionProvider>);
     await act(async () => fireEvent.click(screen.getByText("login")));

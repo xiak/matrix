@@ -5,6 +5,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useSession, useSessionCredential } from "./SessionProvider";
 import type {
   AccountCommand,
+  AccountPolicy,
   CapabilityRestriction,
   DirectoryPage,
   Group,
@@ -13,7 +14,8 @@ import type {
   GroupMembership,
   GroupMembershipPage,
   GroupPolicyAttachment,
-  PolicyAttachmentRevocation
+  PolicyAttachmentRevocation,
+  UserPermissionBoundary
 } from "../domain/accounts";
 import { type AccessWorkspace, type AccessWorkspaceCommand } from "../domain/accessWorkspace";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
@@ -23,6 +25,19 @@ import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
+
+export type UserBoundarySnapshot = {
+  user: AccountUserScene;
+  boundary: UserPermissionBoundary;
+  policies: AccountPolicy[];
+  policiesAvailable: boolean;
+};
+export type UserBoundaryClient = {
+  accountId: string;
+  load(userId: string): Promise<UserBoundarySnapshot>;
+  set(userId: string, command: { policyId: string; policyResourceVersion: number; resourceVersion: number; requestId: string }): Promise<UserPermissionBoundary>;
+  remove(userId: string, command: { resourceVersion: number; requestId: string }): Promise<UserPermissionBoundary>;
+};
 
 export type GroupAccessClient = {
   accountId: string;
@@ -58,6 +73,7 @@ type AccountAccess = {
   clearWorkspaceError(): void;
   clearFeedback(): void;
   groups: GroupAccessClient | null;
+  permissionBoundaries: UserBoundaryClient | null;
   scene: AccountAccessScene | null;
   loading: boolean;
   busy: boolean;
@@ -117,6 +133,7 @@ function accountCommandAvailable(scene: AccountAccessScene, command: AccountComm
 export function AccountAccessProvider({ children, repository = httpAccountRepository, active = true }: { children: ReactNode; repository?: AccountRepository; active?: boolean }) {
   const credential = useSessionCredential();
   const session = useSession();
+  const expireSession = session.expire;
   const tenantId = session.current?.session.organizationId;
   const principalId = session.current?.session.principalId;
   const [scene, setScene] = useState<AccountAccessScene | null>(null);
@@ -165,7 +182,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         findActionCapability(identity.capabilities, action, "ACCOUNT", id)?.available === true;
       const [users, accounts, tenantPolicies, platformPolicies] = await Promise.all([
         currentCapability("iam.user.list") ? readWhenAuthorized(() => repository.listUsers(credential!)) : null,
-        currentCapability("iam.account.read", "accounts") ? readWhenAuthorized(() => repository.listAccounts(credential!)) : null,
+        currentCapability("iam.account.read", "collection") ? readWhenAuthorized(() => repository.listAccounts(credential!)) : null,
         currentCapability("iam.policy.list") ? readWhenAuthorized(() => repository.listPolicies(credential!, false)) : null,
         readWhenAuthorized(() => repository.listPolicies(credential!, true))
       ]);
@@ -212,6 +229,41 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       revokePolicyAttachment: (attachmentId, command) => repository.revokePolicyAttachment(credential, attachmentId, command)
     };
   }, [active, credential, repository, scene, tenantId]);
+
+  const permissionBoundaries = useMemo<UserBoundaryClient | null>(() => {
+    const boundaryRepository = repository.permissionBoundaries;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !boundaryRepository) return null;
+    const accountId = scene.accountId;
+    const target = (userId: string) => {
+      if (!userId || userId === scene.accountOwner.id) throw new Error("INVALID_IAM_USER_TARGET");
+      return userId;
+    };
+    const scoped = async <T,>(request: Promise<T>): Promise<T> => {
+      try { return await request; }
+      catch (failure) {
+        if (failure instanceof HttpProblem && failure.status === 401 && expireSession(credential)) {
+          setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+        }
+        throw failure;
+      }
+    };
+    return {
+      accountId,
+      load: (userId) => scoped((async () => {
+        const access = await repository.getUser(credential, target(userId));
+        if (access.user.id !== userId || access.user.accountId !== accountId) throw new Error("INVALID_IAM_TENANT");
+        const boundary = await boundaryRepository.read(credential, accountId, userId);
+        if (boundary.accountId !== accountId || boundary.userId !== userId) throw new Error("INVALID_IAM_TENANT");
+        if (boundary.resourceVersion !== access.user.resourceVersion) throw new HttpProblem(409, "IAM_USER_REVISION_CHANGED");
+        const directory = scene.tenantPoliciesAvailable ? await readWhenAuthorized(() => repository.listPolicies(credential, false)) : null;
+        if (directory && (directory.accountId !== accountId || directory.scope !== "TENANT")) throw new Error("INVALID_IAM_TENANT");
+        const policies = directory?.items ?? [];
+        return { user: buildAccountUserScene({ id: accountId, loginAlias: scene.loginAlias }, policies, access), boundary, policies, policiesAvailable: directory !== null };
+      })()),
+      set: (userId, command) => scoped(boundaryRepository.set(credential, accountId, target(userId), command)),
+      remove: (userId, command) => scoped(boundaryRepository.remove(credential, accountId, target(userId), command))
+    };
+  }, [active, credential, expireSession, repository, scene, tenantId]);
 
   const loadUsersPage = useCallback(async (after: string) => {
     if (!active || !credential || !scene || loading || mutationPending.current) return;
@@ -286,6 +338,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     policyDirectoryView,
     userDirectoryView,
     groups,
+    permissionBoundaries,
     workspace, workspaceError,
     clearWorkspaceError, clearFeedback,
     async executeWorkspace(command) {
@@ -323,7 +376,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

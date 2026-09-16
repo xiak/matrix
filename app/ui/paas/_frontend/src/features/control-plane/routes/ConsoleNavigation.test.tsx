@@ -145,21 +145,45 @@ describe("Console navigation", () => {
     expect(accepted).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves encoded entity queries and navigates back to the same-path directory", async () => {
+  it("changes encoded entity queries and returns to the directory without fetching a page tree", async () => {
     const href = "/console/access/groups/?id=group%2Fexample";
-    const request = hold(href);
     const user = userEvent.setup();
     render(<Harness initialHref="/console/access/groups/" />);
     await user.click(screen.getByRole("link", { name: "Group detail" }));
-    expect(screen.getByLabelText("Pending destination").textContent).toBe(href);
-    expect(screen.getByRole("link", { name: "Group detail" }).getAttribute("aria-busy")).toBe("true");
-    await act(async () => request.release());
-    expect(screen.getByLabelText("Current content").textContent).toBe(href);
+    expect(window.location.pathname + window.location.search).toBe(href);
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
+    expect(screen.getByLabelText("Content fallback").textContent).toBe("hidden");
     await user.click(screen.getByRole("link", { name: "Group detail" }));
-    expect(router.push).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("link", { name: "Group directory" }));
-    expect(router.push).toHaveBeenLastCalledWith("/console/access/groups/", { scroll: false });
-    expect(screen.getByLabelText("Current content").textContent).toBe("/console/access/groups/");
+    expect(window.location.pathname + window.location.search).toBe("/console/access/groups/");
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it("keeps client query navigation behind the draft guard", async () => {
+    const user = userEvent.setup();
+    render(<Harness initialHref="/console/access/groups/" withDraft />);
+    await user.type(screen.getByLabelText("Workflow draft"), "keep membership changes");
+    await user.click(screen.getByRole("link", { name: "Group detail" }));
+    expect(window.location.search).toBe("");
+    expect(router.push).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Leave" }));
+    expect(window.location.search).toBe("?id=group%2Fexample");
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it("honors query replacement without a page request or another history entry", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/console/access/groups/?id=group%2Fexample");
+    const replace = vi.spyOn(window.history, "replaceState");
+    function ReplaceQuery() {
+      const navigation = useConsoleNavigation();
+      return <button onClick={() => navigation.navigate("/console/access/groups/?id=another", { replace: true })}>Replace query</button>;
+    }
+    render(<ConsoleNavigationProvider selection={parseControlPlanePathname("/console/access/groups/")}><ReplaceQuery /></ConsoleNavigationProvider>);
+    await user.click(screen.getByRole("button", { name: "Replace query" }));
+    expect(replace).toHaveBeenCalledExactlyOnceWith(null, "", "/console/access/groups/?id=another");
+    expect(router.replace).not.toHaveBeenCalled();
+    replace.mockRestore();
   });
   it("exposes a real pending destination while a route suspends and clears it on commit", async () => {
     const request = hold("/console/resources/");

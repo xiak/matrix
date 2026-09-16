@@ -8,6 +8,7 @@ const user = {
   loginName: "alex", displayName: "Alex", status: "ACTIVE", mustChangePassword: false, resourceVersion: 2,
   createdAt: timestamp, updatedAt: timestamp
 };
+const permissionBoundary = { apiVersion, kind: "UserPermissionBoundary", accountId: user.accountId, userId: user.id, resourceVersion: user.resourceVersion, policy: null };
 const account = {
   apiVersion, kind: "Account", id: "account-acme", displayName: "Acme", status: "ACTIVE",
   rootIdentity: { principalId: "root-acme", loginName: "acme.owner" }, loginAlias: "acme", resourceVersion: 2,
@@ -42,8 +43,8 @@ function capability(action: string, kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_
 
 function currentCapabilities(available = true) {
   return [
-    capability("iam.account.create", "ACCOUNT", "accounts", available),
-    capability("iam.account.read", "ACCOUNT", "accounts", available),
+    capability("iam.account.create", "ACCOUNT", "collection", available),
+    capability("iam.account.read", "ACCOUNT", "collection", available),
     capability("iam.account.alias-set", "ACCOUNT", account.id, available),
     capability("iam.user.list", "ACCOUNT", account.id, available),
     capability("iam.user.create", "ACCOUNT", account.id, available),
@@ -58,6 +59,8 @@ function userCapabilities(attachments = [tenantAttachment]) {
     capability("iam.user.read", "USER", user.id),
     capability("iam.user.update", "USER", user.id),
     capability("iam.user.delete", "USER", user.id, false, "TARGET_MUST_BE_DISABLED"),
+    capability("iam.user.permission-boundary.set", "USER", user.id),
+    capability("iam.user.permission-boundary.remove", "USER", user.id),
     capability("iam.user.set-status", "USER", user.id),
     capability("iam.user.reset-password", "USER", user.id),
     capability("iam.policy-attachment.create", "USER", user.id),
@@ -284,6 +287,102 @@ describe("IAM HTTP group boundary", () => {
 });
 
 describe("IAM HTTP account boundary", () => {
+  it("requires an explicit boundary bound to the current account, user and user revision", async () => {
+    const reference = { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, contentDigest: `sha256:${"a".repeat(64)}` };
+    const current = { apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policySources: [], permissionBoundary, capabilities: currentCapabilities() };
+    reply({ ...current, permissionBoundary: { ...permissionBoundary, policy: reference } });
+    const identity = await httpAccountRepository.currentIdentity("bearer");
+    expect(identity.permissionBoundary.policy).toEqual(reference);
+    expect(identity.policySources).toEqual([]);
+    for (const boundary of [
+      undefined, null, {},
+      { ...permissionBoundary, policy: undefined },
+      { ...permissionBoundary, accountId: "other-account" },
+      { ...permissionBoundary, userId: "other-user" },
+      { ...permissionBoundary, resourceVersion: user.resourceVersion + 1 },
+      { ...permissionBoundary, policy: {} },
+      { ...permissionBoundary, policy: { ...reference, contentDigest: "a".repeat(64) } },
+      { ...permissionBoundary, policy: { ...reference, contentDigest: `sha256:${"A".repeat(64)}` } },
+      { ...permissionBoundary, policy: { ...reference, allowed: true } },
+      { ...permissionBoundary, available: true }
+    ]) {
+      reply({ ...current, permissionBoundary: boundary });
+      await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    const root = { ...user, id: account.rootIdentity.principalId };
+    const rootBoundary = { ...permissionBoundary, userId: root.id };
+    reply({ ...current, user: root, identityKind: "ROOT_IDENTITY", permissionBoundary: rootBoundary });
+    expect((await httpAccountRepository.currentIdentity("bearer")).permissionBoundary.policy).toBeNull();
+    reply({ ...current, user: root, identityKind: "ROOT_IDENTITY", permissionBoundary: { ...rootBoundary, policy: reference } });
+    await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    reply({ ...current, capabilities: currentCapabilities().map((item) => item.resource.id === "collection" ? { ...item, resource: { ...item.resource, id: "accounts" } } : item) });
+    await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("reads and changes only the exact user's boundary with explicit concurrency and request identity", async () => {
+    const client = httpAccountRepository.permissionBoundaries!;
+    let fetcher = reply(permissionBoundary);
+    expect(await client.read("bearer", account.id, user.id)).toMatchObject({ userId: user.id, resourceVersion: user.resourceVersion, policy: null });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/users/${user.id}/permission-boundary`);
+    expect(firstRequest(fetcher)[1].body).toBeUndefined();
+    const reference = { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, contentDigest: `sha256:${"b".repeat(64)}` };
+    const set = { policyId: customerPolicy.id, policyResourceVersion: customerPolicy.resourceVersion, resourceVersion: user.resourceVersion, requestId: "request-boundary-set" };
+    fetcher = reply({ ...permissionBoundary, resourceVersion: user.resourceVersion + 1, policy: reference });
+    expect((await client.set("bearer", account.id, user.id, { ...set, accountId: "forged", compiled: {} } as typeof set)).policy).toEqual(reference);
+    expect(firstRequest(fetcher)[1].method).toBe("PUT");
+    expect(requestBody(fetcher)).toEqual(set);
+    fetcher = reply({ ...permissionBoundary, resourceVersion: user.resourceVersion + 2 });
+    const remove = { resourceVersion: user.resourceVersion + 1, requestId: "request-boundary-remove" };
+    expect((await client.remove("bearer", account.id, user.id, remove)).policy).toBeNull();
+    expect(firstRequest(fetcher)[1].method).toBe("DELETE");
+    expect(requestBody(fetcher)).toEqual(remove);
+  });
+
+  it("rejects incomplete, foreign and unexpected boundary write outcomes", async () => {
+    const client = httpAccountRepository.permissionBoundaries!;
+    const reference = { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, contentDigest: `sha256:${"c".repeat(64)}` };
+    const set = { policyId: customerPolicy.id, policyResourceVersion: customerPolicy.resourceVersion, resourceVersion: user.resourceVersion, requestId: "request-set" };
+    for (const result of [
+      permissionBoundary,
+      { ...permissionBoundary, resourceVersion: user.resourceVersion + 1 },
+      { ...permissionBoundary, resourceVersion: user.resourceVersion + 2, policy: reference },
+      { ...permissionBoundary, resourceVersion: user.resourceVersion + 1, policy: { ...reference, policyId: "other-policy" } },
+      { ...permissionBoundary, resourceVersion: user.resourceVersion + 1, userId: "other-user", policy: reference },
+      { ...permissionBoundary, resourceVersion: user.resourceVersion + 1, accountId: "other-account", policy: reference }
+    ]) {
+      reply(result);
+      await expect(client.set("bearer", account.id, user.id, set)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    reply({ ...permissionBoundary, resourceVersion: user.resourceVersion + 1, policy: reference });
+    await expect(client.remove("bearer", account.id, user.id, { resourceVersion: user.resourceVersion, requestId: "request-remove" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    reply({ ...permissionBoundary, policy: null, accountId: "other-account" });
+    await expect(client.read("bearer", account.id, user.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("retries an uncertain boundary request byte-for-byte without replacing its request identity", async () => {
+    const reference = { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, contentDigest: `sha256:${"d".repeat(64)}` };
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ code: "IAM_UNAVAILABLE" }), { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...permissionBoundary, resourceVersion: user.resourceVersion + 1, policy: reference }), { status: 200 }));
+    vi.stubGlobal("fetch", fetcher);
+    const command = { policyId: customerPolicy.id, policyResourceVersion: customerPolicy.resourceVersion, resourceVersion: user.resourceVersion, requestId: "request-uncertain" };
+    await expect(httpAccountRepository.permissionBoundaries!.set("bearer", account.id, user.id, command)).rejects.toMatchObject({ status: 503 });
+    await httpAccountRepository.permissionBoundaries!.set("bearer", account.id, user.id, command);
+    expect(fetcher.mock.calls[0]).toEqual(fetcher.mock.calls[1]);
+  });
+
+  it("requires both exact USER boundary capabilities without treating them as grants", async () => {
+    const current = { user, policyAttachments: [], capabilities: userCapabilities([]) };
+    reply(current);
+    expect((await httpAccountRepository.getUser("bearer", user.id)).capabilities).toHaveLength(9);
+    for (const capabilities of [
+      current.capabilities.filter((item) => !item.action.includes("permission-boundary")),
+      current.capabilities.map((item) => item.action === "iam.user.permission-boundary.set" ? { ...item, resource: { kind: "ACCOUNT", id: account.id } } : item),
+      current.capabilities.map((item) => item.action === "iam.user.permission-boundary.remove" ? { ...item, resource: { kind: "USER", id: "other-user" } } : item)
+    ]) {
+      reply({ ...current, capabilities });
+      await expect(httpAccountRepository.getUser("bearer", user.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
   it.each([undefined, true, false])("sends only the password session policy %s, never a retained-session selector", async (revokeOtherSessions) => {
     const fetcher = reply({ changedAt: timestamp, bootstrapFileRetirable: false });
     const command = { currentPassword: "Current-Only-Test-Password-49!", newPassword: "New-Only-Test-Password-73!", revokeOtherSessions, sessionId: "forged-session", tenantId: "forged-tenant" };
@@ -313,7 +412,7 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("parses current attachments without interpreting policy names", async () => {
-    reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policySources: directSources(tenantAttachment, platformAttachment), capabilities: currentCapabilities() });
+    reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policySources: directSources(tenantAttachment, platformAttachment), permissionBoundary, capabilities: currentCapabilities() });
     const identity = await httpAccountRepository.currentIdentity("bearer");
     expect(identity.policySources.map((item) => item.attachment.policyId)).toEqual(["system.platform-operator", "system.paas-viewer"]);
     for (const patch of [
@@ -327,7 +426,7 @@ describe("IAM HTTP account boundary", () => {
       { roles: ["PLATFORM_OPERATOR"] },
       { apiVersion: "future/v2" }
     ]) {
-      reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policySources: [], capabilities: currentCapabilities(false), ...patch });
+      reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policySources: [], permissionBoundary, capabilities: currentCapabilities(false), ...patch });
       await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });
@@ -337,7 +436,7 @@ describe("IAM HTTP account boundary", () => {
       groupId: "group-a", userId: user.id, createdBy: account.rootIdentity.principalId, resourceVersion: 1,
       createdAt: timestamp, updatedAt: timestamp };
     const inherited = { kind: "GROUP", attachment: { ...tenantAttachment, id: "attachment-group", target: { kind: "GROUP", id: membership.groupId } }, membership };
-    const base = { apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", capabilities: currentCapabilities(false) };
+    const base = { apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", permissionBoundary, capabilities: currentCapabilities(false) };
     reply({ ...base, policySources: [inherited, ...directSources(tenantAttachment)] });
     const identity = await httpAccountRepository.currentIdentity("bearer");
     expect(identity.policySources.map((source) => source.kind)).toEqual(["GROUP", "DIRECT"]);
@@ -397,7 +496,7 @@ describe("IAM HTTP account boundary", () => {
     ]);
     for (const item of [
       { account, capabilities: accountAccess().capabilities.slice(1) },
-      { account, capabilities: [...accountAccess().capabilities, capability("iam.account.create", "ACCOUNT", "accounts")] },
+      { account, capabilities: [...accountAccess().capabilities, capability("iam.account.create", "ACCOUNT", "collection")] },
       { account: { ...account, id: "another-account" }, capabilities: accountAccess().capabilities }
     ]) {
       reply({ apiVersion, kind: "AccountList", items: [item] });

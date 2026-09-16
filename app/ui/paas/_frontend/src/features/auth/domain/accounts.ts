@@ -24,6 +24,8 @@ export type IamAction =
   | "iam.user.read"
   | "iam.user.update"
   | "iam.user.delete"
+  | "iam.user.permission-boundary.set"
+  | "iam.user.permission-boundary.remove"
   | "iam.policy.list"
   | "iam.user.set-status"
   | "iam.user.reset-password"
@@ -114,7 +116,23 @@ export type AccountIdentity = {
   user: User;
   identityKind: IdentityKind;
   policySources: PolicyGrantSource[];
+  permissionBoundary: UserPermissionBoundary;
   capabilities: ActionCapability[];
+};
+
+export type PolicyVersionReference = {
+  policyId: string;
+  versionId: string;
+  contentDigest: string;
+};
+
+// A bound revision of the user's permission ceiling, never a positive grant.
+// Only an explicit null policy means that this user has no tenant boundary.
+export type UserPermissionBoundary = {
+  accountId: string;
+  userId: string;
+  resourceVersion: number;
+  policy: PolicyVersionReference | null;
 };
 
 export type GroupPolicyAttachment = Omit<UserPolicyAttachment, "target" | "scope" | "installationId"> & {

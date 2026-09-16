@@ -12,7 +12,8 @@ import type {
   GroupPolicyAttachment,
   PolicyAttachmentRevocation,
   PolicyDirectory,
-  UserAccess
+  UserAccess,
+  UserPermissionBoundary
 } from "../domain/accounts";
 import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWorkspace";
 import type { UserBatchCommand } from "../domain/userBatch";
@@ -28,6 +29,21 @@ export interface IamRepository {
 }
 
 export interface AccountRepository {
+  // Live boundary lifecycle is separate from the isolated MOCK workspace.
+  // Account/user IDs bind responses locally; they never select HTTP authority.
+  permissionBoundaries?: {
+    read(credential: string, accountId: string, userId: string): Promise<UserPermissionBoundary>;
+    set(credential: string, accountId: string, userId: string, command: {
+      policyId: string;
+      policyResourceVersion: number;
+      resourceVersion: number;
+      requestId: string;
+    }): Promise<UserPermissionBoundary>;
+    remove(credential: string, accountId: string, userId: string, command: {
+      resourceVersion: number;
+      requestId: string;
+    }): Promise<UserPermissionBoundary>;
+  };
   // Explicit, isolated DEMO capabilities. The live HTTP adapter never exposes them.
   executeUserBatch?(credential: string, command: UserBatchCommand): Promise<{ workspace: AccessWorkspace }>;
   workspace?: {

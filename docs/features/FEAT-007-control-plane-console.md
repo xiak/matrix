@@ -276,6 +276,12 @@ Go embeds underscore-prefixed files throughout this owned generated directory,
 as required by [Go's directory embedding rules](https://pkg.go.dev/embed#hdr-Directives).
 Source, assets and build scripts participate in the deterministic build ID.
 
+The static host admits only bounded, singleton `id` queries on owned IAM
+workspace routes and the four `method` values on policy creation. Invalid UTF-8,
+control characters, duplicate values, unknown keys and authority selectors are
+rejected. These queries never select different static content or grant API
+authority; direct workspace entry preserves the same CSP and offline assets.
+
 The first end-to-end component chain is:
 
 ```text
@@ -610,47 +616,11 @@ unchanged by this UX work.
 
 #### Fixed IAM console contract
 
-The live access-management slice adapts only the IAM owner revisions fixed in
-the corresponding [adoption review](../adoption/FEAT-007-control-plane-console.md).
-Acceptance at this boundary requires all of the following:
-
-- `AccountPolicy`, `PolicyDirectory` and `UserPolicyAttachment` replace the
-  superseded built-in-role projection. Current identity and user rows contain
-  current direct `USER` associations only. New users are ungranted.
-- Tenant and installation policy directories are independently authorized,
-  stable-ID sorted complete snapshots of at most 256 metadata records. A 403
-  degrades only its directory. Any other read or validation error fails the
-  live scene and never falls back to MOCK.
-- Missing installation policy metadata falls back to the stable policy ID; it
-  does not hide a current direct attachment. The UI never manufactures policy
-  content, subjects, group inheritance, permission-boundary results or a final
-  allow decision from list responses.
-- Create/revoke association requests carry the selected policy revision or
-  current attachment revision. If a policy changes before submission, the
-  selector clears and requires an explicit new choice.
-- `CurrentIdentity` reports direct and group-derived policy sources without
-  flattening their provenance. Group directories, group details, memberships
-  and group policy attachments keep separate IDs, resource versions and
-  actor-relative capabilities. A group is never presented as a login identity,
-  resource owner, role or final authorization decision.
-- Account, user, group and membership pages are bounded server reads. Their
-  signed continuation is pass-through state outside the strict transport
-  adapter; it is never parsed as a resource ID or authority. Search covers only
-  records already loaded and the UI labels that scope. The UI does not derive
-  an authoritative member total from pages, exhaust the directory to
-  manufacture one, or issue per-row user reads.
-  A cached same-account user summary may decorate the stable membership user ID
-  but cannot determine existence, authority or operation availability.
-- Group creation creates only the group. Each membership or direct-policy
-  change is one versioned relationship command. An uncertain outcome keeps the
-  exact request ID and payload for an equal retry; a conflict refreshes current
-  state, closes the stale editor and requires the user to express a new intent.
-- Live page visibility follows actual directory authorization and explicit
-  capabilities. Unsupported role, federation, key, simulator and
-  policy-authoring behavior remains an isolated repository capability for the
-  one-click MOCK experience; its state cannot grant live access. The MOCK group
-  workspace remains available for UX review but never substitutes for a failed
-  or forbidden live group request.
+The live IAM contract, per-slice implementation status and acceptance belong to
+[FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md); fixed source decisions belong
+to the [adoption review](../adoption/FEAT-007-control-plane-console.md).
+This FEAT owns the shared shell, navigation, visual system and isolated MOCK
+experience. Its UX evidence does not accept an unintegrated live IAM runtime.
 
 #### CAM implementation slices and acceptance
 
@@ -1038,7 +1008,12 @@ inset. Console navigation disables framework document-scroll adjustment because
 the stable ContentPage viewport owns route scroll position; navigation must not
 consume that inset or make content touch the context header. Same-path
 collections, details and workflows contribute distinct scroll keys, replacing
-feature-level `scrollIntoView` calls that could collapse the shared gutter. The
+feature-level `scrollIntoView` calls that could collapse the shared gutter.
+Same-path workspace query changes use Next's supported native-history
+integration instead of fetching another page tree. They retain draft guarding,
+encoded entity IDs, replacement and Back/Forward behavior; cross-page visits
+continue through the prefetched router transition and delayed content fallback.
+The
 content begins with meaningful resource summary, tabs or data, not another
 generic title, return toolbar or repeated preview banner. Header MOCK identity and mutation-level limitations
 remain visible; errors, risks and destructive confirmations are never hidden
@@ -1235,21 +1210,10 @@ account recovery and settings require their own capabilities. Unknown owner
 display names or statuses and absent user access profiles are not fabricated
 from the current actor or interpreted as disabled.
 
-The live account-access projection consumes the fixed IAM revisions recorded
-in the [adoption review](../adoption/FEAT-007-control-plane-console.md).
-`CurrentIdentity` controls which
-account-wide directories may be requested. Every `UserAccess` and
-`AccountAccess` entry then carries an exact action, resource kind and resource
-ID for each supported operation. The scene may use that projection to show an
-entry, disable it and translate a closed restriction reason; it must not infer
-authority from an administrator policy name, an installation-scoped badge or
-a successful list read. Missing, duplicate, foreign, extra or unknown
-capabilities invalidate the response. Availability is advisory interaction
-data, never a client-side permit: mutations retain target identity and resource
-version and IAM reauthorizes against current state. Fixed group directory,
-detail, membership and direct group-policy relationship actions use the same
-rule. Batch, role, custom-policy and simulator actions remain explicit DEMO
-repository extensions until their own fixed IAM contracts are accepted.
+The live account-access projection and exact actor-relative capabilities are
+specified in [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md). Rendering
+availability is advisory interaction data, not a client-side permit; MOCK
+extensions cannot grant live access.
 
 The directory table contains only daily manageable Users, with independent
 type, access-method, authorization-source and status columns. Status/source
@@ -1562,14 +1526,10 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
 
-- The current Theme/component, navigation and CAM-style IAM slice has 502 frontend tests across 35 test
-  files; the complete suite passes at the default timeout with one worker
-  (the long user-selection journey retains its explicit 15s timeout). A
-  two-worker run under local contention completed 499 tests while three existing
-  policy-authoring journeys crossed only the five-second test ceiling; each
-  passed independently in 4.02–4.79 seconds. Worker concurrency remains bounded
-  because simultaneously constructing all jsdom interaction trees exhausts
-  local execution capacity. Functional test success is not a browser-performance
+- The current Theme/component, navigation and CAM-style IAM slice has 528 frontend
+  tests across 36 test files. The complete suite passed on 2026-09-16 with the
+  existing bounded worker configuration and timeouts; no timeout was extended
+  for this slice. Functional test success is not a browser-performance
   acceptance claim.
   Live user and tenant cursor actions own their repository reads independently:
   user paging does not reload the current identity, tenant directory, policy
@@ -1594,7 +1554,7 @@ and `git diff --check` gates must pass on the same committed worktree.
   and table-local horizontal scrolling with no page overflow. Project permissions
   and request-tag conditions remain unavailable; no Tencent authorization was
   created or changed.
-  All 63 Header/shell and appearance regression cases across seven files pass, including
+  Header/shell and appearance regression cases pass, including
   immediate directory content without a dimming stage and retained compact-panel
   dismissal, shared-trigger Enter/Space activation, expanded/panel semantics and
   selection/closure focus restoration.

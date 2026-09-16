@@ -29,8 +29,8 @@ const account = { id: "org-xiak", displayName: "Example", status: "ACTIVE" as co
 const rootUser: User = { id: "admin", accountId: "org-xiak", loginName: "admin", displayName: "Administrator", status: "ACTIVE", mustChangePassword: false, resourceVersion: 1 };
 const capability = (action: IamAction, kind: ActionCapability["resource"]["kind"], id: string, reason: CapabilityRestriction | null = null): ActionCapability => ({ action, resource: { kind, id }, available: reason === null, restrictionReason: reason });
 const currentCapabilities = (available = true): ActionCapability[] => [
-  capability("iam.account.create", "ACCOUNT", "accounts", available ? null : "AUTHORITY_REQUIRED"),
-  capability("iam.account.read", "ACCOUNT", "accounts", available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.account.create", "ACCOUNT", "collection", available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.account.read", "ACCOUNT", "collection", available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.account.alias-set", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.user.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.user.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
@@ -43,11 +43,12 @@ const userAccess = (name: string): UserAccess => {
   return { user, policyAttachments: [], capabilities: [
     capability("iam.user.read", "USER", user.id), capability("iam.user.update", "USER", user.id),
     capability("iam.user.delete", "USER", user.id, "TARGET_MUST_BE_DISABLED"),
+    capability("iam.user.permission-boundary.set", "USER", user.id), capability("iam.user.permission-boundary.remove", "USER", user.id),
     capability("iam.user.set-status", "USER", user.id), capability("iam.user.reset-password", "USER", user.id),
     capability("iam.policy-attachment.create", "USER", user.id), capability("iam.platform-policy-attachment.create", "USER", user.id)
   ] };
 };
-const identity: AccountIdentity = { account, user: rootUser, identityKind: "ROOT_IDENTITY", policySources: [], capabilities: currentCapabilities() };
+const identity: AccountIdentity = { account, user: rootUser, identityKind: "ROOT_IDENTITY", policySources: [], permissionBoundary: { accountId: account.id, userId: rootUser.id, resourceVersion: rootUser.resourceVersion, policy: null }, capabilities: currentCapabilities() };
 const users: UserAccess[] = ["lin", "chen"].map(userAccess);
 const reviewUsers: UserAccess[] = [...users, ...["qiao", "wu"].map(userAccess)];
 const login: IamRepository = { login: async () => ({ credential: "preview-only", mustChangePassword: false, session: { id: "session", organizationId: "org-xiak", principalId: "admin", status: "ACTIVE", issuedAt: "2026-09-09T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z" } }), changePassword: async () => {}, logout: async () => {} };

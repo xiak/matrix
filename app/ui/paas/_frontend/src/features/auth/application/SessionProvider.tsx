@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode
 } from "react";
@@ -29,6 +30,7 @@ type SessionContextValue = {
   login(loginName: string, password: string): Promise<LoginOutcome | null>;
   changePassword(currentPassword: string, newPassword: string): Promise<boolean>;
   logout(): Promise<boolean>;
+  expire(expectedCredential: string): boolean;
 };
 
 type CredentialContextValue = {
@@ -71,15 +73,23 @@ export function SessionProvider({
   const [phase, setPhase] = useState<SessionPhase>("anonymous");
   const [current, setCurrent] = useState<AuthenticatedSession | null>(null);
   const [credential, setCredential] = useState<string | null>(null);
+  const credentialRef = useRef<string | null>(null);
   const [error, setError] = useState<SessionErrorCode | null>(null);
   const clearError = useCallback(() => { setError(null); }, []);
 
   const forget = useCallback(() => {
+    credentialRef.current = null;
     setCredential(null);
     setCurrent(null);
     setError(null);
     setPhase("anonymous");
   }, []);
+
+  const expire = useCallback((expectedCredential: string) => {
+    if (credentialRef.current !== expectedCredential) return false;
+    forget();
+    return true;
+  }, [forget]);
 
   useEffect(() => {
     if (!current) return;
@@ -96,6 +106,7 @@ export function SessionProvider({
     setError(null);
     try {
       const result = await repository.login({ loginName, password });
+      credentialRef.current = result.credential;
       setCredential(result.credential);
       setCurrent({ loginName, session: result.session });
       const outcome: LoginOutcome = result.mustChangePassword
@@ -104,6 +115,7 @@ export function SessionProvider({
       setPhase(outcome);
       return outcome;
     } catch (loginError) {
+      credentialRef.current = null;
       setCredential(null);
       setCurrent(null);
       setError(authenticationError(loginError));
@@ -165,8 +177,9 @@ export function SessionProvider({
     clearError,
     login,
     changePassword,
-    logout
-  }), [changePassword, clearError, current, error, login, logout, phase]);
+    logout,
+    expire
+  }), [changePassword, clearError, current, error, expire, login, logout, phase]);
   const credentialValue = useMemo(() => ({ credential }), [credential]);
 
   return (

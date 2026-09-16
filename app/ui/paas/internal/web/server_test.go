@@ -105,6 +105,63 @@ func TestContentSecurityPolicyAllowsOnlyExactInlineScripts(t *testing.T) {
 	}
 }
 
+func TestHandlerServesBoundedClientWorkspaceQueriesWithoutSelectingContent(t *testing.T) {
+	handler := NewHandler()
+	for _, target := range []string{
+		"/console/access/users/?id=principal-member",
+		"/console/access/groups/?id=group%2Fexample",
+		"/console/access/policies/?id=policy-reviewer",
+		"/console/access/roles/?id=role-reviewer",
+		"/console/access/simulator/?id=principal-member",
+		"/console/access/create-policy/?method=visual",
+		"/console/access/create-policy/?method=json",
+		"/console/access/create-policy/?method=tags",
+		"/console/access/create-policy/?method=features",
+		"/console/access/users/__next.console.access.$d$view.__PAGE__.txt?id=principal-member&_rsc=probe",
+	} {
+		t.Run(target, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, target, nil)
+			withQuery, withoutQuery := httptest.NewRecorder(), httptest.NewRecorder()
+			handler.ServeHTTP(withQuery, request)
+			handler.ServeHTTP(withoutQuery, httptest.NewRequest(http.MethodGet, request.URL.Path, nil))
+			if withQuery.Code != http.StatusOK || withQuery.Body.String() != withoutQuery.Body.String() ||
+				withQuery.Header().Get("Content-Security-Policy") != withoutQuery.Header().Get("Content-Security-Policy") {
+				t.Fatalf("workspace query changed static content: status=%d", withQuery.Code)
+			}
+		})
+	}
+}
+
+func TestHandlerRejectsAuthoritySelectorsAndAmbiguousWorkspaceQueries(t *testing.T) {
+	handler := NewHandler()
+	for _, target := range []string{
+		"/console/access/users/?accountId=other",
+		"/console/access/users/?id=member&tenantId=other",
+		"/console/access/users/?id=member&authorization=secret",
+		"/console/access/users/?id=member&resourceVersion=1",
+		"/console/access/users/?id=a&id=b",
+		"/console/access/users/?id=",
+		"/console/access/users/?id=%GG",
+		"/console/access/users/?id=%FF",
+		"/console/access/users/?id=member%0A",
+		"/console/access/users/?method=tags",
+		"/console/access/users/?_rsc=probe",
+		"/console/access/create-policy/?method=unknown",
+		"/console/access/create-policy/?id=member",
+		"/console/access/users/?id=" + strings.Repeat("a", 257),
+		"/_next/static/missing.js?id=member",
+		"/console/access/users/?" + strings.Repeat("id=a&", 500),
+	} {
+		t.Run(target, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("ambiguous query accepted: status=%d", response.Code)
+			}
+		})
+	}
+}
+
 func TestBrandAssetsRemainAvailableOffline(t *testing.T) {
 	handler := NewHandler()
 	for _, path := range []string{"/brand/matrix-horizontal-cyan.svg", "/brand/matrix-header-cyan.svg", "/brand/matrix-symbol-cyan.svg"} {

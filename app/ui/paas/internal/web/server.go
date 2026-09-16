@@ -14,11 +14,13 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const APIVersion = "ui.matrix.xiak.com/v1"
@@ -99,12 +101,51 @@ func validStaticQuery(request *http.Request, assetName string) bool {
 	if request.URL.RawQuery == "" {
 		return true
 	}
-	values := request.URL.Query()
-	if path.Ext(assetName) != ".txt" || len(values) != 1 {
+	if len(request.URL.RawQuery) > 2048 {
 		return false
 	}
-	requestState, found := values["_rsc"]
-	return found && len(requestState) == 1 && requestState[0] != ""
+	values, err := url.ParseQuery(request.URL.RawQuery)
+	if err != nil || len(values) == 0 {
+		return false
+	}
+	extension, route := path.Ext(assetName), path.Dir(assetName)
+	if extension != ".txt" && extension != ".html" {
+		return false
+	}
+	for key, entries := range values {
+		if len(entries) != 1 || entries[0] == "" || len(entries[0]) > 256 ||
+			!utf8.ValidString(entries[0]) || strings.IndexFunc(entries[0], func(character rune) bool {
+			return character <= ' ' || character == '\u007f'
+		}) >= 0 {
+			return false
+		}
+		switch key {
+		case "_rsc":
+			if extension != ".txt" {
+				return false
+			}
+		case "id":
+			// These queries locate a client-owned workspace. They never select
+			// an authority account or change which static content is served.
+			switch route {
+			case "console/access/users", "console/access/groups", "console/access/policies", "console/access/roles", "console/access/simulator":
+			default:
+				return false
+			}
+		case "method":
+			if route != "console/access/create-policy" {
+				return false
+			}
+			switch entries[0] {
+			case "visual", "json", "tags", "features":
+			default:
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func writeStatic(response http.ResponseWriter, status int, assetName string, asset []byte) {

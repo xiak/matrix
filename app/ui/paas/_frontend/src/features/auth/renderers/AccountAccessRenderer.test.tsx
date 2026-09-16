@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountCapabilities } from "../application/AccountAccessProvider";
-import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, ActionCapability, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment } from "../domain/accounts";
+import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, ActionCapability, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LoginRenderer } from "./LoginRenderer";
@@ -25,8 +25,8 @@ const attachment = (principalId: string, policy: AccountPolicy): UserPolicyAttac
 const directory = (platform: boolean): PolicyDirectory => ({ accountId: "tenant-a", scope: platform ? "INSTALLATION" : "TENANT", installationId: platform ? "installation-a" : null, items: [platform ? platformPolicy : tenantPolicy] });
 const capability = (action: IamAction, kind: ActionCapability["resource"]["kind"], id: string, reason: CapabilityRestriction | null = null): ActionCapability => ({ action, resource: { kind, id }, available: reason === null, restrictionReason: reason });
 const currentCapabilities = (available = true): ActionCapability[] => [
-  capability("iam.account.create", "ACCOUNT", "accounts", available ? null : "AUTHORITY_REQUIRED"),
-  capability("iam.account.read", "ACCOUNT", "accounts", available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.account.create", "ACCOUNT", "collection", available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.account.read", "ACCOUNT", "collection", available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.account.alias-set", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.user.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.user.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
@@ -37,6 +37,8 @@ const currentCapabilities = (available = true): ActionCapability[] => [
 const userCapabilities = (user: User, attachments: UserPolicyAttachment[] = [], reason: CapabilityRestriction | null = null): ActionCapability[] => [
   capability("iam.user.read", "USER", user.id, reason),
   capability("iam.user.update", "USER", user.id, reason),
+  capability("iam.user.permission-boundary.set", "USER", user.id, reason),
+  capability("iam.user.permission-boundary.remove", "USER", user.id, reason),
   capability("iam.user.delete", "USER", user.id, reason ?? (user.status === "ACTIVE" ? "TARGET_MUST_BE_DISABLED" : null)),
   capability("iam.user.set-status", "USER", user.id, reason),
   capability("iam.user.reset-password", "USER", user.id, reason),
@@ -49,7 +51,7 @@ const accountAccess = (value: Account): AccountAccess => ({ account: value, capa
   capability("iam.account.recover-root-credentials", "ACCOUNT", value.id)
 ] });
 const identity: AccountIdentity = {
-  account, user: rootUser, identityKind: "ROOT_IDENTITY", policySources: [], capabilities: currentCapabilities()
+  account, user: rootUser, identityKind: "ROOT_IDENTITY", policySources: [], permissionBoundary: { accountId: account.id, userId: rootUser.id, resourceVersion: rootUser.resourceVersion, policy: null }, capabilities: currentCapabilities()
 };
 const childUser: User = { ...rootUser, id: "child-a", loginName: "developer", displayName: "Developer A" };
 const child: UserAccess = { user: childUser, policyAttachments: [attachment("child-a", tenantPolicy)], capabilities: userCapabilities(childUser, [attachment("child-a", tenantPolicy)]) };
@@ -70,6 +72,55 @@ function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository
     listAccounts: vi.fn().mockResolvedValue({ items: [accountAccess(identity.account)], nextAfter: null }),
     execute: vi.fn().mockResolvedValue(undefined), ...overrides
   } as AccountRepository;
+}
+
+function boundaryFixture() {
+  const target = structuredClone(child);
+  let boundary: UserPermissionBoundary = { accountId: account.id, userId: target.user.id, resourceVersion: target.user.resourceVersion, policy: null };
+  let policies = [structuredClone(tenantPolicy), { ...tenantPolicy, id: "customer.logs", management: "CUSTOMER" as const, accountId: account.id, displayName: "LogBoundary", resourceVersion: 4, defaultVersionId: "version-logs" }];
+  const reference = (policyId: string) => {
+    const policy = policies.find((item) => item.id === policyId)!;
+    return { policyId, versionId: policy.defaultVersionId, contentDigest: `sha256:${"a".repeat(64)}` };
+  };
+  const boundaries = {
+    read: vi.fn(async () => structuredClone(boundary)),
+    set: vi.fn(async (_credential: string, _accountId: string, _userId: string, command: { policyId: string; policyResourceVersion: number; resourceVersion: number; requestId: string }) => {
+      if (command.resourceVersion !== target.user.resourceVersion) throw new HttpProblem(409, "IAM_CONFLICT");
+      target.user.resourceVersion += 1;
+      boundary = { ...boundary, resourceVersion: target.user.resourceVersion, policy: reference(command.policyId) };
+      return structuredClone(boundary);
+    }),
+    remove: vi.fn(async (_credential: string, _accountId: string, _userId: string, command: { resourceVersion: number; requestId: string }) => {
+      if (command.resourceVersion !== target.user.resourceVersion) throw new HttpProblem(409, "IAM_CONFLICT");
+      target.user.resourceVersion += 1;
+      boundary = { ...boundary, resourceVersion: target.user.resourceVersion, policy: null };
+      return structuredClone(boundary);
+    })
+  };
+  const repository = accounts({
+    permissionBoundaries: boundaries,
+    getUser: vi.fn(async () => structuredClone(target)),
+    listPolicies: vi.fn(async (_credential: string, platform: boolean) => platform ? directory(true) : { ...directory(false), items: structuredClone(policies) })
+  });
+  return { repository, boundaries,
+    advance() { target.user.resourceVersion += 1; boundary.resourceVersion = target.user.resourceVersion; policies = policies.map((policy) => ({ ...policy, resourceVersion: policy.resourceVersion + 1 })); },
+    readOnly() { target.capabilities = target.capabilities.map((capability) => capability.action.includes("permission-boundary") ? { ...capability, available: false, restrictionReason: "AUTHORITY_REQUIRED" } : capability); }
+  };
+}
+
+async function openBoundary(fixture: ReturnType<typeof boundaryFixture>) {
+  const result = await openAccess(fixture.repository);
+  await screen.findByText("Developer A");
+  await result.user.click(screen.getByRole("button", { name: "查看用户 developer" }));
+  await screen.findByRole("region", { name: "权限边界" });
+  return result;
+}
+
+async function chooseBoundary(user: ReturnType<typeof userEvent.setup>, label: string) {
+  await user.click(screen.getByRole("button", { name: "修改权限边界" }));
+  await user.click(screen.getByRole("combobox", { name: "权限边界" }));
+  await user.click(screen.getByRole("option", { name: label }));
+  await user.click(screen.getByRole("button", { name: "审阅变更" }));
 }
 
 function LanguageSwitch() {
@@ -150,6 +201,93 @@ describe("qualified login", () => {
 });
 
 describe("account access", () => {
+  it("changes a live user boundary through selection, review and confirmation without changing grants", async () => {
+    const f = boundaryFixture();
+    const { user } = await openBoundary(f);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await chooseBoundary(user, "ReadOnlyAccess · system.paas-viewer");
+    expect(f.boundaries.set).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+    await screen.findByText("权限边界变更已确认，用户状态已重新读取。");
+    expect(f.boundaries.set).toHaveBeenLastCalledWith(credential, account.id, childUser.id, { policyId: tenantPolicy.id, policyResourceVersion: tenantPolicy.resourceVersion, resourceVersion: childUser.resourceVersion, requestId: expect.any(String) });
+    await chooseBoundary(user, "LogBoundary · customer.logs");
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+    await screen.findByText("customer.logs", { exact: true });
+    await chooseBoundary(user, "未设置租户权限边界");
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+    await screen.findByText("未设置租户权限边界");
+    expect(f.boundaries.remove).toHaveBeenCalledWith(credential, account.id, childUser.id, { resourceVersion: childUser.resourceVersion + 2, requestId: expect.any(String) });
+    expect(f.repository.execute).not.toHaveBeenCalled();
+    expect(f.repository.currentIdentity).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the exact live boundary request and review after an uncertain outcome", async () => {
+    const f = boundaryFixture();
+    f.boundaries.set.mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const { user } = await openBoundary(f);
+    await chooseBoundary(user, "LogBoundary · customer.logs");
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+    await screen.findByText(/请求结果尚未确认/);
+    expect((screen.getByRole("button", { name: "返回选择" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "重试原请求" }));
+    await screen.findByText("权限边界变更已确认，用户状态已重新读取。");
+    expect(f.boundaries.set.mock.calls[0]).toEqual(f.boundaries.set.mock.calls[1]);
+  });
+
+  it("does not resubmit an acknowledged boundary change when the follow-up read fails", async () => {
+    const f = boundaryFixture();
+    const { user } = await openBoundary(f);
+    await chooseBoundary(user, "LogBoundary · customer.logs");
+    f.boundaries.read.mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+    await screen.findByText(/边界变更已确认，但暂无法重新读取/);
+    expect(screen.getByText("customer.logs", { exact: true })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重试读取" }));
+    await screen.findByText("权限边界变更已确认，用户状态已重新读取。");
+    expect(f.boundaries.set).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains a stale boundary selection but requires fresh revisions and a new explicit review", async () => {
+    const f = boundaryFixture();
+    const { user } = await openBoundary(f);
+    await chooseBoundary(user, "LogBoundary · customer.logs");
+    f.advance();
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+    await screen.findByText(/用户或策略版本已变化/);
+    await user.click(screen.getByRole("button", { name: "重新读取并审阅" }));
+    const selection = await screen.findByRole("combobox", { name: "权限边界" });
+    expect(selection.textContent).toContain("LogBoundary");
+    expect(f.boundaries.set).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+    await screen.findByText("权限边界变更已确认，用户状态已重新读取。");
+    const first = f.boundaries.set.mock.calls[0]![3], second = f.boundaries.set.mock.calls[1]![3];
+    expect(second.resourceVersion).toBe(first.resourceVersion + 1);
+    expect(second.policyResourceVersion).toBe(first.policyResourceVersion + 1);
+    expect(second.requestId).not.toBe(first.requestId);
+  });
+
+  it("expires sensitive live boundary state on 401 rather than leaving an editable private page", async () => {
+    const f = boundaryFixture();
+    f.boundaries.set.mockRejectedValueOnce(new HttpProblem(401, "IAM_EXPIRED"));
+    const { user, view } = await openBoundary(f);
+    await chooseBoundary(user, "LogBoundary · customer.logs");
+    await user.click(screen.getByRole("button", { name: "确认变更" }));
+    await screen.findByRole("button", { name: "登录控制台" });
+    expect(screen.queryByRole("region", { name: "权限边界" })).toBeNull();
+    expect(view.container.textContent).not.toContain(credential);
+    expect(JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage)])).not.toContain(credential);
+    expect(JSON.stringify([Object.entries(localStorage), Object.entries(sessionStorage)])).not.toContain("customer.logs");
+  });
+
+  it("does not offer boundary mutations when both authoritative capabilities are unavailable", async () => {
+    const f = boundaryFixture(); f.readOnly();
+    await openBoundary(f);
+    expect(screen.queryByRole("button", { name: "修改权限边界" })).toBeNull();
+    expect(screen.getByText(/当前身份没有此用户的边界变更权限/)).toBeTruthy();
+    expect(f.boundaries.set).not.toHaveBeenCalled();
+    expect(f.boundaries.remove).not.toHaveBeenCalled();
+  });
   it("keeps owner identity separate from child targets and never infers identity type from policy names", () => {
     const namedAdministrator = { ...tenantPolicy, id: "customer.administrator", management: "CUSTOMER" as const, accountId: "tenant-a", displayName: "TenantAdministrator" };
     const adminAttachment = attachment("child-a", namedAdministrator);
@@ -159,7 +297,7 @@ describe("account access", () => {
     expect(scene.accountOwner).toMatchObject({ id: "primary-a", accountType: "primary", name: "Account owner", state: "active" });
     expect(scene.users).toHaveLength(1);
     expect(scene.users[0]).toMatchObject({ id: "child-a", accountType: "subuser", attachments: [{ policyId: "customer.administrator" }] });
-    const actingChild: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", policySources: child.policyAttachments.map((attachment) => ({ kind: "DIRECT" as const, attachment })), capabilities: currentCapabilities(false) };
+    const actingChild: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", permissionBoundary: { accountId: account.id, userId: child.user.id, resourceVersion: child.user.resourceVersion, policy: null }, policySources: child.policyAttachments.map((attachment) => ({ kind: "DIRECT" as const, attachment })), capabilities: currentCapabilities(false) };
     const selfProtected: UserAccess = { ...child, capabilities: userCapabilities(child.user, child.policyAttachments, "SELF_PROTECTED") };
     const pageWithoutOwner = buildAccountAccessScene(actingChild, { items: [selfProtected], nextAfter: "later" }, null, directory(false), null);
     expect(pageWithoutOwner.accountOwner).toMatchObject({ id: "primary-a", loginName: "admin", name: null, state: null, isCurrent: false });
@@ -424,7 +562,7 @@ describe("account access", () => {
   });
 
   it("allows an unprivileged user to inspect its own settings without querying admin directories", async () => {
-    const reader: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", policySources: [], capabilities: currentCapabilities(false) };
+    const reader: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", permissionBoundary: { accountId: account.id, userId: child.user.id, resourceVersion: child.user.resourceVersion, policy: null }, policySources: [], capabilities: currentCapabilities(false) };
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(reader), listUsers: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) });
     await openAccess(repository, iam({}, "child-a"), "overview");
     await screen.findByText("未授权");

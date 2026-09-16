@@ -95,7 +95,8 @@ describe("atomic user directory batches", () => {
   });
   it("guards the current actor, actor authority and mixed states for the whole selection", async () => {
     const f = await fixture();
-    const asChild = { ...f.identity, user: f.users[0]!.user, identityKind: "USER" as const };
+    const child = f.users[0]!.user;
+    const asChild = { ...f.identity, user: child, identityKind: "USER" as const, permissionBoundary: { accountId: child.accountId, userId: child.id, resourceVersion: child.resourceVersion, policy: null } };
     for (const action of ["enable", "disable", "delete"] as const) expect(() => applyUserBatch(f.workspace, f.users, asChild, { action, targets: f.targets }, context)).toThrow("ineligibleUsers");
     expect(() => applyUserBatch(f.workspace, f.users, f.identity, { action: "authorize", targets: f.targets, policyIds: ["policy-read"] }, { ...context, canListUsers: false })).toThrow("ineligibleUsers");
     await previewAccountRepository.executeUserBatch!(previewCredential, { action: "disable", targets: [f.targets[0]!] });

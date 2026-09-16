@@ -21,7 +21,8 @@ import type {
   PolicyStatus,
   User,
   UserAccess,
-  UserPolicyAttachment
+  UserPolicyAttachment,
+  UserPermissionBoundary
 } from "../domain/accounts";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand, LoginResult } from "./iamRepository";
 
@@ -90,6 +91,7 @@ const capabilityActions = new Set<IamAction>([
   "iam.group-membership.list", "iam.group-membership.create", "iam.group-membership.remove",
   "iam.group-policy-attachment.create", "iam.group-policy-attachment.revoke",
   "iam.user.update", "iam.user.delete", "iam.user.set-status",
+  "iam.user.permission-boundary.set", "iam.user.permission-boundary.remove",
   "iam.user.reset-password", "iam.policy-attachment.create", "iam.platform-policy-attachment.create",
   "iam.policy-attachment.revoke", "iam.platform-policy-attachment.revoke"
 ]);
@@ -102,6 +104,7 @@ const capabilityRestrictions = new Set<CapabilityRestriction>([
 
 function capabilityResourceKind(action: IamAction): ActionCapability["resource"]["kind"] {
   if (action === "iam.user.read" || action === "iam.user.update" || action === "iam.user.delete" ||
+      action === "iam.user.permission-boundary.set" || action === "iam.user.permission-boundary.remove" ||
       action === "iam.user.set-status" || action === "iam.user.reset-password" ||
       action === "iam.policy-attachment.create" || action === "iam.platform-policy-attachment.create") return "USER";
   if (action === "iam.policy-attachment.revoke" || action === "iam.platform-policy-attachment.revoke" ||
@@ -422,19 +425,37 @@ function parsePolicyDirectory(value: unknown, expectedScope: PolicyScope): Polic
   return { accountId, scope: expectedScope, installationId: expectedScope === "INSTALLATION" ? accountText(wire.installationId) : null, items };
 }
 
+function parseUserPermissionBoundary(value: unknown, accountId: string, userId: string): UserPermissionBoundary {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "userId", "resourceVersion", "policy"]);
+  requireAccountKind(wire, "UserPermissionBoundary");
+  if (accountIdentifier(wire.accountId) !== accountId || accountIdentifier(wire.userId) !== userId) throw new Error("INVALID_IAM_RESPONSE");
+  const resourceVersion = accountVersion(wire.resourceVersion);
+  if (wire.policy === null) return { accountId, userId, resourceVersion, policy: null };
+  const policy = accountRecord(wire.policy);
+  exactKeys(policy, ["policyId", "versionId", "contentDigest"]);
+  if (typeof policy.contentDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(policy.contentDigest)) throw new Error("INVALID_IAM_RESPONSE");
+  return { accountId, userId, resourceVersion, policy: {
+    policyId: accountIdentifier(policy.policyId),
+    versionId: accountIdentifier(policy.versionId),
+    contentDigest: policy.contentDigest
+  } };
+}
+
 function parseAccountIdentity(value: unknown): AccountIdentity {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "account", "user", "identityKind", "policySources", "capabilities"]);
+  exactKeys(wire, ["apiVersion", "kind", "account", "user", "identityKind", "policySources", "permissionBoundary", "capabilities"]);
   requireAccountKind(wire, "CurrentIdentity");
   if (!Array.isArray(wire.policySources) || wire.policySources.length > 256 ||
       (wire.identityKind !== "ROOT_IDENTITY" && wire.identityKind !== "USER")) throw new Error("INVALID_IAM_RESPONSE");
   const account = parseAccount(wire.account);
   const user = parseUser(wire.user);
+  const permissionBoundary = parseUserPermissionBoundary(wire.permissionBoundary, account.id, user.id);
   const policySources = wire.policySources.map(parsePolicyGrantSource);
   const accountResource = { kind: "ACCOUNT" as const, id: account.id };
   const capabilities = parseCapabilities(wire.capabilities, [
-    { action: "iam.account.create", resource: { kind: "ACCOUNT", id: "accounts" } },
-    { action: "iam.account.read", resource: { kind: "ACCOUNT", id: "accounts" } },
+    { action: "iam.account.create", resource: { kind: "ACCOUNT", id: "collection" } },
+    { action: "iam.account.read", resource: { kind: "ACCOUNT", id: "collection" } },
     { action: "iam.account.alias-set", resource: accountResource },
     { action: "iam.user.list", resource: accountResource },
     { action: "iam.user.create", resource: accountResource },
@@ -444,6 +465,8 @@ function parseAccountIdentity(value: unknown): AccountIdentity {
   ]);
   if (
     account.id !== user.accountId ||
+    permissionBoundary.resourceVersion !== user.resourceVersion ||
+    (wire.identityKind === "ROOT_IDENTITY" && permissionBoundary.policy !== null) ||
     (wire.identityKind === "ROOT_IDENTITY") !== (account.rootIdentity.principalId === user.id) ||
     policySources.some((source) => source.attachment.accountId !== user.accountId ||
       (source.kind === "DIRECT"
@@ -451,7 +474,7 @@ function parseAccountIdentity(value: unknown): AccountIdentity {
         : source.membership.userId !== user.id || wire.identityKind !== "USER")) ||
     policySources.some((source, index) => index > 0 && policySources[index - 1]!.attachment.id >= source.attachment.id)
   ) throw new Error("INVALID_IAM_RESPONSE");
-  return { account, user, identityKind: wire.identityKind, policySources, capabilities };
+  return { account, user, identityKind: wire.identityKind, policySources, permissionBoundary, capabilities };
 }
 
 function parseUserAccess(value: unknown): UserAccess {
@@ -469,6 +492,8 @@ function parseUserAccess(value: unknown): UserAccess {
     { action: "iam.user.read", resource: { kind: "USER", id: user.id } },
     { action: "iam.user.update", resource: { kind: "USER", id: user.id } },
     { action: "iam.user.delete", resource: { kind: "USER", id: user.id } },
+    { action: "iam.user.permission-boundary.set", resource: { kind: "USER", id: user.id } },
+    { action: "iam.user.permission-boundary.remove", resource: { kind: "USER", id: user.id } },
     { action: "iam.user.set-status", resource: { kind: "USER", id: user.id } },
     { action: "iam.user.reset-password", resource: { kind: "USER", id: user.id } },
     { action: "iam.policy-attachment.create", resource: { kind: "USER", id: user.id } },
@@ -504,6 +529,38 @@ function accountPage<T>(value: unknown, kind: string, parse: (item: unknown) => 
 function accountHeaders(credential: string): HeadersInit { return { Authorization: `Bearer ${credential}` }; }
 
 export const httpAccountRepository: AccountRepository = {
+  permissionBoundaries: {
+    async read(credential, accountId, userId) {
+      return parseUserPermissionBoundary(await requestJSON<unknown>(
+        `/api/iam/v1/users/${encodeURIComponent(accountIdentifier(userId))}/permission-boundary`,
+        { headers: accountHeaders(credential) }
+      ), accountId, userId);
+    },
+    async set(credential, accountId, userId, command) {
+      const resourceVersion = accountVersion(command.resourceVersion);
+      if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+      const result = parseUserPermissionBoundary(await requestJSON<unknown>(
+        `/api/iam/v1/users/${encodeURIComponent(accountIdentifier(userId))}/permission-boundary`, {
+          method: "PUT", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ policyId: accountIdentifier(command.policyId), policyResourceVersion: accountVersion(command.policyResourceVersion), resourceVersion, requestId: accountIdentifier(command.requestId) })
+        }
+      ), accountId, userId);
+      if (result.resourceVersion !== resourceVersion + 1 || result.policy?.policyId !== command.policyId) throw new Error("INVALID_IAM_RESPONSE");
+      return result;
+    },
+    async remove(credential, accountId, userId, command) {
+      const resourceVersion = accountVersion(command.resourceVersion);
+      if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+      const result = parseUserPermissionBoundary(await requestJSON<unknown>(
+        `/api/iam/v1/users/${encodeURIComponent(accountIdentifier(userId))}/permission-boundary`, {
+          method: "DELETE", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ resourceVersion, requestId: accountIdentifier(command.requestId) })
+        }
+      ), accountId, userId);
+      if (result.resourceVersion !== resourceVersion + 1 || result.policy !== null) throw new Error("INVALID_IAM_RESPONSE");
+      return result;
+    }
+  },
   async currentIdentity(credential) {
     return parseAccountIdentity(await requestJSON<unknown>("/api/iam/v1/auth/me", { headers: accountHeaders(credential) }));
   },

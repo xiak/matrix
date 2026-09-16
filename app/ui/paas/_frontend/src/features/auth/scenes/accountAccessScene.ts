@@ -100,6 +100,10 @@ export function buildAccountUserScene(
     tenantAttachmentRestrictionReason: tenantAttachCapability?.restrictionReason ?? null,
     canAttachPlatformPolicy: platformAttachCapability?.available === true,
     platformAttachmentRestrictionReason: platformAttachCapability?.restrictionReason ?? null,
+    canSetPermissionBoundary: userCapability("iam.user.permission-boundary.set")?.available === true,
+    permissionBoundarySetRestrictionReason: userCapability("iam.user.permission-boundary.set")?.restrictionReason ?? null,
+    canRemovePermissionBoundary: userCapability("iam.user.permission-boundary.remove")?.available === true,
+    permissionBoundaryRemoveRestrictionReason: userCapability("iam.user.permission-boundary.remove")?.restrictionReason ?? null,
     attachments: policyAttachments.map((attachment) => {
       const action = attachment.scope === "INSTALLATION" ? "iam.platform-policy-attachment.revoke" : "iam.policy-attachment.revoke";
       const revoke = findActionCapability(capabilities, action, "POLICY_ATTACHMENT", attachment.id);
@@ -137,6 +141,9 @@ export function buildAccountAccessScene(
   platformPolicies: PolicyDirectory | null
 ) {
   const account = identity.account;
+  if (!identity.permissionBoundary || identity.permissionBoundary.accountId !== account.id ||
+      identity.permissionBoundary.userId !== identity.user.id || identity.permissionBoundary.resourceVersion !== identity.user.resourceVersion ||
+      (identity.identityKind === "ROOT_IDENTITY" && identity.permissionBoundary.policy !== null)) throw new Error("INVALID_IAM_IDENTITY");
   const policies = [...(tenantPolicies?.items ?? []), ...(platformPolicies?.items ?? [])];
   if (new Set(policies.map((policy) => policy.id)).size !== policies.length) throw new Error("INVALID_IAM_POLICY_DIRECTORY");
   const policyById = new Map(policies.map((policy) => [policy.id, policy]));
@@ -155,6 +162,7 @@ export function buildAccountAccessScene(
     currentUserId: identity.user.id,
     currentLoginName: identity.user.loginName,
     identityKind: identity.identityKind,
+    permissionBoundary: identity.permissionBoundary,
     isRoot: rootIsCurrent,
     identityAttachments: identity.policySources.map((source) => describeIdentitySource(source, policyById)),
     canListUsers: identityCapability("iam.user.list")?.available === true && users !== null,
@@ -166,9 +174,9 @@ export function buildAccountAccessScene(
     createGroupsRestrictionReason: identityCapability("iam.group.create")?.restrictionReason ?? null,
     canSetAlias: identityCapability("iam.account.alias-set")?.available === true,
     setAliasRestrictionReason: identityCapability("iam.account.alias-set")?.restrictionReason ?? null,
-    canReadAccounts: identityCapability("iam.account.read", "accounts")?.available === true && accounts !== null,
-    canCreateAccounts: identityCapability("iam.account.create", "accounts")?.available === true,
-    createAccountsRestrictionReason: identityCapability("iam.account.create", "accounts")?.restrictionReason ?? null,
+    canReadAccounts: identityCapability("iam.account.read", "collection")?.available === true && accounts !== null,
+    canCreateAccounts: identityCapability("iam.account.create", "collection")?.available === true,
+    createAccountsRestrictionReason: identityCapability("iam.account.create", "collection")?.restrictionReason ?? null,
     canViewPolicies: (identityCapability("iam.policy.list")?.available === true && tenantPolicies !== null) || platformPolicies !== null,
     tenantPoliciesAvailable: tenantPolicies !== null,
     platformPoliciesAvailable: platformPolicies !== null,

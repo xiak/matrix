@@ -1355,6 +1355,28 @@
     "singleRelationImpact": "This request changes exactly one relationship. It does not modify the user, policy or owned resources.",
     "liveDeleteImpact": "The service returns authoritative counts for removed memberships and revoked direct policy attachments. Users, policies and resources are not deleted."
   },
+  "UserBoundary": {
+    "title": "Permission boundary (limit only)",
+    "hint": "A boundary limits this user's permission ceiling. It grants no permissions and does not change attached policies. It follows the boundary policy's current default version; the backend still authorizes every access.",
+    "none": "No tenant permission boundary is set",
+    "policyId": "Boundary policy ID",
+    "defaultVersion": "Default version when read",
+    "contentDigest": "Version content digest",
+    "userRevision": "User resource revision: {version}",
+    "readOnly": "Your identity cannot change this user's boundary. Reading a boundary does not imply permission to change it or read its policy content.",
+    "completed": "The boundary change is confirmed and the user state has been read again.",
+    "uncertain": "The request outcome is unconfirmed; the server may already have applied the change. Retry the original request. Editing input or starting a different change is temporarily unavailable.",
+    "refreshFailed": "The boundary change is confirmed, but the user state could not be read again. Retrying the read will not resubmit the change.",
+    "conflict": "The user or policy revision has changed. Your selection is retained. Read again, review and explicitly confirm; nothing is automatically overwritten.",
+    "refreshReview": "Read again and review",
+    "retryRead": "Retry read",
+    "selectorHint": "Select only active tenant-scoped policies your identity can read. Submission checks both the user and policy resource revisions.",
+    "changeHint": "Changing the boundary immediately changes the user's permission ceiling. Removing it may make existing policy grants effective again. This action does not add or remove policy associations.",
+    "directoryUnavailable": "Your identity cannot read the policy directory. Available policies or content are not inferred; the existing boundary reference remains visible.",
+    "saving": "Confirming…",
+    "retryOriginal": "Retry original request",
+    "confirm": "Confirm change"
+  },
   "RoleWorkspace": {
     "back": "Back to roles",
     "next": "Next",

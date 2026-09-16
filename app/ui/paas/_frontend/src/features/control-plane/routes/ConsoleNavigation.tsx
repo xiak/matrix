@@ -65,6 +65,14 @@ function ConsoleNavigationBoundary({ selection, children }: { selection: Control
       options?.onAccepted?.();
       setDestination({ href: target, requestId: ++requestSequence.current });
       startTransition(() => {
+        // An entity query changes this client-owned workspace, not its page.
+        // Next integrates native history with useSearchParams without fetching
+        // another RSC tree or replacing the persistent console shell.
+        if (!isPending && target.split(/[?#]/)[0] === committed.split(/[?#]/)[0]) {
+          if (options?.replace) window.history.replaceState(null, "", href);
+          else window.history.pushState(null, "", href);
+          return;
+        }
         const navigate = options?.replace ? router.replace : router.push;
         // ContentPage owns its scroll viewport and route-position memory.
         // Next's document scroll handling otherwise advances that viewport by

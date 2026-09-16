@@ -10,6 +10,7 @@ import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccessReports } from "./AccessReports";
+import { UserBoundarySummary } from "./PermissionBoundary";
 import { policyUsageCounts } from "../domain/accessWorkspace";
 import { includesPermissionManagement } from "../domain/policyDocument";
 import styles from "./AccountAccessRenderer.module.css";
@@ -32,6 +33,7 @@ export function AccountIdentifier({ value, label }: { value: string; label: stri
 function AccountIdentityCard({ scene }: { scene: AccountAccessScene }) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
+  const b = useTranslations("UserBoundary");
   return <Card>
     <Card.Header><Typography.Title as="h2" level={3}>{t("accountIdentity")}</Typography.Title><Badge status="info">{scene.isRoot ? t("primary") : t("child")}</Badge></Card.Header>
     <Card.Body className={styles.detail}>
@@ -40,9 +42,10 @@ function AccountIdentityCard({ scene }: { scene: AccountAccessScene }) {
         <div><dt>{t("signedIn")}</dt><dd>{scene.identityLabel}</dd></div>
         <div><dt>{t("currentLoginName")}</dt><dd>{scene.currentLoginName}</dd></div>
         <div><dt>{t("accountId")}</dt><dd><AccountIdentifier label={t("accountId")} value={scene.accountId} /></dd></div>
-        <div><dt>{t("policySources")}</dt><dd>{scene.identityAttachments.map((attachment) =>
+        <div><dt>{t("policySources")}</dt><dd>{scene.isRoot ? t("resourceOwner") : scene.identityAttachments.map((attachment) =>
           `${attachment.label} · ${attachment.source === "group" ? w("inheritedFrom", { name: attachment.groupId! }) : w("directPolicies")}`
         ).join(" · ") || t("noGrantLabel")}</dd></div>
+        <div><dt>{b("title")}</dt><dd><UserBoundarySummary boundary={scene.permissionBoundary} /></dd></div>
       </dl>
     </Card.Body>
   </Card>;
