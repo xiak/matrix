@@ -174,20 +174,19 @@ describe("ContentPage context heading", () => {
     expect(screen.getAllByRole("heading", { level: 1, hidden: true })).toHaveLength(1);
   });
 
-  it("preserves the current heading during the grace period and switches it with a delayed fallback", () => {
-    const page = (fallback: boolean) => <ContentPage pending fallback={fallback} parentLabel="Users">
+  it("switches heading identity immediately even when regional loading has no placeholders yet", () => {
+    const page = (pending: boolean) => <ContentPage pending={pending} parentLabel="Users">
       <ContentPage.Header title="Policies" back={{ label: "Back to policies", parentLabel: "Policies", onClick() {} }} />
-      <ContentPage.Body pending transitionKey="users">
+      <ContentPage.Body pending={pending} transitionKey="users">
         <ContentPage.Heading title="admin" back={{ label: "Back to users", onClick() {} }} actions={<button>Edit user</button>} />
       </ContentPage.Body>
     </ContentPage>;
     const view = render(page(false));
     const title = screen.getByRole("heading", { name: "admin" });
-    expect((screen.getByRole("button", { name: "Back to users" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByRole("button", { name: "Edit user" })).toBeNull();
-
     view.rerender(page(true));
     expect(screen.getByRole("heading", { name: "Policies" })).toBe(title);
+    expect(screen.queryByRole("button", { name: "Edit user" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Back to users" })).toBeNull();
     expect((screen.getByRole("button", { name: "Back to policies" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -223,12 +222,12 @@ describe("ContentPage context heading", () => {
 });
 
 describe("ContentPage transition", () => {
-  it("keeps outgoing content visually stable but inert during a fallback grace period", () => {
+  it("never reveals outgoing content while waiting for regional loading feedback", () => {
     const body = (loading?: React.ReactNode) => <ContentPage.Body transitionKey="resources" pending loading={loading}><input aria-label="Filter resources" /></ContentPage.Body>;
     const view = render(body());
     const input = screen.getByRole("textbox", { name: "Filter resources", hidden: true });
     expect(input.closest("[inert]")).toBeTruthy();
-    expect(input.closest("[hidden]")).toBeNull();
+    expect(input.closest("[hidden]")).toBeTruthy();
     expect(screen.queryByRole("status")).toBeNull();
 
     view.rerender(body(<p role="status">Opening logs…</p>));

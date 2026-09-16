@@ -10,10 +10,11 @@ import type {
   ControlPlaneSnapshot,
   ServiceInstallation
 } from "../domain/resources";
-import { consoleRouteHref, type ConsoleSection, type ServiceView } from "../domain/selection";
+import { consoleRouteHref, type ConsoleSection, type ServiceView, type ControlPlaneRouteSelection } from "../domain/selection";
 import type {
   AlertScene,
   ConsoleContentScene,
+  ConsoleFrameScene,
   ConsoleMessageScene,
   ConsoleNavigationItemScene,
   ConsoleScene,
@@ -248,11 +249,19 @@ function baseScene(section: ConsoleSection, experience?: ExperienceSnapshot): Om
   };
 }
 
+// Route-known presentation is available before resource reads; it is not an
+// empty business snapshot and cannot enable a mutation workspace.
+export function buildConsoleFrame({ section, view }: ControlPlaneRouteSelection, experience?: ExperienceSnapshot, snapshot?: ControlPlaneSnapshot): ConsoleFrameScene {
+  return {
+    ...baseScene(section, experience),
+    navigation: navigation(section, snapshot, experience, view)
+  };
+}
+
 // IAM navigation must remain available without permission to read PaaS resources.
 export function buildAccessConsoleScene(experience?: ExperienceSnapshot, view?: ServiceView): ConsoleScene {
   return {
-    ...baseScene("access", experience),
-    navigation: navigation("access", undefined, experience, view),
+    ...buildConsoleFrame({ section: "access", view }, experience),
     content: { kind: "access", view: (accountAccessViews as readonly string[]).includes(view ?? "") ? view as AccountAccessView : "overview" },
     workspace: null
   };
@@ -377,8 +386,7 @@ export function buildConsoleScene(
   if (content.kind === "devops" || content.kind === "observability" || content.kind === "logs") content.view = view;
 
   return {
-    ...baseScene(section, experience),
-    navigation: navigation(section, snapshot, experience, view),
+    ...buildConsoleFrame({ section, view }, experience, snapshot),
     content,
     workspace: section === "quotas"
       ? {

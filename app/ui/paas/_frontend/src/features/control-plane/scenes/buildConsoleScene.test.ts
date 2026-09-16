@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ControlPlaneSnapshot } from "../domain/resources";
 import { previewExperienceSnapshot } from "../repositories/previewExperienceSnapshot";
-import { buildConsoleScene } from "./buildConsoleScene";
+import { buildConsoleFrame, buildConsoleScene } from "./buildConsoleScene";
+import { serviceDirectory, serviceNavigation } from "./serviceDirectory";
+import { consoleRouteHref, type ControlPlaneRouteSelection } from "../domain/selection";
 
 const snapshot: ControlPlaneSnapshot = {
   offerings: [{
@@ -59,6 +61,25 @@ const snapshot: ControlPlaneSnapshot = {
 };
 
 describe("buildConsoleScene", () => {
+  it.each(serviceDirectory)("provides the $id destination frame without inventing data or mutation options", service => {
+    const selection: ControlPlaneRouteSelection = serviceNavigation[service.id][0];
+    expect(consoleRouteHref(selection)).toBe(service.href);
+    const frame = buildConsoleFrame(selection, previewExperienceSnapshot);
+    const { content, workspace, ...loadedFrame } = buildConsoleScene(selection.section, snapshot, previewExperienceSnapshot, selection.view);
+    expect(frame.productId).toBe(service.id);
+    expect(frame).toEqual(loadedFrame);
+    expect(frame).not.toHaveProperty("content", content);
+    expect(frame).not.toHaveProperty("workspace", workspace);
+  });
+
+  it("does not turn a live pending read into an empty resource count or authorization result", () => {
+    const frame = buildConsoleFrame({ section: "installations" });
+    expect(frame.preview).toBe(false);
+    expect(frame.navigation.every(item => item.count === undefined)).toBe(true);
+    expect(frame).not.toHaveProperty("content");
+    expect(frame).not.toHaveProperty("workspace");
+  });
+
   it("switches service-local navigation and keeps features out of the global directory", () => {
     const logs = buildConsoleScene("logs", snapshot, previewExperienceSnapshot, "search");
     expect(logs.navigation.map((item) => item.id)).toEqual(["logs", "search", "topics", "collection"]);

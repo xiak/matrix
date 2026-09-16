@@ -712,7 +712,8 @@ passwords, policy documents and identity selections never leave local state.
 The console routes menu, product, favorite, search and imperative navigation
 through the same leave decision, as well as explicit cancel and sign-out
 actions. Read-only data revalidation preserves the mounted draft and is
-not misrepresented as a discard. Confirmation precedes the router transition and any delayed fallback.
+not misrepresented as a discard. Confirmation precedes the destination frame,
+router transition and regional loading feedback.
 Staying retains the current step, validation and every field; confirmed leaving
 executes the original destination once. A save already in flight cannot be
 discarded or silently queue another destination. Save completion clears the
@@ -1012,7 +1013,8 @@ feature-level `scrollIntoView` calls that could collapse the shared gutter.
 Same-path workspace query changes use Next's supported native-history
 integration instead of fetching another page tree. They retain draft guarding,
 encoded entity IDs, replacement and Back/Forward behavior; cross-page visits
-continue through the prefetched router transition and delayed content fallback.
+continue through the prefetched router transition with an immediate destination
+frame and locally delayed loading placeholders.
 The
 content begins with meaningful resource summary, tabs or data, not another
 generic title, return toolbar or repeated preview banner. Header MOCK identity and mutation-level limitations
@@ -1086,13 +1088,19 @@ Button. Compact variants consume Theme dimensions instead of private style forks
 
 Console navigation keeps the global Header and shell mounted. One shared route
 transition owner connects console links and global-search results to the actual
-App Router transition. Clicking a destination immediately marks the target and
-starts the Header progress track. Fast cached or local visits retain the already
-revealed title and content during a bounded 200ms grace period, while making its
-actions and body inert. If the real transition remains pending beyond that
-threshold, the same title frame switches to the destination and the body is
-replaced with its page-shaped PageSkeleton. There is no fabricated navigation
-delay or minimum fallback dwell. A dedicated
+App Router transition. After any required draft-leave consent, clicking a
+destination immediately switches the route-known title, parent context and
+service-local navigation, hides outgoing content/actions and starts the Header
+progress track. Resource readiness never delays this destination frame. A
+frame is a projection of the existing scene vocabulary, not an empty resource
+snapshot, an authorization result or another client router. Pending requests
+cannot expose the old page after the product directory closes. Next still owns
+the actual cross-page route commit, prefetch, history and interrupted visits;
+same-page entity queries retain the existing native-history boundary.
+Regional PageSkeleton and labelled TableSkeleton acknowledge loading at once,
+but mount their placeholder DOM/animation only after a sustained 200ms wait.
+That timer belongs to the regional feedback component, not the shell or Header;
+fast completion cancels it without imposing a minimum loading dwell. A dedicated
 route subscriber renders an indeterminate two-pixel progress track over the
 global Header's bottom divider, without subscribing static Header controls to
 its loading state. The shell does not expose a universal manual refresh action:
@@ -1104,13 +1112,15 @@ React frame state. The active child alone receives the compositor hint, and
 reduced-motion preference presents a stationary indicator. Determinate task
 progress remains a native element driven by real values.
 Dashboard, table, card, list and access layouts share semantic Theme
-tokens and a single announced loading label. The outgoing content becomes inert
-immediately, remains visually stable during the grace period, and is hidden only
-when the delayed fallback is revealed; its draft remains mounted until the visit
-commits or is cancelled. The content viewport remains mounted across a committed visit so its
-background, scroll layer and geometry are not repainted as a new page-sized
-surface. Only the keyed route content is replaced, after the destination
-skeleton, with no full-canvas opacity transition. A thin indeterminate progress
+tokens and a single announced loading label. The outgoing content becomes hidden
+and inert immediately; its draft remains mounted until the visit commits or is
+cancelled. The content viewport remains mounted across a committed visit rather
+than replacing its background/scroll boundary. Only keyed route content is
+replaced, with no full-canvas opacity transition. Initial resource loading and
+load recovery keep the real Header, navigation and title mounted, changing only
+the data area; they never substitute a second all-skeleton LoadingShell or
+present an empty count as a successful read. Mutation controls appear only with
+their owned data/capabilities, not from the destination frame. A thin indeterminate progress
 line communicates real route and scoped background activity without inventing a completion
 percentage. Fast cached routes finish immediately; interrupted visits cannot overwrite a newer
 destination. Reduced-motion preferences disable skeleton and progress motion.
@@ -2092,20 +2102,9 @@ installation/upgrade, or complete IAM acceptance.
   draft without CSP or hydration errors; its production login has no MOCK
   entry. This is current frontend/static-host acceptance, not a new installed
   backend release or a claim to translate user-authored resource names.
-  Navigation tests cover real suspended transitions, interrupted destinations,
-  immediate inerting of the outgoing draft, the 200ms fallback threshold,
-  fast-route fallback suppression, cancellation recovery, stable-viewport
-  scroll isolation with keyed content replacement, and five non-interactive
-  skeleton layouts. A 2026-09-14 desktop MOCK regression visited Groups,
-  Policies, Simulator, Roles and Users after a hard reload; every committed
-  page exposed the destination title with `opacity: 1` and no content animation,
-  and produced no new browser warning or error. Browser checks
-  at `1133px` and `360px` confirm immediate progress, stable fast-route content,
-  delayed target skeletons for sustained waits, hidden outgoing controls, and no horizontal page overflow for menu and search
-  navigation. A temporary loopback-only delayed-response preview exercised long
-  route waits; the normal development route was also verified without that
-  delay. The temporary preview was removed. All animation styling remains
-  theme-owned; reduced-motion behavior is defined in the shared controls.
+  Current navigation acceptance is owned by the development evidence above.
+  All animation styling remains theme-owned; reduced-motion behavior is defined
+  in the shared controls.
   Message tests distinguish unread counts from firing alerts and active tasks,
   share reading state between popup and full page, preserve expanded unread
   details, and prove session reset and unavailable live data. The Header has

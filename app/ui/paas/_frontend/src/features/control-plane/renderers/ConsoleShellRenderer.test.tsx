@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import type { ComponentProps } from "react";
+import { Suspense, useState, type ComponentProps } from "react";
 import userEvent from "@testing-library/user-event";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,12 +13,23 @@ import type { ConsoleSection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import { previewExperienceSnapshot } from "../repositories/previewExperienceSnapshot";
 import { ConsoleShellRenderer } from "./ConsoleShellRenderer";
+import { parseControlPlanePathname } from "../routes/parseControlPlaneRoute";
+import { LOADING_FEEDBACK_DELAY_MS } from "@ui/xiak";
 
 const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), query: "" }));
 const contentRender = vi.hoisted(() => vi.fn());
 const accountMenuRender = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({ useRouter: () => navigation, useSearchParams: () => new URLSearchParams(navigation.query) }));
+vi.mock("next/link", () => ({
+  default: ({ onNavigate, onClick, href, children, replace, scroll, ...props }: ComponentProps<"a"> & { replace?: boolean; scroll?: boolean; onNavigate?(event: { preventDefault(): void }): void }) => <a {...props} href={href} data-replace={replace} data-scroll={scroll} onClick={event => {
+    onClick?.(event);
+    if (event.defaultPrevented) return;
+    event.preventDefault();
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey || props.target === "_blank" || props.download !== undefined) return;
+    onNavigate?.({ preventDefault() {} });
+  }}>{children}</a>
+}));
 vi.mock("./AccountMenu", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./AccountMenu")>();
   return { ...actual, AccountMenu: (props: ComponentProps<typeof actual.AccountMenu>) => { accountMenuRender(); return <actual.AccountMenu {...props} />; } };
@@ -78,13 +89,15 @@ async function renderConsole({
   experience,
   openWorkspace = false,
   load = vi.fn().mockResolvedValue(snapshot),
-  logout = vi.fn().mockResolvedValue(undefined)
+  logout = vi.fn().mockResolvedValue(undefined),
+  heldRoute
 }: {
   section?: ConsoleSection;
   experience?: ExperienceSnapshot;
   openWorkspace?: boolean;
   load?: ControlPlaneRepository["load"];
   logout?: IamRepository["logout"];
+  heldRoute?: { href: string; ready: boolean; promise: Promise<void> };
 } = {}) {
   const repository: ControlPlaneRepository = {
     load,
@@ -111,9 +124,15 @@ async function renderConsole({
     logout
   };
   const user = userEvent.setup();
+  function RoutedPage() {
+    const [href, setHref] = useState(`/console/${section === "overview" ? "" : section + "/"}`);
+    if (heldRoute) navigation.push.mockImplementation((target: string) => setHref(target));
+    if (heldRoute && href === heldRoute.href && !heldRoute.ready) throw heldRoute.promise;
+    return <ConsoleShellRenderer experience={experience} repository={repository} selection={parseControlPlanePathname(href)} />;
+  }
   const view = render(
     <LocaleProvider><SessionProvider repository={iam}>
-      <ConsoleShellRenderer experience={experience} repository={repository} selection={{ section }} />
+      <Suspense fallback={<p>Route bundle loading</p>}><RoutedPage /></Suspense>
     </SessionProvider></LocaleProvider>
   );
   await user.type(screen.getByLabelText("密码", { exact: true }), "renderer-test-password");
@@ -130,10 +149,66 @@ afterEach(() => {
   localStorage.clear();
   useConsoleUiStore.setState({ sidebarOverlayOpen: false, workspaceOpen: false });
   vi.clearAllMocks();
+  navigation.push.mockReset();
+  navigation.replace.mockReset();
+  vi.useRealTimers();
   navigation.query = "";
 });
 
 describe("ConsoleShellRenderer", () => {
+  it("opens the destination frame immediately when a service route suspends, without exposing the previous page", async () => {
+    let release!: () => void;
+    const heldRoute = { href: "/console/logs/", ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };
+    const { user, repository } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot, heldRoute });
+    const oldResource = await screen.findByRole("link", { name: "订单主库" });
+    const header = screen.getByLabelText("全局导航");
+    const title = screen.getByRole("heading", { level: 1 });
+    const menu = screen.getByRole("navigation", { name: "控制台导航" });
+    await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
+    const service = within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /日志服务/ });
+    vi.useFakeTimers();
+    fireEvent.click(service);
+    expect(screen.queryByRole("dialog", { name: "云产品入口" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "日志概览" })).toBe(title);
+    expect(menu).toBe(screen.getByRole("navigation", { name: "控制台导航" }));
+    expect(within(menu).getByRole("link", { name: /^日志概览/ }).getAttribute("aria-current")).toBe("page");
+    expect(within(menu.parentElement!).getByText("日志服务")).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "订单主库" })).toBeNull();
+    expect(oldResource.closest("[hidden]")).not.toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("正在打开日志概览…");
+    expect(screen.getByRole("status").querySelector("[aria-hidden]")).toBeNull();
+    accountMenuRender.mockClear();
+    act(() => vi.advanceTimersByTime(LOADING_FEEDBACK_DELAY_MS));
+    expect(screen.getByRole("status").querySelector("[aria-hidden]")).not.toBeNull();
+    expect(accountMenuRender).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("全局导航")).toBe(header);
+    expect(repository.load).toHaveBeenCalledTimes(1);
+    await act(async () => { heldRoute.ready = true; release(); });
+    expect(screen.getByRole("heading", { name: "日志概览" })).toBe(title);
+    expect(oldResource.isConnected).toBe(false);
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.getByLabelText("全局导航")).toBe(header);
+  });
+
+  it("retains the real header, navigation and title while first-load data is pending and after it arrives", async () => {
+    let resolve!: (value: ControlPlaneSnapshot) => void;
+    const load = vi.fn(() => new Promise<ControlPlaneSnapshot>(done => { resolve = done; }));
+    await renderConsole({ section: "installations", load });
+    const header = screen.getByLabelText("全局导航");
+    const title = screen.getByRole("heading", { name: "数据库实例" });
+    const menu = screen.getByRole("navigation", { name: "控制台导航" });
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
+    expect(screen.getByRole("button", { name: /打开账号菜单/ })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("数据库实例");
+    await act(async () => resolve(snapshot));
+    expect(screen.getByLabelText("全局导航")).toBe(header);
+    expect(screen.getByRole("navigation", { name: "控制台导航" })).toBe(menu);
+    expect(screen.getByRole("heading", { name: "数据库实例" })).toBe(title);
+    expect(screen.getByRole("button", { name: "安装服务" })).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("shows one localized service name and starts its sidebar with useful navigation", async () => {
     const { user } = await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
     const navigation = await screen.findByRole("navigation", { name: "控制台导航" });
@@ -347,7 +422,8 @@ describe("ConsoleShellRenderer", () => {
     const { user } = await renderConsole({ load, logout });
     expect((await screen.findByRole("alert")).textContent).toContain("IAM 会话已失效");
 
-    await user.click(screen.getByRole("button", { name: "注销并撤销 IAM 会话" }));
+    await user.click(screen.getByRole("button", { name: /打开账号菜单/ }));
+    await user.click(screen.getByRole("menuitem", { name: "注销并撤销 IAM 会话" }));
 
     await screen.findByRole("button", { name: "登录控制台" });
     expect(logout).toHaveBeenCalledWith("renderer-test-memory-only-session");
@@ -359,11 +435,15 @@ describe("ConsoleShellRenderer", () => {
     let confirmRevocation!: () => void;
     const logout = vi.fn(() => new Promise<void>((resolve) => { confirmRevocation = resolve; }));
     const { user } = await renderConsole({ load, logout });
-    const exit = screen.getByRole("button", { name: "注销并撤销 IAM 会话" });
+    await user.click(screen.getByRole("button", { name: /打开账号菜单/ }));
+    const exit = screen.getByRole("menuitem", { name: "注销并撤销 IAM 会话" });
 
     await user.click(exit);
-    expect((exit as HTMLButtonElement).disabled).toBe(true);
-    await user.click(exit);
+    expect(exit.isConnected).toBe(false);
+    await user.click(screen.getByRole("button", { name: /打开账号菜单/ }));
+    const pendingExit = screen.getByRole("menuitem", { name: "注销并撤销 IAM 会话" });
+    expect((pendingExit as HTMLButtonElement).disabled).toBe(true);
+    await user.click(pendingExit);
     expect(logout).toHaveBeenCalledTimes(1);
     expect(navigation.replace).not.toHaveBeenCalled();
 

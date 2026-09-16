@@ -7,17 +7,6 @@
   isolation: isolate;
 }
 
-.loadingPath {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  align-items: center;
-  gap: var(--xiak-spacing-tight);
-  color: var(--xiak-color-header-muted);
-  font-size: var(--xiak-font-size-small);
-}
-.loadingPath svg { width: 13px; height: 13px; }
-
 .globalBackdrop {
   position: fixed;
   inset: var(--xiak-layout-header-height) 0 0;
@@ -25,16 +14,6 @@
   border: 0;
   padding: 0;
   background: var(--xiak-color-bg-overlay);
-}
-
-.loadingLogout {
-  flex: none;
-  color: var(--xiak-color-header-muted);
-}
-
-.loadingLogout:hover:not(:disabled) {
-  background: var(--xiak-color-bg-global-hover);
-  color: var(--xiak-color-text-global);
 }
 
 .sider {
@@ -363,26 +342,6 @@
 .overlayBackdrop,
 .workspaceBackdrop {
   display: none;
-}
-
-.railLoading {
-  gap: var(--xiak-spacing-default);
-  padding-top: var(--xiak-spacing-default);
-  background: var(--xiak-color-bg-global);
-}
-
-.railLoading > div {
-  width: 40px;
-  min-height: 40px;
-}
-
-.contextLoading {
-  gap: var(--xiak-spacing-default);
-  padding: var(--xiak-spacing-roomy) var(--xiak-spacing-default);
-}
-
-.headerSkeleton {
-  width: min(320px, 60%);
 }
 
 .pageHeader { position: relative; }

@@ -17,7 +17,7 @@ export { Layout } from "./layout/Layout";
 export { Select, type SelectProps, type SelectOption } from "./select/Select";
 export { Sider } from "./sider/Sider";
 export { Skeleton } from "./skeleton/Skeleton";
-export { PageSkeleton, TableSkeleton, type PageSkeletonLayout } from "./skeleton/PageSkeleton";
+export { PageSkeleton, TableSkeleton, LOADING_FEEDBACK_DELAY_MS, type PageSkeletonLayout } from "./skeleton/PageSkeleton";
 export { Typography } from "./typography/Typography";
 export { Table, TableSelectionCell } from "./table/Table";
 export { TablePagination, type TablePaginationProps } from "./table/TablePagination";

@@ -214,3 +214,7 @@ export type ConsoleScene = {
   content: ConsoleContentScene;
   workspace: ConsoleWorkspaceScene;
 };
+
+// Route-known presentation is independent of resource readiness. It cannot
+// provide rows, totals, mutation options or authorization decisions.
+export type ConsoleFrameScene = Omit<ConsoleScene, "content" | "workspace">;

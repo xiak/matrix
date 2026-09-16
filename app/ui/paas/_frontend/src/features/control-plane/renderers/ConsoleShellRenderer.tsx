@@ -21,7 +21,6 @@ import {
   Boxes,
   Building2,
   ChartNoAxesCombined,
-  ChevronRight,
   CircleGauge,
   Database,
   FileText,
@@ -31,7 +30,6 @@ import {
   KeyRound,
   Network,
   LayoutDashboard,
-  LogOut,
   MapPin,
   Menu,
   PackageSearch,
@@ -57,7 +55,6 @@ import {
   ContentPage,
   Layout,
   Sider,
-  Skeleton,
   PageSkeleton,
   Progress,
   useLeaveConfirmation,
@@ -73,14 +70,14 @@ import type {
   NavigationIconKind,
   RailIconKind
 } from "../scenes/consoleScene";
-import { ConsoleBrand, ConsoleHeader } from "./ConsoleHeader";
-import headerStyles from "./ConsoleHeader.module.css";
+import { ConsoleHeader } from "./ConsoleHeader";
 import { ConsoleContentRenderer } from "./ConsoleContentRenderer";
 import { ConsoleWorkspaceRenderer } from "./ConsoleWorkspaceRenderer";
 import styles from "./ConsoleShellRenderer.module.css";
 import { useServiceDirectory } from "./ServiceDirectory";
 import { serviceForSection, type ServiceId } from "../scenes/serviceDirectory";
 import { ConsoleNavigationProvider, useConsoleNavigation } from "../routes/ConsoleNavigation";
+import { buildConsoleFrame } from "../scenes/buildConsoleScene";
 
 function pageSkeletonLayout({ section, view }: ControlPlaneRouteSelection): PageSkeletonLayout {
   if (section === "overview" || (!view && ["devops", "observability", "logs"].includes(section))) return "dashboard";
@@ -144,52 +141,6 @@ function ServiceLayout({ children }: { children: React.ReactNode }) {
   return <Layout inert={catalogOpen}>{children}</Layout>;
 }
 
-function LoadingShell({ error, logout, retry, revoking, sessionError, selection }: {
-  error: string | null;
-  logout(): void;
-  retry(): void;
-  revoking: boolean;
-  sessionError: string | null;
-  selection: ControlPlaneRouteSelection;
-}) {
-  const t = useTranslations("Console");
-  return (
-    <ShellFrame>
-      <App>
-        <App.Base>
-          <Layout.Header data-surface="shell" className={headerStyles.header}>
-            <ConsoleBrand />
-            <div className={styles.loadingPath}><span>{t("unifiedConsole")}</span><ChevronRight aria-hidden="true" /><span>{t("loading")}</span></div>
-            <Button aria-label={t("logoutLabel")} className={styles.loadingLogout} disabled={revoking} onClick={logout} size="small" variant="ghost">
-              <LogOut aria-hidden="true" />{revoking ? t("loggingOut") : t("logout")}
-            </Button>
-          </Layout.Header>
-          <Layout>
-            <Sider className={styles.sider}>
-              <Sider.RailMenu data-surface="shell" className={styles.railLoading}><Skeleton /><Skeleton /><Skeleton /></Sider.RailMenu>
-              <Sider.ContextMenu className={`${styles.contextMenu} ${styles.contextLoading}`}><Skeleton /><Skeleton /><Skeleton /><Skeleton /></Sider.ContextMenu>
-            </Sider>
-            <Layout.Content>
-              <ContentPage>
-                <ContentPage.Header title={<Skeleton className={styles.headerSkeleton} />} />
-                <ContentPage.Body>
-                  {sessionError ? <Alert className={styles.feedback} status="danger">{sessionError}</Alert> : null}
-                  {error ? (
-                    <div role="alert"><EmptyState title={t("loadFailed")} description={error} icon={<ServerCog />} action={<div className={styles.recoveryActions}>
-                      <Button onClick={retry} variant="secondary"><RefreshCcw aria-hidden="true" />{t("retry")}</Button>
-                      <Button asChild variant="ghost"><Link href="/console/access/">{t("openAccess")}</Link></Button>
-                    </div>} /></div>
-                  ) : <PageSkeleton label={t("loadingConsole")} layout={pageSkeletonLayout(selection)} />}
-                </ContentPage.Body>
-              </ContentPage>
-            </Layout.Content>
-          </Layout>
-        </App.Base>
-      </App>
-    </ShellFrame>
-  );
-}
-
 type WorkspaceSize = "compact" | "medium" | "wide";
 
 // Route-level identity is known before feature data or heading contributions
@@ -244,7 +195,7 @@ function loopOverlayFocus(
   }
 }
 
-function ConsoleShell() {
+function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const t = useTranslations("Console");
   const collection = useTranslations("Collection");
   const authErrors = useTranslations("Auth.errors");
@@ -263,6 +214,11 @@ function ConsoleShell() {
   const controlPlane = useControlPlane();
   const accountCapabilities = useAccountCapabilities();
   const scene = controlPlane.scene;
+  const pendingSelection = navigation.pendingSelection;
+  const staticFrame = useMemo(() => buildConsoleFrame(navigation.selection, experience), [navigation.selection, experience]);
+  const destinationFrame = useMemo(() => pendingSelection ? buildConsoleFrame(pendingSelection, experience) : null, [pendingSelection, experience]);
+  const committedFrame = scene ?? staticFrame;
+  const frame = destinationFrame ?? committedFrame;
   const sidebarPanel = useRef<HTMLDivElement>(null);
   const sidebarTrigger = useRef<HTMLButtonElement>(null);
   const sidebarCloseButton = useRef<HTMLButtonElement>(null);
@@ -280,8 +236,8 @@ function ConsoleShell() {
   const [regionId, setRegionId] = useState("all");
   const setHeaderPanel = useConsoleUiStore((state) => state.setHeaderPanel);
   const principal = session.current;
-  const organizationId = scene?.scope?.organization.id;
-  const organizationName = scene?.scope?.organization.name;
+  const organizationId = committedFrame.scope?.organization.id;
+  const organizationName = committedFrame.scope?.organization.name;
   const headerIdentity = useMemo(() => ({
     accountType: accountMessages(principal?.loginName.includes("@") ? "child" : "primary"),
     loginName: principal?.loginName ?? t("user"),
@@ -349,28 +305,16 @@ function ConsoleShell() {
   }, [sessionLogout, router, setHeaderPanel]);
   const headerLogout = useCallback(() => { setHeaderPanel(null); requestLeave(logout); }, [setHeaderPanel, requestLeave, logout]);
 
-  if (!scene) {
-    return (
-      <LoadingShell
-        error={controlPlane.error ? t(`errors.${controlPlane.error}`) : null}
-        logout={() => requestLeave(logout)}
-        retry={() => void controlPlane.reload()}
-        revoking={session.phase === "revoking"}
-        sessionError={session.error ? authErrors(session.error) : null}
-        selection={navigation.pendingSelection ?? navigation.selection}
-      />
-    );
-  }
-
-  const workspaceVisible = Boolean(scene.workspace && workspaceOpen && !navigation.pendingHref);
-  const workspaceAction = scene.workspace && !navigation.pendingHref ? workspaceActions[scene.workspace.kind] : null;
+  const workspaceVisible = Boolean(scene?.workspace && workspaceOpen && !navigation.pendingHref);
+  const workspaceAction = scene?.workspace && !navigation.pendingHref ? workspaceActions[scene.workspace.kind] : null;
   const WorkspaceActionIcon = workspaceAction?.icon;
-  const activeService = scene.preview ? serviceForSection(scene.section) : undefined;
-  const ProductContextIcon = activeService ? favoriteIcons[activeService.id] : railIcons[scene.productIcon];
-  const productName = activeService ? directory(`services.${activeService.id}.name`) : scene.productId === "console" ? t("consoleName") : directory(`services.${scene.productId}.name`);
-  const selectedPage = scene.navigation.find((item) => item.selected);
-  const localNavigation = scene.navigation.filter((item) => {
-    if (scene.section !== "access" || item.id === "access" || item.id === "settings") return true;
+  const activeService = frame.preview ? serviceForSection(frame.section) : undefined;
+  const ProductContextIcon = activeService ? favoriteIcons[activeService.id] : railIcons[frame.productIcon];
+  const productName = frame.productId === "console" ? t("consoleName") : directory(`services.${frame.productId}.name`);
+  const headerProductName = committedFrame.productId === "console" ? t("consoleName") : directory(`services.${committedFrame.productId}.name`);
+  const selectedPage = frame.navigation.find((item) => item.selected);
+  const localNavigation = frame.navigation.filter((item) => {
+    if (frame.section !== "access" || item.id === "access" || item.id === "settings") return true;
     if (item.id === "users") return accountCapabilities.canListUsers;
     if (item.id === "groups") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canListGroups;
     if (item.id === "policies") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canViewPolicies;
@@ -378,14 +322,9 @@ function ConsoleShell() {
     return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canListUsers;
   });
   const accessTitles = { "create-user": accountText("createUserTitle"), "create-group": iamWorkspaceText("createGroup"), "create-policy": iamWorkspaceText("createPolicy"), "create-role": iamWorkspaceText("createRole"), tenants: accountText("tenantAccounts") };
-  const accessView = scene.content.kind === "access" ? scene.content.view : undefined;
-  const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : scene.section === "overview" ? dashboard("title") : t(`pages.${scene.section}.title`);
-  const pendingSelection = navigation.pendingSelection;
-  const contentFallbackVisible = navigation.contentFallbackVisible;
-  const pendingView = pendingSelection?.section === "access" ? pendingSelection.view : undefined;
-  const pendingPageTitle = pendingSelection ? pendingView && pendingView in accessTitles ? accessTitles[pendingView as keyof typeof accessTitles] : navigationText(`items.${pendingSelection.view ?? pendingSelection.section}.label`) : pageTitle;
-  const visiblePageTitle = contentFallbackVisible ? pendingPageTitle : pageTitle;
-  const loadingLabel = pendingSelection ? t("openingPage", { name: pendingPageTitle }) : t("refreshingPage");
+  const accessView = frame.section === "access" ? pendingSelection?.view ?? navigation.selection.view : undefined;
+  const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : frame.section === "overview" ? dashboard("title") : t(`pages.${frame.section}.title`);
+  const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");
 
   function resizeWorkspace(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -441,8 +380,8 @@ function ConsoleShell() {
             identity={headerIdentity}
             onLogout={headerLogout}
             revoking={session.phase === "revoking"}
-            scene={scene}
-            productName={productName}
+            scene={committedFrame}
+            productName={frame.preview ? headerProductName : productName}
             scope={headerScope}
           />
 
@@ -450,14 +389,14 @@ function ConsoleShell() {
 
           <ServiceLayout>
             <Sider className={styles.sider}>
-              <Sider.RailMenu data-surface="shell" aria-label={scene.preview ? navigationText("favorites") : t("productNavigation")} className={styles.rail}>
+              <Sider.RailMenu data-surface="shell" aria-label={frame.preview ? navigationText("favorites") : t("productNavigation")} className={styles.rail}>
                 <Link aria-label={t("dashboardHome")} className={styles.railHome} href="/console/" onClick={closeSidebarAndRestoreFocus}><LayoutDashboard aria-hidden="true" /></Link>
                 <span className={styles.railDivider} />
-                {scene.preview ? favorites.flatMap((id) => services.filter((service) => service.id === id)).map((service) => {
+                {frame.preview ? favorites.flatMap((id) => services.filter((service) => service.id === id)).map((service) => {
                   const Icon = favoriteIcons[service.id];
                   const selected = service.id === activeService?.id;
                   return <Link aria-current={selected ? "page" : undefined} aria-label={service.label} className={styles.railItem} data-selected={selected ? "true" : undefined} href={service.href} key={service.id} onNavigate={closeSidebarAndRestoreFocus} onAccepted={() => useConsoleUiStore.getState().visitService(service.id)} title={service.label}><span className={styles.railIndicator} /><Icon aria-hidden="true" /><span className={styles.railTooltip}>{service.label}</span></Link>;
-                }) : scene.rail.slice(1).map((item) => {
+                }) : frame.rail.slice(1).map((item) => {
                   const Icon = railIcons[item.icon];
                   const label = directory(`services.${item.id === "access" ? "iam" : "postgresql"}.name`);
                   return (
@@ -466,7 +405,7 @@ function ConsoleShell() {
                     </Link>
                   );
                 })}
-                {scene.preview ? <button aria-label={navigationText("addFavorite")} className={styles.railItem} onClick={() => setHeaderPanel("products")} title={navigationText("addFavorite")} type="button"><Star aria-hidden="true" /><span className={styles.railTooltip}>{navigationText("addFavorite")}</span></button> : null}
+                {frame.preview ? <button aria-label={navigationText("addFavorite")} className={styles.railItem} onClick={() => setHeaderPanel("products")} title={navigationText("addFavorite")} type="button"><Star aria-hidden="true" /><span className={styles.railTooltip}>{navigationText("addFavorite")}</span></button> : null}
               </Sider.RailMenu>
 
               <Sider.ContextMenu
@@ -483,14 +422,14 @@ function ConsoleShell() {
                   <strong title={productName}>{productName}</strong>
                   <Button aria-label={t("closeNavigation")} className={styles.contextCloseButton} onClick={closeSidebarAndRestoreFocus} ref={sidebarCloseButton} iconOnly size="small" variant="ghost"><X aria-hidden="true" /></Button>
                 </div>
-                <nav aria-label={t("navigation")} className={styles.contextNavigation} data-compact={scene.section === "access" ? "true" : undefined}>
+                <nav aria-label={t("navigation")} className={styles.contextNavigation} data-compact={frame.section === "access" ? "true" : undefined}>
                   {localNavigation.map((item, index) => {
                     const Icon = navigationIcons[item.icon];
                     return (
                       <Fragment key={item.id}>
                       {item.group && item.group !== localNavigation[index - 1]?.group ? <p>{iamWorkspaceText(item.group)}</p> : null}
                       <Link aria-current={item.selected ? "page" : undefined} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={item.href} onClick={closeSidebarAndRestoreFocus}>
-                        <Icon aria-hidden="true" /><span><strong>{navigationText(`items.${item.messageKey}.label`)}</strong>{scene.section !== "access" ? <small title={navigationText(`items.${item.messageKey}.hint`)}>{navigationText(`items.${item.messageKey}.hint`)}</small> : null}</span>{typeof item.count === "number" ? <em>{item.count}</em> : null}
+                        <Icon aria-hidden="true" /><span><strong>{navigationText(`items.${item.messageKey}.label`)}</strong>{frame.section !== "access" ? <small title={navigationText(`items.${item.messageKey}.hint`)}>{navigationText(`items.${item.messageKey}.hint`)}</small> : null}</span>{typeof item.count === "number" ? <em>{item.count}</em> : null}
                       </Link>
                       </Fragment>
                     );
@@ -498,7 +437,7 @@ function ConsoleShell() {
                 </nav>
                 <div className={styles.contextCallout}>
                   <CircleGauge aria-hidden="true" />
-                  <div><strong>{scene.preview ? t("previewEnvironment") : t("localDeployment")}</strong><span>{scene.preview ? t("previewDescription") : t("deploymentDescription")}</span></div>
+                  <div><strong>{frame.preview ? t("previewEnvironment") : t("localDeployment")}</strong><span>{frame.preview ? t("previewDescription") : t("deploymentDescription")}</span></div>
                 </div>
               </Sider.ContextMenu>
               <Sider.ResizeHandle />
@@ -507,16 +446,19 @@ function ConsoleShell() {
             <button aria-hidden="true" aria-label={t("closeNavigation")} className={styles.overlayBackdrop} onClick={closeSidebarAndRestoreFocus} tabIndex={-1} type="button" />
 
             <Layout.Content>
-              <ContentPage parentLabel={pageTitle} pending={Boolean(pendingSelection)} fallback={contentFallbackVisible} data-navigating={pendingSelection ? "true" : undefined}>
-                <Suspense fallback={<ContentPage.Header title={visiblePageTitle} />}><ConsolePageHeader title={visiblePageTitle} selection={contentFallbackVisible && pendingSelection ? pendingSelection : navigation.selection} pendingHref={contentFallbackVisible ? navigation.pendingHref : null} className={styles.pageHeader}
+              <ContentPage parentLabel={pageTitle} pending={Boolean(pendingSelection)} data-navigating={pendingSelection ? "true" : undefined}>
+                <Suspense fallback={<ContentPage.Header title={pageTitle} />}><ConsolePageHeader title={pageTitle} selection={pendingSelection ?? navigation.selection} pendingHref={navigation.pendingHref} className={styles.pageHeader}
                   leading={<Button aria-controls="console-product-navigation" aria-expanded={sidebarOverlayOpen} aria-label={t("openNavigation")} className={styles.mobileMenuButton} onClick={openSidebar} ref={sidebarTrigger} iconOnly size="small" variant="ghost"><Menu aria-hidden="true" /></Button>}
-                  trailing={workspaceAction && WorkspaceActionIcon ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={{ id: "workspace", label: t(`workspaceActions.${scene.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`), icon: workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />, disabled: Boolean(pendingSelection), controls: "console-workspace", expanded: workspaceVisible, onSelect: toggleWorkspaceWithFocus, variant: workspaceVisible || !workspaceAction.primary ? "secondary" : "primary" }} /> : undefined}
-                  progress={!pendingSelection && controlPlane.loading && scene.section !== "access" ? <Progress aria-label={loadingLabel} className={styles.navigationProgress} /> : null} /></Suspense>
-                <ContentPage.Body transitionKey={navigation.currentHref} pending={Boolean(pendingSelection)} loading={contentFallbackVisible && pendingSelection ? <div className={styles.pageCanvas}><PageSkeleton label={loadingLabel} layout={pageSkeletonLayout(pendingSelection)} /></div> : undefined}>
-                  <div aria-busy={controlPlane.loading && scene.section !== "access"} className={styles.pageCanvas}>
+                  trailing={workspaceAction && WorkspaceActionIcon ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={{ id: "workspace", label: t(`workspaceActions.${scene!.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`), icon: workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />, disabled: Boolean(pendingSelection), controls: "console-workspace", expanded: workspaceVisible, onSelect: toggleWorkspaceWithFocus, variant: workspaceVisible || !workspaceAction.primary ? "secondary" : "primary" }} /> : undefined}
+                  progress={!pendingSelection && controlPlane.loading && frame.section !== "access" ? <Progress aria-label={loadingLabel} className={styles.navigationProgress} /> : null} /></Suspense>
+                <ContentPage.Body transitionKey={navigation.currentHref} pending={Boolean(pendingSelection)} loading={pendingSelection ? <div className={styles.pageCanvas}><PageSkeleton key={navigation.pendingHref} label={loadingLabel} layout={pageSkeletonLayout(pendingSelection)} /></div> : undefined}>
+                  <div aria-busy={controlPlane.loading && frame.section !== "access"} className={styles.pageCanvas}>
                     {session.error ? <Alert className={styles.feedback} status="danger">{authErrors(session.error)}</Alert> : null}
-                    {controlPlane.error ? <Alert className={styles.feedback} status="danger">{t(`errors.${controlPlane.error}`)}</Alert> : null}
-                    <ConsoleContentRenderer scene={scene.content} scope={{ regionId }} />
+                    {controlPlane.error ? scene ? <Alert className={styles.feedback} status="danger">{t(`errors.${controlPlane.error}`)}</Alert> : <div role="alert"><EmptyState title={t("loadFailed")} description={t(`errors.${controlPlane.error}`)} icon={<ServerCog />} action={<div className={styles.recoveryActions}>
+                      <Button onClick={() => void controlPlane.reload()} variant="secondary"><RefreshCcw aria-hidden="true" />{t("retry")}</Button>
+                      <Button asChild variant="ghost"><Link href="/console/access/">{t("openAccess")}</Link></Button>
+                    </div>} /></div> : null}
+                    {scene ? <ConsoleContentRenderer scene={scene.content} scope={{ regionId }} /> : !controlPlane.error ? <PageSkeleton label={loadingLabel} layout={pageSkeletonLayout(navigation.selection)} /> : null}
                   </div>
                 </ContentPage.Body>
               </ContentPage>
@@ -544,7 +486,7 @@ function ConsoleShell() {
                 tabIndex={0}
               />
               <Button aria-label={t("closeWorkspace")} className={styles.workspaceCloseButton} onClick={closeWorkspaceAndRestoreFocus} ref={workspaceCloseButton} iconOnly size="small" variant="ghost"><X aria-hidden="true" /></Button>
-              {scene.workspace ? <ConsoleWorkspaceRenderer scene={scene.workspace} /> : null}
+              {scene?.workspace ? <ConsoleWorkspaceRenderer scene={scene.workspace} /> : null}
             </Layout.Workspace>
           </ServiceLayout>
         </App.Base>
@@ -572,7 +514,7 @@ export function ConsoleShellRenderer({ accountRepository, experience, repository
     <ConsoleNavigationProvider selection={selection}>
       <AccountAccessProvider active={selection.section === "access"} repository={accountRepository}>
         <ControlPlaneProvider experience={experience} repository={repository} selection={selection}>
-          <ConsoleShell />
+          <ConsoleShell experience={experience} />
         </ControlPlaneProvider>
       </AccountAccessProvider>
     </ConsoleNavigationProvider>

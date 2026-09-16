@@ -19,7 +19,7 @@ const HeadingSlotContext = createContext<HeadingSlot | null>(null);
 const HeaderStateContext = createContext<{ heading: HeadingContribution | null; scrollKey: string | null; pending: boolean; setTarget(target: HTMLDivElement | null): void } | null>(null);
 const ScrollPositionContext = createContext<Map<string, number> | null>(null);
 
-function ContentPageRoot({ className, children, parentLabel, pending = false, fallback = pending, ...props }: ComponentPropsWithoutRef<"section"> & { parentLabel?: string; pending?: boolean; fallback?: boolean }) {
+function ContentPageRoot({ className, children, parentLabel, pending = false, ...props }: ComponentPropsWithoutRef<"section"> & { parentLabel?: string; pending?: boolean }) {
   const [target, setTarget] = useState<HTMLDivElement | null>(null);
   const [heading, setHeading] = useState<HeadingContribution | null>(null);
   const [positions] = useState(() => new Map<string, number>());
@@ -27,7 +27,7 @@ function ContentPageRoot({ className, children, parentLabel, pending = false, fa
   // Only presentation metadata reaches the header. Actions keep their feature
   // providers through a portal; form state never travels through the shell.
   const slot = useMemo(() => ({ target, parentLabel, update: setHeading, remove }), [target, parentLabel, remove]);
-  const header = useMemo(() => ({ heading: fallback ? null : heading, scrollKey: heading?.scrollKey ?? null, pending, setTarget }), [heading, pending, fallback]);
+  const header = useMemo(() => ({ heading: pending ? null : heading, scrollKey: heading?.scrollKey ?? null, pending, setTarget }), [heading, pending]);
   return <HeadingSlotContext.Provider value={slot}><HeaderStateContext.Provider value={header}><ScrollPositionContext.Provider value={positions}>
     <section className={classNames(styles.page, className)} {...props}>{children}</section>
   </ScrollPositionContext.Provider></HeaderStateContext.Provider></HeadingSlotContext.Provider>;
@@ -142,7 +142,7 @@ function Body({ children, className, pending = false, loading, transitionKey, ..
       }
       props.onScroll?.(event);
     }} aria-busy={pending || props["aria-busy"]} className={classNames(styles.body, className)}>
-      <div aria-hidden={pending || undefined} className={styles.content} hidden={showLoading} inert={pending} key={transitionKey}>{children}</div>
+      <div aria-hidden={pending || undefined} className={styles.content} hidden={pending} inert={pending} key={transitionKey}>{children}</div>
     </div>
     {showLoading ? <div className={classNames(styles.body, styles.pending)}>{loading}</div> : null}
   </div>;
