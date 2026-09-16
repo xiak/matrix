@@ -21,8 +21,9 @@ var (
 type CredentialType string
 
 const (
-	CredentialSession CredentialType = "SESSION"
-	CredentialService CredentialType = "SERVICE"
+	CredentialSession     CredentialType = "SESSION"
+	CredentialService     CredentialType = "SERVICE"
+	CredentialRoleSession CredentialType = "ROLE_SESSION"
 )
 
 type CredentialIssuer struct {
@@ -134,5 +135,5 @@ func VerifyCredential(
 }
 
 func knownCredentialType(value CredentialType) bool {
-	return value == CredentialSession || value == CredentialService
+	return value == CredentialSession || value == CredentialService || value == CredentialRoleSession
 }

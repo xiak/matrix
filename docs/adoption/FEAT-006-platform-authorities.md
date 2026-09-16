@@ -492,3 +492,18 @@ triples, quotas or unimplemented MFA/IdP/service selectors. The primary
 identity from a caller-chosen session label. The role-concepts page timed out;
 its fresh contents were not used as new evidence. Exact Matrix fields, lock
 invariants, actions, budgets and acceptance remain owned by006.
+
+For R2, fixed `bf7e8fbbdffe96b8af5b250edd1ed746c5b99265` is `REUSE` for
+the complete Role/trust owner, source-qualified current sessions, opaque
+credential issuer and immutable IAM facts. Its cursor's full attachment,
+membership, Policy/default and boundary revision projection is `ADAPT` for
+source-authority change detection, not a cursor or digest that grants access.
+Current-Allow-only checks that revive a session after revoke/regrant, a Role
+stored as a USER, and a second policy/canonical or credential implementation
+are `REJECT`. Existing USER-only Subject/Audit/Operation handling is `ADAPT`
+only with a complete typed ROLE lineage and actual consumer/storage gates;
+enum-only acceptance or platform/probe widening is `REJECT`. The existing
+once-only secret response owner is `ADAPT` for issuance, while permanent
+plaintext replay, silent reissuance after unknown outcome and a generic
+receipt/cache service are `REJECT`. R2 does not adopt a new deployment or
+release profile from another task.

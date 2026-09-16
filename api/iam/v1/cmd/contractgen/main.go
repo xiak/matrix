@@ -373,6 +373,7 @@ func structContracts() map[string]reflect.Type {
 		"RoleAccess":                          openapi31.StructType[iamv1.RoleAccess](),
 		"RoleTrustVersionList":                openapi31.StructType[iamv1.RoleTrustVersionList](),
 		"CreateRoleRequest":                   openapi31.StructType[iamv1.CreateRoleRequest](),
+		"AssumeRoleRequest":                   openapi31.StructType[iamv1.AssumeRoleRequest](),
 		"UpdateRoleRequest":                   openapi31.StructType[iamv1.UpdateRoleRequest](),
 		"SetRoleStatusRequest":                openapi31.StructType[iamv1.SetRoleStatusRequest](),
 		"SetRoleTrustPolicyRequest":           openapi31.StructType[iamv1.SetRoleTrustPolicyRequest](),
@@ -414,6 +415,17 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if owner == "AssumeRoleRequest" {
+		switch jsonName {
+		case "durationSeconds":
+			base = object{"type": "integer", "minimum": iamv1.MinRoleSessionDurationSeconds, "maximum": iamv1.MaxRoleSessionDurationSeconds,
+				"default": iamv1.DefaultRoleSessionDurationSeconds}
+		case "sessionPolicy":
+			base = openapi31.Ref("PolicyDocument")
+			base["type"] = "object"
+			base["properties"] = object{"scope": object{"const": string(iamv1.AuthorityScopeTenant)}}
+		}
+	}
 	if owner == "Role" || owner == "CreateRoleRequest" || owner == "UpdateRoleRequest" || owner == "RoleDeletion" {
 		switch jsonName {
 		case "name":
@@ -424,7 +436,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			base["maxItems"], base["uniqueItems"] = 50, true
 			base["description"] = "Literal metadata only. UTF-8 limits, unique keys and the 4096-byte aggregate name/description/tag budget require authoritative validation."
 		case "maxSessionDurationSeconds":
-			base = object{"type": "integer", "minimum": 60, "maximum": 43200}
+			base = object{"type": "integer", "minimum": iamv1.MinRoleSessionDurationSeconds, "maximum": iamv1.MaxRoleSessionDurationSeconds}
 			if owner == "CreateRoleRequest" {
 				base["default"] = iamv1.DefaultRoleSessionDurationSeconds
 			}

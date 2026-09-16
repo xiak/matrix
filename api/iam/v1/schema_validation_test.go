@@ -14,6 +14,40 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestAssumeRoleRequestSchemaMatchesTheClosedIntent(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AssumeRoleRequest")
+	base := `{"resourceVersion":1,"requestId":"assume-role"}`
+	policy := `{"languageVersion":"1","scope":"TENANT","statements":[{"sid":"read","effect":"ALLOW","actions":["paas.application.read"],"resources":[{"kind":"APPLICATION","match":"ANY_IN_AUTHORITY"}]}]}`
+	with := func(member string) string { return strings.TrimSuffix(base, "}") + "," + member + "}" }
+	for _, sample := range []struct {
+		wire  string
+		valid bool
+	}{
+		{base, true}, {with(`"durationSeconds":60`), true}, {with(`"durationSeconds":43200`), true},
+		{with(`"sessionPolicy":` + policy), true},
+		{with(`"durationSeconds":null`), false}, {with(`"durationSeconds":59`), false},
+		{with(`"durationSeconds":43201`), false}, {with(`"durationSeconds":"60"`), false},
+		{with(`"sessionPolicy":null`), false}, {with(`"sessionPolicy":{}`), false},
+		{with(`"sessionPolicy":` + strings.Replace(policy, `"TENANT"`, `"INSTALLATION"`, 1)), false},
+		{with(`"accountId":"other"`), false}, {with(`"sourceSessionId":"session-foreign"`), false},
+		{with(`"sourceUserId":"root"`), false}, {with(`"compilation":{}`), false},
+		{`{"resourceVersion":0,"requestId":"assume-role"}`, false}, {`{"requestId":"assume-role"}`, false},
+	} {
+		value, err := jsonschema.UnmarshalJSON(strings.NewReader(sample.wire))
+		if err != nil || (schema.Validate(value) == nil) != sample.valid {
+			t.Fatal("issuance intent schema accepted a different input contract")
+		}
+		var decoded AssumeRoleRequest
+		err = DecodeRequest(strings.NewReader(sample.wire), &decoded)
+		if err == nil {
+			err = ValidateAssumeRoleRequest(decoded)
+		}
+		if (err == nil) != sample.valid {
+			t.Fatal("issuance intent runtime validation differs")
+		}
+	}
+}
+
 func TestRoleManagementRequestsKeepSelectorsAndDefaultsClosed(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	create := `{"name":"Readers","tags":[],"trustPolicy":{"languageVersion":"1","statements":[]},"requestId":"create-role"}`

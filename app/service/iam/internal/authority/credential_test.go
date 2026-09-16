@@ -72,3 +72,35 @@ func TestCredentialFailuresAreNormalized(t *testing.T) {
 		t.Fatalf("invalid stored digest error = %v", err)
 	}
 }
+
+func TestRoleCredentialsCannotBeReinterpretedAsLoginOrServiceCredentials(t *testing.T) {
+	// Identical entropy deliberately removes randomness as an explanation for
+	// different digests. Purpose and binding must independently isolate them.
+	types := []CredentialType{CredentialSession, CredentialService, CredentialRoleSession}
+	for _, issuedType := range types {
+		issued, err := NewCredentialIssuer(bytes.NewReader(bytes.Repeat([]byte{0x71}, 32))).Issue(issuedType, "same-id")
+		if err != nil {
+			t.Fatalf("issue %s: %v", issuedType, err)
+		}
+		for _, testedType := range types {
+			lookup, err := LookupCredentialDigest(testedType, issued.Credential)
+			if err != nil || (lookup == issued.LookupDigest) != (testedType == issuedType) {
+				t.Fatalf("lookup purpose %s -> %s was not isolated", issuedType, testedType)
+			}
+			for _, id := range []string{"same-id", "other-id"} {
+				verified, err := VerifyCredential(testedType, id, issued.Credential, issued.VerificationDigest)
+				if err != nil || verified != (testedType == issuedType && id == "same-id") {
+					t.Fatalf("verify purpose/binding %s -> %s/%s was not isolated", issuedType, testedType, id)
+				}
+			}
+		}
+	}
+	if _, err := NewCredentialIssuer(failingEntropy{}).Issue(CredentialRoleSession, "role-session-a"); !errors.Is(err, ErrCredentialGeneration) {
+		t.Fatalf("role credential entropy failure was not normalized: %v", err)
+	}
+	for _, unknown := range []CredentialType{"ROLE", "USER", "role_session", ""} {
+		if _, err := NewCredentialIssuer(nil).Issue(unknown, "same-id"); !errors.Is(err, ErrCredentialGeneration) {
+			t.Fatal("unknown credential purpose accepted")
+		}
+	}
+}

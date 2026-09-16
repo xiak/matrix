@@ -89,6 +89,45 @@ RoleSession必须绑定account、role、原USER、直接承担者、source sessi
 
 会话秘密只在发行成功的专用响应流转，不进入普通Role详情、Audit、日志或journal。发行幂等与丢失回包处理必须与一次性秘密生命周期一起冻结；不能为了重放返回把明文永久入库，也不能把已提交但回包未知当作失败再发另一凭据。R2在上述事务/秘密/历史边界明确前不开放发行。
 
+#### R2 实施契约与集成准入
+
+R2从已验证R1固定`bf7e8fbbdffe96b8af5b250edd1ed746c5b99265`继续。以下身份/记录器和tenant PaaS消费窗口已与Phase 3对齐；这只是实施契约，不是已运行的发行能力。第一步在原纯规则与凭据owner实现有界载体判断、到期上限、第三种凭据目的与严格AssumeRoleRequest/schema组件；暂不在OpenAPI或HTTP声明可调用发行路由，不把规则通过当作AssumeRole验收，也不提前改变当前schema或发布profile。
+
+同账号USER信任匹配必须先完整验证Role、当前RoleTrustVersion与来源身份的归属和摘要；未知/损坏文档不能因前面有Allow而被跳过。匹配Deny优先，空信任/无匹配均不信任；暂停Account、停用/forced USER、失效来源会话和停用Role不能承担。这个载体判断只证明Trust一侧，不授予`iam.role.assume`或任何业务许可。发行用例还必须在同一真实事务核对当前Assume决定和实际bearer的generation。
+
+到期取同一数据库时间加请求时长、Role最大时长和来源登录会话到期三者最早。请求范围60–43200秒、默认3600秒；Role上限或来源剩余时间较短时明确返回较短的实际到期，不修改来源会话。到期相等即失效，缺失/非UTC/非微秒时刻失败关闭。独立不透明凭据使用既有CSPRNG和唯一摘要owner，目的为`ROLE_SESSION`；与`SESSION`、`SERVICE`任一目的或绑定ID都不能互换，无新token算法、内存权威或第二种可长期离线放行的签名凭据。
+
+拟定发行入口为`POST /v1/roles/{roleId}:assume`，仅接收resourceVersion、durationSeconds、可选SessionPolicy及requestId。账号、原USER、source session、generation和信任版本由IAM取出，不能由body/header指定。SessionPolicy只接受005作者文档，在发行事务从受信当前Profile编译、保存不可变内容；不创建普通Policy、不进入可变默认指针，也不复用005版本ID伪装成附件。使用唯一编译/canonical owner和相同求值器，缺失明确表示没有额外上限，显式null/空对象/非法内容不当作省略。
+
+发行意图按真实Account+来源USER+原requestId唯一，绑定Role、预期修订、规范请求及实际source session/generation；来源改变不能把同requestId变成新发行。首个提交只返回一次秘密，数据库仅存目的隔离的查找/验证摘要。同请求重放返回EQUAL_REPLAY非敏感结果，不返回旧秘密、不发新秘密、不延长到期；输入变体冲突。`GET /v1/auth/role-sessions/by-request/{requestId}`仅凭当前有效原USER会话查自己的非敏感已提交结果，失去Assume许可后仍可查/撤自己的会话，但不能取得另一USER结果或任何业务许可。NOT_FOUND不证明旧请求已终止；客户端保留原意图，未知结果不得自动换requestId、另取当前expected或重新发行。确定已有发行但秘密丢失后，先撤销原RoleSession，再以明确新意图承担；没有新增通用receipt/重放秘密存储服务。
+
+公开允许决定使用独立ROLE分支：`{type:"ROLE",id:roleId,roleSession:{sessionId,sourceUserId}}`。原始主体就是直接承担USER，不接受角色链或caller sourceIdentity。sourceSessionId、信任版本/digest、credential/security generation、授权向量及SessionPolicy承诺全部只属IAM私有evidence，不传播到PaaS/Audit/Operation、日志或普通响应。PaaS主体/Operation/outbox与Audit actor由决定逐字段映射，不回填假USER或用RoleSessionID冒充Role ID；USER/SERVICE/AGENT/SYSTEM_USER不得携带角色引用，旧编码/哈希不变。角色引用参与业务幂等和创建者身份比较，另一RoleSession不能以相同Role ID重放原会话命令；资源归属仍是Account。当前PaaS数据库仅接受原主体类型，必须在同一纵向片验证存储、HTTP与历史proof，不能只放宽Go枚举。
+
+产品接入沿001的唯一`AuthorizationProfileAction.subjectTypes`能力，类型集合排序、唯一、有界，进入完整canonical/digest与005编译相容检查；不按产品名、scope或第二张许可白名单临时判断ROLE可调用动作。受保护的旧Profile缺字段才沿冻结旧语义解释：INSTALLATION_PROBE仅SERVICE_ACCOUNT，其他仅USER；不改旧bytes或回填字段。新IAM r3管理/Assume明确USER，PaaS r2 tenant业务动作及Audit r2 tenant query明确USER+ROLE，平台/probe仍原主体类型。旧编译版本不能随新目录获得ROLE，必须显式发布并选择新编译默认；新声明也不改旧SYSTEM默认或附件。当前USER使用旧策略的非扩权相容性与新ROLE拒绝必须分别验证。
+
+开发schema冻结为IAM25/Audit15，只有实际SQL/消费切换后才改变readiness。单一`record_authorization`直接7→8参，旧重载删除；所有新决定显式存储contract3。末参是必填角色证据，USER/SERVICE必须显式JSON null并存SQL NULL；ROLE必须有完整分离证明。原principal_id仅用于历史1/2及新USER/SERVICE，ROLE为NULL，不能用原USER占位冒充角色决定；新受保护subject_type、role_id和source_principal_id分别绑定真实ROLE与来源USER的同Account外键。Denied不公开Subject，但私有metadata仍准确绑定actor。
+
+`read_audit_evidence`保持原五列，在原SQL owner内新增角色历史证据校验：发行receipt、session、sourceUSER/session/generation、信任、安全generation、两侧授权/边界/会话限制及冻结Profile引用逐项和原发生时证据一致。任一缺失/篡改拒绝，不查current状态/head、不重授权；旧contract不接受ROLE。claim7、ServiceIdentity、lookup_service及唯一CanonicalizeEvent不改；PaaS开发schema按自己实际输入/存储形状验证，最终不继承另一分支的数字或发布profile。
+
+R2同片实现原Root+当前PDP守护的RoleBoundary read/set/remove，不引用不可管理的隐藏上限。RoleBoundary是必须存在的独立上限；remove明确使Role不可承担并使旧会话永久失效，不解释为无限权限。Role附件、RoleBoundary与可选SessionPolicy使用同一求值器求交，Deny全来源优先；来源USER的业务Allow/平台权限不并入。普通User边界的NONE语义不变，不能将角色边界的缺失关闭反向套用到User。初始同时限制每source USER 16、每Role 128、每Account 1024条未撤销且未到期会话；已因来源变化失去业务资格但尚未撤销/到期的行保守计入，显式自撤销释放名额。配额在真实发行事务、精确范围锁内计算，不靠单实例内存限流或清除不可变历史绕过。数字是初始产品上限，不是吞吐或HA验收结果。
+
+同片提供source USER显式revoke-by-request与ROLE bearer self-logout：精确身份只能撤自己的RoleSession，失去Assume许可不阻止退出，不签发新USER session或伪造Assume decision。封闭tenant IAM事实区分issued（真实USER+原Assume decision）、source revoke（真实USER自服务、无伪业务decision）、self exit（ROLE+精确公开引用）；target均为ROLE_SESSION。ROLE事实仅开放这些自退出、contract3授权决定、已声明PaaS tenant业务与Audit tenant查询映射，平台、probe、安装恢复及R1原root管理仍拒绝；语法能解析不等于历史证据已证明。
+
+| R2 接口 | 认证及权限边界 | 严格命令/结果 |
+| --- | --- | --- |
+| `POST /v1/roles/{roleId}:assume` | USER当前`iam.role.assume` / ROLE，加当前Trust与必需RoleBoundary | 原Role修订、durationSeconds、可省略sessionPolicy、requestId；首次专用秘密响应，等值EQUAL_REPLAY无秘密 |
+| `GET /v1/auth/role-sessions/by-request/{issuanceRequestId}` | 当前同Account原USER；不要求仍可Assume | 只返回自己的原发行身份、到期和当前终态，含秘密/私有来源字段的回包非法 |
+| `POST /v1/auth/role-sessions/by-request/{issuanceRequestId}:revoke` | 当前原USER自服务，仅该USER原发行结果 | 新撤销requestId；末尾outbox与终态原子，未知发行不当作成功撤销 |
+| `GET /v1/auth/role-session` | 目的匹配的ROLE bearer，仅自身身份投影 | Role/Account/sourceUserId/RoleSession ID、到期与状态；不是USER CurrentIdentity或缓存permit |
+| `POST /v1/auth/role-session:logout` | 精确ROLE bearer持有证明，仅撤自身；不要求业务Allow | requestId；`iam.role-session.exited`，不返回新凭据或原USER session |
+| `GET /v1/roles/{roleId}/permission-boundary` | USER当前`iam.role.read` / ROLE | 原Role修订和明确边界引用或null；null表示不可承担 |
+| `PUT /v1/roles/{roleId}/permission-boundary` | 原Root及当前`iam.role.permission-boundary.set` / ROLE | policyId、policyResourceVersion、resourceVersion、requestId；跟随该Policy默认，不能自动关联正向权限 |
+| `DELETE /v1/roles/{roleId}/permission-boundary` | 原Root及当前`iam.role.permission-boundary.remove` / ROLE | resourceVersion、requestId；解除上限关系并关闭承担，不复活旧会话 |
+
+三类会话事实准确命名为`iam.role-session.issued/revoked/exited`。RoleBoundary管理事实为`iam.role.permission-boundary.set/removed`，真实USER+原管理decision、target ROLE；两种自撤销无业务decision，不能与issued共用来源契约。新动作/事实/actor仅在完整契约、SQL与真实消费切换中开放；当前纯请求组件不提供这些HTTP能力。
+
+**撤销后再授权不得复活旧角色会话。** 当前Assume资格仍须每次重算；此外绑定发行时的授权来源修订承诺，至少包含实际附件及修订、成员关系身份/修订、Policy修订/默认精确版本、边界关系/修订和User修订。只有“当前Allow”或当前内容digest不足以识别默认指针切走再切回。复用原目录快照中已经验证的修订素材，不复用cursor作为permit；完整来源的保守失效可能要求重新承担，即使仍有另一条Allow，也不能自动更新旧RoleSession的承诺。Role安全generation覆盖信任选择、状态、期限及角色授权/边界变更；来源credential generation单独固定。显示元数据变化与安全变更区分，最终通过真实ABA/并发和两实例门禁证明，不能仅靠字段命名声称完成。
+
 ## 实现拥有者与复用
 
 沿现有`api/iam/v1`数据/严格编码、`authority`纯规则、`identityaccess`用例事务、postgres受限函数、nethttp、生成器及integration/authorityprocess测试拥有者实施。角色/信任契约如需独立源文件，是为区分承担准入与身份权限文档的编码和安全边界，不建立新服务、通用身份框架或另一套PDP。固定来源与REUSE/ADAPT/REFERENCE/REJECT决策归现有FEAT-006 adoption；UI和第三方provider没有运行时依赖。
@@ -116,6 +155,12 @@ RoleSession必须绑定account、role、原USER、直接承担者、source sessi
 - 固定IAM21解释前驱`1dc1079c4e7bec80f5345d06929875b492ba9a86`真实binary保留数据门禁24.775s：迁移/重启保留原SYSTEM默认、字节、receipt、会话与历史proof；原Root的新Role动作先拒绝，显式发布/关联当前TENANT策略后成功，撤销与Role墓碑在再次迁移/重启后保持。仅这个明确解释边界，不恢复从schema1开始的整条未发布开发升级链，也不证明跨release-profile准入。Audit双schema与HTTP分别7.999s/4.017s通过。
 
 准确Git候选源码的独立干净导出通过全仓race/p2、架构、vet/p2、模块校验、API生成字节稳定与Linux amd64构建；工作目录中遗留的验收源码副本未作为产品源码导入，原架构检查未放宽。固定`bf7e8fbbdffe96b8af5b250edd1ed746c5b99265`已推送；GitHub API核实[Verification35060352506](https://github.com/xiak/matrix/actions/runs/35060352506)精确SHA、go/authority-process/node-process三项全部completed/success。上述证据不是RoleSession、完整006、UI、发布或公有云HA验收。
+
+### R2 发行意图与纯规则基础证据
+
+2026-09-16，既有API/authority测试新增严格AssumeRoleRequest与schema接受矩阵、来源/当前信任关系、空信任与Deny优先、服务/暂停/forced/撤销拒绝、三重到期上限和微秒边界。相同熵、相同ID在SESSION/SERVICE/ROLE_SESSION三种目的之间交叉查找/验证均不能互换；不把随机内容恰好不同当作目的隔离证明。请求编解码拒绝caller账号、主体、source session/generation、trust、编译物、重复字段、null限制和超限；纯信任匹配不会给原USER增加业务Allow。目的常量与schema组件补齐前的缺失测试先失败，接入后通过；这不是复现了既有运行权限漏洞。
+
+精确Git候选的独立干净导出通过全仓`go test -race -p 2 -count=1 ./...`（含架构）、`go vet -p 2 ./...`、模块校验、API生成字节稳定及Linux amd64构建。Go2/768MiB，现有请求round-trip fuzz为15秒/2workers/1秒最小化预算，通过120526次执行。没有新增本地PG、浏览器或运行发行进程；默认跳过的外部fixture不记为真实R2证据。当前HTTP仍无AssumeRole、ROLE业务身份或会话发行/撤销入口，subjectTypes、record8/contract3及角色历史证据尚未实现；开发源码仍24/14/1，发布profile不改。独立CI待精确固定提交另核实。
 
 ## 验收
 

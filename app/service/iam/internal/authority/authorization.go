@@ -11,7 +11,56 @@ var (
 	ErrUnauthenticated             = errors.New("IAM authentication failed")
 	ErrInvalidAuthorizationRequest = errors.New("IAM authorization request is invalid")
 	ErrAuthorityUnavailable        = errors.New("IAM authority state is unavailable")
+	ErrInvalidRoleSessionRequest   = errors.New("IAM role session request is invalid")
 )
+
+// RoleTrustAllowsUser checks only the selected carrier trust. The issuance
+// use case must separately authenticate the exact bearer/generation and obtain
+// a current AssumeRole decision inside its transaction. This is not a permit.
+func RoleTrustAllowsUser(source SubjectContext, role iamv1.Role, version iamv1.RoleTrustVersion, databaseTime time.Time) (bool, error) {
+	if err := validateSubjectContext(source, databaseTime); err != nil {
+		return false, err
+	}
+	if iamv1.ValidateRole(role) != nil || iamv1.ValidateRoleTrustVersion(version) != nil ||
+		role.AccountID != source.Organization.ID || version.AccountID != role.AccountID || version.RoleID != role.ID ||
+		version.ID != role.CurrentTrustVersionID || version.CreatedAt.Before(role.CreatedAt) ||
+		version.CreatedAt.After(role.UpdatedAt) || role.UpdatedAt.After(databaseTime) {
+		return false, ErrAuthorityUnavailable
+	}
+	if source.Principal.Type != iamv1.PrincipalUser || source.Principal.MustChangePassword || role.Status != iamv1.RoleActive {
+		return false, nil
+	}
+	allowed, denied := false, false
+	for _, statement := range version.Document.Statements {
+		for _, principal := range statement.Principals {
+			if principal.ID == source.Principal.ID {
+				allowed = allowed || statement.Effect == iamv1.PolicyAllow
+				denied = denied || statement.Effect == iamv1.PolicyDeny
+			}
+		}
+	}
+	return allowed && !denied, nil
+}
+
+// RoleSessionDeadline uses one authoritative instant. Short source lifetimes
+// are clipped, not renewed to the requested minimum; equality means expired.
+func RoleSessionDeadline(databaseTime time.Time, requestedSeconds, maximumSeconds uint32, sourceExpiresAt time.Time) (time.Time, error) {
+	if validateAuthorityTime(databaseTime) != nil || validateAuthorityTime(sourceExpiresAt) != nil ||
+		maximumSeconds < iamv1.MinRoleSessionDurationSeconds || maximumSeconds > iamv1.MaxRoleSessionDurationSeconds {
+		return time.Time{}, ErrAuthorityUnavailable
+	}
+	if requestedSeconds < iamv1.MinRoleSessionDurationSeconds || requestedSeconds > iamv1.MaxRoleSessionDurationSeconds {
+		return time.Time{}, ErrInvalidRoleSessionRequest
+	}
+	if !databaseTime.Before(sourceExpiresAt) {
+		return time.Time{}, ErrUnauthenticated
+	}
+	deadline := databaseTime.Add(time.Duration(min(requestedSeconds, maximumSeconds)) * time.Second)
+	if sourceExpiresAt.Before(deadline) {
+		deadline = sourceExpiresAt
+	}
+	return deadline, nil
+}
 
 type SubjectContext struct {
 	Organization iamv1.Organization

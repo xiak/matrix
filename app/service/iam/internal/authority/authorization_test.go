@@ -13,6 +13,145 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
+func TestRoleTrustChecksTheSelectedCarrierWithoutGrantingBusinessAuthority(t *testing.T) {
+	now := authorityTestTime()
+	fixture := func() (SubjectContext, iamv1.Role, iamv1.RoleTrustVersion) {
+		source := authoritySubject(now) // Deliberately no identity-policy Allow.
+		role := iamv1.Role{APIVersion: iamv1.APIVersion, Kind: "Role", ID: "role-reader", AccountID: source.Organization.ID,
+			Name: "reader", Tags: []iamv1.RoleTag{}, Management: iamv1.RoleCustomerManaged, Status: iamv1.RoleActive,
+			MaxSessionDurationSeconds: 3600, ResourceVersion: 1, CurrentTrustVersionID: "trust-a",
+			CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}
+		document := iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{
+			{SID: "allow-user", Effect: iamv1.PolicyAllow, Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: source.Principal.ID}}},
+		}}
+		_, digest, err := iamv1.CanonicalizeTrustPolicyDocument(document)
+		if err != nil {
+			t.Fatal(err)
+		}
+		version := iamv1.RoleTrustVersion{APIVersion: iamv1.APIVersion, Kind: "RoleTrustVersion", ID: role.CurrentTrustVersionID,
+			AccountID: role.AccountID, RoleID: role.ID, Document: document, ContentDigest: digest, CreatedAt: role.CreatedAt}
+		return source, role, version
+	}
+	source, role, version := fixture()
+	if allowed, err := RoleTrustAllowsUser(source, role, version, now); err != nil || !allowed {
+		t.Fatalf("valid selected carrier rejected: %v", err)
+	}
+	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-one"})
+	if decision, err := Decide(source, iamv1.ServicePaaS, request, "decision-no-inherited-role", now); err != nil || decision.Allowed {
+		t.Fatal("trust matching changed the source user's business authority")
+	}
+	for _, effect := range []iamv1.PolicyEffect{iamv1.PolicyAllow, iamv1.PolicyDeny} {
+		source, role, version = fixture()
+		version.Document.Statements = append(version.Document.Statements, iamv1.TrustPolicyStatement{SID: "second", Effect: effect,
+			Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: source.Principal.ID}}})
+		for _, reverse := range []bool{false, true} {
+			if reverse {
+				slices.Reverse(version.Document.Statements)
+			}
+			_, version.ContentDigest, _ = iamv1.CanonicalizeTrustPolicyDocument(version.Document)
+			allowed, err := RoleTrustAllowsUser(source, role, version, now)
+			if err != nil || allowed != (effect == iamv1.PolicyAllow) {
+				t.Fatal("carrier evaluation depended on statement order or missed Deny")
+			}
+		}
+	}
+	for name, change := range map[string]func(*SubjectContext, *iamv1.Role, *iamv1.RoleTrustVersion){
+		"empty trust": func(_ *SubjectContext, _ *iamv1.Role, v *iamv1.RoleTrustVersion) {
+			v.Document.Statements = []iamv1.TrustPolicyStatement{}
+		},
+		"other user": func(_ *SubjectContext, _ *iamv1.Role, v *iamv1.RoleTrustVersion) {
+			v.Document.Statements[0].Principals[0].ID = "other-user"
+		},
+		"disabled role": func(_ *SubjectContext, r *iamv1.Role, _ *iamv1.RoleTrustVersion) { r.Status = iamv1.RoleDisabled },
+		"forced user": func(s *SubjectContext, _ *iamv1.Role, _ *iamv1.RoleTrustVersion) {
+			s.Principal.MustChangePassword = true
+		},
+		"service with same ID": func(s *SubjectContext, _ *iamv1.Role, _ *iamv1.RoleTrustVersion) {
+			s.Principal.Type, s.Principal.LoginName = iamv1.PrincipalServiceAccount, ""
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, r, v := fixture()
+			change(&s, &r, &v)
+			_, v.ContentDigest, _ = iamv1.CanonicalizeTrustPolicyDocument(v.Document)
+			if allowed, err := RoleTrustAllowsUser(s, r, v, now); err != nil || allowed {
+				t.Fatalf("untrusted carrier: allowed=%v err=%v", allowed, err)
+			}
+		})
+	}
+	for name, change := range map[string]func(*SubjectContext, *iamv1.Role, *iamv1.RoleTrustVersion){
+		"account suspended": func(s *SubjectContext, _ *iamv1.Role, _ *iamv1.RoleTrustVersion) {
+			s.Organization.Status = iamv1.AccountDisabled
+		},
+		"user disabled": func(s *SubjectContext, _ *iamv1.Role, _ *iamv1.RoleTrustVersion) {
+			s.Principal.Status = iamv1.PrincipalDisabled
+		},
+		"source expires now": func(s *SubjectContext, _ *iamv1.Role, _ *iamv1.RoleTrustVersion) { s.Session.ExpiresAt = now },
+		"source revoked": func(s *SubjectContext, _ *iamv1.Role, _ *iamv1.RoleTrustVersion) {
+			revoked := now.Add(-time.Second)
+			s.Session.Status, s.Session.RevokedAt = iamv1.SessionRevoked, &revoked
+		},
+		"role account":       func(_ *SubjectContext, r *iamv1.Role, _ *iamv1.RoleTrustVersion) { r.AccountID = "other-account" },
+		"trust account":      func(_ *SubjectContext, _ *iamv1.Role, v *iamv1.RoleTrustVersion) { v.AccountID = "other-account" },
+		"trust role":         func(_ *SubjectContext, _ *iamv1.Role, v *iamv1.RoleTrustVersion) { v.RoleID = "other-role" },
+		"unselected version": func(_ *SubjectContext, _ *iamv1.Role, v *iamv1.RoleTrustVersion) { v.ID = "trust-old" },
+		"trust digest": func(_ *SubjectContext, _ *iamv1.Role, v *iamv1.RoleTrustVersion) {
+			v.ContentDigest = "sha256:" + strings.Repeat("0", 64)
+		},
+		"missing trust": func(_ *SubjectContext, _ *iamv1.Role, v *iamv1.RoleTrustVersion) { v.Document.Statements = nil },
+		"trust chronology": func(_ *SubjectContext, r *iamv1.Role, v *iamv1.RoleTrustVersion) {
+			v.CreatedAt = r.UpdatedAt.Add(time.Microsecond)
+		},
+		"unsupported after allow": func(_ *SubjectContext, _ *iamv1.Role, v *iamv1.RoleTrustVersion) {
+			v.Document.Statements = append(v.Document.Statements, iamv1.TrustPolicyStatement{SID: "invalid", Effect: iamv1.PolicyAllow,
+				Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalServiceAccount, ID: "service-account"}}})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, r, v := fixture()
+			change(&s, &r, &v)
+			if allowed, err := RoleTrustAllowsUser(s, r, v, now); err == nil || allowed {
+				t.Fatal("corrupt or inactive carrier state did not fail closed")
+			}
+		})
+	}
+}
+
+func TestRoleSessionDeadlineCannotExtendAnyIssuanceLimit(t *testing.T) {
+	now := authorityTestTime()
+	for _, sample := range []struct {
+		requested, maximum uint32
+		remaining, want    time.Duration
+	}{
+		{3600, 43200, 12 * time.Hour, time.Hour},
+		{43200, 60, time.Hour, time.Minute},
+		{60, 43200, time.Microsecond, time.Microsecond},
+		{43200, 43200, 12 * time.Hour, 12 * time.Hour},
+		{3600, 3600, time.Hour, time.Hour},
+	} {
+		deadline, err := RoleSessionDeadline(now, sample.requested, sample.maximum, now.Add(sample.remaining))
+		if err != nil || !deadline.Equal(now.Add(sample.want)) {
+			t.Fatalf("deadline differs from the shortest exact bound: %v", err)
+		}
+	}
+	for _, duration := range []uint32{0, 1, 59, 43201, ^uint32(0)} {
+		if _, err := RoleSessionDeadline(now, duration, 3600, now.Add(time.Hour)); !errors.Is(err, ErrInvalidRoleSessionRequest) {
+			t.Fatal("invalid requested duration accepted")
+		}
+		if _, err := RoleSessionDeadline(now, 60, duration, now.Add(time.Hour)); !errors.Is(err, ErrAuthorityUnavailable) {
+			t.Fatal("corrupt role duration accepted")
+		}
+	}
+	for _, expiry := range []time.Time{time.Time{}, now, now.Add(-time.Microsecond), now.Add(time.Hour + time.Nanosecond), now.Add(time.Hour).In(time.FixedZone("other", 3600))} {
+		if _, err := RoleSessionDeadline(now, 3600, 3600, expiry); err == nil {
+			t.Fatal("invalid or expired source bound accepted")
+		}
+	}
+	if _, err := RoleSessionDeadline(now.Add(time.Nanosecond), 3600, 3600, now.Add(time.Hour)); !errors.Is(err, ErrAuthorityUnavailable) {
+		t.Fatal("non-authoritative clock accepted")
+	}
+}
+
 func TestSessionAuthenticationUsesBindingDigestRevocationAndDatabaseTime(t *testing.T) {
 	now := authorityTestTime()
 	context := authoritySubject(now, iamv1.SystemPolicyPaaSDeveloper)

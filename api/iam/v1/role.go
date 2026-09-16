@@ -26,6 +26,8 @@ const (
 	RoleDisabled                      RoleStatus     = "DISABLED"
 	RoleCustomerManaged               RoleManagement = "CUSTOMER"
 	DefaultRoleSessionDurationSeconds uint32         = 3600
+	MinRoleSessionDurationSeconds     uint32         = 60
+	MaxRoleSessionDurationSeconds     uint32         = 43200
 	MaxRoleListBytes                  int64          = 4 * 1024 * 1024
 	MaxRoleAccessBytes                int64          = 512 * 1024
 )
@@ -119,6 +121,45 @@ type DeleteRoleRequest struct {
 	RequestID       string `json:"requestId"`
 }
 
+// AssumeRoleRequest contains intent, never authenticated identity or compiled
+// authority. The caller selects a Role by path; the issuing transaction owns
+// account, source session, generation, trust selection and policy compilation.
+type AssumeRoleRequest struct {
+	ResourceVersion uint64          `json:"resourceVersion"`
+	DurationSeconds *uint32         `json:"durationSeconds,omitempty"`
+	SessionPolicy   *PolicyDocument `json:"sessionPolicy,omitempty"`
+	RequestID       string          `json:"requestId"`
+}
+
+func (request *AssumeRoleRequest) UnmarshalJSON(source []byte) error {
+	type wire AssumeRoleRequest
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	for _, key := range []string{"durationSeconds", "sessionPolicy"} {
+		if bytes.Equal(bytes.TrimSpace(fields[key]), []byte("null")) {
+			return contractjson.ErrInvalidDocument
+		}
+	}
+	*request = AssumeRoleRequest(decoded)
+	return nil
+}
+
+func ValidateAssumeRoleRequest(value AssumeRoleRequest) error {
+	if value.DurationSeconds != nil && (*value.DurationSeconds < MinRoleSessionDurationSeconds || *value.DurationSeconds > MaxRoleSessionDurationSeconds) {
+		return errors.New("role session duration is invalid")
+	}
+	if value.SessionPolicy != nil && (value.SessionPolicy.Scope != AuthorityScopeTenant || ValidatePolicyDocument(*value.SessionPolicy) != nil) {
+		return ErrInvalidPolicy
+	}
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
 func (tag *RoleTag) UnmarshalJSON(source []byte) error {
 	var wire struct {
 		Key   *string `json:"key"`
@@ -180,7 +221,7 @@ type RoleDeletion struct {
 
 func validateRoleMetadata(name, description string, tags []RoleTag, duration uint32) error {
 	if validateText("role.name", name, 1, 64) != nil || validateText("role.description", description, 0, 512) != nil ||
-		tags == nil || len(tags) > 50 || duration < 60 || duration > 43200 {
+		tags == nil || len(tags) > 50 || duration < MinRoleSessionDurationSeconds || duration > MaxRoleSessionDurationSeconds {
 		return errors.New("role metadata is invalid")
 	}
 	keys := make(map[string]bool, len(tags))

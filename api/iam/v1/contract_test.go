@@ -27,6 +27,77 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func FuzzAssumeRoleIntentRoundTrip(f *testing.F) {
+	for _, seed := range []string{
+		`{"resourceVersion":1,"requestId":"assume-a"}`,
+		`{"resourceVersion":1,"durationSeconds":60,"requestId":"assume-a"}`,
+		`{"resourceVersion":1,"sessionPolicy":null,"requestId":"assume-a"}`,
+		`{"resourceVersion":1,"sourceUserId":"other","requestId":"assume-a"}`,
+		`{"resourceVersion":1,"durationSeconds":43200,"sessionPolicy":{"languageVersion":"1","scope":"TENANT","statements":[{"sid":"read","effect":"ALLOW","actions":["paas.application.*"],"resources":[{"kind":"APPLICATION","match":"ANY_IN_AUTHORITY"}]}]},"requestId":"assume-a"}`,
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, wire string) {
+		var request AssumeRoleRequest
+		if DecodeRequest(strings.NewReader(wire), &request) != nil || ValidateAssumeRoleRequest(request) != nil {
+			return
+		}
+		encoded, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal("valid issuance intent could not be encoded")
+		}
+		var decoded AssumeRoleRequest
+		if DecodeRequest(bytes.NewReader(encoded), &decoded) != nil || ValidateAssumeRoleRequest(decoded) != nil || !reflect.DeepEqual(request, decoded) {
+			t.Fatal("issuance intent changed through its strict codec")
+		}
+	})
+}
+
+func TestAssumeRoleInputCannotSupplyItsOwnIdentityOrCompiledAuthority(t *testing.T) {
+	base := `{"resourceVersion":1,"requestId":"assume-a"}`
+	var request AssumeRoleRequest
+	if DecodeRequest(strings.NewReader(base), &request) != nil || ValidateAssumeRoleRequest(request) != nil || request.DurationSeconds != nil || request.SessionPolicy != nil {
+		t.Fatal("valid intent without optional limits was not preserved")
+	}
+	policy := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant, Statements: []PolicyStatement{
+		{SID: "read-only", Effect: PolicyAllow, Actions: []Action{ActionPaaSApplicationRead}, Resources: []PolicyResourceSelector{{Kind: ResourceApplication, Match: PolicyResourceAnyInAuthority}}},
+	}}
+	encodedPolicy, err := json.Marshal(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withPolicy := strings.TrimSuffix(base, "}") + `,"durationSeconds":60,"sessionPolicy":` + string(encodedPolicy) + `}`
+	if DecodeRequest(strings.NewReader(withPolicy), &request) != nil || ValidateAssumeRoleRequest(request) != nil || request.DurationSeconds == nil || *request.DurationSeconds != 60 || request.SessionPolicy == nil {
+		t.Fatal("bounded authored session policy was not accepted")
+	}
+	for _, member := range []string{
+		`"accountId":"other"`, `"tenantId":"other"`, `"sourceUserId":"root"`, `"sourceSessionId":"other"`,
+		`"credentialGeneration":1`, `"roleGeneration":1`, `"roleId":"other"`, `"trustVersionId":"other"`,
+		`"sourceIdentity":"root"`, `"credentials":"secret"`, `"compilation":{}`, `"profiles":[]`,
+		`"durationSeconds":null`, `"sessionPolicy":null`, `"sessionPolicy":{}`, `"durationSeconds":0`,
+		`"durationSeconds":59`, `"durationSeconds":43201`, `"durationSeconds":-1`, `"durationSeconds":"60"`,
+		`"resourceVersion":1`, `"RequestId":"assume-a"`,
+	} {
+		candidate := strings.TrimSuffix(base, "}") + "," + member + "}"
+		var rejected AssumeRoleRequest
+		if DecodeRequest(strings.NewReader(candidate), &rejected) == nil && ValidateAssumeRoleRequest(rejected) == nil {
+			t.Fatalf("invalid or authority-bearing intent accepted: %s", member)
+		}
+	}
+	for _, candidate := range []string{
+		`{}`, `{"requestId":"assume-a"}`, `{"resourceVersion":0,"requestId":"assume-a"}`,
+		`{"resourceVersion":1,"requestId":""}`, base + `{}`, "null",
+		strings.TrimSuffix(base, "}") + `,"padding":"` + strings.Repeat("x", int(MaxRequestBytes)) + `"}`,
+		strings.Replace(withPolicy, `"scope":"TENANT"`, `"scope":"INSTALLATION"`, 1),
+		strings.Replace(withPolicy, `"sessionPolicy":{`, `"sessionPolicy":{"principal":"root",`, 1),
+	} {
+		var rejected AssumeRoleRequest
+		if DecodeRequest(strings.NewReader(candidate), &rejected) == nil && ValidateAssumeRoleRequest(rejected) == nil {
+			t.Fatal("malformed or excessive issuance intent accepted")
+		}
+	}
+}
+
 func TestRoleMetadataAndAccessAreSeparateFromLoginAuthority(t *testing.T) {
 	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
 	role := Role{APIVersion: APIVersion, Kind: "Role", ID: "role-a", AccountID: "account-a", Name: "Readers",
