@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1 角色管理、R2 同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示，以及来源代际/身份锁安全修复，已在累计固定`1ebab37aef4bce12b963f52d3919748a9d50d4c6`通过本地完整真库、旧数据、独立进程、全仓检查和三项独立CI。R3管理会话后端已实现并有本地真库/并发/保留数据/独立进程证据，固定提交与独立CI待确认。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。UX/UI、容量和发布未完成，整体006未验收。
+- 状态：R1角色管理、R2同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示及管理员会话管理后端，已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`通过本地真库/并发/保留数据/独立进程/全仓检查和三项独立CI；包含原`1ebab37a`的来源代际/身份锁修复。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。UX/UI、容量和发布未完成，整体006未验收。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -274,7 +274,7 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 
 ### R3 管理会话实施契约
 
-本片从已验证固定`1ebab37aef4bce12b963f52d3919748a9d50d4c6`推进，接口与事务已实现，累计门禁仍在收口，尚无独立CI验收结论。共享窗口已与Phase 3确认，UI页面与浏览器仍由010 owner负责。
+本片从已验证固定`1ebab37aef4bce12b963f52d3919748a9d50d4c6`推进，接口与事务已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`完成本地及独立CI门禁。共享窗口已与Phase 3确认，UI页面与浏览器仍由010 owner负责。
 
 | API | 当前USER权限 | 结果与范围 |
 | --- | --- | --- |
@@ -301,7 +301,7 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 - 原私有会话引用门禁扩展到管理员撤销，当前会话为正控，缺失、畸形、未知、其他USER、已撤销、已过期、旧/NULL代际均拒绝且无部分会话、目录、决定或成功事实。旧/NULL行仅用于明确的合成负向检查，不冒充旧binary升级证据。原最短TTL真实到期门禁证明EXPIRED投影、撤销冲突及无状态改变；ROLE持有者仍能沿原独立退出契约销毁凭据。
 - 末端outbox注入失败回滚会话、目录水位、决定和事实；函数权限、RLS、外键、代际范围/default、触发器、索引和search_path漂移关闭readiness。schema与bootstrap等值重放不重置已有水位、撤销或权限。最初累计角色门禁的旧断言误将新list动作归为写操作；明确区分两项读取能力后，完整R1门禁在新库31.725秒通过，全部原root写保护保留。
 - 现有实际固定R2 executable保留数据门禁验证新目录的初始水位及重放不变；新Profile注册不改旧SYSTEM默认或自动补管理权限。原root显式发布/关联当前TENANT策略后才可读历史目录；旧version1当前业务仍关闭，新version2可访问PaaS并经管理员终止。原receipt、发行、Operation、私证及Audit canonical/hash不变，不声称跨release-profile升级。
-- 干净候选源码的Audit双authority/历史分区7.185秒、Audit HTTP3.610秒、固定IAM21/R1/R2与独立双IAM/PaaS/Audit进程110.795秒、PaaS数据4.804秒通过。跨副本撤销/重放后，IAM和PaaS下一请求拒绝旧ROLE；原操作者退出或授权变化后，历史outbox投递、去重、防伪和重启仍正确。相同生产源码已通过全仓race/架构/vet、模块校验、两次契约生成字节一致及Linux构建；最终固定对象的独立CI尚待确认。
+- 干净候选源码的Audit双authority/历史分区7.185秒、Audit HTTP3.610秒、固定IAM21/R1/R2与独立双IAM/PaaS/Audit进程110.795秒、PaaS数据4.804秒通过。跨副本撤销/重放后，IAM和PaaS下一请求拒绝旧ROLE；原操作者退出或授权变化后，历史outbox投递、去重、防伪和重启仍正确。最终准确Git树`a455eedc59429bc97eb3b8654588663693ea7ea6`通过全仓race/架构/vet、模块校验、两次契约生成字节一致及Linux构建。实现固定`62a18a48168e87a4158b95eba41427b445ed10d1`已推送；GitHub API核实[Verification35136745680](https://github.com/xiak/matrix/actions/runs/35136745680)精确SHA，go、authority-process、node-process三项全部completed/success；真库/历史/独立进程步骤实际执行成功，不以跳过替代验收。
 
 ### 来源授权代际本地证据
 

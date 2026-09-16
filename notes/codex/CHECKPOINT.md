@@ -4,87 +4,81 @@
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Only this
   task's independent worktree is writable. Updated 2026-09-17.
-- Latest locally and independently verified, pushed implementation:
-  1ebab37aef4bce12b963f52d3919748a9d50d4c6, cumulative through R3 self-service
-  and irreversible RoleSession source authority. GitHub API confirmed exact
-  Verification35123738141 completed/success: go, authority-process and
-  node-process all succeeded. It is the current verified rollback point.
-- Previous independently verified R2 fixed point:
-  0752c602ab4ce6d73a21094c8e9f75a1c8750183, Verification35096275242 all three
-  jobs success. Its original ABA matrix did not cover the four source changes
-  now repaired. R3 fixed960416dd/35110913530 failed its aggregate IAM timeout;
-  never reclassify that run as successful.
-- Current development source IAM27/Audit15/PaaS2. Published release profile
-  unchanged. Local evidence and exact retained-source boundaries belong006;
-  execution-budget/CI boundaries belong011. This is not whole IAM acceptance.
+- Latest independently verified, pushed implementation:
+  62a18a48168e87a4158b95eba41427b445ed10d1, administrator RoleSession
+  directory/read/revocation, cumulative through R1/R2/R3 and source authority.
+  GitHub API verified exact Verification35136745680 completed/success:
+  go, authority-process and node-process all succeeded. This is the rollback
+  point, not full IAM, UI, capacity or release acceptance.
+- Previous source-authority point 1ebab37aef4bce12b963f52d3919748a9d50d4c6 /
+  Verification35123738141 all three success. Original R2 had incomplete ABA
+  coverage; R3 fixed960416dd/35110913530 failed its aggregate timer. Do not
+  relabel either historical result.
+- Current source IAM28/Audit16/PaaS2, IAM product Profile r4. Published release
+  profile/revision unchanged; record8/evidence5/claim7, ServiceIdentity,
+  lookup_service and old Audit canonical unchanged.
 
 ## Continue the full goal
 
-Whole IAM goal remains ACTIVE. Read AGENTS, IAM/FEAT-IAM-006-roles-and-sts.md,
-then owning API/usecase/adapter/tests. Implement the pending administrator
-RoleSession directory/revocation
-slice in006, followed by the remaining FEAT requirements. Do not shrink the
-goal to R2/R3, duplicate UI or create a generic SessionStore/Redis layer.
+Whole IAM goal remains ACTIVE. Read AGENTS,
+IAM/FEAT-IAM-007-programmatic-credentials.md, then the owning credential,
+PDP and PEP code. Further policy delegation/IP, program credentials,
+product/service integration, governance, UI and cumulative HA/capacity/release
+acceptance remain in their FEAT owners. Do not shrink the goal to Role/STS
+or add a generic SessionStore/Redis layer.
 
-All local candidate gates are terminal and passed: exact clean-source whole
-race/architecture/vet/module/generation/Linux checks, complete serial IAM
-and Audit PG18 matrices, actual fixed IAM21/R1/R2 retained executables and
-independent IAM/PaaS/Audit business/dispatcher gates. One process assertion
-initially still expected IAM26; only that source-shape expectation changed
-to27 and the complete process gate passed again in new databases. Nothing
-weakened release admission or converted skipped browser/history tests to pass.
+## Verified role-session boundary
 
-## Current security boundary
+ROLE and USER credentials are distinct. RoleSession version2 binds monotonic
+source USER authorization and all membership/GROUP generations; old qualified
+version1 business access stays closed while original nonsecret intents,
+self-termination and immutable historical proof remain. No migration or
+restored source grant revives an old session. Current credentials and actual
+non-key actor locks remain required; do not hide deadlocks with retries.
 
-USER and ROLE credentials remain separate. Current RoleSession version2
-binds a monotonic USER authorization generation and every current membership,
-including empty groups, with ordered GROUP generations. Specific mutation
-triggers advance only their sources in the same transaction/outbox. The
-account directory row is only a writer lock barrier, never a global session
-generation. Exact replay/failure does not advance; restore cannot revive old
-ROLE business access. New issuance requires a new explicit intent.
+Administrator sessions live only under an exact Role. The three USER/TENANT
+actions list/read/revoke authorize exact ROLE/ROLE_SESSION targets, not
+root-only administration. Page filters are bounded; sparse empty pages with
+nextAfter are valid. Server lifecycle is not business eligibility. Role or
+source invalidity does not prevent an authorized live administrator from
+terminating a remaining unexpired record. Expired/new terminal intents
+conflict; only the original successful intent may equal-replay under current
+authority. New USER admin-revoked fact requires its real decision, unlike
+old source self-revocation/possession-only exit.
 
-Only complete actual old issuances receive protected version1, without
-fabricated generations. Their current business access is closed; original
-non-secret intent, self-revocation/exit and exact historical proof/delivery
-remain. Immutable history does not compare today's source generations.
+The separate per-Role session directory counter changes only on actual
+issuance/termination. It is not a session authorization generation. Exact
+replay and rollback do not advance it. Actual old R2 executable, old SYSTEM
+defaults, explicit new grants, original outbox/Operation/canonical and current
+two-IAM/PaaS/Audit behavior were verified. No complete unpublished schema1
+chain or release compatibility is inferred. Details and evidence belong006.
 
-Runtime diagnostics exposed actor FK KEY SHARE to FOR UPDATE conversion
-deadlocks in Role/Policy writers, User boundaries and attachment create/revoke.
-Those non-key-changing Principal locks now use ordered FOR NO KEY UPDATE,
-including self-target rereads. Real credential/session/platform protections
-remain; final policy/attachment/Role fixtures reject deadlocks hidden by retry.
-record8/evidence5/claim7, ServiceIdentity/lookup_service, public R3 API and old
-Audit canonical remain unchanged. No platform/service/cross-account assumption.
+## Shared windows and peers
 
-## Peers and next shared contract
+UX/UI工程师 01a07b21-9a0d-7fd0-b090-7827ce18262e owns its independent
+feat/cloud-console-ux and all UI/browser work. Hand off only verified fixed
+objects; its role-session preview is not a production contract. The agreed
+page is Role detail > Role sessions, no global directory or batch operation.
 
-UX/UI工程师 01a07b21-9a0d-7fd0-b090-7827ce18262e owns independent
-feat/cloud-console-ux and all UI/browser work. Fixed1ebab37a's exact CI is now
-successful; send this final confirmation without inheriting UI acceptance.
-R3 public endpoints are listAssumableRoles and currentRoleIdentity; no further
-wire change in the source-generation repair. Sparse pages may be empty with
-nextAfter; no management permission needed for self discovery or cached permit.
+Phase3 01a04149-5dbb-7300-9e4c-31d9e85c8ada consumes only verified fixed
+objects and preserves its host/PaaS/release composition. Current 007 ownership
+alignment leaves IAM contracts, key material, nonce/current PDP and tests
+here; actual request construction belongs to product PEPs, installation
+keyring/files/backup/recovery/rotation to installation. Exact new public
+actor/evidence, file environment and schema/release changes must be frozen
+before implementation handoff. No root/ROLE/SERVICE long-term keys; no fake
+Session or reusable USER permit. Keep current host admission unchanged.
 
-UX confirmed the next admin surface is Role detail > Role sessions, not a
-global directory, batch operation or new assumption screen. Its current
-preview model is not a live contract to preserve. Requirements are now in006:
-bounded role-nested filters, matched non-secret USER display, server lifecycle
-observation, exact row capability, precise read for unknown outcomes and one
-irreversible revoke intent. No fake resourceVersion merely to imitate CRUD.
-The exact new action/read/write/receipt/cursor/audit contracts still need
-freezing and real lock/permission evidence before implementation handoff.
-
-Phase3 01a04149-5dbb-7300-9e4c-31d9e85c8ada receives fixed cumulative donors
-only and preserves its own host/PaaS/release composition. Fixed1ebab37a's
-exact CI succeeded; do not import its WIP, profile or acceptance.
-Coordinate new shared actions/ABI before the next public implementation.
+The fixed f51 foundation donor is not present in the available object stores;
+sources.yaml has only its logical repository name, no physical URL/path.
+Do not guess the repository, claim a fresh inspection or copy another WIP.
+Its existing adoption record remains the boundary for prior reference.
 
 ## Runtime discipline
 
 No subagents/new tasks. Go2/-p2; real gates serial race-p1, in own uniquely
-named/labelled CPU/memory/PID-limited fixtures. Inspect actual ownership before
-use or cleanup. For whole-source gates use a clean Git export outside the
+named/labelled CPU/memory/PID-limited fixtures. Verify actual ownership before
+use or cleanup. Whole-source gates use a clean Git export outside the
 checkout with a temporary index; preserve the real index and all other work.
 No peer runtime/worktree changes, withdrawn GitLab/root1.5 work, remote1.3/
 .160/.161 access, remote/shared restart, global configuration or Docker prune.
