@@ -64,6 +64,101 @@ func TestCurrentRoleIdentityHasOnlyBoundDisplayContext(t *testing.T) {
 	}
 }
 
+func TestRoleSessionManagementObservationAndIntent(t *testing.T) {
+	issued := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
+	session := RoleSession{APIVersion: APIVersion, Kind: "RoleSession", ID: "session-a", AccountID: "account-a", RoleID: "role-a",
+		SourceUserID: "user-a", Status: SessionActive, IssuedAt: issued, ExpiresAt: issued.Add(time.Hour)}
+	for _, sample := range []struct {
+		at   time.Time
+		want RoleSessionLifecycle
+	}{
+		{issued, RoleSessionUnrevoked}, {session.ExpiresAt.Add(-time.Microsecond), RoleSessionUnrevoked},
+		{session.ExpiresAt, RoleSessionExpired}, {session.ExpiresAt.Add(time.Hour), RoleSessionExpired},
+	} {
+		got, err := ObserveRoleSession(session, sample.at)
+		if err != nil || got != sample.want {
+			t.Fatal("lifecycle changed at the expiry boundary", got, err)
+		}
+	}
+	if _, err := ObserveRoleSession(session, issued.Add(-time.Microsecond)); err == nil {
+		t.Fatal("accepted a future issuance")
+	}
+	revoked := issued.Add(time.Minute)
+	session.Status, session.RevokedAt = SessionRevoked, &revoked
+	if got, err := ObserveRoleSession(session, session.ExpiresAt); err != nil || got != RoleSessionRevoked {
+		t.Fatal("expiry hid explicit revocation")
+	}
+	if _, err := ObserveRoleSession(session, revoked.Add(-time.Microsecond)); err == nil {
+		t.Fatal("accepted a future revocation")
+	}
+	for _, outcome := range []string{"APPLIED", "EQUAL_REPLAY"} {
+		if ValidateRevokeRoleSessionResponse(RevokeRoleSessionResponse{Outcome: outcome, Session: session}) != nil {
+			t.Fatal("lost terminal outcome")
+		}
+	}
+	if ValidateRevokeRoleSessionResponse(RevokeRoleSessionResponse{Outcome: "UNKNOWN", Session: session}) == nil {
+		t.Fatal("unknown outcome became success")
+	}
+	session.Status, session.RevokedAt = SessionActive, nil
+	if ValidateRevokeRoleSessionResponse(RevokeRoleSessionResponse{Outcome: "APPLIED", Session: session}) == nil {
+		t.Fatal("unrevoked record became success")
+	}
+	for _, lifecycle := range []string{"", "ALL", "UNREVOKED", "EXPIRED", "REVOKED"} {
+		filter, err := NormalizeRoleSessionFilter(RoleSessionFilter{SourceUserID: "user-a", SessionID: "session-a", Lifecycle: lifecycle})
+		if err != nil || (lifecycle == "" && filter.Lifecycle != "UNREVOKED") {
+			t.Fatal("valid closed filter rejected")
+		}
+	}
+	for _, filter := range []RoleSessionFilter{{Lifecycle: "USABLE"}, {Lifecycle: "ACTIVE"}, {Lifecycle: "all"}, {SourceUserID: "*"}, {SessionID: "a/b"}} {
+		if _, err := NormalizeRoleSessionFilter(filter); err == nil {
+			t.Fatal("unsupported filter accepted")
+		}
+	}
+}
+
+func TestRoleSessionManagementViewsBindMinimalCurrentObservation(t *testing.T) {
+	session := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSession","id":"role-session-a","accountId":"account-a","roleId":"role-a","sourceUserId":"user-a","status":"ACTIVE","issuedAt":"2026-09-17T00:00:00Z","expiresAt":"2026-09-17T01:00:00Z"}`
+	item := `{"session":` + session + `,"sourceUser":{"id":"user-a","loginName":"member","displayName":"Member"},"lifecycle":"UNREVOKED","revokeCapability":{"action":"iam.role-session.revoke","resource":{"kind":"ROLE_SESSION","id":"role-session-a"},"available":true}}`
+	wire := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSessionList","accountId":"account-a","roleId":"role-a","observedAt":"2026-09-17T00:01:00Z","items":[` + item + `]}`
+	var listed RoleSessionList
+	if DecodeRequest(strings.NewReader(wire), &listed) != nil || ValidateRoleSessionList(listed) != nil {
+		t.Fatal("valid management observation rejected")
+	}
+	for name, broken := range map[string]string{
+		"source mismatch":                    strings.Replace(wire, `"id":"user-a"`, `"id":"user-b"`, 1),
+		"account mismatch":                   strings.Replace(wire, `"accountId":"account-a"`, `"accountId":"account-b"`, 1),
+		"role mismatch":                      strings.Replace(wire, `"roleId":"role-a"`, `"roleId":"role-b"`, 1),
+		"capability target":                  strings.Replace(wire, `"kind":"ROLE_SESSION","id":"role-session-a"`, `"kind":"ROLE_SESSION","id":"another"`, 1),
+		"capability action":                  strings.Replace(wire, `"iam.role-session.revoke"`, `"iam.role-session.read"`, 1),
+		"lifecycle does not prove usability": strings.Replace(wire, `"UNREVOKED"`, `"USABLE"`, 1),
+		"expired authority":                  strings.Replace(wire, `"observedAt":"2026-09-17T00:01:00Z"`, `"observedAt":"2026-09-17T01:00:00Z"`, 1),
+		"private lineage":                    strings.Replace(wire, `"sourceUserId":"user-a"`, `"sourceUserId":"user-a","sourceSessionId":"private"`, 1),
+		"diagnostic leakage":                 strings.Replace(wire, `"lifecycle":"UNREVOKED"`, `"lifecycle":"UNREVOKED","invalidationReason":"private"`, 1),
+		"null rows":                          strings.Replace(wire, `"items":[`+item+`]`, `"items":null`, 1),
+		"duplicate rows":                     strings.Replace(wire, `"items":[`+item+`]`, `"items":[`+item+`,`+item+`]`, 1),
+		"private cursor":                     strings.TrimSuffix(wire, "}") + `,"nextAfter":"ir1.private"}`,
+		"empty cursor":                       strings.TrimSuffix(wire, "}") + `,"nextAfter":""}`,
+		"caller total":                       strings.TrimSuffix(wire, "}") + `,"total":1}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var value RoleSessionList
+			if DecodeRequest(strings.NewReader(broken), &value) == nil {
+				t.Fatal("invalid projection accepted")
+			}
+		})
+	}
+	empty := strings.Replace(wire, `"items":[`+item+`]`, `"items":[]`, 1)
+	empty = strings.TrimSuffix(empty, "}") + `,"nextAfter":"ic1.opaque-next-window"}`
+	if DecodeRequest(strings.NewReader(empty), &listed) != nil || len(listed.Items) != 0 || listed.NextAfter == "" {
+		t.Fatal("sparse continuation was lost")
+	}
+	access := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSessionAccess","observedAt":"2026-09-17T00:01:00Z","item":` + item + `}`
+	var detail RoleSessionAccess
+	if DecodeRequest(strings.NewReader(access), &detail) != nil {
+		t.Fatal("precise observation rejected")
+	}
+}
+
 func TestAssumableRoleDirectoryIsMinimalBoundedAndAllowsEmptyContinuation(t *testing.T) {
 	item := `{"roleId":"role-a","accountId":"account-a","name":"Reader","status":"ACTIVE","maxSessionDurationSeconds":3600,"resourceVersion":2,"capability":{"action":"iam.role.assume","resource":{"kind":"ROLE","id":"role-a"},"available":true}}`
 	empty := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AssumableRoleList","accountId":"account-a","sourceUserId":"user-a","items":[]}`
@@ -189,7 +284,7 @@ func TestRoleMetadataAndAccessAreSeparateFromLoginAuthority(t *testing.T) {
 	access := RoleAccess{Role: role, TrustVersion: RoleTrustVersion{APIVersion: APIVersion, Kind: "RoleTrustVersion", ID: "trust-a",
 		AccountID: role.AccountID, RoleID: role.ID, Document: document, ContentDigest: digest, CreatedAt: now}, PolicyAttachments: []PolicyAttachment{}}
 	for _, action := range []Action{ActionIAMRoleRead, ActionIAMRoleUpdate, ActionIAMRoleSetStatus, ActionIAMRoleDelete, ActionIAMRoleTrustSet,
-		ActionIAMRolePolicyAttachmentCreate, ActionIAMRolePermissionBoundarySet, ActionIAMRolePermissionBoundaryRemove, ActionIAMRoleAssume} {
+		ActionIAMRolePolicyAttachmentCreate, ActionIAMRolePermissionBoundarySet, ActionIAMRolePermissionBoundaryRemove, ActionIAMRoleSessionList, ActionIAMRoleAssume} {
 		access.Capabilities = append(access.Capabilities, ActionCapability{Action: action, Resource: ResourceReference{Kind: ResourceRole, ID: string(role.ID)}, RestrictionReason: CapabilityAuthorityRequired})
 	}
 	if ValidateRoleAccess(access) != nil {
@@ -274,12 +369,51 @@ func TestRoleProfilesPreserveRegisteredAuthority(t *testing.T) {
 		}
 	}
 	current, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || current.Revision != 3 {
+	if !found || current.Revision != 4 {
 		t.Fatal("missing current IAM role-session declaration")
 	}
 	for _, action := range current.Actions {
 		if !slices.Equal(action.SubjectTypes, []SubjectType{SubjectUser}) {
 			t.Fatal("role management or assumption accepts a non-USER caller")
+		}
+	}
+}
+
+func TestRoleSessionAdministrationDoesNotReinterpretRegisteredProfiles(t *testing.T) {
+	archives := HistoricalAuthorizationProfiles()
+	index := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool { return profile.Product == ProductIAM && profile.Revision == 3 })
+	if index < 0 {
+		t.Fatal("missing original STS declaration")
+	}
+	_, digest, err := CanonicalizeAuthorizationProfile(archives[index])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest != "sha256:b6556c9b8f8f6978c67c1ffa6a32f51dec13d21dbac656779fd1d0a78dc0ce63" {
+		t.Fatal("registered IAM r3 bytes changed")
+	}
+	for _, action := range archives[index].Actions {
+		if action.Action == ActionIAMRoleSessionList || action.Action == ActionIAMRoleSessionRead || action.Action == ActionIAMRoleSessionRevoke {
+			t.Fatal("archive gained administrator actions")
+		}
+	}
+	current, _ := LookupAuthorizationProfile(ProductIAM)
+	_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AuthorizationProfileReference{Product: ProductIAM, Revision: 4, ContentDigest: currentDigest}
+	for action, target := range map[Action]ResourceKind{ActionIAMRoleSessionList: ResourceRole, ActionIAMRoleSessionRead: ResourceRoleSession, ActionIAMRoleSessionRevoke: ResourceRoleSession} {
+		request, err := NewAuthorizationRequest(action, ResourceReference{Kind: target, ID: "exact"}, AuthorizationResourceInstance, "", "request-a", "correlation-a")
+		if err != nil || ValidateAuthorizationRequest(request) != nil {
+			t.Fatal("missing exact management action", err)
+		}
+		if _, err := NewAuthorizationRequest(action, request.Resource, AuthorizationResourceCollection, AuthorizationCollectionList, "request-a", "correlation-a"); err == nil {
+			t.Fatal("management accepted a collection")
+		}
+		if CheckAuthorizationProfileSubject(current, ref, action, SubjectUser) != nil || CheckAuthorizationProfileSubject(current, ref, action, SubjectRole) == nil ||
+			CheckAuthorizationProfileSubject(current, ref, action, SubjectServiceAccount) == nil {
+			t.Fatal("management crossed the USER boundary")
 		}
 	}
 }

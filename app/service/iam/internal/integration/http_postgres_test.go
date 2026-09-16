@@ -2625,6 +2625,11 @@ func (probe managementSessionTransaction) ChangeRolePermissionBoundary(ctx conte
 	return probe.Transaction.ChangeRolePermissionBoundary(ctx, mutation)
 }
 
+func (probe managementSessionTransaction) RevokeManagedRoleSession(ctx context.Context, mutation identityaccess.RoleSessionAdministrativeRevocation) (iamv1.RevokeRoleSessionResponse, error) {
+	mutation.ActorSessionID = probe.sessionID
+	return probe.Transaction.RevokeManagedRoleSession(ctx, mutation)
+}
+
 func proveManagementSessionReferences(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string, member iamv1.User) {
 	t.Helper()
 	config, err := pgxpool.ParseConfig(database.Config().ConnString())
@@ -2761,26 +2766,38 @@ func proveManagementSessionReferences(t *testing.T, ctx context.Context, handler
 			})
 		}
 	}
-	for _, operation := range []string{"create", "update", "status", "trust", "delete", "boundary-set", "boundary-remove"} {
+	for _, operation := range []string{"create", "update", "status", "trust", "delete", "boundary-set", "boundary-remove", "session-revoke"} {
 		seed := iamv1.CreateRoleRequest{Name: "Reference role " + operation, Tags: []iamv1.RoleTag{},
 			TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}}, RequestID: "role-reference-seed-" + operation}
+		if operation == "session-revoke" {
+			seed.TrustPolicy.Statements = []iamv1.TrustPolicyStatement{{SID: "source", Effect: iamv1.PolicyAllow,
+				Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: iamHTTPBootstrap(t).Administrator.ID}}}}
+		}
 		var target iamv1.Role
+		var issued iamv1.AssumeRoleResponse
 		if operation != "create" {
 			response := performIAMRequest(handler, http.MethodPost, "/v1/roles", root, mustIAMJSON(t, seed))
 			if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &target) != nil || iamv1.ValidateRole(target) != nil {
 				t.Fatal("seed role private-reference target")
 			}
 		}
-		if operation == "boundary-remove" {
+		if operation == "boundary-remove" || operation == "session-revoke" {
 			path := "/v1/roles/" + string(target.ID)
-			set := iamv1.SetRolePermissionBoundaryRequest{PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, ResourceVersion: target.ResourceVersion, RequestID: "role-reference-boundary-seed"}
+			set := iamv1.SetRolePermissionBoundaryRequest{PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, ResourceVersion: target.ResourceVersion, RequestID: "role-reference-boundary-seed-" + operation}
 			response := performIAMRequest(handler, http.MethodPut, path+"/permission-boundary", root, mustIAMJSON(t, set))
 			var access iamv1.RoleAccess
 			read := performIAMRequest(handler, http.MethodGet, path, root, nil)
 			if response.Code != http.StatusOK || read.Code != http.StatusOK || json.Unmarshal(read.Body.Bytes(), &access) != nil {
-				t.Fatal("seed role boundary private-reference removal")
+				t.Fatal("seed role boundary private reference")
 			}
 			target = access.Role
+			if operation == "session-revoke" {
+				response = performIAMRequest(handler, http.MethodPost, path+":assume", validBearer,
+					mustIAMJSON(t, iamv1.AssumeRoleRequest{ResourceVersion: target.ResourceVersion, RequestID: "session-reference-issue"}))
+				if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &issued) != nil || issued.Outcome != "APPLIED" {
+					t.Fatal("issue private-reference session")
+				}
+			}
 		}
 		for _, candidate := range candidates {
 			t.Run("role_"+operation+"_"+candidate.name, func(t *testing.T) {
@@ -2824,6 +2841,9 @@ func proveManagementSessionReferences(t *testing.T, ctx context.Context, handler
 				case "boundary-remove":
 					method, path = http.MethodDelete, path+"/permission-boundary"
 					body = iamv1.RemoveRolePermissionBoundaryRequest{ResourceVersion: target.ResourceVersion, RequestID: requestID}
+				case "session-revoke":
+					path += "/sessions/" + string(issued.Session.ID) + ":revoke"
+					body = iamv1.RevokeRoleSessionRequest{RequestID: requestID}
 				}
 				response := performIAMRequest(probeHandler, method, path, validBearer, mustIAMJSON(t, body))
 				if response.Code != want {
@@ -2844,6 +2864,13 @@ func proveManagementSessionReferences(t *testing.T, ctx context.Context, handler
 						read := performIAMRequest(handler, http.MethodGet, "/v1/roles/"+string(target.ID), root, nil)
 						if read.Code != http.StatusOK || json.Unmarshal(read.Body.Bytes(), &access) != nil || !reflect.DeepEqual(access.Role, target) {
 							t.Fatal("invalid session partially changed role authority")
+						}
+						if operation == "session-revoke" {
+							var unchanged bool
+							if err := database.QueryRow(ctx, `SELECT (SELECT revoked_at IS NULL FROM iam.role_sessions WHERE tenant_id=$1 AND id=$2)
+							 AND (SELECT revision=2 FROM iam.role_session_directory_revisions WHERE tenant_id=$1 AND role_id=$3)`, target.AccountID, issued.Session.ID, target.ID).Scan(&unchanged); err != nil || !unchanged {
+								t.Fatal("invalid actor reference partially revoked a managed session", err)
+							}
 						}
 					}
 				}
@@ -5722,6 +5749,7 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 		{"roles", "MATRIX_IAM_ROLE_POSTGRES_TEST_DSN", "matrix_iam_roles_"},
 		{"role_sessions", "MATRIX_IAM_ROLE_SESSION_POSTGRES_TEST_DSN", "matrix_iam_role_sessions_"},
 		{"role_discovery", "MATRIX_IAM_ROLE_DISCOVERY_POSTGRES_TEST_DSN", "matrix_iam_role_discovery_"},
+		{"role_management", "MATRIX_IAM_ROLE_MANAGEMENT_POSTGRES_TEST_DSN", "matrix_iam_role_management_"},
 		{"role_authorization", "MATRIX_IAM_ROLE_AUTHORIZATION_POSTGRES_TEST_DSN", "matrix_iam_role_authorization_"},
 		{"role_security", "MATRIX_IAM_ROLE_SECURITY_POSTGRES_TEST_DSN", "matrix_iam_role_security_"},
 		{"private_references", "MATRIX_IAM_MANAGEMENT_REFERENCE_POSTGRES_TEST_DSN", "matrix_iam_references_"},
@@ -5779,6 +5807,9 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 				proveRoleSessionSelfExit(t, ctx, handler, database, root)
 			} else if gate.name == "role_discovery" {
 				proveRoleSelfDiscovery(t, ctx, handler, database, root)
+			} else if gate.name == "role_management" {
+				proveRoleSessionManagement(t, ctx, handler, database, root)
+				proveRoleSessionManagementSecurity(t, ctx, handler, database, root)
 			} else if gate.name == "role_authorization" {
 				proveRoleAuthorityRevisions(t, ctx, handler, database, root)
 				proveRolePolicyIntersection(t, ctx, handler, database, root)
@@ -5802,6 +5833,7 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 			// Replaying schema/bootstrap must not assign new state to either fixture.
 			var before, after string
 			const retainedRoles = `SELECT jsonb_build_object('roles',(SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.tenant_id,r.id),'[]') FROM iam.roles r),
+				'sessionDirectoryRevisions',(SELECT COALESCE(jsonb_agg(to_jsonb(d) ORDER BY d.tenant_id,d.role_id),'[]') FROM iam.role_session_directory_revisions d),
 				'directoryRevisions',(SELECT COALESCE(jsonb_agg(to_jsonb(d) ORDER BY d.tenant_id),'[]') FROM iam.role_directory_revisions d),
 				'sourceGenerations',(SELECT COALESCE(jsonb_agg(to_jsonb(g) ORDER BY g.tenant_id,g.user_id,g.group_id),'[]') FROM iam.role_source_authority_generations g),
 				'sessions',(SELECT COALESCE(jsonb_agg(to_jsonb(s) ORDER BY s.tenant_id,s.id),'[]') FROM iam.role_sessions s),
@@ -5819,6 +5851,600 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 				t.Fatal("schema/bootstrap replay changed retained role state")
 			}
 		})
+	}
+}
+
+func proveRoleSessionManagement(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	call := func(method, path, bearer string, body any, want int, output any) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != want {
+			t.Fatalf("role session management %s %s status=%d want=%d", method, path, response.Code, want)
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("session management response was cacheable")
+		}
+		if output != nil && json.Unmarshal(response.Body.Bytes(), output) != nil {
+			t.Fatal("invalid session management response")
+		}
+		return response
+	}
+	newUser := func(name string) (iamv1.User, string) {
+		t.Helper()
+		var user iamv1.User
+		call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": name, "displayName": name, "initialPassword": initialDeveloperPassword, "requestId": name + "-create"}, http.StatusCreated, &user)
+		login := localRecoveryLogin(t, handler, name+"@"+string(user.AccountID), initialDeveloperPassword, true)
+		return user, localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
+	}
+	source, sourceBearer := newUser("session-source")
+	manager, managerBearer := newUser("session-manager")
+	var role iamv1.Role
+	call(http.MethodPost, "/v1/roles", root, iamv1.CreateRoleRequest{Name: "Session management", Tags: []iamv1.RoleTag{}, RequestID: "management-role", TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "source", Effect: iamv1.PolicyAllow, Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: source.ID}}}}}}, http.StatusCreated, &role)
+	path := "/v1/roles/" + string(role.ID)
+	policy := func(name string, statements []iamv1.PolicyStatement) iamv1.PolicyDetail {
+		t.Helper()
+		var result iamv1.PolicyDetail
+		call(http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: name, RequestID: name, Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant, Statements: statements}}, http.StatusCreated, &result)
+		return result
+	}
+	rule := func(sid string, actions []iamv1.Action, kind iamv1.ResourceKind) iamv1.PolicyStatement {
+		return iamv1.PolicyStatement{SID: sid, Effect: iamv1.PolicyAllow, Actions: actions, Resources: []iamv1.PolicyResourceSelector{{Kind: kind, Match: iamv1.PolicyResourceAnyInAuthority}}}
+	}
+	grant := func(name string, user iamv1.User, document iamv1.PolicyDetail) iamv1.PolicyAttachment {
+		t.Helper()
+		var result iamv1.PolicyAttachment
+		call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(user.ID)}, PolicyID: document.Policy.ID, PolicyResourceVersion: document.Policy.ResourceVersion, RequestID: name}, http.StatusOK, &result)
+		return result
+	}
+	grant("source-assume", source, policy("source-assume-policy", []iamv1.PolicyStatement{rule("assume", []iamv1.Action{iamv1.ActionIAMRoleAssume}, iamv1.ResourceRole)}))
+	managementPolicy := policy("session-management-policy", []iamv1.PolicyStatement{
+		rule("directory", []iamv1.Action{iamv1.ActionIAMRoleSessionList}, iamv1.ResourceRole), rule("sessions", []iamv1.Action{iamv1.ActionIAMRoleSessionRead, iamv1.ActionIAMRoleSessionRevoke}, iamv1.ResourceRoleSession),
+	})
+	managerGrant := grant("manager-permissions", manager, managementPolicy)
+	ceiling := policy("management-role-ceiling", []iamv1.PolicyStatement{rule("read", []iamv1.Action{iamv1.ActionPaaSApplicationRead}, iamv1.ResourceApplication)})
+	var boundary iamv1.RolePermissionBoundary
+	call(http.MethodPut, path+"/permission-boundary", root, iamv1.SetRolePermissionBoundaryRequest{PolicyID: ceiling.Policy.ID, PolicyResourceVersion: ceiling.Policy.ResourceVersion, ResourceVersion: role.ResourceVersion, RequestID: "management-ceiling"}, http.StatusOK, &boundary)
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "management-role-read"}, http.StatusOK, nil)
+	issue := func(id string) iamv1.AssumeRoleResponse {
+		t.Helper()
+		var result iamv1.AssumeRoleResponse
+		call(http.MethodPost, path+":assume", sourceBearer, iamv1.AssumeRoleRequest{ResourceVersion: boundary.ResourceVersion, RequestID: id}, http.StatusOK, &result)
+		return result
+	}
+	first, second, third := issue("manage-issue-a"), issue("manage-issue-b"), issue("manage-issue-c")
+	secret := func(s iamv1.Secret) string { raw := s.CopyBytes(); defer clear(raw); return string(raw) }
+	sessionPath := func(id iamv1.RoleSessionID) string { return path + "/sessions/" + string(id) }
+	readRevision := func() uint64 {
+		t.Helper()
+		var revision uint64
+		if err := database.QueryRow(ctx, "SELECT revision FROM iam.role_session_directory_revisions WHERE tenant_id=$1 AND role_id=$2", role.AccountID, role.ID).Scan(&revision); err != nil {
+			t.Fatal("read session directory revision")
+		}
+		return revision
+	}
+	if readRevision() != 4 {
+		t.Fatal("directory did not track exactly three issuances")
+	}
+	call(http.MethodGet, path+"/sessions", sourceBearer, nil, http.StatusForbidden, nil)
+	call(http.MethodGet, path+"/sessions", secret(first.Credential), nil, http.StatusUnauthorized, nil)
+	call(http.MethodGet, path+"/sessions", paasCredential, nil, http.StatusUnauthorized, nil)
+	var page iamv1.RoleSessionList
+	call(http.MethodGet, path+"/sessions", managerBearer, nil, http.StatusOK, &page)
+	if iamv1.ValidateRoleSessionList(page) != nil || len(page.Items) != 3 || page.AccountID != source.AccountID || page.RoleID != role.ID {
+		t.Fatal("directory lost actual ownership")
+	}
+	for _, row := range page.Items {
+		if row.SourceUser.ID != source.ID || row.SourceUser.LoginName != source.LoginName || row.SourceUser.DisplayName != source.DisplayName || row.Lifecycle != iamv1.RoleSessionUnrevoked || !row.RevokeCapability.Available {
+			t.Fatal("directory display or exact capability changed")
+		}
+	}
+	var detail iamv1.RoleSessionAccess
+	call(http.MethodGet, sessionPath(first.Session.ID), managerBearer, nil, http.StatusOK, &detail)
+	call(http.MethodGet, sessionPath(first.Session.ID), sourceBearer, nil, http.StatusForbidden, nil)
+	call(http.MethodGet, "/v1/roles/not-this-role/sessions/"+string(first.Session.ID), managerBearer, nil, http.StatusForbidden, nil)
+	call(http.MethodGet, path+"/sessions/not-this-session", managerBearer, nil, http.StatusForbidden, nil)
+	for _, query := range []string{"?tenantId=other", "?accountId=other", "?sourceSessionId=private", "?lifecycle=ACTIVE", "?lifecycle=USABLE", "?sourceUserId=", "?lifecycle=ALL&lifecycle=REVOKED", "?after=ir1.private", "?limit=1"} {
+		call(http.MethodGet, path+"/sessions"+query, managerBearer, nil, http.StatusBadRequest, nil)
+	}
+	call(http.MethodGet, path+"/sessions?sourceUserId="+string(manager.ID), managerBearer, nil, http.StatusOK, &page)
+	if len(page.Items) != 0 {
+		t.Fatal("source filter expanded results")
+	}
+	call(http.MethodGet, path+"/sessions?sessionId="+string(first.Session.ID), managerBearer, nil, http.StatusOK, &page)
+	if len(page.Items) != 1 || page.Items[0].Session.ID != first.Session.ID {
+		t.Fatal("exact session filter changed")
+	}
+	for _, body := range []map[string]any{{"requestId": "bad", "accountId": "other"}, {"requestId": "bad", "resourceVersion": 1}, {"requestId": "bad", "sourceUserId": source.ID}, {"requestId": "bad", "sourceSessionId": "private"}} {
+		call(http.MethodPost, sessionPath(first.Session.ID)+":revoke", managerBearer, body, http.StatusBadRequest, nil)
+	}
+	var revoked, replayed iamv1.RevokeRoleSessionResponse
+	request := iamv1.RevokeRoleSessionRequest{RequestID: "admin-revoke-a"}
+	call(http.MethodPost, sessionPath(first.Session.ID)+":revoke", sourceBearer, request, http.StatusForbidden, nil)
+	call(http.MethodPost, sessionPath(first.Session.ID)+":revoke", managerBearer, request, http.StatusOK, &revoked)
+	call(http.MethodPost, sessionPath(first.Session.ID)+":revoke", managerBearer, request, http.StatusOK, &replayed)
+	if revoked.Outcome != "APPLIED" || replayed.Outcome != "EQUAL_REPLAY" || !reflect.DeepEqual(revoked.Session, replayed.Session) || readRevision() != 5 {
+		t.Fatal("revocation replay changed terminal identity or directory")
+	}
+	call(http.MethodPost, sessionPath(first.Session.ID)+":revoke", managerBearer, iamv1.RevokeRoleSessionRequest{RequestID: "another-intent"}, http.StatusConflict, nil)
+	call(http.MethodPost, sessionPath(second.Session.ID)+":revoke", managerBearer, request, http.StatusConflict, nil)
+	call(http.MethodGet, sessionPath(first.Session.ID), managerBearer, nil, http.StatusOK, &detail)
+	if detail.Item.Lifecycle != iamv1.RoleSessionRevoked || detail.Item.RevokeCapability.Available {
+		t.Fatal("revoked session remained actionable")
+	}
+	call(http.MethodGet, path+"/sessions?lifecycle=REVOKED", managerBearer, nil, http.StatusOK, &page)
+	if len(page.Items) != 1 || page.Items[0].Session.ID != first.Session.ID {
+		t.Fatal("terminal directory filter changed")
+	}
+	call(http.MethodGet, "/v1/auth/role-session", secret(first.Credential), nil, http.StatusUnauthorized, nil)
+	// All three real paths compete for one irreversible terminal row.
+	codes := make(chan int, 3)
+	go func() {
+		codes <- performIAMRequest(handler, http.MethodPost, sessionPath(third.Session.ID)+":revoke", managerBearer, mustIAMJSON(t, iamv1.RevokeRoleSessionRequest{RequestID: "race-admin"})).Code
+	}()
+	go func() {
+		codes <- performIAMRequest(handler, http.MethodPost, "/v1/auth/role-sessions/by-request/manage-issue-c:revoke", sourceBearer, mustIAMJSON(t, iamv1.RevokeRoleSessionRequest{RequestID: "race-source"})).Code
+	}()
+	go func() {
+		codes <- performIAMRequest(handler, http.MethodPost, "/v1/auth/role-session:logout", secret(third.Credential), mustIAMJSON(t, iamv1.LogoutRequest{RequestID: "race-exit"})).Code
+	}()
+	winners := 0
+	for range 3 {
+		select {
+		case code := <-codes:
+			if code == http.StatusOK {
+				winners++
+			} else if code != http.StatusConflict {
+				t.Fatalf("terminal race returned %d", code)
+			}
+		case <-ctx.Done():
+			t.Fatal("terminal race did not finish")
+		}
+	}
+	if winners != 1 || readRevision() != 6 {
+		t.Fatal("terminal paths had more than one effect")
+	}
+	// Build retained history through real issuance/termination, not fabricated rows.
+	const history = 101
+	for index := range history {
+		issued := issue(fmt.Sprintf("history-issue-%03d", index))
+		call(http.MethodPost, sessionPath(issued.Session.ID)+":revoke", managerBearer, iamv1.RevokeRoleSessionRequest{RequestID: fmt.Sprintf("history-revoke-%03d", index)}, http.StatusOK, nil)
+	}
+	call(http.MethodGet, path+"/sessions?lifecycle=ALL", managerBearer, nil, http.StatusOK, &page)
+	if len(page.Items) != 100 || page.NextAfter == "" {
+		t.Fatal("history directory did not expose a bounded continuation")
+	}
+	allCursor := page.NextAfter
+	seen := map[iamv1.RoleSessionID]bool{}
+	for _, item := range page.Items {
+		seen[item.Session.ID] = true
+	}
+	call(http.MethodGet, path+"/sessions?lifecycle=ALL&after="+allCursor, managerBearer, nil, http.StatusOK, &page)
+	if len(page.Items) != 4 || page.NextAfter != "" {
+		t.Fatal("history continuation changed its scan window")
+	}
+	for _, item := range page.Items {
+		if seen[item.Session.ID] {
+			t.Fatal("history continuation repeated an identity")
+		}
+		seen[item.Session.ID] = true
+	}
+	call(http.MethodGet, path+"/sessions?sourceUserId="+string(manager.ID), managerBearer, nil, http.StatusOK, &page)
+	if len(page.Items) != 0 || page.NextAfter == "" {
+		t.Fatal("sparse page discarded its scan continuation")
+	}
+	call(http.MethodGet, path+"/sessions?sourceUserId="+string(manager.ID)+"&after="+page.NextAfter, managerBearer, nil, http.StatusOK, &page)
+	if len(page.Items) != 0 || page.NextAfter != "" {
+		t.Fatal("sparse final page changed")
+	}
+	call(http.MethodGet, path+"/sessions?lifecycle=REVOKED&after="+allCursor, managerBearer, nil, http.StatusUnprocessableEntity, nil)
+	call(http.MethodGet, path+"/sessions?lifecycle=ALL&after="+allCursor, root, nil, http.StatusUnprocessableEntity, nil)
+	// Regranting identical permissions does not revive a pre-revocation cursor.
+	beforePermissionChange := readRevision()
+	call(http.MethodPost, "/v1/policy-attachments/"+string(managerGrant.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: managerGrant.ResourceVersion, RequestID: "revoke-session-manager"}, http.StatusOK, nil)
+	call(http.MethodGet, path+"/sessions?lifecycle=ALL&after="+allCursor, managerBearer, nil, http.StatusForbidden, nil)
+	grant("restore-session-manager", manager, managementPolicy)
+	call(http.MethodGet, path+"/sessions?lifecycle=ALL&after="+allCursor, managerBearer, nil, http.StatusUnprocessableEntity, nil)
+	call(http.MethodGet, path+"/sessions?lifecycle=ALL", managerBearer, nil, http.StatusOK, &page)
+	if page.NextAfter == "" || readRevision() != beforePermissionChange {
+		t.Fatal("actor authority change mutated session directory instead of its own binding")
+	}
+	allCursor = page.NextAfter
+	// Same-named source users in another account cannot select this tenant's records.
+	call(http.MethodPost, "/v1/accounts", root, map[string]any{"id": "account-session-other", "displayName": "Other account", "rootLoginName": "other-session-root", "rootDisplayName": "Other root", "initialPassword": initialDeveloperPassword, "requestId": "other-session-account"}, http.StatusCreated, nil)
+	otherRoot := localRecoveryLogin(t, handler, "other-session-root", initialDeveloperPassword, true)
+	otherRoot = localRecoveryChangePassword(t, handler, otherRoot, initialDeveloperPassword, changedDeveloperPassword)
+	call(http.MethodPost, "/v1/users", otherRoot, map[string]any{"loginName": source.LoginName, "displayName": source.DisplayName, "initialPassword": initialDeveloperPassword, "requestId": "other-same-source"}, http.StatusCreated, nil)
+	call(http.MethodGet, path+"/sessions", otherRoot, nil, http.StatusForbidden, nil)
+	call(http.MethodGet, sessionPath(first.Session.ID), otherRoot, nil, http.StatusForbidden, nil)
+	call(http.MethodPost, sessionPath(second.Session.ID)+":revoke", otherRoot, iamv1.RevokeRoleSessionRequest{RequestID: "foreign-revoke"}, http.StatusForbidden, nil)
+	// An outbox failure rolls back the session, clock and original decision.
+	rollbackSession := issue("rollback-session")
+	call(http.MethodGet, path+"/sessions?lifecycle=ALL&after="+allCursor, managerBearer, nil, http.StatusUnprocessableEntity, nil)
+	state := func() string {
+		t.Helper()
+		var value string
+		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+		'revision',(SELECT revision FROM iam.role_session_directory_revisions WHERE tenant_id=$1 AND role_id=$2),
+		'revoked',(SELECT revoked_at FROM iam.role_sessions WHERE tenant_id=$1 AND id=$3),
+		'decisions',(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1),
+		'facts',(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1))::text`, role.AccountID, role.ID, rollbackSession.Session.ID).Scan(&value); err != nil {
+			t.Fatal("capture revocation state")
+		}
+		return value
+	}
+	beforeFailure := state()
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.fail_admin_role_session_fact() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN
+		IF NEW.event_document->>'action'='iam.role-session.admin-revoked' THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='isolated role session outbox failure'; END IF; RETURN NEW; END $f$;
+		CREATE TRIGGER fail_admin_role_session_fact BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.fail_admin_role_session_fact()`); err != nil {
+		t.Fatal("install isolated outbox failure")
+	}
+	rollbackIntent := iamv1.RevokeRoleSessionRequest{RequestID: "rollback-admin-revoke"}
+	call(http.MethodPost, sessionPath(rollbackSession.Session.ID)+":revoke", managerBearer, rollbackIntent, http.StatusForbidden, nil)
+	if state() != beforeFailure {
+		t.Fatal("failed outbox partially revoked a session")
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER fail_admin_role_session_fact ON iam.audit_outbox; DROP FUNCTION public.fail_admin_role_session_fact()`); err != nil {
+		t.Fatal("remove isolated outbox failure")
+	}
+	call(http.MethodPost, sessionPath(rollbackSession.Session.ID)+":revoke", managerBearer, rollbackIntent, http.StatusOK, nil)
+	call(http.MethodGet, path+"/sessions?lifecycle=ALL&after="+allCursor, managerBearer, nil, http.StatusUnprocessableEntity, nil)
+	// Role status is not a session terminal state. An authorized administrator
+	// can retire unexpired credentials even when the Role is disabled/deleted.
+	disabledRoleSession := issue("management-disabled-role-session")
+	beforeRoleChange := readRevision()
+	var roleAccess iamv1.RoleAccess
+	call(http.MethodGet, path, root, nil, http.StatusOK, &roleAccess)
+	call(http.MethodPost, path+":set-status", root, iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled,
+		ResourceVersion: roleAccess.Role.ResourceVersion, RequestID: "disable-managed-role"}, http.StatusOK, &role)
+	call(http.MethodGet, "/v1/auth/role-session", secret(disabledRoleSession.Credential), nil, http.StatusUnauthorized, nil)
+	call(http.MethodGet, sessionPath(disabledRoleSession.Session.ID), managerBearer, nil, http.StatusOK, &detail)
+	if detail.Item.Lifecycle != iamv1.RoleSessionUnrevoked || !detail.Item.RevokeCapability.Available || readRevision() != beforeRoleChange {
+		t.Fatal("disabled role changed session lifecycle or directory revision")
+	}
+	call(http.MethodPost, sessionPath(disabledRoleSession.Session.ID)+":revoke", managerBearer,
+		iamv1.RevokeRoleSessionRequest{RequestID: "admin-revoke-disabled-role"}, http.StatusOK, nil)
+	call(http.MethodDelete, path, root, iamv1.DeleteRoleRequest{ResourceVersion: role.ResourceVersion, RequestID: "delete-managed-role"}, http.StatusOK, nil)
+	call(http.MethodGet, path+"/sessions", managerBearer, nil, http.StatusOK, &page)
+	if len(page.Items) != 1 || page.Items[0].Session.ID != second.Session.ID || !page.Items[0].RevokeCapability.Available || readRevision() != beforeRoleChange+1 {
+		t.Fatal("deleted role hid its manageable session or changed directory revision")
+	}
+	beforeInvalidSource := readRevision()
+	// An invalid source is still manageable; no online recovery is implied.
+	var sourceAccess iamv1.UserAccess
+	call(http.MethodGet, "/v1/users/"+string(source.ID), root, nil, http.StatusOK, &sourceAccess)
+	call(http.MethodPost, "/v1/users/"+string(source.ID)+":set-status", root, iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: sourceAccess.User.ResourceVersion, RequestID: "disable-management-source"}, http.StatusOK, nil)
+	call(http.MethodGet, "/v1/auth/role-session", secret(second.Credential), nil, http.StatusUnauthorized, nil)
+	call(http.MethodGet, sessionPath(second.Session.ID), managerBearer, nil, http.StatusOK, &detail)
+	if detail.Item.Lifecycle != iamv1.RoleSessionUnrevoked || !detail.Item.RevokeCapability.Available {
+		t.Fatal("source invalidity was confused with terminal lifecycle")
+	}
+	call(http.MethodPost, sessionPath(second.Session.ID)+":revoke", managerBearer, iamv1.RevokeRoleSessionRequest{RequestID: "admin-revoke-invalid-source"}, http.StatusOK, &revoked)
+	if readRevision() != beforeInvalidSource+1 {
+		t.Fatal("source invalidity changed directory or prevented administrative termination")
+	}
+	var facts int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{target,kind}'='ROLE_SESSION' AND event_document->>'action' IN ('iam.role-session.admin-revoked','iam.role-session.revoked','iam.role-session.exited')`, role.AccountID).Scan(&facts); err != nil || facts != 3+history+2 {
+		t.Fatal("terminal paths produced duplicate facts")
+	}
+	var raw []byte
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.role-session.admin-revoked' AND event_document#>>'{target,id}'=$2`, role.AccountID, first.Session.ID).Scan(&raw); err != nil {
+		t.Fatal("read administrator fact")
+	}
+	var event auditv1.Event
+	if json.Unmarshal(raw, &event) != nil || event.Actor.Type != auditv1.ActorUser || event.Actor.ID != auditv1.ActorID(manager.ID) || event.IAMDecisionID == "" || event.Target.ID != string(first.Session.ID) {
+		t.Fatal("admin fact lost exact decision or actor")
+	}
+	call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
+	event.Target.ID = string(second.Session.ID)
+	call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusForbidden, nil)
+	for _, attack := range []string{
+		`GRANT SELECT ON iam.role_session_directory_revisions TO matrix_iam_api`,
+		`ALTER TABLE iam.role_session_directory_revisions NO FORCE ROW LEVEL SECURITY`,
+		`ALTER TABLE iam.roles DISABLE TRIGGER roles_initialize_session_directory`,
+		`ALTER TABLE iam.role_sessions DISABLE TRIGGER sessions_advance_directory`,
+		`ALTER TABLE iam.role_session_directory_revisions DROP CONSTRAINT role_session_directory_role_fk`,
+		`ALTER TABLE iam.role_session_directory_revisions DROP CONSTRAINT role_session_directory_revision_range`,
+		`ALTER TABLE iam.role_session_directory_revisions ALTER COLUMN revision SET DEFAULT 1`,
+		`GRANT EXECUTE ON FUNCTION iam.revoke_managed_role_session(text,text,text,text,text,text,jsonb) TO matrix_iam_worker`,
+		`ALTER FUNCTION iam.prepare_role_session_management(text,text,text,text,text,boolean) SECURITY INVOKER`,
+		`ALTER FUNCTION iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text) SET search_path=public,pg_temp`,
+		`ALTER FUNCTION iam.managed_role_session_snapshot(text,text,text) VOLATILE`,
+		`DROP INDEX iam.role_sessions_directory_idx`,
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, attack); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal("cannot install scoped contract attack")
+		}
+		var ready bool
+		err = tx.QueryRow(ctx, "SELECT iam.role_contract_ready()").Scan(&ready)
+		_ = tx.Rollback(ctx)
+		if err != nil || ready {
+			t.Fatal("IAM admitted drifted role-session storage contract")
+		}
+	}
+}
+
+func proveRoleSessionManagementSecurity(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
+	t.Helper()
+	for _, adminFirst := range []bool{false, true} {
+		for index, change := range []string{"logout", "password-default", "password-false", "reset", "disabled", "user-grant", "group-grant", "membership", "recover", "suspend", "source-revoke", "role-exit"} {
+			if !t.Run(fmt.Sprintf("admin_first_%t_%s", adminFirst, change), func(t *testing.T) {
+				prefix := fmt.Sprintf("session-security-%t-%02d", adminFirst, index)
+				call := func(method, path, bearer string, body any, output any) {
+					t.Helper()
+					var encoded []byte
+					if body != nil {
+						encoded = mustIAMJSON(t, body)
+					}
+					response := performIAMRequest(handler, method, path, bearer, encoded)
+					if response.Code != http.StatusOK && response.Code != http.StatusCreated {
+						t.Fatalf("admin security fixture %s %s status=%d", method, path, response.Code)
+					}
+					if output != nil && json.Unmarshal(response.Body.Bytes(), output) != nil {
+						t.Fatal("decode admin security fixture")
+					}
+				}
+				var account iamv1.Account
+				call(http.MethodPost, "/v1/accounts", operator, map[string]any{"id": prefix, "displayName": prefix, "rootLoginName": prefix,
+					"rootDisplayName": prefix, "initialPassword": initialDeveloperPassword, "requestId": prefix + "-account"}, &account)
+				root := localRecoveryLogin(t, handler, prefix, initialDeveloperPassword, true)
+				root = localRecoveryChangePassword(t, handler, root, initialDeveloperPassword, changedDeveloperPassword)
+				newUser := func(name string) (iamv1.User, string) {
+					t.Helper()
+					var user iamv1.User
+					call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": name, "displayName": name,
+						"initialPassword": initialDeveloperPassword, "requestId": prefix + "-" + name}, &user)
+					login := localRecoveryLogin(t, handler, name+"@"+string(account.ID), initialDeveloperPassword, true)
+					return user, localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
+				}
+				source, sourceBearer := newUser("source")
+				actor, actorBearer := newUser("manager")
+				attach := func(target iamv1.PolicyAttachmentTarget, policy iamv1.PolicyID, suffix string) iamv1.PolicyAttachment {
+					t.Helper()
+					var result iamv1.PolicyAttachment
+					call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: target, PolicyID: policy,
+						PolicyResourceVersion: 1, RequestID: prefix + "-" + suffix}, &result)
+					return result
+				}
+				attach(iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(source.ID)}, iamv1.SystemPolicyAccountAdministrator, "source-grant")
+				var grant iamv1.PolicyAttachment
+				var group iamv1.Group
+				var membership iamv1.GroupMembership
+				if change == "group-grant" || change == "membership" {
+					call(http.MethodPost, "/v1/groups", root, iamv1.CreateGroupRequest{Name: prefix, RequestID: prefix + "-group"}, &group)
+					call(http.MethodPost, "/v1/groups/"+string(group.ID)+"/memberships", root,
+						iamv1.CreateGroupMembershipRequest{UserID: actor.ID, RequestID: prefix + "-join"}, &membership)
+					grant = attach(iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}, iamv1.SystemPolicyAccountAdministrator, "group-grant")
+				} else if change == "recover" {
+					var identity iamv1.CurrentIdentity
+					call(http.MethodGet, "/v1/auth/me", root, nil, &identity)
+					actor, actorBearer = identity.User, root
+				} else {
+					grant = attach(iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(actor.ID)}, iamv1.SystemPolicyAccountAdministrator, "actor-grant")
+				}
+				var role iamv1.Role
+				call(http.MethodPost, "/v1/roles", root, iamv1.CreateRoleRequest{Name: prefix, Tags: []iamv1.RoleTag{}, RequestID: prefix + "-role",
+					TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "source", Effect: iamv1.PolicyAllow,
+						Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: source.ID}}}}}}, &role)
+				rolePath := "/v1/roles/" + string(role.ID)
+				attach(iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)}, iamv1.SystemPolicyPaaSViewer, "role-grant")
+				var boundary iamv1.RolePermissionBoundary
+				call(http.MethodPut, rolePath+"/permission-boundary", root, iamv1.SetRolePermissionBoundaryRequest{PolicyID: iamv1.SystemPolicyPaaSViewer,
+					PolicyResourceVersion: 1, ResourceVersion: role.ResourceVersion, RequestID: prefix + "-boundary"}, &boundary)
+				var issued iamv1.AssumeRoleResponse
+				call(http.MethodPost, rolePath+":assume", sourceBearer, iamv1.AssumeRoleRequest{ResourceVersion: boundary.ResourceVersion, RequestID: prefix + "-issue"}, &issued)
+				raw := issued.Credential.CopyBytes()
+				roleBearer := string(raw)
+				clear(raw)
+				managedPath := rolePath + "/sessions/" + string(issued.Session.ID)
+				var control iamv1.RoleSessionAccess
+				call(http.MethodGet, managedPath, actorBearer, nil, &control)
+				if !control.Item.RevokeCapability.Available {
+					t.Fatal("security control lacked exact session management authority")
+				}
+				securityID, adminID := prefix+"-security", prefix+"-admin"
+				securityPath, securityBearer := "/v1/auth/logout", actorBearer
+				var securityBody any = iamv1.LogoutRequest{RequestID: securityID}
+				closedStatus := http.StatusUnauthorized
+				switch change {
+				case "password-default", "password-false":
+					securityBearer = localRecoveryLogin(t, handler, actor.LoginName+"@"+string(account.ID), changedDeveloperPassword, false)
+					securityPath = "/v1/auth/password"
+					body := map[string]any{"currentPassword": changedDeveloperPassword, "newPassword": "Session-Management-Changed-Password-72!", "requestId": securityID}
+					if change == "password-false" {
+						body["revokeOtherSessions"], closedStatus = false, http.StatusOK
+					}
+					securityBody = body
+				case "reset", "disabled":
+					var access iamv1.UserAccess
+					call(http.MethodGet, "/v1/users/"+string(actor.ID), root, nil, &access)
+					securityBearer, securityPath = root, "/v1/users/"+string(actor.ID)+":reset-password"
+					securityBody = map[string]any{"initialPassword": "Session-Management-Reset-Password-73!", "resourceVersion": access.User.ResourceVersion, "requestId": securityID}
+					if change == "disabled" {
+						securityPath = "/v1/users/" + string(actor.ID) + ":set-status"
+						securityBody = iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: access.User.ResourceVersion, RequestID: securityID}
+					}
+				case "user-grant", "group-grant":
+					securityBearer, securityPath, closedStatus = root, "/v1/policy-attachments/"+string(grant.ID)+":revoke", http.StatusForbidden
+					securityBody = iamv1.RevokePolicyAttachmentRequest{ResourceVersion: grant.ResourceVersion, RequestID: securityID}
+				case "membership":
+					securityBearer, securityPath, closedStatus = root, "/v1/groups/"+string(group.ID)+"/memberships/"+string(membership.ID)+":remove", http.StatusForbidden
+					securityBody = iamv1.RemoveGroupMembershipRequest{ResourceVersion: membership.ResourceVersion, RequestID: securityID}
+				case "recover", "suspend":
+					var access iamv1.AccountAccess
+					call(http.MethodGet, "/v1/accounts/"+string(account.ID), operator, nil, &access)
+					securityBearer, securityPath = operator, "/v1/accounts/"+string(account.ID)+":recover-root-credentials"
+					securityBody = map[string]any{"initialPassword": "Session-Management-Recovered-Password-74!", "resourceVersion": access.Account.ResourceVersion, "requestId": securityID}
+					if change == "suspend" {
+						securityPath = "/v1/accounts/" + string(account.ID) + ":set-status"
+						securityBody = iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled, ResourceVersion: access.Account.ResourceVersion, RequestID: securityID}
+					}
+				case "source-revoke":
+					securityBearer, securityPath, closedStatus = sourceBearer, "/v1/auth/role-sessions/by-request/"+prefix+"-issue:revoke", http.StatusConflict
+					securityBody = iamv1.RevokeRoleSessionRequest{RequestID: securityID}
+				case "role-exit":
+					securityBearer, securityPath, closedStatus = roleBearer, "/v1/auth/role-session:logout", http.StatusConflict
+				}
+				terminalCompetition := change == "source-revoke" || change == "role-exit"
+				barrierID := securityID
+				if adminFirst {
+					barrierID = adminID
+				}
+				barrierTable := "iam.audit_outbox"
+				barrierSQL := `CREATE FUNCTION public.matrix_managed_session_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+				 BEGIN IF NEW.event_document->>'requestId'=TG_ARGV[0] AND NEW.event_document->>'action'<>'iam.authorization.decided'
+				 THEN PERFORM pg_advisory_xact_lock(54842,28); END IF; RETURN NEW; END $body$;
+				 CREATE TRIGGER matrix_managed_session_barrier BEFORE INSERT ON iam.audit_outbox
+				 FOR EACH ROW EXECUTE FUNCTION public.matrix_managed_session_barrier('` + barrierID + `');`
+				if !adminFirst && (change == "group-grant" || change == "membership") {
+					// This source counter is deferred until after the success fact;
+					// pause only after the real counter write owns its lock.
+					barrierTable = "iam.role_source_authority_generations"
+					column, sourceID := "group_id", string(group.ID)
+					if change == "membership" {
+						column, sourceID = "user_id", string(actor.ID)
+					}
+					barrierSQL = `CREATE FUNCTION public.matrix_managed_session_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+					 BEGIN IF NEW.` + column + `=TG_ARGV[0] THEN PERFORM pg_advisory_xact_lock(54842,28); END IF; RETURN NEW; END $body$;
+					 CREATE TRIGGER matrix_managed_session_barrier BEFORE UPDATE ON iam.role_source_authority_generations
+					 FOR EACH ROW EXECUTE FUNCTION public.matrix_managed_session_barrier('` + sourceID + `');`
+				}
+				if _, err := database.Exec(ctx, barrierSQL+`SELECT pg_advisory_lock(54842,28)`); err != nil {
+					t.Fatal("install isolated management serialization barrier", err)
+				}
+				blocked, cancel := context.WithTimeout(ctx, 8*time.Second)
+				defer func() {
+					cancel()
+					cleanup, finish := context.WithTimeout(context.Background(), 10*time.Second)
+					defer finish()
+					if _, err := database.Exec(cleanup, `SELECT pg_advisory_unlock(54842,28); DROP TRIGGER IF EXISTS matrix_managed_session_barrier ON `+barrierTable+`; DROP FUNCTION IF EXISTS public.matrix_managed_session_barrier()`); err != nil {
+						t.Error("remove isolated management serialization barrier", err)
+					}
+				}()
+				adminBytes := mustIAMJSON(t, iamv1.RevokeRoleSessionRequest{RequestID: adminID})
+				securityBytes := mustIAMJSON(t, securityBody)
+				adminDone, securityDone := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+				send := func(admin bool) {
+					path, bearer, body, done := securityPath, securityBearer, securityBytes, securityDone
+					if admin {
+						path, bearer, body, done = managedPath+":revoke", actorBearer, adminBytes, adminDone
+					}
+					req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body)).WithContext(blocked)
+					req.Header.Set("Authorization", "Bearer "+bearer)
+					req.Header.Set("Content-Type", "application/json")
+					response := httptest.NewRecorder()
+					handler.ServeHTTP(response, req)
+					done <- response
+				}
+				go send(adminFirst)
+				ticker := time.NewTicker(10 * time.Millisecond)
+				defer ticker.Stop()
+				firstPID := 0
+				for firstPID == 0 {
+					if err := database.QueryRow(blocked, `SELECT COALESCE((SELECT pid FROM pg_locks WHERE locktype='advisory' AND NOT granted
+					 AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54842 AND objid=28 LIMIT 1),0)`).Scan(&firstPID); err != nil {
+						t.Fatal("observe first management/security mutation", err)
+					}
+					if firstPID == 0 {
+						select {
+						case <-ticker.C:
+						case <-blocked.Done():
+							t.Fatal("first management/security mutation did not reach its final locked state")
+						}
+					}
+				}
+				go send(!adminFirst)
+				for waiting := false; !waiting; {
+					if err := database.QueryRow(blocked, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))
+					 AND datid=(SELECT oid FROM pg_database WHERE datname=current_database()))`, firstPID).Scan(&waiting); err != nil {
+						t.Fatal("observe actual actor/source/session lock ordering", err)
+					}
+					if !waiting {
+						select {
+						case <-ticker.C:
+						case <-blocked.Done():
+							t.Fatal("second request did not serialize with management authority")
+						}
+					}
+				}
+				if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54842,28)`); err != nil {
+					t.Fatal("release actual management authority transaction", err)
+				}
+				adminStatus, securityStatus := closedStatus, http.StatusOK
+				if adminFirst {
+					adminStatus = http.StatusOK
+					if terminalCompetition {
+						securityStatus = http.StatusConflict
+					}
+				}
+				for _, result := range []struct {
+					done <-chan *httptest.ResponseRecorder
+					want int
+				}{{adminDone, adminStatus}, {securityDone, securityStatus}} {
+					select {
+					case response := <-result.done:
+						if response.Code != result.want {
+							t.Fatalf("ordered admin=%t response status=%d want=%d", result.done == adminDone, response.Code, result.want)
+						}
+						if result.done == adminDone && result.want == http.StatusOK {
+							var applied iamv1.RevokeRoleSessionResponse
+							if json.Unmarshal(response.Body.Bytes(), &applied) != nil || applied.Outcome != "APPLIED" || applied.Session.ID != issued.Session.ID {
+								t.Fatal("management winner lost its exact terminal result")
+							}
+						}
+					case <-blocked.Done():
+						t.Fatal("management/security requests failed to resolve")
+					}
+				}
+				var revoked bool
+				var facts, revision int
+				if err := database.QueryRow(ctx, `SELECT
+				 (SELECT revoked_at IS NOT NULL FROM iam.role_sessions WHERE tenant_id=$1 AND id=$2),
+				 (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3 AND event_document->>'action'='iam.role-session.admin-revoked'),
+				 (SELECT revision FROM iam.role_session_directory_revisions WHERE tenant_id=$1 AND role_id=$4)`, account.ID, issued.Session.ID, adminID, role.ID).Scan(&revoked, &facts, &revision); err != nil {
+					t.Fatal("read atomic management outcome", err)
+				}
+				wantFacts, wantRevision := 0, 2
+				if adminStatus == http.StatusOK {
+					wantFacts = 1
+				}
+				if adminStatus == http.StatusOK || terminalCompetition {
+					wantRevision++
+				}
+				if facts != wantFacts || revision != wantRevision || revoked != (wantRevision == 3) {
+					t.Fatalf("partial management outcome revoked=%t facts=%d revision=%d", revoked, facts, revision)
+				}
+				if adminFirst && closedStatus != http.StatusOK && !terminalCompetition {
+					if replay := performIAMRequest(handler, http.MethodPost, managedPath+":revoke", actorBearer, adminBytes); replay.Code != closedStatus {
+						t.Fatalf("old success replay bypassed current actor authority: %d want=%d", replay.Code, closedStatus)
+					}
+				}
+				if wantFacts == 1 {
+					var document []byte
+					if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2
+					 AND event_document->>'action'='iam.role-session.admin-revoked'`, account.ID, adminID).Scan(&document); err != nil {
+						t.Fatal("read historical management fact", err)
+					}
+					var fact auditv1.Event
+					if json.Unmarshal(document, &fact) != nil || fact.Actor.ID != auditv1.ActorID(actor.ID) || fact.IAMDecisionID == "" || fact.Target.ID != string(issued.Session.ID) {
+						t.Fatal("management fact lost actor/decision/target")
+					}
+					call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: fact}, nil)
+				}
+			}) {
+				t.FailNow()
+			}
+		}
 	}
 }
 
@@ -7980,6 +8606,42 @@ func proveRoleSessionSelfExit(t *testing.T, ctx context.Context, handler http.Ha
 				}
 			}
 			ticker.Stop()
+			managedPath := rolePath + "/sessions/" + string(issued.Session.ID)
+			var observed iamv1.RoleSessionAccess
+			call(http.MethodGet, managedPath, root, nil, http.StatusOK, &observed)
+			if observed.Item.Lifecycle != iamv1.RoleSessionExpired || observed.Item.RevokeCapability.Available || observed.Item.Session.RevokedAt != nil {
+				t.Fatal("expired issuance became an administratively revocable session")
+			}
+			for _, lifecycle := range []string{"UNREVOKED", "EXPIRED", "REVOKED"} {
+				var page iamv1.RoleSessionList
+				call(http.MethodGet, rolePath+"/sessions?lifecycle="+lifecycle, root, nil, http.StatusOK, &page)
+				want := 0
+				if lifecycle == "EXPIRED" {
+					want = 1
+				}
+				if len(page.Items) != want || page.NextAfter != "" {
+					t.Fatal("directory lifecycle did not use actual database expiry")
+				}
+			}
+			state := func() string {
+				t.Helper()
+				var value string
+				if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+				 'revoked',(SELECT revoked_at FROM iam.role_sessions WHERE tenant_id=$1 AND id=$2),
+				 'revision',(SELECT revision FROM iam.role_session_directory_revisions WHERE tenant_id=$1 AND role_id=$3),
+				 'decisions',(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1),
+				 'facts',(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1))::text`, account.ID, issued.Session.ID, role.ID).Scan(&value); err != nil {
+					t.Fatal("read actual expiry conflict state", err)
+				}
+				return value
+			}
+			beforeConflict := state()
+			for range 2 {
+				call(http.MethodPost, managedPath+":revoke", root, iamv1.RevokeRoleSessionRequest{RequestID: id + "-admin-expired"}, http.StatusConflict, nil)
+			}
+			if state() != beforeConflict {
+				t.Fatal("expired administrative intent changed state or manufactured a replay result")
+			}
 		case "source-logout":
 			call(http.MethodPost, "/v1/auth/logout", login, iamv1.LogoutRequest{RequestID: id + "-logout"}, http.StatusOK, nil)
 		case "source-password":
@@ -8891,13 +9553,18 @@ func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler
 	originalTrust := access.TrustVersion
 	get(t, path, bearer, http.StatusOK, &access)
 	for _, capability := range access.Capabilities {
-		if capability.Action == iamv1.ActionIAMRoleRead {
+		if capability.Action == iamv1.ActionIAMRoleRead || capability.Action == iamv1.ActionIAMRoleSessionList {
 			if !capability.Available {
 				t.Fatal("authorized role reader denied")
 			}
 		} else if capability.Available {
 			t.Fatal("nonroot role write capability became available")
 		}
+	}
+	var sessions iamv1.RoleSessionList
+	get(t, path+"/sessions", bearer, http.StatusOK, &sessions)
+	if len(sessions.Items) != 0 || sessions.NextAfter != "" || sessions.RoleID != role.ID {
+		t.Fatal("delegated session directory invented an issuance")
 	}
 	variant := create
 	variant.Description = "Changed intent"

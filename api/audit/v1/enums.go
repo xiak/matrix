@@ -48,6 +48,7 @@ const (
 	ActionIAMRolePermissionBoundaryRemoved   Action = "iam.role.permission-boundary.removed"
 	ActionIAMRoleSessionIssued               Action = "iam.role-session.issued"
 	ActionIAMRoleSessionRevoked              Action = "iam.role-session.revoked"
+	ActionIAMRoleSessionAdminRevoked         Action = "iam.role-session.admin-revoked"
 	ActionIAMRoleSessionExited               Action = "iam.role-session.exited"
 	ActionIAMGroupCreated                    Action = "iam.group.created"
 	ActionIAMPolicyCreated                   Action = "iam.policy.created"
@@ -215,6 +216,7 @@ var allActions = []Action{
 	ActionIAMRolePermissionBoundaryRemoved,
 	ActionIAMRoleSessionIssued,
 	ActionIAMRoleSessionRevoked,
+	ActionIAMRoleSessionAdminRevoked,
 	ActionIAMRoleSessionExited,
 	ActionIAMPolicyCreated,
 	ActionIAMPolicyVersionCreated,
@@ -322,6 +324,7 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMRolePermissionBoundaryRemoved: {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMRoleSessionIssued:             {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMRoleSessionRevoked:            {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMRoleSessionAdminRevoked:       {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true, IAMDecisionRequired: true},
 	ActionIAMRoleSessionExited:             {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, RoleActorPermitted: true, RoleActorRequired: true},
 	ActionIAMPolicyCreated: {
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,

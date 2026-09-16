@@ -485,6 +485,31 @@ func TestIAMRetainedRoleAuthorityProcessUpgrade(t *testing.T) {
 	}
 	iamProcess = start(binaries.iam, iamEnvironment)
 	waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
+	var initialDirectory uint64
+	if err := admin.QueryRow(ctx, `SELECT revision FROM iam.role_session_directory_revisions WHERE tenant_id=$1 AND role_id=$2`, role.AccountID, role.ID).Scan(&initialDirectory); err != nil || initialDirectory != 1 {
+		t.Fatal("retained role did not receive exactly one initial management watermark", err)
+	}
+	// Registering the new product capability never rewrites an old SYSTEM
+	// policy or gives its holder new administration rights implicitly.
+	call(http.MethodGet, rolePath+"/sessions", primary.Credential, nil, http.StatusForbidden, nil)
+	var managementPolicy iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", primary.Credential, iamv1.CreatePolicyRequest{DisplayName: "Retained session administration", RequestID: "retained-session-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant, Statements: []iamv1.PolicyStatement{
+			{SID: "directory", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMRoleSessionList}, Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRole, Match: iamv1.PolicyResourceExact, ID: string(role.ID)}}},
+			{SID: "sessions", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMRoleSessionRead, iamv1.ActionIAMRoleSessionRevoke}, Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRoleSession, Match: iamv1.PolicyResourceAnyInAuthority}}},
+		}}}, http.StatusCreated, &managementPolicy)
+	call(http.MethodPost, "/v1/policy-attachments", primary.Credential, iamv1.CreatePolicyAttachmentRequest{PolicyID: managementPolicy.Policy.ID,
+		PolicyResourceVersion: managementPolicy.Policy.ResourceVersion, Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: "principal-admin"}, RequestID: "retained-session-administrator"}, http.StatusOK, nil)
+	var directory iamv1.RoleSessionList
+	call(http.MethodGet, rolePath+"/sessions", primary.Credential, nil, http.StatusOK, &directory)
+	if len(directory.Items) != 2 || directory.NextAfter != "" {
+		t.Fatal("actual retained issuances disappeared from the management directory")
+	}
+	for _, item := range directory.Items {
+		if item.Session.ID != oldSession.ID && item.Session.ID != secondSession.ID || item.Lifecycle != iamv1.RoleSessionUnrevoked || !item.RevokeCapability.Available {
+			t.Fatal("retained management display substituted business eligibility or lost the source identity")
+		}
+	}
 	for _, token := range []string{oldToken, secondToken} {
 		call(http.MethodGet, "/v1/auth/role-session", token, nil, http.StatusUnauthorized, nil)
 		getPaaSApplication(t, paasEndpoint, token, operation.Target.ID, http.StatusUnauthorized)
@@ -541,6 +566,10 @@ func TestIAMRetainedRoleAuthorityProcessUpgrade(t *testing.T) {
 	if err := admin.QueryRow(ctx, `SELECT authority_contract_version FROM iam.role_sessions WHERE tenant_id=$1 AND id=$2`, fresh.AccountID, fresh.ID).Scan(&version); err != nil || version != 2 {
 		t.Fatal("new issuance did not use current authority contract", err)
 	}
+	var directoryBeforeRestart uint64
+	if err := admin.QueryRow(ctx, `SELECT revision FROM iam.role_session_directory_revisions WHERE tenant_id=$1 AND role_id=$2`, role.AccountID, role.ID).Scan(&directoryBeforeRestart); err != nil || directoryBeforeRestart != initialDirectory+3 {
+		t.Fatal("retained terminal paths and new issuance did not advance the management watermark", err)
+	}
 	iamProcess.stop()
 	if err := iammigration.Up(ctx, admin); err != nil {
 		t.Fatal("replay current authority", err)
@@ -550,6 +579,17 @@ func TestIAMRetainedRoleAuthorityProcessUpgrade(t *testing.T) {
 	getPaaSApplication(t, paasEndpoint, freshToken, operation.Target.ID, http.StatusOK)
 	getPaaSApplication(t, paasEndpoint, oldToken, operation.Target.ID, http.StatusUnauthorized)
 	getPaaSApplication(t, paasEndpoint, secondToken, operation.Target.ID, http.StatusUnauthorized)
+	var directoryAfterRestart uint64
+	if err := admin.QueryRow(ctx, `SELECT revision FROM iam.role_session_directory_revisions WHERE tenant_id=$1 AND role_id=$2`, role.AccountID, role.ID).Scan(&directoryAfterRestart); err != nil || directoryAfterRestart != directoryBeforeRestart {
+		t.Fatal("schema replay reset a populated session directory", err)
+	}
+	var administrativelyRevoked iamv1.RevokeRoleSessionResponse
+	call(http.MethodPost, rolePath+"/sessions/"+string(fresh.ID)+":revoke", primary.Credential,
+		iamv1.RevokeRoleSessionRequest{RequestID: "retained-session-admin-revoke"}, http.StatusOK, &administrativelyRevoked)
+	if administrativelyRevoked.Outcome != "APPLIED" || administrativelyRevoked.Session.ID != fresh.ID {
+		t.Fatal("retained installation could not administer its new role session")
+	}
+	getPaaSApplication(t, paasEndpoint, freshToken, operation.Target.ID, http.StatusUnauthorized)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	waitAllPaaSOutboxDelivered(t, ctx, admin)
 	_, replayedFact := findPaaSEvent(t, ctx, admin, auditv1.ActionPaaSApplicationCreated, string(operation.Target.ID))
@@ -1869,7 +1909,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 27, Audit: 15, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 28, Audit: 16, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -3824,6 +3864,8 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	var issued iamv1.AssumeRoleResponse
 	var sourcePolicy iamv1.PolicyDetail
 	roleCredential := ""
+	var administrativelyIssued iamv1.AssumeRoleResponse
+	adminRoleCredential := ""
 	discoveryCursor := ""
 	hiddenRoles := map[iamv1.RoleID]bool{}
 	call(http.MethodPost, iamEndpoint, "/v1/roles", homeBearer, create, http.StatusCreated, &home)
@@ -3929,6 +3971,37 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		getPaaSApplication(t, paasEndpoint, roleCredential, operation.Target.ID, http.StatusOK)
 		createPaaSApplication(t, paasEndpoint, roleCredential, "application-readonly-role-denied", "readonly-role-denied", "readonly-role-create", http.StatusForbidden)
 		assertPaaSApplicationAbsent(t, ctx, admin, "application-readonly-role-denied")
+		// Separate issuance retains the original source self-revocation gate.
+		assume.RequestID = "process-admin-session-issue"
+		call(http.MethodPost, replicaEndpoint, path+":assume", member.Credential, assume, http.StatusOK, &administrativelyIssued)
+		adminBytes := administrativelyIssued.Credential.CopyBytes()
+		adminRoleCredential = string(adminBytes)
+		clear(adminBytes)
+		getPaaSApplication(t, paasEndpoint, adminRoleCredential, operation.Target.ID, http.StatusOK)
+		managedPath := path + "/sessions/" + string(administrativelyIssued.Session.ID)
+		call(http.MethodGet, replicaEndpoint, path+"/sessions", member.Credential, nil, http.StatusForbidden, nil)
+		call(http.MethodGet, replicaEndpoint, managedPath, homeBearer, nil, http.StatusForbidden, nil)
+		var managedPage iamv1.RoleSessionList
+		call(http.MethodGet, iamEndpoint, path+"/sessions", roleBearer, nil, http.StatusOK, &managedPage)
+		if len(managedPage.Items) != 2 || managedPage.AccountID != tenant || managedPage.RoleID != role.ID {
+			t.Fatal("real session directory lost role ownership")
+		}
+		var administrativeRevocation, administrativeReplay iamv1.RevokeRoleSessionResponse
+		adminIntent := iamv1.RevokeRoleSessionRequest{RequestID: "process-admin-session-revoke"}
+		call(http.MethodPost, replicaEndpoint, managedPath+":revoke", roleBearer, adminIntent, http.StatusOK, &administrativeRevocation)
+		call(http.MethodPost, iamEndpoint, managedPath+":revoke", roleBearer, adminIntent, http.StatusOK, &administrativeReplay)
+		if administrativeRevocation.Outcome != "APPLIED" || administrativeReplay.Outcome != "EQUAL_REPLAY" || !reflect.DeepEqual(administrativeRevocation.Session, administrativeReplay.Session) {
+			t.Fatal("replicas changed administrative terminal intent")
+		}
+		for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+			var precise iamv1.RoleSessionAccess
+			call(http.MethodGet, endpoint, managedPath, roleBearer, nil, http.StatusOK, &precise)
+			if precise.Item.Lifecycle != iamv1.RoleSessionRevoked || precise.Item.RevokeCapability.Available {
+				t.Fatal("replica observation retained revoked capability")
+			}
+			call(http.MethodGet, endpoint, "/v1/auth/role-session", adminRoleCredential, nil, http.StatusUnauthorized, nil)
+		}
+		getPaaSApplication(t, paasEndpoint, adminRoleCredential, operation.Target.ID, http.StatusUnauthorized)
 		call(http.MethodPost, replicaEndpoint, "/v1/policy-attachments/"+string(sourceGrant.ID)+":revoke", roleBearer,
 			iamv1.RevokePolicyAttachmentRequest{ResourceVersion: sourceGrant.ResourceVersion, RequestID: "process-role-assume-revoke"}, http.StatusOK, nil)
 		for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
@@ -4023,23 +4096,36 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		forged.TenantID = "organization-process"
 		call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, forged, http.StatusForbidden, nil)
 	}
-	for _, action := range []auditv1.Action{auditv1.ActionIAMRoleSessionIssued, auditv1.ActionIAMRoleSessionRevoked} {
+	for _, action := range []auditv1.Action{auditv1.ActionIAMRoleSessionIssued, auditv1.ActionIAMRoleSessionRevoked, auditv1.ActionIAMRoleSessionAdminRevoked} {
 		page := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
-		if page.TenantID != tenant || len(page.Records) != 1 {
+		expected := 1
+		if action == auditv1.ActionIAMRoleSessionIssued {
+			expected = 2
+		}
+		if page.TenantID != tenant || len(page.Records) != expected {
 			t.Fatal("role issuance fact did not reach its tenant chain", action)
 		}
-		event := page.Records[0].Event
-		if event.Actor.Type != auditv1.ActorUser || event.Actor.ID != auditv1.ActorID(user.ID) || event.Target.Kind != auditv1.TargetRoleSession ||
-			event.Target.ID != string(issued.Session.ID) || (event.IAMDecisionID != "") != (action == auditv1.ActionIAMRoleSessionIssued) {
-			t.Fatal("role issuance history changed actor or original decision")
+		for _, record := range page.Records {
+			event := record.Event
+			expectedActor, expectedSession := auditv1.ActorID(user.ID), string(issued.Session.ID)
+			if action == auditv1.ActionIAMRoleSessionAdminRevoked {
+				expectedActor, expectedSession = auditv1.ActorID(actor.User.ID), string(administrativelyIssued.Session.ID)
+			}
+			if action == auditv1.ActionIAMRoleSessionIssued && event.Target.ID == string(administrativelyIssued.Session.ID) {
+				expectedSession = event.Target.ID
+			}
+			if event.Actor.Type != auditv1.ActorUser || event.Actor.ID != expectedActor || event.Target.Kind != auditv1.TargetRoleSession ||
+				event.Target.ID != expectedSession || (event.IAMDecisionID != "") != (action != auditv1.ActionIAMRoleSessionRevoked) {
+				t.Fatal("role issuance history changed actor or original decision")
+			}
+			var duplicate auditv1.IngestionResult
+			call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, event, http.StatusOK, &duplicate)
+			if duplicate.Outcome != auditv1.IngestionDuplicate {
+				t.Fatal("role receipt replay appended a second historical fact")
+			}
+			event.Target.ID = "role-session-forged"
+			call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, event, http.StatusForbidden, nil)
 		}
-		var duplicate auditv1.IngestionResult
-		call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, event, http.StatusOK, &duplicate)
-		if duplicate.Outcome != auditv1.IngestionDuplicate {
-			t.Fatal("role receipt replay appended a second historical fact")
-		}
-		event.Target.ID = "role-session-forged"
-		call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, event, http.StatusForbidden, nil)
 	}
 	restartIAM()
 	for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
@@ -4047,6 +4133,12 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		call(http.MethodPost, endpoint, "/v1/roles", ownerBearer, create, http.StatusConflict, nil)
 		call(http.MethodGet, endpoint, "/v1/roles/"+string(home.ID), homeBearer, nil, http.StatusOK, nil)
 		call(http.MethodGet, endpoint, "/v1/auth/me", roleBearer, nil, http.StatusUnauthorized, nil)
+		var terminal iamv1.RoleSessionAccess
+		call(http.MethodGet, endpoint, "/v1/roles/"+string(role.ID)+"/sessions/"+string(administrativelyIssued.Session.ID), ownerBearer, nil, http.StatusOK, &terminal)
+		if terminal.Item.Lifecycle != iamv1.RoleSessionRevoked || terminal.Item.Session.ID != administrativelyIssued.Session.ID {
+			t.Fatal("restart or role tombstone lost the administrative terminal record")
+		}
+		call(http.MethodGet, endpoint, "/v1/auth/role-session", adminRoleCredential, nil, http.StatusUnauthorized, nil)
 	}
 	currentSource := loginIAM(t, replicaEndpoint, "role.candidate@"+tenant, changedDeveloperPassword, "process-role-source-relogin")
 	call(http.MethodGet, iamEndpoint, "/v1/auth/assumable-roles?after="+discoveryCursor, currentSource.Credential, nil, http.StatusUnprocessableEntity, nil)
@@ -4066,7 +4158,7 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	if chain.TenantID != tenant || chain.State != auditv1.VerificationVerified || !chain.Complete {
 		t.Fatal("role lifecycle broke the immutable tenant chain")
 	}
-	sensitive := []string{member.Credential, roleCredential, currentSource.Credential}
+	sensitive := []string{member.Credential, roleCredential, adminRoleCredential, currentSource.Credential}
 	return append(sensitive, proveRoleBusinessProcesses(t, ctx, admin, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, ownerBearer, currentSource.Credential, user, withAuditOutage, restartIAM)...)
 }
 

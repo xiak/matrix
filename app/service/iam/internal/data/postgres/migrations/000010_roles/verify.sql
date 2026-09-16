@@ -11,7 +11,8 @@ BEGIN
     FOR expected IN SELECT * FROM (VALUES
       ('iam.role.list','ACCOUNT'),('iam.role.create','ACCOUNT'),('iam.role.read','ROLE'),('iam.role.update','ROLE'),
       ('iam.role.set-status','ROLE'),('iam.role.delete','ROLE'),('iam.role-trust.set','ROLE'),
-      ('iam.role-policy-attachment.create','ROLE'),('iam.role-policy-attachment.revoke','POLICY_ATTACHMENT')) action(name,kind) LOOP
+      ('iam.role-policy-attachment.create','ROLE'),('iam.role-policy-attachment.revoke','POLICY_ATTACHMENT'),
+      ('iam.role-session.list','ROLE'),('iam.role-session.read','ROLE_SESSION'),('iam.role-session.revoke','ROLE_SESSION')) action(name,kind) LOOP
         IF iam.resource_kind_for_action(expected.name) IS DISTINCT FROM expected.kind OR iam.is_platform_action(expected.name) THEN
             RAISE EXCEPTION 'IAM Role action authority is incompatible';
         END IF;

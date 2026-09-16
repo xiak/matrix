@@ -1254,6 +1254,188 @@ BEGIN
     RETURN iam.role_session_snapshot(tenant,stored.id);
 END $function$;
 
+-- A per-role directory clock is not role security authority. Only actual
+-- issuance and terminal transitions advance it; replay never resets it.
+DO $session_directory_cutover$
+BEGIN
+    IF to_regclass('iam.role_session_directory_revisions') IS NULL THEN
+        CREATE TABLE iam.role_session_directory_revisions (
+            tenant_id text COLLATE "C" NOT NULL,
+            role_id text COLLATE "C" NOT NULL,
+            revision bigint NOT NULL,
+            PRIMARY KEY(tenant_id,role_id),
+            CONSTRAINT role_session_directory_role_fk FOREIGN KEY(tenant_id,role_id) REFERENCES iam.roles(tenant_id,id),
+            CONSTRAINT role_session_directory_revision_range CHECK(revision BETWEEN 1 AND 9007199254740991)
+        );
+        ALTER TABLE iam.roles NO FORCE ROW LEVEL SECURITY;
+        INSERT INTO iam.role_session_directory_revisions SELECT tenant_id,id,1 FROM iam.roles;
+        ALTER TABLE iam.roles FORCE ROW LEVEL SECURITY;
+    END IF;
+END $session_directory_cutover$;
+ALTER TABLE iam.role_session_directory_revisions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.role_session_directory_revisions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON iam.role_session_directory_revisions;
+CREATE POLICY tenant_isolation ON iam.role_session_directory_revisions
+  USING(tenant_id=iam.current_tenant_id()) WITH CHECK(tenant_id=iam.current_tenant_id());
+CREATE INDEX IF NOT EXISTS role_sessions_directory_idx ON iam.role_sessions(tenant_id,role_id,id);
+CREATE OR REPLACE FUNCTION iam.guard_role_session_directory_revision()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF TG_OP='INSERT' AND NEW.revision=1 THEN RETURN NEW; END IF;
+    IF TG_OP='UPDATE' AND NEW.tenant_id=OLD.tenant_id AND NEW.role_id=OLD.role_id AND NEW.revision=OLD.revision+1 THEN RETURN NEW; END IF;
+    RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role session directory is irreversible';
+END $function$;
+DROP TRIGGER IF EXISTS role_session_directory_monotonic ON iam.role_session_directory_revisions;
+CREATE TRIGGER role_session_directory_monotonic BEFORE INSERT OR UPDATE OR DELETE ON iam.role_session_directory_revisions
+  FOR EACH ROW EXECUTE FUNCTION iam.guard_role_session_directory_revision();
+ALTER TABLE iam.role_session_directory_revisions ENABLE ALWAYS TRIGGER role_session_directory_monotonic;
+DROP TRIGGER IF EXISTS cannot_truncate ON iam.role_session_directory_revisions;
+CREATE TRIGGER cannot_truncate BEFORE TRUNCATE ON iam.role_session_directory_revisions FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.role_session_directory_revisions ENABLE ALWAYS TRIGGER cannot_truncate;
+CREATE OR REPLACE FUNCTION iam.advance_role_session_directory_revision()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    PERFORM set_config('matrix.iam_tenant_id',NEW.tenant_id,true);
+    IF TG_TABLE_NAME='roles' AND TG_OP='INSERT' THEN
+        INSERT INTO iam.role_session_directory_revisions VALUES(NEW.tenant_id,NEW.id,1);
+    ELSIF TG_TABLE_NAME='role_sessions' AND (TG_OP='INSERT' OR (TG_OP='UPDATE' AND OLD.revoked_at IS NULL AND NEW.revoked_at IS NOT NULL)) THEN
+        UPDATE iam.role_session_directory_revisions SET revision=revision+1 WHERE tenant_id=NEW.tenant_id AND role_id=NEW.role_id;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='role session directory is unavailable'; END IF;
+    ELSE RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role session directory transition is invalid';
+    END IF;
+    RETURN NEW;
+END $function$;
+DROP TRIGGER IF EXISTS roles_initialize_session_directory ON iam.roles;
+CREATE TRIGGER roles_initialize_session_directory AFTER INSERT ON iam.roles FOR EACH ROW EXECUTE FUNCTION iam.advance_role_session_directory_revision();
+ALTER TABLE iam.roles ENABLE ALWAYS TRIGGER roles_initialize_session_directory;
+DROP TRIGGER IF EXISTS sessions_advance_directory ON iam.role_sessions;
+CREATE TRIGGER sessions_advance_directory AFTER INSERT OR UPDATE ON iam.role_sessions FOR EACH ROW EXECUTE FUNCTION iam.advance_role_session_directory_revision();
+ALTER TABLE iam.role_sessions ENABLE ALWAYS TRIGGER sessions_advance_directory;
+
+-- Prepare before recording the USER decision, then repeat at the effect.
+-- Source USER locks serialize custody only; no source login/role eligibility
+-- is needed for an administrator to terminate an otherwise invalid session.
+CREATE OR REPLACE FUNCTION iam.prepare_role_session_management(tenant text,actor text,actor_session text,role_id text,session_id text,writing boolean)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE source_user text; generation bigint; directory_revision bigint; source_authority jsonb;
+BEGIN
+    IF COALESCE(tenant,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(actor,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(actor_session,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(role_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR session_id IS NULL OR writing IS NULL OR (writing AND session_id='')
+      OR (session_id<>'' AND session_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role session management reference is invalid'; END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts WHERE id=tenant AND status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role session management is unavailable'; END IF;
+    PERFORM 1 FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role session management is unavailable'; END IF;
+    IF session_id<>'' THEN
+        SELECT s.source_user_id INTO source_user FROM iam.role_sessions s WHERE s.tenant_id=tenant AND s.role_id=prepare_role_session_management.role_id AND s.id=session_id;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role session management is unavailable'; END IF;
+    END IF;
+    IF writing THEN
+        PERFORM 1 FROM iam.principals p WHERE p.tenant_id=tenant AND (p.id=actor OR p.id=source_user) AND p.principal_type='USER' ORDER BY p.id FOR NO KEY UPDATE;
+    ELSE
+        PERFORM 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=actor AND p.principal_type='USER' FOR SHARE;
+    END IF;
+    IF NOT EXISTS(SELECT 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=actor AND p.principal_type='USER'
+      AND p.status='ACTIVE' AND p.deleted_at IS NULL AND NOT p.must_change_password) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role session management actor is unavailable'; END IF;
+    SELECT c.credential_version INTO generation FROM iam.user_credentials c JOIN iam.sessions s ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id
+      WHERE c.tenant_id=tenant AND c.principal_id=actor AND s.id=actor_session AND s.status='ACTIVE' AND s.revoked_at IS NULL
+      AND s.credential_version=c.credential_version AND s.expires_at>clock_timestamp() FOR SHARE OF c,s;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role session management credential is unavailable'; END IF;
+    source_authority:=iam.role_source_authority_snapshot(tenant,actor);
+    IF writing THEN
+        PERFORM 1 FROM iam.role_sessions s WHERE s.tenant_id=tenant AND s.role_id=prepare_role_session_management.role_id AND s.id=session_id FOR UPDATE;
+        -- Do not take a shared directory lock and later upgrade it at UPDATE.
+        SELECT d.revision INTO directory_revision FROM iam.role_session_directory_revisions d WHERE d.tenant_id=tenant AND d.role_id=prepare_role_session_management.role_id;
+    ELSE
+        SELECT d.revision INTO directory_revision FROM iam.role_session_directory_revisions d WHERE d.tenant_id=tenant AND d.role_id=prepare_role_session_management.role_id FOR SHARE;
+    END IF;
+    IF directory_revision IS NULL THEN RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='role session directory is unavailable'; END IF;
+    RETURN jsonb_build_object('credentialGeneration',generation,'directoryRevision',directory_revision,
+      'userAuthorizationGeneration',source_authority->'userGeneration','groups',source_authority->'groups');
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.managed_role_session_snapshot(tenant text,role_id text,session_id text)
+RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT jsonb_build_object('session',iam.role_session_snapshot(tenant,s.id),
+      'sourceUser',jsonb_build_object('id',p.id,'loginName',p.login_name,'displayName',p.display_name))
+    FROM iam.role_sessions s JOIN iam.principals p ON p.tenant_id=s.tenant_id AND p.id=s.source_user_id AND p.principal_type='USER'
+    WHERE s.tenant_id=tenant AND s.role_id=managed_role_session_snapshot.role_id AND s.id=session_id
+$function$;
+CREATE OR REPLACE FUNCTION iam.list_managed_role_sessions(tenant text,actor text,actor_session text,role_id text,decision text,after_id text,source_user_id text,session_id text,lifecycle text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE candidate record; scanned integer:=0; previous_id text:=''; next_after text:=''; items jsonb:='[]'; observed timestamptz(6):=transaction_timestamp(); item jsonb;
+BEGIN
+    PERFORM iam.prepare_role_session_management(tenant,actor,actor_session,role_id,'',false);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.role-session.list','ROLE',role_id,'INSTANCE',NULL);
+    IF after_id IS NULL OR source_user_id IS NULL OR session_id IS NULL OR lifecycle IS NULL OR lifecycle NOT IN ('ALL','UNREVOKED','EXPIRED','REVOKED')
+      OR (after_id<>'' AND after_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+      OR (source_user_id<>'' AND source_user_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+      OR (session_id<>'' AND session_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role session query is invalid'; END IF;
+    -- Filters cannot turn a response limit into an unbounded historical scan.
+    FOR candidate IN SELECT s.id,s.source_user_id,s.revoked_at,s.expires_at FROM iam.role_sessions s
+      WHERE s.tenant_id=tenant AND s.role_id=list_managed_role_sessions.role_id AND (after_id='' OR s.id>after_id COLLATE "C")
+      AND (session_id='' OR s.id=session_id) ORDER BY s.id LIMIT 101 LOOP
+        IF scanned=100 THEN next_after:=previous_id; EXIT; END IF;
+        scanned:=scanned+1; previous_id:=candidate.id;
+        IF (source_user_id='' OR candidate.source_user_id=source_user_id) AND (lifecycle='ALL'
+          OR (lifecycle='REVOKED' AND candidate.revoked_at IS NOT NULL)
+          OR (lifecycle='EXPIRED' AND candidate.revoked_at IS NULL AND candidate.expires_at<=observed)
+          OR (lifecycle='UNREVOKED' AND candidate.revoked_at IS NULL AND candidate.expires_at>observed)) THEN
+            item:=iam.managed_role_session_snapshot(tenant,role_id,candidate.id);
+            IF item IS NULL THEN RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='role session display is unavailable'; END IF;
+            items:=items||jsonb_build_array(item);
+        END IF;
+    END LOOP;
+    RETURN jsonb_build_object('items',items,'nextAfter',next_after);
+END $function$;
+CREATE OR REPLACE FUNCTION iam.read_managed_role_session(tenant text,actor text,actor_session text,role_id text,session_id text,decision text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE result jsonb;
+BEGIN
+    PERFORM iam.prepare_role_session_management(tenant,actor,actor_session,role_id,session_id,false);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.role-session.read','ROLE_SESSION',session_id,'INSTANCE',NULL);
+    result:=iam.managed_role_session_snapshot(tenant,role_id,session_id);
+    IF result IS NULL THEN RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='role session display is unavailable'; END IF;
+    RETURN result;
+END $function$;
+CREATE OR REPLACE FUNCTION iam.revoke_managed_role_session(tenant text,actor text,actor_session text,role_id text,session_id text,decision text,event jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE stored iam.role_sessions%ROWTYPE; now_at timestamptz(6):=transaction_timestamp();
+BEGIN
+    PERFORM iam.prepare_role_session_management(tenant,actor,actor_session,role_id,session_id,true);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.role-session.revoke','ROLE_SESSION',session_id,'INSTANCE',NULL);
+    SELECT * INTO stored FROM iam.role_sessions s WHERE s.tenant_id=tenant AND s.role_id=revoke_managed_role_session.role_id AND s.id=session_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role session management is unavailable'; END IF;
+    PERFORM iam.assert_audit_event(event,tenant,'iam.role-session.admin-revoked','ROLE_SESSION',stored.id,'SUCCEEDED');
+    PERFORM iam.assert_user_audit_actor(tenant,actor,event);
+    IF event->>'iamDecisionId' IS DISTINCT FROM decision THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role revocation decision is invalid'; END IF;
+    PERFORM iam.assert_role_intent(tenant,actor,event);
+    IF stored.revoked_at IS NOT NULL THEN
+        IF NOT iam.role_event_matches(tenant,actor,event) THEN RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role revocation intent conflicts'; END IF;
+        RETURN jsonb_build_object('outcome','EQUAL_REPLAY','session',iam.role_session_snapshot(tenant,stored.id));
+    END IF;
+    IF stored.expires_at<=clock_timestamp() THEN RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role session has expired'; END IF;
+    UPDATE iam.role_sessions SET revoked_at=now_at WHERE tenant_id=tenant AND id=stored.id;
+    INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
+      VALUES(tenant,event->>'eventId',event,now_at,now_at,now_at);
+    RETURN jsonb_build_object('outcome','APPLIED','session',iam.role_session_snapshot(tenant,stored.id));
+END $function$;
+REVOKE ALL ON iam.role_session_directory_revisions FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+REVOKE ALL ON FUNCTION iam.guard_role_session_directory_revision(),iam.advance_role_session_directory_revision(),
+    iam.managed_role_session_snapshot(text,text,text),iam.prepare_role_session_management(text,text,text,text,text,boolean),
+    iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text),iam.read_managed_role_session(text,text,text,text,text,text),
+    iam.revoke_managed_role_session(text,text,text,text,text,text,jsonb) FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+GRANT EXECUTE ON FUNCTION iam.prepare_role_session_management(text,text,text,text,text,boolean),
+    iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text),iam.read_managed_role_session(text,text,text,text,text,text),
+    iam.revoke_managed_role_session(text,text,text,text,text,text,jsonb) TO matrix_iam_api;
+
 -- Pure historical linkage: lifecycle fields and current default pointers do
 -- not reinterpret an immutable version captured when the session was issued.
 CREATE OR REPLACE FUNCTION iam.role_snapshot_version_matches(snapshot jsonb)
@@ -1390,7 +1572,7 @@ CREATE OR REPLACE FUNCTION iam.role_contract_ready()
 RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE table_name text; required record; entrypoint record; signature text; relation_oid oid;
 BEGIN
-    FOREACH table_name IN ARRAY ARRAY['roles','role_trust_versions','role_permission_boundaries','role_sessions','role_directory_revisions','role_source_authority_generations'] LOOP
+    FOREACH table_name IN ARRAY ARRAY['roles','role_trust_versions','role_permission_boundaries','role_sessions','role_directory_revisions','role_source_authority_generations','role_session_directory_revisions'] LOOP
         relation_oid:=to_regclass('iam.'||table_name);
         IF relation_oid IS NULL OR NOT EXISTS(SELECT 1 FROM pg_class c WHERE c.oid=relation_oid
           AND c.relowner='matrix_iam_owner'::regrole AND c.relrowsecurity AND c.relforcerowsecurity) THEN RETURN false; END IF;
@@ -1402,6 +1584,8 @@ BEGIN
     FOR required IN SELECT * FROM (VALUES
       ('roles','security_generation','bigint'::regtype,true),
       ('role_directory_revisions','tenant_id','text'::regtype,true),('role_directory_revisions','revision','bigint'::regtype,true),
+      ('role_session_directory_revisions','tenant_id','text'::regtype,true),('role_session_directory_revisions','role_id','text'::regtype,true),
+      ('role_session_directory_revisions','revision','bigint'::regtype,true),
       ('role_source_authority_generations','tenant_id','text'::regtype,true),
       ('role_source_authority_generations','user_id','text'::regtype,false),
       ('role_source_authority_generations','group_id','text'::regtype,false),
@@ -1458,7 +1642,8 @@ BEGIN
       ('iam.role_directory_revisions',ARRAY['tenant_id']),
       ('iam.role_source_authority_generations',ARRAY['tenant_id','user_id']),
       ('iam.role_source_authority_generations',ARRAY['tenant_id','group_id']),
-      ('iam.role_session_index',ARRAY['lookup_digest']),('iam.role_session_index',ARRAY['tenant_id','session_id'])) expected(table_name,column_names) LOOP
+      ('iam.role_session_index',ARRAY['lookup_digest']),('iam.role_session_index',ARRAY['tenant_id','session_id']),
+      ('iam.role_session_directory_revisions',ARRAY['tenant_id','role_id'])) expected(table_name,column_names) LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=to_regclass(required.table_name)
           AND i.indisunique AND i.indisvalid AND i.indisready AND NOT i.indnullsnotdistinct AND i.indexprs IS NULL AND i.indpred IS NULL
           AND i.indnkeyatts=cardinality(required.column_names) AND i.indnatts=i.indnkeyatts
@@ -1479,6 +1664,7 @@ BEGIN
     FOR required IN SELECT * FROM (VALUES ('roles','roles_security_generation_range'),
       ('role_permission_boundaries','role_boundaries_terminal_state'),('role_directory_revisions','role_directory_revision_range'),
       ('role_source_authority_generations','role_source_exact_kind'),('role_source_authority_generations','role_source_generation_range'),
+      ('role_session_directory_revisions','role_session_directory_revision_range'),
       ('role_sessions','role_sessions_authority_contract')) expected(table_name,constraint_name) LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass('iam.'||required.table_name)
           AND c.conname=required.constraint_name AND c.contype='c' AND c.convalidated) THEN RETURN false; END IF;
@@ -1491,6 +1677,10 @@ BEGIN
     FOR required IN SELECT * FROM (VALUES
       ('iam.list_roles(text,text,text,text)',false),('iam.read_role(text,text,text,text)',false),
       ('iam.read_role_discovery_revision(text,text,text)',false),('iam.read_role_candidates(text,text,text,text,text)',false),
+      ('iam.prepare_role_session_management(text,text,text,text,text,boolean)',false),
+      ('iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text)',false),
+      ('iam.read_managed_role_session(text,text,text,text,text,text)',false),
+      ('iam.revoke_managed_role_session(text,text,text,text,text,text,jsonb)',false),
       ('iam.read_role_permission_boundary(text,text,text,text)',false),
       ('iam.lookup_role_session(text)',false),('iam.read_role_assumption(text,text,text,text,text)',false),
       ('iam.lookup_role_session_for_exit(text)',false),('iam.exit_role_session(text,jsonb)',false),
@@ -1517,12 +1707,17 @@ BEGIN
           OR (entrypoint.proname='exit_role_session' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['lookup_digest','event'])
           OR (entrypoint.proname='read_role_discovery_revision' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','source_session'])
           OR (entrypoint.proname='read_role_candidates' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','source_session','after_id','role_id'])
+          OR (entrypoint.proname='prepare_role_session_management' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','actor_session','role_id','session_id','writing'])
+          OR (entrypoint.proname='list_managed_role_sessions' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','actor_session','role_id','decision','after_id','source_user_id','session_id','lifecycle'])
+          OR (entrypoint.proname='read_managed_role_session' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','actor_session','role_id','session_id','decision'])
+          OR (entrypoint.proname='revoke_managed_role_session' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','actor_session','role_id','session_id','decision','event'])
           OR NOT has_function_privilege('matrix_iam_api',entrypoint.oid,'EXECUTE')
           OR EXISTS(SELECT 1 FROM aclexplode(COALESCE(entrypoint.proacl,acldefault('f',entrypoint.proowner))) permission
             WHERE permission.grantee NOT IN (entrypoint.proowner,'matrix_iam_api'::regrole)
               OR (permission.grantee='matrix_iam_api'::regrole AND permission.is_grantable)) THEN RETURN false; END IF;
     END LOOP;
     FOREACH signature IN ARRAY ARRAY['iam.role_metadata_valid(jsonb)','iam.role_trust_content_valid(text,text)',
+      'iam.guard_role_session_directory_revision()','iam.advance_role_session_directory_revision()','iam.managed_role_session_snapshot(text,text,text)',
       'iam.guard_role_change()','iam.assert_role_writer(text,text,text,jsonb)','iam.role_snapshot(text,text)',
       'iam.guard_role_directory_revision()','iam.advance_role_directory_revision()',
       'iam.guard_role_source_authority_generation()','iam.advance_role_source_authority_generation()','iam.role_source_authority_snapshot(text,text)',
@@ -1540,7 +1735,9 @@ BEGIN
     FOR required IN SELECT * FROM (VALUES
       ('iam.guard_role_source_authority_generation()','trigger'::regtype,false,ARRAY[]::text[]),
       ('iam.advance_role_source_authority_generation()','trigger'::regtype,true,ARRAY[]::text[]),
-      ('iam.role_source_authority_snapshot(text,text)','jsonb'::regtype,false,ARRAY['tenant','source_user'])) expected(signature,result_type,defining,argument_names) LOOP
+      ('iam.role_source_authority_snapshot(text,text)','jsonb'::regtype,false,ARRAY['tenant','source_user']),
+      ('iam.guard_role_session_directory_revision()','trigger'::regtype,false,ARRAY[]::text[]),
+      ('iam.advance_role_session_directory_revision()','trigger'::regtype,true,ARRAY[]::text[])) expected(signature,result_type,defining,argument_names) LOOP
         SELECT p.* INTO entrypoint FROM pg_proc p WHERE p.oid=to_regprocedure(required.signature);
         IF NOT FOUND THEN RETURN false; END IF;
         IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace=entrypoint.pronamespace AND p.proname=entrypoint.proname)<>1
@@ -1565,7 +1762,7 @@ BEGIN
         IF NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass('iam.'||required.table_name)
           AND t.tgname=required.trigger_name AND t.tgenabled='A' AND NOT t.tgisinternal) THEN RETURN false; END IF;
     END LOOP;
-    FOREACH table_name IN ARRAY ARRAY['role_directory_revisions','role_source_authority_generations'] LOOP
+    FOREACH table_name IN ARRAY ARRAY['role_directory_revisions','role_source_authority_generations','role_session_directory_revisions'] LOOP
       relation_oid:=to_regclass('iam.'||table_name);
       IF (SELECT count(*) FROM pg_policy WHERE polrelid=relation_oid)<>1
        OR NOT EXISTS(SELECT 1 FROM pg_policy p WHERE p.polrelid=relation_oid
@@ -1586,6 +1783,10 @@ BEGIN
       ('role_source_authority_generations','source_authority_monotonic','iam.guard_role_source_authority_generation()',31),
       ('role_source_authority_generations','cannot_truncate','iam.reject_policy_history_change()',34),
       ('role_sessions','role_session_terminal_state','iam.guard_role_session_change()',31),
+      ('roles','roles_initialize_session_directory','iam.advance_role_session_directory_revision()',5),
+      ('role_sessions','sessions_advance_directory','iam.advance_role_session_directory_revision()',21),
+      ('role_session_directory_revisions','role_session_directory_monotonic','iam.guard_role_session_directory_revision()',31),
+      ('role_session_directory_revisions','cannot_truncate','iam.reject_policy_history_change()',34),
       ('role_directory_revisions','role_directory_monotonic','iam.guard_role_directory_revision()',27),
       ('role_directory_revisions','cannot_truncate','iam.reject_policy_history_change()',34)) expected(table_name,trigger_name,signature,trigger_type) LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass('iam.'||required.table_name)
@@ -1597,6 +1798,23 @@ BEGIN
     END LOOP;
     IF NOT EXISTS(SELECT 1 FROM pg_proc p WHERE p.oid='iam.advance_role_directory_revision()'::regprocedure
         AND p.prosecdef AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']) THEN RETURN false; END IF;
+    IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid='iam.role_session_directory_revisions'::regclass
+      AND c.conname='role_session_directory_role_fk' AND c.contype='f' AND c.confrelid='iam.roles'::regclass AND c.convalidated
+      AND NOT c.condeferrable AND c.confupdtype='a' AND c.confdeltype='a' AND c.confmatchtype='s'
+      AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(number,position)
+        JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.number ORDER BY k.position)=ARRAY['tenant_id','role_id']
+      AND ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(number,position)
+        JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.number ORDER BY k.position)=ARRAY['tenant_id','id']) THEN RETURN false; END IF;
+    IF NOT EXISTS(SELECT 1 FROM pg_index i WHERE i.indexrelid=to_regclass('iam.role_sessions_directory_idx')
+      AND i.indrelid='iam.role_sessions'::regclass AND i.indisvalid AND i.indisready AND NOT i.indisunique AND i.indexprs IS NULL AND i.indpred IS NULL
+      AND i.indnkeyatts=3 AND i.indnatts=3 AND ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY k(number,position)
+        JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.number ORDER BY k.position)=ARRAY['tenant_id','role_id','id']) THEN RETURN false; END IF;
+    IF EXISTS(SELECT 1 FROM pg_attrdef WHERE adrelid='iam.role_session_directory_revisions'::regclass) THEN RETURN false; END IF;
+    SELECT p.* INTO entrypoint FROM pg_proc p WHERE p.oid=to_regprocedure('iam.managed_role_session_snapshot(text,text,text)');
+    IF NOT FOUND OR entrypoint.prosecdef OR entrypoint.proretset OR entrypoint.prorettype<>'jsonb'::regtype OR entrypoint.provolatile<>'s'
+      OR entrypoint.pronargdefaults<>0 OR entrypoint.provariadic<>0 OR entrypoint.proparallel<>'u' OR entrypoint.proisstrict OR entrypoint.proleakproof
+      OR entrypoint.proallargtypes IS NOT NULL OR entrypoint.proargmodes IS NOT NULL OR entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','role_id','session_id']
+      OR entrypoint.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, pg_temp'] THEN RETURN false; END IF;
     RETURN true;
 END $function$;
 

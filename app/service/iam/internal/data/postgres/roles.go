@@ -419,6 +419,102 @@ func decodeRolePermissionBoundary(encoded []byte, account iamv1.AccountID, role 
 	return result, nil
 }
 
+func (value *transaction) PrepareRoleSessionManagement(ctx context.Context, target identityaccess.RoleSessionManagementTarget, writing bool) (authority.RoleSessionDirectoryRevision, error) {
+	var encoded []byte
+	err := value.tx.QueryRow(ctx, "SELECT iam.prepare_role_session_management($1,$2,$3,$4,$5,$6)", target.AccountID,
+		target.ActorPrincipalID, target.ActorSessionID, target.RoleID, target.SessionID, writing).Scan(&encoded)
+	if err != nil {
+		return authority.RoleSessionDirectoryRevision{}, mapAuthorizationDatabaseError("prepare IAM role session management", err)
+	}
+	defer clear(encoded)
+	var result authority.RoleSessionDirectoryRevision
+	if contractjson.DecodeObjectBytes(encoded, iamv1.MaxRequestBytes, &result) != nil || authority.ValidateRoleSessionDirectoryRevision(result) != nil {
+		return authority.RoleSessionDirectoryRevision{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func validateManagedRoleSession(item *identityaccess.ManagedRoleSession, target identityaccess.RoleSessionManagementTarget) error {
+	normalizeRoleSession(&item.Session)
+	if iamv1.ValidateRoleSession(item.Session) != nil || iamv1.ValidateRoleSourceUserDisplay(item.SourceUser) != nil ||
+		item.Session.AccountID != target.AccountID || item.Session.RoleID != target.RoleID || item.SourceUser.ID != item.Session.SourceUserID ||
+		(target.SessionID != "" && item.Session.ID != target.SessionID) {
+		return identityaccess.ErrUnavailable
+	}
+	return nil
+}
+
+func (value *transaction) ListManagedRoleSessions(ctx context.Context, read identityaccess.RoleSessionManagementRead) (identityaccess.ManagedRoleSessionPage, error) {
+	var encoded []byte
+	err := value.tx.QueryRow(ctx, "SELECT iam.list_managed_role_sessions($1,$2,$3,$4,$5,$6,$7,$8,$9)", read.AccountID,
+		read.ActorPrincipalID, read.ActorSessionID, read.RoleID, read.DecisionID, read.After, read.Filter.SourceUserID, read.Filter.SessionID, read.Filter.Lifecycle).Scan(&encoded)
+	if err != nil {
+		return identityaccess.ManagedRoleSessionPage{}, mapAuthorizationDatabaseError("list IAM role sessions", err)
+	}
+	defer clear(encoded)
+	var result identityaccess.ManagedRoleSessionPage
+	if contractjson.DecodeObjectBytes(encoded, iamv1.MaxRoleSessionListBytes, &result) != nil || result.Items == nil || len(result.Items) > iamv1.DirectoryPageSize ||
+		(result.NextAfter != "" && (iamv1.ValidateID("nextAfter", result.NextAfter) != nil || result.NextAfter <= read.After)) {
+		return identityaccess.ManagedRoleSessionPage{}, identityaccess.ErrUnavailable
+	}
+	previous := read.After
+	for index := range result.Items {
+		item := &result.Items[index]
+		if validateManagedRoleSession(item, read.RoleSessionManagementTarget) != nil || string(item.Session.ID) <= previous ||
+			(read.Filter.SourceUserID != "" && item.Session.SourceUserID != read.Filter.SourceUserID) || (read.Filter.SessionID != "" && item.Session.ID != read.Filter.SessionID) ||
+			(result.NextAfter != "" && string(item.Session.ID) > result.NextAfter) {
+			return identityaccess.ManagedRoleSessionPage{}, identityaccess.ErrUnavailable
+		}
+		previous = string(item.Session.ID)
+	}
+	return result, nil
+}
+
+func (value *transaction) ReadManagedRoleSession(ctx context.Context, read identityaccess.RoleSessionManagementRead) (identityaccess.ManagedRoleSession, error) {
+	var encoded []byte
+	err := value.tx.QueryRow(ctx, "SELECT iam.read_managed_role_session($1,$2,$3,$4,$5,$6)", read.AccountID, read.ActorPrincipalID, read.ActorSessionID, read.RoleID, read.SessionID, read.DecisionID).Scan(&encoded)
+	if err != nil {
+		return identityaccess.ManagedRoleSession{}, mapAuthorizationDatabaseError("read IAM role session", err)
+	}
+	defer clear(encoded)
+	var result identityaccess.ManagedRoleSession
+	if contractjson.DecodeObjectBytes(encoded, iamv1.MaxRequestBytes, &result) != nil || validateManagedRoleSession(&result, read.RoleSessionManagementTarget) != nil {
+		return identityaccess.ManagedRoleSession{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) RevokeManagedRoleSession(ctx context.Context, mutation identityaccess.RoleSessionAdministrativeRevocation) (iamv1.RevokeRoleSessionResponse, error) {
+	if iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil {
+		return iamv1.RevokeRoleSessionResponse{}, identityaccess.ErrInvalidArgument
+	}
+	event, err := marshalManagementEvent(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.RevokeRoleSessionResponse{}, err
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, "SELECT iam.revoke_managed_role_session($1,$2,$3,$4,$5,$6,$7::jsonb)", mutation.AccountID,
+		mutation.ActorPrincipalID, mutation.ActorSessionID, mutation.RoleID, mutation.SessionID, mutation.DecisionID, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.RevokeRoleSessionResponse{}, mapAuthorizationDatabaseError("revoke IAM role session", err)
+	}
+	defer clear(encoded)
+	// PostgreSQL emits offset timestamps. Normalize the storage representation
+	// before applying the stricter public UTC wire contract.
+	type storedRevocation iamv1.RevokeRoleSessionResponse
+	var stored storedRevocation
+	if contractjson.DecodeObjectBytes(encoded, iamv1.MaxRequestBytes, &stored) != nil {
+		return iamv1.RevokeRoleSessionResponse{}, identityaccess.ErrUnavailable
+	}
+	result := iamv1.RevokeRoleSessionResponse(stored)
+	normalizeRoleSession(&result.Session)
+	if iamv1.ValidateRevokeRoleSessionResponse(result) != nil || result.Session.AccountID != mutation.AccountID || result.Session.RoleID != mutation.RoleID || result.Session.ID != mutation.SessionID {
+		return iamv1.RevokeRoleSessionResponse{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
 func (value *transaction) ReadRolePermissionBoundary(ctx context.Context, read identityaccess.RoleRead) (iamv1.RolePermissionBoundary, error) {
 	var encoded []byte
 	if err := value.tx.QueryRow(ctx, "SELECT iam.read_role_permission_boundary($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, read.RoleID).Scan(&encoded); err != nil {

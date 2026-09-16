@@ -1787,7 +1787,9 @@ func TestLegacySystemInterpretationDoesNotAdmitUnprovedCustomerVersions(t *testi
 		legacyDocument.Statements[index].Actions = slices.DeleteFunc(slices.Clone(legacyDocument.Statements[index].Actions), func(action iamv1.Action) bool {
 			return strings.HasPrefix(string(action), "iam.") && !oldActions[action]
 		})
-		legacyDocument.Statements[index].Resources = slices.DeleteFunc(slices.Clone(legacyDocument.Statements[index].Resources), func(resource iamv1.PolicyResourceSelector) bool { return resource.Kind == iamv1.ResourceRole })
+		legacyDocument.Statements[index].Resources = slices.DeleteFunc(slices.Clone(legacyDocument.Statements[index].Resources), func(resource iamv1.PolicyResourceSelector) bool {
+			return resource.Kind == iamv1.ResourceRole || resource.Kind == iamv1.ResourceRoleSession
+		})
 	}
 	_, digest, err := iamv1.CanonicalizePolicyDocument(legacyDocument)
 	if err != nil {

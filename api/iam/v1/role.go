@@ -168,6 +168,10 @@ type RoleSourceUserDisplay struct {
 	DisplayName string      `json:"displayName"`
 }
 
+func ValidateRoleSourceUserDisplay(value RoleSourceUserDisplay) error {
+	return errors.Join(ValidateID("sourceUser.id", string(value.ID)), validateLoginName(value.LoginName), validateText("sourceUser.displayName", value.DisplayName, 1, 128))
+}
+
 // CurrentRoleIdentity is a current authenticated projection, not the durable
 // issuance receipt. A cached copy never establishes continuing authority.
 type CurrentRoleIdentity struct {
@@ -307,6 +311,164 @@ type AssumeRoleResponse struct {
 
 type RevokeRoleSessionRequest struct {
 	RequestID string `json:"requestId"`
+}
+
+// Lifecycle observes only expiry and the irreversible explicit revocation.
+// UNREVOKED never promises continuing source, trust or business authority.
+type RoleSessionLifecycle string
+
+const (
+	RoleSessionUnrevoked    RoleSessionLifecycle = "UNREVOKED"
+	RoleSessionExpired      RoleSessionLifecycle = "EXPIRED"
+	RoleSessionRevoked      RoleSessionLifecycle = "REVOKED"
+	MaxRoleSessionListBytes int64                = 512 * 1024
+)
+
+// RoleSessionFilter contains only public list filters, never identity selectors.
+// Lifecycle may also be ALL; its empty query value means UNREVOKED.
+type RoleSessionFilter struct {
+	SourceUserID PrincipalID   `json:"sourceUserId,omitempty"`
+	SessionID    RoleSessionID `json:"sessionId,omitempty"`
+	Lifecycle    string        `json:"lifecycle"`
+}
+
+func NormalizeRoleSessionFilter(value RoleSessionFilter) (RoleSessionFilter, error) {
+	if value.Lifecycle == "" {
+		value.Lifecycle = string(RoleSessionUnrevoked)
+	}
+	if (value.SourceUserID != "" && ValidateID("sourceUserId", string(value.SourceUserID)) != nil) ||
+		(value.SessionID != "" && ValidateID("sessionId", string(value.SessionID)) != nil) {
+		return RoleSessionFilter{}, errors.New("role session filter is invalid")
+	}
+	switch value.Lifecycle {
+	case "ALL", string(RoleSessionUnrevoked), string(RoleSessionExpired), string(RoleSessionRevoked):
+		return value, nil
+	default:
+		return RoleSessionFilter{}, errors.New("role session filter is invalid")
+	}
+}
+
+func ObserveRoleSession(value RoleSession, observedAt time.Time) (RoleSessionLifecycle, error) {
+	if ValidateRoleSession(value) != nil || validateTime("observedAt", observedAt) != nil || observedAt.Before(value.IssuedAt) ||
+		(value.RevokedAt != nil && observedAt.Before(*value.RevokedAt)) {
+		return "", errors.New("role session observation is invalid")
+	}
+	if value.RevokedAt != nil {
+		return RoleSessionRevoked, nil
+	}
+	if !observedAt.Before(value.ExpiresAt) {
+		return RoleSessionExpired, nil
+	}
+	return RoleSessionUnrevoked, nil
+}
+
+type RoleSessionListing struct {
+	Session          RoleSession           `json:"session"`
+	SourceUser       RoleSourceUserDisplay `json:"sourceUser"`
+	Lifecycle        RoleSessionLifecycle  `json:"lifecycle"`
+	RevokeCapability ActionCapability      `json:"revokeCapability"`
+}
+
+type RoleSessionList struct {
+	APIVersion string               `json:"apiVersion"`
+	Kind       string               `json:"kind"`
+	AccountID  AccountID            `json:"accountId"`
+	RoleID     RoleID               `json:"roleId"`
+	ObservedAt time.Time            `json:"observedAt"`
+	Items      []RoleSessionListing `json:"items"`
+	NextAfter  string               `json:"nextAfter,omitempty"`
+}
+
+type RoleSessionAccess struct {
+	APIVersion string             `json:"apiVersion"`
+	Kind       string             `json:"kind"`
+	ObservedAt time.Time          `json:"observedAt"`
+	Item       RoleSessionListing `json:"item"`
+}
+
+// This response contains neither a new credential nor a cached read permit.
+type RevokeRoleSessionResponse struct {
+	Outcome string      `json:"outcome"`
+	Session RoleSession `json:"session"`
+}
+
+func ValidateRoleSessionListing(value RoleSessionListing, observedAt time.Time) error {
+	lifecycle, err := ObserveRoleSession(value.Session, observedAt)
+	if err != nil || lifecycle != value.Lifecycle || value.SourceUser.ID != value.Session.SourceUserID ||
+		ValidateActionCapability(value.RevokeCapability) != nil || value.RevokeCapability.Action != ActionIAMRoleSessionRevoke ||
+		value.RevokeCapability.Resource != (ResourceReference{Kind: ResourceRoleSession, ID: string(value.Session.ID)}) ||
+		(lifecycle != RoleSessionUnrevoked && value.RevokeCapability.Available) {
+		return errors.New("role session listing is invalid")
+	}
+	return ValidateRoleSourceUserDisplay(value.SourceUser)
+}
+
+func ValidateRoleSessionList(value RoleSessionList) error {
+	if value.APIVersion != APIVersion || value.Kind != "RoleSessionList" || ValidateID("accountId", string(value.AccountID)) != nil ||
+		ValidateID("roleId", string(value.RoleID)) != nil || validateTime("observedAt", value.ObservedAt) != nil ||
+		value.Items == nil || len(value.Items) > DirectoryPageSize || (value.NextAfter != "" && ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("role session list is invalid")
+	}
+	var previous RoleSessionID
+	for _, item := range value.Items {
+		if item.Session.AccountID != value.AccountID || item.Session.RoleID != value.RoleID || item.Session.ID <= previous ||
+			ValidateRoleSessionListing(item, value.ObservedAt) != nil {
+			return errors.New("role session list item is invalid")
+		}
+		previous = item.Session.ID
+	}
+	return nil
+}
+
+func ValidateRoleSessionAccess(value RoleSessionAccess) error {
+	if value.APIVersion != APIVersion || value.Kind != "RoleSessionAccess" {
+		return errors.New("role session access is invalid")
+	}
+	return ValidateRoleSessionListing(value.Item, value.ObservedAt)
+}
+
+func ValidateRevokeRoleSessionResponse(value RevokeRoleSessionResponse) error {
+	if (value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY") || ValidateRoleSession(value.Session) != nil || value.Session.Status != SessionRevoked {
+		return errors.New("role session revocation response is invalid")
+	}
+	return nil
+}
+
+func (value *RoleSessionAccess) UnmarshalJSON(source []byte) error {
+	type wire RoleSessionAccess
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateRoleSessionAccess(RoleSessionAccess(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = RoleSessionAccess(decoded)
+	return nil
+}
+
+func (value *RoleSessionList) UnmarshalJSON(source []byte) error {
+	type wire RoleSessionList
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxRoleSessionListBytes, &decoded) != nil || ValidateRoleSessionList(RoleSessionList(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	if _, supplied := fields["nextAfter"]; supplied && ValidatePageCursor(decoded.NextAfter) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = RoleSessionList(decoded)
+	return nil
+}
+
+func (value *RevokeRoleSessionResponse) UnmarshalJSON(source []byte) error {
+	type wire RevokeRoleSessionResponse
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateRevokeRoleSessionResponse(RevokeRoleSessionResponse(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = RevokeRoleSessionResponse(decoded)
+	return nil
 }
 
 func ValidateRoleSession(value RoleSession) error {
@@ -575,7 +737,7 @@ func ValidateRoleDeletion(value RoleDeletion) error {
 func roleCapabilitySet(id RoleID) map[string]struct{} {
 	result := make(map[string]struct{}, 8)
 	for _, action := range []Action{ActionIAMRoleRead, ActionIAMRoleUpdate, ActionIAMRoleSetStatus, ActionIAMRoleDelete, ActionIAMRoleTrustSet,
-		ActionIAMRolePolicyAttachmentCreate, ActionIAMRolePermissionBoundarySet, ActionIAMRolePermissionBoundaryRemove} {
+		ActionIAMRolePolicyAttachmentCreate, ActionIAMRolePermissionBoundarySet, ActionIAMRolePermissionBoundaryRemove, ActionIAMRoleSessionList} {
 		result[capabilityKey(action, ResourceReference{Kind: ResourceRole, ID: string(id)})] = struct{}{}
 	}
 	return result

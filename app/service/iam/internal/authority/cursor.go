@@ -43,7 +43,30 @@ type DirectoryQuery struct {
 	Resource       iamv1.ResourceReference
 	// Self discovery is not a management action. These private revisions come
 	// from the authenticated database snapshot, never from caller selectors.
-	AssumableRoles *RoleDiscoveryRevision `json:",omitempty"`
+	AssumableRoles *RoleDiscoveryRevision     `json:",omitempty"`
+	RoleSessions   *RoleSessionDirectoryQuery `json:",omitempty"`
+}
+
+// Private snapshot and closed filters protect continuation; they grant no
+// permission and are never returned as a northbound selector or permit.
+type RoleSessionDirectoryRevision struct {
+	CredentialGeneration        uint64                      `json:"credentialGeneration"`
+	DirectoryRevision           uint64                      `json:"directoryRevision"`
+	UserAuthorizationGeneration uint64                      `json:"userAuthorizationGeneration"`
+	Groups                      []RoleSourceGroupGeneration `json:"groups"`
+}
+
+type RoleSessionDirectoryQuery struct {
+	Revision RoleSessionDirectoryRevision
+	Filter   iamv1.RoleSessionFilter
+}
+
+func ValidateRoleSessionDirectoryRevision(value RoleSessionDirectoryRevision) error {
+	if value.CredentialGeneration == 0 || value.CredentialGeneration > 9007199254740991 ||
+		value.DirectoryRevision == 0 || value.DirectoryRevision > 9007199254740991 {
+		return ErrAuthorityUnavailable
+	}
+	return ValidateRoleSourceAuthority(2, value.UserAuthorizationGeneration, value.Groups)
 }
 
 type RoleDiscoveryRevision struct {
@@ -189,10 +212,15 @@ func (codec CursorCodec) binding(subject SubjectContext, query DirectoryQuery, n
 	pageSize := iamv1.DirectoryPageSize
 	if query.AssumableRoles != nil {
 		revision := query.AssumableRoles
-		validQuery = query.Action == "" && query.Resource == (iamv1.ResourceReference{}) &&
+		validQuery = query.RoleSessions == nil && query.Action == "" && query.Resource == (iamv1.ResourceReference{}) &&
 			revision.CredentialGeneration > 0 && revision.CredentialGeneration <= 9007199254740991 &&
 			revision.DirectoryRevision > 0 && revision.DirectoryRevision <= 9007199254740991
 		pageSize = iamv1.RoleDiscoveryPageSize
+	} else if query.RoleSessions != nil {
+		filter, err := iamv1.NormalizeRoleSessionFilter(query.RoleSessions.Filter)
+		validQuery = err == nil && filter == query.RoleSessions.Filter && ValidateRoleSessionDirectoryRevision(query.RoleSessions.Revision) == nil &&
+			query.Action == iamv1.ActionIAMRoleSessionList && query.Resource.Kind == iamv1.ResourceRole && iamv1.ValidateID("roleId", query.Resource.ID) == nil
+		mode = iamv1.AuthorizationResourceInstance
 	} else {
 		switch query.Action {
 		case iamv1.ActionIAMUserList, iamv1.ActionIAMGroupList, iamv1.ActionIAMRoleList:

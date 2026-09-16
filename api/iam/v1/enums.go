@@ -138,6 +138,7 @@ const (
 	CapabilityTargetDisabled                  CapabilityRestriction = "TARGET_DISABLED"
 	CapabilityTargetCredentialChangeRequired  CapabilityRestriction = "TARGET_CREDENTIAL_CHANGE_REQUIRED"
 	CapabilityTargetMustBeDisabled            CapabilityRestriction = "TARGET_MUST_BE_DISABLED"
+	CapabilitySessionNotRevocable             CapabilityRestriction = "SESSION_NOT_REVOCABLE"
 )
 
 var allCapabilityRestrictions = [...]CapabilityRestriction{
@@ -150,6 +151,7 @@ var allCapabilityRestrictions = [...]CapabilityRestriction{
 	CapabilityTargetDisabled,
 	CapabilityTargetCredentialChangeRequired,
 	CapabilityTargetMustBeDisabled,
+	CapabilitySessionNotRevocable,
 }
 
 func AllCapabilityRestrictions() []CapabilityRestriction {
@@ -211,6 +213,9 @@ const (
 	ActionIAMRolePermissionBoundarySet      Action = "iam.role.permission-boundary.set"
 	ActionIAMRolePermissionBoundaryRemove   Action = "iam.role.permission-boundary.remove"
 	ActionIAMRoleAssume                     Action = "iam.role.assume"
+	ActionIAMRoleSessionList                Action = "iam.role-session.list"
+	ActionIAMRoleSessionRead                Action = "iam.role-session.read"
+	ActionIAMRoleSessionRevoke              Action = "iam.role-session.revoke"
 	ActionIAMSessionRevoke                  Action = "iam.session.revoke"
 	ActionIAMPolicyAttachmentCreate         Action = "iam.policy-attachment.create"
 	ActionIAMPolicyAttachmentRevoke         Action = "iam.policy-attachment.revoke"
@@ -283,6 +288,7 @@ const (
 	ResourceUser                  ResourceKind = "USER"
 	ResourceGroup                 ResourceKind = "GROUP"
 	ResourceRole                  ResourceKind = "ROLE"
+	ResourceRoleSession           ResourceKind = "ROLE_SESSION"
 	ResourceGroupMembership       ResourceKind = "GROUP_MEMBERSHIP"
 	ResourceOrganization          ResourceKind = "ORGANIZATION"
 	ResourcePrincipal             ResourceKind = "PRINCIPAL"
@@ -402,7 +408,7 @@ func AllServicePurposes() []ServicePurpose {
 // ActionDefinition and contract enum order are derived projections, not a second
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
-	iamRoleSessionProfile(),
+	iamRoleSessionManagementProfile(),
 	roleBusinessProfile(paasProfileRevisionOne),
 	declaredProductProfile(ProductManagedService, ServicePaaS, 1,
 		declaredProfileAction(ActionManagedServiceOfferingRead, ResourceServiceOffering, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
@@ -464,7 +470,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionOne)}
 }
 
 var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
@@ -539,6 +545,20 @@ func iamRoleSessionProfile() AuthorizationProfile {
 		declaredProfileAction(ActionIAMRolePermissionBoundarySet, ResourceRole, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionIAMRolePermissionBoundaryRemove, ResourceRole, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionIAMRoleAssume, ResourceRole, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	)
+	for index := range profile.Actions {
+		profile.Actions[index].SubjectTypes = []SubjectType{SubjectUser}
+	}
+	return profile
+}
+
+func iamRoleSessionManagementProfile() AuthorizationProfile {
+	profile := iamRoleSessionProfile()
+	profile.Revision = 4
+	profile.Actions = append(profile.Actions,
+		declaredProfileAction(ActionIAMRoleSessionList, ResourceRole, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMRoleSessionRead, ResourceRoleSession, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMRoleSessionRevoke, ResourceRoleSession, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 	)
 	for index := range profile.Actions {
 		profile.Actions[index].SubjectTypes = []SubjectType{SubjectUser}

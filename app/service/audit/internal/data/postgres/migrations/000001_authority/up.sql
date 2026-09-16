@@ -344,6 +344,7 @@ BEGIN
         ('iam.role.permission-boundary.removed', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
         ('iam.role-session.issued', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', true, true, false),
         ('iam.role-session.revoked', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', false, false, false),
+        ('iam.role-session.admin-revoked', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', true, true, false),
         ('iam.role-session.exited', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', false, false, false),
         ('iam.group-membership.created', 'IAM', 'GROUP_MEMBERSHIP', 'SUCCEEDED', true, true, false),
         ('iam.group-membership.removed', 'IAM', 'GROUP_MEMBERSHIP', 'SUCCEEDED', true, true, false),
@@ -484,7 +485,7 @@ BEGIN
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted','iam.group-membership.created','iam.group-membership.removed',
             'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
             'iam.role.permission-boundary.set','iam.role.permission-boundary.removed',
-            'iam.role-session.issued','iam.role-session.revoked',
+            'iam.role-session.issued','iam.role-session.revoked','iam.role-session.admin-revoked',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.user.password-reset','iam.user.password-changed',
             'iam.policy-attachment.created','iam.policy-attachment.revoked')
@@ -563,7 +564,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        15::bigint,
+        16::bigint,
         transaction_timestamp()
 $function$;
 
@@ -868,7 +869,7 @@ BEGIN
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
             'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
             'iam.role.permission-boundary.set','iam.role.permission-boundary.removed',
-            'iam.role-session.issued','iam.role-session.revoked','iam.role-session.exited',
+            'iam.role-session.issued','iam.role-session.revoked','iam.role-session.exited','iam.role-session.admin-revoked',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',

@@ -332,16 +332,188 @@ func roleRoot(ctx context.Context, tx Transaction, subject SessionCredential) (b
 	return account.RootIdentity.PrincipalID == subject.Subject.Principal.ID, nil
 }
 
+// The management decision is made after the actual actor/source lock order,
+// not before a late actor lock conversion. Only the actor must authenticate;
+// a disabled/deleted source USER is still a revocable issuance owner.
+func withRoleSessionAuthority[T any](service *Authority, ctx context.Context, credential iamv1.Secret,
+	action iamv1.Action, role iamv1.RoleID, session iamv1.RoleSessionID, requestID string,
+	apply func(context.Context, Transaction, SessionCredential, RoleSessionManagementTarget, iamv1.AuthorizationDecision, authority.RoleSessionDirectoryRevision, time.Time) (T, error)) (T, error) {
+	var result T
+	if action != iamv1.ActionIAMRoleSessionList && action != iamv1.ActionIAMRoleSessionRead && action != iamv1.ActionIAMRoleSessionRevoke {
+		return result, ErrInvalidArgument
+	}
+	if iamv1.ValidateID("roleId", string(role)) != nil || iamv1.ValidateID("requestId", requestID) != nil ||
+		(action != iamv1.ActionIAMRoleSessionList && iamv1.ValidateID("sessionId", string(session)) != nil) ||
+		(action == iamv1.ActionIAMRoleSessionList && session != "") {
+		return result, ErrInvalidArgument
+	}
+	denied := false
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		denied = false
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		if subject.Subject.Principal.MustChangePassword {
+			return ErrForbidden
+		}
+		target := RoleSessionManagementTarget{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+			ActorSessionID: subject.Subject.Session.ID, RoleID: role, SessionID: session}
+		revision, err := tx.PrepareRoleSessionManagement(ctx, target, action == iamv1.ActionIAMRoleSessionRevoke)
+		if err != nil {
+			return err
+		}
+		subject, err = service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		resource := iamv1.ResourceReference{Kind: iamv1.ResourceRoleSession, ID: string(session)}
+		if action == iamv1.ActionIAMRoleSessionList {
+			resource = iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: string(role)}
+		}
+		decision, err := service.managementDecision(ctx, tx, subject, action, resource, iamv1.AuthorizationResourceInstance, "", requestID, now)
+		if err != nil {
+			return err
+		}
+		if !decision.Allowed {
+			denied = true
+			return nil
+		}
+		result, err = apply(ctx, tx, subject, target, decision, revision, now)
+		return err
+	})
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	if denied {
+		var zero T
+		return zero, ErrForbidden
+	}
+	return result, nil
+}
+
+func managedRoleSessionListing(subject SessionCredential, item ManagedRoleSession, now time.Time) (iamv1.RoleSessionListing, error) {
+	lifecycle, err := iamv1.ObserveRoleSession(item.Session, now)
+	if err != nil {
+		return iamv1.RoleSessionListing{}, ErrUnavailable
+	}
+	capability, err := projectCapability(subject, iamv1.ActionIAMRoleSessionRevoke,
+		iamv1.ResourceReference{Kind: iamv1.ResourceRoleSession, ID: string(item.Session.ID)}, iamv1.AuthorizationResourceInstance, "", now)
+	if err != nil {
+		return iamv1.RoleSessionListing{}, err
+	}
+	if lifecycle != iamv1.RoleSessionUnrevoked {
+		restrictCapability(&capability, iamv1.CapabilitySessionNotRevocable)
+	}
+	result := iamv1.RoleSessionListing{Session: item.Session, SourceUser: item.SourceUser, Lifecycle: lifecycle, RevokeCapability: capability}
+	if iamv1.ValidateRoleSessionListing(result, now) != nil {
+		return iamv1.RoleSessionListing{}, ErrUnavailable
+	}
+	return result, nil
+}
+
+func (service *Authority) ListRoleSessions(ctx context.Context, credential iamv1.Secret, role iamv1.RoleID, filter iamv1.RoleSessionFilter, after, requestID string) (iamv1.RoleSessionList, error) {
+	filter, err := iamv1.NormalizeRoleSessionFilter(filter)
+	if err != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
+		return iamv1.RoleSessionList{}, ErrInvalidArgument
+	}
+	return withRoleSessionAuthority(service, ctx, credential, iamv1.ActionIAMRoleSessionList, role, "", requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, target RoleSessionManagementTarget, decision iamv1.AuthorizationDecision, revision authority.RoleSessionDirectoryRevision, now time.Time) (iamv1.RoleSessionList, error) {
+			if service.cursors == nil {
+				return iamv1.RoleSessionList{}, ErrUnavailable
+			}
+			status, err := tx.BootstrapStatus(ctx)
+			if err != nil || iamv1.ValidateBootstrapStatus(status) != nil || status.State != iamv1.BootstrapReady {
+				return iamv1.RoleSessionList{}, ErrUnavailable
+			}
+			query := authority.DirectoryQuery{InstallationID: status.InstallationID, Action: decision.Action, Resource: decision.Resource,
+				RoleSessions: &authority.RoleSessionDirectoryQuery{Revision: revision, Filter: filter}}
+			position := ""
+			if after != "" {
+				position, err = service.cursors.Decode(after, subject.Subject, query, now)
+				if err != nil {
+					return iamv1.RoleSessionList{}, ErrInvalidArgument
+				}
+			}
+			page, err := tx.ListManagedRoleSessions(ctx, RoleSessionManagementRead{RoleSessionManagementTarget: target, DecisionID: decision.ID, After: position, Filter: filter})
+			if err != nil {
+				return iamv1.RoleSessionList{}, err
+			}
+			result := iamv1.RoleSessionList{APIVersion: iamv1.APIVersion, Kind: "RoleSessionList", AccountID: target.AccountID, RoleID: role, ObservedAt: now, Items: make([]iamv1.RoleSessionListing, 0, len(page.Items))}
+			for _, item := range page.Items {
+				listing, err := managedRoleSessionListing(subject, item, now)
+				if err != nil {
+					return iamv1.RoleSessionList{}, err
+				}
+				if filter.Lifecycle != "ALL" && string(listing.Lifecycle) != filter.Lifecycle {
+					return iamv1.RoleSessionList{}, ErrUnavailable
+				}
+				result.Items = append(result.Items, listing)
+			}
+			result.NextAfter, err = service.sealDirectoryPage(subject, query, page.NextAfter, now)
+			if err != nil || iamv1.ValidateRoleSessionList(result) != nil {
+				return iamv1.RoleSessionList{}, ErrUnavailable
+			}
+			return result, nil
+		})
+}
+
+func (service *Authority) GetRoleSession(ctx context.Context, credential iamv1.Secret, role iamv1.RoleID, session iamv1.RoleSessionID, requestID string) (iamv1.RoleSessionAccess, error) {
+	return withRoleSessionAuthority(service, ctx, credential, iamv1.ActionIAMRoleSessionRead, role, session, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, target RoleSessionManagementTarget, decision iamv1.AuthorizationDecision, _ authority.RoleSessionDirectoryRevision, now time.Time) (iamv1.RoleSessionAccess, error) {
+			item, err := tx.ReadManagedRoleSession(ctx, RoleSessionManagementRead{RoleSessionManagementTarget: target, DecisionID: decision.ID})
+			if err != nil {
+				return iamv1.RoleSessionAccess{}, err
+			}
+			listing, err := managedRoleSessionListing(subject, item, now)
+			if err != nil {
+				return iamv1.RoleSessionAccess{}, err
+			}
+			return iamv1.RoleSessionAccess{APIVersion: iamv1.APIVersion, Kind: "RoleSessionAccess", ObservedAt: now, Item: listing}, nil
+		})
+}
+
+func (service *Authority) RevokeRoleSession(ctx context.Context, credential iamv1.Secret, role iamv1.RoleID, session iamv1.RoleSessionID, request iamv1.RevokeRoleSessionRequest) (iamv1.RevokeRoleSessionResponse, error) {
+	digest, err := digestSanitized("role-session-admin-revoke", struct {
+		RoleID    iamv1.RoleID                   `json:"roleId"`
+		SessionID iamv1.RoleSessionID            `json:"sessionId"`
+		Request   iamv1.RevokeRoleSessionRequest `json:"request"`
+	}{role, session, request})
+	if err != nil {
+		return iamv1.RevokeRoleSessionResponse{}, err
+	}
+	return withRoleSessionAuthority(service, ctx, credential, iamv1.ActionIAMRoleSessionRevoke, role, session, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, target RoleSessionManagementTarget, decision iamv1.AuthorizationDecision, _ authority.RoleSessionDirectoryRevision, now time.Time) (iamv1.RevokeRoleSessionResponse, error) {
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMRoleSessionAdminRevoked, auditv1.TargetRoleSession, string(session), decision.ID, digest, request.RequestID, now)
+			if err != nil {
+				return iamv1.RevokeRoleSessionResponse{}, err
+			}
+			result, err := tx.RevokeManagedRoleSession(ctx, RoleSessionAdministrativeRevocation{RoleSessionManagementTarget: target, DecisionID: decision.ID, AuditEvent: event})
+			if err != nil {
+				return iamv1.RevokeRoleSessionResponse{}, err
+			}
+			if iamv1.ValidateRevokeRoleSessionResponse(result) != nil || result.Session.AccountID != target.AccountID || result.Session.RoleID != role || result.Session.ID != session {
+				return iamv1.RevokeRoleSessionResponse{}, ErrUnavailable
+			}
+			return result, nil
+		})
+}
+
 func roleCapabilities(subject SessionCredential, role iamv1.Role, attachments []iamv1.PolicyAttachment, root bool, now time.Time) ([]iamv1.ActionCapability, error) {
 	result := make([]iamv1.ActionCapability, 0, 8+len(attachments))
 	for _, action := range []iamv1.Action{iamv1.ActionIAMRoleRead, iamv1.ActionIAMRoleUpdate, iamv1.ActionIAMRoleSetStatus,
 		iamv1.ActionIAMRoleDelete, iamv1.ActionIAMRoleTrustSet, iamv1.ActionIAMRolePolicyAttachmentCreate,
-		iamv1.ActionIAMRolePermissionBoundarySet, iamv1.ActionIAMRolePermissionBoundaryRemove} {
+		iamv1.ActionIAMRolePermissionBoundarySet, iamv1.ActionIAMRolePermissionBoundaryRemove, iamv1.ActionIAMRoleSessionList} {
 		capability, err := projectCapability(subject, action, iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: string(role.ID)}, iamv1.AuthorizationResourceInstance, "", now)
 		if err != nil {
 			return nil, err
 		}
-		if action != iamv1.ActionIAMRoleRead && !root {
+		if action != iamv1.ActionIAMRoleRead && action != iamv1.ActionIAMRoleSessionList && !root {
 			restrictCapability(&capability, iamv1.CapabilityAuthorityRequired)
 		}
 		result = append(result, capability)

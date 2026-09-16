@@ -88,6 +88,21 @@ func buildPaths() object {
 		"/v1/roles/{roleId}:assume": object{
 			"post": mutationOperation("assumeRole", "Issue an account-local role credential once; equal replay never returns a secret", "AssumeRoleRequest", "AssumeRoleResponse", "200", nil, []any{openapi31.PathIDParameter("roleId")}),
 		},
+		"/v1/roles/{roleId}/sessions": object{
+			"get": readOperation("listRoleSessions", "List a bounded role-session history window; lifecycle is not current business eligibility", "RoleSessionList", nil,
+				append(append([]any{openapi31.PathIDParameter("roleId")}, accountPageParameters()...),
+					object{"name": "sourceUserId", "in": "query", "required": false, "schema": openapi31.Ref("ID")},
+					object{"name": "sessionId", "in": "query", "required": false, "schema": openapi31.Ref("ID")},
+					object{"name": "lifecycle", "in": "query", "required": false, "schema": object{"type": "string", "enum": []string{"ALL", "UNREVOKED", "EXPIRED", "REVOKED"}, "default": "UNREVOKED"}})),
+		},
+		"/v1/roles/{roleId}/sessions/{sessionId}": object{
+			"get": readOperation("getRoleSession", "Read one precisely scoped non-secret session observation, including terminal history", "RoleSessionAccess", nil,
+				[]any{openapi31.PathIDParameter("roleId"), openapi31.PathIDParameter("sessionId")}),
+		},
+		"/v1/roles/{roleId}/sessions/{sessionId}:revoke": object{
+			"post": mutationOperation("revokeRoleSession", "Explicitly revoke one session using current USER authority; equal replay returns the original terminal record", "RevokeRoleSessionRequest", "RevokeRoleSessionResponse", "200", nil,
+				[]any{openapi31.PathIDParameter("roleId"), openapi31.PathIDParameter("sessionId")}),
+		},
 		"/v1/auth/role-sessions/by-request/{requestId}": object{
 			"get": readOperation("getRoleSessionByRequest", "Read only the authenticated source user's non-secret issuance result", "RoleSession", nil, []any{openapi31.PathIDParameter("requestId")}),
 		},
@@ -302,6 +317,7 @@ func enumSchemas() map[string][]string {
 		"SubjectType":                  {string(iamv1.SubjectUser), string(iamv1.SubjectServiceAccount), string(iamv1.SubjectRole)},
 		"PrincipalStatus":              {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
 		"SessionStatus":                {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
+		"RoleSessionLifecycle":         {string(iamv1.RoleSessionUnrevoked), string(iamv1.RoleSessionExpired), string(iamv1.RoleSessionRevoked)},
 		"AuthorityScope":               {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
 		"AuthorizationResourceMode":    {string(iamv1.AuthorizationResourceInstance), string(iamv1.AuthorizationResourceCollection)},
 		"AuthorizationCollectionUsage": {string(iamv1.AuthorizationCollectionList), string(iamv1.AuthorizationCollectionCreate)},
@@ -318,7 +334,7 @@ func enumSchemas() map[string][]string {
 		"Action":                       openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
 			string(iamv1.ResourceAccount), string(iamv1.ResourceUser),
-			string(iamv1.ResourcePolicy), string(iamv1.ResourceRole),
+			string(iamv1.ResourcePolicy), string(iamv1.ResourceRole), string(iamv1.ResourceRoleSession),
 			string(iamv1.ResourceOrganization), string(iamv1.ResourcePrincipal), string(iamv1.ResourceGroup), string(iamv1.ResourceGroupMembership), string(iamv1.ResourceRoleBinding), string(iamv1.ResourcePolicyAttachment),
 			string(iamv1.ResourceSession), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
 			string(iamv1.ResourceConfigurationRevision), string(iamv1.ResourceApplicationRevision),
@@ -412,6 +428,10 @@ func structContracts() map[string]reflect.Type {
 		"AssumeRoleRequest":                   openapi31.StructType[iamv1.AssumeRoleRequest](),
 		"AssumeRoleResponse":                  openapi31.StructType[iamv1.AssumeRoleResponse](),
 		"RoleSession":                         openapi31.StructType[iamv1.RoleSession](),
+		"RoleSessionListing":                  openapi31.StructType[iamv1.RoleSessionListing](),
+		"RoleSessionList":                     openapi31.StructType[iamv1.RoleSessionList](),
+		"RoleSessionAccess":                   openapi31.StructType[iamv1.RoleSessionAccess](),
+		"RevokeRoleSessionResponse":           openapi31.StructType[iamv1.RevokeRoleSessionResponse](),
 		"CurrentRoleIdentity":                 openapi31.StructType[iamv1.CurrentRoleIdentity](),
 		"RoleAccountDisplay":                  openapi31.StructType[iamv1.RoleAccountDisplay](),
 		"RoleDisplay":                         openapi31.StructType[iamv1.RoleDisplay](),
@@ -500,6 +520,22 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "AssumableRoleList" && jsonName == "items" {
 		base["maxItems"], base["uniqueItems"] = iamv1.RoleDiscoveryPageSize, true
 		base["description"] = "Only eligible roles from a bounded candidate window. Empty items may still have nextAfter; no total-count or page-count semantics."
+	}
+	if owner == "RoleSessionList" && jsonName == "items" {
+		base["maxItems"], base["uniqueItems"] = iamv1.DirectoryPageSize, true
+		base["description"] = "One bounded candidate window; an empty filtered page may still have nextAfter. No total count."
+	}
+	if owner == "RoleSessionListing" && jsonName == "revokeCapability" {
+		base["properties"] = object{"action": object{"const": string(iamv1.ActionIAMRoleSessionRevoke)},
+			"resource": object{"properties": object{"kind": object{"const": string(iamv1.ResourceRoleSession)}}}}
+	}
+	if owner == "RevokeRoleSessionResponse" {
+		if jsonName == "outcome" {
+			base = object{"type": "string", "enum": []string{"APPLIED", "EQUAL_REPLAY"}}
+		}
+		if jsonName == "session" {
+			base["properties"] = object{"status": object{"const": string(iamv1.SessionRevoked)}}
+		}
 	}
 	if owner == "CurrentRoleIdentity" && jsonName == "session" {
 		base["properties"] = object{"status": object{"const": string(iamv1.SessionActive)}, "revokedAt": false}
@@ -705,6 +741,11 @@ func applySemanticOverlays(schemas object) {
 		object{"properties": object{"status": object{"const": "ACTIVE"}, "revokedAt": false}},
 		object{"required": []string{"revokedAt"}, "properties": object{"status": object{"const": "REVOKED"}}},
 	}
+	schemas["RoleSessionListing"].(object)["oneOf"] = []any{
+		object{"properties": object{"lifecycle": object{"const": "UNREVOKED"}, "session": object{"properties": object{"status": object{"const": "ACTIVE"}}}}},
+		object{"properties": object{"lifecycle": object{"const": "EXPIRED"}, "session": object{"properties": object{"status": object{"const": "ACTIVE"}}}, "revokeCapability": object{"properties": object{"available": object{"const": false}}}}},
+		object{"properties": object{"lifecycle": object{"const": "REVOKED"}, "session": object{"properties": object{"status": object{"const": "REVOKED"}}}, "revokeCapability": object{"properties": object{"available": object{"const": false}}}}},
+	}
 	schemas["PolicyVersion"].(object)["oneOf"] = []any{
 		object{"properties": object{"contractVersion": object{"const": iamv1.PolicyVersionLegacyContract}, "compilation": false,
 			"document": object{"properties": object{"statements": object{"items": object{"properties": object{"actions": object{"items": exactPolicyAction}}}}}}}},
@@ -771,8 +812,9 @@ func applySemanticOverlays(schemas object) {
 	}
 	kinds := map[string]string{
 		"CurrentRoleIdentity": "CurrentRoleIdentity", "AssumableRoleList": "AssumableRoleList",
-		"RoleSession": "RoleSession",
-		"Role":        "Role", "RoleList": "RoleList", "RoleDeletion": "RoleDeletion", "RoleTrustVersion": "RoleTrustVersion", "RoleTrustVersionList": "RoleTrustVersionList",
+		"RoleSession":     "RoleSession",
+		"RoleSessionList": "RoleSessionList", "RoleSessionAccess": "RoleSessionAccess",
+		"Role": "Role", "RoleList": "RoleList", "RoleDeletion": "RoleDeletion", "RoleTrustVersion": "RoleTrustVersion", "RoleTrustVersionList": "RoleTrustVersionList",
 		"AuthorizationProfileList": "AuthorizationProfileList", "AuthorizationProfile": "AuthorizationProfile",
 		"UserPermissionBoundary": "UserPermissionBoundary",
 		"RolePermissionBoundary": "RolePermissionBoundary",

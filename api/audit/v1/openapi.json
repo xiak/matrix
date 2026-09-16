@@ -39,6 +39,7 @@
           "iam.role.permission-boundary.removed",
           "iam.role-session.issued",
           "iam.role-session.revoked",
+          "iam.role-session.admin-revoked",
           "iam.role-session.exited",
           "iam.policy.created",
           "iam.policy-version.created",
@@ -761,6 +762,32 @@
                   "properties": {
                     "action": {
                       "const": "iam.role-session.revoked"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.role-session.admin-revoked"
                     }
                   },
                   "required": [
@@ -3397,6 +3424,51 @@
               },
               "required": [
                 "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-session.admin-revoked"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE_SESSION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
               ]
             }
           },

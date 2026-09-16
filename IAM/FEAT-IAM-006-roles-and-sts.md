@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1 角色管理、R2 同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示，以及来源代际/身份锁安全修复，已在累计固定`1ebab37aef4bce12b963f52d3919748a9d50d4c6`通过本地完整真库、旧数据、独立进程、全仓检查和三项独立CI。原R2矩阵未覆盖的四类临时Deny/成员关系复活已补验；旧R3固定960416dd的CI失败不被回填为成功。管理型会话目录及UX/UI、容量和发布未完成，整体006未验收。
+- 状态：R1 角色管理、R2 同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示，以及来源代际/身份锁安全修复，已在累计固定`1ebab37aef4bce12b963f52d3919748a9d50d4c6`通过本地完整真库、旧数据、独立进程、全仓检查和三项独立CI。R3管理会话后端已实现并有本地真库/并发/保留数据/独立进程证据，固定提交与独立CI待确认。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。UX/UI、容量和发布未完成，整体006未验收。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -149,7 +149,7 @@ R2同片实现原Root+当前PDP守护的RoleBoundary read/set/remove，不引用
 
 ### 来源授权代际：临时撤权不复活
 
-在固定R3 `960416dd`上只增加真实请求测试，四个独立PG18库均复现：发行后新增USER Deny再撤销、现有GROUP新增Deny再撤销、发行时空组后来新增Deny再撤销、临时加入Deny组再退出后，旧ROLE的`paas.application.read`错误返回200/Allow而不是401。它们不在原12类ABA矩阵内；原向量只记录发行时的有效附件，无法记住后来出现又消失的来源。此处是待完成的安全修复，不回填R2/R3证据。
+在固定R3 `960416dd`上只增加真实请求测试，四个独立PG18库均复现：发行后新增USER Deny再撤销、现有GROUP新增Deny再撤销、发行时空组后来新增Deny再撤销、临时加入Deny组再退出后，旧ROLE的`paas.application.read`错误返回200/Allow而不是401。它们不在原12类ABA矩阵内；原向量只记录发行时的有效附件，无法记住后来出现又消失的来源。这四类路径已由本节来源代际实现修复，准确证据见本文件“来源授权代际本地证据”；不回填原R2/R3的覆盖或CI结论。
 
 最小修复仍属于本owner，不增加公共权限、服务或SessionStore。新增私有`role_source_authority_generations`关系，以真实Account+USER或GROUP双外键互斥列表示独立来源，准确主体唯一；generation为1..2^53-1的单调值。新主体显式初始化；已有主体只在首次数据切换初始化，重放不重置。USER附件create/revoke、UserBoundary set/remove、membership add/remove推进对应USER；GROUP附件create/revoke推进对应GROUP。Policy默认和生命周期由原已绑定Policy resourceVersion覆盖，不用内容digest代替修订。普通Group/Role显示元数据和另一USER的变更不推进本USER代际。
 
@@ -260,9 +260,9 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 
 准确源码干净导出通过全仓race/p2（含架构）、vet/p2、模块校验、全部OpenAPI生成字节稳定及Linux amd64构建。外部真库不以默认跳过的整仓测试代替。该切片已固定推送`960416dd`，独立CI因累计进程超时未通过，详见011。后续已复现的临时Deny及组成员关系撤销后旧RoleSession复活，由本文件来源授权代际切片修复；目录水位不得复用为会话代际或历史proof。
 
-### R3管理员会话目录：下一纵向增量
+### R3管理员会话目录与交互要求
 
-本节为待实现需求，尚未冻结新增action/请求响应、schema或发布profile，也不把已有自服务按原意图查询/撤销冒充管理目录。UX/UI owner已确认真实页面位于“角色详情 > 角色会话”，整张目录在内容区，单条危险操作用确认框；不需要全账号会话产品页、批量接口或此处的创建/承担入口。其既有任意USER/SERVICE/FEDERATION caller和前端状态推导仅属于preview，不是需要保留的线上契约。
+管理目录的实施契约见下一节；已有自服务按原意图查询/撤销不等于管理目录。UX/UI owner已确认真实页面位于“角色详情 > 角色会话”，整张目录在内容区，单条危险操作用确认框；不需要全账号会话产品页、批量接口或此处的创建/承担入口。其既有任意USER/SERVICE/FEDERATION caller和前端状态推导仅属于preview，不是需要保留的线上契约。
 
 - Account仍来自当前有效USER，Role由准确路径绑定；首片只包含现有真实USER来源的RoleSession。查询可按准确sourceUserId、sessionId和封闭生命周期过滤，不开放模糊全局搜索、IP、服务/联邦caller或来源登录会话信息。目录/逐项撤销使用各自精确权限，不能从Role名称、可读目录或可承担能力推导；受委派的会话管理不是创建策略/修改Trust的权限。
 - 默认列出未显式撤销且未过期的发行记录。服务端以同一数据库观测时间区分未撤销、已过期、已撤销；返回observedAt和每项完整非秘密session及匹配的最小sourceUser显示，避免UI逐项查询User目录。该生命周期不是当前业务许可，不逐行执行完整业务授权来制造“USABLE”，也不把ACTIVE或浏览器时钟当作有效凭据证明。
@@ -270,7 +270,38 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 - 每项返回精确ROLE_SESSION目标的撤销capability。UI在选择记录后通过页级命令发起单条危险确认，确认只显示Role、来源User、sessionId和发行/到期时间；capability不是permit。当前发行记录仅允许单向撤销，不为套用CRUD模式新增伪resourceVersion；唯一并发结果由不可变身份、原意图和单向终态确定。
 - 撤销原意图绑定Account/Role/Session、当前操作者和完整请求。同意图精确重放不重复事实，不同意图或已由其他路径撤销不得冒充自己的成功；网络/503等不确定结果保留原意图。必须与原来源自撤销、ROLE持有证明退出、自然到期、身份/Role安全变更串行化，无部分终态/成功事实，不复活旧会话。管理员事实必须携带其真实权限决定，不能套用原无业务decision的自撤销事实或伪造source actor。
 - 提供按精确Role+Session身份的独立单项读取，以当前读取权限核对终态；不能让默认目录过滤、空页或水位冲突代替确认。APPLIED/EQUAL_REPLAY、不同意图竞争、已撤销、已过期但未撤销、锁内资格失效的唯一结果须在接口实施前明确。未知结果时UI保留原requestId，只有权威响应或准确读取证明revokedAt/终态后才显示已撤销；读取资格丢失不补造成功。
-- 继续沿现有API、唯一PDP、Role/Session事务及outbox owner实现，并覆盖双Account、过滤/cursor攻击、同一Session多路径竞争、受限runtime/锁诊断、历史投递、重放/重启和真实消费者。先完成当前已推送安全回滚点的独立CI，再冻结该增量的具体共享契约；UI实现及浏览器验收仍由010 owner独立完成。
+- 继续沿现有API、唯一PDP、Role/Session事务及outbox owner实现，并覆盖双Account、过滤/cursor攻击、同一Session多路径竞争、受限runtime/锁诊断、历史投递、重放/重启和真实消费者。UI实现及浏览器验收仍由010 owner独立完成。
+
+### R3 管理会话实施契约
+
+本片从已验证固定`1ebab37aef4bce12b963f52d3919748a9d50d4c6`推进，接口与事务已实现，累计门禁仍在收口，尚无独立CI验收结论。共享窗口已与Phase 3确认，UI页面与浏览器仍由010 owner负责。
+
+| API | 当前USER权限 | 结果与范围 |
+| --- | --- | --- |
+| `GET /v1/roles/{roleId}/sessions` | `iam.role-session.list`，精确ROLE INSTANCE | `RoleSessionList`，同一observedAt、accountId/roleId、items和可选nextAfter；每次只扫描最多100条候选，允许空页继续 |
+| `GET /v1/roles/{roleId}/sessions/{sessionId}` | `iam.role-session.read`，精确ROLE_SESSION INSTANCE | `RoleSessionAccess{apiVersion,kind,observedAt,item}`；路径Role必须与记录真实归属一致 |
+| `POST /v1/roles/{roleId}/sessions/{sessionId}:revoke` | `iam.role-session.revoke`，精确ROLE_SESSION INSTANCE | 原`RevokeRoleSessionRequest{requestId}`；`RevokeRoleSessionResponse{outcome,session}`仅APPLIED/EQUAL_REPLAY |
+
+目录仅接受after、精确sourceUserId/sessionId及lifecycle过滤，查询串最多1024字节，空值、重复或未知参数拒绝；缺省UNREVOKED，可显式选择ALL/EXPIRED/REVOKED。每个`RoleSessionListing`包含原RoleSession、匹配的最小sourceUser、lifecycle和精确revokeCapability，不公开私有来源会话、代际、Trust、凭据或失效原因。lifecycle按同一数据库时刻计算：已有revokedAt优先REVOKED，否则到期为EXPIRED，其余UNREVOKED；它绝不表示当前业务USABLE。停用/墓碑Role及失效来源USER的历史记录仍可被独立授权查询；未到期、未显式撤销的记录可由当前有效管理员撤销，不重新认证来源USER，不启用任何身份或改变业务资源。
+
+新意图遇已到期或已有另一撤销终态返回409且无新成功事实。原成功意图精确重放保留原session/revokedAt，不能延长、重复或借另一操作者/目标/输入重放；它仍要求当前操作者及撤销权限有效。来源自撤、持有秘密退出与管理员撤销竞争只有一个终态赢家。未知结果必须保留原requestId，以原请求或独立精确读取确认；403、空列表或游标冲突都不能认作已撤销。
+
+新action只属USER/TENANT；IAM源码Profile追加r4并保存r1/r2/r3原字节，不支持ROLE/SERVICE、PREFIX、COLLECTION或默认补权。管理员成功事实新增`iam.role-session.admin-revoked`，真实USER+本次精确revoke决定、tenant chain及ROLE_SESSION目标；不改变旧self-revoked/exited事实的无决定语义，不开放target.tenantId或attributes。历史投递使用不可变原证据和当前producer凭据，不重新检查操作者今天是否仍有权限。
+
+目录使用独立的每Role会话水位，发行/三类实际撤销在原事务内推进，失败或精确重放不推进。原cursor owner绑定当前actor/session/credential与授权来源代际、Role、水位和完整过滤，不能跨用途/账号/Role/过滤使用；不把目录水位当PDP许可，也不借Role安全generation使有效业务会话被目录操作误撤。写路径先按Account→稳定排序的actor/source USER非键更新锁→当前actor credential/session→来源授权保护→RoleSession终态锁；真实PDP在锁保护下形成，末端再次核对当前bearer/期限。只认证actor，source USER锁只用于与自撤、退出及凭据变化排序。只读路径不取发行配额锁，不在目录水位之后反向锁Role/User。
+
+开发schema目标IAM28/Audit16/PaaS2，以真实函数/表/ACL/readiness检查为准；发布profile/revision不变。record8/evidence5/claim7、ServiceIdentity/lookup_service及旧canonical不变。三路径竞争、失效来源可撤、过期冲突、同意图重放、末尾outbox失败、分页过滤攻击与历史投递须在既有真库/进程owner证明后交固定接口给UI。
+
+### R3管理会话本地证据
+
+2026-09-17，在本任务独立PG18.4（1CPU/768MiB/PIDs128/64连接）、Go2/512MiB、真库race/p1串行验证。发布profile未改变，以下不是UI、容量或整套006验收。
+
+- 真实USER承担产生超过100条历史记录，证明100候选窗口、稀疏空页继续、精确source/session及生命周期过滤；跨Account/Role/过滤/操作者的ID与cursor攻击拒绝。撤销再授予相同管理员权限后，旧cursor仍无效；权限变化不冒充会话目录变化。停用、删除Role及停用来源USER后，当前有效管理员仍可显式撤销未到期记录。
+- 三种实际终止路径竞争只有一个成功终态，精确原意图重放不增加业务事实或目录水位。24组实际数据库锁等待覆盖管理先提交/安全变更先提交：退出、改密默认及保留其他会话、reset、停用、直接/组授权撤销、成员移除、原root恢复、Account暂停、来源自撤及ROLE退出。安全变更后的旧成功意图不绕过当前身份或权限；已提交的管理事实仍可证明。没有以睡眠猜执行顺序或以重试掩盖40P01。
+- 原私有会话引用门禁扩展到管理员撤销，当前会话为正控，缺失、畸形、未知、其他USER、已撤销、已过期、旧/NULL代际均拒绝且无部分会话、目录、决定或成功事实。旧/NULL行仅用于明确的合成负向检查，不冒充旧binary升级证据。原最短TTL真实到期门禁证明EXPIRED投影、撤销冲突及无状态改变；ROLE持有者仍能沿原独立退出契约销毁凭据。
+- 末端outbox注入失败回滚会话、目录水位、决定和事实；函数权限、RLS、外键、代际范围/default、触发器、索引和search_path漂移关闭readiness。schema与bootstrap等值重放不重置已有水位、撤销或权限。最初累计角色门禁的旧断言误将新list动作归为写操作；明确区分两项读取能力后，完整R1门禁在新库31.725秒通过，全部原root写保护保留。
+- 现有实际固定R2 executable保留数据门禁验证新目录的初始水位及重放不变；新Profile注册不改旧SYSTEM默认或自动补管理权限。原root显式发布/关联当前TENANT策略后才可读历史目录；旧version1当前业务仍关闭，新version2可访问PaaS并经管理员终止。原receipt、发行、Operation、私证及Audit canonical/hash不变，不声称跨release-profile升级。
+- 干净候选源码的Audit双authority/历史分区7.185秒、Audit HTTP3.610秒、固定IAM21/R1/R2与独立双IAM/PaaS/Audit进程110.795秒、PaaS数据4.804秒通过。跨副本撤销/重放后，IAM和PaaS下一请求拒绝旧ROLE；原操作者退出或授权变化后，历史outbox投递、去重、防伪和重启仍正确。相同生产源码已通过全仓race/架构/vet、模块校验、两次契约生成字节一致及Linux构建；最终固定对象的独立CI尚待确认。
 
 ### 来源授权代际本地证据
 

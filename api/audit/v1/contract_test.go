@@ -34,6 +34,40 @@ func TestCanonicalEventPreservesTenantBytesAndDigest(t *testing.T) {
 	}
 }
 
+func TestAdministratorRoleSessionRevocationRequiresItsOwnDecision(t *testing.T) {
+	event := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-admin-revoke", TenantID: "account-a",
+		Actor: ActorReference{Type: ActorUser, ID: "admin-a"}, IAMDecisionID: "decision-a", Action: ActionIAMRoleSessionAdminRevoked,
+		Target: TargetReference{Kind: TargetRoleSession, ID: "session-a"}, Result: ResultSucceeded,
+		RequestID: "request-a", CorrelationID: "request-a", RequestDigest: "sha256:" + strings.Repeat("1", 64),
+		OccurredAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)}
+	if _, _, err := CanonicalizeEvent(SourceIAM, event); err != nil {
+		t.Fatal("valid administrator fact rejected", err)
+	}
+	for name, change := range map[string]func(*Event){
+		"no decision": func(e *Event) { e.IAMDecisionID = "" },
+		"system":      func(e *Event) { e.Actor = ActorReference{Type: ActorSystem, ID: "iam"} },
+		"service":     func(e *Event) { e.Actor = ActorReference{Type: ActorServiceAccount, ID: "service-a"} },
+		"role": func(e *Event) {
+			e.Actor = ActorReference{Type: ActorRole, ID: "role-a", RoleSession: &RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}}
+		},
+		"wrong target":  func(e *Event) { e.Target.Kind = TargetRole },
+		"target tenant": func(e *Event) { e.Target.TenantID = "account-a" },
+		"installation":  func(e *Event) { e.TenantID = ""; e.InstallationID = "installation-a" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			copy := event
+			change(&copy)
+			if _, _, err := CanonicalizeEvent(SourceIAM, copy); err == nil {
+				t.Fatal("administrator fact widened authority")
+			}
+		})
+	}
+	event.Action, event.IAMDecisionID = ActionIAMRoleSessionRevoked, ""
+	if _, _, err := CanonicalizeEvent(SourceIAM, event); err != nil {
+		t.Fatal("source self-revocation gained a decision requirement", err)
+	}
+}
+
 func TestLegacyOrganizationCreationRetainsItsTenantCanonicalContract(t *testing.T) {
 	event := Event{
 		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-legacy-organization",

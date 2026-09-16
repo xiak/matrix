@@ -2,6 +2,7 @@ package nethttp
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -120,6 +121,10 @@ func (value *handler) role(response http.ResponseWriter, request *http.Request) 
 	roleID := iamv1.RoleID(id)
 	credential, ok := bearerCredential(response, request)
 	if !ok {
+		return
+	}
+	if len(parts) >= 2 && parts[1] == "sessions" {
+		value.roleSessions(response, request, credential, roleID, parts[2:])
 		return
 	}
 	if assume {
@@ -260,6 +265,68 @@ func (value *handler) role(response http.ResponseWriter, request *http.Request) 
 		response.Header().Set("Allow", "GET, PATCH, DELETE")
 		writeProblem(response, requestID(request), http.StatusMethodNotAllowed, "iam.method.invalid", "IAM method not allowed")
 	}
+}
+
+func (value *handler) roleSessions(response http.ResponseWriter, request *http.Request, credential iamv1.Secret, role iamv1.RoleID, suffix []string) {
+	if len(suffix) == 0 {
+		if !value.requireMethod(response, request, http.MethodGet) {
+			return
+		}
+		query, err := url.ParseQuery(request.URL.RawQuery)
+		valid := err == nil && len(request.URL.RawQuery) <= 1024 && len(query) <= 4 && request.ContentLength == 0 && len(request.TransferEncoding) == 0
+		for key, values := range query {
+			if len(values) != 1 || values[0] == "" || (key != "after" && key != "sourceUserId" && key != "sessionId" && key != "lifecycle") {
+				valid = false
+			}
+		}
+		filter, err := iamv1.NormalizeRoleSessionFilter(iamv1.RoleSessionFilter{SourceUserID: iamv1.PrincipalID(query.Get("sourceUserId")), SessionID: iamv1.RoleSessionID(query.Get("sessionId")), Lifecycle: query.Get("lifecycle")})
+		after := query.Get("after")
+		if !valid || err != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
+			writeProblem(response, requestID(request), http.StatusBadRequest, "iam.query.unsupported", "IAM role session query invalid")
+			return
+		}
+		result, err := value.workflow.ListRoleSessions(request.Context(), credential, role, filter, after, requestID(request))
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	id := suffix[0]
+	revoke := strings.HasSuffix(id, ":revoke")
+	if revoke {
+		id = strings.TrimSuffix(id, ":revoke")
+	}
+	if len(suffix) != 1 || iamv1.ValidateID("sessionId", id) != nil {
+		value.notFound(response, request)
+		return
+	}
+	if revoke {
+		if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+			return
+		}
+		body, ok := decodeJSON[iamv1.RevokeRoleSessionRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.RevokeRoleSession(request.Context(), credential, role, iamv1.RoleSessionID(id), body)
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	result, err := value.workflow.GetRoleSession(request.Context(), credential, role, iamv1.RoleSessionID(id), requestID(request))
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
 }
 
 func (value *handler) roleSessionByRequest(response http.ResponseWriter, request *http.Request) {

@@ -564,3 +564,16 @@ KEY SHARE, including self-target rereads. Removing referential integrity,
 dropping current actor/session or platform credential protection checks,
 or accepting conversion deadlocks is `REJECT`.
 This does not create a runtime donor dependency or a release upgrade promise.
+
+For administrator RoleSession management, fixed
+`1ebab37aef4bce12b963f52d3919748a9d50d4c6` is `REUSE` for the immutable
+issuance record, separate USER/ROLE credentials, sole PDP/cursor/Audit
+encoding, source generations and non-key actor locks. Existing role
+directory and terminal revocation adapters are `ADAPT` for bounded
+role-nested management, exact receipt observation and a decision-backed
+administrator fact. Self discovery, possession-only exit and source-user
+revocation remain distinct contracts. Reusing their permission-free fact as
+administrator authority, treating ACTIVE as business eligibility, exposing
+private lineage, unbounded history scans, fake resource versions and
+cursor watermarks as permits are `REJECT`. No UI preview shape or donor
+runtime becomes a dependency; implementation and evidence belong IAM/006.

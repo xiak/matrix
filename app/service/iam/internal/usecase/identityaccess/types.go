@@ -75,6 +75,10 @@ type Transaction interface {
 	IssueRoleSession(context.Context, RoleSessionIssuance) (iamv1.RoleSession, error)
 	ReadRoleSessionByRequest(context.Context, RoleAssumptionRead) (iamv1.RoleSession, bool, error)
 	RevokeRoleSessionByRequest(context.Context, RoleSessionRevocation) (iamv1.RoleSession, error)
+	PrepareRoleSessionManagement(context.Context, RoleSessionManagementTarget, bool) (authority.RoleSessionDirectoryRevision, error)
+	ListManagedRoleSessions(context.Context, RoleSessionManagementRead) (ManagedRoleSessionPage, error)
+	ReadManagedRoleSession(context.Context, RoleSessionManagementRead) (ManagedRoleSession, error)
+	RevokeManagedRoleSession(context.Context, RoleSessionAdministrativeRevocation) (iamv1.RevokeRoleSessionResponse, error)
 	ChangeRolePermissionBoundary(context.Context, RoleBoundaryMutation) (iamv1.RolePermissionBoundary, error)
 	CreateRole(context.Context, RoleCreation) (iamv1.Role, error)
 	UpdateRole(context.Context, RoleProfileMutation) (iamv1.Role, error)
@@ -226,6 +230,37 @@ type RoleSessionIssuance struct {
 
 type RoleSessionRevocation struct {
 	RoleAssumptionRead
+	AuditEvent auditv1.Event
+}
+
+type RoleSessionManagementTarget struct {
+	AccountID        iamv1.AccountID
+	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
+	RoleID           iamv1.RoleID
+	SessionID        iamv1.RoleSessionID
+}
+
+type RoleSessionManagementRead struct {
+	RoleSessionManagementTarget
+	DecisionID iamv1.DecisionID
+	After      string
+	Filter     iamv1.RoleSessionFilter
+}
+
+type ManagedRoleSession struct {
+	Session    iamv1.RoleSession           `json:"session"`
+	SourceUser iamv1.RoleSourceUserDisplay `json:"sourceUser"`
+}
+
+type ManagedRoleSessionPage struct {
+	Items     []ManagedRoleSession `json:"items"`
+	NextAfter string               `json:"nextAfter"`
+}
+
+type RoleSessionAdministrativeRevocation struct {
+	RoleSessionManagementTarget
+	DecisionID iamv1.DecisionID
 	AuditEvent auditv1.Event
 }
 

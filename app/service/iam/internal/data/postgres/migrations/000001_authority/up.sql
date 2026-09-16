@@ -1098,7 +1098,7 @@ BEGIN
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
             'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
             'iam.role.permission-boundary.set','iam.role.permission-boundary.removed',
-            'iam.role-session.issued',
+            'iam.role-session.issued','iam.role-session.admin-revoked',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',
@@ -1583,7 +1583,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           27::bigint,
+           28::bigint,
            transaction_timestamp();
 END
 $function$;

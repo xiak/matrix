@@ -68,6 +68,47 @@ func TestRoleDisplayAndSelfDiscoverySchemasStayClosed(t *testing.T) {
 	}
 }
 
+func TestRoleSessionManagementSchemasAreBoundedAndNonSecret(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	session := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSession","id":"session-a","accountId":"account-a","roleId":"role-a","sourceUserId":"user-a","status":"ACTIVE","issuedAt":"2026-09-17T00:00:00Z","expiresAt":"2026-09-17T01:00:00Z"}`
+	item := `{"session":` + session + `,"sourceUser":{"id":"user-a","loginName":"member","displayName":"Member"},"lifecycle":"UNREVOKED","revokeCapability":{"action":"iam.role-session.revoke","resource":{"kind":"ROLE_SESSION","id":"session-a"},"available":true}}`
+	list := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSessionList","accountId":"account-a","roleId":"role-a","observedAt":"2026-09-17T00:01:00Z","items":[]}`
+	access := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSessionAccess","observedAt":"2026-09-17T00:01:00Z","item":` + item + `}`
+	revoked := strings.Replace(session, `"status":"ACTIVE"`, `"status":"REVOKED","revokedAt":"2026-09-17T00:01:00Z"`, 1)
+	for index, sample := range []struct {
+		kind, wire string
+		valid      bool
+	}{
+		{"RoleSessionList", list, true},
+		{"RoleSessionList", strings.TrimSuffix(list, "}") + `,"nextAfter":"ic1.next-window"}`, true},
+		{"RoleSessionList", strings.TrimSuffix(list, "}") + `,"nextAfter":"ir1.private"}`, false},
+		{"RoleSessionList", strings.Replace(list, `"items":[]`, `"items":null`, 1), false},
+		{"RoleSessionList", strings.TrimSuffix(list, "}") + `,"total":10}`, false},
+		{"RoleSessionList", strings.Replace(list, `"items":[]`, `"items":[`+strings.Repeat(item+",", DirectoryPageSize)+item+`]`, 1), false},
+		{"RoleSessionAccess", access, true},
+		{"RoleSessionAccess", strings.Replace(access, `"UNREVOKED"`, `"USABLE"`, 1), false},
+		{"RoleSessionAccess", strings.Replace(access, `"UNREVOKED"`, `"EXPIRED"`, 1), false},
+		{"RoleSessionAccess", strings.Replace(access, `"UNREVOKED"`, `"REVOKED"`, 1), false},
+		{"RoleSessionAccess", strings.Replace(access, `"iam.role-session.revoke"`, `"iam.role-session.read"`, 1), false},
+		{"RoleSessionAccess", strings.Replace(access, `"sourceUserId":"user-a"`, `"sourceUserId":"user-a","credentialGeneration":1`, 1), false},
+		{"RoleSessionAccess", strings.Replace(access, `"displayName":"Member"`, `"displayName":"Member","principalType":"FEDERATION"`, 1), false},
+		{"RevokeRoleSessionResponse", `{"outcome":"APPLIED","session":` + revoked + `}`, true},
+		{"RevokeRoleSessionResponse", `{"outcome":"EQUAL_REPLAY","session":` + revoked + `}`, true},
+		{"RevokeRoleSessionResponse", `{"outcome":"APPLIED","session":` + session + `}`, false},
+		{"RevokeRoleSessionResponse", `{"outcome":"UNKNOWN","session":` + revoked + `}`, false},
+		{"RevokeRoleSessionResponse", `{"outcome":"APPLIED","session":` + revoked + `,"credential":"secret"}`, false},
+	} {
+		schema := compileIAMOpenAPISchema(t, api, sample.kind)
+		value, err := jsonschema.UnmarshalJSON(strings.NewReader(sample.wire))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = schema.Validate(value); (err == nil) != sample.valid {
+			t.Fatalf("sample %d %s: %v", index, sample.kind, err)
+		}
+	}
+}
+
 func TestAssumeRoleRequestSchemaMatchesTheClosedIntent(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AssumeRoleRequest")
 	base := `{"resourceVersion":1,"requestId":"assume-role"}`

@@ -111,6 +111,56 @@ func TestSelfRoleCursorHidesFilteredPositionAndBindsCurrentSnapshot(t *testing.T
 	}
 }
 
+func TestRoleSessionDirectoryCursorBindsAuthorityFiltersAndTerminalRevision(t *testing.T) {
+	now := authorityTestTime()
+	codec, _ := NewCursorCodec(bytes.Repeat([]byte{0x2c}, 32))
+	subject := authoritySubject(now, iamv1.SystemPolicyAccountAdministrator)
+	query := DirectoryQuery{InstallationID: subject.InstallationID, Action: iamv1.ActionIAMRoleSessionList, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: "role-a"},
+		RoleSessions: &RoleSessionDirectoryQuery{Revision: RoleSessionDirectoryRevision{CredentialGeneration: 3, DirectoryRevision: 12, UserAuthorizationGeneration: 7, Groups: []RoleSourceGroupGeneration{}}, Filter: iamv1.RoleSessionFilter{Lifecycle: "ALL"}}}
+	cursor, err := codec.Encode(subject, query, "session-last-scanned", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after, err := codec.Decode(cursor, subject, query, now.Add(time.Second)); err != nil || after != "session-last-scanned" {
+		t.Fatal("session directory could not continue", err)
+	}
+	for name, change := range map[string]func(*DirectoryQuery){
+		"another role":               func(q *DirectoryQuery) { q.Resource.ID = "role-b" },
+		"changed filter":             func(q *DirectoryQuery) { q.RoleSessions.Filter.Lifecycle = "REVOKED" },
+		"source filter":              func(q *DirectoryQuery) { q.RoleSessions.Filter.SourceUserID = "user-b" },
+		"session filter":             func(q *DirectoryQuery) { q.RoleSessions.Filter.SessionID = "session-b" },
+		"new issuance or revocation": func(q *DirectoryQuery) { q.RoleSessions.Revision.DirectoryRevision++ },
+		"credential change":          func(q *DirectoryQuery) { q.RoleSessions.Revision.CredentialGeneration++ },
+		"temporary deny restored":    func(q *DirectoryQuery) { q.RoleSessions.Revision.UserAuthorizationGeneration += 2 },
+		"empty group became denial source": func(q *DirectoryQuery) {
+			q.RoleSessions.Revision.Groups = []RoleSourceGroupGeneration{{GroupID: "group-a", MembershipID: "membership-a", MembershipResourceVersion: 1, AuthorizationGeneration: 2}}
+		},
+		"no generation":          func(q *DirectoryQuery) { q.RoleSessions.Revision.CredentialGeneration = 0 },
+		"missing group snapshot": func(q *DirectoryQuery) { q.RoleSessions.Revision.Groups = nil },
+		"unnormalized filter":    func(q *DirectoryQuery) { q.RoleSessions.Filter.Lifecycle = "" },
+		"unproved lifecycle":     func(q *DirectoryQuery) { q.RoleSessions.Filter.Lifecycle = "USABLE" },
+		"different purpose":      func(q *DirectoryQuery) { q.Action = iamv1.ActionIAMRoleRead },
+		"mixed self purpose": func(q *DirectoryQuery) {
+			q.AssumableRoles = &RoleDiscoveryRevision{CredentialGeneration: 3, DirectoryRevision: 12}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := query
+			detail := *query.RoleSessions
+			changed.RoleSessions = &detail
+			change(&changed)
+			if after, err := codec.Decode(cursor, subject, changed, now); !errors.Is(err, ErrInvalidCursor) || after != "" {
+				t.Fatal("changed management binding disclosed continuation")
+			}
+		})
+	}
+	noPermission := subject
+	noPermission.Policies = nil
+	if _, err := codec.Decode(cursor, noPermission, query, now); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("directory revision became a permit")
+	}
+}
+
 func TestDirectoryCursorCannotBypassExpiredPolicyConditions(t *testing.T) {
 	now := authorityTestTime()
 	codec, err := NewCursorCodec(bytes.Repeat([]byte{0x36}, 32))
