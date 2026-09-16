@@ -4,15 +4,16 @@
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Only this
   task's independent worktree is writable. Updated 2026-09-17.
-- Latest independently verified, pushed implementation:
-  62a18a48168e87a4158b95eba41427b445ed10d1, administrator RoleSession
+- Latest complete, independently verified contract requires both backend
+  62a18a48168e87a4158b95eba41427b445ed10d1 and public-schema correction
+  0567c8b2699521b137db0f8b69f17630c59f04fb. Administrator RoleSession
   directory/read/revocation, cumulative through R1/R2/R3 and source authority.
   GitHub API verified exact Verification35136745680 completed/success:
   go, authority-process and node-process all succeeded. This is the rollback
   point, not full IAM, UI, capacity or release acceptance.
-- Required public-schema correction is pushed as
-  0567c8b2699521b137db0f8b69f17630c59f04fb. Exact Verification35139789639
-  was confirmed running; poll that run to terminal, do not infer success.
+- Required public-schema correction 0567c8b2699521b137db0f8b69f17630c59f04fb
+  has exact Verification35139789639 completed/success, independently checked
+  through GitHub API: go, authority-process and node-process all succeeded.
   It fixes RoleListing capabilities to exactly9 and RoleAccess to10-266;
   the prior 62a18 CI omitted these complete-response schema bounds. Existing
   API tests reproduced both valid-response rejection and missing lower bounds,
