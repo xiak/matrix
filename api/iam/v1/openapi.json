@@ -18191,7 +18191,8 @@
             "items": {
               "$ref": "#/components/schemas/ActionCapability"
             },
-            "maxItems": 265,
+            "maxItems": 266,
+            "minItems": 10,
             "type": "array"
           },
           "policyAttachments": {
@@ -18372,7 +18373,8 @@
             "items": {
               "$ref": "#/components/schemas/ActionCapability"
             },
-            "maxItems": 8,
+            "maxItems": 9,
+            "minItems": 9,
             "type": "array"
           },
           "role": {

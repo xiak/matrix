@@ -274,7 +274,7 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 
 ### R3 管理会话实施契约
 
-本片从已验证固定`1ebab37aef4bce12b963f52d3919748a9d50d4c6`推进，接口与事务已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`完成本地及独立CI门禁。共享窗口已与Phase 3确认，UI页面与浏览器仍由010 owner负责。
+本片从已验证固定`1ebab37aef4bce12b963f52d3919748a9d50d4c6`推进，接口与事务已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`完成本地及独立CI门禁。后续严格UI消费核对发现旧OpenAPI数量上限漏更新，当前生成器已修正并补完整响应schema门禁；该修正固定片的独立CI仍待确认，不将原CI全绿等同于UI契约完整。共享窗口已与Phase 3确认，UI页面与浏览器仍由010 owner负责。
 
 | API | 当前USER权限 | 结果与范围 |
 | --- | --- | --- |
@@ -283,6 +283,8 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 | `POST /v1/roles/{roleId}/sessions/{sessionId}:revoke` | `iam.role-session.revoke`，精确ROLE_SESSION INSTANCE | 原`RevokeRoleSessionRequest{requestId}`；`RevokeRoleSessionResponse{outcome,session}`仅APPLIED/EQUAL_REPLAY |
 
 目录仅接受after、精确sourceUserId/sessionId及lifecycle过滤，查询串最多1024字节，空值、重复或未知参数拒绝；缺省UNREVOKED，可显式选择ALL/EXPIRED/REVOKED。每个`RoleSessionListing`包含原RoleSession、匹配的最小sourceUser、lifecycle和精确revokeCapability，不公开私有来源会话、代际、Trust、凭据或失效原因。lifecycle按同一数据库时刻计算：已有revokedAt优先REVOKED，否则到期为EXPIRED，其余UNREVOKED；它绝不表示当前业务USABLE。停用/墓碑Role及失效来源USER的历史记录仍可被独立授权查询；未到期、未显式撤销的记录可由当前有效管理员撤销，不重新认证来源USER，不启用任何身份或改变业务资源。
+
+加入独立会话list能力后，原`RoleListing.capabilities`必须完整含9项；`RoleAccess`还含精确Assume能力及每个真实附件的revoke能力，因此为10–266项（最多256附件）。生成schema同步约束这些上下限；完整能力、动作/资源归属与附件对应关系仍由Go语义校验保证，不能用数量代替权限，也不能为旧UI删掉新增能力。
 
 新意图遇已到期或已有另一撤销终态返回409且无新成功事实。原成功意图精确重放保留原session/revokedAt，不能延长、重复或借另一操作者/目标/输入重放；它仍要求当前操作者及撤销权限有效。来源自撤、持有秘密退出与管理员撤销竞争只有一个终态赢家。未知结果必须保留原requestId，以原请求或独立精确读取确认；403、空列表或游标冲突都不能认作已撤销。
 
@@ -304,6 +306,8 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 - 干净候选源码的Audit双authority/历史分区7.185秒、Audit HTTP3.610秒、固定IAM21/R1/R2与独立双IAM/PaaS/Audit进程110.795秒、PaaS数据4.804秒通过。跨副本撤销/重放后，IAM和PaaS下一请求拒绝旧ROLE；原操作者退出或授权变化后，历史outbox投递、去重、防伪和重启仍正确。最终准确Git树`a455eedc59429bc97eb3b8654588663693ea7ea6`通过全仓race/架构/vet、模块校验、两次契约生成字节一致及Linux构建。实现固定`62a18a48168e87a4158b95eba41427b445ed10d1`已推送；GitHub API核实[Verification35136745680](https://github.com/xiak/matrix/actions/runs/35136745680)精确SHA，go、authority-process、node-process三项全部completed/success；真库/历史/独立进程步骤实际执行成功，不以跳过替代验收。
 
 ### 来源授权代际本地证据
+
+2026-09-17的UI固定对象核对发现`62a18a48`生成的RoleListing/RoleAccess仍限8/265项。现有schema测试新增通过Go语义校验的完整目录和256附件详情，稳定复现合法9/266项被schema拒绝，以及缺少必需能力未被数量下限关闭。修正唯一生成器后，完整正样、缺项和超界负样全部通过；API/生成器race门禁13.843/1.264秒，两次生成字节一致。未变更运行权限、SQL或消费者parser；原CI未覆盖这个响应上限，修正片另需独立CI。
 
 2026-09-17，本任务独立PG18.4（1CPU/768MiB/PIDs128/64连接），Go2/512MiB、真库race/p1串行。每次重跑使用全新专属数据库；以下区分聚焦证据与最终组合，不据本地结果宣称独立CI或整个006完成。
 

@@ -552,9 +552,11 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		base["maxItems"] = iamv1.DirectoryPageSize
 	}
 	if (owner == "RoleListing" || owner == "RoleAccess") && jsonName == "capabilities" {
-		base["maxItems"] = 8
+		base["minItems"], base["maxItems"] = 9, 9
 		if owner == "RoleAccess" {
-			base["maxItems"] = 265
+			// Nine role-management capabilities, one exact Assume capability,
+			// and at most one revoke capability for each of 256 attachments.
+			base["minItems"], base["maxItems"] = 10, 9+1+256
 		}
 	}
 	if owner == "TrustPolicyDocument" {

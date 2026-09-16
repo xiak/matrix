@@ -735,9 +735,10 @@ func ValidateRoleDeletion(value RoleDeletion) error {
 }
 
 func roleCapabilitySet(id RoleID) map[string]struct{} {
-	result := make(map[string]struct{}, 8)
-	for _, action := range []Action{ActionIAMRoleRead, ActionIAMRoleUpdate, ActionIAMRoleSetStatus, ActionIAMRoleDelete, ActionIAMRoleTrustSet,
-		ActionIAMRolePolicyAttachmentCreate, ActionIAMRolePermissionBoundarySet, ActionIAMRolePermissionBoundaryRemove, ActionIAMRoleSessionList} {
+	actions := []Action{ActionIAMRoleRead, ActionIAMRoleUpdate, ActionIAMRoleSetStatus, ActionIAMRoleDelete, ActionIAMRoleTrustSet,
+		ActionIAMRolePolicyAttachmentCreate, ActionIAMRolePermissionBoundarySet, ActionIAMRolePermissionBoundaryRemove, ActionIAMRoleSessionList}
+	result := make(map[string]struct{}, len(actions))
+	for _, action := range actions {
 		result[capabilityKey(action, ResourceReference{Kind: ResourceRole, ID: string(id)})] = struct{}{}
 	}
 	return result

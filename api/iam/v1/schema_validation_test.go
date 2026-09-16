@@ -14,6 +14,68 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestRoleCapabilitySchemasAcceptCompleteBoundedResponses(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	now := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
+	role := Role{APIVersion: APIVersion, Kind: "Role", ID: "role-a", AccountID: "account-a", Name: "Readers",
+		Tags: []RoleTag{}, Management: RoleCustomerManaged, Status: RoleActive, MaxSessionDurationSeconds: 3600,
+		ResourceVersion: 1, CurrentTrustVersionID: "trust-a", CreatedAt: now, UpdatedAt: now}
+	var capabilities []ActionCapability
+	for _, action := range []Action{ActionIAMRoleRead, ActionIAMRoleUpdate, ActionIAMRoleSetStatus, ActionIAMRoleDelete,
+		ActionIAMRoleTrustSet, ActionIAMRolePolicyAttachmentCreate, ActionIAMRolePermissionBoundarySet,
+		ActionIAMRolePermissionBoundaryRemove, ActionIAMRoleSessionList} {
+		capabilities = append(capabilities, ActionCapability{Action: action,
+			Resource: ResourceReference{Kind: ResourceRole, ID: string(role.ID)}, RestrictionReason: CapabilityAuthorityRequired})
+	}
+	assertResponse := func(kind string, value any, semanticErr error, valid bool) {
+		t.Helper()
+		if (semanticErr == nil) != valid {
+			t.Fatalf("%s semantic fixture mismatch: %v", kind, semanticErr)
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := compileIAMOpenAPISchema(t, api, kind).Validate(wire); (err == nil) != valid {
+			t.Errorf("%s schema disagrees with complete response boundary: %v", kind, err)
+		}
+	}
+	list := RoleList{APIVersion: APIVersion, Kind: "RoleList", AccountID: role.AccountID,
+		Items: []RoleListing{{Role: role, Capabilities: capabilities}}}
+	assertResponse("RoleList", list, ValidateRoleList(list), true)
+	list.Items[0].Capabilities = capabilities[:len(capabilities)-1]
+	assertResponse("RoleList", list, ValidateRoleList(list), false)
+	list.Items[0].Capabilities = append(append([]ActionCapability{}, capabilities...), capabilities[0])
+	assertResponse("RoleList", list, ValidateRoleList(list), false)
+	document := sampleRoleTrustDocument()
+	_, digest, err := CanonicalizeTrustPolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access := RoleAccess{Role: role, TrustVersion: RoleTrustVersion{APIVersion: APIVersion, Kind: "RoleTrustVersion",
+		ID: "trust-a", AccountID: role.AccountID, RoleID: role.ID, Document: document, ContentDigest: digest, CreatedAt: now},
+		PolicyAttachments: []PolicyAttachment{}, Capabilities: append([]ActionCapability{}, capabilities...)}
+	assertResponse("RoleAccess", access, ValidateRoleAccess(access), false) // missing exact Assume capability
+	access.Capabilities = append(access.Capabilities, ActionCapability{Action: ActionIAMRoleAssume,
+		Resource: ResourceReference{Kind: ResourceRole, ID: string(role.ID)}, RestrictionReason: CapabilityAuthorityRequired})
+	assertResponse("RoleAccess", access, ValidateRoleAccess(access), true)
+	for i := range 256 {
+		attachment := PolicyAttachment{APIVersion: APIVersion, Kind: "PolicyAttachment", ID: PolicyAttachmentID(fmt.Sprintf("attachment-%03d", i)),
+			AccountID: role.AccountID, Target: PolicyAttachmentTarget{Kind: PolicyTargetRole, ID: string(role.ID)},
+			PolicyID: PolicyID(fmt.Sprintf("policy-%03d", i)), Scope: AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+		access.PolicyAttachments = append(access.PolicyAttachments, attachment)
+		access.Capabilities = append(access.Capabilities, ActionCapability{Action: ActionIAMRolePolicyAttachmentRevoke,
+			Resource: ResourceReference{Kind: ResourcePolicyAttachment, ID: string(attachment.ID)}, RestrictionReason: CapabilityAuthorityRequired})
+	}
+	assertResponse("RoleAccess", access, ValidateRoleAccess(access), true)
+	access.Capabilities = append(access.Capabilities, access.Capabilities[0])
+	assertResponse("RoleAccess", access, ValidateRoleAccess(access), false)
+}
+
 func TestRoleDisplayAndSelfDiscoverySchemasStayClosed(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	session := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSession","id":"role-session-a","accountId":"account-a","roleId":"role-a","sourceUserId":"user-a","status":"ACTIVE","issuedAt":"2026-09-16T00:00:00Z","expiresAt":"2026-09-16T01:00:00Z"}`
