@@ -234,6 +234,10 @@ func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 		ValidateID("correlationId", value.CorrelationID) != nil {
 		return errors.New("authorization decision product binding is invalid")
 	}
+	if value.Allowed && value.Subject != nil &&
+		checkValidatedProfileSubject(sourceProfileCommitments[value.Profile.Product].profile, value.Action, SubjectType(value.Subject.Type)) != nil {
+		return errors.New("authorization decision subject capability is invalid")
+	}
 	definition, known := LookupActionDefinition(value.Action)
 	if !known {
 		return errors.New("authorization decision action is not declared")
@@ -247,6 +251,9 @@ func ValidateAuthorizationDecisionForProfile(value AuthorizationDecision, profil
 	if value.Profile == nil || CheckAuthorizationProfileTarget(profile, *value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil ||
 		ValidateID("correlationId", value.CorrelationID) != nil {
 		return errors.New("authorization decision product binding is invalid")
+	}
+	if value.Allowed && value.Subject != nil && checkValidatedProfileSubject(profile, value.Action, SubjectType(value.Subject.Type)) != nil {
+		return errors.New("authorization decision subject capability is invalid")
 	}
 	for _, action := range profile.Actions {
 		if action.Action == value.Action {

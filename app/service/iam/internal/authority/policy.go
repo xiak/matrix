@@ -15,6 +15,10 @@ const MaxEvaluationStatements = 4096
 
 var ErrInvalidPolicyState = errors.New("IAM policy authority state is invalid")
 
+// A valid current action may exclude an otherwise valid subject. The decision
+// layer records a normal Deny for this case, unlike corrupt frozen evidence.
+var errUnsupportedPolicySubject = errors.Join(ErrInvalidPolicyState, errors.New("IAM action subject is not supported"))
+
 // AttachedPolicy is one database-resolved relationship, not a caller-provided
 // permission document. A non-nil Membership proves one live group inheritance
 // path; both direct and inherited authority enter the same evaluator.
@@ -294,6 +298,9 @@ func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVe
 	if !found {
 		return PolicyEvaluation{}, ErrInvalidAuthorizationRequest
 	}
+	if iamv1.CheckAuthorizationProfileSubject(currentProfile, request.Profile, action, iamv1.SubjectType(context.subject.Type)) != nil {
+		return PolicyEvaluation{}, errUnsupportedPolicySubject
+	}
 	if len(versions) > MaxEvaluationPolicies {
 		return PolicyEvaluation{}, ErrInvalidPolicyState
 	}
@@ -308,7 +315,7 @@ func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVe
 			return PolicyEvaluation{}, ErrInvalidPolicyState
 		}
 		compilation, digest, profiles, err := context.policyInterpretation(version)
-		if err != nil || iamv1.CheckPolicyCompilationRequest(version.Document, compilation, digest, profiles, currentProfile, request) != nil {
+		if err != nil || iamv1.CheckPolicyCompilationRequest(version.Document, compilation, digest, profiles, currentProfile, request, iamv1.SubjectType(context.subject.Type)) != nil {
 			return PolicyEvaluation{}, ErrInvalidPolicyState
 		}
 		reference := iamv1.PolicyVersionReference{PolicyID: version.PolicyID, VersionID: version.ID, ContentDigest: version.ContentDigest}

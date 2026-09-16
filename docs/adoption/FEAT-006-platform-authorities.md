@@ -507,3 +507,14 @@ once-only secret response owner is `ADAPT` for issuance, while permanent
 plaintext replay, silent reissuance after unknown outcome and a generic
 receipt/cache service are `REJECT`. R2 does not adopt a new deployment or
 release profile from another task.
+
+For001/005 subject capabilities, fixed
+`6ae975d9a65569d5215fca26ef65a16722d2cd13` is `ADAPT` for the existing
+Profile encoder/deep copy, strict JSON/schema and sole compiled-policy request
+compatibility check. Its immutable registered declarations and digests are
+`REUSE`; absent subject types retain only their original USER/probe ceiling.
+Adding ROLE to PrincipalType, rewriting old declarations, automatically
+recompiling defaults, dropping an incompatible old Deny, and a second
+product/scope-based ROLE allowlist are `REJECT`. Subject capability does not
+prove an authenticated RoleSession or a working PaaS/Audit consumer. The actual
+R2 source revisions and SQL/actor cutover remain owned by006.

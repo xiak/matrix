@@ -34,6 +34,27 @@ type AuthorizationProfileAction struct {
 	// The successful fact may concern a child/new resource. This declaration
 	// never changes the resource against which IAM makes its decision.
 	ResultResourceKind ResourceKind `json:"resultResourceKind,omitempty"`
+	// Absence preserves sealed pre-STS bytes with their USER/probe-only ceiling.
+	// It never means unrestricted subjects. New explicit sets are digest-bound.
+	SubjectTypes []SubjectType `json:"subjectTypes,omitempty"`
+}
+
+func (action *AuthorizationProfileAction) UnmarshalJSON(source []byte) error {
+	type wire AuthorizationProfileAction
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxAuthorizationProfileBytes, &decoded) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	if encoded, present := fields["subjectTypes"]; present &&
+		(bytes.Equal(bytes.TrimSpace(encoded), []byte("null")) || len(decoded.SubjectTypes) == 0) {
+		return contractjson.ErrInvalidDocument
+	}
+	*action = AuthorizationProfileAction(decoded)
+	return nil
 }
 
 type AuthorizationResourceMode string
@@ -199,6 +220,18 @@ func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
 		if action.Scope != AuthorityScopeTenant && action.Scope != AuthorityScopeInstallation && action.Scope != AuthorityScopeInstallationProbe {
 			return ErrInvalidAuthorizationProfile
 		}
+		if action.SubjectTypes != nil {
+			if len(action.SubjectTypes) < 1 || len(action.SubjectTypes) > 3 {
+				return ErrInvalidAuthorizationProfile
+			}
+			seenTypes := make(map[SubjectType]bool, len(action.SubjectTypes))
+			for _, subjectType := range action.SubjectTypes {
+				if !knownSubjectType(subjectType) || seenTypes[subjectType] {
+					return ErrInvalidAuthorizationProfile
+				}
+				seenTypes[subjectType] = true
+			}
+		}
 		if action.ResultResourceKind != "" && !profileIdentifier(string(action.ResultResourceKind), true) {
 			return ErrInvalidAuthorizationProfile
 		}
@@ -290,6 +323,7 @@ func equalAuthorizationProfile(left, right AuthorizationProfile) bool {
 		other := right.Actions[index]
 		if action.Action != other.Action || action.ResourceKind != other.ResourceKind || action.Scope != other.Scope ||
 			action.ResultResourceKind != other.ResultResourceKind ||
+			(action.SubjectTypes == nil) != (other.SubjectTypes == nil) || !slices.Equal(action.SubjectTypes, other.SubjectTypes) ||
 			(action.ResourceShapes == nil) != (other.ResourceShapes == nil) || !slices.Equal(action.ResourceShapes, other.ResourceShapes) ||
 			(action.Conditions == nil) != (other.Conditions == nil) || !slices.Equal(action.Conditions, other.Conditions) {
 			return false
@@ -305,6 +339,7 @@ func canonicalizeAuthorizationProfile(value AuthorizationProfile) (string, strin
 	value = cloneAuthorizationProfile(value)
 	for index := range value.Actions {
 		action := &value.Actions[index]
+		slices.Sort(action.SubjectTypes)
 		slices.SortFunc(action.ResourceShapes, func(left, right AuthorizationResourceShape) int {
 			if order := cmp.Compare(left.Mode, right.Mode); order != 0 {
 				return order
@@ -325,6 +360,7 @@ func canonicalizeAuthorizationProfile(value AuthorizationProfile) (string, strin
 func cloneAuthorizationProfile(value AuthorizationProfile) AuthorizationProfile {
 	value.Actions = slices.Clone(value.Actions)
 	for index := range value.Actions {
+		value.Actions[index].SubjectTypes = slices.Clone(value.Actions[index].SubjectTypes)
 		value.Actions[index].ResourceShapes = slices.Clone(value.Actions[index].ResourceShapes)
 		value.Actions[index].Conditions = slices.Clone(value.Actions[index].Conditions)
 	}
@@ -351,6 +387,49 @@ func CheckAuthorizationProfileReference(value AuthorizationProfile, reference Au
 		return ErrInvalidAuthorizationProfile
 	}
 	return nil
+}
+
+// CheckAuthorizationProfileSubject validates one subject capability, not the
+// subject's credentials, registration or permissions. Runtime callers supply
+// the actual authenticated type; it is not an AuthorizationRequest selector.
+func CheckAuthorizationProfileSubject(profile AuthorizationProfile, reference AuthorizationProfileReference, action Action, subjectType SubjectType) error {
+	if CheckAuthorizationProfileReference(profile, reference) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	return checkValidatedProfileSubject(profile, action, subjectType)
+}
+
+// The complete declaration must already have been validated in this call stack.
+// Missing capabilities preserve the sealed legacy ceiling without rewriting
+// bytes. No product name, resource kind or action prefix grants ROLE capability.
+func checkValidatedProfileSubject(profile AuthorizationProfile, action Action, subjectType SubjectType) error {
+	if !knownSubjectType(subjectType) {
+		return ErrInvalidAuthorizationProfile
+	}
+	for _, declared := range profile.Actions {
+		if declared.Action != action {
+			continue
+		}
+		if declared.SubjectTypes != nil {
+			if slices.Contains(declared.SubjectTypes, subjectType) {
+				return nil
+			}
+			return ErrInvalidAuthorizationProfile
+		}
+		legacyType := SubjectUser
+		if declared.Scope == AuthorityScopeInstallationProbe {
+			legacyType = SubjectServiceAccount
+		}
+		if subjectType == legacyType {
+			return nil
+		}
+		return ErrInvalidAuthorizationProfile
+	}
+	return ErrInvalidAuthorizationProfile
+}
+
+func knownSubjectType(subjectType SubjectType) bool {
+	return subjectType == SubjectUser || subjectType == SubjectServiceAccount || subjectType == SubjectRole
 }
 
 // CheckAuthorizationProfileTarget validates an explicitly selected target mode

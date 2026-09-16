@@ -1275,12 +1275,13 @@ func DecodePolicyCompilation(reader io.Reader, document PolicyDocument, profiles
 // boundaries and selectors. Historical proofs must not call this current check.
 // Neither supplied declaration is authenticated by this pure contract function.
 func CheckPolicyCompilationRequest(document PolicyDocument, compilation PolicyCompilation, contentDigest string,
-	frozenProfiles []AuthorizationProfile, current AuthorizationProfile, request AuthorizationRequest,
+	frozenProfiles []AuthorizationProfile, current AuthorizationProfile, request AuthorizationRequest, subjectType SubjectType,
 ) error {
 	_, digest, err := CanonicalizePolicyCompilation(document, compilation, frozenProfiles)
 	if err != nil || digest != contentDigest || ValidateID("requestId", request.RequestID) != nil ||
 		ValidateID("correlationId", request.CorrelationID) != nil ||
-		CheckAuthorizationProfileTarget(current, request.Profile, request.Action, request.Resource, request.ResourceMode, request.CollectionUsage) != nil {
+		CheckAuthorizationProfileTarget(current, request.Profile, request.Action, request.Resource, request.ResourceMode, request.CollectionUsage) != nil ||
+		checkValidatedProfileSubject(current, request.Action, subjectType) != nil {
 		return ErrInvalidPolicy
 	}
 	participatingStatements := make(map[string]bool)
@@ -1310,9 +1311,13 @@ func CheckPolicyCompilationRequest(document PolicyDocument, compilation PolicyCo
 			return ErrInvalidPolicy
 		}
 		for _, reference := range compilation.Profiles {
-			if reference.Product == profile.Product &&
-				checkValidatedProfileTarget(profile, request.Action, request.Resource, request.ResourceMode, request.CollectionUsage) != nil {
-				return ErrInvalidPolicy
+			if reference.Product == profile.Product {
+				// Capability expansion on a current head cannot extend an old
+				// immutable Allow or silently discard an incompatible old Deny.
+				if checkValidatedProfileTarget(profile, request.Action, request.Resource, request.ResourceMode, request.CollectionUsage) != nil ||
+					checkValidatedProfileSubject(profile, request.Action, subjectType) != nil {
+					return ErrInvalidPolicy
+				}
 			}
 		}
 		for _, action := range profile.Actions {

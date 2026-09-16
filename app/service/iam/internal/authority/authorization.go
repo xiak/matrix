@@ -182,7 +182,8 @@ func decide(
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
 	evaluation, evidence, err := EvaluateAttachedPolicies(databaseTime, tenantID, installationID, subject, policies, request)
-	if err != nil {
+	subjectSupported := !errors.Is(err, errUnsupportedPolicySubject)
+	if err != nil && subjectSupported {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
 	boundaryEvidence := UserBoundaryEvidence{State: "NOT_APPLICABLE"}
@@ -199,7 +200,7 @@ func decide(
 	platformContext := !platform || subject.Type == iamv1.PrincipalUser && iamv1.ValidateID("installationId", installationID) == nil
 	probeContext := request.Action != iamv1.ActionInstallationVerify ||
 		subject.Type == iamv1.PrincipalServiceAccount && request.Resource.ID == installationID
-	allowed := evaluation.Allowed && !mustChangePassword && platformContext && probeContext && ServiceCanRequest(callingService, request.Action)
+	allowed := subjectSupported && evaluation.Allowed && !mustChangePassword && platformContext && probeContext && ServiceCanRequest(callingService, request.Action)
 	profile := request.Profile
 	decision := iamv1.AuthorizationDecision{
 		APIVersion:      iamv1.APIVersion,

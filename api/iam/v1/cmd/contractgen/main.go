@@ -268,6 +268,7 @@ func enumSchemas() map[string][]string {
 		"RoleManagement":               {string(iamv1.RoleCustomerManaged)},
 		"AccountStatus":                {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
 		"PrincipalType":                {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
+		"SubjectType":                  {string(iamv1.SubjectUser), string(iamv1.SubjectServiceAccount), string(iamv1.SubjectRole)},
 		"PrincipalStatus":              {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
 		"SessionStatus":                {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
 		"AuthorityScope":               {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
@@ -498,6 +499,8 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			base = object{"type": "string", "pattern": `^[A-Z][A-Z0-9_-]{0,63}$`, "maxLength": 64}
 		case "resourceShapes":
 			base["minItems"], base["maxItems"] = 1, 3
+		case "subjectTypes":
+			base["minItems"], base["maxItems"], base["uniqueItems"] = 1, 3, true
 		case "conditions":
 			base["maxItems"] = 3
 			base = object{"anyOf": []any{object{"type": "null"}, base}}
@@ -779,8 +782,8 @@ func applySemanticOverlays(schemas object) {
 			"else": object{"required": []string{"tenantId"}, "properties": object{"installationId": false}},
 		},
 	})
-	decision["allOf"] = append(decisionRules, authorizationTargetRules()...)
-	schemas["AuthorizationRequest"].(object)["allOf"] = authorizationTargetRules()
+	decision["allOf"] = append(decisionRules, authorizationTargetRules(true)...)
+	schemas["AuthorizationRequest"].(object)["allOf"] = authorizationTargetRules(false)
 
 	session := schemas["Session"].(object)
 	session["allOf"] = []any{
@@ -835,7 +838,7 @@ func applyAuthorizationProfileOverlays(schemas object) {
 	schemas["AuthorizationProfileAction"].(object)["allOf"] = actionRules
 }
 
-func authorizationTargetRules() []any {
+func authorizationTargetRules(includeSubject bool) []any {
 	var rules []any
 	for _, profile := range iamv1.AllAuthorizationProfiles() {
 		_, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
@@ -854,12 +857,22 @@ func authorizationTargetRules() []any {
 				}
 				shapes = append(shapes, object{"properties": properties, "required": required})
 			}
+			properties := object{
+				"profile":  object{"const": object{"product": string(profile.Product), "revision": profile.Revision, "contentDigest": digest}},
+				"resource": object{"properties": object{"kind": object{"const": string(action.ResourceKind)}}},
+			}
+			if includeSubject {
+				var subjects []string
+				for _, subject := range []iamv1.SubjectType{iamv1.SubjectUser, iamv1.SubjectServiceAccount, iamv1.SubjectRole} {
+					if iamv1.CheckAuthorizationProfileSubject(profile, iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}, action.Action, subject) == nil {
+						subjects = append(subjects, string(subject))
+					}
+				}
+				properties["subject"] = object{"properties": object{"type": object{"enum": subjects}}}
+			}
 			rules = append(rules, object{
-				"if": object{"properties": object{"action": object{"const": string(action.Action)}}, "required": []string{"action"}},
-				"then": object{"properties": object{
-					"profile":  object{"const": object{"product": string(profile.Product), "revision": profile.Revision, "contentDigest": digest}},
-					"resource": object{"properties": object{"kind": object{"const": string(action.ResourceKind)}}},
-				}, "oneOf": shapes},
+				"if":   object{"properties": object{"action": object{"const": string(action.Action)}}, "required": []string{"action"}},
+				"then": object{"properties": properties, "oneOf": shapes},
 			})
 		}
 	}

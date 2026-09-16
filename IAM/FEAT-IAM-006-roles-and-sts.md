@@ -79,7 +79,7 @@ R1对应租户IAM/USER事实为`iam.role.created/updated/disabled/enabled/trust-
 
 ### R2发行、当前权限与历史边界
 
-发行只接受当前有效同账号USER登录会话；先证明调用者的`iam.role.assume`许可，再检查目标Role的当前信任，不伪造一个用户decision来表达角色权限。登录bearer、服务凭据和角色临时凭据使用不同目的的索引/验证摘要；复用既有CSPRNG和不透明秘密，不引入可以离线长期放行的JWT。role-as-subject的公开结构、SQL记录/evidence及跨服务actor映射须另行冻结，R1不会提前扩大现有installation.verify的service-as-subject例外。
+发行只接受当前有效同账号USER登录会话；先证明调用者的`iam.role.assume`许可，再检查目标Role的当前信任，不伪造一个用户decision来表达角色权限。登录bearer、服务凭据和角色临时凭据使用不同目的的索引/验证摘要；复用既有CSPRNG和不透明秘密，不引入可以离线长期放行的JWT。ROLE公开结构、SQL记录/evidence及跨服务actor按下述已冻结的R2契约同片切换；R1不会提前扩大现有installation.verify的service-as-subject例外。
 
 RoleSession必须绑定account、role、原USER、直接承担者、source session、原credential generation、信任version/digest、Role安全generation、发行/到期、撤销状态及不可变SessionPolicy承诺。首片禁止角色链，因此原始主体等于直接承担USER，但仍不能用会话显示名称替代稳定身份或接受caller sourceIdentity。源会话被保留并升级到新credential generation，不会自动把旧RoleSession升级过去。
 
@@ -160,7 +160,7 @@ R2同片实现原Root+当前PDP守护的RoleBoundary read/set/remove，不引用
 
 2026-09-16，既有API/authority测试新增严格AssumeRoleRequest与schema接受矩阵、来源/当前信任关系、空信任与Deny优先、服务/暂停/forced/撤销拒绝、三重到期上限和微秒边界。相同熵、相同ID在SESSION/SERVICE/ROLE_SESSION三种目的之间交叉查找/验证均不能互换；不把随机内容恰好不同当作目的隔离证明。请求编解码拒绝caller账号、主体、source session/generation、trust、编译物、重复字段、null限制和超限；纯信任匹配不会给原USER增加业务Allow。目的常量与schema组件补齐前的缺失测试先失败，接入后通过；这不是复现了既有运行权限漏洞。
 
-精确Git候选的独立干净导出通过全仓`go test -race -p 2 -count=1 ./...`（含架构）、`go vet -p 2 ./...`、模块校验、API生成字节稳定及Linux amd64构建。Go2/768MiB，现有请求round-trip fuzz为15秒/2workers/1秒最小化预算，通过120526次执行。没有新增本地PG、浏览器或运行发行进程；默认跳过的外部fixture不记为真实R2证据。当前HTTP仍无AssumeRole、ROLE业务身份或会话发行/撤销入口，subjectTypes、record8/contract3及角色历史证据尚未实现；开发源码仍24/14/1，发布profile不改。独立CI待精确固定提交另核实。
+精确Git候选的独立干净导出通过全仓`go test -race -p 2 -count=1 ./...`（含架构）、`go vet -p 2 ./...`、模块校验、API生成字节稳定及Linux amd64构建。Go2/768MiB，现有请求round-trip fuzz为15秒/2workers/1秒最小化预算，通过120526次执行。该基础片没有新增本地PG、浏览器或运行发行进程；默认跳过的外部fixture不记为真实R2证据。当前HTTP仍无AssumeRole、ROLE业务身份或会话发行/撤销入口，record8/contract3及角色历史证据尚未实现；subjectTypes增量由001/005拥有，实际R2源码Profile切换尚未发生。开发源码仍24/14/1，发布profile不改。固定6ae975d9a65569d5215fca26ef65a16722d2cd13的Verification35063652730首轮Go/节点成功，但authority-process超过旧10分钟job预算后取消，不能记为全绿；整体作业预算与再次精确源码验证归011。
 
 ## 验收
 

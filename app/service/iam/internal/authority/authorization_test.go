@@ -585,6 +585,57 @@ func TestFamilyPolicyUsesVerifiedResolvedActionsForAllowAndDeny(t *testing.T) {
 	}
 }
 
+func TestPolicyEvaluationChecksSubjectCapabilityBeforeUnmatchedEffects(t *testing.T) {
+	now := authorityTestTime()
+	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "requested-application"})
+	allow := policyVersionForTest(t, "policy-current-allow", iamv1.PolicyAllow, request.Action, iamv1.PolicyResourceAnyInAuthority, "")
+	for _, effect := range []iamv1.PolicyEffect{iamv1.PolicyAllow, iamv1.PolicyDeny} {
+		for _, types := range [][]iamv1.SubjectType{{iamv1.SubjectRole}, {iamv1.SubjectUser, iamv1.SubjectRole}} {
+			profile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+			if !found {
+				t.Fatal("PaaS source declaration missing")
+			}
+			profile.Revision++
+			for index := range profile.Actions {
+				if profile.Actions[index].Action == request.Action {
+					profile.Actions[index].SubjectTypes = types
+				}
+			}
+			version := policyVersionForTest(t, "policy-frozen-subject", effect, request.Action, iamv1.PolicyResourceExact, "unmatched-application")
+			compilation, err := iamv1.CompilePolicyDocument(version.Document, []iamv1.AuthorizationProfile{profile})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, version.ContentDigest, err = iamv1.CanonicalizePolicyCompilation(version.Document, compilation, []iamv1.AuthorizationProfile{profile})
+			if err != nil {
+				t.Fatal(err)
+			}
+			version.Compilation = &compilation
+			context := policyContextForTest(now)
+			if context.includeProfiles([]iamv1.AuthorizationProfile{profile}) != nil {
+				t.Fatal("valid frozen declaration could not be loaded")
+			}
+			for _, versions := range [][]iamv1.PolicyVersion{{allow, version}, {version, allow}} {
+				result, err := evaluatePolicies(context, versions, request)
+				if len(types) == 1 {
+					if !errors.Is(err, ErrInvalidPolicyState) || result.Allowed {
+						t.Fatal("unmatched effect bypassed frozen subject incompatibility")
+					}
+				} else if err != nil || !result.Allowed {
+					t.Fatal("USER-compatible expansion invalidated an otherwise current grant", err)
+				}
+			}
+		}
+	}
+	context := policyContextForTest(now)
+	context.subject.Type = iamv1.PrincipalServiceAccount
+	for _, versions := range [][]iamv1.PolicyVersion{nil, {allow}} {
+		if result, err := evaluatePolicies(context, versions, request); !errors.Is(err, errUnsupportedPolicySubject) || result.Allowed {
+			t.Fatal("business request bypassed current subject admission")
+		}
+	}
+}
+
 func TestUserBoundarySeparatesPlatformAuthorityAndEvaluatesCurrentConditions(t *testing.T) {
 	now := authorityTestTime()
 	subject := authoritySubject(now, iamv1.SystemPolicyPaaSDeveloper, iamv1.SystemPolicyPlatformOperator)

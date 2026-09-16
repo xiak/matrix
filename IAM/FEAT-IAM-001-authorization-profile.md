@@ -1,6 +1,6 @@
 # FEAT-IAM-001：业务授权能力目录
 
-- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 的源码 Profile、不可变注册、当前一致性及请求/决定绑定已有固定验证，编译版本及冻结动作族的运行证据归005。CAT-06 只读编辑目录固定 `40407e27` 的真实门禁及独立CI已通过；最终产品消费者组合仍待验收，本 FEAT 整体未验收。
+- 状态：CAT-01–04 首片已验收（固定 `3b11eb9`）；CAT-05 的源码 Profile、不可变注册、当前一致性及请求/决定绑定已有固定验证，编译版本及冻结动作族的运行证据归005。CAT-06 只读编辑目录固定 `40407e27` 的真实门禁及独立CI已通过；CAT-07 主体能力契约/当前评估已过本地整仓与真库/多进程，精确SHA独立CI待确认。ROLE真实接入与最终产品消费者组合仍待验收，本 FEAT 整体未验收。
 - 依赖：[产品契约](./FEAT-IAM-000-product-contract.md)。
 - Owner：IAM 公共契约与现有 authority；产品拥有其业务词汇。
 - 首片：把现有已接受的动作、允许调用服务、资源种类和 scope 收敛为一份不可变目录，所有当前验证和决定路径消费该目录。
@@ -15,6 +15,7 @@
 | IAM-CAT-04 | 校验器、生成 schema、授权服务使用同一目录；返回副本不能修改全局定义 |
 | IAM-CAT-05 | 后续 Profile 明确声明 revision、digest、资源粒度、创建/列表/批量和可信条件来源；未声明的能力不能启用 |
 | IAM-CAT-06 | 当前有效 User 在既有策略目录权限内读取完整、有限、版本绑定的产品能力；目录不是授权、发布或注册许可 |
+| IAM-CAT-07 | 每个动作的主体类型能力由唯一 Profile 声明并纳入摘要；当前身份必须同时被当前声明与策略冻结声明支持，目录扩展不能给旧策略增加 ROLE 权限 |
 
 ## 首片详细设计
 
@@ -29,6 +30,18 @@
 005 字符串切片在同一目录增加 `iam.account-id` 与 `iam.principal-id`：类型 STRING，来源 IAM_AUTHENTICATED_IDENTITY。分别绑定当前 IAM 权威身份的 Account 和主体稳定 ID，仅对 TENANT/USER 启用；不接受产品请求自报的值，不将 Group/策略/资源的归属误作当前调用者身份。它们是 IAM 内置身份条件，不按产品名称分叉，也不开放租户自行注册来源。契约与唯一求值器已经接入，运行证据、算子、集合、缺失和 canonical 行为归 005；完整 Profile 与业务条件仍按 CAT-05/008 验收。
 
 ## 事务与权限
+
+### CAT-07：主体类型与冻结权限边界
+
+`AuthorizationProfileAction.subjectTypes` 是允许主体类型的唯一产品能力，值来自独立的 `SubjectType`（USER、SERVICE_ACCOUNT、ROLE）；它不是 `PrincipalType`，ROLE 不因此成为可登录 principal。显式集合必须非空、最多三项、无重复，规范编码按集合排序并纳入现有 Profile 摘要；null、空数组、未知类型和大小写别名拒绝。当前声明与历史声明的深拷贝、完整内容比较和编译引用都必须覆盖该字段，不添加产品名称、scope 或动作前缀推导的第二份 ROLE 白名单。
+
+已封存的旧声明没有此字段时，保留原 bytes/digest，解释上限固定为 INSTALLATION_PROBE 的 SERVICE_ACCOUNT、其余动作的 USER；这只解释经过受信 registry 认证的旧内容，不证明来源或授权。不能把缺字段解释成所有主体，也不能迁移回填以暗改旧摘要。006 的实际 R2 切换才采用明确主体类型的新 IAM r3、PaaS/Audit r2 及其真实消费者；当前纯契约增量不先修改这些已登记 revision 或开放 ROLE 运行身份。
+
+唯一 `CheckPolicyCompilationRequest` 接受由权威快照取得的实际主体类型，北向 AuthorizationRequest 不增加 selector。先验证当前声明支持该主体；当原编译结果涉及此动作时，在 Effect、资源及条件匹配之前验证冻结声明也支持该主体。旧 USER 编译在当前声明扩展 USER+ROLE 后仍可供 USER 使用，但 ROLE 必须显式发布新编译内容并选择默认；旧 Deny 不可因主体类型不相容被跳过后采用另一 Allow。没有参与该动作的策略不产生授权；未知身份、错摘要或冲突解释使整个检查失败关闭。该纯检查不是认证或 Allow，实际 PDP 仍验证来源、附件、边界及当前权威。
+
+当前已认证身份不在有效动作的能力集合内，属于普通 Deny；原冻结内容与当前解释冲突则属于权威状态错误，不能伪装成已完成的正常决定。已有 PEP 共用的 `CheckAuthorizationDecisionForRequest`、受保护历史的 `ValidateAuthorizationDecisionForProfile` 以及生成 schema 同样检查 Allow 的实际类型，不只在策略评估入口判断。旧 contract1 只读验证器保持不变；类型能力既不证明当前凭据有效，也不替代私有历史证据。
+
+验收沿既有 API/schema、005 编译与 authority/真库 owner：规范集合与完整摘要、返回副本隔离、旧 canonical、重复/null/空/未知攻击；USER 与 ROLE 的旧/新声明交叉矩阵；SOURCE 服务不能借业务主体能力，探针不能借 USER 或 ROLE；未匹配资源上的旧 Deny 仍先检查兼容性。R2 真实角色发行及 PaaS/Audit 行为另由006验收，不把纯契约通过记为 ROLE 已上线。
 
 ### CAT-06：策略编辑器的只读能力目录
 
@@ -146,6 +159,16 @@ IAM私有assert_allowed_decision由6参替换为8参，追加显式resource_mode
 ## 采用与证据
 
 复用 owner 和固定源见 [adoption](../docs/adoption/FEAT-006-platform-authorities.md)。
+
+### CAT-07：主体能力的契约与当前评估
+
+2026-09-16，既有 API/schema 与 authority owner 增加显式集合/摘要/深拷贝、null/空/重复/未知/别名拒绝，旧 USER ceiling 与新增 ROLE 的交叉矩阵、未匹配资源上的 Allow/Deny 预先相容性，以及 PEP/当前与冻结决定的 USER/SERVICE/probe 类型核对。新功能测试在缺少能力字段/类型时先编译失败，接入后通过；不是复现了已上线的角色越权。ROLE 仍不是 Principal，也未开放角色 bearer；未修改已登记 Profile、旧 canonical/默认指针、SQL/readiness、Audit 编码、ServiceIdentity/lookup_service/claim7或发布 profile。
+
+最终代码树 `d71bf7c4dd61d0d88590dd9aea3999912a7778a9` 的干净导出通过全仓 race-p2、architecture、vet、模块校验、API再次生成稳定和Linux amd64全仓构建。Profile规范往返fuzz在2workers/15秒/1秒最小化预算下通过219645次执行，并验证规范化前后主体能力相同。Go限2核/768MiB；以上为代码/契约门禁，不把默认SKIP的外部fixture、纯语法合法的未来Profile或新enum当作真实R2发行/产品接入验收。独立CI必须另按精确SHA确认。
+
+同一最终代码在本任务独占PG18.4（固定镜像`postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a`，1CPU/768MiB/PIDs128/max_connections64，专属网络/卷、loopback端口及全新唯一数据库）串行race-p1通过原完整策略存储与IAM HTTP，包346.240秒。保留101成员/组继承、边界、目录、原Root/平台凭据保护、Role管理/信任、并发撤权与密码会话、历史producer/outbox及带数据重放；未放宽原组120秒/策略240秒场景预算。过程中首个进程fixture因数据库名不满足已有专属前缀而在启动前拒绝，修正测试库名称，不修改该安全检查或生产代码。
+
+最终独立双IAM/Audit/PaaS与双dispatcher在另一全新专属库串行race-p1通过，包63.154秒。真实受限runtime登录、跨副本撤权/重启、双账号资源/配置/Operation/outbox、原Profile/编译/历史链及installation verifier保持；实际source readiness仍24/14/1，与未改动的已发布安装profile分开验证。没有运行本轮UI或签名安装，也没有把协议host fixture当作真实主机验收。全部本地执行均终态成功后才进入固定提交；001/005的这一能力契约不代替006的RoleSession/ROLE业务身份与完整发行验收。
 
 ### CAT-06：只读编辑目录
 

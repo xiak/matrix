@@ -550,6 +550,15 @@
                       "const": "ACCOUNT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -614,6 +623,15 @@
                       "const": "ACCOUNT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -655,6 +673,15 @@
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -700,6 +727,15 @@
                       "const": "ACCOUNT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -741,6 +777,15 @@
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -786,6 +831,15 @@
                       "const": "ACCOUNT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -827,6 +881,15 @@
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -872,6 +935,15 @@
                       "const": "ACCOUNT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -913,6 +985,15 @@
                   "properties": {
                     "kind": {
                       "const": "POLICY"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -958,6 +1039,15 @@
                       "const": "POLICY"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -999,6 +1089,15 @@
                   "properties": {
                     "kind": {
                       "const": "POLICY"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -1044,6 +1143,15 @@
                       "const": "POLICY"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -1085,6 +1193,15 @@
                   "properties": {
                     "kind": {
                       "const": "POLICY"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -1130,6 +1247,15 @@
                       "const": "POLICY"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -1171,6 +1297,15 @@
                   "properties": {
                     "kind": {
                       "const": "POLICY"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -1216,6 +1351,15 @@
                       "const": "POLICY"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -1257,6 +1401,15 @@
                   "properties": {
                     "kind": {
                       "const": "INSTALLATION"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -1302,6 +1455,15 @@
                       "const": "USER"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -1343,6 +1505,15 @@
                   "properties": {
                     "kind": {
                       "const": "USER"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -1388,6 +1559,15 @@
                       "const": "ACCOUNT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -1429,6 +1609,15 @@
                   "properties": {
                     "kind": {
                       "const": "USER"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -1474,6 +1663,15 @@
                       "const": "USER"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -1515,6 +1713,15 @@
                   "properties": {
                     "kind": {
                       "const": "USER"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -1560,6 +1767,15 @@
                       "const": "USER"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -1601,6 +1817,15 @@
                   "properties": {
                     "kind": {
                       "const": "USER"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -1646,6 +1871,15 @@
                       "const": "ACCOUNT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -1687,6 +1921,15 @@
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -1732,6 +1975,15 @@
                       "const": "GROUP"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -1773,6 +2025,15 @@
                   "properties": {
                     "kind": {
                       "const": "GROUP"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -1818,6 +2079,15 @@
                       "const": "GROUP"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -1859,6 +2129,15 @@
                   "properties": {
                     "kind": {
                       "const": "GROUP"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -1904,6 +2183,15 @@
                       "const": "GROUP"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -1945,6 +2233,15 @@
                   "properties": {
                     "kind": {
                       "const": "GROUP_MEMBERSHIP"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -1990,6 +2287,15 @@
                       "const": "GROUP"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2031,6 +2337,15 @@
                   "properties": {
                     "kind": {
                       "const": "POLICY_ATTACHMENT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -2076,6 +2391,15 @@
                       "const": "USER"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2117,6 +2441,15 @@
                   "properties": {
                     "kind": {
                       "const": "POLICY_ATTACHMENT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -2162,6 +2495,15 @@
                       "const": "SESSION"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2203,6 +2545,15 @@
                   "properties": {
                     "kind": {
                       "const": "USER"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -2248,6 +2599,15 @@
                       "const": "POLICY_ATTACHMENT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2289,6 +2649,15 @@
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -2334,6 +2703,15 @@
                       "const": "ACCOUNT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2375,6 +2753,15 @@
                   "properties": {
                     "kind": {
                       "const": "ROLE"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -2420,6 +2807,15 @@
                       "const": "ROLE"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2461,6 +2857,15 @@
                   "properties": {
                     "kind": {
                       "const": "ROLE"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -2506,6 +2911,15 @@
                       "const": "ROLE"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2547,6 +2961,15 @@
                   "properties": {
                     "kind": {
                       "const": "ROLE"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -2592,6 +3015,15 @@
                       "const": "ROLE"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2635,6 +3067,15 @@
                       "const": "POLICY_ATTACHMENT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2676,6 +3117,15 @@
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_POOL"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -2742,6 +3192,15 @@
                       "const": "EXECUTION_POOL"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2783,6 +3242,15 @@
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_TARGET"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -2849,6 +3317,15 @@
                       "const": "EXECUTION_TARGET"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2890,6 +3367,15 @@
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_TARGET"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -2935,6 +3421,15 @@
                       "const": "EXECUTION_TARGET"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -2976,6 +3471,15 @@
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_TARGET"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -3031,6 +3535,15 @@
                       "const": "NODE_ENROLLMENT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -3072,6 +3585,15 @@
                   "properties": {
                     "kind": {
                       "const": "NODE_ENROLLMENT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -3117,6 +3639,15 @@
                       "const": "NODE_ENROLLMENT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -3160,6 +3691,15 @@
                       "const": "NODE_ENROLLMENT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -3201,6 +3741,15 @@
                   "properties": {
                     "kind": {
                       "const": "OPERATION"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -3256,6 +3805,15 @@
                       "const": "APPLICATION"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -3297,6 +3855,15 @@
                   "properties": {
                     "kind": {
                       "const": "APPLICATION"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -3352,6 +3919,15 @@
                       "const": "CONFIGURATION"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -3393,6 +3969,15 @@
                   "properties": {
                     "kind": {
                       "const": "CONFIGURATION"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -3448,6 +4033,15 @@
                       "const": "CONFIGURATION_REVISION"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -3489,6 +4083,15 @@
                   "properties": {
                     "kind": {
                       "const": "CONFIGURATION_REVISION"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -3544,6 +4147,15 @@
                       "const": "APPLICATION_REVISION"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -3585,6 +4197,15 @@
                   "properties": {
                     "kind": {
                       "const": "APPLICATION_REVISION"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -3640,6 +4261,15 @@
                       "const": "DEPLOYMENT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -3681,6 +4311,15 @@
                   "properties": {
                     "kind": {
                       "const": "DEPLOYMENT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -3726,6 +4365,15 @@
                       "const": "DEPLOYMENT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -3767,6 +4415,15 @@
                   "properties": {
                     "kind": {
                       "const": "DEPLOYMENT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -3812,6 +4469,15 @@
                       "const": "DEPLOYMENT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -3853,6 +4519,15 @@
                   "properties": {
                     "kind": {
                       "const": "OPERATION"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -3919,6 +4594,15 @@
                       "const": "SERVICE_OFFERING"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -3983,6 +4667,15 @@
                       "const": "REGION"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -4034,6 +4727,15 @@
                   "properties": {
                     "kind": {
                       "const": "QUOTA_ENTITLEMENT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -4100,6 +4802,15 @@
                       "const": "QUOTA_ENTITLEMENT"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -4151,6 +4862,15 @@
                   "properties": {
                     "kind": {
                       "const": "SERVICE_INSTALLATION"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -4217,6 +4937,15 @@
                       "const": "SERVICE_INSTALLATION"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -4268,6 +4997,15 @@
                   "properties": {
                     "kind": {
                       "const": "AUDIT_RECORD"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -4323,6 +5061,15 @@
                       "const": "AUDIT_CHAIN"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -4374,6 +5121,15 @@
                   "properties": {
                     "kind": {
                       "const": "AUDIT_RECORD"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
                     }
                   }
                 }
@@ -4429,6 +5185,15 @@
                       "const": "AUDIT_CHAIN"
                     }
                   }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
                 }
               }
             }
@@ -4470,6 +5235,15 @@
                   "properties": {
                     "kind": {
                       "const": "INSTALLATION"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "type": {
+                      "enum": [
+                        "SERVICE_ACCOUNT"
+                      ]
                     }
                   }
                 }
@@ -4709,6 +5483,15 @@
           },
           "scope": {
             "$ref": "#/components/schemas/AuthorityScope"
+          },
+          "subjectTypes": {
+            "items": {
+              "$ref": "#/components/schemas/SubjectType"
+            },
+            "maxItems": 3,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
           }
         },
         "required": [
@@ -16932,6 +17715,14 @@
           "type"
         ],
         "type": "object"
+      },
+      "SubjectType": {
+        "enum": [
+          "USER",
+          "SERVICE_ACCOUNT",
+          "ROLE"
+        ],
+        "type": "string"
       },
       "Timestamp": {
         "format": "date-time",

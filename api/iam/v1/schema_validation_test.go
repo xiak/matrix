@@ -177,6 +177,83 @@ func TestRoleTrustSchemasKeepCarrierAdmissionSeparateFromIdentityPolicies(t *tes
 	}
 }
 
+func TestAuthorizationProfileSubjectSchemaKeepsPrincipalAndCapabilitySeparate(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	schema := compileIAMOpenAPISchema(t, api, "AuthorizationProfile")
+	profile := authorizationProfileFixture()
+	encoded, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, field string
+		valid       bool
+	}{
+		{"sealed absence", "", true},
+		{"user", `"subjectTypes":["USER"],`, true},
+		{"role and user", `"subjectTypes":["ROLE","USER"],`, true},
+		{"service", `"subjectTypes":["SERVICE_ACCOUNT"],`, true},
+		{"null", `"subjectTypes":null,`, false},
+		{"empty", `"subjectTypes":[],`, false},
+		{"duplicate", `"subjectTypes":["USER","USER"],`, false},
+		{"unknown", `"subjectTypes":["ADMIN"],`, false},
+		{"case alias", `"SubjectTypes":["USER"],`, false},
+		{"object", `"subjectTypes":{},`, false},
+		{"nullable element", `"subjectTypes":[null],`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := strings.Replace(string(encoded), `"action":`, test.field+`"action":`, 1)
+			wire, err := jsonschema.UnmarshalJSON(strings.NewReader(candidate))
+			if err != nil || (schema.Validate(wire) == nil) != test.valid {
+				t.Fatal("subject capability schema disagrees with the bounded contract", err)
+			}
+			if _, err := DecodeAuthorizationProfile(strings.NewReader(candidate)); (err == nil) != test.valid {
+				t.Fatal("subject capability decoder diverged from its schema", err)
+			}
+		})
+	}
+	principal := compileIAMOpenAPISchema(t, api, "PrincipalType")
+	if principal.Validate("ROLE") == nil || principal.Validate("USER") != nil || principal.Validate("SERVICE_ACCOUNT") != nil {
+		t.Fatal("authorization subject capability changed the login principal contract")
+	}
+}
+
+func TestDecisionSubjectCapabilityIsCheckedByPEPAndFrozenEvidence(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AuthorizationDecision")
+	for _, test := range []struct {
+		action Action
+		kind   ResourceKind
+		typeID PrincipalType
+	}{
+		{ActionPaaSApplicationRead, ResourceApplication, PrincipalUser},
+		{ActionIAMRoleRead, ResourceRole, PrincipalUser},
+		{ActionPaaSExecutionTargetRead, ResourceExecutionTarget, PrincipalUser},
+		{ActionInstallationVerify, ResourceInstallation, PrincipalServiceAccount},
+	} {
+		request, err := NewAuthorizationRequest(test.action, ResourceReference{Kind: test.kind, ID: "target-one"}, AuthorizationResourceInstance, "", "request-one", "correlation-one")
+		if err != nil {
+			t.Fatal(err)
+		}
+		profile, _ := LookupAuthorizationProfile(request.Profile.Product)
+		for _, subjectType := range []PrincipalType{PrincipalUser, PrincipalServiceAccount, "ROLE", "GROUP"} {
+			decision := AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-one", Allowed: true, Reason: DecisionAllowed,
+				Action: request.Action, Resource: request.Resource, Profile: &request.Profile, ResourceMode: request.ResourceMode,
+				RequestID: request.RequestID, CorrelationID: request.CorrelationID, DecidedAt: time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC),
+				Subject: &Subject{Type: subjectType, ID: "subject-one"}, TenantID: "account-one"}
+			if IsPlatformAction(test.action) {
+				decision.TenantID, decision.InstallationID = "", "installation-one"
+			}
+			encoded, _ := json.Marshal(decision)
+			wire, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+			want := subjectType == test.typeID
+			if err != nil || (schema.Validate(wire) == nil) != want || (CheckAuthorizationDecisionForRequest(decision, request) == nil) != want ||
+				(ValidateAuthorizationDecisionForProfile(decision, profile) == nil) != want {
+				t.Fatalf("PEP/schema/frozen evidence disagree for %s / %s", test.action, subjectType)
+			}
+		}
+	}
+}
+
 func TestAuthorizationProfileDiscoverySchemaPreservesDeclaredScopeAndShape(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AuthorizationProfileList")
 	base := currentAuthorizationProfileList(t)

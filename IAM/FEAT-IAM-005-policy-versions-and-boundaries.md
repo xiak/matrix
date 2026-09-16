@@ -159,6 +159,8 @@ policy_versions 增加无默认、必填的 contract_version，1只标识切换�
 
 相容性检查只证明两份已提供声明的语义约束，不认证注册、当前 producer、tenant 或资源归属，也不返回 Allow。PDP 必须另外验证当前身份、受信 current head、全部附件/边界及语句匹配；资源 ID 恰为 collection 不选 mode。PREFIX 仅适用 INSTANCE，不能因同 Action 另外支持集合而获得目录权限。历史 proof 仍按原冻结材料，不将该当前相容性检查用于重新授权历史事件。
 
+主体类型相容性由001的 `subjectTypes` 统一约束：评估器传入权威身份的类型，不接受请求方 selector；同一动作必须被当前与冻结声明同时支持。比较的是本次实际类型，不要求新旧完整集合相等，因此新增 ROLE 不破坏旧 USER 的解释，但也不能让旧 USER-only 版本对 ROLE 生效。此检查先于 Effect/资源/条件匹配，未知或不相容的旧 Deny 导致整体失败关闭。需新增主体能力时，原 Root 显式 Publish 新编译内容并 set-default；不得改写已封存 Profile/PolicyVersion 或自动移动默认。历史决定 proof 不重新执行当前主体检查。
+
 **增量验收。** 沿现有契约/authority、IAM HTTP/PG、Audit proof 和 authorityprocess 测试：新装编译种子、真实发布与显式默认切换、跨产品最小引用、篡改编译物/旧引用/未知字段、完整响应预算；新 head 增加动作/shape 不使旧 Allow 扩权且不跳过旧 Deny；条件/prefix/同ID三种模式、边界交集和旧 cursor 拒绝；发布与 head/default/附件变更的真实并发及 outbox 末尾失败回滚。明确固定 predecessor 的原 document/default/附件/决定及原 proof 保留，未知旧CUSTOMER和改写SYSTEM种子拒绝，Root自救或效果前preflight拒绝，重复迁移/重启不扩大权限。纯相容性测试不替代上述实际存储、PDP和PEP门禁。
 
 #### 条件首片：IAM 权威时间

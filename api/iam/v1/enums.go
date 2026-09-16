@@ -2,6 +2,11 @@ package iamv1
 
 type AccountStatus string
 type PrincipalType string
+
+// SubjectType describes authorization capability, not a stored principal. A
+// Role is an effective identity and never acquires a login/password by appearing
+// in a product declaration.
+type SubjectType string
 type PrincipalStatus string
 type SessionStatus string
 type Action string
@@ -105,6 +110,12 @@ const (
 const (
 	PrincipalUser           PrincipalType = "USER"
 	PrincipalServiceAccount PrincipalType = "SERVICE_ACCOUNT"
+)
+
+const (
+	SubjectUser           SubjectType = "USER"
+	SubjectServiceAccount SubjectType = "SERVICE_ACCOUNT"
+	SubjectRole           SubjectType = "ROLE"
 )
 
 const (
