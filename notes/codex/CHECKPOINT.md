@@ -10,6 +10,14 @@
   GitHub API verified exact Verification35136745680 completed/success:
   go, authority-process and node-process all succeeded. This is the rollback
   point, not full IAM, UI, capacity or release acceptance.
+- Required public-schema correction is pushed as
+  0567c8b2699521b137db0f8b69f17630c59f04fb. Exact Verification35139789639
+  was confirmed running; poll that run to terminal, do not infer success.
+  It fixes RoleListing capabilities to exactly9 and RoleAccess to10-266;
+  the prior 62a18 CI omitted these complete-response schema bounds. Existing
+  API tests reproduced both valid-response rejection and missing lower bounds,
+  then full API/generator race and deterministic generation passed. Do not
+  hand off 62a18 alone as a complete UI contract. No SQL/authority change.
 - Previous source-authority point 1ebab37aef4bce12b963f52d3919748a9d50d4c6 /
   Verification35123738141 all three success. Original R2 had incomplete ABA
   coverage; R3 fixed960416dd/35110913530 failed its aggregate timer. Do not

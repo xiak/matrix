@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1角色管理、R2同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示及管理员会话管理后端，已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`通过本地真库/并发/保留数据/独立进程/全仓检查和三项独立CI；包含原`1ebab37a`的来源代际/身份锁修复。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。UX/UI、容量和发布未完成，整体006未验收。
+- 状态：R1角色管理、R2同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示及管理员会话管理后端，已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`通过本地真库/并发/保留数据/独立进程/全仓检查和三项独立CI；包含原`1ebab37a`的来源代际/身份锁修复。公开schema数量边界修正固定`0567c8b2699521b137db0f8b69f17630c59f04fb`已过本地契约门禁，其独立CI待确认。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。UX/UI、容量和发布未完成，整体006未验收。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -305,9 +305,9 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 - 现有实际固定R2 executable保留数据门禁验证新目录的初始水位及重放不变；新Profile注册不改旧SYSTEM默认或自动补管理权限。原root显式发布/关联当前TENANT策略后才可读历史目录；旧version1当前业务仍关闭，新version2可访问PaaS并经管理员终止。原receipt、发行、Operation、私证及Audit canonical/hash不变，不声称跨release-profile升级。
 - 干净候选源码的Audit双authority/历史分区7.185秒、Audit HTTP3.610秒、固定IAM21/R1/R2与独立双IAM/PaaS/Audit进程110.795秒、PaaS数据4.804秒通过。跨副本撤销/重放后，IAM和PaaS下一请求拒绝旧ROLE；原操作者退出或授权变化后，历史outbox投递、去重、防伪和重启仍正确。最终准确Git树`a455eedc59429bc97eb3b8654588663693ea7ea6`通过全仓race/架构/vet、模块校验、两次契约生成字节一致及Linux构建。实现固定`62a18a48168e87a4158b95eba41427b445ed10d1`已推送；GitHub API核实[Verification35136745680](https://github.com/xiak/matrix/actions/runs/35136745680)精确SHA，go、authority-process、node-process三项全部completed/success；真库/历史/独立进程步骤实际执行成功，不以跳过替代验收。
 
-### 来源授权代际本地证据
-
 2026-09-17的UI固定对象核对发现`62a18a48`生成的RoleListing/RoleAccess仍限8/265项。现有schema测试新增通过Go语义校验的完整目录和256附件详情，稳定复现合法9/266项被schema拒绝，以及缺少必需能力未被数量下限关闭。修正唯一生成器后，完整正样、缺项和超界负样全部通过；API/生成器race门禁13.843/1.264秒，两次生成字节一致。未变更运行权限、SQL或消费者parser；原CI未覆盖这个响应上限，修正片另需独立CI。
+
+### 来源授权代际本地证据
 
 2026-09-17，本任务独立PG18.4（1CPU/768MiB/PIDs128/64连接），Go2/512MiB、真库race/p1串行。每次重跑使用全新专属数据库；以下区分聚焦证据与最终组合，不据本地结果宣称独立CI或整个006完成。
 
