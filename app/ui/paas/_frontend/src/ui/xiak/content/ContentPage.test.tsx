@@ -222,6 +222,18 @@ describe("ContentPage context heading", () => {
 });
 
 describe("ContentPage transition", () => {
+  it("can expose cached destination structure without enabling it before route commit", () => {
+    const body = (inactive: boolean) => <ContentPage.Body inactive={inactive} transitionKey="groups"><button>Manage group</button></ContentPage.Body>;
+    const view = render(body(true));
+    const button = screen.getByRole("button", { name: "Manage group" });
+    expect(button.closest("[inert]")).toBeTruthy();
+    expect(button.closest("[hidden]")).toBeNull();
+    expect(button.closest('[aria-hidden="true"]')).toBeNull();
+    view.rerender(body(false));
+    expect(screen.getByRole("button", { name: "Manage group" })).toBe(button);
+    expect(button.closest("[inert]")).toBeNull();
+  });
+
   it("never reveals outgoing content while waiting for regional loading feedback", () => {
     const body = (loading?: React.ReactNode) => <ContentPage.Body transitionKey="resources" pending loading={loading}><input aria-label="Filter resources" /></ContentPage.Body>;
     const view = render(body());

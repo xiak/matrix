@@ -77,7 +77,7 @@ import styles from "./ConsoleShellRenderer.module.css";
 import { useServiceDirectory } from "./ServiceDirectory";
 import { serviceForSection, type ServiceId } from "../scenes/serviceDirectory";
 import { ConsoleNavigationProvider, useConsoleNavigation } from "../routes/ConsoleNavigation";
-import { buildConsoleFrame } from "../scenes/buildConsoleScene";
+import { buildConsoleFrame, projectCachedConsoleContent } from "../scenes/buildConsoleScene";
 
 function pageSkeletonLayout({ section, view }: ControlPlaneRouteSelection): PageSkeletonLayout {
   if (section === "overview" || (!view && ["devops", "observability", "logs"].includes(section))) return "dashboard";
@@ -219,6 +219,15 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const destinationFrame = useMemo(() => pendingSelection ? buildConsoleFrame(pendingSelection, experience) : null, [pendingSelection, experience]);
   const committedFrame = scene ?? staticFrame;
   const frame = destinationFrame ?? committedFrame;
+  const pendingContent = useMemo(
+    () => pendingSelection && scene ? projectCachedConsoleContent(scene, pendingSelection) : null,
+    [pendingSelection, scene]
+  );
+  const content = pendingContent ?? scene?.content;
+  const contentTransitionPending = Boolean(pendingSelection && !pendingContent);
+  const contentTransitionKey = pendingContent && pendingSelection
+    ? consoleRouteHref(pendingSelection)
+    : navigation.currentHref;
   const sidebarPanel = useRef<HTMLDivElement>(null);
   const sidebarTrigger = useRef<HTMLButtonElement>(null);
   const sidebarCloseButton = useRef<HTMLButtonElement>(null);
@@ -451,14 +460,14 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
                   leading={<Button aria-controls="console-product-navigation" aria-expanded={sidebarOverlayOpen} aria-label={t("openNavigation")} className={styles.mobileMenuButton} onClick={openSidebar} ref={sidebarTrigger} iconOnly size="small" variant="ghost"><Menu aria-hidden="true" /></Button>}
                   trailing={workspaceAction && WorkspaceActionIcon ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={{ id: "workspace", label: t(`workspaceActions.${scene!.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`), icon: workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />, disabled: Boolean(pendingSelection), controls: "console-workspace", expanded: workspaceVisible, onSelect: toggleWorkspaceWithFocus, variant: workspaceVisible || !workspaceAction.primary ? "secondary" : "primary" }} /> : undefined}
                   progress={!pendingSelection && controlPlane.loading && frame.section !== "access" ? <Progress aria-label={loadingLabel} className={styles.navigationProgress} /> : null} /></Suspense>
-                <ContentPage.Body transitionKey={navigation.currentHref} pending={Boolean(pendingSelection)} loading={pendingSelection ? <div className={styles.pageCanvas}><PageSkeleton key={navigation.pendingHref} label={loadingLabel} layout={pageSkeletonLayout(pendingSelection)} /></div> : undefined}>
+                <ContentPage.Body inactive={Boolean(pendingContent)} transitionKey={contentTransitionKey} pending={contentTransitionPending} loading={contentTransitionPending && pendingSelection ? <div className={styles.pageCanvas}><PageSkeleton key={navigation.pendingHref} label={loadingLabel} layout={pageSkeletonLayout(pendingSelection)} /></div> : undefined}>
                   <div aria-busy={controlPlane.loading && frame.section !== "access"} className={styles.pageCanvas}>
                     {session.error ? <Alert className={styles.feedback} status="danger">{authErrors(session.error)}</Alert> : null}
                     {controlPlane.error ? scene ? <Alert className={styles.feedback} status="danger">{t(`errors.${controlPlane.error}`)}</Alert> : <div role="alert"><EmptyState title={t("loadFailed")} description={t(`errors.${controlPlane.error}`)} icon={<ServerCog />} action={<div className={styles.recoveryActions}>
                       <Button onClick={() => void controlPlane.reload()} variant="secondary"><RefreshCcw aria-hidden="true" />{t("retry")}</Button>
                       <Button asChild variant="ghost"><Link href="/console/access/">{t("openAccess")}</Link></Button>
                     </div>} /></div> : null}
-                    {scene ? <ConsoleContentRenderer scene={scene.content} scope={{ regionId }} /> : !controlPlane.error ? <PageSkeleton label={loadingLabel} layout={pageSkeletonLayout(navigation.selection)} /> : null}
+                    {content ? <ConsoleContentRenderer pendingHref={pendingContent ? navigation.pendingHref : null} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <PageSkeleton label={loadingLabel} layout={pageSkeletonLayout(navigation.selection)} /> : null}
                   </div>
                 </ContentPage.Body>
               </ContentPage>

@@ -4,12 +4,13 @@ import userEvent from "@testing-library/user-event";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionProvider } from "@/features/auth/application/SessionProvider";
-import type { IamRepository } from "@/features/auth/repositories/iamRepository";
+import type { AccountRepository, IamRepository } from "@/features/auth/repositories/iamRepository";
+import { previewAccountRepository, previewIamRepository } from "@/features/auth/repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import type { ControlPlaneSnapshot } from "../domain/resources";
 import type { ExperienceSnapshot } from "../domain/experience";
-import type { ConsoleSection } from "../domain/selection";
+import { consoleRouteHref, type ConsoleSection, type ServiceView } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import { previewExperienceSnapshot } from "../repositories/previewExperienceSnapshot";
 import { ConsoleShellRenderer } from "./ConsoleShellRenderer";
@@ -90,13 +91,19 @@ async function renderConsole({
   openWorkspace = false,
   load = vi.fn().mockResolvedValue(snapshot),
   logout = vi.fn().mockResolvedValue(undefined),
+  accountRepository,
+  iamRepository,
+  view: initialView,
   heldRoute
 }: {
   section?: ConsoleSection;
+  view?: ServiceView;
   experience?: ExperienceSnapshot;
   openWorkspace?: boolean;
   load?: ControlPlaneRepository["load"];
   logout?: IamRepository["logout"];
+  accountRepository?: AccountRepository;
+  iamRepository?: IamRepository;
   heldRoute?: { href: string; ready: boolean; promise: Promise<void> };
 } = {}) {
   const repository: ControlPlaneRepository = {
@@ -105,7 +112,7 @@ async function renderConsole({
     activateQuota: vi.fn(),
     createInstallation: vi.fn()
   };
-  const iam: IamRepository = {
+  const iam: IamRepository = iamRepository ?? {
     async login() {
       return {
         credential: "renderer-test-memory-only-session",
@@ -125,10 +132,14 @@ async function renderConsole({
   };
   const user = userEvent.setup();
   function RoutedPage() {
-    const [href, setHref] = useState(`/console/${section === "overview" ? "" : section + "/"}`);
-    if (heldRoute) navigation.push.mockImplementation((target: string) => setHref(target));
+    const [href, setHref] = useState(consoleRouteHref({ section, view: initialView }));
+    if (heldRoute) navigation.push.mockImplementation((target: string) => {
+      const url = new URL(target, "https://matrix.invalid");
+      navigation.query = url.search.slice(1);
+      setHref(target);
+    });
     if (heldRoute && href === heldRoute.href && !heldRoute.ready) throw heldRoute.promise;
-    return <ConsoleShellRenderer experience={experience} repository={repository} selection={parseControlPlanePathname(href)} />;
+    return <ConsoleShellRenderer accountRepository={accountRepository} experience={experience} repository={repository} selection={parseControlPlanePathname(new URL(href, "https://matrix.invalid").pathname)} />;
   }
   const view = render(
     <LocaleProvider><SessionProvider repository={iam}>
@@ -137,7 +148,7 @@ async function renderConsole({
   );
   await user.type(screen.getByLabelText("密码", { exact: true }), "renderer-test-password");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
-  await waitFor(() => expect(load).toHaveBeenCalled());
+  if (section !== "access") await waitFor(() => expect(load).toHaveBeenCalled());
   if (openWorkspace) await user.click(await screen.findByRole("button", { name: section === "quotas" ? "激活配额" : section === "installations" ? "安装服务" : "查看平台状态" }));
   const loginDestination = navigation.replace.mock.calls.at(-1)?.[0];
   navigation.replace.mockClear();
@@ -188,6 +199,71 @@ describe("ConsoleShellRenderer", () => {
     expect(oldResource.isConnected).toBe(false);
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.getByLabelText("全局导航")).toBe(header);
+  });
+
+  it("renders a cached IAM destination immediately and reserves loading feedback for its data regions", async () => {
+    let release!: () => void;
+    const heldRoute = { href: "/console/access/groups/", ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };
+    const accountRepository: AccountRepository = {
+      ...previewAccountRepository,
+      currentIdentity: vi.fn(previewAccountRepository.currentIdentity),
+      listUsers: vi.fn(previewAccountRepository.listUsers),
+      listGroups: vi.fn(previewAccountRepository.listGroups)
+    };
+    const { user } = await renderConsole({
+      accountRepository,
+      experience: previewExperienceSnapshot,
+      heldRoute,
+      iamRepository: previewIamRepository,
+      section: "access",
+      view: "users"
+    });
+    const users = await screen.findByRole("table", { name: "租户用户列表" });
+    const menu = screen.getByRole("navigation", { name: "控制台导航" });
+
+    await user.click(within(menu).getByRole("link", { name: "用户组" }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "用户组" })).toBeTruthy();
+    expect(users.isConnected).toBe(false);
+    expect(screen.queryByText("正在打开用户组…")).toBeNull();
+    const groups = await screen.findByRole("table", { name: "用户组" });
+    expect(groups.closest("[inert]")).toBeTruthy();
+    expect(groups.closest("[hidden]")).toBeNull();
+    expect(accountRepository.currentIdentity).toHaveBeenCalledTimes(1);
+
+    await act(async () => { heldRoute.ready = true; release(); });
+    await waitFor(() => expect(groups.closest("[inert]")).toBeNull());
+    expect(groups.isConnected).toBe(true);
+    expect(accountRepository.currentIdentity).toHaveBeenCalledTimes(1);
+  });
+
+  it("projects a pending IAM query into the correct content-area workflow", async () => {
+    let release!: () => void;
+    const heldRoute = { href: "/console/access/create-policy/?method=json", ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };
+    const { user } = await renderConsole({
+      accountRepository: previewAccountRepository,
+      experience: previewExperienceSnapshot,
+      heldRoute,
+      iamRepository: previewIamRepository,
+      section: "access",
+      view: "policies"
+    });
+    const policies = await screen.findByRole("table", { name: "策略" });
+    await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
+    const methods = screen.getByRole("dialog", { name: "选择创建策略方式" });
+    await user.click(within(methods).getByRole("button", { name: /^按策略语法创建/ }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "新建策略" })).toBeTruthy();
+    const jsonTab = screen.getByRole("tab", { name: "JSON 编辑" });
+    expect(jsonTab.getAttribute("aria-selected")).toBe("true");
+    const editor = screen.getByRole("textbox", { name: "策略内容" });
+    expect(editor.closest("[inert]")).toBeTruthy();
+    expect(policies.isConnected).toBe(false);
+
+    await act(async () => { heldRoute.ready = true; release(); });
+    await waitFor(() => expect(editor.closest("[inert]")).toBeNull());
+    expect(editor.isConnected).toBe(true);
+    expect(screen.getByRole("tab", { name: "JSON 编辑" }).getAttribute("aria-selected")).toBe("true");
   });
 
   it("retains the real header, navigation and title while first-load data is pending and after it arrives", async () => {

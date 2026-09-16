@@ -118,8 +118,9 @@ function Commands({ label, primary, secondary = [], selection, primaryRef, focus
   </div>;
 }
 
-function Body({ children, className, pending = false, loading, transitionKey, ...props }: ComponentPropsWithoutRef<"div"> & {
+function Body({ children, className, inactive = false, pending = false, loading, transitionKey, ...props }: ComponentPropsWithoutRef<"div"> & {
   transitionKey?: string;
+  inactive?: boolean;
   pending?: boolean;
   loading?: ReactNode;
 }) {
@@ -128,7 +129,7 @@ function Body({ children, className, pending = false, loading, transitionKey, ..
   const viewport = useRef<HTMLDivElement>(null);
   const positionKey = transitionKey === undefined ? undefined : scrollKey ? `${transitionKey}#${scrollKey}` : transitionKey;
   useLayoutEffect(() => { if (!pending && positionKey !== undefined && viewport.current) viewport.current.scrollTop = positions?.get(positionKey) ?? 0; }, [pending, positionKey, positions]);
-  if (transitionKey === undefined) return <div className={classNames(styles.body, className)} {...props}>{children}</div>;
+  if (transitionKey === undefined) return <div {...props} aria-busy={inactive || props["aria-busy"]} className={classNames(styles.body, className)} inert={inactive || props.inert}>{children}</div>;
   // The viewport is a stable paint/scroll boundary. Route identity belongs to
   // its inner content so a commit resets feature state without flashing a new
   // page-sized background layer.
@@ -141,8 +142,8 @@ function Body({ children, className, pending = false, loading, transitionKey, ..
         if (positions.size > 64) positions.delete(positions.keys().next().value!);
       }
       props.onScroll?.(event);
-    }} aria-busy={pending || props["aria-busy"]} className={classNames(styles.body, className)}>
-      <div aria-hidden={pending || undefined} className={styles.content} hidden={pending} inert={pending} key={transitionKey}>{children}</div>
+    }} aria-busy={pending || inactive || props["aria-busy"]} className={classNames(styles.body, className)}>
+      <div aria-hidden={pending || undefined} className={styles.content} hidden={pending} inert={pending || inactive} key={transitionKey}>{children}</div>
     </div>
     {showLoading ? <div className={classNames(styles.body, styles.pending)}>{loading}</div> : null}
   </div>;

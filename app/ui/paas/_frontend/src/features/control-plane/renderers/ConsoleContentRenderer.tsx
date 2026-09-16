@@ -231,9 +231,10 @@ function RegionContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: 
   );
 }
 
-function AccessContent({ view }: { view: Extract<ConsoleContentScene, { kind: "access" }>["view"] }) {
+function AccessContent({ pendingHref, view }: { pendingHref?: string | null; view: Extract<ConsoleContentScene, { kind: "access" }>["view"] }) {
   const { navigate } = useConsoleNavigation();
-  const params = useSearchParams();
+  const currentParams = useSearchParams();
+  const params = pendingHref ? new URL(pendingHref, "https://matrix.invalid").searchParams : currentParams;
   const entityId = params.get("id") ?? undefined;
   const policyMethod = view === "create-policy" ? params.get("method") ?? undefined : undefined;
   return <AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} onNavigate={(next, id, method) => {
@@ -245,15 +246,17 @@ function AccessContent({ view }: { view: Extract<ConsoleContentScene, { kind: "a
 }
 
 export function ConsoleContentRenderer({
+  pendingHref,
   scene,
   scope
 }: {
+  pendingHref?: string | null;
   scene: ConsoleContentScene;
   scope?: ResourceScope;
 }) {
   const t = useTranslations("AccountAccess");
   if (scene.kind === "logs") return <LogServiceRenderer regionId={scope?.regionId} scene={scene} />;
-  if (scene.kind === "access") return <Suspense fallback={<PageSkeleton layout="access" label={t("loading")} />}><AccessContent view={scene.view} /></Suspense>;
+  if (scene.kind === "access") return <Suspense fallback={<PageSkeleton layout="access" label={t("loading")} />}><AccessContent pendingHref={pendingHref} view={scene.view} /></Suspense>;
   if (scene.kind === "messages") return <MessageCenterRenderer scene={scene} />;
   if (
     scene.kind === "cloud-overview" ||
