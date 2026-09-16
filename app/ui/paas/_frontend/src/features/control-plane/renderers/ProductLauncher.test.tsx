@@ -17,14 +17,14 @@ vi.mock("next/link", () => ({
   }}>{children}</a>
 }));
 
-function ProductLauncherHarness() {
+function ProductLauncherHarness({ onPrepare = () => undefined }: { onPrepare?: () => void | Promise<void> }) {
   const [open, setOpen] = useState(false);
-  return <LocaleProvider><ProductLauncher onOpenChange={setOpen} open={open} /><button type="button">后续操作</button></LocaleProvider>;
+  return <LocaleProvider><ProductLauncher onOpenChange={setOpen} onPrepare={onPrepare} open={open} /><button type="button">后续操作</button></LocaleProvider>;
 }
 
-async function openDirectory() {
+async function openDirectory(onPrepare?: () => void | Promise<void>) {
   const user = userEvent.setup();
-  render(<ProductLauncherHarness />);
+  render(<ProductLauncherHarness onPrepare={onPrepare} />);
   const trigger = screen.getByRole("button", { name: "打开产品与服务" });
   await user.click(trigger);
   return { user, trigger, search: screen.getByRole("searchbox", { name: "搜索产品与服务" }) };
@@ -34,7 +34,9 @@ afterEach(() => { cleanup(); localStorage.clear(); useConsoleUiStore.getState().
 
 describe("ProductLauncher", () => {
   it("opens a categorized modal directory with search focus and restores its trigger on explicit close", async () => {
-    const { user, trigger, search } = await openDirectory();
+    const prepare = vi.fn();
+    const { user, trigger, search } = await openDirectory(prepare);
+    expect(prepare).toHaveBeenCalledTimes(1);
     expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
     expect(trigger.getAttribute("aria-controls")).toBe("global-product-launcher");
     expect(screen.getByRole("dialog", { name: "云产品入口" })).toBeTruthy();
@@ -46,6 +48,7 @@ describe("ProductLauncher", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(trigger);
     await user.click(trigger);
+    expect(prepare).toHaveBeenCalledTimes(2);
     expect(document.activeElement).toBe(screen.getByRole("searchbox"));
   });
 

@@ -57,8 +57,7 @@ import {
   Sider,
   PageSkeleton,
   Progress,
-  useLeaveConfirmation,
-  type PageSkeletonLayout
+  useLeaveConfirmation
 } from "@ui/xiak";
 import { ControlPlaneProvider, useControlPlane } from "../application/ControlPlaneProvider";
 import { useConsoleUiStore } from "../application/consoleUiStore";
@@ -71,6 +70,7 @@ import type {
   RailIconKind
 } from "../scenes/consoleScene";
 import { ConsoleHeader } from "./ConsoleHeader";
+import { ConsoleContentLoadingRenderer } from "./ConsoleContentLoadingRenderer";
 import { ConsoleContentRenderer } from "./ConsoleContentRenderer";
 import { ConsoleWorkspaceRenderer } from "./ConsoleWorkspaceRenderer";
 import styles from "./ConsoleShellRenderer.module.css";
@@ -78,14 +78,6 @@ import { useServiceDirectory } from "./ServiceDirectory";
 import { serviceForSection, type ServiceId } from "../scenes/serviceDirectory";
 import { ConsoleNavigationProvider, useConsoleNavigation } from "../routes/ConsoleNavigation";
 import { buildConsoleFrame } from "../scenes/buildConsoleScene";
-
-function pageSkeletonLayout({ section, view }: ControlPlaneRouteSelection): PageSkeletonLayout {
-  if (section === "overview" || (!view && ["devops", "observability", "logs"].includes(section))) return "dashboard";
-  if (section === "access") return !view ? "dashboard" : view === "settings" || view === "user-sso" ? "access" : "table";
-  if (["regions", "quotas", "catalog"].includes(section) || view === "environments") return "cards";
-  if (section === "operations" || section === "messages" || view === "alerts" || view === "health") return "list";
-  return "table";
-}
 
 const railIcons = {
   overview: LayoutDashboard,
@@ -213,6 +205,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const session = useSession();
   const controlPlane = useControlPlane();
   const projectScene = controlPlane.projectScene;
+  const prepareControlPlane = controlPlane.prepare;
   const accountCapabilities = useAccountCapabilities();
   const scene = controlPlane.scene;
   const pendingSelection = navigation.pendingSelection;
@@ -276,6 +269,13 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
     closeSidebar();
     closeWorkspace();
   }, [navigation.pendingHref, closeSidebar, closeWorkspace]);
+
+  // Product-directory opening normally starts this read first. This second
+  // boundary also covers favorites, global search and direct service links.
+  useEffect(() => {
+    if (!pendingSelection || pendingSelection.section === "access") return;
+    void prepareControlPlane();
+  }, [pendingSelection, prepareControlPlane]);
 
   useEffect(() => {
     if (sidebarOverlayOpen) sidebarCloseButton.current?.focus();
@@ -390,6 +390,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
           <ConsoleHeader
             identity={headerIdentity}
             onLogout={headerLogout}
+            onPrepareServices={prepareControlPlane}
             revoking={session.phase === "revoking"}
             scene={committedFrame}
             productName={frame.preview ? headerProductName : productName}
@@ -462,14 +463,14 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
                   leading={<Button aria-controls="console-product-navigation" aria-expanded={sidebarOverlayOpen} aria-label={t("openNavigation")} className={styles.mobileMenuButton} onClick={openSidebar} ref={sidebarTrigger} iconOnly size="small" variant="ghost"><Menu aria-hidden="true" /></Button>}
                   trailing={workspaceAction && WorkspaceActionIcon ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={{ id: "workspace", label: t(`workspaceActions.${scene!.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`), icon: workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />, disabled: Boolean(pendingSelection), controls: "console-workspace", expanded: workspaceVisible, onSelect: toggleWorkspaceWithFocus, variant: workspaceVisible || !workspaceAction.primary ? "secondary" : "primary" }} /> : undefined}
                   progress={!pendingSelection && controlPlane.loading && frame.section !== "access" ? <Progress aria-label={loadingLabel} className={styles.navigationProgress} /> : null} /></Suspense>
-                <ContentPage.Body inactive={Boolean(pendingContent)} transitionKey={contentTransitionKey} pending={contentTransitionPending} loading={contentTransitionPending && pendingSelection ? <div className={styles.pageCanvas}><PageSkeleton key={navigation.pendingHref} label={loadingLabel} layout={pageSkeletonLayout(pendingSelection)} /></div> : undefined}>
+                <ContentPage.Body inactive={Boolean(pendingContent)} transitionKey={contentTransitionKey} pending={contentTransitionPending} loading={contentTransitionPending && pendingSelection ? <div className={styles.pageCanvas}><ConsoleContentLoadingRenderer key={navigation.pendingHref} label={loadingLabel} selection={pendingSelection} /></div> : undefined}>
                   <div aria-busy={controlPlane.loading && frame.section !== "access"} className={styles.pageCanvas}>
                     {session.error ? <Alert className={styles.feedback} status="danger">{authErrors(session.error)}</Alert> : null}
                     {controlPlane.error ? scene ? <Alert className={styles.feedback} status="danger">{t(`errors.${controlPlane.error}`)}</Alert> : <div role="alert"><EmptyState title={t("loadFailed")} description={t(`errors.${controlPlane.error}`)} icon={<ServerCog />} action={<div className={styles.recoveryActions}>
                       <Button onClick={() => void controlPlane.reload()} variant="secondary"><RefreshCcw aria-hidden="true" />{t("retry")}</Button>
                       <Button asChild variant="ghost"><Link href="/console/access/">{t("openAccess")}</Link></Button>
                     </div>} /></div> : null}
-                    {content ? <ConsoleContentRenderer pendingHref={pendingContent ? navigation.pendingHref : null} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <PageSkeleton label={loadingLabel} layout={pageSkeletonLayout(navigation.selection)} /> : null}
+                    {content ? <ConsoleContentRenderer pendingHref={pendingContent ? navigation.pendingHref : null} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer label={loadingLabel} selection={navigation.selection} /> : null}
                   </div>
                 </ContentPage.Body>
               </ContentPage>

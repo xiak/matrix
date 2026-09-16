@@ -68,7 +68,7 @@ function DraftProbe() {
 
 const headerProps: React.ComponentProps<typeof ConsoleHeader> = {
   scene: { preview: true, search: [], scope: null, activeOperationCount: 0, messages: [] },
-  productName: "Console", scope: { regionId: "all", onRegionChange() {} }, identity: { accountType: "Primary", loginName: "preview", principalId: "preview", tenant: { name: "Preview" } }, onLogout() {}, revoking: false
+  productName: "Console", scope: { regionId: "all", onRegionChange() {} }, identity: { accountType: "Primary", loginName: "preview", principalId: "preview", tenant: { name: "Preview" } }, onLogout() {}, onPrepareServices() {}, revoking: false
 };
 
 function Harness({ initialHref = "/console/", withDraft = false, withHeader = false }: { initialHref?: string; withDraft?: boolean; withHeader?: boolean }) {

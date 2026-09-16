@@ -25,6 +25,7 @@ type ConsoleHeaderProps = Readonly<{
   productName: string;
   identity: AccountIdentity;
   onLogout(): void;
+  onPrepareServices(): void | Promise<void>;
   revoking: boolean;
 }>;
 
@@ -45,7 +46,7 @@ function RouteProgress() {
   return <Progress className={styles.routeProgress} aria-label={t("openingPage", { name: navigation(`items.${pendingSelection.view ?? pendingSelection.section}.label`) })} />;
 }
 
-export const ConsoleHeader = memo(function ConsoleHeader({ scene, productName, scope, identity, onLogout, revoking }: ConsoleHeaderProps) {
+export const ConsoleHeader = memo(function ConsoleHeader({ scene, productName, scope, identity, onLogout, onPrepareServices, revoking }: ConsoleHeaderProps) {
   const t = useTranslations("Console");
   const navigation = useTranslations("ServiceNavigation");
   const resourceKinds = useTranslations("GlobalSearch.resourceKinds");
@@ -70,7 +71,7 @@ export const ConsoleHeader = memo(function ConsoleHeader({ scene, productName, s
         <ConsoleBrand inactive={catalogOpen} />
         <span aria-hidden="true" className={styles.divider} />
         {scene.preview ? (
-          <ProductLauncher onOpenChange={openPanel("products")} open={activePanel === "products"} />
+          <ProductLauncher onOpenChange={openPanel("products")} onPrepare={onPrepareServices} open={activePanel === "products"} />
         ) : <div className={styles.productContext}><span>{t("console")}</span><ChevronRight aria-hidden="true" /><strong>{productName}</strong></div>}
       </div>
 

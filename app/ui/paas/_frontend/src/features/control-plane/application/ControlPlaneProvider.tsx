@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode
 } from "react";
@@ -20,7 +21,7 @@ import type {
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepository";
-import { buildAccessConsoleScene, buildConsoleScene } from "../scenes/buildConsoleScene";
+import { buildAccessConsoleScene, buildConsoleScene, buildExperienceConsoleScene } from "../scenes/buildConsoleScene";
 import type { ConsoleScene } from "../scenes/consoleScene";
 
 type ControlPlaneError = "expired" | "forbidden" | "unavailable";
@@ -30,6 +31,7 @@ type MutationKind = "quota" | "installation" | null;
 type ControlPlaneContextValue = {
   scene: ConsoleScene | null;
   projectScene(selection: ControlPlaneRouteSelection): ConsoleScene | null;
+  prepare(): Promise<void>;
   loading: boolean;
   error: ControlPlaneError | null;
   mutation: MutationKind;
@@ -64,51 +66,86 @@ export function ControlPlaneProvider({
   const credential = useSessionCredential();
   const isAccess = selection.section === "access";
   const [snapshot, setSnapshot] = useState<ControlPlaneSnapshot | null>(null);
+  const [snapshotOwner, setSnapshotOwner] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ControlPlaneError | null>(null);
   const [mutation, setMutation] = useState<MutationKind>(null);
+  const snapshotRef = useRef<ControlPlaneSnapshot | null>(null);
+  const snapshotOwnerRef = useRef<string | null>(null);
+  const inFlight = useRef<Promise<ControlPlaneSnapshot> | null>(null);
+  const inFlightOwner = useRef<string | null>(null);
+  const loadRevision = useRef(0);
 
-  const reload = useCallback(async () => {
+  useEffect(() => { snapshotRef.current = snapshot; }, [snapshot]);
+
+  const loadSnapshot = useCallback(async (force: boolean) => {
+    // Keep both route effects and pointer handlers responsive; state changes
+    // belong to the asynchronous provider read, never the caller's render.
+    await Promise.resolve();
     if (!credential) {
+      loadRevision.current += 1;
+      snapshotRef.current = null;
+      snapshotOwnerRef.current = null;
+      inFlight.current = null;
+      inFlightOwner.current = null;
       setSnapshot(null);
+      setSnapshotOwner(null);
       setLoading(false);
       return;
     }
+    if (!force && snapshotOwnerRef.current === credential && snapshotRef.current) return;
+    if (!force && inFlightOwner.current === credential && inFlight.current) {
+      await inFlight.current.catch(() => undefined);
+      return;
+    }
+    const revision = ++loadRevision.current;
     setLoading(true);
     setError(null);
+    const request = repository.load(credential);
+    inFlight.current = request;
+    inFlightOwner.current = credential;
     try {
-      setSnapshot(await repository.load(credential));
+      const loaded = await request;
+      if (revision !== loadRevision.current) return;
+      snapshotRef.current = loaded;
+      snapshotOwnerRef.current = credential;
+      setSnapshot(loaded);
+      setSnapshotOwner(credential);
+      setError(null);
     } catch (loadError) {
+      if (revision !== loadRevision.current) return;
+      snapshotRef.current = null;
+      snapshotOwnerRef.current = null;
       setSnapshot(null);
+      setSnapshotOwner(null);
       setError(loadMessage(loadError));
     } finally {
-      setLoading(false);
+      if (revision === loadRevision.current) {
+        inFlight.current = null;
+        inFlightOwner.current = null;
+        setLoading(false);
+      }
     }
   }, [credential, repository]);
+
+  const prepare = useCallback(() => loadSnapshot(false), [loadSnapshot]);
+
+  const reload = useCallback(async () => {
+    await loadSnapshot(true);
+  }, [loadSnapshot]);
 
   useEffect(() => {
     if (!credential || isAccess) return;
     let active = true;
-    repository.load(credential).then(
-      (loaded) => {
-        if (!active) return;
-        setSnapshot(loaded);
-        setError(null);
-      },
-      (loadError: unknown) => {
-        if (!active) return;
-        setSnapshot(null);
-        setError(loadMessage(loadError));
-      }
-    ).finally(() => {
-      if (active) setLoading(false);
-    });
+    queueMicrotask(() => { if (active) void prepare(); });
     return () => { active = false; };
-  }, [credential, isAccess, repository]);
+  }, [credential, isAccess, prepare]);
+
+  const ownedSnapshot = snapshotOwner === credential ? snapshot : null;
 
   useEffect(() => {
     if (!credential || isAccess) return;
-    const pending = snapshot?.installations.filter(
+    const pending = ownedSnapshot?.installations.filter(
       (item) => item.phase === "PENDING" || item.phase === "PROVISIONING"
     ) ?? [];
     if (pending.length === 0) return;
@@ -130,7 +167,12 @@ export function ControlPlaneProvider({
             return;
           }
           const refreshed = await repository.load(credential);
-          if (active) setSnapshot(refreshed);
+          if (active) {
+            snapshotRef.current = refreshed;
+            snapshotOwnerRef.current = credential;
+            setSnapshot(refreshed);
+            setSnapshotOwner(credential);
+          }
         } catch (pollError: unknown) {
           if (active) setError(loadMessage(pollError));
         }
@@ -140,7 +182,7 @@ export function ControlPlaneProvider({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [credential, isAccess, repository, snapshot]);
+  }, [credential, isAccess, ownedSnapshot, repository]);
 
   const activateQuota = useCallback(async (command: ActivateQuotaCommand) => {
     if (!credential) return false;
@@ -182,14 +224,17 @@ export function ControlPlaneProvider({
 
   // The repository snapshot is product-wide. A route transition may project a
   // destination from that already-authoritative cache without issuing another
-  // read. A missing snapshot remains missing; IAM never triggers a PaaS read.
+  // read. Preview-only products can also project from their own fixed snapshot;
+  // managed-service products remain unavailable until prepare() completes.
   const projectScene = useCallback((target: ControlPlaneRouteSelection): ConsoleScene | null => (
     target.section === "access"
       ? buildAccessConsoleScene(experience, target.view)
-      : snapshot
-        ? buildConsoleScene(target.section, snapshot, experience, target.view)
-        : null
-  ), [experience, snapshot]);
+      : ownedSnapshot
+        ? buildConsoleScene(target.section, ownedSnapshot, experience, target.view)
+        : experience
+          ? buildExperienceConsoleScene(target, experience)
+          : null
+  ), [experience, ownedSnapshot]);
   const scene = useMemo(
     () => projectScene({ section: selection.section, view: selection.view }),
     [projectScene, selection.section, selection.view]
@@ -197,13 +242,14 @@ export function ControlPlaneProvider({
   const value = useMemo<ControlPlaneContextValue>(() => ({
     scene,
     projectScene,
+    prepare,
     loading,
     error: isAccess ? null : error,
     mutation,
     reload,
     activateQuota,
     createInstallation
-  }), [activateQuota, createInstallation, error, isAccess, loading, mutation, projectScene, reload, scene]);
+  }), [activateQuota, createInstallation, error, isAccess, loading, mutation, prepare, projectScene, reload, scene]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

@@ -301,11 +301,12 @@ function legacyContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot):
   };
 }
 
-function experienceContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot, experience: ExperienceSnapshot): ConsoleContentScene | null {
+function experienceContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot | undefined, experience: ExperienceSnapshot): ConsoleContentScene | null {
   const resources = resourceScenes(experience);
   const operations = operationScenes(experience);
   const alerts = alertScenes(experience);
   if (section === "overview") {
+    if (!snapshot) return null;
     const healthy = experience.resources.filter((item) => item.state === "HEALTHY" || item.state === "RUNNING").length;
     const firing = experience.alerts.filter((item) => item.state === "FIRING").length;
     const running = experience.operations.filter((item) => item.state === "RUNNING").length;
@@ -358,6 +359,25 @@ function experienceContent(section: ConsoleSection, snapshot: ControlPlaneSnapsh
     };
   }
   return null;
+}
+
+// Preview-owned product data is already authoritative for these workspaces.
+// Project it without waiting for the unrelated managed-service snapshot. The
+// database catalog, quotas, installations and regions still fail closed until
+// their owning provider has returned real data.
+export function buildExperienceConsoleScene(
+  { section, view }: ControlPlaneRouteSelection,
+  experience: ExperienceSnapshot
+): ConsoleScene | null {
+  if (section === "access") return buildAccessConsoleScene(experience, view);
+  const content = experienceContent(section, undefined, experience);
+  if (!content) return null;
+  if (content.kind === "devops" || content.kind === "observability" || content.kind === "logs") content.view = view;
+  return {
+    ...buildConsoleFrame({ section, view }, experience),
+    content,
+    workspace: null
+  };
 }
 
 export function buildConsoleScene(

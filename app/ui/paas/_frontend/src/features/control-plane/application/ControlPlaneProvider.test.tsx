@@ -91,6 +91,7 @@ function Probe() {
   return (
     <div>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
+      <button onClick={() => void controlPlane.prepare()} type="button">prepare services</button>
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
       <span data-testid="projections">{JSON.stringify(projections)}</span>
@@ -151,6 +152,48 @@ describe("ControlPlaneProvider", () => {
       fireEvent.click(screen.getByText("login"));
       await Promise.resolve();
     });
+    expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
+      "regions",
+      "resources",
+      "installations",
+      "logs",
+      "devops",
+      "observability",
+      "access"
+    ]);
+    expect(repository.load).toHaveBeenCalledTimes(1);
+  });
+  it("keeps IAM independent until product discovery prepares every service from one shared read", async () => {
+    const repository: ControlPlaneRepository = {
+      load: vi.fn().mockResolvedValue(snapshot(readyInstallation, 1)),
+      getInstallation: vi.fn(),
+      activateQuota: vi.fn(),
+      createInstallation: vi.fn()
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider experience={previewExperienceSnapshot} repository={repository} selection={{ section: "access", view: "users" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    expect(repository.load).not.toHaveBeenCalled();
+    expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
+      "none",
+      "resources",
+      "none",
+      "logs",
+      "devops",
+      "observability",
+      "access"
+    ]);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("prepare services"));
+      await Promise.resolve();
+    });
+
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
       "regions",
       "resources",

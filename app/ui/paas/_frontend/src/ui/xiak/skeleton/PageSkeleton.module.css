@@ -1,6 +1,7 @@
 @layer xiak {
 .root { min-width: 0; }
 .label { margin: 0 0 var(--xiak-spacing-roomy); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.label[data-visible="false"] { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; }
 .content { display: grid; gap: var(--xiak-spacing-roomy); }
 .metrics, .cards, .panels { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); }
 .metrics { grid-template-columns: repeat(4, minmax(0, 1fr)); }

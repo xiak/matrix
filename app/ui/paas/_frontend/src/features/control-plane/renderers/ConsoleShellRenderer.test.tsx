@@ -257,6 +257,67 @@ describe("ConsoleShellRenderer", () => {
     expect(accountRepository.currentIdentity).toHaveBeenCalledTimes(1);
   });
 
+  it("projects preview-owned service content immediately when navigation starts from IAM", async () => {
+    let resolveSnapshot!: (value: ControlPlaneSnapshot) => void;
+    let releaseRoute!: () => void;
+    const load = vi.fn(() => new Promise<ControlPlaneSnapshot>((resolve) => { resolveSnapshot = resolve; }));
+    const heldRoute = { href: "/console/logs/", ready: false, promise: new Promise<void>((resolve) => { releaseRoute = resolve; }) };
+    const { user } = await renderConsole({
+      accountRepository: previewAccountRepository,
+      experience: previewExperienceSnapshot,
+      heldRoute,
+      iamRepository: previewIamRepository,
+      load,
+      section: "access",
+      view: "users"
+    });
+    const users = await screen.findByRole("table", { name: "租户用户列表" });
+
+    await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
+    expect(load).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /日志服务/ }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "日志概览" })).toBeTruthy();
+    expect(screen.getByText("Matrix · Log Service").closest("[inert]")).toBeTruthy();
+    expect(users.isConnected).toBe(false);
+
+    await act(async () => { heldRoute.ready = true; releaseRoute(); });
+    await waitFor(() => expect(screen.getByText("Matrix · Log Service").closest("[inert]")).toBeNull());
+    await act(async () => resolveSnapshot(snapshot));
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the database page structure stable while IAM product prefetch is still pending", async () => {
+    let resolveSnapshot!: (value: ControlPlaneSnapshot) => void;
+    let releaseRoute!: () => void;
+    const load = vi.fn(() => new Promise<ControlPlaneSnapshot>((resolve) => { resolveSnapshot = resolve; }));
+    const heldRoute = { href: "/console/installations/", ready: false, promise: new Promise<void>((resolve) => { releaseRoute = resolve; }) };
+    const { user } = await renderConsole({
+      accountRepository: previewAccountRepository,
+      experience: previewExperienceSnapshot,
+      heldRoute,
+      iamRepository: previewIamRepository,
+      load,
+      section: "access",
+      view: "users"
+    });
+    const users = await screen.findByRole("table", { name: "租户用户列表" });
+
+    await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /云数据库 PostgreSQL/ }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "数据库实例" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2, name: "组织服务实例" })).toBeTruthy();
+    expect(users.closest("[hidden]")).toBeTruthy();
+    expect(load).toHaveBeenCalledTimes(1);
+
+    await act(async () => resolveSnapshot(snapshot));
+    await act(async () => { heldRoute.ready = true; releaseRoute(); });
+    expect(await screen.findByRole("button", { name: "安装服务" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "数据库实例" })).toBeTruthy();
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+
   it("projects a pending IAM query into the correct content-area workflow", async () => {
     let release!: () => void;
     const heldRoute = { href: "/console/access/create-policy/?method=json", ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };

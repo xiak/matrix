@@ -1,0 +1,30 @@
+@layer features {
+.stack {
+  display: grid;
+  gap: var(--xiak-spacing-roomy);
+}
+
+.identity {
+  display: flex;
+  min-height: 156px;
+  align-items: flex-end;
+  border: var(--xiak-border-width) var(--xiak-border-style) var(--xiak-color-border-accent);
+  border-radius: var(--xiak-radius-panel);
+  padding: var(--xiak-spacing-generous);
+  background:
+    radial-gradient(circle at 86% 24%, var(--xiak-color-accent-glow) 0, transparent 34%),
+    linear-gradient(120deg, var(--xiak-color-accent-haze), var(--xiak-color-bg-panel));
+}
+
+.identity > div {
+  display: grid;
+  max-width: 680px;
+  gap: var(--xiak-spacing-tight);
+}
+
+.identity p {
+  margin: 0;
+  color: var(--xiak-color-text-muted);
+  line-height: 1.65;
+}
+}

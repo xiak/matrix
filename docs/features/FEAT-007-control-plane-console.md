@@ -1112,23 +1112,31 @@ React frame state. The active child alone receives the compositor hint, and
 reduced-motion preference presents a stationary indicator. Determinate task
 progress remains a native element driven by real values.
 Dashboard, table, card, list and access layouts share semantic Theme
-tokens and a single announced loading label. When the control-plane provider
-already owns the authoritative product-wide snapshot needed by a destination,
-it projects that destination scene into the keyed content boundary immediately.
-The same rule covers all seven directory services and their local views:
-regions/resources, applications, PostgreSQL installations/catalog/quotas,
-logs, DevOps, observability and IAM. It does not issue another repository read,
-fabricate missing business data or make IAM trigger an eager PaaS read. The
-projected content is visible but inert until Next commits the route, consumes
-the pending destination query for detail/workflow identity, and keeps the same
-content key across the commit so the target is not mounted twice. Any read that
-the destination itself still needs, such as a live group directory or entity
-detail, owns loading and retry feedback inside that data region. It does not
-cause the shell to reload the cached IAM identity, policy or capability scene.
+tokens and a single announced loading label. Product discovery starts one
+coalesced product-wide provider read without delaying the directory surface;
+favorites, global search and direct service navigation use the same preparation
+boundary. IAM remains independent of PaaS APIs until one of those explicit
+discovery or navigation intents occurs. Preview-owned Applications, Logs,
+DevOps, Observability, resources, operations and messages can project from the
+already-authoritative ExperienceSnapshot. Regions and PostgreSQL
+installations/catalog/quotas wait for their managed-service owner instead of
+fabricating data. Once the shared snapshot exists, all seven directory services
+and their local views project without another repository read.
+
+The projected content is visible but inert until Next commits the route,
+consumes the pending destination query for detail/workflow identity, and keeps
+the same content key across the commit so the target is not mounted twice. Any
+read that the destination itself still needs, such as a live group directory or
+entity detail, owns loading and retry feedback inside that data region. It does
+not cause the shell to reload the cached IAM identity, policy or capability
+scene. Prepared snapshots are scoped to the current session credential and are
+never reused by a later login identity.
 
 When no complete provider projection exists, the outgoing content becomes
 hidden and inert immediately; its draft remains mounted until the visit commits
-or is cancelled, and regional loading feedback replaces only the content area.
+or is cancelled. The destination still renders its stable content structure,
+including card or table identity and descriptive headings, while only the rows,
+cards or other provider-owned data region receives delayed skeleton feedback.
 The content viewport remains mounted across a committed visit rather than
 replacing its background/scroll boundary. Only keyed route content is replaced,
 with no full-canvas opacity transition. Initial resource loading and load
@@ -1553,18 +1561,17 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-Verified on 2026-09-16 against pushed UI source
-[`2f3088c2bb46b571fc69ce5aaf92f4dafb2bd924`](https://github.com/xiak/matrix/commit/2f3088c2bb46b571fc69ce5aaf92f4dafb2bd924).
+Verified on 2026-09-17 against the current all-service navigation slice.
 
 | Gate | Evidence |
 | --- | --- |
-| Supported frontend runtime | Node 24.19.0; complete `build:embedded` and `check` passed: type checking, lint, architecture, styles, 545 Vitest cases across 36 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
+| Supported frontend runtime | Node 24.19.0; complete `build:embedded` and `check` passed: type checking, lint, architecture, styles, 548 Vitest cases across 36 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
 | Theme and static-export boundary | 228 semantic contrast pairs passed across light, mixed and dark workspace/shell surfaces. Production preview was disabled; all 214 embedded files matched the normalized immutable export. |
-| UI host and architecture | Go UI/architecture race tests, UI vet and Linux/amd64 UI build passed. |
+| UI host and architecture | `go test ./app/ui/paas/...` passed against the regenerated embedded console. |
 | Static query boundary | Supported client detail/creation queries retained identical HTML and CSP; ambiguous, malformed and authority-bearing selectors were rejected. |
-| Destination/frame boundary | Tests compare route-known metadata with loaded scenes for all seven directory services without constructing empty resource snapshots or mutation workspaces. One authoritative provider snapshot projects all seven service destinations without another repository read. Suspended cross-service and PostgreSQL catalog transitions expose the real target content immediately, keep it inert until commit and reuse the same DOM after commit. |
-| Loading/render isolation | Regional PageSkeleton/TableSkeleton tests verify immediate localized status, a local 200ms placeholder delay, fast-unmount cancellation and destination reset. Suspended-shell tests verify unchanged Header/viewport nodes, no account-menu render from the skeleton timer and no additional resource load. IAM users-to-groups and policies-to-JSON-workflow tests keep the projected target DOM stable across route commit, disable it only while pending, preserve the pending query and read the IAM identity once. A genuinely absent PaaS snapshot retains destination framing plus regional feedback; IAM does not start a PaaS read. |
-| Real DEV browser | A loopback-only proxy delayed real Next route payloads by five seconds. Regions, PostgreSQL, Log Service, DevOps, Cloud Monitoring, IAM and Application hosting each displayed its target title and target content immediately; the Header progress line remained the only route-level pending feedback and no whole-content skeleton replaced the target. PostgreSQL installations-to-catalog also reused the same target DOM before and after commit. Earlier IAM Users-to-Groups, rapid Users-to-Policies and JSON policy-creation checks continued to display the exact target workflow without an outgoing page flash. |
+| Destination/frame boundary | Tests compare route-known metadata with loaded scenes for all seven directory services without constructing empty resource snapshots or mutation workspaces. Opening product discovery starts one coalesced provider read. Preview-owned services project immediately from ExperienceSnapshot; the resulting product-wide snapshot projects every directory service without another read. Suspended IAM-to-Logs and IAM-to-PostgreSQL transitions expose the target content structure immediately, keep it inert until commit and never restore the outgoing IAM page. |
+| Loading/render isolation | Regional PageSkeleton/TableSkeleton tests verify immediate localized status, a local 200ms placeholder delay, fast-unmount cancellation and destination reset. Destination-specific loading renders stable headings and containers synchronously while only provider-owned rows/cards receive delayed placeholders. Suspended-shell tests verify unchanged Header/viewport nodes, no account-menu render from the skeleton timer and one coalesced resource read. IAM itself starts no PaaS read before explicit product discovery or navigation intent. |
+| Real DEV browser | Using the real Products & services directory on the normal DEV server, IAM-to-Regions, Applications, PostgreSQL installations, Logs, DevOps, Observability and back-to-IAM navigation each produced the correct URL, H1, product context and destination content. A stale development HMR CSS-chunk error caused by live editing disappeared after reload; no new console warning or error was emitted. |
 | Draft-leave browser behavior | A temporary, unsubmitted JSON draft remained intact after Continue editing. Discard and leave then immediately displayed the Regions frame; the old editor and loading feedback were absent after the actual route commit. No policy or association was created or changed. |
 
 Same-path detail-query tests retain encoded IDs, draft-leave protection and
@@ -1572,14 +1579,14 @@ replace semantics without a Next page-tree navigation. Real static deep links
 and browser back/forward observations belong to the
 [User-boundary evidence](../../IAM/FEAT-IAM-010-console.md#user-权限边界片的开发联调证据).
 The one-click DEV MOCK entry still returns to the requested User directory.
-The slow proxy was stopped and its temporary browser tab closed; the normal
-DEV preview remains independent. ContentPage and PageSkeleton own the shared
-transition behavior; individual pages select a placeholder layout or a
-feature-owned data-region placeholder rather than implementing their own
-navigation timers. The committed URL and business selection remain Next-owned
-until the real page transition completes; an immediate provider projection
-reuses only its already-authoritative cached scene and cannot create data or
-authority. A true cache miss retains regional loading feedback instead of
+The normal DEV preview remains independent. ContentPage and PageSkeleton own
+the shared transition behavior; the control-plane loading renderer selects a
+destination structure and feature-owned data-region placeholder rather than
+giving individual pages navigation timers. The committed URL and business
+selection remain Next-owned until the real page transition completes. An
+immediate provider projection reuses only an authoritative preview or managed
+snapshot and cannot create data or authority. A true managed-service cache miss
+retains the destination structure plus regional loading feedback instead of
 inventing an empty success scene.
 These gates do not establish a universal click-latency budget, a new whole-repository
 or PostgreSQL runtime regression, a new APISIX installation/upgrade, or complete
