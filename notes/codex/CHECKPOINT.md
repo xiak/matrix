@@ -4,12 +4,18 @@
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam; only this
   task's independent worktree is writable. Updated 2026-09-16.
-- Latest pushed code6ae975d9a65569d5215fca26ef65a16722d2cd13 adds only the
-  bounded AssumeRoleRequest/schema component, carrier/deadline pure rules
-  and purpose-separated ROLE_SESSION credential primitive. Exact run
-  Verification35063652730 was observed in_progress; recheck its exact SHA
-  and all jobs before claiming independent acceptance. No issuance HTTP,
-  ROLE business subject, Profile subjectTypes or new SQL is implemented.
+- Latest pushed code7b597101c55cbd782e611f8da794fc84da138ebb implements
+  Profile subjectTypes, digest/deep-copy/strict-schema protections and actual
+  USER/SERVICE policy/PEP checks. Exact Verification35067085558 has Go and
+  node-process success; authority-process was still in_progress. Recheck
+  its exact SHA and all jobs before claiming independent acceptance.
+- The preceding6ae975d9a65569d5215fca26ef65a16722d2cd13 provides bounded
+  AssumeRoleRequest, pure trust/deadline rules and purpose-separated
+  ROLE_SESSION credentials. Its Verification35063652730 ended cancelled:
+  authority-process exceeded the old10-minute aggregate job limit; Go and
+  node passed. Do not claim this exact run passed. The new candidate uses
+  a20-minute aggregate budget without changing per-test limits/resources.
+  No issuance HTTP, ROLE business subject or new SQL is implemented.
 - R1 bf7e8fbbdffe96b8af5b250edd1ed746c5b99265 remains the accepted
   same-account CUSTOMER Role management baseline. GitHub API confirmed exact
   Verification35060352506: go/authority-process/node-process all success.
@@ -24,9 +30,10 @@
 
 Whole IAM goal remains ACTIVE. Read AGENTS, IAM/FEAT-IAM-006-roles-and-sts.md
 and its owning code/tests. R2's shared contract is now frozen in006 after
-Phase3 coordination. Implement the actual Profile subjectTypes/ROLE public
-contract, then real issuance/private proof/RoleBoundary/PaaS/Audit and R3,
-not only these preliminary rules. Read the directly related001/005 owners
+Phase3 coordination. The next substantive slice is actual RoleSession
+issuance/private proof/RoleBoundary/ROLE public contract/PaaS/Audit and R3,
+not another pure foundation. Profile subjectTypes is implemented but the
+registered current revisions have not switched. Read related001/005 owners
 before their changes; do not infer an already-implemented actor or schema.
 001 owns product declarations,005 policy/conditions,006 Role/Trust/STS,
 008 service/ABAC,010 peer UI,011 HA/capacity/release,012 external deferrals.
@@ -71,12 +78,17 @@ Frozen exact candidate outside the source tree passed full race/p2,
 architecture,vet,mod verification,stable API generation and Linux build.
 Evidence and negative matrices belong only to006, not this checkpoint.
 
-The new6ae pure candidate also passed whole-tree race/p2, architecture,vet,
-mod,stable generation and Linux build from an exact clean Git export.
-Its input round-trip fuzz passed120526 executions in15s with2workers and
-1s minimization. No new local database/process/browser gate was run for this
-pure slice; existing runtime regression is not R2 acceptance. All local
-commands for this milestone are terminal. Independent CI above was live.
+The7b597101 final code tree d71bf7c4dd61d0d88590dd9aea3999912a7778a9 passed
+whole-tree race/p2, architecture,vet,mod,stable generation and Linux build
+from an exact clean Git export. Profile round-trip fuzz passed219645
+executions in15s/2workers/1s minimization. Real PG18.4 full policy and IAM
+HTTP gates passed346.240s; independent processes passed63.154s. Limits:
+PG1CPU/768MiB/PIDs128/64connections, Go2/768MiB, real gates serial race/p1.
+Actual readiness remained24/14/1; release profile was not changed. These
+are current USER/SERVICE regression, not actual RoleSession acceptance.
+All local verification processes are terminal. The task's PG container
+and empty network were removed after confirming zero clients; its labelled
+synthetic data volume was retained. Do not assume a live PG fixture.
 
 ## Peer and runtime boundaries
 

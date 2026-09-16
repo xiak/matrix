@@ -104,7 +104,7 @@
 
 初次运行时注册使用已收敛的每产品唯一 revision1；不登记或保留错误旧草案，Git 保存其历史。真正已登记/发布的 Profile 必须同revision异digest拒绝，后续内容变化必须新revision。平台 SYSTEM 策略形成新的不可变内容版本。最终支持的 predecessor be3 原 RolePlatformOperator 已有完整平台集合，因此首次 role→policy 切换须创建与其完整权限等价的 SYSTEM 默认版本，逐条迁移未撤销和已撤销绑定，保留原允许/拒绝结果；这不是新增权限，也不能要求操作者重新授权原有能力。新建最终安装使用同一完整版本。未发布的旧5项CAM开发库不是最终支持基线，不为它增加兼容发行通道。最终发布之后新增、predecessor从未拥有的动作，才适用追加不可变版本但不自动切换已有SYSTEM默认值的规则；明确受权采用由相应发行边界实施，不借此增加在线恢复或首授权接口。
 
-当前源码还包含005的编译与冻结动作族，实际readiness为 IAM23/Audit13/PaaS1；CAT-06不改变它们。IAM包含不可变目录注册、当前一致性及版本化决定记录，Audit保持现有封闭事实，不能因其他函数签名相同沿用旧兼容声明。现有独立进程门禁必须读取三服务实际版本并与sourceProfile逐项比较，同时继续证明已发布installation profile与此组合不同，在副作用前拒绝未发布组合。不修改CurrentDatabaseProfile、不开放安装或跨profile升级；001–010冻结后由安装owner组合实际IAM/Audit和其PaaS5，验证确切predecessor及最终发行。
+当前源码包含005的编译与冻结动作族及006的R1角色管理，实际readiness为 IAM24/Audit14/PaaS1；CAT-07不改变它们。IAM包含不可变目录注册、当前一致性及版本化决定记录，Audit保持现有封闭事实，不能因其他函数签名相同沿用旧兼容声明。现有独立进程门禁必须读取三服务实际版本并与sourceProfile逐项比较，同时继续证明已发布installation profile与此组合不同，在副作用前拒绝未发布组合。不修改CurrentDatabaseProfile、不开放安装或跨profile升级；001–010冻结后由安装owner组合实际IAM/Audit和其PaaS5，验证确切predecessor及最终发行。
 
 实际验收须覆盖全部12项的 API/SQL/caller/scope 一致性、TENANT/错误服务/probe 拒绝、未声明 prefix/condition 拒绝、新 SYSTEM 版本在唯一求值器中的逐项允许与旧版本仍拒绝新增动作。当前带数据迁移重放后，旧 canonical、版本 ID、默认指针及已撤销附件不变；新版本不能暗改旧决定。独立 PG18 的真实授权、producer 及 Audit 投递分别证明直接 target.register 的精确 ID 与 enrollment.create 的原 collection 证据；错误原动作、资源种类、集合 ID、actor、request/correlation、installation 及其他目标变更均拒绝。collection 证据不证明最终业务 payload/ID 的真实性，该关联仍依赖 PaaS 已提交事务/outbox，不能将它推广为任意 target 变更许可。此分支不导入主机运行实现或继承其验收；公共 SQL/wire/发行组合须先与其 owner 冻结后实施。
 
@@ -169,6 +169,8 @@ IAM私有assert_allowed_decision由6参替换为8参，追加显式resource_mode
 同一最终代码在本任务独占PG18.4（固定镜像`postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a`，1CPU/768MiB/PIDs128/max_connections64，专属网络/卷、loopback端口及全新唯一数据库）串行race-p1通过原完整策略存储与IAM HTTP，包346.240秒。保留101成员/组继承、边界、目录、原Root/平台凭据保护、Role管理/信任、并发撤权与密码会话、历史producer/outbox及带数据重放；未放宽原组120秒/策略240秒场景预算。过程中首个进程fixture因数据库名不满足已有专属前缀而在启动前拒绝，修正测试库名称，不修改该安全检查或生产代码。
 
 最终独立双IAM/Audit/PaaS与双dispatcher在另一全新专属库串行race-p1通过，包63.154秒。真实受限runtime登录、跨副本撤权/重启、双账号资源/配置/Operation/outbox、原Profile/编译/历史链及installation verifier保持；实际source readiness仍24/14/1，与未改动的已发布安装profile分开验证。没有运行本轮UI或签名安装，也没有把协议host fixture当作真实主机验收。全部本地执行均终态成功后才进入固定提交；001/005的这一能力契约不代替006的RoleSession/ROLE业务身份与完整发行验收。
+
+固定`7b597101c55cbd782e611f8da794fc84da138ebb`已推送；[Verification35067085558](https://github.com/xiak/matrix/actions/runs/35067085558)精确SHA的Go/节点已成功，authority-process仍在运行，尚不记为独立验收完成。本地客户端归零后仅清理本任务PG容器及已空专属网络；带任务标签的合成测试数据卷保留，没有清理其他任务对象或远端环境。
 
 ### CAT-06：只读编辑目录
 
