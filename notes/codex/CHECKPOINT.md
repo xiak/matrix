@@ -31,7 +31,7 @@
 
 Pure material implementation is pushed as
 be4974e68fc167b418c9eee00c96aaf1b844693f. Exact Verification35142407084
-was confirmed live; poll that run to terminal, do not infer success. The
+was independently checked through GitHub API: all three jobs completed/success. The
 existing credential owner implements the agreed record-bound HKDF/AES-GCM
 format, private structured envelope and independent Node/Go attack vectors.
 Local whole-source race/architecture/vet/modules/generation/Linux passed.
@@ -39,10 +39,24 @@ This is not AccessKey API, transaction, once-only Seal, signature, installation
 or whole007 acceptance. No new schema, profile, FILE env or public actor ABI.
 The uncommitted direct-KEK draft was replaced, not retained as compatibility.
 
-Next K1 lifecycle/management constraints and their real-runtime gates belong
-only to IAM/007. Installation owns the still-unfrozen production keyring
-injection/custody contract; request that boundary before wiring files or
-claiming deployment. Existing password/session semantics must not be silently
+The complete private-file contract is pushed as
+bc7d059571b55ee84c58b62adf1d794cf63ff9a6. Exact Verification35145879997
+was confirmed live with all three jobs running; poll that run to terminal.
+It provides strict one-key canonical private Encode/Decode, per-key immutable
+material commitment and the sole api/iam/v1 context encoding. The old authority
+encoder was deleted; format1 vectors remain unchanged. Whole-source race,
+architecture, fuzz, vet, modules, deterministic generation and Linux passed.
+No runtime loader, registry, schema, public endpoint or installation changed.
+Phase3 waits for exact final CI before consuming the fixed codec, not our FEAT,
+profile or acceptance state. A successful codec is not K1 runtime acceptance.
+
+Next K1 management and custody constraints belong only to IAM/007, including
+the frozen FILE contract, immutable historical wrapping-key registry, exact
+CAS targets, ENABLED/DISABLED key states and four closed Audit facts. Implement
+the actual authority transaction, file/receipt/registry readiness checks,
+bounded User deletion cascade, once-only secret response and real multi-process
+gates there. Installation owns actual file generation/mount/backup/recovery;
+do not modify its WIP. Existing password/session semantics must not be silently
 reinterpreted as long-term key revocation. Do not turn remaining work into a
 generic credential service or a second PDP.
 
@@ -92,9 +106,10 @@ Phase3 01a04149-5dbb-7300-9e4c-31d9e85c8ada consumes only verified fixed
 objects and preserves its host/PaaS/release composition. Current 007 ownership
 alignment leaves IAM contracts, key material, nonce/current PDP and tests
 here; actual request construction belongs to product PEPs, installation
-keyring/files/backup/recovery/rotation to installation. Exact new public
-actor/evidence, file environment and schema/release changes must be frozen
-before implementation handoff. No root/ROLE/SERVICE long-term keys; no fake
+keyring/files/backup/recovery/rotation to installation. FILE/codec and K1
+management contracts are frozen in007; public signed actor/evidence and final
+schema/release changes still require exact coordination before handoff.
+No root/ROLE/SERVICE long-term keys; no fake
 Session or reusable USER permit. Keep current host admission unchanged.
 
 The fixed f51 foundation donor is not present in the available object stores;
