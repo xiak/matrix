@@ -318,6 +318,12 @@ BEGIN
         ('iam.group.created', 'IAM', 'GROUP', 'SUCCEEDED', true, true, false),
         ('iam.group.updated', 'IAM', 'GROUP', 'SUCCEEDED', true, true, false),
         ('iam.group.deleted', 'IAM', 'GROUP', 'SUCCEEDED', true, true, false),
+        ('iam.role.created', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role.updated', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role.disabled', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role.enabled', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role.trust-set', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role.deleted', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
         ('iam.group-membership.created', 'IAM', 'GROUP_MEMBERSHIP', 'SUCCEEDED', true, true, false),
         ('iam.group-membership.removed', 'IAM', 'GROUP_MEMBERSHIP', 'SUCCEEDED', true, true, false),
         ('iam.user.status-set', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
@@ -448,6 +454,7 @@ BEGIN
        OR submitted_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT', 'SYSTEM')
         OR (action_name IN ('iam.account.alias-set','iam.user.created','iam.user.updated','iam.user.deleted','iam.user.status-set',
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted','iam.group-membership.created','iam.group-membership.removed',
+            'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.user.password-reset','iam.user.password-changed',
             'iam.policy-attachment.created','iam.policy-attachment.revoked')
@@ -501,7 +508,7 @@ AS $function$
         to_regclass('audit.chain_heads') IS NOT NULL
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL,
-        13::bigint,
+        14::bigint,
         transaction_timestamp()
 $function$;
 
@@ -805,6 +812,7 @@ BEGIN
             'iam.account-root.credentials-recovered', 'iam.account.alias-set',
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
+            'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',

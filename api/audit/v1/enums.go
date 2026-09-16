@@ -37,6 +37,12 @@ const (
 	ActionIAMUserStatusSet                   Action = "iam.user.status-set"
 	ActionIAMUserPasswordReset               Action = "iam.user.password-reset"
 	ActionIAMUserPasswordChanged             Action = "iam.user.password-changed"
+	ActionIAMRoleCreated                     Action = "iam.role.created"
+	ActionIAMRoleUpdated                     Action = "iam.role.updated"
+	ActionIAMRoleDisabled                    Action = "iam.role.disabled"
+	ActionIAMRoleEnabled                     Action = "iam.role.enabled"
+	ActionIAMRoleTrustSet                    Action = "iam.role.trust-set"
+	ActionIAMRoleDeleted                     Action = "iam.role.deleted"
 	ActionIAMGroupCreated                    Action = "iam.group.created"
 	ActionIAMPolicyCreated                   Action = "iam.policy.created"
 	ActionIAMPolicyVersionCreated            Action = "iam.policy-version.created"
@@ -100,6 +106,7 @@ const (
 	TargetAccount               TargetKind = "ACCOUNT"
 	TargetUser                  TargetKind = "USER"
 	TargetGroup                 TargetKind = "GROUP"
+	TargetRole                  TargetKind = "ROLE"
 	TargetPolicy                TargetKind = "POLICY"
 	TargetGroupMembership       TargetKind = "GROUP_MEMBERSHIP"
 	TargetOrganization          TargetKind = "ORGANIZATION"
@@ -189,6 +196,12 @@ var allActions = []Action{
 	ActionIAMUserPasswordReset,
 	ActionIAMUserPasswordChanged,
 	ActionIAMGroupCreated,
+	ActionIAMRoleCreated,
+	ActionIAMRoleUpdated,
+	ActionIAMRoleDisabled,
+	ActionIAMRoleEnabled,
+	ActionIAMRoleTrustSet,
+	ActionIAMRoleDeleted,
 	ActionIAMPolicyCreated,
 	ActionIAMPolicyVersionCreated,
 	ActionIAMPolicyVersionDeleted,
@@ -285,6 +298,12 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMGroupCreated: {
 		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
+	ActionIAMRoleCreated:  {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleUpdated:  {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleDisabled: {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleEnabled:  {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleTrustSet: {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleDeleted:  {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMPolicyCreated: {
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},

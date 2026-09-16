@@ -473,6 +473,14 @@ signed-token/cache descriptions are `REJECT` as Matrix implementation: use the
 existing opaque, purpose-separated credentials and authoritative current reads.
 No legacy Role/Trust runtime implementation is imported or claimed reverified;
 the earlier fixed legacy rejection remains in force.
+Fixed `1bcaa62bf6b11c20a7b34458408a221ed0aa633c` is `REUSE` for the sole
+strict trust contract/canonical encoder. Fixed `f9ca482df5bde3c8689e9d105f382e178a6abdab`
+is `REUSE` for current authenticated attachment sessions and audited-read head
+locking; the existing closed IAM event/Audit catalog is `ADAPT` for Role facts.
+Its directory cursor codec is `ADAPT` only to add the exact Role directory and
+same-Role trust-history queries. Permissive unknown-directory handling,
+rewriting registered IAM Profile r1 or advancing retained SYSTEM defaults is
+`REJECT`; R1 appends the source-owned r2 and requires explicit current grants.
 
 On2026-09-16, the primary [AssumeRole API](https://cloud.tencent.com/document/product/1312/48197)
 was rechecked: caller permission and target carrier trust are separate, and

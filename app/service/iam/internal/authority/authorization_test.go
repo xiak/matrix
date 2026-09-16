@@ -1342,19 +1342,44 @@ func TestLegacySystemInterpretationDoesNotAdmitUnprovedCustomerVersions(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, digest, err := iamv1.CanonicalizePolicyDocument(current.Document)
+	// The supported predecessor's exact content is interpreted against its
+	// archived IAM revision, not reconstructed from newly added Role actions.
+	legacyDocument := current.Document
+	legacyDocument.Statements = slices.Clone(current.Document.Statements)
+	oldIAM := iamv1.HistoricalAuthorizationProfiles()[0]
+	oldActions := make(map[iamv1.Action]bool, len(oldIAM.Actions))
+	for _, action := range oldIAM.Actions {
+		oldActions[action.Action] = true
+	}
+	for index := range legacyDocument.Statements {
+		legacyDocument.Statements[index].Actions = slices.DeleteFunc(slices.Clone(legacyDocument.Statements[index].Actions), func(action iamv1.Action) bool {
+			return strings.HasPrefix(string(action), "iam.") && !oldActions[action]
+		})
+		legacyDocument.Statements[index].Resources = slices.DeleteFunc(slices.Clone(legacyDocument.Statements[index].Resources), func(resource iamv1.PolicyResourceSelector) bool { return resource.Kind == iamv1.ResourceRole })
+	}
+	_, digest, err := iamv1.CanonicalizePolicyDocument(legacyDocument)
 	if err != nil {
 		t.Fatal(err)
 	}
 	legacy := iamv1.PolicyVersion{PolicyID: current.PolicyID, ID: iamv1.PolicyVersionID("version-" + strings.TrimPrefix(digest, "sha256:")),
-		Document: current.Document, ContentDigest: digest, ContractVersion: iamv1.PolicyVersionLegacyContract}
+		Document: legacyDocument, ContentDigest: digest, ContractVersion: iamv1.PolicyVersionLegacyContract}
 	if _, known := LegacySystemPolicyReferences(legacy); !known {
 		t.Fatal("fixed legacy seed changed without an interpretation decision")
 	}
 	context := policyContextForTest(authorityTestTime())
+	if context.includeProfiles([]iamv1.AuthorizationProfile{oldIAM}) != nil {
+		t.Fatal("invalid fixed legacy profile")
+	}
 	request := policyEvaluationRequestForTest(t, iamv1.ActionIAMPolicyCreate, iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(context.accountID)})
 	if result, err := evaluatePolicies(context, []iamv1.PolicyVersion{legacy}, request); err != nil || !result.Allowed {
 		t.Fatal("exact legacy SYSTEM ceiling unavailable", err)
+	}
+	roleRequest := policyEvaluationRequestForTest(t, iamv1.ActionIAMRoleCreate, iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(context.accountID)})
+	if result, err := evaluatePolicies(context, []iamv1.PolicyVersion{legacy}, roleRequest); err != nil || result.Allowed {
+		t.Fatal("new product registration expanded the exact old SYSTEM policy", err)
+	}
+	if result, err := evaluatePolicies(context, []iamv1.PolicyVersion{current}, roleRequest); err != nil || !result.Allowed {
+		t.Fatal("new source policy does not explicitly contain Role management", err)
 	}
 	for _, id := range []iamv1.PolicyID{"customer-unproved", "system.unproved"} {
 		unknown := legacy

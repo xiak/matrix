@@ -34,6 +34,10 @@ var (
 	groupsUpSQL string
 	//go:embed 000009_groups/verify.sql
 	groupsVerifySQL string
+	//go:embed 000010_roles/up.sql
+	rolesUpSQL string
+	//go:embed 000010_roles/verify.sql
+	rolesVerifySQL string
 )
 
 func Source() postgresmigration.Source {
@@ -49,20 +53,20 @@ func Source() postgresmigration.Source {
 	}
 	profileLiteral := "'" + strings.ReplaceAll(profileSeeds, "'", "''") + "'::jsonb"
 	authoritySQL := strings.Replace(authorityUpSQL, profilePlaceholder, profileLiteral, 1)
-	verification := strings.Replace(authorityVerifySQL, profilePlaceholder, profileLiteral, 1) + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL + "\n" + policyVerifySQL + "\n" + groupsVerifySQL
+	verification := strings.Replace(authorityVerifySQL, profilePlaceholder, profileLiteral, 1) + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL + "\n" + policyVerifySQL + "\n" + groupsVerifySQL + "\n" + rolesVerifySQL
 	return postgresmigration.Source{
 		Context: "iam", BootstrapSQL: bootstrapSQL,
 		// IAM owns one commit boundary across schema, retained-state changes and
 		// its final invariant verification. A late failure exposes none of them.
-		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authoritySQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + verification + "\nCOMMIT;",
+		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authoritySQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + rolesUpSQL + "\n" + verification + "\nCOMMIT;",
 		VerifySQL:     verification,
 		ExecutionRole: "matrix_iam_migrator",
 	}
 }
 
 // Archive insertion and current selection are distinct release decisions.
-// First registration contains only revision1. Future revisions must include
-// required historical declarations here, never infer heads from archive order.
+// Required historical declarations are archived without becoming current.
+// Never infer heads from archive order or reinterpret a stored compilation.
 func authorizationProfileSeeds() (string, error) {
 	type registration struct {
 		iamv1.AuthorizationProfileReference
@@ -84,6 +88,14 @@ func authorizationProfileSeeds() (string, error) {
 		reference := iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
 		seeds.Archive = append(seeds.Archive, registration{reference, canonical})
 		seeds.Heads = append(seeds.Heads, reference)
+	}
+	for _, profile := range iamv1.HistoricalAuthorizationProfiles() {
+		canonical, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+		if err != nil {
+			return "", err
+		}
+		seeds.Archive = append(seeds.Archive, registration{
+			iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}, canonical})
 	}
 	encoded, err := json.Marshal(seeds)
 	return string(encoded), err

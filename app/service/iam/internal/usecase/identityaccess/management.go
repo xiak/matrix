@@ -304,11 +304,14 @@ func (service *Authority) CreatePolicyAttachment(ctx context.Context, credential
 		}
 		action, fact := iamv1.ActionIAMPolicyAttachmentCreate, auditv1.ActionIAMPolicyAttachmentCreated
 		resourceKind := iamv1.ResourceUser
-		if request.Target.Kind == iamv1.PolicyTargetGroup {
+		if request.Target.Kind == iamv1.PolicyTargetGroup || request.Target.Kind == iamv1.PolicyTargetRole {
 			if policy.Scope != iamv1.AuthorityScopeTenant {
 				return ErrForbidden
 			}
 			action, resourceKind = iamv1.ActionIAMGroupPolicyAttachmentCreate, iamv1.ResourceGroup
+			if request.Target.Kind == iamv1.PolicyTargetRole {
+				action, resourceKind = iamv1.ActionIAMRolePolicyAttachmentCreate, iamv1.ResourceRole
+			}
 		} else if policy.Scope == iamv1.AuthorityScopeInstallation {
 			action, fact = iamv1.ActionIAMPlatformPolicyAttachmentCreate, auditv1.ActionIAMPlatformPolicyAttachmentCreated
 		}
@@ -323,6 +326,15 @@ func (service *Authority) CreatePolicyAttachment(ctx context.Context, credential
 		}
 		if policy.ResourceVersion != request.PolicyResourceVersion {
 			return ErrConflict
+		}
+		if request.Target.Kind == iamv1.PolicyTargetRole {
+			root, err := roleRoot(ctx, tx, subject)
+			if err != nil {
+				return err
+			}
+			if !root {
+				return ErrForbidden
+			}
 		}
 		identityDigest, err := digestSanitized("policy-attachment-identity", struct {
 			AccountID iamv1.AccountID   `json:"accountId"`
@@ -393,15 +405,18 @@ func (service *Authority) RevokePolicyAttachment(ctx context.Context, credential
 			return ErrUnavailable
 		}
 		if attachment.AccountID != subject.Subject.Organization.ID ||
-			(attachment.Target.Kind != iamv1.PolicyTargetUser && attachment.Target.Kind != iamv1.PolicyTargetGroup) {
+			(attachment.Target.Kind != iamv1.PolicyTargetUser && attachment.Target.Kind != iamv1.PolicyTargetGroup && attachment.Target.Kind != iamv1.PolicyTargetRole) {
 			return ErrForbidden
 		}
 		action, fact := iamv1.ActionIAMPolicyAttachmentRevoke, auditv1.ActionIAMPolicyAttachmentRevoked
-		if attachment.Target.Kind == iamv1.PolicyTargetGroup {
+		if attachment.Target.Kind == iamv1.PolicyTargetGroup || attachment.Target.Kind == iamv1.PolicyTargetRole {
 			if attachment.Scope != iamv1.AuthorityScopeTenant {
 				return ErrForbidden
 			}
 			action = iamv1.ActionIAMGroupPolicyAttachmentRevoke
+			if attachment.Target.Kind == iamv1.PolicyTargetRole {
+				action = iamv1.ActionIAMRolePolicyAttachmentRevoke
+			}
 		} else if attachment.Scope == iamv1.AuthorityScopeInstallation {
 			action, fact = iamv1.ActionIAMPlatformPolicyAttachmentRevoke, auditv1.ActionIAMPlatformPolicyAttachmentRevoked
 			if attachment.InstallationID != subject.Subject.InstallationID {
@@ -420,6 +435,15 @@ func (service *Authority) RevokePolicyAttachment(ctx context.Context, credential
 			return nil
 		}
 		event, err := service.newManagementEvent(subject, fact, auditv1.TargetPolicyAttachment, string(id), decision.ID, digest, request.RequestID, now)
+		if attachment.Target.Kind == iamv1.PolicyTargetRole {
+			root, err := roleRoot(ctx, tx, subject)
+			if err != nil {
+				return err
+			}
+			if !root {
+				return ErrForbidden
+			}
+		}
 		if err != nil {
 			return err
 		}

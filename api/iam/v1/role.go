@@ -1,6 +1,7 @@
 package iamv1
 
 import (
+	"bytes"
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,12 +10,325 @@ import (
 	"io"
 	"slices"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/xiak/matrix/api/contractjson"
 )
 
 type RoleID string
 type RoleTrustVersionID string
+type RoleStatus string
+type RoleManagement string
+
+const (
+	RoleActive                        RoleStatus     = "ACTIVE"
+	RoleDisabled                      RoleStatus     = "DISABLED"
+	RoleCustomerManaged               RoleManagement = "CUSTOMER"
+	DefaultRoleSessionDurationSeconds uint32         = 3600
+	MaxRoleListBytes                  int64          = 4 * 1024 * 1024
+	MaxRoleAccessBytes                int64          = 512 * 1024
+)
+
+// Tags are bounded literal metadata, never an authenticated condition source.
+type RoleTag struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type Role struct {
+	APIVersion                string             `json:"apiVersion"`
+	Kind                      string             `json:"kind"`
+	ID                        RoleID             `json:"id"`
+	AccountID                 AccountID          `json:"accountId"`
+	Name                      string             `json:"name"`
+	Description               string             `json:"description"`
+	Tags                      []RoleTag          `json:"tags"`
+	Management                RoleManagement     `json:"management"`
+	Status                    RoleStatus         `json:"status"`
+	MaxSessionDurationSeconds uint32             `json:"maxSessionDurationSeconds"`
+	ResourceVersion           uint64             `json:"resourceVersion"`
+	CurrentTrustVersionID     RoleTrustVersionID `json:"currentTrustVersionId"`
+	CreatedAt                 time.Time          `json:"createdAt"`
+	UpdatedAt                 time.Time          `json:"updatedAt"`
+}
+
+// A directory row does not expand every trust document or policy attachment.
+// Detail reads separately authorize the exact Role.
+type RoleListing struct {
+	Role         Role               `json:"role"`
+	Capabilities []ActionCapability `json:"capabilities"`
+}
+
+type RoleList struct {
+	APIVersion string        `json:"apiVersion"`
+	Kind       string        `json:"kind"`
+	AccountID  AccountID     `json:"accountId"`
+	Items      []RoleListing `json:"items"`
+	NextAfter  string        `json:"nextAfter,omitempty"`
+}
+
+type RoleAccess struct {
+	Role              Role               `json:"role"`
+	TrustVersion      RoleTrustVersion   `json:"trustVersion"`
+	PolicyAttachments []PolicyAttachment `json:"policyAttachments"`
+	Capabilities      []ActionCapability `json:"capabilities"`
+}
+
+type RoleTrustVersionList struct {
+	APIVersion string             `json:"apiVersion"`
+	Kind       string             `json:"kind"`
+	AccountID  AccountID          `json:"accountId"`
+	RoleID     RoleID             `json:"roleId"`
+	Items      []RoleTrustVersion `json:"items"`
+	NextAfter  string             `json:"nextAfter,omitempty"`
+}
+
+type CreateRoleRequest struct {
+	Name                      string              `json:"name"`
+	Description               string              `json:"description,omitempty"`
+	Tags                      []RoleTag           `json:"tags"`
+	MaxSessionDurationSeconds *uint32             `json:"maxSessionDurationSeconds,omitempty"`
+	TrustPolicy               TrustPolicyDocument `json:"trustPolicy"`
+	RequestID                 string              `json:"requestId"`
+}
+
+type UpdateRoleRequest struct {
+	Name                      string    `json:"name"`
+	Description               string    `json:"description"`
+	Tags                      []RoleTag `json:"tags"`
+	MaxSessionDurationSeconds uint32    `json:"maxSessionDurationSeconds"`
+	ResourceVersion           uint64    `json:"resourceVersion"`
+	RequestID                 string    `json:"requestId"`
+}
+
+type SetRoleStatusRequest struct {
+	Status          RoleStatus `json:"status"`
+	ResourceVersion uint64     `json:"resourceVersion"`
+	RequestID       string     `json:"requestId"`
+}
+
+type SetRoleTrustPolicyRequest struct {
+	Document        TrustPolicyDocument `json:"document"`
+	ResourceVersion uint64              `json:"resourceVersion"`
+	RequestID       string              `json:"requestId"`
+}
+
+type DeleteRoleRequest struct {
+	ResourceVersion uint64 `json:"resourceVersion"`
+	RequestID       string `json:"requestId"`
+}
+
+func (tag *RoleTag) UnmarshalJSON(source []byte) error {
+	var wire struct {
+		Key   *string `json:"key"`
+		Value *string `json:"value"`
+	}
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &wire) != nil || wire.Key == nil || wire.Value == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*tag = RoleTag{Key: *wire.Key, Value: *wire.Value}
+	return nil
+}
+
+func (request *CreateRoleRequest) UnmarshalJSON(source []byte) error {
+	type wire CreateRoleRequest
+	var decoded wire
+	if err := contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	// Omission selects the documented default; null is not that choice.
+	for _, name := range []string{"description", "maxSessionDurationSeconds"} {
+		if bytes.Equal(bytes.TrimSpace(fields[name]), []byte("null")) {
+			return contractjson.ErrInvalidDocument
+		}
+	}
+	*request = CreateRoleRequest(decoded)
+	return nil
+}
+
+func (request *UpdateRoleRequest) UnmarshalJSON(source []byte) error {
+	type wire UpdateRoleRequest
+	var decoded wire
+	if err := contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded); err != nil {
+		return err
+	}
+	var fields struct {
+		Description *string `json:"description"`
+	}
+	if json.Unmarshal(source, &fields) != nil || fields.Description == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*request = UpdateRoleRequest(decoded)
+	return nil
+}
+
+type RoleDeletion struct {
+	APIVersion               string    `json:"apiVersion"`
+	Kind                     string    `json:"kind"`
+	ID                       RoleID    `json:"id"`
+	AccountID                AccountID `json:"accountId"`
+	Name                     string    `json:"name"`
+	ResourceVersion          uint64    `json:"resourceVersion"`
+	RevokedPolicyAttachments uint32    `json:"revokedPolicyAttachments"`
+	DeletedAt                time.Time `json:"deletedAt"`
+}
+
+func validateRoleMetadata(name, description string, tags []RoleTag, duration uint32) error {
+	if validateText("role.name", name, 1, 64) != nil || validateText("role.description", description, 0, 512) != nil ||
+		tags == nil || len(tags) > 50 || duration < 60 || duration > 43200 {
+		return errors.New("role metadata is invalid")
+	}
+	keys := make(map[string]bool, len(tags))
+	metadataBytes := len(name) + len(description)
+	for _, tag := range tags {
+		if !utf8.ValidString(tag.Key) || !utf8.ValidString(tag.Value) || len(tag.Key) < 1 || len(tag.Key) > 64 || len(tag.Value) > 256 || keys[tag.Key] {
+			return errors.New("role tag is invalid")
+		}
+		for _, value := range []string{tag.Key, tag.Value} {
+			for _, character := range value {
+				if unicode.IsControl(character) {
+					return errors.New("role tag is invalid")
+				}
+			}
+		}
+		keys[tag.Key] = true
+		metadataBytes += len(tag.Key) + len(tag.Value)
+	}
+	// The aggregate literal budget also bounds JSON expansion of HTML-sensitive
+	// characters, so one hundred valid rows fit the declared directory budget.
+	if metadataBytes > 4096 {
+		return errors.New("role metadata exceeds its aggregate budget")
+	}
+	return nil
+}
+
+func ValidateRole(value Role) error {
+	if value.APIVersion != APIVersion || value.Kind != "Role" || value.Management != RoleCustomerManaged ||
+		(value.Status != RoleActive && value.Status != RoleDisabled) {
+		return errors.New("role is invalid")
+	}
+	return errors.Join(ValidateID("role.id", string(value.ID)), ValidateID("role.accountId", string(value.AccountID)),
+		ValidateID("role.currentTrustVersionId", string(value.CurrentTrustVersionID)), validatePositiveVersion(value.ResourceVersion),
+		validateChronology(value.CreatedAt, value.UpdatedAt), validateRoleMetadata(value.Name, value.Description, value.Tags, value.MaxSessionDurationSeconds))
+}
+
+func ValidateCreateRoleRequest(value CreateRoleRequest) error {
+	duration := DefaultRoleSessionDurationSeconds
+	if value.MaxSessionDurationSeconds != nil {
+		duration = *value.MaxSessionDurationSeconds
+	}
+	return errors.Join(validateRoleMetadata(value.Name, value.Description, value.Tags, duration),
+		ValidateTrustPolicyDocument(value.TrustPolicy), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateUpdateRoleRequest(value UpdateRoleRequest) error {
+	return errors.Join(validateRoleMetadata(value.Name, value.Description, value.Tags, value.MaxSessionDurationSeconds),
+		validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateSetRoleStatusRequest(value SetRoleStatusRequest) error {
+	if value.Status != RoleActive && value.Status != RoleDisabled {
+		return errors.New("role status is invalid")
+	}
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateSetRoleTrustPolicyRequest(value SetRoleTrustPolicyRequest) error {
+	return errors.Join(ValidateTrustPolicyDocument(value.Document), validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateDeleteRoleRequest(value DeleteRoleRequest) error {
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateRoleDeletion(value RoleDeletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "RoleDeletion" || value.ResourceVersion < 2 {
+		return errors.New("role deletion is invalid")
+	}
+	return errors.Join(ValidateID("role.id", string(value.ID)), ValidateID("role.accountId", string(value.AccountID)),
+		validateText("role.name", value.Name, 1, 64), validatePositiveVersion(value.ResourceVersion), validateTime("role.deletedAt", value.DeletedAt))
+}
+
+func roleCapabilitySet(id RoleID) map[string]struct{} {
+	result := make(map[string]struct{}, 6)
+	for _, action := range []Action{ActionIAMRoleRead, ActionIAMRoleUpdate, ActionIAMRoleSetStatus, ActionIAMRoleDelete, ActionIAMRoleTrustSet, ActionIAMRolePolicyAttachmentCreate} {
+		result[capabilityKey(action, ResourceReference{Kind: ResourceRole, ID: string(id)})] = struct{}{}
+	}
+	return result
+}
+
+func ValidateRoleList(value RoleList) error {
+	if value.APIVersion != APIVersion || value.Kind != "RoleList" || ValidateID("accountId", string(value.AccountID)) != nil ||
+		value.Items == nil || len(value.Items) > DirectoryPageSize {
+		return errors.New("role list is invalid")
+	}
+	var previous RoleID
+	for _, item := range value.Items {
+		if ValidateRole(item.Role) != nil || item.Role.AccountID != value.AccountID || item.Role.ID <= previous ||
+			validateCapabilities(item.Capabilities, roleCapabilitySet(item.Role.ID)) != nil {
+			return errors.New("role list item is invalid")
+		}
+		previous = item.Role.ID
+	}
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("role page boundary is invalid")
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || int64(len(encoded)) > MaxRoleListBytes {
+		return errors.New("role list exceeds its byte budget")
+	}
+	return nil
+}
+
+func ValidateRoleAccess(value RoleAccess) error {
+	if ValidateRole(value.Role) != nil || ValidateRoleTrustVersion(value.TrustVersion) != nil ||
+		value.TrustVersion.AccountID != value.Role.AccountID || value.TrustVersion.RoleID != value.Role.ID ||
+		value.TrustVersion.ID != value.Role.CurrentTrustVersionID || value.TrustVersion.CreatedAt.Before(value.Role.CreatedAt) ||
+		value.TrustVersion.CreatedAt.After(value.Role.UpdatedAt) || value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 {
+		return errors.New("role access is invalid")
+	}
+	expected := roleCapabilitySet(value.Role.ID)
+	attachments, policies := map[PolicyAttachmentID]bool{}, map[PolicyID]bool{}
+	for _, attachment := range value.PolicyAttachments {
+		if ValidatePolicyAttachment(attachment) != nil || attachment.AccountID != value.Role.AccountID || attachment.Target.Kind != PolicyTargetRole ||
+			attachment.Target.ID != string(value.Role.ID) || attachment.Scope != AuthorityScopeTenant || attachment.RevokedAt != nil || attachments[attachment.ID] || policies[attachment.PolicyID] {
+			return errors.New("role attachment is invalid")
+		}
+		attachments[attachment.ID], policies[attachment.PolicyID] = true, true
+		expected[capabilityKey(ActionIAMRolePolicyAttachmentRevoke, ResourceReference{Kind: ResourcePolicyAttachment, ID: string(attachment.ID)})] = struct{}{}
+	}
+	if validateCapabilities(value.Capabilities, expected) != nil {
+		return errors.New("role capabilities are invalid")
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || int64(len(encoded)) > MaxRoleAccessBytes {
+		return errors.New("role access exceeds its byte budget")
+	}
+	return nil
+}
+
+func ValidateRoleTrustVersionList(value RoleTrustVersionList) error {
+	if value.APIVersion != APIVersion || value.Kind != "RoleTrustVersionList" || ValidateID("accountId", string(value.AccountID)) != nil ||
+		ValidateID("roleId", string(value.RoleID)) != nil || value.Items == nil || len(value.Items) > DirectoryPageSize {
+		return errors.New("role trust list is invalid")
+	}
+	var previous RoleTrustVersionID
+	for _, item := range value.Items {
+		if ValidateRoleTrustVersion(item) != nil || item.AccountID != value.AccountID || item.RoleID != value.RoleID || item.ID <= previous {
+			return errors.New("role trust list item is invalid")
+		}
+		previous = item.ID
+	}
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("role trust page boundary is invalid")
+	}
+	return nil
+}
 
 const (
 	TrustPolicyLanguageVersion          = "1"

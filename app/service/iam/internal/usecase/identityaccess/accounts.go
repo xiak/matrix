@@ -47,7 +47,7 @@ func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.
 		if account.RootIdentity.PrincipalID == user.ID {
 			identityKind = iamv1.IdentityRoot
 		}
-		capabilities, err := currentIdentityCapabilities(binding, now)
+		capabilities, err := currentIdentityCapabilities(binding, identityKind == iamv1.IdentityRoot, now)
 		if err != nil {
 			return err
 		}
@@ -94,7 +94,7 @@ func restrictCapability(value *iamv1.ActionCapability, reason iamv1.CapabilityRe
 	}
 }
 
-func currentIdentityCapabilities(subject SessionCredential, now time.Time) ([]iamv1.ActionCapability, error) {
+func currentIdentityCapabilities(subject SessionCredential, root bool, now time.Time) ([]iamv1.ActionCapability, error) {
 	account := iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Subject.Organization.ID)}
 	requests := []struct {
 		action   iamv1.Action
@@ -110,12 +110,17 @@ func currentIdentityCapabilities(subject SessionCredential, now time.Time) ([]ia
 		{iamv1.ActionIAMPolicyList, account, iamv1.AuthorizationResourceInstance, ""},
 		{iamv1.ActionIAMGroupList, account, iamv1.AuthorizationResourceInstance, ""},
 		{iamv1.ActionIAMGroupCreate, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMRoleList, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMRoleCreate, account, iamv1.AuthorizationResourceInstance, ""},
 	}
 	result := make([]iamv1.ActionCapability, 0, len(requests))
 	for _, request := range requests {
 		capability, err := projectCapability(subject, request.action, request.resource, request.mode, request.usage, now)
 		if err != nil {
 			return nil, err
+		}
+		if request.action == iamv1.ActionIAMRoleCreate && !root {
+			restrictCapability(&capability, iamv1.CapabilityAuthorityRequired)
 		}
 		result = append(result, capability)
 	}

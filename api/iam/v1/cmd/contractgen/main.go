@@ -69,6 +69,19 @@ func buildDocument() object {
 
 func buildPaths() object {
 	return object{
+		"/v1/roles": object{
+			"get":  readOperation("listRoles", "List current-account roles and exact resource capabilities", "RoleList", nil, accountPageParameters()),
+			"post": mutationOperation("createRole", "Create a customer role without credentials or permission attachments", "CreateRoleRequest", "Role", "201", nil, nil),
+		},
+		"/v1/roles/{roleId}": object{
+			"get":    readOperation("getRole", "Read role metadata, current trust and tenant policy attachments", "RoleAccess", nil, []any{openapi31.PathIDParameter("roleId")}),
+			"patch":  mutationOperation("updateRole", "Replace editable role metadata at the expected revision", "UpdateRoleRequest", "Role", "200", nil, []any{openapi31.PathIDParameter("roleId")}),
+			"delete": mutationOperation("deleteRole", "Tombstone a role and revoke its active attachments", "DeleteRoleRequest", "RoleDeletion", "200", nil, []any{openapi31.PathIDParameter("roleId")}),
+		},
+		"/v1/roles/{roleId}:set-status":                 object{"post": mutationOperation("setRoleStatus", "Set role availability without stopping tenant workloads", "SetRoleStatusRequest", "Role", "200", nil, []any{openapi31.PathIDParameter("roleId")})},
+		"/v1/roles/{roleId}/trust-policy":               object{"put": mutationOperation("setRoleTrustPolicy", "Publish and select one immutable trust version", "SetRoleTrustPolicyRequest", "Role", "200", nil, []any{openapi31.PathIDParameter("roleId")})},
+		"/v1/roles/{roleId}/trust-versions":             object{"get": readOperation("listRoleTrustVersions", "List this role's immutable trust versions", "RoleTrustVersionList", nil, append([]any{openapi31.PathIDParameter("roleId")}, accountPageParameters()...))},
+		"/v1/roles/{roleId}/trust-versions/{versionId}": object{"get": readOperation("getRoleTrustVersion", "Read an exact version in this role", "RoleTrustVersion", nil, []any{openapi31.PathIDParameter("roleId"), openapi31.PathIDParameter("versionId")})},
 		"/ready": object{"get": readOperation(
 			"getIAMReadiness", "Get IAM readiness", "Readiness", []any{}, nil,
 		)},
@@ -251,6 +264,8 @@ func scalarSchemas() object {
 
 func enumSchemas() map[string][]string {
 	return map[string][]string{
+		"RoleStatus":                   {string(iamv1.RoleActive), string(iamv1.RoleDisabled)},
+		"RoleManagement":               {string(iamv1.RoleCustomerManaged)},
 		"AccountStatus":                {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
 		"PrincipalType":                {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
 		"PrincipalStatus":              {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
@@ -271,7 +286,7 @@ func enumSchemas() map[string][]string {
 		"Action":                       openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
 			string(iamv1.ResourceAccount), string(iamv1.ResourceUser),
-			string(iamv1.ResourcePolicy),
+			string(iamv1.ResourcePolicy), string(iamv1.ResourceRole),
 			string(iamv1.ResourceOrganization), string(iamv1.ResourcePrincipal), string(iamv1.ResourceGroup), string(iamv1.ResourceGroupMembership), string(iamv1.ResourceRoleBinding), string(iamv1.ResourcePolicyAttachment),
 			string(iamv1.ResourceSession), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
 			string(iamv1.ResourceConfigurationRevision), string(iamv1.ResourceApplicationRevision),
@@ -351,6 +366,18 @@ func structContracts() map[string]reflect.Type {
 		"TrustPolicyStatement":                openapi31.StructType[iamv1.TrustPolicyStatement](),
 		"TrustPrincipal":                      openapi31.StructType[iamv1.TrustPrincipal](),
 		"RoleTrustVersion":                    openapi31.StructType[iamv1.RoleTrustVersion](),
+		"Role":                                openapi31.StructType[iamv1.Role](),
+		"RoleTag":                             openapi31.StructType[iamv1.RoleTag](),
+		"RoleListing":                         openapi31.StructType[iamv1.RoleListing](),
+		"RoleList":                            openapi31.StructType[iamv1.RoleList](),
+		"RoleAccess":                          openapi31.StructType[iamv1.RoleAccess](),
+		"RoleTrustVersionList":                openapi31.StructType[iamv1.RoleTrustVersionList](),
+		"CreateRoleRequest":                   openapi31.StructType[iamv1.CreateRoleRequest](),
+		"UpdateRoleRequest":                   openapi31.StructType[iamv1.UpdateRoleRequest](),
+		"SetRoleStatusRequest":                openapi31.StructType[iamv1.SetRoleStatusRequest](),
+		"SetRoleTrustPolicyRequest":           openapi31.StructType[iamv1.SetRoleTrustPolicyRequest](),
+		"DeleteRoleRequest":                   openapi31.StructType[iamv1.DeleteRoleRequest](),
+		"RoleDeletion":                        openapi31.StructType[iamv1.RoleDeletion](),
 		"ActionCapability":                    openapi31.StructType[iamv1.ActionCapability](),
 		"CurrentIdentity":                     openapi31.StructType[iamv1.CurrentIdentity](),
 		"PolicyList":                          openapi31.StructType[iamv1.PolicyList](),
@@ -387,6 +414,39 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if owner == "Role" || owner == "CreateRoleRequest" || owner == "UpdateRoleRequest" || owner == "RoleDeletion" {
+		switch jsonName {
+		case "name":
+			base["minLength"], base["maxLength"] = 1, 64
+		case "description":
+			base["maxLength"] = 512
+		case "tags":
+			base["maxItems"], base["uniqueItems"] = 50, true
+			base["description"] = "Literal metadata only. UTF-8 limits, unique keys and the 4096-byte aggregate name/description/tag budget require authoritative validation."
+		case "maxSessionDurationSeconds":
+			base = object{"type": "integer", "minimum": 60, "maximum": 43200}
+			if owner == "CreateRoleRequest" {
+				base["default"] = iamv1.DefaultRoleSessionDurationSeconds
+			}
+		}
+	}
+	if owner == "RoleTag" {
+		if jsonName == "key" {
+			base["minLength"], base["maxLength"] = 1, 64
+		}
+		if jsonName == "value" {
+			base["maxLength"] = 256
+		}
+	}
+	if (owner == "RoleList" || owner == "RoleTrustVersionList") && jsonName == "items" {
+		base["maxItems"] = iamv1.DirectoryPageSize
+	}
+	if (owner == "RoleListing" || owner == "RoleAccess") && jsonName == "capabilities" {
+		base["maxItems"] = 6
+		if owner == "RoleAccess" {
+			base["maxItems"] = 262
+		}
+	}
 	if owner == "TrustPolicyDocument" {
 		switch jsonName {
 		case "languageVersion":
@@ -459,7 +519,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		base = pageCursorSchema()
 	}
 	if owner == "CreatePolicyAttachmentRequest" && jsonName == "target" {
-		base = object{"allOf": []any{openapi31.Ref("PolicyAttachmentTarget"), object{"properties": object{"kind": object{"enum": []string{string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetGroup)}}}}}}
+		base = object{"allOf": []any{openapi31.Ref("PolicyAttachmentTarget"), object{"properties": object{"kind": object{"enum": []string{string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetGroup), string(iamv1.PolicyTargetRole)}}}}}}
 	}
 	if (owner == "UserList" || owner == "AccountList" || owner == "GroupList" || owner == "GroupMembershipList") && jsonName == "items" {
 		base["maxItems"] = 100
@@ -471,18 +531,21 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "CurrentIdentity" && jsonName == "policySources" {
 		base["maxItems"] = 256
 	}
-	if (owner == "UserAccess" || owner == "GroupAccess") && jsonName == "policyAttachments" {
+	if (owner == "UserAccess" || owner == "GroupAccess" || owner == "RoleAccess") && jsonName == "policyAttachments" {
 		base["maxItems"] = 256
 		targetKind := string(iamv1.PolicyTargetUser)
 		if owner == "GroupAccess" {
 			targetKind = string(iamv1.PolicyTargetGroup)
+		}
+		if owner == "RoleAccess" {
+			targetKind = string(iamv1.PolicyTargetRole)
 		}
 		base["items"] = object{"allOf": []any{openapi31.Ref("PolicyAttachment"), object{"properties": object{
 			"revokedAt": false, "target": object{"properties": object{"kind": object{"const": targetKind}}},
 		}}}}
 	}
 	if (owner == "CurrentIdentity" || owner == "UserAccess" || owner == "GroupAccess" || owner == "GroupMembershipAccess" || owner == "AccountAccess") && jsonName == "capabilities" {
-		base["maxItems"] = map[string]int{"CurrentIdentity": 8, "UserAccess": 265, "GroupAccess": 262, "GroupMembershipAccess": 1, "AccountAccess": 2}[owner]
+		base["maxItems"] = map[string]int{"CurrentIdentity": 10, "UserAccess": 265, "GroupAccess": 262, "GroupMembershipAccess": 1, "AccountAccess": 2}[owner]
 	}
 	if field.Type.Name() == "Secret" {
 		base["writeOnly"] = true
@@ -609,6 +672,7 @@ func applySemanticOverlays(schemas object) {
 		object{"required": []string{"installationId"}, "properties": object{"tenantId": false}},
 	}
 	kinds := map[string]string{
+		"Role": "Role", "RoleList": "RoleList", "RoleDeletion": "RoleDeletion", "RoleTrustVersion": "RoleTrustVersion", "RoleTrustVersionList": "RoleTrustVersionList",
 		"AuthorizationProfileList": "AuthorizationProfileList", "AuthorizationProfile": "AuthorizationProfile",
 		"UserPermissionBoundary": "UserPermissionBoundary",
 		"Policy":                 "Policy",

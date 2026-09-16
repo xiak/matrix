@@ -544,6 +544,40 @@ func (value *httpWorkflow) ListPolicies(_ context.Context, credential iamv1.Secr
 	return result, nil
 }
 
+func TestIAMRoleRoutesRejectSelectorsBeforeWorkflow(t *testing.T) {
+	handler := newTestHandler(t, newHTTPWorkflow(t))
+	for _, attack := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{http.MethodGet, "/v1/roles?tenantId=other", "", http.StatusBadRequest},
+		{http.MethodGet, "/v1/roles/role-a?accountId=other", "", http.StatusBadRequest},
+		{http.MethodGet, "/v1/roles/role-a/trust-versions?roleId=other", "", http.StatusBadRequest},
+		{http.MethodGet, "/v1/roles/role-a/trust-versions/trust-a?after=ic1.invalid", "", http.StatusBadRequest},
+		{http.MethodGet, "/v1/roles", "{}", http.StatusBadRequest},
+		{http.MethodPost, "/v1/roles", `{"name":"Readers","tags":[],"trustPolicy":{"languageVersion":"1","statements":[]},"accountId":"other","requestId":"create"}`, http.StatusBadRequest},
+		{http.MethodPost, "/v1/roles", `{"name":"Readers","tags":[],"maxSessionDurationSeconds":null,"trustPolicy":{"languageVersion":"1","statements":[]},"requestId":"create"}`, http.StatusBadRequest},
+		{http.MethodPost, "/v1/roles", `{"name":"Readers","name":"Other","tags":[],"trustPolicy":{"languageVersion":"1","statements":[]},"requestId":"create"}`, http.StatusBadRequest},
+		{http.MethodPatch, "/v1/roles/role-a", `{"name":"Readers","tags":[],"maxSessionDurationSeconds":3600,"resourceVersion":1,"requestId":"update"}`, http.StatusBadRequest},
+		{http.MethodPost, "/v1/roles/role-a:set-status", `{"status":"ACTIVE","resourceVersion":1,"actorSessionId":"other","requestId":"status"}`, http.StatusBadRequest},
+		{http.MethodDelete, "/v1/roles/role-a?installationId=other", `{"resourceVersion":1,"requestId":"delete"}`, http.StatusBadRequest},
+		{http.MethodPost, "/v1/roles/role-a:assume", `{}`, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/v1/sts/assume-role", `{}`, http.StatusNotFound},
+		{http.MethodPost, "/v1/roles/role-a/trust-policy", `{}`, http.StatusMethodNotAllowed},
+	} {
+		t.Run(attack.method+attack.path+attack.body, func(t *testing.T) {
+			request := httptest.NewRequest(attack.method, attack.path, strings.NewReader(attack.body))
+			request.Header.Set("Authorization", "Bearer role-test-credential")
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != attack.status {
+				t.Fatalf("role request status=%d want=%d", response.Code, attack.status)
+			}
+		})
+	}
+}
+
 func TestIAMGroupRoutesRejectSelectorsBeforeWorkflow(t *testing.T) {
 	handler := newTestHandler(t, newHTTPWorkflow(t))
 	for _, attack := range []struct {

@@ -181,6 +181,15 @@
           "iam.session.revoke",
           "iam.platform-policy-attachment.create",
           "iam.platform-policy-attachment.revoke",
+          "iam.role.list",
+          "iam.role.create",
+          "iam.role.read",
+          "iam.role.update",
+          "iam.role.set-status",
+          "iam.role.delete",
+          "iam.role-trust.set",
+          "iam.role-policy-attachment.create",
+          "iam.role-policy-attachment.revoke",
           "paas.execution-pool.create",
           "paas.execution-pool.read",
           "paas.execution-target.register",
@@ -497,9 +506,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -561,9 +570,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -604,9 +613,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -647,9 +656,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -690,9 +699,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -733,9 +742,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -776,9 +785,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -819,9 +828,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -862,9 +871,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -905,9 +914,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -948,9 +957,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -991,9 +1000,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1034,9 +1043,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1077,9 +1086,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1120,9 +1129,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1163,9 +1172,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1206,9 +1215,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1249,9 +1258,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1292,9 +1301,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1335,9 +1344,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1378,9 +1387,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1421,9 +1430,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1464,9 +1473,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1507,9 +1516,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1550,9 +1559,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1593,9 +1602,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1636,9 +1645,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1679,9 +1688,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1722,9 +1731,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1765,9 +1774,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1808,9 +1817,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1851,9 +1860,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1894,9 +1903,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1937,9 +1946,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -1980,9 +1989,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -2023,9 +2032,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -2066,9 +2075,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -2109,9 +2118,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -2152,9 +2161,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -2195,9 +2204,396 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY_ATTACHMENT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.update"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.set-status"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.delete"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-trust.set"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-policy-attachment.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-policy-attachment.revoke"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4461,9 +4857,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4525,9 +4921,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4568,9 +4964,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4611,9 +5007,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4654,9 +5050,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4697,9 +5093,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4740,9 +5136,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4783,9 +5179,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4826,9 +5222,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4869,9 +5265,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4912,9 +5308,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4955,9 +5351,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -4998,9 +5394,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5041,9 +5437,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5084,9 +5480,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5127,9 +5523,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5170,9 +5566,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5213,9 +5609,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5256,9 +5652,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5299,9 +5695,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5342,9 +5738,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5385,9 +5781,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5428,9 +5824,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5471,9 +5867,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5514,9 +5910,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5557,9 +5953,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5600,9 +5996,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5643,9 +6039,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5686,9 +6082,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5729,9 +6125,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5772,9 +6168,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5815,9 +6211,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5858,9 +6254,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5901,9 +6297,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5944,9 +6340,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -5987,9 +6383,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -6030,9 +6426,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -6073,9 +6469,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -6116,9 +6512,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -6159,9 +6555,396 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44",
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
                     "product": "iam",
-                    "revision": 1
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "POLICY_ATTACHMENT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.update"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.set-status"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.delete"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-trust.set"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-policy-attachment.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role-policy-attachment.revoke"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:69c3366eed3d18fcc05a0e54d826e27fdf62664d76ef94ef30d16c4d70dd262a",
+                    "product": "iam",
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -8454,7 +9237,8 @@
                   "kind": {
                     "enum": [
                       "USER",
-                      "GROUP"
+                      "GROUP",
+                      "ROLE"
                     ]
                   }
                 }
@@ -8540,6 +9324,48 @@
         ],
         "type": "object"
       },
+      "CreateRoleRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "maxSessionDurationSeconds": {
+            "default": 3600,
+            "maximum": 43200,
+            "minimum": 60,
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "tags": {
+            "description": "Literal metadata only. UTF-8 limits, unique keys and the 4096-byte aggregate name/description/tag budget require authoritative validation.",
+            "items": {
+              "$ref": "#/components/schemas/RoleTag"
+            },
+            "maxItems": 50,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "trustPolicy": {
+            "$ref": "#/components/schemas/TrustPolicyDocument"
+          }
+        },
+        "required": [
+          "name",
+          "requestId",
+          "tags",
+          "trustPolicy"
+        ],
+        "type": "object"
+      },
       "CreateUserRequest": {
         "additionalProperties": false,
         "properties": {
@@ -8581,7 +9407,7 @@
             "items": {
               "$ref": "#/components/schemas/ActionCapability"
             },
-            "maxItems": 8,
+            "maxItems": 10,
             "type": "array"
           },
           "identityKind": {
@@ -8674,6 +9500,24 @@
           },
           "resourceVersion": {
             "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requestId",
+          "resourceVersion"
+        ],
+        "type": "object"
+      },
+      "DeleteRoleRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
             "minimum": 1,
             "type": "integer"
           }
@@ -9600,6 +10444,18 @@
                             "iam.policy.read",
                             "iam.policy.set-default-version",
                             "iam.policy.update",
+                            "iam.role-policy-attachment.*",
+                            "iam.role-policy-attachment.create",
+                            "iam.role-policy-attachment.revoke",
+                            "iam.role-trust.*",
+                            "iam.role-trust.set",
+                            "iam.role.*",
+                            "iam.role.create",
+                            "iam.role.delete",
+                            "iam.role.list",
+                            "iam.role.read",
+                            "iam.role.set-status",
+                            "iam.role.update",
                             "iam.session.*",
                             "iam.session.revoke",
                             "iam.user.*",
@@ -10025,6 +10881,7 @@
               "GROUP_MEMBERSHIP",
               "POLICY_ATTACHMENT",
               "SESSION",
+              "ROLE",
               "EXECUTION_POOL",
               "EXECUTION_TARGET",
               "NODE_ENROLLMENT",
@@ -10133,6 +10990,9 @@
                         "iam.policy.*",
                         "iam.policy.create",
                         "iam.policy.list",
+                        "iam.role.*",
+                        "iam.role.create",
+                        "iam.role.list",
                         "iam.user.*",
                         "iam.user.create",
                         "iam.user.list"
@@ -10173,6 +11033,9 @@
                       "iam.policy.*",
                       "iam.policy.create",
                       "iam.policy.list",
+                      "iam.role.*",
+                      "iam.role.create",
+                      "iam.role.list",
                       "iam.user.*",
                       "iam.user.create",
                       "iam.user.list"
@@ -11535,7 +12398,9 @@
                         "iam.group-policy-attachment.revoke",
                         "iam.platform-policy-attachment.revoke",
                         "iam.policy-attachment.*",
-                        "iam.policy-attachment.revoke"
+                        "iam.policy-attachment.revoke",
+                        "iam.role-policy-attachment.*",
+                        "iam.role-policy-attachment.revoke"
                       ]
                     }
                   }
@@ -11566,7 +12431,9 @@
                       "iam.group-policy-attachment.revoke",
                       "iam.platform-policy-attachment.revoke",
                       "iam.policy-attachment.*",
-                      "iam.policy-attachment.revoke"
+                      "iam.policy-attachment.revoke",
+                      "iam.role-policy-attachment.*",
+                      "iam.role-policy-attachment.revoke"
                     ]
                   }
                 }
@@ -11798,6 +12665,322 @@
             "then": {
               "properties": {
                 "conditions": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.role.list",
+                      "iam.role.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCOUNT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.role.create",
+                      "iam.role.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCOUNT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.role.read",
+                      "iam.role.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ROLE"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ROLE"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "iam.role-policy-attachment.*",
+                        "iam.role-policy-attachment.create",
+                        "iam.role-trust.*",
+                        "iam.role-trust.set",
+                        "iam.role.*",
+                        "iam.role.delete",
+                        "iam.role.read",
+                        "iam.role.set-status",
+                        "iam.role.update"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ROLE"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.role-policy-attachment.*",
+                      "iam.role-policy-attachment.create",
+                      "iam.role-trust.*",
+                      "iam.role-trust.set",
+                      "iam.role.*",
+                      "iam.role.delete",
+                      "iam.role.read",
+                      "iam.role.set-status",
+                      "iam.role.update"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.role.update",
+                      "iam.role.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ROLE"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.role.set-status",
+                      "iam.role.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ROLE"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.role.delete",
+                      "iam.role.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ROLE"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.role-trust.set",
+                      "iam.role-trust.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ROLE"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.role-policy-attachment.create",
+                      "iam.role-policy-attachment.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ROLE"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.role-policy-attachment.revoke",
+                      "iam.role-policy-attachment.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "POLICY_ATTACHMENT"
+                      }
+                    }
+                  }
+                }
               }
             }
           },
@@ -14020,6 +15203,15 @@
                 "iam.session.revoke",
                 "iam.platform-policy-attachment.create",
                 "iam.platform-policy-attachment.revoke",
+                "iam.role.list",
+                "iam.role.create",
+                "iam.role.read",
+                "iam.role.update",
+                "iam.role.set-status",
+                "iam.role.delete",
+                "iam.role-trust.set",
+                "iam.role-policy-attachment.create",
+                "iam.role-policy-attachment.revoke",
                 "paas.execution-pool.create",
                 "paas.execution-pool.read",
                 "paas.execution-target.register",
@@ -14065,6 +15257,9 @@
                 "iam.policy-attachment.*",
                 "iam.policy-version.*",
                 "iam.policy.*",
+                "iam.role-policy-attachment.*",
+                "iam.role-trust.*",
+                "iam.role.*",
                 "iam.session.*",
                 "iam.user.*",
                 "managedservice.offering.*",
@@ -14912,6 +16107,7 @@
           "ACCOUNT",
           "USER",
           "POLICY",
+          "ROLE",
           "ORGANIZATION",
           "PRINCIPAL",
           "GROUP",
@@ -15014,12 +16210,183 @@
         ],
         "type": "object"
       },
+      "Role": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "currentTrustVersionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "description": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "Role"
+          },
+          "management": {
+            "$ref": "#/components/schemas/RoleManagement"
+          },
+          "maxSessionDurationSeconds": {
+            "maximum": 43200,
+            "minimum": 60,
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RoleStatus"
+          },
+          "tags": {
+            "description": "Literal metadata only. UTF-8 limits, unique keys and the 4096-byte aggregate name/description/tag budget require authoritative validation.",
+            "items": {
+              "$ref": "#/components/schemas/RoleTag"
+            },
+            "maxItems": 50,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "createdAt",
+          "currentTrustVersionId",
+          "description",
+          "id",
+          "kind",
+          "management",
+          "maxSessionDurationSeconds",
+          "name",
+          "resourceVersion",
+          "status",
+          "tags",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "RoleAccess": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ActionCapability"
+            },
+            "maxItems": 262,
+            "type": "array"
+          },
+          "policyAttachments": {
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/PolicyAttachment"
+                },
+                {
+                  "properties": {
+                    "revokedAt": false,
+                    "target": {
+                      "properties": {
+                        "kind": {
+                          "const": "ROLE"
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "trustVersion": {
+            "$ref": "#/components/schemas/RoleTrustVersion"
+          }
+        },
+        "required": [
+          "capabilities",
+          "policyAttachments",
+          "role",
+          "trustVersion"
+        ],
+        "type": "object"
+      },
       "RoleBindingID": {
         "allOf": [
           {
             "$ref": "#/components/schemas/ID"
           }
         ]
+      },
+      "RoleDeletion": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "deletedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "RoleDeletion"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "revokedPolicyAttachments": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "deletedAt",
+          "id",
+          "kind",
+          "name",
+          "resourceVersion",
+          "revokedPolicyAttachments"
+        ],
+        "type": "object"
       },
       "RoleID": {
         "allOf": [
@@ -15028,6 +16395,95 @@
           }
         ]
       },
+      "RoleList": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RoleListing"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "const": "RoleList"
+          },
+          "nextAfter": {
+            "maxLength": 384,
+            "minLength": 5,
+            "not": {
+              "pattern": "[^A-Za-z0-9._-]"
+            },
+            "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "RoleListing": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/ActionCapability"
+            },
+            "maxItems": 6,
+            "type": "array"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          }
+        },
+        "required": [
+          "capabilities",
+          "role"
+        ],
+        "type": "object"
+      },
+      "RoleManagement": {
+        "enum": [
+          "CUSTOMER"
+        ],
+        "type": "string"
+      },
+      "RoleStatus": {
+        "enum": [
+          "ACTIVE",
+          "DISABLED"
+        ],
+        "type": "string"
+      },
+      "RoleTag": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "type": "object"
+      },
       "RoleTrustVersion": {
         "additionalProperties": false,
         "properties": {
@@ -15035,7 +16491,7 @@
             "$ref": "#/components/schemas/ID"
           },
           "apiVersion": {
-            "type": "string"
+            "const": "iam.matrix.xiak.com/v1"
           },
           "contentDigest": {
             "pattern": "^sha256:[0-9a-f]{64}$",
@@ -15051,7 +16507,7 @@
             "$ref": "#/components/schemas/ID"
           },
           "kind": {
-            "type": "string"
+            "const": "RoleTrustVersion"
           },
           "roleId": {
             "$ref": "#/components/schemas/ID"
@@ -15075,6 +16531,47 @@
             "$ref": "#/components/schemas/ID"
           }
         ]
+      },
+      "RoleTrustVersionList": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RoleTrustVersion"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "const": "RoleTrustVersionList"
+          },
+          "nextAfter": {
+            "maxLength": 384,
+            "minLength": 5,
+            "not": {
+              "pattern": "[^A-Za-z0-9._-]"
+            },
+            "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "roleId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "items",
+          "kind",
+          "roleId"
+        ],
+        "type": "object"
       },
       "RootIdentity": {
         "additionalProperties": false,
@@ -15293,6 +16790,50 @@
         ],
         "type": "object"
       },
+      "SetRoleStatusRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RoleStatus"
+          }
+        },
+        "required": [
+          "requestId",
+          "resourceVersion",
+          "status"
+        ],
+        "type": "object"
+      },
+      "SetRoleTrustPolicyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/TrustPolicyDocument"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document",
+          "requestId",
+          "resourceVersion"
+        ],
+        "type": "object"
+      },
       "SetUserPermissionBoundaryRequest": {
         "additionalProperties": false,
         "properties": {
@@ -15478,6 +17019,51 @@
           "displayName",
           "requestId",
           "resourceVersion"
+        ],
+        "type": "object"
+      },
+      "UpdateRoleRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "maxSessionDurationSeconds": {
+            "maximum": 43200,
+            "minimum": 60,
+            "type": "integer"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "tags": {
+            "description": "Literal metadata only. UTF-8 limits, unique keys and the 4096-byte aggregate name/description/tag budget require authoritative validation.",
+            "items": {
+              "$ref": "#/components/schemas/RoleTag"
+            },
+            "maxItems": 50,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "description",
+          "maxSessionDurationSeconds",
+          "name",
+          "requestId",
+          "resourceVersion",
+          "tags"
         ],
         "type": "object"
       },
@@ -17752,6 +19338,529 @@
           }
         },
         "summary": "Revoke a policy attachment"
+      }
+    },
+    "/v1/roles": {
+      "get": {
+        "operationId": "listRoles",
+        "parameters": [
+          {
+            "description": "Opaque signed continuation bound to the current account, session, query and authority revision. Pass nextAfter unchanged; raw resource IDs are not accepted.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "maxLength": 384,
+              "minLength": 5,
+              "not": {
+                "pattern": "[^A-Za-z0-9._-]"
+              },
+              "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List current-account roles and exact resource capabilities"
+      },
+      "post": {
+        "operationId": "createRole",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create a customer role without credentials or permission attachments"
+      }
+    },
+    "/v1/roles/{roleId}": {
+      "delete": {
+        "operationId": "deleteRole",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "roleId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDeletion"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Tombstone a role and revoke its active attachments"
+      },
+      "get": {
+        "operationId": "getRole",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "roleId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleAccess"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read role metadata, current trust and tenant policy attachments"
+      },
+      "patch": {
+        "operationId": "updateRole",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "roleId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Replace editable role metadata at the expected revision"
+      }
+    },
+    "/v1/roles/{roleId}/trust-policy": {
+      "put": {
+        "operationId": "setRoleTrustPolicy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "roleId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRoleTrustPolicyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Publish and select one immutable trust version"
+      }
+    },
+    "/v1/roles/{roleId}/trust-versions": {
+      "get": {
+        "operationId": "listRoleTrustVersions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "roleId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque signed continuation bound to the current account, session, query and authority revision. Pass nextAfter unchanged; raw resource IDs are not accepted.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "maxLength": 384,
+              "minLength": 5,
+              "not": {
+                "pattern": "[^A-Za-z0-9._-]"
+              },
+              "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleTrustVersionList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List this role's immutable trust versions"
+      }
+    },
+    "/v1/roles/{roleId}/trust-versions/{versionId}": {
+      "get": {
+        "operationId": "getRoleTrustVersion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "roleId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "versionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleTrustVersion"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read an exact version in this role"
+      }
+    },
+    "/v1/roles/{roleId}:set-status": {
+      "post": {
+        "operationId": "setRoleStatus",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "roleId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetRoleStatusRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Set role availability without stopping tenant workloads"
       }
     },
     "/v1/service-identity": {

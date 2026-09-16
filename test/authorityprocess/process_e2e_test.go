@@ -433,6 +433,13 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		if response := performJSON(t, http.MethodGet, endpoint+"/v1/groups", primary.Credential, nil); response.Status != http.StatusOK {
 			t.Fatal("fixed SYSTEM management ceiling became unreachable")
 		}
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/roles", primary.Credential, nil); response.Status != http.StatusForbidden {
+			t.Fatal("new IAM profile silently granted retained Root the role directory")
+		}
+		if response := performJSON(t, http.MethodPost, endpoint+"/v1/roles", primary.Credential,
+			iamv1.CreateRoleRequest{Name: "Unpublished role", Tags: []iamv1.RoleTag{}, TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}}, RequestID: fmt.Sprintf("retained-role-denied-%d", restart)}); response.Status != http.StatusForbidden {
+			t.Fatal("retained Root bypassed current Role PDP")
+		}
 		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", customerLogin.Credential, nil); response.Status != http.StatusServiceUnavailable {
 			t.Fatal("unknown legacy CUSTOMER interpretation became current authority")
 		}
@@ -442,6 +449,48 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		current.stop()
 	}
 	current := start(currentBinary)
+	// A new product declaration never rewrites old SYSTEM defaults. The real
+	// retained Root must publish and attach explicit current TENANT authority.
+	var oldAdminDefault iamv1.PolicyVersionID
+	if err := admin.QueryRow(ctx, "SELECT default_version_id FROM iam.policies WHERE id=$1", iamv1.SystemPolicyAccountAdministrator).Scan(&oldAdminDefault); err != nil {
+		t.Fatal("read original SYSTEM default")
+	}
+	rolePolicyRequest := iamv1.CreatePolicyRequest{DisplayName: "Explicit retained role management", RequestID: "retained-role-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant, Statements: []iamv1.PolicyStatement{{SID: "roles", Effect: iamv1.PolicyAllow,
+			Actions:   []iamv1.Action{iamv1.ActionIAMRoleList, iamv1.ActionIAMRoleCreate, iamv1.ActionIAMRoleRead, iamv1.ActionIAMRoleDelete},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceAnyInAuthority}, {Kind: iamv1.ResourceRole, Match: iamv1.PolicyResourceAnyInAuthority}}}}}}
+	var rolePolicy iamv1.PolicyDetail
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/policies", primary.Credential, rolePolicyRequest)
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &rolePolicy) != nil || iamv1.ValidatePolicyDetail(rolePolicy) != nil || rolePolicy.Policy.Scope != iamv1.AuthorityScopeTenant {
+		t.Fatal("retained Root could not explicitly publish current Role authority")
+	}
+	roleGrant := createIAMPolicyAttachment(t, endpoint, primary.Credential, "principal-admin", rolePolicy.Policy.ID, "retained-role-attach")
+	var role iamv1.Role
+	roleCreate := iamv1.CreateRoleRequest{Name: "Explicit retained role", Tags: []iamv1.RoleTag{}, TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}}, RequestID: "retained-role-create"}
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/roles", primary.Credential, roleCreate)
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &role) != nil || iamv1.ValidateRole(role) != nil {
+		t.Fatal("explicit current TENANT grant did not permit retained Root role creation")
+	}
+	response = performJSON(t, http.MethodDelete, endpoint+"/v1/roles/"+string(role.ID), primary.Credential, iamv1.DeleteRoleRequest{ResourceVersion: role.ResourceVersion, RequestID: "retained-role-delete"})
+	if response.Status != http.StatusOK {
+		t.Fatal("retained Root could not explicitly delete its role")
+	}
+	revokeIAMPolicyAttachment(t, endpoint, primary.Credential, roleGrant.ID, roleGrant.ResourceVersion, "retained-role-revoke")
+	current.stop()
+	if err := iammigration.Up(ctx, admin); err != nil {
+		t.Fatal("replay current schema with terminal role state", err)
+	}
+	current = start(currentBinary)
+	if response := performJSON(t, http.MethodGet, endpoint+"/v1/roles", primary.Credential, nil); response.Status != http.StatusForbidden {
+		t.Fatal("replay or restart revived revoked Role authority")
+	}
+	var retainedRoleState bool
+	if err := admin.QueryRow(ctx, `SELECT (SELECT default_version_id=$1 FROM iam.policies WHERE id=$2)
+		AND EXISTS(SELECT 1 FROM iam.roles WHERE tenant_id='organization-process' AND id=$3 AND deleted_at IS NOT NULL AND resource_version=2)
+		AND EXISTS(SELECT 1 FROM iam.policy_attachments WHERE tenant_id='organization-process' AND id=$4 AND revoked_at IS NOT NULL AND resource_version=2)`,
+		oldAdminDefault, iamv1.SystemPolicyAccountAdministrator, role.ID, roleGrant.ID).Scan(&retainedRoleState); err != nil || !retainedRoleState {
+		t.Fatal("Role registration/replay changed SYSTEM default or terminal authority", err)
+	}
 	response = performJSON(t, http.MethodPost, endpoint+"/v1/accounts/retained-paused:set-status", keeperLogin.Credential,
 		iamv1.SetAccountStatusRequest{Status: iamv1.AccountActive, ResourceVersion: pausedAccount.ResourceVersion, RequestID: "policy-upgrade-paused-enable"})
 	if response.Status != http.StatusOK {
@@ -1268,7 +1317,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 24, Audit: 13, PaaS: 1}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 24, Audit: 14, PaaS: 1}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -3044,6 +3093,9 @@ func proveTenantAccountProcesses(
 	retainedQuota, retainedDatabase, resourceSecrets := proveTenantResourceProcesses(t, ctx, admin, endpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, childLogin)
 	sensitive := append(resourceSecrets, initial, changed, primary.Credential, childLogin.Credential)
 	sensitive = append(sensitive, proveGroupResourceProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
+	roleOperator := loginIAM(t, endpoint, "customer.primary", changed, "process-role-operator-login")
+	sensitive = append(sensitive, roleOperator.Credential)
+	sensitive = append(sensitive, proveRoleManagementProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, roleOperator.Credential, withAuditOutage, restartIAM)...)
 	readAccount := func(id string) iamv1.Account {
 		t.Helper()
 		response := performJSON(t, http.MethodGet, endpoint+"/v1/accounts/"+id, bearer, nil)
@@ -3187,6 +3239,132 @@ func proveTenantAccountProcesses(
 
 // These are real application resources, database-service records and reserved
 // quota. The local provisioner gate separately proves a running engine.
+func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, ownerBearer, roleBearer string,
+	withAuditOutage func(func()), restartIAM func()) []string {
+	t.Helper()
+	const tenant = "organization-process-customer"
+	call := func(method, endpoint, path, bearer string, body any, want int, result any) {
+		t.Helper()
+		response := performJSON(t, method, endpoint+path, bearer, body)
+		if response.Status != want {
+			t.Fatalf("role process %s %s status=%d want=%d", method, path, response.Status, want)
+		}
+		if result != nil {
+			reflect.ValueOf(result).Elem().SetZero()
+			decoder := json.NewDecoder(bytes.NewReader(response.Body))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(result) != nil {
+				t.Fatal("role process returned an invalid contract")
+			}
+		}
+	}
+	user := createIAMUser(t, iamEndpoint, ownerBearer, "role.candidate", "Role candidate", initialDeveloperPassword, "process-role-user")
+	member := loginIAM(t, iamEndpoint, "role.candidate@"+tenant, initialDeveloperPassword, "process-role-user-login")
+	changePasswordIAM(t, iamEndpoint, member.Credential, initialDeveloperPassword, changedDeveloperPassword, "process-role-user-password")
+	trust := iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "candidate", Effect: iamv1.PolicyAllow,
+		Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: user.ID}}}}}
+	empty := iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}}
+	create := iamv1.CreateRoleRequest{Name: "Application readers", Tags: []iamv1.RoleTag{}, TrustPolicy: empty, RequestID: "process-role-create"}
+	var home, role, replay iamv1.Role
+	call(http.MethodPost, iamEndpoint, "/v1/roles", homeBearer, create, http.StatusCreated, &home)
+	create.TrustPolicy = trust
+	var actor iamv1.CurrentIdentity
+	call(http.MethodGet, iamEndpoint, "/v1/auth/me", roleBearer, nil, http.StatusOK, &actor)
+	// This workload is authorized as the USER owner, never by the unissued Role.
+	operation := createPaaSApplication(t, paasEndpoint, ownerBearer, "application-role-unrelated", "role-unrelated", "process-role-owner-application", http.StatusCreated)
+	withAuditOutage(func() {
+		call(http.MethodPost, iamEndpoint, "/v1/roles", roleBearer, create, http.StatusCreated, &role)
+		call(http.MethodPost, replicaEndpoint, "/v1/roles", roleBearer, create, http.StatusCreated, &replay)
+		if iamv1.ValidateRole(role) != nil || !reflect.DeepEqual(role, replay) || role.ID == home.ID || role.AccountID != tenant || home.AccountID != "organization-process" || role.Name != home.Name {
+			t.Fatal("role process create/replay mixed account identity")
+		}
+		path := "/v1/roles/" + string(role.ID)
+		for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+			call(http.MethodGet, endpoint, path, homeBearer, nil, http.StatusForbidden, nil)
+			call(http.MethodGet, endpoint, "/v1/roles/"+string(home.ID), ownerBearer, nil, http.StatusForbidden, nil)
+			var access iamv1.RoleAccess
+			call(http.MethodGet, endpoint, path, ownerBearer, nil, http.StatusOK, &access)
+			if iamv1.ValidateRoleAccess(access) != nil || len(access.PolicyAttachments) != 0 || len(access.TrustVersion.Document.Statements) != 1 {
+				t.Fatal("replica role did not preserve precise empty permission/trust state")
+			}
+		}
+		var attachment iamv1.PolicyAttachment
+		grant := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)},
+			PolicyID: iamv1.SystemPolicyPaaSDeveloper, PolicyResourceVersion: 1, RequestID: "process-role-grant"}
+		call(http.MethodPost, iamEndpoint, "/v1/policy-attachments", roleBearer, grant, http.StatusOK, &attachment)
+		if iamv1.ValidatePolicyAttachment(attachment) != nil || attachment.Target != grant.Target || attachment.Scope != iamv1.AuthorityScopeTenant {
+			t.Fatal("role attachment lost its explicit tenant/ROLE discriminator")
+		}
+		// Merely trusting a user must not merge Role permissions into LoginSession.
+		getPaaSApplication(t, paasEndpoint, member.Credential, operation.Target.ID, http.StatusForbidden)
+		createPaaSApplication(t, paasEndpoint, member.Credential, "application-role-implicit-denied", "role-implicit-denied", "process-role-no-implicit-assume", http.StatusForbidden)
+		assertPaaSApplicationAbsent(t, ctx, admin, "application-role-implicit-denied")
+		call(http.MethodGet, iamEndpoint, "/v1/auth/me", string(role.ID), nil, http.StatusUnauthorized, nil)
+		call(http.MethodPost, iamEndpoint, "/v1/sts/assume-role", member.Credential, map[string]any{"roleId": role.ID, "requestId": "process-role-not-issued"}, http.StatusNotFound, nil)
+		call(http.MethodPatch, replicaEndpoint, path, roleBearer, iamv1.UpdateRoleRequest{Name: role.Name, Description: "Current managed role", Tags: []iamv1.RoleTag{}, MaxSessionDurationSeconds: 900,
+			ResourceVersion: role.ResourceVersion, RequestID: "process-role-update"}, http.StatusOK, &role)
+		call(http.MethodPost, iamEndpoint, path+":set-status", roleBearer, iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: role.ResourceVersion, RequestID: "process-role-disable"}, http.StatusOK, &role)
+		call(http.MethodPost, replicaEndpoint, path+":set-status", roleBearer, iamv1.SetRoleStatusRequest{Status: iamv1.RoleActive, ResourceVersion: role.ResourceVersion, RequestID: "process-role-enable"}, http.StatusOK, &role)
+		call(http.MethodPut, iamEndpoint, path+"/trust-policy", roleBearer, iamv1.SetRoleTrustPolicyRequest{Document: empty, ResourceVersion: role.ResourceVersion, RequestID: "process-role-trust"}, http.StatusOK, &role)
+		var history iamv1.RoleTrustVersionList
+		call(http.MethodGet, replicaEndpoint, path+"/trust-versions", ownerBearer, nil, http.StatusOK, &history)
+		if iamv1.ValidateRoleTrustVersionList(history) != nil || len(history.Items) != 2 {
+			t.Fatal("role process rewrote its original immutable trust")
+		}
+		remove := iamv1.DeleteRoleRequest{ResourceVersion: role.ResourceVersion, RequestID: "process-role-delete"}
+		var deletion, repeated iamv1.RoleDeletion
+		call(http.MethodDelete, replicaEndpoint, path, roleBearer, remove, http.StatusOK, &deletion)
+		call(http.MethodDelete, iamEndpoint, path, roleBearer, remove, http.StatusOK, &repeated)
+		if iamv1.ValidateRoleDeletion(deletion) != nil || deletion != repeated || deletion.RevokedPolicyAttachments != 1 {
+			t.Fatal("role deletion did not atomically close its attachment once")
+		}
+		call(http.MethodPost, iamEndpoint, "/v1/auth/logout", roleBearer, map[string]any{"requestId": "process-role-operator-logout"}, http.StatusOK, nil)
+		call(http.MethodGet, replicaEndpoint, "/v1/auth/me", roleBearer, nil, http.StatusUnauthorized, nil)
+	})
+	// Delivery uses committed IAM facts, not the now-revoked original session.
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	for _, action := range []auditv1.Action{auditv1.ActionIAMRoleCreated, auditv1.ActionIAMRoleUpdated, auditv1.ActionIAMRoleDisabled, auditv1.ActionIAMRoleEnabled, auditv1.ActionIAMRoleTrustSet, auditv1.ActionIAMRoleDeleted} {
+		page := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
+		if page.TenantID != tenant || len(page.Records) != 1 || page.NextCursor != "" {
+			t.Fatalf("role action %s did not append exactly one tenant fact", action)
+		}
+		event := page.Records[0].Event
+		if page.Records[0].Source != auditv1.SourceIAM || event.Target.Kind != auditv1.TargetRole || event.Target.ID != string(role.ID) || event.Actor.Type != auditv1.ActorUser || event.Actor.ID != auditv1.ActorID(actor.User.ID) || event.IAMDecisionID == "" || event.InstallationID != "" {
+			t.Fatal("role fact changed current tenant, USER or final target proof")
+		}
+		var ingested auditv1.IngestionResult
+		call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, event, http.StatusOK, &ingested)
+		if ingested.Outcome != auditv1.IngestionDuplicate {
+			t.Fatal("role history replay appended after its originating session was revoked")
+		}
+		forged := event
+		forged.Target.ID = string(home.ID)
+		call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, forged, http.StatusForbidden, nil)
+		forged = event
+		forged.TenantID = "organization-process"
+		call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, forged, http.StatusForbidden, nil)
+	}
+	restartIAM()
+	for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+		call(http.MethodGet, endpoint, "/v1/roles/"+string(role.ID), ownerBearer, nil, http.StatusForbidden, nil)
+		call(http.MethodPost, endpoint, "/v1/roles", ownerBearer, create, http.StatusConflict, nil)
+		call(http.MethodGet, endpoint, "/v1/roles/"+string(home.ID), homeBearer, nil, http.StatusOK, nil)
+		call(http.MethodGet, endpoint, "/v1/auth/me", roleBearer, nil, http.StatusUnauthorized, nil)
+	}
+	getPaaSApplication(t, paasEndpoint, ownerBearer, operation.Target.ID, http.StatusOK)
+	var retained paasv1.Operation
+	call(http.MethodGet, paasEndpoint, "/v1/operations/"+string(operation.ID), ownerBearer, nil, http.StatusOK, &retained)
+	if retained.Scope != operation.Scope || retained.RequestedBy != operation.RequestedBy {
+		t.Fatal("role deletion changed accepted USER workload/Operation ownership")
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.TenantID != tenant || chain.State != auditv1.VerificationVerified || !chain.Complete {
+		t.Fatal("role lifecycle broke the immutable tenant chain")
+	}
+	return []string{member.Credential}
+}
+
 func proveGroupResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, ownerBearer string,
 	withAuditOutage func(func()), restartIAM func()) []string {
 	t.Helper()

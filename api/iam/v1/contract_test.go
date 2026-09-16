@@ -27,6 +27,94 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func TestRoleMetadataAndAccessAreSeparateFromLoginAuthority(t *testing.T) {
+	now := time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	role := Role{APIVersion: APIVersion, Kind: "Role", ID: "role-a", AccountID: "account-a", Name: "Readers",
+		Tags: []RoleTag{}, Management: RoleCustomerManaged, Status: RoleActive, MaxSessionDurationSeconds: 3600,
+		ResourceVersion: 1, CurrentTrustVersionID: "trust-a", CreatedAt: now, UpdatedAt: now}
+	document := sampleRoleTrustDocument()
+	_, digest, err := CanonicalizeTrustPolicyDocument(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	access := RoleAccess{Role: role, TrustVersion: RoleTrustVersion{APIVersion: APIVersion, Kind: "RoleTrustVersion", ID: "trust-a",
+		AccountID: role.AccountID, RoleID: role.ID, Document: document, ContentDigest: digest, CreatedAt: now}, PolicyAttachments: []PolicyAttachment{}}
+	for _, action := range []Action{ActionIAMRoleRead, ActionIAMRoleUpdate, ActionIAMRoleSetStatus, ActionIAMRoleDelete, ActionIAMRoleTrustSet, ActionIAMRolePolicyAttachmentCreate} {
+		access.Capabilities = append(access.Capabilities, ActionCapability{Action: action, Resource: ResourceReference{Kind: ResourceRole, ID: string(role.ID)}, RestrictionReason: CapabilityAuthorityRequired})
+	}
+	if ValidateRoleAccess(access) != nil {
+		t.Fatal("valid closed role detail rejected")
+	}
+	for name, change := range map[string]func(*RoleAccess){
+		"foreign trust account":    func(v *RoleAccess) { v.TrustVersion.AccountID = "other" },
+		"foreign trust role":       func(v *RoleAccess) { v.TrustVersion.RoleID = "other" },
+		"unselected trust":         func(v *RoleAccess) { v.TrustVersion.ID = "other" },
+		"trust beyond revision":    func(v *RoleAccess) { v.TrustVersion.CreatedAt = now.Add(time.Second) },
+		"managed service selector": func(v *RoleAccess) { v.Role.Management = "SERVICE" },
+		"null tags":                func(v *RoleAccess) { v.Role.Tags = nil },
+		"duplicate tag key":        func(v *RoleAccess) { v.Role.Tags = []RoleTag{{"env", "a"}, {"env", "b"}} },
+		"control tag":              func(v *RoleAccess) { v.Role.Tags = []RoleTag{{"env", "a\u0085"}} },
+		"short duration":           func(v *RoleAccess) { v.Role.MaxSessionDurationSeconds = 59 },
+		"long duration":            func(v *RoleAccess) { v.Role.MaxSessionDurationSeconds = 43201 },
+		"missing capabilities":     func(v *RoleAccess) { v.Capabilities = nil },
+		"implicit attachments":     func(v *RoleAccess) { v.PolicyAttachments = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := access
+			change(&value)
+			if ValidateRoleAccess(value) == nil {
+				t.Fatal("invalid role detail accepted")
+			}
+		})
+	}
+	page := RoleList{APIVersion: APIVersion, Kind: "RoleList", AccountID: role.AccountID, Items: []RoleListing{}}
+	for index := range DirectoryPageSize {
+		item := RoleListing{Role: role, Capabilities: slices.Clone(access.Capabilities)}
+		item.Role.ID = RoleID(fmt.Sprintf("role-%03d", index))
+		item.Role.Name = strings.Repeat("<", 64)
+		item.Role.Description = strings.Repeat("&", 512)
+		remaining := 4096 - 64 - 512
+		for key := 0; remaining > 0; key++ {
+			name := fmt.Sprintf("tag%02d", key)
+			size := min(256, remaining-len(name))
+			item.Role.Tags = append(item.Role.Tags, RoleTag{name, strings.Repeat(">", size)})
+			remaining -= len(name) + size
+		}
+		for i := range item.Capabilities {
+			item.Capabilities[i].Resource.ID = string(item.Role.ID)
+		}
+		page.Items = append(page.Items, item)
+	}
+	if ValidateRoleList(page) != nil {
+		t.Fatal("valid full metadata directory exceeds declared budget")
+	}
+	page.Items[0].Role.Tags[len(page.Items[0].Role.Tags)-1].Value += "x"
+	if ValidateRoleList(page) == nil {
+		t.Fatal("aggregate role metadata budget was bypassed")
+	}
+}
+
+func TestRoleManagementProfilePreservesRegisteredRevisionOne(t *testing.T) {
+	archives := HistoricalAuthorizationProfiles()
+	if len(archives) != 1 {
+		t.Fatal("missing exact IAM archive")
+	}
+	_, digest, err := CanonicalizeAuthorizationProfile(archives[0])
+	if err != nil || digest != "sha256:9e6176c37a0b1566987e6c666c1fef9da1f81b90078c6d7fb8a91473ae666a44" {
+		t.Fatal("registered IAM revision one was rewritten")
+	}
+	for _, action := range archives[0].Actions {
+		if action.Action == ActionIAMRoleCreate {
+			t.Fatal("historical IAM profile silently gained role authority")
+		}
+	}
+	archives[0].Actions[0].Action = "iam.invalid.mutation"
+	_, again, err := CanonicalizeAuthorizationProfile(HistoricalAuthorizationProfiles()[0])
+	if err != nil || again != digest {
+		t.Fatal("caller changed archived source declaration")
+	}
+}
+
 func sampleRoleTrustDocument() TrustPolicyDocument {
 	return TrustPolicyDocument{LanguageVersion: TrustPolicyLanguageVersion, Statements: []TrustPolicyStatement{
 		{SID: "z-allow", Effect: PolicyAllow, Principals: []TrustPrincipal{{Type: PrincipalUser, ID: "user-b"}, {Type: PrincipalUser, ID: "user-a"}}},
@@ -3118,6 +3206,8 @@ func TestCurrentIdentityUsesOnlyItsLivePolicyGrantSources(t *testing.T) {
 			blocked(ActionIAMPolicyList, ResourceAccount, "account-a"),
 			blocked(ActionIAMGroupList, ResourceAccount, "account-a"),
 			blocked(ActionIAMGroupCreate, ResourceAccount, "account-a"),
+			blocked(ActionIAMRoleList, ResourceAccount, "account-a"),
+			blocked(ActionIAMRoleCreate, ResourceAccount, "account-a"),
 		}}
 	if ValidateCurrentIdentity(identity) != nil {
 		t.Fatal("current policy identity rejected")

@@ -292,7 +292,7 @@ type RevokePolicyAttachmentRequest struct {
 func ValidateCreatePolicyAttachmentRequest(value CreatePolicyAttachmentRequest) error {
 	// Group is the only inherited carrier implemented in this slice. Role and
 	// service-credential management remain closed until their own workflows.
-	if value.Target.Kind != PolicyTargetUser && value.Target.Kind != PolicyTargetGroup {
+	if value.Target.Kind != PolicyTargetUser && value.Target.Kind != PolicyTargetGroup && value.Target.Kind != PolicyTargetRole {
 		return ErrInvalidPolicy
 	}
 	return errors.Join(ValidateID("target.id", value.Target.ID), ValidateID("policyId", string(value.PolicyID)),

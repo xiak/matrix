@@ -752,6 +752,14 @@ func ValidateCurrentIdentity(value CurrentIdentity) error {
 			Action   Action
 			Resource ResourceReference
 		}{ActionIAMGroupCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMRoleList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMRoleCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
 	)
 	if validateCapabilities(value.Capabilities, expected) != nil {
 		return errors.New("current identity capabilities are invalid")

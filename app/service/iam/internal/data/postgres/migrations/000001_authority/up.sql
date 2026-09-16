@@ -316,7 +316,7 @@ ALTER TABLE iam.policy_attachments ADD CONSTRAINT policy_attachments_values_vali
         id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND policy_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND target_kind IN ('USER','SERVICE_ACCOUNT','GROUP')
+        AND target_kind IN ('USER','SERVICE_ACCOUNT','GROUP','ROLE')
         AND ((authority_scope='TENANT' AND installation_id IS NULL)
           OR (authority_scope='INSTALLATION' AND target_kind='USER'
               AND installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' AND installation_id IS NOT NULL)
@@ -515,6 +515,11 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE='23503', MESSAGE='IAM attachment group is unavailable';
         END IF;
         subject_kind := 'GROUP';
+    ELSIF NEW.target_kind='ROLE' THEN
+        PERFORM 1 FROM iam.roles target_role WHERE target_role.tenant_id=NEW.tenant_id
+          AND target_role.id=NEW.target_id AND target_role.deleted_at IS NULL FOR KEY SHARE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='23503', MESSAGE='IAM attachment role is unavailable'; END IF;
+        subject_kind := 'ROLE';
     ELSE
         SELECT principal.principal_type INTO subject_kind FROM iam.principals AS principal
             WHERE principal.tenant_id=NEW.tenant_id AND principal.id=NEW.target_id;
@@ -1061,6 +1066,7 @@ BEGIN
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
+            'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',
@@ -1399,6 +1405,7 @@ BEGIN
            AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='iam.policy_attachments'::regclass
                 AND attname='principal_id' AND NOT attisdropped)
            AND iam.policy_attachment_contract_ready()
+           AND iam.role_contract_ready()
            AND to_regprocedure('iam.create_group(text,text,text,text,text,text,jsonb)') IS NOT NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc AS policy_entry
                 WHERE policy_entry.oid IN (to_regprocedure('iam.read_policy(text,text,text,text)'),
@@ -2638,7 +2645,7 @@ DECLARE
 BEGIN
     IF COALESCE(submitted_tenant_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_attachment_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_target_kind IS NULL OR submitted_target_kind NOT IN ('USER','GROUP')
+       OR submitted_target_kind IS NULL OR submitted_target_kind NOT IN ('USER','GROUP','ROLE')
        OR COALESCE(actor_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_target_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_policy_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -2667,16 +2674,20 @@ BEGIN
          WHERE tenant_id=submitted_tenant_id AND id=submitted_target_id AND principal_type='USER' AND status='ACTIVE'
            AND deleted_at IS NULL FOR UPDATE;
         IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment target is unavailable'; END IF;
-    ELSE
+    ELSIF submitted_target_kind='GROUP' THEN
         PERFORM 1 FROM iam.groups
          WHERE tenant_id=submitted_tenant_id AND id=submitted_target_id AND deleted_at IS NULL FOR UPDATE;
         IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment group is unavailable'; END IF;
+    ELSE
+        PERFORM iam.assert_role_writer(submitted_tenant_id,submitted_actor_principal_id,actor_session_id,NULL);
+        PERFORM 1 FROM iam.roles WHERE tenant_id=submitted_tenant_id AND id=submitted_target_id AND deleted_at IS NULL FOR UPDATE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment role is unavailable'; END IF;
     END IF;
     SELECT * INTO policy FROM iam.policies
      WHERE id=submitted_policy_id AND status='ACTIVE'
        AND (owner_tenant_id IS NULL OR owner_tenant_id=submitted_tenant_id) FOR SHARE;
     IF NOT FOUND OR policy.authority_scope NOT IN ('TENANT','INSTALLATION')
-       OR (submitted_target_kind='GROUP' AND policy.authority_scope<>'TENANT') THEN
+       OR (submitted_target_kind IN ('GROUP','ROLE') AND policy.authority_scope<>'TENANT') THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment policy is unavailable';
     END IF;
     IF policy.resource_version <> submitted_policy_version THEN
@@ -2686,6 +2697,7 @@ BEGIN
         SELECT 1 FROM iam.bootstrap_receipts WHERE organization_id=submitted_tenant_id
     )) THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='platform target is unavailable'; END IF;
     action_name := CASE WHEN submitted_target_kind='GROUP' THEN 'iam.group-policy-attachment.create'
+                   WHEN submitted_target_kind='ROLE' THEN 'iam.role-policy-attachment.create'
                    WHEN policy.authority_scope='INSTALLATION' THEN 'iam.platform-policy-attachment.create'
                    ELSE 'iam.policy-attachment.create' END;
     event_action := CASE policy.authority_scope WHEN 'INSTALLATION' THEN 'iam.platform-policy-attachment.created'
@@ -2745,8 +2757,8 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable'; END IF;
     SELECT * INTO stored FROM iam.policy_attachments
      WHERE tenant_id=submitted_tenant_id AND id=submitted_attachment_id;
-    IF NOT FOUND OR stored.target_kind NOT IN ('USER','GROUP') OR stored.authority_scope NOT IN ('TENANT','INSTALLATION')
-       OR (stored.target_kind='GROUP' AND stored.authority_scope<>'TENANT') THEN
+    IF NOT FOUND OR stored.target_kind NOT IN ('USER','GROUP','ROLE') OR stored.authority_scope NOT IN ('TENANT','INSTALLATION')
+       OR (stored.target_kind IN ('GROUP','ROLE') AND stored.authority_scope<>'TENANT') THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment is unavailable';
     END IF;
     -- The immutable target may be read before locking; mutation locks always
@@ -2765,6 +2777,10 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment session is unavailable'; END IF;
     IF stored.target_kind='GROUP' THEN
         PERFORM 1 FROM iam.groups WHERE tenant_id=submitted_tenant_id AND id=stored.target_id FOR UPDATE;
+    ELSIF stored.target_kind='ROLE' THEN
+        PERFORM iam.assert_role_writer(submitted_tenant_id,submitted_actor_principal_id,actor_session_id,NULL);
+        PERFORM 1 FROM iam.roles WHERE tenant_id=submitted_tenant_id AND id=stored.target_id AND deleted_at IS NULL FOR UPDATE;
+        IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment role is unavailable'; END IF;
     ELSE
         PERFORM 1 FROM iam.principals WHERE tenant_id=submitted_tenant_id AND id=stored.target_id FOR UPDATE;
     END IF;
@@ -2772,6 +2788,7 @@ BEGIN
     SELECT * INTO stored FROM iam.policy_attachments
      WHERE tenant_id=submitted_tenant_id AND id=submitted_attachment_id FOR UPDATE;
     action_name := CASE WHEN stored.target_kind='GROUP' THEN 'iam.group-policy-attachment.revoke'
+                   WHEN stored.target_kind='ROLE' THEN 'iam.role-policy-attachment.revoke'
                    WHEN stored.authority_scope='INSTALLATION' THEN 'iam.platform-policy-attachment.revoke'
                    ELSE 'iam.policy-attachment.revoke' END;
     event_action := CASE stored.authority_scope WHEN 'INSTALLATION' THEN 'iam.platform-policy-attachment.revoked'

@@ -14,6 +14,55 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestRoleManagementRequestsKeepSelectorsAndDefaultsClosed(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	create := `{"name":"Readers","tags":[],"trustPolicy":{"languageVersion":"1","statements":[]},"requestId":"create-role"}`
+	update := `{"name":"Readers","description":"","tags":[],"maxSessionDurationSeconds":3600,"resourceVersion":1,"requestId":"update-role"}`
+	for _, test := range []struct {
+		name, schema, wire string
+		valid              bool
+	}{
+		{"default duration", "CreateRoleRequest", create, true},
+		{"minimum duration", "CreateRoleRequest", strings.Replace(create, `"tags"`, `"maxSessionDurationSeconds":60,"tags"`, 1), true},
+		{"null duration", "CreateRoleRequest", strings.Replace(create, `"tags"`, `"maxSessionDurationSeconds":null,"tags"`, 1), false},
+		{"zero duration", "CreateRoleRequest", strings.Replace(create, `"tags"`, `"maxSessionDurationSeconds":0,"tags"`, 1), false},
+		{"null description", "CreateRoleRequest", strings.Replace(create, `"tags"`, `"description":null,"tags"`, 1), false},
+		{"caller account", "CreateRoleRequest", strings.Replace(create, `"tags"`, `"accountId":"other","tags"`, 1), false},
+		{"caller session", "CreateRoleRequest", strings.Replace(create, `"tags"`, `"actorSessionId":"other","tags"`, 1), false},
+		{"caller manager", "CreateRoleRequest", strings.Replace(create, `"tags"`, `"management":"SERVICE","tags"`, 1), false},
+		{"null tags", "CreateRoleRequest", strings.Replace(create, `"tags":[]`, `"tags":null`, 1), false},
+		{"missing tag value", "CreateRoleRequest", strings.Replace(create, `"tags":[]`, `"tags":[{"key":"env"}]`, 1), false},
+		{"null tag value", "CreateRoleRequest", strings.Replace(create, `"tags":[]`, `"tags":[{"key":"env","value":null}]`, 1), false},
+		{"empty tag value", "CreateRoleRequest", strings.Replace(create, `"tags":[]`, `"tags":[{"key":"env","value":""}]`, 1), true},
+		{"complete replacement", "UpdateRoleRequest", update, true},
+		{"missing replacement description", "UpdateRoleRequest", strings.Replace(update, `"description":"",`, ``, 1), false},
+		{"null replacement description", "UpdateRoleRequest", strings.Replace(update, `"description":""`, `"description":null`, 1), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value, err := jsonschema.UnmarshalJSON(strings.NewReader(test.wire))
+			if err != nil || (compileIAMOpenAPISchema(t, api, test.schema).Validate(value) == nil) != test.valid {
+				t.Fatal("schema acceptance differs")
+			}
+			if test.schema == "CreateRoleRequest" {
+				var decoded CreateRoleRequest
+				err = DecodeRequest(strings.NewReader(test.wire), &decoded)
+				if err == nil {
+					err = ValidateCreateRoleRequest(decoded)
+				}
+			} else {
+				var decoded UpdateRoleRequest
+				err = DecodeRequest(strings.NewReader(test.wire), &decoded)
+				if err == nil {
+					err = ValidateUpdateRoleRequest(decoded)
+				}
+			}
+			if (err == nil) != test.valid {
+				t.Fatal("runtime request acceptance differs")
+			}
+		})
+	}
+}
+
 func TestRoleTrustSchemasKeepCarrierAdmissionSeparateFromIdentityPolicies(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	schema := compileIAMOpenAPISchema(t, api, "TrustPolicyDocument")
@@ -934,7 +983,7 @@ func TestPolicyAttachmentMutationSchemaMatchesStrictRequests(t *testing.T) {
 		{"account selector", "CreatePolicyAttachmentRequest", `{"target":{"kind":"USER","id":"user-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a","accountId":"account-b"}`, false},
 		{"installation selector", "CreatePolicyAttachmentRequest", `{"target":{"kind":"USER","id":"user-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a","installationId":"installation-b"}`, false},
 		{"scope selector", "CreatePolicyAttachmentRequest", `{"target":{"kind":"USER","id":"user-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a","scope":"TENANT"}`, false},
-		{"role carrier unavailable", "CreatePolicyAttachmentRequest", `{"target":{"kind":"ROLE","id":"role-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a"}`, false},
+		{"role syntax does not grant management authority", "CreatePolicyAttachmentRequest", `{"target":{"kind":"ROLE","id":"role-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a"}`, true},
 		{"direct group", "CreatePolicyAttachmentRequest", `{"target":{"kind":"GROUP","id":"group-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a"}`, true},
 		{"service workflow unavailable", "CreatePolicyAttachmentRequest", `{"target":{"kind":"SERVICE_ACCOUNT","id":"service-a"},"policyId":"system.paas-viewer","policyResourceVersion":1,"requestId":"attach-a"}`, false},
 		{"revoke exact revision", "RevokePolicyAttachmentRequest", `{"resourceVersion":1,"requestId":"revoke-a"}`, true},

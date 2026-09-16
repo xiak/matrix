@@ -308,3 +308,39 @@ func TestDirectoryCursorRejectsTamperingAndBindsMembership(t *testing.T) {
 		}
 	}
 }
+
+func TestRoleDirectoryCursorsBindTheirExactCurrentAuthority(t *testing.T) {
+	now := authorityTestTime()
+	codec, _ := NewCursorCodec(bytes.Repeat([]byte{0x64}, 32))
+	subject := authoritySubject(now, iamv1.SystemPolicyAccountAdministrator)
+	queries := []DirectoryQuery{
+		{InstallationID: subject.InstallationID, Action: iamv1.ActionIAMRoleList, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Organization.ID)}},
+		{InstallationID: subject.InstallationID, Action: iamv1.ActionIAMRoleRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: "role-one"}},
+	}
+	for _, query := range queries {
+		t.Run(string(query.Action), func(t *testing.T) {
+			cursor, err := codec.Encode(subject, query, "last-item", now)
+			if err != nil {
+				t.Fatal("authorized role directory could not continue", err)
+			}
+			if after, err := codec.Decode(cursor, subject, query, now); err != nil || after != "last-item" {
+				t.Fatal("role directory lost its boundary", err)
+			}
+			for _, other := range []DirectoryQuery{
+				{InstallationID: query.InstallationID, Action: iamv1.ActionIAMRoleRead, Resource: iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: "role-two"}},
+				{InstallationID: query.InstallationID, Action: iamv1.ActionIAMUserList, Resource: queries[0].Resource},
+				{InstallationID: query.InstallationID, Action: iamv1.ActionIAMRoleList, Resource: queries[1].Resource},
+				{InstallationID: query.InstallationID, Action: iamv1.ActionIAMRoleRead, Resource: queries[0].Resource},
+			} {
+				if _, err := codec.Decode(cursor, subject, other, now); !errors.Is(err, ErrInvalidCursor) {
+					t.Fatal("role cursor crossed directory/resource authority")
+				}
+			}
+			denied := subject
+			denied.Policies = nil
+			if _, err := codec.Decode(cursor, denied, query, now); !errors.Is(err, ErrInvalidCursor) {
+				t.Fatal("cursor retained revoked role read authority")
+			}
+		})
+	}
+}

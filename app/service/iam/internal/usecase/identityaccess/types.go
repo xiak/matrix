@@ -63,6 +63,15 @@ type Transaction interface {
 	ReadUser(context.Context, AccountRead, iamv1.PrincipalID) (iamv1.UserAccess, error)
 	ListGroups(context.Context, AccountRead) (iamv1.GroupList, error)
 	ReadGroup(context.Context, GroupRead) (iamv1.GroupAccess, error)
+	ListRoles(context.Context, AccountRead) (iamv1.RoleList, error)
+	ReadRole(context.Context, RoleRead) (iamv1.RoleAccess, error)
+	CreateRole(context.Context, RoleCreation) (iamv1.Role, error)
+	UpdateRole(context.Context, RoleProfileMutation) (iamv1.Role, error)
+	SetRoleStatus(context.Context, RoleStatusMutation) (iamv1.Role, error)
+	SetRoleTrustPolicy(context.Context, RoleTrustMutation) (iamv1.Role, error)
+	DeleteRole(context.Context, RoleMutation) (iamv1.RoleDeletion, error)
+	ListRoleTrustVersions(context.Context, RoleRead) (iamv1.RoleTrustVersionList, error)
+	ReadRoleTrustVersion(context.Context, RoleRead, iamv1.RoleTrustVersionID) (iamv1.RoleTrustVersion, error)
 	CreateGroup(context.Context, GroupMutation) (iamv1.Group, error)
 	UpdateGroup(context.Context, GroupProfileMutation) (iamv1.Group, error)
 	DeleteGroup(context.Context, GroupDeletionMutation) (iamv1.GroupDeletion, error)
@@ -106,6 +115,50 @@ type AccountRead struct {
 type GroupRead struct {
 	AccountRead
 	GroupID iamv1.GroupID
+}
+
+type RoleRead struct {
+	AccountRead
+	RoleID iamv1.RoleID
+}
+
+type RoleCreation struct {
+	Role             iamv1.Role
+	TrustVersion     iamv1.RoleTrustVersion
+	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
+	DecisionID       iamv1.DecisionID
+	AuditEvent       auditv1.Event
+}
+
+// RoleMutation carries the exact authenticated writer and expected revision,
+// not a caller-selected tenant/session or a reusable authorization permit.
+type RoleMutation struct {
+	AccountID        iamv1.AccountID
+	RoleID           iamv1.RoleID
+	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
+	DecisionID       iamv1.DecisionID
+	ResourceVersion  uint64
+	AuditEvent       auditv1.Event
+}
+
+type RoleProfileMutation struct {
+	RoleMutation
+	Name                      string
+	Description               string
+	Tags                      []iamv1.RoleTag
+	MaxSessionDurationSeconds uint32
+}
+
+type RoleStatusMutation struct {
+	RoleMutation
+	Status iamv1.RoleStatus
+}
+
+type RoleTrustMutation struct {
+	RoleMutation
+	TrustVersion iamv1.RoleTrustVersion
 }
 
 // AccountManagementSnapshot carries only target facts required to project

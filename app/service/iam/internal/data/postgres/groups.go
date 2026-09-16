@@ -63,7 +63,7 @@ func decodeGroupMembership(encoded []byte) (iamv1.GroupMembership, error) {
 	return result, nil
 }
 
-func marshalGroupEvent(event auditv1.Event) ([]byte, error) {
+func marshalManagementEvent(event auditv1.Event) ([]byte, error) {
 	if auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil {
 		return nil, identityaccess.ErrInvalidArgument
 	}
@@ -112,7 +112,7 @@ func (value *transaction) CreateGroup(ctx context.Context, mutation identityacce
 	if iamv1.ValidateGroup(mutation.Group) != nil {
 		return iamv1.Group{}, identityaccess.ErrInvalidArgument
 	}
-	event, err := marshalGroupEvent(mutation.AuditEvent)
+	event, err := marshalManagementEvent(mutation.AuditEvent)
 	if err != nil {
 		return iamv1.Group{}, err
 	}
@@ -127,7 +127,7 @@ func (value *transaction) CreateGroup(ctx context.Context, mutation identityacce
 }
 
 func (value *transaction) UpdateGroup(ctx context.Context, mutation identityaccess.GroupProfileMutation) (iamv1.Group, error) {
-	event, err := marshalGroupEvent(mutation.AuditEvent)
+	event, err := marshalManagementEvent(mutation.AuditEvent)
 	if err != nil {
 		return iamv1.Group{}, err
 	}
@@ -147,7 +147,7 @@ func (value *transaction) UpdateGroup(ctx context.Context, mutation identityacce
 }
 
 func (value *transaction) DeleteGroup(ctx context.Context, mutation identityaccess.GroupDeletionMutation) (iamv1.GroupDeletion, error) {
-	event, err := marshalGroupEvent(mutation.AuditEvent)
+	event, err := marshalManagementEvent(mutation.AuditEvent)
 	if err != nil {
 		return iamv1.GroupDeletion{}, err
 	}
@@ -201,7 +201,7 @@ func (value *transaction) CreateGroupMembership(ctx context.Context, mutation id
 	if iamv1.ValidateGroupMembership(mutation.Membership) != nil || mutation.Membership.RemovedAt != nil {
 		return iamv1.GroupMembership{}, identityaccess.ErrInvalidArgument
 	}
-	event, err := marshalGroupEvent(mutation.AuditEvent)
+	event, err := marshalManagementEvent(mutation.AuditEvent)
 	if err != nil {
 		return iamv1.GroupMembership{}, err
 	}
@@ -217,7 +217,7 @@ func (value *transaction) CreateGroupMembership(ctx context.Context, mutation id
 }
 
 func (value *transaction) RemoveGroupMembership(ctx context.Context, mutation identityaccess.GroupMembershipRemovalMutation) (iamv1.GroupMembership, bool, error) {
-	event, err := marshalGroupEvent(mutation.AuditEvent)
+	event, err := marshalManagementEvent(mutation.AuditEvent)
 	if err != nil {
 		return iamv1.GroupMembership{}, false, err
 	}

@@ -2244,7 +2244,7 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 	defer call(t, "/v1/groups/"+string(group.ID)+":delete", root,
 		iamv1.DeleteGroupRequest{ResourceVersion: group.ResourceVersion, RequestID: "attachment-session-group-cleanup"}, http.StatusOK, nil)
 	t.Run("exact_private_reference", func(t *testing.T) {
-		provePolicyAttachmentSessionReference(t, ctx, handler, database, root, member)
+		proveManagementSessionReferences(t, ctx, handler, database, root, member)
 	})
 	for _, targetKind := range []string{"user", "group", "platform"} {
 		for _, mutation := range []string{"logout", "change-default", "change-true", "change-false", "change-current", "reset", "forced", "disable", "revoke-authority"} {
@@ -2437,33 +2437,58 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 // Fault injection changes only the private reference after real authentication
 // and PDP. All decisions, mutations, rollback and persistence use the production
 // PostgreSQL adapter; this is not a replacement session authority.
-type attachmentSessionProbe struct {
+type managementSessionProbe struct {
 	identityaccess.Repository
 	sessionID iamv1.SessionID
 }
 
-func (probe attachmentSessionProbe) WithinTransaction(ctx context.Context, callback func(context.Context, identityaccess.Transaction) error) error {
+func (probe managementSessionProbe) WithinTransaction(ctx context.Context, callback func(context.Context, identityaccess.Transaction) error) error {
 	return probe.Repository.WithinTransaction(ctx, func(ctx context.Context, transaction identityaccess.Transaction) error {
-		return callback(ctx, attachmentSessionTransaction{transaction, probe.sessionID})
+		return callback(ctx, managementSessionTransaction{transaction, probe.sessionID})
 	})
 }
 
-type attachmentSessionTransaction struct {
+type managementSessionTransaction struct {
 	identityaccess.Transaction
 	sessionID iamv1.SessionID
 }
 
-func (probe attachmentSessionTransaction) CreatePolicyAttachment(ctx context.Context, mutation identityaccess.PolicyAttachmentMutation) (iamv1.PolicyAttachment, error) {
+func (probe managementSessionTransaction) CreatePolicyAttachment(ctx context.Context, mutation identityaccess.PolicyAttachmentMutation) (iamv1.PolicyAttachment, error) {
 	mutation.ActorSessionID = probe.sessionID
 	return probe.Transaction.CreatePolicyAttachment(ctx, mutation)
 }
 
-func (probe attachmentSessionTransaction) RevokePolicyAttachment(ctx context.Context, mutation identityaccess.PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error) {
+func (probe managementSessionTransaction) RevokePolicyAttachment(ctx context.Context, mutation identityaccess.PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error) {
 	mutation.ActorSessionID = probe.sessionID
 	return probe.Transaction.RevokePolicyAttachment(ctx, mutation)
 }
 
-func provePolicyAttachmentSessionReference(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string, member iamv1.User) {
+func (probe managementSessionTransaction) CreateRole(ctx context.Context, mutation identityaccess.RoleCreation) (iamv1.Role, error) {
+	mutation.ActorSessionID = probe.sessionID
+	return probe.Transaction.CreateRole(ctx, mutation)
+}
+
+func (probe managementSessionTransaction) UpdateRole(ctx context.Context, mutation identityaccess.RoleProfileMutation) (iamv1.Role, error) {
+	mutation.ActorSessionID = probe.sessionID
+	return probe.Transaction.UpdateRole(ctx, mutation)
+}
+
+func (probe managementSessionTransaction) SetRoleStatus(ctx context.Context, mutation identityaccess.RoleStatusMutation) (iamv1.Role, error) {
+	mutation.ActorSessionID = probe.sessionID
+	return probe.Transaction.SetRoleStatus(ctx, mutation)
+}
+
+func (probe managementSessionTransaction) SetRoleTrustPolicy(ctx context.Context, mutation identityaccess.RoleTrustMutation) (iamv1.Role, error) {
+	mutation.ActorSessionID = probe.sessionID
+	return probe.Transaction.SetRoleTrustPolicy(ctx, mutation)
+}
+
+func (probe managementSessionTransaction) DeleteRole(ctx context.Context, mutation identityaccess.RoleMutation) (iamv1.RoleDeletion, error) {
+	mutation.ActorSessionID = probe.sessionID
+	return probe.Transaction.DeleteRole(ctx, mutation)
+}
+
+func proveManagementSessionReferences(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string, member iamv1.User) {
 	t.Helper()
 	config, err := pgxpool.ParseConfig(database.Config().ConnString())
 	if err != nil {
@@ -2511,11 +2536,29 @@ func provePolicyAttachmentSessionReference(t *testing.T, ctx context.Context, ha
 			t.Fatal("create isolated session validity fixture")
 		}
 	}
-	for _, operation := range []string{"create", "revoke"} {
+	candidates := []struct {
+		name string
+		id   iamv1.SessionID
+		want int
+	}{{"missing", "", http.StatusUnprocessableEntity}, {"malformed", "bad session", http.StatusUnprocessableEntity}, {"unknown", "unknown-session", 403},
+		{"other-user", otherID, 403}, {"revoked", revokedID, 403}, {"expired", "attachment-reference-expired", 403},
+		{"stale-generation", "attachment-reference-stale-generation", 403}, {"null-generation", "attachment-reference-null-generation", 403},
+		{"current", currentID, 200}}
+	for _, operation := range []string{"create", "revoke", "role-attach", "role-detach"} {
 		var seeded iamv1.PolicyAttachment
 		seed := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
 			PolicyID: iamv1.SystemPolicyAuditReader, PolicyResourceVersion: 1, RequestID: "attachment-reference-seed-" + operation}
-		if operation == "revoke" {
+		if strings.HasPrefix(operation, "role-") {
+			var role iamv1.Role
+			response := performIAMRequest(handler, http.MethodPost, "/v1/roles", root, mustIAMJSON(t, iamv1.CreateRoleRequest{Name: "Reference " + operation, Tags: []iamv1.RoleTag{},
+				TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}}, RequestID: "attachment-reference-role-" + operation}))
+			if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &role) != nil || iamv1.ValidateRole(role) != nil {
+				t.Fatal("create role attachment reference target")
+			}
+			seed.Target = iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)}
+		}
+		revoking := operation == "revoke" || operation == "role-detach"
+		if revoking {
 			response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", root, mustIAMJSON(t, seed))
 			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &seeded) != nil {
 				t.Fatal("seed attachment reference revocation")
@@ -2524,7 +2567,7 @@ func provePolicyAttachmentSessionReference(t *testing.T, ctx context.Context, ha
 		for _, field := range []string{"sessionId", "actorSessionId"} {
 			path := "/v1/policy-attachments"
 			var body any = seed
-			if operation == "revoke" {
+			if revoking {
 				path += "/" + string(seeded.ID) + ":revoke"
 				body = iamv1.RevokePolicyAttachmentRequest{ResourceVersion: seeded.ResourceVersion, RequestID: "session-selector-attack"}
 			}
@@ -2537,16 +2580,9 @@ func provePolicyAttachmentSessionReference(t *testing.T, ctx context.Context, ha
 				t.Fatal("northbound attachment accepted a private session selector")
 			}
 		}
-		for _, candidate := range []struct {
-			name string
-			id   iamv1.SessionID
-			want int
-		}{{"missing", "", http.StatusUnprocessableEntity}, {"malformed", "bad session", http.StatusUnprocessableEntity}, {"unknown", "unknown-session", 403},
-			{"other-user", otherID, 403}, {"revoked", revokedID, 403}, {"expired", "attachment-reference-expired", 403},
-			{"stale-generation", "attachment-reference-stale-generation", 403}, {"null-generation", "attachment-reference-null-generation", 403},
-			{"current", currentID, 200}} {
+		for _, candidate := range candidates {
 			t.Run(operation+"_"+candidate.name, func(t *testing.T) {
-				workflow, err := identityaccess.NewAuthority(attachmentSessionProbe{repository, candidate.id}, identityaccess.Config{})
+				workflow, err := identityaccess.NewAuthority(managementSessionProbe{repository, candidate.id}, identityaccess.Config{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -2559,7 +2595,7 @@ func provePolicyAttachmentSessionReference(t *testing.T, ctx context.Context, ha
 				creation := seed
 				creation.RequestID = requestID
 				var body any = creation
-				if operation == "revoke" {
+				if revoking {
 					path += "/" + string(seeded.ID) + ":revoke"
 					body = iamv1.RevokePolicyAttachmentRequest{ResourceVersion: seeded.ResourceVersion, RequestID: requestID}
 				}
@@ -2574,7 +2610,7 @@ func provePolicyAttachmentSessionReference(t *testing.T, ctx context.Context, ha
 						t.Fatal("invalid reference left partial authorization or success facts")
 					}
 				}
-				if candidate.want == http.StatusOK && operation == "create" {
+				if candidate.want == http.StatusOK && !revoking {
 					var attachment iamv1.PolicyAttachment
 					if json.Unmarshal(response.Body.Bytes(), &attachment) != nil {
 						t.Fatal("decode current reference attachment")
@@ -2583,6 +2619,78 @@ func provePolicyAttachmentSessionReference(t *testing.T, ctx context.Context, ha
 						mustIAMJSON(t, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: requestID + "-cleanup"}))
 					if response.Code != http.StatusOK {
 						t.Fatal("revoke current reference attachment")
+					}
+				}
+			})
+		}
+	}
+	for _, operation := range []string{"create", "update", "status", "trust", "delete"} {
+		seed := iamv1.CreateRoleRequest{Name: "Reference role " + operation, Tags: []iamv1.RoleTag{},
+			TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}}, RequestID: "role-reference-seed-" + operation}
+		var target iamv1.Role
+		if operation != "create" {
+			response := performIAMRequest(handler, http.MethodPost, "/v1/roles", root, mustIAMJSON(t, seed))
+			if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &target) != nil || iamv1.ValidateRole(target) != nil {
+				t.Fatal("seed role private-reference target")
+			}
+		}
+		for _, candidate := range candidates {
+			t.Run("role_"+operation+"_"+candidate.name, func(t *testing.T) {
+				workflow, err := identityaccess.NewAuthority(managementSessionProbe{repository, candidate.id}, identityaccess.Config{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				probeHandler, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				requestID := "role-reference-" + operation + "-" + candidate.name
+				path, method := "/v1/roles/"+string(target.ID), http.MethodPost
+				var body any
+				want := candidate.want
+				switch operation {
+				case "create":
+					path = "/v1/roles"
+					request := seed
+					request.RequestID = requestID
+					body = request
+					if want == http.StatusOK {
+						want = http.StatusCreated
+					}
+				case "update":
+					method = http.MethodPatch
+					body = iamv1.UpdateRoleRequest{Name: seed.Name, Description: "Changed", Tags: []iamv1.RoleTag{}, MaxSessionDurationSeconds: 600, ResourceVersion: 1, RequestID: requestID}
+				case "status":
+					path += ":set-status"
+					body = iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: 1, RequestID: requestID}
+				case "trust":
+					method, path = http.MethodPut, path+"/trust-policy"
+					body = iamv1.SetRoleTrustPolicyRequest{Document: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "member", Effect: iamv1.PolicyAllow,
+						Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: member.ID}}}}}, ResourceVersion: 1, RequestID: requestID}
+				case "delete":
+					method = http.MethodDelete
+					body = iamv1.DeleteRoleRequest{ResourceVersion: 1, RequestID: requestID}
+				}
+				response := performIAMRequest(probeHandler, method, path, validBearer, mustIAMJSON(t, body))
+				if response.Code != want {
+					t.Fatalf("role private session status=%d want=%d", response.Code, want)
+				}
+				if candidate.name != "current" {
+					var persisted bool
+					if err := database.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$2)
+						OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2)`, member.AccountID, requestID).Scan(&persisted); err != nil || persisted {
+						t.Fatal("invalid role reference retained authorization or facts", err)
+					}
+					if operation == "create" {
+						if err := database.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.roles WHERE tenant_id=$1 AND metadata->>'name'=$2)`, member.AccountID, seed.Name).Scan(&persisted); err != nil || persisted {
+							t.Fatal("invalid reference created a role", err)
+						}
+					} else {
+						var access iamv1.RoleAccess
+						read := performIAMRequest(handler, http.MethodGet, "/v1/roles/"+string(target.ID), root, nil)
+						if read.Code != http.StatusOK || json.Unmarshal(read.Body.Bytes(), &access) != nil || !reflect.DeepEqual(access.Role, target) {
+							t.Fatal("invalid session partially changed role authority")
+						}
 					}
 				}
 			})
@@ -5767,6 +5875,9 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	t.Run("password session races", func(t *testing.T) {
 		provePasswordSessionRaces(t, ctx, handler, admin, loginWire.Credential)
 	})
+	t.Run("role management and immutable trust", func(t *testing.T) {
+		proveRoleManagement(t, ctx, handler, admin, loginWire.Credential)
+	})
 	assertPlatformAuthorityHTTP(t, ctx, handler, admin, loginWire.Credential, developerWire.Credential, developer.ID)
 	if _, err := workflow.Bootstrap(ctx, document); err != nil {
 		t.Fatalf("replay bootstrap after platform role revocation: %v", err)
@@ -5925,6 +6036,821 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	t.Run("outbox physical owner and sealed chain", func(t *testing.T) {
 		proveIAMOutboxClaims(t, ctx, admin, poolConfig, handler)
 	})
+}
+
+func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	call := func(t *testing.T, method, path, bearer string, body any, want int, result any) {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != want {
+			t.Fatalf("role %s %s: status=%d want=%d body=%s", method, path, response.Code, want, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("role response is cacheable")
+		}
+		if result != nil {
+			decoder := json.NewDecoder(response.Body)
+			decoder.DisallowUnknownFields()
+			// A response must stand alone. Reusing a destination must not retain
+			// an omitted restrictionReason from a preceding, less privileged read.
+			reflect.ValueOf(result).Elem().SetZero()
+			if decoder.Decode(result) != nil {
+				t.Fatal("invalid role response")
+			}
+		}
+	}
+	get := func(t *testing.T, path, bearer string, want int, result any) {
+		t.Helper()
+		call(t, http.MethodGet, path, bearer, nil, want, result)
+	}
+	post := func(t *testing.T, path, bearer string, body any, want int, result any) {
+		t.Helper()
+		call(t, http.MethodPost, path, bearer, body, want, result)
+	}
+	var actor iamv1.CurrentIdentity
+	get(t, "/v1/auth/me", root, http.StatusOK, &actor)
+	var foreignAccount iamv1.Account
+	post(t, "/v1/accounts", root, map[string]any{"id": "role-other-account", "displayName": "Role isolation", "rootLoginName": "role.other",
+		"rootDisplayName": "Role other owner", "initialPassword": initialDeveloperPassword, "requestId": "role-other-account-create"}, http.StatusCreated, &foreignAccount)
+	other := localRecoveryLogin(t, handler, "role.other", initialDeveloperPassword, true)
+	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
+	var member iamv1.User
+	post(t, "/v1/users", root, map[string]any{"loginName": "role.member", "displayName": "Role member", "initialPassword": initialDeveloperPassword, "requestId": "role-member-create"}, http.StatusCreated, &member)
+	bearer := localRecoveryLogin(t, handler, "role.member@"+string(member.AccountID), initialDeveloperPassword, true)
+	forced := iamv1.CreateRoleRequest{Name: "Unaccepted", Tags: []iamv1.RoleTag{}, TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}}, RequestID: "role-forced"}
+	post(t, "/v1/roles", bearer, forced, http.StatusForbidden, nil)
+	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+	post(t, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
+		PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "role-member-admin"}, http.StatusOK, nil)
+	trust := iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "member", Effect: iamv1.PolicyAllow, Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: member.ID}}}}}
+	create := iamv1.CreateRoleRequest{Name: "Readers", Description: "Role test", Tags: []iamv1.RoleTag{{Key: "environment", Value: "testing"}}, TrustPolicy: trust, RequestID: "role-create"}
+	post(t, "/v1/roles", bearer, create, http.StatusForbidden, nil)
+	post(t, "/v1/roles", paasCredential, create, http.StatusUnauthorized, nil)
+	var role, replay, foreign iamv1.Role
+	post(t, "/v1/roles", root, create, http.StatusCreated, &role)
+	post(t, "/v1/roles", root, create, http.StatusCreated, &replay)
+	if iamv1.ValidateRole(role) != nil || !reflect.DeepEqual(role, replay) || role.AccountID != actor.Account.ID || role.MaxSessionDurationSeconds != 3600 {
+		t.Fatal("role creation/default/replay differs")
+	}
+	foreignCreate := create
+	foreignCreate.TrustPolicy = forced.TrustPolicy
+	post(t, "/v1/roles", other, foreignCreate, http.StatusCreated, &foreign)
+	if foreign.ID == role.ID || foreign.AccountID != foreignAccount.ID || foreign.Name != role.Name {
+		t.Fatal("same-name roles share authority")
+	}
+	path := "/v1/roles/" + string(role.ID)
+	get(t, path, other, http.StatusForbidden, nil)
+	get(t, "/v1/roles/"+string(foreign.ID), root, http.StatusForbidden, nil)
+	get(t, "/v1/roles?accountId="+string(foreignAccount.ID), root, http.StatusBadRequest, nil)
+	get(t, "/v1/roles?after="+string(foreign.ID), root, http.StatusBadRequest, nil)
+	var directory iamv1.RoleList
+	get(t, "/v1/roles", root, http.StatusOK, &directory)
+	if iamv1.ValidateRoleList(directory) != nil || len(directory.Items) != 1 || !reflect.DeepEqual(directory.Items[0].Role, role) {
+		t.Fatal("role directory expanded/altered its authority")
+	}
+	var access iamv1.RoleAccess
+	get(t, path, root, http.StatusOK, &access)
+	if iamv1.ValidateRoleAccess(access) != nil || len(access.PolicyAttachments) != 0 {
+		t.Fatal("new role silently received authority")
+	}
+	originalTrust := access.TrustVersion
+	get(t, path, bearer, http.StatusOK, &access)
+	for _, capability := range access.Capabilities {
+		if capability.Action == iamv1.ActionIAMRoleRead {
+			if !capability.Available {
+				t.Fatal("authorized role reader denied")
+			}
+		} else if capability.Available {
+			t.Fatal("nonroot role write capability became available")
+		}
+	}
+	variant := create
+	variant.Description = "Changed intent"
+	post(t, "/v1/roles", root, variant, http.StatusConflict, nil)
+	variant = create
+	variant.RequestID = "role-same-name"
+	post(t, "/v1/roles", root, variant, http.StatusConflict, nil)
+	for index, id := range []iamv1.PrincipalID{foreignAccount.RootIdentity.PrincipalID, "service-paas", iamv1.PrincipalID(role.ID), "unknown-user"} {
+		invalid := create
+		invalid.Name = fmt.Sprintf("Invalid %d", index)
+		invalid.RequestID = fmt.Sprintf("role-invalid-trust-%d", index)
+		invalid.TrustPolicy = iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "bad", Effect: iamv1.PolicyAllow, Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: id}}}}}
+		post(t, "/v1/roles", root, invalid, http.StatusForbidden, nil)
+	}
+	update := iamv1.UpdateRoleRequest{Name: "Readers renamed", Description: "Updated role", Tags: []iamv1.RoleTag{}, MaxSessionDurationSeconds: 1200, ResourceVersion: role.ResourceVersion, RequestID: "role-update"}
+	call(t, http.MethodPatch, path, bearer, update, http.StatusForbidden, nil)
+	call(t, http.MethodPatch, path, root, update, http.StatusOK, &role)
+	call(t, http.MethodPatch, path, root, update, http.StatusOK, &replay)
+	if !reflect.DeepEqual(role, replay) || role.ResourceVersion != 2 || role.CurrentTrustVersionID != originalTrust.ID {
+		t.Fatal("metadata update changed trust or replay")
+	}
+	variantUpdate := update
+	variantUpdate.Description = "New intent"
+	call(t, http.MethodPatch, path, root, variantUpdate, http.StatusConflict, nil)
+	var attachment iamv1.PolicyAttachment
+	grant := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "role-grant"}
+	post(t, "/v1/policy-attachments", bearer, grant, http.StatusForbidden, nil)
+	post(t, "/v1/policy-attachments", other, grant, http.StatusForbidden, nil)
+	post(t, "/v1/policy-attachments", root, grant, http.StatusOK, &attachment)
+	platformGrant := grant
+	platformGrant.PolicyID = iamv1.SystemPolicyPlatformOperator
+	platformGrant.RequestID = "role-no-platform"
+	post(t, "/v1/policy-attachments", root, platformGrant, http.StatusForbidden, nil)
+	disable := iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: role.ResourceVersion, RequestID: "role-disable"}
+	post(t, path+":set-status", root, disable, http.StatusOK, &role)
+	post(t, path+":set-status", root, disable, http.StatusOK, &replay)
+	if !reflect.DeepEqual(role, replay) {
+		t.Fatal("status replay differs")
+	}
+	get(t, path, root, http.StatusOK, &access)
+	if iamv1.ValidateRoleAccess(access) != nil || len(access.PolicyAttachments) != 1 || access.Role.Status != iamv1.RoleDisabled {
+		t.Fatal("disable deleted role relationships")
+	}
+	post(t, path+":set-status", root, iamv1.SetRoleStatusRequest{Status: iamv1.RoleActive, ResourceVersion: role.ResourceVersion, RequestID: "role-enable"}, http.StatusOK, &role)
+	post(t, path+":set-status", root, disable, http.StatusConflict, nil)
+	changeTrust := iamv1.SetRoleTrustPolicyRequest{Document: forced.TrustPolicy, ResourceVersion: role.ResourceVersion, RequestID: "role-trust-set"}
+	call(t, http.MethodPut, path+"/trust-policy", root, changeTrust, http.StatusOK, &role)
+	call(t, http.MethodPut, path+"/trust-policy", root, changeTrust, http.StatusOK, &replay)
+	if !reflect.DeepEqual(role, replay) || role.CurrentTrustVersionID == originalTrust.ID {
+		t.Fatal("trust version selection/replay differs")
+	}
+	var history iamv1.RoleTrustVersionList
+	get(t, path+"/trust-versions", root, http.StatusOK, &history)
+	if iamv1.ValidateRoleTrustVersionList(history) != nil || len(history.Items) != 2 {
+		t.Fatal("trust history was overwritten")
+	}
+	var oldTrust iamv1.RoleTrustVersion
+	get(t, path+"/trust-versions/"+string(originalTrust.ID), root, http.StatusOK, &oldTrust)
+	if !reflect.DeepEqual(oldTrust, originalTrust) {
+		t.Fatal("original immutable trust changed")
+	}
+	get(t, "/v1/roles/"+string(foreign.ID)+"/trust-versions/"+string(originalTrust.ID), other, http.StatusForbidden, nil)
+	call(t, http.MethodPatch, path, root, update, http.StatusConflict, nil)
+	post(t, "/v1/roles", root, create, http.StatusConflict, nil)
+	post(t, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", bearer, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: "role-revoke-nonroot"}, http.StatusForbidden, nil)
+	post(t, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", root, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: "role-revoke"}, http.StatusOK, nil)
+	grant.RequestID = "role-regrant"
+	post(t, "/v1/policy-attachments", root, grant, http.StatusOK, &attachment)
+	remove := iamv1.DeleteRoleRequest{ResourceVersion: role.ResourceVersion, RequestID: "role-delete"}
+	var deleted, deletedReplay iamv1.RoleDeletion
+	call(t, http.MethodDelete, path, root, remove, http.StatusOK, &deleted)
+	call(t, http.MethodDelete, path, root, remove, http.StatusOK, &deletedReplay)
+	if iamv1.ValidateRoleDeletion(deleted) != nil || deleted != deletedReplay || deleted.RevokedPolicyAttachments != 1 {
+		t.Fatal("role deletion did not seal exact revoked relationships")
+	}
+	get(t, path, root, http.StatusForbidden, nil)
+	post(t, "/v1/roles", root, create, http.StatusConflict, nil)
+	grant.RequestID = "role-deleted-grant"
+	post(t, "/v1/policy-attachments", root, grant, http.StatusForbidden, nil)
+	create.RequestID = "role-replacement"
+	create.Name = deleted.Name
+	post(t, "/v1/roles", root, create, http.StatusCreated, &replay)
+	if replay.ID == deleted.ID {
+		t.Fatal("same-name replacement revived a deleted identity")
+	}
+	var credentials, invalid, facts int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.user_credentials WHERE principal_id IN ($1,$2)),
+		(SELECT count(*) FROM iam.roles WHERE metadata->>'name' LIKE 'Invalid %'),
+		(SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId' LIKE 'role-invalid-trust-%')`, role.ID, replay.ID).Scan(&credentials, &invalid, &facts); err != nil || credentials != 0 || invalid != 0 || facts != 0 {
+		t.Fatal("role creation produced credentials or partial denied state", err)
+	}
+	var eventJSON []byte
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.role.deleted' AND event_document#>>'{target,id}'=$2`, role.AccountID, role.ID).Scan(&eventJSON); err != nil {
+		t.Fatal(err)
+	}
+	var event auditv1.Event
+	if json.Unmarshal(eventJSON, &event) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil || event.Actor.Type != auditv1.ActorUser || event.IAMDecisionID == "" {
+		t.Fatal("role fact lost real actor/decision")
+	}
+	var proof iamv1.AuditProducerAuthorization
+	post(t, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, &proof)
+	_, digest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+	if err != nil || proof.ContentDigest != digest {
+		t.Fatal("role immutable event proof differs")
+	}
+	event.Target.ID = string(foreign.ID)
+	post(t, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusForbidden, nil)
+	t.Run("revision competition and no partial success", func(t *testing.T) {
+		fresh := create
+		fresh.Name, fresh.RequestID = "Role race", "role-race-create"
+		var target iamv1.Role
+		post(t, "/v1/roles", root, fresh, http.StatusCreated, &target)
+		racePath := "/v1/roles/" + string(target.ID)
+		commands := []struct {
+			method, path string
+			body         any
+		}{
+			{http.MethodPatch, racePath, iamv1.UpdateRoleRequest{Name: "Race renamed", Description: "", Tags: []iamv1.RoleTag{}, MaxSessionDurationSeconds: 600, ResourceVersion: 1, RequestID: "role-race-update"}},
+			{http.MethodPut, racePath + "/trust-policy", iamv1.SetRoleTrustPolicyRequest{Document: forced.TrustPolicy, ResourceVersion: 1, RequestID: "role-race-trust"}},
+			{http.MethodDelete, racePath, iamv1.DeleteRoleRequest{ResourceVersion: 1, RequestID: "role-race-delete"}},
+			{http.MethodPost, racePath + ":set-status", iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: 1, RequestID: "role-race-status"}},
+		}
+		type response struct {
+			index int
+			code  int
+		}
+		results := make(chan response, len(commands))
+		start := make(chan struct{})
+		for index, command := range commands {
+			encoded := mustIAMJSON(t, command.body)
+			go func() {
+				<-start
+				r := performIAMRequest(handler, command.method, command.path, root, encoded)
+				results <- response{index, r.Code}
+			}()
+		}
+		close(start)
+		winner := -1
+		for range commands {
+			select {
+			case result := <-results:
+				if result.code == http.StatusOK {
+					if winner >= 0 {
+						t.Fatal("two role revision winners")
+					}
+					winner = result.index
+				} else if result.code != http.StatusConflict && result.code != http.StatusForbidden {
+					t.Fatalf("role race status=%d", result.code)
+				}
+			case <-ctx.Done():
+				t.Fatal("role revision competition did not finish")
+			}
+		}
+		if winner < 0 {
+			t.Fatal("no role revision winner")
+		}
+		var version int64
+		var trustCount, successCount int
+		var deleted bool
+		if err := database.QueryRow(ctx, `SELECT r.resource_version,r.deleted_at IS NOT NULL,
+			(SELECT count(*) FROM iam.role_trust_versions v WHERE v.tenant_id=r.tenant_id AND v.role_id=r.id),
+			(SELECT count(*) FROM iam.audit_outbox o WHERE o.tenant_id=r.tenant_id AND o.event_document->>'requestId' IN ('role-race-update','role-race-trust','role-race-delete','role-race-status') AND o.event_document->>'action'<>'iam.authorization.decided')
+			FROM iam.roles r WHERE r.tenant_id=$1 AND r.id=$2`, target.AccountID, target.ID).Scan(&version, &deleted, &trustCount, &successCount); err != nil {
+			t.Fatal(err)
+		}
+		wantTrust := 1
+		if winner == 1 {
+			wantTrust = 2
+		}
+		if version != 2 || deleted != (winner == 2) || trustCount != wantTrust || successCount != 1 {
+			t.Fatal("losing command partially changed role/trust/fact state")
+		}
+	})
+	t.Run("delete serializes with attachment changes", func(t *testing.T) {
+		for _, operation := range []string{"create", "revoke"} {
+			t.Run(operation, func(t *testing.T) {
+				fresh := foreignCreate
+				fresh.Name, fresh.RequestID = "Role attachment "+operation, "role-attachment-race-"+operation
+				var target iamv1.Role
+				post(t, "/v1/roles", root, fresh, http.StatusCreated, &target)
+				attachmentPath := "/v1/policy-attachments"
+				attachmentRequestID := "role-attachment-pending-" + operation
+				grant := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(target.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer,
+					PolicyResourceVersion: 1, RequestID: attachmentRequestID}
+				var body any = grant
+				if operation == "revoke" {
+					seed := grant
+					seed.RequestID += "-seed"
+					var attachment iamv1.PolicyAttachment
+					post(t, attachmentPath, root, seed, http.StatusOK, &attachment)
+					attachmentPath += "/" + string(attachment.ID) + ":revoke"
+					body = iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: attachmentRequestID}
+				}
+				start := make(chan struct{})
+				attachmentResult, deletionResult := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+				encoded := mustIAMJSON(t, body)
+				remove := mustIAMJSON(t, iamv1.DeleteRoleRequest{ResourceVersion: 1, RequestID: "role-attachment-delete-" + operation})
+				go func() {
+					<-start
+					attachmentResult <- performIAMRequest(handler, http.MethodPost, attachmentPath, root, encoded)
+				}()
+				go func() {
+					<-start
+					deletionResult <- performIAMRequest(handler, http.MethodDelete, "/v1/roles/"+string(target.ID), root, remove)
+				}()
+				close(start)
+				attachmentResponse, deletionResponse := <-attachmentResult, <-deletionResult
+				if attachmentResponse.Code != http.StatusOK && attachmentResponse.Code != http.StatusForbidden {
+					t.Fatalf("competing attachment status=%d", attachmentResponse.Code)
+				}
+				var deletion iamv1.RoleDeletion
+				if deletionResponse.Code != http.StatusOK || json.Unmarshal(deletionResponse.Body.Bytes(), &deletion) != nil || iamv1.ValidateRoleDeletion(deletion) != nil {
+					t.Fatal("competing Role deletion did not complete")
+				}
+				wantRevocations := uint32(0)
+				if (operation == "create" && attachmentResponse.Code == http.StatusOK) || (operation == "revoke" && attachmentResponse.Code == http.StatusForbidden) {
+					wantRevocations = 1
+				}
+				wantFacts := 0
+				if attachmentResponse.Code == http.StatusOK {
+					wantFacts = 1
+				}
+				var active, facts int
+				if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND target_kind='ROLE' AND target_id=$2 AND revoked_at IS NULL),
+					(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3 AND event_document->>'action' IN ('iam.policy-attachment.created','iam.policy-attachment.revoked'))`,
+					target.AccountID, target.ID, attachmentRequestID).Scan(&active, &facts); err != nil || active != 0 || deletion.RevokedPolicyAttachments != wantRevocations || facts != wantFacts {
+					t.Fatal("Role deletion left active/partial concurrent attachments", err)
+				}
+			})
+		}
+	})
+	t.Run("role directory cursor authority", func(t *testing.T) {
+		for index := 0; index < 100; index++ {
+			fresh := foreignCreate
+			fresh.Name = fmt.Sprintf("Page %03d", index)
+			fresh.RequestID = fmt.Sprintf("role-page-%03d", index)
+			post(t, "/v1/roles", root, fresh, http.StatusCreated, nil)
+		}
+		var first, second iamv1.RoleList
+		get(t, "/v1/roles", root, http.StatusOK, &first)
+		if iamv1.ValidateRoleList(first) != nil || len(first.Items) != 100 || first.NextAfter == "" {
+			t.Fatal("role directory did not return a sealed bounded page")
+		}
+		get(t, "/v1/roles?after="+first.NextAfter, root, http.StatusOK, &second)
+		if iamv1.ValidateRoleList(second) != nil || len(second.Items) == 0 || second.NextAfter != "" || second.Items[0].Role.ID <= first.Items[99].Role.ID {
+			t.Fatal("role directory page skipped/repeated data")
+		}
+		get(t, "/v1/roles?after="+first.NextAfter, other, http.StatusUnprocessableEntity, nil)
+		get(t, "/v1/roles?after="+first.NextAfter, bearer, http.StatusUnprocessableEntity, nil)
+		get(t, "/v1/users?after="+first.NextAfter, root, http.StatusUnprocessableEntity, nil)
+		get(t, "/v1/roles/"+string(replay.ID)+"/trust-versions?after="+first.NextAfter, root, http.StatusUnprocessableEntity, nil)
+		forged := first.NextAfter[:len(first.NextAfter)-1] + "A"
+		if forged == first.NextAfter {
+			forged = first.NextAfter[:len(first.NextAfter)-1] + "B"
+		}
+		get(t, "/v1/roles?after="+forged, root, http.StatusUnprocessableEntity, nil)
+	})
+	t.Run("trust history cursor authority", func(t *testing.T) {
+		fresh := foreignCreate
+		fresh.Name, fresh.RequestID = "Trust history", "role-history-create"
+		var target iamv1.Role
+		post(t, "/v1/roles", root, fresh, http.StatusCreated, &target)
+		historyPath := "/v1/roles/" + string(target.ID)
+		for index := 0; index < 100; index++ {
+			document := trust
+			if index%2 == 1 {
+				document = forced.TrustPolicy
+			}
+			call(t, http.MethodPut, historyPath+"/trust-policy", root, iamv1.SetRoleTrustPolicyRequest{Document: document, ResourceVersion: target.ResourceVersion, RequestID: fmt.Sprintf("role-history-%03d", index)}, http.StatusOK, &target)
+		}
+		var first, second iamv1.RoleTrustVersionList
+		get(t, historyPath+"/trust-versions", root, http.StatusOK, &first)
+		if iamv1.ValidateRoleTrustVersionList(first) != nil || len(first.Items) != 100 || first.NextAfter == "" {
+			t.Fatal("trust history did not return a sealed bounded page")
+		}
+		get(t, historyPath+"/trust-versions?after="+first.NextAfter, root, http.StatusOK, &second)
+		if iamv1.ValidateRoleTrustVersionList(second) != nil || len(second.Items) != 1 || second.NextAfter != "" || second.Items[0].ID <= first.Items[99].ID {
+			t.Fatal("trust history lost an immutable version between pages")
+		}
+		get(t, "/v1/roles/"+string(replay.ID)+"/trust-versions?after="+first.NextAfter, root, http.StatusUnprocessableEntity, nil)
+		get(t, historyPath+"/trust-versions?after="+first.NextAfter, bearer, http.StatusUnprocessableEntity, nil)
+		get(t, "/v1/roles?after="+first.NextAfter, root, http.StatusUnprocessableEntity, nil)
+	})
+	t.Run("outbox failure rolls back role authority", func(t *testing.T) {
+		block := func() {
+			t.Helper()
+			if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_role_fact_failure() RETURNS trigger LANGUAGE plpgsql AS $body$
+			BEGIN IF NEW.event_document->>'requestId' LIKE 'role-atomic-%' AND NEW.event_document->>'action' LIKE 'iam.role.%'
+			THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='isolated role outbox failure'; END IF; RETURN NEW; END $body$;
+			CREATE TRIGGER matrix_role_fact_failure BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_role_fact_failure()`); err != nil {
+				t.Fatal("install isolated final fact failure", err)
+			}
+		}
+		unblock := func() {
+			t.Helper()
+			if _, err := database.Exec(ctx, `DROP TRIGGER IF EXISTS matrix_role_fact_failure ON iam.audit_outbox;
+			DROP FUNCTION IF EXISTS public.matrix_role_fact_failure()`); err != nil {
+				t.Fatal("remove isolated final fact failure", err)
+			}
+		}
+		block()
+		defer unblock()
+		fresh := create
+		fresh.Name, fresh.RequestID = "Atomic role", "role-atomic-create"
+		post(t, "/v1/roles", root, fresh, http.StatusForbidden, nil)
+		var created, decisions, facts int
+		if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.roles WHERE tenant_id=$1 AND metadata->>'name'='Atomic role'),
+			(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id='role-atomic-create'),
+			(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'='role-atomic-create')`, role.AccountID).Scan(&created, &decisions, &facts); err != nil || created != 0 || decisions != 0 || facts != 0 {
+			t.Fatal("failed creation retained a role, decision or fact", err)
+		}
+		unblock()
+		var target iamv1.Role
+		post(t, "/v1/roles", root, fresh, http.StatusCreated, &target)
+		var attachment iamv1.PolicyAttachment
+		post(t, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(target.ID)},
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "role-atomic-attach"}, http.StatusOK, &attachment)
+		block()
+		atomicPath := "/v1/roles/" + string(target.ID)
+		call(t, http.MethodPut, atomicPath+"/trust-policy", root, iamv1.SetRoleTrustPolicyRequest{Document: forced.TrustPolicy, ResourceVersion: 1, RequestID: "role-atomic-trust"}, http.StatusForbidden, nil)
+		post(t, atomicPath+":set-status", root, iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: 1, RequestID: "role-atomic-status"}, http.StatusForbidden, nil)
+		call(t, http.MethodDelete, atomicPath, root, iamv1.DeleteRoleRequest{ResourceVersion: 1, RequestID: "role-atomic-delete"}, http.StatusForbidden, nil)
+		var unchanged bool
+		if err := database.QueryRow(ctx, `SELECT r.resource_version=1 AND r.current_trust_version_id=$3 AND r.status='ACTIVE' AND r.deleted_at IS NULL
+			AND (SELECT count(*) FROM iam.role_trust_versions v WHERE v.tenant_id=r.tenant_id AND v.role_id=r.id)=1
+			AND EXISTS(SELECT 1 FROM iam.policy_attachments a WHERE a.tenant_id=r.tenant_id AND a.id=$4 AND a.resource_version=1 AND a.revoked_at IS NULL)
+			AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox o WHERE o.tenant_id=r.tenant_id AND o.event_document->>'requestId' IN ('role-atomic-trust','role-atomic-status','role-atomic-delete'))
+			FROM iam.roles r WHERE r.tenant_id=$1 AND r.id=$2`, target.AccountID, target.ID, target.CurrentTrustVersionID, attachment.ID).Scan(&unchanged); err != nil || !unchanged {
+			t.Fatal("final fact failure partially changed role, trust or attachment", err)
+		}
+		unblock()
+		var deletion iamv1.RoleDeletion
+		call(t, http.MethodDelete, atomicPath, root, iamv1.DeleteRoleRequest{ResourceVersion: 1, RequestID: "role-atomic-delete"}, http.StatusOK, &deletion)
+		if deletion.RevokedPolicyAttachments != 1 {
+			t.Fatal("retry did not complete original atomic deletion")
+		}
+	})
+	t.Run("storage ownership and immutable history", func(t *testing.T) {
+		var isolated, immutable, scoped bool
+		if err := database.QueryRow(ctx, `SELECT
+			(SELECT bool_and(relrowsecurity AND relforcerowsecurity AND relowner='matrix_iam_owner'::regrole) FROM pg_class WHERE oid IN ('iam.roles'::regclass,'iam.role_trust_versions'::regclass)),
+			NOT has_table_privilege('matrix_iam_api','iam.roles','INSERT,UPDATE,DELETE,TRUNCATE') AND NOT has_table_privilege('matrix_iam_worker','iam.role_trust_versions','SELECT,INSERT,UPDATE,DELETE'),
+			NOT has_function_privilege('matrix_iam_worker','iam.create_role(text,text,text,text,text,jsonb,jsonb,jsonb,text)','EXECUTE') AND NOT has_function_privilege('matrix_iam_credential_recovery','iam.delete_role(text,text,text,text,bigint,jsonb,text)','EXECUTE')`).Scan(&isolated, &immutable, &scoped); err != nil || !isolated || !immutable || !scoped {
+			t.Fatal("role storage or callable permissions are overbroad", err)
+		}
+		for _, signature := range []string{
+			"iam.list_roles(text,text,text,text)", "iam.read_role(text,text,text,text)",
+			"iam.create_role(text,text,text,text,text,jsonb,jsonb,jsonb,text)", "iam.update_role(text,text,text,text,bigint,jsonb,jsonb,text)",
+			"iam.set_role_status(text,text,text,text,bigint,text,jsonb,text)", "iam.set_role_trust_policy(text,text,text,text,text,bigint,jsonb,jsonb,text)",
+			"iam.delete_role(text,text,text,text,bigint,jsonb,text)", "iam.list_role_trust_versions(text,text,text,text,text)", "iam.read_role_trust_version(text,text,text,text,text)",
+		} {
+			for _, change := range []string{
+				"GRANT EXECUTE ON FUNCTION " + signature + " TO matrix_iam_worker",
+				"ALTER FUNCTION " + signature + " SET search_path=pg_catalog,public",
+				"ALTER FUNCTION " + signature + " SECURITY INVOKER",
+			} {
+				tx, err := database.Begin(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = tx.Exec(ctx, change)
+				var ready bool
+				if err == nil {
+					err = tx.QueryRow(ctx, "SELECT ready FROM iam.readiness()").Scan(&ready)
+				}
+				_ = tx.Rollback(ctx)
+				if err != nil || ready {
+					t.Fatal("Role callable drift did not close live readiness", err)
+				}
+			}
+		}
+		for _, change := range []string{
+			"ALTER TABLE iam.roles DISABLE ROW LEVEL SECURITY",
+			"ALTER TABLE iam.role_trust_versions DISABLE TRIGGER trust_cannot_update",
+			"ALTER TABLE iam.roles DROP CONSTRAINT roles_current_trust_fk",
+			"GRANT SELECT ON iam.roles TO matrix_iam_api",
+			"CREATE FUNCTION iam.create_role(text) RETURNS jsonb LANGUAGE sql AS 'SELECT NULL::jsonb'",
+		} {
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = tx.Exec(ctx, change)
+			var ready bool
+			if err == nil {
+				err = tx.QueryRow(ctx, "SELECT ready FROM iam.readiness()").Scan(&ready)
+			}
+			_ = tx.Rollback(ctx)
+			if err != nil || ready {
+				t.Fatal("Role storage/overload drift did not close live readiness", err)
+			}
+		}
+		for _, statement := range []string{
+			`UPDATE iam.role_trust_versions SET content_digest=content_digest WHERE tenant_id=$1 AND role_id=$2`,
+			`DELETE FROM iam.role_trust_versions WHERE tenant_id=$1 AND role_id=$2`,
+			`UPDATE iam.roles SET deleted_at=NULL,resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE tenant_id=$1 AND id=$2`,
+		} {
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = tx.Exec(ctx, statement, role.AccountID, role.ID)
+			_ = tx.Rollback(ctx)
+			var databaseError *pgconn.PgError
+			if !errors.As(err, &databaseError) || databaseError.Code != "42501" {
+				t.Fatal("terminal role/history changed", err)
+			}
+		}
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(context.Background())
+		if _, err = tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", role.AccountID); err != nil {
+			t.Fatal(err)
+		}
+		var foreignCount int
+		if err = tx.QueryRow(ctx, "SELECT count(*) FROM iam.roles WHERE tenant_id<>$1", role.AccountID).Scan(&foreignCount); err != nil || foreignCount != 0 {
+			t.Fatal("role owner bypassed tenant RLS", err)
+		}
+	})
+	t.Run("current role writer races", func(t *testing.T) {
+		proveRoleWriterSecurityRaces(t, ctx, handler, database, root)
+	})
+	t.Run("trust history survives user lifecycle without accepting deleted users", func(t *testing.T) {
+		var userAccess iamv1.UserAccess
+		get(t, "/v1/users/"+string(member.ID), root, http.StatusOK, &userAccess)
+		post(t, "/v1/users/"+string(member.ID)+":set-status", root, iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: userAccess.User.ResourceVersion, RequestID: "role-trust-user-disable"}, http.StatusOK, &member)
+		rolePath := "/v1/roles/" + string(replay.ID)
+		var previous, current iamv1.RoleAccess
+		get(t, rolePath, root, http.StatusOK, &previous)
+		disabledTrust := iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "disabled-user", Effect: iamv1.PolicyAllow,
+			Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: member.ID}}}}}
+		call(t, http.MethodPut, rolePath+"/trust-policy", root, iamv1.SetRoleTrustPolicyRequest{Document: disabledTrust, ResourceVersion: previous.Role.ResourceVersion, RequestID: "role-trust-disabled-reference"}, http.StatusOK, &replay)
+		get(t, rolePath, root, http.StatusOK, &previous)
+		post(t, "/v1/users/"+string(member.ID)+":delete", root, iamv1.DeleteUserRequest{ResourceVersion: member.ResourceVersion, RequestID: "role-trust-user-delete"}, http.StatusOK, nil)
+		get(t, rolePath, root, http.StatusOK, &current)
+		if !reflect.DeepEqual(previous.Role, current.Role) || !reflect.DeepEqual(previous.TrustVersion, current.TrustVersion) {
+			t.Fatal("user deletion rewrote immutable role trust or metadata")
+		}
+		disabledTrust.Statements[0].SID = "deleted-user"
+		call(t, http.MethodPut, rolePath+"/trust-policy", root, iamv1.SetRoleTrustPolicyRequest{Document: disabledTrust, ResourceVersion: current.Role.ResourceVersion, RequestID: "role-trust-deleted-reference"}, http.StatusForbidden, nil)
+		get(t, rolePath, root, http.StatusOK, &current)
+		if !reflect.DeepEqual(previous.Role, current.Role) || !reflect.DeepEqual(previous.TrustVersion, current.TrustVersion) {
+			t.Fatal("rejected deleted USER reference partially changed role trust")
+		}
+	})
+	applyIAMSchema(t, ctx, database)
+	get(t, path, root, http.StatusForbidden, nil)
+	get(t, "/v1/roles/"+string(replay.ID), root, http.StatusOK, nil)
+}
+
+func proveRoleWriterSecurityRaces(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
+	t.Helper()
+	for _, scenario := range []struct{ change, operation string }{
+		{"logout", "create"}, {"change-default", "trust"}, {"change-true", "delete"}, {"change-false", "update"},
+		{"change-current", "status"}, {"recover", "trust"}, {"recover-forced", "create"}, {"suspend", "delete"},
+	} {
+		t.Run(scenario.change+"_before_"+scenario.operation, func(t *testing.T) {
+			call := func(path, bearer string, body any, result any) {
+				t.Helper()
+				response := performIAMRequest(handler, http.MethodPost, path, bearer, mustIAMJSON(t, body))
+				if response.Code != http.StatusOK && response.Code != http.StatusCreated {
+					t.Fatalf("role security fixture %s status=%d", path, response.Code)
+				}
+				if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+					t.Fatal("decode role security fixture")
+				}
+			}
+			id := "role-security-" + scenario.change
+			var account iamv1.Account
+			call("/v1/accounts", operator, map[string]any{"id": id, "displayName": "Role security", "rootLoginName": id, "rootDisplayName": "Role owner",
+				"initialPassword": initialDeveloperPassword, "requestId": id + "-account"}, &account)
+			bearer := localRecoveryLogin(t, handler, id, initialDeveloperPassword, true)
+			bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+			other := localRecoveryLogin(t, handler, id, changedDeveloperPassword, false)
+			empty := iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}}
+			seed := iamv1.CreateRoleRequest{Name: "Session protected", Tags: []iamv1.RoleTag{}, TrustPolicy: empty, RequestID: id + "-seed"}
+			var role iamv1.Role
+			if scenario.operation != "create" {
+				call("/v1/roles", bearer, seed, &role)
+			}
+			requestID := "role-pending-" + scenario.change
+			path, method, expected := "/v1/roles/"+string(role.ID), http.MethodPost, http.StatusUnauthorized
+			var body any
+			switch scenario.operation {
+			case "create":
+				path = "/v1/roles"
+				seed.RequestID, body = requestID, nil
+				body = seed
+			case "update":
+				method = http.MethodPatch
+				body = iamv1.UpdateRoleRequest{Name: role.Name, Description: "Retained writer", Tags: []iamv1.RoleTag{}, MaxSessionDurationSeconds: 600, ResourceVersion: 1, RequestID: requestID}
+			case "status":
+				path += ":set-status"
+				body = iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: 1, RequestID: requestID}
+			case "trust":
+				method, path = http.MethodPut, path+"/trust-policy"
+				body = iamv1.SetRoleTrustPolicyRequest{Document: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "root", Effect: iamv1.PolicyAllow,
+					Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: account.RootIdentity.PrincipalID}}}}}, ResourceVersion: 1, RequestID: requestID}
+			case "delete":
+				method = http.MethodDelete
+				body = iamv1.DeleteRoleRequest{ResourceVersion: 1, RequestID: requestID}
+			}
+			// Pause the real transaction after authentication/PDP but before it
+			// reaches the protected writer. Observe a database wait, not a sleep.
+			if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_role_session_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+			BEGIN IF NEW.request_id LIKE 'role-pending-%' THEN PERFORM pg_advisory_xact_lock(54839,21); END IF; RETURN NEW; END $body$;
+			CREATE TRIGGER matrix_role_session_barrier BEFORE INSERT ON iam.authorization_decisions FOR EACH ROW EXECUTE FUNCTION public.matrix_role_session_barrier();
+			SELECT pg_advisory_lock(54839,21)`); err != nil {
+				t.Fatal("install isolated role session barrier", err)
+			}
+			defer func() {
+				if _, err := database.Exec(context.Background(), `SELECT pg_advisory_unlock(54839,21);
+				DROP TRIGGER IF EXISTS matrix_role_session_barrier ON iam.authorization_decisions;
+				DROP FUNCTION IF EXISTS public.matrix_role_session_barrier()`); err != nil {
+					t.Error("remove isolated role session barrier", err)
+				}
+			}()
+			blockedContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			completed := make(chan *httptest.ResponseRecorder, 1)
+			encoded := mustIAMJSON(t, body)
+			go func() {
+				request := httptest.NewRequest(method, path, bytes.NewReader(encoded)).WithContext(blockedContext)
+				request.Header.Set("Authorization", "Bearer "+bearer)
+				request.Header.Set("Content-Type", "application/json")
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				completed <- response
+			}()
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			for waiting := false; !waiting; {
+				if err := database.QueryRow(blockedContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+				AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54839 AND objid=21)`).Scan(&waiting); err != nil {
+					t.Fatal("observe actual role writer barrier", err)
+				}
+				if !waiting {
+					select {
+					case <-ticker.C:
+					case <-blockedContext.Done():
+						t.Fatal("role writer never reached current-session barrier")
+					}
+				}
+			}
+			switch scenario.change {
+			case "logout":
+				call("/v1/auth/logout", bearer, map[string]any{"requestId": id + "-logout"}, nil)
+			case "change-default", "change-true", "change-false", "change-current":
+				request := map[string]any{"currentPassword": changedDeveloperPassword, "newPassword": "Role-Changed-Password-85!", "requestId": id + "-password"}
+				if scenario.change == "change-true" {
+					request["revokeOtherSessions"] = true
+				} else if scenario.change == "change-false" {
+					request["revokeOtherSessions"], expected = false, http.StatusOK
+				} else if scenario.change == "change-current" {
+					other, expected = bearer, http.StatusOK
+				}
+				call("/v1/auth/password", other, request, nil)
+			case "recover", "recover-forced", "suspend":
+				response := performIAMRequest(handler, http.MethodGet, "/v1/accounts/"+id, operator, nil)
+				var access iamv1.AccountAccess
+				if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &access) != nil {
+					t.Fatal("read current account recovery revision")
+				}
+				if scenario.change == "suspend" {
+					call("/v1/accounts/"+id+":set-status", operator, iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled, ResourceVersion: access.Account.ResourceVersion, RequestID: id + "-suspend"}, nil)
+				} else {
+					call("/v1/accounts/"+id+":recover-root-credentials", operator, map[string]any{"initialPassword": "Role-Recovered-Password-96!", "resourceVersion": access.Account.ResourceVersion, "requestId": id + "-recover"}, nil)
+					if scenario.change == "recover-forced" {
+						temporary := localRecoveryLogin(t, handler, id, "Role-Recovered-Password-96!", true)
+						call("/v1/auth/password", temporary, map[string]any{"currentPassword": "Role-Recovered-Password-96!", "newPassword": "Role-Changed-Password-85!", "revokeOtherSessions": false, "requestId": id + "-forced"}, nil)
+					}
+				}
+			}
+			if _, err := database.Exec(ctx, "SELECT pg_advisory_unlock(54839,21)"); err != nil {
+				t.Fatal("release role session barrier", err)
+			}
+			select {
+			case response := <-completed:
+				if response.Code != expected {
+					t.Fatalf("role writer after %s status=%d want=%d", scenario.change, response.Code, expected)
+				}
+			case <-blockedContext.Done():
+				t.Fatal("role writer did not finish after security change")
+			}
+			var facts int
+			wantFacts := 0
+			if expected == http.StatusOK {
+				wantFacts = 1
+			}
+			if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2 AND event_document->>'action' LIKE 'iam.role.%'`, account.ID, requestID).Scan(&facts); err != nil || facts != wantFacts {
+				t.Fatal("role security race persisted incorrect success facts", err)
+			}
+			if expected != http.StatusOK {
+				var unchanged bool
+				if err := database.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM iam.roles WHERE tenant_id=$1 AND (resource_version<>1 OR deleted_at IS NOT NULL))
+				AND (SELECT count(*) FROM iam.roles WHERE tenant_id=$1)=$2
+				AND (SELECT count(*) FROM iam.role_trust_versions WHERE tenant_id=$1)=$2`, account.ID, func() int {
+					if scenario.operation == "create" {
+						return 0
+					}
+					return 1
+				}()).Scan(&unchanged); err != nil || !unchanged {
+					t.Fatal("invalidated role writer partially changed persistent authority", err)
+				}
+			}
+		})
+	}
+	for _, change := range []string{"logout", "recover"} {
+		t.Run("write_before_"+change, func(t *testing.T) {
+			id := "role-write-first-" + change
+			response := performIAMRequest(handler, http.MethodPost, "/v1/accounts", operator, mustIAMJSON(t, map[string]any{"id": id,
+				"displayName": "Write-first role", "rootLoginName": id, "rootDisplayName": "Write-first owner", "initialPassword": initialDeveloperPassword, "requestId": id + "-account"}))
+			var account iamv1.Account
+			if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &account) != nil {
+				t.Fatal("create write-first account")
+			}
+			bearer := localRecoveryLogin(t, handler, id, initialDeveloperPassword, true)
+			bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+			response = performIAMRequest(handler, http.MethodPost, "/v1/roles", bearer, mustIAMJSON(t, iamv1.CreateRoleRequest{Name: "Write-first role", Tags: []iamv1.RoleTag{},
+				TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{}}, RequestID: id + "-role"}))
+			var role iamv1.Role
+			if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &role) != nil {
+				t.Fatal("create write-first role")
+			}
+			securityPath, securityBearer := "/v1/auth/logout", bearer
+			securityBody := map[string]any{"requestId": id + "-logout"}
+			if change == "recover" {
+				response := performIAMRequest(handler, http.MethodGet, "/v1/accounts/"+id, operator, nil)
+				var access iamv1.AccountAccess
+				if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &access) != nil {
+					t.Fatal("read write-first recovery revision")
+				}
+				securityPath, securityBearer = "/v1/accounts/"+id+":recover-root-credentials", operator
+				securityBody = map[string]any{"initialPassword": "Write-First-Recovered-Password-63!", "resourceVersion": access.Account.ResourceVersion, "requestId": id + "-recover"}
+			}
+			blockedContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+			if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_role_commit_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+			BEGIN IF NEW.event_document->>'requestId' LIKE 'role-write-commit-%' AND NEW.event_document->>'action'='iam.role.updated'
+			THEN PERFORM pg_advisory_xact_lock(54840,22); END IF; RETURN NEW; END $body$;
+			CREATE TRIGGER matrix_role_commit_barrier BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_role_commit_barrier();
+			SELECT pg_advisory_lock(54840,22)`); err != nil {
+				cancel()
+				t.Fatal("install isolated role commit barrier", err)
+			}
+			defer func() {
+				cancel()
+				if _, err := database.Exec(context.Background(), `SELECT pg_advisory_unlock(54840,22);
+				DROP TRIGGER IF EXISTS matrix_role_commit_barrier ON iam.audit_outbox;
+				DROP FUNCTION IF EXISTS public.matrix_role_commit_barrier()`); err != nil {
+					t.Error("remove isolated role commit barrier", err)
+				}
+			}()
+			send := func(method, path, credential string, encoded []byte, done chan<- *httptest.ResponseRecorder) {
+				request := httptest.NewRequest(method, path, bytes.NewReader(encoded)).WithContext(blockedContext)
+				request.Header.Set("Authorization", "Bearer "+credential)
+				request.Header.Set("Content-Type", "application/json")
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, request)
+				done <- response
+			}
+			requestID := "role-write-commit-" + change
+			update := mustIAMJSON(t, iamv1.UpdateRoleRequest{Name: role.Name, Description: "Committed before security change", Tags: []iamv1.RoleTag{}, MaxSessionDurationSeconds: 600, ResourceVersion: 1, RequestID: requestID})
+			writeDone, securityDone := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+			go send(http.MethodPatch, "/v1/roles/"+string(role.ID), bearer, update, writeDone)
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			writerPID := 0
+			for writerPID == 0 {
+				if err := database.QueryRow(blockedContext, `SELECT COALESCE((SELECT pid FROM pg_locks WHERE locktype='advisory' AND NOT granted
+				AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54840 AND objid=22 LIMIT 1),0)`).Scan(&writerPID); err != nil {
+					t.Fatal("observe held role transaction", err)
+				}
+				if writerPID == 0 {
+					select {
+					case <-ticker.C:
+					case <-blockedContext.Done():
+						t.Fatal("role did not reach final fact barrier")
+					}
+				}
+			}
+			go send(http.MethodPost, securityPath, securityBearer, mustIAMJSON(t, securityBody), securityDone)
+			for waiting := false; !waiting; {
+				if err := database.QueryRow(blockedContext, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))
+				AND datid=(SELECT oid FROM pg_database WHERE datname=current_database()))`, writerPID).Scan(&waiting); err != nil {
+					t.Fatal("observe security writer blocked by role transaction", err)
+				}
+				if !waiting {
+					select {
+					case <-ticker.C:
+					case <-blockedContext.Done():
+						t.Fatal("security writer did not serialize after role mutation")
+					}
+				}
+			}
+			if _, err := database.Exec(ctx, "SELECT pg_advisory_unlock(54840,22)"); err != nil {
+				t.Fatal("release role commit barrier", err)
+			}
+			for _, completed := range []<-chan *httptest.ResponseRecorder{writeDone, securityDone} {
+				select {
+				case response := <-completed:
+					if response.Code != http.StatusOK {
+						t.Fatalf("write-first response status=%d", response.Code)
+					}
+				case <-blockedContext.Done():
+					t.Fatal("serialized role/security writers did not finish")
+				}
+			}
+			if response := performIAMRequest(handler, http.MethodPatch, "/v1/roles/"+string(role.ID), bearer, update); response.Code != http.StatusUnauthorized {
+				t.Fatal("original role request revived its invalidated session")
+			}
+			var committed bool
+			if err := database.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.roles WHERE tenant_id=$1 AND id=$2 AND resource_version=2 AND metadata->>'description'='Committed before security change')
+			AND (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3 AND event_document->>'action'='iam.role.updated')=1`, account.ID, role.ID, requestID).Scan(&committed); err != nil || !committed {
+				t.Fatal("later security change lost or repeated the committed role fact", err)
+			}
+		})
+	}
 }
 
 func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
