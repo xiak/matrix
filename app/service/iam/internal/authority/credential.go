@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -148,8 +147,6 @@ const (
 	accessKeySecretPrefix = "mak1."
 	accessKeySecretFormat = uint8(1)
 	accessKeySecretSalt   = "matrix.iam.access-key-secret.hkdf-salt.v1"
-	accessKeySecretInfo   = "matrix.iam.access-key-secret.kdf-info.v1"
-	accessKeySecretAAD    = "matrix.iam.access-key-secret.aad.v1"
 )
 
 // AccessKeySecretScope is supplied from authoritative identity, not from the
@@ -247,16 +244,13 @@ func OpenAccessKeySecret(scope AccessKeySecretScope, wrappingKeyID string, wrapp
 }
 
 func accessKeySecretCipher(scope AccessKeySecretScope, wrappingKeyID string, wrappingKey []byte) (cipher.AEAD, []byte, error) {
-	values := []string{scope.InstallationID, string(scope.AccountID), string(scope.UserID), scope.AccessKeyID, wrappingKeyID}
 	if len(wrappingKey) != 32 {
 		return nil, nil, ErrAccessKeyProtection
 	}
-	for _, value := range values {
-		if iamv1.ValidateID("accessKey.secretScope", value) != nil {
-			return nil, nil, ErrAccessKeyProtection
-		}
+	info, aad, err := iamv1.AccessKeySecretContext(scope.InstallationID, scope.AccountID, scope.UserID, scope.AccessKeyID, wrappingKeyID)
+	if err != nil {
+		return nil, nil, ErrAccessKeyProtection
 	}
-	info := accessKeySecretContext(accessKeySecretInfo, scope, wrappingKeyID)
 	recordKey, err := hkdf.Key(sha256.New, wrappingKey, []byte(accessKeySecretSalt), string(info), 32)
 	if err != nil {
 		return nil, nil, ErrAccessKeyProtection
@@ -270,20 +264,5 @@ func accessKeySecretCipher(scope AccessKeySecretScope, wrappingKeyID string, wra
 	if err != nil {
 		return nil, nil, ErrAccessKeyProtection
 	}
-	aad := accessKeySecretContext(accessKeySecretAAD, scope, wrappingKeyID)
 	return aead, aad, nil
-}
-
-// The sole scope encoder is shared by HKDF info and AEAD AAD; only their
-// domain labels differ. Each field is uint32 big-endian byte length followed
-// by its exact bytes. There is no JSON, delimiter ambiguity or caller version.
-func accessKeySecretContext(domain string, scope AccessKeySecretScope, wrappingKeyID string) []byte {
-	fields := []string{domain, "ACCESS_KEY_SECRET", string([]byte{accessKeySecretFormat}),
-		scope.InstallationID, string(scope.AccountID), string(scope.UserID), scope.AccessKeyID, wrappingKeyID}
-	var encoded []byte
-	for _, field := range fields {
-		encoded = binary.BigEndian.AppendUint32(encoded, uint32(len(field)))
-		encoded = append(encoded, field...)
-	}
-	return encoded
 }

@@ -1,6 +1,6 @@
 # FEAT-IAM-007：访问密钥与程序访问
 
-- 状态：实施准备；最小主体、托管、PEP 与 nonce 责任已对齐，材料发行/保护纯函数已有本地向量验证；准确 wire/历史证据/安装文件契约待冻结。未开放 AccessKey API，生命周期/签名业务未实现，整体未验收。
+- 状态：实施中；材料发行/保护固定`be4974e6`的本地向量、全仓及三项独立CI已通过。K1管理、私有keyring和逐密钥commitment契约已冻结，严格私有codec和唯一上下文编码已进入实现；生产文件加载、数据库生命周期/启动检查及签名业务尚未接入。未开放AccessKey API，整体未验收。
 - 依赖：003、005；临时凭据与 006 协作。
 - Owner：IAM credential；各产品 HTTP 签名消费归其 PEP。
 
@@ -29,30 +29,48 @@ AccessKey 是真实 User 的程序认证凭据，不是 User、ServiceIdentity�
 
 首片只支持同账号非 root USER，不为 Account Root、ROLE、SERVICE_ACCOUNT 创建长期 key。具有未撤销平台权限绑定的 User 不能通过租户凭据接口获得或被接管程序凭据；这一保护必须与实际平台绑定写入在同一锁序下证明，不能只在 UI 或事务外检查当前有效权限。其他 User 的管理者仍须有精确 key 管理许可，不能由用户目录可读或管理员名称推导。
 
-KeyCreate 在主体锁内检查目标当前状态、允许的凭据类型和数量，写入材料、元数据、原意图与 outbox；创建 key 不附加权限或清除 forced-change。每用户最多两把未删除key，ACTIVE和DISABLED都占名额；只有显式删除才释放名额，不能先禁用积存任意数量再恢复。支持创建第二把、业务迁移、确认新 key 使用、禁用旧 key、再删除的交叠轮换；创建与启用必须在同一真实主体/配额锁内检查，不能由两副本各算一个名额。管理凭据来自实际有效登录 bearer，并在锁内重检，不能把 key 自己的签名当成修改自身安全设置的额外权限。
+KeyCreate 在主体锁内检查目标当前状态、允许的凭据类型和数量，写入材料、元数据、原意图与 outbox；创建 key 不附加权限或清除 forced-change。每用户最多两把未删除key，ENABLED和DISABLED都占名额；只有显式删除才释放名额，不能先禁用积存任意数量再恢复。支持创建第二把、业务迁移、确认新 key 使用、禁用旧 key、再删除的交叠轮换；创建与启用必须在同一真实主体/配额锁内检查，不能由两副本各算一个名额。管理凭据来自实际有效登录 bearer，并在锁内重检，不能把 key 自己的签名当成修改自身安全设置的额外权限。
 
 删除为不可逆终态，后续不重新使用其 ID；停用/启用是显式管理操作，启用不恢复任何已撤销登录/角色会话。长期 key 的启停不能套用临时 RoleSession 的永久失效代际语义。当前的会话撤销实现不能被误称为已撤销未来 AccessKey。不提供尚未解决回包丢失的一步“覆盖原 Secret 并立即停旧 key”；交叠轮换也不能仅靠没有最近使用记录就断定旧 key 可安全删除。
 
 创建成功只在专用一次性响应返回秘密。原意图查询/精确重放只返回非敏感完成元数据，不重发旧秘密、不生成替代 key。回包丢失保留原 requestId；确认已创建但秘密丢失后，显式废弃原 key 再创建新意图。不得把加密可用材料当作允许再次展示 Secret 的理由。
 
+### K1管理入口与原子事实
+
+这些入口是待实施契约，不是当前已发布API。只接受当前有效登录Session的USER及其真实管理权限，不要求物理浏览器或检查User-Agent；不允许ROLE、AccessKey或服务凭据充当管理者，也不存在隐含的“本人当然可管理key”权限。Account只从Session取得，路径中的userId/keyId只是必须核对同账号归属的资源引用，不接受body/header/cursor中的账号selector。
+
+| HTTP入口 | 请求/结果边界 | 精确Action及授权目标 |
+| --- | --- | --- |
+| GET `/v1/users/{userId}/access-keys` | 最多两把未删除key的非秘密列表；无全局目录或分页cursor | `iam.access-key.list`，USER INSTANCE |
+| POST 同一集合 | `{userResourceVersion,requestId}`；新ID/Secret；APPLIED经一次性encoder返回Secret，EQUAL_REPLAY只返回原非秘密完成信息 | `iam.access-key.create`，USER INSTANCE；最终创建ACCESS_KEY |
+| GET `/v1/users/{userId}/access-keys/{accessKeyId}` | 当前非秘密元数据，不提供Secret/ciphertext导出 | `iam.access-key.read`，ACCESS_KEY INSTANCE |
+| POST 同一key的 `:set-status` | `{accessKeyResourceVersion,requestId,status}`；status准确为ENABLED或DISABLED | `iam.access-key.set-status`，ACCESS_KEY INSTANCE |
+| POST 同一key的 `:delete` | `{accessKeyResourceVersion,requestId}`；新意图只删除DISABLED key | `iam.access-key.delete`，ACCESS_KEY INSTANCE |
+
+创建/启用检查目标User和Account均ACTIVE、无forced-change、非root及无未撤销INSTALLATION附件。读取、禁用及删除可以由具有精确权限的有效管理员作用于停用/待改密的普通User；平台身份的锁内保护继续适用。相同状态的新意图冲突，准确原意图仅重放原结果。首次响应设置`Cache-Control: no-store`且不记录响应体；普通JSON拒绝Secret序列化。源码IAM Profile下一片使用r5添加这些TENANT/USER动作，保留r1–r4的原字节、默认策略和显式授权要求，不能自动为既有用户补权。
+
+审计只增加四个封闭租户事实：`iam.access-key.created/enabled/disabled/deleted`，由真实USER、原精确决定和ACCESS_KEY target关联；不提供泛化status-set事实或自由attributes。User删除在同一事务内为最多两把key各形成一次`iam.access-key.deleted`，随后原User删除事实；其授权证明只允许原`iam.user.delete`的USER INSTANCE决定映射到事务中证实属于该User的key，不扩大为任意key删除许可。create/delete集合或User决定不承诺最终key payload；源事务/outbox证明真实创建/级联归属。失败不得留下部分材料、删除或成功事实。
+
+K1不改变公开Subject、ServiceIdentity、record8/evidence5/claim7或既有Audit canonical。预期新增函数和存储由IAM29/Audit17承载；实际实施后核对readiness、权限及函数形状，不能提前改发布profile/revision或把源码数字当作安装兼容证明。
+
 ### K1生命周期与其他凭据的关系
 
-以下是K1的实施/验收约束，不是当前已开放行为。ACTIVE仅表示key自身未被禁用；可用性还需要每次请求的真实Account、User、强制改密、权限/Boundary和产品认证载体支持，不能用这个状态绕过PDP。
+以下是K1的实施/验收约束，不是当前已开放行为。ENABLED仅表示key自身未被禁用；可用性还需要每次请求的真实Account、User、强制改密、权限/Boundary和产品认证载体支持，不能用这个状态绕过PDP。
 
 | 操作或当前状态 | Key自身状态/材料 | 对下一次程序请求的含义 |
 | --- | --- | --- |
-| 创建 | 仅当前ACTIVE、非root、非服务、无未撤销INSTALLATION附件且已完成强制改密的User可创建；新ID、新Secret、ACTIVE、资源版本1 | 仍没有新增业务权限；Secret只在首次明确提交成功时返回 |
+| 创建 | 仅当前ACTIVE、非root、非服务、无未撤销INSTALLATION附件且已完成强制改密的User可创建；新ID、新Secret、ENABLED、资源版本1 | 仍没有新增业务权限；Secret只在首次明确提交成功时返回 |
 | 普通改密、保留/撤销其他登录会话、退出或到期 | 不隐式轮换/删除/禁用独立AccessKey，不把密码generation当作key发行代际 | 登录/角色会话的原约束保持；key依据自身状态和当前权限重新判定。界面不能将“退出登录设备”描述为回收所有程序凭据 |
 | 管理员重置密码、其他合法操作设置forced-change | 不改变key自身状态，也不暗增reset接口的key管理权限 | forced-change期间拒绝程序请求；完成真实强制改密后，按原key状态及当前策略重新判定。疑似key泄露仍需单独显式禁用/删除，不能声称改密已处理 |
-| User停用/Account暂停 | 不删key、不改资源归属或停止既有工作负载 | 当前请求拒绝；恢复后ACTIVE key可按当前权限发起新签名，旧已拒绝签名的nonce不能重放 |
-| key显式禁用/启用 | 按当前resourceVersion做ACTIVE/DISABLED转换；同意图重放不增版本 | 禁用后拒绝；显式启用只恢复该key未来签名资格，不恢复旧Session/RoleSession或旧nonce |
+| User停用/Account暂停 | 不删key、不改资源归属或停止既有工作负载 | 当前请求拒绝；恢复后ENABLED key可按当前权限发起新签名，旧已拒绝签名的nonce不能重放 |
+| key显式禁用/启用 | 按当前resourceVersion做ENABLED/DISABLED转换；同意图重放不增版本 | 禁用后拒绝；显式启用只恢复该key未来签名资格，不恢复旧Session/RoleSession或旧nonce |
 | key删除 | 必须先DISABLED；保留不可复用ID及最小历史归因/完成记录，移除可解密材料，形成不可逆删除终态 | 永久拒绝该ID；重放创建/启用/删除原意图都不能重建材料或回显Secret |
 | User删除 | 与原User删除同事务，所有key进入不可逆删除终态并移除材料；失败则全部回滚 | 旧key、会话均不可用；历史决定/outbox仍由原证据证明，不追查今天的key |
 | User获得未撤销INSTALLATION附件 | 不通过key获得平台认证载体，原租户凭据修改保护继续成立 | 首片程序认证整体关闭该目标；撤销附件后仍须当前User/key/策略通过，不能据附件状态返回旧许可 |
 
 账号暂停时不提供在线key变更旁路。目标User停用或待改密时，具有准确权限的当前有效管理者仍能读取非秘密元数据、禁用及删除已有key；不能创建或启用。root/服务主体/未撤销平台附件的凭据变更保护在真实锁内检查，不能通过先停用目标再修改其key绕过。原root恢复与平台离线恢复不接受AccessKey目标，不新增恢复key秘密的入口。
 
-同一意图重放返回的是**原完成事实**，不是当前key为ACTIVE的证明；当前状态通过独立授权读取。已有完成意图先核对当前actor和相同管理动作权限、原actor/目标/requestId与输入承诺，然后返回非秘密事实；不因后续key停用/删除再进行一次创建。新意图则完整检查目标、版本和配额。错误版本、目标/actor替换、提交未知、末端outbox失败、两个IAM实例的最后名额竞争与停启/删除交错必须在原真库/进程owner证明，不用纯状态枚举测试代替。
+同一意图重放返回的是**原完成事实**，不是当前key为ENABLED的证明；当前状态通过独立授权读取。已有完成意图先核对当前actor和相同管理动作权限、原actor/目标/requestId与输入承诺，然后返回非秘密事实；不因后续key停用/删除再进行一次创建。新意图则完整检查目标、版本和配额。错误版本、目标/actor替换、提交未知、末端outbox失败、两个IAM实例的最后名额竞争与停启/删除交错必须在原真库/进程owner证明，不用纯状态枚举测试代替。
 
 ### 秘密材料与安装责任
 
@@ -62,7 +80,21 @@ KeyCreate 在主体锁内检查目标当前状态、允许的凭据类型和数�
 
 安装 owner 负责受保护文件、同安装多实例配置、完整备份/恢复配对、密钥版本与轮换，以及签名发行/启动准入；IAM 负责格式验证、目的/归属绑定、受限使用和缺失/不匹配时关闭。禁止复用 bootstrap 密码、cursor HMAC、签名发行私钥或离线恢复 authority。重启时随机生成新封装密钥会毁坏已有 key，不能作为默认行为；也不能从数据库备份自行猜测密钥版本或跨安装重绑定。
 
-跨 IAM/installation 的不可逆秘密托管边界归[ADR-0004](../docs/architecture/ADR-0004-access-key-trust-boundary.md)。本地纯规则门禁可以注入测试 keyring，但在生产文件/安装契约冻结前不接入安装，也不据此声称受保护部署已完成。目前未分配新 schema、源码 Profile 或发布 revision，现有发布准入不会因设计新增而放宽。
+跨IAM/installation的不可逆秘密托管边界归[ADR-0004](../docs/architecture/ADR-0004-access-key-trust-boundary.md)。下述文件契约已与安装owner冻结；纯codec不是文件权限、数据库匹配或真实安装证据。本片没有变更schema、源码Profile或发布revision，现有发布准入不会因设计新增而放宽。
+
+### 私有keyring与逐密钥承诺
+
+唯一FILE环境名为`MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE`，容器路径`/run/matrix/iam-access-key-wrapping-keyring.json`，安装内相对路径`secrets/authority/iam-access-key-wrapping-keyring.json`。仅IAM API取得只读文件挂载；migration、dispatcher、PaaS、Audit、worker、verifier和本地恢复入口均不得挂载文件或其父目录。安装owner负责父目录0700、常规非链接文件0600、有界读取及原子持久写入。秘密不进入环境值、Compose文本、签名包、manifest、数据库、journal、support或Audit。
+
+私有文档准确为`apiVersion/kind=AccessKeyWrappingKeyring/purpose=IAM_ACCESS_KEY_SECRET_WRAPPING/scope{installationId,bootstrapDigest}/activeWrappingKeyId/keys[{wrappingKeyId,formatVersion,keyMaterial}]`。K1准确一把active key，格式1、43字符严格无填充base64url编码的32字节CSPRNG材料；不以格式验证冒充随机性来源证明。文件最多4096字节，原字节必须与唯一encoder输出完全一致；拒绝重复/未知/缺失/类型错误、字段重排、别名转义、空白/末尾换行/第二文档及非规范base64。不提供多格式兼容、热重载、目录扫描或caller路径selector。
+
+现有`api/iam/v1`新增`access_key_wrapping.go`拥有安装私有codec和纯编码；这是不能混入公开AccessKey DTO的秘密文件边界，不新增包/服务/通用文件框架。仅显式`EncodeAccessKeyWrappingKeyring`与`DecodeAccessKeyWrappingKeyring`可写读材料，普通JSON双向拒绝、格式化隐藏材料，错误归一化为`ErrInvalidAccessKeyWrappingKeyring`。显式临时byte buffer及时清理；Go字符串和内部库副本不保证物理擦除。安装和IAM不复制codec，公开OpenAPI不暴露该类型。
+
+`AccessKeyWrappingKeyCommitment(document,wrappingKeyId)`先验证完整私有文档和准确key，再输出`sha256:<lowerhex>`。它不是整文件摘要或授权能力；输入准确为uint32大端长度封装的domain `matrix.iam.access-key-wrapping-key.commitment.v1`、purpose、installationId、bootstrapDigest、wrappingKeyId、单字节formatVersion和解码后的32字节KEK。它不绑定active selector、数组次序或其他key，使未来增加密钥不改变旧key的承诺。单个包内长度编码原语同时供commitment和`AccessKeySecretContext`使用；不开放caller自定义domain/字段列表的通用canonicalizer。原authority中的上下文编码器被移除，格式1原info/AAD字节保持。
+
+K1数据库须提供不可改的wrapping-key登记：installation+wrappingKeyId唯一，首次材料写入同事务插入或精确匹配commitment；冲突全部回滚。API登录无直接DML；只要被使用过，登记及ID/材料对应关系永不因User/key全部删除而删除或重绑定。启动/readiness读取全部历史登记，K1只能是零条或当前文件对应的一条；所有比较常量时间执行。零条仅证明尚无已提交key，不授予创建或在线管理权限。该登记/检查仍待实现，不能把已有纯函数hash当作持久不变性。
+
+IAM启动同时核对私有文件、实际bootstrap和数据库封存receipt（复用唯一`BootstrapDigest`）；任何文件缺失/损坏/权限错误、安装或commitment不符都使整个IAM不READY，不只隐藏某个endpoint。新安装或显式支持的前驱升级仅生成一次；等值重放验证原文件，已经持久化后不得因丢失而生成替代。回滚保留材料，旧release仅忽略它。当前仅同安装root保留材料：数据库备份保留registry，安装owner在受保护backup兼容承诺中绑定所需逐key摘要，在数据效果前核对，启动再核对；raw KEK不进入backup产物。K1不实现KEK轮换/移除、跨机密钥托管/KMS或整机root回退防护。实际安装和备份门禁仍由各自owner完成后才能验收。
 
 ### HTTP 签名与业务接入
 
@@ -99,7 +131,9 @@ wrappingKeyId永久对应唯一KEK原材料，移除后也不得复用该ID。re
 
 2026-09-17，现有credential测试改用Node.js `crypto.hkdfSync`及`crypto.createCipheriv("aes-256-gcm")`独立产生的固定公开向量；直接KEK草稿对新向量首先真实失败，替换为单一派生实现并补齐各字段canonical拒绝后，聚焦race/p2门禁1.947秒通过。向量逐字节覆盖salt/info/AAD/派生密钥/nonce/ciphertext/tag及完整结构化envelope；另验证同KEK不同key ID派生不同key、确定性、字段长度边界、随机nonce、所有归属替换、格式/长度/密文/tag破坏、错误key、熵源失败、JSON拒绝及调用方buffer不变。Node独立解封装同样拒绝installation/account/user/key/wrapping引用、格式、nonce、ciphertext与tag九类替换。
 
-最终纯材料源码的干净Git树`cb24bb005426c54d48ae5eb44100c2d65fb95307`在Go2/512MiB下通过全仓race/p2（含架构）、vet、模块校验、契约重新生成逐文件字节一致及Linux amd64构建。API/domain/usecase/HTTP的聚焦race分别14.441/7.332/7.613/2.132秒通过；最终全仓也包含相同owner。这里只使用公开人工固定字节，没有新的运行入口、API/SQL或schema；本轮没有启动真实数据库，也不把无DSN的数据库跳过项当作验收。独立CI待固定提交后核实；这些不是HTTP签名、数据库事务、安装托管或007功能验收。
+最终纯材料源码的干净Git树`cb24bb005426c54d48ae5eb44100c2d65fb95307`在Go2/512MiB下通过全仓race/p2（含架构）、vet、模块校验、契约重新生成逐文件字节一致及Linux amd64构建。API/domain/usecase/HTTP的聚焦race分别14.441/7.332/7.613/2.132秒通过；最终全仓也包含相同owner。固定`be4974e68fc167b418c9eee00c96aaf1b844693f`的[Verification35142407084](https://github.com/xiak/matrix/actions/runs/35142407084)已通过GitHub API核实准确SHA和go/authority-process/node-process三项completed/success。这里只使用公开人工固定字节，没有新的运行入口、API/SQL或schema；本地材料验证没有启动真实数据库，也不把无DSN的数据库跳过项当作验收。CI的既有进程回归不等于新增AccessKey运行闭环；这些不是HTTP签名、数据库事务、安装托管或007功能验收。
+
+2026-09-17，私有codec/逐key commitment及唯一context owner的干净源码树`fa03b9a808d1313ac9ee813ef699f491a6f2d8d8`通过全仓race/p2（含架构）、vet、模块校验、生成文件集合及字节一致、Linux amd64构建。API/authority聚焦race为2.371/1.247秒，完整API/authority回归为14.974/7.456秒。2-worker、20秒预算的私有文件fuzz实际21.871秒通过813143次执行；模糊测试最初的脚本转义错误已修正后在同一源码树实跑，不记为首次成功。Node独立SHA-256向量核对全部七个绑定字段，原info/AAD/密文向量保持；未知/重复/错类型/非规范字节、超限/底层读取失败及普通JSON/公开schema泄露分别拒绝。此源码只建立可共享的私有文件契约，尚未接入任何实际文件、SQL登记或业务入口；其新固定提交独立CI仍待核实。
 
 ### 当前源码约束与替换边界
 
@@ -109,12 +143,12 @@ wrappingKeyId永久对应唯一KEK原材料，移除后也不得复用该ID。re
 
 历史证明要关联当时真实 key、用户、签名请求与决定；key 后来停用/删除、User 后来退出/撤权不应使已提交业务 outbox 永久丢失。既有 USER 决定没有 key 谱系，不能回填或冒称已包含。原 `record_authorization`、私有 evidence 与 producer proof 的确切扩展应在当前 owner 内冻结；不全局放开 USER actor、不伪造登录决定、不改变旧 canonical/hash，也不另建通用凭据 receipt 服务。该证明不覆盖业务最终 payload 的真实性；后者仍由产品实际事务/outbox承担。
 
-### 实施前仍需冻结
+### 后续实施前仍需冻结
 
-- 安装keyring文件与唯一codec、不可复用的密钥版本、备份恢复/轮换和启动失败分类；上述材料格式1与单次封装限制已经冻结，不另留直接KEK加密兼容实现。
-- 生命周期、数量上限、轮换交接、准确管理 Action/Resource、危险目标保护及与平台授权竞争的锁序。
+- 具体安装加载/备份承诺消费者和错误处理；文件/codec、单次封装及不可重绑定的登记规则已冻结，不能因此提前宣称生产托管已实现。
+- 在K1既有事务owner落实冻结的生命周期、CAS/配额、准确Action/Resource、危险目标保护及实际平台授权锁序；需要变更既有锁协议时先复核消费者。
 - HTTP wire、限额/时间窗口/nonce 准入、代理后的可信请求/IP、产品能力声明和内部重试协议。
-- 一次性创建/非秘密意图、真实 key 历史证据及对当前记录器的最小 ABI；实际迁移/启动/消费者验收后才确定版本。
+- K2真实key签名历史证据及对当前记录器的最小ABI；K1沿用原USER管理决定，不预先伪造程序凭据谱系。实际迁移/启动/消费者验收后才变更对应版本。
 
 这些冻结项属于本 FEAT 的实施前设计，不是要求建立第二套服务、文档或测试框架，也不将剩余需求移出目标。
 

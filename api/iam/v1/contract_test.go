@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/xiak/matrix/api/contractjson"
@@ -25,6 +27,196 @@ var removedBuiltinRoleNames = []string{
 	"PAAS_VIEWER",
 	"AUDIT_READER",
 	"INSTALLATION_VERIFIER",
+}
+
+func TestAccessKeyWrappingKeyringHasOneExplicitCanonicalPrivateCodec(t *testing.T) {
+	material := "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+	wire := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccessKeyWrappingKeyring","purpose":"IAM_ACCESS_KEY_SECRET_WRAPPING","scope":{"installationId":"install-a","bootstrapDigest":"sha256:` + strings.Repeat("a", 64) + `"},"activeWrappingKeyId":"wrap-a","keys":[{"wrappingKeyId":"wrap-a","formatVersion":1,"keyMaterial":"` + material + `"}]}`
+	decoded, err := DecodeAccessKeyWrappingKeyring(strings.NewReader(wire))
+	if err != nil || ValidateAccessKeyWrappingKeyring(decoded) != nil || len(decoded.Keys) != 1 || string(decoded.Keys[0].KeyMaterial.CopyBytes()) != material {
+		t.Fatal("canonical private keyring was not decoded")
+	}
+	encoded, err := EncodeAccessKeyWrappingKeyring(decoded)
+	defer clear(encoded)
+	if err != nil || string(encoded) != wire {
+		t.Fatal("explicit keyring encoder changed the canonical file")
+	}
+	for _, value := range []any{decoded, &decoded, decoded.Keys[0], &decoded.Keys[0]} {
+		if strings.Contains(fmt.Sprintf("%v %+v %#v", value, value, value), material) {
+			t.Fatal("private keyring leaked through formatting")
+		}
+		if output, err := json.Marshal(value); !errors.Is(err, ErrInvalidAccessKeyWrappingKeyring) || bytes.Contains(output, []byte(material)) {
+			t.Fatal("private keyring allowed ordinary JSON serialization")
+		}
+	}
+	var ordinary AccessKeyWrappingKeyring
+	if err := json.Unmarshal([]byte(wire), &ordinary); !errors.Is(err, ErrInvalidAccessKeyWrappingKeyring) || len(ordinary.Keys) != 0 {
+		t.Fatal("ordinary JSON bypassed the private file codec")
+	}
+	var ordinaryKey AccessKeyWrappingKey
+	if err := json.Unmarshal([]byte(`{"wrappingKeyId":"wrap-a","formatVersion":1,"keyMaterial":"`+material+`"}`), &ordinaryKey); !errors.Is(err, ErrInvalidAccessKeyWrappingKeyring) || ordinaryKey.KeyMaterial.Present() {
+		t.Fatal("ordinary JSON decoded private key material")
+	}
+	for name, invalid := range map[string]string{
+		"empty": "", "null": "null", "array": "[]", "whitespace": " " + wire,
+		"newline": wire + "\n", "trailing": wire + `{}`, "duplicate": strings.Replace(wire, `"formatVersion":1`, `"formatVersion":1,"formatVersion":1`, 1),
+		"unknown":             strings.Replace(wire, `"formatVersion":1`, `"formatVersion":1,"secretSelector":true`, 1),
+		"case alias":          strings.Replace(wire, `"activeWrappingKeyId"`, `"ActiveWrappingKeyId"`, 1),
+		"escaped field":       strings.Replace(wire, `"kind"`, `"k\u0069nd"`, 1),
+		"reordered":           strings.Replace(wire, `"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccessKeyWrappingKeyring"`, `"kind":"AccessKeyWrappingKeyring","apiVersion":"iam.matrix.xiak.com/v1"`, 1),
+		"wrong api":           strings.Replace(wire, APIVersion, "other/v1", 1),
+		"wrong purpose":       strings.Replace(wire, AccessKeyWrappingPurpose, LocalCredentialRecoveryPurpose, 1),
+		"wrong kind":          strings.Replace(wire, `"AccessKeyWrappingKeyring"`, `"AccessKey"`, 1),
+		"missing scope":       strings.Replace(wire, `"installationId":"install-a",`, ``, 1),
+		"null scope":          strings.Replace(wire, `"installationId":"install-a"`, `"installationId":null`, 1),
+		"noncanonical id":     strings.Replace(wire, `"install-a"`, `" install-a"`, 1),
+		"invalid digest":      strings.Replace(wire, "sha256:", "SHA256:", 1),
+		"inactive reference":  strings.Replace(wire, `"activeWrappingKeyId":"wrap-a"`, `"activeWrappingKeyId":"wrap-b"`, 1),
+		"unknown format":      strings.Replace(wire, `"formatVersion":1`, `"formatVersion":2`, 1),
+		"missing format":      strings.Replace(wire, `"formatVersion":1,`, ``, 1),
+		"wrong format type":   strings.Replace(wire, `"formatVersion":1`, `"formatVersion":"1"`, 1),
+		"noncanonical number": strings.Replace(wire, `"formatVersion":1`, `"formatVersion":1.0`, 1),
+		"null material":       strings.Replace(wire, `"keyMaterial":"`+material+`"`, `"keyMaterial":null`, 1),
+		"short material":      strings.Replace(wire, material, base64.RawURLEncoding.EncodeToString(make([]byte, 31)), 1),
+		"long material":       strings.Replace(wire, material, base64.RawURLEncoding.EncodeToString(make([]byte, 33)), 1),
+		"padded material":     strings.Replace(wire, material, material+"=", 1),
+		"pad bits":            strings.Replace(wire, material, material[:42]+"9", 1),
+		"empty keys":          strings.Replace(wire, wire[strings.Index(wire, `"keys":`):], `"keys":[]}`, 1),
+		"two keys":            strings.Replace(wire, `}]}`, `},{"wrappingKeyId":"wrap-b","formatVersion":1,"keyMaterial":"`+material+`"}]}`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, err := DecodeAccessKeyWrappingKeyring(strings.NewReader(invalid))
+			if err != ErrInvalidAccessKeyWrappingKeyring || len(value.Keys) != 0 || strings.Contains(err.Error(), material) {
+				t.Fatal("invalid private file returned data or a non-normalized error")
+			}
+		})
+	}
+	for _, invalid := range []AccessKeyWrappingKeyring{{}, {APIVersion: APIVersion, Kind: "AccessKeyWrappingKeyring", Purpose: AccessKeyWrappingPurpose, Scope: decoded.Scope, ActiveWrappingKeyID: "wrap-a"}} {
+		if output, err := EncodeAccessKeyWrappingKeyring(invalid); err != ErrInvalidAccessKeyWrappingKeyring || len(output) != 0 {
+			t.Fatal("invalid typed keyring was encoded")
+		}
+	}
+	if value, err := DecodeAccessKeyWrappingKeyring(nil); err != ErrInvalidAccessKeyWrappingKeyring || len(value.Keys) != 0 {
+		t.Fatal("nil file reader was accepted")
+	}
+	for _, reader := range []io.Reader{
+		iotest.ErrReader(errors.New(material)),
+		io.MultiReader(strings.NewReader(wire), iotest.ErrReader(errors.New(material))),
+	} {
+		value, err := DecodeAccessKeyWrappingKeyring(reader)
+		if err != ErrInvalidAccessKeyWrappingKeyring || !reflect.DeepEqual(value, AccessKeyWrappingKeyring{}) {
+			t.Fatal("reader failure exposed partial material or its underlying error")
+		}
+	}
+	oversized := strings.NewReader(strings.Repeat(" ", int(MaxAccessKeyWrappingKeyringBytes)+100))
+	if value, err := DecodeAccessKeyWrappingKeyring(oversized); err != ErrInvalidAccessKeyWrappingKeyring || len(value.Keys) != 0 || oversized.Len() < 99 {
+		t.Fatal("private file decoder exceeded its bounded read")
+	}
+}
+
+func FuzzAccessKeyWrappingCanonicalPrivateFile(f *testing.F) {
+	material, _ := NewSecret("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
+	value := AccessKeyWrappingKeyring{APIVersion: APIVersion, Kind: "AccessKeyWrappingKeyring", Purpose: AccessKeyWrappingPurpose,
+		Scope:               AccessKeyWrappingScope{InstallationID: "install-a", BootstrapDigest: "sha256:" + strings.Repeat("a", 64)},
+		ActiveWrappingKeyID: "wrap-a", Keys: []AccessKeyWrappingKey{{WrappingKeyID: "wrap-a", FormatVersion: 1, KeyMaterial: material}}}
+	seed, err := EncodeAccessKeyWrappingKeyring(value)
+	if err != nil {
+		f.Fatal("could not encode the public fuzz seed")
+	}
+	for _, wire := range []string{string(seed), "{}", "null", string(seed) + "\n", string(seed) + `{}`, strings.Replace(string(seed), `"formatVersion":1`, `"formatVersion":1,"formatVersion":1`, 1)} {
+		f.Add(wire)
+	}
+	clear(seed)
+	f.Fuzz(func(t *testing.T, wire string) {
+		value, err := DecodeAccessKeyWrappingKeyring(strings.NewReader(wire))
+		if err != nil {
+			if err != ErrInvalidAccessKeyWrappingKeyring || !reflect.DeepEqual(value, AccessKeyWrappingKeyring{}) {
+				t.Fatal("rejected file returned partial data or a non-normalized error")
+			}
+			return
+		}
+		encoded, err := EncodeAccessKeyWrappingKeyring(value)
+		defer clear(encoded)
+		if err != nil || string(encoded) != wire {
+			t.Fatal("private decoder accepted noncanonical bytes")
+		}
+		commitment, err := AccessKeyWrappingKeyCommitment(value, value.ActiveWrappingKeyID)
+		if err != nil || ValidateDigest("commitment", commitment) != nil {
+			t.Fatal("accepted private file had no exact material commitment")
+		}
+	})
+}
+
+func TestAccessKeyWrappingKeyCommitmentBindsExactMaterialAndInstallation(t *testing.T) {
+	material, err := NewSecret("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
+	if err != nil {
+		t.Fatal("invalid public test material")
+	}
+	value := AccessKeyWrappingKeyring{APIVersion: APIVersion, Kind: "AccessKeyWrappingKeyring", Purpose: AccessKeyWrappingPurpose,
+		Scope:               AccessKeyWrappingScope{InstallationID: "install-a", BootstrapDigest: "sha256:" + strings.Repeat("a", 64)},
+		ActiveWrappingKeyID: "wrap-a", Keys: []AccessKeyWrappingKey{{WrappingKeyID: "wrap-a", FormatVersion: 1, KeyMaterial: material}}}
+	// Independently produced by Node crypto.createHash(sha256) over explicit
+	// uint32BE-framed fields, including the decoded public 00..1f test KEK.
+	want := "sha256:8111150ca7512038ed411a1e2efaa56e817deba04c0929c03cab71087870c17f"
+	for range 2 {
+		got, err := AccessKeyWrappingKeyCommitment(value, "wrap-a")
+		if err != nil || got != want {
+			t.Fatal("per-key commitment differed from the independent vector")
+		}
+	}
+	for name, mutation := range map[string]struct {
+		change func(*AccessKeyWrappingKeyring)
+		valid  bool
+	}{
+		"installation": {func(v *AccessKeyWrappingKeyring) { v.Scope.InstallationID = "install-b" }, true},
+		"bootstrap":    {func(v *AccessKeyWrappingKeyring) { v.Scope.BootstrapDigest = "sha256:" + strings.Repeat("b", 64) }, true},
+		"key identity": {func(v *AccessKeyWrappingKeyring) {
+			v.ActiveWrappingKeyID = "wrap-b"
+			v.Keys[0].WrappingKeyID = "wrap-b"
+		}, true},
+		"material under same id": {func(v *AccessKeyWrappingKeyring) {
+			v.Keys[0].KeyMaterial, _ = NewSecret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x77}, 32)))
+		}, true},
+		"purpose":         {func(v *AccessKeyWrappingKeyring) { v.Purpose = LocalCredentialRecoveryPurpose }, false},
+		"format":          {func(v *AccessKeyWrappingKeyring) { v.Keys[0].FormatVersion = 2 }, false},
+		"active mismatch": {func(v *AccessKeyWrappingKeyring) { v.ActiveWrappingKeyID = "wrap-b" }, false},
+		"bad id":          {func(v *AccessKeyWrappingKeyring) { v.Scope.InstallationID += " " }, false},
+		"incomplete":      {func(v *AccessKeyWrappingKeyring) { v.Keys = nil }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := value
+			candidate.Keys = slices.Clone(value.Keys)
+			mutation.change(&candidate)
+			got, err := AccessKeyWrappingKeyCommitment(candidate, candidate.ActiveWrappingKeyID)
+			if mutation.valid {
+				if err != nil || ValidateDigest("commitment", got) != nil || got == want {
+					t.Fatal("substituted binding or material retained the original commitment")
+				}
+			} else if err != ErrInvalidAccessKeyWrappingKeyring || got != "" {
+				t.Fatal("invalid keyring produced commitment or a revealing error")
+			}
+		})
+	}
+	if got, err := AccessKeyWrappingKeyCommitment(value, "wrap-missing"); err != ErrInvalidAccessKeyWrappingKeyring || got != "" {
+		t.Fatal("unknown key selector produced a commitment")
+	}
+	info, aad, err := AccessKeySecretContext("install-a", "account-a", "user-a", "key-a", "wrap-a")
+	if err != nil || bytes.Equal(info, aad) {
+		t.Fatal("secret context domains were not distinct")
+	}
+	aadBefore := bytes.Clone(aad)
+	info[0] ^= 1
+	if !bytes.Equal(aad, aadBefore) {
+		t.Fatal("secret contexts shared a mutable buffer")
+	}
+	for field := range 5 {
+		values := []string{"install-a", "account-a", "user-a", "key-a", "wrap-a"}
+		values[field] += " "
+		info, aad, err := AccessKeySecretContext(values[0], AccountID(values[1]), PrincipalID(values[2]), values[3], values[4])
+		if err != ErrInvalidAccessKeySecretContext || len(info) != 0 || len(aad) != 0 {
+			t.Fatal("invalid context field was normalized or encoded")
+		}
+	}
 }
 
 func TestCurrentRoleIdentityHasOnlyBoundDisplayContext(t *testing.T) {
@@ -4185,6 +4377,11 @@ func TestIAMLoginResponsePublishesPasswordChangeRequirement(t *testing.T) {
 
 func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 	document := loadIAMOpenAPI(t)
+	for _, privateType := range []string{"AccessKeyWrappingKeyring", "AccessKeyWrappingKey", "AccessKeyWrappingScope"} {
+		if _, exists := iamOpenAPISchemas(t, document)[privateType]; exists {
+			t.Fatal("public HTTP contract exposed an installation-private keyring type")
+		}
+	}
 	paths := mustIAMObject(t, document["paths"], "paths")
 	authorizePath := mustIAMObject(t, paths["/v1/authorize"], "authorize path")
 	authorize := mustIAMObject(t, authorizePath["post"], "authorize operation")

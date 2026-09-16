@@ -203,8 +203,16 @@ func TestAccessKeySecretContextsDeriveIndependentRecordKeys(t *testing.T) {
 	}
 	wantInfo := "000000286d61747269782e69616d2e6163636573732d6b65792d7365637265742e6b64662d696e666f2e7631000000114143434553535f4b45595f534543524554000000010100000009696e7374616c6c2d61000000096163636f756e742d6100000006757365722d61000000056b65792d6100000006777261702d61"
 	wantAAD := "000000236d61747269782e69616d2e6163636573732d6b65792d7365637265742e6161642e7631000000114143434553535f4b45595f534543524554000000010100000009696e7374616c6c2d61000000096163636f756e742d6100000006757365722d61000000056b65792d6100000006777261702d61"
-	if hex.EncodeToString(accessKeySecretContext(accessKeySecretInfo, scope, "wrap-a")) != wantInfo ||
-		hex.EncodeToString(accessKeySecretContext(accessKeySecretAAD, scope, "wrap-a")) != wantAAD {
+	context := func(scope AccessKeySecretScope, wrappingID string) ([]byte, []byte) {
+		t.Helper()
+		info, aad, err := iamv1.AccessKeySecretContext(scope.InstallationID, scope.AccountID, scope.UserID, scope.AccessKeyID, wrappingID)
+		if err != nil {
+			t.Fatal("valid fixed secret context failed")
+		}
+		return info, aad
+	}
+	info, aad := context(scope, "wrap-a")
+	if hex.EncodeToString(info) != wantInfo || hex.EncodeToString(aad) != wantAAD {
 		t.Fatal("record context differed from the independent canonical vectors")
 	}
 	for keyID, expected := range map[string]string{
@@ -212,7 +220,7 @@ func TestAccessKeySecretContextsDeriveIndependentRecordKeys(t *testing.T) {
 		"key-b": "722278556b9385923b5f007ffcaf6e94107b8bccbd8b4339a6a7cd7b02675d99",
 	} {
 		scope.AccessKeyID = keyID
-		info := accessKeySecretContext(accessKeySecretInfo, scope, "wrap-a")
+		info, _ := context(scope, "wrap-a")
 		for range 2 {
 			key, err := hkdf.Key(sha256.New, wrappingKey, []byte(accessKeySecretSalt), string(info), 32)
 			if err != nil || hex.EncodeToString(key) != expected || bytes.Equal(key, wrappingKey) {
@@ -224,7 +232,9 @@ func TestAccessKeySecretContextsDeriveIndependentRecordKeys(t *testing.T) {
 	// The same unframed bytes must not permit moving a field boundary.
 	left := AccessKeySecretScope{InstallationID: "a", AccountID: "bc", UserID: "user", AccessKeyID: "key"}
 	right := AccessKeySecretScope{InstallationID: "ab", AccountID: "c", UserID: "user", AccessKeyID: "key"}
-	if bytes.Equal(accessKeySecretContext(accessKeySecretInfo, left, "wrap"), accessKeySecretContext(accessKeySecretInfo, right, "wrap")) {
+	leftInfo, _ := context(left, "wrap")
+	rightInfo, _ := context(right, "wrap")
+	if bytes.Equal(leftInfo, rightInfo) {
 		t.Fatal("scope encoding did not delimit field lengths")
 	}
 }
