@@ -1,10 +1,15 @@
 package authority
 
 import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -16,6 +21,7 @@ var (
 	ErrCredentialGeneration  = errors.New("credential generation failed")
 	ErrInvalidCredentialType = errors.New("credential type is invalid")
 	ErrInvalidCredentialHash = errors.New("stored credential digest is invalid")
+	ErrAccessKeyProtection   = errors.New("access key protection failed")
 )
 
 type CredentialType string
@@ -136,4 +142,148 @@ func VerifyCredential(
 
 func knownCredentialType(value CredentialType) bool {
 	return value == CredentialSession || value == CredentialService || value == CredentialRoleSession
+}
+
+const (
+	accessKeySecretPrefix = "mak1."
+	accessKeySecretFormat = uint8(1)
+	accessKeySecretSalt   = "matrix.iam.access-key-secret.hkdf-salt.v1"
+	accessKeySecretInfo   = "matrix.iam.access-key-secret.kdf-info.v1"
+	accessKeySecretAAD    = "matrix.iam.access-key-secret.aad.v1"
+)
+
+// AccessKeySecretScope is supplied from authoritative identity, not from the
+// encrypted document or the caller. It is not an authorization decision.
+type AccessKeySecretScope struct {
+	InstallationID string
+	AccountID      iamv1.AccountID
+	UserID         iamv1.PrincipalID
+	AccessKeyID    string
+}
+
+// SealedAccessKeySecret is private credential storage material. A future
+// persistence adapter must pass its fields explicitly, not export this value
+// through ordinary API/log encoding. It contains no recoverable keyring.
+type SealedAccessKeySecret struct {
+	FormatVersion uint8
+	WrappingKeyID string
+	Nonce         []byte
+	Ciphertext    []byte
+}
+
+func (SealedAccessKeySecret) String() string   { return "[REDACTED]" }
+func (SealedAccessKeySecret) GoString() string { return "authority.SealedAccessKeySecret{[REDACTED]}" }
+func (SealedAccessKeySecret) MarshalJSON() ([]byte, error) {
+	return nil, ErrAccessKeyProtection
+}
+func (*SealedAccessKeySecret) UnmarshalJSON([]byte) error { return ErrAccessKeyProtection }
+
+func (issuer *CredentialIssuer) IssueAccessKeySecret() (iamv1.Secret, error) {
+	if issuer == nil || issuer.entropy == nil {
+		return iamv1.Secret{}, ErrCredentialGeneration
+	}
+	random := make([]byte, 32)
+	defer clear(random)
+	if _, err := io.ReadFull(issuer.entropy, random); err != nil {
+		return iamv1.Secret{}, ErrCredentialGeneration
+	}
+	secret, err := iamv1.NewSecret(accessKeySecretPrefix + base64.RawURLEncoding.EncodeToString(random))
+	if err != nil {
+		return iamv1.Secret{}, ErrCredentialGeneration
+	}
+	return secret, nil
+}
+
+// SealAccessKeySecret derives a record key with HKDF-SHA256 before using
+// random-nonce AES-256-GCM. The caller must reserve a fresh server-generated
+// AccessKeyID and seal at most once for that ID/wrapping-key version. Retries
+// reuse the sealed result, never this call. This stateless primitive does not
+// enforce that lifecycle, allocate IDs, perform admission or own a keyring.
+func SealAccessKeySecret(scope AccessKeySecretScope, wrappingKeyID string, wrappingKey []byte, secret iamv1.Secret) (SealedAccessKeySecret, error) {
+	aead, aad, err := accessKeySecretCipher(scope, wrappingKeyID, wrappingKey)
+	if err != nil {
+		return SealedAccessKeySecret{}, err
+	}
+	encoded := secret.CopyBytes()
+	defer clear(encoded)
+	if len(encoded) != len(accessKeySecretPrefix)+43 || !bytes.HasPrefix(encoded, []byte(accessKeySecretPrefix)) {
+		return SealedAccessKeySecret{}, ErrAccessKeyProtection
+	}
+	plaintext := make([]byte, 32)
+	defer clear(plaintext)
+	if n, err := base64.RawURLEncoding.Strict().Decode(plaintext, encoded[len(accessKeySecretPrefix):]); err != nil || n != len(plaintext) {
+		return SealedAccessKeySecret{}, ErrAccessKeyProtection
+	}
+	// NewGCMWithRandomNonce prepends its own 96-bit nonce. No caller-supplied
+	// nonce is accepted. Lifecycle code still owns the per-record use limit.
+	protected := aead.Seal(nil, nil, plaintext, aad)
+	defer clear(protected)
+	return SealedAccessKeySecret{FormatVersion: accessKeySecretFormat, WrappingKeyID: wrappingKeyID,
+		Nonce: bytes.Clone(protected[:12]), Ciphertext: bytes.Clone(protected[12:])}, nil
+}
+
+func OpenAccessKeySecret(scope AccessKeySecretScope, wrappingKeyID string, wrappingKey []byte, sealed SealedAccessKeySecret) (iamv1.Secret, error) {
+	if sealed.FormatVersion != accessKeySecretFormat || sealed.WrappingKeyID != wrappingKeyID || len(sealed.Nonce) != 12 || len(sealed.Ciphertext) != 32+16 {
+		return iamv1.Secret{}, ErrAccessKeyProtection
+	}
+	aead, aad, err := accessKeySecretCipher(scope, wrappingKeyID, wrappingKey)
+	if err != nil {
+		return iamv1.Secret{}, err
+	}
+	protected := make([]byte, 0, 12+len(sealed.Ciphertext))
+	protected = append(protected, sealed.Nonce...)
+	protected = append(protected, sealed.Ciphertext...)
+	defer clear(protected)
+	plaintext, err := aead.Open(nil, nil, protected, aad)
+	defer clear(plaintext)
+	if err != nil || len(plaintext) != 32 {
+		return iamv1.Secret{}, ErrAccessKeyProtection
+	}
+	secret, err := iamv1.NewSecret(accessKeySecretPrefix + base64.RawURLEncoding.EncodeToString(plaintext))
+	if err != nil {
+		return iamv1.Secret{}, ErrAccessKeyProtection
+	}
+	return secret, nil
+}
+
+func accessKeySecretCipher(scope AccessKeySecretScope, wrappingKeyID string, wrappingKey []byte) (cipher.AEAD, []byte, error) {
+	values := []string{scope.InstallationID, string(scope.AccountID), string(scope.UserID), scope.AccessKeyID, wrappingKeyID}
+	if len(wrappingKey) != 32 {
+		return nil, nil, ErrAccessKeyProtection
+	}
+	for _, value := range values {
+		if iamv1.ValidateID("accessKey.secretScope", value) != nil {
+			return nil, nil, ErrAccessKeyProtection
+		}
+	}
+	info := accessKeySecretContext(accessKeySecretInfo, scope, wrappingKeyID)
+	recordKey, err := hkdf.Key(sha256.New, wrappingKey, []byte(accessKeySecretSalt), string(info), 32)
+	if err != nil {
+		return nil, nil, ErrAccessKeyProtection
+	}
+	defer clear(recordKey)
+	block, err := aes.NewCipher(recordKey)
+	if err != nil {
+		return nil, nil, ErrAccessKeyProtection
+	}
+	aead, err := cipher.NewGCMWithRandomNonce(block)
+	if err != nil {
+		return nil, nil, ErrAccessKeyProtection
+	}
+	aad := accessKeySecretContext(accessKeySecretAAD, scope, wrappingKeyID)
+	return aead, aad, nil
+}
+
+// The sole scope encoder is shared by HKDF info and AEAD AAD; only their
+// domain labels differ. Each field is uint32 big-endian byte length followed
+// by its exact bytes. There is no JSON, delimiter ambiguity or caller version.
+func accessKeySecretContext(domain string, scope AccessKeySecretScope, wrappingKeyID string) []byte {
+	fields := []string{domain, "ACCESS_KEY_SECRET", string([]byte{accessKeySecretFormat}),
+		scope.InstallationID, string(scope.AccountID), string(scope.UserID), scope.AccessKeyID, wrappingKeyID}
+	var encoded []byte
+	for _, field := range fields {
+		encoded = binary.BigEndian.AppendUint32(encoded, uint32(len(field)))
+		encoded = append(encoded, field...)
+	}
+	return encoded
 }

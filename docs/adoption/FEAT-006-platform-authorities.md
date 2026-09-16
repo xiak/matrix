@@ -577,3 +577,26 @@ administrator authority, treating ACTIVE as business eligibility, exposing
 private lineage, unbounded history scans, fake resource versions and
 cursor watermarks as permits are `REJECT`. No UI preview shape or donor
 runtime becomes a dependency; implementation and evidence belong IAM/006.
+
+## Programmatic credentials target review
+
+The smallest enterprise target is owned by IAM/007: non-root USER key
+lifecycle, one-time secret disclosure, installation-separated encrypted
+material, request-bound signatures, durable replay rejection and current
+policy enforcement. The following review does not claim an implemented
+AccessKey or a published signed protocol.
+
+| Fixed source / slice | Decision | Rationale |
+| --- | --- | --- |
+| Matrix `1ebab37aef4bce12b963f52d3919748a9d50d4c6`, credential/secret encoding, current USER/PDP, transaction/outbox and real PEP owners | `REUSE` for secret redaction, current authority and tests; `ADAPT` for distinct credential carrier | Actual `SubjectContext` requires a Session and product adapters parse bearer only. A fake Session, another PDP, or exchanging a signed request for a reusable USER permit is rejected. Opaque digest verification cannot verify HMAC. |
+| Product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, `access-key-lifecycle.md` and `request-authentication-and-signing.md` | `REFERENCE` | The fixed files were read for one-time disclosure, overlapping rotation, actual request coverage, current revocation and source-network restrictions. They do not provide executable or independently verified cryptographic code. |
+| Same fixed product reference: generic four-state key model, vendor-derived signature scope, unavailable MFA/SSO and regional/VPC vocabulary | `REJECT` as a mandatory first implementation | Concrete Matrix lifecycle, protocol and supported integration boundaries belong007. Do not import a second revocation state without a distinct accepted operation, foreign headers or unsupported network/provider selectors. |
+| Foundation `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d`, previous service-account/client-secret review in this record | `REFERENCE` only to the prior recorded review; `REJECT` as new code adoption | Its Git object is unavailable in this task and sources.yaml contains no physical URL/path. This review does not claim a fresh inspection. No guessed repository, moving branch, plaintext store, donor JWT/Redis framework or runtime dependency is admitted. |
+
+Public-reference cross-checks are requirements input, not source-code donors:
+[Tencent key lifecycle](https://cloud.tencent.com/document/product/598/37140)
+confirms creation-only Secret disclosure and overlapping keys;
+[RFC9421](https://www.rfc-editor.org/rfc/rfc9421.html) is `REFERENCE` for
+explicit covered components, application requirements and replay/HTTP
+ambiguity attacks. This is not a claim that Matrix implements the whole RFC
+or the vendor's protocol. Runtime and acceptance facts remain solely in007.
