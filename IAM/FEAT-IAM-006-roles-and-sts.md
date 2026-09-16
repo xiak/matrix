@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1 角色管理已按固定 `bf7e8fbbdffe96b8af5b250edd1ed746c5b99265` 完成真实运行和独立 CI 验收。R2 同账号承担/RoleBoundary/SessionPolicy、角色退出、contract3 历史证明及 tenant PaaS/Audit 消费已实现，相关真库、独立进程和全仓检查通过，累计提交的独立 CI 待确认。R3 会话管理及 UX/UI、容量和发布仍未完成，整体006未验收；不以管理目录、身份读取或本地通过代替最终验收。
+- 状态：R1 角色管理固定 `bf7e8fbbdffe96b8af5b250edd1ed746c5b99265`、R2 同账号承担及 tenant PaaS/Audit 真实授权闭环固定 `0752c602ab4ce6d73a21094c8e9f75a1c8750183` 均已完成本地真实运行、整仓与独立 CI 验收。R3 自服务发现/当前角色显示、管理型会话目录及 UX/UI、容量和发布仍未完成，整体006未验收；不以R2后端通过代替最终页面与发布验收。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -146,6 +146,22 @@ R2同片实现原Root+当前PDP守护的RoleBoundary read/set/remove，不引用
 
 **撤销后再授权不得复活旧角色会话。** 当前Assume资格仍须每次重算；此外绑定发行时的授权来源修订承诺，至少包含实际附件及修订、成员关系身份/修订、Policy修订/默认精确版本、边界关系/修订和User修订。只有“当前Allow”或当前内容digest不足以识别默认指针切走再切回。复用原目录快照中已经验证的修订素材，不复用cursor作为permit；完整来源的保守失效可能要求重新承担，即使仍有另一条Allow，也不能自动更新旧RoleSession的承诺。Role安全generation覆盖信任选择、状态、期限及角色授权/边界变更；来源credential generation单独固定。显示元数据变化与安全变更区分，最终通过真实ABA/并发和两实例门禁证明，不能仅靠字段命名声称完成。
 
+### R3 自服务发现与角色显示上下文
+
+本节为下一后端切片的目标，不属于R2已实现接口。UX/UI工程师已确认：普通USER可能具有Assume权限却没有Role管理目录/read权限；角色模式也不能依赖切换前偶然保留的名称缓存。先补这两个权威投影和详情能力，再由010接入真实页面。管理型RoleSession目录/代他人撤销仍是后续独立验收项，不能拿当前by-request自服务或MOCK Sessions tab冒充完成。
+
+`GET /v1/auth/assumable-roles`是当前有效USER的同账号自服务发现，不要求`iam.role.list/read`，不接受caller account/user/source-session selector。仅返回当次读取中USER的精确Assume权限、Trust、Role状态及必需边界检查通过的候选；不能把本账号所有Role加一个forbidden字段暴露给无目录权限的人。沿现有纯求值/信任/边界拥有者复用规则，不创建第二PDP或新增业务许可，不生成一次虚构的Assume成功决定。
+
+结果绑定真实accountId/sourceUserId，items只含roleId/accountId/name/status/maxSessionDurationSeconds/resourceVersion和精确`iam.role.assume` capability；无Trust、Policy、附件、秘密或未授权总数。每次读取有固定候选扫描和响应预算，复用既有签名游标owner，绑定实际账号/来源USER、用途和查询顺序。稀疏授权允许空items仍有nextAfter；客户端以nextAfter是否存在判断结束，不无限自动翻页。每页重新检查当前资格，cursor和availability不是permit；发行仍检查当前版本/来源/边界/时长/请求策略及会话配额。只读发现不走发行配额或Account排他锁，不能把全账号串行化当成分页实现。
+
+现有`GET /v1/auth/role-session`在R3直接替换为严格`CurrentRoleIdentity{apiVersion,kind,session,account,role,sourceUser}`：account仅id/displayName，role仅id/name，sourceUser仅id/loginName/displayName；各ID与session精确一致，由同一次当前IAM权威读取推导。RoleSession发行记录和该当前身份投影不是同一种结果；按pre-v1规则不保留旧形状兼容分支或平行别名入口，固定消费者须同步适配。完整Account/RootIdentity、平台绑定、Trust/Policy、sourceSessionId、代际和秘密均不公开。
+
+资格失效或权威不可用时该当前投影仍返回401/503，不为Header放行失效身份。页面可保留此前已验证的非敏感显示副本，明确显示失效并使用原ROLE秘密自退出；不能用显示副本授权。原USER bearer与ROLE秘密使用独立内存槽，返回原身份必须重新验证原USER会话，退出角色不发行或复活任何USER登录。一次性秘密和未知结果仍严格沿R2的原意图规则。
+
+`RoleAccess.capabilities`增加精确`iam.role.assume`，和self目录共用服务端资格计算，不套用只允许原root写Role的管理保护。读取详情不意味着能够承担；权限/信任/边界或目标状态阻止承担时投影封闭restriction，损坏/不确定则整体失败关闭。`RoleListing`保持管理用途，不另加一套列表快捷承担判断；无管理目录权限的普通成员从self目录发现角色。
+
+本片必须用当前真实HTTP/PG与独立进程证明：只有Assume而无list/read的普通成员可发现并承担；少任一侧、缺边界、停用/暂停、旧会话与跨账号均不泄露候选；稀疏分页、空页继续、不同USER/Account/用途cursor及页面后撤权均正确。详情的非root承担能力与root管理能力分别验证。显示上下文完整绑定且无私有字段，不使会话失效的Role显示名称修改后重新读取获得当前名称；来源USER或Account修订改变仍按R2原规则失效，不为显示信息复活旧会话，来源撤权后返回拒绝而非旧permit；自退出仍可用。新只读函数的范围、ACL、readiness与锁边界沿现有owner验证，实际形状确定后推进开发schema，不改发布profile或记录器/claim/历史canonical契约。
+
 ## 实现拥有者与复用
 
 沿现有`api/iam/v1`数据/严格编码、`authority`纯规则、`identityaccess`用例事务、postgres受限函数、nethttp、生成器及integration/authorityprocess测试拥有者实施。角色/信任契约如需独立源文件，是为区分承担准入与身份权限文档的编码和安全边界，不建立新服务、通用身份框架或另一套PDP。固定来源与REUSE/ADAPT/REFERENCE/REJECT决策归现有FEAT-006 adoption；UI和第三方provider没有运行时依赖。
@@ -204,7 +220,9 @@ contract3历史证明只核对原authority/actor/action/request及不可变发�
 
 USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contract3的USER行必须没有ROLE私有字段，允许结果、内部决定和审计事实绑定同一身份；拒绝结果不公开用户/租户，内部仍保留精确归属。原请求/决定/Profile/资源/用途/关联字段的替换、缺失与旧调用ABI均拒绝，没有为新ROLE放宽原USER规则。
 
-准确候选Git树 `71d240364ce3095e3218860cd5f35ee127617a83` 的干净导出通过全仓race/p2（含架构）、vet/p2、模块校验、API生成逐字节稳定与Linux amd64构建；外部真库由上述独立门禁证明，不把默认跳过的测试当成真实运行。累计提交的独立CI待确认。UI、容量/HA和签名发布按各自owner继续，不改变发布profile，不把SQL解释保留门禁当成跨release-profile准入。
+准确候选Git树 `71d240364ce3095e3218860cd5f35ee127617a83` 的干净导出通过全仓race/p2（含架构）、vet/p2、模块校验、API生成逐字节稳定与Linux amd64构建；外部真库由上述独立门禁证明，不把默认跳过的测试当成真实运行。固定源码另通过Assume请求及产品Profile canonical各15秒/2worker/1秒最小化预算的既有fuzz门禁。
+
+累计实现 `0752c602ab4ce6d73a21094c8e9f75a1c8750183` 已推送，[Verification35096275242](https://github.com/xiak/matrix/actions/runs/35096275242)已通过GitHub API核实精确SHA，go、authority-process、node-process全部completed/success。此为R2后端运行闭环；UI、容量/HA和签名发布按各自owner继续，不改变发布profile，不把SQL解释保留门禁当成跨release-profile准入。
 
 ## 验收
 

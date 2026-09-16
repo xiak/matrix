@@ -530,3 +530,16 @@ actual registered declaration and preserve original bytes/defaults; inventing
 legacy state by deleting current fields, granting ROLE by replacing an old
 Profile, and replaying every unpublished schema revision are `REJECT`.
 Implementation status and runtime evidence belong only to IAM/006.
+
+For R3 self-service discovery and current-role display, fixed
+`0752c602ab4ce6d73a21094c8e9f75a1c8750183` is `REUSE` for the separate
+USER/ROLE credentials, current-role lookup, sole policy/trust evaluator,
+purpose-bound cursor owner and strict API codec. Its RoleAccess projection
+and bounded read adapters are `ADAPT` for minimal same-account self views.
+Reusing the issuance-only `read_role_assumption` as a directory reader is
+`REJECT`: it takes issuance locks and interprets an issuance request ID.
+Requiring management list/read permission to discover an otherwise assumable
+role, revealing every account role with a forbidden flag, frontend Trust
+evaluation, cached identity as a permit and an old/new current-identity wire
+alias are `REJECT`. This is a target adoption decision, not R3 implementation
+or browser acceptance; those remain in IAM/006 and the UI owner.

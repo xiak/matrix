@@ -2,83 +2,94 @@
 
 > Non-authoritative portable memory. Validate Git and the owning FEAT.
 
-- Repository https://github.com/xiak/matrix.git, branch feat/iam; only this
+- Repository https://github.com/xiak/matrix.git, branch feat/iam. Only this
   task's independent worktree is writable. Updated 2026-09-16.
-- Latest verified, pushed code is
-  d45402d91c89a5bb23f52fcfde65491435cd0f55. GitHub API confirmed exact
-  Verification35069879250: go/authority-process/node-process all success.
-  It isolates existing Role/private-session-reference matrices into independent
-  clean databases, preserving assertions, scenario limits and bounded waits.
-- It includes7b597101c55cbd782e611f8da794fc84da138ebb Profile subjectTypes
-  and current USER/SERVICE checks. That earlier CI35067085558 failed from
-  two aggregate IAM contexts exhausting120/180seconds. Predecessor6ae975d9
-  CI35063652730 was cancelled at the old10-minute JOB cap. Do not rewrite
-  those runs as successes. Job cap is now20minutes; per-test, package, lock,
-  resource and password-cost budgets were not increased.
-- R1 Role management bf7e8fbbdffe96b8af5b250edd1ed746c5b99265 is accepted
-  with CI35060352506 all-three success. R2 foundations do not imply working
-  RoleSession issuance, ROLE product authorization or complete006 acceptance.
-- Committed source IAM24/Audit14/PaaS1; published release profile unchanged.
-  Read current Git before interpreting local edits or runtime state.
+- Latest verified, pushed implementation:
+  0752c602ab4ce6d73a21094c8e9f75a1c8750183 (cumulative R2 Role/STS).
+  GitHub API confirmed exact Verification35096275242 and all three jobs
+  go/authority-process/node-process completed/success.
+- R1 fixed bf7e8fbbdffe96b8af5b250edd1ed746c5b99265 and capability baseline
+  d45402d91c89a5bb23f52fcfde65491435cd0f55 remain recorded in their FEAT.
+  Earlier failed/cancelled foundation CI is not reclassified as success.
+- Committed development source IAM25/Audit15/PaaS2; published release profile
+  unchanged. R2 is not a signed release, UI, capacity, HA or whole-IAM acceptance.
 
-## Active goal and next substantive work
+## Continue the full goal
 
-Whole IAM goal remains ACTIVE. Read AGENTS, IAM/FEAT-IAM-006-roles-and-sts.md
-and owning code/tests. R2's shared contract is frozen in006. Complete actual
-RoleSession issuance/private proof/RoleBoundary/ROLE public contract and tenant
-PaaS/Audit consumption, then R3 and final gates; do not substitute another pure
-foundation for the runtime slice. Profile subjectTypes exists, but committed
-source declarations have not switched to R2 revisions. 001 owns product
-declarations,005 policy/conditions,006 Role/Trust/STS,008 service/ABAC,010 peer
-UI,011 HA/capacity/release,012 external deferrals. No subagents or extra tasks.
+Whole IAM goal remains ACTIVE. Read AGENTS, IAM/FEAT-IAM-006-roles-and-sts.md,
+then owning API/usecase/adapter/tests. R2 now has real tenant business and
+immutable-history evidence; do not redo it as a foundation or shrink the goal.
+The next substantive slice is R3 self-service discovery/current-role display,
+followed by remaining management, UI and final requirements in existing FEATs.
+The R3 design is recorded in006; it is not yet implemented. No subagents or
+extra tasks. No parallel UI implementation or generic SessionStore/Redis layer.
 
-User approved separate logical Identity/Access/STS responsibilities and
-LoginSession/RoleSession, retaining one IAM authority deployment/transaction
-boundary. No Redis or generic interchangeable session authority framework.
+## R2 fixed contract
 
-## Fixed contracts and evidence
+USER login and RoleSession are separate, opaque purpose-bound credentials.
+Public ROLE is roleId plus exactly roleSession.sessionId/sourceUserId; private
+source login/generations/trust/authority vectors remain IAM evidence. Same
+account USER Assume needs both current permission and Trust, with mandatory
+RoleBoundary and optional immutable SessionPolicy. Source business grants do
+not flow into ROLE. Once-only secret, exact non-secret replay, source self
+revocation, ROLE self exit, ABA invalidation and immutable history are real.
 
-R1 Role writes require original Account Root AND current PDP AND exact bearer
-Session.ID checked under locks. Root is not a bypass. Immutable IAM Profile
-r1/r2, retained SYSTEM defaults, historical trust and deleted USERs are not
-rewritten. New Role authority requires explicit current grants on retained data.
-Metadata budgets, sorted locks and negative matrices belong006. Role writers
-end with private actor_session_id: create/trust9,update/status8,delete7;
-readers4/4/5/5. Attachment create10/revoke7 have no old overload.
-record_authorization7/evidence5/claim7 and public USER/SERVICE remain.
+record_authorization is the sole8-argument contract3 writer. USER/SERVICE use
+explicit JSON null for its private role argument and SQL NULL role columns;
+ROLE has no fake USER principal_id. Evidence5/claim7/ServiceIdentity/
+lookup_service and old USER/SERVICE canonical/hash remain. Audit tenant query
+uses the complete actor argument and its7-argument ABI, with full cursor
+filter binding. Readiness verifies actual shapes/ACLs/invariants, not numbers.
 
-The d454 test code tree e496908ecea855d6300ad8e549774719f1d46b6a passed
-clean-export real PG18.4 HTTP/attachment/Role/private-reference gates263.159s,
-then full race/p2,architecture,vet/p2,module verification and Linux build.
-Go2/512MiB; PG1CPU/768MiB/PIDs128/max_connections64; real gates serial-p1.
-This is not RoleBoundary/RoleSession, browser, HA or release evidence.
-Other exact baseline gates remain in001/005/006; do not duplicate inventories.
+PaaS/Audit tenant products consume ROLE through their current Profile
+subjectTypes. Platform/host/probe and undeclared ManagedService stay closed.
+Old compiled USER-only policy does not gain ROLE from a new catalog: explicit
+publication/selection and removal of incompatible old Role sources is required.
+Fixed IAM21 and actual R1 binaries prove only their explicit retained-content
+interpretation boundaries, not an unpublished schema1 upgrade chain or release
+admission. Evidence and fixed adoption decisions remain in their owners.
 
-## Peer and runtime boundaries
+## R3 and peers
 
-UX/UI工程师01a07b21-9a0d-7fd0-b090-7827ce18262e owns independent
-feat/cloud-console-ux. R1 fixed source was sent; AssumeRole/temporary identity
-is not delivered. Phase3 01a04149-5dbb-7300-9e4c-31d9e85c8ada waits one
-final cumulative Role/STS donor and retains its own PaaS/host/profile. Do not
-import peer WIP, environments, assets alone or acceptance state.
+UX/UI工程师 01a07b21-9a0d-7fd0-b090-7827ce18262e owns independent
+feat/cloud-console-ux and all UI/browser work. Its current Role/session
+workspace is MOCK, not a live R2 consumer. We agreed the next backend shape:
 
-R2 public ROLE is roleId plus exactly roleSession.sessionId/sourceUserId.
-Source login session, credential/trust/security generations and full source
-authority vectors stay private IAM evidence. This task owns tenant PaaS
-subject/Operation/outbox adaptation; platform/host/node stay closed. Use the
-single Profile subjectTypes capability, not a product/scope whitelist.
-Old compilations do not gain ROLE without explicit publication/default.
-Mandatory RoleBoundary, once-only secret/EQUAL_REPLAY, source self-revocation,
-ROLE self-exit and immutable history are specified in006. IAM25/Audit15 is
-allocated for actual record8/contract3 cutover, not yet in committed source.
-ServiceIdentity/lookup_service/claim7/CanonicalizeEvent and release profile
-stay fixed. Do not inherit another branch's PaaS or published profile.
+- GET /v1/auth/assumable-roles: bounded current USER self discovery, no caller
+  scope and no management list/read requirement; only currently eligible
+  minimal roles. Empty items may still have nextAfter; no unauthorized totals,
+  unlimited scanning or frontend policy evaluation.
+- Replace GET /v1/auth/role-session's R2 RoleSession response with a strict
+  CurrentRoleIdentity containing minimal account/role/sourceUser display and
+  the exact session. R2 does not yet have this response. No compatibility alias.
+  Invalid current authority still401/503; possession-only self exit still works.
+- RoleAccess gains exact Assume capability using the same eligibility rules;
+  RoleListing remains management-only. Do not apply root-only management
+  protection to ordinary USER assumption. Admin session management remains
+  separate unfinished work, not an interpretation of by-request self service.
 
-Go defaults GOMAXPROCS2/-p2; real gates serial-p1 in owned uniquely labelled,
-CPU/memory/PID-limited fixtures. Check live object IDs before cleanup; this
-checkpoint never authorizes deleting an object or assumes a live fixture.
-An earlier deletion of an ignored source export was blocked: do not retry
-through another mechanism or weaken architecture checks. Use an exact clean
-Git export outside the source tree for whole-tree checks when needed.
-No other worktree/environment, remote1.3/.160/.161, withdrawn GitLab/root1.5
-work, remote or shared restart. Keep UI and shared release work with owners.
+UI will use separate in-memory USER/ROLE slots, original issuance intent for
+unknown outcomes, and current USER verification before returning from a role.
+Actual expiresAt is authoritative, not a promised duration. Do not turn
+current-role401 or an uncertain logout into proof of server-side revocation.
+Send the next verified R3 fixed object, schema/operationIds and closed
+restrictions; no WIP or accidental cached-name dependency.
+
+Phase3 01a04149-5dbb-7300-9e4c-31d9e85c8ada receives fixed cumulative donors
+only and keeps its host/PaaS/release composition and evidence. Do not import
+its WIP or claim its consumer integration. Shared interfaces must remain
+coordinated; the R3 read projection does not authorize platform/service scope.
+
+## Runtime discipline
+
+Go defaults GOMAXPROCS2/-p2; real gates serial-p1 in uniquely named, labelled,
+CPU/memory/PID-limited own fixtures. Never assume a live object from this
+checkpoint; inspect exact ownership before running or cleaning anything.
+No other worktree, peer runtime, withdrawn GitLab/root1.5 task, remote1.3/
+.160/.161 access, remote/shared restart, global configuration or Docker prune.
+
+An ignored source export inside the worktree poisons whole-tree architecture
+traversal. Its earlier removal was blocked; do not retry through another
+mechanism or weaken checks. Use an exact clean Git export outside the source
+tree with a temporary index; preserve the real index. All local R2 gates have
+terminal results; detailed scope and limitations belong006, not this file.
