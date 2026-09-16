@@ -720,6 +720,9 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	if err != nil || binding.Target.ID != string(created.ID) || binding.PolicyID != iamv1.SystemPolicyPaaSDeveloper {
 		t.Fatalf("bind organization user: binding=%#v err=%v", binding, err)
 	}
+	if repository.transaction.attachmentSession != login.Session.ID {
+		t.Fatal("attachment creation did not forward the authenticated bearer session")
+	}
 	developerLogin, err := service.Login(context.Background(), iamv1.LoginRequest{
 		LoginName: "developer@organization-example",
 		Password:  coreSecret(t, "Initial-Developer-Password-84!"),
@@ -763,6 +766,9 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	)
 	if err != nil || revokedBinding.ID != string(binding.ID) || revokedBinding.ResourceVersion != 2 {
 		t.Fatalf("revoke developer binding: revocation=%#v err=%v", revokedBinding, err)
+	}
+	if repository.transaction.revocationSession != login.Session.ID {
+		t.Fatal("attachment revocation did not forward the authenticated bearer session")
 	}
 	request.RequestID = "request-developer-after-binding-revoke"
 	request.CorrelationID = request.RequestID
@@ -868,6 +874,8 @@ type coreTransaction struct {
 	passwords               map[iamv1.PrincipalID]authority.PasswordHash
 	users                   map[iamv1.PrincipalID]iamv1.Principal
 	attachments             map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment
+	attachmentSession       iamv1.SessionID
+	revocationSession       iamv1.SessionID
 	localRecoveryInspection iamv1.LocalCredentialRecoveryInspection
 	localRecoveryResult     iamv1.LocalCredentialRecoveryResult
 	localRecoveryMutation   *LocalCredentialRecoveryMutation
@@ -1207,6 +1215,7 @@ func (transaction *coreTransaction) LookupPolicyAttachment(_ context.Context, ac
 }
 
 func (transaction *coreTransaction) CreatePolicyAttachment(_ context.Context, mutation PolicyAttachmentMutation) (iamv1.PolicyAttachment, error) {
+	transaction.attachmentSession = mutation.ActorSessionID
 	if _, found := transaction.users[iamv1.PrincipalID(mutation.Attachment.Target.ID)]; !found {
 		return iamv1.PolicyAttachment{}, ErrForbidden
 	}
@@ -1224,6 +1233,7 @@ func (transaction *coreTransaction) CreatePolicyAttachment(_ context.Context, mu
 }
 
 func (transaction *coreTransaction) RevokePolicyAttachment(_ context.Context, mutation PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error) {
+	transaction.revocationSession = mutation.ActorSessionID
 	attachment, found := transaction.attachments[mutation.AttachmentID]
 	if !found || attachment.AccountID != mutation.AccountID {
 		return iamv1.Revocation{}, false, ErrForbidden

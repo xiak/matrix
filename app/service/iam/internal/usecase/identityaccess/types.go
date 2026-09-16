@@ -406,6 +406,7 @@ type PolicyAttachmentMutation struct {
 	Attachment            iamv1.PolicyAttachment
 	PolicyResourceVersion uint64
 	ActorPrincipalID      iamv1.PrincipalID
+	ActorSessionID        iamv1.SessionID
 	DecisionID            iamv1.DecisionID
 	AuditEvent            auditv1.Event
 }
@@ -415,6 +416,7 @@ type PolicyAttachmentRevocationMutation struct {
 	AttachmentID     iamv1.PolicyAttachmentID
 	ResourceVersion  uint64
 	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
 }

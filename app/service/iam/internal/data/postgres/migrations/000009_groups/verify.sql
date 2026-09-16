@@ -42,7 +42,7 @@ BEGIN
         'iam.create_group(text,text,text,text,text,text,jsonb)','iam.update_group(text,text,text,text,text,text,bigint,jsonb)',
         'iam.delete_group(text,text,text,text,bigint,jsonb)','iam.list_group_memberships(text,text,text,text,text)',
         'iam.create_group_membership(text,text,text,text,text,text,jsonb)',
-        'iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb)'
+        'iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb,text)'
     ] LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS entrypoint WHERE entrypoint.oid=to_regprocedure(function_name)
             AND entrypoint.prosecdef AND entrypoint.proowner='matrix_iam_owner'::regrole

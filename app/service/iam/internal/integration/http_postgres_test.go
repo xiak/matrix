@@ -270,7 +270,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
 	}
-	// This retained-data fixture now runs ten serial protocol flows. Bound
+	// This retained-data fixture runs serial protocol flows. Bound
 	// their aggregate separately from each flow; it is not an operation SLO.
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -2112,6 +2112,482 @@ func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler ht
 	call(http.MethodPut, path, root, set, http.StatusForbidden, nil)
 	call(http.MethodGet, path, root, nil, http.StatusForbidden, nil)
 	call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
+}
+
+func TestIAMPolicyAttachmentSessionPostgres(t *testing.T) {
+	const environment = "MATRIX_IAM_ATTACHMENT_SESSION_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(environment)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
+	}
+	// Keep the same two-minute session-flow budget. Its deliberately numerous
+	// security identities do not belong to the separate policy-retention fixture.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_attachment_") {
+		t.Fatal("attachment session gate requires its own matrix_iam_attachment_ database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	database, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect attachment session database")
+	}
+	defer database.Close(context.Background())
+	assertIAMPostgres18(t, ctx, database)
+	assertCleanIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	createIAMHTTPRole(t, ctx, database)
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole)
+	document := iamHTTPBootstrap(t)
+	initial, err := workflow.Bootstrap(ctx, document)
+	if err != nil || initial.State != iamv1.BootstrapReady {
+		t.Fatal("bootstrap attachment session fixture")
+	}
+	endpoint, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestContext, cancelRequest := context.WithCancel(request.Context())
+		defer cancelRequest()
+		stop := context.AfterFunc(ctx, cancelRequest)
+		defer stop()
+		endpoint.ServeHTTP(response, request.WithContext(requestContext))
+	})
+	root := localRecoveryLogin(t, handler, "admin", adminPassword, true)
+	root = localRecoveryChangePassword(t, handler, root, adminPassword, changedAdminPassword)
+	verify := provePolicyAttachmentSessions(t, ctx, handler, database, root)
+	applyIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	replayed, err := workflow.Bootstrap(ctx, document)
+	if err != nil || initial.AppliedAt == nil || replayed.AppliedAt == nil || *initial.AppliedAt != *replayed.AppliedAt {
+		t.Fatal("attachment fixture bootstrap replay changed its original receipt")
+	}
+	verify()
+}
+
+func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) func() {
+	t.Helper()
+	var retainedChecks []func(*testing.T)
+	t.Run("private_abi_and_readiness", func(t *testing.T) {
+		for _, attack := range []string{
+			`SELECT iam.create_policy_attachment(NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)`,
+			`SELECT * FROM iam.revoke_policy_attachment(NULL,NULL,NULL,NULL,NULL,NULL)`,
+		} {
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_api"); err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			_, rejected := tx.Exec(ctx, attack)
+			_ = tx.Rollback(ctx)
+			var failure *pgconn.PgError
+			if !errors.As(rejected, &failure) || failure.Code != "42883" {
+				t.Fatal("old attachment entrypoint remains callable")
+			}
+		}
+		for _, signature := range []string{
+			"iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb,text)",
+			"iam.revoke_policy_attachment(text,text,bigint,text,text,jsonb,text)",
+		} {
+			for _, change := range []string{
+				"GRANT EXECUTE ON FUNCTION " + signature + " TO matrix_iam_worker",
+				"ALTER FUNCTION " + signature + " SET search_path=pg_catalog,public",
+				"ALTER FUNCTION " + signature + " SECURITY INVOKER",
+				"ALTER FUNCTION " + signature + " STABLE",
+				"ALTER FUNCTION " + signature + " STRICT",
+				"ALTER FUNCTION " + signature + " PARALLEL SAFE",
+			} {
+				tx, err := database.Begin(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := tx.Exec(ctx, change); err != nil {
+					_ = tx.Rollback(ctx)
+					t.Fatal("inject isolated attachment ABI drift")
+				}
+				var ready bool
+				err = tx.QueryRow(ctx, "SELECT ready FROM iam.readiness()").Scan(&ready)
+				_ = tx.Rollback(ctx)
+				if err != nil || ready {
+					t.Fatal("attachment ABI drift did not close readiness")
+				}
+			}
+		}
+		var ready bool
+		if err := database.QueryRow(ctx, "SELECT ready FROM iam.readiness()").Scan(&ready); err != nil || !ready {
+			t.Fatal("original attachment ABI did not recover after fixture rollback")
+		}
+	})
+	call := func(t *testing.T, path, bearer string, body any, want int, result any) {
+		t.Helper()
+		response := performIAMRequest(handler, http.MethodPost, path, bearer, mustIAMJSON(t, body))
+		if response.Code != want {
+			t.Fatalf("attachment session %s: status=%d want=%d", path, response.Code, want)
+		}
+		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+			t.Fatal("decode attachment session response")
+		}
+	}
+	var member iamv1.User
+	call(t, "/v1/users", root, map[string]any{"loginName": "attachment-session-target", "displayName": "Attachment session target",
+		"initialPassword": initialDeveloperPassword, "requestId": "attachment-session-target"}, http.StatusCreated, &member)
+	memberBearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
+	localRecoveryChangePassword(t, handler, memberBearer, initialDeveloperPassword, changedDeveloperPassword)
+	var group iamv1.Group
+	call(t, "/v1/groups", root, map[string]any{"name": "attachment-session-group", "description": "Session isolation",
+		"requestId": "attachment-session-group"}, http.StatusCreated, &group)
+	defer call(t, "/v1/groups/"+string(group.ID)+":delete", root,
+		iamv1.DeleteGroupRequest{ResourceVersion: group.ResourceVersion, RequestID: "attachment-session-group-cleanup"}, http.StatusOK, nil)
+	t.Run("exact_private_reference", func(t *testing.T) {
+		provePolicyAttachmentSessionReference(t, ctx, handler, database, root, member)
+	})
+	for _, targetKind := range []string{"user", "group", "platform"} {
+		for _, mutation := range []string{"logout", "change-default", "change-true", "change-false", "change-current", "reset", "forced", "disable", "revoke-authority"} {
+			if targetKind == "platform" && (mutation == "reset" || mutation == "forced" || mutation == "disable") {
+				continue // Platform credential protection is a separate, retained gate.
+			}
+			for _, operation := range []string{"create", "revoke"} {
+				t.Run(targetKind+"_"+operation+"_"+mutation, func(t *testing.T) {
+					caseID := targetKind + "-" + operation + "-" + mutation
+					requestID := "attachment-session-pending-" + caseID
+					var actor iamv1.User
+					call(t, "/v1/users", root, map[string]any{"loginName": "attachment-actor-" + caseID, "displayName": "Attachment actor",
+						"initialPassword": initialDeveloperPassword, "requestId": "attachment-actor-" + caseID}, http.StatusCreated, &actor)
+					actorName := actor.LoginName + "@" + string(actor.AccountID)
+					bearer := localRecoveryLogin(t, handler, actorName, initialDeveloperPassword, true)
+					localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+					var grant iamv1.PolicyAttachment
+					grantRequest := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(actor.ID)},
+						PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "attachment-actor-grant-" + caseID}
+					call(t, "/v1/policy-attachments", root, grantRequest, http.StatusOK, &grant)
+					if targetKind == "platform" {
+						grantRequest.PolicyID = iamv1.SystemPolicyPlatformOperator
+						grantRequest.RequestID += "-platform"
+						call(t, "/v1/policy-attachments", root, grantRequest, http.StatusOK, &grant)
+					}
+					otherBearer := localRecoveryLogin(t, handler, actorName, changedDeveloperPassword, false)
+					request := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
+						PolicyID: iamv1.SystemPolicyAuditReader, PolicyResourceVersion: 1, RequestID: requestID}
+					if targetKind == "group" {
+						request.Target = iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}
+					} else if targetKind == "platform" {
+						request.PolicyID = iamv1.SystemPolicyPlatformOperator
+					}
+					path := "/v1/policy-attachments"
+					var body any = request
+					var attachment iamv1.PolicyAttachment
+					if operation == "revoke" {
+						seed := request
+						seed.RequestID = "attachment-session-seed-" + caseID
+						call(t, path, root, seed, http.StatusOK, &attachment)
+						path += "/" + string(attachment.ID) + ":revoke"
+						body = iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: requestID}
+					}
+					// Observe a real lock after authentication/PDP and before the mutation.
+					// The security change must commit before the original write resumes.
+					if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_attachment_session_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+				BEGIN IF NEW.request_id LIKE 'attachment-session-pending-%'
+				THEN PERFORM pg_advisory_xact_lock(54831,19); END IF; RETURN NEW; END $body$;
+				CREATE TRIGGER matrix_attachment_session_barrier BEFORE INSERT ON iam.authorization_decisions
+				FOR EACH ROW EXECUTE FUNCTION public.matrix_attachment_session_barrier(); SELECT pg_advisory_lock(54831,19)`); err != nil {
+						t.Fatal("install isolated attachment session barrier")
+					}
+					defer func() {
+						if _, err := database.Exec(context.Background(), `SELECT pg_advisory_unlock(54831,19);
+					DROP TRIGGER IF EXISTS matrix_attachment_session_barrier ON iam.authorization_decisions;
+					DROP FUNCTION IF EXISTS public.matrix_attachment_session_barrier()`); err != nil {
+							t.Error("remove isolated attachment session barrier")
+						}
+					}()
+					blockedContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+					defer cancel()
+					completed := make(chan *httptest.ResponseRecorder, 1)
+					encoded := mustIAMJSON(t, body)
+					go func() {
+						request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(encoded)).WithContext(blockedContext)
+						request.Header.Set("Authorization", "Bearer "+bearer)
+						request.Header.Set("Content-Type", "application/json")
+						response := httptest.NewRecorder()
+						handler.ServeHTTP(response, request)
+						completed <- response
+					}()
+					ticker := time.NewTicker(10 * time.Millisecond)
+					defer ticker.Stop()
+					for waiting := false; !waiting; {
+						if err := database.QueryRow(blockedContext, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted
+					AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54831 AND objid=19)`).Scan(&waiting); err != nil {
+							t.Fatal("observe attachment session barrier")
+						}
+						if !waiting {
+							select {
+							case <-ticker.C:
+							case <-blockedContext.Done():
+								t.Fatal("attachment did not reach session barrier")
+							}
+						}
+					}
+					want := http.StatusUnauthorized
+					mutationID := "attachment-session-mutate-" + caseID
+					switch mutation {
+					case "logout":
+						call(t, "/v1/auth/logout", bearer, map[string]any{"requestId": mutationID}, http.StatusOK, nil)
+					case "change-default", "change-true", "change-false", "change-current":
+						change := map[string]any{"currentPassword": changedDeveloperPassword, "newPassword": "Attachment-Changed-Password-62!", "requestId": mutationID}
+						if mutation == "change-true" {
+							change["revokeOtherSessions"] = true
+						} else if mutation == "change-false" {
+							change["revokeOtherSessions"] = false
+							want = http.StatusOK
+						}
+						if mutation == "change-current" {
+							otherBearer, want = bearer, http.StatusOK
+						}
+						call(t, "/v1/auth/password", otherBearer, change, http.StatusOK, nil)
+					case "reset", "forced", "disable":
+						response := performIAMRequest(handler, http.MethodGet, "/v1/users/"+string(actor.ID), root, nil)
+						var access iamv1.UserAccess
+						if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &access) != nil {
+							t.Fatal("read actor security revision")
+						}
+						if mutation == "disable" {
+							call(t, "/v1/users/"+string(actor.ID)+":set-status", root, iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled,
+								ResourceVersion: access.User.ResourceVersion, RequestID: mutationID}, http.StatusOK, nil)
+						} else {
+							call(t, "/v1/users/"+string(actor.ID)+":reset-password", root, map[string]any{
+								"initialPassword": "Attachment-Reset-Password-79!", "resourceVersion": access.User.ResourceVersion, "requestId": mutationID}, http.StatusOK, nil)
+							if mutation == "forced" {
+								temporary := localRecoveryLogin(t, handler, actorName, "Attachment-Reset-Password-79!", true)
+								call(t, "/v1/auth/password", temporary, map[string]any{"currentPassword": "Attachment-Reset-Password-79!",
+									"newPassword": "Attachment-Changed-Password-62!", "revokeOtherSessions": false, "requestId": mutationID + "-forced"}, http.StatusOK, nil)
+							}
+						}
+					case "revoke-authority":
+						want = http.StatusForbidden
+						call(t, "/v1/policy-attachments/"+string(grant.ID)+":revoke", root,
+							iamv1.RevokePolicyAttachmentRequest{ResourceVersion: grant.ResourceVersion, RequestID: mutationID}, http.StatusOK, nil)
+					}
+					if _, err := database.Exec(ctx, `SELECT pg_advisory_unlock(54831,19)`); err != nil {
+						t.Fatal("release attachment session barrier")
+					}
+					select {
+					case response := <-completed:
+						if response.Code != want {
+							t.Fatalf("attachment after security change: status=%d want=%d", response.Code, want)
+						}
+						if want == http.StatusOK && operation == "create" && json.Unmarshal(response.Body.Bytes(), &attachment) != nil {
+							t.Fatal("decode retained-session attachment")
+						}
+					case <-blockedContext.Done():
+						t.Fatal("attachment did not finish after security change")
+					}
+					var facts int
+					wantFacts := 0
+					if want == http.StatusOK {
+						wantFacts = 1
+					}
+					if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1
+				AND event_document->>'requestId'=$2 AND event_document->>'action' IN ('iam.policy-attachment.created','iam.policy-attachment.revoked',
+				'iam.platform-policy-attachment.created','iam.platform-policy-attachment.revoked')`, member.AccountID, requestID).Scan(&facts); err != nil || facts != wantFacts {
+						t.Fatal("session mutation persisted the wrong attachment facts")
+					}
+					if operation == "revoke" && want != http.StatusOK {
+						var unchanged bool
+						if err := database.QueryRow(ctx, `SELECT revoked_at IS NULL AND resource_version=$3 FROM iam.policy_attachments
+					WHERE tenant_id=$1 AND id=$2`, member.AccountID, attachment.ID, attachment.ResourceVersion).Scan(&unchanged); err != nil || !unchanged {
+							t.Fatal("revoked bearer changed attachment")
+						}
+					}
+					if want != http.StatusOK {
+						// A different, currently valid bearer performs the original intent.
+						var result any
+						if operation == "create" {
+							result = &attachment
+						}
+						call(t, path, root, body, http.StatusOK, result)
+					}
+					if operation == "create" {
+						call(t, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", root,
+							iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: "attachment-cleanup-" + caseID}, http.StatusOK, nil)
+					}
+					retainedChecks = append(retainedChecks, func(t *testing.T) {
+						if want == http.StatusOK {
+							if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", bearer, nil); response.Code != http.StatusOK {
+								t.Errorf("retained current session no longer usable after replay: %s", caseID)
+							}
+						} else if response := performIAMRequest(handler, http.MethodPost, path, bearer, encoded); response.Code != want {
+							t.Errorf("revoked session or permission changed after replay: %s status=%d want=%d", caseID, response.Code, want)
+						}
+					})
+				})
+			}
+		}
+	}
+	return func() {
+		for _, verify := range retainedChecks {
+			verify(t)
+		}
+	}
+}
+
+// Fault injection changes only the private reference after real authentication
+// and PDP. All decisions, mutations, rollback and persistence use the production
+// PostgreSQL adapter; this is not a replacement session authority.
+type attachmentSessionProbe struct {
+	identityaccess.Repository
+	sessionID iamv1.SessionID
+}
+
+func (probe attachmentSessionProbe) WithinTransaction(ctx context.Context, callback func(context.Context, identityaccess.Transaction) error) error {
+	return probe.Repository.WithinTransaction(ctx, func(ctx context.Context, transaction identityaccess.Transaction) error {
+		return callback(ctx, attachmentSessionTransaction{transaction, probe.sessionID})
+	})
+}
+
+type attachmentSessionTransaction struct {
+	identityaccess.Transaction
+	sessionID iamv1.SessionID
+}
+
+func (probe attachmentSessionTransaction) CreatePolicyAttachment(ctx context.Context, mutation identityaccess.PolicyAttachmentMutation) (iamv1.PolicyAttachment, error) {
+	mutation.ActorSessionID = probe.sessionID
+	return probe.Transaction.CreatePolicyAttachment(ctx, mutation)
+}
+
+func (probe attachmentSessionTransaction) RevokePolicyAttachment(ctx context.Context, mutation identityaccess.PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error) {
+	mutation.ActorSessionID = probe.sessionID
+	return probe.Transaction.RevokePolicyAttachment(ctx, mutation)
+}
+
+func provePolicyAttachmentSessionReference(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string, member iamv1.User) {
+	t.Helper()
+	config, err := pgxpool.ParseConfig(database.Config().ConnString())
+	if err != nil {
+		t.Fatal("parse attachment reference fixture")
+	}
+	config.ConnConfig.User, config.ConnConfig.Password, config.MaxConns = iamHTTPTestRole, iamHTTPTestPassword, 2
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect attachment reference runtime")
+	}
+	defer pool.Close()
+	repository, err := iampostgres.NewRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := func(name, password string) (string, iamv1.SessionID) {
+		t.Helper()
+		response := performIAMRequest(handler, http.MethodPost, "/v1/auth/login", "", mustIAMJSON(t, map[string]any{
+			"loginName": name, "password": password, "requestId": "attachment-reference-login"}))
+		var result struct {
+			Credential string        `json:"credential"`
+			Session    iamv1.Session `json:"session"`
+		}
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidateSession(result.Session) != nil {
+			t.Fatal("attachment reference login failed")
+		}
+		return result.Credential, result.Session.ID
+	}
+	validBearer, currentID := login("admin", changedAdminPassword)
+	_, otherID := login(member.LoginName+"@"+string(member.AccountID), changedDeveloperPassword)
+	revokedBearer, revokedID := login("admin", changedAdminPassword)
+	if response := performIAMRequest(handler, http.MethodPost, "/v1/auth/logout", revokedBearer,
+		mustIAMJSON(t, map[string]any{"requestId": "attachment-reference-logout"})); response.Code != http.StatusOK {
+		t.Fatal("revoke attachment reference fixture")
+	}
+	// Explicitly synthetic retained/corrupt session rows, not a claimed old
+	// executable upgrade. They cannot gain current credential authority.
+	for _, variant := range []string{"expired", "stale-generation", "null-generation"} {
+		if _, err := database.Exec(ctx, `INSERT INTO iam.sessions(tenant_id,id,principal_id,verification_digest,status,resource_version,
+			issued_at,expires_at,credential_version) SELECT tenant_id,$2,principal_id,verification_digest,'ACTIVE',1,
+			transaction_timestamp()-interval '2 hours',CASE WHEN $3='expired' THEN transaction_timestamp()-interval '1 hour'
+			ELSE expires_at END,CASE WHEN $3='null-generation' THEN NULL WHEN $3='stale-generation' THEN credential_version-1
+			ELSE credential_version END FROM iam.sessions WHERE tenant_id=$1 AND id=$4`,
+			member.AccountID, "attachment-reference-"+variant, variant, currentID); err != nil {
+			t.Fatal("create isolated session validity fixture")
+		}
+	}
+	for _, operation := range []string{"create", "revoke"} {
+		var seeded iamv1.PolicyAttachment
+		seed := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
+			PolicyID: iamv1.SystemPolicyAuditReader, PolicyResourceVersion: 1, RequestID: "attachment-reference-seed-" + operation}
+		if operation == "revoke" {
+			response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", root, mustIAMJSON(t, seed))
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &seeded) != nil {
+				t.Fatal("seed attachment reference revocation")
+			}
+		}
+		for _, field := range []string{"sessionId", "actorSessionId"} {
+			path := "/v1/policy-attachments"
+			var body any = seed
+			if operation == "revoke" {
+				path += "/" + string(seeded.ID) + ":revoke"
+				body = iamv1.RevokePolicyAttachmentRequest{ResourceVersion: seeded.ResourceVersion, RequestID: "session-selector-attack"}
+			}
+			var fields map[string]any
+			if json.Unmarshal(mustIAMJSON(t, body), &fields) != nil {
+				t.Fatal("prepare session selector attack")
+			}
+			fields[field] = string(currentID)
+			if response := performIAMRequest(handler, http.MethodPost, path, validBearer, mustIAMJSON(t, fields)); response.Code != http.StatusBadRequest {
+				t.Fatal("northbound attachment accepted a private session selector")
+			}
+		}
+		for _, candidate := range []struct {
+			name string
+			id   iamv1.SessionID
+			want int
+		}{{"missing", "", http.StatusUnprocessableEntity}, {"malformed", "bad session", http.StatusUnprocessableEntity}, {"unknown", "unknown-session", 403},
+			{"other-user", otherID, 403}, {"revoked", revokedID, 403}, {"expired", "attachment-reference-expired", 403},
+			{"stale-generation", "attachment-reference-stale-generation", 403}, {"null-generation", "attachment-reference-null-generation", 403},
+			{"current", currentID, 200}} {
+			t.Run(operation+"_"+candidate.name, func(t *testing.T) {
+				workflow, err := identityaccess.NewAuthority(attachmentSessionProbe{repository, candidate.id}, identityaccess.Config{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				probeHandler, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				requestID := "attachment-reference-" + operation + "-" + candidate.name
+				path := "/v1/policy-attachments"
+				creation := seed
+				creation.RequestID = requestID
+				var body any = creation
+				if operation == "revoke" {
+					path += "/" + string(seeded.ID) + ":revoke"
+					body = iamv1.RevokePolicyAttachmentRequest{ResourceVersion: seeded.ResourceVersion, RequestID: requestID}
+				}
+				response := performIAMRequest(probeHandler, http.MethodPost, path, validBearer, mustIAMJSON(t, body))
+				if response.Code != candidate.want {
+					t.Fatalf("substituted session status=%d want=%d", response.Code, candidate.want)
+				}
+				if candidate.want != http.StatusOK {
+					var persisted bool
+					if err := database.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$2)
+						OR EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2)`, member.AccountID, requestID).Scan(&persisted); err != nil || persisted {
+						t.Fatal("invalid reference left partial authorization or success facts")
+					}
+				}
+				if candidate.want == http.StatusOK && operation == "create" {
+					var attachment iamv1.PolicyAttachment
+					if json.Unmarshal(response.Body.Bytes(), &attachment) != nil {
+						t.Fatal("decode current reference attachment")
+					}
+					response = performIAMRequest(handler, http.MethodPost, path+"/"+string(attachment.ID)+":revoke", root,
+						mustIAMJSON(t, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: 1, RequestID: requestID + "-cleanup"}))
+					if response.Code != http.StatusOK {
+						t.Fatal("revoke current reference attachment")
+					}
+				}
+			})
+		}
+	}
 }
 
 func proveUserBoundaryPolicyRaces(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {

@@ -136,7 +136,7 @@ BEGIN
             'matrix_iam_api', 'iam.create_user(text,text,text,text,text,text,text,jsonb)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb)', 'EXECUTE'
+            'matrix_iam_api', 'iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb,text)', 'EXECUTE'
        )
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_policy(text,text)', 'EXECUTE')
        OR NOT has_function_privilege('matrix_iam_api', 'iam.list_policies(text,text,text,text)', 'EXECUTE')
@@ -146,7 +146,7 @@ BEGIN
        OR has_function_privilege('matrix_iam_worker', 'iam.lookup_policy_attachment(text,text)', 'EXECUTE')
        OR has_function_privilege('matrix_iam_worker', 'iam.lookup_policy(text,text)', 'EXECUTE')
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.revoke_policy_attachment(text,text,bigint,text,text,jsonb)', 'EXECUTE'
+            'matrix_iam_api', 'iam.revoke_policy_attachment(text,text,bigint,text,text,jsonb,text)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_iam_worker', 'iam.claim_audit_event(text,integer)', 'EXECUTE'
@@ -293,10 +293,12 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>23 OR NOT iam.authorization_decision_contract_ready() THEN
+    IF (SELECT schema_version FROM iam.readiness())<>24 OR NOT iam.authorization_decision_contract_ready()
+        OR NOT iam.policy_attachment_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';
     END IF;
     FOREACH entry IN ARRAY ARRAY['iam.authorization_decision_contract_ready()'::regprocedure,
+        'iam.policy_attachment_contract_ready()'::regprocedure,
         'iam.authorization_decision_profile_matches(jsonb)'::regprocedure,
         'iam.resource_kind_for_action(text)'::regprocedure,'iam.is_platform_action(text)'::regprocedure,
         'iam.assert_allowed_decision(text,text,text,text,text,text,text,text)'::regprocedure] LOOP

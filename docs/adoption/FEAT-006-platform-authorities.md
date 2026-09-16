@@ -460,6 +460,12 @@ gates, not implied by CRUD. Fixed `40407e2710a45ee1000552146cd362740074369a`
 Group/Policy transactions, restricted PostgreSQL functions, current PDP,
 credential-generation ownership, strict JSON and ordinary IAM fact/outbox are
 `REUSE`/`ADAPT`; never model a Role as a password-bearing USER or GROUP.
+The same fixed source's User-boundary private session reference and sorted
+principal locking are `ADAPT` for attachment writes. Its older attachment
+mutation carries no session reference; treating an authorization decision as
+proof of the calling session, or retaining its session-less SQL overload as a
+fallback, is `REJECT`. Credential/current-session checks stay with the existing
+transaction owner, not a new interchangeable cache authority.
 Fixed `1ad6884ff1f844429b477d5578a039ec809211d7` roles-and-trust.md and
 temporary-credentials-and-sts.md were inspected as `REFERENCE` for product
 separation, double-sided admission, bounded sessions and lineage. Their generic

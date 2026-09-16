@@ -911,7 +911,8 @@ func (value *transaction) LookupPolicyAttachment(ctx context.Context, account ia
 
 func (value *transaction) CreatePolicyAttachment(ctx context.Context, mutation identityaccess.PolicyAttachmentMutation) (iamv1.PolicyAttachment, error) {
 	attachment := mutation.Attachment
-	if iamv1.ValidatePolicyAttachment(attachment) != nil || iamv1.ValidateCreatePolicyAttachmentRequest(iamv1.CreatePolicyAttachmentRequest{
+	if iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil ||
+		iamv1.ValidatePolicyAttachment(attachment) != nil || iamv1.ValidateCreatePolicyAttachmentRequest(iamv1.CreatePolicyAttachmentRequest{
 		Target: attachment.Target, PolicyID: attachment.PolicyID, PolicyResourceVersion: mutation.PolicyResourceVersion, RequestID: mutation.AuditEvent.RequestID}) != nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.PolicyAttachment{}, identityaccess.ErrInvalidArgument
@@ -921,9 +922,9 @@ func (value *transaction) CreatePolicyAttachment(ctx context.Context, mutation i
 		return iamv1.PolicyAttachment{}, identityaccess.ErrUnavailable
 	}
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.create_policy_attachment($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
+	err = value.tx.QueryRow(ctx, "SELECT iam.create_policy_attachment($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)",
 		string(attachment.AccountID), string(attachment.ID), string(attachment.Target.Kind), attachment.Target.ID, string(attachment.PolicyID), mutation.PolicyResourceVersion,
-		string(mutation.ActorPrincipalID), string(mutation.DecisionID), event).Scan(&encoded)
+		string(mutation.ActorPrincipalID), string(mutation.DecisionID), event, string(mutation.ActorSessionID)).Scan(&encoded)
 	if err != nil {
 		return iamv1.PolicyAttachment{}, mapAuthorizationDatabaseError("create IAM policy attachment", err)
 	}
@@ -931,7 +932,8 @@ func (value *transaction) CreatePolicyAttachment(ctx context.Context, mutation i
 }
 
 func (value *transaction) RevokePolicyAttachment(ctx context.Context, mutation identityaccess.PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error) {
-	if iamv1.ValidateID("accountId", string(mutation.AccountID)) != nil || iamv1.ValidateID("attachmentId", string(mutation.AttachmentID)) != nil ||
+	if iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil ||
+		iamv1.ValidateID("accountId", string(mutation.AccountID)) != nil || iamv1.ValidateID("attachmentId", string(mutation.AttachmentID)) != nil ||
 		iamv1.ValidateRevokePolicyAttachmentRequest(iamv1.RevokePolicyAttachmentRequest{ResourceVersion: mutation.ResourceVersion, RequestID: mutation.AuditEvent.RequestID}) != nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.Revocation{}, false, identityaccess.ErrInvalidArgument
@@ -942,9 +944,9 @@ func (value *transaction) RevokePolicyAttachment(ctx context.Context, mutation i
 	}
 	result := iamv1.Revocation{APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(mutation.AttachmentID)}
 	var applied bool
-	err = value.tx.QueryRow(ctx, "SELECT * FROM iam.revoke_policy_attachment($1,$2,$3,$4,$5,$6::jsonb)",
+	err = value.tx.QueryRow(ctx, "SELECT * FROM iam.revoke_policy_attachment($1,$2,$3,$4,$5,$6::jsonb,$7)",
 		string(mutation.AccountID), string(mutation.AttachmentID), mutation.ResourceVersion, string(mutation.ActorPrincipalID),
-		string(mutation.DecisionID), event).Scan(&result.ResourceVersion, &result.RevokedAt, &applied)
+		string(mutation.DecisionID), event, string(mutation.ActorSessionID)).Scan(&result.ResourceVersion, &result.RevokedAt, &applied)
 	if err != nil {
 		return iamv1.Revocation{}, false, mapAuthorizationDatabaseError("revoke IAM policy attachment", err)
 	}

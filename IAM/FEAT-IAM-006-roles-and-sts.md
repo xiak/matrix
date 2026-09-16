@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1 信任内容纯契约已实现，管理事务/HTTP/真实运行待实施验收。首个运行切片为同账号自定义角色管理，后续必须完成真实角色会话与业务授权，不能以管理目录代替本 FEAT 验收。
+- 状态：R1 信任内容及附件当前会话基础已实现，附件的本地 PG/独立进程回归通过，独立 CI 待确认；Role 管理事务/HTTP/真实运行待实施验收。首个角色运行切片为同账号自定义角色管理，后续必须完成真实角色会话与业务授权，不能以管理目录或附件前置增量代替本 FEAT 验收。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -71,9 +71,9 @@ R1对应租户IAM/USER事实为`iam.role.created/updated/disabled/enabled/trust-
 
 现有授权决定不保存SessionID，`assert_allowed_decision`不能用于重建调用会话。先按稳定ID锁actor及涉及的USER目标，再检查指定Session的真实Account/USER、ACTIVE/未撤销/未过期、非临时改密及与user_credentials相同generation；空、NULL、其他USER或代际不符一律拒绝。不得任选actor的另一有效session，不把私有SessionID加入北向request、AuthorizationRequest/decision、摘要、outbox或历史proof，也不追称旧决定包含该lineage。
 
-因此现有附件ABI也在同一IAM24迁移中直接替换，末参同为私有SessionID；旧9/6参重载删除，无default、overload或兼容旁路。新增原Account Root规则仅ROLE分支，原USER/GROUP授权、平台USER附件与Root受保护关系保持。新形状为`create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb,text) -> jsonb`、`revoke_policy_attachment(text,text,bigint,text,text,jsonb,text) -> (resource_version bigint,revoked_at timestamptz,applied boolean)`。原record_authorization7/evidence5、ServiceIdentity、lookup_service、claim7不变。
+现有USER/GROUP/平台USER附件ABI已在IAM24事务中直接替换，末参为私有SessionID；旧9/6参重载删除，无default、overload或兼容旁路。实际会话到期在取得主体锁后按数据库时钟检查，不沿用事务开始时尚未到期的判断。原USER/GROUP授权、平台USER附件与Root受保护关系保持；ROLE尚未开放，后续新增原Account Root规则仅作用于ROLE分支。当前形状为`create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb,text) -> jsonb`、`revoke_policy_attachment(text,text,bigint,text,text,jsonb,text) -> (resource_version bigint,revoked_at timestamptz,applied boolean)`。原record_authorization7/evidence5、ServiceIdentity、lookup_service、claim7不变。
 
-开发IAM schema24/Audit14窗口已确认，用于新增对象、受限函数和闭合事实；在实现前源码仍为23/13，不提前修改数字或发布profile。IAM产品Profile追加r2，不能覆盖已登记r1；当前SYSTEM默认值、已撤销附件和旧信任/决定不能由schema/bootstrap重放改写。新装使用新源码声明与系统种子；已有数据是否能调用新Role action仍取决于明确当前附件，不因注册目录而授予权限。保留数据正向资格由原root显式发布/关联当前TENANT策略证明，不暗改旧SYSTEM默认或重做安装bootstrap。完整release兼容仍由最终累计组合及安装owner验收，不为本管理切片单独分配发行revision。
+开发IAM schema24/Audit14窗口已确认，用于新增对象、受限函数和闭合事实；当前附件前置增量为IAM24/Audit13/PaaS1，Audit14仅在角色事实实际实现时推进，发布profile不变。角色目录实施时IAM产品Profile追加r2，不能覆盖已登记r1；当前SYSTEM默认值、已撤销附件和旧信任/决定不能由schema/bootstrap重放改写。新装使用新源码声明与系统种子；已有数据是否能调用新Role action仍取决于明确当前附件，不因注册目录而授予权限。保留数据正向资格由原root显式发布/关联当前TENANT策略证明，不暗改旧SYSTEM默认或重做安装bootstrap。完整release兼容仍由最终累计组合及安装owner验收，不为本管理切片单独分配发行revision，也不把开发中相同schema数字视为可跨二进制兼容。
 
 锁序必须基于实际现有Account/主体/Policy/附件事务核对，不能仅照一条概念箭头实现。复用现有SERIALIZABLE和有界重试，跨对象先后顺序与实际管理、附件和删除路径保持一致；同类批量锁按稳定ID取得，写root关系、当前会话、预期修订与对象范围在锁内重查。不得把Account读锁误称为独占串行化全部授权变更。同resourceVersion的状态/信任/删除竞争只可一个结果，末尾outbox失败全部回滚。未来R2需把source session、RoleSession与credential generation加入同一已验证顺序。
 
@@ -95,7 +95,13 @@ RoleSession必须绑定account、role、原USER、直接承担者、source sessi
 
 当前纯契约位于`api/iam/v1/role.go`：严格`TrustPolicyDocument`/`RoleTrustVersion`读取、静态校验及唯一`CanonicalizeTrustPolicyDocument(document) (canonical,contentDigest,error)`。规范化只排序副本，保留空`[]`，拒绝空缺/null、未知字段、重复/大小写歧义、未实现载体、权限文档字段和超预算输入。OpenAPI仅增加数据schema，没有Role HTTP路由、Action、subject、SQL、发行profile或schema数字变化。
 
-2026-09-16聚焦契约与JSONSchema、全仓`go test -race -p 2 -count=1 ./...`、`go vet -p 2 ./...`、模块校验、API生成字节稳定和Linux amd64构建通过（Go2/768MiB）。测试明确区分16KiB reader预算、Go语义及JSONSchema结构：schema不证明SID跨语句唯一、摘要相等、实际Account/USER或当前选中关系。该证据只覆盖纯契约与现有默认回归；本地未启动PG/独立进程/浏览器，不构成R1事务、R2承担或整个006验收。
+固定`1bcaa62bf6b11c20a7b34458408a221ed0aa633c`的聚焦契约与JSONSchema、全仓`go test -race -p 2 -count=1 ./...`、`go vet -p 2 ./...`、模块校验、API生成字节稳定和Linux amd64构建通过（Go2/768MiB）；[Verification35047801568](https://github.com/xiak/matrix/actions/runs/35047801568)精确SHA的go/authority-process/node-process三项均success。测试明确区分16KiB reader预算、Go语义及JSONSchema结构：schema不证明SID跨语句唯一、摘要相等、实际Account/USER或当前选中关系。纯契约本地没有新增PG/进程/浏览器fixture，独立CI也不构成尚未实现的Role管理或承担验收。
+
+附件会话基础沿原仓储/事务接口传递实际bearer的Session.ID，没有新增SessionStore、Redis依赖、北向selector或审计字段。私有`policy_attachment_contract_ready()`由迁移验证与实时readiness共用，检查唯一10/7参入口、精确返回列、无默认/可变参数、owner/ACL、SECURITY DEFINER、易变性/并行属性和安全search_path；元数据漂移失败关闭。新的输入缺失/错误引用门禁使用真实PDP及PostgreSQL适配器，仅在测试事务入口替换私有Session引用；过期/旧代际/NULL行是显式合成存储攻击，不声称为旧binary来源证据。
+
+2026-09-16受限PG18.6（1CPU/768MiB/128PIDs/64连接，Go2/768MiB、真实门禁串行race/p1）通过原策略保留数据门禁与附件会话门禁，合计301.225s。两者沿用同一integration owner，但使用独立数据库和原4分钟/2分钟预算，避免会话矩阵的测试用户混入策略目录/101成员规模fixture；CI在既有authority-process job运行两项，不放宽超时、密码成本或规模断言。附件矩阵包含用户、组、平台用户共48个安全变更先提交的可控交错：退出、改密省略/true/false、保留当前会话、重置/forced及停用/撤权；保留会话仍可写，失效会话拒绝，关系和成功事实无部分效果。双次迁移及等值bootstrap重放后再次检查原会话/撤权结果，原receipt不变、旧权限不复活。平台身份不可在线重置/停用继续由原凭据保护门禁验收，本矩阵不绕过它。
+
+18个私有引用用例覆盖缺失/畸形/未知/另一USER/已撤销/过期/旧或NULL代际及正常引用；四项北向selector注入拒绝。旧9/6参调用返回未定义函数，权限和入口配置漂移关闭readiness。原IAM HTTP/本地凭据恢复门禁141.053s，Audit双schema/HTTP分别11.384s/3.448s，独立IAM/Audit/PaaS进程77.478s通过，保留实际受限数据库登录、双账号资源/Operation/outbox和历史proof。全仓race/p2、vet/p2、模块校验、API生成字节稳定及Linux amd64构建通过；默认跳过的外部fixture不计为真实运行证据。此前原实现已能在两项退出竞争中经SERIALIZABLE重试拒绝，不把该回归声称为已复现漏洞；新参数提供显式数据库入口保证。此证据仍不是Role/STS、Redis替换、HA或发布验收；Role写入与原root恢复的竞争、写入先提交的Role交错及完整角色闭环按R1/R2继续完成。
 
 ## 验收
 

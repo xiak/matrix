@@ -343,7 +343,8 @@ func (service *Authority) CreatePolicyAttachment(ctx context.Context, credential
 			return err
 		}
 		stored, err = tx.CreatePolicyAttachment(ctx, PolicyAttachmentMutation{Attachment: attachment,
-			PolicyResourceVersion: request.PolicyResourceVersion, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, AuditEvent: event})
+			PolicyResourceVersion: request.PolicyResourceVersion, ActorPrincipalID: subject.Subject.Principal.ID,
+			ActorSessionID: subject.Subject.Session.ID, DecisionID: decision.ID, AuditEvent: event})
 		return err
 	})
 	if err != nil {
@@ -423,7 +424,8 @@ func (service *Authority) RevokePolicyAttachment(ctx context.Context, credential
 			return err
 		}
 		result, _, err = tx.RevokePolicyAttachment(ctx, PolicyAttachmentRevocationMutation{AccountID: subject.Subject.Organization.ID,
-			AttachmentID: id, ResourceVersion: request.ResourceVersion, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, AuditEvent: event})
+			AttachmentID: id, ResourceVersion: request.ResourceVersion, ActorPrincipalID: subject.Subject.Principal.ID,
+			ActorSessionID: subject.Subject.Session.ID, DecisionID: decision.ID, AuditEvent: event})
 		return err
 	})
 	if err != nil {

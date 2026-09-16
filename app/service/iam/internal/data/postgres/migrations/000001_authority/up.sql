@@ -1333,6 +1333,39 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
                 AND protection.tgenabled='A' AND NOT protection.tgisinternal AND protection.tgfoid=to_regprocedure('iam.reject_policy_history_change()'))=2
 $function$;
 
+-- This private check is shared by migration verification and live readiness.
+-- A matching schema number alone does not prove the callable session ABI.
+CREATE OR REPLACE FUNCTION iam.policy_attachment_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+        WHERE n.nspname='iam' AND p.proname IN ('create_policy_attachment','revoke_policy_attachment'))=2
+      AND NOT EXISTS(SELECT 1 FROM (VALUES
+        ('iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb,text)',10,false,'jsonb'::regtype),
+        ('iam.revoke_policy_attachment(text,text,bigint,text,text,jsonb,text)',7,true,'record'::regtype)
+        ) expected(signature,arguments,returns_set,result_type)
+        LEFT JOIN pg_proc p ON p.oid=to_regprocedure(expected.signature)
+        WHERE p.oid IS NULL OR NOT p.prosecdef OR p.proowner<>'matrix_iam_owner'::regrole
+          OR p.pronargs<>expected.arguments OR p.pronargdefaults<>0 OR p.provariadic<>0
+          OR p.provolatile<>'v' OR p.proparallel<>'u' OR p.proisstrict OR p.proleakproof
+          OR p.proargnames[expected.arguments] IS DISTINCT FROM 'actor_session_id'
+          OR p.proretset<>expected.returns_set OR p.prorettype<>expected.result_type
+          OR (NOT expected.returns_set AND (p.proallargtypes IS NOT NULL OR p.proargmodes IS NOT NULL))
+          OR (expected.returns_set AND (cardinality(p.proallargtypes) IS DISTINCT FROM 10
+            OR cardinality(p.proargnames) IS DISTINCT FROM 10 OR cardinality(p.proargmodes) IS DISTINCT FROM 10
+            OR p.proargnames[8:10] IS DISTINCT FROM ARRAY['resource_version','revoked_at','applied']
+            OR p.proallargtypes[8:10] IS DISTINCT FROM ARRAY['bigint'::regtype::oid,'timestamptz'::regtype::oid,'boolean'::regtype::oid]
+            OR p.proargmodes[8:10] IS DISTINCT FROM ARRAY['t','t','t']::"char"[]))
+          OR NOT has_function_privilege('matrix_iam_api',p.oid,'EXECUTE')
+          OR EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) permission
+            WHERE permission.grantee NOT IN (p.proowner,'matrix_iam_api'::regrole)
+              OR (permission.grantee='matrix_iam_api'::regrole AND permission.is_grantable))
+          OR NOT COALESCE((SELECT count(*)=1 AND bool_and(
+            (SELECT array_agg(parse_ident(btrim(component.name),true) ORDER BY component.position)
+             FROM unnest(string_to_array(substr(config.setting,strpos(config.setting,'=')+1),','))
+               WITH ORDINALITY AS component(name,position))=ARRAY[ARRAY['pg_catalog'],ARRAY['pg_temp']])
+            FROM unnest(p.proconfig) AS config(setting) WHERE split_part(config.setting,'=',1)='search_path'),false))
+$function$;
+
 CREATE OR REPLACE FUNCTION iam.readiness()
 RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
 LANGUAGE plpgsql
@@ -1365,8 +1398,7 @@ BEGIN
                 AND attname='target_id' AND atttypid='text'::regtype AND attnotnull AND NOT attisdropped)
            AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute WHERE attrelid='iam.policy_attachments'::regclass
                 AND attname='principal_id' AND NOT attisdropped)
-           AND to_regprocedure('iam.create_policy_attachment(text,text,text,text,bigint,text,text,jsonb)') IS NULL
-           AND to_regprocedure('iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
+           AND iam.policy_attachment_contract_ready()
            AND to_regprocedure('iam.create_group(text,text,text,text,text,text,jsonb)') IS NOT NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc AS policy_entry
                 WHERE policy_entry.oid IN (to_regprocedure('iam.read_policy(text,text,text,text)'),
@@ -1491,7 +1523,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           23::bigint,
+           24::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -2587,10 +2619,11 @@ BEGIN
 END $function$;
 
 DROP FUNCTION IF EXISTS iam.create_policy_attachment(text,text,text,text,bigint,text,text,jsonb);
+DROP FUNCTION IF EXISTS iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb);
 CREATE OR REPLACE FUNCTION iam.create_policy_attachment(
     submitted_tenant_id text, submitted_attachment_id text, submitted_target_kind text, submitted_target_id text,
     submitted_policy_id text, submitted_policy_version bigint, submitted_actor_principal_id text,
-    submitted_decision_id text, submitted_audit_event jsonb
+    submitted_decision_id text, submitted_audit_event jsonb, actor_session_id text
 )
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
@@ -2605,7 +2638,8 @@ DECLARE
 BEGIN
     IF COALESCE(submitted_tenant_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_attachment_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_target_kind NOT IN ('USER','GROUP')
+       OR submitted_target_kind IS NULL OR submitted_target_kind NOT IN ('USER','GROUP')
+       OR COALESCE(actor_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_target_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_policy_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_policy_version IS NULL OR submitted_policy_version NOT BETWEEN 1 AND 9007199254740991 THEN
@@ -2614,6 +2648,20 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id',submitted_tenant_id,true);
     PERFORM 1 FROM iam.accounts WHERE id=submitted_tenant_id AND status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable'; END IF;
+    -- Lock both real USER rows in one stable order, including self-targets.
+    -- Credential, logout and platform-grant writers serialize on these rows.
+    PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id
+        AND (p.id=submitted_actor_principal_id OR (submitted_target_kind='USER' AND p.id=submitted_target_id))
+        ORDER BY p.id FOR UPDATE;
+    PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id AND p.id=submitted_actor_principal_id
+        AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL AND NOT p.must_change_password;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment actor is unavailable'; END IF;
+    PERFORM 1 FROM iam.user_credentials c JOIN iam.sessions s
+        ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id
+        WHERE c.tenant_id=submitted_tenant_id AND c.principal_id=submitted_actor_principal_id AND s.id=actor_session_id
+          AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp()
+          AND s.credential_version=c.credential_version FOR SHARE OF c,s;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment session is unavailable'; END IF;
     IF submitted_target_kind='USER' THEN
         SELECT * INTO target_user FROM iam.principals
          WHERE tenant_id=submitted_tenant_id AND id=submitted_target_id AND principal_type='USER' AND status='ACTIVE'
@@ -2671,9 +2719,10 @@ BEGIN
 END $function$;
 
 DROP FUNCTION IF EXISTS iam.revoke_policy_attachment(text,text,text,text,jsonb);
+DROP FUNCTION IF EXISTS iam.revoke_policy_attachment(text,text,bigint,text,text,jsonb);
 CREATE OR REPLACE FUNCTION iam.revoke_policy_attachment(
     submitted_tenant_id text, submitted_attachment_id text, submitted_resource_version bigint,
-    submitted_actor_principal_id text, submitted_decision_id text, submitted_audit_event jsonb
+    submitted_actor_principal_id text, submitted_decision_id text, submitted_audit_event jsonb, actor_session_id text
 )
 RETURNS TABLE(resource_version bigint, revoked_at timestamptz, applied boolean)
 LANGUAGE plpgsql SECURITY DEFINER
@@ -2687,6 +2736,7 @@ DECLARE
 BEGIN
     IF COALESCE(submitted_tenant_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_attachment_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(actor_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_resource_version IS NULL OR submitted_resource_version NOT BETWEEN 1 AND 9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='attachment revocation input is invalid';
     END IF;
@@ -2699,6 +2749,20 @@ BEGIN
        OR (stored.target_kind='GROUP' AND stored.authority_scope<>'TENANT') THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment is unavailable';
     END IF;
+    -- The immutable target may be read before locking; mutation locks always
+    -- start with the same sorted actor/USER set as attachment creation.
+    PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id
+        AND (p.id=submitted_actor_principal_id OR (stored.target_kind='USER' AND p.id=stored.target_id))
+        ORDER BY p.id FOR UPDATE;
+    PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id AND p.id=submitted_actor_principal_id
+        AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL AND NOT p.must_change_password;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment actor is unavailable'; END IF;
+    PERFORM 1 FROM iam.user_credentials c JOIN iam.sessions s
+        ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id
+        WHERE c.tenant_id=submitted_tenant_id AND c.principal_id=submitted_actor_principal_id AND s.id=actor_session_id
+          AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp()
+          AND s.credential_version=c.credential_version FOR SHARE OF c,s;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment session is unavailable'; END IF;
     IF stored.target_kind='GROUP' THEN
         PERFORM 1 FROM iam.groups WHERE tenant_id=submitted_tenant_id AND id=stored.target_id FOR UPDATE;
     ELSE
@@ -2938,13 +3002,13 @@ GRANT EXECUTE ON FUNCTION iam.create_user(
     text, text, text, text, text, text, text, jsonb
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.create_policy_attachment(
-    text, text, text, text, text, bigint, text, text, jsonb
+    text, text, text, text, text, bigint, text, text, jsonb, text
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_policy(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.list_policies(text, text, text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_policy_attachment(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.revoke_policy_attachment(
-    text, text, bigint, text, text, jsonb
+    text, text, bigint, text, text, jsonb, text
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.claim_audit_event(text, integer) TO matrix_iam_worker;
 GRANT EXECUTE ON FUNCTION iam.complete_audit_event(
