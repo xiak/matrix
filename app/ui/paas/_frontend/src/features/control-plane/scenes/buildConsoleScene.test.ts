@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ControlPlaneSnapshot } from "../domain/resources";
 import { previewExperienceSnapshot } from "../repositories/previewExperienceSnapshot";
-import { buildConsoleFrame, buildConsoleScene, projectCachedConsoleContent } from "./buildConsoleScene";
+import { buildConsoleFrame, buildConsoleScene } from "./buildConsoleScene";
 import { serviceDirectory, serviceNavigation } from "./serviceDirectory";
 import { consoleRouteHref, type ControlPlaneRouteSelection } from "../domain/selection";
 
@@ -149,22 +149,6 @@ describe("buildConsoleScene", () => {
     expect(scene.navigation.filter((item) => item.group === "security").map((item) => item.id)).toEqual(["keys", "settings"]);
     expect(scene.navigation.find((item) => item.id === "federations")?.group).toBe("identity");
     expect(scene.navigation.map((item) => item.id)).not.toContain("installations");
-  });
-
-  it("projects only service-local destination views from already loaded data", () => {
-    const access = buildConsoleScene("access", snapshot, previewExperienceSnapshot, "users");
-    expect(projectCachedConsoleContent(access, { section: "access", view: "groups" })).toEqual({ kind: "access", view: "groups" });
-    expect(projectCachedConsoleContent(access, { section: "logs", view: "search" })).toBeNull();
-
-    const logs = buildConsoleScene("logs", snapshot, previewExperienceSnapshot);
-    expect(projectCachedConsoleContent(logs, { section: "logs", view: "topics" })).toMatchObject({
-      kind: "logs",
-      view: "topics",
-      data: previewExperienceSnapshot.logs
-    });
-
-    const installations = buildConsoleScene("installations", snapshot, previewExperienceSnapshot);
-    expect(projectCachedConsoleContent(installations, { section: "installations" })).toBeNull();
   });
 
 

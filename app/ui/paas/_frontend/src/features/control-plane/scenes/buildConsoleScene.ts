@@ -267,32 +267,6 @@ export function buildAccessConsoleScene(experience?: ExperienceSnapshot, view?: 
   };
 }
 
-// A service-local route can reuse the data that already belongs to that
-// service. Project only the destination view; never manufacture another
-// product's business data while its route is loading.
-export function projectCachedConsoleContent(
-  scene: ConsoleScene,
-  selection: ControlPlaneRouteSelection
-): ConsoleContentScene | null {
-  if (scene.section !== selection.section) return null;
-  if (scene.content.kind === "access" && selection.section === "access") {
-    const view = (accountAccessViews as readonly string[]).includes(selection.view ?? "")
-      ? selection.view as AccountAccessView
-      : "overview";
-    return { ...scene.content, view };
-  }
-  if (scene.content.kind === "logs" && selection.section === "logs") {
-    return { ...scene.content, view: selection.view };
-  }
-  if (scene.content.kind === "devops" && selection.section === "devops") {
-    return { ...scene.content, view: selection.view };
-  }
-  if (scene.content.kind === "observability" && selection.section === "observability") {
-    return { ...scene.content, view: selection.view };
-  }
-  return null;
-}
-
 function legacyContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot): ConsoleContentScene {
   const offerings = offeringScenes(snapshot);
   const installations = installationScenes(snapshot);

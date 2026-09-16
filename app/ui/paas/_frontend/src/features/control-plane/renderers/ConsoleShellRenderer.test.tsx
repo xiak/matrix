@@ -15,7 +15,6 @@ import type { ControlPlaneRepository } from "../repositories/controlPlaneReposit
 import { previewExperienceSnapshot } from "../repositories/previewExperienceSnapshot";
 import { ConsoleShellRenderer } from "./ConsoleShellRenderer";
 import { parseControlPlanePathname } from "../routes/parseControlPlaneRoute";
-import { LOADING_FEEDBACK_DELAY_MS } from "@ui/xiak";
 
 const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), query: "" }));
 const contentRender = vi.hoisted(() => vi.fn());
@@ -167,7 +166,7 @@ afterEach(() => {
 });
 
 describe("ConsoleShellRenderer", () => {
-  it("opens the destination frame immediately when a service route suspends, without exposing the previous page", async () => {
+  it("opens a cached service destination immediately when its route suspends", async () => {
     let release!: () => void;
     const heldRoute = { href: "/console/logs/", ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };
     const { user, repository } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot, heldRoute });
@@ -177,7 +176,6 @@ describe("ConsoleShellRenderer", () => {
     const menu = screen.getByRole("navigation", { name: "控制台导航" });
     await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
     const service = within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /日志服务/ });
-    vi.useFakeTimers();
     fireEvent.click(service);
     expect(screen.queryByRole("dialog", { name: "云产品入口" })).toBeNull();
     expect(screen.getByRole("heading", { name: "日志概览" })).toBe(title);
@@ -185,20 +183,42 @@ describe("ConsoleShellRenderer", () => {
     expect(within(menu).getByRole("link", { name: /^日志概览/ }).getAttribute("aria-current")).toBe("page");
     expect(within(menu.parentElement!).getByText("日志服务")).toBeTruthy();
     expect(screen.queryByRole("link", { name: "订单主库" })).toBeNull();
-    expect(oldResource.closest("[hidden]")).not.toBeNull();
-    expect(screen.getByRole("status").textContent).toBe("正在打开日志概览…");
-    expect(screen.getByRole("status").querySelector("[aria-hidden]")).toBeNull();
+    expect(oldResource.isConnected).toBe(false);
+    const destination = screen.getByText("Matrix · Log Service");
+    expect(destination.closest("[inert]")).toBeTruthy();
+    expect(destination.closest("[hidden]")).toBeNull();
+    expect(screen.queryByText("正在打开日志概览…")).toBeNull();
     accountMenuRender.mockClear();
-    act(() => vi.advanceTimersByTime(LOADING_FEEDBACK_DELAY_MS));
-    expect(screen.getByRole("status").querySelector("[aria-hidden]")).not.toBeNull();
     expect(accountMenuRender).not.toHaveBeenCalled();
     expect(screen.getByLabelText("全局导航")).toBe(header);
     expect(repository.load).toHaveBeenCalledTimes(1);
     await act(async () => { heldRoute.ready = true; release(); });
     expect(screen.getByRole("heading", { name: "日志概览" })).toBe(title);
-    expect(oldResource.isConnected).toBe(false);
+    await waitFor(() => expect(destination.closest("[inert]")).toBeNull());
+    expect(destination.isConnected).toBe(true);
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.getByLabelText("全局导航")).toBe(header);
+  });
+
+  it("uses the same cached transition for database service pages", async () => {
+    let release!: () => void;
+    const heldRoute = { href: "/console/catalog/", ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };
+    const { user, repository } = await renderConsole({ section: "installations", experience: previewExperienceSnapshot, heldRoute });
+    const menu = screen.getByRole("navigation", { name: "控制台导航" });
+
+    await user.click(within(menu).getByRole("link", { name: /^产品规格/ }));
+
+    expect(screen.getByRole("heading", { level: 1, name: "产品规格" })).toBeTruthy();
+    const product = screen.getByRole("heading", { level: 2, name: "PostgreSQL 18" });
+    expect(product.closest("[inert]")).toBeTruthy();
+    expect(product.closest("[hidden]")).toBeNull();
+    expect(screen.queryByText("正在打开产品规格…")).toBeNull();
+    expect(repository.load).toHaveBeenCalledTimes(1);
+
+    await act(async () => { heldRoute.ready = true; release(); });
+    await waitFor(() => expect(product.closest("[inert]")).toBeNull());
+    expect(product.isConnected).toBe(true);
+    expect(repository.load).toHaveBeenCalledTimes(1);
   });
 
   it("renders a cached IAM destination immediately and reserves loading feedback for its data regions", async () => {

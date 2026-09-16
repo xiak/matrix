@@ -29,6 +29,7 @@ type MutationKind = "quota" | "installation" | null;
 
 type ControlPlaneContextValue = {
   scene: ConsoleScene | null;
+  projectScene(selection: ControlPlaneRouteSelection): ConsoleScene | null;
   loading: boolean;
   error: ControlPlaneError | null;
   mutation: MutationKind;
@@ -179,19 +180,30 @@ export function ControlPlaneProvider({
     }
   }, [credential, repository]);
 
+  // The repository snapshot is product-wide. A route transition may project a
+  // destination from that already-authoritative cache without issuing another
+  // read. A missing snapshot remains missing; IAM never triggers a PaaS read.
+  const projectScene = useCallback((target: ControlPlaneRouteSelection): ConsoleScene | null => (
+    target.section === "access"
+      ? buildAccessConsoleScene(experience, target.view)
+      : snapshot
+        ? buildConsoleScene(target.section, snapshot, experience, target.view)
+        : null
+  ), [experience, snapshot]);
   const scene = useMemo(
-    () => isAccess ? buildAccessConsoleScene(experience, selection.view) : snapshot ? buildConsoleScene(selection.section, snapshot, experience, selection.view) : null,
-    [experience, isAccess, selection.section, selection.view, snapshot]
+    () => projectScene({ section: selection.section, view: selection.view }),
+    [projectScene, selection.section, selection.view]
   );
   const value = useMemo<ControlPlaneContextValue>(() => ({
     scene,
+    projectScene,
     loading,
     error: isAccess ? null : error,
     mutation,
     reload,
     activateQuota,
     createInstallation
-  }), [activateQuota, createInstallation, error, isAccess, loading, mutation, reload, scene]);
+  }), [activateQuota, createInstallation, error, isAccess, loading, mutation, projectScene, reload, scene]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

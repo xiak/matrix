@@ -4,6 +4,8 @@ import { SessionProvider, useSession } from "@/features/auth/application/Session
 import type { IamRepository } from "@/features/auth/repositories/iamRepository";
 import type { ControlPlaneSnapshot, ServiceInstallation } from "../domain/resources";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
+import { previewExperienceSnapshot } from "../repositories/previewExperienceSnapshot";
+import { serviceDirectory, serviceNavigation } from "../scenes/serviceDirectory";
 import { ControlPlaneProvider, useControlPlane } from "./ControlPlaneProvider";
 
 const pendingInstallation: ServiceInstallation = {
@@ -83,11 +85,15 @@ function Probe() {
   const installation = controlPlane.scene?.content.kind === "installations"
     ? controlPlane.scene.content.installations[0]
     : null;
+  const projections = serviceDirectory.map((service) => (
+    controlPlane.projectScene(serviceNavigation[service.id][0])?.content.kind ?? "none"
+  ));
   return (
     <div>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
+      <span data-testid="projections">{JSON.stringify(projections)}</span>
     </div>
   );
 }
@@ -126,6 +132,35 @@ describe("ControlPlaneProvider", () => {
     expect(screen.getByTestId("section").textContent).toBe("access");
     expect(repository.load).not.toHaveBeenCalled();
     expect(repository.getInstallation).not.toHaveBeenCalled();
+  });
+  it("projects every service from one authoritative snapshot without another read", async () => {
+    const repository: ControlPlaneRepository = {
+      load: vi.fn().mockResolvedValue(snapshot(readyInstallation, 1)),
+      getInstallation: vi.fn(),
+      activateQuota: vi.fn(),
+      createInstallation: vi.fn()
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider experience={previewExperienceSnapshot} repository={repository} selection={{ section: "installations" }}>
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByText("login"));
+      await Promise.resolve();
+    });
+    expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
+      "regions",
+      "resources",
+      "installations",
+      "logs",
+      "devops",
+      "observability",
+      "access"
+    ]);
+    expect(repository.load).toHaveBeenCalledTimes(1);
   });
   it("polls only pending installation resources before refreshing terminal quota state", async () => {
     vi.useFakeTimers();

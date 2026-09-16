@@ -77,7 +77,7 @@ import styles from "./ConsoleShellRenderer.module.css";
 import { useServiceDirectory } from "./ServiceDirectory";
 import { serviceForSection, type ServiceId } from "../scenes/serviceDirectory";
 import { ConsoleNavigationProvider, useConsoleNavigation } from "../routes/ConsoleNavigation";
-import { buildConsoleFrame, projectCachedConsoleContent } from "../scenes/buildConsoleScene";
+import { buildConsoleFrame } from "../scenes/buildConsoleScene";
 
 function pageSkeletonLayout({ section, view }: ControlPlaneRouteSelection): PageSkeletonLayout {
   if (section === "overview" || (!view && ["devops", "observability", "logs"].includes(section))) return "dashboard";
@@ -212,6 +212,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const requestLeave = useLeaveConfirmation();
   const session = useSession();
   const controlPlane = useControlPlane();
+  const projectScene = controlPlane.projectScene;
   const accountCapabilities = useAccountCapabilities();
   const scene = controlPlane.scene;
   const pendingSelection = navigation.pendingSelection;
@@ -219,10 +220,11 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const destinationFrame = useMemo(() => pendingSelection ? buildConsoleFrame(pendingSelection, experience) : null, [pendingSelection, experience]);
   const committedFrame = scene ?? staticFrame;
   const frame = destinationFrame ?? committedFrame;
-  const pendingContent = useMemo(
-    () => pendingSelection && scene ? projectCachedConsoleContent(scene, pendingSelection) : null,
-    [pendingSelection, scene]
+  const pendingScene = useMemo(
+    () => pendingSelection ? projectScene(pendingSelection) : null,
+    [pendingSelection, projectScene]
   );
+  const pendingContent = pendingScene?.content ?? null;
   const content = pendingContent ?? scene?.content;
   const contentTransitionPending = Boolean(pendingSelection && !pendingContent);
   const contentTransitionKey = pendingContent && pendingSelection
