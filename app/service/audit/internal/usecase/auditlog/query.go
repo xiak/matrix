@@ -75,6 +75,11 @@ func (service *Service) queryRecords(
 		if err != nil {
 			return err
 		}
+		access, err := service.prepareAccessEvent(transactionContext, transaction, decision, actor,
+			accessAction, auditv1.TargetAuditRecords, "records", requestDigest, requestID, now)
+		if err != nil {
+			return err
+		}
 		records, err := transaction.ReadRecords(transactionContext, RecordQuery{
 			ChainID:        chainID,
 			BeforeSequence: beforeSequence,
@@ -116,18 +121,7 @@ func (service *Service) queryRecords(
 				return ErrUnavailable
 			}
 		}
-		return service.appendAccessEvent(
-			transactionContext,
-			transaction,
-			decision,
-			actor,
-			accessAction,
-			auditv1.TargetAuditRecords,
-			"records",
-			requestDigest,
-			requestID,
-			now,
-		)
+		return appendPreparedAccessEvent(transactionContext, transaction, access)
 	})
 	if err != nil {
 		return auditv1.RecordPage{}, err
@@ -193,6 +187,11 @@ func (service *Service) verifyChain(
 	var verification auditv1.ChainVerification
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
+		if err != nil {
+			return err
+		}
+		access, err := service.prepareAccessEvent(transactionContext, transaction, decision, actor,
+			accessAction, auditv1.TargetAuditChain, "chain", requestDigest, requestID, now)
 		if err != nil {
 			return err
 		}
@@ -262,18 +261,7 @@ func (service *Service) verifyChain(
 		if auditv1.ValidateChainVerification(verification) != nil {
 			return ErrUnavailable
 		}
-		return service.appendAccessEvent(
-			transactionContext,
-			transaction,
-			decision,
-			actor,
-			accessAction,
-			auditv1.TargetAuditChain,
-			"chain",
-			requestDigest,
-			requestID,
-			now,
-		)
+		return appendPreparedAccessEvent(transactionContext, transaction, access)
 	})
 	if err != nil {
 		return auditv1.ChainVerification{}, err
@@ -305,7 +293,12 @@ func (service *Service) authorize(
 	return decision, nil
 }
 
-func (service *Service) appendAccessEvent(
+// Audited reads also append to the selected chain. Acquire the same event ->
+// head locks as ingestion before scanning that chain, rather than letting a
+// writer advance it while the read accumulates SERIALIZABLE dependencies.
+// Only the caller's successful, validated read appends this prepared fact;
+// it is not included in its own query/verification result.
+func (service *Service) prepareAccessEvent(
 	ctx context.Context,
 	transaction Transaction,
 	decision iamv1.AuthorizationDecision,
@@ -316,10 +309,10 @@ func (service *Service) appendAccessEvent(
 	requestDigest string,
 	requestID string,
 	now time.Time,
-) error {
+) (AppendMutation, error) {
 	eventID, err := service.config.NewID("event")
 	if err != nil {
-		return ErrUnavailable
+		return AppendMutation{}, ErrUnavailable
 	}
 	event := auditv1.Event{
 		APIVersion:     auditv1.APIVersion,
@@ -338,22 +331,22 @@ func (service *Service) appendAccessEvent(
 		OccurredAt:     now,
 	}
 	if auditv1.ValidateEventForSource(auditv1.SourceAudit, event) != nil {
-		return ErrUnavailable
+		return AppendMutation{}, ErrUnavailable
 	}
 	if err := transaction.LockEvent(ctx, auditv1.SourceAudit, event.EventID); err != nil {
-		return err
+		return AppendMutation{}, err
 	}
 	if _, found, err := transaction.LookupRecord(ctx, auditv1.SourceAudit, event.EventID); err != nil {
-		return err
+		return AppendMutation{}, err
 	} else if found {
-		return ErrUnavailable
+		return AppendMutation{}, ErrUnavailable
 	}
 	head, ingestedAt, err := transaction.LockChainHead(ctx, authority.ChainFor(event.TenantID, event.InstallationID))
 	if err != nil {
-		return err
+		return AppendMutation{}, err
 	}
 	if ingestedAt != now {
-		return ErrUnavailable
+		return AppendMutation{}, ErrUnavailable
 	}
 	record, fact, err := authority.AppendRecord(
 		head,
@@ -363,9 +356,13 @@ func (service *Service) appendAccessEvent(
 		ingestedAt,
 	)
 	if err != nil {
-		return ErrUnavailable
+		return AppendMutation{}, ErrUnavailable
 	}
-	outcome, err := transaction.AppendRecord(ctx, AppendMutation{Record: record, Fact: fact})
+	return AppendMutation{Record: record, Fact: fact}, nil
+}
+
+func appendPreparedAccessEvent(ctx context.Context, transaction Transaction, access AppendMutation) error {
+	outcome, err := transaction.AppendRecord(ctx, access)
 	if err != nil {
 		return err
 	}

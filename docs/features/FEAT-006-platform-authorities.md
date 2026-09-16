@@ -493,23 +493,36 @@ input, replay conflicts, unavailable storage and unknown commit outcomes are
 not transaction-retry signals. Exhaustion still fails closed; this is not a
 throughput guarantee or a retry of external IAM calls.
 
-The `273196d` [independent authority-process run](https://github.com/xiak/matrix/actions/runs/34567733186) failed when five immediate
-serialization retries collided with ongoing chain writes; its Go and node
-jobs passing did not accept that candidate. The service-side pacing correction
-keeps the HTTP gate strict, rather than masking the failure with client retry.
-Focused tests cover bounded attempts, minimum pacing, cancellation and
-non-retryable errors. The isolated PG18 retained-upgrade and independent
-IAM/Audit/PaaS process regression passes locally (57.432s on 2026-09-11);
-the correction's independent CI passes at fixed
-`0f99ec98ef52bdb69017fd16dfe21f1c2cc55177`
-([Verification 34569666803](https://github.com/xiak/matrix/actions/runs/34569666803):
-go, authority-process and node-process all success). The broader PG18
-regression also passes: separated IAM/Audit schemas and retained tenant-chain
-upgrade (5.802s), Audit HTTP (3.100s), IAM HTTP and local recovery/concurrency
-(91.862s). These do not accept the new policy-storage replacement or full HA.
-Two additional fresh-database independent-process race runs pass without
-client retries (46.505s and 51.722s). Full-repository race/vet, module checks,
-stable generation and Linux/amd64 builds also pass for the correction.
+Audited reads are chain writers, not read-only transactions: a successful
+query or verification must commit its access fact. The use case prepares that
+fact and takes ingestion's event-then-selected-head locks before scanning the
+chain. Only a validated successful read appends it, so the response excludes
+its own access fact and a failed read leaves no partial success record.
+Installation verification uses the same preparation after finding its exact
+immutable probe; a missing probe still returns PENDING without an access fact.
+The other tenant's head is not locked. SERIALIZABLE, five paced attempts,
+canonical encoding, schema/profile, producer proof and public contracts stay
+unchanged; the independent HTTP gate still has no client retries.
+
+The `89cd60c9bd64ddf0fccb10b5b8df64309f5e118c`
+[Verification35051957349](https://github.com/xiak/matrix/actions/runs/35051957349)
+passed Go, node and IAM PostgreSQL cases but failed the independent process
+job on a platform query returning 503; database logs show concurrent
+serialization conflicts at that time. Its local passes do not make that CI
+accepted. The existing Audit HTTP/PG owner now pauses real query/verification
+reads and proves selected-head exclusion with another restricted connection,
+independent other-tenant access, exactly one committed success fact, and no
+fact on rejection. All four interleavings fail on the preceding implementation
+and pass with early acquisition (PG18, 3.560s); this is a deterministic lock/
+atomicity regression, not a claim of reproducing every CI scheduling detail.
+Two fresh-database IAM/Audit/PaaS process race gates pass with the correction
+(52.215s and 48.042s on 2026-09-16), retaining current authorization, actual
+restricted runtime logins, two-account resources/outboxes and installation
+verification. The same isolated candidate passes the real dual-schema/RLS
+regression (5.776s) and Audit HTTP gate (3.729s), full-repository race/vet,
+module verification, byte-stable generation and Linux amd64 builds. These
+checks exclude uncommitted Role work. Independent CI for this correction
+remains pending; none of this is Role/STS or HA acceptance.
 
 Phase 1 retention is `INDEFINITE`: there is no purge, overwrite, truncate, or
 tenant deletion path. Configurable expiry, archive tiers, legal hold, and

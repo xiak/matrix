@@ -76,6 +76,11 @@ func (service *Service) VerifyInstallation(
 		if !installationProbeRecordMatches(record, tenantID, actor, request) {
 			return ErrConflict
 		}
+		access, err := service.prepareAccessEvent(transactionContext, transaction, decision, actor,
+			auditv1.ActionAuditIntegrityVerified, auditv1.TargetAuditChain, "installation-verification", requestDigest, requestID, now)
+		if err != nil {
+			return err
+		}
 
 		fromSequence := uint64(1)
 		if record.Sequence > uint64(auditv1.MaxVerifyRecords) {
@@ -134,18 +139,7 @@ func (service *Service) VerifyInstallation(
 		if auditv1.ValidateInstallationVerification(verification) != nil {
 			return ErrUnavailable
 		}
-		return service.appendAccessEvent(
-			transactionContext,
-			transaction,
-			decision,
-			actor,
-			auditv1.ActionAuditIntegrityVerified,
-			auditv1.TargetAuditChain,
-			"installation-verification",
-			requestDigest,
-			requestID,
-			now,
-		)
+		return appendPreparedAccessEvent(transactionContext, transaction, access)
 	})
 	if err != nil {
 		return auditv1.InstallationVerification{}, err

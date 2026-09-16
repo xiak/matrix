@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	auditauthority "github.com/xiak/matrix/app/service/audit/internal/authority"
 	auditpostgres "github.com/xiak/matrix/app/service/audit/internal/data/postgres"
 	audithttp "github.com/xiak/matrix/app/service/audit/internal/service/nethttp"
 	"github.com/xiak/matrix/app/service/audit/internal/usecase/auditlog"
@@ -324,6 +326,7 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 		verifierCredential,
 	)
 
+	assertAuditedReadSerialization(t, ctx, admin, pool, repository, iam)
 	iam.failure = errors.New("native IAM failure contains " + readerCredentialA + " and native-provider-path")
 	failure := performAuditRequest(
 		handler,
@@ -338,6 +341,153 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 		bytes.Contains(failure.Body.Bytes(), []byte(`native-provider-path`)) {
 		t.Fatalf("Audit IAM outage leaked native data: status=%d body=%s", failure.Code, failure.Body.String())
 	}
+}
+
+// A read is itself a chain writer because a successful response must commit
+// its access fact. Pause after the real database read, then try the real
+// restricted writer on another connection: the selected head must already be
+// protected, while the other tenant's head must remain independently writable.
+func assertAuditedReadSerialization(t *testing.T, ctx context.Context, admin *pgx.Conn, pool *pgxpool.Pool, repository auditlog.Repository, iam *integrationIAM) {
+	t.Helper()
+	for _, verify := range []bool{false, true} {
+		for _, reject := range []bool{false, true} {
+			t.Run(fmt.Sprintf("audited-read-verify-%t-reject-%t", verify, reject), func(t *testing.T) {
+				arrived, resume := make(chan struct{}, 1), make(chan struct{})
+				release := sync.OnceFunc(func() { close(resume) })
+				defer release()
+				workflow, err := auditlog.NewService(auditReadPauseRepository{Repository: repository, arrived: arrived, resume: resume, reject: reject}, iam, auditlog.Config{CursorKey: bytes.Repeat([]byte{0x6a}, 32)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				requestID := fmt.Sprintf("request-locked-read-%t-%t", verify, reject)
+				handler, err := audithttp.NewHandler(workflow, audithttp.Config{NewRequestID: func() (string, error) { return requestID, nil }})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var before uint64
+				if err := admin.QueryRow(ctx, "SELECT last_sequence FROM audit.chain_heads WHERE chain_id='tenant:organization-a'").Scan(&before); err != nil {
+					t.Fatal(err)
+				}
+				path := "/v1/records:query"
+				var request any = auditv1.QueryRecordsRequest{PageSize: 100}
+				if verify {
+					path, request = "/v1/integrity:verify", auditv1.VerifyChainRequest{FromSequence: 1, MaximumRecords: 100}
+				}
+				body := mustJSON(t, request)
+				done := make(chan *httptest.ResponseRecorder, 1)
+				go func() { done <- performAuditRequest(handler, http.MethodPost, path, readerCredentialA, body) }()
+				select {
+				case <-arrived:
+				case response := <-done:
+					t.Fatalf("audited read ended before contention probe: %d", response.Code)
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+				tryHead := func(chainID string) error {
+					tx, err := pool.Begin(ctx)
+					if err != nil {
+						return err
+					}
+					defer func() { _ = tx.Rollback(context.Background()) }()
+					if _, err = tx.Exec(ctx, "SET LOCAL lock_timeout='150ms'"); err != nil {
+						return err
+					}
+					_, err = tx.Exec(ctx, "SELECT * FROM audit.lock_chain_head($1)", chainID)
+					return err
+				}
+				selectedErr, otherErr := tryHead("tenant:organization-a"), tryHead("tenant:organization-b")
+				release()
+				var response *httptest.ResponseRecorder
+				select {
+				case response = <-done:
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+				assertPostgresCode(t, selectedErr, "55P03")
+				if otherErr != nil {
+					t.Fatalf("an audited read blocked a different tenant: %v", otherErr)
+				}
+				var after uint64
+				var facts int
+				if err := admin.QueryRow(ctx, "SELECT last_sequence FROM audit.chain_heads WHERE chain_id='tenant:organization-a'").Scan(&after); err != nil {
+					t.Fatal(err)
+				}
+				if err := admin.QueryRow(ctx, "SELECT count(*) FROM audit.records WHERE source='AUDIT' AND event_document->>'requestId'=$1", requestID).Scan(&facts); err != nil {
+					t.Fatal(err)
+				}
+				if reject {
+					if response.Code != http.StatusConflict || after != before || facts != 0 {
+						t.Fatal("failed read committed an access fact or changed the head")
+					}
+					return
+				}
+				if response.Code != http.StatusOK || after != before+1 || facts != 1 {
+					t.Fatalf("audited read did not commit exactly one access fact: status=%d before=%d after=%d facts=%d", response.Code, before, after, facts)
+				}
+				if verify {
+					var result auditv1.ChainVerification
+					if json.Unmarshal(response.Body.Bytes(), &result) != nil || auditv1.ValidateChainVerification(result) != nil || result.ToSequence != before {
+						t.Fatal("verification included its own not-yet-committed fact")
+					}
+				} else {
+					var result auditv1.RecordPage
+					if json.Unmarshal(response.Body.Bytes(), &result) != nil || auditv1.ValidateRecordPage(result) != nil || len(result.Records) == 0 || result.Records[0].Sequence != before {
+						t.Fatal("query included its own not-yet-committed fact")
+					}
+				}
+			})
+		}
+	}
+}
+
+type auditReadPauseRepository struct {
+	auditlog.Repository
+	arrived chan<- struct{}
+	resume  <-chan struct{}
+	reject  bool
+}
+
+func (repository auditReadPauseRepository) WithinTransaction(ctx context.Context, callback func(context.Context, auditlog.Transaction) error) error {
+	return repository.Repository.WithinTransaction(ctx, func(ctx context.Context, transaction auditlog.Transaction) error {
+		return callback(ctx, auditReadPauseTransaction{Transaction: transaction, repository: repository})
+	})
+}
+
+type auditReadPauseTransaction struct {
+	auditlog.Transaction
+	repository auditReadPauseRepository
+}
+
+func (transaction auditReadPauseTransaction) pause(ctx context.Context) error {
+	select {
+	case transaction.repository.arrived <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-transaction.repository.resume:
+	}
+	if transaction.repository.reject {
+		return auditlog.ErrConflict
+	}
+	return nil
+}
+
+func (transaction auditReadPauseTransaction) ReadRecords(ctx context.Context, query auditlog.RecordQuery) ([]auditv1.AuditRecord, error) {
+	result, err := transaction.Transaction.ReadRecords(ctx, query)
+	if err == nil {
+		err = transaction.pause(ctx)
+	}
+	return result, err
+}
+
+func (transaction auditReadPauseTransaction) ReadChain(ctx context.Context, chainID auditauthority.ChainID, from uint64, limit int) ([]auditv1.AuditRecord, error) {
+	result, err := transaction.Transaction.ReadChain(ctx, chainID, from, limit)
+	if err == nil {
+		err = transaction.pause(ctx)
+	}
+	return result, err
 }
 
 func verifyInstallationAudit(
