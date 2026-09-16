@@ -555,19 +555,9 @@ func attachedSystemPolicyAllows(t *testing.T, policyID iamv1.PolicyID, action ia
 	return decision.Allowed
 }
 
-func TestEveryIAMActionHasSystemPolicyAndUniqueServiceAuthority(t *testing.T) {
-	policies := testSystemPolicyIDs
+func TestEveryIAMActionHasUniqueServiceAuthority(t *testing.T) {
 	services := iamv1.AllServicePurposes()
 	for _, action := range iamv1.AllActions() {
-		owners := 0
-		for _, policyID := range policies {
-			if attachedSystemPolicyAllows(t, policyID, action) {
-				owners++
-			}
-		}
-		if owners == 0 {
-			t.Fatalf("IAM action %q has no system policy authority", action)
-		}
 		serviceOwners := 0
 		for _, service := range services {
 			if ServiceCanRequest(service, action) {
@@ -585,6 +575,34 @@ func TestEveryIAMActionHasSystemPolicyAndUniqueServiceAuthority(t *testing.T) {
 	}
 	if ServiceCanRequest(iamv1.ServiceIAM, iamv1.ActionPaaSApplicationRead) {
 		t.Fatal("IAM was allowed to request PaaS authorization")
+	}
+}
+
+func TestAccessKeyActionsRequireExplicitCurrentPolicy(t *testing.T) {
+	now := authorityTestTime()
+	for _, action := range []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate,
+		iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus, iamv1.ActionIAMAccessKeyDelete} {
+		t.Run(string(action), func(t *testing.T) {
+			for _, policyID := range testSystemPolicyIDs {
+				if attachedSystemPolicyAllows(t, policyID, action) {
+					t.Fatalf("existing system policy %s implicitly acquired %s", policyID, action)
+				}
+			}
+			definition, _ := iamv1.LookupActionDefinition(action)
+			request := declaredAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: action,
+				Resource:  iamv1.ResourceReference{Kind: definition.ResourceKind, ID: "key-target"},
+				RequestID: "explicit-key-policy", CorrelationID: "explicit-key-policy"})
+			subject := authoritySubject(now)
+			for _, granted := range []bool{false, true} {
+				if granted {
+					subject.Policies = authorityPoliciesForAction(t, now, action)
+				}
+				decision, err := Decide(subject, iamv1.ServiceIAM, request, "explicit-key-decision", now)
+				if err != nil || decision.Allowed != granted || (granted && len(decision.PolicyEvidence) != 1) {
+					t.Fatalf("explicit grant=%t allowed=%t err=%v", granted, decision.Allowed, err)
+				}
+			}
+		})
 	}
 }
 
@@ -627,7 +645,7 @@ func TestDeclaredModesBindBothDecisionsAndRejectUntrustedProfileContexts(t *test
 						subject := authoritySubject(now)
 						subject.InstallationID = "installation-example"
 						if granted {
-							subject.Policies = authoritySubject(now, iamv1.SystemPolicyAccountAdministrator, iamv1.SystemPolicyPlatformOperator).Policies
+							subject.Policies = authorityPoliciesForAction(t, now, action.Action)
 						}
 						var decision AuthorizationEvaluation
 						var err error
@@ -694,7 +712,8 @@ func TestCatalogConfinementIsEnforcedByActualDecisions(t *testing.T) {
 					request.Resource.ID = identity.InstallationID
 					decision, err = DecideService(identity, authorityServicePolicies(now, identity, iamv1.SystemPolicyInstallationVerifier), request, "decision-catalog", now)
 				} else {
-					context := authoritySubject(now, iamv1.SystemPolicyAccountAdministrator, iamv1.SystemPolicyPlatformOperator)
+					context := authoritySubject(now)
+					context.Policies = authorityPoliciesForAction(t, now, definition.Action)
 					context.InstallationID = "installation-example"
 					decision, err = Decide(context, service, request, "decision-catalog", now)
 				}
@@ -1594,6 +1613,31 @@ var testSystemPolicyIDs = []iamv1.PolicyID{
 
 func authorityServicePolicies(now time.Time, identity iamv1.ServiceIdentity, policyIDs ...iamv1.PolicyID) []AttachedPolicy {
 	return authorityPolicies(now, identity.AccountID, iamv1.Subject{Type: iamv1.SubjectServiceAccount, ID: string(identity.PrincipalID)}, identity.InstallationID, policyIDs...)
+}
+
+// Catalog/shape tests supply an explicit grant rather than treating a new
+// registered action as an automatic expansion of existing system defaults.
+func authorityPoliciesForAction(t *testing.T, now time.Time, action iamv1.Action) []AttachedPolicy {
+	t.Helper()
+	definition, known := iamv1.LookupActionDefinition(action)
+	if !known {
+		t.Fatal("unknown fixture action")
+	}
+	subject := authoritySubject(now, iamv1.SystemPolicyPlatformOperator)
+	if definition.AuthorityScope != iamv1.AuthorityScopeTenant {
+		return subject.Policies // Non-tenant policies remain system-owned.
+	}
+	version := policyVersionForTest(t, "explicit-action", iamv1.PolicyAllow, action, iamv1.PolicyResourceAnyInAuthority, "")
+	return []AttachedPolicy{{
+		Profiles: iamv1.AllAuthorizationProfiles(), Version: version,
+		Policy: iamv1.Policy{APIVersion: iamv1.APIVersion, Kind: "Policy", ID: version.PolicyID,
+			Management: iamv1.PolicyCustomerManaged, AccountID: subject.Organization.ID, DisplayName: "Explicit action",
+			Scope: iamv1.AuthorityScopeTenant, Status: iamv1.PolicyActive, DefaultVersionID: version.ID,
+			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
+		Attachment: iamv1.PolicyAttachment{APIVersion: iamv1.APIVersion, Kind: "PolicyAttachment", ID: "explicit-attachment",
+			AccountID: subject.Organization.ID, Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(subject.Principal.ID)},
+			PolicyID: version.PolicyID, Scope: iamv1.AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now},
+	}}
 }
 
 func authorityPolicies(now time.Time, account iamv1.AccountID, subject iamv1.Subject, installation string, policyIDs ...iamv1.PolicyID) []AttachedPolicy {

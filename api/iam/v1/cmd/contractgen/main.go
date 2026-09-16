@@ -169,6 +169,19 @@ func buildPaths() object {
 		"/v1/accounts/{accountId}:recover-root-credentials": object{"post": mutationOperation("recoverRootCredentials", "Recover the account's immutable root identity without transferring ownership", "RecoverRootCredentialsRequest", "Account", "200", nil, []any{openapi31.PathIDParameter("accountId")})},
 		"/v1/account:alias":                                 object{"post": mutationOperation("setAccountAlias", "Set the current account login alias", "SetAccountAliasRequest", "Account", "200", nil, nil)},
 		"/v1/users/{userId}":                                object{"get": readOperation("getUser", "Read one manageable account user and target capabilities", "UserAccess", nil, []any{openapi31.PathIDParameter("userId")})},
+		"/v1/users/{userId}/access-keys": object{
+			"get":  readOperation("listAccessKeys", "Read the complete, at most two undeleted keys of one user", "AccessKeyList", nil, []any{openapi31.PathIDParameter("userId")}),
+			"post": mutationOperation("createAccessKey", "Create one user key; only the first successful response carries its secret", "CreateAccessKeyRequest", "CreateAccessKeyResponse", "201", nil, []any{openapi31.PathIDParameter("userId")}),
+		},
+		"/v1/users/{userId}/access-keys/{accessKeyId}": object{
+			"get": readOperation("getAccessKey", "Read nonsecret user key metadata and current operation hints", "AccessKeyAccess", nil, []any{openapi31.PathIDParameter("userId"), openapi31.PathIDParameter("accessKeyId")}),
+		},
+		"/v1/users/{userId}/access-keys/{accessKeyId}:set-status": object{
+			"post": mutationOperation("setAccessKeyStatus", "Explicitly disable or enable one key at its exact version", "SetAccessKeyStatusRequest", "SetAccessKeyStatusResponse", "200", nil, []any{openapi31.PathIDParameter("userId"), openapi31.PathIDParameter("accessKeyId")}),
+		},
+		"/v1/users/{userId}/access-keys/{accessKeyId}:delete": object{
+			"post": mutationOperation("deleteAccessKey", "Irreversibly delete a disabled key without exporting material", "DeleteAccessKeyRequest", "DeleteAccessKeyResponse", "200", nil, []any{openapi31.PathIDParameter("userId"), openapi31.PathIDParameter("accessKeyId")}),
+		},
 		"/v1/users/{userId}/permission-boundary": object{
 			"get":    readOperation("getUserPermissionBoundary", "Read the current user permission limit, not a grant", "UserPermissionBoundary", nil, []any{openapi31.PathIDParameter("userId")}),
 			"put":    mutationOperation("setUserPermissionBoundary", "Root sets or replaces the tenant user permission limit", "SetUserPermissionBoundaryRequest", "UserPermissionBoundary", "200", nil, []any{openapi31.PathIDParameter("userId")}),
@@ -242,6 +255,9 @@ func mutationOperation(
 ) object {
 	responses := openapi31.ProblemResponses("400", "401", "403", "409", "413", "415", "422", "500", "503")
 	responses[status] = openapi31.JSONResponse("Command completed.", responseSchema)
+	if operationID == "createAccessKey" {
+		responses["200"] = openapi31.JSONResponse("Original nonsecret completion; no secret is reissued.", responseSchema)
+	}
 	operation := object{
 		"operationId": operationID,
 		"summary":     summary,
@@ -300,7 +316,7 @@ func scalarSchemas() object {
 	}
 	for _, name := range []string{
 		"AccountID", "PrincipalID", "GroupID", "GroupMembershipID", "RoleBindingID", "RoleID", "RoleTrustVersionID", "RoleSessionID", "SessionID", "DecisionID",
-		"PolicyID", "PolicyVersionID", "PolicyAttachmentID",
+		"PolicyID", "PolicyVersionID", "PolicyAttachmentID", "AccessKeyID",
 	} {
 		result[name] = object{"allOf": []any{openapi31.Ref("ID")}}
 	}
@@ -311,6 +327,7 @@ func scalarSchemas() object {
 func enumSchemas() map[string][]string {
 	return map[string][]string{
 		"RoleStatus":                   {string(iamv1.RoleActive), string(iamv1.RoleDisabled)},
+		"AccessKeyStatus":              {string(iamv1.AccessKeyEnabled), string(iamv1.AccessKeyDisabled)},
 		"RoleManagement":               {string(iamv1.RoleCustomerManaged)},
 		"AccountStatus":                {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
 		"PrincipalType":                {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
@@ -333,7 +350,7 @@ func enumSchemas() map[string][]string {
 		"PolicyResourceMatch":          {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority), string(iamv1.PolicyResourcePrefixInAuthority)},
 		"Action":                       openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
-			string(iamv1.ResourceAccount), string(iamv1.ResourceUser),
+			string(iamv1.ResourceAccount), string(iamv1.ResourceUser), string(iamv1.ResourceAccessKey),
 			string(iamv1.ResourcePolicy), string(iamv1.ResourceRole), string(iamv1.ResourceRoleSession),
 			string(iamv1.ResourceOrganization), string(iamv1.ResourcePrincipal), string(iamv1.ResourceGroup), string(iamv1.ResourceGroupMembership), string(iamv1.ResourceRoleBinding), string(iamv1.ResourcePolicyAttachment),
 			string(iamv1.ResourceSession), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
@@ -406,6 +423,16 @@ func structContracts() map[string]reflect.Type {
 		"ChangePasswordRequest":               openapi31.StructType[iamv1.ChangePasswordRequest](),
 		"ChangePasswordResponse":              openapi31.StructType[iamv1.ChangePasswordResponse](),
 		"CreateUserRequest":                   openapi31.StructType[iamv1.CreateUserRequest](),
+		"AccessKey":                           openapi31.StructType[iamv1.AccessKey](),
+		"AccessKeyAccess":                     openapi31.StructType[iamv1.AccessKeyAccess](),
+		"AccessKeyList":                       openapi31.StructType[iamv1.AccessKeyList](),
+		"CreateAccessKeyRequest":              openapi31.StructType[iamv1.CreateAccessKeyRequest](),
+		"CreateAccessKeyResponse":             openapi31.StructType[iamv1.CreateAccessKeyResponse](),
+		"SetAccessKeyStatusRequest":           openapi31.StructType[iamv1.SetAccessKeyStatusRequest](),
+		"SetAccessKeyStatusResponse":          openapi31.StructType[iamv1.SetAccessKeyStatusResponse](),
+		"DeleteAccessKeyRequest":              openapi31.StructType[iamv1.DeleteAccessKeyRequest](),
+		"AccessKeyDeletion":                   openapi31.StructType[iamv1.AccessKeyDeletion](),
+		"DeleteAccessKeyResponse":             openapi31.StructType[iamv1.DeleteAccessKeyResponse](),
 		"RootIdentity":                        openapi31.StructType[iamv1.RootIdentity](),
 		"Account":                             openapi31.StructType[iamv1.Account](),
 		"User":                                openapi31.StructType[iamv1.User](),
@@ -480,6 +507,40 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if owner == "CreateAccessKeyResponse" || owner == "SetAccessKeyStatusResponse" || owner == "DeleteAccessKeyResponse" {
+		if jsonName == "outcome" {
+			base = object{"type": "string", "enum": []string{"APPLIED", "EQUAL_REPLAY"}}
+		}
+		if jsonName == "key" {
+			base["properties"] = object{"resourceVersion": object{"minimum": 2}}
+			if owner == "CreateAccessKeyResponse" {
+				base["properties"] = object{"resourceVersion": object{"const": 1}, "status": object{"const": string(iamv1.AccessKeyEnabled)}}
+			}
+		}
+	}
+	if (owner == "AccessKeyList" || owner == "AccessKeyAccess") && jsonName == "capabilities" {
+		base["minItems"], base["maxItems"] = 3, 3
+		base["uniqueItems"] = true
+		if owner == "AccessKeyList" {
+			base["minItems"], base["maxItems"] = 1, 1
+			base["items"] = object{"allOf": []any{openapi31.Ref("ActionCapability"), object{"properties": object{
+				"action":   object{"const": string(iamv1.ActionIAMAccessKeyCreate)},
+				"resource": object{"properties": object{"kind": object{"const": string(iamv1.ResourceUser)}}},
+			}}}}
+		} else {
+			var actions []any
+			for _, action := range []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus, iamv1.ActionIAMAccessKeyDelete} {
+				actions = append(actions, object{"contains": object{"properties": object{
+					"action":   object{"const": string(action)},
+					"resource": object{"properties": object{"kind": object{"const": string(iamv1.ResourceAccessKey)}}},
+				}}, "minContains": 1, "maxContains": 1})
+			}
+			base["allOf"] = actions
+		}
+	}
+	if owner == "AccessKeyList" && jsonName == "items" {
+		base["maxItems"], base["uniqueItems"] = iamv1.MaxUserAccessKeys, true
+	}
 	if owner == "AssumeRoleRequest" {
 		switch jsonName {
 		case "durationSeconds":
@@ -667,7 +728,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	}
 	if field.Type.Name() == "Secret" {
 		base["writeOnly"] = true
-		if owner == "LoginResponse" && jsonName == "credential" {
+		if (owner == "LoginResponse" && jsonName == "credential") || (owner == "CreateAccessKeyResponse" && jsonName == "secret") {
 			delete(base, "writeOnly")
 			base["readOnly"] = true
 		}
@@ -676,8 +737,14 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		(jsonName == "id" || strings.HasSuffix(jsonName, "Id")) {
 		base = openapi31.Ref("ID")
 	}
-	if jsonName == "resourceVersion" || jsonName == "schemaVersion" || jsonName == "policyResourceVersion" || ((owner == "AuthorizationProfileReference" || owner == "AuthorizationProfile") && jsonName == "revision") {
+	if jsonName == "resourceVersion" || jsonName == "schemaVersion" || jsonName == "policyResourceVersion" || jsonName == "userResourceVersion" || jsonName == "accessKeyResourceVersion" || ((owner == "AuthorizationProfileReference" || owner == "AuthorizationProfile") && jsonName == "revision") {
 		base["minimum"] = 1
+		if owner == "AccessKeyDeletion" {
+			base["minimum"] = 2
+		}
+		if jsonName == "accessKeyResourceVersion" {
+			base["maximum"] = uint64(9007199254740990)
+		}
 	}
 	if owner == "ChangePasswordRequest" && jsonName == "revokeOtherSessions" {
 		base["default"] = true
@@ -730,6 +797,16 @@ func applySemanticOverlays(schemas object) {
 	roleBoundary["properties"].(object)["policy"] = object{"anyOf": []any{object{"type": "null"}, openapi31.Ref("PolicyVersionReference")},
 		"description": "Null closes role assumption; it never means an unlimited ceiling."}
 	roleResponse := schemas["AssumeRoleResponse"].(object)
+	keyResponse := schemas["CreateAccessKeyResponse"].(object)
+	keyResponse["required"] = []string{"outcome", "key"}
+	keyResponse["oneOf"] = []any{
+		object{"required": []string{"secret"}, "properties": object{"outcome": object{"const": "APPLIED"}}},
+		object{"properties": object{"outcome": object{"const": "EQUAL_REPLAY"}, "secret": false}},
+	}
+	schemas["AccessKey"].(object)["allOf"] = []any{object{
+		"if":   object{"properties": object{"resourceVersion": object{"const": 1}}},
+		"then": object{"properties": object{"status": object{"const": string(iamv1.AccessKeyEnabled)}}},
+	}}
 	schemas["Subject"].(object)["oneOf"] = []any{
 		object{"required": []string{"roleSession"}, "properties": object{"type": object{"const": "ROLE"}}},
 		object{"properties": object{"type": object{"enum": []string{"USER", "SERVICE_ACCOUNT"}}, "roleSession": false}},
@@ -813,6 +890,7 @@ func applySemanticOverlays(schemas object) {
 		object{"required": []string{"installationId"}, "properties": object{"tenantId": false}},
 	}
 	kinds := map[string]string{
+		"AccessKey": "AccessKey", "AccessKeyList": "AccessKeyList", "AccessKeyDeletion": "AccessKeyDeletion",
 		"CurrentRoleIdentity": "CurrentRoleIdentity", "AssumableRoleList": "AssumableRoleList",
 		"RoleSession":     "RoleSession",
 		"RoleSessionList": "RoleSessionList", "RoleSessionAccess": "RoleSessionAccess",

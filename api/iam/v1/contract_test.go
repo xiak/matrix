@@ -29,6 +29,124 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func TestAccessKeyManagementUsesAnExplicitNewUserOnlyProfile(t *testing.T) {
+	profile, found := LookupAuthorizationProfile(ProductIAM)
+	if !found || profile.Revision != 5 {
+		t.Fatal("missing source-owned access key management declaration")
+	}
+	_, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AuthorizationProfileReference{Product: ProductIAM, Revision: profile.Revision, ContentDigest: digest}
+	for action, target := range map[Action]ResourceKind{
+		ActionIAMAccessKeyList: ResourceUser, ActionIAMAccessKeyCreate: ResourceUser,
+		ActionIAMAccessKeyRead: ResourceAccessKey, ActionIAMAccessKeySetStatus: ResourceAccessKey, ActionIAMAccessKeyDelete: ResourceAccessKey,
+	} {
+		definition, found := LookupActionDefinition(action)
+		if !found || definition.ResourceKind != target || definition.AuthorityScope != AuthorityScopeTenant || definition.CallingService != ServiceIAM {
+			t.Fatal("key management acquired a different authority or producer")
+		}
+		request, err := NewAuthorizationRequest(action, ResourceReference{Kind: target, ID: "exact-target"}, AuthorizationResourceInstance, "", "request-a", "correlation-a")
+		if err != nil || ValidateAuthorizationRequest(request) != nil {
+			t.Fatal("key management cannot authorize its exact target")
+		}
+		if _, err := NewAuthorizationRequest(action, request.Resource, AuthorizationResourceCollection, AuthorizationCollectionList, "request-a", "correlation-a"); err == nil {
+			t.Fatal("key management unexpectedly admitted an unbound collection")
+		}
+		if CheckAuthorizationProfileSubject(profile, ref, action, SubjectUser) != nil ||
+			CheckAuthorizationProfileSubject(profile, ref, action, SubjectRole) == nil ||
+			CheckAuthorizationProfileSubject(profile, ref, action, SubjectServiceAccount) == nil {
+			t.Fatal("key management widened the USER boundary")
+		}
+		for _, historical := range HistoricalAuthorizationProfiles() {
+			if historical.Product != ProductIAM {
+				continue
+			}
+			for _, declaration := range historical.Actions {
+				if declaration.Action == action {
+					t.Fatal("old declaration gained key management authority")
+				}
+			}
+		}
+	}
+	archives := HistoricalAuthorizationProfiles()
+	index := slices.IndexFunc(archives, func(p AuthorizationProfile) bool { return p.Product == ProductIAM && p.Revision == 4 })
+	if index < 0 {
+		t.Fatal("missing original session administration declaration")
+	}
+	_, oldDigest, err := CanonicalizeAuthorizationProfile(archives[index])
+	// Read through the public codec of the fixed bc7d0595 code export, not
+	// derived from the new current declaration or a manufactured legacy row.
+	if err != nil || oldDigest != "sha256:eabe31550549c1303370067c5ac2dbcc8759c397beb98759961b67fa6664bda0" {
+		t.Fatal("registered IAM r4 bytes changed")
+	}
+}
+
+func TestAccessKeyCreationSecretIsNotAReplayOrDeletionResult(t *testing.T) {
+	now := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
+	key := AccessKey{APIVersion: APIVersion, Kind: "AccessKey", ID: "key-a", AccountID: "account-a", UserID: "user-a",
+		Status: AccessKeyEnabled, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+	secret, err := NewSecret("mak1.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := CreateAccessKeyResponse{Outcome: "APPLIED", Key: key, Secret: secret}
+	if ValidateCreateAccessKeyResponse(response) != nil {
+		t.Fatal("new key result was rejected")
+	}
+	if encoded, err := json.Marshal(response); !errors.Is(err, ErrSecretSerialization) || len(encoded) != 0 {
+		t.Fatal("ordinary JSON emitted the new key secret")
+	}
+	if strings.Contains(fmt.Sprintf("%v %+v %#v", response, response, response), "AAECAwQ") {
+		t.Fatal("key creation leaked secret through formatting")
+	}
+	encoded, err := EncodeCreateAccessKeyResponse(response)
+	defer clear(encoded)
+	if err != nil || !bytes.Contains(encoded, []byte(`"secret":"mak1.`)) {
+		t.Fatal("explicit creation response omitted its one-time secret")
+	}
+	for _, outcome := range []string{"EQUAL_REPLAY", "UNKNOWN", ""} {
+		response.Outcome = outcome
+		if encoded, err := EncodeCreateAccessKeyResponse(response); err == nil || len(encoded) != 0 {
+			t.Fatal("non-creation outcome disclosed a secret")
+		}
+	}
+	response.Outcome, response.Secret = "EQUAL_REPLAY", Secret{}
+	encoded, err = EncodeCreateAccessKeyResponse(response)
+	if err != nil || bytes.Contains(encoded, []byte("secret")) {
+		t.Fatal("equal replay did not remain non-secret")
+	}
+	clear(encoded)
+	response.Secret = Secret{value: "\x00"}
+	if encoded, err := EncodeCreateAccessKeyResponse(response); err == nil || len(encoded) != 0 {
+		t.Fatal("invalid nonempty secret bypassed the replay prohibition")
+	}
+	response.Secret = Secret{}
+	response.Key.ResourceVersion = 2
+	response.Key.Status = AccessKeyDisabled
+	if ValidateCreateAccessKeyResponse(response) == nil {
+		t.Fatal("replay substituted current metadata for the immutable creation result")
+	}
+	changed := SetAccessKeyStatusResponse{Outcome: "APPLIED", Key: response.Key}
+	if ValidateSetAccessKeyStatusResponse(changed) != nil {
+		t.Fatal("valid status result was rejected")
+	}
+	changed.Key.ResourceVersion = 1
+	if ValidateSetAccessKeyStatusResponse(changed) == nil {
+		t.Fatal("status result had no versioned mutation")
+	}
+	deletion := DeleteAccessKeyResponse{Outcome: "APPLIED", Deletion: AccessKeyDeletion{APIVersion: APIVersion, Kind: "AccessKeyDeletion",
+		ID: key.ID, AccountID: key.AccountID, UserID: key.UserID, ResourceVersion: 3, DeletedAt: now}}
+	if ValidateDeleteAccessKeyResponse(deletion) != nil {
+		t.Fatal("valid terminal key result was rejected")
+	}
+	encoded, err = json.Marshal(deletion)
+	if err != nil || bytes.Contains(encoded, []byte("secret")) || bytes.Contains(encoded, []byte("status")) {
+		t.Fatal("deletion exposed secret or a reversible status")
+	}
+}
+
 func TestAccessKeyWrappingKeyringHasOneExplicitCanonicalPrivateCodec(t *testing.T) {
 	material := "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 	wire := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccessKeyWrappingKeyring","purpose":"IAM_ACCESS_KEY_SECRET_WRAPPING","scope":{"installationId":"install-a","bootstrapDigest":"sha256:` + strings.Repeat("a", 64) + `"},"activeWrappingKeyId":"wrap-a","keys":[{"wrappingKeyId":"wrap-a","formatVersion":1,"keyMaterial":"` + material + `"}]}`
@@ -561,7 +679,7 @@ func TestRoleProfilesPreserveRegisteredAuthority(t *testing.T) {
 		}
 	}
 	current, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || current.Revision != 4 {
+	if !found || current.Revision < 4 {
 		t.Fatal("missing current IAM role-session declaration")
 	}
 	for _, action := range current.Actions {
@@ -594,7 +712,7 @@ func TestRoleSessionAdministrationDoesNotReinterpretRegisteredProfiles(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	ref := AuthorizationProfileReference{Product: ProductIAM, Revision: 4, ContentDigest: currentDigest}
+	ref := AuthorizationProfileReference{Product: ProductIAM, Revision: current.Revision, ContentDigest: currentDigest}
 	for action, target := range map[Action]ResourceKind{ActionIAMRoleSessionList: ResourceRole, ActionIAMRoleSessionRead: ResourceRoleSession, ActionIAMRoleSessionRevoke: ResourceRoleSession} {
 		request, err := NewAuthorizationRequest(action, ResourceReference{Kind: target, ID: "exact"}, AuthorizationResourceInstance, "", "request-a", "correlation-a")
 		if err != nil || ValidateAuthorizationRequest(request) != nil {

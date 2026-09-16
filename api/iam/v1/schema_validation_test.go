@@ -14,6 +14,111 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestAccessKeyManagementSchemasAgreeWithBoundedNonSecretContracts(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	key := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccessKey","id":"key-a","accountId":"account-a","userId":"user-a","status":"ENABLED","resourceVersion":1,"createdAt":"2026-09-17T00:00:00Z","updatedAt":"2026-09-17T00:00:00Z"}`
+	create := `{"userResourceVersion":1,"requestId":"key-create"}`
+	status := `{"accessKeyResourceVersion":1,"status":"DISABLED","requestId":"key-disable"}`
+	remove := `{"accessKeyResourceVersion":2,"requestId":"key-delete"}`
+	applied := `{"outcome":"APPLIED","key":` + key + `,"secret":"mak1.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"}`
+	replayed := `{"outcome":"EQUAL_REPLAY","key":` + key + `}`
+	capabilities := `[{"action":"iam.access-key.read","resource":{"kind":"ACCESS_KEY","id":"key-a"},"available":true},{"action":"iam.access-key.set-status","resource":{"kind":"ACCESS_KEY","id":"key-a"},"available":true},{"action":"iam.access-key.delete","resource":{"kind":"ACCESS_KEY","id":"key-a"},"available":false,"restrictionReason":"TARGET_MUST_BE_DISABLED"}]`
+	access := `{"key":` + key + `,"capabilities":` + capabilities + `}`
+	list := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccessKeyList","accountId":"account-a","userId":"user-a","userResourceVersion":1,"capabilities":[{"action":"iam.access-key.create","resource":{"kind":"USER","id":"user-a"},"available":true}],"items":[]}`
+	twoKeys := strings.Replace(list, `"items":[]`, `"items":[`+access+`,`+strings.ReplaceAll(access, "key-a", "key-b")+`]`, 1)
+	validators := map[string]func(string) bool{
+		"AccessKey": func(w string) bool {
+			var v AccessKey
+			return DecodeRequest(strings.NewReader(w), &v) == nil && ValidateAccessKey(v) == nil
+		},
+		"AccessKeyAccess": func(w string) bool {
+			var v AccessKeyAccess
+			return DecodeRequest(strings.NewReader(w), &v) == nil && ValidateAccessKeyAccess(v) == nil
+		},
+		"AccessKeyList": func(w string) bool {
+			var v AccessKeyList
+			return DecodeRequest(strings.NewReader(w), &v) == nil && ValidateAccessKeyList(v) == nil
+		},
+		"CreateAccessKeyRequest": func(w string) bool {
+			var v CreateAccessKeyRequest
+			return DecodeRequest(strings.NewReader(w), &v) == nil && ValidateCreateAccessKeyRequest(v) == nil
+		},
+		"SetAccessKeyStatusRequest": func(w string) bool {
+			var v SetAccessKeyStatusRequest
+			return DecodeRequest(strings.NewReader(w), &v) == nil && ValidateSetAccessKeyStatusRequest(v) == nil
+		},
+		"DeleteAccessKeyRequest": func(w string) bool {
+			var v DeleteAccessKeyRequest
+			return DecodeRequest(strings.NewReader(w), &v) == nil && ValidateDeleteAccessKeyRequest(v) == nil
+		},
+		"CreateAccessKeyResponse": func(w string) bool {
+			var v CreateAccessKeyResponse
+			return DecodeRequest(strings.NewReader(w), &v) == nil && ValidateCreateAccessKeyResponse(v) == nil
+		},
+	}
+	schemas := make(map[string]*jsonschema.Schema, len(validators))
+	for kind := range validators {
+		schemas[kind] = compileIAMOpenAPISchema(t, api, kind)
+	}
+	for index, sample := range []struct {
+		kind, wire         string
+		schemaValid, valid bool
+	}{
+		{"AccessKey", key, true, true},
+		{"AccessKey", strings.Replace(key, "ENABLED", "ACTIVE", 1), false, false},
+		{"AccessKey", strings.Replace(key, "ENABLED", "DISABLED", 1), false, false},
+		{"AccessKey", strings.TrimSuffix(key, "}") + `,"secret":"forged"}`, false, false},
+		{"AccessKeyAccess", access, true, true},
+		{"AccessKeyAccess", strings.Replace(access, capabilities, `[]`, 1), false, false},
+		{"AccessKeyAccess", strings.Replace(access, "iam.access-key.delete", "iam.access-key.read", 1), false, false},
+		{"AccessKeyAccess", strings.Replace(access, `"kind":"ACCESS_KEY","id":"key-a"`, `"kind":"ACCESS_KEY","id":"key-b"`, 1), true, false},
+		{"AccessKeyList", list, true, true},
+		{"AccessKeyList", twoKeys, true, true},
+		{"AccessKeyList", strings.Replace(twoKeys, `"items":[`, `"items":[`+strings.ReplaceAll(access, "key-a", "key-c")+`,`, 1), false, false},
+		{"AccessKeyList", strings.Replace(twoKeys, "key-b", "key-a", -1), false, false},
+		{"AccessKeyList", strings.Replace(twoKeys, `"userId":"user-a"`, `"userId":"foreign-user"`, 1), true, false},
+		{"AccessKeyList", strings.Replace(list, `"items":[]`, `"items":null`, 1), false, false},
+		{"AccessKeyList", strings.TrimSuffix(list, "}") + `,"nextAfter":"foreign-cursor"}`, false, false},
+		{"AccessKeyList", strings.Replace(list, "iam.access-key.create", "iam.user.create", 1), false, false},
+		{"CreateAccessKeyRequest", create, true, true},
+		{"CreateAccessKeyRequest", strings.Replace(create, `:1`, `:9007199254740991`, 1), true, true},
+		{"CreateAccessKeyRequest", strings.Replace(create, `:1`, `:0`, 1), false, false},
+		{"CreateAccessKeyRequest", strings.Replace(create, "userResourceVersion", "resourceVersion", 1), false, false},
+		{"CreateAccessKeyRequest", strings.TrimSuffix(create, "}") + `,"accountId":"other"}`, false, false},
+		{"CreateAccessKeyRequest", strings.TrimSuffix(create, "}") + `,"secret":"caller-secret"}`, false, false},
+		{"CreateAccessKeyRequest", strings.TrimSuffix(create, "}") + `,"accessKeyId":"caller-id"}`, false, false},
+		{"SetAccessKeyStatusRequest", status, true, true},
+		{"SetAccessKeyStatusRequest", strings.Replace(status, "DISABLED", "ENABLED", 1), true, true},
+		{"SetAccessKeyStatusRequest", strings.Replace(status, "DISABLED", "REVOKED", 1), false, false},
+		{"SetAccessKeyStatusRequest", strings.Replace(status, `:1`, `:9007199254740991`, 1), false, false},
+		{"SetAccessKeyStatusRequest", strings.TrimSuffix(status, "}") + `,"actorSessionId":"forged"}`, false, false},
+		{"DeleteAccessKeyRequest", remove, true, true},
+		{"DeleteAccessKeyRequest", strings.Replace(remove, `:2`, `:9007199254740991`, 1), false, false},
+		{"DeleteAccessKeyRequest", strings.Replace(remove, `:2`, `:0`, 1), false, false},
+		{"DeleteAccessKeyRequest", strings.TrimSuffix(remove, "}") + `,"userResourceVersion":1}`, false, false},
+		{"CreateAccessKeyResponse", applied, true, true},
+		{"CreateAccessKeyResponse", replayed, true, true},
+		{"CreateAccessKeyResponse", strings.Replace(applied, "APPLIED", "EQUAL_REPLAY", 1), false, false},
+		{"CreateAccessKeyResponse", strings.Replace(replayed, "EQUAL_REPLAY", "APPLIED", 1), false, false},
+		{"CreateAccessKeyResponse", strings.TrimSuffix(replayed, "}") + `,"secret":null}`, false, false},
+		{"CreateAccessKeyResponse", strings.Replace(replayed, `"resourceVersion":1`, `"resourceVersion":2`, 1), false, false},
+		{"CreateAccessKeyResponse", strings.Replace(applied, `"secret":"mak1.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"`, `"secret":""`, 1), false, false},
+	} {
+		t.Run(fmt.Sprintf("%d_%s", index, sample.kind), func(t *testing.T) {
+			wire, err := jsonschema.UnmarshalJSON(strings.NewReader(sample.wire))
+			if err != nil {
+				t.Fatal("invalid fixture JSON")
+			}
+			if err := schemas[sample.kind].Validate(wire); (err == nil) != sample.schemaValid {
+				t.Fatalf("schema violated key management boundary: %v", err)
+			}
+			if validators[sample.kind](sample.wire) != sample.valid {
+				t.Fatal("strict contract lost key ownership, lifecycle or secret boundary")
+			}
+		})
+	}
+}
+
 func TestRoleCapabilitySchemasAcceptCompleteBoundedResponses(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	now := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)

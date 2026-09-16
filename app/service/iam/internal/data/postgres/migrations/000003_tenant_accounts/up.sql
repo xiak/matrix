@@ -645,6 +645,7 @@ BEGIN
     PERFORM attachment.id FROM iam.policy_attachments AS attachment
      WHERE attachment.tenant_id=tenant AND attachment.target_id=user_id AND attachment.target_kind='USER'
      ORDER BY attachment.id FOR UPDATE;
+    PERFORM iam.delete_user_access_keys(tenant,actor,decision,user_id,event);
     UPDATE iam.principals AS principal
        SET status='DISABLED',must_change_password=false,
            resource_version=principal.resource_version+1,updated_at=effective_now,deleted_at=effective_now

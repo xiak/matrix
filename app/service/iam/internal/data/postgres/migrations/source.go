@@ -38,6 +38,10 @@ var (
 	rolesUpSQL string
 	//go:embed 000010_roles/verify.sql
 	rolesVerifySQL string
+	//go:embed 000011_access_keys/up.sql
+	accessKeysUpSQL string
+	//go:embed 000011_access_keys/verify.sql
+	accessKeysVerifySQL string
 )
 
 func Source() postgresmigration.Source {
@@ -53,12 +57,12 @@ func Source() postgresmigration.Source {
 	}
 	profileLiteral := "'" + strings.ReplaceAll(profileSeeds, "'", "''") + "'::jsonb"
 	authoritySQL := strings.Replace(authorityUpSQL, profilePlaceholder, profileLiteral, 1)
-	verification := strings.Replace(authorityVerifySQL, profilePlaceholder, profileLiteral, 1) + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL + "\n" + policyVerifySQL + "\n" + groupsVerifySQL + "\n" + rolesVerifySQL
+	verification := strings.Replace(authorityVerifySQL, profilePlaceholder, profileLiteral, 1) + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL + "\n" + policyVerifySQL + "\n" + groupsVerifySQL + "\n" + rolesVerifySQL + "\n" + accessKeysVerifySQL
 	return postgresmigration.Source{
 		Context: "iam", BootstrapSQL: bootstrapSQL,
 		// IAM owns one commit boundary across schema, retained-state changes and
 		// its final invariant verification. A late failure exposes none of them.
-		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authoritySQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + rolesUpSQL + "\n" + verification + "\nCOMMIT;",
+		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authoritySQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + rolesUpSQL + "\n" + accessKeysUpSQL + "\n" + verification + "\nCOMMIT;",
 		VerifySQL:     verification,
 		ExecutionRole: "matrix_iam_migrator",
 	}

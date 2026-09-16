@@ -1099,6 +1099,7 @@ BEGIN
             'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
             'iam.role.permission-boundary.set','iam.role.permission-boundary.removed',
             'iam.role-session.issued','iam.role-session.admin-revoked',
+            'iam.access-key.created','iam.access-key.enabled','iam.access-key.disabled','iam.access-key.deleted',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',
@@ -1459,6 +1460,7 @@ BEGIN
                 AND attname='principal_id' AND NOT attisdropped)
            AND iam.policy_attachment_contract_ready()
            AND iam.role_contract_ready()
+           AND iam.access_key_contract_ready()
            AND to_regprocedure('iam.create_group(text,text,text,text,text,text,jsonb)') IS NOT NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc AS policy_entry
                 WHERE policy_entry.oid IN (to_regprocedure('iam.read_policy(text,text,text,text)'),
@@ -1583,7 +1585,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           28::bigint,
+           29::bigint,
            transaction_timestamp();
 END
 $function$;

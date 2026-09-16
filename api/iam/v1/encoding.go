@@ -251,3 +251,21 @@ func EncodeAssumeRoleResponse(response AssumeRoleResponse) ([]byte, error) {
 	}
 	return encoded, nil
 }
+
+// EncodeCreateAccessKeyResponse discloses a new Secret exactly in APPLIED.
+// Receipt replay never emits a secret, ciphertext or replacement credential.
+func EncodeCreateAccessKeyResponse(response CreateAccessKeyResponse) ([]byte, error) {
+	if err := ValidateCreateAccessKeyResponse(response); err != nil {
+		return nil, err
+	}
+	wire := struct {
+		Outcome string    `json:"outcome"`
+		Key     AccessKey `json:"key"`
+		Secret  string    `json:"secret,omitempty"`
+	}{response.Outcome, response.Key, response.Secret.reveal()}
+	encoded, err := json.Marshal(wire)
+	if err != nil {
+		return nil, ErrEncodingFailed
+	}
+	return encoded, nil
+}

@@ -627,7 +627,7 @@ func assertLocalRecoveryClosedSQLFact(t *testing.T, ctx context.Context, databas
 	}
 }
 
-func localRecoveryWorkflow(t *testing.T, ctx context.Context, dsn, user string, trace pgx.QueryTracer) *identityaccess.Authority {
+func localRecoveryWorkflow(t *testing.T, ctx context.Context, dsn, user string, trace pgx.QueryTracer, keyring ...iamv1.AccessKeyWrappingKeyring) *identityaccess.Authority {
 	t.Helper()
 	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -648,7 +648,14 @@ func localRecoveryWorkflow(t *testing.T, ctx context.Context, dsn, user string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{CursorKey: bytes.Repeat([]byte{0x39}, 32)})
+	options := identityaccess.Config{CursorKey: bytes.Repeat([]byte{0x39}, 32)}
+	if len(keyring) > 1 {
+		t.Fatal("multiple test wrapping documents")
+	}
+	if len(keyring) == 1 {
+		options.AccessKeyWrapping = &keyring[0]
+	}
+	workflow, err := identityaccess.NewAuthority(repository, options)
 	if err != nil {
 		t.Fatal(err)
 	}

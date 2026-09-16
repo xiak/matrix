@@ -91,6 +91,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	endpoint := "http://" + address
 	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + dsnPath, "MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("35", 32)))}
+	wrappingFile := writeProcessAccessKeyWrapping(t, temporary, bootstrap)
 	var children []*childProcess
 	defer func() {
 		for _, child := range children {
@@ -99,7 +100,11 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		assertProcessOutputsSanitized(t, children, initialAdminPassword, changedAdminPassword, initialReaderPassword, changedReaderPassword)
 	}()
 	start := func(binary string) *childProcess {
-		child := startChild(t, root, binary, environment)
+		currentEnvironment := append([]string(nil), environment...)
+		if binary == currentBinary {
+			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
+		}
+		child := startChild(t, root, binary, currentEnvironment)
 		children = append(children, child)
 		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
 		return child

@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -71,6 +72,54 @@ func (trace *iamTransactionFailureTrace) TraceQueryEnd(_ context.Context, _ *pgx
 	}
 }
 
+// Only encrypted completion commitments for one synthetic request are retained.
+// This proves real Serializable retry reuse without adding a production cipher
+// hook or logging SQL, credentials, raw material or unrelated query arguments.
+type iamAccessKeyCompletionTrace struct {
+	*iamTransactionFailureTrace
+	requestID string
+	mu        sync.Mutex
+	invalid   bool
+	attempts  []struct {
+		KeyID    iamv1.AccessKeyID
+		Format   uint8
+		Material [32]byte
+	}
+}
+
+func (trace *iamAccessKeyCompletionTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if !strings.HasPrefix(data.SQL, "SELECT iam.complete_access_key(") || len(data.Args) != 10 {
+		return ctx
+	}
+	encoded, ok := data.Args[9].([]byte)
+	var event auditv1.Event
+	requestID := trace.requestID
+	if requestID == "" {
+		requestID = "key-first"
+	}
+	if !ok || json.Unmarshal(encoded, &event) != nil || event.RequestID != requestID {
+		return ctx
+	}
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	id, idOK := data.Args[5].(iamv1.AccessKeyID)
+	format, formatOK := data.Args[6].(uint8)
+	nonce, nonceOK := data.Args[7].([]byte)
+	ciphertext, ciphertextOK := data.Args[8].([]byte)
+	if !idOK || !formatOK || !nonceOK || !ciphertextOK || len(nonce) != 12 || len(ciphertext) != 48 || len(trace.attempts) >= 5 {
+		trace.invalid = true
+		return ctx
+	}
+	material := append(bytes.Clone(nonce), ciphertext...)
+	trace.attempts = append(trace.attempts, struct {
+		KeyID    iamv1.AccessKeyID
+		Format   uint8
+		Material [32]byte
+	}{id, format, sha256.Sum256(material)})
+	clear(material)
+	return ctx
+}
+
 // Wait until two real decisions hold actor foreign-key references before
 // releasing their writers. Shared advisory locks do not serialize the writers
 // themselves; only the production identity/target locks may do that.
@@ -118,6 +167,66 @@ func holdRecordedIdentityDecisions(t *testing.T, ctx context.Context, database *
 			t.Fatal(err)
 		}
 	}
+}
+
+// Stop one real key request either after evaluation (before the decision FK),
+// or after its material/locks exist but before commit. The peer command is
+// never paused by this fixture; production row locks must order the effects.
+func holdAccessKeyRequest(t *testing.T, ctx context.Context, database *pgx.Conn, requestID string, afterWrite bool) (func() int32, func()) {
+	t.Helper()
+	if iamv1.ValidateID("requestId", requestID) != nil {
+		t.Fatal("invalid AccessKey barrier intent")
+	}
+	table, condition := "iam.authorization_decisions", "NEW.request_id=TG_ARGV[0]"
+	if afterWrite {
+		table, condition = "iam.audit_outbox", "NEW.event_document->>'requestId'=TG_ARGV[0] AND NEW.event_document->>'action'='iam.access-key.created'"
+	}
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_key_linearization() RETURNS trigger LANGUAGE plpgsql AS $body$
+	 BEGIN IF `+condition+` THEN PERFORM pg_advisory_xact_lock_shared(54854,29); END IF; RETURN NEW; END $body$;
+	 CREATE TRIGGER matrix_key_linearization BEFORE INSERT ON `+table+` FOR EACH ROW EXECUTE FUNCTION public.matrix_key_linearization('`+requestID+`');
+	 SELECT pg_advisory_lock(54854,29)`); err != nil {
+		t.Fatal("install key linearization barrier", err)
+	}
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			if _, err := database.Exec(cleanup, "SELECT pg_advisory_unlock(54854,29)"); err != nil {
+				t.Error("release key linearization barrier", err)
+			}
+		})
+	}
+	t.Cleanup(func() {
+		release()
+		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if _, err := database.Exec(cleanup, `DROP TRIGGER IF EXISTS matrix_key_linearization ON `+table+`; DROP FUNCTION IF EXISTS public.matrix_key_linearization()`); err != nil {
+			t.Error("remove key linearization barrier", err)
+		}
+	})
+	return func() int32 {
+		t.Helper()
+		wait, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			var pid int32
+			if err := database.QueryRow(wait, `SELECT COALESCE(min(pid),0) FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			 AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54854 AND objid=29`).Scan(&pid); err != nil {
+				t.Fatal("observe actual key barrier", err)
+			}
+			if pid != 0 {
+				return pid
+			}
+			select {
+			case <-ticker.C:
+			case <-wait.Done():
+				t.Fatal("key request never reached its linearization barrier")
+			}
+		}
+	}, release
 }
 
 func findIAMCapability(values []iamv1.ActionCapability, action iamv1.Action, kind iamv1.ResourceKind, id string) (iamv1.ActionCapability, bool) {
@@ -5742,6 +5851,842 @@ func provePolicyScopeCredentialProtection(t *testing.T, ctx context.Context, han
 // These growing matrices have their own clean fixtures and the same two-minute
 // bound as the existing management session flow. They must not consume the
 // unrelated attachment matrix or account HTTP gate's remaining deadline.
+func TestIAMAccessKeyPostgres(t *testing.T) {
+	dsn := os.Getenv("MATRIX_IAM_ACCESS_KEY_POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set MATRIX_IAM_ACCESS_KEY_POSTGRES_TEST_DSN to an own clean PostgreSQL 18 database")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_access_keys_") {
+		t.Fatal("AccessKey gate requires its own database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	database, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect AccessKey gate database")
+	}
+	defer database.Close(context.Background())
+	assertIAMPostgres18(t, ctx, database)
+	assertCleanIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	createIAMHTTPRole(t, ctx, database)
+	document := iamHTTPBootstrap(t)
+	keyring := iamHTTPAccessKeyWrapping(t, document)
+	failures := &iamTransactionFailureTrace{}
+	completionTrace := &iamAccessKeyCompletionTrace{iamTransactionFailureTrace: failures}
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, completionTrace, keyring)
+	if _, err := workflow.Bootstrap(ctx, document); err != nil {
+		t.Fatal("bootstrap AccessKey gate", err)
+	}
+	if err := workflow.VerifyAccessKeyCustody(ctx); err != nil {
+		t.Fatal("verify empty wrapping registry", err)
+	}
+	handler, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replica := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, failures, keyring)
+	second, err := iamhttp.NewHandler(replica, iamhttp.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstEndpoint, secondEndpoint := handler, second
+	handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { firstEndpoint.ServeHTTP(w, r.WithContext(ctx)) })
+	second = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { secondEndpoint.ServeHTTP(w, r.WithContext(ctx)) })
+	root := localRecoveryLogin(t, handler, "admin", adminPassword, true)
+	root = localRecoveryChangePassword(t, handler, root, adminPassword, changedAdminPassword)
+	call := func(endpoint http.Handler, method, path, bearer string, body any, status int, result any) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(endpoint, method, path, bearer, encoded)
+		if response.Code != status {
+			t.Fatalf("AccessKey %s %s status=%d want=%d", method, path, response.Code, status)
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("AccessKey response is cacheable")
+		}
+		if result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body.Bytes()), result) != nil {
+			t.Fatal("decode AccessKey response")
+		}
+		return response
+	}
+	newUser := func(name string) (iamv1.User, string) {
+		t.Helper()
+		var user iamv1.User
+		call(handler, http.MethodPost, "/v1/users", root, map[string]any{"loginName": name, "displayName": name, "initialPassword": initialDeveloperPassword, "requestId": name}, http.StatusCreated, &user)
+		login := localRecoveryLogin(t, handler, name+"@"+string(user.AccountID), initialDeveloperPassword, true)
+		login = localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
+		var me iamv1.CurrentIdentity
+		call(handler, http.MethodGet, "/v1/auth/me", login, nil, http.StatusOK, &me)
+		return me.User, login
+	}
+	manager, managerBearer := newUser("key-manager")
+	user, userBearer := newUser("key-user")
+	path := "/v1/users/" + string(user.ID) + "/access-keys"
+	call(handler, http.MethodGet, path, userBearer, nil, http.StatusForbidden, nil)
+	call(handler, http.MethodGet, path, managerBearer, nil, http.StatusForbidden, nil)
+	rule := func(sid string, actions []iamv1.Action, kind iamv1.ResourceKind) iamv1.PolicyStatement {
+		return iamv1.PolicyStatement{SID: sid, Effect: iamv1.PolicyAllow, Actions: actions, Resources: []iamv1.PolicyResourceSelector{{Kind: kind, Match: iamv1.PolicyResourceAnyInAuthority}}}
+	}
+	var policy iamv1.PolicyDetail
+	call(handler, http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "AccessKey manager", RequestID: "key-manager-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant, Statements: []iamv1.PolicyStatement{
+			rule("directory", []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate}, iamv1.ResourceUser),
+			rule("keys", []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus, iamv1.ActionIAMAccessKeyDelete}, iamv1.ResourceAccessKey)}}}, http.StatusCreated, &policy)
+	var attachment iamv1.PolicyAttachment
+	call(handler, http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(manager.ID)}, PolicyID: policy.Policy.ID,
+		PolicyResourceVersion: policy.Policy.ResourceVersion, RequestID: "key-manager-grant"}, http.StatusOK, &attachment)
+	var directory iamv1.AccessKeyList
+	call(handler, http.MethodGet, path, managerBearer, nil, http.StatusOK, &directory)
+	if iamv1.ValidateAccessKeyList(directory) != nil || len(directory.Items) != 0 || directory.UserResourceVersion != user.ResourceVersion || !directory.Capabilities[0].Available {
+		t.Fatal("empty key directory or explicit create authority differs")
+	}
+	call(handler, http.MethodGet, "/v1/users/"+string(document.Administrator.ID)+"/access-keys", managerBearer, nil, http.StatusForbidden, nil)
+	create := iamv1.CreateAccessKeyRequest{UserResourceVersion: directory.UserResourceVersion, RequestID: "key-first"}
+	if _, err := database.Exec(ctx, `CREATE SEQUENCE public.matrix_key_retry;
+	 GRANT USAGE ON SEQUENCE public.matrix_key_retry TO matrix_iam_owner;
+	 CREATE FUNCTION public.matrix_key_retry_once() RETURNS trigger LANGUAGE plpgsql AS $body$
+	 BEGIN IF NEW.event_document->>'action'='iam.access-key.created' AND NEW.event_document->>'requestId'='key-first' THEN
+	   IF nextval('public.matrix_key_retry')=1 THEN RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='synthetic completion retry'; END IF;
+	 END IF; RETURN NEW; END $body$;
+	 CREATE TRIGGER matrix_key_retry_once BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_key_retry_once()`); err != nil {
+		t.Fatal("install completion retry fixture", err)
+	}
+	cleanupRetry := func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if _, err := database.Exec(cleanup, `DROP TRIGGER IF EXISTS matrix_key_retry_once ON iam.audit_outbox; DROP FUNCTION IF EXISTS public.matrix_key_retry_once(); DROP SEQUENCE IF EXISTS public.matrix_key_retry`); err != nil {
+			t.Error("remove completion retry fixture", err)
+		}
+	}
+	defer cleanupRetry()
+	var first iamv1.CreateAccessKeyResponse
+	call(handler, http.MethodPost, path, managerBearer, create, http.StatusCreated, &first)
+	cleanupRetry()
+	completionTrace.mu.Lock()
+	identical := !completionTrace.invalid && len(completionTrace.attempts) == 2 && completionTrace.attempts[0] == completionTrace.attempts[1] &&
+		completionTrace.attempts[0].KeyID == first.Key.ID && completionTrace.attempts[0].Format == 1
+	completionTrace.mu.Unlock()
+	if !identical || failures.serialization.Load() == 0 {
+		t.Fatal("Serializable completion retry did not reuse the exact once-sealed material")
+	}
+	if iamv1.ValidateCreateAccessKeyResponse(first) != nil || first.Outcome != "APPLIED" || first.Key.UserID != user.ID {
+		t.Fatal("one-time key creation differs")
+	}
+	secretBytes := first.Secret.CopyBytes()
+	defer clear(secretBytes)
+	var sealed authority.SealedAccessKeySecret
+	sealed.WrappingKeyID = keyring.ActiveWrappingKeyID
+	var format int
+	if err := database.QueryRow(ctx, "SELECT format_version,nonce,ciphertext FROM iam.access_keys WHERE tenant_id=$1 AND id=$2", user.AccountID, first.Key.ID).
+		Scan(&format, &sealed.Nonce, &sealed.Ciphertext); err != nil {
+		t.Fatal("inspect encrypted test material", err)
+	}
+	sealed.FormatVersion = uint8(format)
+	scope := authority.AccessKeySecretScope{InstallationID: document.InstallationID, AccountID: user.AccountID, UserID: user.ID, AccessKeyID: string(first.Key.ID)}
+	opened, err := authority.OpenAccessKeySecret(scope, sealed.WrappingKeyID, bytes.Repeat([]byte{0x57}, 32), sealed)
+	if err != nil || !bytes.Equal(opened.CopyBytes(), secretBytes) {
+		t.Fatal("database material does not bind real user/key context")
+	}
+	scope.UserID = manager.ID
+	if _, err := authority.OpenAccessKeySecret(scope, sealed.WrappingKeyID, bytes.Repeat([]byte{0x57}, 32), sealed); err == nil {
+		t.Fatal("moved material opened for another user")
+	}
+	if err := replica.VerifyAccessKeyCustody(ctx); err != nil {
+		t.Fatal("second authority cannot match committed registry", err)
+	}
+	var replay iamv1.CreateAccessKeyResponse
+	response := call(second, http.MethodPost, path, managerBearer, create, http.StatusOK, &replay)
+	if replay.Outcome != "EQUAL_REPLAY" || replay.Secret.Present() || replay.Key != first.Key || bytes.Contains(response.Body.Bytes(), secretBytes) {
+		t.Fatal("create replay reissued secret or changed original metadata")
+	}
+	variant := create
+	variant.UserResourceVersion++
+	call(handler, http.MethodPost, path, managerBearer, variant, http.StatusConflict, nil)
+	create.RequestID = "key-second"
+	var other iamv1.CreateAccessKeyResponse
+	t.Run("last-slot-across-replicas", func(t *testing.T) {
+		release := holdRecordedIdentityDecisions(t, ctx, database, "key-second", "key-second-alternate")
+		firstCommand := mustIAMJSON(t, create)
+		alternative := create
+		alternative.RequestID = "key-second-alternate"
+		secondCommand := mustIAMJSON(t, alternative)
+		finished := make(chan *httptest.ResponseRecorder, 2)
+		go func() { finished <- performIAMRequest(handler, http.MethodPost, path, managerBearer, firstCommand) }()
+		go func() { finished <- performIAMRequest(second, http.MethodPost, path, managerBearer, secondCommand) }()
+		release()
+		created, conflicted := 0, 0
+		for range 2 {
+			select {
+			case response := <-finished:
+				if response.Code == http.StatusCreated {
+					created++
+					if iamv1.DecodeRequest(bytes.NewReader(response.Body.Bytes()), &other) != nil || iamv1.ValidateCreateAccessKeyResponse(other) != nil {
+						t.Fatal("decode quota winner")
+					}
+				} else if response.Code == http.StatusConflict {
+					conflicted++
+				} else {
+					t.Fatalf("last key slot status=%d", response.Code)
+				}
+			case <-ctx.Done():
+				t.Fatal("last key slot transactions did not finish")
+			}
+		}
+		if created != 1 || conflicted != 1 {
+			t.Fatal("two replicas oversubscribed the final key slot")
+		}
+	})
+	create.RequestID = "key-over-quota"
+	call(handler, http.MethodPost, path, managerBearer, create, http.StatusConflict, nil)
+	firstPath := path + "/" + string(first.Key.ID)
+	call(handler, http.MethodPost, firstPath+":delete", managerBearer, iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: 1, RequestID: "key-delete-enabled"}, http.StatusConflict, nil)
+	disable := iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: "key-disable-first"}
+	var disabled iamv1.SetAccessKeyStatusResponse
+	call(handler, http.MethodPost, firstPath+":set-status", managerBearer, disable, http.StatusOK, &disabled)
+	call(second, http.MethodPost, path, managerBearer, create, http.StatusConflict, nil)
+	var deleted iamv1.DeleteAccessKeyResponse
+	deleteRequest := iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: 2, RequestID: "key-delete-first"}
+	call(second, http.MethodPost, firstPath+":delete", managerBearer, deleteRequest, http.StatusOK, &deleted)
+	if deleted.Deletion.ResourceVersion != 3 {
+		t.Fatal("deletion did not advance exact key version")
+	}
+	call(handler, http.MethodGet, firstPath, managerBearer, nil, http.StatusForbidden, nil)
+	call(handler, http.MethodPost, firstPath+":delete", managerBearer, deleteRequest, http.StatusOK, &deleted)
+	create.RequestID = "key-first"
+	call(second, http.MethodPost, path, managerBearer, create, http.StatusOK, &replay)
+	if replay.Secret.Present() || replay.Key != first.Key {
+		t.Fatal("post-delete replay resurrected or changed original key")
+	}
+	create.RequestID = "key-after-delete"
+	var replacement iamv1.CreateAccessKeyResponse
+	call(handler, http.MethodPost, path, managerBearer, create, http.StatusCreated, &replacement)
+	if replacement.Key.ID == first.Key.ID || replacement.Key.ID == other.Key.ID {
+		t.Fatal("key ID reused after deletion")
+	}
+	var noMaterial bool
+	if err := database.QueryRow(ctx, "SELECT format_version IS NULL AND nonce IS NULL AND ciphertext IS NULL AND deleted_at IS NOT NULL FROM iam.access_keys WHERE id=$1", first.Key.ID).Scan(&noMaterial); err != nil || !noMaterial {
+		t.Fatal("deleted key retained usable material")
+	}
+	call(handler, http.MethodGet, "/v1/users/"+string(manager.ID)+"/access-keys/"+string(other.Key.ID), managerBearer, nil, http.StatusForbidden, nil)
+	// Both replicas compete on one current key version. No hidden deadlock retry.
+	firstCommand := mustIAMJSON(t, iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: "key-race-first"})
+	secondCommand := mustIAMJSON(t, iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: "key-race-second"})
+	results := make(chan int, 2)
+	for index, endpoint := range []http.Handler{handler, second} {
+		body := firstCommand
+		if index == 1 {
+			body = secondCommand
+		}
+		go func(endpoint http.Handler, body []byte) {
+			results <- performIAMRequest(endpoint, http.MethodPost, path+"/"+string(other.Key.ID)+":set-status", managerBearer, body).Code
+		}(endpoint, body)
+	}
+	a, b := <-results, <-results
+	if !((a == http.StatusOK && b == http.StatusConflict) || (b == http.StatusOK && a == http.StatusConflict)) {
+		t.Fatalf("key concurrent CAS statuses %d/%d", a, b)
+	}
+	// Existing user deletion must atomically dispose both ENABLED and DISABLED keys.
+	var disabledUser iamv1.User
+	call(handler, http.MethodPost, "/v1/users/"+string(user.ID)+":set-status", root,
+		iamv1.SetUserStatusRequest{ResourceVersion: user.ResourceVersion, Status: iamv1.PrincipalDisabled, RequestID: "key-user-disable"}, http.StatusOK, &disabledUser)
+	call(second, http.MethodGet, path, managerBearer, nil, http.StatusOK, &directory)
+	if directory.Capabilities[0].Available {
+		t.Fatal("disabled user can create keys")
+	}
+	create.RequestID = "key-disabled-user-create"
+	create.UserResourceVersion = disabledUser.ResourceVersion
+	call(handler, http.MethodPost, path, managerBearer, create, http.StatusForbidden, nil)
+	call(handler, http.MethodPost, path+"/"+string(other.Key.ID)+":set-status", managerBearer,
+		iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 2, Status: iamv1.AccessKeyEnabled, RequestID: "key-disabled-user-enable"}, http.StatusForbidden, nil)
+	var userDeletion iamv1.UserDeletion
+	call(handler, http.MethodPost, "/v1/users/"+string(user.ID)+":delete", root,
+		iamv1.DeleteUserRequest{ResourceVersion: disabledUser.ResourceVersion, RequestID: "key-user-delete"}, http.StatusOK, &userDeletion)
+	var live, materialCount, facts int
+	if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE deleted_at IS NULL),count(*) FILTER(WHERE ciphertext IS NOT NULL)
+		FROM iam.access_keys WHERE tenant_id=$1 AND user_id=$2`, user.AccountID, user.ID).Scan(&live, &materialCount); err != nil || live != 0 || materialCount != 0 {
+		t.Fatal("user deletion did not finish bounded key cascade")
+	}
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId'='key-user-delete'
+		AND event_document->>'action'='iam.access-key.deleted'`).Scan(&facts); err != nil || facts != 2 {
+		t.Fatal("bounded cascade facts differ")
+	}
+	var denyPolicy iamv1.PolicyDetail
+	deny := rule("deny-create", []iamv1.Action{iamv1.ActionIAMAccessKeyCreate}, iamv1.ResourceUser)
+	deny.Effect = iamv1.PolicyDeny
+	call(handler, http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Key boundary deny", RequestID: "key-boundary-deny",
+		Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant, Statements: []iamv1.PolicyStatement{deny}}}, http.StatusCreated, &denyPolicy)
+	for scenarioIndex, scenario := range []string{"target-platform", "target-disable", "target-reset", "actor-disable", "actor-reset",
+		"actor-logout", "actor-change-password", "attachment-revoke", "membership-remove", "group-grant-revoke", "boundary-deny", "policy-version"} {
+		for _, keyFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("linearization/%s/key-first-%t", scenario, keyFirst), func(t *testing.T) {
+				prefix := fmt.Sprintf("key-linear-%d-%t", scenarioIndex, keyFirst)
+				actor, bearer := newUser(prefix + "-actor")
+				target, _ := newUser(prefix + "-target")
+				var group iamv1.Group
+				var membership iamv1.GroupMembership
+				activePolicy := policy
+				var nextVersion iamv1.PolicyVersionDetail
+				if scenario == "policy-version" {
+					call(handler, http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: prefix,
+						Document: policy.Version.Document, RequestID: prefix + "-policy"}, http.StatusCreated, &activePolicy)
+					call(handler, http.MethodPost, "/v1/policies/"+string(activePolicy.Policy.ID)+"/versions", root,
+						iamv1.CreatePolicyVersionRequest{ResourceVersion: activePolicy.Policy.ResourceVersion,
+							Document: denyPolicy.Version.Document, RequestID: prefix + "-version"}, http.StatusCreated, &nextVersion)
+					activePolicy.Policy = nextVersion.Policy
+				}
+				grantTarget := iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(actor.ID)}
+				if scenario == "membership-remove" || scenario == "group-grant-revoke" {
+					call(handler, http.MethodPost, "/v1/groups", root, iamv1.CreateGroupRequest{Name: prefix, RequestID: prefix + "-group"}, http.StatusCreated, &group)
+					call(handler, http.MethodPost, "/v1/groups/"+string(group.ID)+"/memberships", root,
+						iamv1.CreateGroupMembershipRequest{UserID: actor.ID, RequestID: prefix + "-member"}, http.StatusOK, &membership)
+					grantTarget = iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}
+				}
+				var sourceGrant iamv1.PolicyAttachment
+				call(handler, http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: grantTarget,
+					PolicyID: activePolicy.Policy.ID, PolicyResourceVersion: activePolicy.Policy.ResourceVersion, RequestID: prefix + "-grant"}, http.StatusOK, &sourceGrant)
+				mutationMethod, mutationPath, mutationBearer := http.MethodPost, "", root
+				var mutation any
+				wantKey := http.StatusForbidden
+				switch scenario {
+				case "target-platform":
+					mutationPath = "/v1/policy-attachments"
+					mutation = iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)},
+						PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: prefix + "-mutate"}
+				case "target-disable", "actor-disable":
+					selected := target
+					if scenario == "actor-disable" {
+						selected, wantKey = actor, http.StatusUnauthorized
+					}
+					mutationPath = "/v1/users/" + string(selected.ID) + ":set-status"
+					mutation = iamv1.SetUserStatusRequest{ResourceVersion: selected.ResourceVersion, Status: iamv1.PrincipalDisabled, RequestID: prefix + "-mutate"}
+				case "target-reset", "actor-reset":
+					selected := target
+					if scenario == "actor-reset" {
+						selected, wantKey = actor, http.StatusUnauthorized
+					}
+					mutationPath = "/v1/users/" + string(selected.ID) + ":reset-password"
+					mutation = map[string]any{"resourceVersion": selected.ResourceVersion, "initialPassword": initialDeveloperPassword, "requestId": prefix + "-mutate"}
+				case "actor-logout":
+					mutationPath, mutationBearer, wantKey = "/v1/auth/logout", bearer, http.StatusUnauthorized
+					mutation = iamv1.LogoutRequest{RequestID: prefix + "-mutate"}
+				case "actor-change-password":
+					mutationPath, mutationBearer, wantKey = "/v1/auth/password", bearer, http.StatusCreated
+					mutation = map[string]any{"currentPassword": changedDeveloperPassword, "newPassword": initialDeveloperPassword,
+						"revokeOtherSessions": false, "requestId": prefix + "-mutate"}
+				case "attachment-revoke", "group-grant-revoke":
+					mutationPath = "/v1/policy-attachments/" + string(sourceGrant.ID) + ":revoke"
+					mutation = iamv1.RevokePolicyAttachmentRequest{ResourceVersion: sourceGrant.ResourceVersion, RequestID: prefix + "-mutate"}
+				case "membership-remove":
+					mutationPath = "/v1/groups/" + string(group.ID) + "/memberships/" + string(membership.ID) + ":remove"
+					mutation = iamv1.RemoveGroupMembershipRequest{ResourceVersion: membership.ResourceVersion, RequestID: prefix + "-mutate"}
+				case "boundary-deny":
+					mutationMethod, mutationPath = http.MethodPut, "/v1/users/"+string(actor.ID)+"/permission-boundary"
+					mutation = iamv1.SetUserPermissionBoundaryRequest{PolicyID: denyPolicy.Policy.ID, PolicyResourceVersion: denyPolicy.Policy.ResourceVersion,
+						ResourceVersion: actor.ResourceVersion, RequestID: prefix + "-mutate"}
+				case "policy-version":
+					mutationPath = "/v1/policies/" + string(activePolicy.Policy.ID) + ":set-default-version"
+					mutation = iamv1.SetDefaultPolicyVersionRequest{VersionID: nextVersion.Version.ID,
+						ResourceVersion: activePolicy.Policy.ResourceVersion, RequestID: prefix + "-mutate"}
+				}
+				if keyFirst {
+					wantKey = http.StatusCreated
+				}
+				await, release := holdAccessKeyRequest(t, ctx, database, prefix+"-create", keyFirst)
+				keyFinished, mutationFinished := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+				keyPath := "/v1/users/" + string(target.ID) + "/access-keys"
+				keyBody := mustIAMJSON(t, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: prefix + "-create"})
+				mutationBody := mustIAMJSON(t, mutation)
+				go func() { keyFinished <- performIAMRequest(second, http.MethodPost, keyPath, bearer, keyBody) }()
+				keyPID := await()
+				go func() {
+					mutationFinished <- performIAMRequest(handler, mutationMethod, mutationPath, mutationBearer, mutationBody)
+				}()
+				wait, stop := context.WithTimeout(ctx, 5*time.Second)
+				defer stop()
+				var mutationResponse *httptest.ResponseRecorder
+				if keyFirst {
+					ticker := time.NewTicker(10 * time.Millisecond)
+					defer ticker.Stop()
+					for {
+						var blocked bool
+						if err := database.QueryRow(wait, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))`, keyPID).Scan(&blocked); err != nil {
+							t.Fatal("observe security mutation waiting for key commit", err)
+						}
+						if blocked {
+							break
+						}
+						select {
+						case response := <-mutationFinished:
+							t.Fatalf("security mutation escaped the held key lock, status=%d", response.Code)
+						case <-ticker.C:
+						case <-wait.Done():
+							t.Fatal("security mutation did not reach the key lock")
+						}
+					}
+				} else {
+					select {
+					case mutationResponse = <-mutationFinished:
+					case <-wait.Done():
+						t.Fatal("security mutation did not commit in the pre-writer gap")
+					}
+				}
+				release()
+				var keyResponse *httptest.ResponseRecorder
+				select {
+				case keyResponse = <-keyFinished:
+				case <-wait.Done():
+					t.Fatal("key request did not finish after linearization")
+				}
+				if mutationResponse == nil {
+					select {
+					case mutationResponse = <-mutationFinished:
+					case <-wait.Done():
+						t.Fatal("security mutation did not finish after key commit")
+					}
+				}
+				if mutationResponse.Code != http.StatusOK || keyResponse.Code != wantKey {
+					t.Fatalf("linearized key/security statuses=%d/%d want=%d/200", keyResponse.Code, mutationResponse.Code, wantKey)
+				}
+				var keys, intents, successfulFacts int
+				if err := database.QueryRow(ctx, `SELECT
+				 (SELECT count(*) FROM iam.access_keys WHERE tenant_id=$1 AND user_id=$2 AND deleted_at IS NULL AND ciphertext IS NOT NULL),
+				 (SELECT count(*) FROM iam.access_key_intents WHERE tenant_id=$1 AND request_id=$3),
+				 (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3 AND event_document->>'action'='iam.access-key.created')`,
+					target.AccountID, target.ID, prefix+"-create").Scan(&keys, &intents, &successfulFacts); err != nil {
+					t.Fatal("read committed key linearization", err)
+				}
+				wantCount := 0
+				if wantKey == http.StatusCreated {
+					wantCount = 1
+				}
+				if keys != wantCount || intents != wantCount || successfulFacts != wantCount {
+					t.Fatal("linearization left partial material, intent or success facts")
+				}
+				if scenario == "target-platform" {
+					var grant iamv1.PolicyAttachment
+					if iamv1.DecodeRequest(bytes.NewReader(mutationResponse.Body.Bytes()), &grant) != nil {
+						t.Fatal("decode exact platform grant")
+					}
+					call(handler, http.MethodPost, "/v1/policy-attachments/"+string(grant.ID)+":revoke", root,
+						iamv1.RevokePolicyAttachmentRequest{ResourceVersion: grant.ResourceVersion, RequestID: prefix + "-revoke-platform"}, http.StatusOK, nil)
+				}
+				if wantCount == 1 {
+					var key iamv1.CreateAccessKeyResponse
+					if iamv1.DecodeRequest(bytes.NewReader(keyResponse.Body.Bytes()), &key) != nil {
+						t.Fatal("decode linearized key")
+					}
+					keyPath += "/" + string(key.Key.ID)
+					call(handler, http.MethodPost, keyPath+":set-status", managerBearer,
+						iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: prefix + "-cleanup-disable"}, http.StatusOK, nil)
+					call(handler, http.MethodPost, keyPath+":delete", managerBearer,
+						iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: 2, RequestID: prefix + "-cleanup-delete"}, http.StatusOK, nil)
+				}
+			})
+		}
+	}
+	t.Run("platform-grant-before-key-target-lock", func(t *testing.T) {
+		target, _ := newUser("key-platform-race-target")
+		racePath := "/v1/users/" + string(target.ID) + "/access-keys"
+		// Pause after real authentication/PDP and before the key writer takes its
+		// target lock. The platform grant must finish in this stale snapshot gap.
+		if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_access_key_barrier() RETURNS trigger LANGUAGE plpgsql AS $body$
+		 BEGIN IF NEW.event_document->>'action'='iam.authorization.decided' AND NEW.event_document->>'requestId'='key-platform-race'
+		 THEN PERFORM pg_advisory_xact_lock_shared(54853,29); END IF; RETURN NEW; END $body$;
+		 CREATE TRIGGER matrix_access_key_barrier BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_access_key_barrier();
+		 SELECT pg_advisory_lock(54853,29)`); err != nil {
+			t.Fatal("install key target race barrier", err)
+		}
+		t.Cleanup(func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			if _, err := database.Exec(cleanup, `SELECT pg_advisory_unlock(54853,29); DROP TRIGGER IF EXISTS matrix_access_key_barrier ON iam.audit_outbox; DROP FUNCTION IF EXISTS public.matrix_access_key_barrier()`); err != nil {
+				t.Error("remove key race barrier", err)
+			}
+		})
+		finished := make(chan int, 1)
+		command := mustIAMJSON(t, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: "key-platform-race"})
+		go func() { finished <- performIAMRequest(second, http.MethodPost, racePath, managerBearer, command).Code }()
+		wait, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			var blocked int
+			if err := database.QueryRow(wait, `SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND NOT granted
+			 AND database=(SELECT oid FROM pg_database WHERE datname=current_database()) AND classid=54853 AND objid=29`).Scan(&blocked); err != nil {
+				t.Fatal("observe stale key snapshot", err)
+			}
+			if blocked == 1 {
+				break
+			}
+			select {
+			case <-ticker.C:
+			case <-wait.Done():
+				t.Fatal("key never reached authority barrier")
+			}
+		}
+		var platform iamv1.PolicyAttachment
+		call(handler, http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+			Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)}, PolicyID: iamv1.SystemPolicyPlatformOperator,
+			PolicyResourceVersion: 1, RequestID: "key-platform-race-grant"}, http.StatusOK, &platform)
+		if _, err := database.Exec(ctx, "SELECT pg_advisory_unlock(54853,29)"); err != nil {
+			t.Fatal("release stale key snapshot")
+		}
+		select {
+		case status := <-finished:
+			if status != http.StatusForbidden {
+				t.Fatalf("platform grant completed before target lock, key status=%d want=403", status)
+			}
+		case <-wait.Done():
+			t.Fatal("key did not finish after platform grant")
+		}
+		var keys, facts, intents int
+		if err := database.QueryRow(ctx, `SELECT
+		 (SELECT count(*) FROM iam.access_keys WHERE tenant_id=$1 AND user_id=$2),
+		 (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId'='key-platform-race' AND event_document->>'action'='iam.access-key.created'),
+		 (SELECT count(*) FROM iam.access_key_intents WHERE request_id='key-platform-race')`, target.AccountID, target.ID).Scan(&keys, &facts, &intents); err != nil || keys != 0 || facts != 0 || intents != 0 {
+			t.Fatal("protected platform target retained a partial key, success fact or intent")
+		}
+	})
+	t.Run("committed-response-loss", func(t *testing.T) {
+		target, _ := newUser("key-response-loss")
+		keyPath := "/v1/users/" + string(target.ID) + "/access-keys"
+		var key iamv1.AccessKey
+		for _, action := range []string{"create", "disable", "delete"} {
+			requestID, url := "key-response-loss-"+action, keyPath
+			var command any
+			wantStatus, fact := http.StatusOK, ""
+			switch action {
+			case "create":
+				command = iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: requestID}
+				wantStatus, fact = http.StatusCreated, "iam.access-key.created"
+			case "disable":
+				url += "/" + string(key.ID) + ":set-status"
+				command = iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: requestID}
+				fact = "iam.access-key.disabled"
+			case "delete":
+				url += "/" + string(key.ID) + ":delete"
+				command = iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: 2, RequestID: requestID}
+				fact = "iam.access-key.deleted"
+			}
+			// The production handler commits to the real PG database, then this
+			// transport fixture closes the real TCP response without any bytes.
+			var calls atomic.Int64
+			completed := make(chan int, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, r)
+				defer clear(response.Body.Bytes())
+				completed <- response.Code
+				panic(http.ErrAbortHandler)
+			}))
+			transport := &http.Transport{DisableKeepAlives: true, MaxConnsPerHost: 1}
+			client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+			request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+url, bytes.NewReader(mustIAMJSON(t, command)))
+			if err != nil {
+				server.Close()
+				t.Fatal("build response-loss request")
+			}
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer "+managerBearer)
+			response, err := client.Do(request)
+			if response != nil {
+				_ = response.Body.Close()
+			}
+			transport.CloseIdleConnections()
+			server.Close()
+			if err == nil || calls.Load() != 1 {
+				t.Fatal("response-loss fixture did not create exactly one unknown result")
+			}
+			select {
+			case status := <-completed:
+				if status != wantStatus {
+					t.Fatalf("lost response was not a committed success: %d", status)
+				}
+			default:
+				t.Fatal("response disappeared before reaching the real handler")
+			}
+			var replayResponse *httptest.ResponseRecorder
+			switch action {
+			case "create":
+				var replay iamv1.CreateAccessKeyResponse
+				replayResponse = call(second, http.MethodPost, url, managerBearer, command, http.StatusOK, &replay)
+				if replay.Outcome != "EQUAL_REPLAY" || replay.Secret.Present() || replay.Key.ResourceVersion != 1 {
+					t.Fatal("lost create response reissued material or a new intent")
+				}
+				key = replay.Key
+				call(second, http.MethodPost, url, managerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion + 1, RequestID: requestID}, http.StatusConflict, nil)
+			case "disable":
+				var replay iamv1.SetAccessKeyStatusResponse
+				replayResponse = call(second, http.MethodPost, url, managerBearer, command, http.StatusOK, &replay)
+				if replay.Outcome != "EQUAL_REPLAY" || replay.Key.ID != key.ID || replay.Key.ResourceVersion != 2 || replay.Key.Status != iamv1.AccessKeyDisabled {
+					t.Fatal("lost status response did not retain original completion")
+				}
+			case "delete":
+				var replay iamv1.DeleteAccessKeyResponse
+				replayResponse = call(second, http.MethodPost, url, managerBearer, command, http.StatusOK, &replay)
+				if replay.Outcome != "EQUAL_REPLAY" || replay.Deletion.ID != key.ID || replay.Deletion.ResourceVersion != 3 {
+					t.Fatal("lost deletion response revived the key")
+				}
+			}
+			if bytes.Contains(replayResponse.Body.Bytes(), []byte(`"secret"`)) || bytes.Contains(replayResponse.Body.Bytes(), []byte("mak1.")) {
+				t.Fatal("unknown result recovery disclosed secret material")
+			}
+			var intents, facts int
+			if err := database.QueryRow(ctx, `SELECT
+			 (SELECT count(*) FROM iam.access_key_intents WHERE tenant_id=$1 AND request_id=$2),
+			 (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2 AND event_document->>'action'=$3)`,
+				target.AccountID, requestID, fact).Scan(&intents, &facts); err != nil || intents != 1 || facts != 1 {
+				t.Fatal("unknown result recovery duplicated the completed effect", err)
+			}
+		}
+	})
+	t.Run("id-reservation-before-seal", func(t *testing.T) {
+		target, _ := newUser("key-collision-user")
+		poolConfig, err := pgxpool.ParseConfig(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		trace := &iamAccessKeyCompletionTrace{iamTransactionFailureTrace: failures, requestID: "key-collision-create"}
+		poolConfig.ConnConfig.User, poolConfig.ConnConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+		poolConfig.ConnConfig.Tracer, poolConfig.MaxConns = trace, 2
+		pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Close()
+		repository, err := iampostgres.NewRepository(pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids, keyIDs atomic.Int64
+		var exhaust atomic.Bool
+		candidate, err := identityaccess.NewAuthority(repository, identityaccess.Config{AccessKeyWrapping: &keyring,
+			CursorKey: bytes.Repeat([]byte{0x39}, 32), NewID: func(kind string) (string, error) {
+				if kind == "access-key" {
+					if keyIDs.Add(1) == 1 || exhaust.Load() {
+						return string(first.Key.ID), nil // Actual deleted ID remains reserved.
+					}
+					return "access-key-after-collision", nil
+				}
+				return fmt.Sprintf("%s-collision-fixture-%d", kind, ids.Add(1)), nil
+			}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		endpoint, err := iamhttp.NewHandler(candidate, iamhttp.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := "/v1/users/" + string(target.ID) + "/access-keys"
+		var created iamv1.CreateAccessKeyResponse
+		call(endpoint, http.MethodPost, path, managerBearer,
+			iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: "key-collision-create"}, http.StatusCreated, &created)
+		trace.mu.Lock()
+		oneCompletion := !trace.invalid && len(trace.attempts) == 1 && trace.attempts[0].KeyID == created.Key.ID
+		trace.mu.Unlock()
+		if keyIDs.Load() != 2 || created.Key.ID != "access-key-after-collision" || !oneCompletion {
+			t.Fatal("ID collision used an existing key or repeated its encrypted completion")
+		}
+		exhaust.Store(true)
+		call(endpoint, http.MethodPost, path, managerBearer,
+			iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: "key-collision-exhausted"}, http.StatusServiceUnavailable, nil)
+		var pending int
+		if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.access_key_intents WHERE request_id='key-collision-exhausted')+
+		 (SELECT count(*) FROM iam.access_keys WHERE creation_request_id='key-collision-exhausted')+
+		 (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId'='key-collision-exhausted' AND event_document->>'action'='iam.access-key.created')`).Scan(&pending); err != nil || pending != 0 || keyIDs.Load() != 6 {
+			t.Fatal("exhausted collision budget mutated authority or retried without bound")
+		}
+		path += "/" + string(created.Key.ID)
+		call(second, http.MethodPost, path+":set-status", managerBearer,
+			iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: "key-collision-disable"}, http.StatusOK, nil)
+		call(second, http.MethodPost, path+":delete", managerBearer,
+			iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: 2, RequestID: "key-collision-delete"}, http.StatusOK, nil)
+	})
+	t.Run("incomplete-reservation-cannot-commit", func(t *testing.T) {
+		for _, withMaterial := range []bool{false, true} {
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, `SET LOCAL ROLE matrix_iam_owner; SELECT set_config('matrix.iam_tenant_id',$1,true)`, manager.AccountID); err != nil {
+				t.Fatal(err)
+			}
+			var format, nonce, ciphertext any
+			if withMaterial {
+				format, nonce, ciphertext = 1, sealed.Nonce, sealed.Ciphertext
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO iam.access_keys(id,tenant_id,user_id,created_by,creation_request_id,creation_request_digest,
+			 installation_id,wrapping_key_id,status,resource_version,created_at,updated_at,format_version,nonce,ciphertext)
+			 VALUES('key-incomplete-fixture',$1,$2,$2,'key-incomplete-intent','sha256:'||repeat('a',64),$3,$4,'ENABLED',1,
+			 transaction_timestamp(),transaction_timestamp(),$5,$6,$7)`, manager.AccountID, manager.ID, document.InstallationID, keyring.ActiveWrappingKeyID, format, nonce, ciphertext)
+			if err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal("incomplete reservation fixture did not reach commit", err)
+			}
+			err = tx.Commit(ctx)
+			var rejected *pgconn.PgError
+			if !errors.As(err, &rejected) || rejected.Code != "23514" {
+				t.Fatal("material without an exact completed creation intent committed", err)
+			}
+		}
+		var partial int
+		if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.access_keys WHERE id='key-incomplete-fixture'`).Scan(&partial); err != nil || partial != 0 {
+			t.Fatal("failed deferred completion retained a reserved identity")
+		}
+	})
+	t.Run("runtime-sql-confinement", func(t *testing.T) {
+		runtimeConfig := config.Copy()
+		runtimeConfig.User, runtimeConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+		runtime, err := pgx.ConnectConfig(ctx, runtimeConfig)
+		if err != nil {
+			t.Fatal("connect real restricted AccessKey SQL login", err)
+		}
+		defer runtime.Close(context.Background())
+		var login, current string
+		if err := runtime.QueryRow(ctx, "SELECT session_user,current_user").Scan(&login, &current); err != nil || login != iamHTTPTestRole || current != login {
+			t.Fatal("AccessKey SQL attack did not use the actual runtime identity")
+		}
+		for _, attack := range []string{
+			"SELECT * FROM iam.access_keys", "SELECT ciphertext FROM iam.access_keys", "SELECT * FROM iam.access_key_intents",
+			"SELECT * FROM iam.access_key_wrapping_registry", "UPDATE iam.access_keys SET status='ENABLED'",
+			"INSERT INTO iam.access_keys DEFAULT VALUES", "DELETE FROM iam.access_keys", "TRUNCATE iam.access_keys CASCADE",
+			"SELECT iam.access_key_snapshot('account','key')", "SELECT iam.access_key_intent_result('account','actor','user','key','iam.access-key.create','request','sha256:'||repeat('0',64))",
+			"SELECT iam.delete_user_access_keys('account','actor','decision','user','{}'::jsonb)", "SET ROLE matrix_iam_owner", "SET ROLE matrix_iam_migrator",
+		} {
+			tx, err := runtime.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", user.AccountID); err != nil {
+				t.Fatal("set caller-selected SQL scope", err)
+			}
+			_, err = tx.Exec(ctx, attack)
+			_ = tx.Rollback(ctx)
+			var rejected *pgconn.PgError
+			if !errors.As(err, &rejected) || rejected.Code != "42501" {
+				t.Fatal("runtime SQL escaped the purpose-limited entrypoints", err)
+			}
+		}
+	})
+	// The registry and original completion snapshots survive deletion/restart/replay.
+	const retained = `SELECT jsonb_build_object('keys',(SELECT jsonb_agg(to_jsonb(k) ORDER BY id) FROM iam.access_keys k),
+		'intents',(SELECT jsonb_agg(to_jsonb(i) ORDER BY actor_id,request_id) FROM iam.access_key_intents i),
+		'registry',(SELECT jsonb_agg(to_jsonb(r) ORDER BY wrapping_key_id) FROM iam.access_key_wrapping_registry r))::text`
+	var before, after string
+	if err := database.QueryRow(ctx, retained).Scan(&before); err != nil {
+		t.Fatal("read retained key state")
+	}
+	applyIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	if _, err := replica.Bootstrap(ctx, document); err != nil {
+		t.Fatal("equal bootstrap key replay")
+	}
+	if err := database.QueryRow(ctx, retained).Scan(&after); err != nil || before != after {
+		t.Fatal("migration/bootstrap changed key history")
+	}
+	if err := replica.VerifyAccessKeyCustody(ctx); err != nil {
+		t.Fatal("deleting all keys removed registry custody")
+	}
+	for _, variant := range []string{"missing", "installation", "bootstrap", "key-id", "material"} {
+		t.Run("custody-after-delete-"+variant, func(t *testing.T) {
+			changed := keyring
+			changed.Keys = append([]iamv1.AccessKeyWrappingKey(nil), keyring.Keys...)
+			switch variant {
+			case "installation":
+				changed.Scope.InstallationID = "other-installation"
+			case "bootstrap":
+				changed.Scope.BootstrapDigest = "sha256:" + strings.Repeat("b", 64)
+			case "key-id":
+				changed.ActiveWrappingKeyID, changed.Keys[0].WrappingKeyID = "replacement-key", "replacement-key"
+			case "material":
+				changed.Keys[0].KeyMaterial = iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x58}, 32)))
+			}
+			var wrapping []iamv1.AccessKeyWrappingKeyring
+			if variant != "missing" {
+				wrapping = append(wrapping, changed)
+			}
+			candidate := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, failures, wrapping...)
+			if err := candidate.VerifyAccessKeyCustody(ctx); !errors.Is(err, identityaccess.ErrUnavailable) {
+				t.Fatal("invalid historical custody accepted", err)
+			}
+			endpoint, err := iamhttp.NewHandler(candidate, iamhttp.Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			call(endpoint, http.MethodGet, "/ready", "", nil, http.StatusServiceUnavailable, nil)
+			if err := database.QueryRow(ctx, retained).Scan(&after); err != nil || before != after {
+				t.Fatal("custody inspection changed retained keys or registry")
+			}
+		})
+	}
+	call(second, http.MethodGet, "/ready", "", nil, http.StatusOK, nil)
+	for _, attack := range []string{
+		`ALTER TABLE iam.access_keys NO FORCE ROW LEVEL SECURITY`,
+		`CREATE POLICY access_key_open ON iam.access_keys USING(true)`,
+		`GRANT SELECT(ciphertext) ON iam.access_keys TO matrix_iam_api`,
+		`ALTER TABLE iam.access_key_wrapping_registry DISABLE TRIGGER cannot_update`,
+		`ALTER TABLE iam.access_key_intents DISABLE TRIGGER cannot_delete`,
+		`ALTER TABLE iam.access_keys DISABLE TRIGGER access_key_creation_complete`,
+		`ALTER TABLE iam.access_keys DROP CONSTRAINT access_keys_material_shape`,
+		`ALTER TABLE iam.access_keys DROP CONSTRAINT access_keys_lifecycle`,
+		`ALTER TABLE iam.access_keys DROP CONSTRAINT access_keys_tenant_id_user_id_fkey`,
+		`ALTER TABLE iam.access_key_intents DROP CONSTRAINT access_key_intents_tenant_id_user_id_key_id_fkey`,
+		`ALTER TABLE iam.access_key_wrapping_registry DROP CONSTRAINT access_key_wrapping_registry_installation_id_fkey`,
+		`DROP INDEX iam.access_key_creation_intent_uq`,
+		`DROP INDEX iam.access_keys_live_user_idx`,
+		`ALTER FUNCTION iam.reserve_access_key(text,text,text,text,text,text,bigint,text,text,text,text,text) SECURITY INVOKER`,
+		`ALTER FUNCTION iam.change_access_key(text,text,text,text,text,text,bigint,text,jsonb) STABLE`,
+		`GRANT EXECUTE ON FUNCTION iam.read_access_key_custody() TO matrix_iam_worker`,
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, attack); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal("install AccessKey contract attack", err)
+		}
+		var ready bool
+		err = tx.QueryRow(ctx, "SELECT iam.access_key_contract_ready()").Scan(&ready)
+		_ = tx.Rollback(ctx)
+		if err != nil || ready {
+			t.Fatal("AccessKey contract drift remained ready", err)
+		}
+	}
+	for _, attack := range []string{
+		`UPDATE iam.access_key_wrapping_registry SET material_commitment='sha256:'||repeat('b',64)`,
+		`DELETE FROM iam.access_key_wrapping_registry`,
+		`TRUNCATE iam.access_key_wrapping_registry CASCADE`,
+		`UPDATE iam.access_key_intents SET result=result||'{"secret":"forged"}'::jsonb`,
+		`DELETE FROM iam.access_key_intents`,
+		`UPDATE iam.access_keys SET deleted_at=NULL,format_version=1,nonce=decode(repeat('ab',12),'hex'),ciphertext=decode(repeat('ab',48),'hex')`,
+		`DELETE FROM iam.access_keys`,
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, attack)
+		_ = tx.Rollback(ctx)
+		var databaseError *pgconn.PgError
+		if !errors.As(err, &databaseError) || databaseError.Code != "42501" {
+			t.Fatal("immutable key history or terminal material accepted mutation", err)
+		}
+	}
+	if failures.deadlock.Load() != 0 {
+		t.Fatal("AccessKey gate concealed a database deadlock")
+	}
+}
+
 func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 	for _, gate := range []struct {
 		name, environment, prefix string
@@ -9041,9 +9986,12 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		t.Fatalf("create IAM PostgreSQL repository: %v", err)
 	}
 	var sequence atomic.Int64
+	document := iamHTTPBootstrap(t)
+	keyring := iamHTTPAccessKeyWrapping(t, document)
 	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{
-		SessionLifetime: time.Hour,
-		CursorKey:       bytes.Repeat([]byte{0x39}, 32),
+		SessionLifetime:   time.Hour,
+		CursorKey:         bytes.Repeat([]byte{0x39}, 32),
+		AccessKeyWrapping: &keyring,
 		NewID: func(prefix string) (string, error) {
 			return fmt.Sprintf("%s-http-%d", prefix, sequence.Add(1)), nil
 		},
@@ -9051,7 +9999,6 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create IAM HTTP workflow: %v", err)
 	}
-	document := iamHTTPBootstrap(t)
 	status, err := workflow.Bootstrap(ctx, document)
 	if err != nil || status.State != iamv1.BootstrapReady {
 		t.Fatalf("bootstrap IAM HTTP authority: status=%#v err=%v", status, err)
@@ -12566,6 +13513,18 @@ func iamHTTPBootstrap(t *testing.T) iamv1.BootstrapDocument {
 			service(iamv1.ServiceInstallationVerifier, "service-verifier", verifierCredential),
 		},
 	}
+}
+
+func iamHTTPAccessKeyWrapping(t *testing.T, document iamv1.BootstrapDocument) iamv1.AccessKeyWrappingKeyring {
+	t.Helper()
+	digest, err := iamv1.BootstrapDigest(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return iamv1.AccessKeyWrappingKeyring{APIVersion: iamv1.APIVersion, Kind: "AccessKeyWrappingKeyring", Purpose: iamv1.AccessKeyWrappingPurpose,
+		Scope: iamv1.AccessKeyWrappingScope{InstallationID: document.InstallationID, BootstrapDigest: digest}, ActiveWrappingKeyID: "access-key-test-wrapping",
+		Keys: []iamv1.AccessKeyWrappingKey{{WrappingKeyID: "access-key-test-wrapping", FormatVersion: 1,
+			KeyMaterial: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x57}, 32)))}}}
 }
 
 func iamHTTPSecret(t *testing.T, value string) iamv1.Secret {

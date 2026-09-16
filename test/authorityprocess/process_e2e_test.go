@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -151,8 +152,13 @@ func TestIAMRetainedRoleCapabilityProcessUpgrade(t *testing.T) {
 	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-api-dsn", []byte(apiDSN)),
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("36", 32)))}
+	wrappingFile := writeProcessAccessKeyWrapping(t, temporary, processBootstrap(t))
 	start := func(binary string) *childProcess {
-		child := startChild(t, root, binary, environment)
+		currentEnvironment := append([]string(nil), environment...)
+		if binary == currentBinary {
+			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
+		}
+		child := startChild(t, root, binary, currentEnvironment)
 		children = append(children, child)
 		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
 		assertRuntimeProcessLogins(t, ctx, admin, "matrix_iam_api_login")
@@ -323,7 +329,11 @@ func TestIAMRetainedRoleAuthorityProcessUpgrade(t *testing.T) {
 	}
 	var children []*childProcess
 	sensitive := []string{initialAdminPassword, changedAdminPassword, processDBPassword, iamServiceCredential, paasServiceCredential, auditServiceCredential, verifierCredential}
+	wrappingFile := writeProcessAccessKeyWrapping(t, temporary, processBootstrap(t))
 	start := func(binary string, environment []string) *childProcess {
+		if binary == binaries.iam {
+			environment = append(append([]string(nil), environment...), "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
+		}
 		child := startChild(t, root, binary, environment)
 		children = append(children, child)
 		return child
@@ -674,8 +684,13 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("35", 32))),
 	}
+	wrappingFile := writeProcessAccessKeyWrapping(t, temporary, processBootstrap(t))
 	start := func(binary string) *childProcess {
-		child := startChild(t, root, binary, environment)
+		currentEnvironment := append([]string(nil), environment...)
+		if binary == currentBinary {
+			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
+		}
+		child := startChild(t, root, binary, currentEnvironment)
 		children = append(children, child)
 		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
 		assertRuntimeProcessLogins(t, ctx, admin, "matrix_iam_api_login")
@@ -1415,6 +1430,7 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 	endpoint := "http://" + address
 	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + dsnPath, "MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("35", 32)))}
+	wrappingFile := writeProcessAccessKeyWrapping(t, temporary, processBootstrap(t))
 	var children []*childProcess
 	defer func() {
 		for _, child := range children {
@@ -1423,7 +1439,11 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 		assertProcessOutputsSanitized(t, children, initialAdminPassword, changedAdminPassword, initialReaderPassword, changedReaderPassword)
 	}()
 	start := func(binary string) *childProcess {
-		child := startChild(t, root, binary, environment)
+		currentEnvironment := append([]string(nil), environment...)
+		if binary == currentBinary {
+			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
+		}
+		child := startChild(t, root, binary, currentEnvironment)
 		children = append(children, child)
 		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
 		assertRuntimeProcessLogins(t, ctx, admin, iamAPILogin)
@@ -1800,6 +1820,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 		[]byte(hex.EncodeToString(bytes.Repeat([]byte{0x6a}, 32))),
 	)
 	iamCursorKeyPath := writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("35", 32)))
+	iamWrappingKeyPath := writeProcessAccessKeyWrapping(t, temporary, bootstrap)
 
 	iamAddress := freeAddress(t)
 	auditAddress := freeAddress(t)
@@ -1814,6 +1835,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
 		"MATRIX_IAM_LISTEN_ADDRESS=" + iamAddress,
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + iamCursorKeyPath,
+		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + iamWrappingKeyPath,
 	}
 	auditEnvironment := []string{
 		"MATRIX_AUDIT_DATABASE_DSN_FILE=" + auditDSNPath,
@@ -1877,6 +1899,26 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 		assertProcessOutputsSanitized(t, children, sensitive...)
 	}()
 
+	for _, candidate := range []string{"", filepath.Join(temporary, "missing-keyring"),
+		writeProtectedFile(t, temporary, "invalid-keyring", []byte("{}"))} {
+		environment := []string{}
+		for _, entry := range iamEnvironment {
+			if !strings.HasPrefix(entry, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=") {
+				environment = append(environment, entry)
+			}
+		}
+		if candidate != "" {
+			environment = append(environment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+candidate)
+		}
+		invalid := start(binaries.iam, environment)
+		if err := invalid.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
+			t.Fatal("IAM network process accepted missing/invalid wrapping file")
+		}
+		var effects int
+		if err := admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.bootstrap_receipts)+(SELECT count(*) FROM iam.access_key_wrapping_registry)+(SELECT count(*) FROM iam.audit_outbox)`).Scan(&effects); err != nil || effects != 0 {
+			t.Fatal("invalid wrapping startup changed installation state", err)
+		}
+	}
 	iamProcess := start(binaries.iam, iamEnvironment)
 	waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
 	iamProcess.stop()
@@ -1909,7 +1951,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 28, Audit: 16, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 29, Audit: 17, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -1996,6 +2038,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
 		"MATRIX_IAM_LISTEN_ADDRESS=" + replicaAddress,
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + iamCursorKeyPath,
+		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + iamWrappingKeyPath,
 	})
 	waitHTTPStatus(t, ctx, replicaProcess, replicaEndpoint+"/ready", http.StatusOK)
 	assertRuntimeProcessLogins(t, ctx, admin, replicaLogin)
@@ -2012,6 +2055,62 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 			iamProcess = start(binaries.iam, iamEnvironment)
 			waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
 		})...)
+	// A syntactically valid file from the same installation must still match
+	// the permanent registry. Use a separate free address: a bind conflict with
+	// the healthy replicas must never masquerade as the expected startup denial.
+	keyringBytes, err := os.ReadFile(iamWrappingKeyPath)
+	if err != nil {
+		t.Fatal("read own process keyring fixture")
+	}
+	keyring, err := iamv1.DecodeAccessKeyWrappingKeyring(bytes.NewReader(keyringBytes))
+	clear(keyringBytes)
+	if err != nil {
+		t.Fatal("decode own process keyring fixture")
+	}
+	const keyCustodyState = `SELECT jsonb_build_object(
+	 'registry',(SELECT jsonb_agg(to_jsonb(r) ORDER BY wrapping_key_id) FROM iam.access_key_wrapping_registry r),
+	 'keys',(SELECT jsonb_agg(to_jsonb(k) ORDER BY id) FROM iam.access_keys k),
+	 'intents',(SELECT jsonb_agg(to_jsonb(i) ORDER BY actor_id,request_id) FROM iam.access_key_intents i))::text`
+	var originalCustody string
+	var registryCount int
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.access_key_wrapping_registry").Scan(&registryCount); err != nil || registryCount != 1 {
+		t.Fatal("process gate has no committed wrapping history")
+	}
+	if err := admin.QueryRow(ctx, keyCustodyState).Scan(&originalCustody); err != nil {
+		t.Fatal("read original process custody")
+	}
+	for _, variant := range []string{"material", "wrapping-id"} {
+		changed := keyring
+		changed.Keys = append([]iamv1.AccessKeyWrappingKey(nil), keyring.Keys...)
+		if variant == "material" {
+			material := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x58}, 32))
+			sensitive = append(sensitive, material)
+			changed.Keys[0].KeyMaterial = processSecret(t, material)
+		} else {
+			changed.ActiveWrappingKeyID, changed.Keys[0].WrappingKeyID = "process-replacement-wrapping", "process-replacement-wrapping"
+		}
+		encoded, err := iamv1.EncodeAccessKeyWrappingKeyring(changed)
+		if err != nil {
+			t.Fatal("encode mismatched process custody")
+		}
+		path := writeProtectedFile(t, temporary, "mismatched-wrapping-"+variant, encoded)
+		clear(encoded)
+		environment := []string{}
+		for _, entry := range iamEnvironment {
+			if !strings.HasPrefix(entry, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=") && !strings.HasPrefix(entry, "MATRIX_IAM_LISTEN_ADDRESS=") {
+				environment = append(environment, entry)
+			}
+		}
+		environment = append(environment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+path, "MATRIX_IAM_LISTEN_ADDRESS="+freeAddress(t))
+		invalid := start(binaries.iam, environment)
+		if err := invalid.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
+			t.Fatal("IAM process accepted material inconsistent with committed key history")
+		}
+		var currentCustody string
+		if err := admin.QueryRow(ctx, keyCustodyState).Scan(&currentCustody); err != nil || currentCustody != originalCustody {
+			t.Fatal("invalid process startup changed permanent key custody")
+		}
+	}
 	platformAuditRecord := ingestPlatformAuditFixture(t, auditEndpoint, platformDecisions[0])
 	platformAuditRecords := []auditv1.AuditRecord{platformAuditRecord}
 	for index, mapping := range []struct {
@@ -2236,9 +2335,19 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	policyHistory := queryAudit(t, auditEndpoint, adminLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMPolicyCreated}, http.StatusOK)
-	if policyHistory.TenantID != auditv1.TenantID(customPolicy.Policy.AccountID) || len(policyHistory.Records) != 1 || policyHistory.NextCursor != "" ||
-		policyHistory.Records[0].Source != auditv1.SourceIAM || policyHistory.Records[0].Event.Target.ID != string(customPolicy.Policy.ID) ||
-		policyHistory.Records[0].Event.RequestID != customRequest.RequestID || policyHistory.Records[0].Event.Result != auditv1.ResultSucceeded {
+	publications := 0
+	for _, record := range policyHistory.Records {
+		if record.Event.TenantID != auditv1.TenantID(customPolicy.Policy.AccountID) {
+			t.Fatal("policy history crossed tenant scope")
+		}
+		if record.Event.Target.ID == string(customPolicy.Policy.ID) {
+			publications++
+			if record.Source != auditv1.SourceIAM || record.Event.RequestID != customRequest.RequestID || record.Event.Result != auditv1.ResultSucceeded {
+				t.Fatal("custom policy publication lost its immutable provenance")
+			}
+		}
+	}
+	if policyHistory.TenantID != auditv1.TenantID(customPolicy.Policy.AccountID) || policyHistory.NextCursor != "" || publications != 1 {
 		t.Fatal("custom policy publication did not reach the immutable tenant Audit chain")
 	}
 	if countAuditFacts(t, ctx, admin, auditv1.SourceIAM, auditv1.ActionIAMPolicyVersionCreated, auditv1.ResultSucceeded) != 1 ||
@@ -3596,6 +3705,154 @@ func expireIAMSession(
 	}
 }
 
+func proveAccessKeyManagementProcesses(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica, auditEndpoint, home, customer string,
+	withAuditOutage func(func()), restartIAM func()) []string {
+	t.Helper()
+	call := func(server, method, path, bearer string, body any, status int, result any) {
+		t.Helper()
+		response := performJSON(t, method, server+path, bearer, body)
+		if response.Status != status || result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body), result) != nil {
+			t.Fatalf("AccessKey process %s %s status=%d want=%d", method, path, response.Status, status)
+		}
+	}
+	type accountFixture struct {
+		owner, manager, targetBearer, path string
+		target                             iamv1.User
+		grant                              iamv1.PolicyAttachment
+		key                                iamv1.CreateAccessKeyResponse
+		intent                             iamv1.CreateAccessKeyRequest
+	}
+	accounts := []accountFixture{{owner: home}, {owner: customer}}
+	sensitive := []string{}
+	for index := range accounts {
+		account := &accounts[index]
+		prefix := fmt.Sprintf("program-%d", index)
+		manager := createIAMUser(t, endpoint, account.owner, "program.manager", "Program manager", initialReaderPassword, prefix+"-manager")
+		target := createIAMUser(t, endpoint, account.owner, "program.user", "Program user", initialReaderPassword, prefix+"-user")
+		for _, user := range []iamv1.User{manager, target} {
+			login := loginIAM(t, endpoint, user.LoginName+"@"+string(user.AccountID), initialReaderPassword, prefix+"-"+string(user.ID)+"-login")
+			changePasswordIAM(t, endpoint, login.Credential, initialReaderPassword, changedReaderPassword, prefix+"-"+string(user.ID)+"-password")
+			sensitive = append(sensitive, login.Credential)
+			if user.ID == manager.ID {
+				account.manager = login.Credential
+			} else {
+				account.targetBearer = login.Credential
+			}
+		}
+		var current iamv1.CurrentIdentity
+		call(endpoint, http.MethodGet, "/v1/auth/me", account.targetBearer, nil, http.StatusOK, &current)
+		account.target = current.User
+		account.path = "/v1/users/" + string(target.ID) + "/access-keys"
+		call(endpoint, http.MethodGet, account.path, account.manager, nil, http.StatusForbidden, nil)
+		rule := func(sid string, actions []iamv1.Action, kind iamv1.ResourceKind) iamv1.PolicyStatement {
+			return iamv1.PolicyStatement{SID: sid, Effect: iamv1.PolicyAllow, Actions: actions, Resources: []iamv1.PolicyResourceSelector{{Kind: kind, Match: iamv1.PolicyResourceAnyInAuthority}}}
+		}
+		var policy iamv1.PolicyDetail
+		call(endpoint, http.MethodPost, "/v1/policies", account.owner, iamv1.CreatePolicyRequest{DisplayName: prefix + " key manager", RequestID: prefix + "-policy",
+			Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant, Statements: []iamv1.PolicyStatement{
+				rule("user", []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate}, iamv1.ResourceUser),
+				rule("key", []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus, iamv1.ActionIAMAccessKeyDelete}, iamv1.ResourceAccessKey)}}}, http.StatusCreated, &policy)
+		account.grant = createIAMPolicyAttachment(t, endpoint, account.owner, manager.ID, policy.Policy.ID, prefix+"-grant")
+		var directory iamv1.AccessKeyList
+		call(replica, http.MethodGet, account.path, account.manager, nil, http.StatusOK, &directory)
+		if iamv1.ValidateAccessKeyList(directory) != nil || len(directory.Items) != 0 || !directory.Capabilities[0].Available {
+			t.Fatal("program key directory differs")
+		}
+		account.intent = iamv1.CreateAccessKeyRequest{UserResourceVersion: directory.UserResourceVersion, RequestID: prefix + "-create"}
+		call(endpoint, http.MethodPost, account.path, account.manager, account.intent, http.StatusCreated, &account.key)
+		if iamv1.ValidateCreateAccessKeyResponse(account.key) != nil || account.key.Key.UserID != target.ID {
+			t.Fatal("program key creation differs")
+		}
+		secret := account.key.Secret.CopyBytes()
+		sensitive = append(sensitive, string(secret))
+		clear(secret)
+		var replay iamv1.CreateAccessKeyResponse
+		call(replica, http.MethodPost, account.path, account.manager, account.intent, http.StatusOK, &replay)
+		if replay.Secret.Present() || replay.Key != account.key.Key || replay.Outcome != "EQUAL_REPLAY" {
+			t.Fatal("replica repeated one-time secret")
+		}
+	}
+	a, b := &accounts[0], &accounts[1]
+	if a.target.AccountID == b.target.AccountID || a.target.LoginName != b.target.LoginName {
+		t.Fatal("two-realm program fixture is invalid")
+	}
+	call(endpoint, http.MethodGet, b.path+"/"+string(b.key.Key.ID), a.manager, nil, http.StatusForbidden, nil)
+	call(replica, http.MethodGet, a.path+"/"+string(a.key.Key.ID), b.manager, nil, http.StatusForbidden, nil)
+	call(endpoint, http.MethodPost, b.path, a.manager, b.intent, http.StatusForbidden, nil)
+	call(replica, http.MethodGet, a.path+"?accountId="+string(b.target.AccountID), a.manager, nil, http.StatusBadRequest, nil)
+	secret := a.key.Secret.CopyBytes()
+	call(endpoint, http.MethodGet, a.path, string(secret), nil, http.StatusUnauthorized, nil)
+	clear(secret)
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	withAuditOutage(func() {
+		keyPath := b.path + "/" + string(b.key.Key.ID)
+		for index, status := range []iamv1.AccessKeyStatus{iamv1.AccessKeyDisabled, iamv1.AccessKeyEnabled, iamv1.AccessKeyDisabled} {
+			var changed iamv1.SetAccessKeyStatusResponse
+			call(replica, http.MethodPost, keyPath+":set-status", b.manager, iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: uint64(index + 1), Status: status, RequestID: fmt.Sprintf("program-status-%d", index)}, http.StatusOK, &changed)
+			if changed.Key.ResourceVersion != uint64(index+2) || changed.Key.Status != status {
+				t.Fatal("program status CAS differs")
+			}
+		}
+		call(endpoint, http.MethodPost, keyPath+":delete", b.manager, iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: 4, RequestID: "program-delete"}, http.StatusOK, nil)
+		for index := range 2 {
+			intent := b.intent
+			intent.RequestID = fmt.Sprintf("program-cascade-create-%d", index)
+			var created iamv1.CreateAccessKeyResponse
+			call(replica, http.MethodPost, b.path, b.manager, intent, http.StatusCreated, &created)
+			secret := created.Secret.CopyBytes()
+			sensitive = append(sensitive, string(secret))
+			clear(secret)
+		}
+		var disabled iamv1.User
+		userPath := "/v1/users/" + string(b.target.ID)
+		call(endpoint, http.MethodPost, userPath+":set-status", b.owner, iamv1.SetUserStatusRequest{ResourceVersion: b.target.ResourceVersion, Status: iamv1.PrincipalDisabled, RequestID: "program-target-disable"}, http.StatusOK, &disabled)
+		call(endpoint, http.MethodPost, userPath+":delete", b.owner, iamv1.DeleteUserRequest{ResourceVersion: disabled.ResourceVersion, RequestID: "program-target-delete"}, http.StatusOK, nil)
+		revokeIAMPolicyAttachment(t, endpoint, b.owner, b.grant.ID, b.grant.ResourceVersion, "program-manager-revoke")
+		call(replica, http.MethodPost, b.path, b.manager, b.intent, http.StatusForbidden, nil)
+		waitIAMOutboxRetry(t, ctx, database)
+	})
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	for action, count := range map[auditv1.Action]int{auditv1.ActionIAMAccessKeyCreated: 3, auditv1.ActionIAMAccessKeyDisabled: 2, auditv1.ActionIAMAccessKeyEnabled: 1, auditv1.ActionIAMAccessKeyDeleted: 3} {
+		page := queryAudit(t, auditEndpoint, b.owner, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
+		if len(page.Records) != count || page.TenantID != auditv1.TenantID(b.target.AccountID) {
+			t.Fatalf("AccessKey historical delivery action=%s count=%d want=%d", action, len(page.Records), count)
+		}
+		for _, record := range page.Records {
+			if record.Event.IAMDecisionID == "" || record.Event.Actor.Type != auditv1.ActorUser || record.Event.Target.Kind != auditv1.TargetAccessKey || record.Event.TenantID != page.TenantID {
+				t.Fatal("program fact lost actual decision/tenant/USER")
+			}
+			encoded, err := json.Marshal(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, secret := range sensitive {
+				if bytes.Contains(encoded, []byte(secret)) {
+					t.Fatal("program audit leaked material")
+				}
+			}
+		}
+	}
+	page := queryAudit(t, auditEndpoint, b.owner, auditv1.QueryRecordsRequest{PageSize: 1, Action: auditv1.ActionIAMAccessKeyCreated}, http.StatusOK)
+	if page.NextCursor == "" {
+		t.Fatal("program audit cursor fixture is empty")
+	}
+	queryAudit(t, auditEndpoint, a.owner, auditv1.QueryRecordsRequest{PageSize: 1, Action: auditv1.ActionIAMAccessKeyCreated, Cursor: page.NextCursor}, http.StatusUnprocessableEntity)
+	if chain := verifyAudit(t, auditEndpoint, b.owner); !chain.Complete || chain.State != auditv1.VerificationVerified {
+		t.Fatal("program history chain failed")
+	}
+	var remaining int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.access_keys WHERE tenant_id=$1 AND user_id=$2 AND (deleted_at IS NULL OR ciphertext IS NOT NULL)`, b.target.AccountID, b.target.ID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatal("user deletion retained usable program material", err)
+	}
+	restartIAM()
+	var replay iamv1.CreateAccessKeyResponse
+	call(endpoint, http.MethodPost, a.path, a.manager, a.intent, http.StatusOK, &replay)
+	if replay.Secret.Present() || replay.Key != a.key.Key || replay.Outcome != "EQUAL_REPLAY" {
+		t.Fatal("restart repeated one-time program secret")
+	}
+	return sensitive
+}
+
 func proveTenantAccountProcesses(
 	t *testing.T,
 	ctx context.Context,
@@ -3691,6 +3948,7 @@ func proveTenantAccountProcesses(
 	roleOperator := loginIAM(t, endpoint, "customer.primary", changed, "process-role-operator-login")
 	sensitive = append(sensitive, roleOperator.Credential)
 	sensitive = append(sensitive, proveRoleManagementProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, roleOperator.Credential, withAuditOutage, restartIAM)...)
+	sensitive = append(sensitive, proveAccessKeyManagementProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
 	readAccount := func(id string) iamv1.Account {
 		t.Helper()
 		response := performJSON(t, http.MethodGet, endpoint+"/v1/accounts/"+id, bearer, nil)
@@ -3803,8 +4061,16 @@ func proveTenantAccountProcesses(
 	}
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	deletionRecords := queryAudit(t, auditEndpoint, primary.Credential, auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMUserDeleted}, http.StatusOK)
-	if deletionRecords.TenantID != crossTenantID || len(deletionRecords.Records) != 1 ||
-		deletionRecords.Records[0].Event.Target.ID != string(child.ID) || deletionRecords.Records[0].Event.TenantID != crossTenantID {
+	creatorDeletions := 0
+	for _, record := range deletionRecords.Records {
+		if record.Event.TenantID != crossTenantID {
+			t.Fatal("user deletion query crossed tenant scope")
+		}
+		if record.Event.Target.ID == string(child.ID) {
+			creatorDeletions++
+		}
+	}
+	if deletionRecords.TenantID != crossTenantID || deletionRecords.NextCursor != "" || creatorDeletions != 1 {
 		t.Fatal("resource creator deletion lost its tenant audit identity")
 	}
 	for _, action := range []auditv1.Action{auditv1.ActionIAMAccountCreated, auditv1.ActionIAMAccountDisabled, auditv1.ActionIAMAccountEnabled, auditv1.ActionIAMAccountRootCredentialsRecovered} {
@@ -5518,6 +5784,7 @@ func assertProcessOutputsSanitized(
 	plaintexts ...string,
 ) {
 	t.Helper()
+	plaintexts = append(plaintexts, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x57}, 32)))
 	for _, child := range children {
 		output := child.output()
 		for _, plaintext := range plaintexts {
@@ -5915,6 +6182,27 @@ func assertRuntimeProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Co
 			t.Fatalf("running authority %s did not use its bounded non-superuser database login", user)
 		}
 	}
+}
+
+// Synthetic test custody, never an installation generator. The caller passes
+// this file only to the current IAM network executable, not its predecessor,
+// migrator, local-recovery entry, dispatcher or product services.
+func writeProcessAccessKeyWrapping(t *testing.T, directory string, bootstrap iamv1.BootstrapDocument) string {
+	t.Helper()
+	digest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring := iamv1.AccessKeyWrappingKeyring{APIVersion: iamv1.APIVersion, Kind: "AccessKeyWrappingKeyring", Purpose: iamv1.AccessKeyWrappingPurpose,
+		Scope: iamv1.AccessKeyWrappingScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest}, ActiveWrappingKeyID: "process-wrapping",
+		Keys: []iamv1.AccessKeyWrappingKey{{WrappingKeyID: "process-wrapping", FormatVersion: 1,
+			KeyMaterial: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x57}, 32)))}}}
+	encoded, err := iamv1.EncodeAccessKeyWrappingKeyring(keyring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	return writeProtectedFile(t, directory, "iam-access-key-wrapping.json", encoded)
 }
 
 func writeProtectedFile(

@@ -50,6 +50,10 @@ const (
 	ActionIAMRoleSessionRevoked              Action = "iam.role-session.revoked"
 	ActionIAMRoleSessionAdminRevoked         Action = "iam.role-session.admin-revoked"
 	ActionIAMRoleSessionExited               Action = "iam.role-session.exited"
+	ActionIAMAccessKeyCreated                Action = "iam.access-key.created"
+	ActionIAMAccessKeyEnabled                Action = "iam.access-key.enabled"
+	ActionIAMAccessKeyDisabled               Action = "iam.access-key.disabled"
+	ActionIAMAccessKeyDeleted                Action = "iam.access-key.deleted"
 	ActionIAMGroupCreated                    Action = "iam.group.created"
 	ActionIAMPolicyCreated                   Action = "iam.policy.created"
 	ActionIAMPolicyVersionCreated            Action = "iam.policy-version.created"
@@ -115,6 +119,7 @@ const (
 	TargetGroup                 TargetKind = "GROUP"
 	TargetRole                  TargetKind = "ROLE"
 	TargetRoleSession           TargetKind = "ROLE_SESSION"
+	TargetAccessKey             TargetKind = "ACCESS_KEY"
 	TargetPolicy                TargetKind = "POLICY"
 	TargetGroupMembership       TargetKind = "GROUP_MEMBERSHIP"
 	TargetOrganization          TargetKind = "ORGANIZATION"
@@ -218,6 +223,10 @@ var allActions = []Action{
 	ActionIAMRoleSessionRevoked,
 	ActionIAMRoleSessionAdminRevoked,
 	ActionIAMRoleSessionExited,
+	ActionIAMAccessKeyCreated,
+	ActionIAMAccessKeyEnabled,
+	ActionIAMAccessKeyDisabled,
+	ActionIAMAccessKeyDeleted,
 	ActionIAMPolicyCreated,
 	ActionIAMPolicyVersionCreated,
 	ActionIAMPolicyVersionDeleted,
@@ -326,6 +335,10 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMRoleSessionRevoked:            {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMRoleSessionAdminRevoked:       {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true, IAMDecisionRequired: true},
 	ActionIAMRoleSessionExited:             {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, RoleActorPermitted: true, RoleActorRequired: true},
+	ActionIAMAccessKeyCreated:              {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyEnabled:              {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyDisabled:             {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyDeleted:              {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMPolicyCreated: {
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},

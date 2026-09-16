@@ -9,6 +9,7 @@ type PrincipalType string
 type SubjectType string
 type PrincipalStatus string
 type SessionStatus string
+type AccessKeyStatus string
 type Action string
 type ResourceKind string
 type DecisionReason string
@@ -139,6 +140,8 @@ const (
 	CapabilityTargetCredentialChangeRequired  CapabilityRestriction = "TARGET_CREDENTIAL_CHANGE_REQUIRED"
 	CapabilityTargetMustBeDisabled            CapabilityRestriction = "TARGET_MUST_BE_DISABLED"
 	CapabilitySessionNotRevocable             CapabilityRestriction = "SESSION_NOT_REVOCABLE"
+	CapabilityAccessKeyLimitReached           CapabilityRestriction = "ACCESS_KEY_LIMIT_REACHED"
+	CapabilityResourceVersionExhausted        CapabilityRestriction = "RESOURCE_VERSION_EXHAUSTED"
 )
 
 var allCapabilityRestrictions = [...]CapabilityRestriction{
@@ -152,6 +155,8 @@ var allCapabilityRestrictions = [...]CapabilityRestriction{
 	CapabilityTargetCredentialChangeRequired,
 	CapabilityTargetMustBeDisabled,
 	CapabilitySessionNotRevocable,
+	CapabilityAccessKeyLimitReached,
+	CapabilityResourceVersionExhausted,
 }
 
 func AllCapabilityRestrictions() []CapabilityRestriction {
@@ -162,6 +167,12 @@ const (
 	SessionActive  SessionStatus = "ACTIVE"
 	SessionRevoked SessionStatus = "REVOKED"
 	SessionExpired SessionStatus = "EXPIRED"
+)
+
+const (
+	AccessKeyEnabled  AccessKeyStatus = "ENABLED"
+	AccessKeyDisabled AccessKeyStatus = "DISABLED"
+	MaxUserAccessKeys                 = 2
 )
 
 const (
@@ -217,6 +228,11 @@ const (
 	ActionIAMRoleSessionRead                Action = "iam.role-session.read"
 	ActionIAMRoleSessionRevoke              Action = "iam.role-session.revoke"
 	ActionIAMSessionRevoke                  Action = "iam.session.revoke"
+	ActionIAMAccessKeyList                  Action = "iam.access-key.list"
+	ActionIAMAccessKeyCreate                Action = "iam.access-key.create"
+	ActionIAMAccessKeyRead                  Action = "iam.access-key.read"
+	ActionIAMAccessKeySetStatus             Action = "iam.access-key.set-status"
+	ActionIAMAccessKeyDelete                Action = "iam.access-key.delete"
 	ActionIAMPolicyAttachmentCreate         Action = "iam.policy-attachment.create"
 	ActionIAMPolicyAttachmentRevoke         Action = "iam.policy-attachment.revoke"
 	ActionIAMPlatformPolicyAttachmentCreate Action = "iam.platform-policy-attachment.create"
@@ -286,6 +302,7 @@ const (
 const (
 	ResourceAccount               ResourceKind = "ACCOUNT"
 	ResourceUser                  ResourceKind = "USER"
+	ResourceAccessKey             ResourceKind = "ACCESS_KEY"
 	ResourceGroup                 ResourceKind = "GROUP"
 	ResourceRole                  ResourceKind = "ROLE"
 	ResourceRoleSession           ResourceKind = "ROLE_SESSION"
@@ -408,7 +425,7 @@ func AllServicePurposes() []ServicePurpose {
 // ActionDefinition and contract enum order are derived projections, not a second
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
-	iamRoleSessionManagementProfile(),
+	iamAccessKeyManagementProfile(),
 	roleBusinessProfile(paasProfileRevisionOne),
 	declaredProductProfile(ProductManagedService, ServicePaaS, 1,
 		declaredProfileAction(ActionManagedServiceOfferingRead, ResourceServiceOffering, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
@@ -470,7 +487,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionOne)}
 }
 
 var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
@@ -559,6 +576,22 @@ func iamRoleSessionManagementProfile() AuthorizationProfile {
 		declaredProfileAction(ActionIAMRoleSessionList, ResourceRole, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionIAMRoleSessionRead, ResourceRoleSession, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 		declaredProfileAction(ActionIAMRoleSessionRevoke, ResourceRoleSession, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	)
+	for index := range profile.Actions {
+		profile.Actions[index].SubjectTypes = []SubjectType{SubjectUser}
+	}
+	return profile
+}
+
+func iamAccessKeyManagementProfile() AuthorizationProfile {
+	profile := iamRoleSessionManagementProfile()
+	profile.Revision = 5
+	profile.Actions = append(profile.Actions,
+		declaredProfileAction(ActionIAMAccessKeyList, ResourceUser, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMAccessKeyCreate, ResourceUser, AuthorityScopeTenant, ResourceAccessKey, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMAccessKeyRead, ResourceAccessKey, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMAccessKeySetStatus, ResourceAccessKey, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMAccessKeyDelete, ResourceAccessKey, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 	)
 	for index := range profile.Actions {
 		profile.Actions[index].SubjectTypes = []SubjectType{SubjectUser}

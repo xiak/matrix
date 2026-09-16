@@ -24,6 +24,7 @@ type Config struct {
 	MaxTransactionAttempts int
 	NewID                  func(prefix string) (string, error)
 	CursorKey              []byte
+	AccessKeyWrapping      *iamv1.AccessKeyWrappingKeyring
 }
 
 type Repository interface {
@@ -36,6 +37,11 @@ type Repository interface {
 type Transaction interface {
 	TransactionTime(context.Context) (time.Time, error)
 	CheckCurrentAuthorizationProfiles(context.Context) error
+	ReadAccessKeyCustody(context.Context) (AccessKeyCustody, error)
+	ReadAccessKeys(context.Context, AccessKeyRead) (AccessKeyDirectory, error)
+	ReserveAccessKey(context.Context, AccessKeyReservation) (AccessKeyReservationResult, error)
+	CompleteAccessKey(context.Context, AccessKeyCompletion) (AccessKeyMutationResult, error)
+	ChangeAccessKey(context.Context, AccessKeyChange) (AccessKeyMutationResult, error)
 	LookupAuthorizationProfile(context.Context, iamv1.AuthorizationProfileReference) (iamv1.AuthorizationProfile, bool, error)
 	BootstrapStatus(context.Context) (iamv1.BootstrapStatus, error)
 	ApplyBootstrap(context.Context, BootstrapMutation) (authority.BootstrapOutcome, error)
@@ -125,6 +131,66 @@ type AccountRead struct {
 	ActorPrincipalID iamv1.PrincipalID
 	DecisionID       iamv1.DecisionID
 	After            string
+}
+
+// Private, nonsecret custody evidence; never a caller-selected installation.
+type AccessKeyCustody struct {
+	InstallationID  string `json:"installationId"`
+	BootstrapDigest string `json:"bootstrapDigest"`
+	Keys            []struct {
+		WrappingKeyID      string `json:"wrappingKeyId"`
+		MaterialCommitment string `json:"materialCommitment"`
+	} `json:"keys"`
+}
+
+type AccessKeyRead struct {
+	AccountID      iamv1.AccountID
+	ActorID        iamv1.PrincipalID
+	ActorSessionID iamv1.SessionID
+	UserID         iamv1.PrincipalID
+	KeyID          iamv1.AccessKeyID
+	DecisionID     iamv1.DecisionID
+}
+
+type AccessKeyDirectory struct {
+	UserResourceVersion uint64                `json:"userResourceVersion"`
+	UserStatus          iamv1.PrincipalStatus `json:"userStatus"`
+	MustChangePassword  bool                  `json:"mustChangePassword"`
+	Keys                []iamv1.AccessKey     `json:"keys"`
+}
+
+type AccessKeyReservation struct {
+	AccessKeyRead
+	ExpectedUserVersion uint64
+	InstallationID      string
+	WrappingKeyID       string
+	MaterialCommitment  string
+	RequestID           string
+	RequestDigest       string
+}
+
+type AccessKeyReservationResult struct {
+	Outcome string           `json:"outcome"`
+	Key     *iamv1.AccessKey `json:"key,omitempty"`
+}
+
+type AccessKeyCompletion struct {
+	AccessKeyRead
+	Material   authority.SealedAccessKeySecret
+	AuditEvent auditv1.Event
+}
+
+type AccessKeyChange struct {
+	AccessKeyRead
+	ExpectedVersion uint64
+	Status          iamv1.AccessKeyStatus // Empty only for irreversible deletion.
+	AuditEvent      auditv1.Event
+}
+
+type AccessKeyMutationResult struct {
+	Outcome  string                   `json:"outcome"`
+	Key      *iamv1.AccessKey         `json:"key,omitempty"`
+	Deletion *iamv1.AccessKeyDeletion `json:"deletion,omitempty"`
 }
 
 type GroupRead struct {
@@ -620,4 +686,5 @@ type Authority struct {
 	passwords   *authority.PasswordHasher
 	credentials *authority.CredentialIssuer
 	cursors     *authority.CursorCodec
+	accessKeys  *accessKeyWrapping
 }

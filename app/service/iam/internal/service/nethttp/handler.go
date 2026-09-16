@@ -19,6 +19,11 @@ import (
 )
 
 type Workflow interface {
+	ListAccessKeys(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.AccessKeyList, error)
+	GetAccessKey(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.AccessKeyID, string) (iamv1.AccessKeyAccess, error)
+	CreateAccessKey(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.CreateAccessKeyRequest) (iamv1.CreateAccessKeyResponse, error)
+	SetAccessKeyStatus(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.AccessKeyID, iamv1.SetAccessKeyStatusRequest) (iamv1.SetAccessKeyStatusResponse, error)
+	DeleteAccessKey(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.AccessKeyID, iamv1.DeleteAccessKeyRequest) (iamv1.DeleteAccessKeyResponse, error)
 	CurrentIdentity(context.Context, iamv1.Secret) (iamv1.CurrentIdentity, error)
 	ListUsers(context.Context, iamv1.Secret, string, string) (iamv1.UserList, error)
 	GetUser(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserAccess, error)
@@ -849,6 +854,11 @@ func (value *handler) account(response http.ResponseWriter, request *http.Reques
 }
 
 func (value *handler) user(response http.ResponseWriter, request *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(request.URL.Path, "/v1/users/"), "/")
+	if len(parts) >= 2 && parts[1] == "access-keys" {
+		value.accessKeys(response, request, parts)
+		return
+	}
 	if strings.HasSuffix(request.URL.Path, "/permission-boundary") {
 		value.userPermissionBoundary(response, request)
 		return

@@ -74,7 +74,7 @@ jobs:
         run: |
           for database in matrix_authority_ci matrix_audit_upgrade_ci matrix_audit_http_ci \
               matrix_iam_http_ci matrix_iam_policy_ci matrix_iam_upgrade_compiled_ci matrix_iam_recovery_ci matrix_iam_attachment_ci \
-              matrix_iam_roles_ci matrix_iam_references_ci matrix_iam_role_sessions_ci matrix_iam_role_discovery_ci matrix_iam_role_management_ci matrix_iam_role_authorization_ci matrix_iam_role_security_ci \
+              matrix_iam_roles_ci matrix_iam_references_ci matrix_iam_role_sessions_ci matrix_iam_role_discovery_ci matrix_iam_role_management_ci matrix_iam_role_authorization_ci matrix_iam_role_security_ci matrix_iam_access_keys_ci \
               matrix_iam_upgrade_roles_ci matrix_iam_upgrade_role_authority_ci matrix_authority_process_ci matrix_paas_ci; do
             docker exec "$POSTGRES_CONTAINER_ID" createdb -U postgres "$database"
           done
@@ -110,6 +110,7 @@ jobs:
           MATRIX_IAM_ROLE_AUTHORIZATION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_role_authorization_ci?sslmode=disable
           MATRIX_IAM_ROLE_SECURITY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_role_security_ci?sslmode=disable
           MATRIX_IAM_MANAGEMENT_REFERENCE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_references_ci?sslmode=disable
+          MATRIX_IAM_ACCESS_KEY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_access_keys_ci?sslmode=disable
           MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_authority_process_ci?sslmode=disable
           MATRIX_PAAS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_paas_ci?sslmode=disable
         run: |

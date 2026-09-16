@@ -34,6 +34,43 @@ func TestCanonicalEventPreservesTenantBytesAndDigest(t *testing.T) {
 	}
 }
 
+func TestAccessKeyFactsRequireRealTenantUserDecisions(t *testing.T) {
+	event := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-key", TenantID: "account-a",
+		Actor: ActorReference{Type: ActorUser, ID: "manager-a"}, IAMDecisionID: "decision-key", Target: TargetReference{Kind: TargetAccessKey, ID: "key-a"},
+		Result: ResultSucceeded, RequestID: "request-key", CorrelationID: "request-key", RequestDigest: "sha256:" + strings.Repeat("1", 64),
+		OccurredAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)}
+	for _, action := range []Action{ActionIAMAccessKeyCreated, ActionIAMAccessKeyEnabled, ActionIAMAccessKeyDisabled, ActionIAMAccessKeyDeleted} {
+		event.Action = action
+		if _, _, err := CanonicalizeEvent(SourceIAM, event); err != nil {
+			t.Fatal("valid AccessKey fact rejected", err)
+		}
+		for name, change := range map[string]func(*Event){
+			"no decision":      func(e *Event) { e.IAMDecisionID = "" },
+			"no tenant":        func(e *Event) { e.TenantID = "" },
+			"platform":         func(e *Event) { e.TenantID = ""; e.InstallationID = "installation-a" },
+			"target namespace": func(e *Event) { e.Target.TenantID = e.TenantID },
+			"user target":      func(e *Event) { e.Target.Kind = TargetUser },
+			"failure":          func(e *Event) { e.Result = ResultDenied },
+			"system":           func(e *Event) { e.Actor = ActorReference{Type: ActorSystem, ID: "iam"} },
+			"service":          func(e *Event) { e.Actor = ActorReference{Type: ActorServiceAccount, ID: "service-a"} },
+			"role": func(e *Event) {
+				e.Actor = ActorReference{Type: ActorRole, ID: "role-a", RoleSession: &RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}}
+			},
+		} {
+			t.Run(string(action)+"/"+name, func(t *testing.T) {
+				changed := event
+				change(&changed)
+				if _, _, err := CanonicalizeEvent(SourceIAM, changed); err == nil {
+					t.Fatal("AccessKey fact widened the closed source/actor/target contract")
+				}
+			})
+		}
+		if _, _, err := CanonicalizeEvent(SourcePaaS, event); err == nil {
+			t.Fatal("another producer asserted IAM credential lifecycle")
+		}
+	}
+}
+
 func TestAdministratorRoleSessionRevocationRequiresItsOwnDecision(t *testing.T) {
 	event := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-admin-revoke", TenantID: "account-a",
 		Actor: ActorReference{Type: ActorUser, ID: "admin-a"}, IAMDecisionID: "decision-a", Action: ActionIAMRoleSessionAdminRevoked,

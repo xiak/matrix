@@ -13,6 +13,7 @@ type GroupMembershipID string
 type RoleBindingID string
 type SessionID string
 type DecisionID string
+type AccessKeyID string
 
 type Subject struct {
 	Type        SubjectType           `json:"type"`
@@ -215,6 +216,83 @@ type User struct {
 	ResourceVersion    uint64          `json:"resourceVersion"`
 	CreatedAt          time.Time       `json:"createdAt"`
 	UpdatedAt          time.Time       `json:"updatedAt"`
+}
+
+// AccessKey is non-secret program-credential metadata. ENABLED is not a
+// permission or proof that the current account/user permits authentication.
+type AccessKey struct {
+	APIVersion      string          `json:"apiVersion"`
+	Kind            string          `json:"kind"`
+	ID              AccessKeyID     `json:"id"`
+	AccountID       AccountID       `json:"accountId"`
+	UserID          PrincipalID     `json:"userId"`
+	Status          AccessKeyStatus `json:"status"`
+	ResourceVersion uint64          `json:"resourceVersion"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
+}
+
+type AccessKeyAccess struct {
+	Key          AccessKey          `json:"key"`
+	Capabilities []ActionCapability `json:"capabilities"`
+}
+
+// This complete, bounded user directory has no cursor. Its user revision
+// supplies create's CAS without requiring an unrelated user.read permission.
+type AccessKeyList struct {
+	APIVersion          string             `json:"apiVersion"`
+	Kind                string             `json:"kind"`
+	AccountID           AccountID          `json:"accountId"`
+	UserID              PrincipalID        `json:"userId"`
+	UserResourceVersion uint64             `json:"userResourceVersion"`
+	Capabilities        []ActionCapability `json:"capabilities"`
+	Items               []AccessKeyAccess  `json:"items"`
+}
+
+type CreateAccessKeyRequest struct {
+	UserResourceVersion uint64 `json:"userResourceVersion"`
+	RequestID           string `json:"requestId"`
+}
+
+type SetAccessKeyStatusRequest struct {
+	AccessKeyResourceVersion uint64          `json:"accessKeyResourceVersion"`
+	Status                   AccessKeyStatus `json:"status"`
+	RequestID                string          `json:"requestId"`
+}
+
+type DeleteAccessKeyRequest struct {
+	AccessKeyResourceVersion uint64 `json:"accessKeyResourceVersion"`
+	RequestID                string `json:"requestId"`
+}
+
+// Only the explicit creation encoder may emit Secret. An equal replay is
+// the original creation receipt, not the current key's availability.
+type CreateAccessKeyResponse struct {
+	Outcome string    `json:"outcome"`
+	Key     AccessKey `json:"key"`
+	Secret  Secret    `json:"secret,omitempty"`
+}
+
+type SetAccessKeyStatusResponse struct {
+	Outcome string    `json:"outcome"`
+	Key     AccessKey `json:"key"`
+}
+
+// Deletion preserves attribution, never recoverable material or a status
+// that could be changed back to ENABLED.
+type AccessKeyDeletion struct {
+	APIVersion      string      `json:"apiVersion"`
+	Kind            string      `json:"kind"`
+	ID              AccessKeyID `json:"id"`
+	AccountID       AccountID   `json:"accountId"`
+	UserID          PrincipalID `json:"userId"`
+	ResourceVersion uint64      `json:"resourceVersion"`
+	DeletedAt       time.Time   `json:"deletedAt"`
+}
+
+type DeleteAccessKeyResponse struct {
+	Outcome  string            `json:"outcome"`
+	Deletion AccessKeyDeletion `json:"deletion"`
 }
 
 // Group is an account-local collection of users. It never authenticates,

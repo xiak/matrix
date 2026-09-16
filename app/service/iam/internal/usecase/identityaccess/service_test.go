@@ -885,8 +885,8 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 		t.Fatalf("management path lost decisions: %v", expectedDecisions)
 	}
 	readiness, err := service.Readiness(context.Background())
-	if err != nil || readiness.State != iamv1.ReadinessReady || readiness.CheckedAt != repository.transaction.now {
-		t.Fatalf("IAM readiness = %#v err=%v", readiness, err)
+	if !errors.Is(err, ErrUnavailable) || readiness.State == iamv1.ReadinessReady {
+		t.Fatal("local authority without AccessKey custody advertised network readiness")
 	}
 }
 
@@ -923,6 +923,89 @@ type coreTransaction struct {
 	localRecoveryResult     iamv1.LocalCredentialRecoveryResult
 	localRecoveryMutation   *LocalCredentialRecoveryMutation
 	profileErr              error
+	accessKeyCustody        *AccessKeyCustody
+	accessKeyCustodyErr     error
+}
+
+func (transaction *coreTransaction) ReadAccessKeyCustody(context.Context) (AccessKeyCustody, error) {
+	if transaction.accessKeyCustodyErr != nil {
+		return AccessKeyCustody{}, transaction.accessKeyCustodyErr
+	}
+	if transaction.accessKeyCustody == nil {
+		return AccessKeyCustody{}, ErrUnavailable
+	}
+	return *transaction.accessKeyCustody, nil
+}
+
+func TestIAMReadinessRequiresCompleteMatchingAccessKeyCustody(t *testing.T) {
+	tx := newCoreTransaction()
+	tx.status.State = iamv1.BootstrapReady
+	document := iamv1.AccessKeyWrappingKeyring{APIVersion: iamv1.APIVersion, Kind: "AccessKeyWrappingKeyring", Purpose: iamv1.AccessKeyWrappingPurpose,
+		Scope:               iamv1.AccessKeyWrappingScope{InstallationID: "custody-install", BootstrapDigest: "sha256:" + strings.Repeat("a", 64)},
+		ActiveWrappingKeyID: "custody-key", Keys: []iamv1.AccessKeyWrappingKey{{WrappingKeyID: "custody-key", FormatVersion: 1,
+			KeyMaterial: coreSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x57}, 32)))}}}
+	commitment, err := iamv1.AccessKeyWrappingKeyCommitment(document, document.ActiveWrappingKeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewAuthority(&coreRepository{transaction: tx}, Config{AccessKeyWrapping: &document})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Constructor must own material and scope; callers cannot replace its KEK.
+	document.Scope.InstallationID = "changed-install"
+	document.Keys[0].KeyMaterial = coreSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x58}, 32)))
+	if service.config.AccessKeyWrapping != nil || !bytes.Equal(service.accessKeys.material, bytes.Repeat([]byte{0x57}, 32)) {
+		t.Fatal("authority retained mutable wrapping configuration")
+	}
+	for _, variant := range []string{"empty", "matching", "missing-file", "missing-registry", "installation", "bootstrap", "key-id", "commitment", "extra-history", "unavailable", "uninitialized"} {
+		t.Run(variant, func(t *testing.T) {
+			var custody AccessKeyCustody
+			if err := json.Unmarshal([]byte(`{"installationId":"custody-install","bootstrapDigest":"sha256:`+strings.Repeat("a", 64)+`","keys":[{"wrappingKeyId":"custody-key","materialCommitment":"`+commitment+`"}]}`), &custody); err != nil {
+				t.Fatal(err)
+			}
+			tx.accessKeyCustody, tx.accessKeyCustodyErr, tx.status.State = &custody, nil, iamv1.BootstrapReady
+			current := service
+			switch variant {
+			case "empty":
+				custody.Keys = custody.Keys[:0]
+			case "missing-file":
+				var err error
+				current, err = NewAuthority(&coreRepository{transaction: tx}, Config{})
+				if err != nil {
+					t.Fatal(err)
+				}
+			case "missing-registry":
+				custody.Keys = nil
+			case "installation":
+				custody.InstallationID = "other-install"
+			case "bootstrap":
+				custody.BootstrapDigest = "sha256:" + strings.Repeat("b", 64)
+			case "key-id":
+				custody.Keys[0].WrappingKeyID = "other-key"
+			case "commitment":
+				custody.Keys[0].MaterialCommitment = "sha256:" + strings.Repeat("b", 64)
+			case "extra-history":
+				custody.Keys = append(custody.Keys, custody.Keys[0])
+			case "unavailable":
+				tx.accessKeyCustodyErr = ErrUnavailable
+			case "uninitialized":
+				tx.status.State, tx.accessKeyCustody = iamv1.BootstrapUninitialized, nil
+			}
+			readiness, err := current.Readiness(t.Context())
+			if variant == "empty" || variant == "matching" {
+				if err != nil || readiness.State != iamv1.ReadinessReady || readiness.CheckedAt != tx.now || readiness.SchemaVersion != SchemaVersion {
+					t.Fatal("valid process custody rejected", err)
+				}
+			} else if variant == "uninitialized" {
+				if err != nil || readiness.State != iamv1.ReadinessNotReady || readiness.SchemaVersion != SchemaVersion {
+					t.Fatal("uninitialized schema cannot be checked before bootstrap", err)
+				}
+			} else if !errors.Is(err, ErrUnavailable) || readiness.State == iamv1.ReadinessReady {
+				t.Fatal("incomplete process custody advertised ready")
+			}
+		})
+	}
 }
 
 func (transaction *coreTransaction) LookupRoleSession(_ context.Context, digest string) (RoleSessionCredential, bool, error) {

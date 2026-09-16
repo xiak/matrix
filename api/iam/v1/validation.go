@@ -582,6 +582,101 @@ func ValidateUser(value User) error {
 		validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
 }
 
+func ValidateAccessKey(value AccessKey) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKey" ||
+		(value.Status != AccessKeyEnabled && value.Status != AccessKeyDisabled) ||
+		(value.ResourceVersion == 1 && (value.Status != AccessKeyEnabled || !value.CreatedAt.Equal(value.UpdatedAt))) {
+		return errors.New("access key metadata is invalid")
+	}
+	return errors.Join(ValidateID("accessKey.id", string(value.ID)), ValidateID("accessKey.accountId", string(value.AccountID)),
+		ValidateID("accessKey.userId", string(value.UserID)), validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
+}
+
+func ValidateAccessKeyAccess(value AccessKeyAccess) error {
+	if err := ValidateAccessKey(value.Key); err != nil {
+		return err
+	}
+	expected := make(map[string]struct{}, 3)
+	for _, action := range []Action{ActionIAMAccessKeyRead, ActionIAMAccessKeySetStatus, ActionIAMAccessKeyDelete} {
+		expected[capabilityKey(action, ResourceReference{Kind: ResourceAccessKey, ID: string(value.Key.ID)})] = struct{}{}
+	}
+	return validateCapabilities(value.Capabilities, expected)
+}
+
+func ValidateAccessKeyList(value AccessKeyList) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKeyList" || value.Items == nil || len(value.Items) > MaxUserAccessKeys {
+		return errors.New("access key list is invalid")
+	}
+	if err := errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("userId", string(value.UserID)), validatePositiveVersion(value.UserResourceVersion)); err != nil {
+		return err
+	}
+	expected := map[string]struct{}{capabilityKey(ActionIAMAccessKeyCreate, ResourceReference{Kind: ResourceUser, ID: string(value.UserID)}): {}}
+	if err := validateCapabilities(value.Capabilities, expected); err != nil {
+		return err
+	}
+	var previous AccessKeyID
+	for _, item := range value.Items {
+		if ValidateAccessKeyAccess(item) != nil || item.Key.AccountID != value.AccountID || item.Key.UserID != value.UserID || item.Key.ID <= previous {
+			return errors.New("access key list contains an unbound or duplicate entry")
+		}
+		previous = item.Key.ID
+	}
+	return nil
+}
+
+func ValidateCreateAccessKeyRequest(value CreateAccessKeyRequest) error {
+	return errors.Join(validatePositiveVersion(value.UserResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateSetAccessKeyStatusRequest(value SetAccessKeyStatusRequest) error {
+	if value.Status != AccessKeyEnabled && value.Status != AccessKeyDisabled {
+		return errors.New("access key status is invalid")
+	}
+	return ValidateDeleteAccessKeyRequest(DeleteAccessKeyRequest{AccessKeyResourceVersion: value.AccessKeyResourceVersion, RequestID: value.RequestID})
+}
+
+func ValidateDeleteAccessKeyRequest(value DeleteAccessKeyRequest) error {
+	if value.AccessKeyResourceVersion == 9007199254740991 {
+		return errors.New("access key resource version cannot advance")
+	}
+	return errors.Join(validatePositiveVersion(value.AccessKeyResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateCreateAccessKeyResponse(value CreateAccessKeyResponse) error {
+	if ValidateAccessKey(value.Key) != nil || value.Key.ResourceVersion != 1 || value.Key.Status != AccessKeyEnabled ||
+		(value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY") ||
+		(value.Outcome == "APPLIED" && !value.Secret.Present()) ||
+		(value.Outcome == "EQUAL_REPLAY" && value.Secret.reveal() != "") {
+		return errors.New("access key creation result is invalid")
+	}
+	return nil
+}
+
+func ValidateSetAccessKeyStatusResponse(value SetAccessKeyStatusResponse) error {
+	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
+		return errors.New("access key change result is invalid")
+	}
+	if value.Key.ResourceVersion < 2 {
+		return errors.New("access key change result has no mutation")
+	}
+	return ValidateAccessKey(value.Key)
+}
+
+func ValidateAccessKeyDeletion(value AccessKeyDeletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKeyDeletion" || value.ResourceVersion < 2 {
+		return errors.New("access key deletion is invalid")
+	}
+	return errors.Join(ValidateID("accessKey.id", string(value.ID)), ValidateID("accessKey.accountId", string(value.AccountID)),
+		ValidateID("accessKey.userId", string(value.UserID)), validatePositiveVersion(value.ResourceVersion), validateTime("deletedAt", value.DeletedAt))
+}
+
+func ValidateDeleteAccessKeyResponse(value DeleteAccessKeyResponse) error {
+	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
+		return errors.New("access key deletion result is invalid")
+	}
+	return ValidateAccessKeyDeletion(value.Deletion)
+}
+
 func ValidateGroup(value Group) error {
 	var descriptionError error
 	if value.Description != "" {
