@@ -168,6 +168,14 @@ func releaseInstallArguments(config options, initial release.VerifiedBundle) ([]
 	return nil, errors.New("release installation profile is unsupported")
 }
 
+func releaseUpgradeArguments(config options, candidate release.VerifiedBundle) []string {
+	return []string{
+		"--bundle", candidate.Root,
+		"--root", config.root,
+		"--northbound-origin", config.edge,
+	}
+}
+
 func (value *gate) beforeRestart(ctx context.Context) error {
 	defer value.edge.close()
 	defer func() {
@@ -366,9 +374,11 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 
-	upgrade, err := runMX(ctx, value.releases.b, "upgrade", []string{
-		"--bundle", value.releases.b.Root, "--root", value.config.root,
-	}, value.forbidden(secret, newPassword, bearer))
+	upgrade, err := runMX(
+		ctx, value.releases.b, "upgrade",
+		releaseUpgradeArguments(value.config, value.releases.b),
+		value.forbidden(secret, newPassword, bearer),
+	)
 	if err != nil || upgrade.ReleaseID != value.releases.b.Manifest.Release.ID ||
 		upgrade.PreviousID != value.releases.a.Manifest.Release.ID || !upgrade.Changed {
 		return fail("release-b-upgrade")
@@ -1256,7 +1266,7 @@ func (value *gate) failedUpgrade(
 	defer cancel()
 	command, stdout, stderr, err := startMX(
 		upgradeContext, value.releases.b, "upgrade",
-		[]string{"--bundle", value.releases.b.Root, "--root", value.config.root},
+		releaseUpgradeArguments(value.config, value.releases.b),
 	)
 	if err != nil {
 		return "", fail("failed-upgrade-start")

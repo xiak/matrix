@@ -474,7 +474,7 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 	}
 }
 
-func TestReleaseInstallArgumentsRespectThePublishedPredecessorCLI(t *testing.T) {
+func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T) {
 	base := options{
 		root:     "/data/matrix",
 		trustKey: "/data/release-trust.json",
@@ -504,6 +504,11 @@ func TestReleaseInstallArgumentsRespectThePublishedPredecessorCLI(t *testing.T) 
 	index := slices.Index(arguments, "--northbound-origin")
 	if index < 0 || index+1 >= len(arguments) || arguments[index+1] != defaultEdgeEndpoint {
 		t.Fatalf("current install arguments=%q", arguments)
+	}
+	upgradeArguments := releaseUpgradeArguments(base, current)
+	index = slices.Index(upgradeArguments, "--northbound-origin")
+	if index < 0 || index+1 >= len(upgradeArguments) || upgradeArguments[index+1] != defaultEdgeEndpoint {
+		t.Fatalf("current upgrade arguments=%q", upgradeArguments)
 	}
 
 	changed := base

@@ -57,11 +57,13 @@ func preflightUpgrade(
 	); err != nil {
 		return err
 	}
-	var freeListeners []uint16
-	if source.Bundle.Manifest.TopologyDigest == topology.SupportedPredecessorContractDigest() {
-		freeListeners = []uint16{topology.NodeEnrollmentIngressPort}
-	}
-	return preflightRelease(ctx, runtimeBoundary, plan.Target, freeListeners)
+	// The authenticated source gateway owns every fixed northbound listener,
+	// including the enrollment ingress port introduced by the successor. The
+	// upgrade removes that exact source project before starting the target, so
+	// probing the shared port here would reject the supported predecessor for
+	// being healthy. Foreign ownership is already rejected by the complete
+	// source observation above.
+	return preflightRelease(ctx, runtimeBoundary, plan.Target, nil)
 }
 
 func preflightRelease(

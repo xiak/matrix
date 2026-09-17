@@ -1552,6 +1552,59 @@ func TestCrossProfileAutomaticRollbackCleansCandidateWithoutStartingSource(t *te
 	}
 }
 
+func TestSupportedPredecessorUpgradeAdmitsItsOwnedSharedIngressListener(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine release upgrade targets Linux")
+	}
+	plan := newUpgradePlan(
+		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
+	)
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		t.Fatalf("authenticate upgrade source: %v", err)
+	}
+	defer clear(source.TrustBytes)
+	updatedSource := source
+	updatedSource.Listener = "127.0.0.2"
+	if err := replaceReleaseConfiguration(source, updatedSource); err != nil {
+		t.Fatalf("bind predecessor fixture to isolated listener: %v", err)
+	}
+	plan.Source.Listener = updatedSource.Listener
+	plan.Target.Listener = updatedSource.Listener
+	compiled, err := topology.CompileInstalled(updatedSource.Bundle.Manifest, topology.Options{
+		InstallationID: updatedSource.InstallationID,
+		Root:           updatedSource.Root,
+		Listener:       updatedSource.Listener,
+		Port:           updatedSource.Port,
+	})
+	if err != nil {
+		t.Fatalf("compile predecessor fixture: %v", err)
+	}
+	expectation, err := decodePlatformExpectation(compiled.ComposeJSON)
+	if err != nil {
+		t.Fatalf("decode predecessor fixture: %v", err)
+	}
+	provider := newPlatformStartRuntime(updatedSource, expectation)
+	provider.started = true
+	provider.networkCreated = true
+	for _, image := range plan.Target.Bundle.Manifest.Images {
+		provider.images[image.ImageID] = true
+	}
+	listener, err := net.Listen(
+		"tcp4", net.JoinHostPort(updatedSource.Listener, fmt.Sprint(topology.NodeEnrollmentIngressPort)),
+	)
+	if err != nil {
+		t.Fatalf("reserve source-owned ingress listener: %v", err)
+	}
+	defer listener.Close()
+
+	if err := preflightUpgrade(
+		context.Background(), predecessorUpgradePreflightRuntime{platformStartRuntime: provider}, plan,
+	); err != nil {
+		t.Fatalf("supported predecessor preflight rejected its owned listener: %v", err)
+	}
+}
+
 func TestLoadInstallImagesUsesAuthenticatedStdinAndExactIdentities(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
@@ -3127,6 +3180,37 @@ type platformCleanupRuntime struct {
 	unexpectedRemovals     int
 	failStartedRemovalOnce bool
 	failedStartedRemoval   bool
+}
+
+type predecessorUpgradePreflightRuntime struct {
+	*platformStartRuntime
+}
+
+func (runtimeBoundary predecessorUpgradePreflightRuntime) Run(
+	ctx context.Context,
+	input io.Reader,
+	arguments ...string,
+) ([]byte, bool, error) {
+	if slices.Equal(arguments, []string{"version", "--format", "{{json .Server}}"}) {
+		return []byte(`{"Version":"29.0.0","Os":"linux","Arch":"amd64"}`), true, nil
+	}
+	if slices.Equal(arguments, []string{"compose", "version", "--short"}) {
+		return []byte("2.40.0\n"), true, nil
+	}
+	if len(arguments) >= 2 && arguments[0] == "container" && arguments[1] == "inspect" &&
+		hasArgumentPair(arguments, "--format", "{{json .Config.Labels}}") {
+		content, complete, err := runtimeBoundary.platformStartRuntime.inspectContainer(arguments[len(arguments)-1])
+		if err != nil {
+			return nil, complete, err
+		}
+		var inspection platformContainerInspection
+		if err := json.Unmarshal(content, &inspection); err != nil {
+			return nil, complete, err
+		}
+		content, err = json.Marshal(inspection.Config.Labels)
+		return content, complete, err
+	}
+	return runtimeBoundary.platformStartRuntime.Run(ctx, input, arguments...)
 }
 
 const platformTestConfigHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
