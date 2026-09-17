@@ -4,7 +4,19 @@
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Only this
   task's independent worktree is writable. Updated 2026-09-17.
-- Latest verified runtime baseline is
+- Latest verified pushed source is d2b1db475c5c60fd6f7f680f0149935fbb903129,
+  the isolated Audit REPEATABLE READ correction atop b4bf4110. Local real
+  PG18 red/green, retained records, dual-IAM/process/dispatcher, whole-source
+  race/architecture/vet/generation/Linux gates passed; evidence belongs the
+  original FEAT-006 Audit owner. GitHub API confirmed the exact SHA on
+  Verification35170233190 completed/success, including all five jobs: go,
+  node-process, authority-storage, authority-runtime and authority-process.
+  Phase3 received the verified fixed-object handoff; it consumes no K2 WIP.
+- b4bf4110efae1f3604d86587feb867579a8cfe50 supplies K2's pure signing
+  contract, not program access. Verification35165984088 failed runtime and
+  its aggregate on Audit platform integrity 503/40001. Go/node/storage
+  success and the later local pass do not relabel that failed run.
+- Its last prior verified runtime baseline is
   ebe4c2d49d04359e44cec6a9968ee36dc4e9a11d, cumulative through caca31d0 K1
   AccessKey management/custody and a435195d serial CI separation. GitHub API
   verified exact Verification35163801371 completed/success: go, node-process,
@@ -71,6 +83,12 @@ claim7, lookup_service5, ServiceIdentity and old canonical stay unchanged.
 No release revision is allocated. IAM owns this backend/contract/testing
 window; PEP, APISIX, NorthboundOrigin and installation remain closed until
 explicit coordination after the cumulative fixed donor. No shared owner WIP.
+
+The exact d2b1db47 independent CI and verified handoff are complete; pending
+K2 work must stay separate from that fixed source and its evidence.
+Audit repository isolation alone changes; IAM remains SERIALIZABLE. SQL,
+schema, replay/chain identity, canonical bytes and five paced attempts are
+unchanged. The new real lock/snapshot tests stay in their existing owners.
 
 The fixed f51 foundation donor is unavailable in known object stores and
 sources.yaml has no physical location. Do not guess a repository, claim fresh

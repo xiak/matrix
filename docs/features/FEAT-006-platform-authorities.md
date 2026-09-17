@@ -538,8 +538,8 @@ claimed to reproduce the CI's exact five-attempt exhaustion. Instead, a real
 PG18 barrier reproduced cross-chain SSI conflicts in all three schedules,
 while the narrowly changed repository passed those schedules plus replay and
 atomicity cases. No SQL, error classification or retry-count change is used
-to turn the failure green. Final cumulative CI remains required before this
-correction is handed off as verified.
+to turn the failure green. The subsequent fixed correction has its own
+independent acceptance below; it does not relabel the failed run.
 
 On 2026-09-17 the isolated correction (excluding pending AccessKey work)
 passed the real PG18 restricted-role/immutable-history and retained-tenant
@@ -549,9 +549,12 @@ gate retains installation verification, current revocation, tenant separation,
 actual runtime database identities and historical proof. Its final clean tree
 `3b880a2f65c99bf4f3bc975c4204f6d73a737fb9` also passed whole-repository race/p2
 (including architecture), vet, module verification, byte-stable contract
-generation and Linux amd64 build with Go2/512MiB. Local success is not the
-pending exact-commit independent CI result, a capacity SLO or full IAM/HA
-acceptance.
+generation and Linux amd64 build with Go2/512MiB. GitHub API verified the exact
+fixed `d2b1db475c5c60fd6f7f680f0149935fbb903129` on
+[Verification35170233190](https://github.com/xiak/matrix/actions/runs/35170233190):
+go, node-process, authority-storage, authority-runtime and authority-process
+all completed/success. This proves the isolated correction and its current
+regressions, not pending AccessKey work, a capacity SLO or full IAM/HA acceptance.
 
 Phase 1 retention is `INDEFINITE`: there is no purge, overwrite, truncate, or
 tenant deletion path. Configurable expiry, archive tiers, legal hold, and
