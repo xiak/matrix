@@ -4,6 +4,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +24,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -438,7 +442,7 @@ func TestIAMRetainedRoleAuthorityProcessUpgrade(t *testing.T) {
 		 'receipts',(SELECT jsonb_agg(to_jsonb(b)) FROM iam.bootstrap_receipts b),
 		 'roles',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.id) FROM iam.roles r),
 		 'sessions',(SELECT jsonb_agg(to_jsonb(s)-ARRAY['authority_contract_version','source_authorization_generation','source_group_generations'] ORDER BY s.id) FROM iam.role_sessions s),
-		 'decisions',(SELECT jsonb_agg(to_jsonb(d) ORDER BY d.id) FROM iam.authorization_decisions d),
+		 'decisions',(SELECT jsonb_agg(to_jsonb(d)-'access_key_id' ORDER BY d.id) FROM iam.authorization_decisions d),
 		 'facts',(SELECT jsonb_agg(o.event_document ORDER BY o.event_id) FROM iam.audit_outbox o),
 		 'paasFacts',(SELECT jsonb_agg(o.document ORDER BY o.event_id) FROM paas.audit_outbox o),
 		 'operations',(SELECT jsonb_agg(o.document ORDER BY o.id) FROM paas.operations o))`).Scan(&state); err != nil {
@@ -487,6 +491,15 @@ func TestIAMRetainedRoleAuthorityProcessUpgrade(t *testing.T) {
 		}
 		if !bytes.Equal(before, retained()) {
 			t.Fatal("cutover rewrote original receipt, issuance, decision or facts")
+		}
+		// Compare original row content separately from the new nullable locator;
+		// old USER/ROLE decisions must never acquire fabricated key authority.
+		var noKeyAuthority bool
+		if err := admin.QueryRow(ctx, `SELECT count(*)>0 AND bool_and(access_key_id IS NULL
+		 AND NOT COALESCE(document->'subject' ? 'accessKeyId',false))
+		 AND NOT EXISTS(SELECT 1 FROM iam.access_key_authorization_evidence)
+		 FROM iam.authorization_decisions`).Scan(&noKeyAuthority); err != nil || !noKeyAuthority {
+			t.Fatal("retained role authority acquired fabricated access key lineage", err)
 		}
 	}
 	var oldVersions bool
@@ -884,7 +897,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 			'principals',(SELECT jsonb_agg(to_jsonb(p) ORDER BY tenant_id,id) FROM iam.principals p),
 			'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.user_credentials c),
 			'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY tenant_id,id) FROM iam.sessions s),
-			'decisions',(SELECT jsonb_agg(to_jsonb(d)-'subject_type'-'role_id'-'source_principal_id'-'role_evidence' ORDER BY tenant_id,id) FROM iam.authorization_decisions d),
+			'decisions',(SELECT jsonb_agg(to_jsonb(d)-ARRAY['subject_type','role_id','source_principal_id','role_evidence','access_key_id'] ORDER BY tenant_id,id) FROM iam.authorization_decisions d),
 			'outbox',(SELECT jsonb_agg(to_jsonb(e) ORDER BY tenant_id,event_id) FROM iam.audit_outbox e))`, originalVersions).Scan(&state); err != nil {
 			t.Fatal("read retained policy authority")
 		}
@@ -1001,9 +1014,11 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		}
 		var originalSubjects bool
 		if err := admin.QueryRow(ctx, `SELECT count(*)>0 AND bool_and(contract_version IN (1,2) AND principal_id IS NOT NULL
-			 AND subject_type IS NULL AND role_id IS NULL AND source_principal_id IS NULL AND role_evidence IS NULL)
+			 AND subject_type IS NULL AND role_id IS NULL AND source_principal_id IS NULL AND role_evidence IS NULL
+			 AND access_key_id IS NULL AND NOT COALESCE(document->'subject' ? 'accessKeyId',false))
+			 AND NOT EXISTS(SELECT 1 FROM iam.access_key_authorization_evidence)
 			 FROM iam.authorization_decisions`).Scan(&originalSubjects); err != nil || !originalSubjects {
-			t.Fatal("migration fabricated ROLE metadata or replaced original USER authority", err)
+			t.Fatal("migration fabricated ROLE/access key metadata or replaced original USER authority", err)
 		}
 	}
 	obsolete := startChild(t, root, oldBinary, environment)
@@ -1958,7 +1973,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 29, Audit: 17, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 30, Audit: 18, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -3712,7 +3727,7 @@ func expireIAMSession(
 	}
 }
 
-func proveAccessKeyManagementProcesses(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica, auditEndpoint, home, customer string,
+func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica, auditEndpoint, home, customer string,
 	withAuditOutage func(func()), restartIAM func()) []string {
 	t.Helper()
 	call := func(server, method, path, bearer string, body any, status int, result any) {
@@ -3790,8 +3805,222 @@ func proveAccessKeyManagementProcesses(t *testing.T, ctx context.Context, databa
 	secret := a.key.Secret.CopyBytes()
 	call(endpoint, http.MethodGet, a.path, string(secret), nil, http.StatusUnauthorized, nil)
 	clear(secret)
+	// Exercise the actual internal RPC in both IAM executables, without
+	// pretending a fixture is a product PEP or enabling a source Profile.
+	sign := func(account *accountFixture, requestID string) iamv1.AccessKeyAuthorizationRequest {
+		t.Helper()
+		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "program-signed-application"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var now time.Time
+		if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
+			t.Fatal(err)
+		}
+		nonce := make([]byte, 16)
+		if _, err := rand.Read(nonce); err != nil {
+			t.Fatal("generate process signature nonce")
+		}
+		bodyHash := sha256.Sum256(nil)
+		signed := iamv1.AccessKeySignedRequest{Parameters: iamv1.AccessKeySignatureParameters{
+			AccessKeyID: account.key.Key.ID, InstallationID: "installation-process", Audience: iamv1.ProductPaaS, SignedAt: now.Unix(),
+			Nonce: processSecret(t, base64.RawURLEncoding.EncodeToString(nonce))},
+			HTTP: iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "program-process.invalid:443",
+				EscapedPath: "/api/paas/v1/applications/program-signed-application", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])}}
+		canonical, err := iamv1.AccessKeySigningBytes(signed.Parameters, signed.HTTP)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clear(canonical)
+		secret := account.key.Secret.CopyBytes()
+		defer clear(secret)
+		material, err := base64.RawURLEncoding.DecodeString(string(bytes.TrimPrefix(secret, []byte("mak1."))))
+		if err != nil || len(material) != 32 {
+			t.Fatal("decode process signature material")
+		}
+		defer clear(material)
+		mac := hmac.New(sha256.New, material)
+		_, _ = mac.Write(canonical)
+		signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+		signed.Signature = processSecret(t, signature)
+		sensitive = append(sensitive, base64.RawURLEncoding.EncodeToString(nonce), signature)
+		return iamv1.AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: signed}
+	}
+	encode := func(request iamv1.AccessKeyAuthorizationRequest) []byte {
+		t.Helper()
+		body, err := iamv1.EncodeAccessKeyAuthorizationRequest(request)
+		if err != nil {
+			t.Fatal("encode process signing request")
+		}
+		t.Cleanup(func() { clear(body) })
+		return body
+	}
+	counts := func(key iamv1.AccessKeyID) [3]int {
+		t.Helper()
+		var values [3]int
+		if err := database.QueryRow(ctx, `SELECT
+		 (SELECT count(*) FROM iam.access_key_authorization_evidence WHERE access_key_id=$1),
+		 (SELECT count(*) FROM iam.authorization_decisions WHERE access_key_id=$1),
+		 (SELECT count(*) FROM iam.audit_outbox WHERE event_document#>>'{actor,accessKeyId}'=$1)`, key).Scan(&values[0], &values[1], &values[2]); err != nil {
+			t.Fatal("read signed process completion", err)
+		}
+		return values
+	}
+	denied := map[iamv1.AccessKeyID]map[iamv1.DecisionID]bool{}
+	checkDeny := func(request iamv1.AccessKeyAuthorizationRequest, response processResponse) {
+		t.Helper()
+		result, err := iamv1.DecodeAccessKeyAuthorization(bytes.NewReader(response.Body))
+		if response.Status != http.StatusOK || err != nil || iamv1.CheckAccessKeyAuthorizationForRequest(result, request) != nil ||
+			result.Decision.Allowed || result.Decision.Subject != nil || result.Decision.TenantID != "" {
+			t.Fatalf("signed process did not return exact sanitized Deny: status=%d", response.Status)
+		}
+		key := request.SignedRequest.Parameters.AccessKeyID
+		if denied[key] == nil {
+			denied[key] = map[iamv1.DecisionID]bool{}
+		}
+		if denied[key][result.Decision.ID] {
+			t.Fatal("duplicate signed process decision")
+		}
+		denied[key][result.Decision.ID] = true
+		for _, value := range sensitive {
+			if bytes.Contains(response.Body, []byte(value)) {
+				t.Fatal("signed process response disclosed private material")
+			}
+		}
+	}
+	invoke := func(server string, request iamv1.AccessKeyAuthorizationRequest, status int) processResponse {
+		t.Helper()
+		response := performJSON(t, http.MethodPost, server+"/v1/authorize:access-key", paasServiceCredential, json.RawMessage(encode(request)))
+		if response.Status != status {
+			t.Fatalf("signed process status=%d want=%d", response.Status, status)
+		}
+		if status == http.StatusOK {
+			checkDeny(request, response)
+		}
+		return response
+	}
+	var restartReplay iamv1.AccessKeyAuthorizationRequest
+	for index := range accounts {
+		account := &accounts[index]
+		prefix := fmt.Sprintf("program-signature-%d", index)
+		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyPaaSDeveloper, prefix+"-grant")
+		request := sign(account, prefix+"-deny")
+		loginRequest := request.Authorization
+		loginRequest.RequestID, loginRequest.CorrelationID = prefix+"-login", prefix+"-login"
+		loginResponse := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize", paasServiceCredential, "", loginRequest,
+			map[string]string{"Matrix-Subject-Credential": account.targetBearer})
+		var loginDecision iamv1.AuthorizationDecision
+		if loginResponse.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(loginResponse.Body), &loginDecision) != nil ||
+			iamv1.CheckAuthorizationDecisionForRequest(loginDecision, loginRequest) != nil || !loginDecision.Allowed ||
+			loginDecision.Subject == nil || loginDecision.Subject.AccessKeyID != "" {
+			t.Fatal("signature fixture must have a real login-authorized positive control")
+		}
+		before := counts(account.key.Key.ID)
+		wrongMAC := request
+		wrongMAC.SignedRequest.Signature = processSecret(t, base64.RawURLEncoding.EncodeToString(make([]byte, 32)))
+		invoke(endpoint, wrongMAC, http.StatusUnauthorized)
+		for _, caller := range []string{account.targetBearer, auditServiceCredential, verifierCredential} {
+			response := performJSON(t, http.MethodPost, replica+"/v1/authorize:access-key", caller, json.RawMessage(encode(request)))
+			if response.Status != http.StatusUnauthorized {
+				t.Fatal("invalid product service reached signed authorization")
+			}
+		}
+		if counts(account.key.Key.ID) != before {
+			t.Fatal("bad signature/service allocated signed authority")
+		}
+		invoke(endpoint, request, http.StatusOK)
+		invoke(replica, request, http.StatusConflict)
+		if index == 0 {
+			restartReplay = request
+		}
+	}
+	// A common nonce competes across two actual executables and runtime logins.
+	concurrent := sign(b, "program-signed-race")
+	raceBody := encode(concurrent)
+	type wireResult struct {
+		response processResponse
+		err      error
+	}
+	send := func(server string, body []byte) wireResult {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, server+"/v1/authorize:access-key", bytes.NewReader(body))
+		if err != nil {
+			return wireResult{err: err}
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+paasServiceCredential)
+		response, err := processHTTPClient().Do(request)
+		if err != nil {
+			return wireResult{err: err}
+		}
+		defer response.Body.Close()
+		encoded, err := io.ReadAll(io.LimitReader(response.Body, iamv1.MaxRequestBytes+1))
+		return wireResult{response: processResponse{Status: response.StatusCode, Body: encoded}, err: err}
+	}
+	started := make(chan struct{})
+	responses := make(chan wireResult, 2)
+	for _, server := range []string{endpoint, replica} {
+		go func() { <-started; responses <- send(server, raceBody) }()
+	}
+	close(started)
+	statuses := map[int]int{}
+	for range 2 {
+		response := <-responses
+		if response.err != nil {
+			t.Fatal("signed replica race transport failed")
+		}
+		statuses[response.response.Status]++
+		if response.response.Status == http.StatusOK {
+			checkDeny(concurrent, response.response)
+		}
+	}
+	if statuses[http.StatusOK] != 1 || statuses[http.StatusConflict] != 1 {
+		t.Fatal("signed nonce was not consumed once across executables")
+	}
+	// Drop a real RPC reply after IAM has committed. A retry on the other
+	// executable must reject, not return the old decision as a reusable permit.
+	unknown := sign(b, "program-signed-response-lost")
+	unknownBody := encode(unknown)
+	completed := make(chan wireResult, 1)
+	var calls atomic.Int64
+	lostReply := httptest.NewUnstartedServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) != 1 {
+			panic(http.ErrAbortHandler)
+		}
+		completed <- send(endpoint, unknownBody)
+		panic(http.ErrAbortHandler)
+	}))
+	lostReply.Config.ReadHeaderTimeout, lostReply.Config.WriteTimeout = 5*time.Second, 10*time.Second
+	lostReply.Start()
+	transport := &http.Transport{DisableKeepAlives: true, MaxConnsPerHost: 1}
+	lostClient := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	lostRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, lostReply.URL, nil)
+	if err != nil {
+		t.Fatal("build unknown-result request")
+	}
+	lostResponse, lostErr := lostClient.Do(lostRequest)
+	if lostResponse != nil {
+		_ = lostResponse.Body.Close()
+	}
+	transport.CloseIdleConnections()
+	lostReply.Close()
+	if lostErr == nil || calls.Load() != 1 {
+		t.Fatal("did not lose exactly one committed signing response")
+	}
+	select {
+	case result := <-completed:
+		if result.err != nil {
+			t.Fatal("unknown result did not reach IAM")
+		}
+		checkDeny(unknown, result.response)
+	default:
+		t.Fatal("unknown result was not observed after real IAM completion")
+	}
+	invoke(replica, unknown, http.StatusConflict)
+	deletedPacket := sign(b, "program-signed-deleted-material")
 	waitAllIAMOutboxDelivered(t, ctx, database)
 	withAuditOutage(func() {
+		invoke(replica, sign(b, "program-signed-outage"), http.StatusOK)
 		keyPath := b.path + "/" + string(b.key.Key.ID)
 		for index, status := range []iamv1.AccessKeyStatus{iamv1.AccessKeyDisabled, iamv1.AccessKeyEnabled, iamv1.AccessKeyDisabled} {
 			var changed iamv1.SetAccessKeyStatusResponse
@@ -3801,6 +4030,7 @@ func proveAccessKeyManagementProcesses(t *testing.T, ctx context.Context, databa
 			}
 		}
 		call(endpoint, http.MethodPost, keyPath+":delete", b.manager, iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: 4, RequestID: "program-delete"}, http.StatusOK, nil)
+		invoke(endpoint, deletedPacket, http.StatusUnauthorized)
 		for index := range 2 {
 			intent := b.intent
 			intent.RequestID = fmt.Sprintf("program-cascade-create-%d", index)
@@ -3852,6 +4082,47 @@ func proveAccessKeyManagementProcesses(t *testing.T, ctx context.Context, databa
 		t.Fatal("user deletion retained usable program material", err)
 	}
 	restartIAM()
+	invoke(endpoint, restartReplay, http.StatusConflict)
+	invoke(endpoint, deletedPacket, http.StatusUnauthorized)
+	invoke(endpoint, sign(a, "program-signed-after-restart"), http.StatusOK)
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	for index := range accounts {
+		account := &accounts[index]
+		key := account.key.Key.ID
+		want := len(denied[key])
+		if counts(key) != [3]int{want, want, want} {
+			t.Fatal("signed processes left partial/duplicate private evidence or facts")
+		}
+		actor := auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(account.target.ID), AccessKeyID: string(key)}
+		query := auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMAuthorizationDecided, Actor: &actor}
+		page := queryAudit(t, auditEndpoint, account.owner, query, http.StatusOK)
+		if len(page.Records) != want || page.TenantID != auditv1.TenantID(account.target.AccountID) || want == 0 {
+			t.Fatal("signed historical facts did not survive deletion/outage/restart")
+		}
+		for _, record := range page.Records {
+			if record.Event.Actor != actor || !denied[key][iamv1.DecisionID(record.Event.IAMDecisionID)] {
+				t.Fatal("signed Audit history lost original USER/key/decision attribution")
+			}
+			duplicate := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", iamServiceCredential, record.Event)
+			var retained auditv1.IngestionResult
+			if duplicate.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(duplicate.Body), &retained) != nil ||
+				auditv1.ValidateIngestionResult(retained) != nil || retained.Outcome != auditv1.IngestionDuplicate || retained.Record.RecordHash != record.RecordHash {
+				t.Fatal("signed historical replay did not preserve the original hash")
+			}
+		}
+		other := &accounts[1-index]
+		if len(queryAudit(t, auditEndpoint, other.owner, query, http.StatusOK).Records) != 0 {
+			t.Fatal("another account read key-attributed Audit facts")
+		}
+		forged := page.Records[0].Event
+		forged.Actor.AccessKeyID = string(other.key.Key.ID)
+		if response := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", iamServiceCredential, forged); response.Status != http.StatusForbidden {
+			t.Fatal("historical producer accepted another key's attribution")
+		}
+		if chain := verifyAudit(t, auditEndpoint, account.owner); !chain.Complete || chain.State != auditv1.VerificationVerified {
+			t.Fatal("signed facts broke the mixed tenant Audit chain")
+		}
+	}
 	var replay iamv1.CreateAccessKeyResponse
 	call(endpoint, http.MethodPost, a.path, a.manager, a.intent, http.StatusOK, &replay)
 	if replay.Secret.Present() || replay.Key != a.key.Key || replay.Outcome != "EQUAL_REPLAY" {
@@ -3955,7 +4226,7 @@ func proveTenantAccountProcesses(
 	roleOperator := loginIAM(t, endpoint, "customer.primary", changed, "process-role-operator-login")
 	sensitive = append(sensitive, roleOperator.Credential)
 	sensitive = append(sensitive, proveRoleManagementProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, roleOperator.Credential, withAuditOutage, restartIAM)...)
-	sensitive = append(sensitive, proveAccessKeyManagementProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
+	sensitive = append(sensitive, proveAccessKeyProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
 	readAccount := func(id string) iamv1.Account {
 		t.Helper()
 		response := performJSON(t, http.MethodGet, endpoint+"/v1/accounts/"+id, bearer, nil)

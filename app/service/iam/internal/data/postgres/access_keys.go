@@ -2,11 +2,86 @@ package postgres
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 
 	"github.com/xiak/matrix/api/contractjson"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	"github.com/xiak/matrix/app/service/iam/internal/authority"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 )
+
+func (value *transaction) LookupAccessKey(ctx context.Context, serviceDigest string, key iamv1.AccessKeyID, installation string, audience iamv1.ProductID) (identityaccess.AccessKeyCredential, bool, error) {
+	if iamv1.ValidateDigest("serviceDigest", serviceDigest) != nil || iamv1.ValidateID("accessKeyId", string(key)) != nil ||
+		iamv1.ValidateID("installationId", installation) != nil {
+		return identityaccess.AccessKeyCredential{}, false, identityaccess.ErrInvalidArgument
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.lookup_access_key($1,$2,$3,$4)", serviceDigest, key, installation, audience).Scan(&encoded); err != nil {
+		return identityaccess.AccessKeyCredential{}, false, mapDatabaseError("lookup IAM access key", err)
+	}
+	defer clear(encoded)
+	if encoded == nil {
+		return identityaccess.AccessKeyCredential{}, false, nil
+	}
+	var stored struct {
+		Account                        iamv1.Account   `json:"account"`
+		User                           iamv1.User      `json:"user"`
+		Key                            iamv1.AccessKey `json:"key"`
+		InstallationID                 string          `json:"installationId"`
+		Policies                       json.RawMessage `json:"policies"`
+		Boundary                       json.RawMessage `json:"boundary"`
+		HasUnrevokedPlatformAttachment *bool           `json:"hasUnrevokedPlatformAttachment"`
+		Material                       struct {
+			FormatVersion      uint8  `json:"formatVersion"`
+			WrappingKeyID      string `json:"wrappingKeyId"`
+			MaterialCommitment string `json:"materialCommitment"`
+			Nonce              string `json:"nonce"`
+			Ciphertext         string `json:"ciphertext"`
+		} `json:"material"`
+	}
+	if contractjson.DecodeObjectBytes(encoded, (maxStoredPolicyVersionBytes+4096)*(authority.MaxEvaluationPolicies+1)+8192, &stored) != nil {
+		return identityaccess.AccessKeyCredential{}, false, identityaccess.ErrUnavailable
+	}
+	normalizeAccount(&stored.Account)
+	normalizeUser(&stored.User)
+	normalizeAccessKey(&stored.Key)
+	if iamv1.ValidateAccount(stored.Account) != nil || iamv1.ValidateUser(stored.User) != nil || iamv1.ValidateAccessKey(stored.Key) != nil ||
+		stored.InstallationID != installation || stored.Key.ID != key || stored.Key.AccountID != stored.Account.ID ||
+		stored.User.AccountID != stored.Account.ID || stored.Key.UserID != stored.User.ID || stored.HasUnrevokedPlatformAttachment == nil ||
+		stored.Material.FormatVersion != 1 || iamv1.ValidateID("wrappingKeyId", stored.Material.WrappingKeyID) != nil ||
+		iamv1.ValidateDigest("materialCommitment", stored.Material.MaterialCommitment) != nil || len(stored.Material.Nonce) != 24 || len(stored.Material.Ciphertext) != 96 {
+		return identityaccess.AccessKeyCredential{}, false, identityaccess.ErrUnavailable
+	}
+	result := identityaccess.AccessKeyCredential{MaterialCommitment: stored.Material.MaterialCommitment,
+		Material: authority.SealedAccessKeySecret{FormatVersion: stored.Material.FormatVersion, WrappingKeyID: stored.Material.WrappingKeyID},
+		Subject: authority.AccessKeyContext{InstallationID: installation, RootUserID: stored.Account.RootIdentity.PrincipalID,
+			Key: stored.Key, HasUnrevokedPlatformAttachment: *stored.HasUnrevokedPlatformAttachment,
+			Organization: iamv1.Organization{APIVersion: iamv1.APIVersion, Kind: "Organization", ID: stored.Account.ID,
+				DisplayName: stored.Account.DisplayName, Status: stored.Account.Status, ResourceVersion: stored.Account.ResourceVersion,
+				CreatedAt: stored.Account.CreatedAt, UpdatedAt: stored.Account.UpdatedAt},
+			Principal: iamv1.Principal{APIVersion: iamv1.APIVersion, Kind: "Principal", ID: stored.User.ID, AccountID: stored.User.AccountID,
+				Type: iamv1.PrincipalUser, LoginName: stored.User.LoginName, DisplayName: stored.User.DisplayName, Status: stored.User.Status,
+				MustChangePassword: stored.User.MustChangePassword, ResourceVersion: stored.User.ResourceVersion, CreatedAt: stored.User.CreatedAt, UpdatedAt: stored.User.UpdatedAt}}}
+	var err error
+	result.Material.Nonce, err = hex.DecodeString(stored.Material.Nonce)
+	if err != nil || hex.EncodeToString(result.Material.Nonce) != stored.Material.Nonce {
+		return identityaccess.AccessKeyCredential{}, false, identityaccess.ErrUnavailable
+	}
+	result.Material.Ciphertext, err = hex.DecodeString(stored.Material.Ciphertext)
+	if err != nil || hex.EncodeToString(result.Material.Ciphertext) != stored.Material.Ciphertext {
+		return identityaccess.AccessKeyCredential{}, false, identityaccess.ErrUnavailable
+	}
+	result.Subject.Policies, err = value.decodeAttachedPolicies(ctx, stored.Policies)
+	if err != nil {
+		return identityaccess.AccessKeyCredential{}, false, err
+	}
+	result.Subject.Boundary, err = value.decodeUserBoundary(ctx, stored.Boundary, stored.Account.ID, stored.User.ID, stored.User.ResourceVersion)
+	if err != nil {
+		return identityaccess.AccessKeyCredential{}, false, err
+	}
+	return result, true, nil
+}
 
 func (value *transaction) ReadAccessKeyCustody(ctx context.Context) (identityaccess.AccessKeyCustody, error) {
 	var encoded []byte

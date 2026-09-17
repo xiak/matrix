@@ -13,6 +13,7 @@ type ActorReference struct {
 	Type        ActorType             `json:"type"`
 	ID          ActorID               `json:"id"`
 	RoleSession *RoleSessionReference `json:"roleSession,omitempty"`
+	AccessKeyID string                `json:"accessKeyId,omitempty"`
 }
 
 type RoleSessionReference struct {
@@ -22,7 +23,7 @@ type RoleSessionReference struct {
 
 // Lineage is part of the actor identity, not pointer identity or an attribute.
 func (actor ActorReference) Equal(other ActorReference) bool {
-	if actor.Type != other.Type || actor.ID != other.ID || (actor.RoleSession == nil) != (other.RoleSession == nil) {
+	if actor.Type != other.Type || actor.ID != other.ID || actor.AccessKeyID != other.AccessKeyID || (actor.RoleSession == nil) != (other.RoleSession == nil) {
 		return false
 	}
 	return actor.RoleSession == nil || *actor.RoleSession == *other.RoleSession

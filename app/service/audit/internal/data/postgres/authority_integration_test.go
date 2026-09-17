@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -276,6 +277,9 @@ func assertAuditContractCatalog(
 	t.Helper()
 	for _, actor := range []string{`null`, `{}`, `{"type":"ROLE","id":"role-one"}`,
 		`{"type":"USER","id":"user-one","roleSession":null}`,
+		`{"type":"USER","id":"user-one","accessKeyId":null}`,
+		`{"type":"USER","id":"user-one","accessKeyId":""}`,
+		`{"type":"SERVICE_ACCOUNT","id":"service-one","accessKeyId":"key-one"}`,
 		`{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"one","sourceUserId":"user","sourceSessionId":"private"}}`} {
 		_, err := runtimeConnection.Exec(ctx, `SELECT * FROM audit.read_records('tenant:filter-contract',100,2,NULL,NULL,NULL,$1::jsonb)`, actor)
 		assertAuthorityPostgresCode(t, err, "22023")
@@ -318,6 +322,9 @@ func assertAuditContractCatalog(
 			fmt.Sprintf("target-catalog-%d", index),
 			action,
 		)
+		if contract.AccessKeyActorPermitted {
+			event.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: "catalog-key-user"}
+		}
 		record, _ := appendAcceptedAuditRecord(
 			t, ctx, runtimeConnection, contract.Source, event,
 		)
@@ -349,6 +356,43 @@ func assertAuditContractCatalog(
 				}
 			}
 		}
+		if contract.AccessKeyActorPermitted {
+			for _, key := range []string{"one", "two"} {
+				keyEvent := event
+				keyEvent.EventID += auditv1.EventID("-key-" + key)
+				if keyEvent.OperationID != "" {
+					keyEvent.OperationID += auditv1.OperationID("-key-" + key)
+				}
+				keyEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: "catalog-key-user", AccessKeyID: "catalog-key-" + key}
+				appendAcceptedAuditRecord(t, ctx, runtimeConnection, contract.Source, keyEvent)
+				if err := runtimeConnection.QueryRow(ctx, `SELECT count(*) FROM audit.read_records($1,$2,100,NULL,NULL,$3,$4::jsonb)`,
+					string(auditauthority.ChainFor(event.TenantID, event.InstallationID)), authorityMaximumSequence+1, string(action), authorityJSON(t, keyEvent.Actor)).Scan(&matched); err != nil || matched != 1 {
+					t.Fatal("same-user key query mixed credentials or lost attribution", err)
+				}
+			}
+			var originalDocument string
+			if err := runtimeConnection.QueryRow(ctx, `SELECT event_document FROM audit.read_records($1,$2,100,NULL,NULL,$3,NULL) WHERE event_id=$4`,
+				string(auditauthority.ChainFor(event.TenantID, event.InstallationID)), authorityMaximumSequence+1, string(action), string(event.EventID)).Scan(&originalDocument); err != nil {
+				t.Fatal("read original non-key fact", err)
+			}
+			if old := decodeAuthorityEvent(t, originalDocument); old.Actor.AccessKeyID != "" {
+				t.Fatal("key attribution was backfilled into a pre-existing fact")
+			}
+			if err := runtimeConnection.QueryRow(ctx, `SELECT count(*) FROM audit.read_records($1,$2,100,NULL,NULL,$3,$4::jsonb)`,
+				string(auditauthority.ChainFor(event.TenantID, event.InstallationID)), authorityMaximumSequence+1, string(action), authorityJSON(t, event.Actor)).Scan(&matched); err != nil || matched != 1 {
+				t.Fatal("original user filter matched its program credentials", err)
+			}
+			chainID := auditauthority.ChainFor(event.TenantID, event.InstallationID)
+			records := readAuditChainRecords(t, ctx, runtimeConnection, chainID)
+			slices.Reverse(records)
+			genesis, err := auditauthority.GenesisCheckpoint(chainID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := auditauthority.VerifyChain(genesis, records); err != nil || len(records) == 0 || records[0].RecordHash != record.RecordHash {
+				t.Fatal("mixed user/role/key history changed the old hash or broke its chain", err)
+			}
+		}
 		// Exercise the database's closed target shape independently of canonical
 		// hash mismatch rejection. The authorized migration identity only calls
 		// validation here; no invalid record is inserted or encoder duplicated.
@@ -374,6 +418,20 @@ func assertAuditContractCatalog(
 		// Check actor and decision semantics independently of the canonical hash.
 		// A self-service fact must not acquire a fabricated business decision.
 		var invalid []auditv1.Event
+		if !contract.AccessKeyActorPermitted {
+			candidate := event
+			candidate.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: "catalog-key-user", AccessKeyID: "catalog-key-one"}
+			invalid = append(invalid, candidate)
+		} else {
+			for _, actorType := range []auditv1.ActorType{auditv1.ActorServiceAccount, auditv1.ActorSystem, auditv1.ActorRole} {
+				candidate := event
+				candidate.Actor = auditv1.ActorReference{Type: actorType, ID: "catalog-key-user", AccessKeyID: "catalog-key-one"}
+				if actorType == auditv1.ActorRole {
+					candidate.Actor.RoleSession = &auditv1.RoleSessionReference{SessionID: "catalog-role-session", SourceUserID: "catalog-source"}
+				}
+				invalid = append(invalid, candidate)
+			}
+		}
 		if contract.RoleActorRequired {
 			for _, actorType := range []auditv1.ActorType{auditv1.ActorUser, auditv1.ActorServiceAccount, auditv1.ActorSystem} {
 				candidate := event
@@ -1027,7 +1085,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 29 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 30 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
@@ -1108,7 +1166,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 29 || checkedAt.IsZero() {
+	if ready || schemaVersion != 30 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -2017,7 +2075,7 @@ func assertIAMAuthorizationCatalog(
 		}
 		_, err = tx.Exec(
 			ctx,
-			"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb,3,'null'::jsonb)",
+			"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb,4,'null'::jsonb,'null'::jsonb)",
 			string(fixture.TenantID),
 			actorID,
 			authorityJSON(t, map[string]any{"request": request, "decision": decision}),
@@ -2033,7 +2091,7 @@ func assertIAMAuthorizationCatalog(
 			t.Fatalf("commit IAM authorization action %q: %v", action, err)
 		}
 		var matches bool
-		if err := admin.QueryRow(ctx, `SELECT contract_version=3 AND subject_type=$6 AND principal_id=$7 AND role_id IS NULL AND source_principal_id IS NULL AND role_evidence IS NULL
+		if err := admin.QueryRow(ctx, `SELECT contract_version=4 AND subject_type=$6 AND principal_id=$7 AND role_id IS NULL AND source_principal_id IS NULL AND role_evidence IS NULL AND access_key_id IS NULL
 			AND document=$3::jsonb AND policy_evidence=$4::jsonb AND boundary_evidence=$5::jsonb
 			FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, string(fixture.TenantID), decisionID,
 			authorityJSON(t, decision), string(evidence), string(boundary), string(decision.Subject.Type), actorID).Scan(&matches); err != nil || !matches {
@@ -2089,7 +2147,7 @@ func assertIAMAuthorizationCatalog(
 			}
 			request.Action, request.Resource = decision.Action, decision.Resource
 			decision.Profile, decision.ResourceMode, decision.CorrelationID = &request.Profile, request.ResourceMode, request.CorrelationID
-			_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,3,'null'::jsonb)",
+			_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,4,'null'::jsonb,'null'::jsonb)",
 				string(fixture.TenantID), fixture.Administrator, authorityJSON(t, map[string]any{"request": request, "decision": decision}), authorityJSON(t, event), string(evidence), string(boundary))
 			_ = tx.Rollback(ctx)
 			assertAuthorityPostgresCode(t, err, "22023")
@@ -2150,7 +2208,7 @@ func assertIAMAuthorizationCatalog(
 	decision.Profile, decision.ResourceMode, decision.CorrelationID = &request.Profile, request.ResourceMode, request.CorrelationID
 	_, err = transaction.Exec(
 		ctx,
-		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb,3,'null'::jsonb)",
+		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb,4,'null'::jsonb,'null'::jsonb)",
 		string(fixture.TenantID),
 		fixture.Administrator,
 		authorityJSON(t, map[string]any{"request": request, "decision": decision}),
@@ -2193,7 +2251,7 @@ func assertIAMAuthorizationCatalog(
 		if attack == "wrong installation" {
 			decision.InstallationID = "installation-other"
 		}
-		_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,3,'null'::jsonb)",
+		_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,4,'null'::jsonb,'null'::jsonb)",
 			string(fixture.TenantID), fixture.Administrator, authorityJSON(t, map[string]any{"request": request, "decision": decision}), authorityJSON(t, event), string(platformEvidence), string(notApplicableBoundary))
 		_ = tx.Rollback(ctx)
 		code := "22023"

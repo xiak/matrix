@@ -846,6 +846,127 @@ func TestFamilyPolicyUsesVerifiedResolvedActionsForAllowAndDeny(t *testing.T) {
 	}
 }
 
+func TestAccessKeyContextHasNoLoginSessionAndRejectsInconsistentAuthority(t *testing.T) {
+	now := authorityTestTime()
+	fixture := func() AccessKeyContext {
+		user := authoritySubject(now, iamv1.SystemPolicyPaaSViewer)
+		return AccessKeyContext{Organization: user.Organization, Principal: user.Principal,
+			RootUserID: "principal-root", InstallationID: user.InstallationID, Policies: user.Policies, Boundary: user.Boundary,
+			Key: iamv1.AccessKey{APIVersion: iamv1.APIVersion, Kind: "AccessKey", ID: "access-key-context", AccountID: user.Organization.ID,
+				UserID: user.Principal.ID, Status: iamv1.AccessKeyEnabled, ResourceVersion: 1, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}}
+	}
+	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-key"})
+	if eligible, err := accessKeyEligibility(fixture(), now, now.Unix()); err != nil || !eligible {
+		t.Fatal("coherent ordinary key metadata is not eligible for later MAC/PDP checks", err)
+	}
+	// Platform protection is independent of the effective policy directory.
+	// A RETIRED policy disappears from that projection, not attachment history.
+	protected := fixture()
+	protected.HasUnrevokedPlatformAttachment = true
+	if eligible, err := accessKeyEligibility(protected, now, now.Unix()); err != nil || eligible {
+		t.Fatal("filtered platform policy erased the unrevoked-attachment protection", err)
+	}
+	// The current release still declares LOGIN_SESSION only. Even a coherent
+	// key context with a matching USER grant must not widen that declaration.
+	for name, change := range map[string]func(*AccessKeyContext){
+		"current user":   func(*AccessKeyContext) {},
+		"paused account": func(v *AccessKeyContext) { v.Organization.Status = iamv1.AccountDisabled },
+		"disabled user":  func(v *AccessKeyContext) { v.Principal.Status = iamv1.PrincipalDisabled },
+		"forced change":  func(v *AccessKeyContext) { v.Principal.MustChangePassword = true },
+		"root identity":  func(v *AccessKeyContext) { v.RootUserID = v.Principal.ID },
+		"no user grant":  func(v *AccessKeyContext) { v.Policies = nil },
+		"disabled key":   func(v *AccessKeyContext) { v.Key.Status, v.Key.ResourceVersion = iamv1.AccessKeyDisabled, 2 },
+		"bounded identity": func(v *AccessKeyContext) {
+			v.Boundary = userBoundaryForTest(authoritySubject(now), policyVersionForTest(t, "key-ceiling", iamv1.PolicyAllow, request.Action, iamv1.PolicyResourceAnyInAuthority, ""))
+		},
+		"platform identity": func(v *AccessKeyContext) {
+			v.HasUnrevokedPlatformAttachment = true
+			v.Policies = authoritySubject(now, iamv1.SystemPolicyPaaSViewer, iamv1.SystemPolicyPlatformOperator).Policies
+		},
+		"retired platform policy": func(v *AccessKeyContext) { v.HasUnrevokedPlatformAttachment = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := fixture()
+			change(&value)
+			for _, signedAt := range []int64{now.Unix(), now.Unix() - 301, now.Unix() + 31} {
+				result, err := DecideAccessKey(value, iamv1.ServicePaaS, request, "decision-key-context", now, signedAt)
+				if err != nil || result.Allowed || result.ID != "decision-key-context" || result.Subject != nil || result.TenantID != "" || result.InstallationID != "" ||
+					result.PolicyEvidence == nil || iamv1.CheckAuthorizationDecisionForRequest(result.AuthorizationDecision, request) != nil {
+					t.Fatal("known restricted carrier did not remain a bound, sanitized Deny", err)
+				}
+			}
+		})
+	}
+	for name, change := range map[string]func(*AccessKeyContext){
+		"missing owner":     func(v *AccessKeyContext) { v.RootUserID = "" },
+		"missing install":   func(v *AccessKeyContext) { v.InstallationID = "" },
+		"wrong user tenant": func(v *AccessKeyContext) { v.Principal.AccountID = "other-account" },
+		"wrong key tenant":  func(v *AccessKeyContext) { v.Key.AccountID = "other-account" },
+		"wrong key user":    func(v *AccessKeyContext) { v.Key.UserID = "other-user" },
+		"service identity":  func(v *AccessKeyContext) { v.Principal.Type, v.Principal.LoginName = iamv1.PrincipalServiceAccount, "" },
+		"missing key":       func(v *AccessKeyContext) { v.Key = iamv1.AccessKey{} },
+		"invalid key state": func(v *AccessKeyContext) { v.Key.Status = "DELETED" },
+		"invalid key CAS":   func(v *AccessKeyContext) { v.Key.ResourceVersion = 0 },
+		"future key":        func(v *AccessKeyContext) { v.Key.ResourceVersion, v.Key.UpdatedAt = 2, now.Add(time.Second) },
+		"key before user": func(v *AccessKeyContext) {
+			v.Key.CreatedAt, v.Key.UpdatedAt = v.Principal.CreatedAt.Add(-time.Second), v.Principal.CreatedAt.Add(-time.Second)
+		},
+		"user before tenant": func(v *AccessKeyContext) { v.Principal.CreatedAt = v.Organization.CreatedAt.Add(-time.Second) },
+		"missing boundary":   func(v *AccessKeyContext) { v.Boundary = nil },
+		"wrong ceiling user": func(v *AccessKeyContext) { v.Boundary.UserID = "other-user" },
+		"old ceiling CAS":    func(v *AccessKeyContext) { v.Boundary.UserResourceVersion++ },
+		"contradictory protection snapshot": func(v *AccessKeyContext) {
+			v.Policies = authoritySubject(now, iamv1.SystemPolicyPaaSViewer, iamv1.SystemPolicyPlatformOperator).Policies
+		},
+		"hidden platform attachment": func(v *AccessKeyContext) {
+			v.HasUnrevokedPlatformAttachment = true
+			v.Policies = authoritySubject(now, iamv1.SystemPolicyPaaSViewer, iamv1.SystemPolicyPlatformOperator).Policies
+			v.Policies[1].Attachment.AccountID = "other-account"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := fixture()
+			change(&value)
+			result, err := DecideAccessKey(value, iamv1.ServicePaaS, request, "decision-key-corrupt", now, now.Unix())
+			if !errors.Is(err, ErrAuthorityUnavailable) || result.ID != "" {
+				t.Fatal("corrupt authority was disguised as a completed Deny", err)
+			}
+		})
+	}
+	for _, signedAt := range []int64{0, -1, 253402300800} {
+		if result, err := DecideAccessKey(fixture(), iamv1.ServicePaaS, request, "decision-key-invalid", now, signedAt); !errors.Is(err, ErrInvalidAuthorizationRequest) || result.ID != "" {
+			t.Fatal("malformed timestamp became a completed decision")
+		}
+	}
+}
+
+func TestPolicyEvaluationDoesNotInferProgramAccessFromUserSupport(t *testing.T) {
+	now := authorityTestTime()
+	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-program"})
+	user := authoritySubject(now, iamv1.SystemPolicyPaaSViewer)
+	subject := iamv1.Subject{Type: iamv1.SubjectUser, ID: string(user.Principal.ID)}
+	if result, _, err := EvaluateAttachedPolicies(now, user.Organization.ID, user.InstallationID, subject, user.Policies, request); err != nil || !result.Allowed {
+		t.Fatal("fixture does not prove a current login-user grant", err)
+	}
+	subject.AccessKeyID = "access-key-program"
+	if result, _, err := EvaluateAttachedPolicies(now, user.Organization.ID, user.InstallationID, subject, user.Policies, request); !errors.Is(err, errUnsupportedPolicySubject) || result.Allowed {
+		t.Fatal("USER capability implicitly enabled an undeclared AccessKey carrier", err)
+	}
+	for _, bounded := range []bool{false, true} {
+		boundary := user.Boundary
+		if bounded {
+			boundary = userBoundaryForTest(user, policyVersionForTest(t, "key-boundary", iamv1.PolicyAllow, request.Action, iamv1.PolicyResourceAnyInAuthority, ""))
+		}
+		result, err := decide(user.Organization.ID, user.InstallationID, subject, false, user.Policies, boundary, iamv1.ServicePaaS, request, "decision-key-unsupported", now)
+		if err != nil || result.Allowed || result.Subject != nil || result.TenantID != "" || result.InstallationID != "" || result.Reason != iamv1.DecisionDenied {
+			t.Fatal("unsupported current carrier did not produce a sanitized Deny", err)
+		}
+		if bounded && (result.BoundaryEvidence.State != "BOUND" || result.BoundaryEvidence.Version == nil || *result.BoundaryEvidence.Version != (iamv1.PolicyVersionReference{PolicyID: boundary.Policy.ID, VersionID: boundary.Version.ID, ContentDigest: boundary.Version.ContentDigest})) {
+			t.Fatal("carrier rejection discarded the current boundary provenance")
+		}
+	}
+}
+
 func TestPolicyEvaluationChecksSubjectCapabilityBeforeUnmatchedEffects(t *testing.T) {
 	now := authorityTestTime()
 	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "requested-application"})

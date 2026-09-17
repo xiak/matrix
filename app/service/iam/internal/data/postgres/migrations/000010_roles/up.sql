@@ -1494,7 +1494,7 @@ BEGIN
       OR original.action_name<>'iam.role.assume' OR original.target_kind<>'ROLE' OR original.target_id<>stored.role_id
       OR original.decided_at<>stored.issued_at OR original.request_id<>stored.request_id
       OR original.document->'subject' IS DISTINCT FROM jsonb_build_object('type','USER','id',stored.source_user_id)
-      OR original.contract_version NOT IN (2,3) OR NOT iam.authorization_decision_profile_matches(original.document)
+      OR original.contract_version NOT IN (2,3,4) OR original.access_key_id IS NOT NULL OR NOT iam.authorization_decision_profile_matches(original.document)
       OR NOT EXISTS(SELECT 1 FROM iam.audit_outbox o WHERE o.tenant_id=tenant AND o.event_document->>'action'='iam.role-session.issued'
           AND o.event_document#>>'{target,id}'=stored.id AND o.event_document->'actor'=jsonb_build_object('type','USER','id',stored.source_user_id)
           AND o.event_document->>'iamDecisionId'=stored.decision_id AND o.event_document->>'requestId'=stored.request_id

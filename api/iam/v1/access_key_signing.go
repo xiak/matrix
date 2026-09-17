@@ -85,6 +85,114 @@ type AccessKeySignedRequest struct {
 	Signature  Secret
 }
 
+// Internal product-to-IAM request. The service authenticates independently;
+// this document cannot select the subject/account or supply reusable authority.
+type AccessKeyAuthorizationRequest struct {
+	Authorization AuthorizationRequest
+	SignedRequest AccessKeySignedRequest
+}
+
+type AccessKeyAuthorization struct {
+	APIVersion          string                `json:"apiVersion"`
+	Kind                string                `json:"kind"`
+	Decision            AuthorizationDecision `json:"decision"`
+	SignedRequestDigest string                `json:"signedRequestDigest"`
+}
+
+func (AccessKeyAuthorizationRequest) String() string { return "[REDACTED]" }
+func (AccessKeyAuthorizationRequest) GoString() string {
+	return "iamv1.AccessKeyAuthorizationRequest{[REDACTED]}"
+}
+func (AccessKeyAuthorizationRequest) MarshalJSON() ([]byte, error) {
+	return nil, ErrInvalidAccessKeySignature
+}
+func (*AccessKeyAuthorizationRequest) UnmarshalJSON([]byte) error {
+	return ErrInvalidAccessKeySignature
+}
+
+func ValidateAccessKeyAuthorizationRequest(value AccessKeyAuthorizationRequest) error {
+	if ValidateAuthorizationRequest(value.Authorization) != nil || ValidateAccessKeySignedRequest(value.SignedRequest) != nil ||
+		value.Authorization.Profile.Product != value.SignedRequest.Parameters.Audience {
+		return ErrInvalidAccessKeySignature
+	}
+	// Lack of current carrier capability is a recorded Deny after MAC checking,
+	// not malformed transport. Service/install authority and the real HTTP-to-
+	// action mapping are also separate from this pure syntax/binding check.
+	return nil
+}
+
+func EncodeAccessKeyAuthorizationRequest(value AccessKeyAuthorizationRequest) ([]byte, error) {
+	if ValidateAccessKeyAuthorizationRequest(value) != nil {
+		return nil, ErrInvalidAccessKeySignature
+	}
+	signed, err := EncodeAccessKeySignedRequest(value.SignedRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(signed)
+	encoded, err := json.Marshal(struct {
+		Authorization AuthorizationRequest `json:"authorization"`
+		SignedRequest json.RawMessage      `json:"signedRequest"`
+	}{value.Authorization, signed})
+	if err != nil || int64(len(encoded)) > MaxRequestBytes {
+		clear(encoded)
+		return nil, ErrInvalidAccessKeySignature
+	}
+	return encoded, nil
+}
+
+func DecodeAccessKeyAuthorizationRequest(reader io.Reader) (AccessKeyAuthorizationRequest, error) {
+	var wire struct {
+		Authorization AuthorizationRequest `json:"authorization"`
+		SignedRequest json.RawMessage      `json:"signedRequest"`
+	}
+	if contractjson.DecodeObject(reader, MaxRequestBytes, &wire) != nil {
+		return AccessKeyAuthorizationRequest{}, ErrInvalidAccessKeySignature
+	}
+	defer clear(wire.SignedRequest)
+	signed, err := DecodeAccessKeySignedRequest(bytes.NewReader(wire.SignedRequest))
+	value := AccessKeyAuthorizationRequest{Authorization: wire.Authorization, SignedRequest: signed}
+	if err != nil || ValidateAccessKeyAuthorizationRequest(value) != nil {
+		return AccessKeyAuthorizationRequest{}, ErrInvalidAccessKeySignature
+	}
+	return value, nil
+}
+
+func ValidateAccessKeyAuthorization(value AccessKeyAuthorization) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKeyAuthorization" || ValidateAuthorizationDecision(value.Decision) != nil ||
+		ValidateDigest("signedRequestDigest", value.SignedRequestDigest) != nil {
+		return ErrInvalidAccessKeySignature
+	}
+	if value.Decision.Allowed && (value.Decision.Subject == nil || value.Decision.Subject.Type != SubjectUser ||
+		value.Decision.Subject.AccessKeyID == "" || value.Decision.InstallationID != "") {
+		return ErrInvalidAccessKeySignature
+	}
+	return nil
+}
+
+func DecodeAccessKeyAuthorization(reader io.Reader) (AccessKeyAuthorization, error) {
+	var result AccessKeyAuthorization
+	if contractjson.DecodeObject(reader, MaxRequestBytes, &result) != nil || ValidateAccessKeyAuthorization(result) != nil {
+		return AccessKeyAuthorization{}, ErrInvalidAccessKeySignature
+	}
+	return result, nil
+}
+
+// The actual product PEP compares the once-only result to the request it sent.
+// A digest match is not permission to cache or replay this response.
+func CheckAccessKeyAuthorizationForRequest(value AccessKeyAuthorization, request AccessKeyAuthorizationRequest) error {
+	if ValidateAccessKeyAuthorizationRequest(request) != nil || ValidateAccessKeyAuthorization(value) != nil ||
+		CheckAuthorizationDecisionForRequest(value.Decision, request.Authorization) != nil {
+		return ErrInvalidAccessKeySignature
+	}
+	digest, err := AccessKeySignedRequestDigest(request.SignedRequest)
+	if err != nil || digest != value.SignedRequestDigest ||
+		value.Decision.Allowed && value.Decision.Subject.AccessKeyID != request.SignedRequest.Parameters.AccessKeyID {
+		return ErrInvalidAccessKeySignature
+	}
+	return nil
+}
+
 func (AccessKeySignatureParameters) String() string { return "[REDACTED]" }
 func (AccessKeySignatureParameters) GoString() string {
 	return "iamv1.AccessKeySignatureParameters{[REDACTED]}"

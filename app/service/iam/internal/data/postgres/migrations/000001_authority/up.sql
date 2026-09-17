@@ -660,6 +660,55 @@ CREATE TABLE IF NOT EXISTS iam.service_credential_index (
     )
 );
 
+-- K2 binds history to the original service credential tuple, not an invented
+-- credential ID/version. Existing rows must already agree with the locator;
+-- migration never repairs a changed identity or resurrects revoked material.
+CREATE UNIQUE INDEX IF NOT EXISTS service_credentials_lookup_identity_uq
+    ON iam.service_credentials(tenant_id,principal_id,lookup_digest);
+ALTER TABLE iam.service_credentials NO FORCE ROW LEVEL SECURITY;
+DO $service_identity_history$ BEGIN
+    IF EXISTS(SELECT 1 FROM iam.service_credentials c LEFT JOIN iam.service_credential_index i
+      ON i.tenant_id=c.tenant_id AND i.principal_id=c.principal_id AND i.lookup_digest=c.lookup_digest
+      WHERE i.lookup_digest IS NULL)
+      OR EXISTS(SELECT 1 FROM iam.service_credential_index i LEFT JOIN iam.service_credentials c
+        ON c.tenant_id=i.tenant_id AND c.principal_id=i.principal_id AND c.lookup_digest=i.lookup_digest
+        WHERE c.principal_id IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='service credential history conflicts'; END IF;
+END $service_identity_history$;
+ALTER TABLE iam.service_credential_index DROP CONSTRAINT IF EXISTS service_credential_index_credential_fk;
+ALTER TABLE iam.service_credential_index ADD CONSTRAINT service_credential_index_credential_fk
+    FOREIGN KEY(tenant_id,principal_id,lookup_digest) REFERENCES iam.service_credentials(tenant_id,principal_id,lookup_digest);
+ALTER TABLE iam.service_credentials FORCE ROW LEVEL SECURITY;
+
+CREATE OR REPLACE FUNCTION iam.guard_service_credential_change()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF ROW(NEW.tenant_id,NEW.principal_id,NEW.purpose,NEW.lookup_digest,NEW.verification_digest,NEW.created_at)
+       IS DISTINCT FROM ROW(OLD.tenant_id,OLD.principal_id,OLD.purpose,OLD.lookup_digest,OLD.verification_digest,OLD.created_at)
+       OR OLD.revoked_at IS NOT NULL OR NEW.revoked_at IS NULL OR NEW.revoked_at<>transaction_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='service credential identity is immutable'; END IF;
+    RETURN NEW;
+END $function$;
+DROP TRIGGER IF EXISTS service_credential_revoked_once ON iam.service_credentials;
+CREATE TRIGGER service_credential_revoked_once BEFORE UPDATE ON iam.service_credentials
+    FOR EACH ROW EXECUTE FUNCTION iam.guard_service_credential_change();
+ALTER TABLE iam.service_credentials ENABLE ALWAYS TRIGGER service_credential_revoked_once;
+DO $service_history_protection$ DECLARE relation_name text; BEGIN
+    FOREACH relation_name IN ARRAY ARRAY['service_credentials','service_credential_index'] LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS identity_cannot_delete ON iam.%I',relation_name);
+        EXECUTE format('CREATE TRIGGER identity_cannot_delete BEFORE DELETE ON iam.%I FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change()',relation_name);
+        EXECUTE format('ALTER TABLE iam.%I ENABLE ALWAYS TRIGGER identity_cannot_delete',relation_name);
+        EXECUTE format('DROP TRIGGER IF EXISTS identity_cannot_truncate ON iam.%I',relation_name);
+        EXECUTE format('CREATE TRIGGER identity_cannot_truncate BEFORE TRUNCATE ON iam.%I FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change()',relation_name);
+        EXECUTE format('ALTER TABLE iam.%I ENABLE ALWAYS TRIGGER identity_cannot_truncate',relation_name);
+    END LOOP;
+END $service_history_protection$;
+DROP TRIGGER IF EXISTS identity_cannot_update ON iam.service_credential_index;
+CREATE TRIGGER identity_cannot_update BEFORE UPDATE ON iam.service_credential_index
+    FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.service_credential_index ENABLE ALWAYS TRIGGER identity_cannot_update;
+REVOKE ALL ON FUNCTION iam.guard_service_credential_change() FROM PUBLIC,matrix_iam_api,matrix_iam_worker;
+
 CREATE TABLE IF NOT EXISTS iam.sessions (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
@@ -717,6 +766,10 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $fu
           AND (decision->'allowed'='false'::jsonb OR CASE WHEN action ? 'subjectTypes'
             THEN action->'subjectTypes' ? (decision#>>'{subject,type}')
             ELSE decision#>>'{subject,type}'=CASE WHEN action->>'scope'='INSTALLATION_PROBE' THEN 'SERVICE_ACCOUNT' ELSE 'USER' END END)
+          AND (decision->'allowed'='false'::jsonb OR decision#>>'{subject,type}'<>'USER' OR
+            CASE WHEN decision->'subject' ? 'accessKeyId' THEN action->>'scope'='TENANT'
+              AND action->'userAuthenticationMethods' ? 'ACCESS_KEY'
+            ELSE NOT action ? 'userAuthenticationMethods' OR action->'userAuthenticationMethods' ? 'LOGIN_SESSION' END)
           AND (CASE WHEN decision->'allowed'='true'::jsonb THEN
             CASE WHEN action->>'scope'='INSTALLATION' THEN
               decision ? 'installationId' AND NOT decision ? 'tenantId' AND decision#>>'{subject,type}'='USER'
@@ -770,6 +823,7 @@ ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS subject_type te
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS role_id text COLLATE "C";
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS source_principal_id text COLLATE "C";
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS role_evidence jsonb;
+ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS access_key_id text COLLATE "C";
 ALTER TABLE iam.authorization_decisions DROP CONSTRAINT IF EXISTS authorization_decisions_source_principal_fk;
 ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decisions_source_principal_fk
     FOREIGN KEY(tenant_id,source_principal_id) REFERENCES iam.principals(tenant_id,id);
@@ -796,7 +850,9 @@ ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS resource_mode t
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS collection_usage text COLLATE "C";
 ALTER TABLE iam.authorization_decisions DROP CONSTRAINT IF EXISTS authorization_decision_contract_valid;
 ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_contract_valid CHECK (COALESCE(
-    contract_version IN (1,2,3)
+    contract_version IN (1,2,3,4)
+    AND (access_key_id IS NULL OR (contract_version=4 AND subject_type='USER'
+      AND access_key_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'))
     AND (CASE WHEN contract_version IN (1,2) THEN principal_id IS NOT NULL AND subject_type IS NULL AND role_id IS NULL AND source_principal_id IS NULL AND role_evidence IS NULL
       ELSE subject_type IS NOT NULL AND policy_evidence IS NOT NULL AND boundary_evidence IS NOT NULL AND
         CASE WHEN subject_type='ROLE' THEN principal_id IS NULL AND role_id IS NOT NULL AND source_principal_id IS NOT NULL
@@ -822,12 +878,15 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
     AND (CASE WHEN allowed THEN
         jsonb_typeof(document->'subject')='object'
         AND document->'subject' ?& ARRAY['type','id']
-        AND (CASE WHEN contract_version=3 AND subject_type='ROLE' THEN
+        AND (CASE WHEN contract_version IN (3,4) AND subject_type='ROLE' THEN
           document->'subject'=jsonb_build_object('type','ROLE','id',role_id,'roleSession',jsonb_build_object('sessionId',role_evidence->>'sessionId','sourceUserId',source_principal_id))
           AND NOT document ? 'installationId'
+          WHEN access_key_id IS NOT NULL THEN
+            document->'subject'=jsonb_build_object('type','USER','id',principal_id,'accessKeyId',access_key_id)
+            AND NOT document ? 'installationId'
           ELSE ((document->'subject')-ARRAY['type','id'])='{}'::jsonb AND document#>>'{subject,id}'=principal_id
             AND document#>>'{subject,type}' IN ('USER','SERVICE_ACCOUNT')
-            AND (contract_version<>3 OR document#>>'{subject,type}'=subject_type) END)
+            AND (contract_version NOT IN (3,4) OR document#>>'{subject,type}'=subject_type) END)
         AND jsonb_typeof(document#>'{subject,id}')='string'
         AND jsonb_typeof(document#>'{subject,type}')='string'
         AND ((document ? 'tenantId' AND NOT document ? 'installationId' AND jsonb_typeof(document->'tenantId')='string' AND document->>'tenantId'=tenant_id)
@@ -837,7 +896,7 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
     AND (CASE WHEN contract_version=1 THEN
         profile_product IS NULL AND profile_revision IS NULL AND profile_content_digest IS NULL AND resource_mode IS NULL AND collection_usage IS NULL
         AND NOT document ?| ARRAY['profile','resourceMode','collectionUsage','correlationId']
-      WHEN contract_version IN (2,3) THEN
+      WHEN contract_version IN (2,3,4) THEN
         profile_product IS NOT NULL AND profile_revision IS NOT NULL AND profile_content_digest IS NOT NULL AND resource_mode IS NOT NULL
         AND document ?& ARRAY['profile','resourceMode','correlationId']
         AND document->'profile'=jsonb_build_object('product',profile_product,'revision',profile_revision,'contentDigest',profile_content_digest)
@@ -1019,6 +1078,11 @@ BEGIN
             OR jsonb_typeof(submitted_event#>'{actor,roleSession,sourceUserId}') IS DISTINCT FROM 'string'
             OR COALESCE(submitted_event#>>'{actor,roleSession,sessionId}','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
             OR COALESCE(submitted_event#>>'{actor,roleSession,sourceUserId}','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          WHEN submitted_event->'actor' ? 'accessKeyId' THEN
+            expected_action<>'iam.authorization.decided' OR submitted_event#>>'{actor,type}'<>'USER'
+            OR ((submitted_event->'actor')-ARRAY['type','id','accessKeyId'])<>'{}'::jsonb
+            OR jsonb_typeof(submitted_event#>'{actor,accessKeyId}') IS DISTINCT FROM 'string'
+            OR COALESCE(submitted_event#>>'{actor,accessKeyId}','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
           ELSE ((submitted_event->'actor') - ARRAY['type','id']) <> '{}'::jsonb END)
        OR ((submitted_event->'target') - ARRAY['kind', 'id', 'tenantId']) <> '{}'::jsonb
        OR (expected_action IN ('iam.account-root.credentials-recovered','iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (
@@ -1334,15 +1398,16 @@ $function$;
 CREATE OR REPLACE FUNCTION iam.authorization_decision_contract_ready()
 RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
     SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS recorder
-                WHERE recorder.oid=to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb)')
+                WHERE recorder.oid=to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb,jsonb)')
                   AND recorder.prosecdef AND recorder.proowner='matrix_iam_owner'::regrole
                   AND recorder.proargnames=ARRAY['submitted_tenant_id','submitted_subject_id','input_authorization','submitted_audit_event',
-                    'submitted_policy_evidence','submitted_boundary_evidence','input_contract_version','submitted_role_evidence']
-                  AND recorder.pronargs=8 AND recorder.pronargdefaults=0 AND recorder.provariadic=0
+                    'submitted_policy_evidence','submitted_boundary_evidence','input_contract_version','submitted_role_evidence','submitted_key_evidence']
+                  AND recorder.pronargs=9 AND recorder.pronargdefaults=0 AND recorder.provariadic=0
                   AND recorder.prorettype='void'::regtype AND NOT recorder.proretset
                   AND recorder.proallargtypes IS NULL AND recorder.proargmodes IS NULL
                   AND recorder.provolatile='v' AND recorder.proparallel='u' AND NOT recorder.proisstrict AND NOT recorder.proleakproof)
            AND to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer)') IS NULL
+           AND to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb)') IS NULL
            AND to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb)') IS NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
                 WHERE n.nspname='iam' AND p.proname='record_authorization')=1
@@ -1351,7 +1416,7 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
                 ('profile_revision','bigint'::regtype,false),('profile_content_digest','text'::regtype,false),
                 ('resource_mode','text'::regtype,false),('collection_usage','text'::regtype,false),
                 ('principal_id','text'::regtype,false),('subject_type','text'::regtype,false),('role_id','text'::regtype,false),
-                ('source_principal_id','text'::regtype,false),('role_evidence','jsonb'::regtype,false)) expected(name,type_oid,required)
+                ('source_principal_id','text'::regtype,false),('role_evidence','jsonb'::regtype,false),('access_key_id','text'::regtype,false)) expected(name,type_oid,required)
                 LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid='iam.authorization_decisions'::regclass AND a.attname=expected.name AND NOT a.attisdropped
                 WHERE a.attnum IS NULL OR a.atttypid<>expected.type_oid OR a.attnotnull<>expected.required OR a.atthasdef)
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid='iam.authorization_decisions'::regclass
@@ -1374,13 +1439,13 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
                   AND evidence.proallargtypes[6:10]=ARRAY['text'::regtype::oid,'jsonb'::regtype::oid,'jsonb'::regtype::oid,'text'::regtype::oid,'integer'::regtype::oid]
                   AND evidence.proargnames[6:10]=ARRAY['installation_id','event_document','decision_document','verifier_principal_id','decision_contract_version'])
            AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc p CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) permission
-                WHERE p.oid IN (to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb)'),to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)'))
+                WHERE p.oid IN (to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb,jsonb)'),to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)'))
                   AND (permission.grantee NOT IN (p.proowner,'matrix_iam_api'::regrole)
                     OR (permission.grantee='matrix_iam_api'::regrole AND (permission.is_grantable OR permission.privilege_type<>'EXECUTE'))))
-           AND has_function_privilege('matrix_iam_api','iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb)','EXECUTE')
+           AND has_function_privilege('matrix_iam_api','iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb,jsonb)','EXECUTE')
            AND has_function_privilege('matrix_iam_api','iam.read_audit_evidence(text,text,text,text,jsonb)','EXECUTE')
            AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc p
-                WHERE p.oid IN (to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb)'),to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)'))
+                WHERE p.oid IN (to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb,jsonb)'),to_regprocedure('iam.read_audit_evidence(text,text,text,text,jsonb)'))
                   AND NOT COALESCE((SELECT count(*)=1 AND bool_and(
                     (SELECT array_agg(parse_ident(btrim(component.name),true) ORDER BY component.position)
                      FROM unnest(string_to_array(substr(config.setting,strpos(config.setting,'=')+1),','))
@@ -1585,7 +1650,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           29::bigint,
+           30::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1911,6 +1976,7 @@ DROP FUNCTION IF EXISTS iam.record_authorization(text,text,jsonb,jsonb);
 DROP FUNCTION IF EXISTS iam.record_authorization(text,text,jsonb,jsonb,jsonb);
 DROP FUNCTION IF EXISTS iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb);
 DROP FUNCTION IF EXISTS iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer);
+DROP FUNCTION IF EXISTS iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb);
 CREATE OR REPLACE FUNCTION iam.record_authorization(
     submitted_tenant_id text,
     submitted_subject_id text,
@@ -1919,7 +1985,8 @@ CREATE OR REPLACE FUNCTION iam.record_authorization(
     submitted_policy_evidence jsonb,
     submitted_boundary_evidence jsonb,
     input_contract_version integer,
-    submitted_role_evidence jsonb
+    submitted_role_evidence jsonb,
+    submitted_key_evidence jsonb
 )
 RETURNS void
 LANGUAGE plpgsql
@@ -1940,7 +2007,8 @@ DECLARE
     binding_key text;
     expected_subject jsonb;
 BEGIN
-    IF input_contract_version IS DISTINCT FROM 3 OR submitted_role_evidence IS NULL THEN
+    IF input_contract_version IS DISTINCT FROM 4 OR submitted_role_evidence IS NULL OR submitted_key_evidence IS NULL
+       OR (submitted_role_evidence<>'null'::jsonb AND submitted_key_evidence<>'null'::jsonb) THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization contract version is invalid';
     END IF;
     IF jsonb_typeof(input_authorization) IS DISTINCT FROM 'object'
@@ -2026,8 +2094,13 @@ BEGIN
             MESSAGE = 'authorization action and resource are invalid';
     END IF;
 
+    decision_allowed := (submitted_decision->>'allowed')::boolean;
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
-    IF submitted_role_evidence <> 'null'::jsonb THEN
+    IF submitted_key_evidence <> 'null'::jsonb THEN
+        actor_type:='USER';
+        PERFORM iam.assert_current_access_key_authorization(submitted_tenant_id,submitted_subject_id,submitted_decision,submitted_key_evidence);
+        expected_subject:=jsonb_build_object('type','USER','id',submitted_subject_id,'accessKeyId',submitted_key_evidence->>'accessKeyId');
+    ELSIF submitted_role_evidence <> 'null'::jsonb THEN
         actor_type:='ROLE';
         PERFORM iam.assert_current_role_authorization(submitted_tenant_id,submitted_subject_id,submitted_role_evidence);
         expected_subject:=jsonb_build_object('type','ROLE','id',submitted_subject_id,'roleSession',jsonb_build_object(
@@ -2049,7 +2122,6 @@ BEGIN
       expected_subject:=jsonb_build_object('type',actor_type,'id',submitted_subject_id);
     END IF;
 
-    decision_allowed := (submitted_decision->>'allowed')::boolean;
     IF decision_allowed AND actor_type='USER' AND EXISTS(SELECT 1 FROM iam.principals AS principal
         WHERE principal.tenant_id=submitted_tenant_id AND principal.id=submitted_subject_id AND principal.must_change_password) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='authorization subject requires credential replacement';
@@ -2175,7 +2247,7 @@ BEGIN
         tenant_id, id, principal_id, allowed, action_name, target_kind,
         target_id, request_id, decided_at, document, policy_evidence, boundary_evidence,
         contract_version, profile_product, profile_revision, profile_content_digest, resource_mode, collection_usage,
-        subject_type, role_id, source_principal_id, role_evidence
+        subject_type, role_id, source_principal_id, role_evidence, access_key_id
     ) VALUES (
         submitted_tenant_id,
         submitted_decision->>'id',
@@ -2189,7 +2261,7 @@ BEGIN
         submitted_decision,
         submitted_policy_evidence,
         submitted_boundary_evidence,
-        3,
+        4,
         submitted_decision#>>'{profile,product}',
         (submitted_decision#>>'{profile,revision}')::bigint,
         submitted_decision#>>'{profile,contentDigest}',
@@ -2197,8 +2269,12 @@ BEGIN
         submitted_decision->>'collectionUsage',
         actor_type, CASE WHEN actor_type='ROLE' THEN submitted_subject_id ELSE NULL END,
         CASE WHEN actor_type='ROLE' THEN submitted_role_evidence->>'sourceUserId' ELSE NULL END,
-        nullif(submitted_role_evidence,'null'::jsonb)
+        nullif(submitted_role_evidence,'null'::jsonb),
+        submitted_key_evidence->>'accessKeyId'
     );
+    IF submitted_key_evidence<>'null'::jsonb THEN
+        PERFORM iam.record_access_key_evidence(submitted_tenant_id,submitted_subject_id,submitted_decision->>'id',submitted_key_evidence);
+    END IF;
     INSERT INTO iam.audit_outbox (
         tenant_id, event_id, event_document, next_attempt_at,
         created_at, updated_at
@@ -2254,7 +2330,7 @@ BEGIN
            AND decision.action_name = submitted_action
            AND decision.target_kind = submitted_target_kind
            AND decision.target_id = submitted_target_id
-           AND decision.contract_version = 3 AND decision.subject_type='USER'
+           AND decision.contract_version = 4 AND decision.subject_type='USER' AND decision.access_key_id IS NULL
            AND EXISTS(SELECT 1 FROM iam.authorization_profile_heads head
              JOIN iam.authorization_profiles archive ON archive.product=head.product AND archive.revision=head.revision
              WHERE head.product=decision.profile_product AND head.revision=decision.profile_revision
@@ -3085,7 +3161,7 @@ GRANT EXECUTE ON FUNCTION iam.lookup_service(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_service_policies(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_password(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.record_authorization(
-    text, text, jsonb, jsonb, jsonb, jsonb, integer, jsonb
+    text, text, jsonb, jsonb, jsonb, jsonb, integer, jsonb, jsonb
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.change_password(
     text, text, text, text, jsonb, text, boolean

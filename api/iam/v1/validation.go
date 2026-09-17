@@ -235,7 +235,7 @@ func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 		return errors.New("authorization decision product binding is invalid")
 	}
 	if value.Allowed && value.Subject != nil &&
-		checkValidatedProfileSubject(sourceProfileCommitments[value.Profile.Product].profile, value.Action, SubjectType(value.Subject.Type)) != nil {
+		checkValidatedProfileSubjectCredential(sourceProfileCommitments[value.Profile.Product].profile, value.Action, *value.Subject) != nil {
 		return errors.New("authorization decision subject capability is invalid")
 	}
 	definition, known := LookupActionDefinition(value.Action)
@@ -252,7 +252,7 @@ func ValidateAuthorizationDecisionForProfile(value AuthorizationDecision, profil
 		ValidateID("correlationId", value.CorrelationID) != nil {
 		return errors.New("authorization decision product binding is invalid")
 	}
-	if value.Allowed && value.Subject != nil && checkValidatedProfileSubject(profile, value.Action, SubjectType(value.Subject.Type)) != nil {
+	if value.Allowed && value.Subject != nil && checkValidatedProfileSubjectCredential(profile, value.Action, *value.Subject) != nil {
 		return errors.New("authorization decision subject capability is invalid")
 	}
 	for _, action := range profile.Actions {
@@ -267,7 +267,8 @@ func ValidateAuthorizationDecisionForProfile(value AuthorizationDecision, profil
 // database metadata says contract1. This function alone is not legacy admission.
 func ValidateLegacyAuthorizationDecision(value AuthorizationDecision) error {
 	definition, known := lookupRecordedActionDefinition(value.Action)
-	if !known || value.Resource.Kind != definition.ResourceKind || value.Profile != nil || value.ResourceMode != "" || value.CollectionUsage != "" || value.CorrelationID != "" {
+	if !known || value.Resource.Kind != definition.ResourceKind || value.Profile != nil || value.ResourceMode != "" || value.CollectionUsage != "" || value.CorrelationID != "" ||
+		value.Subject != nil && value.Subject.AccessKeyID != "" {
 		return errors.New("legacy decision contains an invalid or current binding")
 	}
 	return validateAuthorizationDecision(value, definition)
@@ -292,7 +293,7 @@ func validateAuthorizationDecision(value AuthorizationDecision, definition Actio
 		}
 		if definition.AuthorityScope == AuthorityScopeInstallation {
 			problems = append(problems, ValidateID("installationId", value.InstallationID))
-			if value.TenantID != "" || value.Subject != nil && value.Subject.Type != SubjectUser {
+			if value.TenantID != "" || value.Subject != nil && (value.Subject.Type != SubjectUser || value.Subject.AccessKeyID != "") {
 				problems = append(problems, errors.New("platform decision contains invalid authority"))
 			}
 		} else {
@@ -322,6 +323,12 @@ func ValidateSubject(value Subject) error {
 		}
 	} else if value.RoleSession != nil {
 		problems = append(problems, errors.New("non-role subject contains role session"))
+	}
+	if value.AccessKeyID != "" {
+		if value.Type != SubjectUser {
+			problems = append(problems, errors.New("non-user subject contains access key lineage"))
+		}
+		problems = append(problems, ValidateID("subject.accessKeyId", string(value.AccessKeyID)))
 	}
 	return errors.Join(problems...)
 }

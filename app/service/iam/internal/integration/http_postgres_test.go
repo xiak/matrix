@@ -3,6 +3,8 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -54,6 +56,7 @@ const (
 type iamTransactionFailureTrace struct {
 	serialization atomic.Int64
 	deadlock      atomic.Int64
+	lastSQLState  atomic.Value // SQLSTATE only, never a database message or arguments.
 }
 
 func (*iamTransactionFailureTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
@@ -63,6 +66,7 @@ func (*iamTransactionFailureTrace) TraceQueryStart(ctx context.Context, _ *pgx.C
 func (trace *iamTransactionFailureTrace) TraceQueryEnd(_ context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
 	var databaseError *pgconn.PgError
 	if errors.As(data.Err, &databaseError) {
+		trace.lastSQLState.Store(databaseError.Code)
 		switch databaseError.Code {
 		case "40001":
 			trace.serialization.Add(1)
@@ -1105,7 +1109,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 			jsonb_build_object('request',document-'apiVersion'-'kind'-'id'-'allowed'-'reason'-'decidedAt'-'tenantId'-'installationId'-'subject','decision',
 			document||jsonb_build_object('id','forged-boundary-decision','decidedAt',
 			to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),
-			'{}'::jsonb,policy_evidence,`+attack.evidence+`,3,'null'::jsonb) FROM iam.authorization_decisions
+			'{}'::jsonb,policy_evidence,`+attack.evidence+`,4,'null'::jsonb,'null'::jsonb) FROM iam.authorization_decisions
 			WHERE principal_id=$2 AND action_name='paas.application.read' AND allowed ORDER BY decided_at,id LIMIT 1`,
 			"42501", document.Organization.ID, document.Administrator.ID)
 	}
@@ -1122,7 +1126,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 			jsonb_build_object('request',document-'apiVersion'-'kind'-'id'-'allowed'-'reason'-'decidedAt'-'tenantId'-'installationId'-'subject','decision',
 			document||jsonb_build_object('id','forged-policy-decision','decidedAt',
 			to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),
-			'{}'::jsonb,`+attack.evidence+`,boundary_evidence,3,'null'::jsonb) FROM iam.authorization_decisions WHERE allowed ORDER BY decided_at,id LIMIT 1`,
+			'{}'::jsonb,`+attack.evidence+`,boundary_evidence,4,'null'::jsonb,'null'::jsonb) FROM iam.authorization_decisions WHERE allowed ORDER BY decided_at,id LIMIT 1`,
 			attack.code, document.Organization.ID, document.Administrator.ID)
 	}
 	assertRejected("immutable-version-truncate", `TRUNCATE iam.policy_versions`, "0A000") // Referenced defaults also prohibit truncation.
@@ -1371,7 +1375,7 @@ func proveDecisionTargetConsumption(t *testing.T, ctx context.Context, admin *pg
 			Request  iamv1.AuthorizationRequest  `json:"request"`
 			Decision iamv1.AuthorizationDecision `json:"decision"`
 		}{request, decision}
-		if _, err := tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,3,'null'::jsonb)`,
+		if _, err := tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,4,'null'::jsonb,'null'::jsonb)`,
 			decision.TenantID, decision.Subject.ID, string(mustIAMJSON(t, envelope)), string(mustIAMJSON(t, fact)), string(policy), string(boundary)); err != nil {
 			t.Fatalf("record target fixture: %v", err)
 		}
@@ -1432,23 +1436,24 @@ func proveProfileBoundRecorder(t *testing.T, ctx context.Context, admin *pgx.Con
 		var factBytes, policyBytes, boundaryBytes []byte
 		if err := admin.QueryRow(ctx, `SELECT d.tenant_id,d.principal_id,d.contract_version,d.profile_product,d.profile_revision,d.profile_content_digest,d.resource_mode,d.collection_usage,
 			o.event_document,d.policy_evidence,d.boundary_evidence,
-			d.subject_type='USER' AND d.role_id IS NULL AND d.source_principal_id IS NULL AND d.role_evidence IS NULL
+			d.subject_type='USER' AND d.role_id IS NULL AND d.source_principal_id IS NULL AND d.role_evidence IS NULL AND d.access_key_id IS NULL
+			AND NOT EXISTS(SELECT 1 FROM iam.access_key_authorization_evidence e WHERE e.tenant_id=d.tenant_id AND e.decision_id=d.id)
 			FROM iam.authorization_decisions d JOIN iam.audit_outbox o
 			ON o.tenant_id=d.tenant_id AND o.event_document->>'action'='iam.authorization.decided' AND o.event_document->>'iamDecisionId'=d.id WHERE d.id=$1`, decision.ID).
 			Scan(&tenant, &principal, &version, &product, &revision, &digest, &mode, &usage, &factBytes, &policyBytes, &boundaryBytes, &userEvidence); err != nil {
 			t.Fatal(err)
 		}
-		if version != 3 || !userEvidence || product != string(request.Profile.Product) || revision != request.Profile.Revision || digest != request.Profile.ContentDigest || mode != string(request.ResourceMode) || usage != nil {
+		if version != 4 || !userEvidence || product != string(request.Profile.Product) || revision != request.Profile.Revision || digest != request.Profile.ContentDigest || mode != string(request.ResourceMode) || usage != nil {
 			t.Fatal("stored row did not preserve exact contract/instance binding")
 		}
 		var fact auditv1.Event
 		if json.Unmarshal(factBytes, &fact) != nil {
 			t.Fatal("invalid original fact")
 		}
-		if tenant == "" || tenant != string(fact.TenantID) || principal == "" || principal != string(fact.Actor.ID) || fact.Actor.Type != auditv1.ActorUser || fact.Actor.RoleSession != nil {
+		if tenant == "" || tenant != string(fact.TenantID) || principal == "" || principal != string(fact.Actor.ID) || fact.Actor.Type != auditv1.ActorUser || fact.Actor.RoleSession != nil || fact.Actor.AccessKeyID != "" {
 			t.Fatal("USER decision and original fact lost their exact identity binding")
 		}
-		if allowed && (tenant != string(decision.TenantID) || decision.Subject == nil || decision.Subject.Type != iamv1.SubjectUser || decision.Subject.ID != principal || decision.Subject.RoleSession != nil) {
+		if allowed && (tenant != string(decision.TenantID) || decision.Subject == nil || decision.Subject.Type != iamv1.SubjectUser || decision.Subject.ID != principal || decision.Subject.RoleSession != nil || decision.Subject.AccessKeyID != "") {
 			t.Fatal("USER allow exposed a different subject")
 		}
 		if !allowed && (decision.TenantID != "" || decision.InstallationID != "" || decision.Subject != nil) {
@@ -1512,7 +1517,7 @@ func proveProfileBoundRecorder(t *testing.T, ctx context.Context, admin *pgx.Con
 				if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+pgx.Identifier{iamHTTPTestRole}.Sanitize()); err != nil {
 					t.Fatal(err)
 				}
-				_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,3,'null'::jsonb)", tenant, principal, string(mustIAMJSON(t, envelope)), string(mustIAMJSON(t, copyFact)), string(policyBytes), string(boundaryBytes))
+				_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,4,'null'::jsonb,'null'::jsonb)", tenant, principal, string(mustIAMJSON(t, envelope)), string(mustIAMJSON(t, copyFact)), string(policyBytes), string(boundaryBytes))
 				if name == "valid" {
 					if err != nil {
 						t.Fatalf("restricted recorder rejected complete original input: %v", err)
@@ -1536,10 +1541,14 @@ func proveProfileBoundRecorder(t *testing.T, ctx context.Context, admin *pgx.Con
 	for _, call := range []struct{ sql, code string }{
 		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}')`, "42883"},
 		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',2)`, "42883"},
-		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',1,'null')`, "22023"},
-		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',2,'null')`, "22023"},
-		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',NULL,'null')`, "22023"},
-		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',3,NULL)`, "22023"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',3,'null')`, "42883"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',1,'null','null')`, "22023"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',2,'null','null')`, "22023"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',3,'null','null')`, "22023"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',NULL,'null','null')`, "22023"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',4,NULL,'null')`, "22023"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',4,'null',NULL)`, "22023"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',4,'{}','{}')`, "22023"},
 	} {
 		tx, err := admin.Begin(ctx)
 		if err != nil {
@@ -1642,7 +1651,7 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 			Resource: iamv1.ResourceReference{Kind: source.resource, ID: "collection"}, RequestID: "registry-historical", CorrelationID: "registry-historical"}, iamv1.AuthorizationResourceCollection, source.usage)
 		var document []byte
 		if err := admin.QueryRow(ctx, `SELECT document FROM iam.authorization_decisions
-			WHERE request_id='registry-historical' AND action_name=$1 AND contract_version=3`, source.action).Scan(&document); err != nil {
+			WHERE request_id='registry-historical' AND action_name=$1 AND contract_version=4`, source.action).Scan(&document); err != nil {
 			t.Fatal("missing original protected business decision")
 		}
 		var decision iamv1.AuthorizationDecision
@@ -1674,7 +1683,7 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 				t.Fatal("historical business proof consulted a current head or changed its event commitment")
 			}
 			var current []byte
-			if err := admin.QueryRow(ctx, `SELECT document FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2 AND contract_version=3`, original.event.TenantID, original.event.IAMDecisionID).Scan(&current); err != nil || !bytes.Equal(current, original.document) {
+			if err := admin.QueryRow(ctx, `SELECT document FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2 AND contract_version=4`, original.event.TenantID, original.event.IAMDecisionID).Scan(&current); err != nil || !bytes.Equal(current, original.document) {
 				t.Fatal("historical decision changed while current profile advanced")
 			}
 		}
@@ -1779,7 +1788,7 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 	applyIAMSchema(t, ctx, admin)
 	lookup(future, true)
 	for _, function := range []string{"iam.current_authorization_profiles()", "iam.lookup_authorization_profile(text,bigint,text)",
-		"iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb)", "iam.read_audit_evidence(text,text,text,text,jsonb)",
+		"iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb,jsonb)", "iam.read_audit_evidence(text,text,text,text,jsonb)",
 		"iam.resource_kind_for_action(text)", "iam.is_platform_action(text)"} {
 		// Configuration spelling is not the boundary: accept the same two
 		// PostgreSQL identifiers with different whitespace, then roll it back.
@@ -4823,7 +4832,7 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 		if _, err = tx.Exec(ctx, `SET LOCAL ROLE matrix_iam_owner; SELECT set_config('matrix.iam_tenant_id',$1,true)`, member.AccountID); err != nil {
 			t.Fatal(err)
 		}
-		_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,jsonb_build_object('request',document-'apiVersion'-'kind'-'id'-'allowed'-'reason'-'decidedAt'-'tenantId'-'installationId'-'subject','decision',document||jsonb_build_object('id','forged-group-decision','decidedAt',to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),'{}'::jsonb,`+expression+`,boundary_evidence,3,'null'::jsonb) FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$3`, member.AccountID, member.ID, decision.ID)
+		_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,jsonb_build_object('request',document-'apiVersion'-'kind'-'id'-'allowed'-'reason'-'decidedAt'-'tenantId'-'installationId'-'subject','decision',document||jsonb_build_object('id','forged-group-decision','decidedAt',to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),'{}'::jsonb,`+expression+`,boundary_evidence,4,'null'::jsonb,'null'::jsonb) FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$3`, member.AccountID, member.ID, decision.ID)
 		var databaseError *pgconn.PgError
 		if !errors.As(err, &databaseError) || databaseError.Code != code {
 			t.Fatalf("group evidence attack: %v want=%s", err, code)
@@ -5979,6 +5988,605 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	if iamv1.ValidateCreateAccessKeyResponse(first) != nil || first.Outcome != "APPLIED" || first.Key.UserID != user.ID {
 		t.Fatal("one-time key creation differs")
 	}
+	// This is the real restricted database adapter, not a fake Session. No
+	// signature permit or nonce is produced by credential lookup alone.
+	signingConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signingConfig.ConnConfig.User, signingConfig.ConnConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+	signingConfig.ConnConfig.RuntimeParams["application_name"] = "matrix-iam-signed-context-fixture"
+	signingConfig.MaxConns = 2
+	signingPool, err := pgxpool.NewWithConfig(ctx, signingConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer signingPool.Close()
+	var signingLogin string
+	if err := signingPool.QueryRow(ctx, "SELECT session_user").Scan(&signingLogin); err != nil || signingLogin != iamHTTPTestRole {
+		t.Fatal("credential lookup is not using its restricted login")
+	}
+	signingRepository, err := iampostgres.NewRepository(signingPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceSecret, err := iamv1.NewSecret(paasCredential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceDigest, err := authority.LookupCredentialDigest(authority.CredentialService, serviceSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lookupSigningKey := func(key iamv1.AccessKeyID, installation string, audience iamv1.ProductID, wantFound bool) identityaccess.AccessKeyCredential {
+		t.Helper()
+		var credential identityaccess.AccessKeyCredential
+		err := signingRepository.WithinTransaction(ctx, func(ctx context.Context, tx identityaccess.Transaction) error {
+			var found bool
+			var err error
+			credential, found, err = tx.LookupAccessKey(ctx, serviceDigest, key, installation, audience)
+			if err == nil && found != wantFound {
+				t.Errorf("signed credential found=%t want=%t", found, wantFound)
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal("lookup signed credential", err)
+		}
+		return credential
+	}
+	resolvedKey := lookupSigningKey(first.Key.ID, document.InstallationID, "paas", true)
+	if resolvedKey.Subject.Key != first.Key || resolvedKey.Subject.Principal.ID != user.ID || resolvedKey.Subject.Organization.ID != user.AccountID ||
+		resolvedKey.Subject.RootUserID != document.Administrator.ID || resolvedKey.Subject.HasUnrevokedPlatformAttachment {
+		t.Fatal("credential locator did not retain exact physical user/key ownership")
+	}
+	if _, err := json.Marshal(resolvedKey); err == nil {
+		t.Fatal("private signing material accepted ordinary JSON")
+	}
+	lookupSigningKey(first.Key.ID, "another-installation", "paas", false)
+	lookupSigningKey(first.Key.ID, document.InstallationID, "audit", false)
+	lookupSigningKey("unknown-key", document.InstallationID, "paas", false)
+	var signedHistory []auditv1.Event
+	var deletedKeyPacket []byte
+	t.Cleanup(func() { clear(deletedKeyPacket) })
+	t.Run("signed-request-atomic-denial", func(t *testing.T) {
+		// Current product PEP declarations have not enabled ACCESS_KEY yet.
+		// Real MAC verification must still commit Deny+nonce, not a fake Session.
+		sign := func(key iamv1.CreateAccessKeyResponse, requestID string, offset time.Duration) iamv1.AccessKeyAuthorizationRequest {
+			t.Helper()
+			request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+				iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "signed-app"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var now time.Time
+			if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
+				t.Fatal(err)
+			}
+			nonce := make([]byte, 16)
+			if _, err := rand.Read(nonce); err != nil {
+				t.Fatal(err)
+			}
+			bodyHash := sha256.Sum256(nil)
+			signed := iamv1.AccessKeySignedRequest{Parameters: iamv1.AccessKeySignatureParameters{
+				AccessKeyID: key.Key.ID, InstallationID: document.InstallationID, Audience: "paas", SignedAt: now.Add(offset).Unix(),
+				Nonce: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(nonce))},
+				HTTP: iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "iam-key-fixture.invalid:443",
+					EscapedPath: "/api/paas/v1/applications/signed-app", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])}}
+			canonical, err := iamv1.AccessKeySigningBytes(signed.Parameters, signed.HTTP)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clear(canonical)
+			secret := key.Secret.CopyBytes()
+			defer clear(secret)
+			material, err := base64.RawURLEncoding.DecodeString(string(bytes.TrimPrefix(secret, []byte("mak1."))))
+			if err != nil {
+				t.Fatal("decode test key material")
+			}
+			defer clear(material)
+			mac := hmac.New(sha256.New, material)
+			_, _ = mac.Write(canonical)
+			signed.Signature = iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(mac.Sum(nil)))
+			return iamv1.AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: signed}
+		}
+		encode := func(request iamv1.AccessKeyAuthorizationRequest) []byte {
+			t.Helper()
+			encoded, err := iamv1.EncodeAccessKeyAuthorizationRequest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return encoded
+		}
+		deletedKeyPacket = encode(sign(first, "key-signed-deleted-material", 0))
+		counts := func() [3]int {
+			t.Helper()
+			var result [3]int
+			if err := database.QueryRow(ctx, `SELECT
+			 (SELECT count(*) FROM iam.access_key_authorization_evidence WHERE access_key_id=$1),
+			 (SELECT count(*) FROM iam.authorization_decisions WHERE access_key_id=$1),
+			 (SELECT count(*) FROM iam.audit_outbox WHERE event_document#>>'{actor,accessKeyId}'=$1)`, first.Key.ID).Scan(&result[0], &result[1], &result[2]); err != nil {
+				t.Fatal(err)
+			}
+			return result
+		}
+		assertDenied := func(endpoint http.Handler, request iamv1.AccessKeyAuthorizationRequest) iamv1.AccessKeyAuthorization {
+			t.Helper()
+			encoded := encode(request)
+			defer clear(encoded)
+			failures.lastSQLState.Store("")
+			response := performIAMRequest(endpoint, http.MethodPost, "/v1/authorize:access-key", paasCredential, encoded)
+			if response.Code != http.StatusOK {
+				t.Fatalf("signed request status=%d SQLSTATE=%v", response.Code, failures.lastSQLState.Load())
+			}
+			result, err := iamv1.DecodeAccessKeyAuthorization(bytes.NewReader(response.Body.Bytes()))
+			if err != nil || iamv1.CheckAccessKeyAuthorizationForRequest(result, request) != nil || result.Decision.Allowed || result.Decision.Subject != nil {
+				t.Fatal("restricted signature did not return a sanitized current Deny", err)
+			}
+			var original []byte
+			if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'iamDecisionId'=$2`, user.AccountID, result.Decision.ID).Scan(&original); err != nil {
+				t.Fatal("read committed signed fact", err)
+			}
+			var event auditv1.Event
+			if iamv1.DecodeRequest(bytes.NewReader(original), &event) != nil || event.Actor.AccessKeyID != string(request.SignedRequest.Parameters.AccessKeyID) {
+				t.Fatal("signed fact attribution differs")
+			}
+			if event.Actor.AccessKeyID == string(first.Key.ID) {
+				signedHistory = append(signedHistory, event)
+			}
+			return result
+		}
+		initial := counts()
+		for _, offset := range []time.Duration{0, -10 * time.Minute, 10 * time.Minute} {
+			request := sign(first, fmt.Sprintf("key-signed-deny-%d", offset/time.Second), offset)
+			result := assertDenied(handler, request)
+			var complete bool
+			if err := database.QueryRow(ctx, `SELECT d.contract_version=4 AND d.subject_type='USER' AND NOT d.allowed
+			 AND d.principal_id=$3 AND d.access_key_id=$2 AND e.signed_request_digest=$4 AND e.service_lookup_digest=$5
+			 AND e.service_tenant_id=$6 AND e.installation_id=$7 AND d.document->'subject' IS NULL
+			 FROM iam.authorization_decisions d JOIN iam.access_key_authorization_evidence e ON e.tenant_id=d.tenant_id AND e.decision_id=d.id
+			 WHERE d.id=$1`, result.Decision.ID, first.Key.ID, user.ID, result.SignedRequestDigest, serviceDigest, document.Organization.ID, document.InstallationID).Scan(&complete); err != nil || !complete {
+				t.Fatal("signed denial lost exact authority/nonce evidence", err)
+			}
+			encoded := encode(request)
+			response := performIAMRequest(second, http.MethodPost, "/v1/authorize:access-key", paasCredential, encoded)
+			clear(encoded)
+			if response.Code != http.StatusConflict {
+				t.Fatalf("replayed denial status=%d", response.Code)
+			}
+		}
+		if counts() != [3]int{initial[0] + 3, initial[1] + 3, initial[2] + 3} {
+			t.Fatal("Deny or replay produced partial/duplicate facts")
+		}
+		t.Run("record9-private-evidence", func(t *testing.T) {
+			original := signedHistory[0]
+			var decisionBytes, policyBytes, boundaryBytes, evidenceBytes []byte
+			if err := database.QueryRow(ctx, `SELECT d.document,d.policy_evidence,d.boundary_evidence,
+			 jsonb_build_object('accessKeyId',e.access_key_id,'resourceVersion',e.key_resource_version,'formatVersion',e.format_version,
+			 'wrappingKeyId',e.wrapping_key_id,'materialCommitment',e.material_commitment,'installationId',e.installation_id,
+			 'serviceLookupDigest',e.service_lookup_digest,'audience',e.audience,'signedRequestDigest',e.signed_request_digest,
+			 'nonceDigest',e.nonce_digest,'signedAt',e.signed_at)
+			 FROM iam.authorization_decisions d JOIN iam.access_key_authorization_evidence e ON e.tenant_id=d.tenant_id AND e.decision_id=d.id
+			 WHERE d.tenant_id=$1 AND d.id=$2`, original.TenantID, original.IAMDecisionID).Scan(&decisionBytes, &policyBytes, &boundaryBytes, &evidenceBytes); err != nil {
+				t.Fatal("read genuine signed recorder input", err)
+			}
+			for _, sample := range []struct{ name, code string }{
+				{"valid-control", ""}, {"old-contract", "22023"}, {"sql-null", "22023"}, {"role-and-key", "22023"},
+				{"extra-field", "22023"}, {"wrong-format", "22023"}, {"wrong-audience", "22023"},
+				{"wrong-version", "42501"}, {"wrong-key", "42501"}, {"wrong-installation", "42501"},
+				{"wrong-wrapping", "42501"}, {"wrong-commitment", "42501"}, {"wrong-service", "42501"},
+				{"wrong-actor", "42501"}, {"wrong-tenant", "42501"}, {"actor-without-key", "22023"}, {"actor-other-key", "22023"},
+			} {
+				t.Run(sample.name, func(t *testing.T) {
+					var decision iamv1.AuthorizationDecision
+					var evidence map[string]any
+					if json.Unmarshal(decisionBytes, &decision) != nil || json.Unmarshal(evidenceBytes, &evidence) != nil {
+						t.Fatal("invalid committed recorder fixture")
+					}
+					signed := sign(first, decision.RequestID, 0)
+					evidence["nonceDigest"], _ = iamv1.AccessKeyNonceDigest(signed.SignedRequest.Parameters)
+					evidence["signedRequestDigest"], _ = iamv1.AccessKeySignedRequestDigest(signed.SignedRequest)
+					evidence["signedAt"] = signed.SignedRequest.Parameters.SignedAt
+					tx, err := signingPool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer tx.Rollback(context.Background())
+					if err := tx.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&decision.DecidedAt); err != nil {
+						t.Fatal(err)
+					}
+					decision.DecidedAt = decision.DecidedAt.UTC()
+					decision.ID = iamv1.DecisionID("signed-recorder-" + sample.name)
+					fact := original
+					fact.EventID, fact.IAMDecisionID, fact.Target.ID, fact.OccurredAt = auditv1.EventID(decision.ID), auditv1.DecisionID(decision.ID), string(decision.ID), decision.DecidedAt
+					tenant, actor, contract, role := user.AccountID, user.ID, 4, "null"
+					switch sample.name {
+					case "old-contract":
+						contract = 3
+					case "role-and-key":
+						role = `{}`
+					case "extra-field":
+						evidence["principalId"] = user.ID
+					case "wrong-format":
+						evidence["formatVersion"] = 2
+					case "wrong-audience":
+						evidence["audience"] = "audit"
+					case "wrong-version":
+						evidence["resourceVersion"] = 2
+					case "wrong-key":
+						evidence["accessKeyId"] = "not-a-real-key"
+					case "wrong-installation":
+						evidence["installationId"] = "another-installation"
+					case "wrong-wrapping":
+						evidence["wrappingKeyId"] = "another-wrapping-key"
+					case "wrong-commitment":
+						evidence["materialCommitment"] = "sha256:" + strings.Repeat("0", 64)
+					case "wrong-service":
+						evidence["serviceLookupDigest"], _ = authority.LookupCredentialDigest(authority.CredentialService, iamHTTPSecret(t, auditCredential))
+					case "wrong-actor":
+						actor = manager.ID
+					case "wrong-tenant":
+						tenant = "another-account"
+					case "actor-without-key":
+						fact.Actor.AccessKeyID = ""
+					case "actor-other-key":
+						fact.Actor.AccessKeyID = "another-key"
+					}
+					keyWire, err := json.Marshal(evidence)
+					if err != nil {
+						t.Fatal("encode private recorder fixture")
+					}
+					var keyInput any = string(keyWire)
+					if sample.name == "sql-null" {
+						keyInput = nil
+					}
+					envelope := map[string]any{"request": signed.Authorization, "decision": decision}
+					_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,$7,$8::jsonb,$9::jsonb)`,
+						tenant, actor, string(mustIAMJSON(t, envelope)), string(mustIAMJSON(t, fact)), string(policyBytes), string(boundaryBytes), contract, role, keyInput)
+					if err == nil {
+						_, err = tx.Exec(ctx, "SET CONSTRAINTS ALL IMMEDIATE")
+					}
+					if sample.code == "" {
+						if err != nil {
+							t.Fatal("valid private recorder control failed", err)
+						}
+					} else {
+						var rejected *pgconn.PgError
+						if !errors.As(err, &rejected) || rejected.Code != sample.code {
+							actual := "not-a-postgres-rejection"
+							if rejected != nil {
+								actual = rejected.Code
+							}
+							t.Fatalf("private recorder rejection code for %s: got=%s want=%s", sample.name, actual, sample.code)
+						}
+					}
+				})
+			}
+			// An owner-side malformed insert is a database invariant attack, not
+			// a supported issuance path. The real API has no direct table DML.
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO iam.authorization_decisions
+			 SELECT (jsonb_populate_record(NULL::iam.authorization_decisions,to_jsonb(d)||jsonb_build_object(
+			 'id','signed-missing-evidence','document',d.document||'{"id":"signed-missing-evidence"}'::jsonb))).*
+			 FROM iam.authorization_decisions d WHERE d.tenant_id=$1 AND d.id=$2`, original.TenantID, original.IAMDecisionID)
+			if err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal("prepare missing signed evidence", err)
+			}
+			err = tx.Commit(ctx)
+			var rejected *pgconn.PgError
+			if !errors.As(err, &rejected) || rejected.Code != "23514" {
+				t.Fatal("missing signed evidence committed")
+			}
+			var partial int
+			if err := database.QueryRow(ctx, "SELECT count(*) FROM iam.authorization_decisions WHERE id='signed-missing-evidence'").Scan(&partial); err != nil || partial != 0 {
+				t.Fatal("incomplete signed decision survived failed commit")
+			}
+		})
+		for _, attack := range []string{"bad-mac", "unknown-key", "wrong-installation", "wrong-service"} {
+			request := sign(first, "key-signed-"+attack, 0)
+			bearer := paasCredential
+			switch attack {
+			case "bad-mac":
+				request.SignedRequest.HTTP.EscapedPath = "/api/paas/v1/applications/forged-app"
+			case "unknown-key":
+				request.SignedRequest.Parameters.AccessKeyID = "not-a-real-key"
+			case "wrong-installation":
+				request.SignedRequest.Parameters.InstallationID = "another-installation"
+			case "wrong-service":
+				bearer = auditCredential
+			}
+			before := counts()
+			encoded := encode(request)
+			response := performIAMRequest(handler, http.MethodPost, "/v1/authorize:access-key", bearer, encoded)
+			clear(encoded)
+			if response.Code != http.StatusUnauthorized || counts() != before {
+				t.Fatalf("unauthenticated %s wrote evidence or status=%d", attack, response.Code)
+			}
+		}
+		request := sign(first, "key-signed-concurrent", 0)
+		encoded := encode(request)
+		defer clear(encoded)
+		before := counts()
+		responses := make(chan int, 2)
+		for _, endpoint := range []http.Handler{handler, second} {
+			go func(endpoint http.Handler) {
+				responses <- performIAMRequest(endpoint, http.MethodPost, "/v1/authorize:access-key", paasCredential, encoded).Code
+			}(endpoint)
+		}
+		statuses := []int{<-responses, <-responses}
+		slices.Sort(statuses)
+		if !slices.Equal(statuses, []int{http.StatusOK, http.StatusConflict}) || counts() != [3]int{before[0] + 1, before[1] + 1, before[2] + 1} {
+			t.Fatalf("two IAM authorities reused a nonce: %v", statuses)
+		}
+		if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_signed_outbox_failure() RETURNS trigger LANGUAGE plpgsql AS $body$
+		 BEGIN IF NEW.event_document->>'requestId'='key-signed-outbox-failure' THEN
+		   RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='synthetic final outbox failure';
+		 END IF; RETURN NEW; END $body$;
+		 CREATE TRIGGER matrix_signed_outbox_failure BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_signed_outbox_failure()`); err != nil {
+			t.Fatal("install signed outbox failure", err)
+		}
+		removeFailure := func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+			defer stop()
+			if _, err := database.Exec(cleanup, `DROP TRIGGER IF EXISTS matrix_signed_outbox_failure ON iam.audit_outbox; DROP FUNCTION IF EXISTS public.matrix_signed_outbox_failure()`); err != nil {
+				t.Error("remove owned signed outbox fixture", err)
+			}
+		}
+		defer removeFailure()
+		request = sign(first, "key-signed-outbox-failure", 0)
+		failedBody := encode(request)
+		defer clear(failedBody)
+		before = counts()
+		response := performIAMRequest(handler, http.MethodPost, "/v1/authorize:access-key", paasCredential, failedBody)
+		if response.Code != http.StatusServiceUnavailable || counts() != before {
+			t.Fatal("failed final outbox retained a nonce or decision", response.Code)
+		}
+		removeFailure()
+		assertDenied(second, request)
+		if counts() != [3]int{before[0] + 1, before[1] + 1, before[2] + 1} {
+			t.Fatal("rolled-back signature could not complete exactly once")
+		}
+		for _, restriction := range []string{"key-disabled", "user-disabled", "forced-change", "platform-attachment"} {
+			t.Run(restriction, func(t *testing.T) {
+				prefix := "signed-restricted-" + restriction
+				target, _ := newUser(prefix)
+				keyPath := "/v1/users/" + string(target.ID) + "/access-keys"
+				var created iamv1.CreateAccessKeyResponse
+				call(handler, http.MethodPost, keyPath, managerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: prefix + "-create"}, http.StatusCreated, &created)
+				keyPath += "/" + string(created.Key.ID)
+				switch restriction {
+				case "key-disabled":
+					call(handler, http.MethodPost, keyPath+":set-status", managerBearer,
+						iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: prefix + "-disable"}, http.StatusOK, nil)
+				case "user-disabled":
+					call(handler, http.MethodPost, "/v1/users/"+string(target.ID)+":set-status", root,
+						iamv1.SetUserStatusRequest{ResourceVersion: target.ResourceVersion, Status: iamv1.PrincipalDisabled, RequestID: prefix + "-disable"}, http.StatusOK, &target)
+				case "forced-change":
+					call(handler, http.MethodPost, "/v1/users/"+string(target.ID)+":reset-password", root,
+						map[string]any{"resourceVersion": target.ResourceVersion, "initialPassword": initialDeveloperPassword, "requestId": prefix + "-reset"}, http.StatusOK, nil)
+				case "platform-attachment":
+					call(handler, http.MethodPost, "/v1/policy-attachments", root,
+						iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)},
+							PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: prefix + "-grant"}, http.StatusOK, nil)
+				}
+				signed := sign(created, prefix+"-request", 0)
+				result := assertDenied(handler, signed)
+				var exact bool
+				if err := database.QueryRow(ctx, `SELECT count(*)=1 AND bool_and(d.id=$2 AND e.user_id=$3 AND NOT d.allowed)
+				 FROM iam.access_key_authorization_evidence e JOIN iam.authorization_decisions d ON d.tenant_id=e.tenant_id AND d.id=e.decision_id
+				 WHERE e.access_key_id=$1`, created.Key.ID, result.Decision.ID, target.ID).Scan(&exact); err != nil || !exact {
+					t.Fatal("restricted key did not commit its own Deny and nonce", err)
+				}
+				if restriction == "key-disabled" {
+					call(second, http.MethodPost, keyPath+":set-status", managerBearer,
+						iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 2, Status: iamv1.AccessKeyEnabled, RequestID: prefix + "-enable"}, http.StatusOK, nil)
+				}
+				if restriction == "user-disabled" {
+					call(second, http.MethodPost, "/v1/users/"+string(target.ID)+":set-status", root,
+						iamv1.SetUserStatusRequest{ResourceVersion: target.ResourceVersion, Status: iamv1.PrincipalActive, RequestID: prefix + "-enable"}, http.StatusOK, nil)
+				}
+				wire := encode(signed)
+				defer clear(wire)
+				if response := performIAMRequest(second, http.MethodPost, "/v1/authorize:access-key", paasCredential, wire); response.Code != http.StatusConflict {
+					t.Fatal("restricted or restored identity reused the old signed packet", response.Code)
+				}
+			})
+		}
+	})
+	for _, mutation := range []string{"platform-grant", "user-reset", "key-disable"} {
+		for _, lookupFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("signed-context-locks/%s/lookup-first-%t", mutation, lookupFirst), func(t *testing.T) {
+				prefix := fmt.Sprintf("signed-lock-%s-%t", mutation, lookupFirst)
+				target, _ := newUser(prefix)
+				keyPath := "/v1/users/" + string(target.ID) + "/access-keys"
+				var created iamv1.CreateAccessKeyResponse
+				call(handler, http.MethodPost, keyPath, managerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: prefix + "-create"}, http.StatusCreated, &created)
+				keyPath += "/" + string(created.Key.ID)
+				mutationPath, mutationBearer := "/v1/policy-attachments", root
+				var command any = iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)},
+					PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: prefix + "-mutation"}
+				switch mutation {
+				case "user-reset":
+					mutationPath = "/v1/users/" + string(target.ID) + ":reset-password"
+					command = map[string]any{"resourceVersion": target.ResourceVersion, "initialPassword": initialDeveloperPassword, "requestId": prefix + "-mutation"}
+				case "key-disable":
+					mutationPath, mutationBearer = keyPath+":set-status", managerBearer
+					command = iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: prefix + "-mutation"}
+				}
+				wait, stop := context.WithTimeout(ctx, 5*time.Second)
+				defer stop()
+				held, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+				var once sync.Once
+				unlock := func() { once.Do(func() { close(release) }) }
+				defer unlock()
+				go func() {
+					done <- signingRepository.WithinTransaction(wait, func(ctx context.Context, tx identityaccess.Transaction) error {
+						// Acquire a real old snapshot before allowing the writer, or
+						// hold the actual complete key context until it has waited.
+						if _, found, err := tx.LookupService(ctx, serviceDigest); err != nil || !found {
+							return identityaccess.ErrUnavailable
+						}
+						if lookupFirst {
+							if _, found, err := tx.LookupAccessKey(ctx, serviceDigest, created.Key.ID, document.InstallationID, "paas"); err != nil || !found {
+								return identityaccess.ErrUnavailable
+							}
+						}
+						close(held)
+						select {
+						case <-release:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+						if !lookupFirst {
+							_, _, err := tx.LookupAccessKey(ctx, serviceDigest, created.Key.ID, document.InstallationID, "paas")
+							return err
+						}
+						return nil
+					})
+				}()
+				select {
+				case <-held:
+				case err := <-done:
+					t.Fatal("credential lock not acquired", err)
+				case <-wait.Done():
+					t.Fatal("credential lock wait expired")
+				}
+				body := mustIAMJSON(t, command)
+				changed := make(chan *httptest.ResponseRecorder, 1)
+				go func() { changed <- performIAMRequest(second, http.MethodPost, mutationPath, mutationBearer, body) }()
+				var response *httptest.ResponseRecorder
+				if lookupFirst {
+					ticker := time.NewTicker(10 * time.Millisecond)
+					defer ticker.Stop()
+					for {
+						var blocked bool
+						if err := database.QueryRow(wait, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity holder,pg_stat_activity writer
+						 WHERE holder.datname=current_database() AND holder.application_name='matrix-iam-signed-context-fixture'
+						 AND holder.pid=ANY(pg_blocking_pids(writer.pid)))`).Scan(&blocked); err != nil {
+							t.Fatal("observe signed context lock", err)
+						}
+						if blocked {
+							break
+						}
+						select {
+						case response = <-changed:
+							t.Fatalf("security write escaped context locks: %d", response.Code)
+						case <-ticker.C:
+						case <-wait.Done():
+							t.Fatal("security write did not reach context lock")
+						}
+					}
+				} else {
+					select {
+					case response = <-changed:
+					case <-wait.Done():
+						t.Fatal("security write did not commit before stale lookup")
+					}
+				}
+				unlock()
+				select {
+				case err := <-done:
+					if (lookupFirst && err != nil) || (!lookupFirst && !errors.Is(err, identityaccess.ErrRetryableTransaction)) {
+						t.Fatal("stale snapshot was not rejected or held context failed", err)
+					}
+				case <-wait.Done():
+					t.Fatal("signed context transaction did not finish")
+				}
+				if response == nil {
+					select {
+					case response = <-changed:
+					case <-wait.Done():
+						t.Fatal("security mutation did not finish")
+					}
+				}
+				if response.Code != http.StatusOK {
+					t.Fatalf("signed context mutation status=%d", response.Code)
+				}
+				current := lookupSigningKey(created.Key.ID, document.InstallationID, "paas", true)
+				switch mutation {
+				case "platform-grant":
+					if !current.Subject.HasUnrevokedPlatformAttachment {
+						t.Fatal("fresh snapshot missed platform attachment")
+					}
+					var grant iamv1.PolicyAttachment
+					if iamv1.DecodeRequest(bytes.NewReader(response.Body.Bytes()), &grant) != nil {
+						t.Fatal("decode signed context platform grant")
+					}
+					call(handler, http.MethodPost, "/v1/policy-attachments/"+string(grant.ID)+":revoke", root,
+						iamv1.RevokePolicyAttachmentRequest{ResourceVersion: grant.ResourceVersion, RequestID: prefix + "-revoke"}, http.StatusOK, nil)
+				case "user-reset":
+					if !current.Subject.Principal.MustChangePassword {
+						t.Fatal("fresh snapshot missed forced password change")
+					}
+				case "key-disable":
+					if current.Subject.Key.Status != iamv1.AccessKeyDisabled {
+						t.Fatal("fresh snapshot missed key disable")
+					}
+				}
+				if mutation != "key-disable" {
+					call(handler, http.MethodPost, keyPath+":set-status", managerBearer,
+						iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: prefix + "-disable"}, http.StatusOK, nil)
+				}
+				call(handler, http.MethodPost, keyPath+":delete", managerBearer,
+					iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: 2, RequestID: prefix + "-delete"}, http.StatusOK, nil)
+			})
+		}
+	}
+	t.Run("signed-key-physical-owner", func(t *testing.T) {
+		var account iamv1.Account
+		call(handler, http.MethodPost, "/v1/accounts", root, map[string]any{"id": "a-signing-account", "displayName": "Signing account",
+			"rootLoginName": "signing-other-root", "rootDisplayName": "Signing root", "initialPassword": initialDeveloperPassword, "requestId": "signing-account-create"}, http.StatusCreated, &account)
+		otherRoot := localRecoveryLogin(t, handler, "signing-other-root", initialDeveloperPassword, true)
+		otherRoot = localRecoveryChangePassword(t, handler, otherRoot, initialDeveloperPassword, changedDeveloperPassword)
+		var target iamv1.User
+		call(handler, http.MethodPost, "/v1/users", otherRoot, map[string]any{"loginName": "key-user", "displayName": "Same name, different owner",
+			"initialPassword": initialDeveloperPassword, "requestId": "signing-other-user"}, http.StatusCreated, &target)
+		bearer := localRecoveryLogin(t, handler, "key-user@"+string(account.ID), initialDeveloperPassword, true)
+		bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+		var current iamv1.CurrentIdentity
+		call(handler, http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusOK, &current)
+		target = current.User
+		var keyPolicy iamv1.PolicyDetail
+		call(handler, http.MethodPost, "/v1/policies", otherRoot, iamv1.CreatePolicyRequest{DisplayName: "Signing key manager",
+			Document: policy.Version.Document, RequestID: "signing-other-policy"}, http.StatusCreated, &keyPolicy)
+		call(handler, http.MethodPost, "/v1/policy-attachments", otherRoot, iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(account.RootIdentity.PrincipalID)},
+			PolicyID: keyPolicy.Policy.ID, PolicyResourceVersion: keyPolicy.Policy.ResourceVersion, RequestID: "signing-other-grant"}, http.StatusOK, nil)
+		var created iamv1.CreateAccessKeyResponse
+		otherPath := "/v1/users/" + string(target.ID) + "/access-keys"
+		call(handler, http.MethodPost, otherPath, otherRoot, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion,
+			RequestID: "signing-other-key"}, http.StatusCreated, &created)
+		otherKey := lookupSigningKey(created.Key.ID, document.InstallationID, "paas", true)
+		if otherKey.Subject.Principal.LoginName != user.LoginName || otherKey.Subject.Principal.ID == user.ID || otherKey.Subject.Organization.ID != account.ID ||
+			otherKey.Subject.RootUserID != account.RootIdentity.PrincipalID || otherKey.Subject.Key != created.Key {
+			t.Fatal("installed service home account replaced the key's real account")
+		}
+		call(handler, http.MethodPost, "/v1/accounts/"+string(account.ID)+":set-status", root,
+			iamv1.SetAccountStatusRequest{ResourceVersion: account.ResourceVersion, Status: iamv1.AccountDisabled, RequestID: "signing-account-pause"}, http.StatusOK, &account)
+		otherKey = lookupSigningKey(created.Key.ID, document.InstallationID, "paas", true)
+		if otherKey.Subject.Organization.Status != iamv1.AccountDisabled {
+			t.Fatal("paused account was hidden before MAC-verified Deny")
+		}
+		call(handler, http.MethodPost, "/v1/accounts/"+string(account.ID)+":set-status", root,
+			iamv1.SetAccountStatusRequest{ResourceVersion: account.ResourceVersion, Status: iamv1.AccountActive, RequestID: "signing-account-resume"}, http.StatusOK, &account)
+		otherRoot = localRecoveryLogin(t, handler, "signing-other-root", changedDeveloperPassword, false)
+		call(handler, http.MethodPost, "/v1/users/"+string(target.ID)+":reset-password", otherRoot,
+			map[string]any{"resourceVersion": target.ResourceVersion, "initialPassword": initialDeveloperPassword, "requestId": "signing-other-reset"}, http.StatusOK, &target)
+		otherKey = lookupSigningKey(created.Key.ID, document.InstallationID, "paas", true)
+		if !otherKey.Subject.Principal.MustChangePassword {
+			t.Fatal("forced-change key was hidden before MAC verification")
+		}
+		otherPath += "/" + string(created.Key.ID)
+		call(handler, http.MethodPost, otherPath+":set-status", otherRoot, iamv1.SetAccessKeyStatusRequest{
+			AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: "signing-other-key-disable"}, http.StatusOK, nil)
+		call(handler, http.MethodPost, otherPath+":delete", otherRoot, iamv1.DeleteAccessKeyRequest{
+			AccessKeyResourceVersion: 2, RequestID: "signing-other-key-delete"}, http.StatusOK, nil)
+		lookupSigningKey(created.Key.ID, document.InstallationID, "paas", false)
+	})
 	secretBytes := first.Secret.CopyBytes()
 	defer clear(secretBytes)
 	var sealed authority.SealedAccessKeySecret
@@ -6050,6 +6658,10 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	disable := iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: "key-disable-first"}
 	var disabled iamv1.SetAccessKeyStatusResponse
 	call(handler, http.MethodPost, firstPath+":set-status", managerBearer, disable, http.StatusOK, &disabled)
+	resolvedKey = lookupSigningKey(first.Key.ID, document.InstallationID, "paas", true)
+	if resolvedKey.Subject.Key.Status != iamv1.AccessKeyDisabled || resolvedKey.Subject.Key.ResourceVersion != 2 {
+		t.Fatal("disabled key was hidden instead of available for MAC-verified Deny")
+	}
 	call(second, http.MethodPost, path, managerBearer, create, http.StatusConflict, nil)
 	var deleted iamv1.DeleteAccessKeyResponse
 	deleteRequest := iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: 2, RequestID: "key-delete-first"}
@@ -6057,6 +6669,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	if deleted.Deletion.ResourceVersion != 3 {
 		t.Fatal("deletion did not advance exact key version")
 	}
+	lookupSigningKey(first.Key.ID, document.InstallationID, "paas", false)
 	call(handler, http.MethodGet, firstPath, managerBearer, nil, http.StatusForbidden, nil)
 	call(handler, http.MethodPost, firstPath+":delete", managerBearer, deleteRequest, http.StatusOK, &deleted)
 	create.RequestID = "key-first"
@@ -6096,6 +6709,10 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	var disabledUser iamv1.User
 	call(handler, http.MethodPost, "/v1/users/"+string(user.ID)+":set-status", root,
 		iamv1.SetUserStatusRequest{ResourceVersion: user.ResourceVersion, Status: iamv1.PrincipalDisabled, RequestID: "key-user-disable"}, http.StatusOK, &disabledUser)
+	resolvedKey = lookupSigningKey(replacement.Key.ID, document.InstallationID, "paas", true)
+	if resolvedKey.Subject.Principal.Status != iamv1.PrincipalDisabled || resolvedKey.Subject.Principal.ResourceVersion != disabledUser.ResourceVersion {
+		t.Fatal("disabled USER was hidden or replaced with a login Session")
+	}
 	call(second, http.MethodGet, path, managerBearer, nil, http.StatusOK, &directory)
 	if directory.Capabilities[0].Available {
 		t.Fatal("disabled user can create keys")
@@ -6273,6 +6890,44 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 					var grant iamv1.PolicyAttachment
 					if iamv1.DecodeRequest(bytes.NewReader(mutationResponse.Body.Bytes()), &grant) != nil {
 						t.Fatal("decode exact platform grant")
+					}
+					if keyFirst {
+						var key iamv1.CreateAccessKeyResponse
+						if iamv1.DecodeRequest(bytes.NewReader(keyResponse.Body.Bytes()), &key) != nil {
+							t.Fatal("decode protected key")
+						}
+						protected := lookupSigningKey(key.Key.ID, document.InstallationID, "paas", true)
+						if !protected.Subject.HasUnrevokedPlatformAttachment {
+							t.Fatal("platform attachment was hidden from signed credential context")
+						}
+						// A retired policy disappears from current_policy_snapshot, but
+						// its unrevoked attachment must still protect the real USER.
+						tx, err := database.Begin(ctx)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer tx.Rollback(context.Background())
+						if _, err := tx.Exec(ctx, `UPDATE iam.policies SET status='RETIRED',resource_version=resource_version+1,updated_at=transaction_timestamp() WHERE id=$1`, iamv1.SystemPolicyPlatformOperator); err != nil {
+							t.Fatal("retire test platform policy", err)
+						}
+						if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_api"); err != nil {
+							t.Fatal(err)
+						}
+						var encoded []byte
+						if err := tx.QueryRow(ctx, "SELECT iam.lookup_access_key($1,$2,$3,$4)", serviceDigest, key.Key.ID, document.InstallationID, "paas").Scan(&encoded); err != nil {
+							t.Fatal("read retired platform protection", err)
+						}
+						var snapshot struct {
+							Protected bool              `json:"hasUnrevokedPlatformAttachment"`
+							Policies  []json.RawMessage `json:"policies"`
+						}
+						if json.Unmarshal(encoded, &snapshot) != nil || !snapshot.Protected || len(snapshot.Policies) != 0 {
+							t.Fatal("retired policy became absence of platform protection")
+						}
+						clear(encoded)
+						if err := tx.Rollback(ctx); err != nil {
+							t.Fatal(err)
+						}
 					}
 					call(handler, http.MethodPost, "/v1/policy-attachments/"+string(grant.ID)+":revoke", root,
 						iamv1.RevokePolicyAttachmentRequest{ResourceVersion: grant.ResourceVersion, RequestID: prefix + "-revoke-platform"}, http.StatusOK, nil)
@@ -6557,7 +7212,11 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 		}
 		for _, attack := range []string{
 			"SELECT * FROM iam.access_keys", "SELECT ciphertext FROM iam.access_keys", "SELECT * FROM iam.access_key_intents",
-			"SELECT * FROM iam.access_key_wrapping_registry", "UPDATE iam.access_keys SET status='ENABLED'",
+			"SELECT * FROM iam.access_key_authorization_evidence", "UPDATE iam.access_key_authorization_evidence SET signed_at=1",
+			"SELECT iam.access_key_authorization_evidence_matches('account','decision')",
+			"SELECT iam.record_access_key_evidence('account','actor','decision','{}'::jsonb)",
+			"SELECT iam.assert_current_access_key_authorization('account','actor','{}'::jsonb,'{}'::jsonb)",
+			"SELECT * FROM iam.access_key_wrapping_registry", "SELECT * FROM iam.access_key_index", "UPDATE iam.access_keys SET status='ENABLED'",
 			"INSERT INTO iam.access_keys DEFAULT VALUES", "DELETE FROM iam.access_keys", "TRUNCATE iam.access_keys CASCADE",
 			"SELECT iam.access_key_snapshot('account','key')", "SELECT iam.access_key_intent_result('account','actor','user','key','iam.access-key.create','request','sha256:'||repeat('0',64))",
 			"SELECT iam.delete_user_access_keys('account','actor','decision','user','{}'::jsonb)", "SET ROLE matrix_iam_owner", "SET ROLE matrix_iam_migrator",
@@ -6577,10 +7236,38 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 			}
 		}
 	})
-	// The registry and original completion snapshots survive deletion/restart/replay.
+	t.Run("deleted-material-and-historical-service", func(t *testing.T) {
+		var deleted bool
+		if err := database.QueryRow(ctx, `SELECT deleted_at IS NOT NULL AND ciphertext IS NULL FROM iam.access_keys WHERE id=$1`, first.Key.ID).Scan(&deleted); err != nil || !deleted || len(deletedKeyPacket) == 0 {
+			t.Fatal("deleted-key fixture lacks a real tombstone or original signed packet")
+		}
+		// Prove that missing material, not an invalid calling service, rejects it.
+		call(second, http.MethodGet, "/v1/service-identity", paasCredential, nil, http.StatusOK, nil)
+		if response := performIAMRequest(second, http.MethodPost, "/v1/authorize:access-key", paasCredential, deletedKeyPacket); response.Code != http.StatusUnauthorized {
+			t.Fatal("deleted key retained a usable signed credential", response.Code)
+		}
+		var effects int
+		if err := database.QueryRow(ctx, `SELECT
+		 (SELECT count(*) FROM iam.authorization_decisions WHERE request_id='key-signed-deleted-material')+
+		 (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId'='key-signed-deleted-material')`).Scan(&effects); err != nil || effects != 0 {
+			t.Fatal("missing key material allocated decision or outbox state", err)
+		}
+		// Test-only lifecycle fixture. Ordinary runtime roles cannot revoke or
+		// alter the service identity directly. Its immutable tuple must survive.
+		changed, err := database.Exec(ctx, `UPDATE iam.service_credentials SET revoked_at=transaction_timestamp() WHERE lookup_digest=$1 AND revoked_at IS NULL`, serviceDigest)
+		if err != nil || changed.RowsAffected() != 1 {
+			t.Fatal("revoke original signing service fixture", err)
+		}
+		call(second, http.MethodGet, "/v1/service-identity", paasCredential, nil, http.StatusUnauthorized, nil)
+	})
+	// The registry, revoked service and original completions survive replay.
 	const retained = `SELECT jsonb_build_object('keys',(SELECT jsonb_agg(to_jsonb(k) ORDER BY id) FROM iam.access_keys k),
+		'signedEvidence',(SELECT jsonb_agg(to_jsonb(e) ORDER BY tenant_id,decision_id) FROM iam.access_key_authorization_evidence e),
 		'intents',(SELECT jsonb_agg(to_jsonb(i) ORDER BY actor_id,request_id) FROM iam.access_key_intents i),
-		'registry',(SELECT jsonb_agg(to_jsonb(r) ORDER BY wrapping_key_id) FROM iam.access_key_wrapping_registry r))::text`
+		'registry',(SELECT jsonb_agg(to_jsonb(r) ORDER BY wrapping_key_id) FROM iam.access_key_wrapping_registry r),
+		'locators',(SELECT jsonb_agg(to_jsonb(i) ORDER BY key_id) FROM iam.access_key_index i),
+		'services',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.service_credentials c),
+		'serviceLocators',(SELECT jsonb_agg(to_jsonb(i) ORDER BY lookup_digest) FROM iam.service_credential_index i))::text`
 	var before, after string
 	if err := database.QueryRow(ctx, retained).Scan(&before); err != nil {
 		t.Fatal("read retained key state")
@@ -6593,6 +7280,26 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	if err := database.QueryRow(ctx, retained).Scan(&after); err != nil || before != after {
 		t.Fatal("migration/bootstrap changed key history")
 	}
+	t.Run("signed-history-after-deletion-revocation-and-replay", func(t *testing.T) {
+		var deleted bool
+		if err := database.QueryRow(ctx, `SELECT deleted_at IS NOT NULL AND format_version IS NULL AND ciphertext IS NULL FROM iam.access_keys WHERE id=$1`, first.Key.ID).Scan(&deleted); err != nil || !deleted {
+			t.Fatal("history fixture must have actually deleted key material", err)
+		}
+		if len(signedHistory) == 0 {
+			t.Fatal("missing signed authority history")
+		}
+		for _, event := range signedHistory {
+			var result iamv1.AuditProducerAuthorization
+			call(second, http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, &result)
+			_, digest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+			if err != nil || result.ContentDigest != digest {
+				t.Fatal("retained key history lost immutable Audit proof", err)
+			}
+			forged := event
+			forged.Actor.AccessKeyID = "another-key"
+			call(second, http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: forged}, http.StatusForbidden, nil)
+		}
+	})
 	if err := replica.VerifyAccessKeyCustody(ctx); err != nil {
 		t.Fatal("deleting all keys removed registry custody")
 	}
@@ -6631,6 +7338,29 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	call(second, http.MethodGet, "/ready", "", nil, http.StatusOK, nil)
 	for _, attack := range []string{
 		`ALTER TABLE iam.access_keys NO FORCE ROW LEVEL SECURITY`,
+		`ALTER TABLE iam.access_key_authorization_evidence NO FORCE ROW LEVEL SECURITY`,
+		`GRANT SELECT(nonce_digest) ON iam.access_key_authorization_evidence TO matrix_iam_api`,
+		`ALTER TABLE iam.access_key_authorization_evidence DISABLE TRIGGER cannot_update`,
+		`ALTER TABLE iam.access_key_authorization_evidence DISABLE TRIGGER access_key_authorization_complete`,
+		`ALTER TABLE iam.authorization_decisions DISABLE TRIGGER access_key_authorization_complete`,
+		`DO $attack$ DECLARE name text; BEGIN
+		 SELECT c.conname INTO STRICT name FROM pg_constraint c
+		 WHERE c.conrelid='iam.access_key_authorization_evidence'::regclass AND c.contype='u'
+		 AND (SELECT array_agg(a.attname::text ORDER BY k.ordinality) FROM unnest(c.conkey) WITH ORDINALITY k(attnum,ordinality)
+		 JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum)=ARRAY['access_key_id','nonce_digest'];
+		 EXECUTE format('ALTER TABLE iam.access_key_authorization_evidence DROP CONSTRAINT %I',name);
+		 END $attack$`,
+		`ALTER TABLE iam.access_key_authorization_evidence DROP CONSTRAINT access_key_authorization_values`,
+		`GRANT EXECUTE ON FUNCTION iam.record_access_key_evidence(text,text,text,jsonb) TO matrix_iam_api`,
+		`GRANT SELECT ON iam.access_key_index TO matrix_iam_api`,
+		`ALTER TABLE iam.access_key_index DISABLE TRIGGER cannot_update`,
+		`ALTER TABLE iam.access_key_index DROP CONSTRAINT access_key_index_tenant_id_user_id_key_id_fkey`,
+		`ALTER TABLE iam.access_keys DISABLE TRIGGER access_key_identity_registered`,
+		`ALTER FUNCTION iam.lookup_access_key(text,text,text,text) SECURITY INVOKER`,
+		`GRANT EXECUTE ON FUNCTION iam.lookup_access_key(text,text,text,text) TO matrix_iam_worker`,
+		`ALTER TABLE iam.service_credentials DISABLE TRIGGER service_credential_revoked_once`,
+		`ALTER TABLE iam.service_credential_index DISABLE TRIGGER identity_cannot_update`,
+		`ALTER TABLE iam.service_credential_index DROP CONSTRAINT service_credential_index_credential_fk`,
 		`CREATE POLICY access_key_open ON iam.access_keys USING(true)`,
 		`GRANT SELECT(ciphertext) ON iam.access_keys TO matrix_iam_api`,
 		`ALTER TABLE iam.access_key_wrapping_registry DISABLE TRIGGER cannot_update`,
@@ -6663,6 +7393,20 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 		}
 	}
 	for _, attack := range []string{
+		`UPDATE iam.access_key_authorization_evidence SET signed_at=1`,
+		`DELETE FROM iam.access_key_authorization_evidence`,
+		`TRUNCATE iam.access_key_authorization_evidence`,
+		`UPDATE iam.access_key_index SET tenant_id='forged'`,
+		`DELETE FROM iam.access_key_index`,
+		`TRUNCATE iam.access_key_index`,
+		`UPDATE iam.service_credentials SET verification_digest='sha256:'||repeat('a',64)`,
+		`UPDATE iam.service_credentials SET created_at=created_at-interval '1 second'`,
+		`UPDATE iam.service_credentials SET revoked_at=NULL`,
+		`DELETE FROM iam.service_credentials`,
+		`TRUNCATE iam.service_credentials CASCADE`,
+		`UPDATE iam.service_credential_index SET lookup_digest='sha256:'||repeat('b',64)`,
+		`DELETE FROM iam.service_credential_index`,
+		`TRUNCATE iam.service_credential_index`,
 		`UPDATE iam.access_key_wrapping_registry SET material_commitment='sha256:'||repeat('b',64)`,
 		`DELETE FROM iam.access_key_wrapping_registry`,
 		`TRUNCATE iam.access_key_wrapping_registry CASCADE`,
@@ -6721,6 +7465,11 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 			applyIAMSchema(t, ctx, database)
 			createIAMHTTPRole(t, ctx, database)
 			failures := &iamTransactionFailureTrace{}
+			defer func() {
+				if t.Failed() {
+					t.Logf("management gate context=%v last SQLSTATE=%v serializations=%d", ctx.Err(), failures.lastSQLState.Load(), failures.serialization.Load())
+				}
+			}()
 			workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, failures)
 			t.Cleanup(func() {
 				if count := failures.deadlock.Load(); count != 0 {
@@ -8158,7 +8907,7 @@ func proveRoleSessionIssuance(t *testing.T, ctx context.Context, handler http.Ha
 				t.Fatal("business subject is not the exact role lineage")
 			}
 			var bound bool
-			if err := database.QueryRow(ctx, `SELECT contract_version=3 AND principal_id IS NULL AND subject_type='ROLE' AND role_id=$3 AND source_principal_id=$4
+			if err := database.QueryRow(ctx, `SELECT contract_version=4 AND principal_id IS NULL AND subject_type='ROLE' AND role_id=$3 AND source_principal_id=$4
 				AND role_evidence->>'sessionId'=$5 AND role_evidence=iam.role_authorization_evidence(tenant_id,$5)
 				AND boundary_evidence='{"state":"NOT_APPLICABLE"}'::jsonb
 				AND EXISTS(SELECT 1 FROM iam.audit_outbox o WHERE o.tenant_id=d.tenant_id AND o.event_document->>'iamDecisionId'=d.id
@@ -8418,7 +9167,7 @@ func proveRoleSessionIssuance(t *testing.T, ctx context.Context, handler http.Ha
 			`ALTER TABLE iam.authorization_decisions DROP CONSTRAINT authorization_decisions_role_fk`,
 			`ALTER TABLE iam.authorization_decisions DROP CONSTRAINT authorization_decisions_source_principal_fk`,
 			`GRANT EXECUTE ON FUNCTION iam.role_authorization_evidence(text,text) TO matrix_iam_api`,
-			`ALTER FUNCTION iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb) STRICT`,
+			`ALTER FUNCTION iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb,jsonb) STRICT`,
 			`CREATE FUNCTION iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer) RETURNS void LANGUAGE sql AS 'SELECT'`,
 		} {
 			tx, err := database.Begin(ctx)
@@ -8974,7 +9723,7 @@ func proveRolePolicyIntersection(t *testing.T, ctx context.Context, handler http
 				t.Fatal("intersection permission lost role identity")
 			}
 			var matches bool
-			if err := database.QueryRow(ctx, `SELECT contract_version=3 AND role_evidence=iam.role_authorization_evidence(tenant_id,$3)
+			if err := database.QueryRow(ctx, `SELECT contract_version=4 AND role_evidence=iam.role_authorization_evidence(tenant_id,$3)
 			 AND (role_evidence->'sessionPolicy'='null'::jsonb)=$4 AND principal_id IS NULL AND source_principal_id=$5
 			 FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, user.AccountID, decision.ID, issued.Session.ID, mode == "omitted", user.ID).Scan(&matches); err != nil || !matches {
 				t.Fatal("intersection did not record the exact private session policy", err)
@@ -9497,7 +10246,15 @@ func proveRoleSessionSelfExit(t *testing.T, ctx context.Context, handler http.Ha
 	root := localRecoveryLogin(t, handler, "role-exit-root", initialDeveloperPassword, true)
 	root = localRecoveryChangePassword(t, handler, root, initialDeveloperPassword, changedDeveloperPassword)
 	const exitPath = "/v1/auth/role-session:logout"
-	for _, scenario := range []string{"control", "expired", "source-logout", "source-password", "source-reset", "source-disabled", "source-deleted", "role-disabled", "role-deleted", "source-permission", "account-disabled"} {
+	var finishExpired func()
+	for _, scenario := range []string{"expired", "control", "source-logout", "source-password", "source-reset", "source-disabled", "source-deleted", "role-disabled", "role-deleted", "source-permission", "account-disabled"} {
+		if scenario == "account-disabled" {
+			if finishExpired == nil {
+				t.Fatal("actual expiry scenario was not prepared")
+			}
+			finishExpired()
+			finishExpired = nil
+		}
 		id := "role-exit-" + scenario
 		var user iamv1.User
 		call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": id, "displayName": id, "initialPassword": initialDeveloperPassword, "requestId": id + "-user"}, http.StatusCreated, &user)
@@ -9531,168 +10288,181 @@ func proveRoleSessionSelfExit(t *testing.T, ctx context.Context, handler http.Ha
 		}
 		issued, token := issue(id + "-issue")
 		call(http.MethodGet, "/v1/auth/role-session", token, nil, http.StatusOK, nil)
-		switch scenario {
-		case "expired":
-			// Use the public minimum TTL and the database's actual clock. Do not
-			// backdate immutable issuance rows or change the production clock.
-			ticker := time.NewTicker(time.Second)
-			for expired := false; !expired; {
-				if err := database.QueryRow(ctx, `SELECT clock_timestamp()>=$1`, issued.Session.ExpiresAt).Scan(&expired); err != nil {
-					ticker.Stop()
-					t.Fatal("observe actual role credential expiry", err)
-				}
-				if !expired {
-					select {
-					case <-ticker.C:
-					case <-ctx.Done():
+		complete := func() {
+			switch scenario {
+			case "expired":
+				// Use the public minimum TTL and the database's actual clock. Do not
+				// backdate immutable issuance rows or change the production clock.
+				ticker := time.NewTicker(time.Second)
+				for expired := false; !expired; {
+					if err := database.QueryRow(ctx, `SELECT clock_timestamp()>=$1`, issued.Session.ExpiresAt).Scan(&expired); err != nil {
 						ticker.Stop()
-						t.Fatal("role expiry exceeded its existing fixture budget")
+						t.Fatal("observe actual role credential expiry", err)
+					}
+					if !expired {
+						select {
+						case <-ticker.C:
+						case <-ctx.Done():
+							ticker.Stop()
+							t.Fatal("role expiry exceeded its existing fixture budget")
+						}
 					}
 				}
-			}
-			ticker.Stop()
-			managedPath := rolePath + "/sessions/" + string(issued.Session.ID)
-			var observed iamv1.RoleSessionAccess
-			call(http.MethodGet, managedPath, root, nil, http.StatusOK, &observed)
-			if observed.Item.Lifecycle != iamv1.RoleSessionExpired || observed.Item.RevokeCapability.Available || observed.Item.Session.RevokedAt != nil {
-				t.Fatal("expired issuance became an administratively revocable session")
-			}
-			for _, lifecycle := range []string{"UNREVOKED", "EXPIRED", "REVOKED"} {
-				var page iamv1.RoleSessionList
-				call(http.MethodGet, rolePath+"/sessions?lifecycle="+lifecycle, root, nil, http.StatusOK, &page)
-				want := 0
-				if lifecycle == "EXPIRED" {
-					want = 1
+				ticker.Stop()
+				managedPath := rolePath + "/sessions/" + string(issued.Session.ID)
+				var observed iamv1.RoleSessionAccess
+				call(http.MethodGet, managedPath, root, nil, http.StatusOK, &observed)
+				if observed.Item.Lifecycle != iamv1.RoleSessionExpired || observed.Item.RevokeCapability.Available || observed.Item.Session.RevokedAt != nil {
+					t.Fatal("expired issuance became an administratively revocable session")
 				}
-				if len(page.Items) != want || page.NextAfter != "" {
-					t.Fatal("directory lifecycle did not use actual database expiry")
+				for _, lifecycle := range []string{"UNREVOKED", "EXPIRED", "REVOKED"} {
+					var page iamv1.RoleSessionList
+					call(http.MethodGet, rolePath+"/sessions?lifecycle="+lifecycle, root, nil, http.StatusOK, &page)
+					want := 0
+					if lifecycle == "EXPIRED" {
+						want = 1
+					}
+					if len(page.Items) != want || page.NextAfter != "" {
+						t.Fatal("directory lifecycle did not use actual database expiry")
+					}
 				}
-			}
-			state := func() string {
-				t.Helper()
-				var value string
-				if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+				state := func() string {
+					t.Helper()
+					var value string
+					if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
 				 'revoked',(SELECT revoked_at FROM iam.role_sessions WHERE tenant_id=$1 AND id=$2),
 				 'revision',(SELECT revision FROM iam.role_session_directory_revisions WHERE tenant_id=$1 AND role_id=$3),
 				 'decisions',(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1),
 				 'facts',(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1))::text`, account.ID, issued.Session.ID, role.ID).Scan(&value); err != nil {
-					t.Fatal("read actual expiry conflict state", err)
+						t.Fatal("read actual expiry conflict state", err)
+					}
+					return value
 				}
-				return value
+				beforeConflict := state()
+				for range 2 {
+					call(http.MethodPost, managedPath+":revoke", root, iamv1.RevokeRoleSessionRequest{RequestID: id + "-admin-expired"}, http.StatusConflict, nil)
+				}
+				if state() != beforeConflict {
+					t.Fatal("expired administrative intent changed state or manufactured a replay result")
+				}
+			case "source-logout":
+				call(http.MethodPost, "/v1/auth/logout", login, iamv1.LogoutRequest{RequestID: id + "-logout"}, http.StatusOK, nil)
+			case "source-password":
+				call(http.MethodPost, "/v1/auth/password", login, map[string]any{"currentPassword": changedDeveloperPassword, "newPassword": "Changed-Role-Exit-Password-85!", "requestId": id + "-password", "revokeOtherSessions": false}, http.StatusOK, nil)
+			case "source-reset":
+				var access iamv1.UserAccess
+				call(http.MethodGet, "/v1/users/"+string(user.ID), root, nil, http.StatusOK, &access)
+				call(http.MethodPost, "/v1/users/"+string(user.ID)+":reset-password", root, map[string]any{"initialPassword": "Reset-Role-Exit-Password-86!", "resourceVersion": access.User.ResourceVersion, "requestId": id + "-reset"}, http.StatusOK, nil)
+			case "source-disabled", "source-deleted":
+				var access iamv1.UserAccess
+				call(http.MethodGet, "/v1/users/"+string(user.ID), root, nil, http.StatusOK, &access)
+				call(http.MethodPost, "/v1/users/"+string(user.ID)+":set-status", root, iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled,
+					ResourceVersion: access.User.ResourceVersion, RequestID: id + "-disable"}, http.StatusOK, &user)
+				if scenario == "source-deleted" {
+					call(http.MethodPost, "/v1/users/"+string(user.ID)+":delete", root, iamv1.DeleteUserRequest{ResourceVersion: user.ResourceVersion, RequestID: id + "-delete"}, http.StatusOK, nil)
+				}
+			case "role-disabled":
+				call(http.MethodPost, rolePath+":set-status", root, iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: ceiling.ResourceVersion, RequestID: id + "-disable"}, http.StatusOK, nil)
+			case "role-deleted":
+				call(http.MethodDelete, rolePath, root, iamv1.DeleteRoleRequest{ResourceVersion: ceiling.ResourceVersion, RequestID: id + "-delete"}, http.StatusOK, nil)
+			case "source-permission":
+				call(http.MethodPost, "/v1/policy-attachments/"+string(sourceGrant.ID)+":revoke", root, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: sourceGrant.ResourceVersion, RequestID: id + "-revoke"}, http.StatusOK, nil)
+			case "account-disabled":
+				var access iamv1.AccountAccess
+				call(http.MethodGet, "/v1/accounts/"+string(account.ID), operator, nil, http.StatusOK, &access)
+				call(http.MethodPost, "/v1/accounts/"+string(account.ID)+":set-status", operator, iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled,
+					ResourceVersion: access.Account.ResourceVersion, RequestID: id + "-disable"}, http.StatusOK, nil)
 			}
-			beforeConflict := state()
-			for range 2 {
-				call(http.MethodPost, managedPath+":revoke", root, iamv1.RevokeRoleSessionRequest{RequestID: id + "-admin-expired"}, http.StatusConflict, nil)
+			if scenario != "control" {
+				call(http.MethodGet, "/v1/auth/role-session", token, nil, http.StatusUnauthorized, nil)
 			}
-			if state() != beforeConflict {
-				t.Fatal("expired administrative intent changed state or manufactured a replay result")
-			}
-		case "source-logout":
-			call(http.MethodPost, "/v1/auth/logout", login, iamv1.LogoutRequest{RequestID: id + "-logout"}, http.StatusOK, nil)
-		case "source-password":
-			call(http.MethodPost, "/v1/auth/password", login, map[string]any{"currentPassword": changedDeveloperPassword, "newPassword": "Changed-Role-Exit-Password-85!", "requestId": id + "-password", "revokeOtherSessions": false}, http.StatusOK, nil)
-		case "source-reset":
-			var access iamv1.UserAccess
-			call(http.MethodGet, "/v1/users/"+string(user.ID), root, nil, http.StatusOK, &access)
-			call(http.MethodPost, "/v1/users/"+string(user.ID)+":reset-password", root, map[string]any{"initialPassword": "Reset-Role-Exit-Password-86!", "resourceVersion": access.User.ResourceVersion, "requestId": id + "-reset"}, http.StatusOK, nil)
-		case "source-disabled", "source-deleted":
-			var access iamv1.UserAccess
-			call(http.MethodGet, "/v1/users/"+string(user.ID), root, nil, http.StatusOK, &access)
-			call(http.MethodPost, "/v1/users/"+string(user.ID)+":set-status", root, iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled,
-				ResourceVersion: access.User.ResourceVersion, RequestID: id + "-disable"}, http.StatusOK, &user)
-			if scenario == "source-deleted" {
-				call(http.MethodPost, "/v1/users/"+string(user.ID)+":delete", root, iamv1.DeleteUserRequest{ResourceVersion: user.ResourceVersion, RequestID: id + "-delete"}, http.StatusOK, nil)
-			}
-		case "role-disabled":
-			call(http.MethodPost, rolePath+":set-status", root, iamv1.SetRoleStatusRequest{Status: iamv1.RoleDisabled, ResourceVersion: ceiling.ResourceVersion, RequestID: id + "-disable"}, http.StatusOK, nil)
-		case "role-deleted":
-			call(http.MethodDelete, rolePath, root, iamv1.DeleteRoleRequest{ResourceVersion: ceiling.ResourceVersion, RequestID: id + "-delete"}, http.StatusOK, nil)
-		case "source-permission":
-			call(http.MethodPost, "/v1/policy-attachments/"+string(sourceGrant.ID)+":revoke", root, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: sourceGrant.ResourceVersion, RequestID: id + "-revoke"}, http.StatusOK, nil)
-		case "account-disabled":
-			var access iamv1.AccountAccess
-			call(http.MethodGet, "/v1/accounts/"+string(account.ID), operator, nil, http.StatusOK, &access)
-			call(http.MethodPost, "/v1/accounts/"+string(account.ID)+":set-status", operator, iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled,
-				ResourceVersion: access.Account.ResourceVersion, RequestID: id + "-disable"}, http.StatusOK, nil)
-		}
-		if scenario != "control" {
-			call(http.MethodGet, "/v1/auth/role-session", token, nil, http.StatusUnauthorized, nil)
-		}
-		var before, after string
-		const retained = `SELECT jsonb_build_object('account',(SELECT to_jsonb(a) FROM iam.accounts a WHERE id=$1),
+			var before, after string
+			const retained = `SELECT jsonb_build_object('account',(SELECT to_jsonb(a) FROM iam.accounts a WHERE id=$1),
 			 'user',(SELECT to_jsonb(p) FROM iam.principals p WHERE tenant_id=$1 AND id=$2),
 			 'credential',(SELECT to_jsonb(c) FROM iam.user_credentials c WHERE tenant_id=$1 AND principal_id=$2),
 			 'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY id) FROM iam.sessions s WHERE tenant_id=$1 AND principal_id=$2),
 			 'role',(SELECT to_jsonb(r) FROM iam.roles r WHERE tenant_id=$1 AND id=$3),
 			 'attachments',(SELECT jsonb_agg(to_jsonb(p) ORDER BY id) FROM iam.policy_attachments p WHERE tenant_id=$1))::text`
-		if err := database.QueryRow(ctx, retained, account.ID, user.ID, role.ID).Scan(&before); err != nil {
-			t.Fatal(err)
-		}
-		request := iamv1.LogoutRequest{RequestID: id + "-exit"}
-		var second iamv1.AssumeRoleResponse
-		var secondToken string
-		if scenario == "control" {
-			for _, wrong := range []string{login, root, paasCredential, "mx1.UnknownRoleSessionCredential000000000001"} {
-				call(http.MethodPost, exitPath, wrong, request, http.StatusUnauthorized, nil)
+			if err := database.QueryRow(ctx, retained, account.ID, user.ID, role.ID).Scan(&before); err != nil {
+				t.Fatal(err)
 			}
-			for _, field := range []string{"sessionId", "roleId", "accountId", "sourceUserId", "sourceSessionId", "credentialGeneration"} {
-				call(http.MethodPost, exitPath, token, map[string]any{"requestId": request.RequestID, field: "forged"}, http.StatusBadRequest, nil)
-			}
-			call(http.MethodPost, exitPath+"?sessionId=another-session", token, request, http.StatusBadRequest, nil)
-			second, secondToken = issue(id + "-second")
-			proveRoleExitDatabaseBinding(t, ctx, database, issued.Session, issued.Credential)
-			if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_role_exit_failure() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN
+			request := iamv1.LogoutRequest{RequestID: id + "-exit"}
+			var second iamv1.AssumeRoleResponse
+			var secondToken string
+			if scenario == "control" {
+				for _, wrong := range []string{login, root, paasCredential, "mx1.UnknownRoleSessionCredential000000000001"} {
+					call(http.MethodPost, exitPath, wrong, request, http.StatusUnauthorized, nil)
+				}
+				for _, field := range []string{"sessionId", "roleId", "accountId", "sourceUserId", "sourceSessionId", "credentialGeneration"} {
+					call(http.MethodPost, exitPath, token, map[string]any{"requestId": request.RequestID, field: "forged"}, http.StatusBadRequest, nil)
+				}
+				call(http.MethodPost, exitPath+"?sessionId=another-session", token, request, http.StatusBadRequest, nil)
+				second, secondToken = issue(id + "-second")
+				proveRoleExitDatabaseBinding(t, ctx, database, issued.Session, issued.Credential)
+				if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_role_exit_failure() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN
 				 IF NEW.event_document->>'action'='iam.role-session.exited' THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='isolated role exit failure'; END IF;
 				 RETURN NEW; END $body$; CREATE TRIGGER matrix_role_exit_failure BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_role_exit_failure()`); err != nil {
-				t.Fatal(err)
+					t.Fatal(err)
+				}
+				call(http.MethodPost, exitPath, token, request, http.StatusForbidden, nil)
+				if _, err := database.Exec(ctx, `DROP TRIGGER matrix_role_exit_failure ON iam.audit_outbox; DROP FUNCTION public.matrix_role_exit_failure()`); err != nil {
+					t.Fatal(err)
+				}
+				call(http.MethodGet, "/v1/auth/role-session", token, nil, http.StatusOK, nil)
 			}
-			call(http.MethodPost, exitPath, token, request, http.StatusForbidden, nil)
-			if _, err := database.Exec(ctx, `DROP TRIGGER matrix_role_exit_failure ON iam.audit_outbox; DROP FUNCTION public.matrix_role_exit_failure()`); err != nil {
-				t.Fatal(err)
+			var result iamv1.RoleSession
+			call(http.MethodPost, exitPath, token, request, http.StatusOK, &result)
+			if result.ID != issued.Session.ID || result.RevokedAt == nil || result.Status != iamv1.SessionRevoked {
+				t.Fatal("self exit did not revoke its exact issuance")
 			}
-			call(http.MethodGet, "/v1/auth/role-session", token, nil, http.StatusOK, nil)
-		}
-		var result iamv1.RoleSession
-		call(http.MethodPost, exitPath, token, request, http.StatusOK, &result)
-		if result.ID != issued.Session.ID || result.RevokedAt == nil || result.Status != iamv1.SessionRevoked {
-			t.Fatal("self exit did not revoke its exact issuance")
-		}
-		var replay iamv1.RoleSession
-		call(http.MethodPost, exitPath, token, request, http.StatusOK, &replay)
-		if !reflect.DeepEqual(result, replay) {
-			t.Fatal("exact exit replay changed the terminal receipt")
-		}
-		call(http.MethodPost, exitPath, token, iamv1.LogoutRequest{RequestID: id + "-variant"}, http.StatusConflict, nil)
-		call(http.MethodGet, "/v1/auth/role-session", token, nil, http.StatusUnauthorized, nil)
-		call(http.MethodGet, "/v1/auth/me", token, nil, http.StatusUnauthorized, nil)
-		if err := database.QueryRow(ctx, retained, account.ID, user.ID, role.ID).Scan(&after); err != nil || before != after {
-			t.Fatal("self exit modified user credentials/login, account, role or permission state", err)
-		}
-		var raw []byte
-		var count int
-		if err := database.QueryRow(ctx, `SELECT count(*),min(event_document::text)::jsonb FROM iam.audit_outbox WHERE tenant_id=$1
+			var replay iamv1.RoleSession
+			call(http.MethodPost, exitPath, token, request, http.StatusOK, &replay)
+			if !reflect.DeepEqual(result, replay) {
+				t.Fatal("exact exit replay changed the terminal receipt")
+			}
+			call(http.MethodPost, exitPath, token, iamv1.LogoutRequest{RequestID: id + "-variant"}, http.StatusConflict, nil)
+			call(http.MethodGet, "/v1/auth/role-session", token, nil, http.StatusUnauthorized, nil)
+			call(http.MethodGet, "/v1/auth/me", token, nil, http.StatusUnauthorized, nil)
+			if err := database.QueryRow(ctx, retained, account.ID, user.ID, role.ID).Scan(&after); err != nil || before != after {
+				t.Fatal("self exit modified user credentials/login, account, role or permission state", err)
+			}
+			var raw []byte
+			var count int
+			if err := database.QueryRow(ctx, `SELECT count(*),min(event_document::text)::jsonb FROM iam.audit_outbox WHERE tenant_id=$1
 			 AND event_document->>'action'='iam.role-session.exited' AND event_document#>>'{target,id}'=$2`, account.ID, issued.Session.ID).Scan(&count, &raw); err != nil || count != 1 {
-			t.Fatal("role exit must commit exactly one fact", err)
-		}
-		var fact auditv1.Event
-		if json.Unmarshal(raw, &fact) != nil || fact.Actor.Type != auditv1.ActorRole || fact.Actor.ID != auditv1.ActorID(role.ID) || fact.Actor.RoleSession == nil ||
-			fact.Actor.RoleSession.SessionID != string(result.ID) || fact.Actor.RoleSession.SourceUserID != auditv1.ActorID(user.ID) || fact.IAMDecisionID != "" || strings.Contains(string(raw), token) {
-			t.Fatal("role exit fact lost lineage, invented an allow or leaked its secret")
-		}
-		call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: fact}, http.StatusOK, nil)
-		forged := fact
-		forged.Target.ID = "another-role-session"
-		call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: forged}, http.StatusUnprocessableEntity, nil)
-		if scenario == "control" {
-			call(http.MethodGet, "/v1/auth/role-session", secondToken, nil, http.StatusOK, nil)
-			call(http.MethodGet, "/v1/auth/me", login, nil, http.StatusOK, nil)
-			// Same request ID in another exact role session is an independent exit.
-			call(http.MethodPost, exitPath, secondToken, request, http.StatusOK, &result)
-			if result.ID != second.Session.ID {
-				t.Fatal("another role session replayed its peer's exit")
+				t.Fatal("role exit must commit exactly one fact", err)
 			}
-			proveRoleExitRaces(t, ctx, handler, database, login, rolePath, ceiling.ResourceVersion, id)
+			var fact auditv1.Event
+			if json.Unmarshal(raw, &fact) != nil || fact.Actor.Type != auditv1.ActorRole || fact.Actor.ID != auditv1.ActorID(role.ID) || fact.Actor.RoleSession == nil ||
+				fact.Actor.RoleSession.SessionID != string(result.ID) || fact.Actor.RoleSession.SourceUserID != auditv1.ActorID(user.ID) || fact.IAMDecisionID != "" || strings.Contains(string(raw), token) {
+				t.Fatal("role exit fact lost lineage, invented an allow or leaked its secret")
+			}
+			call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: fact}, http.StatusOK, nil)
+			forged := fact
+			forged.Target.ID = "another-role-session"
+			call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: forged}, http.StatusUnprocessableEntity, nil)
+			if scenario == "control" {
+				call(http.MethodGet, "/v1/auth/role-session", secondToken, nil, http.StatusOK, nil)
+				call(http.MethodGet, "/v1/auth/me", login, nil, http.StatusOK, nil)
+				// Same request ID in another exact role session is an independent exit.
+				call(http.MethodPost, exitPath, secondToken, request, http.StatusOK, &result)
+				if result.ID != second.Session.ID {
+					t.Fatal("another role session replayed its peer's exit")
+				}
+				proveRoleExitRaces(t, ctx, handler, database, login, rolePath, ceiling.ResourceVersion, id)
+			}
 		}
+		if scenario == "expired" {
+			// Let the actual minimum TTL elapse while independent scenarios run.
+			// Complete every expiry assertion before disabling their shared account;
+			// do not change clocks, issuance rows, duration or the fixture deadline.
+			finishExpired = complete
+		} else {
+			complete()
+		}
+	}
+	if finishExpired != nil {
+		t.Fatal("actual expiry scenario was not completed")
 	}
 }
 
@@ -9914,7 +10684,7 @@ func proveRoleDecisionEvidence(t *testing.T, ctx context.Context, database *pgx.
 			if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+pgx.Identifier{iamHTTPTestRole}.Sanitize()); err != nil {
 				t.Fatal(err)
 			}
-			_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,3,$7::jsonb)`, account, fact.Actor.ID,
+			_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,4,$7::jsonb,'null'::jsonb)`, account, fact.Actor.ID,
 				string(mustIAMJSON(t, map[string]any{"request": request, "decision": decision})), string(mustIAMJSON(t, fact)), string(policy), string(boundary), string(mustIAMJSON(t, evidence)))
 			if test.name == "valid" {
 				if err != nil {

@@ -216,7 +216,9 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id',proof_tenant,true);
     IF producer_purpose='IAM' THEN
         RETURN QUERY SELECT sealed_installation, outbox.event_document, NULL::jsonb, verifier_id, NULL::integer
-        FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=proof_tenant AND outbox.event_id=event->>'eventId';
+        FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=proof_tenant AND outbox.event_id=event->>'eventId'
+          AND (NOT outbox.event_document->'actor' ? 'accessKeyId' OR
+            iam.access_key_authorization_evidence_matches(proof_tenant,outbox.event_document->>'iamDecisionId'));
     ELSE
         RETURN QUERY SELECT sealed_installation, outbox.event_document, decision.document, verifier_id, decision.contract_version
         FROM iam.authorization_decisions AS decision
@@ -229,7 +231,8 @@ BEGIN
               WHERE iam.recorded_policy_version_matches(e) IS DISTINCT FROM true))
           AND (decision.boundary_evidence IS NULL OR decision.boundary_evidence->>'state'<>'BOUND'
               OR iam.recorded_policy_version_matches(decision.boundary_evidence))
-          AND (CASE WHEN decision.contract_version=3 AND decision.subject_type='ROLE' THEN
+          AND iam.access_key_authorization_evidence_matches(proof_tenant,decision.id)
+          AND (CASE WHEN decision.contract_version IN (3,4) AND decision.subject_type='ROLE' THEN
             decision.principal_id IS NULL AND decision.role_evidence IS NOT NULL
             AND iam.role_authorization_evidence(proof_tenant,decision.role_evidence->>'sessionId')=decision.role_evidence
             AND decision.role_id=decision.role_evidence->>'roleId' AND decision.source_principal_id=decision.role_evidence->>'sourceUserId'

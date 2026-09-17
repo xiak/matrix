@@ -469,6 +469,20 @@ func knownUserAuthenticationMethod(method UserAuthenticationMethod) bool {
 	return method == UserAuthenticationLoginSession || method == UserAuthenticationAccessKey
 }
 
+func checkValidatedProfileSubjectCredential(profile AuthorizationProfile, action Action, subject Subject) error {
+	if checkValidatedProfileSubject(profile, action, subject.Type) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	if subject.Type == SubjectUser {
+		method := UserAuthenticationLoginSession
+		if subject.AccessKeyID != "" {
+			method = UserAuthenticationAccessKey
+		}
+		return checkValidatedProfileUserAuthentication(profile, action, method)
+	}
+	return nil
+}
+
 // CheckAuthorizationProfileUserAuthentication checks a declared USER carrier,
 // not an authenticated identity, signature, nonce or policy decision. The caller
 // must supply the actual verified carrier and independently establish authority.

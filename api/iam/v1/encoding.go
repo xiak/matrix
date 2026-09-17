@@ -41,7 +41,8 @@ func (subject *Subject) UnmarshalJSON(source []byte) error {
 		return contractjson.ErrInvalidDocument
 	}
 	_, hasRoleSession := fields["roleSession"]
-	if (decoded.Type == SubjectRole) != hasRoleSession || ValidateSubject(Subject(decoded)) != nil {
+	_, hasAccessKey := fields["accessKeyId"]
+	if (decoded.Type == SubjectRole) != hasRoleSession || hasAccessKey && decoded.AccessKeyID == "" || ValidateSubject(Subject(decoded)) != nil {
 		return contractjson.ErrInvalidDocument
 	}
 	*subject = Subject(decoded)

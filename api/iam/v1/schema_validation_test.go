@@ -14,6 +14,118 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestAccessKeySigningSchemasMatchExplicitTransportAndSanitizedResults(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	request, err := NewAuthorizationRequest(ActionPaaSApplicationRead, ResourceReference{Kind: ResourceApplication, ID: "application-one"},
+		AuthorizationResourceInstance, "", "request-key", "correlation-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only codec/schema agreement: this does not authenticate the fixture's
+	// signature or claim that the product PEP accepts its HTTP/action mapping.
+	input := AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: accessKeySigningFixture(t)}
+	encoded, err := EncodeAccessKeyAuthorizationRequest(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	wire := string(encoded)
+	replace := func(source, from, to string) string {
+		t.Helper()
+		changed := strings.Replace(source, from, to, 1)
+		if changed == source {
+			t.Fatal("schema attack did not change its fixture")
+		}
+		return changed
+	}
+	empty := input
+	empty.SignedRequest.HTTP = AccessKeyHTTPRequest{Method: "GET", Scheme: "https", Authority: "fixture.invalid:443", EscapedPath: "/api/paas/v1/applications/application-one",
+		BodyDigest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+	emptyEncoded, err := EncodeAccessKeyAuthorizationRequest(empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(emptyEncoded)
+	digest, _ := AccessKeySignedRequestDigest(input.SignedRequest)
+	result := AccessKeyAuthorization{APIVersion: APIVersion, Kind: "AccessKeyAuthorization", SignedRequestDigest: digest,
+		Decision: AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-key", Reason: DecisionDenied,
+			Action: request.Action, Resource: request.Resource, ResourceMode: request.ResourceMode, Profile: &request.Profile,
+			RequestID: request.RequestID, CorrelationID: request.CorrelationID, DecidedAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)}}
+	response, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginResult := result
+	loginResult.Decision.Allowed, loginResult.Decision.Reason = true, DecisionAllowed
+	loginResult.Decision.TenantID = "account-one"
+	loginResult.Decision.Subject = &Subject{Type: SubjectUser, ID: "user-one"}
+	if ValidateAuthorizationDecision(loginResult.Decision) != nil {
+		t.Fatal("ordinary USER decision fixture must be valid before carrier substitution")
+	}
+	loginWire, err := json.Marshal(loginResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginResult.Decision.Subject.AccessKeyID = "key-one"
+	unsupportedKeyWire, err := json.Marshal(loginResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schemas := map[string]*jsonschema.Schema{
+		"AccessKeyAuthorizationRequest": compileIAMOpenAPISchema(t, api, "AccessKeyAuthorizationRequest"),
+		"AccessKeyAuthorization":        compileIAMOpenAPISchema(t, api, "AccessKeyAuthorization"),
+	}
+	for _, sample := range []struct {
+		name, kind, wire   string
+		schemaValid, valid bool
+	}{
+		{"explicit-wire", "AccessKeyAuthorizationRequest", wire, true, true},
+		{"empty-covered-fields", "AccessKeyAuthorizationRequest", string(emptyEncoded), true, true},
+		{"missing-request", "AccessKeyAuthorizationRequest", `{}`, false, false},
+		{"wrong-field-case", "AccessKeyAuthorizationRequest", replace(wire, `"signedRequest":`, `"SignedRequest":`), false, false},
+		{"account-selector", "AccessKeyAuthorizationRequest", replace(wire, `"authorization":`, `"accountId":"other","authorization":`), false, false},
+		{"actor-selector", "AccessKeyAuthorizationRequest", replace(wire, `"authorization":`, `"subject":{"type":"USER","id":"other"},"authorization":`), false, false},
+		{"method-case", "AccessKeyAuthorizationRequest", replace(wire, `"method":"POST"`, `"method":"post"`), false, false},
+		{"media-parameters", "AccessKeyAuthorizationRequest", replace(wire, `"contentType":"application/json"`, `"contentType":"application/json; charset=utf-8"`), false, false},
+		{"unsigned-media", "AccessKeyAuthorizationRequest", replace(wire, `"contentType":"application/json"`, `"contentType":""`), false, false},
+		{"missing-empty-header", "AccessKeyAuthorizationRequest", replace(string(emptyEncoded), `"ifMatch":"",`, ``), false, false},
+		{"null-empty-header", "AccessKeyAuthorizationRequest", replace(string(emptyEncoded), `"ifMatch":""`, `"ifMatch":null`), false, false},
+		{"wrong-algorithm", "AccessKeyAuthorizationRequest", replace(wire, "Matrix-HMAC-SHA256-V1", "HMAC-SHA256"), false, false},
+		{"noncanonical-nonce", "AccessKeyAuthorizationRequest", replace(wire, "oKGio6SlpqeoqaqrrK2urw", "oKGio6SlpqeoqaqrrK2urx"), false, false},
+		{"noncanonical-signature", "AccessKeyAuthorizationRequest", replace(wire, "IG55lQ4P2B4", "IG55lQ4P2B5"), false, false},
+		// These require semantic/canonical checks, not JSON Schema alone.
+		{"different-audience", "AccessKeyAuthorizationRequest", replace(wire, ",Audience=paas,", ",Audience=audit,"), true, false},
+		{"time-outside-encoding-range", "AccessKeyAuthorizationRequest", replace(wire, "SignedAt=1800000000,", "SignedAt=253402300800,"), true, false},
+		{"header-leading-space", "AccessKeyAuthorizationRequest", replace(wire, `"idempotencyKey":"deploy-intent-a"`, `"idempotencyKey":" deploy-intent-a"`), true, false},
+		{"sanitized-deny", "AccessKeyAuthorization", string(response), true, true},
+		{"login-allow-is-not-key-allow", "AccessKeyAuthorization", string(loginWire), false, false},
+		{"undeclared-key-allow", "AccessKeyAuthorization", string(unsupportedKeyWire), false, false},
+		{"deny-account-leak", "AccessKeyAuthorization", replace(string(response), `"allowed":false`, `"allowed":false,"tenantId":"account-a"`), false, false},
+		{"deny-actor-leak", "AccessKeyAuthorization", replace(string(response), `"allowed":false`, `"allowed":false,"subject":{"type":"USER","id":"user-a","accessKeyId":"key-a"}`), false, false},
+		{"private-nonce", "AccessKeyAuthorization", replace(string(response), `"decision":`, `"nonce":"private","decision":`), false, false},
+		{"private-key-evidence", "AccessKeyAuthorization", replace(string(response), `"decision":`, `"keyEvidence":{},"decision":`), false, false},
+		{"wrong-content-digest", "AccessKeyAuthorization", replace(string(response), `"signedRequestDigest":"sha256:`, `"signedRequestDigest":"sha512:`), false, false},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			value, err := jsonschema.UnmarshalJSON(strings.NewReader(sample.wire))
+			if err != nil {
+				t.Fatal("invalid fixture JSON")
+			}
+			if err := schemas[sample.kind].Validate(value); (err == nil) != sample.schemaValid {
+				t.Fatal("schema changed the explicit signing boundary", err)
+			}
+			if sample.kind == "AccessKeyAuthorizationRequest" {
+				_, err = DecodeAccessKeyAuthorizationRequest(strings.NewReader(sample.wire))
+			} else {
+				_, err = DecodeAccessKeyAuthorization(strings.NewReader(sample.wire))
+			}
+			if (err == nil) != sample.valid {
+				t.Fatal("strict signing codec disagrees with the intended boundary", err)
+			}
+		})
+	}
+}
+
 func TestAccessKeyManagementSchemasAgreeWithBoundedNonSecretContracts(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	key := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccessKey","id":"key-a","accountId":"account-a","userId":"user-a","status":"ENABLED","resourceVersion":1,"createdAt":"2026-09-17T00:00:00Z","updatedAt":"2026-09-17T00:00:00Z"}`
@@ -617,6 +729,11 @@ func TestRoleSubjectKeepsExactPublicLineageAndPrincipalSeparation(t *testing.T) 
 		valid        bool
 	}{
 		{"user", `{"type":"USER","id":"user-one"}`, true},
+		{"key USER", `{"type":"USER","id":"user-one","accessKeyId":"key-one"}`, true},
+		{"null key", `{"type":"USER","id":"user-one","accessKeyId":null}`, false},
+		{"empty key", `{"type":"USER","id":"user-one","accessKeyId":""}`, false},
+		{"service with key", `{"type":"SERVICE_ACCOUNT","id":"service-one","accessKeyId":"key-one"}`, false},
+		{"role with key", `{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"role-session-one","sourceUserId":"user-one"},"accessKeyId":"key-one"}`, false},
 		{"service", `{"type":"SERVICE_ACCOUNT","id":"service-one"}`, true},
 		{"role", `{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"role-session-one","sourceUserId":"user-one"}}`, true},
 		{"missing lineage", `{"type":"ROLE","id":"role-one"}`, false},

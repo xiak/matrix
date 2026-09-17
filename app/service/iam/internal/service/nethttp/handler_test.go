@@ -126,6 +126,73 @@ func TestIAMHTTPExposesOnlyCredentialBoundCoreRoutes(t *testing.T) {
 	}
 }
 
+func TestSignedAuthorizationTransportDoesNotAcceptSubjectSelectors(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	endpoint := newTestHandler(t, workflow)
+	request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-signed"}, iamv1.AuthorizationResourceInstance, "", "signed-request", "signed-correlation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce, _ := iamv1.NewSecret(strings.Repeat("A", 22))
+	signature, _ := iamv1.NewSecret(strings.Repeat("A", 43))
+	input := iamv1.AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: iamv1.AccessKeySignedRequest{
+		Parameters: iamv1.AccessKeySignatureParameters{AccessKeyID: "key-one", InstallationID: "installation-one", Audience: "paas", SignedAt: 1700000000, Nonce: nonce},
+		HTTP: iamv1.AccessKeyHTTPRequest{Method: "GET", Scheme: "https", Authority: "fixture.invalid:443", EscapedPath: "/api/paas/v1/applications/application-signed",
+			BodyDigest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, Signature: signature}}
+	body, err := iamv1.EncodeAccessKeyAuthorizationRequest(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(body)
+	for _, name := range []string{"valid", "subject-header", "duplicate-bearer", "query-selector", "body-selector", "encoding", "method", "media"} {
+		t.Run(name, func(t *testing.T) {
+			wire := body
+			if name == "body-selector" {
+				wire = append(append([]byte(nil), body[:len(body)-1]...), []byte(`,"tenantId":"another-account"}`)...)
+				defer clear(wire)
+			}
+			r := httptest.NewRequest(http.MethodPost, "/v1/authorize:access-key", bytes.NewReader(wire))
+			r.Header.Set("Content-Type", "application/json")
+			r.Header.Set("Authorization", "Bearer service-credential")
+			want := http.StatusBadRequest
+			switch name {
+			case "valid":
+				want = http.StatusOK
+			case "subject-header":
+				r.Header.Set("Matrix-Subject-Credential", "cannot-select-a-user")
+			case "duplicate-bearer":
+				r.Header.Add("Authorization", "Bearer another-service")
+				want = http.StatusUnauthorized
+			case "query-selector":
+				r.URL.RawQuery = "tenantId=another-account"
+			case "encoding":
+				r.Header.Set("Content-Encoding", "gzip")
+				want = http.StatusUnsupportedMediaType
+			case "method":
+				r.Method = http.MethodGet
+				want = http.StatusMethodNotAllowed
+			case "media":
+				r.Header.Set("Content-Type", "application/json; charset=utf-8")
+				want = http.StatusUnsupportedMediaType
+			}
+			before := workflow.keyCalls
+			response := httptest.NewRecorder()
+			endpoint.ServeHTTP(response, r)
+			if response.Code != want {
+				t.Fatalf("transport status=%d want=%d", response.Code, want)
+			}
+			if name == "valid" {
+				result, err := iamv1.DecodeAccessKeyAuthorization(bytes.NewReader(response.Body.Bytes()))
+				if err != nil || iamv1.CheckAccessKeyAuthorizationForRequest(result, input) != nil || workflow.keyCalls != before+1 || response.Header().Get("Cache-Control") != "no-store" {
+					t.Fatal("signed wire or sanitized response differs", err)
+				}
+			} else if workflow.keyCalls != before {
+				t.Fatal("invalid transport reached authority")
+			}
+		})
+	}
+}
+
 func TestIAMHTTPAuthorizationProfileDiscoveryRequiresUserSession(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	handler := newTestHandler(t, workflow)
@@ -519,6 +586,7 @@ type httpWorkflow struct {
 	updateUser              iamv1.UpdateUserRequest
 	deleteUser              iamv1.DeleteUserRequest
 	authorizeCalls          int
+	keyCalls                int
 	verifyInstallationCalls int
 }
 
@@ -882,6 +950,16 @@ func (workflow *httpWorkflow) VerifyInstallation(
 ) (iamv1.AuthorizationDecision, error) {
 	workflow.verifyInstallationCalls++
 	return workflow.verificationDecision, nil
+}
+
+func (workflow *httpWorkflow) AuthorizeAccessKey(_ context.Context, _ iamv1.Secret, request iamv1.AccessKeyAuthorizationRequest) (iamv1.AccessKeyAuthorization, error) {
+	workflow.keyCalls++
+	digest, err := iamv1.AccessKeySignedRequestDigest(request.SignedRequest)
+	decision := workflow.decision
+	decision.Allowed, decision.Reason, decision.Subject, decision.TenantID, decision.InstallationID = false, iamv1.DecisionDenied, nil, "", ""
+	decision.Action, decision.Resource, decision.RequestID, decision.CorrelationID = request.Authorization.Action, request.Authorization.Resource, request.Authorization.RequestID, request.Authorization.CorrelationID
+	decision.Profile, decision.ResourceMode, decision.CollectionUsage = &request.Authorization.Profile, request.Authorization.ResourceMode, request.Authorization.CollectionUsage
+	return iamv1.AccessKeyAuthorization{APIVersion: iamv1.APIVersion, Kind: "AccessKeyAuthorization", Decision: decision, SignedRequestDigest: digest}, err
 }
 
 func newTestHandler(t *testing.T, workflow Workflow) http.Handler {

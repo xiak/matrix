@@ -19,6 +19,7 @@ type Subject struct {
 	Type        SubjectType           `json:"type"`
 	ID          string                `json:"id"`
 	RoleSession *RoleSessionReference `json:"roleSession,omitempty"`
+	AccessKeyID AccessKeyID           `json:"accessKeyId,omitempty"`
 }
 
 // RoleSessionReference is the public actor lineage, not the private source

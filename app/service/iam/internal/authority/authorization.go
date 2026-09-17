@@ -74,6 +74,22 @@ type SubjectContext struct {
 	InstallationID string
 }
 
+// AccessKeyContext is resolved under the credential/identity authority locks.
+// It has no login Session. The use case separately verifies the exact MAC and
+// persists nonce consumption with the evaluation before returning any result.
+type AccessKeyContext struct {
+	Organization   iamv1.Organization
+	Principal      iamv1.Principal
+	RootUserID     iamv1.PrincipalID
+	Key            iamv1.AccessKey
+	Policies       []AttachedPolicy
+	Boundary       *ResolvedUserBoundary
+	InstallationID string
+	// Read directly under the USER/source-authority locks. Current policy
+	// snapshots omit RETIRED policies and cannot prove this attachment absent.
+	HasUnrevokedPlatformAttachment bool
+}
+
 // RoleSessionContext is a separate credential-bound identity. The adapter
 // checks the issued credential/security generations and complete revision
 // vectors; this context does not promote its source USER into a ROLE principal.
@@ -269,6 +285,50 @@ func Decide(
 	)
 }
 
+// DecideAccessKey applies the same USER policy/boundary evaluator to this
+// request's credential-bound identity. Metadata or a returned value alone is
+// not MAC authentication, a consumed nonce, or a reusable business permit.
+func DecideAccessKey(value AccessKeyContext, callingService iamv1.ServicePurpose, request iamv1.AuthorizationRequest,
+	decisionID iamv1.DecisionID, databaseTime time.Time, signedAt int64,
+) (AuthorizationEvaluation, error) {
+	eligible, err := accessKeyEligibility(value, databaseTime, signedAt)
+	if err != nil {
+		return AuthorizationEvaluation{}, err
+	}
+	return decide(value.Organization.ID, value.InstallationID,
+		iamv1.Subject{Type: iamv1.SubjectUser, ID: string(value.Principal.ID), AccessKeyID: value.Key.ID},
+		!eligible, value.Policies, value.Boundary, callingService, request, decisionID, databaseTime)
+}
+
+// Eligibility is distinct from MAC authentication and policy permission. A
+// known restriction yields a recorded Deny only after the use case verifies
+// the signature; corrupt authority is not a normal denial.
+func accessKeyEligibility(value AccessKeyContext, databaseTime time.Time, signedAt int64) (bool, error) {
+	if validateAuthorityTime(databaseTime) != nil || iamv1.ValidateOrganization(value.Organization) != nil ||
+		iamv1.ValidatePrincipal(value.Principal) != nil || value.Principal.Type != iamv1.PrincipalUser ||
+		iamv1.ValidateAccessKey(value.Key) != nil || iamv1.ValidateID("rootUserId", string(value.RootUserID)) != nil ||
+		iamv1.ValidateID("installationId", value.InstallationID) != nil ||
+		value.Principal.AccountID != value.Organization.ID || value.Key.AccountID != value.Organization.ID ||
+		value.Key.UserID != value.Principal.ID || value.Principal.CreatedAt.Before(value.Organization.CreatedAt) ||
+		value.Key.CreatedAt.Before(value.Principal.CreatedAt) || value.Key.UpdatedAt.After(databaseTime) ||
+		value.Principal.UpdatedAt.After(databaseTime) || value.Organization.UpdatedAt.After(databaseTime) ||
+		ValidateUserBoundary(value.Boundary, value.Organization.ID, value.Principal.ID, value.Principal.ResourceVersion) != nil {
+		return false, ErrAuthorityUnavailable
+	}
+	if signedAt <= 0 || signedAt > 253402300799 {
+		return false, ErrInvalidAuthorizationRequest
+	}
+	restricted := value.Organization.Status != iamv1.AccountActive || value.Principal.Status != iamv1.PrincipalActive ||
+		value.Principal.MustChangePassword || value.RootUserID == value.Principal.ID || value.Key.Status != iamv1.AccessKeyEnabled ||
+		value.HasUnrevokedPlatformAttachment || ValidateAccessKeySignatureTime(signedAt, databaseTime) != nil
+	for _, row := range value.Policies {
+		if row.Attachment.Scope == iamv1.AuthorityScopeInstallation && row.Attachment.RevokedAt == nil && !value.HasUnrevokedPlatformAttachment {
+			return false, ErrAuthorityUnavailable
+		}
+	}
+	return !restricted, nil
+}
+
 // DecideService authorizes the credential-bound service as its own subject.
 // The installation verification endpoint is its only Phase 1 consumer.
 func DecideService(
@@ -354,7 +414,7 @@ func decide(
 	tenantID iamv1.AccountID,
 	installationID string,
 	subject iamv1.Subject,
-	mustChangePassword bool,
+	credentialRestricted bool,
 	policies []AttachedPolicy,
 	boundary *ResolvedUserBoundary,
 	callingService iamv1.ServicePurpose,
@@ -376,21 +436,26 @@ func decide(
 	if err != nil && subjectSupported {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
+	if evidence == nil {
+		// A known unsupported carrier is a recordable Deny with no matching
+		// grants, not missing provenance that makes the transaction unavailable.
+		evidence = []PolicyAttachmentEvidence{}
+	}
 	boundaryEvidence := UserBoundaryEvidence{State: "NOT_APPLICABLE"}
 	definition, _ := iamv1.LookupActionDefinition(request.Action)
 	if subject.Type == iamv1.SubjectUser && definition.AuthorityScope == iamv1.AuthorityScopeTenant {
 		limit, proof, err := evaluateUserBoundary(boundary, policyEvaluationContext{databaseTime: databaseTime, accountID: tenantID, subject: subject}, request)
-		if err != nil {
+		if err != nil && !errors.Is(err, errUnsupportedPolicySubject) {
 			return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 		}
 		evaluation.Allowed = evaluation.Allowed && limit.Allowed
 		boundaryEvidence = proof
 	}
 	platform := iamv1.IsPlatformAction(request.Action)
-	platformContext := !platform || subject.Type == iamv1.SubjectUser && iamv1.ValidateID("installationId", installationID) == nil
+	platformContext := !platform || subject.Type == iamv1.SubjectUser && subject.AccessKeyID == "" && iamv1.ValidateID("installationId", installationID) == nil
 	probeContext := request.Action != iamv1.ActionInstallationVerify ||
 		subject.Type == iamv1.SubjectServiceAccount && request.Resource.ID == installationID
-	allowed := subjectSupported && evaluation.Allowed && !mustChangePassword && platformContext && probeContext && ServiceCanRequest(callingService, request.Action)
+	allowed := subjectSupported && evaluation.Allowed && !credentialRestricted && platformContext && probeContext && ServiceCanRequest(callingService, request.Action)
 	decision, err := authorizationDecision(tenantID, installationID, subject, request, decisionID, databaseTime, allowed)
 	if err != nil {
 		return AuthorizationEvaluation{}, err

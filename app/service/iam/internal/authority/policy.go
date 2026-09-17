@@ -15,8 +15,8 @@ const MaxEvaluationStatements = 4096
 
 var ErrInvalidPolicyState = errors.New("IAM policy authority state is invalid")
 
-// A valid current action may exclude an otherwise valid subject. The decision
-// layer records a normal Deny for this case, unlike corrupt frozen evidence.
+// A valid current action may exclude a subject type or USER authentication
+// carrier. The decision layer records a normal Deny, unlike corrupt evidence.
 var errUnsupportedPolicySubject = errors.Join(ErrInvalidPolicyState, errors.New("IAM action subject is not supported"))
 
 // AttachedPolicy is one database-resolved relationship, not a caller-provided
@@ -143,17 +143,17 @@ func evaluateUserBoundary(value *ResolvedUserBoundary, context policyEvaluationC
 	if value.State == "NONE" {
 		return PolicyEvaluation{Allowed: true}, evidence, nil
 	}
+	evidence.BoundaryID, evidence.ResourceVersion = value.BoundaryID, value.ResourceVersion
+	evidence.Version = &iamv1.PolicyVersionReference{PolicyID: value.Policy.ID, VersionID: value.Version.ID, ContentDigest: value.Version.ContentDigest}
+	evidence.ContractVersion, evidence.Compilation = value.Version.ContractVersion, value.Version.Compilation
 	context.profiles = make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)
 	if context.includeProfiles(value.Profiles) != nil {
 		return PolicyEvaluation{}, UserBoundaryEvidence{}, ErrInvalidPolicyState
 	}
 	result, err := evaluatePolicies(context, []iamv1.PolicyVersion{*value.Version}, request)
 	if err != nil {
-		return PolicyEvaluation{}, UserBoundaryEvidence{}, err
+		return PolicyEvaluation{}, evidence, err
 	}
-	evidence.BoundaryID, evidence.ResourceVersion = value.BoundaryID, value.ResourceVersion
-	evidence.Version = &iamv1.PolicyVersionReference{PolicyID: value.Policy.ID, VersionID: value.Version.ID, ContentDigest: value.Version.ContentDigest}
-	evidence.ContractVersion, evidence.Compilation = value.Version.ContractVersion, value.Version.Compilation
 	return result, evidence, nil
 }
 
@@ -343,7 +343,15 @@ func evaluatePolicies(context policyEvaluationContext, versions []iamv1.PolicyVe
 			return PolicyEvaluation{}, ErrInvalidPolicyState
 		}
 		compilation, digest, profiles, err := context.policyInterpretation(version)
-		if err != nil || iamv1.CheckPolicyCompilationRequest(version.Document, compilation, digest, profiles, currentProfile, request, iamv1.SubjectType(context.subject.Type)) != nil {
+		if err != nil {
+			return PolicyEvaluation{}, ErrInvalidPolicyState
+		}
+		if context.subject.AccessKeyID != "" {
+			err = iamv1.CheckAccessKeyPolicyCompilationRequest(version.Document, compilation, digest, profiles, currentProfile, request)
+		} else {
+			err = iamv1.CheckPolicyCompilationRequest(version.Document, compilation, digest, profiles, currentProfile, request, context.subject.Type)
+		}
+		if err != nil {
 			return PolicyEvaluation{}, ErrInvalidPolicyState
 		}
 		reference := iamv1.PolicyVersionReference{PolicyID: version.PolicyID, VersionID: version.ID, ContentDigest: version.ContentDigest}
@@ -384,6 +392,15 @@ func policyRequestProfile(context policyEvaluationContext, request iamv1.Authori
 	}
 	if iamv1.CheckAuthorizationProfileSubject(profile, request.Profile, request.Action, context.subject.Type) != nil {
 		return iamv1.AuthorizationProfile{}, errUnsupportedPolicySubject
+	}
+	if context.subject.Type == iamv1.SubjectUser {
+		method := iamv1.UserAuthenticationLoginSession
+		if context.subject.AccessKeyID != "" {
+			method = iamv1.UserAuthenticationAccessKey
+		}
+		if iamv1.CheckAuthorizationProfileUserAuthentication(profile, request.Profile, request.Action, method) != nil {
+			return iamv1.AuthorizationProfile{}, errUnsupportedPolicySubject
+		}
 	}
 	return profile, nil
 }

@@ -102,6 +102,90 @@ func TestRoleActorLineageIsStrictAndFactBound(t *testing.T) {
 	}
 }
 
+func TestAccessKeyActorIsStrictAndOnlyAdmittedByClosedFacts(t *testing.T) {
+	document := loadAuditOpenAPI(t)
+	schema := compileAuditOpenAPISchema(t, document, "ActorReference")
+	valid := `{"type":"USER","id":"user-one","accessKeyId":"key-one"}`
+	for _, test := range []struct {
+		wire string
+		want bool
+	}{
+		{valid, true},
+		{`{"type":"USER","id":"user-one"}`, true},
+		{strings.Replace(valid, `"key-one"`, `null`, 1), false},
+		{strings.Replace(valid, `"key-one"`, `""`, 1), false},
+		{strings.Replace(valid, `"USER"`, `"SERVICE_ACCOUNT"`, 1), false},
+		{strings.Replace(valid, `"USER"`, `"SYSTEM"`, 1), false},
+		{`{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"role-session","sourceUserId":"user-one"},"accessKeyId":"key-one"}`, false},
+		{`{"type":"USER","id":"user-one","accessKeyId":"key-one","roleSession":null}`, false},
+		{strings.Replace(valid, `"accessKeyId":`, `"AccessKeyId":`, 1), false},
+	} {
+		var actor ActorReference
+		err := json.Unmarshal([]byte(test.wire), &actor)
+		instance, decodeErr := jsonschema.UnmarshalJSON(strings.NewReader(test.wire))
+		if (err == nil) != test.want || decodeErr != nil || (schema.Validate(instance) == nil) != test.want {
+			t.Fatalf("key actor decoder/schema accepted=%v/%v want=%v", err == nil, schema.Validate(instance) == nil, test.want)
+		}
+		if test.want {
+			encoded, err := json.Marshal(actor)
+			if err != nil || string(encoded) != test.wire {
+				t.Fatal("key attribution changed public wire")
+			}
+		}
+	}
+	actor := ActorReference{Type: ActorUser, ID: "user-one", AccessKeyID: "key-one"}
+	other := actor
+	if !actor.Equal(other) {
+		t.Fatal("same key attribution is unequal")
+	}
+	for _, key := range []string{"", "key-two"} {
+		other.AccessKeyID = key
+		if actor.Equal(other) {
+			t.Fatal("key attribution was omitted from actor identity")
+		}
+	}
+	permitted := map[Action]bool{ActionIAMAuthorizationDecided: true, ActionPaaSApplicationCreated: true, ActionPaaSConfigurationCreated: true,
+		ActionPaaSConfigurationRevisionCreated: true, ActionPaaSApplicationRevisionCreated: true, ActionPaaSDeploymentCreated: true,
+		ActionPaaSDeploymentUpdated: true, ActionPaaSDeploymentStopped: true, ActionPaaSDeploymentRolledBack: true, ActionAuditRecordsRead: true, ActionAuditIntegrityVerified: true}
+	eventSchema := compileAuditOpenAPISchema(t, document, "Event")
+	for _, action := range AllActions() {
+		contract, _ := ContractForAction(action)
+		for _, result := range contract.Results {
+			event := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-key", TenantID: "account-one", Actor: actor, Action: action,
+				Target: TargetReference{Kind: contract.Target, ID: "target-one"}, Result: result, RequestID: "request-one", CorrelationID: "correlation-one",
+				RequestDigest: "sha256:" + strings.Repeat("1", 64), OccurredAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)}
+			if contract.PlatformOnly {
+				event.TenantID, event.InstallationID = "", "installation-one"
+			}
+			if contract.IAMDecisionRequired {
+				event.IAMDecisionID = "decision-one"
+			}
+			if action == ActionIAMAuthorizationDecided {
+				event.Target.ID = string(event.IAMDecisionID)
+			}
+			if contract.OperationRequired {
+				event.OperationID = "operation-one"
+			}
+			if action == ActionIAMAccountRootCredentialsRecovered || action == ActionIAMTenantAdministratorRecovered || action == ActionIAMInstallationPrimaryCredentialsRecovered {
+				event.Target.TenantID = "account-one"
+			}
+			encoded, _ := json.Marshal(event)
+			instance, _ := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+			if contract.AccessKeyActorPermitted != permitted[action] || (ValidateEventForSource(contract.Source, event) == nil) != permitted[action] || (eventSchema.Validate(instance) == nil) != permitted[action] {
+				t.Fatal("key actor escaped its closed fact contract", action)
+			}
+			if permitted[action] {
+				_, digest, err := CanonicalizeEvent(contract.Source, event)
+				event.Actor.AccessKeyID = "key-two"
+				_, altered, alteredErr := CanonicalizeEvent(contract.Source, event)
+				if err != nil || alteredErr != nil || altered == digest {
+					t.Fatal("key attribution is not committed by the unique canonical owner")
+				}
+			}
+		}
+	}
+}
+
 func TestAuditSchemaAcceptsGoUTCSecondEncoding(t *testing.T) {
 	value := Readiness{
 		APIVersion: APIVersion, Kind: "Readiness", State: ReadinessReady,

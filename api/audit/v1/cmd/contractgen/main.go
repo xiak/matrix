@@ -213,7 +213,7 @@ func structContracts() map[string]reflect.Type {
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
 	switch jsonName {
-	case "id", "requestId", "correlationId", "installationId", "sessionId", "sourceUserId":
+	case "id", "requestId", "correlationId", "installationId", "sessionId", "sourceUserId", "accessKeyId":
 		if field.Type.Kind() == reflect.String {
 			base = openapi31.Ref("ID")
 		}
@@ -283,8 +283,9 @@ func applySemanticOverlays(schemas object) {
 		}
 	}
 	schemas["ActorReference"].(object)["oneOf"] = []any{
-		object{"properties": object{"type": object{"const": string(auditv1.ActorRole)}}, "required": []string{"roleSession"}},
-		object{"properties": object{"type": object{"enum": []string{string(auditv1.ActorUser), string(auditv1.ActorServiceAccount), string(auditv1.ActorSystem)}}, "roleSession": false}},
+		object{"properties": object{"type": object{"const": string(auditv1.ActorRole)}, "accessKeyId": false}, "required": []string{"roleSession"}},
+		object{"properties": object{"type": object{"const": string(auditv1.ActorUser)}, "roleSession": false}},
+		object{"properties": object{"type": object{"enum": []string{string(auditv1.ActorServiceAccount), string(auditv1.ActorSystem)}}, "roleSession": false, "accessKeyId": false}},
 	}
 
 	installation := schemas["InstallationVerification"].(object)
@@ -353,6 +354,14 @@ func actionRules() (eventRules []any, recordRules []any) {
 		} else {
 			thenRequired = append(thenRequired, "tenantId")
 			thenProperties["installationId"] = false
+		}
+		if !contract.AccessKeyActorPermitted {
+			actor, exists := thenProperties["actor"].(object)
+			if !exists {
+				actor = object{"properties": object{}}
+				thenProperties["actor"] = actor
+			}
+			actor["properties"].(object)["accessKeyId"] = false
 		}
 		if contract.IAMDecisionRequired {
 			thenRequired = append(thenRequired, "iamDecisionId")

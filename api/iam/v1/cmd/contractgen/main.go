@@ -229,6 +229,10 @@ func buildPaths() object {
 			"authorize", "Authorize a transient subject for one action", "AuthorizationRequest", "AuthorizationDecision", "200",
 			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
 		)},
+		"/v1/authorize:access-key": object{"post": mutationOperation(
+			"authorizeAccessKey", "Verify one signed product request and atomically record its decision and permanent nonce consumption", "AccessKeyAuthorizationRequest", "AccessKeyAuthorization", "200",
+			[]any{object{"ServiceCredential": []string{}}}, nil,
+		)},
 		"/v1/installation:verify": object{"post": mutationOperation(
 			"verifyInstallation", "Authorize the credential-bound installation verifier", "AuthorizationRequest", "AuthorizationDecision", "200",
 			[]any{object{"ServiceCredential": []string{}}}, nil,
@@ -502,12 +506,37 @@ func structContracts() map[string]reflect.Type {
 		"Revocation":                          openapi31.StructType[iamv1.Revocation](),
 		"AuthorizationRequest":                openapi31.StructType[iamv1.AuthorizationRequest](),
 		"AuthorizationDecision":               openapi31.StructType[iamv1.AuthorizationDecision](),
+		"AccessKeyAuthorization":              openapi31.StructType[iamv1.AccessKeyAuthorization](),
+		"AccessKeyHTTPRequest":                openapi31.StructType[iamv1.AccessKeyHTTPRequest](),
 		"Readiness":                           openapi31.StructType[iamv1.Readiness](),
 		"Problem":                             openapi31.StructType[iamv1.Problem](),
 	}
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if owner == "AccessKeyHTTPRequest" {
+		switch jsonName {
+		case "method":
+			base = object{"type": "string", "enum": []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}}
+		case "scheme":
+			base = object{"type": "string", "enum": []string{"http", "https"}}
+		case "authority":
+			base = object{"type": "string", "minLength": 1, "maxLength": 255, "description": "Exact canonical lower-case HTTP authority; IAM additionally validates DNS/IP and port encoding."}
+		case "escapedPath":
+			base = object{"type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^/", "description": "Canonical RFC3986 escaped path; ambiguous or aliased encodings are rejected, not normalized."}
+		case "rawQuery":
+			base = object{"type": "string", "maxLength": 4096, "description": "At most 64 canonical name=value items ordered by encoded name, preserving repeated-name value order."}
+		case "contentType":
+			base = object{"type": "string", "enum": []string{"", "application/json"}}
+		case "idempotencyKey", "ifMatch":
+			base = object{"type": "string", "maxLength": 128, "pattern": "^[ -~]*$", "description": "Exact covered header, including empty; leading/trailing whitespace is invalid."}
+		case "bodyDigest":
+			base = object{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+		}
+	}
+	if owner == "AccessKeyAuthorization" && jsonName == "signedRequestDigest" {
+		base = object{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+	}
 	if owner == "CreateAccessKeyResponse" || owner == "SetAccessKeyStatusResponse" || owner == "DeleteAccessKeyResponse" {
 		if jsonName == "outcome" {
 			base = object{"type": "string", "enum": []string{"APPLIED", "EQUAL_REPLAY"}}
@@ -757,6 +786,28 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	// The signed wire uses its explicit codec, not reflection of secret-bearing
+	// implementation values. This schema is never a second transport encoder.
+	schemas["AccessKeySignedRequest"] = object{"type": "object", "additionalProperties": false, "writeOnly": true,
+		"required": []string{"apiVersion", "kind", "http", "authorization"}, "properties": object{
+			"apiVersion": object{"const": iamv1.APIVersion}, "kind": object{"const": "AccessKeySignedRequest"},
+			"http": openapi31.Ref("AccessKeyHTTPRequest"),
+			"authorization": object{"type": "string", "writeOnly": true, "maxLength": iamv1.MaxAccessKeyAuthorizationBytes,
+				"pattern": "^Matrix-HMAC-SHA256-V1 KeyId=[A-Za-z0-9][A-Za-z0-9._:-]{0,127},Installation=[A-Za-z0-9][A-Za-z0-9._:-]{0,127},Audience=[a-z][a-z0-9_-]{0,63},SignedAt=[1-9][0-9]{0,11},Nonce=[A-Za-z0-9_-]{21}[AQgw],Signature=[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$"}}}
+	schemas["AccessKeyAuthorizationRequest"] = object{"type": "object", "additionalProperties": false,
+		"required": []string{"authorization", "signedRequest"}, "properties": object{
+			"authorization": openapi31.Ref("AuthorizationRequest"), "signedRequest": openapi31.Ref("AccessKeySignedRequest")},
+		"description": "Service-bound internal request only. No subject/account selector. The actual PEP binds HTTP data and audience; IAM verifies the MAC and database-time window. Duplicate nonce conflicts, never replays a permit."}
+	schemas["AccessKeyAuthorization"].(object)["allOf"] = []any{object{
+		"if": object{"properties": object{"decision": object{"properties": object{"allowed": object{"const": true}}}}},
+		"then": object{"properties": object{"decision": object{"properties": object{"installationId": false, "subject": object{
+			"required": []string{"accessKeyId"}, "properties": object{"type": object{"const": "USER"}}}}}}},
+	}}
+	schemas["AccessKeyHTTPRequest"].(object)["allOf"] = []any{object{
+		"if":   object{"properties": object{"contentType": object{"const": ""}}},
+		"then": object{"properties": object{"bodyDigest": object{"const": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}},
+		"else": object{"properties": object{"bodyDigest": object{"not": object{"const": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}}},
+	}}
 	applyPolicyLanguageOverlays(schemas)
 	applyAuthorizationProfileOverlays(schemas)
 	// Immutable response content checks syntax, not today's action catalog.
@@ -811,8 +862,9 @@ func applySemanticOverlays(schemas object) {
 		"then": object{"properties": object{"status": object{"const": string(iamv1.AccessKeyEnabled)}}},
 	}}
 	schemas["Subject"].(object)["oneOf"] = []any{
-		object{"required": []string{"roleSession"}, "properties": object{"type": object{"const": "ROLE"}}},
-		object{"properties": object{"type": object{"enum": []string{"USER", "SERVICE_ACCOUNT"}}, "roleSession": false}},
+		object{"required": []string{"roleSession"}, "properties": object{"type": object{"const": "ROLE"}, "accessKeyId": false}},
+		object{"properties": object{"type": object{"const": "USER"}, "roleSession": false}},
+		object{"properties": object{"type": object{"const": "SERVICE_ACCOUNT"}, "roleSession": false, "accessKeyId": false}},
 	}
 	roleResponse["required"] = []string{"outcome", "session"}
 	roleResponse["oneOf"] = []any{
@@ -988,7 +1040,7 @@ func applySemanticOverlays(schemas object) {
 		"then": object{
 			"if": object{"properties": object{"action": object{"enum": platformActions}}, "required": []string{"action"}},
 			"then": object{"required": []string{"installationId"}, "properties": object{
-				"tenantId": false, "subject": object{"properties": object{"type": object{"const": string(iamv1.PrincipalUser)}}},
+				"tenantId": false, "subject": object{"properties": object{"type": object{"const": string(iamv1.PrincipalUser)}, "accessKeyId": false}},
 			}},
 			"else": object{"required": []string{"tenantId"}, "properties": object{"installationId": false}},
 		},
@@ -1084,7 +1136,17 @@ func authorizationTargetRules(includeSubject bool) []any {
 						subjects = append(subjects, string(subject))
 					}
 				}
-				properties["subject"] = object{"properties": object{"type": object{"enum": subjects}}}
+				subjectProperties := object{"type": object{"enum": subjects}}
+				subjectSchema := object{"properties": subjectProperties}
+				reference := iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+				keyAllowed := action.Scope == iamv1.AuthorityScopeTenant && iamv1.CheckAuthorizationProfileUserAuthentication(profile, reference, action.Action, iamv1.UserAuthenticationAccessKey) == nil
+				if !keyAllowed {
+					subjectProperties["accessKeyId"] = false
+				} else if iamv1.CheckAuthorizationProfileUserAuthentication(profile, reference, action.Action, iamv1.UserAuthenticationLoginSession) != nil {
+					subjectSchema["if"] = object{"properties": object{"type": object{"const": string(iamv1.SubjectUser)}}}
+					subjectSchema["then"] = object{"required": []string{"accessKeyId"}}
+				}
+				properties["subject"] = subjectSchema
 			}
 			rules = append(rules, object{
 				"if":   object{"properties": object{"action": object{"const": string(action.Action)}}, "required": []string{"action"}},

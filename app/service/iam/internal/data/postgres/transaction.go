@@ -421,6 +421,24 @@ func (value *transaction) LookupSession(
 		return identityaccess.SessionCredential{}, false, err
 	}
 	defer clear(boundary)
+	subject.Boundary, err = value.decodeUserBoundary(ctx, boundary, subject.Organization.ID, subject.Principal.ID, subject.Principal.ResourceVersion)
+	if err != nil {
+		return identityaccess.SessionCredential{}, false, err
+	}
+	if iamv1.ValidateOrganization(subject.Organization) != nil ||
+		iamv1.ValidatePrincipal(subject.Principal) != nil ||
+		iamv1.ValidateSession(subject.Session) != nil {
+		return identityaccess.SessionCredential{}, false, identityaccess.ErrUnavailable
+	}
+	return identityaccess.SessionCredential{
+		Subject:            subject,
+		VerificationDigest: verificationDigest,
+	}, true, nil
+}
+
+// The same boundary decoder protects USER authentication carriers; a key must
+// not acquire a second policy representation or fabricated login Session.
+func (value *transaction) decodeUserBoundary(ctx context.Context, boundary []byte, account iamv1.AccountID, user iamv1.PrincipalID, userVersion uint64) (*authority.ResolvedUserBoundary, error) {
 	var storedBoundary struct {
 		State               string               `json:"state"`
 		AccountID           iamv1.AccountID      `json:"accountId"`
@@ -432,7 +450,7 @@ func (value *transaction) LookupSession(
 		Version             *storedPolicyVersion `json:"version,omitempty"`
 	}
 	if contractjson.DecodeObjectBytes(boundary, maxStoredPolicyVersionBytes+4096, &storedBoundary) != nil {
-		return identityaccess.SessionCredential{}, false, identityaccess.ErrUnavailable
+		return nil, identityaccess.ErrUnavailable
 	}
 	resolved := authority.ResolvedUserBoundary{State: storedBoundary.State, AccountID: storedBoundary.AccountID,
 		UserID: storedBoundary.UserID, UserResourceVersion: storedBoundary.UserResourceVersion,
@@ -440,26 +458,17 @@ func (value *transaction) LookupSession(
 	if storedBoundary.Version != nil {
 		version, profiles, err := value.resolvePolicyVersion(ctx, *storedBoundary.Version)
 		if err != nil {
-			return identityaccess.SessionCredential{}, false, err
+			return nil, err
 		}
 		resolved.Version, resolved.Profiles = &version, profiles
 	}
 	if resolved.Policy != nil {
 		resolved.Policy.CreatedAt, resolved.Policy.UpdatedAt = resolved.Policy.CreatedAt.UTC(), resolved.Policy.UpdatedAt.UTC()
 	}
-	subject.Boundary = &resolved
-	if authority.ValidateUserBoundary(subject.Boundary, subject.Organization.ID, subject.Principal.ID, subject.Principal.ResourceVersion) != nil {
-		return identityaccess.SessionCredential{}, false, identityaccess.ErrUnavailable
+	if authority.ValidateUserBoundary(&resolved, account, user, userVersion) != nil {
+		return nil, identityaccess.ErrUnavailable
 	}
-	if iamv1.ValidateOrganization(subject.Organization) != nil ||
-		iamv1.ValidatePrincipal(subject.Principal) != nil ||
-		iamv1.ValidateSession(subject.Session) != nil {
-		return identityaccess.SessionCredential{}, false, identityaccess.ErrUnavailable
-	}
-	return identityaccess.SessionCredential{
-		Subject:            subject,
-		VerificationDigest: verificationDigest,
-	}, true, nil
+	return &resolved, nil
 }
 
 func (value *transaction) LookupService(
@@ -539,8 +548,9 @@ func (value *transaction) ReadAuditEvidence(
 			if iamv1.ValidateLegacyAuthorizationDecision(decoded) != nil {
 				return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
 			}
-		case 2, 3:
-			if *decisionContract == 2 && decoded.Subject != nil && decoded.Subject.Type == iamv1.SubjectRole {
+		case 2, 3, 4:
+			if decoded.Subject != nil && ((*decisionContract == 2 && decoded.Subject.Type == iamv1.SubjectRole) ||
+				(*decisionContract < 4 && decoded.Subject.AccessKeyID != "")) {
 				return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
 			}
 			if decoded.Profile == nil {
@@ -681,6 +691,8 @@ func (value *transaction) RecordAuthorization(
 	if iamv1.CheckAuthorizationDecisionForRequest(mutation.Decision, mutation.Request) != nil ||
 		iamv1.ValidateSubject(mutation.Subject) != nil ||
 		(mutation.Subject.Type == iamv1.SubjectRole) != (mutation.RoleEvidence != nil) ||
+		(mutation.Subject.AccessKeyID != "") != (mutation.AccessKeyEvidence != nil) ||
+		(mutation.AccessKeyEvidence != nil && mutation.AccessKeyEvidence.AccessKeyID != mutation.Subject.AccessKeyID) ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return identityaccess.ErrInvalidArgument
 	}
@@ -718,17 +730,29 @@ func (value *transaction) RecordAuthorization(
 		return identityaccess.ErrUnavailable
 	}
 	defer clear(roleEvidence)
+	// This local wire is the only explicit database encoder. The private
+	// evidence type still rejects ordinary JSON and redacts formatting.
+	type keyEvidenceWire identityaccess.AccessKeyAuthorizationEvidence
+	keyEvidence, err := json.Marshal((*keyEvidenceWire)(mutation.AccessKeyEvidence))
+	if err != nil {
+		clear(decision)
+		clear(event)
+		clear(evidence)
+		return identityaccess.ErrUnavailable
+	}
+	defer clear(keyEvidence)
 	_, err = value.tx.Exec(
 		ctx,
-		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::integer, $8::jsonb)",
+		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb, $7::integer, $8::jsonb, $9::jsonb)",
 		string(mutation.AccountID),
 		mutation.Subject.ID,
 		decision,
 		event,
 		evidence,
 		boundary,
-		3,
+		4,
 		roleEvidence,
+		keyEvidence,
 	)
 	clear(decision)
 	clear(event)

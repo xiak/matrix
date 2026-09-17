@@ -38,6 +38,7 @@ type Transaction interface {
 	TransactionTime(context.Context) (time.Time, error)
 	CheckCurrentAuthorizationProfiles(context.Context) error
 	ReadAccessKeyCustody(context.Context) (AccessKeyCustody, error)
+	LookupAccessKey(context.Context, string, iamv1.AccessKeyID, string, iamv1.ProductID) (AccessKeyCredential, bool, error)
 	ReadAccessKeys(context.Context, AccessKeyRead) (AccessKeyDirectory, error)
 	ReserveAccessKey(context.Context, AccessKeyReservation) (AccessKeyReservationResult, error)
 	CompleteAccessKey(context.Context, AccessKeyCompletion) (AccessKeyMutationResult, error)
@@ -548,17 +549,54 @@ type ServiceCredential struct {
 	VerificationDigest string
 }
 
+// Private locked credential input, not public metadata or a login Session.
+// Usable material never travels to products or ordinary JSON encoders.
+type AccessKeyCredential struct {
+	Subject            authority.AccessKeyContext
+	Material           authority.SealedAccessKeySecret
+	MaterialCommitment string
+}
+
+func (AccessKeyCredential) String() string               { return "[REDACTED]" }
+func (AccessKeyCredential) GoString() string             { return "identityaccess.AccessKeyCredential{[REDACTED]}" }
+func (AccessKeyCredential) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
+func (*AccessKeyCredential) UnmarshalJSON([]byte) error  { return ErrUnavailable }
+
 type AuthorizationMutation struct {
 	AccountID iamv1.AccountID
 	Subject   iamv1.Subject
 	// Request is the original validated input, not reconstructed from Decision.
-	Request          iamv1.AuthorizationRequest
-	Decision         iamv1.AuthorizationDecision
-	PolicyEvidence   []authority.PolicyAttachmentEvidence
-	BoundaryEvidence authority.UserBoundaryEvidence
-	RoleEvidence     *authority.RoleAuthorizationEvidence
-	AuditEvent       auditv1.Event
+	Request           iamv1.AuthorizationRequest
+	Decision          iamv1.AuthorizationDecision
+	PolicyEvidence    []authority.PolicyAttachmentEvidence
+	BoundaryEvidence  authority.UserBoundaryEvidence
+	RoleEvidence      *authority.RoleAuthorizationEvidence
+	AccessKeyEvidence *AccessKeyAuthorizationEvidence
+	AuditEvent        auditv1.Event
 }
+
+// Only the successful MAC path constructs this private, once-only evidence.
+// SQL resolves the service's full immutable identity from ServiceLookupDigest.
+type AccessKeyAuthorizationEvidence struct {
+	AccessKeyID         iamv1.AccessKeyID `json:"accessKeyId"`
+	ResourceVersion     uint64            `json:"resourceVersion"`
+	FormatVersion       uint8             `json:"formatVersion"`
+	WrappingKeyID       string            `json:"wrappingKeyId"`
+	MaterialCommitment  string            `json:"materialCommitment"`
+	InstallationID      string            `json:"installationId"`
+	ServiceLookupDigest string            `json:"serviceLookupDigest"`
+	Audience            iamv1.ProductID   `json:"audience"`
+	SignedRequestDigest string            `json:"signedRequestDigest"`
+	NonceDigest         string            `json:"nonceDigest"`
+	SignedAt            int64             `json:"signedAt"`
+}
+
+func (AccessKeyAuthorizationEvidence) String() string { return "[REDACTED]" }
+func (AccessKeyAuthorizationEvidence) GoString() string {
+	return "identityaccess.AccessKeyAuthorizationEvidence{[REDACTED]}"
+}
+func (AccessKeyAuthorizationEvidence) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
+func (*AccessKeyAuthorizationEvidence) UnmarshalJSON([]byte) error  { return ErrUnavailable }
 
 type UserBoundaryMutation struct {
 	AccountID             iamv1.AccountID

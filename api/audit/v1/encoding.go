@@ -19,6 +19,7 @@ func (actor *ActorReference) UnmarshalJSON(document []byte) error {
 		Type        ActorType       `json:"type"`
 		ID          ActorID         `json:"id"`
 		RoleSession json.RawMessage `json:"roleSession"`
+		AccessKeyID json.RawMessage `json:"accessKeyId"`
 	}
 	if err := contractjson.DecodeObjectBytes(document, MaxRequestBytes, &wire); err != nil {
 		return err
@@ -31,6 +32,11 @@ func (actor *ActorReference) UnmarshalJSON(document []byte) error {
 		value.RoleSession = &RoleSessionReference{}
 		if err := contractjson.DecodeObjectBytes(wire.RoleSession, MaxRequestBytes, value.RoleSession); err != nil {
 			return err
+		}
+	}
+	if wire.AccessKeyID != nil {
+		if json.Unmarshal(wire.AccessKeyID, &value.AccessKeyID) != nil || ValidateID("actor.accessKeyId", value.AccessKeyID) != nil {
+			return errors.New("Audit actor key lineage is invalid")
 		}
 	}
 	if err := ValidateActor(value); err != nil {

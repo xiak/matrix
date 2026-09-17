@@ -155,6 +155,82 @@
         ],
         "type": "object"
       },
+      "AccessKeyAuthorization": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "decision": {
+                  "properties": {
+                    "allowed": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "decision": {
+                  "properties": {
+                    "installationId": false,
+                    "subject": {
+                      "properties": {
+                        "type": {
+                          "const": "USER"
+                        }
+                      },
+                      "required": [
+                        "accessKeyId"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/AuthorizationDecision"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "signedRequestDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "decision",
+          "kind",
+          "signedRequestDigest"
+        ],
+        "type": "object"
+      },
+      "AccessKeyAuthorizationRequest": {
+        "additionalProperties": false,
+        "description": "Service-bound internal request only. No subject/account selector. The actual PEP binds HTTP data and audience; IAM verifies the MAC and database-time window. Duplicate nonce conflicts, never replays a permit.",
+        "properties": {
+          "authorization": {
+            "$ref": "#/components/schemas/AuthorizationRequest"
+          },
+          "signedRequest": {
+            "$ref": "#/components/schemas/AccessKeySignedRequest"
+          }
+        },
+        "required": [
+          "authorization",
+          "signedRequest"
+        ],
+        "type": "object"
+      },
       "AccessKeyDeletion": {
         "additionalProperties": false,
         "properties": {
@@ -190,6 +266,110 @@
           "kind",
           "resourceVersion",
           "userId"
+        ],
+        "type": "object"
+      },
+      "AccessKeyHTTPRequest": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "else": {
+              "properties": {
+                "bodyDigest": {
+                  "not": {
+                    "const": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                  }
+                }
+              }
+            },
+            "if": {
+              "properties": {
+                "contentType": {
+                  "const": ""
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "bodyDigest": {
+                  "const": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "authority": {
+            "description": "Exact canonical lower-case HTTP authority; IAM additionally validates DNS/IP and port encoding.",
+            "maxLength": 255,
+            "minLength": 1,
+            "type": "string"
+          },
+          "bodyDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "contentType": {
+            "enum": [
+              "",
+              "application/json"
+            ],
+            "type": "string"
+          },
+          "escapedPath": {
+            "description": "Canonical RFC3986 escaped path; ambiguous or aliased encodings are rejected, not normalized.",
+            "maxLength": 2048,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "description": "Exact covered header, including empty; leading/trailing whitespace is invalid.",
+            "maxLength": 128,
+            "pattern": "^[ -~]*$",
+            "type": "string"
+          },
+          "ifMatch": {
+            "description": "Exact covered header, including empty; leading/trailing whitespace is invalid.",
+            "maxLength": 128,
+            "pattern": "^[ -~]*$",
+            "type": "string"
+          },
+          "method": {
+            "enum": [
+              "GET",
+              "HEAD",
+              "POST",
+              "PUT",
+              "PATCH",
+              "DELETE",
+              "OPTIONS"
+            ],
+            "type": "string"
+          },
+          "rawQuery": {
+            "description": "At most 64 canonical name=value items ordered by encoded name, preserving repeated-name value order.",
+            "maxLength": 4096,
+            "type": "string"
+          },
+          "scheme": {
+            "enum": [
+              "http",
+              "https"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "authority",
+          "bodyDigest",
+          "contentType",
+          "escapedPath",
+          "idempotencyKey",
+          "ifMatch",
+          "method",
+          "rawQuery",
+          "scheme"
         ],
         "type": "object"
       },
@@ -266,6 +446,34 @@
           "userResourceVersion"
         ],
         "type": "object"
+      },
+      "AccessKeySignedRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "authorization": {
+            "maxLength": 1024,
+            "pattern": "^Matrix-HMAC-SHA256-V1 KeyId=[A-Za-z0-9][A-Za-z0-9._:-]{0,127},Installation=[A-Za-z0-9][A-Za-z0-9._:-]{0,127},Audience=[a-z][a-z0-9_-]{0,63},SignedAt=[1-9][0-9]{0,11},Nonce=[A-Za-z0-9_-]{21}[AQgw],Signature=[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "http": {
+            "$ref": "#/components/schemas/AccessKeyHTTPRequest"
+          },
+          "kind": {
+            "const": "AccessKeySignedRequest"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "http",
+          "authorization"
+        ],
+        "type": "object",
+        "writeOnly": true
       },
       "AccessKeyStatus": {
         "enum": [
@@ -908,6 +1116,7 @@
                 "properties": {
                   "subject": {
                     "properties": {
+                      "accessKeyId": false,
                       "type": {
                         "const": "USER"
                       }
@@ -973,6 +1182,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1046,6 +1256,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1098,6 +1309,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1150,6 +1362,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1202,6 +1415,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1254,6 +1468,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1306,6 +1521,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1358,6 +1574,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1410,6 +1627,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1462,6 +1680,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1514,6 +1733,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1566,6 +1786,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1618,6 +1839,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1670,6 +1892,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1722,6 +1945,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1774,6 +1998,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1826,6 +2051,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1878,6 +2104,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1930,6 +2157,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -1982,6 +2210,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2034,6 +2263,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2086,6 +2316,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2138,6 +2369,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2190,6 +2422,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2242,6 +2475,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2294,6 +2528,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2346,6 +2581,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2398,6 +2634,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2450,6 +2687,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2502,6 +2740,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2554,6 +2793,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2606,6 +2846,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2658,6 +2899,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2710,6 +2952,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2762,6 +3005,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2814,6 +3058,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2866,6 +3111,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2918,6 +3164,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -2970,6 +3217,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3022,6 +3270,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3074,6 +3323,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3126,6 +3376,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3178,6 +3429,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3230,6 +3482,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3282,6 +3535,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3334,6 +3588,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3386,6 +3641,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3438,6 +3694,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3490,6 +3747,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3542,6 +3800,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3594,6 +3853,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3646,6 +3906,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3698,6 +3959,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3750,6 +4012,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3802,6 +4065,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3854,6 +4118,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3906,6 +4171,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -3958,6 +4224,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4010,6 +4277,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4062,6 +4330,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4114,6 +4383,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4187,6 +4457,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4239,6 +4510,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4312,6 +4584,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4364,6 +4637,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4416,6 +4690,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4468,6 +4743,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4530,6 +4806,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4582,6 +4859,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4634,6 +4912,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4686,6 +4965,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4738,6 +5018,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -4800,6 +5081,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -4853,6 +5135,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -4916,6 +5199,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -4969,6 +5253,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -5032,6 +5317,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -5085,6 +5371,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -5148,6 +5435,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -5201,6 +5489,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -5264,6 +5553,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -5317,6 +5607,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -5370,6 +5661,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -5423,6 +5715,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -5476,6 +5769,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -5529,6 +5823,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -5603,6 +5898,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -5676,6 +5972,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -5738,6 +6035,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -5811,6 +6109,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -5873,6 +6172,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -5946,6 +6246,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -6008,6 +6309,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -6071,6 +6373,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER",
@@ -6134,6 +6437,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -6196,6 +6500,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "USER"
@@ -6248,6 +6553,7 @@
                 },
                 "subject": {
                   "properties": {
+                    "accessKeyId": false,
                     "type": {
                       "enum": [
                         "SERVICE_ACCOUNT"
@@ -20344,6 +20650,7 @@
         "oneOf": [
           {
             "properties": {
+              "accessKeyId": false,
               "type": {
                 "const": "ROLE"
               }
@@ -20356,15 +20663,24 @@
             "properties": {
               "roleSession": false,
               "type": {
-                "enum": [
-                  "USER",
-                  "SERVICE_ACCOUNT"
-                ]
+                "const": "USER"
+              }
+            }
+          },
+          {
+            "properties": {
+              "accessKeyId": false,
+              "roleSession": false,
+              "type": {
+                "const": "SERVICE_ACCOUNT"
               }
             }
           }
         ],
         "properties": {
+          "accessKeyId": {
+            "$ref": "#/components/schemas/ID"
+          },
           "id": {
             "$ref": "#/components/schemas/ID"
           },
@@ -21785,6 +22101,66 @@
           }
         ],
         "summary": "Authorize a transient subject for one action"
+      }
+    },
+    "/v1/authorize:access-key": {
+      "post": {
+        "operationId": "authorizeAccessKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessKeyAuthorizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessKeyAuthorization"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "ServiceCredential": []
+          }
+        ],
+        "summary": "Verify one signed product request and atomically record its decision and permanent nonce consumption"
       }
     },
     "/v1/bootstrap/status": {

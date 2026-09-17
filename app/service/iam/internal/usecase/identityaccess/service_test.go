@@ -328,6 +328,45 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 			if got, err := auditContentDigest(identity, event, current); err != nil || got != expected {
 				t.Fatalf("frozen v2 proof borrowed current head or changed fact: %v", err)
 			}
+			if contract, _ := auditv1.ContractForAction(event.Action); contract.AccessKeyActorPermitted {
+				keyProfile, _ := iamv1.LookupAuthorizationProfile(profile.Product)
+				keyProfile.Revision = profile.Revision
+				for index := range keyProfile.Actions {
+					if keyProfile.Actions[index].Action == decision.Action {
+						keyProfile.Actions[index].UserAuthenticationMethods = []iamv1.UserAuthenticationMethod{iamv1.UserAuthenticationLoginSession, iamv1.UserAuthenticationAccessKey}
+					}
+				}
+				_, keyDigest, err := iamv1.CanonicalizeAuthorizationProfile(keyProfile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				keyDecision := decision
+				keyDecision.Subject = &iamv1.Subject{Type: iamv1.SubjectUser, ID: decision.Subject.ID, AccessKeyID: "key-forged-history"}
+				keyDecision.Profile = &iamv1.AuthorizationProfileReference{Product: keyProfile.Product, Revision: keyProfile.Revision, ContentDigest: keyDigest}
+				if iamv1.ValidateAuthorizationDecisionForProfile(keyDecision, keyProfile) != nil {
+					t.Fatal("key history attack must have a self-consistent public declaration")
+				}
+				for _, contractVersion := range []int{2, 3} {
+					forged := current
+					forged.Decision, forged.DecisionProfile, forged.DecisionContractVersion = &keyDecision, &keyProfile, contractVersion
+					if validHistoricalDecision(forged) {
+						t.Fatal("pre-key protected contract acquired a credential lineage")
+					}
+				}
+				keyEvidence := current
+				keyEvidence.Decision, keyEvidence.DecisionProfile, keyEvidence.DecisionContractVersion = &keyDecision, &keyProfile, 4
+				keyEvent := event
+				keyEvent.Actor.AccessKeyID = string(keyDecision.Subject.AccessKeyID)
+				keyEvidence.Event.Actor = keyEvent.Actor
+				_, expectedKeyDigest, err := auditv1.CanonicalizeEvent(mustAuditSource(t, mapping.event), keyEvent)
+				if digest, proofErr := auditContentDigest(identity, keyEvent, keyEvidence); err != nil || proofErr != nil || digest != expectedKeyDigest {
+					t.Fatal("contract4 key attribution or archived carrier rejected", err, proofErr)
+				}
+				keyEvent.Actor.AccessKeyID = "another-key"
+				if _, err := auditContentDigest(identity, keyEvent, keyEvidence); !errors.Is(err, ErrForbidden) {
+					t.Fatal("key substitution borrowed historical authority")
+				}
+			}
 			// Exact archive validation must also govern producer admission: a
 			// coherent frozen declaration with a different caller cannot borrow
 			// the current catalog's permission for this producer.
@@ -347,7 +386,7 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 			}
 			for name, mutate := range map[string]func(*AuditEvidence){
 				"version absent":      func(e *AuditEvidence) { e.DecisionContractVersion = 0 },
-				"version unknown":     func(e *AuditEvidence) { e.DecisionContractVersion = 4 },
+				"version unknown":     func(e *AuditEvidence) { e.DecisionContractVersion = 5 },
 				"downgrade to legacy": func(e *AuditEvidence) { e.DecisionContractVersion = 1 },
 				"archive absent":      func(e *AuditEvidence) { e.DecisionProfile = nil },
 				"profile absent":      func(e *AuditEvidence) { e.Decision.Profile = nil },

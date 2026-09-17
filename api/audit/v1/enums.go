@@ -171,16 +171,17 @@ const (
 // ActionContract is the closed Audit event union. Source is authority
 // context supplied by authentication and is never accepted from event JSON.
 type ActionContract struct {
-	Source               Source
-	Target               TargetKind
-	Results              []Result
-	IAMDecisionPermitted bool
-	IAMDecisionRequired  bool
-	OperationRequired    bool
-	PlatformOnly         bool
-	UserActorRequired    bool
-	RoleActorPermitted   bool
-	RoleActorRequired    bool
+	Source                  Source
+	Target                  TargetKind
+	Results                 []Result
+	IAMDecisionPermitted    bool
+	IAMDecisionRequired     bool
+	OperationRequired       bool
+	PlatformOnly            bool
+	UserActorRequired       bool
+	RoleActorPermitted      bool
+	RoleActorRequired       bool
+	AccessKeyActorPermitted bool
 }
 
 func AllActions() []Action {
@@ -420,7 +421,7 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMAuthorizationDecided: {
 		Source: SourceIAM, Target: TargetAuthorizationDecision,
 		Results: []Result{ResultAllowed, ResultDenied}, IAMDecisionRequired: true,
-		RoleActorPermitted: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionIAMPolicyAttachmentCreated: {
 		Source: SourceIAM, Target: TargetPolicyAttachment, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
@@ -437,42 +438,42 @@ var actionContracts = map[Action]ActionContract{
 	ActionPaaSApplicationCreated: {
 		Source: SourcePaaS, Target: TargetApplication, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
-		RoleActorPermitted: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSConfigurationCreated: {
 		Source: SourcePaaS, Target: TargetConfiguration, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
-		RoleActorPermitted: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSConfigurationRevisionCreated: {
 		Source: SourcePaaS, Target: TargetConfigurationRevision, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
-		RoleActorPermitted: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSApplicationRevisionCreated: {
 		Source: SourcePaaS, Target: TargetApplicationRevision, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
-		RoleActorPermitted: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSDeploymentCreated: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
-		RoleActorPermitted: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSDeploymentUpdated: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
-		RoleActorPermitted: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSDeploymentStopped: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
-		RoleActorPermitted: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSDeploymentRolledBack: {
 		Source: SourcePaaS, Target: TargetDeployment, Results: []Result{ResultAccepted},
 		IAMDecisionRequired: true, OperationRequired: true,
-		RoleActorPermitted: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionPaaSExecutionPoolCreated: {
 		Source: SourcePaaS, Target: TargetExecutionPool, Results: []Result{ResultSucceeded},
@@ -508,11 +509,11 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionAuditRecordsRead: {
 		Source: SourceAudit, Target: TargetAuditRecords, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
-		RoleActorPermitted: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionAuditIntegrityVerified: {
 		Source: SourceAudit, Target: TargetAuditChain, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
-		RoleActorPermitted: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
 	},
 	ActionAuditPlatformRecordsRead: {
 		Source: SourceAudit, Target: TargetAuditRecords, Results: []Result{ResultSucceeded},

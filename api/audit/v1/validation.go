@@ -68,6 +68,9 @@ func ValidateEvent(value Event) error {
 		if value.Actor.Type == ActorRole && !contract.RoleActorPermitted {
 			problems = append(problems, errors.New("Audit action cannot contain a ROLE actor"))
 		}
+		if value.Actor.AccessKeyID != "" && !contract.AccessKeyActorPermitted {
+			problems = append(problems, errors.New("Audit action cannot contain access key lineage"))
+		}
 		if contract.UserActorRequired && value.Actor.Type != ActorUser {
 			problems = append(problems, errors.New("Audit action requires a USER actor"))
 		}
@@ -148,6 +151,12 @@ func ValidateActor(value ActorReference) error {
 		}
 	} else if value.RoleSession != nil {
 		problems = append(problems, errors.New("non-ROLE actor cannot contain session lineage"))
+	}
+	if value.AccessKeyID != "" {
+		if value.Type != ActorUser {
+			problems = append(problems, errors.New("non-USER actor cannot contain key lineage"))
+		}
+		problems = append(problems, ValidateID("actor.accessKeyId", value.AccessKeyID))
 	}
 	return errors.Join(problems...)
 }

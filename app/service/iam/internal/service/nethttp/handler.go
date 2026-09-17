@@ -107,6 +107,7 @@ type Workflow interface {
 		iamv1.Secret,
 		iamv1.AuthorizationRequest,
 	) (iamv1.AuthorizationDecision, error)
+	AuthorizeAccessKey(context.Context, iamv1.Secret, iamv1.AccessKeyAuthorizationRequest) (iamv1.AccessKeyAuthorization, error)
 	VerifyInstallation(
 		context.Context,
 		iamv1.Secret,
@@ -151,6 +152,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/logout", value.logout)
 	routes.HandleFunc("/v1/auth/password", value.changePassword)
 	routes.HandleFunc("/v1/authorize", value.authorize)
+	routes.HandleFunc("/v1/authorize:access-key", value.authorizeAccessKey)
 	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
 	routes.HandleFunc("/v1/users", value.users)
 	routes.HandleFunc("/v1/users/", value.user)
@@ -665,6 +667,35 @@ func (value *handler) authorize(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	writeJSON(response, http.StatusOK, decision)
+}
+
+func (value *handler) authorizeAccessKey(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	if len(request.Header.Values("Matrix-Subject-Credential")) != 0 {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.header.unsupported", "IAM header unsupported")
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	if len(request.Header.Values("Content-Encoding")) != 0 || len(request.Header.Values("Content-Type")) != 1 || request.Header.Get("Content-Type") != "application/json" {
+		writeProblem(response, requestID(request), http.StatusUnsupportedMediaType, "iam.media.unsupported", "IAM media type unsupported")
+		return
+	}
+	body, err := iamv1.DecodeAccessKeyAuthorizationRequest(request.Body)
+	if err != nil {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.json.invalid", "IAM JSON invalid")
+		return
+	}
+	result, err := value.workflow.AuthorizeAccessKey(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
 }
 
 func (value *handler) verifyInstallation(response http.ResponseWriter, request *http.Request) {

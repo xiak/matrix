@@ -29,6 +29,154 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func TestAccessKeySubjectLineageRequiresItsOwnDeclaredCarrier(t *testing.T) {
+	valid := `{"type":"USER","id":"user-one","accessKeyId":"key-one"}`
+	for _, test := range []struct {
+		wire  string
+		valid bool
+	}{
+		{valid, true},
+		{`{"type":"USER","id":"user-one"}`, true},
+		{strings.Replace(valid, `"key-one"`, `null`, 1), false},
+		{strings.Replace(valid, `"key-one"`, `""`, 1), false},
+		{strings.Replace(valid, `"key-one"`, `[]`, 1), false},
+		{strings.Replace(valid, `"accessKeyId":`, `"AccessKeyId":`, 1), false},
+		{strings.Replace(valid, `"accessKeyId":`, `"accessKeyId":"key-two","accessKeyId":`, 1), false},
+		{strings.Replace(valid, `"USER"`, `"SERVICE_ACCOUNT"`, 1), false},
+		{`{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"role-session","sourceUserId":"user-one"},"accessKeyId":"key-one"}`, false},
+		{`{"type":"USER","id":"user-one","accessKeyId":"key-one","roleSession":null}`, false},
+	} {
+		var subject Subject
+		if err := DecodeRequest(strings.NewReader(test.wire), &subject); (err == nil) != test.valid {
+			t.Fatalf("key attribution decoder accepted=%v want=%v", err == nil, test.valid)
+		}
+		if test.valid {
+			encoded, err := json.Marshal(subject)
+			if err != nil || string(encoded) != test.wire {
+				t.Fatal("public attribution changed its exact bytes")
+			}
+		}
+	}
+	request, err := NewAuthorizationRequest(ActionPaaSApplicationRead, ResourceReference{Kind: ResourceApplication, ID: "application-one"}, AuthorizationResourceInstance, "", "request-key", "correlation-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-key", Allowed: true, Reason: DecisionAllowed,
+		Action: request.Action, Resource: request.Resource, RequestID: request.RequestID, CorrelationID: request.CorrelationID,
+		Profile: &request.Profile, ResourceMode: request.ResourceMode, DecidedAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC),
+		TenantID: "account-one", Subject: &Subject{Type: SubjectUser, ID: "user-one", AccessKeyID: "key-one"}}
+	profile, _ := LookupAuthorizationProfile(ProductPaaS)
+	if ValidateAuthorizationDecision(decision) == nil || ValidateAuthorizationDecisionForProfile(decision, profile) == nil {
+		t.Fatal("USER capability alone admitted a key-attributed decision")
+	}
+	profile.Revision++
+	for index := range profile.Actions {
+		if profile.Actions[index].Action == request.Action {
+			profile.Actions[index].UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey}
+		}
+	}
+	_, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision.Profile = &AuthorizationProfileReference{profile.Product, profile.Revision, digest}
+	if ValidateAuthorizationDecisionForProfile(decision, profile) != nil {
+		t.Fatal("explicit archived key capability was not recognized")
+	}
+	if ValidateAuthorizationDecision(decision) == nil {
+		t.Fatal("archive syntax validation advanced the current source head")
+	}
+	legacy := decision
+	legacy.Profile, legacy.ResourceMode, legacy.CollectionUsage, legacy.CorrelationID = nil, "", "", ""
+	legacy.Subject = &Subject{Type: SubjectUser, ID: "user-one"}
+	if ValidateLegacyAuthorizationDecision(legacy) != nil {
+		t.Fatal("original USER legacy decision was rejected")
+	}
+	legacy.Subject.AccessKeyID = "key-one"
+	if ValidateLegacyAuthorizationDecision(legacy) == nil {
+		t.Fatal("legacy decision gained an unproven key lineage")
+	}
+}
+
+func TestAccessKeyAuthorizationTransportBindsOneRequestWithoutSelectors(t *testing.T) {
+	request, err := NewAuthorizationRequest(ActionPaaSApplicationRead, ResourceReference{Kind: ResourceApplication, ID: "application-one"}, AuthorizationResourceInstance, "", "request-key", "correlation-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: accessKeySigningFixture(t)}
+	encoded, err := EncodeAccessKeyAuthorizationRequest(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	decoded, err := DecodeAccessKeyAuthorizationRequest(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(value, decoded) {
+		t.Fatal("dedicated authorization transport changed the original request")
+	}
+	if _, err := json.Marshal(value); err == nil || json.Unmarshal(encoded, &decoded) == nil {
+		t.Fatal("ordinary JSON bypassed the dedicated signature transport")
+	}
+	if strings.Contains(fmt.Sprintf("%+v %#v", value, value), "Uz5Xlnd") {
+		t.Fatal("authorization request formatting leaked its signature")
+	}
+	for _, replacement := range []struct{ from, to string }{
+		{`"authorization":`, `"accountId":"chosen","authorization":`},
+		{`"authorization":`, `"subjectId":"chosen","authorization":`},
+		{`"authorization":`, `"servicePurpose":"PAAS","authorization":`},
+		{`"signedRequest":`, `"signedRequest":null,"signedRequest":`},
+		{`"signedRequest":`, `"SignedRequest":`},
+		{`,Audience=paas,`, `,Audience=audit,`},
+	} {
+		attack := strings.Replace(string(encoded), replacement.from, replacement.to, 1)
+		if attack == string(encoded) {
+			t.Fatal("attack did not change the request")
+		}
+		if _, err := DecodeAccessKeyAuthorizationRequest(strings.NewReader(attack)); !errors.Is(err, ErrInvalidAccessKeySignature) {
+			t.Fatal("authority selector, ambiguity or wrong audience decoded", err)
+		}
+	}
+	for _, source := range []string{`{}`, `{"authorization":null,"signedRequest":null}`, string(encoded) + `{}`, strings.Repeat(" ", int(MaxRequestBytes)) + string(encoded)} {
+		if _, err := DecodeAccessKeyAuthorizationRequest(strings.NewReader(source)); !errors.Is(err, ErrInvalidAccessKeySignature) {
+			t.Fatal("partial, extra or unbounded request decoded", err)
+		}
+	}
+	digest, _ := AccessKeySignedRequestDigest(value.SignedRequest)
+	result := AccessKeyAuthorization{APIVersion: APIVersion, Kind: "AccessKeyAuthorization", SignedRequestDigest: digest,
+		Decision: AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-key", Allowed: false, Reason: DecisionDenied,
+			Action: request.Action, Resource: request.Resource, RequestID: request.RequestID, CorrelationID: request.CorrelationID, Profile: &request.Profile,
+			ResourceMode: request.ResourceMode, DecidedAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)}}
+	if CheckAccessKeyAuthorizationForRequest(result, value) != nil {
+		t.Fatal("valid request-bound Deny rejected")
+	}
+	wire, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded, err := DecodeAccessKeyAuthorization(bytes.NewReader(wire)); err != nil || !reflect.DeepEqual(result, decoded) {
+		t.Fatal("sanitized response changed on strict decode")
+	}
+	for name, change := range map[string]func(*AccessKeyAuthorization){
+		"different request": func(v *AccessKeyAuthorization) { v.Decision.RequestID = "another-request" },
+		"different target":  func(v *AccessKeyAuthorization) { v.Decision.Resource.ID = "another-resource" },
+		"wrong digest":      func(v *AccessKeyAuthorization) { v.SignedRequestDigest = "sha256:" + strings.Repeat("0", 64) },
+		"exposed account":   func(v *AccessKeyAuthorization) { v.Decision.TenantID = "account-one" },
+		"exposed actor": func(v *AccessKeyAuthorization) {
+			v.Decision.Subject = &Subject{Type: SubjectUser, ID: "user-one", AccessKeyID: "key-one"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := result
+			change(&changed)
+			if CheckAccessKeyAuthorizationForRequest(changed, value) == nil {
+				t.Fatal("response substitution was accepted")
+			}
+		})
+	}
+	if _, err := DecodeAccessKeyAuthorization(strings.NewReader(strings.Replace(string(wire), `"decision":`, `"nonce":"private","decision":`, 1))); err == nil {
+		t.Fatal("response admitted private material")
+	}
+}
+
 func accessKeySigningFixture(t testing.TB) AccessKeySignedRequest {
 	t.Helper()
 	nonce, _ := NewSecret("oKGio6SlpqeoqaqrrK2urw")
@@ -5057,7 +5205,7 @@ func TestIAMLoginResponsePublishesPasswordChangeRequirement(t *testing.T) {
 
 func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 	document := loadIAMOpenAPI(t)
-	for _, privateType := range []string{"AccessKeyWrappingKeyring", "AccessKeyWrappingKey", "AccessKeyWrappingScope"} {
+	for _, privateType := range []string{"AccessKeyWrappingKeyring", "AccessKeyWrappingKey", "AccessKeyWrappingScope", "AccessKeyCredential", "AccessKeyAuthorizationEvidence", "AccessKeySignatureParameters"} {
 		if _, exists := iamOpenAPISchemas(t, document)[privateType]; exists {
 			t.Fatal("public HTTP contract exposed an installation-private keyring type")
 		}
@@ -5072,6 +5220,19 @@ func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 	requirement := mustIAMObject(t, security[0], "authorize security requirement")
 	if len(requirement) != 2 || requirement["ServiceCredential"] == nil || requirement["SubjectCredential"] == nil {
 		t.Fatalf("authorize security = %#v, want service and subject credentials", requirement)
+	}
+	keyPath := mustIAMObject(t, paths["/v1/authorize:access-key"], "signed authorization path")
+	keyOperation := mustIAMObject(t, keyPath["post"], "signed authorization operation")
+	keySecurity, ok := keyOperation["security"].([]any)
+	if !ok || len(keySecurity) != 1 {
+		t.Fatal("signed authorization must authenticate one current calling service")
+	}
+	keyRequirement := mustIAMObject(t, keySecurity[0], "signed authorization security requirement")
+	if len(keyRequirement) != 1 || keyRequirement["ServiceCredential"] == nil {
+		t.Fatal("signed authorization accepts a session selector or lacks service authentication")
+	}
+	if _, exists := keyOperation["parameters"]; exists {
+		t.Fatal("signed authorization exposes a selector or unsigned parameter")
 	}
 	verificationPath := mustIAMObject(t, paths["/v1/installation:verify"], "installation verification path")
 	verification := mustIAMObject(t, verificationPath["post"], "installation verification operation")
