@@ -678,3 +678,26 @@ are `REFERENCE` for length, blocklists, full-secret verification and bounded
 attempts, not a Matrix compliance claim. Rules, actual budgets, history
 retention, permissions and acceptance remain with009; no blocklist dataset,
 new dependency or configurable production API is adopted by this review.
+
+## Security-report and idle-governance target review
+
+IAM/009 owns scoped credential reports, accurate activity coverage and
+current-authority remediation. Reports are observations, not authorization
+or proof that an object has never been used.
+
+| Fixed source / slice | Decision | Rationale |
+| --- | --- | --- |
+| Matrix `644fff09446fc8ffb003cc53cf2fb55d4f58828a`, `CurrentIdentity`, `PolicyGrantSource`, `ActionCapability` and the single authority evaluator | `REUSE` actual direct/group/boundary lineage and evaluation rules; `ADAPT` an explicitly authorized diagnostic projection | The current public decision only distinguishes ALLOWED/DENIED. A capability hint, flattened action list or today's reevaluation is not a historical explanation or an executable permit. |
+| Same fixed source, `AuthorizeAccessKey`, `decideAndRecord`, immutable decision/key/Role evidence and IAM outbox | `REUSE` committed attribution and exact event identities; `REFERENCE` as activity sources | Valid-MAC Deny is distinct from bad MAC, replay, business acceptance and business success. No last-used/report authority exists; maximum event time or outbox pending=0 cannot prove cross-product completeness. Preserve older records without invented lineage. |
+| Same fixed source, AccessKey metadata/mutations and existing User lifecycle | `REUSE` versioned, protected target mutations and permanent deletion history; `ADAPT` explicit idle preconditions only when supported | An old report cannot authorize a new mutation, and updated_at is not last use. Automatic idle decisions need current qualification and complete activity evidence under the real target lock; existing verifier or service purpose cannot acquire generic tenant write rights. |
+| Product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, `04-user-guide/security-analysis-report.md` and `07-practices/operation-audit-and-accountability.md` | `REFERENCE` reporting/diagnosis/remediation needs and evidence distinctions; `REJECT` runtime, risk-data or wire-format inference | The prose does not prove current MFA/IP signals, exported artifacts or cross-account analysis. Its example event is not adopted over the actual closed Audit/canonical contract; missing source data stays unknown. |
+
+The official [credential-report reference](https://cloud.tencent.com/document/product/598/65676)
+is `REFERENCE` for a downloadable, scoped credential-status view; the vendor's
+four-hour reuse window and numbered key columns are not Matrix contracts.
+[OWASP CSV Injection](https://community.owasp.org/attacks/CSV_Injection)
+is `REFERENCE` for export tests, including the limits of quoting across
+spreadsheet clients and save/reopen. No universal safe-CSV claim, report
+framework, data warehouse, background principal or new permission is adopted
+by this design review. Cross-product queries and actual acceptance belong
+to009 and the respective source owner.
