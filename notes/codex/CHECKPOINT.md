@@ -56,14 +56,18 @@ implementation only after the fixed consumer checkpoint and explicit window
 confirmation. UX received the fixed design, not an instruction to wire a
 nonexistent endpoint. No UI work is done here.
 
-MFA S2 design/adoption is committed and pushed at
-a378429b5d8912a265e2b5077ddf229a160e3793, in the same009 owner. It
-separates incomplete authentication from Session, covers forced enrollment,
-shared OTP consumption and explicit recovery, and identifies custody,
-non-rollback recovery and cross-context step-up gaps. This is design only;
-no API/SQL, source/release version, runtime or acceptance state changed.
-Public fields, budgets and privileged recovery remain to be frozen with
-their owners. Do not treat this design as a production consumer donor.
+The remaining009 design/adoption is committed and pushed: S2 MFA at
+a378429b5d8912a265e2b5077ddf229a160e3793, S3 password/authentication
+budgets at8595260d9fa121ca2d624fffd2e3f53392f3f914, and S4 reports/idle
+governance at2687a567058ebafe5d95ba23e9a4116b7d2ad9da. They distinguish
+unfinished authentication, durable failed-attempt budgets and complete
+activity evidence from permission. Missing telemetry is not inactivity.
+This is design only; no API/SQL, source/release version, runtime or acceptance
+state changed. Public fields, budgets, data sources and privileged recovery
+remain to be frozen with their owners. Do not treat these as production
+consumer donors or keep expanding speculative design to replace delivery.
+An explicit S1 window confirmation was requested from Phase3 after this
+design milestone; no new implementation permission has been received.
 
 Remaining delegation/IP, product/service integration, governance, UI,
 capacity/HA and signed installation/backup/release gates stay with their FEAT
