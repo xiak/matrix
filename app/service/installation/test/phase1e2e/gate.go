@@ -70,12 +70,13 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 	if value.releases.base != nil {
 		installStep = "release-base-install"
 	}
-	installed, err := runMX(ctx, initial, "install", []string{
-		"--bundle", initial.Root,
-		"--root", value.config.root,
-		"--trust-key", value.config.trustKey,
-		"--northbound-origin", value.config.edge,
-	}, value.pathLeakage())
+	installArguments, err := releaseInstallArguments(value.config, initial)
+	if err != nil {
+		return fail(installStep)
+	}
+	installed, err := runMX(
+		ctx, initial, "install", installArguments, value.pathLeakage(),
+	)
 	if err != nil || installed.ReleaseID != initial.Manifest.Release.ID ||
 		installed.PreviousID != "" || !installed.Changed {
 		return fail(installStep)
@@ -145,6 +146,26 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 	emit("release-a-bridge-reactivation")
 	emit("release-a-status-verify")
 	return nil
+}
+
+func releaseInstallArguments(config options, initial release.VerifiedBundle) ([]string, error) {
+	arguments := []string{
+		"--bundle", initial.Root,
+		"--root", config.root,
+		"--trust-key", config.trustKey,
+	}
+	switch initial.Manifest.Database {
+	case release.CurrentDatabaseProfile():
+		return append(arguments, "--northbound-origin", config.edge), nil
+	case release.SupportedDatabasePredecessorProfile():
+		// The published predecessor predates the explicit origin input and owns
+		// this exact listener as its immutable default. Do not pass a flag that
+		// its CLI cannot parse or invent compatibility in the old executable.
+		if config.edge == defaultEdgeEndpoint {
+			return arguments, nil
+		}
+	}
+	return nil, errors.New("release installation profile is unsupported")
 }
 
 func (value *gate) beforeRestart(ctx context.Context) error {

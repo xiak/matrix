@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -470,6 +471,50 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 				t.Fatalf("release pair accepted=%t, want %t", err == nil, scenario.accept)
 			}
 		})
+	}
+}
+
+func TestReleaseInstallArgumentsRespectThePublishedPredecessorCLI(t *testing.T) {
+	base := options{
+		root:     "/data/matrix",
+		trustKey: "/data/release-trust.json",
+		edge:     defaultEdgeEndpoint,
+	}
+	predecessor := release.VerifiedBundle{
+		Root: "/data/release-a",
+		Manifest: release.Manifest{
+			Database: release.SupportedDatabasePredecessorProfile(),
+		},
+	}
+	arguments, err := releaseInstallArguments(base, predecessor)
+	if err != nil {
+		t.Fatalf("published predecessor install arguments: %v", err)
+	}
+	if slices.Contains(arguments, "--northbound-origin") {
+		t.Fatal("published predecessor received a flag its CLI cannot parse")
+	}
+
+	current := predecessor
+	current.Root = "/data/release-b"
+	current.Manifest.Database = release.CurrentDatabaseProfile()
+	arguments, err = releaseInstallArguments(base, current)
+	if err != nil {
+		t.Fatalf("current install arguments: %v", err)
+	}
+	index := slices.Index(arguments, "--northbound-origin")
+	if index < 0 || index+1 >= len(arguments) || arguments[index+1] != defaultEdgeEndpoint {
+		t.Fatalf("current install arguments=%q", arguments)
+	}
+
+	changed := base
+	changed.edge = "https://matrix.example.test:443"
+	if _, err := releaseInstallArguments(changed, predecessor); err == nil {
+		t.Fatal("published predecessor accepted a nondefault origin it cannot persist")
+	}
+	unknown := predecessor
+	unknown.Manifest.Database = release.DatabaseProfile{}
+	if _, err := releaseInstallArguments(base, unknown); err == nil {
+		t.Fatal("unsupported release profile received install arguments")
 	}
 }
 
