@@ -1269,6 +1269,72 @@ func DecodePolicyCompilation(reader io.Reader, document PolicyDocument, profiles
 	return compilation, nil
 }
 
+// CheckAccessKeyPolicyCompilationRequest is the narrower USER carrier check.
+// It authenticates neither profile, key nor policy attachment and is not an
+// Allow. Current authorization and historical evidence owners must supply the
+// exact declarations relevant to their own decision, never today's head for
+// an older decision. Ordinary login/ROLE compatibility remains unchanged.
+func CheckAccessKeyPolicyCompilationRequest(document PolicyDocument, compilation PolicyCompilation, contentDigest string,
+	frozenProfiles []AuthorizationProfile, current AuthorizationProfile, request AuthorizationRequest,
+) error {
+	if CheckPolicyCompilationRequest(document, compilation, contentDigest, frozenProfiles, current, request, SubjectUser) != nil ||
+		checkValidatedProfileUserAuthentication(current, request.Action, UserAuthenticationAccessKey) != nil {
+		return ErrInvalidPolicy
+	}
+	participating := false
+	for _, statement := range compilation.ResolvedStatements {
+		participating = participating || slices.Contains(statement.Actions, request.Action)
+	}
+	if !participating {
+		// The whole compilation was checked; its frozen action set contributes
+		// nothing to this request. Compatibility never adds a new family member.
+		return nil
+	}
+	for _, frozen := range frozenProfiles {
+		if frozen.Product != current.Product {
+			continue
+		}
+		var original, present AuthorizationProfileAction
+		for _, action := range frozen.Actions {
+			if action.Action == request.Action {
+				original = action
+			}
+		}
+		for _, action := range current.Actions {
+			if action.Action == request.Action {
+				present = action
+			}
+		}
+		oldMethods := original.UserAuthenticationMethods
+		if oldMethods == nil {
+			oldMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
+		}
+		sameMethods := len(oldMethods) == len(present.UserAuthenticationMethods)
+		for _, method := range oldMethods {
+			sameMethods = sameMethods && slices.Contains(present.UserAuthenticationMethods, method)
+		}
+		addsKey := len(oldMethods) == 1 && oldMethods[0] == UserAuthenticationLoginSession &&
+			len(present.UserAuthenticationMethods) == 2 && slices.Contains(present.UserAuthenticationMethods, UserAuthenticationLoginSession)
+		if !sameMethods && !addsKey {
+			return ErrInvalidPolicy
+		}
+		// Compare every other declared field through the sole canonical owner.
+		// The exact original and request references were already validated above.
+		// These local one-action projections are never returned or registered;
+		// ignoring revision here does not replace an immutable registry lookup.
+		original.UserAuthenticationMethods, present.UserAuthenticationMethods = nil, nil
+		frozen.Actions, current.Actions = []AuthorizationProfileAction{original}, []AuthorizationProfileAction{present}
+		current.Revision = frozen.Revision
+		left, _, leftErr := CanonicalizeAuthorizationProfile(frozen)
+		right, _, rightErr := CanonicalizeAuthorizationProfile(current)
+		if leftErr != nil || rightErr != nil || left != right {
+			return ErrInvalidPolicy
+		}
+		return nil
+	}
+	return ErrInvalidPolicy
+}
+
 // CheckPolicyCompilationRequest checks the compatibility of frozen content
 // with one explicitly supplied current request declaration. It is not an Allow:
 // callers still authenticate the current head/subject and evaluate all grants,

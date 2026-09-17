@@ -10,9 +10,105 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
+
+func TestAccessKeyRequestHMACMatchesIndependentNodeVector(t *testing.T) {
+	// Public synthetic vector independently computed with Node crypto. The
+	// signing key is the raw 32 bytes 00..1f, not its mak1 display encoding.
+	secret, _ := iamv1.NewSecret("mak1.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
+	nonce, _ := iamv1.NewSecret("oKGio6SlpqeoqaqrrK2urw")
+	signature, _ := iamv1.NewSecret("Uz5XlndRsGE-aCQEe1dapqyjZJPmgm5fIG55lQ4P2B4")
+	request := iamv1.AccessKeySignedRequest{
+		Parameters: iamv1.AccessKeySignatureParameters{AccessKeyID: "access-key-a", InstallationID: "install-a", Audience: iamv1.ProductPaaS, SignedAt: 1800000000, Nonce: nonce},
+		HTTP: iamv1.AccessKeyHTTPRequest{Method: "POST", Scheme: "https", Authority: "matrix.example:8443", EscapedPath: "/api/paas/v1/applications/app-a:deploy",
+			RawQuery: "after=a%2Fb&label=%E4%B8%AD&label=second", ContentType: "application/json", IdempotencyKey: "deploy-intent-a", IfMatch: `"7"`,
+			BodyDigest: "sha256:17d084291987b1fa52e98eaf615b891da5cf03cdb3e659518aa8c53c68ef42a6"}, Signature: signature,
+	}
+	if valid, err := VerifyAccessKeyRequestSignature(secret, request); err != nil || !valid {
+		t.Fatal("independent HMAC vector rejected")
+	}
+	read := request
+	read.Parameters.Nonce, _ = iamv1.NewSecret("sLGys7S1tre4ubq7vL2-vw")
+	read.Signature, _ = iamv1.NewSecret("wvQNQPPSaqkf7m09RDLN_zWd6yzdr8CARcyzRMhkbGo")
+	read.HTTP = iamv1.AccessKeyHTTPRequest{Method: "GET", Scheme: "https", Authority: "matrix.example",
+		EscapedPath: "/api/paas/v1/applications/app-a",
+		BodyDigest:  "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+	if valid, err := VerifyAccessKeyRequestSignature(secret, read); err != nil || !valid {
+		t.Fatal("independent empty-body HMAC vector rejected")
+	}
+	for name, mutation := range map[string]func(*iamv1.AccessKeySignedRequest){
+		"key":          func(v *iamv1.AccessKeySignedRequest) { v.Parameters.AccessKeyID = "access-key-b" },
+		"installation": func(v *iamv1.AccessKeySignedRequest) { v.Parameters.InstallationID = "install-b" },
+		"audience":     func(v *iamv1.AccessKeySignedRequest) { v.Parameters.Audience = iamv1.ProductAudit },
+		"time":         func(v *iamv1.AccessKeySignedRequest) { v.Parameters.SignedAt++ },
+		"nonce": func(v *iamv1.AccessKeySignedRequest) {
+			v.Parameters.Nonce, _ = iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAA")
+		},
+		"method":           func(v *iamv1.AccessKeySignedRequest) { v.HTTP.Method = "PUT" },
+		"scheme":           func(v *iamv1.AccessKeySignedRequest) { v.HTTP.Scheme = "http" },
+		"authority":        func(v *iamv1.AccessKeySignedRequest) { v.HTTP.Authority = "matrix.example:443" },
+		"public path":      func(v *iamv1.AccessKeySignedRequest) { v.HTTP.EscapedPath = "/v1/applications/app-a:deploy" },
+		"query order":      func(v *iamv1.AccessKeySignedRequest) { v.HTTP.RawQuery = "after=a%2Fb&label=second&label=%E4%B8%AD" },
+		"content type":     func(v *iamv1.AccessKeySignedRequest) { v.HTTP.ContentType = "text/plain" },
+		"idempotency":      func(v *iamv1.AccessKeySignedRequest) { v.HTTP.IdempotencyKey = "deploy-intent-b" },
+		"resource version": func(v *iamv1.AccessKeySignedRequest) { v.HTTP.IfMatch = `"8"` },
+		"body":             func(v *iamv1.AccessKeySignedRequest) { v.HTTP.BodyDigest = "sha256:" + strings.Repeat("a", 64) },
+		"text key MAC": func(v *iamv1.AccessKeySignedRequest) {
+			v.Signature, _ = iamv1.NewSecret("COYTJLOV6rNGsP1iaHkPXRGCs5wiolKL7su8ybYNWLw")
+		},
+		"noncanonical MAC": func(v *iamv1.AccessKeySignedRequest) {
+			v.Signature, _ = iamv1.NewSecret("Uz5XlndRsGE-aCQEe1dapqyjZJPmgm5fIG55lQ4P2B5")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := request
+			mutation(&changed)
+			valid, err := VerifyAccessKeyRequestSignature(secret, changed)
+			if valid || err != nil && err != ErrAccessKeySignature {
+				t.Fatal("changed request verified or disclosed material")
+			}
+		})
+	}
+	for _, text := range []string{"mx1.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", "mak1.invalid", "mak1.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh9"} {
+		bad, _ := iamv1.NewSecret(text)
+		if valid, err := VerifyAccessKeyRequestSignature(bad, request); valid || err != ErrAccessKeySignature {
+			t.Fatal("noncanonical or different credential type verified")
+		}
+	}
+	other, _ := iamv1.NewSecret("mak1.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+	if valid, err := VerifyAccessKeyRequestSignature(other, request); valid || err != nil {
+		t.Fatal("wrong valid key was not rejected by constant-time MAC comparison")
+	}
+	if valid, err := VerifyAccessKeyRequestSignature(secret, request); err != nil || !valid {
+		t.Fatal("verification mutated request or key")
+	}
+}
+
+func TestAccessKeySignatureTimeUsesExactDatabaseInstant(t *testing.T) {
+	now := time.Unix(1800000000, 0).UTC()
+	for _, offset := range []int64{-300, -1, 0, 1, 30} {
+		if ValidateAccessKeySignatureTime(now.Unix()+offset, now) != nil {
+			t.Fatal("valid inclusive signature window rejected")
+		}
+	}
+	for _, signedAt := range []int64{0, -1, now.Unix() - 301, now.Unix() + 31, 253402300800} {
+		if ValidateAccessKeySignatureTime(signedAt, now) != ErrUnauthenticated {
+			t.Fatal("invalid signature time accepted")
+		}
+	}
+	if ValidateAccessKeySignatureTime(now.Unix()-300, now.Add(time.Microsecond)) != ErrUnauthenticated ||
+		ValidateAccessKeySignatureTime(now.Unix()+30, now.Add(-time.Microsecond)) != ErrUnauthenticated {
+		t.Fatal("window widened by truncating database clock")
+	}
+	for _, clock := range []time.Time{{}, now.In(time.FixedZone("caller-clock", 0)), now.Add(time.Nanosecond)} {
+		if ValidateAccessKeySignatureTime(now.Unix(), clock) != ErrAuthorityUnavailable {
+			t.Fatal("invalid authority clock accepted")
+		}
+	}
+}
 
 func TestOpaqueCredentialsAreRandomHashedAndBindingScoped(t *testing.T) {
 	entropy := make([]byte, 64)

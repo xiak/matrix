@@ -29,6 +29,253 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func accessKeySigningFixture(t testing.TB) AccessKeySignedRequest {
+	t.Helper()
+	nonce, _ := NewSecret("oKGio6SlpqeoqaqrrK2urw")
+	signature, _ := NewSecret("Uz5XlndRsGE-aCQEe1dapqyjZJPmgm5fIG55lQ4P2B4")
+	return AccessKeySignedRequest{
+		Parameters: AccessKeySignatureParameters{AccessKeyID: "access-key-a", InstallationID: "install-a", Audience: ProductPaaS, SignedAt: 1800000000, Nonce: nonce},
+		HTTP: AccessKeyHTTPRequest{Method: "POST", Scheme: "https", Authority: "matrix.example:8443", EscapedPath: "/api/paas/v1/applications/app-a:deploy",
+			RawQuery: "after=a%2Fb&label=%E4%B8%AD&label=second", ContentType: "application/json", IdempotencyKey: "deploy-intent-a", IfMatch: `"7"`,
+			BodyDigest: "sha256:17d084291987b1fa52e98eaf615b891da5cf03cdb3e659518aa8c53c68ef42a6"}, Signature: signature,
+	}
+}
+
+func TestAccessKeySigningUsesIndependentTransportVectors(t *testing.T) {
+	value := accessKeySigningFixture(t)
+	before := value
+	// Generated independently with Node crypto/Buffer, not a Go round-trip.
+	const expectedHex = "000000276d61747269782e69616d2e6163636573732d6b65792d687474702d7369676e61747572652e7631000000154d61747269782d484d41432d5348413235362d56310000000c6163636573732d6b65792d6100000009696e7374616c6c2d6100000004706161730000000a31383030303030303030000000166f4b47696f36536c7071656f71617172724b3275727700000004504f5354000000056874747073000000136d61747269782e6578616d706c653a38343433000000262f6170692f706161732f76312f6170706c69636174696f6e732f6170702d613a6465706c6f790000002861667465723d6125324662266c6162656c3d254534254238254144266c6162656c3d7365636f6e64000000106170706c69636174696f6e2f6a736f6e0000000f6465706c6f792d696e74656e742d6100000003223722000000477368613235363a31376430383432393139383762316661353265393865616636313562383931646135636630336364623365363539353138616138633533633638656634326136"
+	base, err := AccessKeySigningBytes(value.Parameters, value.HTTP)
+	if err != nil || hex.EncodeToString(base) != expectedHex {
+		t.Fatal("signature base differs from independent vector")
+	}
+	digest, err := AccessKeySignedRequestDigest(value)
+	if err != nil || digest != "sha256:62e845ae36ef92e71f3150eb0a047bbd557752d64fa8aef32676a833ee500716" {
+		t.Fatal("request digest differs from independent vector")
+	}
+	nonceDigest, err := AccessKeyNonceDigest(value.Parameters)
+	if err != nil || nonceDigest != "sha256:83d5a36550871210968d8bb64149df16f54c5c387704e87c5efb993b44838bef" {
+		t.Fatal("nonce digest differs from independent vector")
+	}
+	changed := value
+	changed.HTTP.RawQuery = "after=a%2Fb&label=second&label=%E4%B8%AD"
+	other, err := AccessKeySignedRequestDigest(changed)
+	if err != nil || other == digest {
+		t.Fatal("reordering repeated query values did not change the signed request")
+	}
+	changed.Parameters.Audience = "future-product"
+	changed.Parameters.SignedAt++
+	otherNonce, err := AccessKeyNonceDigest(changed.Parameters)
+	if err != nil || otherNonce != nonceDigest {
+		t.Fatal("nonce identity was scoped to request time or product")
+	}
+	changed.Parameters.InstallationID = "install-b"
+	otherNonce, err = AccessKeyNonceDigest(changed.Parameters)
+	if err != nil || otherNonce == nonceDigest {
+		t.Fatal("nonce identity lost installation binding")
+	}
+	if !reflect.DeepEqual(before, value) {
+		t.Fatal("encoding mutated caller-owned request")
+	}
+}
+
+func TestAccessKeySignatureRejectsAmbiguousHTTPComponents(t *testing.T) {
+	base := accessKeySigningFixture(t)
+	for _, host := range []string{"matrix", "matrix.example", "127.0.0.1:8443", "[::1]", "[2001:db8::1]:443"} {
+		value := base.HTTP
+		value.Authority = host
+		if ValidateAccessKeyHTTPRequest(value) != nil {
+			t.Errorf("canonical authority rejected: %q", host)
+		}
+	}
+	for _, path := range []string{"/", "/api/audit/v1/records:query", "/v1/%E4%B8%AD", "/v1/a-b._~!$&'()*+,;=:@"} {
+		value := base.HTTP
+		value.EscapedPath = path
+		if ValidateAccessKeyHTTPRequest(value) != nil {
+			t.Errorf("canonical path rejected: %q", path)
+		}
+	}
+	for _, query := range []string{"", "a=", "a=one&a=two", "a=%20%2B%3B%3D%26&b=%E4%B8%AD", "a=2&a=1"} {
+		value := base.HTTP
+		value.RawQuery = query
+		if ValidateAccessKeyHTTPRequest(value) != nil {
+			t.Errorf("canonical query rejected: %q", query)
+		}
+	}
+	invalid := map[string][]string{
+		"authority": {"", "UPPER.example", "user@host", "host.", "host:0443", "host:0", "host:65536", "host:", "[127.0.0.1]", "[::1%eth0]", "::1", "[2001:0db8::1]", "127.0.0.01", "a..b", "a/b", "a#b", "a?b", "-a", "a-", strings.Repeat("a", 64) + ".example"},
+		"path":      {"", "v1/path", "https://host/v1", "/v1//a", "/v1/a/", "/v1/./a", "/v1/../a", "/v1/%2E", "/v1/%2f", "/v1/%2F", "/v1/%5C", "/v1/%252F", "/v1/%41", "/v1/%e4%b8%ad", "/v1/中", "/v1/%FF", "/v1/%00", "/v1/%0D", "/v1/%", "/v1/a?b", "/v1/a#b", "/" + strings.Repeat("a", 2048)},
+		"query":     {"a", "=b", "a=b&", "&a=b", "a=b&&b=c", "b=2&a=1", "a=one+two", "a=%2f", "a=%41", "a=%", "a=%00", "a=%FF", "a=b;c=d", "a=b=c", "a=中", "a=b#c", strings.Repeat("a=1&", 64) + "a=1", "a=" + strings.Repeat("x", 4096)},
+	}
+	for field, values := range invalid {
+		for i, input := range values {
+			t.Run(fmt.Sprintf("%s-%d", field, i), func(t *testing.T) {
+				value := base
+				switch field {
+				case "authority":
+					value.HTTP.Authority = input
+				case "path":
+					value.HTTP.EscapedPath = input
+				case "query":
+					value.HTTP.RawQuery = input
+				}
+				if ValidateAccessKeySignedRequest(value) != ErrInvalidAccessKeySignature {
+					t.Fatal("ambiguous HTTP component accepted")
+				}
+				if b, err := AccessKeySigningBytes(value.Parameters, value.HTTP); err != ErrInvalidAccessKeySignature || b != nil {
+					t.Fatal("invalid HTTP component acquired signature bytes")
+				}
+			})
+		}
+	}
+	for _, mutation := range []func(*AccessKeySignedRequest){
+		func(v *AccessKeySignedRequest) { v.HTTP.Method = "post" },
+		func(v *AccessKeySignedRequest) { v.HTTP.Scheme = "HTTPS" },
+		func(v *AccessKeySignedRequest) { v.HTTP.ContentType = "application/json; charset=utf-8" },
+		func(v *AccessKeySignedRequest) { v.HTTP.ContentType = "" },
+		func(v *AccessKeySignedRequest) { v.HTTP.IdempotencyKey = " x" },
+		func(v *AccessKeySignedRequest) { v.HTTP.IfMatch = "\"7\"\r\nInjected: x" },
+		func(v *AccessKeySignedRequest) { v.HTTP.BodyDigest = strings.ToUpper(v.HTTP.BodyDigest) },
+		func(v *AccessKeySignedRequest) { v.Parameters.SignedAt = 0 },
+		func(v *AccessKeySignedRequest) { v.Parameters.SignedAt = 253402300800 },
+		func(v *AccessKeySignedRequest) { v.Parameters.Audience = "paas,other" },
+		func(v *AccessKeySignedRequest) { v.Parameters.Nonce, _ = NewSecret("oKGio6SlpqeoqaqrrK2urx") },
+	} {
+		value := base
+		mutation(&value)
+		if ValidateAccessKeySignedRequest(value) == nil {
+			t.Fatal("invalid protocol component accepted")
+		}
+	}
+}
+
+func TestAccessKeyReadSignatureBindsExplicitEmptyComponents(t *testing.T) {
+	value := accessKeySigningFixture(t)
+	value.Parameters.Nonce, _ = NewSecret("sLGys7S1tre4ubq7vL2-vw")
+	value.Signature, _ = NewSecret("wvQNQPPSaqkf7m09RDLN_zWd6yzdr8CARcyzRMhkbGo")
+	value.HTTP = AccessKeyHTTPRequest{Method: "GET", Scheme: "https", Authority: "matrix.example",
+		EscapedPath: "/api/paas/v1/applications/app-a",
+		BodyDigest:  "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+	// Independently computed Node vector covers an empty body and all four
+	// empty query/header values. Absence in the private wire is not equivalent.
+	if digest, err := AccessKeySignedRequestDigest(value); err != nil || digest != "sha256:9110fb2418ebbeeefd15171522a219e46aec319edb7fd2ca296cca27a6d527c3" {
+		t.Fatal("empty-body request differs from independent vector")
+	}
+	header, err := EncodeAccessKeyAuthorization(value.Parameters, value.Signature)
+	if err != nil || string(header.CopyBytes()) != "Matrix-HMAC-SHA256-V1 KeyId=access-key-a,Installation=install-a,Audience=paas,SignedAt=1800000000,Nonce=sLGys7S1tre4ubq7vL2-vw,Signature=wvQNQPPSaqkf7m09RDLN_zWd6yzdr8CARcyzRMhkbGo" {
+		t.Fatal("canonical Authorization field differs from independent vector")
+	}
+	encoded, err := EncodeAccessKeySignedRequest(value)
+	if err != nil {
+		t.Fatal("empty components could not be explicitly encoded")
+	}
+	if decoded, err := DecodeAccessKeySignedRequest(bytes.NewReader(encoded)); err != nil || !reflect.DeepEqual(value, decoded) {
+		t.Fatal("explicit empty components did not survive transport")
+	}
+	for _, name := range []string{"rawQuery", "contentType", "idempotencyKey", "ifMatch"} {
+		missing := strings.Replace(string(encoded), `"`+name+`":"",`, "", 1)
+		if missing == string(encoded) {
+			t.Fatal("fixture did not remove covered empty component")
+		}
+		if _, err := DecodeAccessKeySignedRequest(strings.NewReader(missing)); err != ErrInvalidAccessKeySignature {
+			t.Fatal("missing empty covered component accepted")
+		}
+	}
+	value.HTTP.ContentType = "application/json"
+	if ValidateAccessKeyHTTPRequest(value.HTTP) != ErrInvalidAccessKeySignature {
+		t.Fatal("empty body with a conflicting media-type declaration accepted")
+	}
+}
+
+func TestAccessKeySignatureWireIsExplicitStrictAndRedacted(t *testing.T) {
+	value := accessKeySigningFixture(t)
+	header, err := EncodeAccessKeyAuthorization(value.Parameters, value.Signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(header.CopyBytes())
+	parameters, signature, err := ParseAccessKeyAuthorization(text)
+	if err != nil || !reflect.DeepEqual(parameters, value.Parameters) || !reflect.DeepEqual(signature, value.Signature) {
+		t.Fatal("explicit Authorization codec lost claims")
+	}
+	for _, bad := range []string{
+		" " + text, text + " ", strings.ToLower(text), strings.Replace(text, ",", ", ", 1),
+		text + ",Nonce=other", strings.Replace(text, ",Installation=install-a", "", 1),
+		strings.Replace(text, "SignedAt=1800000000", "SignedAt=01800000000", 1),
+		strings.Replace(text, "SignedAt=1800000000", "SignedAt=+1800000000", 1),
+		strings.Replace(text, "KeyId=access-key-a", `KeyId="access-key-a"`, 1),
+		strings.Replace(text, "KeyId=", "keyId=", 1), text + "=", text + "," + text,
+		strings.Repeat("x", MaxAccessKeyAuthorizationBytes+1),
+	} {
+		p, s, err := ParseAccessKeyAuthorization(bad)
+		if err != ErrInvalidAccessKeySignature || p.AccessKeyID != "" || s.Present() {
+			t.Fatal("ambiguous Authorization accepted or leaked claims")
+		}
+	}
+	encoded, err := EncodeAccessKeySignedRequest(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeAccessKeySignedRequest(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(value, decoded) {
+		t.Fatal("explicit signed request lost fields")
+	}
+	for _, v := range []any{value, value.Parameters} {
+		if _, err := json.Marshal(v); err == nil {
+			t.Fatal("ordinary JSON exposed signature material")
+		}
+		printed := fmt.Sprintf("%v %+v %#v", v, v, v)
+		if strings.Contains(printed, string(value.Parameters.Nonce.CopyBytes())) || strings.Contains(printed, string(value.Signature.CopyBytes())) {
+			t.Fatal("formatting exposed signature material")
+		}
+	}
+	base := string(encoded)
+	for _, bad := range []string{
+		strings.Replace(base, `"kind":"AccessKeySignedRequest"`, `"kind":"AccessKeySignedRequest","kind":"AccessKeySignedRequest"`, 1),
+		strings.Replace(base, `"method":"POST"`, `"method":"POST","method":"GET"`, 1),
+		strings.Replace(base, `"rawQuery":`, `"unknown":`, 1),
+		strings.Replace(base, `"idempotencyKey":"deploy-intent-a",`, "", 1),
+		strings.Replace(base, `"ifMatch":"\"7\""`, `"ifMatch": null`, 1),
+		strings.Replace(base, `"contentType":"application/json"`, `"contentType":7`, 1),
+		strings.Replace(base, `"http":{`, `"http":{"scheme":null,`, 1),
+		base + `{}`, `null`, strings.Repeat(" ", int(MaxAccessKeySignedRequestBytes)) + base,
+	} {
+		if out, err := DecodeAccessKeySignedRequest(strings.NewReader(bad)); err != ErrInvalidAccessKeySignature || out.Signature.Present() {
+			t.Fatal("invalid private request was decoded")
+		}
+	}
+	if _, err := DecodeAccessKeySignedRequest(iotest.ErrReader(errors.New("private request bytes"))); err != ErrInvalidAccessKeySignature {
+		t.Fatal("reader error was not sanitized")
+	}
+}
+
+func FuzzAccessKeySignatureWire(f *testing.F) {
+	encoded, err := EncodeAccessKeySignedRequest(accessKeySigningFixture(f))
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(string(encoded))
+	f.Add(`{"http":null}`)
+	f.Fuzz(func(t *testing.T, source string) {
+		value, err := DecodeAccessKeySignedRequest(strings.NewReader(source))
+		if err != nil {
+			if err != ErrInvalidAccessKeySignature || value.Signature.Present() {
+				t.Fatal("invalid input exposed partial claims")
+			}
+			return
+		}
+		encoded, err := EncodeAccessKeySignedRequest(value)
+		if err != nil {
+			t.Fatal("valid typed request cannot be explicitly encoded")
+		}
+		second, err := DecodeAccessKeySignedRequest(bytes.NewReader(encoded))
+		if err != nil || !reflect.DeepEqual(value, second) {
+			t.Fatal("explicit wire changed request")
+		}
+	})
+}
+
 func TestAccessKeyManagementUsesAnExplicitNewUserOnlyProfile(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductIAM)
 	if !found || profile.Revision != 5 {
@@ -1632,6 +1879,115 @@ func TestRoleBoundaryIsAnExplicitRevisionBoundLimit(t *testing.T) {
 	}
 }
 
+func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing.T) {
+	legacy := authorizationProfileFixture()
+	original, originalDigest, err := CanonicalizeAuthorizationProfile(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := legacy.Actions[0].Action
+	legacyReference := AuthorizationProfileReference{Product: legacy.Product, Revision: legacy.Revision, ContentDigest: originalDigest}
+	if CheckAuthorizationProfileUserAuthentication(legacy, legacyReference, action, UserAuthenticationLoginSession) != nil ||
+		CheckAuthorizationProfileUserAuthentication(legacy, legacyReference, action, UserAuthenticationAccessKey) == nil {
+		t.Fatal("legacy USER capability inferred programmatic authentication")
+	}
+	profile := cloneAuthorizationProfile(legacy)
+	profile.Revision++
+	profile.Actions[0].SubjectTypes = []SubjectType{SubjectUser, SubjectRole}
+	profile.Actions[0].UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey}
+	before, _ := json.Marshal(profile)
+	canonical, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil || digest == originalDigest || !strings.Contains(canonical, `"userAuthenticationMethods":["ACCESS_KEY","LOGIN_SESSION"]`) {
+		t.Fatal("authentication capability did not enter the canonical commitment", err)
+	}
+	after, _ := json.Marshal(profile)
+	if !bytes.Equal(before, after) {
+		t.Fatal("authentication canonicalization mutated its caller")
+	}
+	reference := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+	for _, method := range []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey} {
+		if CheckAuthorizationProfileUserAuthentication(profile, reference, action, method) != nil {
+			t.Fatal("explicit USER authentication capability was rejected")
+		}
+	}
+	if CheckAuthorizationProfileUserAuthentication(profile, legacyReference, action, UserAuthenticationAccessKey) == nil ||
+		CheckAuthorizationProfileUserAuthentication(profile, reference, "example.unknown", UserAuthenticationAccessKey) == nil ||
+		CheckAuthorizationProfileUserAuthentication(profile, reference, action, "USER") == nil {
+		t.Fatal("unbound action or unknown authentication method was accepted")
+	}
+	reordered := cloneAuthorizationProfile(profile)
+	slices.Reverse(reordered.Actions[0].UserAuthenticationMethods)
+	if actual, actualDigest, err := CanonicalizeAuthorizationProfile(reordered); err != nil || actual != canonical || actualDigest != digest {
+		t.Fatal("method set order changed its commitment")
+	}
+	reordered.Actions[0].UserAuthenticationMethods[0] = UserAuthenticationLoginSession
+	if !slices.Equal(profile.Actions[0].UserAuthenticationMethods, []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey}) {
+		t.Fatal("clone exposed mutable authentication capabilities")
+	}
+	for name, replacement := range map[string]string{
+		"null": `null`, "empty": `[]`, "duplicate": `["ACCESS_KEY","ACCESS_KEY"]`,
+		"unknown": `["BEARER"]`, "case alias": `["access_key"]`, "null element": `[null]`,
+		"object": `{}`, "scalar": `"ACCESS_KEY"`, "over budget": `["ACCESS_KEY","LOGIN_SESSION","ACCESS_KEY"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			encoded := strings.Replace(canonical, `["ACCESS_KEY","LOGIN_SESSION"]`, replacement, 1)
+			if _, err := DecodeAuthorizationProfile(strings.NewReader(encoded)); !errors.Is(err, ErrInvalidAuthorizationProfile) {
+				t.Fatal("invalid authentication capability decoded", err)
+			}
+		})
+	}
+	for _, encoded := range []string{
+		strings.Replace(canonical, `"userAuthenticationMethods":`, `"UserAuthenticationMethods":`, 1),
+		strings.Replace(canonical, `"userAuthenticationMethods":`, `"userAuthenticationMethods":["LOGIN_SESSION"],"userAuthenticationMethods":`, 1),
+	} {
+		if _, err := DecodeAuthorizationProfile(strings.NewReader(encoded)); !errors.Is(err, ErrInvalidAuthorizationProfile) {
+			t.Fatal("ambiguous authentication capability decoded")
+		}
+	}
+	for _, methods := range [][]UserAuthenticationMethod{{}, {UserAuthenticationAccessKey, UserAuthenticationAccessKey}, {"OTHER"}} {
+		invalid := cloneAuthorizationProfile(profile)
+		invalid.Actions[0].UserAuthenticationMethods = methods
+		if _, _, err := CanonicalizeAuthorizationProfile(invalid); !errors.Is(err, ErrInvalidAuthorizationProfile) {
+			t.Fatal("typed invalid authentication set reached encoding")
+		}
+	}
+	for _, types := range [][]SubjectType{{SubjectRole}, {SubjectServiceAccount}, {SubjectRole, SubjectServiceAccount}} {
+		invalid := cloneAuthorizationProfile(profile)
+		invalid.Actions[0].SubjectTypes = types
+		if _, _, err := CanonicalizeAuthorizationProfile(invalid); !errors.Is(err, ErrInvalidAuthorizationProfile) {
+			t.Fatal("non-USER subjects acquired USER authentication capability")
+		}
+	}
+	decoded, err := DecodeAuthorizationProfile(strings.NewReader(original))
+	if err != nil || decoded.Actions[0].UserAuthenticationMethods != nil {
+		t.Fatal("old declaration gained authentication metadata")
+	}
+	if actual, actualDigest, err := CanonicalizeAuthorizationProfile(decoded); err != nil || actual != original || actualDigest != originalDigest {
+		t.Fatal("authentication extension changed old bytes")
+	}
+	for _, source := range AllAuthorizationProfiles() {
+		for _, declared := range source.Actions {
+			if declared.UserAuthenticationMethods != nil {
+				t.Fatal("pure capability contract changed current product admission")
+			}
+		}
+		_, sourceDigest, _ := CanonicalizeAuthorizationProfile(source)
+		changed := cloneAuthorizationProfile(source)
+		for index, declared := range changed.Actions {
+			if checkValidatedProfileSubject(changed, declared.Action, SubjectUser) != nil {
+				continue
+			}
+			changed.Actions[index].UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationAccessKey}
+			got, gotDigest, gotErr := CanonicalizeAuthorizationProfile(changed)
+			want, wantDigest, wantErr := canonicalizeAuthorizationProfile(changed)
+			if gotErr != nil || wantErr != nil || got != want || gotDigest != wantDigest || gotDigest == sourceDigest {
+				t.Fatal("authentication substitution borrowed the immutable source commitment")
+			}
+			break
+		}
+	}
+}
+
 func TestAuthorizationProfileSubjectTypesAreBoundedCommittedSets(t *testing.T) {
 	legacy := authorizationProfileFixture()
 	legacyCanonical, legacyDigest, err := CanonicalizeAuthorizationProfile(legacy)
@@ -2011,6 +2367,12 @@ func FuzzAuthorizationProfileCanonicalRoundTrip(f *testing.F) {
 		f.Fatal(err)
 	}
 	f.Add(canonicalSubjects)
+	explicit.Actions[0].UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey}
+	canonicalMethods, _, err := CanonicalizeAuthorizationProfile(explicit)
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(canonicalMethods)
 	for _, profile := range AllAuthorizationProfiles() {
 		canonical, _, err := CanonicalizeAuthorizationProfile(profile)
 		if err != nil {
@@ -2066,6 +2428,11 @@ func FuzzAuthorizationProfileCanonicalRoundTrip(f *testing.F) {
 			for _, subject := range []SubjectType{SubjectUser, SubjectServiceAccount, SubjectRole, "UNKNOWN"} {
 				if (checkValidatedProfileSubject(profile, action.Action, subject) == nil) != (checkValidatedProfileSubject(decoded, action.Action, subject) == nil) {
 					t.Fatal("canonical round trip changed subject capability")
+				}
+			}
+			for _, method := range []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey, "UNKNOWN"} {
+				if (checkValidatedProfileUserAuthentication(profile, action.Action, method) == nil) != (checkValidatedProfileUserAuthentication(decoded, action.Action, method) == nil) {
+					t.Fatal("canonical round trip changed USER authentication capability")
 				}
 			}
 		}
@@ -3115,6 +3482,168 @@ func TestCompiledPolicyVersionHasExplicitCompleteTransportContract(t *testing.T)
 	}
 }
 
+func TestAccessKeyPolicyCompilationOnlyAddsTheCredentialCarrier(t *testing.T) {
+	methods := [][]UserAuthenticationMethod{nil, {UserAuthenticationLoginSession}, {UserAuthenticationAccessKey}, {UserAuthenticationLoginSession, UserAuthenticationAccessKey}}
+	for originalIndex, originalMethods := range methods {
+		for currentIndex, currentMethods := range methods {
+			for _, effect := range []PolicyEffect{PolicyAllow, PolicyDeny} {
+				frozen := declaredProductProfile("widgets", "WIDGET_SERVICE", 7,
+					declaredProfileAction("widgets.item.read", "WIDGET", AuthorityScopeTenant, "", []AuthorizationResourceShape{
+						{Mode: AuthorizationResourceInstance, PrefixAllowed: true},
+						{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}))
+				frozen.Actions[0].SubjectTypes = []SubjectType{SubjectUser, SubjectRole}
+				frozen.Actions[0].UserAuthenticationMethods = originalMethods
+				document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+					Statements: []PolicyStatement{{SID: "original", Effect: effect, Actions: []Action{"widgets.item.read"},
+						Resources: []PolicyResourceSelector{{Kind: "WIDGET", Match: PolicyResourceExact, ID: "unmatched"}}}}}
+				compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{frozen})
+				if err != nil {
+					t.Fatal(err)
+				}
+				canonical, digest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{frozen})
+				if err != nil {
+					t.Fatal(err)
+				}
+				current := cloneAuthorizationProfile(frozen)
+				current.Revision++
+				current.Actions[0].UserAuthenticationMethods = slices.Clone(currentMethods)
+				slices.Reverse(current.Actions[0].SubjectTypes)
+				slices.Reverse(current.Actions[0].ResourceShapes)
+				slices.Reverse(current.Actions[0].Conditions)
+				_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request := AuthorizationRequest{Profile: AuthorizationProfileReference{current.Product, current.Revision, currentDigest},
+					Action: "widgets.item.read", Resource: ResourceReference{Kind: "WIDGET", ID: "actual"},
+					ResourceMode: AuthorizationResourceInstance, RequestID: "signed-request", CorrelationID: "signed-correlation"}
+				want := originalIndex <= 1 && currentIndex == 3 || originalIndex >= 2 && originalIndex == currentIndex
+				if err := CheckAccessKeyPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{frozen}, current, request); (err == nil) != want {
+					t.Fatalf("carrier transition %d -> %d, %s: accepted=%v want=%v", originalIndex, currentIndex, effect, err == nil, want)
+				}
+				if actual, actualDigest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{frozen}); err != nil || actual != canonical || actualDigest != digest {
+					t.Fatal("carrier compatibility changed the original policy commitment")
+				}
+			}
+		}
+	}
+}
+
+func TestAccessKeyPolicyCompilationRejectsOtherMeaningChangesBeforeMatching(t *testing.T) {
+	frozen := declaredProductProfile("widgets", "WIDGET_SERVICE", 7,
+		declaredProfileAction("widgets.item.read", "WIDGET", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}))
+	frozen.Actions[0].SubjectTypes = []SubjectType{SubjectUser}
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+		Statements: []PolicyStatement{{SID: "unmatched-deny", Effect: PolicyDeny, Actions: []Action{"widgets.item.read"},
+			Resources: []PolicyResourceSelector{{Kind: "WIDGET", Match: PolicyResourceExact, ID: "unmatched"}}}}}
+	compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{frozen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{frozen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]struct {
+		modify        func(*AuthorizationProfile, *AuthorizationRequest)
+		loginAccepted bool
+	}{
+		"calling service": {func(p *AuthorizationProfile, _ *AuthorizationRequest) { p.CallingService = "OTHER_SERVICE" }, false},
+		"subject expansion": {func(p *AuthorizationProfile, _ *AuthorizationRequest) {
+			p.Actions[0].SubjectTypes = append(p.Actions[0].SubjectTypes, SubjectRole)
+		}, true},
+		"unused condition removed": {func(p *AuthorizationProfile, _ *AuthorizationRequest) { p.Actions[0].Conditions = nil }, true},
+		"other target shape": {func(p *AuthorizationProfile, _ *AuthorizationRequest) {
+			p.Actions[0].ResourceShapes = append(p.Actions[0].ResourceShapes, AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList})
+		}, true},
+		"prefix capability": {func(p *AuthorizationProfile, _ *AuthorizationRequest) {
+			p.Actions[0].ResourceShapes[0].PrefixAllowed = true
+		}, true},
+		"result resource": {func(p *AuthorizationProfile, _ *AuthorizationRequest) {
+			p.Actions[0].ResultResourceKind = "CHILD_WIDGET"
+		}, false},
+		"resource kind": {func(p *AuthorizationProfile, r *AuthorizationRequest) {
+			p.Actions[0].ResourceKind, r.Resource.Kind = "OTHER_WIDGET", "OTHER_WIDGET"
+		}, false},
+		"scope": {func(p *AuthorizationProfile, _ *AuthorizationRequest) {
+			p.Actions[0].Scope, p.Actions[0].Conditions = AuthorityScopeInstallation, nil
+		}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			current := cloneAuthorizationProfile(frozen)
+			current.Revision++
+			current.Actions[0].UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey}
+			request := AuthorizationRequest{Action: "widgets.item.read", Resource: ResourceReference{Kind: "WIDGET", ID: "actual"},
+				ResourceMode: AuthorizationResourceInstance, RequestID: "signed-request", CorrelationID: "signed-correlation"}
+			change.modify(&current, &request)
+			_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
+			if err != nil {
+				t.Fatal("fixture must be a valid current declaration", err)
+			}
+			request.Profile = AuthorizationProfileReference{current.Product, current.Revision, currentDigest}
+			if err := CheckAuthorizationProfileTarget(current, request.Profile, request.Action, request.Resource, request.ResourceMode, request.CollectionUsage); err != nil {
+				t.Fatal("fixture must be a legal current target", err)
+			}
+			if err := CheckPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{frozen}, current, request, SubjectUser); (err == nil) != change.loginAccepted {
+				t.Fatal("existing USER compatibility changed", err)
+			}
+			if err := CheckAccessKeyPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{frozen}, current, request); !errors.Is(err, ErrInvalidPolicy) {
+				t.Fatal("key carrier admitted changed semantics or skipped an unmatched Deny", err)
+			}
+		})
+	}
+}
+
+func TestAccessKeyPolicyCompilationDoesNotGrowFrozenActionsOrBorrowEvidence(t *testing.T) {
+	frozen := declaredProductProfile("widgets", "WIDGET_SERVICE", 7,
+		declaredProfileAction("widgets.item.read", "WIDGET", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}))
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant,
+		Statements: []PolicyStatement{{SID: "family", Effect: PolicyAllow, Actions: []Action{"widgets.item.*"},
+			Resources: []PolicyResourceSelector{{Kind: "WIDGET", Match: PolicyResourceAnyInAuthority}}}}}
+	compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{frozen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{frozen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := cloneAuthorizationProfile(frozen)
+	current.Revision++
+	current.Actions = append(current.Actions, declaredProfileAction("widgets.item.delete", "WIDGET", AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}))
+	for index := range current.Actions {
+		current.Actions[index].UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationAccessKey, UserAuthenticationLoginSession}
+	}
+	_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := AuthorizationRequest{Profile: AuthorizationProfileReference{current.Product, current.Revision, currentDigest},
+		Action: "widgets.item.delete", Resource: ResourceReference{Kind: "WIDGET", ID: "actual"},
+		ResourceMode: AuthorizationResourceInstance, RequestID: "signed-request", CorrelationID: "signed-correlation"}
+	if err := CheckAccessKeyPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{frozen}, current, request); err != nil {
+		t.Fatal("intact nonparticipating policy was treated as an implicit grant or corruption", err)
+	}
+	if slices.Contains(compilation.ResolvedStatements[0].Actions, request.Action) {
+		t.Fatal("new action entered the frozen family")
+	}
+	for _, participating := range []bool{false, true} {
+		if participating {
+			request.Action = "widgets.item.read"
+		}
+		if CheckAccessKeyPolicyCompilationRequest(document, compilation, "sha256:"+strings.Repeat("0", 64), []AuthorizationProfile{frozen}, current, request) == nil ||
+			CheckAccessKeyPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{current}, current, request) == nil ||
+			CheckAccessKeyPolicyCompilationRequest(document, compilation, digest, nil, current, request) == nil {
+			t.Fatal("key compatibility ignored missing or forged policy evidence")
+		}
+		badRequest := request
+		badRequest.Profile.Revision--
+		if CheckAccessKeyPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{frozen}, current, badRequest) == nil {
+			t.Fatal("key compatibility ignored the exact current reference")
+		}
+	}
+}
+
 func TestPolicyCompilationRequestCompatibilityAcrossDeclaredTargets(t *testing.T) {
 	for _, frozen := range AllAuthorizationProfiles() {
 		current := cloneAuthorizationProfile(frozen)
@@ -3146,6 +3675,22 @@ func TestPolicyCompilationRequestCompatibilityAcrossDeclaredTargets(t *testing.T
 					}
 					if err := CheckPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{frozen}, current, request, subject); err != nil {
 						t.Fatalf("same explicit meaning rejected: %s/%s/%s: %v", action.Action, effect, shape.Mode, err)
+					}
+					if subject == SubjectUser {
+						carrierProfile := cloneAuthorizationProfile(current)
+						for index := range carrierProfile.Actions {
+							if carrierProfile.Actions[index].Action == action.Action {
+								carrierProfile.Actions[index].UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey}
+							}
+						}
+						_, carrierDigest, err := CanonicalizeAuthorizationProfile(carrierProfile)
+						if err != nil {
+							t.Fatal(err)
+						}
+						request.Profile.ContentDigest = carrierDigest
+						if err := CheckAccessKeyPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{frozen}, carrierProfile, request); err != nil {
+							t.Fatalf("unchanged declared target rejected a pure USER carrier extension: %s/%s/%s: %v", action.Action, effect, shape.Mode, err)
+						}
 					}
 				}
 			}
@@ -3432,6 +3977,19 @@ func FuzzPolicyCompilationCanonicalRoundTrip(f *testing.F) {
 	if !known || err != nil {
 		f.Fatal("invalid current request fixture", err)
 	}
+	keyProfile := cloneAuthorizationProfile(current)
+	keyProfile.Revision++
+	for index := range keyProfile.Actions {
+		if keyProfile.Actions[index].Action == request.Action {
+			keyProfile.Actions[index].UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey}
+		}
+	}
+	_, keyDigest, err := CanonicalizeAuthorizationProfile(keyProfile)
+	if err != nil {
+		f.Fatal(err)
+	}
+	keyRequest := request
+	keyRequest.Profile = AuthorizationProfileReference{keyProfile.Product, keyProfile.Revision, keyDigest}
 	compilation, err := CompilePolicyDocument(document, profiles)
 	if err != nil {
 		f.Fatal(err)
@@ -3464,6 +4022,10 @@ func FuzzPolicyCompilationCanonicalRoundTrip(f *testing.F) {
 		}
 		if err := CheckPolicyCompilationRequest(document, repeated, "sha256:"+strings.Repeat("0", 64), profiles, current, request, SubjectUser); !errors.Is(err, ErrInvalidPolicy) {
 			t.Fatal("request compatibility ignored the stored whole-content commitment", err)
+		}
+		if CheckAccessKeyPolicyCompilationRequest(document, repeated, digest, profiles, keyProfile, keyRequest) != nil ||
+			CheckAccessKeyPolicyCompilationRequest(document, repeated, "sha256:"+strings.Repeat("0", 64), profiles, keyProfile, keyRequest) == nil {
+			t.Fatal("key compatibility lost the original compilation commitment after round trip")
 		}
 		version := PolicyVersion{PolicyID: "policy-fuzz", ID: "version-fuzz", Document: document, ContentDigest: digest,
 			ContractVersion: PolicyVersionCompiledContract, Compilation: &repeated}

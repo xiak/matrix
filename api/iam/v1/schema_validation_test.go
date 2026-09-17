@@ -514,6 +514,61 @@ func TestRoleTrustSchemasKeepCarrierAdmissionSeparateFromIdentityPolicies(t *tes
 	}
 }
 
+func TestAuthorizationProfileUserAuthenticationSchema(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	schema := compileIAMOpenAPISchema(t, api, "AuthorizationProfile")
+	encoded, err := json.Marshal(authorizationProfileFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, field string
+		valid       bool
+	}{
+		{"legacy absence", "", true},
+		{"login", `"userAuthenticationMethods":["LOGIN_SESSION"],`, true},
+		{"key", `"userAuthenticationMethods":["ACCESS_KEY"],`, true},
+		{"both", `"userAuthenticationMethods":["LOGIN_SESSION","ACCESS_KEY"],`, true},
+		{"explicit USER", `"subjectTypes":["ROLE","USER"],"userAuthenticationMethods":["ACCESS_KEY"],`, true},
+		{"ROLE only", `"subjectTypes":["ROLE"],"userAuthenticationMethods":["ACCESS_KEY"],`, false},
+		{"service only", `"subjectTypes":["SERVICE_ACCOUNT"],"userAuthenticationMethods":["LOGIN_SESSION"],`, false},
+		{"null", `"userAuthenticationMethods":null,`, false},
+		{"empty", `"userAuthenticationMethods":[],`, false},
+		{"duplicate", `"userAuthenticationMethods":["ACCESS_KEY","ACCESS_KEY"],`, false},
+		{"unknown", `"userAuthenticationMethods":["TOKEN"],`, false},
+		{"case alias", `"UserAuthenticationMethods":["ACCESS_KEY"],`, false},
+		{"object", `"userAuthenticationMethods":{},`, false},
+		{"nullable element", `"userAuthenticationMethods":[null],`, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := strings.Replace(string(encoded), `"action":`, test.field+`"action":`, 1)
+			wire, err := jsonschema.UnmarshalJSON(strings.NewReader(candidate))
+			if err != nil || (schema.Validate(wire) == nil) != test.valid {
+				t.Fatal("authentication capability schema disagrees with its contract", err)
+			}
+			if _, err := DecodeAuthorizationProfile(strings.NewReader(candidate)); (err == nil) != test.valid {
+				t.Fatal("authentication capability decoder diverged from its schema", err)
+			}
+		})
+	}
+	probe := declaredProductProfile("probe", "PROBE", 1,
+		declaredProfileAction("probe.check", "INSTALLATION", AuthorityScopeInstallationProbe, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}))
+	probe.Actions[0].UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationAccessKey}
+	probeBytes, err := json.Marshal(probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire, err := jsonschema.UnmarshalJSON(bytes.NewReader(probeBytes))
+	if err != nil || schema.Validate(wire) == nil || ValidateAuthorizationProfile(probe) == nil {
+		t.Fatal("legacy service probe inferred USER credential capability")
+	}
+	for _, typeName := range []string{"PrincipalType", "SubjectType"} {
+		if compileIAMOpenAPISchema(t, api, typeName).Validate("ACCESS_KEY") == nil {
+			t.Fatal("credential method became a subject or principal type")
+		}
+	}
+}
+
 func TestAuthorizationProfileSubjectSchemaKeepsPrincipalAndCapabilitySeparate(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	schema := compileIAMOpenAPISchema(t, api, "AuthorizationProfile")

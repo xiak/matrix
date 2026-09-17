@@ -6406,6 +6406,43 @@
           },
           {
             "if": {
+              "required": [
+                "userAuthenticationMethods"
+              ]
+            },
+            "then": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "subjectTypes": {
+                      "contains": {
+                        "const": "USER"
+                      }
+                    }
+                  },
+                  "required": [
+                    "subjectTypes"
+                  ]
+                },
+                {
+                  "not": {
+                    "required": [
+                      "subjectTypes"
+                    ]
+                  },
+                  "properties": {
+                    "scope": {
+                      "not": {
+                        "const": "INSTALLATION_PROBE"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "if": {
               "properties": {
                 "resourceShapes": {
                   "contains": {
@@ -6497,6 +6534,15 @@
               "$ref": "#/components/schemas/SubjectType"
             },
             "maxItems": 3,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "userAuthenticationMethods": {
+            "items": {
+              "$ref": "#/components/schemas/UserAuthenticationMethod"
+            },
+            "maxItems": 2,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -20633,6 +20679,13 @@
           "user"
         ],
         "type": "object"
+      },
+      "UserAuthenticationMethod": {
+        "enum": [
+          "LOGIN_SESSION",
+          "ACCESS_KEY"
+        ],
+        "type": "string"
       },
       "UserDeletion": {
         "additionalProperties": false,

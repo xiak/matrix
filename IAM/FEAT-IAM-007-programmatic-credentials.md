@@ -1,6 +1,6 @@
 # FEAT-IAM-007：访问密钥与程序访问
 
-- 状态：实施中；材料保护`be4974e6`、私有codec与唯一上下文`bc7d0595`均已通过本地及三项独立CI。K1管理API、原子持久化、进程文件加载和readiness已实现，真实PG18双向并发/回包丢失/ID碰撞/受限SQL攻击、独立进程及本地回归已通过，候选独立CI待确认。安装托管及UI未验收，签名业务尚未实施；未发布，整体未验收。
+- 状态：实施中；K1管理后端累计固定`ebe4c2d49d04359e44cec6a9968ee36dc4e9a11d`已通过本地真实PG18/独立进程及五项独立CI，可作为后续源码集成基线；生产安装托管/备份及UI仍须各自验收。K2协议、纯HMAC、认证载体及冻结策略兼容基础实施中，真实签名业务尚未接通。未发布，整体未验收。
 - 依赖：003、005；临时凭据与 006 协作。
 - Owner：IAM credential；各产品 HTTP 签名消费归其 PEP。
 
@@ -106,6 +106,26 @@ IAM启动同时核对私有文件、实际bootstrap和数据库封存receipt（�
 
 公开 wire/唯一编码 owner 为 `api/iam/v1`；HTTP 提取在各产品 PEP，认证/防重放/当前授权在 IAM。发布有版本且有界的 Matrix 签名规范，明确大写 method、唯一 escaped path、严格 percent-encoding 排序且保留重复项的完整 query、实际 body SHA-256、所有影响请求语义的 header、signedAt、至少128-bit随机 nonce、key ID、算法及固定 audience 的唯一编码。query签名保留重复项不等于某个业务参数允许多值；业务自身的单值/未知字段校验仍执行。重复安全 header、歧义 path、异常编码、错误 body、过期/过早、跨服务或跨安装均拒绝；不把 Secret 放在 URL。
 
+#### K2 请求签名基础
+
+唯一协议基础放在现有`api/iam/v1`，新增`access_key_signing.go`仅拥有与私有KEK文件不同的跨产品请求wire/编码边界；HMAC验证仍在现有IAM credential owner。它不发行决定、不消费nonce、不开放HTTP路由，也不证明程序请求已可执行。
+
+Authorization的唯一格式为`Matrix-HMAC-SHA256-V1 KeyId=<id>,Installation=<id>,Audience=<product>,SignedAt=<unix-seconds>,Nonce=<base64url>,Signature=<base64url>`。参数顺序固定，逗号后无空格；不接受其他算法、重复/未知/缺失参数、引号、空白别名或多个Authorization值。Nonce为16字节随机数的严格无填充base64url，Signature为32字节HMAC的相同编码；格式校验不冒充随机性来源证明。签名密钥是`mak1.`后解码的原32字节，不是整个Secret文本、摘要或KEK。秘密、原签名和nonce只允许显式传输编码，普通JSON/格式化不得泄露。
+
+规范请求准确覆盖参数中的key ID、installation、audience、SignedAt、nonce，以及实际method、HTTP scheme、authority、escaped path、完整query、Content-Type、Idempotency-Key、If-Match和body SHA-256。长度前缀编码复用现有私有原语，各UTF-8字段使用uint32大端字节长度；domain为`matrix.iam.access-key-http-signature.v1`，字段顺序为协议scheme、key ID、installation、audience、十进制SignedAt、nonce、method、HTTP scheme、authority、escaped path、raw query、content type、idempotency key、if match、body digest。HTTP scheme准确为`http`或`https`，服务端不得按caller转发header猜测；协议能表示HTTP不等于批准明文生产部署。空header也作为空字段绑定；正文摘要为`sha256:<lowerhex>`，包括零字节正文。HMAC-SHA256直接覆盖这些规范字节，结果常量时间比较；请求摘要为同一字节的SHA-256，不是业务payload真实性或可缓存许可。
+
+path最多2048字节、query最多4096字节且64项；仅接受规范UTF-8/RFC3986百分号编码，hex必须大写，不允许把unreserved字符编码成别名。path拒绝空/点段、重复或末尾斜杠（根路径除外）、编码斜杠/反斜杠/百分号及控制字符。query每项必须为非空name加`=`及value，按编码后的name递增；**相同name的原顺序保留并参与签名**，不按value排序以免改变first/last语义。不修复收到的不规范请求；单值参数的重复拒绝仍归实际PEP。纯wire的authority使用小写ASCII DNS/规范IP，可带规范十进制端口；省略端口与显式默认端口是不同签名输入，不能自动删补。真实部署另由安装owner的NorthboundOrigin要求显式端口并精确匹配。不接受userinfo、zone或转发header猜测。三个业务header逐字节覆盖，拒绝控制字符和首尾空白；不把大小写/空白归一化当作请求等价证明。
+
+签名请求的Content-Type首片准确为`application/json`或无正文时的空值，不能借宽松media-type参数改变解释。PEP对Cookie、Matrix-Subject-Credential、Content-Encoding、X-HTTP-Method-Override、未覆盖的语义header、trailer及重复security header在实际入口拒绝；Content-Length/Transfer-Encoding不签，实际body受原产品上限和HTTP解析约束。这里的纯编码无法证明HTTP提取正确。
+
+安装owner已只读确认现有APISIX将`/api/paas/`、`/api/audit/`重写为内部路径，且没有原authority保真证据。已对齐后续ingress契约：边缘删除caller的`X-Matrix-External-Origin`和`X-Matrix-External-Request-Target`后，各覆盖恰好一个实际外部origin及原始request-target；它们不是edge签名。PEP严格拆解后重新编码必须与原值相同，origin再精确匹配显式配置的唯一NorthboundOrigin；该配置由安装owner后续实现，不由Host学习、不借Listener或节点Public-Origin代替。target只允许准确的`/api/paas/`或`/api/audit/`前缀转换，结果与真实内部EscapedPath/RawQuery逐字节一致；尾随空`?`、双`?`、fragment和absolute-form拒绝。API继续只拥有scheme/authority/escapedPath/rawQuery四字段及唯一编码，不拥有内部header常量。真实APISIX的覆盖、原始编码/重复query保真及后端映射门禁尚未实现；这些header不证明可信来源IP。
+
+程序入口必须按method+route template+action/resource闭合，不按产品prefix泛化开放。首片限定现有tenant application/configuration/revision/deployment/operation，以及外部`/api/audit/v1/records:query`、`/api/audit/v1/integrity:verify`；managed-services、terminal、node/host/platform、probe/installation verify、Audit ingest和IAM管理/AssumeRole均不开放。固定动作可在真实body capture后先IAM再业务decode；已有`PUT /v1/deployments/{id}`按DesiredState选择update/stop，允许capture后用原严格DeploymentSpec契约做一次无副作用完整解析，选择准确动作，再单次IAM，最终业务复用同一已解码值。该结构解析失败不验证签名、不消费nonce；不得以部分JSON扫描、宽泛许可、两次PDP或授权后另一decoder替代。路由/头/body大小先检查；其他动态动作必须逐项审计并对齐。
+
+数据库权威时间窗口为过去300秒/未来30秒，端点包含；有效窗口只参与认证，不能替代当前key/USER/Account/PDP或持久nonce事务。标准HTTP歧义及重放风险参考[RFC9421安全边界](https://www.rfc-editor.org/rfc/rfc9421.html#section-7.5)和[RFC3986编码](https://www.rfc-editor.org/rfc/rfc3986.html#section-2)，这是Matrix的有界协议，不宣称实现整个RFC9421。
+
+纯协议、载体与策略兼容候选的最终干净源码树`26715a9bd17e6caf2ed372cb20679d1b83c37220`在Go2/512MiB下通过全仓race/p2（含架构）、vet、模块校验、契约生成文件集合及字节不变、Linux amd64构建。API/authority完整race为16.450/5.443秒。Node独立UTF-8长度前缀/SHA-256/HMAC向量同时覆盖JSON写请求和零正文GET，四个可为空的HTTP字段仍须显式存在；错误Secret格式、显示文本冒充原32字节key、16类字段替换、URI/重复query次序/非规范编码及数据库时间窗口分别关闭。签名wire的原2-worker/20秒模糊门禁21.946秒、566025次执行通过，之后生产编码未改。冻结编译模糊门禁加入载体兼容及错误摘要检查，2-worker/20秒预算实际22.077秒、751193次执行通过；全部现有声明的USER目标模式、32组载体/Effect组合和不匹配资源上的旧Deny均在原测试owner检查，主体扩展、未使用条件/目标形状变化仍被新路径拒绝，原登录路径不被改写。当前没有新增HTTP入口、nonce行、决定、公开actor/Operation字段、schema/profile或安装配置；这些只证明纯基础，不是K2业务或生产接入验收。
+
 PEP 必须从它实际处理的请求取得字段并计算 body digest，不能接受 caller 提交的“已规范请求”替代真实 method/path/body，也不能只把 Authorization 文本转交 IAM。PaaS 的 Idempotency-Key 等影响行为的 header 必须被绑定；反向代理公开 authority/路径的转换、body 大小和一次读取后的安全重用由真实消费者明确。IAM 保留当前服务凭据的独立认证，核对其封存安装、purpose 与已登记产品能力，不能把 caller audience 当作已认证服务归属。
 
 有效签名只证明持有 key 并承诺这次请求；IAM 仍检查当前 Account、User、forced-change、key 状态、适用策略/Boundary 与动作/资源。signedAt用数据库权威时间判断准确过去/未来窗口。有效签名的nonce按key在数据库中原子唯一消费，只存摘要且保留超过最大签名窗口；包括最终Allow、Deny及当前key受限的结果，防止原拒绝包在后来授权改变后重放。错误签名/未知key不产生攻击者可放大的nonce行。拒绝结果与nonce需要提交，不能因为用例最后返回认证/权限错误而回滚防重放状态。
@@ -113,6 +133,22 @@ PEP 必须从它实际处理的请求取得字段并计算 body digest，不能�
 多实例使用同一持久权威去重，不能用本机 map/粘性路由或异步 Redis 失效代替撤销保证。重复消息与产品业务幂等是两个边界：客户端重试需新签名/nonce，但保留原业务requestId/idempotency；相同 nonce 的两个并发业务请求不能都获得许可。内部 RPC 重试、IAM 已提交但响应未知、nonce 保留/清理时限需要与真实 PEP 一起冻结，不通过放宽重放或返回旧permit来避免处理未知结果。
 
 允许决定必须匹配实际请求及签名证据，业务只消费这次结果，不将其缓存为用户许可。身份始终是原 USER，认证载体明确为ACCESS_KEY；公开Decision/PaaS/Audit只增加最小accessKeyId归因，签名证据仍留IAM。哪些当前动作支持程序载体须由产品已登记能力和真实 PEP 共同决定，不能在通用求值器写死产品名或把 `subjectTypes=USER` 推断成所有认证方法均可用。具体字段形状及旧USER无key分支的兼容解释在公共API切换前冻结。
+
+#### K2 原子授权与受保护历史
+
+此节是后端增量的已对齐设计，尚非实现证据。内部入口为`POST /v1/authorize:access-key`，只以当前服务Bearer认证调用服务，不接受Matrix-Subject或主体/租户selector。请求准确为`{authorization,signedRequest}`，前者是原AuthorizationRequest，后者复用唯一显式签名wire。封闭结果为`{apiVersion,kind:AccessKeyAuthorization,decision,signedRequestDigest}`；摘要必须从实际通过MAC的规范字节产生，PEP独立核对该摘要、原请求/决定和key归因。不是JSON wire摘要，不含原签名，不提供结果重用或nonce查询接口。
+
+防重放归原decision事务：新增私有一对一`access_key_authorization_evidence`，主键/外键为`(tenant_id,decision_id)`，仅由原`record_authorization`写入。typed列绑定真实AccessKey、当时resourceVersion/formatVersion、wrappingKeyId与永久材料commitment、封存安装、实际调用服务、audience、signedRequestDigest、nonceDigest及signedAt；不把FK/唯一性只放进opaque JSON。`UNIQUE(access_key_id,nonce_digest)`永久保留，前提是原AccessKey全局ID及索引唯一性实际成立。表无PUBLIC/API/worker直接ACL，有不可变及禁止truncate保护；它不是第二个授权服务或可重放permit。key定位索引只负责RLS前的ID到真实tenant定位，owner-only、永久唯一、不可改，并精确FK到原key tombstone。迁移只为真实既有行登记；冲突、缺失registry或不一致全部回滚，不补key或改归属。
+
+先认证实际服务并验证结构及安装/服务目的/audience，再定位key。格式合法且MAC有效的请求，无论当前Account/User/key状态、forced-change、策略/Boundary、载体能力或时间窗口是否允许，均形成同事务的ALLOW或DENY及原outbox，永久消费nonce。**过早/过期但合法MAC也记录DENY**，避免后来进入时间窗口再使用原包。结构非法、服务身份/请求绑定不成立、未知key、已删除材料或错误MAC不写nonce/决定；对外不区分key存在与状态。重复nonce永远拒绝，不返回原ALLOW/DENY，不另写决定或成功事实；新传输重试使用新nonce并保留业务幂等键。只有确认未提交的事务失败可整事务有界重试，提交未知不自动重发原nonce。
+
+锁序按真实物理身份排序：全部涉及的Account先按ID全局排序，再所有principal按`(tenant_id,id)`排序，然后依固定类别取得service credential、Policy、USER/GROUP授权代际及AccessKey锁。读取使用能与状态/撤权更新冲突的SHARE，不以KEY SHARE冒充；Serializable等待后遇到旧版本须重开事务，不能继续旧快照。原密码Session不进入AccessKey上下文，当前策略/Boundary仍复用唯一PDP。记录器9参拟在末尾接收严格nullable key evidence，显式contract4；旧8参删除，不保留旁路。实际IAM30/Audit18须待函数/列/ACL/readiness验收后才成立；此设计不分配或修改发布profile。
+
+当前服务凭据没有独立credential ID/version，不补固定版本。其真实历史身份为`home account + principal + purpose + lookup digest + verification digest + created_at`，另绑定sealed installation。记录SQL仅接收已认证调用的lookup digest，在锁内经原service_credential_index重新定位并读取完整元组，不接受应用自报整个元组。原身份列必须不可改，只允许revoked_at从NULL单调撤销；两张原服务凭据表的身份/索引不得UPDATE、DELETE或TRUNCATE，迁移先核对真实行/index/FK一致，不修补或猜测历史。lookup_service仍五列，ServiceIdentity不加字段；材料摘要只在私有证据中。将来轮换需独立真实凭据模型，不能覆盖这组历史身份。
+
+contract4的载体矩阵闭合为：LOGIN_SESSION USER无keyId/key evidence；ACCESS_KEY ALLOW的USER keyId与私有证据相同；ACCESS_KEY DENY的公开决定仍无subject/tenant，但私有证据必须存在；ROLE只带原Role evidence，SERVICE_ACCOUNT没有两种USER凭据证据。公开keyId仅是现有Subject/Actor末尾omitempty字段，经PaaS原嵌套RequestedBy传播，不新增顶层重复字段。`read_audit_evidence`可保持五列，但内部须验证一对一证据、永久key归属/registry、原服务元组、请求摘要和原outbox一致；不要求今天key/User/service有效或密文仍存在。原LOGIN_SESSION/ROLE事件及canonical bytes不改变，claim7不变。
+
+`userAuthenticationMethods`由原Profile owner承载，是请求载体准入而非另一许可。它只解释USER，闭合值为LOGIN_SESSION/ACCESS_KEY；历史缺字段只表示LOGIN_SESSION，新改写声明显式给出规范集合。key请求必须满足当前Profile显式支持、实际闭合PEP和同一USER的当前policy/Boundary三层。旧USER compilation不能靠忽略digest复用：唯一`CheckAccessKeyPolicyCompilationRequest`先复用原完整编译/引用/目标检查，再以同一规范编码比较请求动作的全部原语义。产品、调用服务、scope、resourceKind、全部shape/usage、subjectTypes、条件及创建结果必须相同；除已含ACCESS_KEY的集合原样保持外，只允许缺省/LOGIN_SESSION增加ACCESS_KEY且保留LOGIN_SESSION，不允许同时删除另一载体。仅本地比较投影不绑定revision；两份真实完整引用和策略摘要仍先分别验证，投影不返回、不登记。其他变更失败关闭，需要显式重发策略；不因Deny尚未匹配资源/条件而略过，LOGIN_SESSION保留既有解释。冻结动作族不吸收新动作，不参与本次动作的完整策略仍不贡献许可。新决定须同时保留当前请求Profile和原策略归档证据，历史proof使用当时两份声明重验，不改旧bytes或倒灌当前head。当前只有纯检查实现，实际PDP/历史接线未完成。
 
 网络准入仅使用产品实际连接IP，或installation明确配置的可信代理链。Account限制与key限制取交集，不直接相信任意X-Forwarded-For，不把客户端VPC/网络名当权威。网络片未完成时不开放假配置面，也不宣称IAM-KEY-05通过。
 
@@ -141,7 +177,7 @@ wrappingKeyId永久对应唯一KEK原材料，移除后也不得复用该ID。re
 
 2026-09-17，私有codec/逐key commitment及唯一context owner的干净源码树`fa03b9a808d1313ac9ee813ef699f491a6f2d8d8`通过全仓race/p2（含架构）、vet、模块校验、生成文件集合及字节一致、Linux amd64构建。API/authority聚焦race为2.371/1.247秒，完整API/authority回归为14.974/7.456秒。2-worker、20秒预算的私有文件fuzz实际21.871秒通过813143次执行；模糊测试最初的脚本转义错误已修正后在同一源码树实跑，不记为首次成功。Node独立SHA-256向量核对全部七个绑定字段，原info/AAD/密文向量保持；未知/重复/错类型/非规范字节、超限/底层读取失败及普通JSON/公开schema泄露分别拒绝。固定`bc7d059571b55ee84c58b62adf1d794cf63ff9a6`的[Verification35145879997](https://github.com/xiak/matrix/actions/runs/35145879997)已由GitHub API核对精确SHA及go/authority-process/node-process三项success；该固定点只证明私有契约，不证明后继K1运行候选。
 
-### K1候选运行证据与未完成边界
+### K1后端运行证据与未完成边界
 
 2026-09-17，专属PG18、真实受限API连接、Go2/512MiB/race-p1下，现有`TestIAMAccessKeyPostgres`累计41.59秒通过。24个双向场景覆盖平台grant、目标/actor停用及重置、退出、保留当前会话的日常改密、直接附件撤销、组成员移除、组附件撤销、Boundary限制和默认版本切换。先前真实暴露的平台grant旧快照201及默认版本不等待已写key的问题，分别由现有来源代际与按序Policy锁修复；不能只靠主体锁。没有隐藏deadlock，失败无部分key/intent/成功事实。
 
@@ -155,7 +191,9 @@ wrappingKeyId永久对应唯一KEK原材料，移除后也不得复用该ID。re
 
 独立workflow修复`a435195dcbb7197556e5671a45a51769fb7eee8b`只拆分原有数据库/HTTP和真实进程两组，按`max-parallel=1`串行执行；每组仍20分钟，原20个DSN绑定、全部命令、race-p1及单项context/lock时限不变。两组分别使用唯一标签、运行/尝试ID数据库、随机端口和受限PG18；原`authority-process`检查以`if:always()`保留，只有两组都成功才通过。actionlint1.7.12、10段Bash语法、原数据库绑定/创建集合一致及汇总成功/失败/取消/跳过/空值五种状态已验证。[Verification35160554567](https://github.com/xiak/matrix/actions/runs/35160554567)已核对精确SHA：go、node-process、authority-storage成功，authority-runtime及汇总失败。这次是实际测试失败，不是总时限取消。
 
-失败位于原`TestIAMRetainedPolicyProcessUpgrade`的后继Profile真实程序启动：fixture只在二进制路径等于currentBinary时传入keyring，后继overlay构建的futureBinary因此缺少必填FILE。固定a435在专属PG18原样复现21.68秒失败；临时诊断仅输出封闭启动阶段，确认CONFIGURATION，数据库已保留实际后继PaaS Profile r3，未发现需要放宽生产schema/readiness的证据。修复在原进程测试owner显式区分predecessor与current/future环境；旧程序不接收不存在的契约，新程序共用完整custody配置。两处旧数据未迁移拒绝门禁也提供完整新配置，避免缺文件提前退出伪装schema拒绝；后继日志使用真实Profile revision。仅首处修复的干净树`f45a21aa6b6365cb02ffb7f17fc9f87ac7f11860`已通过原retained-policy真库race22.41秒；最终累计storage/runtime与五项独立CI仍需通过，不以此聚焦结果宣称K1、签名业务、安装或UI验收。
+失败位于原`TestIAMRetainedPolicyProcessUpgrade`的后继Profile真实程序启动：fixture只在二进制路径等于currentBinary时传入keyring，后继overlay构建的futureBinary因此缺少必填FILE。固定a435在专属PG18原样复现21.68秒失败；临时诊断仅输出封闭启动阶段，确认CONFIGURATION。原测试owner已显式区分predecessor与current/future环境；旧程序不接收不存在的契约，新程序共用完整custody配置。两处未迁移拒绝门禁也提供完整新配置，避免缺文件提前退出伪装schema拒绝；没有放宽生产schema/readiness或加入调试入口。
+
+最终累计源码固定`ebe4c2d49d04359e44cec6a9968ee36dc4e9a11d`的[Verification35163801371](https://github.com/xiak/matrix/actions/runs/35163801371)已经GitHub API核实精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。本地同源码干净树`de4810595ee2ac0c5c5e6d821c9adae3f19e9da6`在原限额及新隔离数据库上串行通过：Audit PG/HTTP7.787/3.643秒、IAM主存储329.366秒、管理引用270.288秒、PaaS DB5.286秒；真实角色能力前驱11.77秒、来源权威前驱20.18秒、策略解释前驱25.48秒及双IAM/Audit/PaaS60.97秒（进程包121.543秒）。针对本次改动的旧账户/会话fixture另以真实9fd/a36程序通过11.05/11.26秒，未启用的local-recovery旧程序和浏览器项仍为SKIP，不能算通过。此固定点验证K1后端组合，不证明K2签名业务、安装生产托管/备份、UI或跨发布profile兼容；原失败结果不回填。
 
 ### 当前源码约束与替换边界
 
@@ -165,13 +203,13 @@ wrappingKeyId永久对应唯一KEK原材料，移除后也不得复用该ID。re
 
 历史证明要关联当时真实 key、用户、签名请求与决定；key 后来停用/删除、User 后来退出/撤权不应使已提交业务 outbox 永久丢失。既有 USER 决定没有 key 谱系，不能回填或冒称已包含。原 `record_authorization`、私有 evidence 与 producer proof 的确切扩展应在当前 owner 内冻结；不全局放开 USER actor、不伪造登录决定、不改变旧 canonical/hash，也不另建通用凭据 receipt 服务。该证明不覆盖业务最终 payload 的真实性；后者仍由产品实际事务/outbox承担。
 
-### 后续实施前仍需冻结
+### 后续集成与未完成边界
 
-- 具体安装加载/备份承诺消费者和错误处理；文件/codec、单次封装及不可重绑定的登记规则已冻结，不能因此提前宣称生产托管已实现。
-- HTTP wire、限额/时间窗口/nonce 准入、代理后的可信请求/IP、产品能力声明和内部重试协议。
-- K2真实key签名历史证据及对当前记录器的最小ABI；K1沿用原USER管理决定，不预先伪造程序凭据谱系。实际迁移/启动/消费者验收后才变更对应版本。
+- 安装owner仍需实际文件生成/挂载、备份恢复配对和发布准入；文件/codec、单次封装及不可重绑定登记已有固定后端基线，不等于生产托管已验收。
+- 按上述已对齐HTTP/载体/锁序/防重放设计实现原子授权和历史证据；实际函数、ACL、readiness及消费者验收后才改变对应版本。K1仍沿用原USER管理决定，不提前伪造程序凭据谱系。
+- 产品PEP、APISIX和NorthboundOrigin由所属owner在明确窗口消费累计固定对象；当前纯协议不改变它们。可信来源IP、Account/key网络限制、使用摘要及UI分别保留原验收，不以header转交或HMAC通过代替。
 
-这些冻结项属于本 FEAT 的实施前设计，不是要求建立第二套服务、文档或测试框架，也不将剩余需求移出目标。
+后端组合、业务消费、生产托管及最终发布是不同验收边界；继续使用现有owner，不建立第二套服务、文档或测试框架，也不将剩余需求移出目标。
 
 ## 验收
 

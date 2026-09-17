@@ -25,6 +25,15 @@ type AuthorizationProfile struct {
 	Actions        []AuthorizationProfileAction `json:"actions"`
 }
 
+// A USER credential carrier, not a subject type or permission. ROLE sessions
+// and service credentials retain their separate authentication contracts.
+type UserAuthenticationMethod string
+
+const (
+	UserAuthenticationLoginSession UserAuthenticationMethod = "LOGIN_SESSION"
+	UserAuthenticationAccessKey    UserAuthenticationMethod = "ACCESS_KEY"
+)
+
 type AuthorizationProfileAction struct {
 	Action         Action                          `json:"action"`
 	ResourceKind   ResourceKind                    `json:"resourceKind"`
@@ -37,6 +46,9 @@ type AuthorizationProfileAction struct {
 	// Absence preserves sealed pre-STS bytes with their USER/probe-only ceiling.
 	// It never means unrestricted subjects. New explicit sets are digest-bound.
 	SubjectTypes []SubjectType `json:"subjectTypes,omitempty"`
+	// Absence preserves historical LOGIN_SESSION-only USER admission. A USER
+	// capability never implicitly enables every kind of USER credential.
+	UserAuthenticationMethods []UserAuthenticationMethod `json:"userAuthenticationMethods,omitempty"`
 }
 
 func (action *AuthorizationProfileAction) UnmarshalJSON(source []byte) error {
@@ -51,6 +63,10 @@ func (action *AuthorizationProfileAction) UnmarshalJSON(source []byte) error {
 	}
 	if encoded, present := fields["subjectTypes"]; present &&
 		(bytes.Equal(bytes.TrimSpace(encoded), []byte("null")) || len(decoded.SubjectTypes) == 0) {
+		return contractjson.ErrInvalidDocument
+	}
+	if encoded, present := fields["userAuthenticationMethods"]; present &&
+		(bytes.Equal(bytes.TrimSpace(encoded), []byte("null")) || len(decoded.UserAuthenticationMethods) == 0) {
 		return contractjson.ErrInvalidDocument
 	}
 	*action = AuthorizationProfileAction(decoded)
@@ -232,6 +248,20 @@ func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
 				seenTypes[subjectType] = true
 			}
 		}
+		if action.UserAuthenticationMethods != nil {
+			if len(action.UserAuthenticationMethods) < 1 || len(action.UserAuthenticationMethods) > 2 ||
+				action.SubjectTypes == nil && action.Scope == AuthorityScopeInstallationProbe ||
+				action.SubjectTypes != nil && !slices.Contains(action.SubjectTypes, SubjectUser) {
+				return ErrInvalidAuthorizationProfile
+			}
+			seenMethods := make(map[UserAuthenticationMethod]bool, len(action.UserAuthenticationMethods))
+			for _, method := range action.UserAuthenticationMethods {
+				if !knownUserAuthenticationMethod(method) || seenMethods[method] {
+					return ErrInvalidAuthorizationProfile
+				}
+				seenMethods[method] = true
+			}
+		}
 		if action.ResultResourceKind != "" && !profileIdentifier(string(action.ResultResourceKind), true) {
 			return ErrInvalidAuthorizationProfile
 		}
@@ -324,6 +354,7 @@ func equalAuthorizationProfile(left, right AuthorizationProfile) bool {
 		if action.Action != other.Action || action.ResourceKind != other.ResourceKind || action.Scope != other.Scope ||
 			action.ResultResourceKind != other.ResultResourceKind ||
 			(action.SubjectTypes == nil) != (other.SubjectTypes == nil) || !slices.Equal(action.SubjectTypes, other.SubjectTypes) ||
+			(action.UserAuthenticationMethods == nil) != (other.UserAuthenticationMethods == nil) || !slices.Equal(action.UserAuthenticationMethods, other.UserAuthenticationMethods) ||
 			(action.ResourceShapes == nil) != (other.ResourceShapes == nil) || !slices.Equal(action.ResourceShapes, other.ResourceShapes) ||
 			(action.Conditions == nil) != (other.Conditions == nil) || !slices.Equal(action.Conditions, other.Conditions) {
 			return false
@@ -340,6 +371,7 @@ func canonicalizeAuthorizationProfile(value AuthorizationProfile) (string, strin
 	for index := range value.Actions {
 		action := &value.Actions[index]
 		slices.Sort(action.SubjectTypes)
+		slices.Sort(action.UserAuthenticationMethods)
 		slices.SortFunc(action.ResourceShapes, func(left, right AuthorizationResourceShape) int {
 			if order := cmp.Compare(left.Mode, right.Mode); order != 0 {
 				return order
@@ -361,6 +393,7 @@ func cloneAuthorizationProfile(value AuthorizationProfile) AuthorizationProfile 
 	value.Actions = slices.Clone(value.Actions)
 	for index := range value.Actions {
 		value.Actions[index].SubjectTypes = slices.Clone(value.Actions[index].SubjectTypes)
+		value.Actions[index].UserAuthenticationMethods = slices.Clone(value.Actions[index].UserAuthenticationMethods)
 		value.Actions[index].ResourceShapes = slices.Clone(value.Actions[index].ResourceShapes)
 		value.Actions[index].Conditions = slices.Clone(value.Actions[index].Conditions)
 	}
@@ -430,6 +463,42 @@ func checkValidatedProfileSubject(profile AuthorizationProfile, action Action, s
 
 func knownSubjectType(subjectType SubjectType) bool {
 	return subjectType == SubjectUser || subjectType == SubjectServiceAccount || subjectType == SubjectRole
+}
+
+func knownUserAuthenticationMethod(method UserAuthenticationMethod) bool {
+	return method == UserAuthenticationLoginSession || method == UserAuthenticationAccessKey
+}
+
+// CheckAuthorizationProfileUserAuthentication checks a declared USER carrier,
+// not an authenticated identity, signature, nonce or policy decision. The caller
+// must supply the actual verified carrier and independently establish authority.
+func CheckAuthorizationProfileUserAuthentication(profile AuthorizationProfile, reference AuthorizationProfileReference, action Action, method UserAuthenticationMethod) error {
+	if CheckAuthorizationProfileReference(profile, reference) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	return checkValidatedProfileUserAuthentication(profile, action, method)
+}
+
+func checkValidatedProfileUserAuthentication(profile AuthorizationProfile, action Action, method UserAuthenticationMethod) error {
+	if !knownUserAuthenticationMethod(method) || checkValidatedProfileSubject(profile, action, SubjectUser) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	for _, declared := range profile.Actions {
+		if declared.Action != action {
+			continue
+		}
+		if declared.UserAuthenticationMethods == nil {
+			if method == UserAuthenticationLoginSession {
+				return nil
+			}
+			return ErrInvalidAuthorizationProfile
+		}
+		if slices.Contains(declared.UserAuthenticationMethods, method) {
+			return nil
+		}
+		return ErrInvalidAuthorizationProfile
+	}
+	return ErrInvalidAuthorizationProfile
 }
 
 // CheckAuthorizationProfileTarget validates an explicitly selected target mode

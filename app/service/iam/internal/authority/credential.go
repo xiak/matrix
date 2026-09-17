@@ -5,6 +5,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -12,6 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
@@ -21,6 +23,7 @@ var (
 	ErrInvalidCredentialType = errors.New("credential type is invalid")
 	ErrInvalidCredentialHash = errors.New("stored credential digest is invalid")
 	ErrAccessKeyProtection   = errors.New("access key protection failed")
+	ErrAccessKeySignature    = errors.New("access key signature verification failed")
 )
 
 type CredentialType string
@@ -201,14 +204,9 @@ func SealAccessKeySecret(scope AccessKeySecretScope, wrappingKeyID string, wrapp
 	if err != nil {
 		return SealedAccessKeySecret{}, err
 	}
-	encoded := secret.CopyBytes()
-	defer clear(encoded)
-	if len(encoded) != len(accessKeySecretPrefix)+43 || !bytes.HasPrefix(encoded, []byte(accessKeySecretPrefix)) {
-		return SealedAccessKeySecret{}, ErrAccessKeyProtection
-	}
-	plaintext := make([]byte, 32)
+	plaintext, err := accessKeySecretMaterial(secret)
 	defer clear(plaintext)
-	if n, err := base64.RawURLEncoding.Strict().Decode(plaintext, encoded[len(accessKeySecretPrefix):]); err != nil || n != len(plaintext) {
+	if err != nil {
 		return SealedAccessKeySecret{}, ErrAccessKeyProtection
 	}
 	// NewGCMWithRandomNonce prepends its own 96-bit nonce. No caller-supplied
@@ -217,6 +215,69 @@ func SealAccessKeySecret(scope AccessKeySecretScope, wrappingKeyID string, wrapp
 	defer clear(protected)
 	return SealedAccessKeySecret{FormatVersion: accessKeySecretFormat, WrappingKeyID: wrappingKeyID,
 		Nonce: bytes.Clone(protected[:12]), Ciphertext: bytes.Clone(protected[12:])}, nil
+}
+
+func accessKeySecretMaterial(secret iamv1.Secret) ([]byte, error) {
+	encoded := secret.CopyBytes()
+	defer clear(encoded)
+	if len(encoded) != len(accessKeySecretPrefix)+43 || !bytes.HasPrefix(encoded, []byte(accessKeySecretPrefix)) {
+		return nil, ErrAccessKeyProtection
+	}
+	plaintext := make([]byte, 32)
+	if n, err := base64.RawURLEncoding.Strict().Decode(plaintext, encoded[len(accessKeySecretPrefix):]); err != nil || n != len(plaintext) ||
+		base64.RawURLEncoding.EncodeToString(plaintext) != string(encoded[len(accessKeySecretPrefix):]) {
+		clear(plaintext)
+		return nil, ErrAccessKeyProtection
+	}
+	return plaintext, nil
+}
+
+// VerifyAccessKeyRequestSignature proves only possession and exact request
+// coverage. The use case must independently bind current service/key scope,
+// enforce the database clock, consume the nonce, and run the current PDP.
+// In particular this stateless function neither issues nor caches a permit.
+func VerifyAccessKeyRequestSignature(secret iamv1.Secret, request iamv1.AccessKeySignedRequest) (bool, error) {
+	if iamv1.ValidateAccessKeySignedRequest(request) != nil {
+		return false, ErrAccessKeySignature
+	}
+	material, err := accessKeySecretMaterial(secret)
+	defer clear(material)
+	if err != nil {
+		return false, ErrAccessKeySignature
+	}
+	encoded, err := iamv1.AccessKeySigningBytes(request.Parameters, request.HTTP)
+	defer clear(encoded)
+	if err != nil {
+		return false, ErrAccessKeySignature
+	}
+	mac := hmac.New(sha256.New, material)
+	_, _ = mac.Write(encoded)
+	expected := mac.Sum(nil)
+	defer clear(expected)
+	signature := request.Signature.CopyBytes()
+	defer clear(signature)
+	actual := make([]byte, sha256.Size)
+	defer clear(actual)
+	n, err := base64.RawURLEncoding.Strict().Decode(actual, signature)
+	if err != nil || n != len(actual) {
+		return false, ErrAccessKeySignature
+	}
+	return hmac.Equal(expected, actual), nil
+}
+
+func ValidateAccessKeySignatureTime(signedAt int64, databaseTime time.Time) error {
+	if validateAuthorityTime(databaseTime) != nil {
+		return ErrAuthorityUnavailable
+	}
+	if signedAt <= 0 || signedAt > 253402300799 {
+		return ErrUnauthenticated
+	}
+	signed := time.Unix(signedAt, 0).UTC()
+	if signed.Before(databaseTime.Add(-time.Duration(iamv1.AccessKeySignaturePastSeconds)*time.Second)) ||
+		signed.After(databaseTime.Add(time.Duration(iamv1.AccessKeySignatureFutureSeconds)*time.Second)) {
+		return ErrUnauthenticated
+	}
+	return nil
 }
 
 func OpenAccessKeySecret(scope AccessKeySecretScope, wrappingKeyID string, wrappingKey []byte, sealed SealedAccessKeySecret) (iamv1.Secret, error) {

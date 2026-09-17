@@ -332,6 +332,7 @@ func enumSchemas() map[string][]string {
 		"AccountStatus":                {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
 		"PrincipalType":                {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
 		"SubjectType":                  {string(iamv1.SubjectUser), string(iamv1.SubjectServiceAccount), string(iamv1.SubjectRole)},
+		"UserAuthenticationMethod":     {string(iamv1.UserAuthenticationLoginSession), string(iamv1.UserAuthenticationAccessKey)},
 		"PrincipalStatus":              {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
 		"SessionStatus":                {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
 		"RoleSessionLifecycle":         {string(iamv1.RoleSessionUnrevoked), string(iamv1.RoleSessionExpired), string(iamv1.RoleSessionRevoked)},
@@ -661,6 +662,8 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			base["minItems"], base["maxItems"] = 1, 3
 		case "subjectTypes":
 			base["minItems"], base["maxItems"], base["uniqueItems"] = 1, 3, true
+		case "userAuthenticationMethods":
+			base["minItems"], base["maxItems"], base["uniqueItems"] = 1, 2, true
 		case "conditions":
 			base["maxItems"] = 3
 			base = object{"anyOf": []any{object{"type": "null"}, base}}
@@ -1032,6 +1035,11 @@ func applyAuthorizationProfileOverlays(schemas object) {
 		object{"if": object{"properties": object{"scope": object{"not": object{"const": "TENANT"}}}},
 			"then": object{"properties": object{"conditions": object{"anyOf": []any{object{"type": "null"}, object{"type": "array", "maxItems": 0}}},
 				"resourceShapes": object{"items": object{"properties": object{"prefixAllowed": object{"const": false}}}}}}},
+		object{"if": object{"required": []string{"userAuthenticationMethods"}},
+			"then": object{"anyOf": []any{
+				object{"required": []string{"subjectTypes"}, "properties": object{"subjectTypes": object{"contains": object{"const": string(iamv1.SubjectUser)}}}},
+				object{"not": object{"required": []string{"subjectTypes"}}, "properties": object{"scope": object{"not": object{"const": string(iamv1.AuthorityScopeInstallationProbe)}}}},
+			}}},
 	}
 	for _, usage := range []string{"COLLECTION_LIST", "COLLECTION_CREATE"} {
 		then := object{"properties": object{"resultResourceKind": false}}
