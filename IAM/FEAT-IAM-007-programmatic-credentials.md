@@ -1,6 +1,6 @@
 # FEAT-IAM-007：访问密钥与程序访问
 
-- 状态：实施中；K1管理后端累计固定`ebe4c2d49d04359e44cec6a9968ee36dc4e9a11d`已通过本地真实PG18/独立进程及五项独立CI，可作为后续源码集成基线；生产安装托管/备份及UI仍须各自验收。K2内部验签、原子拒绝/防重放与历史证据已实现，并通过累计真实PG18、固定前驱保留数据、独立进程及最终全仓检查；当前产品声明仍未开放AccessKey，真实签名业务尚未接通。本增量独立CI与发布验收未完成，整体未验收。
+- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI，已交所属消费者集成。当前产品声明仍未开放AccessKey，真实签名业务尚未接通；生产安装托管/备份、UI及最终发布仍须各自验收，整体未验收。
 - 依赖：003、005；临时凭据与 006 协作。
 - Owner：IAM credential；各产品 HTTP 签名消费归其 PEP。
 
@@ -170,7 +170,7 @@ contract4的载体矩阵闭合为：LOGIN_SESSION USER无keyId/key evidence；AC
 
 原固定前驱保留数据与真实进程包累计135.218秒通过：角色能力前驱11.99秒、角色历史权威20.71秒、策略解释前驱27.38秒及双IAM/Audit/PaaS72.10秒。第一次迁移比较因整行JSON新增`access_key_id:null`失败；修正后逐项保持原字段/事实字节，并独立要求旧locator为NULL、subject无key且无key evidence，不能只排除新字段而不检查虚构归因。实际前驱产生的旧contract2/3、两次迁移、旧解释与历史投递均保留。未启用的其他历史binary及浏览器项为SKIP，不纳入本轮通过结论；不把源码数据保留当作跨release升级准入。
 
-最终干净源码树`692e11027d666ea162ea6666f8ab316f60909385`在Go2/512MiB下通过全仓race/p2（含架构）、vet、模块校验、API生成文件集合/字节一致和Linux amd64构建；无DSN的默认测试不替代上面的独立真库门禁。以上是本增量的本地后端证据，不是独立CI、真实签名业务Allow、安装、UI、容量或发布验收。既有未声明AccessKey的Profile继续拒绝程序许可；不以测试临时开启源码Profile代替实际PEP消费。
+最终干净源码树`692e11027d666ea162ea6666f8ab316f60909385`在Go2/512MiB下通过全仓race/p2（含架构）、vet、模块校验、API生成文件集合/字节一致和Linux amd64构建；无DSN的默认测试不替代上面的独立真库门禁。累计固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`的[Verification35184409378](https://github.com/xiak/matrix/actions/runs/35184409378)已于2026-09-17通过GitHub API核实精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。上述证据只证明本增量后端及既有回归，不是真实签名业务Allow、安装、UI、容量或发布验收。既有未声明AccessKey的Profile继续拒绝程序许可；不以测试临时开启源码Profile代替实际PEP消费。
 
 ### 材料保护纯函数
 
@@ -226,7 +226,7 @@ IAM已保留原登录`SubjectContext`约束，并用独立`AccessKeyContext`进�
 ### 后续集成与未完成边界
 
 - 安装owner仍需实际文件生成/挂载、备份恢复配对和发布准入；文件/codec、单次封装及不可重绑定登记已有固定后端基线，不等于生产托管已验收。
-- 原子验签/拒绝、nonce与历史证据已经实现；继续完成当前源码的累计回归、独立进程和CI，再交固定对象供实际PEP接入。K1继续使用真实无key的USER登录管理决定，不因新增程序载体取得额外权限。
+- 原子验签/拒绝、nonce与历史证据已通过累计回归、独立进程和精确CI，固定`644fff09`已交实际PEP owner接入。K1继续使用真实无key的USER登录管理决定，不因新增程序载体取得额外权限。
 - 产品PEP、APISIX和NorthboundOrigin由所属owner在明确窗口消费累计固定对象；当前纯协议不改变它们。可信来源IP、Account/key网络限制、使用摘要及UI分别保留原验收，不以header转交或HMAC通过代替。
 
 消费者窗口已与Phase3明确：IAM分支只交付通过精确独立CI的累计后端固定对象；Phase3在`feat/host-self-enrollment`的实际PaaS5上一次适配PaaS authorization port/iamhttp/nethttp、`api/paas`的USER key归因及Operation/outbox、Audit query/verify、共用edge原始请求解析/映射，以及NorthboundOrigin/APISIX和安装keyring/备份/发布。本分支不在PaaS2上创建平行消费者，不预先改source release Profile。仍使用上文已冻结的两个`X-Matrix-External-*`头，不能复用node enrollment的`X-Matrix-Public-Origin`；双方只交换已验证固定对象，产品签名Allow及安装验收必须来自实际消费者组合。

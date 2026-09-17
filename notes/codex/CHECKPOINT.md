@@ -11,12 +11,12 @@
   independent dual-IAM/Audit/PaaS/dispatchers, whole-source race/architecture,
   vet, modules, byte-identical generation and Linux build. Evidence and failed
   precursor runs belong IAM/007; test scheduling constraints belong IAM/011.
-- GitHub API confirmed exact Verification35184409378 queued for 644fff09.
-  Independent CI is NOT yet accepted. Recheck that exact SHA and all five
-  jobs; do not use local success or another run to replace it. The last
-  fully verified source remains d2b1db475c5c60fd6f7f680f0149935fbb903129,
-  Verification35170233190, whose five jobs all succeeded. Its Audit-only
-  REPEATABLE READ correction keeps IAM SERIALIZABLE.
+- GitHub API confirmed exact Verification35184409378 for 644fff09:
+  go, node-process, authority-storage, authority-runtime and authority-process
+  all completed/success. This is the latest verified cumulative backend
+  source and has been handed to Phase3. It retains the Audit-only REPEATABLE
+  READ correction; IAM remains SERIALIZABLE. Backend acceptance does not
+  establish signed business, UI, installation or final release acceptance.
 - Current source is IAM30/Audit18/PaaS2, IAM product Profile r5. Published
   release profile/revision unchanged. All current USER product declarations
   remain LOGIN_SESSION-only: this source does NOT enable signed business
@@ -31,12 +31,12 @@
 ## Continue the full goal
 
 Read AGENTS, IAM/FEAT-IAM-007-programmatic-credentials.md and ADR-0004,
-then owning code/tests. Keep the exact candidate's CI outcome separate from
+then owning code/tests. Keep each exact source's evidence separate from
 the previous baseline. Correct actual failures; do not raise test limits,
 remove cases or rerun solely because an observation timed out.
 
-After independent acceptance, hand off only the verified fixed source and
-agree the product PEP/ingress consumer window. The next outcome is actual
+The verified fixed source has been handed off and the product PEP/ingress
+consumer window is agreed. The next integrated outcome is actual
 signed PaaS/Audit business authorization, not another metadata-only API.
 Request reconstruction must bind real HTTP bytes and exact trusted external
 origin/path conversion, with once-only IAM results and product idempotency.
@@ -53,9 +53,9 @@ UX/UI工程师 01a07b21-9a0d-7fd0-b090-7827ce18262e owns UI/browser work
 in feat/cloud-console-ux. It has the verified K1 backend baseline ebe4c2d4;
 no UI/browser edits or acceptance claims are made here.
 
-Phase3 01a04149-5dbb-7300-9e4c-31d9e85c8ada received the fixed 644fff09
-candidate with CI explicitly pending. It waits for a cumulative verified K2
-donor and keeps its own PaaS/host/release composition. Do not import another
+Phase3 01a04149-5dbb-7300-9e4c-31d9e85c8ada received the verified fixed
+644fff09 cumulative K2 donor with exact five-job CI success. It keeps its
+own PaaS/host/release composition. Do not import another
 branch's WIP, profile, checkpoint or acceptance state.
 
 The IAM/backend/Audit evidence window stays here. Consumer ownership is now
