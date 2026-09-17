@@ -868,6 +868,12 @@ func (backend *Backend) rollback(
 	if previousBundle.Manifest.Database != currentBundle.Manifest.Database {
 		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_REQUIRES_AUTHENTICATED_RECOVERY")
 	}
+	destinationOrigin, err := releaseNorthboundOrigin(
+		previousBundle.Manifest, state.NorthboundOrigin,
+	)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	}
 
 	if state.Active == nil {
 		ready, observeErr := backend.effects.ObserveInstallation(
@@ -895,7 +901,8 @@ func (backend *Backend) rollback(
 	}
 	started, err := lifecycle.Start(state, lifecycle.Command{
 		ID: commandID, Action: lifecycle.ActionRollback,
-		RequestedAt: canonicalNow(backend.now()),
+		NorthboundOrigin: destinationOrigin,
+		RequestedAt:      canonicalNow(backend.now()),
 	})
 	if err != nil {
 		return cli.Result{}, lifecycleFault(err)
@@ -997,6 +1004,12 @@ func (backend *Backend) recover(
 	if !SupportsRecoveryTarget(currentBundle.Manifest, targetBundle.Manifest) {
 		return cli.Result{}, fault(cli.FaultPrecondition, "RECOVERY_TARGET_UNSUPPORTED")
 	}
+	destinationOrigin, err := releaseNorthboundOrigin(
+		targetBundle.Manifest, state.NorthboundOrigin,
+	)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
+	}
 
 	commandID := ""
 	if state.Active != nil {
@@ -1011,7 +1024,8 @@ func (backend *Backend) recover(
 		ID: commandID, Action: lifecycle.ActionRecover,
 		InputDigest: source.ReleaseDigest, BackupDigest: source.BackupDigest,
 		TargetReleaseID: source.ReleaseID, BackupID: source.BackupID,
-		RequestedAt: canonicalNow(backend.now()),
+		NorthboundOrigin: destinationOrigin,
+		RequestedAt:      canonicalNow(backend.now()),
 	})
 	if err != nil {
 		return cli.Result{}, lifecycleFault(err)
@@ -1038,7 +1052,7 @@ func (backend *Backend) recover(
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
 		Listener:      defaultListener, Port: defaultPort,
-		NorthboundOrigin: started.Journal.NorthboundOrigin,
+		NorthboundOrigin: destinationOrigin,
 		Bundle:           targetBundle,
 		Trust:            trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
@@ -1054,6 +1068,23 @@ func (backend *Backend) recover(
 		},
 		nil,
 	)
+}
+
+func releaseNorthboundOrigin(manifest release.Manifest, current string) (string, error) {
+	if topology.ValidateInstalledContract(manifest) != nil {
+		return "", errors.New("release topology is unsupported")
+	}
+	switch manifest.TopologyDigest {
+	case topology.ContractDigest():
+		if externalrequest.ValidateOrigin(current) != nil {
+			return "", errors.New("release northbound origin is invalid")
+		}
+		return current, nil
+	case topology.SupportedPredecessorContractDigest():
+		return "", nil
+	default:
+		return "", errors.New("release topology is unsupported")
+	}
 }
 
 func (backend *Backend) recoverCredentials(ctx context.Context, request cli.Request) (result cli.Result, returnErr error) {

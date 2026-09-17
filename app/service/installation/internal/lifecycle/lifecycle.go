@@ -440,7 +440,8 @@ func ValidateNodeTransition(before, after Journal) error {
 			return nil
 		}
 		if before.Active == nil || after.Active != nil || after.Last == nil ||
-			(before.Active.Command.Action != ActionInstall && before.Active.Command.Action != ActionUpgrade) {
+			(before.Active.Command.Action != ActionInstall && before.Active.Command.Action != ActionUpgrade &&
+				before.Active.Command.Action != ActionRollback && before.Active.Command.Action != ActionRecover) {
 			return invalid
 		}
 		expected, err := Advance(before, before.Active.Command.ID, PhaseReady, after.Last.CompletedAt)
@@ -498,7 +499,8 @@ func validateCommand(command Command, node bool) error {
 		return errors.New("installation action is unsupported for this root")
 	}
 	if command.NorthboundOrigin != "" && (node ||
-		(command.Action != ActionInstall && command.Action != ActionUpgrade) ||
+		(command.Action != ActionInstall && command.Action != ActionUpgrade &&
+			command.Action != ActionRollback && command.Action != ActionRecover) ||
 		externalrequest.ValidateOrigin(command.NorthboundOrigin) != nil) {
 		return errors.New("installation command northbound origin is invalid")
 	}
@@ -791,35 +793,34 @@ func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 		journal.CurrentReleaseDigest = execution.DestinationDigest
 		journal.PreviousRelease = ""
 		journal.PreviousReleaseDigest = ""
-		if execution.Command.NorthboundOrigin != "" {
-			journal.NorthboundOrigin = execution.Command.NorthboundOrigin
-		}
+		journal.NorthboundOrigin = execution.Command.NorthboundOrigin
 	case ActionUpgrade:
 		journal.PreviousRelease = execution.SourceRelease
 		journal.PreviousReleaseDigest = execution.SourceDigest
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
-		if execution.Command.NorthboundOrigin != "" {
-			journal.NorthboundOrigin = execution.Command.NorthboundOrigin
-		}
+		journal.NorthboundOrigin = execution.Command.NorthboundOrigin
 	case ActionRollback:
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
 		journal.PreviousRelease = ""
 		journal.PreviousReleaseDigest = ""
+		journal.NorthboundOrigin = execution.Command.NorthboundOrigin
 	case ActionRecover:
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
 		journal.PreviousRelease = ""
 		journal.PreviousReleaseDigest = ""
+		journal.NorthboundOrigin = execution.Command.NorthboundOrigin
 	}
 }
 
 func validateCompletedPointers(journal Journal, execution Execution) error {
 	switch execution.Outcome {
 	case OutcomeSucceeded:
-		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionUpgrade) &&
-			execution.Command.NorthboundOrigin != "" && journal.NorthboundOrigin != execution.Command.NorthboundOrigin {
+		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionUpgrade ||
+			execution.Command.Action == ActionRollback || execution.Command.Action == ActionRecover) &&
+			journal.NorthboundOrigin != execution.Command.NorthboundOrigin {
 			return errors.New("successful command lost its northbound origin")
 		}
 		if execution.Command.Action == ActionRotateCredentials &&

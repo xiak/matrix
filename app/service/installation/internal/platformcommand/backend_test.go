@@ -846,6 +846,14 @@ func TestFrozenAdjacentProfilePairAllowsUpgradeButRollbackRequiresAuthenticatedR
 		effects.recoveryCalls[lifecycle.PhaseVerifying] != 1 {
 		t.Fatalf("authenticated cross-profile recovery = %#v / %v / effects=%#v", recovered, err, effects)
 	}
+	completed := readJournal(t, root)
+	encoded, err := json.Marshal(completed)
+	if err != nil || completed.NorthboundOrigin != "" || completed.Last == nil ||
+		completed.Last.Command.NorthboundOrigin != "" ||
+		strings.Contains(string(encoded), `"northboundOrigin"`) ||
+		effects.recoveryPlan.Target.NorthboundOrigin != "" {
+		t.Fatalf("predecessor recovery retained successor-only origin state: %s / %#v", encoded, effects.recoveryPlan)
+	}
 }
 
 func TestRecoveryRejectsSkippedSignedTargetBeforePersistingIntent(t *testing.T) {
