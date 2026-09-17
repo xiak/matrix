@@ -14,6 +14,38 @@ func DecodeRequest(reader io.Reader, destination any) error {
 	return contractjson.DecodeObject(reader, MaxRequestBytes, destination)
 }
 
+func (actor *ActorReference) UnmarshalJSON(document []byte) error {
+	var wire struct {
+		Type        ActorType       `json:"type"`
+		ID          ActorID         `json:"id"`
+		RoleSession json.RawMessage `json:"roleSession"`
+		AccessKeyID json.RawMessage `json:"accessKeyId"`
+	}
+	if err := contractjson.DecodeObjectBytes(document, MaxRequestBytes, &wire); err != nil {
+		return err
+	}
+	value := ActorReference{Type: wire.Type, ID: wire.ID}
+	if (wire.Type == ActorRole) != (wire.RoleSession != nil) {
+		return errors.New("Audit actor lineage presence is invalid")
+	}
+	if wire.RoleSession != nil {
+		value.RoleSession = &RoleSessionReference{}
+		if err := contractjson.DecodeObjectBytes(wire.RoleSession, MaxRequestBytes, value.RoleSession); err != nil {
+			return err
+		}
+	}
+	if wire.AccessKeyID != nil {
+		if json.Unmarshal(wire.AccessKeyID, &value.AccessKeyID) != nil || ValidateID("actor.accessKeyId", value.AccessKeyID) != nil {
+			return errors.New("Audit actor key lineage is invalid")
+		}
+	}
+	if err := ValidateActor(value); err != nil {
+		return err
+	}
+	*actor = value
+	return nil
+}
+
 // An explicitly supplied empty/null namespace must not disappear during
 // decoding and bypass the action's closed target-field contract.
 func (target *TargetReference) UnmarshalJSON(document []byte) error {

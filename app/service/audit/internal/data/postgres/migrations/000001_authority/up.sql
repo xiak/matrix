@@ -262,6 +262,24 @@ CREATE TRIGGER records_cannot_be_truncated
 BEFORE TRUNCATE ON audit.records
 FOR EACH STATEMENT EXECUTE FUNCTION audit.reject_record_mutation();
 
+CREATE OR REPLACE FUNCTION audit.actor_reference_valid(actor jsonb)
+RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT COALESCE(jsonb_typeof(actor)='object' AND actor ?& ARRAY['type','id']
+      AND jsonb_typeof(actor->'id')='string' AND actor->>'id' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      AND CASE WHEN actor->>'type'='ROLE' THEN
+        actor ? 'roleSession' AND actor-ARRAY['type','id','roleSession']='{}'::jsonb
+        AND jsonb_typeof(actor->'roleSession')='object' AND (actor->'roleSession') ?& ARRAY['sessionId','sourceUserId']
+        AND (actor->'roleSession')-ARRAY['sessionId','sourceUserId']='{}'::jsonb
+        AND jsonb_typeof(actor#>'{roleSession,sessionId}')='string'
+        AND actor#>>'{roleSession,sessionId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND jsonb_typeof(actor#>'{roleSession,sourceUserId}')='string'
+        AND actor#>>'{roleSession,sourceUserId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      WHEN actor ? 'accessKeyId' THEN actor->>'type'='USER' AND actor-ARRAY['type','id','accessKeyId']='{}'::jsonb
+        AND jsonb_typeof(actor->'accessKeyId')='string' AND actor->>'accessKeyId' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      ELSE actor->>'type' IN('USER','SERVICE_ACCOUNT','SYSTEM') AND actor-ARRAY['type','id']='{}'::jsonb END,false)
+$function$;
+REVOKE ALL ON FUNCTION audit.actor_reference_valid(jsonb) FROM PUBLIC,matrix_audit_runtime;
+
 CREATE OR REPLACE FUNCTION audit.assert_event(
     submitted_source text,
     submitted_event_id text,
@@ -284,11 +302,12 @@ DECLARE
 BEGIN
     action_name := submitted_event->>'action';
     platform_only := action_name IN (
+        'iam.account.created', 'iam.account.disabled', 'iam.account.enabled', 'iam.account-root.credentials-recovered',
         'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled', 'iam.tenant-administrator.recovered',
         'iam.installation-primary.credentials-recovered',
+        'iam.platform-policy-attachment.created', 'iam.platform-policy-attachment.revoked',
         'paas.execution-pool.created', 'paas.execution-target.registered',
-        'paas.execution-target.drained', 'paas.execution-target.activated',
-        'paas.execution-target.removed',
+        'paas.execution-target.drained', 'paas.execution-target.activated', 'paas.execution-target.removed',
         'audit.platform-records.read', 'audit.platform-integrity.verified'
     );
     SELECT contract.source, contract.target_kind, contract.result,
@@ -298,6 +317,46 @@ BEGIN
            iam_decision_permitted, iam_decision_required,
            operation_required
       FROM (VALUES
+        ('iam.account.created', 'IAM', 'ACCOUNT', 'SUCCEEDED', true, true, false),
+        ('iam.account.disabled', 'IAM', 'ACCOUNT', 'SUCCEEDED', true, true, false),
+        ('iam.account.enabled', 'IAM', 'ACCOUNT', 'SUCCEEDED', true, true, false),
+        ('iam.account-root.credentials-recovered', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.account.alias-set', 'IAM', 'ACCOUNT', 'SUCCEEDED', true, true, false),
+        ('iam.user.created', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.user.updated', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.user.deleted', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.policy.created', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
+        ('iam.policy-version.created', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
+        ('iam.policy-version.deleted', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
+        ('iam.user.permission-boundary.set', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.user.permission-boundary.removed', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.policy.default-version-set', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
+        ('iam.policy.updated', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
+        ('iam.policy.deleted', 'IAM', 'POLICY', 'SUCCEEDED', true, true, false),
+        ('iam.group.created', 'IAM', 'GROUP', 'SUCCEEDED', true, true, false),
+        ('iam.group.updated', 'IAM', 'GROUP', 'SUCCEEDED', true, true, false),
+        ('iam.group.deleted', 'IAM', 'GROUP', 'SUCCEEDED', true, true, false),
+        ('iam.role.created', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role.updated', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role.disabled', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role.enabled', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role.trust-set', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role.deleted', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role.permission-boundary.set', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role.permission-boundary.removed', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.role-session.issued', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', true, true, false),
+        ('iam.role-session.revoked', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', false, false, false),
+        ('iam.role-session.admin-revoked', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', true, true, false),
+        ('iam.role-session.exited', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', false, false, false),
+        ('iam.access-key.created', 'IAM', 'ACCESS_KEY', 'SUCCEEDED', true, true, false),
+        ('iam.access-key.enabled', 'IAM', 'ACCESS_KEY', 'SUCCEEDED', true, true, false),
+        ('iam.access-key.disabled', 'IAM', 'ACCESS_KEY', 'SUCCEEDED', true, true, false),
+        ('iam.access-key.deleted', 'IAM', 'ACCESS_KEY', 'SUCCEEDED', true, true, false),
+        ('iam.group-membership.created', 'IAM', 'GROUP_MEMBERSHIP', 'SUCCEEDED', true, true, false),
+        ('iam.group-membership.removed', 'IAM', 'GROUP_MEMBERSHIP', 'SUCCEEDED', true, true, false),
+        ('iam.user.status-set', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.user.password-reset', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
+        ('iam.user.password-changed', 'IAM', 'USER', 'SUCCEEDED', false, false, false),
         ('iam.tenant.created', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.tenant.disabled', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.tenant.enabled', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
@@ -314,6 +373,10 @@ BEGIN
         ('iam.principal.created', 'IAM', 'PRINCIPAL', 'SUCCEEDED', true, true, false),
         ('iam.role-binding.put', 'IAM', 'ROLE_BINDING', 'SUCCEEDED', true, true, false),
         ('iam.role-binding.revoked', 'IAM', 'ROLE_BINDING', 'SUCCEEDED', true, true, false),
+        ('iam.policy-attachment.created', 'IAM', 'POLICY_ATTACHMENT', 'SUCCEEDED', true, true, false),
+        ('iam.policy-attachment.revoked', 'IAM', 'POLICY_ATTACHMENT', 'SUCCEEDED', true, true, false),
+        ('iam.platform-policy-attachment.created', 'IAM', 'POLICY_ATTACHMENT', 'SUCCEEDED', true, true, false),
+        ('iam.platform-policy-attachment.revoked', 'IAM', 'POLICY_ATTACHMENT', 'SUCCEEDED', true, true, false),
         ('iam.authorization.decided', 'IAM', 'AUTHORIZATION_DECISION', NULL, true, true, false),
         ('paas.application.created', 'PAAS', 'APPLICATION', 'SUCCEEDED', true, true, true),
         ('paas.configuration.created', 'PAAS', 'CONFIGURATION', 'SUCCEEDED', true, true, true),
@@ -333,9 +396,9 @@ BEGIN
         ('paas.execution-target.drained', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
         ('paas.execution-target.activated', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
         ('paas.execution-target.removed', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true),
-        ('paas.terminal-session.created', 'PAAS', 'TERMINAL_SESSION', 'ACCEPTED', true, true, false),
-        ('paas.terminal-session.started', 'PAAS', 'TERMINAL_SESSION', 'SUCCEEDED', true, true, false),
-        ('paas.terminal-session.ended', 'PAAS', 'TERMINAL_SESSION', NULL, true, true, false),
+		('paas.terminal-session.created', 'PAAS', 'TERMINAL_SESSION', 'ACCEPTED', true, true, false),
+		('paas.terminal-session.started', 'PAAS', 'TERMINAL_SESSION', 'SUCCEEDED', true, true, false),
+		('paas.terminal-session.ended', 'PAAS', 'TERMINAL_SESSION', NULL, true, true, false),
         ('audit.platform-records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false),
         ('audit.platform-integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false)
       ) AS contract(
@@ -348,14 +411,14 @@ BEGIN
             expected_result := submitted_event->>'result';
         END IF;
     END IF;
-    IF action_name = 'paas.terminal-session.ended' THEN
-        IF submitted_event->>'result' IN (
-            'COMPLETED', 'UNSUPPORTED', 'EXPIRED', 'DISCONNECTED',
-            'REVOKED', 'REPLACED', 'FAILED'
-        ) THEN
-            expected_result := submitted_event->>'result';
-        END IF;
-    END IF;
+	IF action_name = 'paas.terminal-session.ended' THEN
+		IF submitted_event->>'result' IN (
+			'COMPLETED', 'UNSUPPORTED', 'EXPIRED', 'DISCONNECTED',
+			'REVOKED', 'REPLACED', 'FAILED'
+		) THEN
+			expected_result := submitted_event->>'result';
+		END IF;
+	END IF;
     IF jsonb_typeof(submitted_event) <> 'object'
        OR jsonb_typeof(submitted_event->'actor') <> 'object'
        OR jsonb_typeof(submitted_event->'target') <> 'object'
@@ -381,13 +444,18 @@ BEGIN
             'requestId', 'correlationId', 'operationId', 'traceparent',
             'occurredAt'
        ]) <> '{}'::jsonb
-       OR ((submitted_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
+       OR NOT audit.actor_reference_valid(submitted_event->'actor')
+       OR (submitted_event#>>'{actor,type}'='ROLE' AND (
+            action_name NOT IN ('iam.authorization.decided','iam.role-session.exited','paas.application.created','paas.configuration.created',
+              'paas.configuration-revision.created','paas.application-revision.created','paas.deployment.created','paas.deployment.updated',
+			  'paas.deployment.stopped','paas.deployment.rolled-back','paas.terminal-session.created',
+			  'paas.terminal-session.started','paas.terminal-session.ended','audit.records.read','audit.integrity.verified')))
        OR ((submitted_event->'target') - ARRAY['kind', 'id', 'tenantId']) <> '{}'::jsonb
-       OR (action_name IN ('iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (
+       OR (action_name IN ('iam.account-root.credentials-recovered','iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (
             jsonb_typeof(submitted_event#>'{target,tenantId}') IS DISTINCT FROM 'string'
             OR COALESCE(submitted_event#>>'{target,tenantId}','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
           ))
-       OR (action_name NOT IN ('iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (submitted_event->'target') ? 'tenantId')
+       OR (action_name NOT IN ('iam.account-root.credentials-recovered','iam.tenant-administrator.recovered','iam.installation-primary.credentials-recovered') AND (submitted_event->'target') ? 'tenantId')
        OR jsonb_typeof(submitted_event#>'{actor,type}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{actor,id}') <> 'string'
        OR jsonb_typeof(submitted_event#>'{target,kind}') <> 'string'
@@ -427,7 +495,24 @@ BEGIN
             !~ '^(tenant:|installation:)[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_event#>>'{actor,id}', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT', 'SYSTEM')
+       OR submitted_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT', 'SYSTEM', 'ROLE')
+       OR (submitted_event->'actor' ? 'accessKeyId' AND (action_name NOT IN (
+            'iam.authorization.decided','paas.application.created','paas.configuration.created','paas.configuration-revision.created',
+            'paas.application-revision.created','paas.deployment.created','paas.deployment.updated','paas.deployment.stopped',
+            'paas.deployment.rolled-back','audit.records.read','audit.integrity.verified') OR submitted_event ? 'installationId'))
+       OR (action_name='iam.role-session.exited' AND (
+            submitted_event#>>'{actor,type}' IS DISTINCT FROM 'ROLE'
+            OR submitted_event#>>'{actor,roleSession,sessionId}' IS DISTINCT FROM submitted_event#>>'{target,id}'))
+        OR (action_name IN ('iam.account.alias-set','iam.user.created','iam.user.updated','iam.user.deleted','iam.user.status-set',
+            'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted','iam.group-membership.created','iam.group-membership.removed',
+            'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
+            'iam.role.permission-boundary.set','iam.role.permission-boundary.removed',
+            'iam.role-session.issued','iam.role-session.revoked','iam.role-session.admin-revoked',
+            'iam.access-key.created','iam.access-key.enabled','iam.access-key.disabled','iam.access-key.deleted',
+            'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
+            'iam.user.password-reset','iam.user.password-changed',
+            'iam.policy-attachment.created','iam.policy-attachment.revoked')
+            AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
        OR COALESCE(submitted_event#>>'{target,id}', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(submitted_event->>'requestDigest', '') COLLATE "C"
@@ -467,6 +552,30 @@ BEGIN
 END
 $function$;
 
+CREATE OR REPLACE FUNCTION audit.role_actor_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT to_regprocedure('audit.read_records(text,bigint,integer,timestamptz,timestamptz,text,text,text)') IS NULL
+      AND (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='audit' AND p.proname='read_records')=1
+      AND EXISTS(SELECT 1 FROM pg_proc p WHERE p.oid=to_regprocedure('audit.read_records(text,bigint,integer,timestamptz,timestamptz,text,jsonb)')
+        AND p.proowner='matrix_audit_owner'::regrole AND p.prosecdef AND p.proretset AND p.prorettype='audit.records'::regtype
+        AND p.pronargs=7 AND p.pronargdefaults=0 AND p.provariadic=0 AND NOT p.proisstrict
+        AND p.provolatile='v' AND p.proparallel='u' AND NOT p.proleakproof
+        AND p.proallargtypes IS NULL AND p.proargmodes IS NULL AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+        AND p.proargnames=ARRAY['submitted_chain_id','submitted_before_sequence','submitted_page_size','submitted_from','submitted_to','submitted_action','submitted_actor']
+        AND has_function_privilege('matrix_audit_runtime',p.oid,'EXECUTE')
+        AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a
+          WHERE a.grantee NOT IN(p.proowner,'matrix_audit_runtime'::regrole) OR (a.grantee<>p.proowner AND a.is_grantable)))
+      AND EXISTS(SELECT 1 FROM pg_proc p WHERE p.oid=to_regprocedure('audit.actor_reference_valid(jsonb)')
+        AND p.proowner='matrix_audit_owner'::regrole AND NOT p.prosecdef AND p.provolatile='i' AND NOT p.proisstrict
+        AND p.prorettype='boolean'::regtype AND NOT p.proretset AND p.pronargdefaults=0
+        AND p.pronargs=1 AND p.provariadic=0 AND p.proparallel='u' AND NOT p.proleakproof
+        AND p.proallargtypes IS NULL AND p.proargmodes IS NULL AND p.proargnames=ARRAY['actor']
+        AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+        AND (SELECT count(*) FROM pg_proc other WHERE other.pronamespace=p.pronamespace AND other.proname=p.proname)=1
+        AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a WHERE a.grantee<>p.proowner))
+$function$;
+REVOKE ALL ON FUNCTION audit.role_actor_contract_ready() FROM PUBLIC,matrix_audit_runtime;
+
 CREATE OR REPLACE FUNCTION audit.readiness()
 RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
 LANGUAGE sql
@@ -476,8 +585,9 @@ AS $function$
     SELECT
         to_regclass('audit.chain_heads') IS NOT NULL
         AND to_regclass('audit.records') IS NOT NULL
-        AND to_regclass('audit.event_registry') IS NOT NULL,
-        4::bigint,
+        AND to_regclass('audit.event_registry') IS NOT NULL
+        AND audit.role_actor_contract_ready(),
+        18::bigint,
         transaction_timestamp()
 $function$;
 
@@ -759,8 +869,7 @@ CREATE OR REPLACE FUNCTION audit.read_records(
     submitted_from timestamptz,
     submitted_to timestamptz,
     submitted_action text,
-    submitted_actor_type text,
-    submitted_actor_id text
+    submitted_actor jsonb
 )
 RETURNS SETOF audit.records
 LANGUAGE plpgsql
@@ -776,9 +885,23 @@ BEGIN
        OR submitted_page_size NOT BETWEEN 1 AND 201
        OR (submitted_from IS NOT NULL AND submitted_to IS NOT NULL
             AND submitted_to < submitted_from)
-       OR (submitted_action IS NOT NULL AND submitted_action NOT IN (
+        OR (submitted_action IS NOT NULL AND submitted_action NOT IN (
+            'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
+            'iam.account-root.credentials-recovered', 'iam.account.alias-set',
+            'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
+            'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
+            'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
+            'iam.role.permission-boundary.set','iam.role.permission-boundary.removed',
+            'iam.role-session.issued','iam.role-session.revoked','iam.role-session.exited','iam.role-session.admin-revoked',
+            'iam.access-key.created','iam.access-key.enabled','iam.access-key.disabled','iam.access-key.deleted',
+            'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
+            'iam.group-membership.created','iam.group-membership.removed',
+            'iam.user.status-set', 'iam.user.password-reset',
+            'iam.user.password-changed',
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.session.revoked', 'iam.password.changed',
+            'iam.policy-attachment.created', 'iam.policy-attachment.revoked',
+            'iam.platform-policy-attachment.created', 'iam.platform-policy-attachment.revoked',
             'iam.principal.created', 'iam.role-binding.put',
             'iam.organization.created', 'iam.account-alias.set',
             'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled',
@@ -796,18 +919,12 @@ BEGIN
             'managedservice.service-installation.ready', 'audit.records.read',
             'audit.integrity.verified',
             'paas.execution-pool.created', 'paas.execution-target.registered',
-            'paas.execution-target.drained', 'paas.execution-target.activated',
-            'paas.execution-target.removed',
-            'paas.terminal-session.created', 'paas.terminal-session.started',
-            'paas.terminal-session.ended',
+            'paas.execution-target.drained', 'paas.execution-target.activated', 'paas.execution-target.removed',
+			'paas.terminal-session.created', 'paas.terminal-session.started',
+			'paas.terminal-session.ended',
             'audit.platform-records.read', 'audit.platform-integrity.verified'
        ))
-       OR ((submitted_actor_type IS NULL) <> (submitted_actor_id IS NULL))
-       OR (submitted_actor_type IS NOT NULL AND submitted_actor_type NOT IN (
-            'USER', 'SERVICE_ACCOUNT', 'SYSTEM'
-       ))
-       OR (submitted_actor_id IS NOT NULL AND submitted_actor_id COLLATE "C"
-            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
+       OR (submitted_actor IS NOT NULL AND NOT audit.actor_reference_valid(submitted_actor)) THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit query input is invalid';
     END IF;
     PERFORM set_config('matrix.audit_chain_id', submitted_chain_id, true);
@@ -829,11 +946,7 @@ BEGIN
             OR record.event_document->>'action' = submitted_action
        )
        AND (
-            submitted_actor_type IS NULL
-            OR (
-                record.event_document#>>'{actor,type}' = submitted_actor_type
-                AND record.event_document#>>'{actor,id}' = submitted_actor_id
-            )
+            submitted_actor IS NULL OR record.event_document->'actor'=submitted_actor
        )
      ORDER BY record.sequence DESC
      LIMIT submitted_page_size;
@@ -941,7 +1054,7 @@ GRANT EXECUTE ON FUNCTION audit.append_record(
     text, text, text, bigint, jsonb, text, text, text, text, timestamptz
 ) TO matrix_audit_runtime;
 GRANT EXECUTE ON FUNCTION audit.read_records(
-    text, bigint, integer, timestamptz, timestamptz, text, text, text
+    text, bigint, integer, timestamptz, timestamptz, text, jsonb
 )
     TO matrix_audit_runtime;
 GRANT EXECUTE ON FUNCTION audit.read_checkpoint(text, bigint)

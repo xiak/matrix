@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -16,10 +18,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	auditauthority "github.com/xiak/matrix/app/service/audit/internal/authority"
+	"github.com/xiak/matrix/app/service/audit/internal/usecase/auditlog"
 	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 )
@@ -44,6 +48,26 @@ var authorityGroupRoles = []string{
 	"matrix_audit_owner",
 	"matrix_audit_migrator",
 	"matrix_audit_runtime",
+}
+
+func TestAuditDatabaseRetryClassification(t *testing.T) {
+	for _, test := range []struct {
+		input error
+		want  error
+	}{
+		{&pgconn.PgError{Code: "40001"}, auditlog.ErrRetryableTransaction},
+		{&pgconn.PgError{Code: "40P01"}, auditlog.ErrRetryableTransaction},
+		{&pgconn.PgError{Code: "23505"}, auditlog.ErrConflict},
+		{&pgconn.PgError{Code: "42501"}, auditlog.ErrUnavailable},
+		{&pgconn.PgError{Code: "08007"}, auditlog.ErrUnavailable},
+		{errors.New("connection lost during commit"), auditlog.ErrUnavailable},
+		{context.Canceled, context.Canceled},
+		{context.DeadlineExceeded, context.DeadlineExceeded},
+	} {
+		if actual := mapDatabaseError("transaction", fmt.Errorf("driver: %w", test.input)); !errors.Is(actual, test.want) {
+			t.Fatalf("database failure classification=%v want=%v", actual, test.want)
+		}
+	}
 }
 
 func TestPostgresAuthorityIntegration(t *testing.T) {
@@ -101,6 +125,7 @@ func TestPostgresAuthorityIntegration(t *testing.T) {
 	assertLeastPrivilegeLogin(t, ctx, iamWorker, "matrix_iam_worker")
 	assertLeastPrivilegeLogin(t, ctx, auditRuntime, "matrix_audit_runtime")
 	assertAuthorityDatabaseAttackSurface(t, ctx, iamAPI, iamWorker, auditRuntime)
+	assertAuditRepositoryIsolation(t, ctx, adminConfig)
 
 	assertIAMUninitialized(t, ctx, iamAPI)
 	fixture := applyIAMBootstrap(t, ctx, admin, iamAPI)
@@ -240,7 +265,7 @@ func TestPostgresAuthorityIntegration(t *testing.T) {
 	)
 	assertAuditImmutability(t, ctx, auditMigrator, bootstrapEvent.TenantID)
 	assertIAMSessionDatabaseTime(t, ctx, admin, iamAPI, fixture)
-	assertIAMAuthorizationCatalog(t, ctx, admin, iamAPI, fixture)
+	assertIAMAuthorizationCatalog(t, ctx, admin, iamAPI, auditRuntime, fixture)
 }
 
 func assertAuditContractCatalog(
@@ -250,6 +275,42 @@ func assertAuditContractCatalog(
 	migrator *pgx.Conn,
 ) {
 	t.Helper()
+	for _, actor := range []string{`null`, `{}`, `{"type":"ROLE","id":"role-one"}`,
+		`{"type":"USER","id":"user-one","roleSession":null}`,
+		`{"type":"USER","id":"user-one","accessKeyId":null}`,
+		`{"type":"USER","id":"user-one","accessKeyId":""}`,
+		`{"type":"SERVICE_ACCOUNT","id":"service-one","accessKeyId":"key-one"}`,
+		`{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"one","sourceUserId":"user","sourceSessionId":"private"}}`} {
+		_, err := runtimeConnection.Exec(ctx, `SELECT * FROM audit.read_records('tenant:filter-contract',100,2,NULL,NULL,NULL,$1::jsonb)`, actor)
+		assertAuthorityPostgresCode(t, err, "22023")
+	}
+	for _, drift := range []string{
+		`ALTER FUNCTION audit.read_records(text,bigint,integer,timestamptz,timestamptz,text,jsonb) SET search_path=public,pg_temp`,
+		`ALTER FUNCTION audit.read_records(text,bigint,integer,timestamptz,timestamptz,text,jsonb) STRICT`,
+		`ALTER FUNCTION audit.read_records(text,bigint,integer,timestamptz,timestamptz,text,jsonb) PARALLEL SAFE`,
+		`GRANT EXECUTE ON FUNCTION audit.actor_reference_valid(jsonb) TO matrix_audit_runtime`,
+		`ALTER FUNCTION audit.actor_reference_valid(jsonb) STABLE`,
+		`CREATE FUNCTION audit.read_records(text,bigint,integer,timestamptz,timestamptz,text,text,text) RETURNS SETOF audit.records LANGUAGE sql AS 'SELECT * FROM audit.records WHERE false'`,
+	} {
+		tx, err := migrator.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_audit_owner"); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, drift); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal("install scoped role actor contract drift", err)
+		}
+		var ready bool
+		err = tx.QueryRow(ctx, `SELECT audit.role_actor_contract_ready()`).Scan(&ready)
+		_ = tx.Rollback(ctx)
+		if err != nil || ready {
+			t.Fatal("Audit role actor/query contract drift remained ready", err)
+		}
+	}
 	for index, action := range auditv1.AllActions() {
 		contract, known := auditv1.ContractForAction(action)
 		if !known {
@@ -261,6 +322,9 @@ func assertAuditContractCatalog(
 			fmt.Sprintf("target-catalog-%d", index),
 			action,
 		)
+		if contract.AccessKeyActorPermitted {
+			event.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: "catalog-key-user"}
+		}
 		record, _ := appendAcceptedAuditRecord(
 			t, ctx, runtimeConnection, contract.Source, event,
 		)
@@ -269,16 +333,73 @@ func assertAuditContractCatalog(
 		}
 		var matched int
 		if err := runtimeConnection.QueryRow(ctx,
-			"SELECT count(*) FROM audit.read_records($1,$2,2,NULL,NULL,$3,NULL,NULL) WHERE event_id=$4",
+			"SELECT count(*) FROM audit.read_records($1,$2,2,NULL,NULL,$3,NULL) WHERE event_id=$4",
 			string(auditauthority.ChainFor(event.TenantID, event.InstallationID)), authorityMaximumSequence+1,
 			string(action), string(event.EventID)).Scan(&matched); err != nil || matched != 1 {
 			t.Fatalf("Audit catalog action %q cannot be queried: matches=%d error=%v", action, matched, err)
+		}
+		if contract.RoleActorPermitted {
+			for _, session := range []string{"one", "two"} {
+				roleEvent := event
+				roleEvent.EventID = auditv1.EventID(string(event.EventID) + "-role-" + session)
+				if roleEvent.OperationID != "" {
+					roleEvent.OperationID = auditv1.OperationID(string(event.OperationID) + "-role-" + session)
+				}
+				roleEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorRole, ID: "catalog-role", RoleSession: &auditv1.RoleSessionReference{SessionID: "session-" + session, SourceUserID: "catalog-user"}}
+				if action == auditv1.ActionIAMRoleSessionExited {
+					roleEvent.Target.ID = roleEvent.Actor.RoleSession.SessionID
+				}
+				appendAcceptedAuditRecord(t, ctx, runtimeConnection, contract.Source, roleEvent)
+				if err := runtimeConnection.QueryRow(ctx, `SELECT count(*) FROM audit.read_records($1,$2,100,NULL,NULL,$3,$4::jsonb)`,
+					string(auditauthority.ChainFor(event.TenantID, event.InstallationID)), authorityMaximumSequence+1, string(action), authorityJSON(t, roleEvent.Actor)).Scan(&matched); err != nil || matched != 1 {
+					t.Fatal("role actor query mixed sessions or lost lineage", err)
+				}
+			}
+		}
+		if contract.AccessKeyActorPermitted {
+			for _, key := range []string{"one", "two"} {
+				keyEvent := event
+				keyEvent.EventID += auditv1.EventID("-key-" + key)
+				if keyEvent.OperationID != "" {
+					keyEvent.OperationID += auditv1.OperationID("-key-" + key)
+				}
+				keyEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: "catalog-key-user", AccessKeyID: "catalog-key-" + key}
+				appendAcceptedAuditRecord(t, ctx, runtimeConnection, contract.Source, keyEvent)
+				if err := runtimeConnection.QueryRow(ctx, `SELECT count(*) FROM audit.read_records($1,$2,100,NULL,NULL,$3,$4::jsonb)`,
+					string(auditauthority.ChainFor(event.TenantID, event.InstallationID)), authorityMaximumSequence+1, string(action), authorityJSON(t, keyEvent.Actor)).Scan(&matched); err != nil || matched != 1 {
+					t.Fatal("same-user key query mixed credentials or lost attribution", err)
+				}
+			}
+			var originalDocument string
+			if err := runtimeConnection.QueryRow(ctx, `SELECT event_document FROM audit.read_records($1,$2,100,NULL,NULL,$3,NULL) WHERE event_id=$4`,
+				string(auditauthority.ChainFor(event.TenantID, event.InstallationID)), authorityMaximumSequence+1, string(action), string(event.EventID)).Scan(&originalDocument); err != nil {
+				t.Fatal("read original non-key fact", err)
+			}
+			if old := decodeAuthorityEvent(t, originalDocument); old.Actor.AccessKeyID != "" {
+				t.Fatal("key attribution was backfilled into a pre-existing fact")
+			}
+			if err := runtimeConnection.QueryRow(ctx, `SELECT count(*) FROM audit.read_records($1,$2,100,NULL,NULL,$3,$4::jsonb)`,
+				string(auditauthority.ChainFor(event.TenantID, event.InstallationID)), authorityMaximumSequence+1, string(action), authorityJSON(t, event.Actor)).Scan(&matched); err != nil || matched != 1 {
+				t.Fatal("original user filter matched its program credentials", err)
+			}
+			chainID := auditauthority.ChainFor(event.TenantID, event.InstallationID)
+			records := readAuditChainRecords(t, ctx, runtimeConnection, chainID)
+			slices.Reverse(records)
+			genesis, err := auditauthority.GenesisCheckpoint(chainID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := auditauthority.VerifyChain(genesis, records); err != nil || len(records) == 0 || records[0].RecordHash != record.RecordHash {
+				t.Fatal("mixed user/role/key history changed the old hash or broke its chain", err)
+			}
 		}
 		// Exercise the database's closed target shape independently of canonical
 		// hash mismatch rejection. The authorized migration identity only calls
 		// validation here; no invalid record is inserted or encoder duplicated.
 		forgedTarget := event
-		if action == auditv1.ActionIAMTenantAdministratorRecovered || action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
+		if action == auditv1.ActionIAMAccountRootCredentialsRecovered ||
+			action == auditv1.ActionIAMTenantAdministratorRecovered ||
+			action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
 			forgedTarget.Target.TenantID = ""
 		} else {
 			forgedTarget.Target.TenantID = "organization-forged"
@@ -294,6 +415,63 @@ func assertAuditContractCatalog(
 		_, err = tx.Exec(ctx, "SELECT audit.assert_event($1,$2,$3,$4::jsonb)", contract.Source, event.EventID, string(auditauthority.ChainFor(event.TenantID, event.InstallationID)), authorityJSON(t, forgedTarget))
 		_ = tx.Rollback(ctx)
 		assertAuthorityPostgresCode(t, err, "22023")
+		// Check actor and decision semantics independently of the canonical hash.
+		// A self-service fact must not acquire a fabricated business decision.
+		var invalid []auditv1.Event
+		if !contract.AccessKeyActorPermitted {
+			candidate := event
+			candidate.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: "catalog-key-user", AccessKeyID: "catalog-key-one"}
+			invalid = append(invalid, candidate)
+		} else {
+			for _, actorType := range []auditv1.ActorType{auditv1.ActorServiceAccount, auditv1.ActorSystem, auditv1.ActorRole} {
+				candidate := event
+				candidate.Actor = auditv1.ActorReference{Type: actorType, ID: "catalog-key-user", AccessKeyID: "catalog-key-one"}
+				if actorType == auditv1.ActorRole {
+					candidate.Actor.RoleSession = &auditv1.RoleSessionReference{SessionID: "catalog-role-session", SourceUserID: "catalog-source"}
+				}
+				invalid = append(invalid, candidate)
+			}
+		}
+		if contract.RoleActorRequired {
+			for _, actorType := range []auditv1.ActorType{auditv1.ActorUser, auditv1.ActorServiceAccount, auditv1.ActorSystem} {
+				candidate := event
+				candidate.Actor = auditv1.ActorReference{Type: actorType, ID: event.Actor.ID}
+				invalid = append(invalid, candidate)
+			}
+			candidate := event
+			candidate.Target.ID = "another-role-session"
+			invalid = append(invalid, candidate)
+		}
+		if contract.UserActorRequired {
+			for _, actorType := range []auditv1.ActorType{auditv1.ActorServiceAccount, auditv1.ActorSystem} {
+				candidate := event
+				candidate.Actor.Type = actorType
+				invalid = append(invalid, candidate)
+			}
+		}
+		if contract.IAMDecisionRequired {
+			candidate := event
+			candidate.IAMDecisionID = ""
+			invalid = append(invalid, candidate)
+		} else if !contract.IAMDecisionPermitted {
+			candidate := event
+			candidate.IAMDecisionID = "unrelated-decision"
+			invalid = append(invalid, candidate)
+		}
+		for _, candidate := range invalid {
+			tx, err := migrator.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_audit_owner"); err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			_, err = tx.Exec(ctx, "SELECT audit.assert_event($1,$2,$3,$4::jsonb)", contract.Source, event.EventID,
+				string(auditauthority.ChainFor(event.TenantID, event.InstallationID)), authorityJSON(t, candidate))
+			_ = tx.Rollback(ctx)
+			assertAuthorityPostgresCode(t, err, "22023")
+		}
 		if contract.PlatformOnly {
 			for _, mutation := range []string{"both", "tenant", "actor", "installation"} {
 				candidate := event
@@ -321,6 +499,42 @@ func assertAuditContractCatalog(
 				}, "22023")
 			}
 		}
+	}
+}
+
+func assertAuditRepositoryIsolation(t *testing.T, ctx context.Context, adminConfig *pgx.ConnConfig) {
+	t.Helper()
+	config, err := pgxpool.ParseConfig(adminConfig.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig = adminConfig.Copy()
+	config.ConnConfig.User, config.ConnConfig.Password = auditRuntimeTestRole, authorityTestPassword
+	config.MaxConns = 2
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository, err := NewRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.WithinTransaction(ctx, func(ctx context.Context, tx auditlog.Transaction) error {
+		var isolation, user string
+		actual := tx.(*transaction).tx
+		if err := actual.QueryRow(ctx, "SHOW transaction_isolation").Scan(&isolation); err != nil {
+			return err
+		}
+		if err := actual.QueryRow(ctx, "SELECT session_user").Scan(&user); err != nil {
+			return err
+		}
+		if isolation != "repeatable read" || user != auditRuntimeTestRole {
+			return fmt.Errorf("unexpected runtime transaction boundary: isolation=%s user=%s", isolation, user)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -666,7 +880,13 @@ func assertAuthorityDatabaseAttackSurface(
 ) {
 	t.Helper()
 	var count int
-	err := iamAPI.QueryRow(ctx, "SELECT count(*) FROM iam.organizations").Scan(&count)
+	for _, connection := range []*pgx.Conn{iamAPI, iamWorker, auditRuntime} {
+		for _, table := range []string{"policies", "policy_versions", "policy_attachments", "authorization_decisions"} {
+			err := connection.QueryRow(ctx, "SELECT count(*) FROM "+pgx.Identifier{"iam", table}.Sanitize()).Scan(&count)
+			assertAuthorityPostgresCode(t, err, "42501")
+		}
+	}
+	err := iamAPI.QueryRow(ctx, "SELECT count(*) FROM iam.accounts").Scan(&count)
 	assertAuthorityPostgresCode(t, err, "42501")
 	_, err = iamAPI.Exec(ctx, "SET ROLE matrix_iam_owner")
 	assertAuthorityPostgresCode(t, err, "42501")
@@ -808,7 +1028,7 @@ func applyIAMBootstrap(
 		ctx,
 		`SELECT
 			(SELECT count(*) FROM iam.bootstrap_receipts),
-			(SELECT count(*) FROM iam.organizations),
+			(SELECT count(*) FROM iam.accounts),
 			(SELECT count(*) FROM iam.audit_outbox)`,
 	).Scan(&receiptCount, &organizationCount, &outboxCount); err != nil {
 		t.Fatalf("inspect applied IAM bootstrap: %v", err)
@@ -865,7 +1085,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 5 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 30 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
@@ -946,7 +1166,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 5 || checkedAt.IsZero() {
+	if ready || schemaVersion != 30 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -1262,7 +1482,7 @@ func readAuditChainRecords(
 		`SELECT chain_id, sequence, source, event_id, event_document,
 			   canonical_document, content_digest, previous_hash, record_hash,
 			   ingested_at, retention
-		  FROM audit.read_records($1, $2, $3, NULL, NULL, NULL, NULL, NULL)`,
+		  FROM audit.read_records($1, $2, $3, NULL, NULL, NULL, NULL)`,
 		string(chainID),
 		authorityMaximumSequence,
 		200,
@@ -1337,13 +1557,13 @@ func assertForcedTenantIsolation(
 	t.Helper()
 	if count := ownerTenantCount(
 		t, ctx, iamMigrator, "matrix_iam_owner", "matrix.iam_tenant_id",
-		"iam.organizations", string(tenantA),
+		"iam.accounts", string(tenantA),
 	); count != 1 {
 		t.Fatalf("IAM owner tenant A row count = %d, want 1", count)
 	}
 	if count := ownerTenantCount(
 		t, ctx, iamMigrator, "matrix_iam_owner", "matrix.iam_tenant_id",
-		"iam.organizations", "organization-other",
+		"iam.accounts", "organization-other",
 	); count != 0 {
 		t.Fatalf("IAM owner cross-tenant row count = %d, want 0", count)
 	}
@@ -1598,11 +1818,11 @@ func assertIAMSessionLookup(
 	t.Helper()
 	var tenantID, storedSessionID, principalID, principalType, storedVerification string
 	var mustChangePassword bool
-	var roles []string
+	var policies json.RawMessage
 	if err := iamAPI.QueryRow(
 		ctx,
 		`SELECT organization_id, session_id, principal_id, principal_type,
-		        verification_digest, principal_must_change_password, roles
+		        verification_digest, principal_must_change_password, policies
 		   FROM iam.lookup_session($1)`,
 		lookupDigest,
 	).Scan(
@@ -1612,24 +1832,57 @@ func assertIAMSessionLookup(
 		&principalType,
 		&storedVerification,
 		&mustChangePassword,
-		&roles,
+		&policies,
 	); err != nil {
 		t.Fatalf("lookup IAM session %s: %v", sessionID, err)
 	}
 	if tenantID != string(fixture.TenantID) || storedSessionID != sessionID ||
 		principalID != fixture.Administrator || principalType != "USER" ||
-		storedVerification != verificationDigest || !mustChangePassword ||
-		len(roles) != 2 || roles[0] != "ORGANIZATION_ADMIN" || roles[1] != "PLATFORM_OPERATOR" {
+		storedVerification != verificationDigest || !mustChangePassword {
 		t.Fatalf(
-			"IAM session lookup tenant=%q session=%q principal=%q type=%q digest=%q mustChange=%t roles=%v",
+			"IAM session lookup tenant=%q session=%q principal=%q type=%q digest=%q mustChange=%t",
 			tenantID,
 			storedSessionID,
 			principalID,
 			principalType,
 			storedVerification,
 			mustChangePassword,
-			roles,
 		)
+	}
+	// This consumer checks the persisted wire relationship, not a second policy
+	// evaluator or a dependency on the other service's internal domain package.
+	var attached []struct {
+		Policy  iamv1.Policy `json:"policy"`
+		Version struct {
+			Value     iamv1.PolicyVersion `json:"value"`
+			Canonical string              `json:"canonical"`
+		} `json:"version"`
+		Attachment iamv1.PolicyAttachment `json:"attachment"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(policies))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&attached); err != nil || len(attached) != 2 {
+		t.Fatalf("IAM session policy relationship shape: %v", err)
+	}
+	seen := make(map[iamv1.PolicyID]bool)
+	for _, row := range attached {
+		version := row.Version.Value
+		canonical, err := iamv1.CanonicalizePolicyVersion(version)
+		row.Policy.CreatedAt, row.Policy.UpdatedAt = row.Policy.CreatedAt.UTC(), row.Policy.UpdatedAt.UTC()
+		row.Attachment.CreatedAt, row.Attachment.UpdatedAt = row.Attachment.CreatedAt.UTC(), row.Attachment.UpdatedAt.UTC()
+		if iamv1.ValidatePolicy(row.Policy) != nil || err != nil || canonical != row.Version.Canonical ||
+			iamv1.ValidatePolicyAttachment(row.Attachment) != nil || row.Policy.Status != iamv1.PolicyActive ||
+			row.Attachment.RevokedAt != nil || row.Attachment.AccountID != iamv1.AccountID(fixture.TenantID) ||
+			row.Attachment.Target.ID != fixture.Administrator || string(row.Attachment.Target.Kind) != "USER" ||
+			row.Attachment.PolicyID != row.Policy.ID || version.PolicyID != row.Policy.ID ||
+			version.ID != row.Policy.DefaultVersionID || version.Document.Scope != row.Policy.Scope ||
+			row.Attachment.Scope != row.Policy.Scope || seen[row.Policy.ID] {
+			t.Fatal("IAM session returned an invalid policy relationship")
+		}
+		seen[row.Policy.ID] = true
+	}
+	if !seen[iamv1.SystemPolicyAccountAdministrator] || !seen[iamv1.SystemPolicyPlatformOperator] {
+		t.Fatal("bootstrap session lost its explicit tenant or platform policy attachment")
 	}
 }
 
@@ -1656,6 +1909,7 @@ func assertIAMAuthorizationCatalog(
 	ctx context.Context,
 	admin *pgx.Conn,
 	iamAPI *pgx.Conn,
+	auditRuntime *pgx.Conn,
 	fixture iamBootstrapFixture,
 ) {
 	t.Helper()
@@ -1668,7 +1922,7 @@ func assertIAMAuthorizationCatalog(
 		_ = passwordTransaction.Rollback(ctx)
 		t.Fatal(err)
 	}
-	passwordEvent := authorityAuditEvent("event-catalog-password", fixture.TenantID, fixture.Administrator, auditv1.ActionIAMPasswordChanged)
+	passwordEvent := authorityAuditEvent("event-catalog-password", fixture.TenantID, fixture.Administrator, auditv1.ActionIAMUserPasswordChanged)
 	passwordEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
 	passwordEvent.OccurredAt = passwordTime.UTC()
 	sessionEvent := authorityAuditEvent("event-catalog-session", fixture.TenantID, "session-catalog", auditv1.ActionIAMSessionIssued)
@@ -1689,13 +1943,75 @@ func assertIAMAuthorizationCatalog(
 	if err := passwordTransaction.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for index, action := range iamv1.AllActions() {
-		resourceKind, known := iamv1.ResourceKindForAction(action)
-		if !known {
-			t.Fatalf("IAM action %q has no Go resource contract", action)
+	// These fixtures exercise the restricted recorder's catalog and historical
+	// evidence contract. Actual policy evaluation is covered by the IAM HTTP
+	// gate; do not fabricate an allowed USER probe to cover a service action.
+	evidenceFor := func(principal string, policy iamv1.PolicyID) json.RawMessage {
+		t.Helper()
+		var evidence json.RawMessage
+		if err := admin.QueryRow(ctx, `SELECT jsonb_build_array(jsonb_strip_nulls(jsonb_build_object(
+			'attachmentId', attachment.id, 'resourceVersion', attachment.resource_version,
+			'contractVersion',version.contract_version,'compilation',version.compilation,
+			'version', jsonb_build_object('policyId', policy.id, 'versionId', version.id,
+			'contentDigest', version.content_digest))))
+			FROM iam.policy_attachments AS attachment
+			JOIN iam.principals AS subject ON subject.tenant_id=attachment.tenant_id
+			AND subject.id=attachment.target_id AND subject.principal_type=attachment.target_kind
+			JOIN iam.policies AS policy ON policy.id=attachment.policy_id
+			JOIN iam.policy_versions AS version ON version.policy_id=policy.id AND version.id=policy.default_version_id
+			WHERE attachment.tenant_id=$1 AND attachment.target_id=$2 AND policy.id=$3
+			AND attachment.revoked_at IS NULL AND policy.status='ACTIVE'`,
+			string(fixture.TenantID), principal, string(policy)).Scan(&evidence); err != nil {
+			t.Fatalf("read exact fixture policy evidence: %v", err)
 		}
+		return evidence
+	}
+	tenantEvidence := evidenceFor(fixture.Administrator, iamv1.SystemPolicyAccountAdministrator)
+	platformEvidence := evidenceFor(fixture.Administrator, iamv1.SystemPolicyPlatformOperator)
+	var tenantBoundary json.RawMessage
+	if err := admin.QueryRow(ctx, `SELECT jsonb_build_object('state','NONE','userResourceVersion',p.resource_version)
+		FROM iam.principals p WHERE p.tenant_id=$1 AND p.id=$2 AND p.principal_type='USER'
+		AND NOT EXISTS(SELECT 1 FROM iam.user_permission_boundaries b WHERE b.tenant_id=p.tenant_id AND b.user_id=p.id AND b.revoked_at IS NULL)`,
+		string(fixture.TenantID), fixture.Administrator).Scan(&tenantBoundary); err != nil {
+		t.Fatal("read explicit current fixture boundary absence")
+	}
+	notApplicableBoundary := json.RawMessage(`{"state":"NOT_APPLICABLE"}`)
+	var verifier string
+	for _, service := range fixture.Services {
+		if service.Purpose == string(iamv1.ServiceInstallationVerifier) {
+			verifier = service.PrincipalID
+		}
+	}
+	if verifier == "" {
+		t.Fatal("bootstrap has no installation verifier")
+	}
+	probeEvidence := evidenceFor(verifier, iamv1.SystemPolicyInstallationVerifier)
+	var historicalDecision iamv1.AuthorizationDecision
+	var historicalEvent auditv1.Event
+	var requests []iamv1.AuthorizationRequest
+	for _, profile := range iamv1.AllAuthorizationProfiles() {
+		for _, declaration := range profile.Actions {
+			for _, shape := range declaration.ResourceShapes {
+				resource := iamv1.ResourceReference{Kind: declaration.ResourceKind, ID: fmt.Sprintf("resource-catalog-%d", len(requests))}
+				if shape.Mode == iamv1.AuthorizationResourceCollection {
+					resource.ID = "collection"
+				}
+				if declaration.Action == iamv1.ActionInstallationVerify {
+					resource.ID = fixture.InstallationID
+				}
+				requestID := fmt.Sprintf("request-catalog-%d", len(requests))
+				request, err := iamv1.NewAuthorizationRequest(declaration.Action, resource, shape.Mode, shape.CollectionUsage, requestID, requestID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				requests = append(requests, request)
+			}
+		}
+	}
+	for index, request := range requests {
+		action := request.Action
 		decisionID := fmt.Sprintf("decision-catalog-%d", index)
-		requestID := fmt.Sprintf("request-catalog-%d", index)
+		requestID := request.RequestID
 		tx, err := iamAPI.Begin(ctx)
 		if err != nil {
 			t.Fatalf("begin IAM authorization catalog transaction: %v", err)
@@ -1711,15 +2027,32 @@ func assertIAMAuthorizationCatalog(
 			ID:         iamv1.DecisionID(decisionID),
 			Allowed:    true,
 			Reason:     iamv1.DecisionAllowed,
-			TenantID:   iamv1.OrganizationID(fixture.TenantID),
-			Subject:    &iamv1.Subject{Type: iamv1.PrincipalUser, ID: iamv1.PrincipalID(fixture.Administrator)},
+			TenantID:   iamv1.AccountID(fixture.TenantID),
+			Subject:    &iamv1.Subject{Type: iamv1.SubjectUser, ID: fixture.Administrator},
 			Action:     action,
-			Resource:   iamv1.ResourceReference{Kind: resourceKind, ID: fmt.Sprintf("resource-catalog-%d", index)},
+			Resource:   request.Resource,
 			RequestID:  requestID,
 			DecidedAt:  transactionTime.UTC(),
+			Profile:    &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
 		}
 		if iamv1.IsPlatformAction(action) {
 			decision.TenantID, decision.InstallationID = "", fixture.InstallationID
+		}
+		evidence, actorID, actorType := tenantEvidence, fixture.Administrator, auditv1.ActorUser
+		boundary := tenantBoundary
+		if iamv1.IsPlatformAction(action) {
+			evidence = platformEvidence
+			boundary = notApplicableBoundary
+		}
+		if action == iamv1.ActionInstallationVerify {
+			evidence, actorID, actorType = probeEvidence, verifier, auditv1.ActorServiceAccount
+			boundary = notApplicableBoundary
+			decision.Subject = &iamv1.Subject{Type: iamv1.SubjectServiceAccount, ID: verifier}
+			decision.Resource.ID = fixture.InstallationID
+		}
+		if err := iamv1.ValidateAuthorizationDecision(decision); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatalf("catalog fixture violates public authorization contract: %v", err)
 		}
 		event := authorityAuditEvent(
 			fmt.Sprintf("event-authorization-catalog-%d", index),
@@ -1728,21 +2061,27 @@ func assertIAMAuthorizationCatalog(
 			auditv1.ActionIAMAuthorizationDecided,
 		)
 		event.Actor = auditv1.ActorReference{
-			Type: auditv1.ActorUser,
-			ID:   auditv1.ActorID(fixture.Administrator),
+			Type: actorType,
+			ID:   auditv1.ActorID(actorID),
 		}
 		event.IAMDecisionID = auditv1.DecisionID(decisionID)
 		event.Target.ID = decisionID
 		event.Result = auditv1.ResultAllowed
 		event.RequestID = requestID
+		event.CorrelationID = request.CorrelationID
 		event.OccurredAt = transactionTime.UTC()
+		if action == iamv1.ActionPaaSExecutionTargetRegister {
+			historicalDecision, historicalEvent = decision, event
+		}
 		_, err = tx.Exec(
 			ctx,
-			"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb)",
+			"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb,4,'null'::jsonb,'null'::jsonb)",
 			string(fixture.TenantID),
-			fixture.Administrator,
-			authorityJSON(t, decision),
+			actorID,
+			authorityJSON(t, map[string]any{"request": request, "decision": decision}),
 			authorityJSON(t, event),
+			string(evidence),
+			string(boundary),
 		)
 		if err != nil {
 			_ = tx.Rollback(context.Background())
@@ -1751,14 +2090,80 @@ func assertIAMAuthorizationCatalog(
 		if err := tx.Commit(ctx); err != nil {
 			t.Fatalf("commit IAM authorization action %q: %v", action, err)
 		}
+		var matches bool
+		if err := admin.QueryRow(ctx, `SELECT contract_version=4 AND subject_type=$6 AND principal_id=$7 AND role_id IS NULL AND source_principal_id IS NULL AND role_evidence IS NULL AND access_key_id IS NULL
+			AND document=$3::jsonb AND policy_evidence=$4::jsonb AND boundary_evidence=$5::jsonb
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, string(fixture.TenantID), decisionID,
+			authorityJSON(t, decision), string(evidence), string(boundary), string(decision.Subject.Type), actorID).Scan(&matches); err != nil || !matches {
+			t.Fatalf("persisted catalog decision lost its exact policy evidence: %v", err)
+		}
 	}
 
+	// Historical decoding is not current admission. The restricted recorder
+	// must reject both Allow and Deny for every retired operation, even with
+	// otherwise valid current actor, evidence, scope and transaction time.
+	for _, definition := range iamv1.AllRecordedActionDefinitions() {
+		if _, current := iamv1.LookupActionDefinition(definition.Action); current {
+			continue
+		}
+		for _, allowed := range []bool{true, false} {
+			tx, err := iamAPI.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var now time.Time
+			if err := tx.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&now); err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			decision := iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
+				ID: "decision-retired-action", Allowed: allowed, Reason: iamv1.DecisionAllowed,
+				TenantID: iamv1.AccountID(fixture.TenantID), Subject: &iamv1.Subject{Type: iamv1.SubjectUser, ID: fixture.Administrator},
+				Action: definition.Action, Resource: iamv1.ResourceReference{Kind: definition.ResourceKind, ID: "retired-target"},
+				RequestID: "retired-action-request", DecidedAt: now.UTC()}
+			evidence := tenantEvidence
+			boundary := tenantBoundary
+			if definition.AuthorityScope == iamv1.AuthorityScopeInstallation {
+				decision.TenantID, decision.InstallationID, evidence = "", fixture.InstallationID, platformEvidence
+				boundary = notApplicableBoundary
+			}
+			event := authorityAuditEvent("event-retired-action", fixture.TenantID, string(decision.ID), auditv1.ActionIAMAuthorizationDecided)
+			event.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
+			event.IAMDecisionID, event.Target.ID = auditv1.DecisionID(decision.ID), string(decision.ID)
+			event.Result, event.RequestID, event.OccurredAt = auditv1.ResultAllowed, decision.RequestID, now.UTC()
+			if !allowed {
+				decision.Reason, decision.TenantID, decision.InstallationID, decision.Subject = iamv1.DecisionDenied, "", "", nil
+				event.Result, evidence = auditv1.ResultDenied, json.RawMessage(`[]`)
+			}
+			if iamv1.ValidateLegacyAuthorizationDecision(decision) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal("retired action fixture is not a valid historical document")
+			}
+			// A fully bound envelope still cannot register a retired action by
+			// borrowing the current IAM profile. No missing-field shortcut here.
+			request, err := iamv1.NewAuthorizationRequest(iamv1.ActionIAMUserRead, iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: "retired-target"}, iamv1.AuthorizationResourceInstance, "", decision.RequestID, event.CorrelationID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Action, request.Resource = decision.Action, decision.Resource
+			decision.Profile, decision.ResourceMode, decision.CorrelationID = &request.Profile, request.ResourceMode, request.CorrelationID
+			_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,4,'null'::jsonb,'null'::jsonb)",
+				string(fixture.TenantID), fixture.Administrator, authorityJSON(t, map[string]any{"request": request, "decision": decision}), authorityJSON(t, event), string(evidence), string(boundary))
+			_ = tx.Rollback(ctx)
+			assertAuthorityPostgresCode(t, err, "22023")
+		}
+	}
+	var retiredFacts int
+	if err := admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.authorization_decisions WHERE id='decision-retired-action') +
+		(SELECT count(*) FROM iam.audit_outbox WHERE event_id='event-retired-action')`).Scan(&retiredFacts); err != nil || retiredFacts != 0 {
+		t.Fatalf("retired operation left decision/outbox effects: count=%d err=%v", retiredFacts, err)
+	}
 	var decisionCount int
 	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.authorization_decisions").Scan(&decisionCount); err != nil {
 		t.Fatalf("count stored IAM authorization decisions: %v", err)
 	}
-	if decisionCount != len(iamv1.AllActions()) {
-		t.Fatalf("stored IAM authorization decisions=%d want=%d", decisionCount, len(iamv1.AllActions()))
+	if decisionCount != len(requests) {
+		t.Fatalf("stored IAM authorization decisions=%d want=%d", decisionCount, len(requests))
 	}
 
 	transaction, err := iamAPI.Begin(ctx)
@@ -1776,8 +2181,8 @@ func assertIAMAuthorizationCatalog(
 		ID:         "decision-forged-kind",
 		Allowed:    true,
 		Reason:     iamv1.DecisionAllowed,
-		TenantID:   iamv1.OrganizationID(fixture.TenantID),
-		Subject:    &iamv1.Subject{Type: iamv1.PrincipalUser, ID: iamv1.PrincipalID(fixture.Administrator)},
+		TenantID:   iamv1.AccountID(fixture.TenantID),
+		Subject:    &iamv1.Subject{Type: iamv1.SubjectUser, ID: fixture.Administrator},
 		Action:     iamv1.ActionPaaSApplicationRead,
 		Resource:   iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "application-forged-kind"},
 		RequestID:  "request-forged-kind",
@@ -1795,22 +2200,30 @@ func assertIAMAuthorizationCatalog(
 	event.Result = auditv1.ResultAllowed
 	event.RequestID = decision.RequestID
 	event.OccurredAt = databaseTime.UTC()
+	request, err := iamv1.NewAuthorizationRequest(decision.Action, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: decision.Resource.ID}, iamv1.AuthorizationResourceInstance, "", decision.RequestID, event.CorrelationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Resource = decision.Resource
+	decision.Profile, decision.ResourceMode, decision.CorrelationID = &request.Profile, request.ResourceMode, request.CorrelationID
 	_, err = transaction.Exec(
 		ctx,
-		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb)",
+		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb,4,'null'::jsonb,'null'::jsonb)",
 		string(fixture.TenantID),
 		fixture.Administrator,
-		authorityJSON(t, decision),
+		authorityJSON(t, map[string]any{"request": request, "decision": decision}),
 		authorityJSON(t, event),
+		string(tenantEvidence),
+		string(tenantBoundary),
 	)
 	assertAuthorityPostgresCode(t, err, "22023")
 	if err := transaction.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, attack := range []string{"mixed authority", "wrong installation", "revoked platform role"} {
-		if attack == "revoked platform role" {
-			if _, err := admin.Exec(ctx, `UPDATE iam.role_bindings SET revoked_at = transaction_timestamp(), updated_at = transaction_timestamp(), resource_version = resource_version + 1
-				WHERE tenant_id = $1 AND principal_id = $2 AND role_name = 'PLATFORM_OPERATOR' AND revoked_at IS NULL`,
+	for _, attack := range []string{"mixed authority", "wrong installation", "revoked platform attachment"} {
+		if attack == "revoked platform attachment" {
+			if _, err := admin.Exec(ctx, `UPDATE iam.policy_attachments SET revoked_at = transaction_timestamp(), updated_at = transaction_timestamp(), resource_version = resource_version + 1
+				WHERE tenant_id = $1 AND target_id = $2 AND target_kind='USER' AND policy_id = 'system.platform-operator' AND revoked_at IS NULL`,
 				string(fixture.TenantID), fixture.Administrator); err != nil {
 				t.Fatal(err)
 			}
@@ -1827,17 +2240,57 @@ func assertIAMAuthorizationCatalog(
 		decision.Resource.Kind = iamv1.ResourceExecutionTarget
 		decision.TenantID, decision.InstallationID = "", fixture.InstallationID
 		decision.DecidedAt, event.OccurredAt = databaseTime.UTC(), databaseTime.UTC()
+		request, err := iamv1.NewAuthorizationRequest(decision.Action, decision.Resource, iamv1.AuthorizationResourceInstance, "", decision.RequestID, event.CorrelationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision.Profile, decision.ResourceMode, decision.CorrelationID = &request.Profile, request.ResourceMode, request.CorrelationID
 		if attack == "mixed authority" {
-			decision.TenantID = iamv1.OrganizationID(fixture.TenantID)
+			decision.TenantID = iamv1.AccountID(fixture.TenantID)
 		}
 		if attack == "wrong installation" {
 			decision.InstallationID = "installation-other"
 		}
-		_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb)",
-			string(fixture.TenantID), fixture.Administrator, authorityJSON(t, decision), authorityJSON(t, event))
+		_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,4,'null'::jsonb,'null'::jsonb)",
+			string(fixture.TenantID), fixture.Administrator, authorityJSON(t, map[string]any{"request": request, "decision": decision}), authorityJSON(t, event), string(platformEvidence), string(notApplicableBoundary))
 		_ = tx.Rollback(ctx)
-		assertAuthorityPostgresCode(t, err, "22023")
+		code := "22023"
+		if attack == "revoked platform attachment" {
+			code = "42501"
+		}
+		assertAuthorityPostgresCode(t, err, code)
 	}
+	// Revocation rejects new decisions but does not rewrite the committed
+	// authority/outbox evidence needed to deliver an earlier accepted fact.
+	var producer string
+	for _, service := range fixture.Services {
+		if service.Purpose == string(iamv1.ServicePaaS) {
+			producer = service.PrincipalID
+		}
+	}
+	if producer == "" || historicalDecision.ID == "" {
+		t.Fatal("historical platform proof fixture is missing")
+	}
+	fact := authorityAuditEvent("event-historical-target", "", historicalDecision.Resource.ID, auditv1.ActionPaaSExecutionTargetRegistered)
+	fact.InstallationID = fixture.InstallationID
+	fact.Actor = historicalEvent.Actor
+	fact.IAMDecisionID = auditv1.DecisionID(historicalDecision.ID)
+	fact.RequestID = historicalDecision.RequestID
+	var preserved bool
+	if err := iamAPI.QueryRow(ctx, `SELECT installation_id=$4 AND decision_document=$6::jsonb AND event_document=$7::jsonb
+		FROM iam.read_audit_evidence($1,$2,$3,$4,$5::jsonb)`, string(fixture.TenantID), producer,
+		string(iamv1.ServicePaaS), fixture.InstallationID, authorityJSON(t, fact),
+		authorityJSON(t, historicalDecision), authorityJSON(t, historicalEvent)).Scan(&preserved); err != nil || !preserved {
+		t.Fatalf("platform revocation removed immutable producer evidence: %v", err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT policy_evidence=$3::jsonb FROM iam.authorization_decisions
+		WHERE tenant_id=$1 AND id=$2`, string(fixture.TenantID), string(historicalDecision.ID), string(platformEvidence)).Scan(&preserved); err != nil || !preserved {
+		t.Fatalf("platform revocation rewrote historical policy evidence: %v", err)
+	}
+	// This is the database append/replay boundary, not the separate HTTP
+	// producer admission gate. Its canonical and chain owner remains Audit.
+	record, canonical := appendAcceptedAuditRecord(t, ctx, auditRuntime, auditv1.SourceIAM, historicalEvent)
+	assertEqualAndChangedAuditReplay(t, ctx, auditRuntime, record, canonical)
 }
 
 func authorityAuditEvent(
@@ -1877,10 +2330,19 @@ func authorityAuditEvent(
 		event.TenantID, event.InstallationID = "", string(tenantID)
 		event.Actor.Type = auditv1.ActorUser
 	}
+	if contract.UserActorRequired {
+		event.Actor.Type = auditv1.ActorUser
+	}
+	if contract.RoleActorRequired {
+		event.Actor = auditv1.ActorReference{Type: auditv1.ActorRole, ID: "catalog-base-role",
+			RoleSession: &auditv1.RoleSessionReference{SessionID: targetID, SourceUserID: "catalog-base-user"}}
+	}
 	if action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
 		event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "iam-local-recovery"}
 	}
-	if action == auditv1.ActionIAMTenantAdministratorRecovered || action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
+	if action == auditv1.ActionIAMAccountRootCredentialsRecovered ||
+		action == auditv1.ActionIAMTenantAdministratorRecovered ||
+		action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
 		event.Target.TenantID = "organization-recovered"
 	}
 	return event

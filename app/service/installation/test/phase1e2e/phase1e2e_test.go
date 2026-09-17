@@ -22,7 +22,7 @@ import (
 
 func TestPlatformEdgeBoundaryFollowsTheSignedTopology(t *testing.T) {
 	compiled, _, err := expectedPlatformServices(
-		releasetest.Manifest(), "/data/xiak/platform-edge-test", "mxi-"+strings.Repeat("a", 32),
+		releasetest.Manifest(), "/data/xiak/platform-edge-test", "mxi-"+strings.Repeat("a", 32), "https://matrix.example.com:443",
 	)
 	if err != nil {
 		t.Fatal(err)

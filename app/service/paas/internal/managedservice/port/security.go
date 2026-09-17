@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 )
 
@@ -42,10 +43,12 @@ const (
 )
 
 type AuthorizationRequest struct {
-	Credential string
-	Action     string
-	Resource   ResourceReference
-	RequestID  string
+	Credential      string
+	Action          string
+	Resource        ResourceReference
+	ResourceMode    iamv1.AuthorizationResourceMode
+	CollectionUsage iamv1.AuthorizationCollectionUsage
+	RequestID       string
 }
 
 type Authorization struct {
@@ -80,6 +83,16 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	}
 	if expectedResourceKind(value.Action) != value.Resource.Kind {
 		return errors.New("authorization action and resource kind differ")
+	}
+	if value.ResourceMode == iamv1.AuthorizationResourceInstance {
+		if value.CollectionUsage != "" {
+			return errors.New("instance authorization cannot carry collection usage")
+		}
+	} else if value.ResourceMode != iamv1.AuthorizationResourceCollection ||
+		value.Resource.ID != "collection" ||
+		(value.CollectionUsage != iamv1.AuthorizationCollectionList &&
+			value.CollectionUsage != iamv1.AuthorizationCollectionCreate) {
+		return errors.New("authorization resource shape is invalid")
 	}
 	return errors.Join(
 		managedservicev1.ValidateID("authorization.resource.id", value.Resource.ID),

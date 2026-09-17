@@ -46,6 +46,7 @@ const (
 	nodeConnectionsFileEnvironment       = "MATRIX_PAAS_NODE_CONNECTIONS_FILE"
 	publicBasePathEnvironment            = "MATRIX_PAAS_PUBLIC_BASE_PATH"
 	terminalCookieSecureEnvironment      = "MATRIX_PAAS_TERMINAL_COOKIE_SECURE"
+	northboundOriginEnvironment          = "MATRIX_PAAS_NORTHBOUND_ORIGIN"
 	enrollmentIssuerCertEnvironment      = "MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE"
 	enrollmentIssuerKeyEnvironment       = "MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE"
 	enrollmentControllerCertEnvironment  = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"
@@ -64,6 +65,7 @@ type configuration struct {
 	nodeConnectionsFile       string
 	publicBasePath            string
 	terminalCookieSecure      bool
+	northboundOrigin          string
 	enrollmentIssuerCert      string
 	enrollmentIssuerKey       string
 	enrollmentControllerCert  string
@@ -253,6 +255,8 @@ func run(ctx context.Context) error {
 	apphostingHandler, err := paashttp.NewHandler(authorizer, workflow, execution, enrollmentWorkflow, terminalWorkflow, terminalConnector, installationVerifier, paashttp.Config{
 		TerminalPublicBasePath: config.publicBasePath,
 		TerminalCookieSecure:   config.terminalCookieSecure,
+		NorthboundOrigin:       config.northboundOrigin,
+		InstallationID:         config.installationID,
 		Readiness: func(readinessContext context.Context) (paasv1.Readiness, error) {
 			readiness, err := repository.Readiness(readinessContext)
 			if err != nil || readiness.State != paasv1.ReadinessReady {
@@ -321,6 +325,7 @@ func loadConfiguration() (configuration, error) {
 		nodeConnectionsFile:       os.Getenv(nodeConnectionsFileEnvironment),
 		publicBasePath:            os.Getenv(publicBasePathEnvironment),
 		terminalCookieSecure:      terminalCookieSecure,
+		northboundOrigin:          os.Getenv(northboundOriginEnvironment),
 		enrollmentIssuerCert:      os.Getenv(enrollmentIssuerCertEnvironment),
 		enrollmentIssuerKey:       os.Getenv(enrollmentIssuerKeyEnvironment),
 		enrollmentControllerCert:  os.Getenv(enrollmentControllerCertEnvironment),
@@ -333,7 +338,7 @@ func loadConfiguration() (configuration, error) {
 		config.verificationDigest == "" || config.nodeConnectionsFile == "" ||
 		config.enrollmentIssuerCert == "" || config.enrollmentIssuerKey == "" ||
 		config.enrollmentControllerCert == "" || config.enrollmentControllerKey == "" ||
-		config.enrollmentControllerTrust == "" {
+		config.enrollmentControllerTrust == "" || config.northboundOrigin == "" {
 		return configuration{}, errors.New("PaaS process configuration is incomplete")
 	}
 	return config, nil

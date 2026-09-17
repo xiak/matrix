@@ -20,14 +20,11 @@ func (service *Service) VerifyInstallation(
 		auditv1.ValidateVerifyInstallationRequest(request) != nil {
 		return auditv1.InstallationVerification{}, ErrInvalidArgument
 	}
-	authorizationRequest := iamv1.AuthorizationRequest{
-		Action: iamv1.ActionInstallationVerify,
-		Resource: iamv1.ResourceReference{
-			Kind: iamv1.ResourceInstallation,
-			ID:   request.InstallationID,
-		},
-		RequestID:     requestID,
-		CorrelationID: requestID,
+	authorizationRequest, err := iamv1.NewAuthorizationRequest(iamv1.ActionInstallationVerify,
+		iamv1.ResourceReference{Kind: iamv1.ResourceInstallation, ID: request.InstallationID},
+		iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+	if err != nil {
+		return auditv1.InstallationVerification{}, ErrUnavailable
 	}
 	decision, err := service.iam.VerifyInstallation(
 		ctx, verifierCredential, authorizationRequest,
@@ -35,16 +32,13 @@ func (service *Service) VerifyInstallation(
 	if err != nil {
 		return auditv1.InstallationVerification{}, err
 	}
-	if iamv1.ValidateAuthorizationDecision(decision) != nil ||
-		decision.Action != authorizationRequest.Action ||
-		decision.Resource != authorizationRequest.Resource ||
-		decision.RequestID != requestID {
+	if iamv1.CheckAuthorizationDecisionForRequest(decision, authorizationRequest) != nil {
 		return auditv1.InstallationVerification{}, ErrUnavailable
 	}
 	if !decision.Allowed {
 		return auditv1.InstallationVerification{}, ErrForbidden
 	}
-	if decision.Subject == nil || decision.Subject.Type != iamv1.PrincipalServiceAccount {
+	if decision.Subject == nil || decision.Subject.Type != iamv1.SubjectServiceAccount {
 		return auditv1.InstallationVerification{}, ErrUnavailable
 	}
 	actor, err := actorForDecision(decision)
@@ -81,6 +75,11 @@ func (service *Service) VerifyInstallation(
 		}
 		if !installationProbeRecordMatches(record, tenantID, actor, request) {
 			return ErrConflict
+		}
+		access, err := service.prepareAccessEvent(transactionContext, transaction, decision, actor,
+			auditv1.ActionAuditIntegrityVerified, auditv1.TargetAuditChain, "installation-verification", requestDigest, requestID, now)
+		if err != nil {
+			return err
 		}
 
 		fromSequence := uint64(1)
@@ -141,18 +140,7 @@ func (service *Service) VerifyInstallation(
 		if auditv1.ValidateInstallationVerification(verification) != nil {
 			return ErrUnavailable
 		}
-		return service.appendAccessEvent(
-			transactionContext,
-			transaction,
-			decision,
-			actor,
-			auditv1.ActionAuditIntegrityVerified,
-			auditv1.TargetAuditChain,
-			"installation-verification",
-			requestDigest,
-			requestID,
-			now,
-		)
+		return appendPreparedAccessEvent(transactionContext, transaction, access)
 	})
 	if err != nil {
 		return auditv1.InstallationVerification{}, err
@@ -172,7 +160,7 @@ func installationProbeRecordMatches(
 	if auditv1.ValidateAuditRecord(record) != nil ||
 		record.Source != auditv1.SourcePaaS ||
 		record.Event.TenantID != tenantID ||
-		record.Event.Actor != actor ||
+		!record.Event.Actor.Equal(actor) ||
 		record.Event.OperationID != request.OperationID ||
 		record.Event.Target != (auditv1.TargetReference{
 			Kind: auditv1.TargetDeployment,

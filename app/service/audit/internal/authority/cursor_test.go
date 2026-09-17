@@ -60,6 +60,28 @@ func TestCursorIsOpaqueTenantAndFilterBound(t *testing.T) {
 	}
 }
 
+func TestRoleActorCursorBindsTheCompleteFilter(t *testing.T) {
+	codec, _ := NewCursorCodec(bytes.Repeat([]byte{0x5a}, 32))
+	query := auditv1.QueryRecordsRequest{PageSize: 2, Actor: &auditv1.ActorReference{Type: auditv1.ActorRole, ID: "role-a",
+		RoleSession: &auditv1.RoleSessionReference{SessionID: "session-a", SourceUserID: "user-a"}}}
+	cursor, err := codec.Encode(TenantChain("account-a"), query, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, lineage := range []auditv1.RoleSessionReference{{SessionID: "session-b", SourceUserID: "user-a"}, {SessionID: "session-a", SourceUserID: "user-b"}} {
+		changed := query
+		actor := *query.Actor
+		actor.RoleSession = &lineage
+		changed.Actor = &actor
+		if _, err := codec.Decode(cursor, TenantChain("account-a"), changed); !errors.Is(err, ErrInvalidCursor) {
+			t.Fatal("cursor changed role session filter", err)
+		}
+	}
+	if sequence, err := codec.Decode(cursor, TenantChain("account-a"), query); err != nil || sequence != 7 {
+		t.Fatal("exact role actor filter lost pagination", err)
+	}
+}
+
 func TestCursorRejectsTamperingUnboundedInputAndInvalidKeys(t *testing.T) {
 	if _, err := NewCursorCodec(bytes.Repeat([]byte{0x5a}, 31)); !errors.Is(err, ErrInvalidCursorKey) {
 		t.Fatalf("short cursor key error = %v", err)

@@ -1053,7 +1053,7 @@ func assertFixedPaaSNotReady(
 		APIVersion:     iamv1.APIVersion,
 		Kind:           "ServiceIdentity",
 		InstallationID: "installation-runtime-compat",
-		OrganizationID: "organization-runtime-compat",
+		AccountID:      "organization-runtime-compat",
 		PrincipalID:    "principal-runtime-compat-paas",
 		Purpose:        iamv1.ServicePaaS,
 	}

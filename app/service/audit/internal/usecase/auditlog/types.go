@@ -39,6 +39,10 @@ type IAM interface {
 	) (iamv1.AuthorizationDecision, error)
 }
 
+type AccessKeyIAM interface {
+	AuthorizeAccessKey(context.Context, iamv1.AccessKeyAuthorizationRequest) (iamv1.AccessKeyAuthorization, error)
+}
+
 type Repository interface {
 	WithinTransaction(
 		context.Context,

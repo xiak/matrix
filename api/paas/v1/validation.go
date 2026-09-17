@@ -2244,7 +2244,8 @@ func ValidateOperation(value Operation) error {
 		OperationDrainExecutionTarget, OperationActivateExecutionTarget,
 		OperationRemoveExecutionTarget:
 		problems = append(problems, ValidateID("operation.installationId", value.InstallationID))
-		if value.Scope.Kind != AuthorityPlatform || value.RequestedBy.Type != SubjectUser {
+		if value.Scope.Kind != AuthorityPlatform || value.RequestedBy.Type != SubjectUser ||
+			value.RequestedBy.RoleSession != nil || value.RequestedBy.AccessKeyID != "" {
 			problems = append(problems, errors.New("platform operation requires installation scope and a user"))
 		}
 		expectedTarget := "ExecutionPool"
@@ -2273,12 +2274,7 @@ func ValidateOperation(value Operation) error {
 	if strings.TrimSpace(value.Target.Kind) == "" {
 		problems = append(problems, errors.New("operation target kind is required"))
 	}
-	if !contains(
-		[]SubjectType{SubjectUser, SubjectServiceAccount, SubjectAgent, SubjectSystemUser},
-		value.RequestedBy.Type,
-	) {
-		problems = append(problems, fmt.Errorf("unknown requester type %q", value.RequestedBy.Type))
-	}
+	problems = append(problems, ValidateSubjectRef(value.RequestedBy))
 	if value.UpdatedAt.Before(value.CreatedAt) {
 		problems = append(problems, errors.New("operation.updatedAt cannot precede createdAt"))
 	}
@@ -2316,6 +2312,36 @@ func ValidateOperation(value Operation) error {
 	}
 	if !failed && value.Error != nil {
 		problems = append(problems, errors.New("only failed operations can contain an error"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateSubjectRef(value SubjectRef) error {
+	var problems []error
+	problems = append(problems, ValidateID("subject.id", value.ID))
+	switch value.Type {
+	case SubjectUser:
+		if value.RoleSession != nil {
+			problems = append(problems, errors.New("user subject cannot carry role-session lineage"))
+		}
+		if value.AccessKeyID != "" {
+			problems = append(problems, ValidateID("subject.accessKeyId", value.AccessKeyID))
+		}
+	case SubjectRole:
+		if value.RoleSession == nil || value.AccessKeyID != "" {
+			problems = append(problems, errors.New("role subject requires only role-session lineage"))
+		} else {
+			problems = append(problems,
+				ValidateID("subject.roleSession.sessionId", value.RoleSession.SessionID),
+				ValidateID("subject.roleSession.sourceUserId", value.RoleSession.SourceUserID),
+			)
+		}
+	case SubjectServiceAccount, SubjectAgent, SubjectSystemUser:
+		if value.RoleSession != nil || value.AccessKeyID != "" {
+			problems = append(problems, errors.New("non-user subject cannot carry user credential lineage"))
+		}
+	default:
+		problems = append(problems, fmt.Errorf("unknown subject type %q", value.Type))
 	}
 	return errors.Join(problems...)
 }

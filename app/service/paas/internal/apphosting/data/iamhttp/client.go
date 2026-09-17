@@ -114,9 +114,7 @@ func (client *Client) Authorize(
 	var decision iamv1.AuthorizationDecision
 	if !authorityhttp.ResponseIsJSON(response) ||
 		iamv1.DecodeRequest(response.Body, &decision) != nil ||
-		iamv1.ValidateAuthorizationDecision(decision) != nil ||
-		decision.Action != iamRequest.Action || decision.Resource != iamRequest.Resource ||
-		decision.RequestID != iamRequest.RequestID {
+		iamv1.CheckAuthorizationDecisionForRequest(decision, iamRequest) != nil {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	authorization, err := authorizationFromDecision(decision)
@@ -127,6 +125,61 @@ func (client *Client) Authorize(
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	if authorization.InstallationID != "" && authorization.InstallationID != client.installationID {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	return authorization, nil
+}
+
+func (client *Client) AuthorizeAccessKey(
+	ctx context.Context,
+	request port.AccessKeyAuthorizationRequest,
+) (port.Authorization, error) {
+	if client == nil || client.http == nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	if ctx == nil || port.ValidateAccessKeyAuthorizationRequest(request) != nil {
+		return port.Authorization{}, port.ErrUnauthenticated
+	}
+	iamRequest, err := toIAMRequest(port.AuthorizationRequest{
+		Action: request.Action, Resource: request.Resource,
+		ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage,
+		RequestID: request.RequestID,
+	})
+	if err != nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	input := iamv1.AccessKeyAuthorizationRequest{Authorization: iamRequest, SignedRequest: request.SignedRequest}
+	body, err := iamv1.EncodeAccessKeyAuthorizationRequest(input)
+	if err != nil {
+		return port.Authorization{}, port.ErrUnauthenticated
+	}
+	defer clear(body)
+	response, err := client.http.Do(
+		ctx,
+		http.MethodPost,
+		"/v1/authorize:access-key",
+		bytes.NewReader(body),
+		"application/json",
+		client.serviceCredential,
+		iamv1.Secret{},
+	)
+	if err != nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return port.Authorization{}, authorizationStatusError(response.StatusCode)
+	}
+	result, err := iamv1.DecodeAccessKeyAuthorization(response.Body)
+	if err != nil || iamv1.CheckAccessKeyAuthorizationForRequest(result, input) != nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
+	authorization, err := authorizationFromDecision(result.Decision)
+	if err != nil {
+		return port.Authorization{}, err
+	}
+	if port.ValidateAccessKeyAuthorizationForRequest(authorization, request) != nil ||
+		authorization.InstallationID != "" {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	return authorization, nil
@@ -145,16 +198,12 @@ func (client *Client) VerifyInstallation(
 	if err != nil || ctx == nil {
 		return port.Authorization{}, port.ErrUnauthenticated
 	}
-	iamRequest := iamv1.AuthorizationRequest{
-		Action: iamv1.ActionInstallationVerify,
-		Resource: iamv1.ResourceReference{
-			Kind: iamv1.ResourceInstallation,
-			ID:   installationID,
-		},
-		RequestID:     requestID,
-		CorrelationID: requestID,
-	}
-	if iamv1.ValidateAuthorizationRequest(iamRequest) != nil {
+	iamRequest, err := iamv1.NewAuthorizationRequest(
+		iamv1.ActionInstallationVerify,
+		iamv1.ResourceReference{Kind: iamv1.ResourceInstallation, ID: installationID},
+		iamv1.AuthorizationResourceInstance, "", requestID, requestID,
+	)
+	if err != nil {
 		return port.Authorization{}, port.ErrUnauthenticated
 	}
 	body, err := json.Marshal(iamRequest)
@@ -211,10 +260,21 @@ func authorizationFromDecision(
 	if err != nil {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
+	subject := paasv1.SubjectRef{
+		Type:        subjectType,
+		ID:          string(decision.Subject.ID),
+		AccessKeyID: string(decision.Subject.AccessKeyID),
+	}
+	if decision.Subject.RoleSession != nil {
+		subject.RoleSession = &paasv1.RoleSessionReference{
+			SessionID:    string(decision.Subject.RoleSession.SessionID),
+			SourceUserID: string(decision.Subject.RoleSession.SourceUserID),
+		}
+	}
 	authorization := port.Authorization{
 		TenantID:       paasv1.TenantID(decision.TenantID),
 		InstallationID: decision.InstallationID,
-		Subject:        paasv1.SubjectRef{Type: subjectType, ID: string(decision.Subject.ID)},
+		Subject:        subject,
 		DecisionID:     string(decision.ID),
 		RequestID:      decision.RequestID,
 	}
@@ -242,13 +302,12 @@ func toIAMRequest(request port.AuthorizationRequest) (iamv1.AuthorizationRequest
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, err
 	}
-	result := iamv1.AuthorizationRequest{
-		Action:        iamv1.Action(request.Action),
-		Resource:      iamv1.ResourceReference{Kind: resourceKind, ID: string(request.Resource.ID)},
-		RequestID:     request.RequestID,
-		CorrelationID: request.RequestID,
-	}
-	if iamv1.ValidateAuthorizationRequest(result) != nil {
+	result, err := iamv1.NewAuthorizationRequest(
+		iamv1.Action(request.Action),
+		iamv1.ResourceReference{Kind: resourceKind, ID: string(request.Resource.ID)},
+		request.ResourceMode, request.CollectionUsage, request.RequestID, request.RequestID,
+	)
+	if err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("PaaS authorization cannot map to IAM")
 	}
 	return result, nil
@@ -281,11 +340,13 @@ func toIAMResourceKind(kind string) (iamv1.ResourceKind, error) {
 	}
 }
 
-func toPaaSSubjectType(value iamv1.PrincipalType) (paasv1.SubjectType, error) {
+func toPaaSSubjectType(value iamv1.SubjectType) (paasv1.SubjectType, error) {
 	switch value {
-	case iamv1.PrincipalUser:
+	case iamv1.SubjectUser:
 		return paasv1.SubjectUser, nil
-	case iamv1.PrincipalServiceAccount:
+	case iamv1.SubjectRole:
+		return paasv1.SubjectRole, nil
+	case iamv1.SubjectServiceAccount:
 		return paasv1.SubjectServiceAccount, nil
 	default:
 		return "", errors.New("IAM subject type cannot map to PaaS")
@@ -298,6 +359,8 @@ func authorizationStatusError(status int) error {
 		return port.ErrUnauthenticated
 	case http.StatusForbidden:
 		return port.ErrPermissionDenied
+	case http.StatusConflict:
+		return port.ErrAuthorizationReplay
 	default:
 		return port.ErrAuthorizationUnavailable
 	}

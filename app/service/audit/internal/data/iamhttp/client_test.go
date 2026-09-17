@@ -33,11 +33,11 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 			_, digest, _ := auditv1.CanonicalizeEvent(auditv1.SourcePaaS, body.Event)
 			_ = json.NewEncoder(response).Encode(iamv1.AuditProducerAuthorization{
 				APIVersion: iamv1.APIVersion, Kind: "AuditProducerAuthorization",
-				TenantID: iamv1.OrganizationID(body.Event.TenantID), ContentDigest: digest,
+				TenantID: iamv1.AccountID(body.Event.TenantID), ContentDigest: digest,
 				Producer: iamv1.ServiceIdentity{
 					APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
 					InstallationID: "installation-example",
-					OrganizationID: "organization-example", PrincipalID: "service-paas", Purpose: iamv1.ServicePaaS,
+					AccountID:      "organization-example", PrincipalID: "service-paas", Purpose: iamv1.ServicePaaS,
 				},
 			})
 		case "/v1/authorize":
@@ -58,11 +58,12 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 				Allowed:    true,
 				Reason:     iamv1.DecisionAllowed,
 				TenantID:   "organization-example",
-				Subject:    &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-reader"},
+				Subject:    &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-reader"},
 				Action:     authorization.Action,
 				Resource:   authorization.Resource,
 				RequestID:  authorization.RequestID,
-				DecidedAt:  now,
+				Profile:    &authorization.Profile, ResourceMode: authorization.ResourceMode, CollectionUsage: authorization.CollectionUsage, CorrelationID: authorization.CorrelationID,
+				DecidedAt: now,
 			})
 		case "/v1/installation:verify":
 			if request.Method != http.MethodPost || request.URL.RawQuery != "" ||
@@ -80,10 +81,11 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 				ID: "decision-installation-verifier", Allowed: true, Reason: iamv1.DecisionAllowed,
 				TenantID: "organization-example",
 				Subject: &iamv1.Subject{
-					Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+					Type: iamv1.SubjectServiceAccount, ID: "service-installation-verifier",
 				},
 				Action: authorization.Action, Resource: authorization.Resource,
 				RequestID: authorization.RequestID, DecidedAt: now,
+				Profile: &authorization.Profile, ResourceMode: authorization.ResourceMode, CollectionUsage: authorization.CollectionUsage, CorrelationID: authorization.CorrelationID,
 			})
 		default:
 			http.NotFound(response, request)
@@ -105,14 +107,14 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 		iamv1.ResolveAuditProducerRequest{Event: clientEvent()},
 	)
 	if err != nil || identity.Producer.Purpose != iamv1.ServicePaaS ||
-		identity.Producer.OrganizationID != "organization-example" || identity.TenantID != "organization-second" {
+		identity.Producer.AccountID != "organization-example" || identity.TenantID != "organization-second" {
 		t.Fatalf("IAM service identity=%#v err=%v", identity, err)
 	}
-	authorization := iamv1.AuthorizationRequest{
-		Action:        iamv1.ActionAuditRecordRead,
-		Resource:      iamv1.ResourceReference{Kind: iamv1.ResourceAuditRecord, ID: "records"},
-		RequestID:     "request-authorize",
-		CorrelationID: "request-authorize",
+	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionAuditRecordRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourceAuditRecord, ID: "collection"},
+		iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList, "request-authorize", "request-authorize")
+	if err != nil {
+		t.Fatal(err)
 	}
 	decision, err := client.Authorize(
 		context.Background(),
@@ -123,14 +125,11 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 		decision.RequestID != authorization.RequestID {
 		t.Fatalf("IAM authorization decision=%#v err=%v", decision, err)
 	}
-	verificationRequest := iamv1.AuthorizationRequest{
-		Action: iamv1.ActionInstallationVerify,
-		Resource: iamv1.ResourceReference{
-			Kind: iamv1.ResourceInstallation,
-			ID:   "mxi-0123456789abcdef0123456789abcdef",
-		},
-		RequestID:     "request-installation-verifier",
-		CorrelationID: "request-installation-verifier",
+	verificationRequest, err := iamv1.NewAuthorizationRequest(iamv1.ActionInstallationVerify,
+		iamv1.ResourceReference{Kind: iamv1.ResourceInstallation, ID: "mxi-0123456789abcdef0123456789abcdef"},
+		iamv1.AuthorizationResourceInstance, "", "request-installation-verifier", "request-installation-verifier")
+	if err != nil {
+		t.Fatal(err)
 	}
 	decision, err = client.VerifyInstallation(
 		context.Background(),
@@ -138,8 +137,76 @@ func TestClientBindsProducerAndSubjectCredentialsToExactIAMRoutes(t *testing.T) 
 		verificationRequest,
 	)
 	if err != nil || !decision.Allowed || decision.Subject == nil ||
-		decision.Subject.Type != iamv1.PrincipalServiceAccount {
+		decision.Subject.Type != iamv1.SubjectServiceAccount {
 		t.Fatalf("IAM verifier decision=%#v err=%v", decision, err)
+	}
+}
+
+func TestClientBindsOneAccessKeyDecisionToTheSignedAuditRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/authorize:access-key" ||
+			request.Header.Get("Authorization") != "Bearer audit-service-credential" ||
+			request.Header.Get("Matrix-Subject-Credential") != "" {
+			t.Fatalf("IAM signed request path=%s headers=%#v", request.URL.Path, request.Header)
+		}
+		input, err := iamv1.DecodeAccessKeyAuthorizationRequest(request.Body)
+		if err != nil || input.Authorization.Action != iamv1.ActionAuditRecordRead ||
+			input.SignedRequest.Parameters.Audience != iamv1.ProductAudit {
+			t.Fatalf("decode signed authorization: %#v %v", input.Authorization, err)
+		}
+		digest, err := iamv1.AccessKeySignedRequestDigest(input.SignedRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(iamv1.AccessKeyAuthorization{
+			APIVersion: iamv1.APIVersion,
+			Kind:       "AccessKeyAuthorization",
+			Decision: iamv1.AuthorizationDecision{
+				APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
+				ID: "decision-key", Allowed: true, Reason: iamv1.DecisionAllowed,
+				TenantID: "organization-example",
+				Subject: &iamv1.Subject{
+					Type: iamv1.SubjectUser, ID: "principal-reader", AccessKeyID: "access-key-one",
+				},
+				Action: input.Authorization.Action, Resource: input.Authorization.Resource,
+				RequestID: input.Authorization.RequestID, CorrelationID: input.Authorization.CorrelationID,
+				Profile: &input.Authorization.Profile, ResourceMode: input.Authorization.ResourceMode,
+				CollectionUsage: input.Authorization.CollectionUsage,
+				DecidedAt:       time.Date(2026, 9, 17, 1, 2, 3, 0, time.UTC),
+			},
+			SignedRequestDigest: digest,
+		})
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		Endpoint: server.URL, ServiceCredential: clientSecret(t, "audit-service-credential"), HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := auditAccessKeyAuthorizationRequest(t)
+	result, err := client.AuthorizeAccessKey(context.Background(), request)
+	if err != nil || !result.Decision.Allowed || result.Decision.Subject == nil ||
+		result.Decision.Subject.AccessKeyID != "access-key-one" || result.Decision.TenantID != "organization-example" {
+		t.Fatalf("access-key authorization=%#v err=%v", result, err)
+	}
+}
+
+func TestClientReportsConsumedAuditAccessKeyNonceAsConflict(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusConflict)
+	}))
+	defer server.Close()
+	client, err := NewClient(Config{
+		Endpoint: server.URL, ServiceCredential: clientSecret(t, "audit-service-credential"), HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AuthorizeAccessKey(context.Background(), auditAccessKeyAuthorizationRequest(t)); !errors.Is(err, auditlog.ErrConflict) {
+		t.Fatalf("consumed nonce error=%v", err)
 	}
 }
 
@@ -222,4 +289,42 @@ func clientSecret(t *testing.T, value string) iamv1.Secret {
 		t.Fatalf("create IAM HTTP client secret: %v", err)
 	}
 	return secret
+}
+
+func auditAccessKeyAuthorizationRequest(t *testing.T) iamv1.AccessKeyAuthorizationRequest {
+	t.Helper()
+	authorization, err := iamv1.NewAuthorizationRequest(
+		iamv1.ActionAuditRecordRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourceAuditRecord, ID: "collection"},
+		iamv1.AuthorizationResourceCollection,
+		iamv1.AuthorizationCollectionList,
+		"request-audit-key",
+		"request-audit-key",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce, err := iamv1.NewSecret(strings.Repeat("A", 22))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := iamv1.NewSecret(strings.Repeat("A", 43))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return iamv1.AccessKeyAuthorizationRequest{
+		Authorization: authorization,
+		SignedRequest: iamv1.AccessKeySignedRequest{
+			Parameters: iamv1.AccessKeySignatureParameters{
+				AccessKeyID: "access-key-one", InstallationID: "installation-one", Audience: iamv1.ProductAudit,
+				SignedAt: 1800000000, Nonce: nonce,
+			},
+			HTTP: iamv1.AccessKeyHTTPRequest{
+				Method: http.MethodPost, Scheme: "https", Authority: "api.example.test:443",
+				EscapedPath: "/api/audit/v1/records:query", ContentType: "application/json",
+				BodyDigest: "sha256:1b5d9794535781df4b24845ab44a56410a3b65371970cab253ba943283e90c00",
+			},
+			Signature: signature,
+		},
+	}
 }

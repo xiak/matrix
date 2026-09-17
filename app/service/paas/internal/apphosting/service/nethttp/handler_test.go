@@ -26,7 +26,9 @@ import (
 
 	"github.com/coder/websocket"
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
@@ -64,6 +66,87 @@ func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable ||
 		strings.Contains(response.Body.String(), "credential") {
 		t.Fatalf("not-ready response=%d body=%q", response.Code, response.Body.String())
+	}
+}
+
+func TestAccessKeyRequestUsesExactEdgeRequestAndPreservesAttribution(t *testing.T) {
+	authorization := port.Authorization{
+		TenantID: "tenant-authorized",
+		Subject: paasv1.SubjectRef{
+			Type: paasv1.SubjectUser, ID: "user-authorized", AccessKeyID: "access-key-one",
+		},
+		DecisionID: "decision-authorized", RequestID: "request-test", AuditID: "audit-authorized",
+	}
+	authorizer := &fakeAuthorizer{accessKeyResult: &authorization}
+	workflow := &fakeWorkflow{}
+	handler, err := NewHandler(
+		authorizer, workflow, &fakeExecutionWorkflow{}, &fakeEnrollmentWorkflow{},
+		&fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{},
+		Config{
+			NorthboundOrigin: "https://api.example.test:443", InstallationID: "installation-one",
+			NewRequestID: func() (string, error) { return "request-test", nil },
+			Readiness:    func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "http://paas.internal/v1/applications/application-one", nil)
+	setAccessKeyEdgeHeaders(t, request, "/api/paas/v1/applications/application-one", iamv1.ProductPaaS)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || authorizer.calls != 0 || authorizer.accessKeyCalls != 1 ||
+		workflow.getApplicationCalls != 1 || workflow.readAuthorization != authorization ||
+		authorizer.accessKeyRequest.Action != port.AuthorizeApplicationRead ||
+		authorizer.accessKeyRequest.Resource != (paasv1.ResourceRef{Kind: "Application", ID: "application-one"}) ||
+		authorizer.accessKeyRequest.RequestID != "request-test" {
+		t.Fatalf("response=%d body=%q normalCalls=%d accessKeyCalls=%d request=%#v authorization=%#v workflowCalls=%d",
+			response.Code, response.Body.String(), authorizer.calls, authorizer.accessKeyCalls,
+			authorizer.accessKeyRequest, workflow.readAuthorization, workflow.getApplicationCalls)
+	}
+	signed := authorizer.accessKeyRequest.SignedRequest
+	if signed.Parameters.Audience != iamv1.ProductPaaS || signed.Parameters.InstallationID != "installation-one" ||
+		signed.HTTP.Method != http.MethodGet || signed.HTTP.Scheme != "https" ||
+		signed.HTTP.Authority != "api.example.test:443" ||
+		signed.HTTP.EscapedPath != "/api/paas/v1/applications/application-one" || signed.HTTP.RawQuery != "" {
+		t.Fatalf("signed request=%#v", signed.HTTP)
+	}
+}
+
+func TestAccessKeyRequestRejectsExcludedOrForgedRoutesBeforeIAM(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		internalTarget string
+		externalTarget string
+	}{
+		{"terminal", "/v1/deployments/deployment-one/terminal-sessions", "/api/paas/v1/deployments/deployment-one/terminal-sessions"},
+		{"platform", "/v1/execution-targets/execution-target-one", "/api/paas/v1/execution-targets/execution-target-one"},
+		{"forged target", "/v1/applications/application-one", "/api/paas/v1/applications/application-two"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			authorizer := &fakeAuthorizer{}
+			handler, err := NewHandler(
+				authorizer, &fakeWorkflow{}, &fakeExecutionWorkflow{}, &fakeEnrollmentWorkflow{},
+				&fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{},
+				Config{
+					NorthboundOrigin: "https://api.example.test:443", InstallationID: "installation-one",
+					NewRequestID: func() (string, error) { return "request-test", nil },
+					Readiness:    func(context.Context) (paasv1.Readiness, error) { return paasv1.Readiness{}, nil },
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodGet, "http://paas.internal"+test.internalTarget, nil)
+			setAccessKeyEdgeHeaders(t, request, test.externalTarget, iamv1.ProductPaaS)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized || authorizer.calls != 0 || authorizer.accessKeyCalls != 0 {
+				t.Fatalf("response=%d body=%q normalCalls=%d accessKeyCalls=%d", response.Code, response.Body.String(), authorizer.calls, authorizer.accessKeyCalls)
+			}
+		})
 	}
 }
 
@@ -117,6 +200,8 @@ func TestNodeEnrollmentHTTPSeparatesOneTimeCreationFromOrdinaryReads(t *testing.
 	if response.Code != http.StatusCreated || workflow.createCalls != 1 ||
 		authorizer.request.Action != port.AuthorizeNodeEnrollmentCreate ||
 		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "NodeEnrollment", ID: "collection"}) ||
+		authorizer.request.ResourceMode != iamv1.AuthorizationResourceCollection ||
+		authorizer.request.CollectionUsage != iamv1.AuthorizationCollectionCreate ||
 		workflow.createCommand.Authorization != authorization ||
 		workflow.createCommand.IdempotencyKey != "enroll-host-a" ||
 		workflow.createCommand.ControlPlaneBaseURL != "https://matrix.internal/api/paas/v1" ||
@@ -151,6 +236,8 @@ func TestNodeEnrollmentHTTPSeparatesOneTimeCreationFromOrdinaryReads(t *testing.
 	if response.Code != http.StatusOK || workflow.readCalls != 1 ||
 		authorizer.request.Action != port.AuthorizeNodeEnrollmentRead ||
 		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "NodeEnrollment", ID: createResult.Response.Enrollment.Metadata.ID}) ||
+		authorizer.request.ResourceMode != iamv1.AuthorizationResourceInstance ||
+		authorizer.request.CollectionUsage != "" ||
 		workflow.readAuthorization != authorization || workflow.readID != createResult.Response.Enrollment.Metadata.ID ||
 		response.Header().Get("ETag") != `"1"` {
 		t.Fatalf("node enrollment get response=%d body=%s request=%#v", response.Code, response.Body.String(), authorizer.request)
@@ -164,6 +251,8 @@ func TestNodeEnrollmentHTTPSeparatesOneTimeCreationFromOrdinaryReads(t *testing.
 	if response.Code != http.StatusOK || workflow.listCalls != 1 ||
 		authorizer.request.Action != port.AuthorizeNodeEnrollmentRead ||
 		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "NodeEnrollment", ID: "collection"}) ||
+		authorizer.request.ResourceMode != iamv1.AuthorizationResourceCollection ||
+		authorizer.request.CollectionUsage != iamv1.AuthorizationCollectionList ||
 		workflow.listAuthorization != authorization {
 		t.Fatalf("node enrollment list response=%d body=%s request=%#v", response.Code, response.Body.String(), authorizer.request)
 	}
@@ -1245,7 +1334,9 @@ func TestHandlerListsDeploymentsWithOnlyOpaqueCursor(t *testing.T) {
 		t.Fatalf("list workflow = %#v", workflow)
 	}
 	if authorizer.request.Action != port.AuthorizeDeploymentRead ||
-		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "Deployment", ID: "collection"}) {
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "Deployment", ID: "collection"}) ||
+		authorizer.request.ResourceMode != iamv1.AuthorizationResourceCollection ||
+		authorizer.request.CollectionUsage != iamv1.AuthorizationCollectionList {
 		t.Fatalf("list authorization = %#v", authorizer.request)
 	}
 
@@ -1313,8 +1404,22 @@ func TestHandlerReadsDeploymentRuntimeThroughExactDeploymentAuthorization(t *tes
 		t.Fatalf("runtime workflow = %#v", workflow)
 	}
 	if authorizer.request.Action != port.AuthorizeDeploymentRead ||
-		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "Deployment", ID: "deployment-a"}) {
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "Deployment", ID: "deployment-a"}) ||
+		authorizer.request.ResourceMode != iamv1.AuthorizationResourceInstance ||
+		authorizer.request.CollectionUsage != "" {
 		t.Fatalf("runtime authorization = %#v", authorizer.request)
+	}
+
+	workflow.runtimeSnapshot.Value.Observation.DeploymentID = "collection"
+	request = httptest.NewRequest(http.MethodGet, "/v1/deployments/collection/runtime", nil)
+	request.Header.Set("Authorization", "Bearer opaque-credential")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || workflow.runtimeCalls != 2 || workflow.readID != "collection" ||
+		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "Deployment", ID: "collection"}) ||
+		authorizer.request.ResourceMode != iamv1.AuthorizationResourceInstance ||
+		authorizer.request.CollectionUsage != "" {
+		t.Fatalf("resource named collection authorization=%#v status=%d body=%s", authorizer.request, response.Code, response.Body.String())
 	}
 
 	for _, invalidRequest := range []*http.Request{
@@ -1329,7 +1434,7 @@ func TestHandlerReadsDeploymentRuntimeThroughExactDeploymentAuthorization(t *tes
 			t.Fatalf("runtime selector/body status = %d, body = %s", invalidResponse.Code, invalidResponse.Body.String())
 		}
 	}
-	if workflow.runtimeCalls != 1 {
+	if workflow.runtimeCalls != 2 {
 		t.Fatal("runtime selector or body reached the Deployment workflow")
 	}
 }
@@ -1747,15 +1852,21 @@ func terminalHTTPStored(authorization port.Authorization, now time.Time) termina
 }
 
 type fakeAuthorizer struct {
-	request port.AuthorizationRequest
-	err     error
-	result  *port.Authorization
+	request          port.AuthorizationRequest
+	accessKeyRequest port.AccessKeyAuthorizationRequest
+	calls            int
+	accessKeyCalls   int
+	err              error
+	accessKeyErr     error
+	result           *port.Authorization
+	accessKeyResult  *port.Authorization
 }
 
 func (authorizer *fakeAuthorizer) Authorize(
 	_ context.Context,
 	request port.AuthorizationRequest,
 ) (port.Authorization, error) {
+	authorizer.calls++
 	authorizer.request = request
 	if authorizer.err != nil {
 		return port.Authorization{}, authorizer.err
@@ -1769,6 +1880,52 @@ func (authorizer *fakeAuthorizer) Authorize(
 		DecisionID: "decision-authorized", RequestID: request.RequestID,
 		AuditID: "audit-authorized",
 	}, nil
+}
+
+func (authorizer *fakeAuthorizer) AuthorizeAccessKey(
+	_ context.Context,
+	request port.AccessKeyAuthorizationRequest,
+) (port.Authorization, error) {
+	authorizer.accessKeyCalls++
+	authorizer.accessKeyRequest = request
+	if authorizer.accessKeyErr != nil {
+		return port.Authorization{}, authorizer.accessKeyErr
+	}
+	if authorizer.accessKeyResult != nil {
+		return *authorizer.accessKeyResult, nil
+	}
+	return port.Authorization{
+		TenantID: "tenant-authorized",
+		Subject: paasv1.SubjectRef{
+			Type: paasv1.SubjectUser, ID: "user-authorized", AccessKeyID: "access-key-one",
+		},
+		DecisionID: "decision-authorized", RequestID: request.RequestID,
+		AuditID: "audit-authorized",
+	}, nil
+}
+
+func setAccessKeyEdgeHeaders(t *testing.T, request *http.Request, target string, audience iamv1.ProductID) {
+	t.Helper()
+	nonce, err := iamv1.NewSecret(strings.Repeat("A", 22))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := iamv1.NewSecret(strings.Repeat("A", 43))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization, err := iamv1.EncodeAccessKeyAuthorization(iamv1.AccessKeySignatureParameters{
+		AccessKeyID: "access-key-one", InstallationID: "installation-one", Audience: audience,
+		SignedAt: 1800000000, Nonce: nonce,
+	}, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := authorization.CopyBytes()
+	defer clear(plain)
+	request.Header.Set("Authorization", string(plain))
+	request.Header.Set(externalrequest.HeaderExternalOrigin, "https://api.example.test:443")
+	request.Header.Set(externalrequest.HeaderExternalRequestTarget, target)
 }
 
 type fakeWorkflow struct {

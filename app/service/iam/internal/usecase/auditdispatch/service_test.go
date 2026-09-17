@@ -91,10 +91,10 @@ func TestDispatchBindsTenantAndInstallationChainsToTheStoredOwner(t *testing.T) 
 	}{
 		{name: "tenant fact", claim: dispatchClaim(1), valid: true},
 		{name: "installation lifecycle fact", claim: platform, valid: true},
-		{name: "wrong tenant owner", claim: dispatchClaim(1), edit: func(claim *Claim) { claim.OrganizationID = "another-tenant" }},
+		{name: "wrong tenant owner", claim: dispatchClaim(1), edit: func(claim *Claim) { claim.AccountID = "another-tenant" }},
 		{name: "unsealed installation", claim: platform, edit: func(claim *Claim) { claim.InstallationID = "" }},
 		{name: "wrong installation", claim: platform, edit: func(claim *Claim) { claim.InstallationID = "installation-other" }},
-		{name: "missing storage owner", claim: platform, edit: func(claim *Claim) { claim.OrganizationID = "" }},
+		{name: "missing storage owner", claim: platform, edit: func(claim *Claim) { claim.AccountID = "" }},
 		{name: "tenant cannot replace installation", claim: platform, edit: func(claim *Claim) { claim.Event.TenantID = "another-tenant"; claim.Event.InstallationID = "" }},
 		{name: "mixed chain scopes", claim: platform, edit: func(claim *Claim) { claim.Event.TenantID = "another-tenant" }},
 		{name: "wrong action scope", claim: platform, edit: func(claim *Claim) { claim.Event.Action = auditv1.ActionIAMOrganizationCreated }},
@@ -180,7 +180,7 @@ func dispatchClaim(attempts int) Claim {
 		OccurredAt:    now,
 	}
 	return Claim{
-		OrganizationID: iamv1.OrganizationID(event.TenantID), EventID: event.EventID, Attempts: attempts,
+		AccountID: iamv1.AccountID(event.TenantID), EventID: event.EventID, Attempts: attempts,
 		FencingToken: uint64(attempts), LeaseExpiresAt: now.Add(10 * time.Second), Event: event,
 	}
 }

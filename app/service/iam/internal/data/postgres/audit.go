@@ -52,7 +52,7 @@ func (repository *AuditOutboxRepository) Claim(
 		workerID,
 		int(leaseDuration/time.Second),
 	).Scan(
-		&claim.OrganizationID,
+		&claim.AccountID,
 		&claim.EventID,
 		&document,
 		&claim.Attempts,

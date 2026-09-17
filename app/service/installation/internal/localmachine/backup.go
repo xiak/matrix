@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/xiak/matrix/api/contractjson"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
@@ -27,7 +28,8 @@ import (
 )
 
 const (
-	backupAPIVersion                 = "installation.matrix.xiak.com/v2"
+	backupAPIVersion                 = "installation.matrix.xiak.com/v3"
+	predecessorBackupAPIVersion      = "installation.matrix.xiak.com/v2"
 	legacyBackupAPIVersion           = "installation.matrix.xiak.com/v1"
 	backupKind                       = "PlatformBackup"
 	backupSealAlgorithm              = "HMAC-SHA256"
@@ -47,17 +49,23 @@ const (
 var backupIDPattern = regexp.MustCompile(`^backup-[0-9a-f]{32}$`)
 
 type backupManifest struct {
-	APIVersion     string                  `json:"apiVersion"`
-	Kind           string                  `json:"kind"`
-	BackupID       string                  `json:"backupId"`
-	InstallationID string                  `json:"installationId"`
-	ReleaseID      string                  `json:"releaseId"`
-	ReleaseDigest  string                  `json:"releaseDigest"`
-	SchemaVersion  uint64                  `json:"schemaVersion,omitempty"`
-	CreatedAt      time.Time               `json:"createdAt"`
-	Artifacts      []backupArtifact        `json:"artifacts"`
-	Seal           *backupSeal             `json:"seal,omitempty"`
-	Database       release.DatabaseProfile `json:"database,omitzero"`
+	APIVersion        string                   `json:"apiVersion"`
+	Kind              string                   `json:"kind"`
+	BackupID          string                   `json:"backupId"`
+	InstallationID    string                   `json:"installationId"`
+	ReleaseID         string                   `json:"releaseId"`
+	ReleaseDigest     string                   `json:"releaseDigest"`
+	SchemaVersion     uint64                   `json:"schemaVersion,omitempty"`
+	CreatedAt         time.Time                `json:"createdAt"`
+	Artifacts         []backupArtifact         `json:"artifacts"`
+	Seal              *backupSeal              `json:"seal,omitempty"`
+	Database          release.DatabaseProfile  `json:"database,omitzero"`
+	AccessKeyWrapping *backupAccessKeyWrapping `json:"accessKeyWrapping,omitempty"`
+}
+
+type backupAccessKeyWrapping struct {
+	WrappingKeyID string `json:"wrappingKeyId"`
+	Commitment    string `json:"commitment"`
 }
 
 // databaseProfile decodes the published scalar backup without changing its
@@ -66,15 +74,21 @@ func (manifest backupManifest) databaseProfile() (release.DatabaseProfile, error
 	profile := manifest.Database
 	switch manifest.APIVersion {
 	case legacyBackupAPIVersion:
-		if manifest.SchemaVersion == 0 || profile != (release.DatabaseProfile{}) {
+		if manifest.SchemaVersion == 0 || profile != (release.DatabaseProfile{}) || manifest.AccessKeyWrapping != nil {
 			return release.DatabaseProfile{}, errors.New("legacy backup database profile is invalid")
 		}
 		profile = release.DatabaseProfile{
 			SchemaVersion: manifest.SchemaVersion, Compatibility: "expand-contract-n-minus-one",
 		}
-	case backupAPIVersion:
-		if manifest.SchemaVersion != 0 {
+	case predecessorBackupAPIVersion:
+		if manifest.SchemaVersion != 0 || manifest.AccessKeyWrapping != nil {
 			return release.DatabaseProfile{}, errors.New("backup contains a legacy schema selector")
+		}
+	case backupAPIVersion:
+		if manifest.SchemaVersion != 0 || manifest.AccessKeyWrapping == nil ||
+			iamv1.ValidateID("wrappingKeyId", manifest.AccessKeyWrapping.WrappingKeyID) != nil ||
+			!validSHA256(manifest.AccessKeyWrapping.Commitment) {
+			return release.DatabaseProfile{}, errors.New("backup access-key wrapping commitment is invalid")
 		}
 	default:
 		return release.DatabaseProfile{}, errors.New("backup version is unsupported")
@@ -144,7 +158,8 @@ func (effects *Effects) InspectBackup(
 	targetIdentity.PreviousDigest = ""
 	profile, profileErr := manifest.databaseProfile()
 	target, err := authenticateInstalledPlan(targetIdentity)
-	if err != nil || profileErr != nil || target.Bundle.Manifest.Database != profile {
+	if err != nil || profileErr != nil || target.Bundle.Manifest.Database != profile ||
+		verifyBackupAccessKeyWrapping(installed.Root, installed.InstallationID, target.Bundle.Manifest, manifest) != nil {
 		clear(target.TrustBytes)
 		return platformcommand.RecoverySource{}, errors.Join(
 			platformcommand.ErrEffectVerification,
@@ -337,14 +352,19 @@ func createBackup(
 	}
 	secretsArtifact.Path = workloadSecretsFilename
 	secretsArtifact.MediaType = "application/vnd.xiak.matrix.workload-secrets.tar"
+	accessKeyWrapping, backupVersion, err := backupAccessKeyWrappingForRelease(plan)
+	if err != nil {
+		return err
+	}
 	manifest := backupManifest{
-		APIVersion: backupAPIVersion, Kind: backupKind,
+		APIVersion: backupVersion, Kind: backupKind,
 		BackupID: backupID, InstallationID: plan.InstallationID,
-		ReleaseID:     plan.Bundle.Manifest.Release.ID,
-		ReleaseDigest: plan.Bundle.ManifestSHA256,
-		Database:      plan.Bundle.Manifest.Database,
-		CreatedAt:     createdAt,
-		Artifacts:     []backupArtifact{dumpArtifact, secretsArtifact},
+		ReleaseID:         plan.Bundle.Manifest.Release.ID,
+		ReleaseDigest:     plan.Bundle.ManifestSHA256,
+		Database:          plan.Bundle.Manifest.Database,
+		CreatedAt:         createdAt,
+		Artifacts:         []backupArtifact{dumpArtifact, secretsArtifact},
+		AccessKeyWrapping: accessKeyWrapping,
 	}
 	content, err := sealBackupManifest(manifest, key)
 	if err != nil {
@@ -799,7 +819,8 @@ func verifyBackupDirectory(
 	if profileErr != nil || manifest.ReleaseID != plan.Bundle.Manifest.Release.ID ||
 		manifest.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
 		profile != installation.bundle.Manifest.Database ||
-		manifest.CreatedAt != createdAt {
+		manifest.CreatedAt != createdAt ||
+		verifyBackupAccessKeyWrapping(plan.Root, plan.InstallationID, installation.bundle.Manifest, manifest) != nil {
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("backup manifest identity is invalid"),
@@ -809,6 +830,62 @@ func verifyBackupDirectory(
 		ctx, runtimeBoundary, plan.Root,
 		filepath.Join(relative, databaseDumpFilename), postgresID,
 	)
+}
+
+func backupAccessKeyWrappingForRelease(plan platformcommand.InstallPlan) (*backupAccessKeyWrapping, string, error) {
+	switch plan.Bundle.Manifest.Database {
+	case release.SupportedDatabasePredecessorProfile():
+		return nil, predecessorBackupAPIVersion, nil
+	case release.CurrentDatabaseProfile():
+		keyring, err := readAccessKeyWrappingKeyring(plan.Root, plan.InstallationID)
+		if err != nil {
+			return nil, "", errors.Join(platformcommand.ErrEffectVerification, err)
+		}
+		keyID := keyring.ActiveWrappingKeyID
+		commitment, err := iamv1.AccessKeyWrappingKeyCommitment(keyring, keyID)
+		keyring = iamv1.AccessKeyWrappingKeyring{}
+		if err != nil {
+			return nil, "", errors.Join(platformcommand.ErrEffectVerification, err)
+		}
+		return &backupAccessKeyWrapping{WrappingKeyID: keyID, Commitment: commitment}, backupAPIVersion, nil
+	default:
+		return nil, "", errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("backup release profile is unsupported"),
+		)
+	}
+}
+
+func verifyBackupAccessKeyWrapping(
+	root, installationID string,
+	manifest release.Manifest,
+	backup backupManifest,
+) error {
+	switch manifest.Database {
+	case release.SupportedDatabasePredecessorProfile():
+		if backup.APIVersion != predecessorBackupAPIVersion || backup.AccessKeyWrapping != nil {
+			return errors.New("predecessor backup contains an unsupported access-key wrapping commitment")
+		}
+		return nil
+	case release.CurrentDatabaseProfile():
+		if backup.APIVersion != backupAPIVersion || backup.AccessKeyWrapping == nil {
+			return errors.New("current backup lacks its access-key wrapping commitment")
+		}
+		keyring, err := readAccessKeyWrappingKeyring(root, installationID)
+		if err != nil {
+			return err
+		}
+		commitment, err := iamv1.AccessKeyWrappingKeyCommitment(keyring, backup.AccessKeyWrapping.WrappingKeyID)
+		keyring = iamv1.AccessKeyWrappingKeyring{}
+		if err != nil || subtle.ConstantTimeCompare(
+			[]byte(commitment), []byte(backup.AccessKeyWrapping.Commitment),
+		) != 1 {
+			return errors.New("backup access-key wrapping commitment differs from the installation")
+		}
+		return nil
+	default:
+		return errors.New("backup access-key wrapping profile is unsupported")
+	}
 }
 
 func readVerifiedBackupDirectory(

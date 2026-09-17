@@ -168,7 +168,7 @@ func (client *edgeClient) login(ctx context.Context, password []byte, requestID 
 	defer clear(response.body)
 	var result iamv1.LoginResponse
 	if decodeOne(response.body, &result) != nil || iamv1.ValidateLoginResponse(result) != nil ||
-		result.Session.PrincipalID != "principal-admin" || result.Session.OrganizationID != "organization-default" ||
+		result.Session.PrincipalID != "principal-admin" || result.Session.AccountID != "organization-default" ||
 		result.Session.Status != iamv1.SessionActive {
 		return nil, errors.New("IAM login response failed")
 	}

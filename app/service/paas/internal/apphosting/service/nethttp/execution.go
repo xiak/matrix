@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
@@ -167,13 +168,13 @@ func (value *handler) listExecutionPools(response http.ResponseWriter, request *
 	if !ok {
 		return
 	}
-	authorization, ok := value.authorizeRequest(
+	authorization, ok := value.authorizeCollectionRequest(
 		response,
 		request,
 		requestID,
 		port.AuthorizeExecutionPoolRead,
 		"ExecutionPool",
-		"collection",
+		iamv1.AuthorizationCollectionList,
 	)
 	if !ok {
 		return
@@ -208,13 +209,13 @@ func (value *handler) listExecutionTargets(response http.ResponseWriter, request
 	if !ok {
 		return
 	}
-	authorization, ok := value.authorizeRequest(
+	authorization, ok := value.authorizeCollectionRequest(
 		response,
 		request,
 		requestID,
 		port.AuthorizeExecutionTargetRead,
 		"ExecutionTarget",
-		"collection",
+		iamv1.AuthorizationCollectionList,
 	)
 	if !ok {
 		return

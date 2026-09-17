@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/usecase"
@@ -67,6 +68,7 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 func (value *handler) listOfferings(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
 		response, request, port.AuthorizeOfferingRead, port.ResourceServiceOffering,
+		iamv1.AuthorizationCollectionList,
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
@@ -90,6 +92,7 @@ func (value *handler) getOffering(response http.ResponseWriter, request *http.Re
 func (value *handler) listRegions(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
 		response, request, port.AuthorizeRegionRead, port.ResourceRegion,
+		iamv1.AuthorizationCollectionList,
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
@@ -113,6 +116,7 @@ func (value *handler) getRegion(response http.ResponseWriter, request *http.Requ
 func (value *handler) listQuotaEntitlements(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
 		response, request, port.AuthorizeQuotaEntitlementRead, port.ResourceQuotaEntitlement,
+		iamv1.AuthorizationCollectionList,
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
@@ -136,6 +140,7 @@ func (value *handler) getQuotaEntitlement(response http.ResponseWriter, request 
 func (value *handler) activateQuota(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
 		response, request, port.AuthorizeQuotaEntitlementActivate, port.ResourceQuotaEntitlement,
+		iamv1.AuthorizationCollectionCreate,
 	)
 	if !ok {
 		return
@@ -163,6 +168,7 @@ func (value *handler) activateQuota(response http.ResponseWriter, request *http.
 func (value *handler) listServiceInstallations(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
 		response, request, port.AuthorizeInstallationRead, port.ResourceServiceInstallation,
+		iamv1.AuthorizationCollectionList,
 	)
 	if !ok || !acceptsNoInput(response, request, requestID) {
 		return
@@ -198,6 +204,7 @@ func (value *handler) getInstallationOperation(response http.ResponseWriter, req
 func (value *handler) createInstallation(response http.ResponseWriter, request *http.Request) {
 	authorization, requestID, ok := value.authorizeCollection(
 		response, request, port.AuthorizeInstallationCreate, port.ResourceServiceInstallation,
+		iamv1.AuthorizationCollectionCreate,
 	)
 	if !ok {
 		return
@@ -227,8 +234,17 @@ func (value *handler) authorizeCollection(
 	request *http.Request,
 	action string,
 	resourceKind string,
+	usage iamv1.AuthorizationCollectionUsage,
 ) (port.Authorization, string, bool) {
-	return value.authorizeResource(response, request, action, resourceKind, "collection")
+	return value.authorize(
+		response,
+		request,
+		action,
+		resourceKind,
+		"collection",
+		iamv1.AuthorizationResourceCollection,
+		usage,
+	)
 }
 
 func (value *handler) authorizeResource(
@@ -237,6 +253,26 @@ func (value *handler) authorizeResource(
 	action string,
 	resourceKind string,
 	resourceID string,
+) (port.Authorization, string, bool) {
+	return value.authorize(
+		response,
+		request,
+		action,
+		resourceKind,
+		resourceID,
+		iamv1.AuthorizationResourceInstance,
+		"",
+	)
+}
+
+func (value *handler) authorize(
+	response http.ResponseWriter,
+	request *http.Request,
+	action string,
+	resourceKind string,
+	resourceID string,
+	mode iamv1.AuthorizationResourceMode,
+	usage iamv1.AuthorizationCollectionUsage,
 ) (port.Authorization, string, bool) {
 	requestID, err := value.config.NewRequestID()
 	if err != nil || managedservicev1.ValidateID("requestId", requestID) != nil {
@@ -252,7 +288,8 @@ func (value *handler) authorizeResource(
 	}
 	authorizationRequest := port.AuthorizationRequest{
 		Credential: request.Header.Get("Authorization"), Action: action,
-		Resource:  port.ResourceReference{Kind: resourceKind, ID: resourceID},
+		Resource:     port.ResourceReference{Kind: resourceKind, ID: resourceID},
+		ResourceMode: mode, CollectionUsage: usage,
 		RequestID: requestID,
 	}
 	if port.ValidateAuthorizationRequest(authorizationRequest) != nil {

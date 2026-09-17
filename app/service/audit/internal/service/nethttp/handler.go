@@ -3,11 +3,13 @@
 package nethttp
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"mime"
 	"net/http"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"github.com/xiak/matrix/api/contractjson"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/audit/internal/usecase/auditlog"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 type Workflow interface {
@@ -43,17 +46,26 @@ type Workflow interface {
 	) (auditv1.InstallationVerification, error)
 }
 
+type AccessKeyWorkflow interface {
+	QueryRecordsByAccessKey(context.Context, iamv1.AccessKeySignedRequest, string, auditv1.QueryRecordsRequest) (auditv1.RecordPage, error)
+	VerifyChainByAccessKey(context.Context, iamv1.AccessKeySignedRequest, string, auditv1.VerifyChainRequest) (auditv1.ChainVerification, error)
+}
+
 type Config struct {
-	NewRequestID func() (string, error)
+	NewRequestID     func() (string, error)
+	NorthboundOrigin string
+	InstallationID   string
 }
 
 type handler struct {
-	workflow Workflow
-	config   Config
-	routes   *http.ServeMux
+	workflow         Workflow
+	config           Config
+	routes           *http.ServeMux
+	externalRequests *externalrequest.Boundary
 }
 
 type requestIDContextKey struct{}
+type accessKeyContextKey struct{}
 
 func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	if workflow == nil {
@@ -62,7 +74,15 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	if config.NewRequestID == nil {
 		config.NewRequestID = newRequestID
 	}
-	value := &handler{workflow: workflow, config: config}
+	var externalRequests *externalrequest.Boundary
+	if config.NorthboundOrigin != "" {
+		var err error
+		externalRequests, err = externalrequest.NewBoundary(config.NorthboundOrigin, "/api/audit", config.InstallationID, iamv1.ProductAudit)
+		if err != nil {
+			return nil, errors.New("Audit northbound origin is invalid")
+		}
+	}
+	value := &handler{workflow: workflow, config: config, externalRequests: externalRequests}
 	routes := http.NewServeMux()
 	routes.HandleFunc("/ready", value.ready)
 	routes.HandleFunc("/v1/events", value.ingest)
@@ -128,6 +148,34 @@ func (value *handler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	}
 	response.Header().Set("Matrix-Request-ID", requestID)
 	request = request.WithContext(context.WithValue(request.Context(), requestIDContextKey{}, requestID))
+	if externalrequest.IsAccessKeyAuthorization(request) {
+		if value.externalRequests == nil {
+			writeProblem(response, requestID, http.StatusServiceUnavailable, "audit.unavailable", "Audit unavailable")
+			return
+		}
+		if request.Method != http.MethodPost ||
+			(request.URL.EscapedPath() != "/v1/records:query" && request.URL.EscapedPath() != "/v1/integrity:verify") {
+			writeAuthenticationProblem(response, request)
+			return
+		}
+		body, readErr := readSignedBody(request, auditv1.MaxRequestBytes)
+		if readErr != nil {
+			status := http.StatusBadRequest
+			if errors.Is(readErr, errSignedBodyTooLarge) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			writeProblem(response, requestID, status, "audit.json.invalid", "Audit signed request invalid")
+			return
+		}
+		signed, signErr := value.externalRequests.SignedRequest(request, body)
+		if signErr != nil {
+			writeAuthenticationProblem(response, request)
+			return
+		}
+		request.Body = io.NopCloser(bytes.NewReader(body))
+		request.ContentLength = int64(len(body))
+		request = request.WithContext(context.WithValue(request.Context(), accessKeyContextKey{}, signed))
+	}
 	value.routes.ServeHTTP(response, request)
 }
 
@@ -174,7 +222,7 @@ func (value *handler) queryRecords(response http.ResponseWriter, request *http.R
 	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
 	}
-	credential, ok := bearerCredential(response, request)
+	credential, signed, ok := authorizationCarrier(response, request)
 	if !ok {
 		return
 	}
@@ -186,12 +234,18 @@ func (value *handler) queryRecords(response http.ResponseWriter, request *http.R
 	if request.URL.Path == "/v1/platform/records:query" {
 		query = value.workflow.QueryPlatformRecords
 	}
-	page, err := query(
-		request.Context(),
-		credential,
-		requestID(request),
-		body,
-	)
+	var page auditv1.RecordPage
+	var err error
+	if signed != nil {
+		accessKeyWorkflow, present := value.workflow.(AccessKeyWorkflow)
+		if !present {
+			value.writeError(response, request, auditlog.ErrUnavailable)
+			return
+		}
+		page, err = accessKeyWorkflow.QueryRecordsByAccessKey(request.Context(), *signed, requestID(request), body)
+	} else {
+		page, err = query(request.Context(), credential, requestID(request), body)
+	}
 	if err != nil {
 		value.writeError(response, request, err)
 		return
@@ -203,7 +257,7 @@ func (value *handler) verifyChain(response http.ResponseWriter, request *http.Re
 	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
 	}
-	credential, ok := bearerCredential(response, request)
+	credential, signed, ok := authorizationCarrier(response, request)
 	if !ok {
 		return
 	}
@@ -215,12 +269,18 @@ func (value *handler) verifyChain(response http.ResponseWriter, request *http.Re
 	if request.URL.Path == "/v1/platform/integrity:verify" {
 		verify = value.workflow.VerifyPlatformChain
 	}
-	verification, err := verify(
-		request.Context(),
-		credential,
-		requestID(request),
-		body,
-	)
+	var verification auditv1.ChainVerification
+	var err error
+	if signed != nil {
+		accessKeyWorkflow, present := value.workflow.(AccessKeyWorkflow)
+		if !present {
+			value.writeError(response, request, auditlog.ErrUnavailable)
+			return
+		}
+		verification, err = accessKeyWorkflow.VerifyChainByAccessKey(request.Context(), *signed, requestID(request), body)
+	} else {
+		verification, err = verify(request.Context(), credential, requestID(request), body)
+	}
 	if err != nil {
 		value.writeError(response, request, err)
 		return
@@ -315,6 +375,32 @@ func bearerCredential(response http.ResponseWriter, request *http.Request) (iamv
 		return iamv1.Secret{}, false
 	}
 	return credential, true
+}
+
+func authorizationCarrier(response http.ResponseWriter, request *http.Request) (iamv1.Secret, *iamv1.AccessKeySignedRequest, bool) {
+	if signed, present := request.Context().Value(accessKeyContextKey{}).(iamv1.AccessKeySignedRequest); present {
+		return iamv1.Secret{}, &signed, true
+	}
+	credential, ok := bearerCredential(response, request)
+	return credential, nil, ok
+}
+
+var errSignedBodyTooLarge = errors.New("signed request body is too large")
+
+func readSignedBody(request *http.Request, maximum int64) ([]byte, error) {
+	if request.Body == nil {
+		return []byte{}, nil
+	}
+	defer request.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(request.Body, maximum+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maximum {
+		clear(body)
+		return nil, errSignedBodyTooLarge
+	}
+	return body, nil
 }
 
 func writeAuthenticationProblem(response http.ResponseWriter, request *http.Request) {

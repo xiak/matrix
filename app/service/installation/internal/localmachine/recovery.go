@@ -615,6 +615,7 @@ func authenticateRecoveryPlan(
 		plan.Current.CorrelationID == "" ||
 		plan.Current.CorrelationID != plan.Target.CorrelationID ||
 		plan.Current.Listener != plan.Target.Listener || plan.Current.Port != plan.Target.Port ||
+		plan.Current.NorthboundOrigin != plan.Target.NorthboundOrigin ||
 		plan.Current.Trust != plan.Target.Trust ||
 		!bytes.Equal(plan.Current.TrustBytes, plan.Target.TrustBytes) ||
 		!backupIDPattern.MatchString(plan.BackupID) || !validSHA256(plan.BackupDigest) {
@@ -664,7 +665,8 @@ func authenticateRecoveryPlan(
 	if err != nil || profileErr != nil || digest != plan.BackupDigest ||
 		manifest.ReleaseID != target.Bundle.Manifest.Release.ID ||
 		manifest.ReleaseDigest != target.Bundle.ManifestSHA256 ||
-		profile != target.Bundle.Manifest.Database {
+		profile != target.Bundle.Manifest.Database ||
+		verifyBackupAccessKeyWrapping(plan.Current.Root, plan.Current.InstallationID, target.Bundle.Manifest, manifest) != nil {
 		clear(current.TrustBytes)
 		clear(target.TrustBytes)
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},

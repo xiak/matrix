@@ -14,6 +14,7 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/audit/internal/authority"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 func TestAuditHTTPExposesCredentialBoundRoutes(t *testing.T) {
@@ -112,6 +113,73 @@ func TestAuditHTTPExposesCredentialBoundRoutes(t *testing.T) {
 	handler.ServeHTTP(missingResponse, missingCredential)
 	if missingResponse.Code != http.StatusUnauthorized || workflow.queryCalls != 1 {
 		t.Fatalf("missing credential status=%d calls=%d", missingResponse.Code, workflow.queryCalls)
+	}
+}
+
+func TestAuditAccessKeyUsesExactEdgeRequestAndNeverBearerWorkflow(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	handler, err := NewHandler(workflow, Config{
+		NewRequestID:     func() (string, error) { return "request-http-test", nil },
+		NorthboundOrigin: "https://api.example.test:443",
+		InstallationID:   "installation-one",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"pageSize":10}`)
+	request := httptest.NewRequest(http.MethodPost, "http://audit.internal/v1/records:query", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	setAuditAccessKeyEdgeHeaders(t, request, "/api/audit/v1/records:query")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK || workflow.accessKeyQueryCalls != 1 || workflow.queryCalls != 0 ||
+		workflow.accessKeyRequestID != "request-http-test" {
+		t.Fatalf("response=%d body=%q accessKeyCalls=%d bearerCalls=%d requestId=%q",
+			response.Code, response.Body.String(), workflow.accessKeyQueryCalls, workflow.queryCalls, workflow.accessKeyRequestID)
+	}
+	signed := workflow.accessKeySignedRequest
+	if signed.Parameters.Audience != iamv1.ProductAudit || signed.Parameters.InstallationID != "installation-one" ||
+		signed.HTTP.Method != http.MethodPost || signed.HTTP.Scheme != "https" ||
+		signed.HTTP.Authority != "api.example.test:443" || signed.HTTP.EscapedPath != "/api/audit/v1/records:query" ||
+		signed.HTTP.ContentType != "application/json" {
+		t.Fatalf("signed request=%#v", signed.HTTP)
+	}
+}
+
+func TestAuditAccessKeyRejectsPlatformAndForgedTargetsBeforeWorkflow(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		internalTarget string
+		externalTarget string
+	}{
+		{"platform", "/v1/platform/records:query", "/api/audit/v1/platform/records:query"},
+		{"ingest", "/v1/events", "/api/audit/v1/events"},
+		{"forged", "/v1/records:query", "/api/audit/v1/integrity:verify"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			handler, err := NewHandler(workflow, Config{
+				NewRequestID:     func() (string, error) { return "request-http-test", nil },
+				NorthboundOrigin: "https://api.example.test:443",
+				InstallationID:   "installation-one",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body := []byte(`{"pageSize":10}`)
+			request := httptest.NewRequest(http.MethodPost, "http://audit.internal"+test.internalTarget, bytes.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			setAuditAccessKeyEdgeHeaders(t, request, test.externalTarget)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusUnauthorized || workflow.accessKeyQueryCalls != 0 ||
+				workflow.accessKeyVerifyCalls != 0 || workflow.queryCalls != 0 || workflow.verifyCalls != 0 {
+				t.Fatalf("response=%d body=%q query=%d verify=%d bearerQuery=%d bearerVerify=%d",
+					response.Code, response.Body.String(), workflow.accessKeyQueryCalls,
+					workflow.accessKeyVerifyCalls, workflow.queryCalls, workflow.verifyCalls)
+			}
+		})
 	}
 }
 
@@ -283,6 +351,10 @@ type httpWorkflow struct {
 	queryRequestID              string
 	verifyRequestID             string
 	installationVerifyRequestID string
+	accessKeyQueryCalls         int
+	accessKeyVerifyCalls        int
+	accessKeyRequestID          string
+	accessKeySignedRequest      iamv1.AccessKeySignedRequest
 }
 
 func newHTTPWorkflow(t *testing.T) *httpWorkflow {
@@ -423,4 +495,55 @@ func (workflow *httpWorkflow) VerifyPlatformChain(
 ) (auditv1.ChainVerification, error) {
 	workflow.platformVerifyCalls++
 	return workflow.VerifyChain(ctx, credential, requestID, request)
+}
+
+func (workflow *httpWorkflow) QueryRecordsByAccessKey(
+	_ context.Context,
+	signed iamv1.AccessKeySignedRequest,
+	requestID string,
+	_ auditv1.QueryRecordsRequest,
+) (auditv1.RecordPage, error) {
+	workflow.accessKeyQueryCalls++
+	workflow.accessKeyRequestID = requestID
+	workflow.accessKeySignedRequest = signed
+	if workflow.queryErr != nil {
+		return auditv1.RecordPage{}, workflow.queryErr
+	}
+	return workflow.page, nil
+}
+
+func (workflow *httpWorkflow) VerifyChainByAccessKey(
+	_ context.Context,
+	signed iamv1.AccessKeySignedRequest,
+	requestID string,
+	_ auditv1.VerifyChainRequest,
+) (auditv1.ChainVerification, error) {
+	workflow.accessKeyVerifyCalls++
+	workflow.accessKeyRequestID = requestID
+	workflow.accessKeySignedRequest = signed
+	return workflow.verification, workflow.queryErr
+}
+
+func setAuditAccessKeyEdgeHeaders(t *testing.T, request *http.Request, target string) {
+	t.Helper()
+	nonce, err := iamv1.NewSecret(strings.Repeat("A", 22))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := iamv1.NewSecret(strings.Repeat("A", 43))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization, err := iamv1.EncodeAccessKeyAuthorization(iamv1.AccessKeySignatureParameters{
+		AccessKeyID: "access-key-one", InstallationID: "installation-one", Audience: iamv1.ProductAudit,
+		SignedAt: 1800000000, Nonce: nonce,
+	}, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := authorization.CopyBytes()
+	defer clear(plain)
+	request.Header.Set("Authorization", string(plain))
+	request.Header.Set(externalrequest.HeaderExternalOrigin, "https://api.example.test:443")
+	request.Header.Set(externalrequest.HeaderExternalRequestTarget, target)
 }

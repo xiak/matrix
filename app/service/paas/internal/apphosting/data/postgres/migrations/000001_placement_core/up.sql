@@ -69,6 +69,50 @@ REVOKE ALL ON FUNCTION paas.current_installation_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.current_installation_id()
     TO matrix_paas_api, matrix_paas_worker;
 
+-- A subject reference is immutable public lineage, not a credential or a
+-- caller-selected authorization shortcut. Keep its closed JSON shape in the
+-- database so an API role cannot smuggle unverified fields through a
+-- SECURITY DEFINER mutation.
+CREATE OR REPLACE FUNCTION paas.valid_subject_ref(value jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT CASE
+        WHEN jsonb_typeof(value) IS DISTINCT FROM 'object'
+          OR jsonb_typeof(value->'type') IS DISTINCT FROM 'string'
+          OR jsonb_typeof(value->'id') IS DISTINCT FROM 'string'
+          OR COALESCE(value->>'id', '') COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        THEN false
+        WHEN value->>'type' = 'USER' THEN
+            (value - ARRAY['type', 'id', 'accessKeyId']) = '{}'::jsonb
+            AND (NOT (value ? 'accessKeyId') OR (
+                jsonb_typeof(value->'accessKeyId') = 'string'
+                AND value->>'accessKeyId' COLLATE "C"
+                    ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            ))
+        WHEN value->>'type' = 'ROLE' THEN
+            (value - ARRAY['type', 'id', 'roleSession']) = '{}'::jsonb
+            AND jsonb_typeof(value->'roleSession') = 'object'
+            AND ((value->'roleSession') - ARRAY['sessionId', 'sourceUserId']) = '{}'::jsonb
+            AND (value->'roleSession') ?& ARRAY['sessionId', 'sourceUserId']
+            AND jsonb_typeof(value#>'{roleSession,sessionId}') = 'string'
+            AND jsonb_typeof(value#>'{roleSession,sourceUserId}') = 'string'
+            AND value#>>'{roleSession,sessionId}' COLLATE "C"
+                ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND value#>>'{roleSession,sourceUserId}' COLLATE "C"
+                ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        WHEN value->>'type' IN ('SERVICE_ACCOUNT', 'AGENT', 'SYSTEM_USER') THEN
+            (value - ARRAY['type', 'id']) = '{}'::jsonb
+        ELSE false
+    END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.valid_subject_ref(jsonb) FROM PUBLIC;
+
 CREATE TABLE IF NOT EXISTS paas.applications (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
@@ -514,6 +558,7 @@ ALTER TABLE paas.operations
         document->>'apiVersion' = 'paas.matrix.xiak.com/v1'
         AND document->>'kind' = 'Operation'
         AND document->>'id' = id
+        AND paas.valid_subject_ref(document->'requestedBy')
         AND ((tenant_id IS NOT NULL
             AND document#>>'{scope,kind}' = 'TENANT'
             AND document#>>'{scope,tenantId}' = tenant_id
@@ -523,6 +568,7 @@ ALTER TABLE paas.operations
             AND NOT (document#>'{scope}' ? 'tenantId')
             AND document->>'installationId' = installation_id
             AND document#>>'{requestedBy,type}' = 'USER'
+            AND ((document->'requestedBy') - ARRAY['type', 'id']) = '{}'::jsonb
             AND target_kind = CASE action
                 WHEN 'CREATE_EXECUTION_POOL' THEN 'ExecutionPool'
                 WHEN 'REGISTER_EXECUTION_TARGET' THEN 'ExecutionTarget'
@@ -2079,7 +2125,7 @@ BEGIN
             'iamDecisionId', 'action', 'target', 'operationId',
             'requestDigest', 'result', 'requestId', 'occurredAt'
        ])
-       OR NOT ((submitted_audit_event->'actor') ?& ARRAY['type', 'id'])
+       OR NOT paas.valid_subject_ref(submitted_audit_event->'actor')
        OR NOT ((submitted_audit_event->'target') ?& ARRAY['kind', 'id'])
        OR (submitted_audit_event - ARRAY[
             'schemaVersion', 'eventId', 'tenantId', 'installationId', 'actor',
@@ -2087,8 +2133,6 @@ BEGIN
             'requestDigest', 'result', 'requestId', 'auditId',
             'traceparent', 'occurredAt'
        ]) <> '{}'::jsonb
-       OR ((submitted_audit_event->'actor') - ARRAY['type', 'id'])
-            <> '{}'::jsonb
        OR ((submitted_audit_event->'target') - ARRAY['kind', 'id'])
             <> '{}'::jsonb THEN
         RAISE EXCEPTION USING
@@ -5109,6 +5153,7 @@ AS $function$
         AND to_regclass('paas.terminal_sessions') IS NOT NULL
         AND to_regclass('paas.enrolled_node_connections') IS NOT NULL
         AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
+        AND to_regprocedure('paas.valid_subject_ref(jsonb)') IS NOT NULL
         AND to_regprocedure('paas.complete_audit_event(text,text,text,text,bigint,text,timestamptz,text)') IS NOT NULL
         AND to_regprocedure('paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)') IS NOT NULL
         AND to_regprocedure('paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)') IS NOT NULL
@@ -5134,7 +5179,7 @@ AS $function$
              WHERE outbox.status = 'DEAD_LETTER'
                 OR outbox.attempts >= 100
         ),
-        5::bigint,
+        6::bigint,
         transaction_timestamp()
 $function$;
 
@@ -5156,6 +5201,7 @@ AS $function$
         AND to_regclass('paas.deployment_runtime_snapshots') IS NOT NULL
         AND to_regclass('paas.deployment_resource_snapshots') IS NOT NULL
         AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
+        AND to_regprocedure('paas.valid_subject_ref(jsonb)') IS NOT NULL
         AND to_regprocedure('paas.claim_operation(text,integer)') IS NOT NULL
         AND to_regprocedure(
             'paas.advance_operation(text,text,bigint,text,jsonb,timestamptz,boolean)'
@@ -5170,7 +5216,7 @@ AS $function$
         AND to_regprocedure(
             'paas.reconcile_local_execution_profile(bigint,jsonb,bigint,jsonb,bigint,jsonb)'
         ) IS NULL,
-        5::bigint,
+        6::bigint,
         transaction_timestamp()
 $function$;
 

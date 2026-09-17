@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
@@ -14,6 +15,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 func configureInstallation(
@@ -43,11 +45,12 @@ func configureInstallation(
 	compiled, err := topology.Compile(staged.Manifest, topology.Options{
 		InstallationID: plan.InstallationID, Root: plan.Root,
 		Listener: plan.Listener, Port: plan.Port,
+		NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	return publishInstallationConfiguration(plan.Root, staged.Manifest, compiled)
+	return publishInstallationConfiguration(plan.Root, staged.Manifest, plan.NorthboundOrigin, compiled)
 }
 
 func configureUpgrade(
@@ -108,15 +111,19 @@ func replaceReleaseConfiguration(
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	options := topology.Options{
-		InstallationID: after.InstallationID, Root: after.Root,
-		Listener: after.Listener, Port: after.Port,
-	}
-	beforeTopology, err := topology.CompileInstalled(beforeBundle.Manifest, options)
+	beforeTopology, err := topology.CompileInstalled(beforeBundle.Manifest, topology.Options{
+		InstallationID: before.InstallationID, Root: before.Root,
+		Listener: before.Listener, Port: before.Port,
+		NorthboundOrigin: before.NorthboundOrigin,
+	})
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	afterTopology, err := topology.CompileInstalled(afterBundle.Manifest, options)
+	afterTopology, err := topology.CompileInstalled(afterBundle.Manifest, topology.Options{
+		InstallationID: after.InstallationID, Root: after.Root,
+		Listener: after.Listener, Port: after.Port,
+		NorthboundOrigin: after.NorthboundOrigin,
+	})
 	if err != nil || afterTopology.ProjectName != beforeTopology.ProjectName {
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
@@ -131,11 +138,11 @@ func replaceReleaseConfiguration(
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	beforeRoutes, err := installedAPISIXStandaloneConfig(beforeBundle.Manifest)
+	beforeRoutes, err := installedAPISIXStandaloneConfig(beforeBundle.Manifest, before.NorthboundOrigin)
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	afterRoutes, err := installedAPISIXStandaloneConfig(afterBundle.Manifest)
+	afterRoutes, err := installedAPISIXStandaloneConfig(afterBundle.Manifest, after.NorthboundOrigin)
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
@@ -189,9 +196,10 @@ func replaceReleaseConfiguration(
 func publishInstallationConfiguration(
 	root string,
 	manifest release.Manifest,
+	northboundOrigin string,
 	compiled topology.Result,
 ) error {
-	routes, err := installedAPISIXStandaloneConfig(manifest)
+	routes, err := installedAPISIXStandaloneConfig(manifest, northboundOrigin)
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
@@ -321,12 +329,20 @@ func artifactCatalogConfig(manifests ...release.Manifest) ([]byte, error) {
 func apisixMainConfig() []byte {
 	return replaceStaticAPISIXFragment(
 		predecessorAPISIXMainConfig(),
+		[]byte("        proxy_set_header X-Matrix-Public-Origin \"\";\n"),
+		[]byte("        proxy_set_header X-Matrix-Public-Origin \"\";\n        proxy_set_header X-Matrix-External-Origin \"\";\n        proxy_set_header X-Matrix-External-Request-Target \"\";\n"),
+	)
+}
+
+func predecessorAPISIXMainConfig() []byte {
+	return replaceStaticAPISIXFragment(
+		legacyAPISIXMainConfig(),
 		[]byte("(?:exchange|recovery-challenge|recover))$\""),
 		[]byte("(?:exchange|recovery-challenge|recover|complete))$\""),
 	)
 }
 
-func predecessorAPISIXMainConfig() []byte {
+func legacyAPISIXMainConfig() []byte {
 	prefix := []byte(fmt.Sprintf(`apisix:
   node_listen:
     - ip: 0.0.0.0
@@ -397,9 +413,88 @@ nginx_config:
 	return append(prefix, replaceStaticAPISIXFragment(base, marker, withEnrollmentIngress)...)
 }
 
-func apisixStandaloneConfig() []byte {
-	withCompletionURI := replaceStaticAPISIXFragment(
+func apisixStandaloneConfig(northboundOrigin string) ([]byte, error) {
+	if externalrequest.ValidateOrigin(northboundOrigin) != nil {
+		return nil, errors.New("APISIX northbound origin is invalid")
+	}
+	withStripping := bytes.ReplaceAll(
 		predecessorAPISIXStandaloneConfig(),
+		[]byte("            - Matrix-Subject-Credential"),
+		[]byte("            - Matrix-Subject-Credential\n            - X-Matrix-External-Origin\n            - X-Matrix-External-Request-Target"),
+	)
+	for _, route := range []struct {
+		id, uri, expression, target string
+	}{
+		{"matrix-audit", "/api/audit/*", "^/api/audit/(.*)", "/$1"},
+	} {
+		old := []byte(fmt.Sprintf(`    id: %s
+    uri: %s
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - %q
+          - %q
+        headers:
+          remove:
+            - Matrix-Subject-Credential
+            - X-Matrix-External-Origin
+            - X-Matrix-External-Request-Target`, route.id, route.uri, route.expression, route.target))
+		replacement := []byte(fmt.Sprintf(`    id: %s
+    uri: %s
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - %q
+          - %q
+        headers:
+          set:
+            X-Matrix-External-Origin: %s
+            X-Matrix-External-Request-Target: "$request_uri"
+          remove:
+            - Matrix-Subject-Credential`, route.id, route.uri, route.expression, route.target, strconv.Quote(northboundOrigin)))
+		withStripping = replaceStaticAPISIXFragment(withStripping, old, replacement)
+	}
+	paasOld := []byte(fmt.Sprintf(`    id: matrix-paas
+    uri: /api/paas/*
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/paas/(.*)"
+          - "/$1"
+        headers:
+          set:
+            X-Matrix-Public-Origin: "https://$host:%d"
+          remove:
+            - X-Matrix-Observed-Peer
+            - X-Matrix-Transport-Scheme
+            - X-Matrix-TLS-Peer
+            - Matrix-Subject-Credential
+            - X-Matrix-External-Origin
+            - X-Matrix-External-Request-Target`, topology.NodeEnrollmentIngressPort))
+	paasReplacement := []byte(fmt.Sprintf(`    id: matrix-paas
+    uri: /api/paas/*
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/paas/(.*)"
+          - "/$1"
+        headers:
+          set:
+            X-Matrix-Public-Origin: "https://$host:%d"
+            X-Matrix-External-Origin: %s
+            X-Matrix-External-Request-Target: "$request_uri"
+          remove:
+            - X-Matrix-Observed-Peer
+            - X-Matrix-Transport-Scheme
+            - X-Matrix-TLS-Peer
+            - Matrix-Subject-Credential`, topology.NodeEnrollmentIngressPort, strconv.Quote(northboundOrigin)))
+	withStripping = replaceStaticAPISIXFragment(withStripping, paasOld, paasReplacement)
+	return withStripping, nil
+}
+
+func predecessorAPISIXStandaloneConfig() []byte {
+	withCompletionURI := replaceStaticAPISIXFragment(
+		legacyAPISIXStandaloneConfig(),
 		[]byte("      - /api/paas/v1/node-enrollments/*/recover\n"),
 		[]byte("      - /api/paas/v1/node-enrollments/*/recover\n      - /api/paas/v1/node-enrollments/*/complete\n"),
 	)
@@ -410,7 +505,7 @@ func apisixStandaloneConfig() []byte {
 	)
 }
 
-func predecessorAPISIXStandaloneConfig() []byte {
+func legacyAPISIXStandaloneConfig() []byte {
 	predecessor := apisixStandaloneBaseConfig()
 	withPublicOrigin := replaceStaticAPISIXFragment(
 		predecessor, paasPublicOriginAPISIXPredecessor, paasPublicOriginAPISIXCurrent(),
@@ -650,13 +745,13 @@ func apisixStandaloneBaseConfig() []byte {
 `)
 }
 
-func installedAPISIXStandaloneConfig(manifest release.Manifest) ([]byte, error) {
+func installedAPISIXStandaloneConfig(manifest release.Manifest, northboundOrigin string) ([]byte, error) {
 	if err := topology.ValidateInstalledContract(manifest); err != nil {
 		return nil, err
 	}
 	switch manifest.Database {
 	case release.CurrentDatabaseProfile():
-		return apisixStandaloneConfig(), nil
+		return apisixStandaloneConfig(northboundOrigin)
 	case release.SupportedDatabasePredecessorProfile():
 		return predecessorAPISIXStandaloneConfig(), nil
 	default:

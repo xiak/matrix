@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -525,15 +526,20 @@ func TestProviderVersionComparisonAcceptsBoundedDistributionMetadata(t *testing.
 }
 
 func TestFrozenPredecessorAPISIXRoutesMatchPublishedContract(t *testing.T) {
-	const publishedDigest = "sha256:afb557295b44d580c969b86fec32c849ca0ba4c2408eb3ff2023a122a499b19c"
+	const publishedDigest = "sha256:9bd36e4e60ce2cc211bb5f2e36391686319212e1b5722a3106a9826b033ef07d"
 	digest := sha256.Sum256(predecessorAPISIXStandaloneConfig())
 	if got := "sha256:" + hex.EncodeToString(digest[:]); got != publishedDigest {
 		t.Fatalf("frozen predecessor APISIX digest = %q, want %q", got, publishedDigest)
 	}
-	if bytes.Equal(predecessorAPISIXStandaloneConfig(), apisixStandaloneConfig()) {
+	current, err := apisixStandaloneConfig("https://matrix.example.com:443")
+	if err != nil || bytes.Equal(predecessorAPISIXStandaloneConfig(), current) {
 		t.Fatal("current APISIX routes did not advance beyond the frozen predecessor")
 	}
-	const publishedMainDigest = "sha256:9bb2541ebf533ec0aa514b35fe763347106147207426132eca71c6851c25b7e4"
+	if bytes.Count(current, []byte(`X-Matrix-External-Origin: "https://matrix.example.com:443"`)) != 2 ||
+		bytes.Count(current, []byte(`X-Matrix-External-Request-Target: "$request_uri"`)) != 2 {
+		t.Fatal("current APISIX routes do not inject the exact external request boundary")
+	}
+	const publishedMainDigest = "sha256:af92fe49e77330f574bc1b06c86ebc16e3e87a56ecbc3e86c0286c6bb864460f"
 	mainDigest := sha256.Sum256(predecessorAPISIXMainConfig())
 	if got := "sha256:" + hex.EncodeToString(mainDigest[:]); got != publishedMainDigest {
 		t.Fatalf("frozen predecessor APISIX main digest = %q, want %q", got, publishedMainDigest)
@@ -542,7 +548,7 @@ func TestFrozenPredecessorAPISIXRoutesMatchPublishedContract(t *testing.T) {
 		t.Fatal("current APISIX main configuration did not advance beyond the frozen predecessor")
 	}
 	if !bytes.Contains(predecessorAPISIXMainConfig(), []byte("ssl_protocols TLSv1.3;")) ||
-		bytes.Contains(predecessorAPISIXMainConfig(), []byte("recover|complete")) {
+		!bytes.Contains(predecessorAPISIXMainConfig(), []byte("recover|complete")) {
 		t.Fatal("frozen predecessor APISIX main configuration differs from its TLS bootstrap contract")
 	}
 }
@@ -573,10 +579,19 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	bootstrapDigest, digestErr := iamv1.BootstrapDigest(bootstrap)
 	if err != nil || digestErr != nil || localAuthority.Scope != (iamv1.LocalCredentialRecoveryScope{
 		InstallationID: bootstrap.InstallationID, BootstrapDigest: bootstrapDigest,
-		OrganizationID: bootstrap.Organization.ID, PrincipalID: bootstrap.Administrator.ID,
+		AccountID: bootstrap.Organization.ID, PrincipalID: bootstrap.Administrator.ID,
 	}) {
 		t.Fatal("local recovery authority is not bound to the sealed original primary")
 	}
+	wrappingKeyring, err := readAccessKeyWrappingKeyring(plan.Root, plan.InstallationID)
+	if err != nil || wrappingKeyring.Scope != (iamv1.AccessKeyWrappingScope{
+		InstallationID: bootstrap.InstallationID, BootstrapDigest: bootstrapDigest,
+	}) || len(wrappingKeyring.Keys) != 1 || wrappingKeyring.ActiveWrappingKeyID != wrappingKeyring.Keys[0].WrappingKeyID {
+		t.Fatal("access-key wrapping keyring is not bound to the sealed IAM bootstrap")
+	}
+	wrappingKeyMaterial := wrappingKeyring.Keys[0].KeyMaterial.CopyBytes()
+	defer clear(wrappingKeyMaterial)
+	wrappingKeyring = iamv1.AccessKeyWrappingKeyring{}
 	issuerCertificate := readTestFile(t, plan.Root, layout.EnrollmentIssuerCertificate)
 	issuerPrivateKey := readTestFile(t, plan.Root, layout.EnrollmentIssuerPrivateKey)
 	defer clear(issuerPrivateKey)
@@ -716,15 +731,16 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	}
 
 	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
-		InstallationID: plan.InstallationID,
-		Root:           "/matrix-installation-root",
-		Listener:       plan.Listener,
-		Port:           plan.Port,
+		InstallationID:   plan.InstallationID,
+		Root:             "/matrix-installation-root",
+		Listener:         plan.Listener,
+		Port:             plan.Port,
+		NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		t.Fatalf("compile fixture topology: %v", err)
 	}
-	if err := publishInstallationConfiguration(plan.Root, plan.Bundle.Manifest, compiled); err != nil {
+	if err := publishInstallationConfiguration(plan.Root, plan.Bundle.Manifest, plan.NorthboundOrigin, compiled); err != nil {
 		t.Fatalf("publish installation configuration: %v", err)
 	}
 	catalogBytes := readTestFile(t, plan.Root, layout.ArtifactCatalog)
@@ -845,7 +861,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	if err := os.WriteFile(nginxPath, providerContent, 0o600); err != nil {
 		t.Fatalf("simulate APISIX runtime write: %v", err)
 	}
-	if err := publishInstallationConfiguration(plan.Root, plan.Bundle.Manifest, compiled); err != nil {
+	if err := publishInstallationConfiguration(plan.Root, plan.Bundle.Manifest, plan.NorthboundOrigin, compiled); err != nil {
 		t.Fatalf("replay configuration with provider-owned runtime file: %v", err)
 	}
 	if actual := readTestFile(t, plan.Root, layout.APISIXNginx); !bytes.Equal(actual, providerContent) {
@@ -884,6 +900,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		ingressPrivateKeyPEM,
 		controllerPrivateKeyPEM,
 		localAuthority.CapabilityKey.CopyBytes(),
+		wrappingKeyMaterial,
 	}
 	for _, credential := range serviceCredentials {
 		secrets = append(secrets, credential)
@@ -898,7 +915,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 			t.Fatalf("drift APISIX runtime permissions: %v", err)
 		}
 		if err := publishInstallationConfiguration(
-			plan.Root, plan.Bundle.Manifest, compiled,
+			plan.Root, plan.Bundle.Manifest, plan.NorthboundOrigin, compiled,
 		); !errors.Is(err, platformcommand.ErrEffectConflict) {
 			t.Fatalf("unsafe APISIX runtime replay error=%v", err)
 		}
@@ -1065,6 +1082,99 @@ func TestLocalRecoveryAuthorityCannotAdoptAnotherBootstrapOrTarget(t *testing.T)
 				t.Fatal("rejected authority changed existing installation credentials")
 			}
 		})
+	}
+}
+
+func TestAccessKeyWrappingKeyringCannotAdoptSubstitutedMaterial(t *testing.T) {
+	for _, mode := range []string{"installation", "bootstrap", "invalid key material", "absent keyring"} {
+		t.Run(mode, func(t *testing.T) {
+			plan := newInstallPlan(t)
+			if err := stageInstallation(plan, rand.Reader); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(plan.Root, filepath.FromSlash(layout.IAMAccessKeyWrappingKeyring))
+			content := readTestFile(t, plan.Root, layout.IAMAccessKeyWrappingKeyring)
+			switch mode {
+			case "installation":
+				content = bytes.Replace(content, []byte(plan.InstallationID), []byte("mxi-ffffffffffffffffffffffffffffffff"), 1)
+			case "bootstrap":
+				content = bytes.Replace(content, []byte(`"bootstrapDigest":"sha256:`), []byte(`"bootstrapDigest":"sha256:f`), 1)
+			case "invalid key material":
+				marker := []byte(`"keyMaterial":"`)
+				index := bytes.Index(content, marker)
+				if index < 0 || index+len(marker) >= len(content) {
+					t.Fatal("keyring fixture lacks key material")
+				}
+				content[index+len(marker)] = '?'
+			case "absent keyring":
+				if os.Remove(path) != nil {
+					t.Fatal("remove keyring fixture")
+				}
+				if _, err := readAccessKeyWrappingKeyring(plan.Root, plan.InstallationID); !errors.Is(err, platformcommand.ErrEffectVerification) {
+					t.Fatal("read silently created a missing wrapping keyring")
+				}
+				return
+			}
+			if os.WriteFile(path, content, 0o600) != nil {
+				t.Fatal("write substituted keyring fixture")
+			}
+			before := snapshotManagedCredentials(t, plan.Root)
+			if _, err := readAccessKeyWrappingKeyring(plan.Root, plan.InstallationID); !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatal("substituted wrapping keyring was accepted")
+			}
+			if err := stageInstallation(plan, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatal("staging replay adopted a substituted wrapping keyring")
+			}
+			if !equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
+				t.Fatal("rejected wrapping keyring changed installation credentials")
+			}
+		})
+	}
+}
+
+func TestBackupBindsCurrentAccessKeyWrappingKeyWithoutArchivingIt(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatal(err)
+	}
+	binding, version, err := backupAccessKeyWrappingForRelease(plan)
+	if err != nil || version != backupAPIVersion || binding == nil ||
+		binding.WrappingKeyID != "access-key-wrapping-v1" || !validSHA256(binding.Commitment) {
+		t.Fatalf("backup wrapping commitment = %#v / %q / %v", binding, version, err)
+	}
+	manifest := backupManifest{APIVersion: version, AccessKeyWrapping: binding}
+	if err := verifyBackupAccessKeyWrapping(plan.Root, plan.InstallationID, plan.Bundle.Manifest, manifest); err != nil {
+		t.Fatalf("verify current wrapping commitment: %v", err)
+	}
+	path := filepath.Join(plan.Root, filepath.FromSlash(layout.IAMAccessKeyWrappingKeyring))
+	original := readTestFile(t, plan.Root, layout.IAMAccessKeyWrappingKeyring)
+	keyring, err := iamv1.DecodeAccessKeyWrappingKeyring(bytes.NewReader(original))
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, err := iamv1.NewSecret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x7f}, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring.Keys[0].KeyMaterial = material
+	substituted, err := iamv1.EncodeAccessKeyWrappingKeyring(keyring)
+	keyring = iamv1.AccessKeyWrappingKeyring{}
+	if err != nil || os.WriteFile(path, substituted, 0o600) != nil {
+		clear(substituted)
+		t.Fatal("write substituted wrapping keyring")
+	}
+	clear(substituted)
+	if err := verifyBackupAccessKeyWrapping(plan.Root, plan.InstallationID, plan.Bundle.Manifest, manifest); err == nil {
+		t.Fatal("backup commitment admitted different wrapping key material")
+	}
+	if bytes.Contains(original, []byte(binding.Commitment)) {
+		t.Fatal("non-secret commitment was confused with raw keyring bytes")
+	}
+
+	predecessor := newInstallPlan(t, release.SupportedDatabasePredecessorProfile())
+	legacyBinding, legacyVersion, err := backupAccessKeyWrappingForRelease(predecessor)
+	if err != nil || legacyBinding != nil || legacyVersion != predecessorBackupAPIVersion {
+		t.Fatalf("predecessor backup wrapping contract = %#v / %q / %v", legacyBinding, legacyVersion, err)
 	}
 }
 
@@ -1238,14 +1348,19 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_TERMINAL_COOKIE_SECURE")) ||
 		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE")) ||
 		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE")) ||
-		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
-		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
+		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
+		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
+		bytes.Contains(predecessorCompose, []byte("MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE")) ||
+		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_NORTHBOUND_ORIGIN")) ||
+		bytes.Contains(predecessorCompose, []byte("MATRIX_AUDIT_NORTHBOUND_ORIGIN")) ||
 		!bytes.Contains(predecessorCompose, []byte(layout.EnrollmentIngressCertificate)) ||
 		!bytes.Contains(predecessorCompose, []byte(layout.EnrollmentIngressPrivateKey)) ||
 		!bytes.Contains(predecessorRoutes, []byte("matrix-paas-terminal")) ||
 		!bytes.Contains(predecessorRoutes, []byte("X-Matrix-Public-Origin")) ||
 		!bytes.Contains(predecessorRoutes, []byte("matrix-paas-node-enrollment-bootstrap")) ||
-		bytes.Contains(predecessorRoutes, []byte("/complete")) ||
+		!bytes.Contains(predecessorRoutes, []byte("/complete")) ||
+		bytes.Contains(predecessorRoutes, []byte("X-Matrix-External-Origin")) ||
+		bytes.Contains(predecessorRoutes, []byte("X-Matrix-External-Request-Target")) ||
 		!bytes.Equal(predecessorMainConfig, predecessorAPISIXMainConfig()) {
 		t.Fatal("frozen adjacent predecessor differs from its signed topology")
 	}
@@ -1271,6 +1386,9 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE")) ||
 		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
 		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
+		!bytes.Contains(successorCompose, []byte("MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE")) ||
+		!bytes.Contains(successorCompose, []byte("MATRIX_PAAS_NORTHBOUND_ORIGIN")) ||
+		!bytes.Contains(successorCompose, []byte("MATRIX_AUDIT_NORTHBOUND_ORIGIN")) ||
 		!bytes.Contains(successorCompose, []byte(layout.EnrollmentIngressCertificate)) ||
 		!bytes.Contains(successorCompose, []byte(layout.EnrollmentIngressPrivateKey)) ||
 		bytes.Equal(successorRoutes, predecessorRoutes) ||
@@ -1278,9 +1396,11 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 		!bytes.Contains(successorRoutes, []byte("X-Matrix-Public-Origin")) ||
 		!bytes.Contains(successorRoutes, []byte("matrix-paas-node-enrollment-bootstrap")) ||
 		!bytes.Contains(successorRoutes, []byte("/complete")) ||
+		!bytes.Contains(successorRoutes, []byte("X-Matrix-External-Origin")) ||
+		!bytes.Contains(successorRoutes, []byte("X-Matrix-External-Request-Target")) ||
 		bytes.Equal(successorMainConfig, predecessorMainConfig) ||
 		!bytes.Equal(successorMainConfig, apisixMainConfig()) {
-		t.Fatal("schema upgrade did not advance the exact enrollment route while retaining terminal topology")
+		t.Fatal("schema upgrade did not add the external-request trust boundary while retaining enrollment topology")
 	}
 
 	if err := restoreUpgradeConfiguration(plan); err != nil {
@@ -1298,20 +1418,17 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 	assertReleaseConfiguration(t, source)
 }
 
-func TestFrozenPredecessorVerificationDoesNotRequireFutureEnrollmentControllerIdentity(t *testing.T) {
+func TestFrozenPredecessorVerificationDoesNotRequireFutureAccessKeyWrappingKeyring(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")
 	}
 	plan := newUpgradePlan(
 		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
 	)
-	for _, relative := range []string{
-		layout.EnrollmentControllerCertificate, layout.EnrollmentControllerPrivateKey,
-		layout.EnrollmentControllerTrust,
-	} {
-		if err := os.Remove(filepath.Join(plan.Source.Root, filepath.FromSlash(relative))); err != nil {
-			t.Fatalf("remove future enrollment controller fixture %q: %v", relative, err)
-		}
+	if _, err := os.Stat(filepath.Join(
+		plan.Source.Root, filepath.FromSlash(layout.IAMAccessKeyWrappingKeyring),
+	)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("frozen predecessor access-key wrapping keyring error = %v", err)
 	}
 	source, err := authenticateInstalledPlan(plan.Source)
 	if err != nil {
@@ -1319,13 +1436,13 @@ func TestFrozenPredecessorVerificationDoesNotRequireFutureEnrollmentControllerId
 	}
 	defer clear(source.TrustBytes)
 	if _, err := verifiedInstallationConfiguration(source); err != nil {
-		t.Fatalf("verify frozen predecessor without future controller identity: %v", err)
+		t.Fatalf("verify frozen predecessor without future access-key wrapping keyring: %v", err)
 	}
 	if err := stageInstallation(plan.Target, rand.Reader); err != nil {
-		t.Fatalf("stage successor controller identity: %v", err)
+		t.Fatalf("stage successor credentials: %v", err)
 	}
-	if err := ensureEnrollmentController(plan.Target.Root, plan.Target.InstallationID, nil); err != nil {
-		t.Fatalf("successor staging did not materialize enrollment controller identity: %v", err)
+	if _, err := readAccessKeyWrappingKeyring(plan.Target.Root, plan.Target.InstallationID); err != nil {
+		t.Fatalf("successor staging did not materialize access-key wrapping keyring: %v", err)
 	}
 }
 
@@ -1569,6 +1686,7 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
 		InstallationID: plan.InstallationID, Root: plan.Root,
 		Listener: plan.Listener, Port: plan.Port,
+		NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		t.Fatalf("compile migration topology: %v", err)
@@ -1658,6 +1776,7 @@ func TestMigrateUpgradeUsesTargetBinariesOnTheOwnedSourceNetwork(t *testing.T) {
 	compiled, err := topology.Compile(plan.Target.Bundle.Manifest, topology.Options{
 		InstallationID: plan.Target.InstallationID, Root: plan.Target.Root,
 		Listener: plan.Target.Listener, Port: plan.Target.Port,
+		NorthboundOrigin: plan.Target.NorthboundOrigin,
 	})
 	if err != nil {
 		t.Fatalf("compile migration upgrade target: %v", err)
@@ -2117,7 +2236,7 @@ func TestPublishedBackupSealRemainsDecodableButDoesNotGrantRuntimeCompatibility(
 	if err := json.Unmarshal(content, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = legacyBackupAPIVersion, 1, release.DatabaseProfile{}
+	manifest.APIVersion, manifest.SchemaVersion, manifest.Database, manifest.AccessKeyWrapping = legacyBackupAPIVersion, 1, release.DatabaseProfile{}, nil
 	key, err := loadBackupSealKey(plan.Root, nil, false)
 	if err != nil {
 		t.Fatal(err)
@@ -2163,7 +2282,7 @@ func TestPublishedBackupSealRemainsDecodableButDoesNotGrantRuntimeCompatibility(
 		t.Fatal("rejected legacy backup replay rewrote its sealed bytes")
 	}
 
-	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = backupAPIVersion, 0, release.SupportedDatabasePredecessorProfile()
+	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = predecessorBackupAPIVersion, 0, release.SupportedDatabasePredecessorProfile()
 	substituted, err := sealBackupManifest(manifest, key)
 	if err != nil {
 		t.Fatal(err)
@@ -2720,7 +2839,8 @@ func newInstallPlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
 		CorrelationID: "cmd-11111111111111111111111111111111",
 		Listener:      "0.0.0.0", Port: 8080, Bundle: bundle,
-		Trust: fixture.Trust, TrustBytes: trustBytes,
+		NorthboundOrigin: "https://matrix.example.com:443",
+		Trust:            fixture.Trust, TrustBytes: trustBytes,
 	}
 }
 
@@ -2751,14 +2871,14 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 		Listener:      "0.0.0.0", Port: 8080, Bundle: bundles[0],
 		Trust: fixtures[0].Trust, TrustBytes: trustBytes,
 	}
+	if source.Bundle.Manifest.TopologyDigest == topology.ContractDigest() {
+		source.NorthboundOrigin = "https://matrix.example.com:443"
+	}
 	if err := stageInstallation(source, rand.Reader); err != nil {
 		t.Fatalf("stage upgrade source: %v", err)
 	}
 	if source.Bundle.Manifest.TopologyDigest == topology.SupportedPredecessorContractDigest() {
-		for _, relative := range []string{
-			layout.EnrollmentControllerCertificate, layout.EnrollmentControllerPrivateKey,
-			layout.EnrollmentControllerTrust,
-		} {
+		for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring} {
 			if err := os.Remove(filepath.Join(source.Root, filepath.FromSlash(relative))); err != nil {
 				t.Fatalf("remove future predecessor fixture %q: %v", relative, err)
 			}
@@ -2776,16 +2896,20 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 		compiled, err := topology.CompileInstalled(source.Bundle.Manifest, topology.Options{
 			InstallationID: source.InstallationID, Root: source.Root,
 			Listener: source.Listener, Port: source.Port,
+			NorthboundOrigin: source.NorthboundOrigin,
 		})
 		if err != nil {
 			t.Fatalf("compile predecessor source: %v", err)
 		}
-		if err := publishInstallationConfiguration(source.Root, source.Bundle.Manifest, compiled); err != nil {
+		if err := publishInstallationConfiguration(source.Root, source.Bundle.Manifest, source.NorthboundOrigin, compiled); err != nil {
 			t.Fatalf("publish predecessor source: %v", err)
 		}
 	}
 	target := source
 	target.Bundle = bundles[1]
+	if target.Bundle.Manifest.TopologyDigest == topology.ContractDigest() {
+		target.NorthboundOrigin = "https://matrix.example.com:443"
+	}
 	target.PreviousID = source.Bundle.Manifest.Release.ID
 	target.PreviousDigest = source.Bundle.ManifestSHA256
 	if err := stageInstallation(target, rand.Reader); err != nil {
@@ -2807,6 +2931,7 @@ func assertReleaseConfiguration(
 	compiled, err := topology.CompileInstalled(plan.Bundle.Manifest, topology.Options{
 		InstallationID: plan.InstallationID, Root: plan.Root,
 		Listener: plan.Listener, Port: plan.Port,
+		NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		t.Fatalf("compile expected release configuration: %v", err)
@@ -2831,6 +2956,7 @@ func installedPlanFrom(plan platformcommand.InstallPlan) platformcommand.Install
 		Root: plan.Root, InstallationID: plan.InstallationID,
 		CorrelationID: plan.CorrelationID,
 		Listener:      plan.Listener, Port: plan.Port,
+		NorthboundOrigin: plan.NorthboundOrigin,
 		ReleaseID:        plan.Bundle.Manifest.Release.ID,
 		ReleaseDigest:    plan.Bundle.ManifestSHA256,
 		PreviousID:       plan.PreviousID,
@@ -2852,7 +2978,7 @@ func readTestFile(t *testing.T, root, relative string) []byte {
 func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 	t.Helper()
 	paths := []string{
-		layout.ReleaseTrust, layout.IAMBootstrap, layout.AuditIAMCredential,
+		layout.ReleaseTrust, layout.IAMBootstrap, layout.IAMAccessKeyWrappingKeyring, layout.AuditIAMCredential,
 		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
 		layout.InstallationVerifierCredential, layout.AuditCursorKey,
 		layout.EnrollmentIssuerCertificate, layout.EnrollmentIssuerPrivateKey,

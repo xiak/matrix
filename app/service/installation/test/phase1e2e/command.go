@@ -462,13 +462,14 @@ func inspectContainers(ctx context.Context, ids []string) ([]containerInspection
 
 func expectedPlatformServices(
 	manifest release.Manifest,
-	root, installationID string,
+	root, installationID, northboundOrigin string,
 ) (topology.Result, map[string]struct{}, error) {
 	compiled, err := topology.CompileInstalled(manifest, topology.Options{
-		InstallationID: installationID,
-		Root:           filepath.ToSlash(root),
-		Listener:       "0.0.0.0",
-		Port:           8080,
+		InstallationID:   installationID,
+		Root:             filepath.ToSlash(root),
+		Listener:         "0.0.0.0",
+		Port:             8080,
+		NorthboundOrigin: northboundOrigin,
 	})
 	if err != nil {
 		return topology.Result{}, nil, err
@@ -573,7 +574,7 @@ func assertPlatform(
 		state.PreviousRelease != wantPrevious || state.Active != nil {
 		return lifecycle.Journal{}, fail("platform-journal")
 	}
-	compiled, expected, err := expectedPlatformServices(manifest, root, state.InstallationID)
+	compiled, expected, err := expectedPlatformServices(manifest, root, state.InstallationID, state.NorthboundOrigin)
 	if err != nil {
 		return lifecycle.Journal{}, fail("platform-topology-contract")
 	}

@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"strings"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 var (
 	ErrUnauthenticated          = errors.New("IAM authentication failed")
 	ErrPermissionDenied         = errors.New("IAM authorization denied")
+	ErrAuthorizationReplay      = errors.New("IAM signed request was already consumed")
 	ErrAuthorizationUnavailable = errors.New("IAM authorization unavailable")
 )
 
@@ -49,10 +51,24 @@ const (
 // AuthorizationRequest carries transient credential material to the IAM
 // boundary. Credential must never be persisted, logged, or copied into Audit.
 type AuthorizationRequest struct {
-	Credential string
-	Action     string
-	Resource   paasv1.ResourceRef
-	RequestID  string
+	Credential      string
+	Action          string
+	Resource        paasv1.ResourceRef
+	ResourceMode    iamv1.AuthorizationResourceMode
+	CollectionUsage iamv1.AuthorizationCollectionUsage
+	RequestID       string
+}
+
+// AccessKeyAuthorizationRequest carries the exact external request extracted
+// by the product HTTP boundary. It is not a bearer credential or reusable
+// permit and must be sent to IAM at most once.
+type AccessKeyAuthorizationRequest struct {
+	Action          string
+	Resource        paasv1.ResourceRef
+	ResourceMode    iamv1.AuthorizationResourceMode
+	CollectionUsage iamv1.AuthorizationCollectionUsage
+	RequestID       string
+	SignedRequest   iamv1.AccessKeySignedRequest
 }
 
 // Authorization is the trusted IAM result consumed by apphosting. Exactly one
@@ -74,6 +90,10 @@ type Authorizer interface {
 	Authorize(context.Context, AuthorizationRequest) (Authorization, error)
 }
 
+type AccessKeyAuthorizer interface {
+	AuthorizeAccessKey(context.Context, AccessKeyAuthorizationRequest) (Authorization, error)
+}
+
 func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	var problems []error
 	if value.Credential == "" || strings.TrimSpace(value.Credential) != value.Credential ||
@@ -89,7 +109,54 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	problems = append(problems,
 		paasv1.ValidateID("authorization.resource.id", string(value.Resource.ID)),
 		paasv1.ValidateID("authorization.requestId", value.RequestID),
+		validateAuthorizationResourceShape(value.Resource, value.ResourceMode, value.CollectionUsage),
 	)
+	return errors.Join(problems...)
+}
+
+func ValidateAccessKeyAuthorizationRequest(value AccessKeyAuthorizationRequest) error {
+	var problems []error
+	if !accessKeyAuthorizationAction(value.Action) {
+		problems = append(problems, errors.New("authorization action does not accept an access key"))
+	}
+	if strings.TrimSpace(value.Resource.Kind) == "" {
+		problems = append(problems, errors.New("authorization resource kind is required"))
+	}
+	problems = append(problems,
+		paasv1.ValidateID("authorization.resource.id", string(value.Resource.ID)),
+		paasv1.ValidateID("authorization.requestId", value.RequestID),
+		validateAuthorizationResourceShape(value.Resource, value.ResourceMode, value.CollectionUsage),
+		iamv1.ValidateAccessKeySignedRequest(value.SignedRequest),
+	)
+	return errors.Join(problems...)
+}
+
+func validateAuthorizationResourceShape(
+	resource paasv1.ResourceRef,
+	mode iamv1.AuthorizationResourceMode,
+	usage iamv1.AuthorizationCollectionUsage,
+) error {
+	switch mode {
+	case iamv1.AuthorizationResourceInstance:
+		if usage != "" {
+			return errors.New("instance authorization cannot carry collection usage")
+		}
+	case iamv1.AuthorizationResourceCollection:
+		if resource.ID != "collection" ||
+			(usage != iamv1.AuthorizationCollectionList && usage != iamv1.AuthorizationCollectionCreate) {
+			return errors.New("collection authorization shape is invalid")
+		}
+	default:
+		return errors.New("authorization resource mode is invalid")
+	}
+	return nil
+}
+
+func ValidateAccessKeyAuthorizationForRequest(value Authorization, request AccessKeyAuthorizationRequest) error {
+	problems := []error{ValidateAuthorization(value)}
+	if value.RequestID != request.RequestID || value.Subject.AccessKeyID == "" {
+		problems = append(problems, errors.New("IAM access-key authorization binding mismatch"))
+	}
 	return errors.Join(problems...)
 }
 
@@ -133,16 +200,10 @@ func ValidatePlatformAuthorization(value Authorization) error {
 func validateAuthorizedIdentity(value Authorization) error {
 	var problems []error
 	problems = append(problems,
-		paasv1.ValidateID("authorization.subject.id", value.Subject.ID),
+		paasv1.ValidateSubjectRef(value.Subject),
 		paasv1.ValidateID("authorization.decisionId", value.DecisionID),
 		paasv1.ValidateID("authorization.requestId", value.RequestID),
 	)
-	if value.Subject.Type != paasv1.SubjectUser &&
-		value.Subject.Type != paasv1.SubjectServiceAccount &&
-		value.Subject.Type != paasv1.SubjectAgent &&
-		value.Subject.Type != paasv1.SubjectSystemUser {
-		problems = append(problems, fmt.Errorf("unknown authorized subject type %q", value.Subject.Type))
-	}
 	if value.AuditID != "" {
 		problems = append(problems, paasv1.ValidateID("authorization.auditId", value.AuditID))
 	}
@@ -201,6 +262,20 @@ func isPlatformAuthorizationAction(value string) bool {
 		AuthorizeNodeEnrollmentCreate, AuthorizeNodeEnrollmentRead,
 		AuthorizeNodeEnrollmentRevoke, AuthorizeNodeEnrollmentRegenerate,
 		AuthorizePlatformOperationRead:
+		return true
+	default:
+		return false
+	}
+}
+
+func accessKeyAuthorizationAction(value string) bool {
+	switch value {
+	case AuthorizeApplicationCreate, AuthorizeApplicationRead,
+		AuthorizeConfigurationCreate, AuthorizeConfigurationRead,
+		AuthorizeConfigurationRevisionCreate, AuthorizeConfigurationRevisionRead,
+		AuthorizeApplicationRevisionCreate, AuthorizeApplicationRevisionRead,
+		AuthorizeDeploymentCreate, AuthorizeDeploymentUpdate, AuthorizeDeploymentStop,
+		AuthorizeDeploymentRollback, AuthorizeDeploymentRead, AuthorizeOperationRead:
 		return true
 	default:
 		return false

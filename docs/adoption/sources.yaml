@@ -22,3 +22,13 @@ sources:
     paths:
       - docs/paas
     mode: redesign-for-independent-product
+  iamK2Authority:
+    repository: matrix-fixed-git-object
+    commit: 644fff09446fc8ffb003cc53cf2fb55d4f58828a
+    paths:
+      - api/iam
+      - api/audit
+      - app/service/iam
+      - app/service/audit
+      - test/authorityprocess
+    mode: selective-backend-adaptation

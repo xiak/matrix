@@ -284,8 +284,25 @@ BEGIN
     END IF;
 
     IF to_regprocedure('paas.complete_audit_event(text,text,text,bigint,text,timestamptz,text)') IS NOT NULL
-       OR to_regprocedure('paas.current_installation_id()') IS NULL THEN
+       OR to_regprocedure('paas.current_installation_id()') IS NULL
+       OR to_regprocedure('paas.valid_subject_ref(jsonb)') IS NULL THEN
         RAISE EXCEPTION 'Operation authority function contract is invalid';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = procedure.pronamespace
+         WHERE namespace.nspname = 'paas'
+           AND procedure.proname = 'valid_subject_ref'
+           AND pg_catalog.pg_get_function_identity_arguments(procedure.oid) = 'value jsonb'
+           AND NOT procedure.prosecdef
+           AND procedure.provolatile = 'i'
+           AND NOT procedure.proisstrict
+           AND 'search_path=pg_catalog, pg_temp' = ANY(procedure.proconfig)
+    ) THEN
+        RAISE EXCEPTION 'subject lineage validator is missing or unsafe';
     END IF;
 
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
@@ -928,6 +945,16 @@ BEGIN
             'paas.valid_deployment_resource_document(jsonb)',
             'EXECUTE'
        )
+       OR has_function_privilege(
+            'matrix_paas_api',
+            'paas.valid_subject_ref(jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_worker',
+            'paas.valid_subject_ref(jsonb)',
+            'EXECUTE'
+       )
        OR to_regprocedure(
             'paas.reconcile_local_execution_profile(bigint,jsonb,bigint,jsonb,bigint,jsonb)'
        ) IS NOT NULL
@@ -1039,8 +1066,8 @@ BEGIN
             'paas.append_audit_outbox(jsonb, jsonb)',
             'EXECUTE'
        )
-       OR (SELECT schema_version FROM paas.readiness()) IS DISTINCT FROM 5::bigint
-       OR (SELECT schema_version FROM paas.worker_readiness()) IS DISTINCT FROM 5::bigint THEN
+       OR (SELECT schema_version FROM paas.readiness()) IS DISTINCT FROM 6::bigint
+       OR (SELECT schema_version FROM paas.worker_readiness()) IS DISTINCT FROM 6::bigint THEN
         RAISE EXCEPTION 'application roles lack required current privileges';
     END IF;
 END

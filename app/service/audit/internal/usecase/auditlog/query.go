@@ -16,7 +16,16 @@ func (service *Service) QueryRecords(
 	requestID string,
 	request auditv1.QueryRecordsRequest,
 ) (auditv1.RecordPage, error) {
-	return service.queryRecords(ctx, subjectCredential, requestID, request, false)
+	return service.queryRecords(ctx, authorizationCarrier{subjectCredential: subjectCredential}, requestID, request, false)
+}
+
+func (service *Service) QueryRecordsByAccessKey(
+	ctx context.Context,
+	signedRequest iamv1.AccessKeySignedRequest,
+	requestID string,
+	request auditv1.QueryRecordsRequest,
+) (auditv1.RecordPage, error) {
+	return service.queryRecords(ctx, authorizationCarrier{signedRequest: &signedRequest}, requestID, request, false)
 }
 
 func (service *Service) QueryPlatformRecords(
@@ -25,12 +34,12 @@ func (service *Service) QueryPlatformRecords(
 	requestID string,
 	request auditv1.QueryRecordsRequest,
 ) (auditv1.RecordPage, error) {
-	return service.queryRecords(ctx, subjectCredential, requestID, request, true)
+	return service.queryRecords(ctx, authorizationCarrier{subjectCredential: subjectCredential}, requestID, request, true)
 }
 
 func (service *Service) queryRecords(
 	ctx context.Context,
-	subjectCredential iamv1.Secret,
+	carrier authorizationCarrier,
 	requestID string,
 	request auditv1.QueryRecordsRequest,
 	platform bool,
@@ -45,10 +54,10 @@ func (service *Service) queryRecords(
 	}
 	decision, err := service.authorize(
 		ctx,
-		subjectCredential,
+		carrier,
 		requestID,
 		action,
-		iamv1.ResourceReference{Kind: iamv1.ResourceAuditRecord, ID: "records"},
+		iamv1.ResourceReference{Kind: iamv1.ResourceAuditRecord, ID: "collection"},
 	)
 	if err != nil {
 		return auditv1.RecordPage{}, err
@@ -72,6 +81,11 @@ func (service *Service) queryRecords(
 	var page auditv1.RecordPage
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
+		if err != nil {
+			return err
+		}
+		access, err := service.prepareAccessEvent(transactionContext, transaction, decision, actor,
+			accessAction, auditv1.TargetAuditRecords, "records", requestDigest, requestID, now)
 		if err != nil {
 			return err
 		}
@@ -116,18 +130,7 @@ func (service *Service) queryRecords(
 				return ErrUnavailable
 			}
 		}
-		return service.appendAccessEvent(
-			transactionContext,
-			transaction,
-			decision,
-			actor,
-			accessAction,
-			auditv1.TargetAuditRecords,
-			"records",
-			requestDigest,
-			requestID,
-			now,
-		)
+		return appendPreparedAccessEvent(transactionContext, transaction, access)
 	})
 	if err != nil {
 		return auditv1.RecordPage{}, err
@@ -144,7 +147,16 @@ func (service *Service) VerifyChain(
 	requestID string,
 	request auditv1.VerifyChainRequest,
 ) (auditv1.ChainVerification, error) {
-	return service.verifyChain(ctx, subjectCredential, requestID, request, false)
+	return service.verifyChain(ctx, authorizationCarrier{subjectCredential: subjectCredential}, requestID, request, false)
+}
+
+func (service *Service) VerifyChainByAccessKey(
+	ctx context.Context,
+	signedRequest iamv1.AccessKeySignedRequest,
+	requestID string,
+	request auditv1.VerifyChainRequest,
+) (auditv1.ChainVerification, error) {
+	return service.verifyChain(ctx, authorizationCarrier{signedRequest: &signedRequest}, requestID, request, false)
 }
 
 func (service *Service) VerifyPlatformChain(
@@ -153,12 +165,12 @@ func (service *Service) VerifyPlatformChain(
 	requestID string,
 	request auditv1.VerifyChainRequest,
 ) (auditv1.ChainVerification, error) {
-	return service.verifyChain(ctx, subjectCredential, requestID, request, true)
+	return service.verifyChain(ctx, authorizationCarrier{subjectCredential: subjectCredential}, requestID, request, true)
 }
 
 func (service *Service) verifyChain(
 	ctx context.Context,
-	subjectCredential iamv1.Secret,
+	carrier authorizationCarrier,
 	requestID string,
 	request auditv1.VerifyChainRequest,
 	platform bool,
@@ -173,10 +185,10 @@ func (service *Service) verifyChain(
 	}
 	decision, err := service.authorize(
 		ctx,
-		subjectCredential,
+		carrier,
 		requestID,
 		action,
-		iamv1.ResourceReference{Kind: iamv1.ResourceAuditChain, ID: "chain"},
+		iamv1.ResourceReference{Kind: iamv1.ResourceAuditChain, ID: "collection"},
 	)
 	if err != nil {
 		return auditv1.ChainVerification{}, err
@@ -193,6 +205,11 @@ func (service *Service) verifyChain(
 	var verification auditv1.ChainVerification
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
+		if err != nil {
+			return err
+		}
+		access, err := service.prepareAccessEvent(transactionContext, transaction, decision, actor,
+			accessAction, auditv1.TargetAuditChain, "chain", requestDigest, requestID, now)
 		if err != nil {
 			return err
 		}
@@ -262,18 +279,7 @@ func (service *Service) verifyChain(
 		if auditv1.ValidateChainVerification(verification) != nil {
 			return ErrUnavailable
 		}
-		return service.appendAccessEvent(
-			transactionContext,
-			transaction,
-			decision,
-			actor,
-			accessAction,
-			auditv1.TargetAuditChain,
-			"chain",
-			requestDigest,
-			requestID,
-			now,
-		)
+		return appendPreparedAccessEvent(transactionContext, transaction, access)
 	})
 	if err != nil {
 		return auditv1.ChainVerification{}, err
@@ -283,20 +289,41 @@ func (service *Service) verifyChain(
 
 func (service *Service) authorize(
 	ctx context.Context,
-	subjectCredential iamv1.Secret,
+	carrier authorizationCarrier,
 	requestID string,
 	action iamv1.Action,
 	resource iamv1.ResourceReference,
 ) (iamv1.AuthorizationDecision, error) {
-	request := iamv1.AuthorizationRequest{
-		Action: action, Resource: resource, RequestID: requestID, CorrelationID: requestID,
-	}
-	decision, err := service.iam.Authorize(ctx, subjectCredential, request)
+	request, err := iamv1.NewAuthorizationRequest(action, resource, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList, requestID, requestID)
 	if err != nil {
-		return iamv1.AuthorizationDecision{}, err
+		return iamv1.AuthorizationDecision{}, ErrUnavailable
 	}
-	if iamv1.ValidateAuthorizationDecision(decision) != nil ||
-		decision.Action != action || decision.Resource != resource || decision.RequestID != requestID {
+	var decision iamv1.AuthorizationDecision
+	if carrier.signedRequest != nil {
+		accessKeyIAM, ok := service.iam.(AccessKeyIAM)
+		if !ok {
+			return iamv1.AuthorizationDecision{}, ErrUnavailable
+		}
+		result, authorizeErr := accessKeyIAM.AuthorizeAccessKey(ctx, iamv1.AccessKeyAuthorizationRequest{
+			Authorization: request, SignedRequest: *carrier.signedRequest,
+		})
+		if authorizeErr != nil {
+			return iamv1.AuthorizationDecision{}, authorizeErr
+		}
+		if iamv1.CheckAccessKeyAuthorizationForRequest(result, iamv1.AccessKeyAuthorizationRequest{
+			Authorization: request, SignedRequest: *carrier.signedRequest,
+		}) != nil {
+			return iamv1.AuthorizationDecision{}, ErrUnavailable
+		}
+		decision = result.Decision
+	} else {
+		var err error
+		decision, err = service.iam.Authorize(ctx, carrier.subjectCredential, request)
+		if err != nil {
+			return iamv1.AuthorizationDecision{}, err
+		}
+	}
+	if iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil {
 		return iamv1.AuthorizationDecision{}, ErrUnavailable
 	}
 	if !decision.Allowed {
@@ -305,7 +332,17 @@ func (service *Service) authorize(
 	return decision, nil
 }
 
-func (service *Service) appendAccessEvent(
+type authorizationCarrier struct {
+	subjectCredential iamv1.Secret
+	signedRequest     *iamv1.AccessKeySignedRequest
+}
+
+// Audited reads also append to the selected chain. Acquire the same event ->
+// head locks as ingestion before scanning that chain, rather than letting a
+// writer advance it while the read accumulates SERIALIZABLE dependencies.
+// Only the caller's successful, validated read appends this prepared fact;
+// it is not included in its own query/verification result.
+func (service *Service) prepareAccessEvent(
 	ctx context.Context,
 	transaction Transaction,
 	decision iamv1.AuthorizationDecision,
@@ -316,10 +353,10 @@ func (service *Service) appendAccessEvent(
 	requestDigest string,
 	requestID string,
 	now time.Time,
-) error {
+) (AppendMutation, error) {
 	eventID, err := service.config.NewID("event")
 	if err != nil {
-		return ErrUnavailable
+		return AppendMutation{}, ErrUnavailable
 	}
 	event := auditv1.Event{
 		APIVersion:     auditv1.APIVersion,
@@ -338,22 +375,22 @@ func (service *Service) appendAccessEvent(
 		OccurredAt:     now,
 	}
 	if auditv1.ValidateEventForSource(auditv1.SourceAudit, event) != nil {
-		return ErrUnavailable
+		return AppendMutation{}, ErrUnavailable
 	}
 	if err := transaction.LockEvent(ctx, auditv1.SourceAudit, event.EventID); err != nil {
-		return err
+		return AppendMutation{}, err
 	}
 	if _, found, err := transaction.LookupRecord(ctx, auditv1.SourceAudit, event.EventID); err != nil {
-		return err
+		return AppendMutation{}, err
 	} else if found {
-		return ErrUnavailable
+		return AppendMutation{}, ErrUnavailable
 	}
 	head, ingestedAt, err := transaction.LockChainHead(ctx, authority.ChainFor(event.TenantID, event.InstallationID))
 	if err != nil {
-		return err
+		return AppendMutation{}, err
 	}
 	if ingestedAt != now {
-		return ErrUnavailable
+		return AppendMutation{}, ErrUnavailable
 	}
 	record, fact, err := authority.AppendRecord(
 		head,
@@ -363,9 +400,13 @@ func (service *Service) appendAccessEvent(
 		ingestedAt,
 	)
 	if err != nil {
-		return ErrUnavailable
+		return AppendMutation{}, ErrUnavailable
 	}
-	outcome, err := transaction.AppendRecord(ctx, AppendMutation{Record: record, Fact: fact})
+	return AppendMutation{Record: record, Fact: fact}, nil
+}
+
+func appendPreparedAccessEvent(ctx context.Context, transaction Transaction, access AppendMutation) error {
+	outcome, err := transaction.AppendRecord(ctx, access)
 	if err != nil {
 		return err
 	}
@@ -392,7 +433,7 @@ func recordMatchesQuery(
 	if request.Action != "" && record.Event.Action != request.Action {
 		return false
 	}
-	if request.Actor != nil && record.Event.Actor != *request.Actor {
+	if request.Actor != nil && !record.Event.Actor.Equal(*request.Actor) {
 		return false
 	}
 	return true

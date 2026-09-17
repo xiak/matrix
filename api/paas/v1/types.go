@@ -928,8 +928,17 @@ type DeploymentGeneration struct {
 }
 
 type SubjectRef struct {
-	Type SubjectType `json:"type"`
-	ID   string      `json:"id"`
+	Type        SubjectType           `json:"type"`
+	ID          string                `json:"id"`
+	RoleSession *RoleSessionReference `json:"roleSession,omitempty"`
+	AccessKeyID string                `json:"accessKeyId,omitempty"`
+}
+
+// RoleSessionReference is public delegation lineage. It contains no session
+// credential, source login session, policy, trust, or private IAM evidence.
+type RoleSessionReference struct {
+	SessionID    string `json:"sessionId"`
+	SourceUserID string `json:"sourceUserId"`
 }
 
 type ResourceRef struct {

@@ -4741,6 +4741,22 @@
         ],
         "type": "object"
       },
+      "RoleSessionReference": {
+        "additionalProperties": false,
+        "properties": {
+          "sessionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "sourceUserId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "sessionId",
+          "sourceUserId"
+        ],
+        "type": "object"
+      },
       "RollbackDeploymentRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4774,8 +4790,14 @@
       "SubjectRef": {
         "additionalProperties": false,
         "properties": {
+          "accessKeyId": {
+            "$ref": "#/components/schemas/ID"
+          },
           "id": {
             "$ref": "#/components/schemas/ID"
+          },
+          "roleSession": {
+            "$ref": "#/components/schemas/RoleSessionReference"
           },
           "type": {
             "$ref": "#/components/schemas/SubjectType"
@@ -4790,6 +4812,7 @@
       "SubjectType": {
         "enum": [
           "USER",
+          "ROLE",
           "SERVICE_ACCOUNT",
           "AGENT",
           "SYSTEM_USER"

@@ -49,7 +49,8 @@ func authenticateInstalledPlan(
 		Root: installed.Root, InstallationID: installed.InstallationID,
 		CorrelationID: installed.CorrelationID,
 		Listener:      installed.Listener, Port: installed.Port,
-		PreviousID: installed.PreviousID, PreviousDigest: installed.PreviousDigest,
+		NorthboundOrigin: installed.NorthboundOrigin,
+		PreviousID:       installed.PreviousID, PreviousDigest: installed.PreviousDigest,
 		Bundle: bundle, Trust: trust, TrustBytes: trustBytes,
 	}, nil
 }
@@ -84,10 +85,11 @@ func verifiedInstallationConfiguration(
 		return verifiedInstallation{}, err
 	}
 	compiled, err := topology.CompileInstalled(staged.Manifest, topology.Options{
-		InstallationID: plan.InstallationID,
-		Root:           plan.Root,
-		Listener:       plan.Listener,
-		Port:           plan.Port,
+		InstallationID:   plan.InstallationID,
+		Root:             plan.Root,
+		Listener:         plan.Listener,
+		Port:             plan.Port,
+		NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		return verifiedInstallation{}, err
@@ -104,7 +106,7 @@ func verifiedInstallationConfiguration(
 	if err != nil {
 		return verifiedInstallation{}, errors.New("generated artifact catalog is invalid")
 	}
-	routes, err := installedAPISIXStandaloneConfig(staged.Manifest)
+	routes, err := installedAPISIXStandaloneConfig(staged.Manifest, plan.NorthboundOrigin)
 	if err != nil {
 		return verifiedInstallation{}, errors.New("generated APISIX routes are invalid")
 	}

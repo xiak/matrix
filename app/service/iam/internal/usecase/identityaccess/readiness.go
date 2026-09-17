@@ -6,14 +6,19 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
-const SchemaVersion uint64 = 5
+const SchemaVersion uint64 = 30
 
 func (service *Authority) Readiness(ctx context.Context) (iamv1.Readiness, error) {
 	var snapshot ReadinessSnapshot
 	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		var err error
 		snapshot, err = transaction.Readiness(transactionContext)
-		return err
+		if err != nil || !snapshot.Ready || snapshot.SchemaVersion != SchemaVersion {
+			return err
+		}
+		// Network readiness requires custody even when no AccessKey exists.
+		// This check reads the complete immutable history in the same snapshot.
+		return service.checkAccessKeyCustody(transactionContext, transaction)
 	})
 	if err != nil {
 		return iamv1.Readiness{}, err

@@ -15,6 +15,88 @@ import (
 
 const testDigest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+func TestAuditTransactionRetryIsBoundedAndPaced(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		failures     int
+		wantAttempts int
+		wantError    error
+	}{
+		{"no conflict", 0, 1, nil},
+		{"rolled back conflict", 1, 2, nil},
+		{"exhausted conflicts", 10, 3, ErrRetryableTransaction},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			attempts := 0
+			var lastConflict time.Time
+			repository := auditTransactionAttempt(func(context.Context, func(context.Context, Transaction) error) error {
+				if !lastConflict.IsZero() && time.Since(lastConflict) < 5*time.Millisecond {
+					t.Fatal("retry did not leave the minimum contention backoff")
+				}
+				attempts++
+				if attempts <= test.failures {
+					lastConflict = time.Now()
+					return fmt.Errorf("rolled back: %w", ErrRetryableTransaction)
+				}
+				return nil
+			})
+			service := &Service{repository: repository, config: Config{MaxTransactionAttempts: 3}}
+			err := service.withinTransaction(context.Background(), func(context.Context, Transaction) error { return nil })
+			if !errors.Is(err, test.wantError) || attempts != test.wantAttempts {
+				t.Fatalf("attempts=%d err=%v", attempts, err)
+			}
+		})
+	}
+}
+
+func TestAuditTransactionDoesNotRetryOtherFailures(t *testing.T) {
+	for _, failure := range []error{ErrUnavailable, ErrConflict, ErrInvalidArgument, ErrUnauthenticated, ErrForbidden, context.Canceled, errors.New("unknown commit outcome")} {
+		attempts := 0
+		service := &Service{repository: auditTransactionAttempt(func(context.Context, func(context.Context, Transaction) error) error {
+			attempts++
+			return failure
+		}), config: Config{MaxTransactionAttempts: 5}}
+		err := service.withinTransaction(context.Background(), func(context.Context, Transaction) error { return nil })
+		if !errors.Is(err, failure) || attempts != 1 {
+			t.Fatalf("non-retryable failure attempts=%d err=%v", attempts, err)
+		}
+	}
+}
+
+func TestAuditTransactionCancellationStopsAttempts(t *testing.T) {
+	for _, beforeStart := range []bool{false, true} {
+		ctx, cancel := context.WithCancel(context.Background())
+		if beforeStart {
+			cancel()
+		}
+		attempts := 0
+		service := &Service{repository: auditTransactionAttempt(func(context.Context, func(context.Context, Transaction) error) error {
+			attempts++
+			cancel()
+			return ErrRetryableTransaction
+		}), config: Config{MaxTransactionAttempts: 5}}
+		err := service.withinTransaction(ctx, func(context.Context, Transaction) error { return nil })
+		cancel()
+		if !errors.Is(err, context.Canceled) || attempts > 1 || (beforeStart && attempts != 0) {
+			t.Fatalf("cancelled transaction attempts=%d err=%v", attempts, err)
+		}
+	}
+}
+
+func TestAuditTransactionBackoffHonorsDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	if err := waitTransactionRetry(ctx, 9); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("backoff did not honor deadline: %v", err)
+	}
+}
+
+type auditTransactionAttempt func(context.Context, func(context.Context, Transaction) error) error
+
+func (attempt auditTransactionAttempt) WithinTransaction(ctx context.Context, callback func(context.Context, Transaction) error) error {
+	return attempt(ctx, callback)
+}
+
 func TestAuditUsecasesBindIAMAndAuditEveryAuthorizedRead(t *testing.T) {
 	transaction := newAuditTransaction()
 	repository := &auditRepository{transaction: transaction}
@@ -23,7 +105,7 @@ func TestAuditUsecasesBindIAMAndAuditEveryAuthorizedRead(t *testing.T) {
 			InstallationID: "installation-example",
 			APIVersion:     iamv1.APIVersion,
 			Kind:           "ServiceIdentity",
-			OrganizationID: "organization-example",
+			AccountID:      "organization-example",
 			PrincipalID:    "service-iam",
 			Purpose:        iamv1.ServiceIAM,
 		},
@@ -125,7 +207,7 @@ func TestAuditUsecasesBindIAMAndAuditEveryAuthorizedRead(t *testing.T) {
 	assertLastAccessRecord(t, transaction, 6, auditv1.ActionAuditIntegrityVerified, "decision-4")
 	readiness, err := service.Readiness(context.Background())
 	if err != nil || readiness.State != auditv1.ReadinessReady ||
-		readiness.CheckedAt != transaction.now || readiness.SchemaVersion != 4 {
+		readiness.CheckedAt != transaction.now || readiness.SchemaVersion != SchemaVersion {
 		t.Fatalf("read Audit readiness: readiness=%#v err=%v", readiness, err)
 	}
 }
@@ -137,7 +219,7 @@ func TestAuditUsecasesFailClosedBeforeMutation(t *testing.T) {
 			InstallationID: "installation-example",
 			APIVersion:     iamv1.APIVersion,
 			Kind:           "ServiceIdentity",
-			OrganizationID: "organization-example",
+			AccountID:      "organization-example",
 			PrincipalID:    "service-iam",
 			Purpose:        iamv1.ServiceIAM,
 		},
@@ -241,7 +323,7 @@ func TestPlatformAuditUsesInstallationAuthorityAndCannotReadTenantChain(t *testi
 	transaction := newAuditTransaction()
 	iam := &auditIAM{now: transaction.now, identity: iamv1.ServiceIdentity{
 		APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
-		InstallationID: "organization-example", OrganizationID: "organization-example",
+		InstallationID: "organization-example", AccountID: "organization-example",
 		PrincipalID: "service-paas", Purpose: iamv1.ServicePaaS,
 	}}
 	nextID := 0
@@ -404,11 +486,12 @@ func (client *auditIAM) Authorize(
 		Allowed:    !client.deny,
 		Reason:     iamv1.DecisionAllowed,
 		TenantID:   "organization-example",
-		Subject:    &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-reader"},
+		Subject:    &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-reader"},
 		Action:     request.Action,
 		Resource:   request.Resource,
 		RequestID:  request.RequestID,
-		DecidedAt:  client.now,
+		Profile:    &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
+		DecidedAt: client.now,
 	}
 	if iamv1.IsPlatformAction(request.Action) {
 		decision.TenantID, decision.InstallationID = "", client.identity.InstallationID
@@ -437,10 +520,11 @@ func (client *auditIAM) VerifyInstallation(
 		Allowed: !client.deny, Reason: iamv1.DecisionAllowed,
 		TenantID: "organization-example",
 		Subject: &iamv1.Subject{
-			Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+			Type: iamv1.SubjectServiceAccount, ID: "service-installation-verifier",
 		},
 		Action: request.Action, Resource: request.Resource,
 		RequestID: request.RequestID, DecidedAt: client.now,
+		Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
 	}
 	if client.deny {
 		decision.Reason = iamv1.DecisionDenied
@@ -451,11 +535,9 @@ func (client *auditIAM) VerifyInstallation(
 }
 
 type auditTransaction struct {
-	now              time.Time
-	records          map[authority.ChainID][]auditv1.AuditRecord
-	registry         map[string]StoredRecord
-	readChainFrom    uint64
-	readChainMaximum int
+	now      time.Time
+	records  map[authority.ChainID][]auditv1.AuditRecord
+	registry map[string]StoredRecord
 }
 
 func newAuditTransaction() *auditTransaction {
@@ -580,8 +662,6 @@ func (transaction *auditTransaction) ReadChain(
 	fromSequence uint64,
 	maximumRecords int,
 ) ([]auditv1.AuditRecord, error) {
-	transaction.readChainFrom = fromSequence
-	transaction.readChainMaximum = maximumRecords
 	records := transaction.records[chainID]
 	if fromSequence == 0 || fromSequence > uint64(len(records)) {
 		return nil, nil
@@ -605,7 +685,7 @@ func (transaction *auditTransaction) LookupPaaSOperationRecord(
 }
 
 func (transaction *auditTransaction) Readiness(context.Context) (ReadinessSnapshot, error) {
-	return ReadinessSnapshot{Ready: true, SchemaVersion: 4, CheckedAt: transaction.now}, nil
+	return ReadinessSnapshot{Ready: true, SchemaVersion: SchemaVersion, CheckedAt: transaction.now}, nil
 }
 
 func registryKey(source auditv1.Source, eventID auditv1.EventID) string {

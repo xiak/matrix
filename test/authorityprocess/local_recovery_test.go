@@ -24,6 +24,22 @@ import (
 
 const localRecoveryProcessLogin = "matrix_iam_credential_recovery_login"
 
+type legacyBuiltinRole string
+
+const legacyRolePaaSViewer legacyBuiltinRole = "PAAS_VIEWER"
+
+type legacyRoleBinding struct {
+	APIVersion      string              `json:"apiVersion"`
+	Kind            string              `json:"kind"`
+	ID              iamv1.RoleBindingID `json:"id"`
+	AccountID       iamv1.AccountID     `json:"organizationId"`
+	PrincipalID     iamv1.PrincipalID   `json:"principalId"`
+	Role            legacyBuiltinRole   `json:"role"`
+	ResourceVersion uint64              `json:"resourceVersion"`
+	CreatedAt       time.Time           `json:"createdAt"`
+	UpdatedAt       time.Time           `json:"updatedAt"`
+}
+
 func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_LOCAL_RECOVERY_UPGRADE_POSTGRES_TEST_DSN"
 	dsn := os.Getenv(variable)
@@ -92,8 +108,8 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	member := createIAMUser(t, endpoint, primary.Credential, "retained.local.viewer", "Retained local viewer", initialReaderPassword, "schema3-member-create")
 	memberSession := loginIAM(t, endpoint, "retained.local.viewer@organization-process", initialReaderPassword, "schema3-member-login")
 	changePasswordIAM(t, endpoint, memberSession.Credential, initialReaderPassword, changedReaderPassword, "schema3-member-change")
-	binding := putIAMBinding(t, endpoint, primary.Credential, member.ID, iamv1.RolePaaSViewer, "schema3-member-grant")
-	revokeIAMBinding(t, endpoint, primary.Credential, binding.ID, "schema3-member-revoke")
+	binding := putLegacyIAMBinding(t, endpoint, primary.Credential, member.ID, legacyRolePaaSViewer, "schema3-member-grant")
+	revokeLegacyIAMBinding(t, endpoint, primary.Credential, binding.ID, "schema3-member-revoke")
 	retired := loginIAM(t, endpoint, "admin", changedAdminPassword, "schema3-retired-login")
 	revokeIAMSession(t, endpoint, primary.Credential, retired.Session.ID, "schema3-retired-revoke")
 	var originalGeneration uint64
@@ -197,7 +213,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		}
 		memberIdentity := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", memberSession.Credential, nil)
 		var memberState iamv1.CurrentIdentity
-		if memberIdentity.Status != http.StatusOK || json.Unmarshal(memberIdentity.Body, &memberState) != nil || len(memberState.Roles) != 0 {
+		if memberIdentity.Status != http.StatusOK || json.Unmarshal(memberIdentity.Body, &memberState) != nil || len(memberState.PolicySources) != 0 {
 			t.Fatal("primary recovery changed the retained member or repaired its revoked binding")
 		}
 		if attempt == 0 {
@@ -318,7 +334,7 @@ func proveLocalCredentialRecoveryProcesses(t *testing.T, ctx context.Context, ad
 			t.Fatal(err)
 		}
 		defer lock.Rollback(ctx)
-		if _, err := lock.Exec(ctx, "SELECT id FROM iam.role_bindings WHERE tenant_id=$1 AND id=$2 FOR UPDATE", local.Scope.OrganizationID, request.Expected.PlatformBindingID); err != nil {
+		if _, err := lock.Exec(ctx, "SELECT id FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$2 FOR UPDATE", local.Scope.AccountID, request.Expected.PlatformBindingID); err != nil {
 			t.Fatal(err)
 		}
 		applied = apply(requestPath, 0, func() {
@@ -388,7 +404,7 @@ func proveLocalCredentialRecoveryProcesses(t *testing.T, ctx context.Context, ad
 	}
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	eventID, event := findIAMEvent(t, ctx, admin, auditv1.ActionIAMInstallationPrimaryCredentialsRecovered, string(local.Scope.PrincipalID))
-	if eventID != string(applied.AuditEventID) || event.InstallationID != local.Scope.InstallationID || event.TenantID != "" || event.Actor != (auditv1.ActorReference{Type: auditv1.ActorSystem, ID: iamv1.LocalCredentialRecoveryActor}) || event.Target.TenantID != auditv1.TenantID(local.Scope.OrganizationID) || event.IAMDecisionID != "" {
+	if eventID != string(applied.AuditEventID) || event.InstallationID != local.Scope.InstallationID || event.TenantID != "" || event.Actor != (auditv1.ActorReference{Type: auditv1.ActorSystem, ID: iamv1.LocalCredentialRecoveryActor}) || event.Target.TenantID != auditv1.TenantID(local.Scope.AccountID) || event.IAMDecisionID != "" {
 		t.Fatal("local completion did not deliver its exact single security fact")
 	}
 	assertAuditEventCount(t, ctx, admin, eventID, 1)
@@ -459,7 +475,7 @@ func localRecoveryProcessAuthority(t *testing.T, bootstrap iamv1.BootstrapDocume
 		t.Fatal(err)
 	}
 	return iamv1.LocalCredentialRecoveryAuthority{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryAuthority", Purpose: iamv1.LocalCredentialRecoveryPurpose,
-		Scope:         iamv1.LocalCredentialRecoveryScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest, OrganizationID: bootstrap.Organization.ID, PrincipalID: bootstrap.Administrator.ID},
+		Scope:         iamv1.LocalCredentialRecoveryScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest, AccountID: bootstrap.Organization.ID, PrincipalID: bootstrap.Administrator.ID},
 		CapabilityKey: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x6d}, 32)))}
 }
 
@@ -500,4 +516,58 @@ func invokeLocalRecoveryProcess(t *testing.T, ctx context.Context, root, binary,
 		t.Fatal("local recovery gate context expired")
 	}
 	return append([]byte(nil), child.stdout.Bytes()...)
+}
+
+// These wire helpers only construct retained history through fixed pre-policy
+// executables. Current runtime flows must use policy attachment endpoints.
+func putLegacyIAMBinding(
+	t *testing.T,
+	endpoint string,
+	bearer string,
+	principalID iamv1.PrincipalID,
+	role legacyBuiltinRole,
+	requestID string,
+) legacyRoleBinding {
+	t.Helper()
+	response := performJSON(t, http.MethodPost, endpoint+"/v1/role-bindings", bearer, struct {
+		PrincipalID iamv1.PrincipalID `json:"principalId"`
+		Role        legacyBuiltinRole `json:"role"`
+		RequestID   string            `json:"requestId"`
+	}{principalID, role, requestID})
+	if response.Status != http.StatusOK {
+		t.Fatalf("put IAM binding status=%d", response.Status)
+	}
+	var binding legacyRoleBinding
+	if err := json.Unmarshal(response.Body, &binding); err != nil ||
+		binding.APIVersion != iamv1.APIVersion || binding.Kind != "RoleBinding" ||
+		iamv1.ValidateID("legacyRoleBinding.id", string(binding.ID)) != nil ||
+		iamv1.ValidateID("legacyRoleBinding.organizationId", string(binding.AccountID)) != nil ||
+		iamv1.ValidateID("legacyRoleBinding.principalId", string(binding.PrincipalID)) != nil ||
+		binding.Role != role || binding.ResourceVersion == 0 || binding.CreatedAt.IsZero() ||
+		binding.UpdatedAt.Before(binding.CreatedAt) {
+		t.Fatalf("decode IAM binding: %v", err)
+	}
+	return binding
+}
+
+func revokeLegacyIAMBinding(
+	t *testing.T,
+	endpoint string,
+	bearer string,
+	bindingID iamv1.RoleBindingID,
+	requestID string,
+) {
+	t.Helper()
+	response := performJSON(
+		t,
+		http.MethodPost,
+		endpoint+"/v1/role-bindings/"+string(bindingID)+":revoke",
+		bearer,
+		struct {
+			RequestID string `json:"requestId"`
+		}{requestID},
+	)
+	if response.Status != http.StatusOK {
+		t.Fatalf("revoke IAM binding status=%d", response.Status)
+	}
 }

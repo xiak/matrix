@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,172 @@ func TestEveryAuditOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			_ = compileAuditOpenAPISchema(t, document, name)
 		})
+	}
+}
+
+func TestRoleActorLineageIsStrictAndFactBound(t *testing.T) {
+	schema := compileAuditOpenAPISchema(t, loadAuditOpenAPI(t), "ActorReference")
+	valid := `{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"role-session-one","sourceUserId":"source-user"}}`
+	for _, test := range []struct {
+		body string
+		want bool
+	}{
+		{valid, true},
+		{`{"type":"USER","id":"source-user"}`, true},
+		{`{"type":"USER","id":"source-user","roleSession":null}`, false},
+		{`{"type":"ROLE","id":"role-one"}`, false},
+		{`{"type":"ROLE","id":"role-one","roleSession":null}`, false},
+		{strings.Replace(valid, `"sourceUserId":"source-user"`, `"sourceUserId":""`, 1), false},
+		{strings.Replace(valid, `"sourceUserId":"source-user"`, `"sourceSessionId":"source-session"`, 1), false},
+		{strings.Replace(valid, `"sessionId":"role-session-one"`, `"sessionId":"role-session-one","generation":1`, 1), false},
+		{strings.Replace(valid, `"ROLE"`, `"SERVICE_ACCOUNT"`, 1), false},
+	} {
+		var actor ActorReference
+		err := json.Unmarshal([]byte(test.body), &actor)
+		instance, decodeErr := jsonschema.UnmarshalJSON(strings.NewReader(test.body))
+		if (err == nil) != test.want || decodeErr != nil || (schema.Validate(instance) == nil) != test.want {
+			t.Fatalf("actor decoder/schema differ for %s: %v", test.body, err)
+		}
+	}
+	var actor, copy ActorReference
+	if json.Unmarshal([]byte(valid), &actor) != nil || json.Unmarshal([]byte(valid), &copy) != nil || !actor.Equal(copy) {
+		t.Fatal("independent decodes lost actor equality")
+	}
+	copy.RoleSession.SessionID = "another-session"
+	if actor.Equal(copy) {
+		t.Fatal("another session became the same actor")
+	}
+	permitted := map[Action]bool{ActionIAMAuthorizationDecided: true, ActionIAMRoleSessionExited: true, ActionPaaSApplicationCreated: true, ActionPaaSConfigurationCreated: true,
+		ActionPaaSConfigurationRevisionCreated: true, ActionPaaSApplicationRevisionCreated: true, ActionPaaSDeploymentCreated: true,
+		ActionPaaSDeploymentUpdated: true, ActionPaaSDeploymentStopped: true, ActionPaaSDeploymentRolledBack: true, ActionAuditRecordsRead: true, ActionAuditIntegrityVerified: true}
+	eventSchema := compileAuditOpenAPISchema(t, loadAuditOpenAPI(t), "Event")
+	for _, action := range AllActions() {
+		contract, _ := ContractForAction(action)
+		event := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-role", TenantID: "account-one", Actor: actor, Action: action,
+			Target: TargetReference{Kind: contract.Target, ID: "target-one"}, Result: contract.Results[0], RequestID: "request-one", CorrelationID: "correlation-one",
+			RequestDigest: "sha256:" + strings.Repeat("1", 64), OccurredAt: time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)}
+		if contract.PlatformOnly {
+			event.TenantID = ""
+			event.InstallationID = "installation-one"
+		}
+		if contract.IAMDecisionRequired {
+			event.IAMDecisionID = "decision-one"
+		}
+		if action == ActionIAMAuthorizationDecided {
+			event.Target.ID = string(event.IAMDecisionID)
+		}
+		if action == ActionIAMRoleSessionExited {
+			event.Target.ID = actor.RoleSession.SessionID
+		}
+		if contract.OperationRequired {
+			event.OperationID = "operation-one"
+		}
+		if action == ActionIAMAccountRootCredentialsRecovered || action == ActionIAMTenantAdministratorRecovered || action == ActionIAMInstallationPrimaryCredentialsRecovered {
+			event.Target.TenantID = "account-one"
+		}
+		encoded, _ := json.Marshal(event)
+		instance, _ := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if contract.RoleActorPermitted != permitted[action] || (ValidateEventForSource(contract.Source, event) == nil) != permitted[action] || (eventSchema.Validate(instance) == nil) != permitted[action] {
+			t.Fatal("ROLE escaped its closed fact catalog", action)
+		}
+		if permitted[action] {
+			_, digest, err := CanonicalizeEvent(contract.Source, event)
+			event.Actor = copy
+			if action == ActionIAMRoleSessionExited {
+				if ValidateEvent(event) == nil {
+					t.Fatal("role self-exit accepted another session target")
+				}
+				event.Target.ID = copy.RoleSession.SessionID
+			}
+			_, changed, changedErr := CanonicalizeEvent(contract.Source, event)
+			if err != nil || changedErr != nil || changed == digest {
+				t.Fatal("role session lineage was excluded from canonical digest")
+			}
+		}
+	}
+}
+
+func TestAccessKeyActorIsStrictAndOnlyAdmittedByClosedFacts(t *testing.T) {
+	document := loadAuditOpenAPI(t)
+	schema := compileAuditOpenAPISchema(t, document, "ActorReference")
+	valid := `{"type":"USER","id":"user-one","accessKeyId":"key-one"}`
+	for _, test := range []struct {
+		wire string
+		want bool
+	}{
+		{valid, true},
+		{`{"type":"USER","id":"user-one"}`, true},
+		{strings.Replace(valid, `"key-one"`, `null`, 1), false},
+		{strings.Replace(valid, `"key-one"`, `""`, 1), false},
+		{strings.Replace(valid, `"USER"`, `"SERVICE_ACCOUNT"`, 1), false},
+		{strings.Replace(valid, `"USER"`, `"SYSTEM"`, 1), false},
+		{`{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"role-session","sourceUserId":"user-one"},"accessKeyId":"key-one"}`, false},
+		{`{"type":"USER","id":"user-one","accessKeyId":"key-one","roleSession":null}`, false},
+		{strings.Replace(valid, `"accessKeyId":`, `"AccessKeyId":`, 1), false},
+	} {
+		var actor ActorReference
+		err := json.Unmarshal([]byte(test.wire), &actor)
+		instance, decodeErr := jsonschema.UnmarshalJSON(strings.NewReader(test.wire))
+		if (err == nil) != test.want || decodeErr != nil || (schema.Validate(instance) == nil) != test.want {
+			t.Fatalf("key actor decoder/schema accepted=%v/%v want=%v", err == nil, schema.Validate(instance) == nil, test.want)
+		}
+		if test.want {
+			encoded, err := json.Marshal(actor)
+			if err != nil || string(encoded) != test.wire {
+				t.Fatal("key attribution changed public wire")
+			}
+		}
+	}
+	actor := ActorReference{Type: ActorUser, ID: "user-one", AccessKeyID: "key-one"}
+	other := actor
+	if !actor.Equal(other) {
+		t.Fatal("same key attribution is unequal")
+	}
+	for _, key := range []string{"", "key-two"} {
+		other.AccessKeyID = key
+		if actor.Equal(other) {
+			t.Fatal("key attribution was omitted from actor identity")
+		}
+	}
+	permitted := map[Action]bool{ActionIAMAuthorizationDecided: true, ActionPaaSApplicationCreated: true, ActionPaaSConfigurationCreated: true,
+		ActionPaaSConfigurationRevisionCreated: true, ActionPaaSApplicationRevisionCreated: true, ActionPaaSDeploymentCreated: true,
+		ActionPaaSDeploymentUpdated: true, ActionPaaSDeploymentStopped: true, ActionPaaSDeploymentRolledBack: true, ActionAuditRecordsRead: true, ActionAuditIntegrityVerified: true}
+	eventSchema := compileAuditOpenAPISchema(t, document, "Event")
+	for _, action := range AllActions() {
+		contract, _ := ContractForAction(action)
+		for _, result := range contract.Results {
+			event := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-key", TenantID: "account-one", Actor: actor, Action: action,
+				Target: TargetReference{Kind: contract.Target, ID: "target-one"}, Result: result, RequestID: "request-one", CorrelationID: "correlation-one",
+				RequestDigest: "sha256:" + strings.Repeat("1", 64), OccurredAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)}
+			if contract.PlatformOnly {
+				event.TenantID, event.InstallationID = "", "installation-one"
+			}
+			if contract.IAMDecisionRequired {
+				event.IAMDecisionID = "decision-one"
+			}
+			if action == ActionIAMAuthorizationDecided {
+				event.Target.ID = string(event.IAMDecisionID)
+			}
+			if contract.OperationRequired {
+				event.OperationID = "operation-one"
+			}
+			if action == ActionIAMAccountRootCredentialsRecovered || action == ActionIAMTenantAdministratorRecovered || action == ActionIAMInstallationPrimaryCredentialsRecovered {
+				event.Target.TenantID = "account-one"
+			}
+			encoded, _ := json.Marshal(event)
+			instance, _ := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+			if contract.AccessKeyActorPermitted != permitted[action] || (ValidateEventForSource(contract.Source, event) == nil) != permitted[action] || (eventSchema.Validate(instance) == nil) != permitted[action] {
+				t.Fatal("key actor escaped its closed fact contract", action)
+			}
+			if permitted[action] {
+				_, digest, err := CanonicalizeEvent(contract.Source, event)
+				event.Actor.AccessKeyID = "key-two"
+				_, altered, alteredErr := CanonicalizeEvent(contract.Source, event)
+				if err != nil || alteredErr != nil || altered == digest {
+					t.Fatal("key attribution is not committed by the unique canonical owner")
+				}
+			}
+		}
 	}
 }
 

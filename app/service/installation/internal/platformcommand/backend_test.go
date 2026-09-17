@@ -481,6 +481,7 @@ func TestUpgradeUnknownOutcomeResumesAndDefinitiveFailureRestoresSource(t *testi
 	materializeInstalledRelease(t, root, fixtures[0])
 	request := cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+		NorthboundOrigin: "https://matrix.example.com:443",
 	}
 	_, err := backend.Run(context.Background(), request)
 	assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
@@ -525,6 +526,7 @@ func TestCrossProfileUpgradeFailureRequiresAuthenticatedRecovery(t *testing.T) {
 	seedPublishedInstalledRelease(t, root, fixtures[0])
 	request := cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+		NorthboundOrigin: "https://matrix.example.com:443",
 	}
 
 	_, err = backend.Run(context.Background(), request)
@@ -786,6 +788,7 @@ func TestPublishedScalarManifestDoesNotImplyRuntimeTopologyCompatibility(t *test
 	before := readJournal(t, root)
 	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+		NorthboundOrigin: "https://matrix.example.com:443",
 	})
 	assertFault(t, err, cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	if !reflect.DeepEqual(before, readJournal(t, root)) || len(effects.upgradeCalls) != 0 {
@@ -806,6 +809,7 @@ func TestFrozenAdjacentProfilePairAllowsUpgradeButRollbackRequiresAuthenticatedR
 	seedPublishedInstalledRelease(t, root, fixtures[0])
 	upgraded, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+		NorthboundOrigin: "https://matrix.example.com:443",
 	})
 	if err != nil || upgraded.ReleaseID != fixtures[1].Manifest.Release.ID || !upgraded.Changed {
 		t.Fatalf("upgrade exact runtime profile pair: %#v / %v", upgraded, err)
@@ -1568,7 +1572,7 @@ func (effects *installEffects) ApplyInstallPhase(
 	effects.calls[phase]++
 	if plan.Root == "" || plan.InstallationID == "" || plan.Bundle.Manifest.Release.ID == "" ||
 		plan.CorrelationID == "" || plan.Trust.KeyID == "" ||
-		len(plan.TrustBytes) == 0 || plan.Port == 0 {
+		len(plan.TrustBytes) == 0 || plan.Port == 0 || plan.NorthboundOrigin == "" {
 		return errors.New("install plan is incomplete")
 	}
 	if phase == effects.failPhase && effects.failErr != nil && (!effects.failOnce || !effects.failed) {
@@ -1763,6 +1767,7 @@ func installRequest(root string, fixture releasetest.Fixture) cli.Request {
 	return cli.Request{
 		Action: lifecycle.ActionInstall, Root: root,
 		Bundle: fixture.Root, TrustKey: fixture.TrustPath,
+		NorthboundOrigin: "https://matrix.example.com:443",
 	}
 }
 

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"regexp"
 	"time"
+
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 const APIVersion = "installation.matrix.xiak.com/v1"
@@ -80,6 +82,7 @@ type Command struct {
 	InputDigest                 string    `json:"inputDigest,omitempty"`
 	BackupDigest                string    `json:"backupDigest,omitempty"`
 	TargetReleaseID             string    `json:"targetReleaseId,omitempty"`
+	NorthboundOrigin            string    `json:"northboundOrigin,omitempty"`
 	BackupID                    string    `json:"backupId,omitempty"`
 	ExpectedConfigurationDigest string    `json:"expectedConfigurationDigest,omitempty"`
 	RevokePreviousCredentials   bool      `json:"revokePreviousCredentials,omitempty"`
@@ -104,6 +107,7 @@ type Journal struct {
 	APIVersion             string       `json:"apiVersion"`
 	Version                uint64       `json:"version"`
 	InstallationID         string       `json:"installationId"`
+	NorthboundOrigin       string       `json:"northboundOrigin,omitempty"`
 	ReleaseTrust           ReleaseTrust `json:"releaseTrust"`
 	Node                   *NodeBinding `json:"node,omitempty"`
 	NodeCredentialRotation *Command     `json:"nodeCredentialRotation,omitempty"`
@@ -355,6 +359,11 @@ func ValidateJournal(journal Journal) error {
 		!trustFingerprintPattern.MatchString(journal.ReleaseTrust.Fingerprint) {
 		problems = append(problems, errors.New("installation release trust is invalid"))
 	}
+	if (journal.NorthboundOrigin != "" && externalrequest.ValidateOrigin(journal.NorthboundOrigin) != nil) ||
+		(journal.Node != nil && journal.NorthboundOrigin != "") ||
+		(journal.CurrentReleaseID == "" && journal.NorthboundOrigin != "") {
+		problems = append(problems, errors.New("installation northbound origin is invalid"))
+	}
 	if journal.Node != nil && (!trustKeyIDPattern.MatchString(journal.Node.ExecutionTargetID) ||
 		!digestPattern.MatchString(journal.Node.ConfigurationDigest)) {
 		problems = append(problems, errors.New("node installation binding is invalid"))
@@ -389,6 +398,10 @@ func ValidateJournal(journal Journal) error {
 			journal.CurrentReleaseDigest != journal.Active.SourceDigest {
 			problems = append(problems, errors.New("active command source does not match the current release"))
 		}
+		if journal.Node == nil && journal.Active.Command.Action == ActionUpgrade &&
+			journal.NorthboundOrigin != "" && journal.Active.Command.NorthboundOrigin != journal.NorthboundOrigin {
+			problems = append(problems, errors.New("active upgrade changed the sealed northbound origin"))
+		}
 		if journal.Active.Command.Action == ActionRotateCredentials &&
 			(journal.Node == nil || journal.Active.Command.ExpectedConfigurationDigest != journal.Node.ConfigurationDigest) {
 			problems = append(problems, errors.New("active rotation source does not match the node commitment"))
@@ -421,6 +434,17 @@ func ValidateNodeTransition(before, after Journal) error {
 	}
 	if before.Node == nil {
 		if after.NodeCredentialRotation != nil || after.NodeReleaseChange != nil {
+			return invalid
+		}
+		if before.NorthboundOrigin == after.NorthboundOrigin {
+			return nil
+		}
+		if before.Active == nil || after.Active != nil || after.Last == nil ||
+			(before.Active.Command.Action != ActionInstall && before.Active.Command.Action != ActionUpgrade) {
+			return invalid
+		}
+		expected, err := Advance(before, before.Active.Command.ID, PhaseReady, after.Last.CompletedAt)
+		if err != nil || expected.NorthboundOrigin != after.NorthboundOrigin || *expected.Last != *after.Last {
 			return invalid
 		}
 		return nil
@@ -472,6 +496,11 @@ func validateCommand(command Command, node bool) error {
 	}
 	if len(workflow(command.Action, node)) == 0 {
 		return errors.New("installation action is unsupported for this root")
+	}
+	if command.NorthboundOrigin != "" && (node ||
+		(command.Action != ActionInstall && command.Action != ActionUpgrade) ||
+		externalrequest.ValidateOrigin(command.NorthboundOrigin) != nil) {
+		return errors.New("installation command northbound origin is invalid")
 	}
 	if command.Action != ActionRotateCredentials && command.Action != ActionConfigureNodes &&
 		(command.ExpectedConfigurationDigest != "" || command.RevokePreviousCredentials) {
@@ -675,6 +704,7 @@ func validateExecution(execution Execution, completed bool, node bool) error {
 func sameCommandInput(left, right Command) bool {
 	return left.ID == right.ID && left.Action == right.Action &&
 		left.InputDigest == right.InputDigest && left.TargetReleaseID == right.TargetReleaseID &&
+		left.NorthboundOrigin == right.NorthboundOrigin &&
 		left.BackupID == right.BackupID && left.BackupDigest == right.BackupDigest &&
 		left.ExpectedConfigurationDigest == right.ExpectedConfigurationDigest &&
 		left.RevokePreviousCredentials == right.RevokePreviousCredentials
@@ -761,11 +791,17 @@ func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 		journal.CurrentReleaseDigest = execution.DestinationDigest
 		journal.PreviousRelease = ""
 		journal.PreviousReleaseDigest = ""
+		if execution.Command.NorthboundOrigin != "" {
+			journal.NorthboundOrigin = execution.Command.NorthboundOrigin
+		}
 	case ActionUpgrade:
 		journal.PreviousRelease = execution.SourceRelease
 		journal.PreviousReleaseDigest = execution.SourceDigest
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
+		if execution.Command.NorthboundOrigin != "" {
+			journal.NorthboundOrigin = execution.Command.NorthboundOrigin
+		}
 	case ActionRollback:
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
@@ -782,6 +818,10 @@ func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 func validateCompletedPointers(journal Journal, execution Execution) error {
 	switch execution.Outcome {
 	case OutcomeSucceeded:
+		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionUpgrade) &&
+			execution.Command.NorthboundOrigin != "" && journal.NorthboundOrigin != execution.Command.NorthboundOrigin {
+			return errors.New("successful command lost its northbound origin")
+		}
 		if execution.Command.Action == ActionRotateCredentials &&
 			(journal.Node == nil || journal.Node.ConfigurationDigest != execution.Command.InputDigest ||
 				journal.NodeCredentialRotation == nil || !sameCommandInput(*journal.NodeCredentialRotation, execution.Command)) {

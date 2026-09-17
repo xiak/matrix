@@ -87,8 +87,8 @@ type AuthoritySchemas struct {
 func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 5, Audit: 4, PaaS: 5},
-		ContractRevision: 11,
+		Authorities:      AuthoritySchemas{IAM: 30, Audit: 18, PaaS: 6},
+		ContractRevision: 12,
 	}
 }
 
@@ -98,8 +98,8 @@ func CurrentDatabaseProfile() DatabaseProfile {
 func SupportedDatabasePredecessorProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 5, Audit: 4, PaaS: 4},
-		ContractRevision: 10,
+		Authorities:      AuthoritySchemas{IAM: 5, Audit: 4, PaaS: 5},
+		ContractRevision: 11,
 	}
 }
 

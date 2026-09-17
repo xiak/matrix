@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/xiak/matrix/api/contractjson"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
@@ -365,13 +366,13 @@ func (value *handler) createNodeEnrollment(response http.ResponseWriter, request
 		writeWorkflowError(response, requestID, nodeenrollment.ErrInvalidArgument)
 		return
 	}
-	authorization, ok := value.authorizeRequest(
+	authorization, ok := value.authorizeCollectionRequest(
 		response,
 		request,
 		requestID,
 		port.AuthorizeNodeEnrollmentCreate,
 		"NodeEnrollment",
-		"collection",
+		iamv1.AuthorizationCollectionCreate,
 	)
 	if !ok {
 		return
@@ -427,13 +428,13 @@ func (value *handler) listNodeEnrollments(response http.ResponseWriter, request 
 	if !ok {
 		return
 	}
-	authorization, ok := value.authorizeRequest(
+	authorization, ok := value.authorizeCollectionRequest(
 		response,
 		request,
 		requestID,
 		port.AuthorizeNodeEnrollmentRead,
 		"NodeEnrollment",
-		"collection",
+		iamv1.AuthorizationCollectionList,
 	)
 	if !ok {
 		return

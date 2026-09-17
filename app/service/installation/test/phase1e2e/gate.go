@@ -74,6 +74,7 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 		"--bundle", initial.Root,
 		"--root", value.config.root,
 		"--trust-key", value.config.trustKey,
+		"--northbound-origin", value.config.edge,
 	}, value.pathLeakage())
 	if err != nil || installed.ReleaseID != initial.Manifest.Release.ID ||
 		installed.PreviousID != "" || !installed.Changed {

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/usecase"
@@ -30,6 +31,9 @@ func TestListOfferingsAuthorizesTheManagedServiceCollection(t *testing.T) {
 	}
 	if authorizer.request.Action != port.AuthorizeOfferingRead ||
 		authorizer.request.Resource.Kind != port.ResourceServiceOffering ||
+		authorizer.request.Resource.ID != "collection" ||
+		authorizer.request.ResourceMode != iamv1.AuthorizationResourceCollection ||
+		authorizer.request.CollectionUsage != iamv1.AuthorizationCollectionList ||
 		authorizer.request.Credential != "Bearer session-secret" {
 		t.Fatalf("authorization request=%#v", authorizer.request)
 	}
@@ -41,7 +45,8 @@ func TestListOfferingsAuthorizesTheManagedServiceCollection(t *testing.T) {
 
 func TestQuotaActivationRejectsUnknownPaymentFields(t *testing.T) {
 	workflow := &stubWorkflow{}
-	handler := testHandler(t, &stubAuthorizer{}, workflow)
+	authorizer := &stubAuthorizer{}
+	handler := testHandler(t, authorizer, workflow)
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/managed-services/v1/quota-entitlements",
@@ -67,7 +72,8 @@ func TestCreateInstallationReturnsOnlyNormalizedPendingState(t *testing.T) {
 			ID: "operation-1", Phase: managedservicev1.InstallationPending, ObservedAt: now,
 		},
 	}}
-	handler := testHandler(t, &stubAuthorizer{}, workflow)
+	authorizer := &stubAuthorizer{}
+	handler := testHandler(t, authorizer, workflow)
 	request := httptest.NewRequest(
 		http.MethodPost,
 		"/managed-services/v1/service-installations",
@@ -81,12 +87,18 @@ func TestCreateInstallationReturnsOnlyNormalizedPendingState(t *testing.T) {
 	if response.Code != http.StatusAccepted || workflow.createCalls != 1 {
 		t.Fatalf("status=%d calls=%d body=%s", response.Code, workflow.createCalls, response.Body.String())
 	}
+	if authorizer.request.Action != port.AuthorizeInstallationCreate ||
+		authorizer.request.Resource.ID != "collection" ||
+		authorizer.request.ResourceMode != iamv1.AuthorizationResourceCollection ||
+		authorizer.request.CollectionUsage != iamv1.AuthorizationCollectionCreate {
+		t.Fatalf("create authorization=%#v", authorizer.request)
+	}
 	if strings.Contains(response.Body.String(), "password") || strings.Contains(response.Body.String(), "image") {
 		t.Fatalf("native or secret field leaked: %s", response.Body.String())
 	}
 }
 
-func TestGetInstallationOperationAuthorizesTheExactInstallation(t *testing.T) {
+func TestGetInstallationOperationKeepsCollectionNamedResourceAsInstance(t *testing.T) {
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	authorizer := &stubAuthorizer{}
 	workflow := &stubWorkflow{operation: managedservicev1.InstallationOperation{
@@ -95,7 +107,7 @@ func TestGetInstallationOperationAuthorizesTheExactInstallation(t *testing.T) {
 	handler := testHandler(t, authorizer, workflow)
 	request := httptest.NewRequest(
 		http.MethodGet,
-		"/managed-services/v1/service-installations/postgres-primary/operation",
+		"/managed-services/v1/service-installations/collection/operation",
 		nil,
 	)
 	request.Header.Set("Authorization", "Bearer session-secret")
@@ -106,7 +118,9 @@ func TestGetInstallationOperationAuthorizesTheExactInstallation(t *testing.T) {
 	}
 	if authorizer.request.Action != port.AuthorizeInstallationRead ||
 		authorizer.request.Resource.Kind != port.ResourceServiceInstallation ||
-		authorizer.request.Resource.ID != "postgres-primary" || workflow.operationReads != 1 {
+		authorizer.request.Resource.ID != "collection" ||
+		authorizer.request.ResourceMode != iamv1.AuthorizationResourceInstance ||
+		authorizer.request.CollectionUsage != "" || workflow.operationReads != 1 {
 		t.Fatalf("authorization=%#v operationReads=%d", authorizer.request, workflow.operationReads)
 	}
 	var result managedservicev1.InstallationOperation

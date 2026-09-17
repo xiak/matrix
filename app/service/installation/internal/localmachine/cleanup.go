@@ -22,10 +22,11 @@ func rollbackInstallation(
 	plan platformcommand.InstallPlan,
 ) error {
 	compiled, err := topology.CompileInstalled(plan.Bundle.Manifest, topology.Options{
-		InstallationID: plan.InstallationID,
-		Root:           plan.Root,
-		Listener:       plan.Listener,
-		Port:           plan.Port,
+		InstallationID:   plan.InstallationID,
+		Root:             plan.Root,
+		Listener:         plan.Listener,
+		Port:             plan.Port,
+		NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)

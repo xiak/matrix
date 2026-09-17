@@ -57,8 +57,8 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
         END $role$; GRANT matrix_iam_credential_recovery TO `+localRecoveryTestRole); err != nil {
 		t.Fatal(err)
 	}
-	api := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole)
-	local := localRecoveryWorkflow(t, ctx, dsn, localRecoveryTestRole)
+	api := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, nil)
+	local := localRecoveryWorkflow(t, ctx, dsn, localRecoveryTestRole, nil)
 	document := iamHTTPBootstrap(t)
 	status, err := api.Bootstrap(ctx, document)
 	if err != nil {
@@ -71,7 +71,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 	}
 	capabilityKey := iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x7a}, 32)))
 	authority := iamv1.LocalCredentialRecoveryAuthority{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryAuthority", Purpose: iamv1.LocalCredentialRecoveryPurpose,
-		Scope: iamv1.LocalCredentialRecoveryScope{InstallationID: document.InstallationID, BootstrapDigest: status.ContentDigest, OrganizationID: document.Organization.ID, PrincipalID: document.Administrator.ID}, CapabilityKey: capabilityKey}
+		Scope: iamv1.LocalCredentialRecoveryScope{InstallationID: document.InstallationID, BootstrapDigest: status.ContentDigest, AccountID: document.Organization.ID, PrincipalID: document.Administrator.ID}, CapabilityKey: capabilityKey}
 	initial := localRecoveryLogin(t, handler, "admin", adminPassword, true)
 	primary := localRecoveryChangePassword(t, handler, initial, adminPassword, changedAdminPassword)
 	_ = localRecoveryLogin(t, handler, "admin", changedAdminPassword, false)
@@ -84,7 +84,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 	if _, err := api.RecoverLocalCredentials(ctx, authority, request); !errors.Is(err, identityaccess.ErrForbidden) {
 		t.Fatalf("API identity acquired offline recovery: %v", err)
 	}
-	worker := localRecoveryWorkflow(t, ctx, dsn, iamHTTPWorkerRole)
+	worker := localRecoveryWorkflow(t, ctx, dsn, iamHTTPWorkerRole, nil)
 	if _, err := worker.RecoverLocalCredentials(ctx, authority, request); !errors.Is(err, identityaccess.ErrForbidden) {
 		t.Fatalf("worker acquired offline recovery: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 			r.Scope = a.Scope
 		},
 		"tenant": func(a *iamv1.LocalCredentialRecoveryAuthority, r *iamv1.LocalCredentialRecoveryRequest) {
-			a.Scope.OrganizationID = "organization-other"
+			a.Scope.AccountID = "organization-other"
 			r.Scope = a.Scope
 		},
 		"primary": func(a *iamv1.LocalCredentialRecoveryAuthority, r *iamv1.LocalCredentialRecoveryRequest) {
@@ -150,20 +150,21 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 				damage = `UPDATE iam.principals SET status='DISABLED' WHERE tenant_id=$1 AND id=$2`
 				restore = `UPDATE iam.principals SET status='ACTIVE' WHERE tenant_id=$1 AND id=$2`
 			case "organization-disabled":
-				damage = `UPDATE iam.organizations SET status='DISABLED' WHERE id=$1 AND $2::text IS NOT NULL`
-				restore = `UPDATE iam.organizations SET status='ACTIVE' WHERE id=$1 AND $2::text IS NOT NULL`
+				damage = `UPDATE iam.accounts SET status='DISABLED' WHERE id=$1 AND $2::text IS NOT NULL`
+				restore = `UPDATE iam.accounts SET status='ACTIVE' WHERE id=$1 AND $2::text IS NOT NULL`
 			case "not-owner":
-				damage = `UPDATE iam.login_index SET account_owner=false WHERE tenant_id=$1 AND principal_id=$2`
-				restore = `UPDATE iam.login_index SET account_owner=true WHERE tenant_id=$1 AND principal_id=$2`
+				damage = `DELETE FROM iam.account_roots WHERE account_id=$1 AND principal_id=$2`
+				restore = `INSERT INTO iam.account_roots(account_id,principal_id,login_name)
+					SELECT tenant_id,id,login_name FROM iam.principals WHERE tenant_id=$1 AND id=$2`
 			case "not-user":
 				damage = `UPDATE iam.principals SET principal_type='SERVICE_ACCOUNT',login_name=NULL WHERE tenant_id=$1 AND id=$2`
 				restore = `UPDATE iam.principals SET principal_type='USER',login_name='admin' WHERE tenant_id=$1 AND id=$2`
 			}
-			if _, err := database.Exec(ctx, damage, authority.Scope.OrganizationID, authority.Scope.PrincipalID); err != nil {
+			if _, err := database.Exec(ctx, damage, authority.Scope.AccountID, authority.Scope.PrincipalID); err != nil {
 				t.Fatal(err)
 			}
 			defer func() {
-				if _, err := database.Exec(ctx, restore, authority.Scope.OrganizationID, authority.Scope.PrincipalID); err != nil {
+				if _, err := database.Exec(ctx, restore, authority.Scope.AccountID, authority.Scope.PrincipalID); err != nil {
 					t.Fatal(err)
 				}
 			}()
@@ -204,7 +205,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tx.Exec(ctx, `SET LOCAL ROLE matrix_iam_owner; SELECT set_config('matrix.iam_tenant_id',$1,true)`, string(authority.Scope.OrganizationID)); err != nil {
+		if _, err := tx.Exec(ctx, `SET LOCAL ROLE matrix_iam_owner; SELECT set_config('matrix.iam_tenant_id',$1,true)`, string(authority.Scope.AccountID)); err != nil {
 			t.Fatal(err)
 		}
 		_, attackErr := tx.Exec(ctx, attack)
@@ -243,19 +244,19 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 
 	// A separate normally provisioned platform USER can race revocation without
 	// relying on the recovered primary's now-revoked bearer.
-	created := performIAMRequest(handler, http.MethodPost, "/v1/principals", primary, []byte(`{"loginName":"recovery.operator","displayName":"Recovery operator","initialPassword":"Other-Operator-Initial-91!","requestId":"create-recovery-operator"}`))
-	var operator iamv1.Principal
+	created := performIAMRequest(handler, http.MethodPost, "/v1/users", primary, []byte(`{"loginName":"recovery.operator","displayName":"Recovery operator","initialPassword":"Other-Operator-Initial-91!","requestId":"create-recovery-operator"}`))
+	var operator iamv1.User
 	if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &operator) != nil {
 		t.Fatal("create separate platform operator")
 	}
-	operatorSession := localRecoveryLogin(t, handler, "recovery.operator@"+string(authority.Scope.OrganizationID), "Other-Operator-Initial-91!", true)
+	operatorSession := localRecoveryLogin(t, handler, "recovery.operator@"+string(authority.Scope.AccountID), "Other-Operator-Initial-91!", true)
 	operatorSession = localRecoveryChangePassword(t, handler, operatorSession, "Other-Operator-Initial-91!", "Other-Operator-Changed-92!")
-	bindingBody, _ := json.Marshal(iamv1.PutRoleBindingRequest{PrincipalID: operator.ID, Role: iamv1.RolePlatformOperator, RequestID: "grant-recovery-operator"})
-	if response := performIAMRequest(handler, http.MethodPost, "/v1/role-bindings", primary, bindingBody); response.Code != http.StatusOK {
+	bindingBody, _ := json.Marshal(iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(operator.ID)}, PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "grant-recovery-operator"})
+	if response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", primary, bindingBody); response.Code != http.StatusOK {
 		t.Fatal("grant separate platform operator")
 	}
-	adminBindingBody, _ := json.Marshal(iamv1.PutRoleBindingRequest{PrincipalID: operator.ID, Role: iamv1.RoleOrganizationAdmin, RequestID: "grant-recovery-organization-admin"})
-	if response := performIAMRequest(handler, http.MethodPost, "/v1/role-bindings", primary, adminBindingBody); response.Code != http.StatusOK {
+	adminBindingBody, _ := json.Marshal(iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(operator.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "grant-recovery-organization-admin"})
+	if response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", primary, adminBindingBody); response.Code != http.StatusOK {
 		t.Fatal("grant independent organization administrator")
 	}
 	for _, action := range []string{"reset", "recover", "grant", "login"} {
@@ -267,14 +268,14 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 			var body any
 			switch action {
 			case "reset":
-				path = "/v1/principals/" + string(authority.Scope.PrincipalID) + ":reset-password"
+				path = "/v1/users/" + string(authority.Scope.PrincipalID) + ":reset-password"
 				body = map[string]any{"initialPassword": "Forbidden-Online-Password-89!", "resourceVersion": r.Expected.PrincipalResourceVersion, "requestId": "online-reset-versus-local"}
 			case "recover":
-				path = "/v1/organizations/" + string(authority.Scope.OrganizationID) + ":recover-administrator"
-				body = map[string]any{"principalId": authority.Scope.PrincipalID, "initialPassword": "Forbidden-Online-Password-89!", "resourceVersion": r.Expected.OrganizationResourceVersion, "requestId": "online-recovery-versus-local"}
+				path = "/v1/accounts/" + string(authority.Scope.AccountID) + ":recover-root-credentials"
+				body = map[string]any{"initialPassword": "Forbidden-Online-Password-89!", "resourceVersion": r.Expected.OrganizationResourceVersion, "requestId": "online-recovery-versus-local"}
 			case "grant":
-				path = "/v1/role-bindings"
-				body = iamv1.PutRoleBindingRequest{PrincipalID: authority.Scope.PrincipalID, Role: iamv1.RolePlatformOperator, RequestID: "platform-grant-versus-local"}
+				path = "/v1/policy-attachments"
+				body = iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(authority.Scope.PrincipalID)}, PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "platform-grant-versus-local"}
 			case "login":
 				path, credential = "/v1/auth/login", ""
 				body = map[string]any{"loginName": "admin", "password": changedAdminPassword, "requestId": "old-login-versus-local"}
@@ -312,9 +313,10 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 				}
 			case "grant":
 				// Recovery-first makes the target password-change-only, so even
-				// an equal platform grant must then be refused by its own rules.
-				if other.status != http.StatusOK && other.status != http.StatusForbidden {
-					t.Fatalf("authorized binding grant did not serialize: %d", other.status)
+				// a fresh grant must then be refused. Grant-first conflicts with the
+				// existing active relationship; it is not an equal-input replay.
+				if other.status != http.StatusConflict && other.status != http.StatusForbidden {
+					t.Fatalf("duplicate attachment grant did not serialize: %d", other.status)
 				}
 			case "login":
 				if other.status != http.StatusOK && other.status != http.StatusUnauthorized {
@@ -456,28 +458,29 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 			}
 			prior := readLocalRecoveryState(t, ctx, database, authority.Scope)
 			// Hold only a fixture row lock, never write credentials or bindings.
-			// Recovery-first has already locked the binding when it waits for the
-			// organization. Revoke-first queues on the binding before recovery.
+			// Recovery-first queues on the organization before online revocation.
+			// Revoke-first holds its scope while waiting on the attachment,
+			// so recovery must wait for that same scope.
 			// Both paths still execute the real transactions and HTTP authority.
 			blocker, err := database.Begin(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer blocker.Rollback(context.Background())
-			lockQuery := "SELECT id FROM iam.role_bindings WHERE tenant_id=$1 AND id=$2 FOR UPDATE"
+			lockQuery := "SELECT id FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$2 FOR UPDATE"
 			lockTarget := string(r.Expected.PlatformBindingID)
 			if recoveryFirst {
-				lockQuery = "SELECT id FROM iam.organizations WHERE id=$1 AND $2::text IS NOT NULL FOR UPDATE"
-				lockTarget = string(authority.Scope.OrganizationID)
+				lockQuery = "SELECT id FROM iam.accounts WHERE id=$1 AND $2::text IS NOT NULL FOR UPDATE"
+				lockTarget = string(authority.Scope.AccountID)
 			}
-			if _, err := blocker.Exec(ctx, lockQuery, authority.Scope.OrganizationID, lockTarget); err != nil {
+			if _, err := blocker.Exec(ctx, lockQuery, authority.Scope.AccountID, lockTarget); err != nil {
 				t.Fatal(err)
 			}
 			recoverErr := make(chan error, 1)
 			revocation := make(chan int, 1)
 			recover := func() { _, err := local.RecoverLocalCredentials(ctx, authority, r); recoverErr <- err }
 			revoke := func() {
-				revocation <- performIAMRequest(handler, http.MethodPost, "/v1/role-bindings/"+string(r.Expected.PlatformBindingID)+":revoke", operatorSession, []byte(fmt.Sprintf(`{"requestId":"revoke-versus-recovery-%t"}`, recoveryFirst))).Code
+				revocation <- performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments/"+string(r.Expected.PlatformBindingID)+":revoke", operatorSession, []byte(fmt.Sprintf(`{"resourceVersion":%d,"requestId":"revoke-versus-recovery-%t"}`, r.Expected.PlatformBindingResourceVersion, recoveryFirst))).Code
 			}
 			if recoveryFirst {
 				go recover()
@@ -528,8 +531,8 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 				// Reset the next race only through normal forced password change and
 				// explicit grant by the separate still-authorized platform operator.
 				primary = localRecoveryChangePassword(t, handler, localRecoveryLogin(t, handler, "admin", "Revoked-Recovered-Password-87!", true), "Revoked-Recovered-Password-87!", changedAdminPassword)
-				body, _ := json.Marshal(iamv1.PutRoleBindingRequest{PrincipalID: authority.Scope.PrincipalID, Role: iamv1.RolePlatformOperator, RequestID: "explicit-regrant-for-next-recovery-race"})
-				if response := performIAMRequest(handler, http.MethodPost, "/v1/role-bindings", operatorSession, body); response.Code != http.StatusOK {
+				body, _ := json.Marshal(iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(authority.Scope.PrincipalID)}, PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "explicit-regrant-for-next-recovery-race"})
+				if response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", operatorSession, body); response.Code != http.StatusOK {
 					t.Fatal("explicit authorized platform grant failed")
 				}
 			}
@@ -575,16 +578,16 @@ func assertLocalRecoveryClosedSQLFact(t *testing.T, ctx context.Context, databas
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*auditv1.Event){
-		"actor":           func(e *auditv1.Event) { e.Actor.Type = auditv1.ActorUser },
-		"system id":       func(e *auditv1.Event) { e.Actor.ID = "installation-verifier" },
-		"action":          func(e *auditv1.Event) { e.Action = auditv1.ActionIAMTenantAdministratorRecovered },
-		"namespace":       func(e *auditv1.Event) { e.Target.TenantID = "another-tenant" },
-		"principal":       func(e *auditv1.Event) { e.Target.ID = "service-iam" },
-		"installation":    func(e *auditv1.Event) { e.InstallationID = "another-installation" },
-		"decision":        func(e *auditv1.Event) { e.IAMDecisionID = "fabricated-decision" },
-		"operation":       func(e *auditv1.Event) { e.OperationID = "fabricated-operation" },
-		"request":         func(e *auditv1.Event) { e.RequestID = "another-command" },
-		"missing binding": nil,
+		"actor":              func(e *auditv1.Event) { e.Actor.Type = auditv1.ActorUser },
+		"system id":          func(e *auditv1.Event) { e.Actor.ID = "installation-verifier" },
+		"action":             func(e *auditv1.Event) { e.Action = auditv1.ActionIAMTenantAdministratorRecovered },
+		"namespace":          func(e *auditv1.Event) { e.Target.TenantID = "another-tenant" },
+		"principal":          func(e *auditv1.Event) { e.Target.ID = "service-iam" },
+		"installation":       func(e *auditv1.Event) { e.InstallationID = "another-installation" },
+		"decision":           func(e *auditv1.Event) { e.IAMDecisionID = "fabricated-decision" },
+		"operation":          func(e *auditv1.Event) { e.OperationID = "fabricated-operation" },
+		"request":            func(e *auditv1.Event) { e.RequestID = "another-command" },
+		"revoked attachment": nil,
 	} {
 		t.Run("database fact "+name, func(t *testing.T) {
 			tx, err := database.Begin(ctx)
@@ -592,7 +595,7 @@ func assertLocalRecoveryClosedSQLFact(t *testing.T, ctx context.Context, databas
 				t.Fatal(err)
 			}
 			if mutate == nil {
-				if _, err := tx.Exec(ctx, "DELETE FROM iam.role_bindings WHERE tenant_id=$1 AND id=$2", request.Scope.OrganizationID, request.Expected.PlatformBindingID); err != nil {
+				if _, err := tx.Exec(ctx, "UPDATE iam.policy_attachments SET revoked_at=transaction_timestamp(),updated_at=transaction_timestamp(),resource_version=resource_version+1 WHERE tenant_id=$1 AND id=$2", request.Scope.AccountID, request.Expected.PlatformBindingID); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -605,7 +608,7 @@ func assertLocalRecoveryClosedSQLFact(t *testing.T, ctx context.Context, databas
 			}
 			event := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "event-local-recovery-attack",
 				InstallationID: request.Scope.InstallationID, Actor: auditv1.ActorReference{Type: auditv1.ActorSystem, ID: iamv1.LocalCredentialRecoveryActor},
-				Action: auditv1.ActionIAMInstallationPrimaryCredentialsRecovered, Target: auditv1.TargetReference{Kind: auditv1.TargetPrincipal, ID: string(request.Scope.PrincipalID), TenantID: auditv1.TenantID(request.Scope.OrganizationID)},
+				Action: auditv1.ActionIAMInstallationPrimaryCredentialsRecovered, Target: auditv1.TargetReference{Kind: auditv1.TargetPrincipal, ID: string(request.Scope.PrincipalID), TenantID: auditv1.TenantID(request.Scope.AccountID)},
 				Result: auditv1.ResultSucceeded, RequestDigest: "sha256:" + strings.Repeat("d", 64), RequestID: request.CommandID, CorrelationID: request.CommandID, OccurredAt: now.UTC()}
 			if mutate != nil {
 				mutate(&event)
@@ -624,13 +627,14 @@ func assertLocalRecoveryClosedSQLFact(t *testing.T, ctx context.Context, databas
 	}
 }
 
-func localRecoveryWorkflow(t *testing.T, ctx context.Context, dsn, user string) *identityaccess.Authority {
+func localRecoveryWorkflow(t *testing.T, ctx context.Context, dsn, user string, trace pgx.QueryTracer, keyring ...iamv1.AccessKeyWrappingKeyring) *identityaccess.Authority {
 	t.Helper()
 	config, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	config.ConnConfig.User, config.ConnConfig.Password = user, iamHTTPTestPassword
+	config.ConnConfig.Tracer = trace
 	config.MaxConns = 2
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
@@ -644,7 +648,14 @@ func localRecoveryWorkflow(t *testing.T, ctx context.Context, dsn, user string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{})
+	options := identityaccess.Config{CursorKey: bytes.Repeat([]byte{0x39}, 32)}
+	if len(keyring) > 1 {
+		t.Fatal("multiple test wrapping documents")
+	}
+	if len(keyring) == 1 {
+		options.AccessKeyWrapping = &keyring[0]
+	}
+	workflow, err := identityaccess.NewAuthority(repository, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -699,15 +710,15 @@ func readLocalRecoveryState(t *testing.T, ctx context.Context, database *pgx.Con
 	t.Helper()
 	var result localRecoveryState
 	err := database.QueryRow(ctx, `SELECT c.credential_version,c.password_hash,p.resource_version,p.must_change_password,p.status,o.status,o.resource_version,
-        (SELECT account_owner FROM iam.login_index l WHERE l.tenant_id=p.tenant_id AND l.principal_id=p.id),
+		EXISTS(SELECT 1 FROM iam.account_roots r WHERE r.account_id=p.tenant_id AND r.principal_id=p.id),
         (SELECT jsonb_agg(jsonb_build_array(principal_id,purpose,lookup_digest,verification_digest,revoked_at) ORDER BY principal_id)::text FROM iam.service_credentials sc WHERE sc.tenant_id=p.tenant_id),
         (SELECT count(*) FROM iam.sessions s WHERE s.tenant_id=p.tenant_id AND s.principal_id=p.id AND s.status='ACTIVE'),
         (SELECT COALESCE(jsonb_agg(jsonb_build_array(id,status,resource_version,credential_version,revoked_at) ORDER BY id),'[]'::jsonb)::text FROM iam.sessions s WHERE s.tenant_id=p.tenant_id AND s.principal_id=p.id),
-        (SELECT COALESCE(jsonb_agg(jsonb_build_array(id,role_name,resource_version,revoked_at) ORDER BY id),'[]'::jsonb)::text FROM iam.role_bindings b WHERE b.tenant_id=p.tenant_id AND b.principal_id=p.id),
+        (SELECT COALESCE(jsonb_agg(jsonb_build_array(id,policy_id,authority_scope,installation_id,resource_version,revoked_at) ORDER BY id),'[]'::jsonb)::text FROM iam.policy_attachments b WHERE b.tenant_id=p.tenant_id AND b.target_id=p.id),
         (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action'=$3),
         (SELECT count(*) FROM iam.local_credential_recoveries)
         FROM iam.principals p JOIN iam.user_credentials c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
-        JOIN iam.organizations o ON o.id=p.tenant_id WHERE p.tenant_id=$1 AND p.id=$2`, scope.OrganizationID, scope.PrincipalID, auditv1.ActionIAMInstallationPrimaryCredentialsRecovered).
+        JOIN iam.accounts o ON o.id=p.tenant_id WHERE p.tenant_id=$1 AND p.id=$2`, scope.AccountID, scope.PrincipalID, auditv1.ActionIAMInstallationPrimaryCredentialsRecovered).
 		Scan(&result.generation, &result.passwordHash, &result.principalVersion, &result.mustChange, &result.principalStatus, &result.organizationStatus, &result.organizationVersion, &result.owner, &result.services,
 			&result.activeSessions, &result.sessions, &result.bindings, &result.facts, &result.receipts)
 	if err != nil {

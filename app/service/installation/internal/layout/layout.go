@@ -44,6 +44,7 @@ const (
 	PaaSWorker            = "secrets/database/paas-worker-dsn"
 
 	IAMBootstrap                   = "secrets/authority/iam-bootstrap.json"
+	IAMAccessKeyWrappingKeyring    = "secrets/authority/iam-access-key-wrapping-keyring.json"
 	AuditIAMCredential             = "secrets/authority/audit-iam-credential"
 	IAMAuditCredential             = "secrets/authority/iam-audit-credential"
 	PaaSIAMCredential              = "secrets/authority/paas-iam-credential"

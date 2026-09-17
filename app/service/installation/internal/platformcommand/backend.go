@@ -22,6 +22,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 const (
@@ -54,16 +55,17 @@ var (
 // InstallPlan is authenticated input plus the installation-owned identity.
 // TrustBytes contains a public key document, never credential material.
 type InstallPlan struct {
-	Root           string
-	InstallationID string
-	CorrelationID  string
-	Listener       string
-	Port           uint16
-	PreviousID     string
-	PreviousDigest string
-	Bundle         release.VerifiedBundle
-	Trust          release.TrustRoot
-	TrustBytes     []byte
+	Root             string
+	InstallationID   string
+	CorrelationID    string
+	Listener         string
+	Port             uint16
+	NorthboundOrigin string
+	PreviousID       string
+	PreviousDigest   string
+	Bundle           release.VerifiedBundle
+	Trust            release.TrustRoot
+	TrustBytes       []byte
 }
 
 // InstalledPlan is the sealed identity of the currently committed release.
@@ -75,6 +77,7 @@ type InstalledPlan struct {
 	CorrelationID    string
 	Listener         string
 	Port             uint16
+	NorthboundOrigin string
 	ReleaseID        string
 	ReleaseDigest    string
 	PreviousID       string
@@ -244,6 +247,9 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 	}
 	if request.Join != "" {
 		return cli.Result{}, fault(cli.FaultInvalidArgument, "PLATFORM_JOIN_UNSUPPORTED")
+	}
+	if request.NorthboundOrigin != "" && request.Action != lifecycle.ActionInstall && request.Action != lifecycle.ActionUpgrade {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_UNSUPPORTED")
 	}
 	switch request.Action {
 	case lifecycle.ActionInstall:
@@ -476,7 +482,8 @@ func installedPlan(root string, state lifecycle.Journal) InstalledPlan {
 	return InstalledPlan{
 		Root: root, InstallationID: state.InstallationID,
 		Listener: defaultListener, Port: defaultPort,
-		ReleaseID: state.CurrentReleaseID, ReleaseDigest: state.CurrentReleaseDigest,
+		NorthboundOrigin: state.NorthboundOrigin,
+		ReleaseID:        state.CurrentReleaseID, ReleaseDigest: state.CurrentReleaseDigest,
 		PreviousID: state.PreviousRelease, PreviousDigest: state.PreviousReleaseDigest,
 		TrustKeyID:       state.ReleaseTrust.KeyID,
 		TrustFingerprint: state.ReleaseTrust.Fingerprint,
@@ -487,7 +494,8 @@ func previousInstalledPlan(root string, state lifecycle.Journal) InstalledPlan {
 	return InstalledPlan{
 		Root: root, InstallationID: state.InstallationID,
 		Listener: defaultListener, Port: defaultPort,
-		ReleaseID: state.PreviousRelease, ReleaseDigest: state.PreviousReleaseDigest,
+		NorthboundOrigin: state.NorthboundOrigin,
+		ReleaseID:        state.PreviousRelease, ReleaseDigest: state.PreviousReleaseDigest,
 		TrustKeyID:       state.ReleaseTrust.KeyID,
 		TrustFingerprint: state.ReleaseTrust.Fingerprint,
 	}
@@ -517,6 +525,9 @@ func (backend *Backend) install(
 	ctx context.Context,
 	request cli.Request,
 ) (result cli.Result, returnErr error) {
+	if externalrequest.ValidateOrigin(request.NorthboundOrigin) != nil {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_INVALID")
+	}
 	trustBytes, trust, err := release.ReadTrustRootFile(request.TrustKey)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "TRUST_ROOT_INVALID")
@@ -577,6 +588,9 @@ func (backend *Backend) install(
 		if state.CurrentReleaseDigest != verified.ManifestSHA256 {
 			return cli.Result{}, fault(cli.FaultConflict, "RELEASE_CONTENT_CONFLICT")
 		}
+		if state.NorthboundOrigin != request.NorthboundOrigin {
+			return cli.Result{}, fault(cli.FaultConflict, "NORTHBOUND_ORIGIN_CONFLICT")
+		}
 		correlationID := ""
 		if state.Last != nil {
 			correlationID = state.Last.Command.ID
@@ -599,11 +613,12 @@ func (backend *Backend) install(
 	}
 
 	command := lifecycle.Command{
-		ID:              commandID,
-		Action:          lifecycle.ActionInstall,
-		InputDigest:     verified.ManifestSHA256,
-		TargetReleaseID: verified.Manifest.Release.ID,
-		RequestedAt:     canonicalNow(backend.now()),
+		ID:               commandID,
+		Action:           lifecycle.ActionInstall,
+		InputDigest:      verified.ManifestSHA256,
+		TargetReleaseID:  verified.Manifest.Release.ID,
+		NorthboundOrigin: request.NorthboundOrigin,
+		RequestedAt:      canonicalNow(backend.now()),
 	}
 	started, err := lifecycle.Start(state, command)
 	if err != nil {
@@ -623,7 +638,8 @@ func (backend *Backend) install(
 	plan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, Bundle: verified,
+		Listener:      defaultListener, Port: defaultPort,
+		NorthboundOrigin: started.Execution.Command.NorthboundOrigin, Bundle: verified,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(plan.TrustBytes)
@@ -664,6 +680,22 @@ func (backend *Backend) upgrade(
 	}
 	if state.CurrentReleaseID == "" {
 		return cli.Result{}, fault(cli.FaultPrecondition, "PLATFORM_NOT_INSTALLED")
+	}
+	northboundOrigin := request.NorthboundOrigin
+	if state.Active != nil {
+		sealed := state.Active.Command.NorthboundOrigin
+		if northboundOrigin != "" && northboundOrigin != sealed {
+			return cli.Result{}, fault(cli.FaultConflict, "NORTHBOUND_ORIGIN_CONFLICT")
+		}
+		northboundOrigin = sealed
+	} else if state.NorthboundOrigin != "" {
+		if northboundOrigin != "" && northboundOrigin != state.NorthboundOrigin {
+			return cli.Result{}, fault(cli.FaultConflict, "NORTHBOUND_ORIGIN_CONFLICT")
+		}
+		northboundOrigin = state.NorthboundOrigin
+	}
+	if externalrequest.ValidateOrigin(northboundOrigin) != nil {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_INVALID")
 	}
 
 	trustPath := filepath.Join(session.Root(), filepath.FromSlash(layout.ReleaseTrust))
@@ -735,10 +767,11 @@ func (backend *Backend) upgrade(
 	}
 	started, err := lifecycle.Start(state, lifecycle.Command{
 		ID: commandID, Action: lifecycle.ActionUpgrade,
-		InputDigest:     targetBundle.ManifestSHA256,
-		TargetReleaseID: targetBundle.Manifest.Release.ID,
-		BackupID:        backupID,
-		RequestedAt:     canonicalNow(backend.now()),
+		InputDigest:      targetBundle.ManifestSHA256,
+		TargetReleaseID:  targetBundle.Manifest.Release.ID,
+		NorthboundOrigin: northboundOrigin,
+		BackupID:         backupID,
+		RequestedAt:      canonicalNow(backend.now()),
 	})
 	if err != nil {
 		return cli.Result{}, lifecycleFault(err)
@@ -757,7 +790,8 @@ func (backend *Backend) upgrade(
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
 		Listener:      defaultListener, Port: defaultPort,
-		PreviousID: sourcePlan.ReleaseID, PreviousDigest: sourcePlan.ReleaseDigest,
+		NorthboundOrigin: northboundOrigin,
+		PreviousID:       sourcePlan.ReleaseID, PreviousDigest: sourcePlan.ReleaseDigest,
 		Bundle: targetBundle,
 		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
@@ -878,7 +912,8 @@ func (backend *Backend) rollback(
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
 		Listener:      defaultListener, Port: defaultPort,
-		PreviousID: started.Journal.PreviousRelease, PreviousDigest: started.Journal.PreviousReleaseDigest,
+		NorthboundOrigin: started.Journal.NorthboundOrigin,
+		PreviousID:       started.Journal.PreviousRelease, PreviousDigest: started.Journal.PreviousReleaseDigest,
 		Bundle: currentBundle,
 		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
@@ -993,7 +1028,8 @@ func (backend *Backend) recover(
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
 		Listener:      defaultListener, Port: defaultPort,
-		PreviousID: started.Journal.PreviousRelease, PreviousDigest: started.Journal.PreviousReleaseDigest,
+		NorthboundOrigin: started.Journal.NorthboundOrigin,
+		PreviousID:       started.Journal.PreviousRelease, PreviousDigest: started.Journal.PreviousReleaseDigest,
 		Bundle: currentBundle,
 		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
@@ -1002,8 +1038,9 @@ func (backend *Backend) recover(
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
 		Listener:      defaultListener, Port: defaultPort,
-		Bundle: targetBundle,
-		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
+		NorthboundOrigin: started.Journal.NorthboundOrigin,
+		Bundle:           targetBundle,
+		Trust:            trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(targetPlan.TrustBytes)
 	plan := RecoveryPlan{

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -40,8 +41,9 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 			APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
 			ID: "decision-paas-authorize", Allowed: true, Reason: iamv1.DecisionAllowed,
 			TenantID: "organization-a",
-			Subject:  &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"},
-			Action:   body.Action, Resource: body.Resource, RequestID: body.RequestID,
+			Subject:  &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"},
+			Action:   body.Action, Resource: body.Resource, RequestID: body.RequestID, CorrelationID: body.CorrelationID,
+			Profile: &body.Profile, ResourceMode: body.ResourceMode, CollectionUsage: body.CollectionUsage,
 			DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 456_000, time.UTC),
 		})
 	}))
@@ -59,13 +61,59 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 		t.Fatalf("PaaS authorization=%#v", authorization)
 	}
 	stopRequest, err := toIAMRequest(port.AuthorizationRequest{
-		Credential: "Bearer " + testSubjectCredential,
-		Action:     port.AuthorizeDeploymentStop,
-		Resource:   paasv1.ResourceRef{Kind: "Deployment", ID: "deployment-a"},
-		RequestID:  "request-paas-stop",
+		Credential:   "Bearer " + testSubjectCredential,
+		Action:       port.AuthorizeDeploymentStop,
+		Resource:     paasv1.ResourceRef{Kind: "Deployment", ID: "deployment-a"},
+		ResourceMode: iamv1.AuthorizationResourceInstance,
+		RequestID:    "request-paas-stop",
 	})
 	if err != nil || stopRequest.Action != iamv1.ActionPaaSDeploymentStop {
 		t.Fatalf("map PaaS stop authorization=%#v err=%v", stopRequest, err)
+	}
+}
+
+func TestClientBindsOneAccessKeyDecisionToTheSignedRequest(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/authorize:access-key" || request.Header.Get("Authorization") != "Bearer "+testServiceCredential ||
+			request.Header.Get("Matrix-Subject-Credential") != "" {
+			t.Fatalf("IAM signed request path=%s headers=%#v", request.URL.Path, request.Header)
+		}
+		input, err := iamv1.DecodeAccessKeyAuthorizationRequest(request.Body)
+		if err != nil || input.Authorization.Action != iamv1.ActionPaaSApplicationRead {
+			t.Fatalf("decode signed authorization: %#v %v", input.Authorization, err)
+		}
+		digest, _ := iamv1.AccessKeySignedRequestDigest(input.SignedRequest)
+		decision := iamv1.AuthorizationDecision{
+			APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "decision-key", Allowed: true, Reason: iamv1.DecisionAllowed,
+			TenantID: "organization-a", Subject: &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer", AccessKeyID: "key-one"},
+			Action: input.Authorization.Action, Resource: input.Authorization.Resource, RequestID: input.Authorization.RequestID,
+			CorrelationID: input.Authorization.CorrelationID, Profile: &input.Authorization.Profile,
+			ResourceMode: input.Authorization.ResourceMode, CollectionUsage: input.Authorization.CollectionUsage,
+			DecidedAt: time.Date(2026, 9, 17, 1, 2, 3, 0, time.UTC),
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(iamv1.AccessKeyAuthorization{
+			APIVersion: iamv1.APIVersion, Kind: "AccessKeyAuthorization", Decision: decision, SignedRequestDigest: digest,
+		})
+	}))
+	defer server.Close()
+
+	request := accessKeyAuthorizationRequest(t)
+	authorization, err := newTestClient(t, server.URL).AuthorizeAccessKey(context.Background(), request)
+	if err != nil || authorization.TenantID != "organization-a" || authorization.Subject.Type != paasv1.SubjectUser ||
+		authorization.Subject.ID != "principal-developer" || authorization.Subject.AccessKeyID != "key-one" ||
+		authorization.DecisionID != "decision-key" {
+		t.Fatalf("PaaS key authorization=%#v err=%v", authorization, err)
+	}
+}
+
+func TestClientReportsConsumedAccessKeyNonceAsConflict(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusConflict)
+	}))
+	defer server.Close()
+	if _, err := newTestClient(t, server.URL).AuthorizeAccessKey(context.Background(), accessKeyAuthorizationRequest(t)); !errors.Is(err, port.ErrAuthorizationReplay) {
+		t.Fatalf("consumed nonce error=%v", err)
 	}
 }
 
@@ -82,7 +130,8 @@ func TestClientFailsClosedForDenialStatusAndInvalidResponse(t *testing.T) {
 				_ = json.NewEncoder(response).Encode(iamv1.AuthorizationDecision{
 					APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
 					ID: "decision-denied", Reason: iamv1.DecisionDenied,
-					Action: request.Action, Resource: request.Resource, RequestID: request.RequestID,
+					Action: request.Action, Resource: request.Resource, RequestID: request.RequestID, CorrelationID: request.CorrelationID,
+					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage,
 					DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
 				})
 			},
@@ -104,8 +153,9 @@ func TestClientFailsClosedForDenialStatusAndInvalidResponse(t *testing.T) {
 					APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
 					ID: "decision-mismatch", Allowed: true, Reason: iamv1.DecisionAllowed,
 					TenantID: "organization-a",
-					Subject:  &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "principal-developer"},
-					Action:   request.Action, Resource: request.Resource, RequestID: request.RequestID,
+					Subject:  &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"},
+					Action:   request.Action, Resource: request.Resource, RequestID: request.RequestID, CorrelationID: request.CorrelationID,
+					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage,
 					DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
 				})
 			},
@@ -168,9 +218,10 @@ func TestClientAuthorizesCredentialBoundInstallationVerifier(t *testing.T) {
 			ID: "decision-installation-verify", Allowed: true, Reason: iamv1.DecisionAllowed,
 			TenantID: "organization-default",
 			Subject: &iamv1.Subject{
-				Type: iamv1.PrincipalServiceAccount, ID: "service-installation-verifier",
+				Type: iamv1.SubjectServiceAccount, ID: "service-installation-verifier",
 			},
-			Action: body.Action, Resource: body.Resource, RequestID: body.RequestID,
+			Action: body.Action, Resource: body.Resource, RequestID: body.RequestID, CorrelationID: body.CorrelationID,
+			Profile: &body.Profile, ResourceMode: body.ResourceMode, CollectionUsage: body.CollectionUsage,
 			DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 456_000, time.UTC),
 		})
 	}))
@@ -201,7 +252,7 @@ func TestClientReadinessRequiresPaaSServiceIdentity(t *testing.T) {
 		_ = json.NewEncoder(response).Encode(iamv1.ServiceIdentity{
 			InstallationID: installationID.Load().(string),
 			APIVersion:     iamv1.APIVersion, Kind: "ServiceIdentity",
-			OrganizationID: "organization-a", PrincipalID: "service-paas",
+			AccountID: "organization-a", PrincipalID: "service-paas",
 			Purpose: iamv1.ServicePaaS,
 		})
 	}))
@@ -226,10 +277,12 @@ func TestPlatformIAMDecisionKeepsActualResourceAndInstallation(t *testing.T) {
 		}
 		response.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(response).Encode(iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "decision-platform", Allowed: true, Reason: iamv1.DecisionAllowed,
-			InstallationID: installationID.Load().(string), Subject: &iamv1.Subject{Type: iamv1.PrincipalUser, ID: "platform-user"}, Action: body.Action, Resource: body.Resource, RequestID: body.RequestID, DecidedAt: time.Now().UTC().Truncate(time.Microsecond)})
+			InstallationID: installationID.Load().(string), Subject: &iamv1.Subject{Type: iamv1.SubjectUser, ID: "platform-user"}, Action: body.Action, Resource: body.Resource,
+			RequestID: body.RequestID, CorrelationID: body.CorrelationID, Profile: &body.Profile, ResourceMode: body.ResourceMode,
+			CollectionUsage: body.CollectionUsage, DecidedAt: time.Now().UTC().Truncate(time.Microsecond)})
 	}))
 	defer server.Close()
-	request := port.AuthorizationRequest{Credential: "Bearer " + testSubjectCredential, Action: port.AuthorizeExecutionTargetRegister, Resource: paasv1.ResourceRef{Kind: "ExecutionTarget", ID: "target-a"}, RequestID: "request-platform"}
+	request := port.AuthorizationRequest{Credential: "Bearer " + testSubjectCredential, Action: port.AuthorizeExecutionTargetRegister, Resource: paasv1.ResourceRef{Kind: "ExecutionTarget", ID: "target-a"}, ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: "request-platform"}
 	authorization, err := newTestClient(t, server.URL).Authorize(context.Background(), request)
 	if err != nil || authorization.InstallationID != "installation-example" || authorization.TenantID != "" || authorization.Subject.ID != "platform-user" {
 		t.Fatalf("platform authorization = %#v %v", authorization, err)
@@ -242,10 +295,12 @@ func TestPlatformIAMDecisionKeepsActualResourceAndInstallation(t *testing.T) {
 
 func TestNodeEnrollmentAuthorizationMapsToIAMAuthority(t *testing.T) {
 	request, err := toIAMRequest(port.AuthorizationRequest{
-		Credential: "Bearer " + testSubjectCredential,
-		Action:     port.AuthorizeNodeEnrollmentCreate,
-		Resource:   paasv1.ResourceRef{Kind: "NodeEnrollment", ID: "collection"},
-		RequestID:  "request-node-enrollment-create",
+		Credential:      "Bearer " + testSubjectCredential,
+		Action:          port.AuthorizeNodeEnrollmentCreate,
+		Resource:        paasv1.ResourceRef{Kind: "NodeEnrollment", ID: "collection"},
+		ResourceMode:    iamv1.AuthorizationResourceCollection,
+		CollectionUsage: iamv1.AuthorizationCollectionCreate,
+		RequestID:       "request-node-enrollment-create",
 	})
 	if err != nil {
 		t.Fatalf("map node enrollment authorization: %v", err)
@@ -257,6 +312,39 @@ func TestNodeEnrollmentAuthorizationMapsToIAMAuthority(t *testing.T) {
 		}) || request.RequestID != "request-node-enrollment-create" ||
 		request.CorrelationID != request.RequestID {
 		t.Fatalf("IAM node enrollment authorization request=%#v", request)
+	}
+}
+
+func TestClientDoesNotInferCollectionAuthorityFromResourceID(t *testing.T) {
+	request, err := toIAMRequest(port.AuthorizationRequest{
+		Credential:   "Bearer " + testSubjectCredential,
+		Action:       port.AuthorizeDeploymentRead,
+		Resource:     paasv1.ResourceRef{Kind: "Deployment", ID: "collection"},
+		ResourceMode: iamv1.AuthorizationResourceInstance,
+		RequestID:    "request-resource-named-collection",
+	})
+	if err != nil {
+		t.Fatalf("map instance named collection: %v", err)
+	}
+	if request.ResourceMode != iamv1.AuthorizationResourceInstance || request.CollectionUsage != "" ||
+		request.Resource.ID != "collection" {
+		t.Fatalf("resource named collection changed authority shape: %#v", request)
+	}
+
+	request, err = toIAMRequest(port.AuthorizationRequest{
+		Credential:      "Bearer " + testSubjectCredential,
+		Action:          port.AuthorizeDeploymentRead,
+		Resource:        paasv1.ResourceRef{Kind: "Deployment", ID: "collection"},
+		ResourceMode:    iamv1.AuthorizationResourceCollection,
+		CollectionUsage: iamv1.AuthorizationCollectionList,
+		RequestID:       "request-deployment-list",
+	})
+	if err != nil {
+		t.Fatalf("map collection list: %v", err)
+	}
+	if request.ResourceMode != iamv1.AuthorizationResourceCollection ||
+		request.CollectionUsage != iamv1.AuthorizationCollectionList {
+		t.Fatalf("collection list lost authority shape: %#v", request)
 	}
 }
 
@@ -275,9 +363,26 @@ func newTestClient(t *testing.T, endpoint string) *Client {
 
 func testAuthorizationRequest() port.AuthorizationRequest {
 	return port.AuthorizationRequest{
-		Credential: "Bearer " + testSubjectCredential,
-		Action:     port.AuthorizeApplicationCreate,
-		Resource:   paasv1.ResourceRef{Kind: "Application", ID: "collection"},
-		RequestID:  "request-paas-authorize",
+		Credential:      "Bearer " + testSubjectCredential,
+		Action:          port.AuthorizeApplicationCreate,
+		Resource:        paasv1.ResourceRef{Kind: "Application", ID: "collection"},
+		ResourceMode:    iamv1.AuthorizationResourceCollection,
+		CollectionUsage: iamv1.AuthorizationCollectionCreate,
+		RequestID:       "request-paas-authorize",
+	}
+}
+
+func accessKeyAuthorizationRequest(t *testing.T) port.AccessKeyAuthorizationRequest {
+	t.Helper()
+	nonce, _ := iamv1.NewSecret(strings.Repeat("A", 22))
+	signature, _ := iamv1.NewSecret(strings.Repeat("A", 43))
+	return port.AccessKeyAuthorizationRequest{
+		Action: port.AuthorizeApplicationRead, Resource: paasv1.ResourceRef{Kind: "Application", ID: "application-one"},
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: "request-key",
+		SignedRequest: iamv1.AccessKeySignedRequest{
+			Parameters: iamv1.AccessKeySignatureParameters{AccessKeyID: "key-one", InstallationID: "installation-example", Audience: iamv1.ProductPaaS, SignedAt: 1800000000, Nonce: nonce},
+			HTTP:       iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "api.example.test:443", EscapedPath: "/api/paas/v1/applications/application-one", BodyDigest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+			Signature:  signature,
+		},
 	}
 }

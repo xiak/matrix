@@ -17,10 +17,9 @@ type passwordDigestInput struct {
 }
 
 type createUserDigestInput struct {
-	LoginName   string             `json:"loginName"`
-	DisplayName string             `json:"displayName"`
-	RequestID   string             `json:"requestId"`
-	InitialRole *iamv1.BuiltinRole `json:"initialRole,omitempty"`
+	LoginName   string `json:"loginName"`
+	DisplayName string `json:"displayName"`
+	RequestID   string `json:"requestId"`
 }
 
 type revokeDigestInput struct {
@@ -64,7 +63,7 @@ func (service *Authority) Logout(
 			return err
 		}
 		revocation, applied, err := transaction.RevokeSession(transactionContext, SessionRevocationMutation{
-			OrganizationID:   subject.Subject.Organization.ID,
+			AccountID:        subject.Subject.Organization.ID,
 			SessionID:        subject.Subject.Session.ID,
 			ActorPrincipalID: subject.Subject.Principal.ID,
 			AuditEvent:       event,
@@ -140,8 +139,8 @@ func (service *Authority) ChangePassword(
 		}
 		event, err := service.newManagementEvent(
 			subject,
-			auditv1.ActionIAMPasswordChanged,
-			auditv1.TargetPrincipal,
+			auditv1.ActionIAMUserPasswordChanged,
+			auditv1.TargetUser,
 			string(subject.Subject.Principal.ID),
 			"",
 			requestDigest,
@@ -152,7 +151,7 @@ func (service *Authority) ChangePassword(
 			return err
 		}
 		response, err = transaction.ChangePassword(transactionContext, PasswordMutation{
-			OrganizationID:       subject.Subject.Organization.ID,
+			AccountID:            subject.Subject.Organization.ID,
 			PrincipalID:          subject.Subject.Principal.ID,
 			SessionID:            subject.Subject.Session.ID,
 			RevokeOtherSessions:  revokeOthers,
@@ -175,18 +174,18 @@ func (service *Authority) CreateUser(
 	ctx context.Context,
 	credential iamv1.Secret,
 	request iamv1.CreateUserRequest,
-) (iamv1.Principal, error) {
+) (iamv1.User, error) {
 	if iamv1.ValidateCreateUserRequest(request) != nil ||
 		authority.ValidatePassword(request.InitialPassword) != nil {
-		return iamv1.Principal{}, ErrInvalidArgument
+		return iamv1.User{}, ErrInvalidArgument
 	}
-	requestDigest, err := digestSanitized("principal-create", createUserDigestInput{
-		LoginName: request.LoginName, DisplayName: request.DisplayName, RequestID: request.RequestID, InitialRole: request.InitialRole,
+	requestDigest, err := digestSanitized("user-create", createUserDigestInput{
+		LoginName: request.LoginName, DisplayName: request.DisplayName, RequestID: request.RequestID,
 	})
 	if err != nil {
-		return iamv1.Principal{}, err
+		return iamv1.User{}, err
 	}
-	var created iamv1.Principal
+	var created iamv1.User
 	denied := false
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		denied = false
@@ -202,8 +201,9 @@ func (service *Authority) CreateUser(
 			transactionContext,
 			transaction,
 			subject,
-			iamv1.ActionIAMPrincipalCreate,
-			iamv1.ResourceReference{Kind: iamv1.ResourceOrganization, ID: string(subject.Subject.Organization.ID)},
+			iamv1.ActionIAMUserCreate,
+			iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Subject.Organization.ID)},
+			iamv1.AuthorizationResourceInstance, "",
 			request.RequestID,
 			now,
 		)
@@ -222,12 +222,11 @@ func (service *Authority) CreateUser(
 		if err != nil {
 			return ErrUnavailable
 		}
-		proposed := iamv1.Principal{
+		proposed := iamv1.User{
 			APIVersion:         iamv1.APIVersion,
-			Kind:               "Principal",
+			Kind:               "User",
 			ID:                 iamv1.PrincipalID(principalID),
-			OrganizationID:     subject.Subject.Organization.ID,
-			Type:               iamv1.PrincipalUser,
+			AccountID:          subject.Subject.Organization.ID,
 			LoginName:          request.LoginName,
 			DisplayName:        request.DisplayName,
 			Status:             iamv1.PrincipalActive,
@@ -238,8 +237,8 @@ func (service *Authority) CreateUser(
 		}
 		event, err := service.newManagementEvent(
 			subject,
-			auditv1.ActionIAMPrincipalCreated,
-			auditv1.TargetPrincipal,
+			auditv1.ActionIAMUserCreated,
+			auditv1.TargetUser,
 			principalID,
 			decision.ID,
 			requestDigest,
@@ -250,66 +249,74 @@ func (service *Authority) CreateUser(
 			return err
 		}
 		created, err = transaction.CreateUser(transactionContext, UserMutation{
-			Principal:        proposed,
+			User:             proposed,
 			PasswordHash:     passwordHash,
 			ActorPrincipalID: subject.Subject.Principal.ID,
 			DecisionID:       decision.ID,
 			AuditEvent:       event,
 		})
-		if err == nil && request.InitialRole != nil {
-			err = service.putInitialRole(transactionContext, transaction, subject, created.ID, *request.InitialRole, request.RequestID, now)
-		}
 		return err
 	})
 	if err != nil {
-		return iamv1.Principal{}, err
+		return iamv1.User{}, err
 	}
 	if denied {
-		return iamv1.Principal{}, ErrForbidden
+		return iamv1.User{}, ErrForbidden
 	}
-	if iamv1.ValidatePrincipal(created) != nil {
-		return iamv1.Principal{}, ErrUnavailable
+	if iamv1.ValidateUser(created) != nil {
+		return iamv1.User{}, ErrUnavailable
 	}
 	return created, nil
 }
 
-func (service *Authority) PutRoleBinding(
-	ctx context.Context,
-	credential iamv1.Secret,
-	request iamv1.PutRoleBindingRequest,
-) (iamv1.RoleBinding, error) {
-	if iamv1.ValidatePutRoleBindingRequest(request) != nil {
-		return iamv1.RoleBinding{}, ErrInvalidArgument
+func (service *Authority) CreatePolicyAttachment(ctx context.Context, credential iamv1.Secret, request iamv1.CreatePolicyAttachmentRequest) (iamv1.PolicyAttachment, error) {
+	if iamv1.ValidateCreatePolicyAttachmentRequest(request) != nil {
+		return iamv1.PolicyAttachment{}, ErrInvalidArgument
 	}
-	requestDigest, err := digestSanitized("role-binding-put", request)
+	requestDigest, err := digestSanitized("policy-attachment-create", request)
 	if err != nil {
-		return iamv1.RoleBinding{}, err
+		return iamv1.PolicyAttachment{}, err
 	}
-	var stored iamv1.RoleBinding
+	var stored iamv1.PolicyAttachment
 	denied := false
-	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
 		denied = false
-		now, err := transactionTime(transactionContext, transaction)
+		now, err := transactionTime(ctx, tx)
 		if err != nil {
 			return err
 		}
-		subject, err := service.authenticateSession(transactionContext, transaction, credential, now)
+		subject, err := service.authenticateSession(ctx, tx, credential, now)
 		if err != nil {
 			return err
 		}
-		action := iamv1.ActionIAMRoleBindingPut
-		if request.Role == iamv1.RolePlatformOperator {
-			action = iamv1.ActionIAMPlatformRoleBindingPut
+		policy, found, err := tx.LookupPolicy(ctx, subject.Subject.Organization.ID, request.PolicyID)
+		if err != nil {
+			return err
 		}
-		decision, err := service.managementDecision(
-			transactionContext,
-			transaction,
-			subject,
-			action,
-			iamv1.ResourceReference{Kind: iamv1.ResourcePrincipal, ID: string(request.PrincipalID)},
-			request.RequestID,
-			now,
-		)
+		if !found || policy.Status != iamv1.PolicyActive || (policy.Scope != iamv1.AuthorityScopeTenant && policy.Scope != iamv1.AuthorityScopeInstallation) {
+			return ErrForbidden
+		}
+		if iamv1.ValidatePolicy(policy) != nil {
+			return ErrUnavailable
+		}
+		if policy.AccountID != "" && policy.AccountID != subject.Subject.Organization.ID {
+			return ErrForbidden
+		}
+		action, fact := iamv1.ActionIAMPolicyAttachmentCreate, auditv1.ActionIAMPolicyAttachmentCreated
+		resourceKind := iamv1.ResourceUser
+		if request.Target.Kind == iamv1.PolicyTargetGroup || request.Target.Kind == iamv1.PolicyTargetRole {
+			if policy.Scope != iamv1.AuthorityScopeTenant {
+				return ErrForbidden
+			}
+			action, resourceKind = iamv1.ActionIAMGroupPolicyAttachmentCreate, iamv1.ResourceGroup
+			if request.Target.Kind == iamv1.PolicyTargetRole {
+				action, resourceKind = iamv1.ActionIAMRolePolicyAttachmentCreate, iamv1.ResourceRole
+			}
+		} else if policy.Scope == iamv1.AuthorityScopeInstallation {
+			action, fact = iamv1.ActionIAMPlatformPolicyAttachmentCreate, auditv1.ActionIAMPlatformPolicyAttachmentCreated
+		}
+		decision, err := service.managementDecision(ctx, tx, subject, action,
+			iamv1.ResourceReference{Kind: resourceKind, ID: request.Target.ID}, iamv1.AuthorizationResourceInstance, "", request.RequestID, now)
 		if err != nil {
 			return err
 		}
@@ -317,88 +324,144 @@ func (service *Authority) PutRoleBinding(
 			denied = true
 			return nil
 		}
-		bindingID, err := service.config.NewID("binding")
-		if err != nil {
-			return ErrUnavailable
+		if policy.ResourceVersion != request.PolicyResourceVersion {
+			return ErrConflict
 		}
-		proposed := iamv1.RoleBinding{
-			APIVersion:      iamv1.APIVersion,
-			Kind:            "RoleBinding",
-			ID:              iamv1.RoleBindingID(bindingID),
-			OrganizationID:  subject.Subject.Organization.ID,
-			PrincipalID:     request.PrincipalID,
-			Role:            request.Role,
-			ResourceVersion: 1,
-			CreatedAt:       now,
-			UpdatedAt:       now,
+		if request.Target.Kind == iamv1.PolicyTargetRole {
+			root, err := roleRoot(ctx, tx, subject)
+			if err != nil {
+				return err
+			}
+			if !root {
+				return ErrForbidden
+			}
 		}
-		event, err := service.newManagementEvent(
-			subject,
-			auditv1.ActionIAMRoleBindingPut,
-			auditv1.TargetRoleBinding,
-			bindingID,
-			decision.ID,
-			requestDigest,
-			request.RequestID,
-			now,
-		)
+		identityDigest, err := digestSanitized("policy-attachment-identity", struct {
+			AccountID iamv1.AccountID   `json:"accountId"`
+			ActorID   iamv1.PrincipalID `json:"actorId"`
+			RequestID string            `json:"requestId"`
+		}{subject.Subject.Organization.ID, subject.Subject.Principal.ID, request.RequestID})
 		if err != nil {
 			return err
 		}
-		stored, _, err = transaction.PutRoleBinding(transactionContext, RoleBindingMutation{
-			Binding:          proposed,
-			ActorPrincipalID: subject.Subject.Principal.ID,
-			DecisionID:       decision.ID,
-			AuditEvent:       event,
-		})
+		attachment := iamv1.PolicyAttachment{APIVersion: iamv1.APIVersion, Kind: "PolicyAttachment",
+			ID: iamv1.PolicyAttachmentID("attachment-" + identityDigest[len("sha256:"):]), AccountID: subject.Subject.Organization.ID,
+			Target: request.Target, PolicyID: policy.ID, Scope: policy.Scope, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+		if policy.Scope == iamv1.AuthorityScopeInstallation {
+			attachment.InstallationID = subject.Subject.InstallationID
+		}
+		event, err := service.newManagementEvent(subject, fact, auditv1.TargetPolicyAttachment, string(attachment.ID), decision.ID, requestDigest, request.RequestID, now)
+		if err != nil {
+			return err
+		}
+		stored, err = tx.CreatePolicyAttachment(ctx, PolicyAttachmentMutation{Attachment: attachment,
+			PolicyResourceVersion: request.PolicyResourceVersion, ActorPrincipalID: subject.Subject.Principal.ID,
+			ActorSessionID: subject.Subject.Session.ID, DecisionID: decision.ID, AuditEvent: event})
 		return err
 	})
 	if err != nil {
-		return iamv1.RoleBinding{}, err
+		return iamv1.PolicyAttachment{}, err
 	}
 	if denied {
-		return iamv1.RoleBinding{}, ErrForbidden
+		return iamv1.PolicyAttachment{}, ErrForbidden
 	}
-	if iamv1.ValidateRoleBinding(stored) != nil {
-		return iamv1.RoleBinding{}, ErrUnavailable
+	if iamv1.ValidatePolicyAttachment(stored) != nil {
+		return iamv1.PolicyAttachment{}, ErrUnavailable
 	}
 	return stored, nil
 }
 
-func (service *Authority) RevokeRoleBinding(
-	ctx context.Context,
-	credential iamv1.Secret,
-	roleBindingID iamv1.RoleBindingID,
-	request iamv1.RevokeRoleBindingRequest,
-) (iamv1.Revocation, error) {
-	if iamv1.ValidateID("roleBindingId", string(roleBindingID)) != nil ||
-		iamv1.ValidateRevokeRoleBindingRequest(request) != nil {
+func (service *Authority) RevokePolicyAttachment(ctx context.Context, credential iamv1.Secret, id iamv1.PolicyAttachmentID, request iamv1.RevokePolicyAttachmentRequest) (iamv1.Revocation, error) {
+	if iamv1.ValidateID("attachmentId", string(id)) != nil || iamv1.ValidateRevokePolicyAttachmentRequest(request) != nil {
 		return iamv1.Revocation{}, ErrInvalidArgument
 	}
-	return service.revokeManagedResource(
-		ctx,
-		credential,
-		request.RequestID,
-		iamv1.ActionIAMRoleBindingRevoke,
-		iamv1.ResourceReference{Kind: iamv1.ResourceRoleBinding, ID: string(roleBindingID)},
-		auditv1.ActionIAMRoleBindingRevoked,
-		auditv1.TargetRoleBinding,
-		func(
-			transactionContext context.Context,
-			transaction Transaction,
-			subject SessionCredential,
-			decision iamv1.AuthorizationDecision,
-			event auditv1.Event,
-		) (iamv1.Revocation, bool, error) {
-			return transaction.RevokeRoleBinding(transactionContext, RoleBindingRevocationMutation{
-				OrganizationID:   subject.Subject.Organization.ID,
-				RoleBindingID:    roleBindingID,
-				ActorPrincipalID: subject.Subject.Principal.ID,
-				DecisionID:       decision.ID,
-				AuditEvent:       event,
-			})
-		},
-	)
+	digest, err := digestSanitized("policy-attachment-revoke", struct {
+		ID      iamv1.PolicyAttachmentID            `json:"id"`
+		Request iamv1.RevokePolicyAttachmentRequest `json:"request"`
+	}{id, request})
+	if err != nil {
+		return iamv1.Revocation{}, err
+	}
+	var result iamv1.Revocation
+	denied := false
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		denied = false
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		attachment, found, err := tx.LookupPolicyAttachment(ctx, subject.Subject.Organization.ID, id)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return ErrForbidden
+		}
+		if iamv1.ValidatePolicyAttachment(attachment) != nil {
+			return ErrUnavailable
+		}
+		if attachment.AccountID != subject.Subject.Organization.ID ||
+			(attachment.Target.Kind != iamv1.PolicyTargetUser && attachment.Target.Kind != iamv1.PolicyTargetGroup && attachment.Target.Kind != iamv1.PolicyTargetRole) {
+			return ErrForbidden
+		}
+		action, fact := iamv1.ActionIAMPolicyAttachmentRevoke, auditv1.ActionIAMPolicyAttachmentRevoked
+		if attachment.Target.Kind == iamv1.PolicyTargetGroup || attachment.Target.Kind == iamv1.PolicyTargetRole {
+			if attachment.Scope != iamv1.AuthorityScopeTenant {
+				return ErrForbidden
+			}
+			action = iamv1.ActionIAMGroupPolicyAttachmentRevoke
+			if attachment.Target.Kind == iamv1.PolicyTargetRole {
+				action = iamv1.ActionIAMRolePolicyAttachmentRevoke
+			}
+		} else if attachment.Scope == iamv1.AuthorityScopeInstallation {
+			action, fact = iamv1.ActionIAMPlatformPolicyAttachmentRevoke, auditv1.ActionIAMPlatformPolicyAttachmentRevoked
+			if attachment.InstallationID != subject.Subject.InstallationID {
+				return ErrForbidden
+			}
+		} else if attachment.Scope != iamv1.AuthorityScopeTenant {
+			return ErrForbidden
+		}
+		decision, err := service.managementDecision(ctx, tx, subject, action,
+			iamv1.ResourceReference{Kind: iamv1.ResourcePolicyAttachment, ID: string(id)}, iamv1.AuthorizationResourceInstance, "", request.RequestID, now)
+		if err != nil {
+			return err
+		}
+		if !decision.Allowed {
+			denied = true
+			return nil
+		}
+		event, err := service.newManagementEvent(subject, fact, auditv1.TargetPolicyAttachment, string(id), decision.ID, digest, request.RequestID, now)
+		if attachment.Target.Kind == iamv1.PolicyTargetRole {
+			root, err := roleRoot(ctx, tx, subject)
+			if err != nil {
+				return err
+			}
+			if !root {
+				return ErrForbidden
+			}
+		}
+		if err != nil {
+			return err
+		}
+		result, _, err = tx.RevokePolicyAttachment(ctx, PolicyAttachmentRevocationMutation{AccountID: subject.Subject.Organization.ID,
+			AttachmentID: id, ResourceVersion: request.ResourceVersion, ActorPrincipalID: subject.Subject.Principal.ID,
+			ActorSessionID: subject.Subject.Session.ID, DecisionID: decision.ID, AuditEvent: event})
+		return err
+	})
+	if err != nil {
+		return iamv1.Revocation{}, err
+	}
+	if denied {
+		return iamv1.Revocation{}, ErrForbidden
+	}
+	if iamv1.ValidateRevocation(result) != nil {
+		return iamv1.Revocation{}, ErrUnavailable
+	}
+	return result, nil
 }
 
 func (service *Authority) RevokeSession(
@@ -427,7 +490,7 @@ func (service *Authority) RevokeSession(
 			event auditv1.Event,
 		) (iamv1.Revocation, bool, error) {
 			return transaction.RevokeSession(transactionContext, SessionRevocationMutation{
-				OrganizationID:   subject.Subject.Organization.ID,
+				AccountID:        subject.Subject.Organization.ID,
 				SessionID:        sessionID,
 				ActorPrincipalID: subject.Subject.Principal.ID,
 				DecisionID:       decision.ID,
@@ -471,23 +534,13 @@ func (service *Authority) revokeManagedResource(
 		if err != nil {
 			return err
 		}
-		resolvedAction := action
-		if action == iamv1.ActionIAMRoleBindingRevoke {
-			role, found, err := transaction.LookupRoleBindingRole(transactionContext,
-				subject.Subject.Organization.ID, iamv1.RoleBindingID(resource.ID))
-			if err != nil {
-				return err
-			}
-			if found && role == iamv1.RolePlatformOperator {
-				resolvedAction = iamv1.ActionIAMPlatformRoleBindingRevoke
-			}
-		}
 		decision, err := service.managementDecision(
 			transactionContext,
 			transaction,
 			subject,
-			resolvedAction,
+			action,
 			resource,
+			iamv1.AuthorizationResourceInstance, "",
 			requestID,
 			now,
 		)
@@ -535,14 +588,17 @@ func (service *Authority) managementDecision(
 	subject SessionCredential,
 	action iamv1.Action,
 	resource iamv1.ResourceReference,
+	mode iamv1.AuthorizationResourceMode,
+	usage iamv1.AuthorizationCollectionUsage,
 	requestID string,
 	now time.Time,
 ) (iamv1.AuthorizationDecision, error) {
-	request := iamv1.AuthorizationRequest{
-		Action:        action,
-		Resource:      resource,
-		RequestID:     requestID,
-		CorrelationID: requestID,
+	if err := transaction.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+		return iamv1.AuthorizationDecision{}, err
+	}
+	request, err := iamv1.NewAuthorizationRequest(action, resource, mode, usage, requestID, requestID)
+	if err != nil {
+		return iamv1.AuthorizationDecision{}, ErrUnavailable
 	}
 	requestDigest, err := digestSanitized("authorization", request)
 	if err != nil {
@@ -591,14 +647,17 @@ func (service *Authority) managementDecision(
 		return iamv1.AuthorizationDecision{}, err
 	}
 	if err := transaction.RecordAuthorization(ctx, AuthorizationMutation{
-		OrganizationID: subject.Subject.Organization.ID,
-		PrincipalID:    subject.Subject.Principal.ID,
-		Decision:       decision,
-		AuditEvent:     event,
+		AccountID:        subject.Subject.Organization.ID,
+		Subject:          iamv1.Subject{Type: iamv1.SubjectType(subject.Subject.Principal.Type), ID: string(subject.Subject.Principal.ID)},
+		Request:          request,
+		Decision:         decision.AuthorizationDecision,
+		PolicyEvidence:   decision.PolicyEvidence,
+		BoundaryEvidence: decision.BoundaryEvidence,
+		AuditEvent:       event,
 	}); err != nil {
 		return iamv1.AuthorizationDecision{}, err
 	}
-	return decision, nil
+	return decision.AuthorizationDecision, nil
 }
 
 func (service *Authority) newManagementEvent(
@@ -615,10 +674,18 @@ func (service *Authority) newManagementEvent(
 	if err != nil {
 		return auditv1.Event{}, ErrUnavailable
 	}
+	tenant, installation := subject.Subject.Organization.ID, ""
+	contract, known := auditv1.ContractForAction(action)
+	if !known {
+		return auditv1.Event{}, ErrUnavailable
+	}
+	if contract.PlatformOnly {
+		tenant, installation = "", subject.Subject.InstallationID
+	}
 	return newAuditEvent(
 		eventID,
-		subject.Subject.Organization.ID,
-		"",
+		tenant,
+		installation,
 		auditv1.ActorReference{
 			Type: auditv1.ActorType(subject.Subject.Principal.Type),
 			ID:   auditv1.ActorID(subject.Subject.Principal.ID),

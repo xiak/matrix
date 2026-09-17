@@ -3,6 +3,7 @@
 package nethttp
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -11,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -19,7 +21,9 @@ import (
 	"strings"
 
 	"github.com/xiak/matrix/api/contractjson"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
@@ -66,6 +70,8 @@ type Workflow interface {
 
 type Config struct {
 	MaximumBodyBytes       int64
+	NorthboundOrigin       string
+	InstallationID         string
 	TerminalPublicBasePath string
 	TerminalCookieSecure   bool
 	NewRequestID           func() (string, error)
@@ -99,7 +105,11 @@ type handler struct {
 	config               Config
 	routes               *http.ServeMux
 	terminalRegistry     *terminalRegistry
+	externalRequests     *externalrequest.Boundary
 }
+
+type requestIDContextKey struct{}
+type accessKeyContextKey struct{}
 
 func NewHandler(
 	authorizer port.Authorizer,
@@ -136,11 +146,22 @@ func NewHandler(
 	if config.NewTerminalTicket == nil {
 		config.NewTerminalTicket = newTerminalTicket
 	}
+	var externalRequests *externalrequest.Boundary
+	if config.NorthboundOrigin != "" {
+		var err error
+		externalRequests, err = externalrequest.NewBoundary(
+			config.NorthboundOrigin, "/api/paas", config.InstallationID, iamv1.ProductPaaS,
+		)
+		if err != nil {
+			return nil, errors.New("PaaS northbound origin is invalid")
+		}
+	}
 	value := &handler{
 		authorizer: authorizer, workflow: workflow, execution: execution, enrollment: enrollment,
 		terminal: terminal, terminalConnector: terminalConnector,
 		installationVerifier: installationVerifier, config: config,
 		terminalRegistry: newTerminalRegistry(),
+		externalRequests: externalRequests,
 	}
 	routes := http.NewServeMux()
 	routes.HandleFunc("GET /ready", value.ready)
@@ -273,6 +294,38 @@ func (value *handler) ready(response http.ResponseWriter, request *http.Request)
 func (value *handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
 	response.Header().Set("Cache-Control", "no-store")
 	response.Header().Set("X-Content-Type-Options", "nosniff")
+	if externalrequest.IsAccessKeyAuthorization(request) {
+		requestID, ok := value.beginRequest(response)
+		if !ok {
+			return
+		}
+		request = request.WithContext(context.WithValue(request.Context(), requestIDContextKey{}, requestID))
+		if value.externalRequests == nil {
+			writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "signed request authentication is not configured", true)
+			return
+		}
+		if !accessKeyRoute(request.Method, request.URL.EscapedPath()) {
+			writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "access keys are not accepted by this route", false)
+			return
+		}
+		body, err := readSignedBody(request, value.config.MaximumBodyBytes)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, errSignedBodyTooLarge) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			writeProblem(response, requestID, status, paasv1.ErrorInvalidArgument, "Invalid argument", "signed request body is invalid", false)
+			return
+		}
+		signed, err := value.externalRequests.SignedRequest(request, body)
+		if err != nil {
+			writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "signed request is invalid", false)
+			return
+		}
+		request.Body = io.NopCloser(bytes.NewReader(body))
+		request.ContentLength = int64(len(body))
+		request = request.WithContext(context.WithValue(request.Context(), accessKeyContextKey{}, signed))
+	}
 	value.routes.ServeHTTP(response, request)
 }
 
@@ -494,13 +547,13 @@ func (value *handler) listDeployments(response http.ResponseWriter, request *htt
 		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "Deployment list query is invalid", false)
 		return
 	}
-	authorization, ok := value.authorizeRequest(
+	authorization, ok := value.authorizeCollectionRequest(
 		response,
 		request,
 		requestID,
 		port.AuthorizeDeploymentRead,
 		"Deployment",
-		"collection",
+		iamv1.AuthorizationCollectionList,
 	)
 	if !ok {
 		return
@@ -564,13 +617,13 @@ func (value *handler) createTerminalSession(response http.ResponseWriter, reques
 		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "one Idempotency-Key is required", false)
 		return
 	}
-	authorization, ok := value.authorizeRequest(
+	authorization, ok := value.authorizeCollectionRequest(
 		response,
 		request,
 		requestID,
 		port.AuthorizeTerminalSessionCreate,
 		"TerminalSession",
-		"collection",
+		iamv1.AuthorizationCollectionCreate,
 	)
 	if !ok {
 		return
@@ -692,7 +745,19 @@ func (value *handler) authorizeCollection(
 	action string,
 	kind string,
 ) (string, port.Authorization, bool) {
-	return value.authorize(response, request, action, kind, "collection")
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return "", port.Authorization{}, false
+	}
+	authorization, ok := value.authorizeCollectionRequest(
+		response,
+		request,
+		requestID,
+		action,
+		kind,
+		iamv1.AuthorizationCollectionCreate,
+	)
+	return requestID, authorization, ok
 }
 
 func (value *handler) authorizePath(
@@ -726,6 +791,9 @@ func (value *handler) authorize(
 }
 
 func (value *handler) beginRequest(response http.ResponseWriter) (string, bool) {
+	if current, ok := responseRequestID(response); ok {
+		return current, true
+	}
 	requestID, err := value.config.NewRequestID()
 	if err != nil || paasv1.ValidateID("requestId", requestID) != nil {
 		writeProblem(response, "request-unavailable", http.StatusInternalServerError, paasv1.ErrorInternal, "Internal error", "request identity could not be established", false)
@@ -733,6 +801,11 @@ func (value *handler) beginRequest(response http.ResponseWriter) (string, bool) 
 	}
 	response.Header().Set("X-Request-ID", requestID)
 	return requestID, true
+}
+
+func responseRequestID(response http.ResponseWriter) (string, bool) {
+	current := response.Header().Get("X-Request-ID")
+	return current, current != "" && paasv1.ValidateID("requestId", current) == nil
 }
 
 func (value *handler) authorizeRequest(
@@ -743,11 +816,81 @@ func (value *handler) authorizeRequest(
 	kind string,
 	id paasv1.ResourceID,
 ) (port.Authorization, bool) {
+	return value.authorizeRequestWithShape(
+		response,
+		request,
+		requestID,
+		action,
+		kind,
+		id,
+		iamv1.AuthorizationResourceInstance,
+		"",
+	)
+}
+
+func (value *handler) authorizeCollectionRequest(
+	response http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	action string,
+	kind string,
+	usage iamv1.AuthorizationCollectionUsage,
+) (port.Authorization, bool) {
+	return value.authorizeRequestWithShape(
+		response,
+		request,
+		requestID,
+		action,
+		kind,
+		"collection",
+		iamv1.AuthorizationResourceCollection,
+		usage,
+	)
+}
+
+func (value *handler) authorizeRequestWithShape(
+	response http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	action string,
+	kind string,
+	id paasv1.ResourceID,
+	mode iamv1.AuthorizationResourceMode,
+	usage iamv1.AuthorizationCollectionUsage,
+) (port.Authorization, bool) {
+	if signed, present := request.Context().Value(accessKeyContextKey{}).(iamv1.AccessKeySignedRequest); present {
+		accessKeyAuthorizer, ok := value.authorizer.(port.AccessKeyAuthorizer)
+		if !ok {
+			writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "signed request authentication is unavailable", true)
+			return port.Authorization{}, false
+		}
+		authorizationRequest := port.AccessKeyAuthorizationRequest{
+			Action: action, Resource: paasv1.ResourceRef{Kind: kind, ID: id},
+			ResourceMode: mode, CollectionUsage: usage,
+			RequestID: requestID, SignedRequest: signed,
+		}
+		if err := port.ValidateAccessKeyAuthorizationRequest(authorizationRequest); err != nil {
+			writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "access keys are not accepted for this action", false)
+			return port.Authorization{}, false
+		}
+		authorization, err := accessKeyAuthorizer.AuthorizeAccessKey(request.Context(), authorizationRequest)
+		if err != nil {
+			writeAuthorizationError(response, requestID, err)
+			return port.Authorization{}, false
+		}
+		if err := port.ValidateAccessKeyAuthorizationForRequest(authorization, authorizationRequest); err != nil {
+			writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "IAM returned an invalid signed-request decision", true)
+			return port.Authorization{}, false
+		}
+		return authorization, true
+	}
 	authorizationRequest := port.AuthorizationRequest{
-		Credential: request.Header.Get("Authorization"),
-		Action:     action,
-		Resource:   paasv1.ResourceRef{Kind: kind, ID: id},
-		RequestID:  requestID,
+		Credential:      request.Header.Get("Authorization"),
+		Action:          action,
+		Resource:        paasv1.ResourceRef{Kind: kind, ID: id},
+		ResourceMode:    mode,
+		CollectionUsage: usage,
+		RequestID:       requestID,
 	}
 	if err := port.ValidateAuthorizationRequest(authorizationRequest); err != nil {
 		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "a valid IAM credential is required", false)
@@ -928,8 +1071,54 @@ func writeAuthorizationError(response http.ResponseWriter, requestID string, err
 		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "IAM authentication failed", false)
 	case errors.Is(err, port.ErrPermissionDenied):
 		writeProblem(response, requestID, http.StatusForbidden, paasv1.ErrorPermissionDenied, "Permission denied", "IAM denied this action", false)
+	case errors.Is(err, port.ErrAuthorizationReplay):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Signed request conflict", "the signed request nonce was already consumed", false)
 	default:
 		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "IAM authorization is unavailable", true)
+	}
+}
+
+var errSignedBodyTooLarge = errors.New("signed request body is too large")
+
+func readSignedBody(request *http.Request, maximum int64) ([]byte, error) {
+	if request.Body == nil {
+		return []byte{}, nil
+	}
+	defer request.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(request.Body, maximum+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maximum {
+		clear(body)
+		return nil, errSignedBodyTooLarge
+	}
+	return body, nil
+}
+
+func accessKeyRoute(method, path string) bool {
+	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	if len(segments) < 2 || segments[0] != "v1" {
+		return false
+	}
+	switch segments[1] {
+	case "applications", "configurations", "configuration-revisions", "application-revisions":
+		return method == http.MethodPost && len(segments) == 2 || method == http.MethodGet && len(segments) == 3
+	case "operations":
+		return method == http.MethodGet && len(segments) == 3
+	case "deployments":
+		if len(segments) == 2 {
+			return method == http.MethodGet || method == http.MethodPost
+		}
+		if len(segments) == 3 {
+			return method == http.MethodGet || method == http.MethodPut
+		}
+		if len(segments) == 4 {
+			return segments[3] == "runtime" && method == http.MethodGet || segments[3] == "rollback" && method == http.MethodPost
+		}
+		return len(segments) == 5 && segments[3] == "generations" && method == http.MethodGet
+	default:
+		return false
 	}
 }
 

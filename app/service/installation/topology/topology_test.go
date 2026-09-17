@@ -18,6 +18,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	options := Options{
 		InstallationID: "mxi-" + strings.Repeat("a", 32),
 		Root:           "/srv/matrix", Listener: "127.0.0.1", Port: 8080,
+		NorthboundOrigin: "https://matrix.example.com:443",
 	}
 	result, err := Compile(manifest, options)
 	if err != nil {
@@ -70,6 +71,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	controllerMounts := 0
 	enrollmentIssuerMounts := 0
 	enrollmentIngressMounts := 0
+	accessKeyWrappingMounts := 0
 	for name, raw := range services {
 		service := raw.(map[string]any)
 		mounts, _ := service["volumes"].([]any)
@@ -98,6 +100,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					t.Fatal("node enrollment ingress identity crossed its APISIX boundary")
 				}
 			}
+			if mount["source"] == path.Join(options.Root, layout.IAMAccessKeyWrappingKeyring) {
+				accessKeyWrappingMounts++
+				if name != "iam" || mount["target"] != "/run/matrix/iam-access-key-wrapping-keyring.json" || mount["read_only"] != true {
+					t.Fatal("access-key wrapping keyring crossed its IAM API boundary")
+				}
+			}
 		}
 	}
 	if controllerMounts != 2 {
@@ -108,6 +116,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 	if enrollmentIngressMounts != 2 {
 		t.Fatal("node enrollment ingress lacks exact APISIX certificate and key mounts")
+	}
+	if accessKeyWrappingMounts != 1 {
+		t.Fatal("access-key wrapping keyring lacks its single IAM API mount")
+	}
+	if services["iam"].(map[string]any)["environment"].(map[string]any)["MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE"] != "/run/matrix/iam-access-key-wrapping-keyring.json" {
+		t.Fatal("IAM does not consume the installation-owned access-key wrapping keyring")
 	}
 	if services["paas-api"].(map[string]any)["environment"].(map[string]any)["MATRIX_PAAS_NODE_CONNECTIONS_FILE"] != "/run/matrix/node-controller/configuration.json" {
 		t.Fatal("PaaS does not consume the signed controller mount")
@@ -140,11 +154,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	expectedEnvironmentKeys := map[string][]string{
 		"audit": {
 			"MATRIX_AUDIT_CURSOR_KEY_FILE", "MATRIX_AUDIT_DATABASE_DSN_FILE",
-			"MATRIX_AUDIT_IAM_ENDPOINT", "MATRIX_AUDIT_LISTEN_ADDRESS",
+			"MATRIX_AUDIT_IAM_ENDPOINT", "MATRIX_AUDIT_INSTALLATION_ID", "MATRIX_AUDIT_LISTEN_ADDRESS",
+			"MATRIX_AUDIT_NORTHBOUND_ORIGIN",
 			"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE",
 		},
 		"iam": {
-			"MATRIX_IAM_BOOTSTRAP_FILE", "MATRIX_IAM_DATABASE_DSN_FILE",
+			"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE", "MATRIX_IAM_BOOTSTRAP_FILE", "MATRIX_IAM_DATABASE_DSN_FILE",
 			"MATRIX_IAM_LISTEN_ADDRESS",
 		},
 		"iam-audit-dispatcher": {
@@ -159,6 +174,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
 			"MATRIX_PAAS_INSTALLATION_ID", "MATRIX_PAAS_LISTEN_ADDRESS",
 			"MATRIX_PAAS_NODE_CONNECTIONS_FILE",
+			"MATRIX_PAAS_NORTHBOUND_ORIGIN",
 			"MATRIX_PAAS_PUBLIC_BASE_PATH",
 			"MATRIX_PAAS_RELEASE_ID", "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE",
 			"MATRIX_PAAS_TERMINAL_COOKIE_SECURE",
@@ -437,11 +453,11 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 }
 
 func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing.T) {
-	const publishedPredecessorDigest = "sha256:533a0087a560cfc791b23b59a07fb6fd90814b6593030ef2f36944abb59af0ee"
+	const publishedPredecessorDigest = "sha256:3b5e33844c8f9fc90bcad489a071cc292b1b42d65dbe387adb05ffec562d9178"
 	if got := SupportedPredecessorContractDigest(); got != publishedPredecessorDigest {
 		t.Fatalf("frozen predecessor topology digest = %q, want %q", got, publishedPredecessorDigest)
 	}
-	options := Options{InstallationID: "mxi-" + strings.Repeat("b", 32), Root: "/data/xiak/matrix-predecessor", Listener: "0.0.0.0", Port: 8080}
+	options := Options{InstallationID: "mxi-" + strings.Repeat("b", 32), Root: "/data/xiak/matrix-predecessor", Listener: "0.0.0.0", Port: 8080, NorthboundOrigin: "https://matrix.example.com:443"}
 	current := topologyManifest()
 	wantCurrent, err := Compile(current, options)
 	if err != nil {
@@ -480,10 +496,10 @@ func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing
 		environment[enrollmentIssuerPrivateKeyEnvironment] != enrollmentIssuerPrivateKeyTarget {
 		t.Fatal("frozen predecessor lost its node enrollment issuer input")
 	}
-	if environment[enrollmentControllerCertificateEnvironment] != "" ||
-		environment[enrollmentControllerPrivateKeyEnvironment] != "" ||
-		environment[enrollmentControllerTrustEnvironment] != "" {
-		t.Fatal("frozen predecessor gained the successor controller identity")
+	if environment[enrollmentControllerCertificateEnvironment] == "" ||
+		environment[enrollmentControllerPrivateKeyEnvironment] == "" ||
+		environment[enrollmentControllerTrustEnvironment] == "" {
+		t.Fatal("frozen predecessor lost its published controller identity")
 	}
 	issuerMounts := 0
 	for _, volume := range document.Services["paas-api"].Volumes {
@@ -495,10 +511,21 @@ func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing
 		t.Fatal("frozen predecessor lost its enrollment issuer mounts")
 	}
 	workerEnvironment := document.Services["paas-worker"].Environment
-	if workerEnvironment[workerEnrollmentControllerCertificateEnvironment] != "" ||
-		workerEnvironment[workerEnrollmentControllerPrivateKeyEnvironment] != "" ||
-		workerEnvironment[workerEnrollmentControllerTrustEnvironment] != "" {
-		t.Fatal("frozen predecessor worker gained the successor controller identity")
+	if workerEnvironment[workerEnrollmentControllerCertificateEnvironment] == "" ||
+		workerEnvironment[workerEnrollmentControllerPrivateKeyEnvironment] == "" ||
+		workerEnvironment[workerEnrollmentControllerTrustEnvironment] == "" {
+		t.Fatal("frozen predecessor worker lost its published controller identity")
+	}
+	if environment["MATRIX_PAAS_NORTHBOUND_ORIGIN"] != "" ||
+		document.Services["audit"].Environment["MATRIX_AUDIT_NORTHBOUND_ORIGIN"] != "" ||
+		document.Services["audit"].Environment["MATRIX_AUDIT_INSTALLATION_ID"] != "" ||
+		document.Services["iam"].Environment["MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE"] != "" {
+		t.Fatal("frozen predecessor gained the successor access-key trust boundary")
+	}
+	for _, volume := range document.Services["iam"].Volumes {
+		if volume.Target == "/run/matrix/iam-access-key-wrapping-keyring.json" {
+			t.Fatal("frozen predecessor gained the successor wrapping key mount")
+		}
 	}
 	predecessorAPISIX := document.Services["apisix"]
 	if len(predecessorAPISIX.Ports) != 2 ||
@@ -564,6 +591,7 @@ func TestCompileRejectsUntrustedTopologyInputs(t *testing.T) {
 	valid := Options{
 		InstallationID: "mxi-" + strings.Repeat("a", 32),
 		Root:           "/srv/matrix", Listener: "0.0.0.0", Port: 9080,
+		NorthboundOrigin: "https://matrix.example.com:443",
 	}
 	tests := map[string]func(*Options){
 		"relative root": func(value *Options) { value.Root = "srv/matrix" },
@@ -598,7 +626,7 @@ func TestCompileRejectsUntrustedTopologyInputs(t *testing.T) {
 
 func TestOptionsCannotCarryProviderNativeTopology(t *testing.T) {
 	typeOfOptions := reflect.TypeFor[Options]()
-	want := []string{"InstallationID", "Root", "Listener", "Port"}
+	want := []string{"InstallationID", "Root", "Listener", "Port", "NorthboundOrigin"}
 	got := make([]string, 0, typeOfOptions.NumField())
 	for index := 0; index < typeOfOptions.NumField(); index++ {
 		got = append(got, typeOfOptions.Field(index).Name)

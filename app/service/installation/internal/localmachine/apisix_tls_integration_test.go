@@ -46,11 +46,12 @@ func TestAPISIXServesInstallationAuthenticatedEnrollmentTLS(t *testing.T) {
 	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
 		InstallationID: plan.InstallationID, Root: "/srv/matrix",
 		Listener: plan.Listener, Port: plan.Port,
+		NorthboundOrigin: plan.NorthboundOrigin,
 	})
 	if err != nil {
 		t.Fatalf("compile APISIX TLS integration topology: %v", err)
 	}
-	if err := publishInstallationConfiguration(plan.Root, plan.Bundle.Manifest, compiled); err != nil {
+	if err := publishInstallationConfiguration(plan.Root, plan.Bundle.Manifest, plan.NorthboundOrigin, compiled); err != nil {
 		t.Fatalf("publish APISIX TLS integration configuration: %v", err)
 	}
 	testID := fmt.Sprintf("%d-%x", os.Getpid(), uint64(time.Now().UnixNano()))

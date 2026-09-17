@@ -19,7 +19,7 @@ func TestPlatformCommandSurfaceBuildsExactRequests(t *testing.T) {
 		args []string
 		want Request
 	}{
-		{"install", []string{"platform", "install", "--bundle", "/media/release", "--root", "/srv/matrix", "--trust-key", "/media/trust.json"}, Request{Action: lifecycle.ActionInstall, Root: "/srv/matrix", Bundle: "/media/release", TrustKey: "/media/trust.json"}},
+		{"install", []string{"platform", "install", "--bundle", "/media/release", "--root", "/srv/matrix", "--trust-key", "/media/trust.json", "--northbound-origin", "https://matrix.example.com:443"}, Request{Action: lifecycle.ActionInstall, Root: "/srv/matrix", Bundle: "/media/release", TrustKey: "/media/trust.json", NorthboundOrigin: "https://matrix.example.com:443"}},
 		{"verify", []string{"platform", "verify", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionVerify, Root: "/srv/matrix"}},
 		{"status", []string{"platform", "status", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionStatus, Root: "/srv/matrix"}},
 		{"backup", []string{"platform", "backup", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionBackup, Root: "/srv/matrix"}},
@@ -292,7 +292,7 @@ func TestRunWritesVersionedStableJSON(t *testing.T) {
 	var out, errOut bytes.Buffer
 	exit := Run(context.Background(), []string{
 		"--format", "json", "platform", "install", "--bundle", "/media/release",
-		"--root", "/srv/matrix", "--trust-key", "/media/trust.json",
+		"--root", "/srv/matrix", "--trust-key", "/media/trust.json", "--northbound-origin", "https://matrix.example.com:443",
 	}, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backend)
 	if exit != ExitSuccess || errOut.Len() != 0 {
 		t.Fatalf("run exit/output = %d / %q", exit, errOut.String())

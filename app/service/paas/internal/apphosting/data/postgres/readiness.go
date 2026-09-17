@@ -12,10 +12,10 @@ import (
 )
 
 // Enrollment completion adds its atomic registration and durable runtime
-// connection to the accepted PaaS schema-4 boundary. Schema-4 binaries must
-// not serve against this expanded authority contract; the fixed predecessor
-// gate proves retained data and fail-closed rollback behavior.
-const paasDatabaseSchemaVersion = 5
+// connection to the accepted PaaS schema boundary. Older binaries must not
+// serve against this expanded authority contract; the fixed predecessor gate
+// proves retained data and fail-closed rollback behavior.
+const paasDatabaseSchemaVersion = 6
 
 func (repository *ApplicationRepository) Readiness(
 	ctx context.Context,

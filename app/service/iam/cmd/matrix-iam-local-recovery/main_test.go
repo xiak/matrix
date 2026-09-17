@@ -52,7 +52,7 @@ func TestLocalRecoveryRejectsAlteredIntentBeforeDatabaseAccess(t *testing.T) {
 		return result
 	}
 	local := iamv1.LocalCredentialRecoveryAuthority{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryAuthority", Purpose: iamv1.LocalCredentialRecoveryPurpose,
-		Scope:         iamv1.LocalCredentialRecoveryScope{InstallationID: "installation-original", BootstrapDigest: "sha256:" + strings.Repeat("a", 64), OrganizationID: "organization-original", PrincipalID: "principal-original"},
+		Scope:         iamv1.LocalCredentialRecoveryScope{InstallationID: "installation-original", BootstrapDigest: "sha256:" + strings.Repeat("a", 64), AccountID: "organization-original", PrincipalID: "principal-original"},
 		CapabilityKey: secret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x4a}, 32)))}
 	request := iamv1.LocalCredentialRecoveryRequest{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryRequest", Purpose: iamv1.LocalCredentialRecoveryPurpose,
 		CommandID: "command-original", Scope: local.Scope, Expected: iamv1.LocalCredentialRecoveryExpected{OrganizationResourceVersion: 1, PrincipalResourceVersion: 1, CredentialGeneration: 1,

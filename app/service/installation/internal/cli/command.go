@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 const (
@@ -45,6 +46,7 @@ type commandOptions struct {
 	root                        string
 	bundle                      string
 	trustKey                    string
+	northboundOrigin            string
 	join                        string
 	backupID                    string
 	supportOutput               string
@@ -134,7 +136,8 @@ func newLifecycleCommand(
 			}
 			request := Request{
 				Subject: subject, Action: action, Root: options.root, Bundle: options.bundle, TrustKey: options.trustKey,
-				Join: options.join, BackupID: options.backupID, SupportOutput: options.supportOutput,
+				NorthboundOrigin: options.northboundOrigin,
+				Join:             options.join, BackupID: options.backupID, SupportOutput: options.supportOutput,
 				Configuration:               options.configuration,
 				ExpectedConfigurationDigest: options.expectedConfigurationDigest,
 				RevokePreviousCredentials:   options.revokePreviousCredentials,
@@ -177,11 +180,15 @@ func bindCommandFlags(flags *pflag.FlagSet, subject Subject, action lifecycle.Ac
 		flags.StringVar(&options.trustKey, "trust-key", "", "out-of-band release trust root")
 		if subject == SubjectNode {
 			flags.StringVar(&options.join, "join", "", "protected one-time node join file")
+		} else {
+			flags.StringVar(&options.northboundOrigin, "northbound-origin", "", "canonical public origin including explicit port")
 		}
 	case lifecycle.ActionUpgrade:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
 		if subject == SubjectNode {
 			flags.BoolVar(&options.resume, "resume", false, "resume only the sealed node release change")
+		} else {
+			flags.StringVar(&options.northboundOrigin, "northbound-origin", "", "canonical public origin required when adopting the new edge contract")
 		}
 	case lifecycle.ActionRecover:
 		flags.StringVar(&options.backupID, "backup", "", "verified installation-owned backup identity")
@@ -217,13 +224,18 @@ func validateCommandFlags(subject Subject, action lifecycle.Action, options *com
 		if subject == SubjectNode && strings.TrimSpace(options.join) == "" {
 			return errors.New("protected one-time node join is required")
 		}
+		if subject == SubjectPlatform && (strings.TrimSpace(options.northboundOrigin) == "" ||
+			externalrequest.ValidateOrigin(options.northboundOrigin) != nil) {
+			return errors.New("canonical northbound origin is required")
+		}
 	case lifecycle.ActionUpgrade:
 		if subject == SubjectNode {
 			if options.resume == (strings.TrimSpace(options.bundle) != "") || (options.resume && options.bundle != "") {
 				return errors.New("offline node bundle or explicit resume is required, but not both")
 			}
-		} else if strings.TrimSpace(options.bundle) == "" {
-			return errors.New("offline bundle is required")
+		} else if strings.TrimSpace(options.bundle) == "" ||
+			(options.northboundOrigin != "" && externalrequest.ValidateOrigin(options.northboundOrigin) != nil) {
+			return errors.New("offline bundle and any supplied canonical northbound origin are required")
 		}
 	case lifecycle.ActionRecover:
 		if strings.TrimSpace(options.backupID) == "" {

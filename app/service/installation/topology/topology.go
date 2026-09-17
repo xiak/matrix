@@ -12,11 +12,13 @@ import (
 	"net"
 	"net/netip"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/release"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 const (
@@ -29,10 +31,11 @@ const (
 )
 
 type Options struct {
-	InstallationID string
-	Root           string
-	Listener       string
-	Port           uint16
+	InstallationID   string
+	Root             string
+	Listener         string
+	Port             uint16
+	NorthboundOrigin string
 }
 
 type Result struct {
@@ -88,10 +91,11 @@ func contractDescriptionDigest(value contract) string {
 
 func contractDescription() contract {
 	options := Options{
-		InstallationID: "mxi-00000000000000000000000000000000",
-		Root:           "/matrix-installation-root",
-		Listener:       "0.0.0.0",
-		Port:           1,
+		InstallationID:   "mxi-00000000000000000000000000000000",
+		Root:             "/matrix-installation-root",
+		Listener:         "0.0.0.0",
+		Port:             1,
+		NorthboundOrigin: "https://matrix.example.com:443",
 	}
 	manifest := release.Manifest{Release: release.ReleaseIdentity{
 		ID: "matrix-v0.0.0-000000000000", SourceCommit: strings.Repeat("0", 40),
@@ -119,6 +123,7 @@ func contractDescription() contract {
 		Version: ContractVersion,
 		Substitutions: []string{
 			"installationId", "installationRoot", "listenerAddress", "listenerPort",
+			"northboundOrigin",
 			"releaseId", "releaseBuildId", "sourceCommit", "signedImageIds",
 			"verificationArtifactDigest",
 		},
@@ -128,8 +133,31 @@ func contractDescription() contract {
 
 func predecessorContractDescription() contract {
 	description := contractDescription()
-	removeEnrollmentControllerIdentity(description.Compose.Services)
+	description.Substitutions = slices.DeleteFunc(description.Substitutions, func(value string) bool {
+		return value == "northboundOrigin"
+	})
+	removeAccessKeyWrapping(description.Compose.Services)
+	removeExternalRequestBoundary(description.Compose.Services)
 	return description
+}
+
+func removeAccessKeyWrapping(services map[string]serviceConfig) {
+	iam := services["iam"]
+	delete(iam.Environment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE")
+	iam.Volumes = slices.DeleteFunc(iam.Volumes, func(value mount) bool {
+		return value.Target == "/run/matrix/iam-access-key-wrapping-keyring.json"
+	})
+	services["iam"] = iam
+}
+
+func removeExternalRequestBoundary(services map[string]serviceConfig) {
+	audit := services["audit"]
+	delete(audit.Environment, "MATRIX_AUDIT_INSTALLATION_ID")
+	delete(audit.Environment, "MATRIX_AUDIT_NORTHBOUND_ORIGIN")
+	services["audit"] = audit
+	paas := services["paas-api"]
+	delete(paas.Environment, "MATRIX_PAAS_NORTHBOUND_ORIGIN")
+	services["paas-api"] = paas
 }
 
 func Compile(manifest release.Manifest, options Options) (Result, error) {
@@ -185,8 +213,12 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 	services := compileServices(manifest, images, options)
 	switch digest {
 	case ContractDigest():
+		if externalrequest.ValidateOrigin(options.NorthboundOrigin) != nil {
+			return Result{}, errors.New("platform northbound origin is invalid")
+		}
 	case SupportedPredecessorContractDigest():
-		removeEnrollmentControllerIdentity(services)
+		removeAccessKeyWrapping(services)
+		removeExternalRequestBoundary(services)
 	default:
 		return Result{}, errors.New("platform topology contract is unsupported")
 	}
@@ -209,20 +241,6 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 	}, nil
 }
 
-func removeEnrollmentControllerIdentity(services map[string]serviceConfig) {
-	paasAPI := services["paas-api"]
-	delete(paasAPI.Environment, enrollmentControllerCertificateEnvironment)
-	delete(paasAPI.Environment, enrollmentControllerPrivateKeyEnvironment)
-	delete(paasAPI.Environment, enrollmentControllerTrustEnvironment)
-	services["paas-api"] = paasAPI
-
-	paasWorker := services["paas-worker"]
-	delete(paasWorker.Environment, workerEnrollmentControllerCertificateEnvironment)
-	delete(paasWorker.Environment, workerEnrollmentControllerPrivateKeyEnvironment)
-	delete(paasWorker.Environment, workerEnrollmentControllerTrustEnvironment)
-	services["paas-worker"] = paasWorker
-}
-
 func validateOptions(options Options) error {
 	var problems []error
 	problems = append(problems, lifecycle.ValidateInstallationID(options.InstallationID))
@@ -237,6 +255,9 @@ func validateOptions(options Options) error {
 	}
 	if options.Port == 0 || options.Port == NodeEnrollmentIngressPort {
 		problems = append(problems, errors.New("platform listener port is invalid"))
+	}
+	if options.NorthboundOrigin != "" && externalrequest.ValidateOrigin(options.NorthboundOrigin) != nil {
+		problems = append(problems, errors.New("platform northbound origin is invalid"))
 	}
 	return errors.Join(problems...)
 }
@@ -319,6 +340,7 @@ func compileServices(
 	paasAPIDSN := path.Join(root, layout.PaaSAPI)
 	paasWorkerDSN := path.Join(root, layout.PaaSWorker)
 	bootstrapIAM := path.Join(root, layout.IAMBootstrap)
+	accessKeyWrappingKeyring := path.Join(root, layout.IAMAccessKeyWrappingKeyring)
 	auditIAMCredential := path.Join(root, layout.AuditIAMCredential)
 	iamAuditCredential := path.Join(root, layout.IAMAuditCredential)
 	paasIAMCredential := path.Join(root, layout.PaaSIAMCredential)
@@ -388,13 +410,15 @@ func compileServices(
 		"1.0", "512M", "http://127.0.0.1:8080/ready",
 	)
 	iam.Environment = map[string]string{
-		"MATRIX_IAM_DATABASE_DSN_FILE": "/run/matrix/iam-api-dsn",
-		"MATRIX_IAM_BOOTSTRAP_FILE":    "/run/matrix/iam-bootstrap.json",
-		"MATRIX_IAM_LISTEN_ADDRESS":    "0.0.0.0:8080",
+		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE": "/run/matrix/iam-access-key-wrapping-keyring.json",
+		"MATRIX_IAM_DATABASE_DSN_FILE":                "/run/matrix/iam-api-dsn",
+		"MATRIX_IAM_BOOTSTRAP_FILE":                   "/run/matrix/iam-bootstrap.json",
+		"MATRIX_IAM_LISTEN_ADDRESS":                   "0.0.0.0:8080",
 	}
 	iam.Volumes = []mount{
 		bind(iamAPIDSN, "/run/matrix/iam-api-dsn", true),
 		bind(bootstrapIAM, "/run/matrix/iam-bootstrap.json", true),
+		bind(accessKeyWrappingKeyring, "/run/matrix/iam-access-key-wrapping-keyring.json", true),
 	}
 	iam.DependsOn = healthy("postgres")
 
@@ -408,6 +432,8 @@ func compileServices(
 		"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE": "/run/matrix/audit-iam-credential",
 		"MATRIX_AUDIT_CURSOR_KEY_FILE":         "/run/matrix/audit-cursor-key",
 		"MATRIX_AUDIT_LISTEN_ADDRESS":          "0.0.0.0:8080",
+		"MATRIX_AUDIT_INSTALLATION_ID":         options.InstallationID,
+		"MATRIX_AUDIT_NORTHBOUND_ORIGIN":       options.NorthboundOrigin,
 	}
 	audit.Volumes = []mount{
 		bind(auditRuntimeDSN, "/run/matrix/audit-runtime-dsn", true),
@@ -446,6 +472,7 @@ func compileServices(
 		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE":                "/run/matrix/paas-iam-credential",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST":           verificationArtifactDigest(manifest),
 		"MATRIX_PAAS_LISTEN_ADDRESS":                         "0.0.0.0:8080",
+		"MATRIX_PAAS_NORTHBOUND_ORIGIN":                      options.NorthboundOrigin,
 		"MATRIX_PAAS_NODE_CONNECTIONS_FILE":                  "/run/matrix/node-controller/configuration.json",
 		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE": "/run/matrix/node-controller/enrollment-controller.pem",
 		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE": "/run/matrix/node-controller/enrollment-controller-key.pem",

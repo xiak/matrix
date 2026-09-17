@@ -2,7 +2,7 @@ DO $matrix_audit_verify$
 DECLARE
     missing text;
 BEGIN
-    IF (SELECT schema_version FROM audit.readiness()) IS DISTINCT FROM 4::bigint THEN
+    IF (SELECT schema_version=18 AND ready FROM audit.readiness()) IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'Audit schema version is incompatible';
     END IF;
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
@@ -132,7 +132,7 @@ BEGIN
        )
        OR NOT has_function_privilege(
             'matrix_audit_runtime',
-            'audit.read_records(text,bigint,integer,timestamptz,timestamptz,text,text,text)',
+            'audit.read_records(text,bigint,integer,timestamptz,timestamptz,text,jsonb)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(

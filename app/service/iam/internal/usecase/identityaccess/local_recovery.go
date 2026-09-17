@@ -74,7 +74,7 @@ func (service *Authority) RecoverLocalCredentials(ctx context.Context, local iam
 		mutation.AuditEvent, err = newAuditEvent(eventID, "", request.Scope.InstallationID,
 			auditv1.ActorReference{Type: auditv1.ActorSystem, ID: iamv1.LocalCredentialRecoveryActor},
 			auditv1.ActionIAMInstallationPrimaryCredentialsRecovered,
-			auditv1.TargetReference{Kind: auditv1.TargetPrincipal, ID: string(request.Scope.PrincipalID), TenantID: auditv1.TenantID(request.Scope.OrganizationID)},
+			auditv1.TargetReference{Kind: auditv1.TargetPrincipal, ID: string(request.Scope.PrincipalID), TenantID: auditv1.TenantID(request.Scope.AccountID)},
 			auditv1.ResultSucceeded, "", digest, request.CommandID, request.CommandID, now)
 		if err != nil {
 			return err

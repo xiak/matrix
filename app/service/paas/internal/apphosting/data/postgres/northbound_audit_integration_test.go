@@ -17,7 +17,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	apphttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
@@ -157,6 +159,41 @@ func assertNorthboundIAMAudit(
 	configurationRevisionID := paasv1.ResourceID(prefix + "-http-configuration-revision")
 	applicationRevisionID := paasv1.ResourceID(prefix + "-http-application-revision")
 	deploymentID := paasv1.ResourceID(prefix + "-http-deployment")
+	accessKeyApplicationID := paasv1.ResourceID(prefix + "-access-key-application")
+
+	accessKeyOperation := doIntegrationAccessKeyHTTP[paasv1.Operation](
+		t, ctx, handler, http.MethodPost, "/v1/applications",
+		paasv1.CreateApplicationRequest{ID: accessKeyApplicationID, Name: "access-key-application"},
+		map[string]string{"Idempotency-Key": "http-create-access-key-application"},
+		http.StatusCreated,
+	)
+	if accessKeyOperation.RequestedBy != (paasv1.SubjectRef{
+		Type: paasv1.SubjectUser, ID: "integration-http-user", AccessKeyID: "integration-access-key",
+	}) {
+		t.Fatalf("access-key Operation attribution = %#v", accessKeyOperation.RequestedBy)
+	}
+	var accessKeyOperationDocument, accessKeyAuditDocument []byte
+	if err := admin.QueryRow(
+		ctx,
+		`SELECT operation.document, outbox.document
+		   FROM paas.operations AS operation
+		   JOIN paas.audit_outbox AS outbox
+		     ON outbox.authority_key = operation.authority_key
+		    AND outbox.operation_id = operation.id
+		  WHERE operation.tenant_id = $1 AND operation.id = $2`,
+		fixture.tenantA,
+		accessKeyOperation.ID,
+	).Scan(&accessKeyOperationDocument, &accessKeyAuditDocument); err != nil {
+		t.Fatalf("read access-key Operation and Audit lineage: %v", err)
+	}
+	var storedAccessKeyOperation paasv1.Operation
+	storedAccessKeyAudit, auditErr := decodeStoredAuditEvent(accessKeyAuditDocument)
+	if json.Unmarshal(accessKeyOperationDocument, &storedAccessKeyOperation) != nil ||
+		paasv1.ValidateOperation(storedAccessKeyOperation) != nil || auditErr != nil ||
+		storedAccessKeyOperation.RequestedBy != accessKeyOperation.RequestedBy ||
+		storedAccessKeyAudit.Actor != accessKeyOperation.RequestedBy {
+		t.Fatalf("access-key lineage was not retained: operation=%s audit=%s", accessKeyOperationDocument, accessKeyAuditDocument)
+	}
 
 	applicationRequest := paasv1.CreateApplicationRequest{
 		ID: applicationID, Name: "http-application", Labels: map[string]string{"source": "northbound"},
@@ -256,7 +293,7 @@ func assertNorthboundIAMAudit(
 	}
 
 	targets := []paasv1.ResourceID{
-		applicationID, configurationID, configurationRevisionID, applicationRevisionID, deploymentID,
+		accessKeyApplicationID, applicationID, configurationID, configurationRevisionID, applicationRevisionID, deploymentID,
 	}
 	var auditCount int
 	var auditDocuments []byte
@@ -424,6 +461,25 @@ func (authorizer integrationHTTPAuthorizer) Authorize(
 	}, nil
 }
 
+func (authorizer integrationHTTPAuthorizer) AuthorizeAccessKey(
+	_ context.Context,
+	request port.AccessKeyAuthorizationRequest,
+) (port.Authorization, error) {
+	if request.SignedRequest.Parameters.AccessKeyID != "integration-access-key" ||
+		request.SignedRequest.Parameters.Audience != iamv1.ProductPaaS ||
+		request.SignedRequest.Parameters.InstallationID != "integration-installation" {
+		return port.Authorization{}, port.ErrUnauthenticated
+	}
+	return port.Authorization{
+		TenantID: authorizer.tenantID,
+		Subject: paasv1.SubjectRef{
+			Type: paasv1.SubjectUser, ID: "integration-http-user", AccessKeyID: "integration-access-key",
+		},
+		DecisionID: "decision-" + request.RequestID, RequestID: request.RequestID,
+		AuditID: "audit-" + request.RequestID,
+	}, nil
+}
+
 func newIntegrationHTTPHandler(
 	t *testing.T,
 	apiPool *pgxpool.Pool,
@@ -472,6 +528,7 @@ func newIntegrationHTTPHandler(
 		integrationTerminalConnector{},
 		integrationInstallationVerifier{},
 		apphttp.Config{
+			NorthboundOrigin: "https://api.example.test:443", InstallationID: "integration-installation",
 			NewRequestID: func() (string, error) {
 				sequence++
 				return fmt.Sprintf("http-request-%d", sequence), nil
@@ -489,6 +546,60 @@ func newIntegrationHTTPHandler(
 		t.Fatalf("create northbound HTTP handler: %v", err)
 	}
 	return handler
+}
+
+func doIntegrationAccessKeyHTTP[T any](
+	t *testing.T,
+	ctx context.Context,
+	handler http.Handler,
+	method string,
+	path string,
+	body any,
+	headers map[string]string,
+	wantStatus int,
+) T {
+	t.Helper()
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("encode %s %s body: %v", method, path, err)
+	}
+	request := httptest.NewRequest(method, path, bytes.NewReader(encoded)).WithContext(ctx)
+	request.Header.Set("Content-Type", "application/json")
+	for name, value := range headers {
+		request.Header.Set(name, value)
+	}
+	nonce, err := iamv1.NewSecret(strings.Repeat("A", 22))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := iamv1.NewSecret(strings.Repeat("A", 43))
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization, err := iamv1.EncodeAccessKeyAuthorization(iamv1.AccessKeySignatureParameters{
+		AccessKeyID: "integration-access-key", InstallationID: "integration-installation",
+		Audience: iamv1.ProductPaaS, SignedAt: 1800000000, Nonce: nonce,
+	}, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain := authorization.CopyBytes()
+	request.Header.Set("Authorization", string(plain))
+	clear(plain)
+	request.Header.Set(externalrequest.HeaderExternalOrigin, "https://api.example.test:443")
+	request.Header.Set(externalrequest.HeaderExternalRequestTarget, "/api/paas"+path)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != wantStatus {
+		t.Fatalf("%s %s status = %d, want %d: %s", method, path, response.Code, wantStatus, response.Body.String())
+	}
+	var decoded T
+	decoder := json.NewDecoder(response.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&decoded); err != nil {
+		t.Fatalf("decode %s %s response: %v", method, path, err)
+	}
+	return decoded
 }
 
 type integrationTerminalConnector struct{}

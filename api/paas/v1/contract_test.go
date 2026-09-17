@@ -348,6 +348,7 @@ func TestOpenAPIEnumsMatchGoContract(t *testing.T) {
 	}))
 	assertExactEnum(t, schemas, "SubjectType", stringify([]SubjectType{
 		SubjectUser,
+		SubjectRole,
 		SubjectServiceAccount,
 		SubjectAgent,
 		SubjectSystemUser,

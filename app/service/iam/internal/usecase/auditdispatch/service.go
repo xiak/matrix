@@ -110,7 +110,7 @@ func ValidateClaim(claim Claim) error {
 	var problems []error
 	problems = append(problems,
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, claim.Event),
-		auditv1.ValidateID("organizationId", string(claim.OrganizationID)),
+		auditv1.ValidateID("organizationId", string(claim.AccountID)),
 	)
 	if claim.InstallationID != "" {
 		problems = append(problems, auditv1.ValidateID("installationId", claim.InstallationID))
@@ -122,7 +122,7 @@ func ValidateClaim(claim Claim) error {
 		if claim.InstallationID != claim.Event.InstallationID {
 			problems = append(problems, errors.New("IAM Audit event differs from its owner's sealed installation"))
 		}
-	} else if string(claim.OrganizationID) != string(claim.Event.TenantID) {
+	} else if string(claim.AccountID) != string(claim.Event.TenantID) {
 		problems = append(problems, errors.New("IAM Audit event differs from its owning tenant"))
 	}
 	if claim.Attempts < 1 || claim.Attempts > 100 {

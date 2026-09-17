@@ -18,8 +18,8 @@ var (
 )
 
 type Claim struct {
-	// OrganizationID owns the IAM outbox row, not necessarily the Audit chain.
-	OrganizationID iamv1.OrganizationID
+	// AccountID owns the IAM outbox row, not necessarily the Audit chain.
+	AccountID iamv1.AccountID
 	// InstallationID is sealed by that organization's bootstrap receipt.
 	InstallationID string
 	EventID        auditv1.EventID

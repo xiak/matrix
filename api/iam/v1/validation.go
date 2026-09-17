@@ -80,7 +80,7 @@ func ValidateServiceIdentity(value ServiceIdentity) error {
 	}
 	problems = append(problems,
 		ValidateID("serviceIdentity.installationId", value.InstallationID),
-		ValidateID("serviceIdentity.organizationId", string(value.OrganizationID)),
+		ValidateID("serviceIdentity.organizationId", string(value.AccountID)),
 		ValidateID("serviceIdentity.principalId", string(value.PrincipalID)),
 	)
 	if !knownServicePurpose(value.Purpose) {
@@ -115,7 +115,7 @@ func ValidateBootstrapStatus(value BootstrapStatus) error {
 	}
 	switch value.State {
 	case BootstrapUninitialized:
-		if value.InstallationID != "" || value.OrganizationID != "" ||
+		if value.InstallationID != "" || value.AccountID != "" ||
 			value.ContentDigest != "" || value.AppliedAt != nil {
 			return errors.New("uninitialized bootstrap status contains initialized data")
 		}
@@ -124,7 +124,7 @@ func ValidateBootstrapStatus(value BootstrapStatus) error {
 		var problems []error
 		problems = append(problems,
 			ValidateID("installationId", value.InstallationID),
-			ValidateID("organizationId", string(value.OrganizationID)),
+			ValidateID("organizationId", string(value.AccountID)),
 			ValidateDigest("contentDigest", value.ContentDigest),
 		)
 		if value.AppliedAt == nil {
@@ -190,26 +190,7 @@ func ValidateCreateUserRequest(value CreateUserRequest) error {
 	if !value.InitialPassword.Present() {
 		problems = append(problems, ErrInvalidSecret)
 	}
-	if value.InitialRole != nil && (!UserAssignableRole(*value.InitialRole) || *value.InitialRole == RolePlatformOperator) {
-		problems = append(problems, errors.New("initial role is invalid"))
-	}
 	return errors.Join(problems...)
-}
-
-func ValidatePutRoleBindingRequest(value PutRoleBindingRequest) error {
-	var problems []error
-	problems = append(problems,
-		ValidateID("principalId", string(value.PrincipalID)),
-		ValidateID("requestId", value.RequestID),
-	)
-	if !UserAssignableRole(value.Role) {
-		problems = append(problems, errors.New("role is invalid"))
-	}
-	return errors.Join(problems...)
-}
-
-func ValidateRevokeRoleBindingRequest(value RevokeRoleBindingRequest) error {
-	return ValidateID("requestId", value.RequestID)
 }
 
 func ValidateRevokeSessionRequest(value RevokeSessionRequest) error {
@@ -231,7 +212,7 @@ func ValidateRevocation(value Revocation) error {
 
 func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	var problems []error
-	if !knownAction(value.Action) {
+	if checkSourceProfileTarget(value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil {
 		problems = append(problems, errors.New("authorization action is invalid"))
 	}
 	problems = append(problems,
@@ -242,14 +223,65 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	return errors.Join(problems...)
 }
 
+// ValidateAuthorizationDecision is the current response contract. Historical
+// loaders must first authenticate the stored row's contract version and use the
+// explicit frozen-profile or legacy validator, never infer it from missing JSON.
 func ValidateAuthorizationDecision(value AuthorizationDecision) error {
+	if value.Profile == nil {
+		return errors.New("authorization decision has no product binding")
+	}
+	if checkSourceProfileTarget(*value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil ||
+		ValidateID("correlationId", value.CorrelationID) != nil {
+		return errors.New("authorization decision product binding is invalid")
+	}
+	if value.Allowed && value.Subject != nil &&
+		checkValidatedProfileSubjectCredential(sourceProfileCommitments[value.Profile.Product].profile, value.Action, *value.Subject) != nil {
+		return errors.New("authorization decision subject capability is invalid")
+	}
+	definition, known := LookupActionDefinition(value.Action)
+	if !known {
+		return errors.New("authorization decision action is not declared")
+	}
+	return validateAuthorizationDecision(value, definition)
+}
+
+// This validates immutable evidence against explicit declaration bytes; it does
+// not establish that a producer or caller is entitled to select that profile.
+func ValidateAuthorizationDecisionForProfile(value AuthorizationDecision, profile AuthorizationProfile) error {
+	if value.Profile == nil || CheckAuthorizationProfileTarget(profile, *value.Profile, value.Action, value.Resource, value.ResourceMode, value.CollectionUsage) != nil ||
+		ValidateID("correlationId", value.CorrelationID) != nil {
+		return errors.New("authorization decision product binding is invalid")
+	}
+	if value.Allowed && value.Subject != nil && checkValidatedProfileSubjectCredential(profile, value.Action, *value.Subject) != nil {
+		return errors.New("authorization decision subject capability is invalid")
+	}
+	for _, action := range profile.Actions {
+		if action.Action == value.Action {
+			return validateAuthorizationDecision(value, authorizationProfileActionDefinition(profile, action))
+		}
+	}
+	return errors.New("authorization decision action is not declared")
+}
+
+// Legacy syntax is only usable for an existing immutable row whose protected
+// database metadata says contract1. This function alone is not legacy admission.
+func ValidateLegacyAuthorizationDecision(value AuthorizationDecision) error {
+	definition, known := lookupRecordedActionDefinition(value.Action)
+	if !known || value.Resource.Kind != definition.ResourceKind || value.Profile != nil || value.ResourceMode != "" || value.CollectionUsage != "" || value.CorrelationID != "" ||
+		value.Subject != nil && value.Subject.AccessKeyID != "" {
+		return errors.New("legacy decision contains an invalid or current binding")
+	}
+	return validateAuthorizationDecision(value, definition)
+}
+
+func validateAuthorizationDecision(value AuthorizationDecision, definition ActionDefinition) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "AuthorizationDecision" {
 		problems = append(problems, errors.New("authorization decision type metadata is invalid"))
 	}
 	problems = append(problems,
 		ValidateID("id", string(value.ID)),
-		validateResourceForAction(value.Action, value.Resource),
+		ValidateID("resource.id", value.Resource.ID),
 		ValidateID("requestId", value.RequestID),
 		validateTime("decidedAt", value.DecidedAt),
 	)
@@ -259,9 +291,9 @@ func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 		} else {
 			problems = append(problems, ValidateSubject(*value.Subject))
 		}
-		if IsPlatformAction(value.Action) {
+		if definition.AuthorityScope == AuthorityScopeInstallation {
 			problems = append(problems, ValidateID("installationId", value.InstallationID))
-			if value.TenantID != "" || value.Subject != nil && value.Subject.Type != PrincipalUser {
+			if value.TenantID != "" || value.Subject != nil && (value.Subject.Type != SubjectUser || value.Subject.AccessKeyID != "") {
 				problems = append(problems, errors.New("platform decision contains invalid authority"))
 			}
 		} else {
@@ -278,10 +310,26 @@ func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 
 func ValidateSubject(value Subject) error {
 	var problems []error
-	if value.Type != PrincipalUser && value.Type != PrincipalServiceAccount {
+	if value.Type != SubjectUser && value.Type != SubjectServiceAccount && value.Type != SubjectRole {
 		problems = append(problems, errors.New("subject type is invalid"))
 	}
-	problems = append(problems, ValidateID("subject.id", string(value.ID)))
+	problems = append(problems, ValidateID("subject.id", value.ID))
+	if value.Type == SubjectRole {
+		if value.RoleSession == nil {
+			problems = append(problems, errors.New("role subject has no session reference"))
+		} else {
+			problems = append(problems, ValidateID("roleSession.sessionId", string(value.RoleSession.SessionID)),
+				ValidateID("roleSession.sourceUserId", string(value.RoleSession.SourceUserID)))
+		}
+	} else if value.RoleSession != nil {
+		problems = append(problems, errors.New("non-role subject contains role session"))
+	}
+	if value.AccessKeyID != "" {
+		if value.Type != SubjectUser {
+			problems = append(problems, errors.New("non-user subject contains access key lineage"))
+		}
+		problems = append(problems, ValidateID("subject.accessKeyId", string(value.AccessKeyID)))
+	}
 	return errors.Join(problems...)
 }
 
@@ -290,7 +338,7 @@ func ValidateOrganization(value Organization) error {
 	if value.APIVersion != APIVersion || value.Kind != "Organization" {
 		problems = append(problems, errors.New("organization type metadata is invalid"))
 	}
-	if value.Status != OrganizationActive && value.Status != OrganizationDisabled {
+	if value.Status != AccountActive && value.Status != AccountDisabled {
 		problems = append(problems, errors.New("organization status is invalid"))
 	}
 	problems = append(problems,
@@ -315,7 +363,7 @@ func ValidatePrincipal(value Principal) error {
 	}
 	problems = append(problems,
 		ValidateID("principal.id", string(value.ID)),
-		ValidateID("principal.organizationId", string(value.OrganizationID)),
+		ValidateID("principal.organizationId", string(value.AccountID)),
 		validateText("principal.displayName", value.DisplayName, 1, 128),
 		validatePositiveVersion(value.ResourceVersion),
 		validateChronology(value.CreatedAt, value.UpdatedAt),
@@ -325,24 +373,6 @@ func ValidatePrincipal(value Principal) error {
 	} else if value.LoginName != "" || value.MustChangePassword {
 		problems = append(problems, errors.New("service principal contains user fields"))
 	}
-	return errors.Join(problems...)
-}
-
-func ValidateRoleBinding(value RoleBinding) error {
-	var problems []error
-	if value.APIVersion != APIVersion || value.Kind != "RoleBinding" {
-		problems = append(problems, errors.New("role binding type metadata is invalid"))
-	}
-	if !knownRole(value.Role) {
-		problems = append(problems, errors.New("role is invalid"))
-	}
-	problems = append(problems,
-		ValidateID("roleBinding.id", string(value.ID)),
-		ValidateID("roleBinding.organizationId", string(value.OrganizationID)),
-		ValidateID("roleBinding.principalId", string(value.PrincipalID)),
-		validatePositiveVersion(value.ResourceVersion),
-		validateChronology(value.CreatedAt, value.UpdatedAt),
-	)
 	return errors.Join(problems...)
 }
 
@@ -356,7 +386,7 @@ func ValidateSession(value Session) error {
 	}
 	problems = append(problems,
 		ValidateID("session.id", string(value.ID)),
-		ValidateID("session.organizationId", string(value.OrganizationID)),
+		ValidateID("session.organizationId", string(value.AccountID)),
 		ValidateID("session.principalId", string(value.PrincipalID)),
 		validateTime("session.issuedAt", value.IssuedAt),
 		validateTime("session.expiresAt", value.ExpiresAt),
@@ -411,21 +441,8 @@ func ValidateProblem(value Problem) error {
 }
 
 func knownAction(value Action) bool {
-	for _, candidate := range allActions {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
-}
-
-func knownRole(value BuiltinRole) bool {
-	for _, candidate := range allBuiltinRoles {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
+	_, known := LookupActionDefinition(value)
+	return known
 }
 
 func knownServicePurpose(value ServicePurpose) bool {
@@ -451,66 +468,14 @@ func validateResourceForAction(action Action, resource ResourceReference) error 
 	return nil
 }
 
-// ResourceKindForAction is the single action-to-resource catalog used by
-// domain validation and contract generation.
+// ResourceKindForAction reads the shared catalog for domain validation and
+// contract generation; resource ownership still requires product enforcement.
 func ResourceKindForAction(action Action) (ResourceKind, bool) {
-	switch action {
-	case ActionIAMPrincipalCreate, ActionIAMPrincipalList,
-		ActionIAMOrganizationCreate, ActionIAMOrganizationRead, ActionIAMOrganizationSetStatus, ActionIAMAccountAliasSet:
-		return ResourceOrganization, true
-	case ActionIAMPrincipalRead, ActionIAMRoleBindingPut, ActionIAMPlatformRoleBindingPut,
-		ActionIAMPrincipalSetStatus, ActionIAMPasswordReset, ActionIAMOrganizationAdministratorRecover:
-		return ResourcePrincipal, true
-	case ActionIAMRoleBindingRevoke, ActionIAMPlatformRoleBindingRevoke:
-		return ResourceRoleBinding, true
-	case ActionIAMSessionRevoke:
-		return ResourceSession, true
-	case ActionPaaSApplicationCreate, ActionPaaSApplicationRead:
-		return ResourceApplication, true
-	case ActionPaaSConfigurationCreate, ActionPaaSConfigurationRead:
-		return ResourceConfiguration, true
-	case ActionPaaSConfigurationRevisionCreate, ActionPaaSConfigurationRevisionRead:
-		return ResourceConfigurationRevision, true
-	case ActionPaaSApplicationRevisionCreate, ActionPaaSApplicationRevisionRead:
-		return ResourceApplicationRevision, true
-	case ActionPaaSDeploymentCreate, ActionPaaSDeploymentUpdate,
-		ActionPaaSDeploymentRollback, ActionPaaSDeploymentStop, ActionPaaSDeploymentRead:
-		return ResourceDeployment, true
-	case ActionPaaSTerminalSessionCreate, ActionPaaSTerminalSessionClose:
-		return ResourceTerminalSession, true
-	case ActionPaaSOperationRead, ActionPaaSPlatformOperationRead:
-		return ResourceOperation, true
-	case ActionPaaSExecutionPoolCreate, ActionPaaSExecutionPoolRead:
-		return ResourceExecutionPool, true
-	case ActionPaaSExecutionTargetRegister, ActionPaaSExecutionTargetRead,
-		ActionPaaSExecutionTargetDrain, ActionPaaSExecutionTargetActivate,
-		ActionPaaSExecutionTargetRemove:
-		return ResourceExecutionTarget, true
-	case ActionPaaSNodeEnrollmentCreate, ActionPaaSNodeEnrollmentRead,
-		ActionPaaSNodeEnrollmentRevoke, ActionPaaSNodeEnrollmentRegenerate:
-		return ResourceNodeEnrollment, true
-	case ActionManagedServiceOfferingRead:
-		return ResourceServiceOffering, true
-	case ActionManagedServiceRegionRead:
-		return ResourceRegion, true
-	case ActionManagedServiceQuotaEntitlementActivate,
-		ActionManagedServiceQuotaEntitlementRead:
-		return ResourceQuotaEntitlement, true
-	case ActionManagedServiceInstallationCreate,
-		ActionManagedServiceInstallationRead:
-		return ResourceServiceInstallation, true
-	case ActionAuditRecordRead, ActionAuditPlatformRecordRead:
-		return ResourceAuditRecord, true
-	case ActionAuditIntegrityVerify, ActionAuditPlatformIntegrityVerify:
-		return ResourceAuditChain, true
-	case ActionInstallationVerify:
-		return ResourceInstallation, true
-	default:
-		return "", false
-	}
+	definition, known := LookupActionDefinition(action)
+	return definition.ResourceKind, known
 }
 
-// ValidateLoginIdentifier accepts a primary login or one qualified subaccount
+// ValidateLoginIdentifier accepts a root login or one qualified account user
 // name. It deliberately does not normalize case, whitespace, Unicode, or DNS.
 func ValidateLoginIdentifier(value string) error {
 	name, namespace, qualified := strings.Cut(value, "@")
@@ -530,20 +495,16 @@ func ValidateAccountAlias(value string) error {
 	return nil
 }
 
-func UserAssignableRole(role BuiltinRole) bool {
-	return knownRole(role) && role != RoleInstallationVerifier
-}
-
-func ValidateCreateOrganizationRequest(value CreateOrganizationRequest) error {
+func ValidateCreateAccountRequest(value CreateAccountRequest) error {
 	var secretError error
 	if !value.InitialPassword.Present() {
 		secretError = ErrInvalidSecret
 	}
 	return errors.Join(
-		ValidateID("organization.id", string(value.ID)),
+		ValidateID("account.id", string(value.ID)),
 		validateText("displayName", value.DisplayName, 1, 128),
-		validateLoginName(value.AdministratorLoginName),
-		validateText("administratorDisplayName", value.AdministratorDisplayName, 1, 128),
+		validateLoginName(value.RootLoginName),
+		validateText("rootDisplayName", value.RootDisplayName, 1, 128),
 		ValidateID("requestId", value.RequestID), secretError,
 	)
 }
@@ -553,26 +514,42 @@ func ValidateSetAccountAliasRequest(value SetAccountAliasRequest) error {
 		validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
-func ValidateSetPrincipalStatusRequest(value SetPrincipalStatusRequest) error {
+func ValidateSetUserStatusRequest(value SetUserStatusRequest) error {
 	if value.Status != PrincipalActive && value.Status != PrincipalDisabled {
-		return errors.New("principal status is invalid")
+		return errors.New("user status is invalid")
 	}
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
-func ValidateSetOrganizationStatusRequest(value SetOrganizationStatusRequest) error {
-	if value.Status != OrganizationActive && value.Status != OrganizationDisabled {
-		return errors.New("organization status is invalid")
+func ValidateUpdateUserRequest(value UpdateUserRequest) error {
+	return errors.Join(validateText("displayName", value.DisplayName, 1, 128),
+		validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateDeleteUserRequest(value DeleteUserRequest) error {
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateUserDeletion(value UserDeletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "UserDeletion" {
+		return errors.New("user deletion type metadata is invalid")
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("userId", string(value.ID)),
+		validateLoginName(value.LoginName), validatePositiveVersion(value.ResourceVersion), validateTime("deletedAt", value.DeletedAt))
+}
+
+func ValidateSetAccountStatusRequest(value SetAccountStatusRequest) error {
+	if value.Status != AccountActive && value.Status != AccountDisabled {
+		return errors.New("account status is invalid")
 	}
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
-func ValidateRecoverOrganizationAdministratorRequest(value RecoverOrganizationAdministratorRequest) error {
+func ValidateRecoverRootCredentialsRequest(value RecoverRootCredentialsRequest) error {
 	if !value.InitialPassword.Present() {
 		return ErrInvalidSecret
 	}
-	return errors.Join(ValidateID("principalId", string(value.PrincipalID)),
-		validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
 func ValidateResetUserPasswordRequest(value ResetUserPasswordRequest) error {
@@ -582,82 +559,577 @@ func ValidateResetUserPasswordRequest(value ResetUserPasswordRequest) error {
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
-func ValidateOrganizationAccount(value OrganizationAccount) error {
+func ValidateRootIdentity(value RootIdentity) error {
+	return errors.Join(ValidateID("rootIdentity.principalId", string(value.PrincipalID)),
+		validateLoginName(value.LoginName))
+}
+
+func ValidateAccount(value Account) error {
 	var aliasError error
 	if value.LoginAlias != nil {
 		aliasError = ValidateAccountAlias(*value.LoginAlias)
 	}
-	return errors.Join(ValidateOrganization(value.Organization),
-		ValidateID("primaryPrincipalId", string(value.PrimaryPrincipalID)),
-		validateLoginName(value.PrimaryLoginName), aliasError)
+	if value.APIVersion != APIVersion || value.Kind != "Account" ||
+		(value.Status != AccountActive && value.Status != AccountDisabled) {
+		return errors.New("account is invalid")
+	}
+	return errors.Join(ValidateID("account.id", string(value.ID)),
+		validateText("account.displayName", value.DisplayName, 1, 128),
+		ValidateRootIdentity(value.RootIdentity), validatePositiveVersion(value.ResourceVersion),
+		validateChronology(value.CreatedAt, value.UpdatedAt), aliasError)
+}
+
+func ValidateUser(value User) error {
+	if value.APIVersion != APIVersion || value.Kind != "User" ||
+		(value.Status != PrincipalActive && value.Status != PrincipalDisabled) {
+		return errors.New("user is invalid")
+	}
+	return errors.Join(ValidateID("user.id", string(value.ID)), ValidateID("user.accountId", string(value.AccountID)),
+		validateLoginName(value.LoginName), validateText("user.displayName", value.DisplayName, 1, 128),
+		validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
+}
+
+func ValidateAccessKey(value AccessKey) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKey" ||
+		(value.Status != AccessKeyEnabled && value.Status != AccessKeyDisabled) ||
+		(value.ResourceVersion == 1 && (value.Status != AccessKeyEnabled || !value.CreatedAt.Equal(value.UpdatedAt))) {
+		return errors.New("access key metadata is invalid")
+	}
+	return errors.Join(ValidateID("accessKey.id", string(value.ID)), ValidateID("accessKey.accountId", string(value.AccountID)),
+		ValidateID("accessKey.userId", string(value.UserID)), validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
+}
+
+func ValidateAccessKeyAccess(value AccessKeyAccess) error {
+	if err := ValidateAccessKey(value.Key); err != nil {
+		return err
+	}
+	expected := make(map[string]struct{}, 3)
+	for _, action := range []Action{ActionIAMAccessKeyRead, ActionIAMAccessKeySetStatus, ActionIAMAccessKeyDelete} {
+		expected[capabilityKey(action, ResourceReference{Kind: ResourceAccessKey, ID: string(value.Key.ID)})] = struct{}{}
+	}
+	return validateCapabilities(value.Capabilities, expected)
+}
+
+func ValidateAccessKeyList(value AccessKeyList) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKeyList" || value.Items == nil || len(value.Items) > MaxUserAccessKeys {
+		return errors.New("access key list is invalid")
+	}
+	if err := errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("userId", string(value.UserID)), validatePositiveVersion(value.UserResourceVersion)); err != nil {
+		return err
+	}
+	expected := map[string]struct{}{capabilityKey(ActionIAMAccessKeyCreate, ResourceReference{Kind: ResourceUser, ID: string(value.UserID)}): {}}
+	if err := validateCapabilities(value.Capabilities, expected); err != nil {
+		return err
+	}
+	var previous AccessKeyID
+	for _, item := range value.Items {
+		if ValidateAccessKeyAccess(item) != nil || item.Key.AccountID != value.AccountID || item.Key.UserID != value.UserID || item.Key.ID <= previous {
+			return errors.New("access key list contains an unbound or duplicate entry")
+		}
+		previous = item.Key.ID
+	}
+	return nil
+}
+
+func ValidateCreateAccessKeyRequest(value CreateAccessKeyRequest) error {
+	return errors.Join(validatePositiveVersion(value.UserResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateSetAccessKeyStatusRequest(value SetAccessKeyStatusRequest) error {
+	if value.Status != AccessKeyEnabled && value.Status != AccessKeyDisabled {
+		return errors.New("access key status is invalid")
+	}
+	return ValidateDeleteAccessKeyRequest(DeleteAccessKeyRequest{AccessKeyResourceVersion: value.AccessKeyResourceVersion, RequestID: value.RequestID})
+}
+
+func ValidateDeleteAccessKeyRequest(value DeleteAccessKeyRequest) error {
+	if value.AccessKeyResourceVersion == 9007199254740991 {
+		return errors.New("access key resource version cannot advance")
+	}
+	return errors.Join(validatePositiveVersion(value.AccessKeyResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateCreateAccessKeyResponse(value CreateAccessKeyResponse) error {
+	if ValidateAccessKey(value.Key) != nil || value.Key.ResourceVersion != 1 || value.Key.Status != AccessKeyEnabled ||
+		(value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY") ||
+		(value.Outcome == "APPLIED" && !value.Secret.Present()) ||
+		(value.Outcome == "EQUAL_REPLAY" && value.Secret.reveal() != "") {
+		return errors.New("access key creation result is invalid")
+	}
+	return nil
+}
+
+func ValidateSetAccessKeyStatusResponse(value SetAccessKeyStatusResponse) error {
+	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
+		return errors.New("access key change result is invalid")
+	}
+	if value.Key.ResourceVersion < 2 {
+		return errors.New("access key change result has no mutation")
+	}
+	return ValidateAccessKey(value.Key)
+}
+
+func ValidateAccessKeyDeletion(value AccessKeyDeletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessKeyDeletion" || value.ResourceVersion < 2 {
+		return errors.New("access key deletion is invalid")
+	}
+	return errors.Join(ValidateID("accessKey.id", string(value.ID)), ValidateID("accessKey.accountId", string(value.AccountID)),
+		ValidateID("accessKey.userId", string(value.UserID)), validatePositiveVersion(value.ResourceVersion), validateTime("deletedAt", value.DeletedAt))
+}
+
+func ValidateDeleteAccessKeyResponse(value DeleteAccessKeyResponse) error {
+	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
+		return errors.New("access key deletion result is invalid")
+	}
+	return ValidateAccessKeyDeletion(value.Deletion)
+}
+
+func ValidateGroup(value Group) error {
+	var descriptionError error
+	if value.Description != "" {
+		descriptionError = validateText("group.description", value.Description, 1, 512)
+	}
+	if value.APIVersion != APIVersion || value.Kind != "Group" {
+		return errors.New("group is invalid")
+	}
+	return errors.Join(ValidateID("group.id", string(value.ID)), ValidateID("group.accountId", string(value.AccountID)),
+		validateText("group.name", value.Name, 1, 64), descriptionError,
+		validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
+}
+
+func ValidateGroupMembership(value GroupMembership) error {
+	if value.APIVersion != APIVersion || value.Kind != "GroupMembership" {
+		return errors.New("group membership is invalid")
+	}
+	problems := []error{
+		ValidateID("membership.id", string(value.ID)), ValidateID("membership.accountId", string(value.AccountID)),
+		ValidateID("membership.groupId", string(value.GroupID)), ValidateID("membership.userId", string(value.UserID)),
+		ValidateID("membership.createdBy", string(value.CreatedBy)), validatePositiveVersion(value.ResourceVersion),
+		validateChronology(value.CreatedAt, value.UpdatedAt),
+	}
+	if value.RemovedAt == nil {
+		if value.RemovedBy != "" || value.ResourceVersion != 1 || !value.UpdatedAt.Equal(value.CreatedAt) {
+			problems = append(problems, errors.New("active membership contains removal state"))
+		}
+	} else {
+		problems = append(problems, ValidateID("membership.removedBy", string(value.RemovedBy)), validateTime("membership.removedAt", *value.RemovedAt))
+		if value.ResourceVersion < 2 || !value.RemovedAt.Equal(value.UpdatedAt) || value.RemovedAt.Before(value.CreatedAt) {
+			problems = append(problems, errors.New("removed membership chronology is invalid"))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateCreateGroupRequest(value CreateGroupRequest) error {
+	var descriptionError error
+	if value.Description != "" {
+		descriptionError = validateText("description", value.Description, 1, 512)
+	}
+	return errors.Join(validateText("name", value.Name, 1, 64), descriptionError, ValidateID("requestId", value.RequestID))
+}
+
+func ValidateUpdateGroupRequest(value UpdateGroupRequest) error {
+	return errors.Join(ValidateCreateGroupRequest(CreateGroupRequest{Name: value.Name, Description: value.Description, RequestID: value.RequestID}),
+		validatePositiveVersion(value.ResourceVersion))
+}
+
+func ValidateDeleteGroupRequest(value DeleteGroupRequest) error {
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateGroupDeletion(value GroupDeletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "GroupDeletion" {
+		return errors.New("group deletion is invalid")
+	}
+	return errors.Join(ValidateID("groupDeletion.accountId", string(value.AccountID)), ValidateID("groupDeletion.id", string(value.ID)),
+		validateText("groupDeletion.name", value.Name, 1, 64), validatePositiveVersion(value.ResourceVersion),
+		validateTime("groupDeletion.deletedAt", value.DeletedAt))
+}
+
+func ValidateCreateGroupMembershipRequest(value CreateGroupMembershipRequest) error {
+	return errors.Join(ValidateID("userId", string(value.UserID)), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateRemoveGroupMembershipRequest(value RemoveGroupMembershipRequest) error {
+	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateActionCapability(value ActionCapability) error {
+	if value.Available {
+		if value.RestrictionReason != "" {
+			return errors.New("available capability has a restriction")
+		}
+	} else if !knownCapabilityRestriction(value.RestrictionReason) {
+		return errors.New("unavailable capability has no known restriction")
+	}
+	return validateResourceForAction(value.Action, value.Resource)
+}
+
+func knownCapabilityRestriction(value CapabilityRestriction) bool {
+	for _, known := range allCapabilityRestrictions {
+		if value == known {
+			return true
+		}
+	}
+	return false
+}
+
+func capabilityKey(action Action, resource ResourceReference) string {
+	return string(action) + "\x00" + string(resource.Kind) + "\x00" + resource.ID
+}
+
+func validateCapabilities(values []ActionCapability, expected map[string]struct{}) error {
+	if values == nil || len(values) != len(expected) {
+		return errors.New("capability set is incomplete")
+	}
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		key := capabilityKey(value.Action, value.Resource)
+		if ValidateActionCapability(value) != nil || seen[key] {
+			return errors.New("capability is invalid or duplicated")
+		}
+		if _, required := expected[key]; !required {
+			return errors.New("capability does not belong to its projection")
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+func expectedCapabilitySet(values ...struct {
+	Action   Action
+	Resource ResourceReference
+}) map[string]struct{} {
+	result := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		result[capabilityKey(value.Action, value.Resource)] = struct{}{}
+	}
+	return result
 }
 
 func ValidateCurrentIdentity(value CurrentIdentity) error {
+	if ValidateUserPermissionBoundary(value.PermissionBoundary) != nil || value.PermissionBoundary.AccountID != value.Account.ID ||
+		value.PermissionBoundary.UserID != value.User.ID || value.PermissionBoundary.ResourceVersion != value.User.ResourceVersion ||
+		(value.IdentityKind == IdentityRoot && value.PermissionBoundary.Policy != nil) {
+		return errors.New("current identity boundary is invalid")
+	}
 	if value.APIVersion != APIVersion || value.Kind != "CurrentIdentity" ||
-		value.Principal.Type != PrincipalUser || value.Roles == nil ||
-		value.Principal.OrganizationID != value.Account.Organization.ID ||
-		(value.CanCreateOrganizations && value.Principal.MustChangePassword) {
+		value.PolicySources == nil || len(value.PolicySources) > 256 ||
+		value.User.AccountID != value.Account.ID {
 		return errors.New("current identity is invalid")
 	}
-	seen := map[BuiltinRole]bool{}
-	for _, role := range value.Roles {
-		if !UserAssignableRole(role) || seen[role] {
-			return errors.New("current roles are invalid")
+	expectedKind := IdentityUser
+	if value.User.ID == value.Account.RootIdentity.PrincipalID {
+		expectedKind = IdentityRoot
+	}
+	if value.IdentityKind != expectedKind {
+		return errors.New("current identity kind is invalid")
+	}
+	seen := map[PolicyAttachmentID]bool{}
+	var previous PolicyAttachmentID
+	for _, source := range value.PolicySources {
+		attachment := source.Attachment
+		if ValidatePolicyGrantSource(source) != nil || seen[attachment.ID] || attachment.ID <= previous ||
+			attachment.AccountID != value.Account.ID ||
+			(source.Kind == PolicyGrantDirect && attachment.Target.ID != string(value.User.ID)) ||
+			(source.Kind == PolicyGrantGroup && (value.IdentityKind == IdentityRoot || source.Membership.AccountID != value.Account.ID || source.Membership.UserID != value.User.ID)) {
+			return errors.New("current policy sources are invalid")
 		}
-		seen[role] = true
+		seen[attachment.ID] = true
+		previous = attachment.ID
 	}
-	if value.CanCreateOrganizations && !seen[RolePlatformOperator] {
-		return errors.New("tenant opening requires a platform role")
+	expected := expectedCapabilitySet(
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountCreate, ResourceReference{Kind: ResourceAccount, ID: "collection"}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountRead, ResourceReference{Kind: ResourceAccount, ID: "collection"}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountAliasSet, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMPolicyList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMRoleList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMRoleCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+	)
+	if validateCapabilities(value.Capabilities, expected) != nil {
+		return errors.New("current identity capabilities are invalid")
 	}
-	return errors.Join(ValidateOrganizationAccount(value.Account), ValidatePrincipal(value.Principal))
+	return errors.Join(ValidateAccount(value.Account), ValidateUser(value.User))
 }
 
-func ValidatePrincipalList(value PrincipalList) error {
-	if value.APIVersion != APIVersion || value.Kind != "PrincipalList" || value.Items == nil || len(value.Items) > 100 {
-		return errors.New("principal list is invalid")
+const DirectoryPageSize = 100
+const MaxPageCursorBytes = 384
+
+// ValidatePageCursor checks only the public bounded opaque envelope. Signature,
+// current authority, query and expiry are verified exclusively by IAM.
+func ValidatePageCursor(value string) error {
+	return validateCursorEnvelope(value, "ic1.")
+}
+
+// Self discovery has a distinct confidential cursor kind; management cursors
+// cannot be used to supply its private scan position (or vice versa).
+func ValidateRoleDiscoveryCursor(value string) error {
+	return validateCursorEnvelope(value, "ir1.")
+}
+
+func validateCursorEnvelope(value, prefix string) error {
+	if len(value) <= 4 || len(value) > MaxPageCursorBytes || value[:4] != prefix {
+		return errors.New("IAM page cursor is invalid")
 	}
-	var previous string
-	var tenant OrganizationID
-	for _, item := range value.Items {
-		if ValidatePrincipal(item.Principal) != nil || item.Principal.Type != PrincipalUser ||
-			string(item.Principal.ID) <= previous || item.RoleBindings == nil {
-			return errors.New("principal list item is invalid")
+	for _, character := range value[4:] {
+		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || character == '-' || character == '_') {
+			return errors.New("IAM page cursor is invalid")
 		}
-		previous = string(item.Principal.ID)
-		if tenant != "" && item.Principal.OrganizationID != tenant {
-			return errors.New("principal directory contains multiple tenants")
-		}
-		tenant = item.Principal.OrganizationID
-		roles := map[BuiltinRole]bool{}
-		for _, binding := range item.RoleBindings {
-			if ValidateRoleBinding(binding) != nil || !UserAssignableRole(binding.Role) ||
-				binding.OrganizationID != item.Principal.OrganizationID || binding.PrincipalID != item.Principal.ID || roles[binding.Role] {
-				return errors.New("principal role binding is invalid")
-			}
-			roles[binding.Role] = true
-		}
-	}
-	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
-		return errors.New("principal page boundary is invalid")
 	}
 	return nil
 }
 
-func ValidateOrganizationAccountList(value OrganizationAccountList) error {
-	if value.APIVersion != APIVersion || value.Kind != "OrganizationAccountList" || value.Items == nil || len(value.Items) > 100 {
-		return errors.New("organization list is invalid")
+func ValidateUserList(value UserList) error {
+	if value.APIVersion != APIVersion || value.Kind != "UserList" || value.Items == nil || len(value.Items) > 100 {
+		return errors.New("user list is invalid")
+	}
+	var previous string
+	var account AccountID
+	for _, item := range value.Items {
+		if ValidateUserAccess(item) != nil || string(item.User.ID) <= previous {
+			return errors.New("user list item is invalid")
+		}
+		previous = string(item.User.ID)
+		if account != "" && item.User.AccountID != account {
+			return errors.New("user directory contains multiple accounts")
+		}
+		account = item.User.AccountID
+	}
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("user page boundary is invalid")
+	}
+	return nil
+}
+
+func ValidateUserAccess(value UserAccess) error {
+	if ValidateUser(value.User) != nil || value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 {
+		return errors.New("user access is invalid")
+	}
+	attachments := map[PolicyAttachmentID]bool{}
+	policies := map[PolicyID]bool{}
+	for _, attachment := range value.PolicyAttachments {
+		if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil ||
+			attachment.AccountID != value.User.AccountID || attachment.Target.Kind != PolicyTargetUser ||
+			attachment.Target.ID != string(value.User.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
+			return errors.New("user policy attachment is invalid")
+		}
+		attachments[attachment.ID] = true
+		policies[attachment.PolicyID] = true
+	}
+	expected := expectedCapabilitySet(
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserRead, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserUpdate, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserDelete, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserPermissionBoundarySet, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserPermissionBoundaryRemove, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserSetStatus, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMUserPasswordReset, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMPolicyAttachmentCreate, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMPlatformPolicyAttachmentCreate, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+	)
+	for _, attachment := range value.PolicyAttachments {
+		action := ActionIAMPolicyAttachmentRevoke
+		if attachment.Scope == AuthorityScopeInstallation {
+			action = ActionIAMPlatformPolicyAttachmentRevoke
+		}
+		expected[capabilityKey(action, ResourceReference{Kind: ResourcePolicyAttachment, ID: string(attachment.ID)})] = struct{}{}
+	}
+	if validateCapabilities(value.Capabilities, expected) != nil {
+		return errors.New("user capabilities are invalid")
+	}
+	return nil
+}
+
+func ValidateGroupAccess(value GroupAccess) error {
+	if ValidateGroup(value.Group) != nil || value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 {
+		return errors.New("group access is invalid")
+	}
+	attachments := map[PolicyAttachmentID]bool{}
+	policies := map[PolicyID]bool{}
+	expected := expectedCapabilitySet(
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupRead, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupUpdate, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupDelete, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupMembershipList, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupMembershipCreate, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMGroupPolicyAttachmentCreate, ResourceReference{Kind: ResourceGroup, ID: string(value.Group.ID)}},
+	)
+	for _, attachment := range value.PolicyAttachments {
+		if ValidatePolicyAttachment(attachment) != nil || attachment.RevokedAt != nil || attachment.Scope != AuthorityScopeTenant ||
+			attachment.AccountID != value.Group.AccountID || attachment.Target.Kind != PolicyTargetGroup ||
+			attachment.Target.ID != string(value.Group.ID) || attachments[attachment.ID] || policies[attachment.PolicyID] {
+			return errors.New("group policy attachment is invalid")
+		}
+		attachments[attachment.ID] = true
+		policies[attachment.PolicyID] = true
+		expected[capabilityKey(ActionIAMGroupPolicyAttachmentRevoke,
+			ResourceReference{Kind: ResourcePolicyAttachment, ID: string(attachment.ID)})] = struct{}{}
+	}
+	return validateCapabilities(value.Capabilities, expected)
+}
+
+func ValidateGroupList(value GroupList) error {
+	if value.APIVersion != APIVersion || value.Kind != "GroupList" || value.Items == nil || len(value.Items) > 100 {
+		return errors.New("group list is invalid")
+	}
+	var previous GroupID
+	var account AccountID
+	for _, item := range value.Items {
+		if ValidateGroupAccess(item) != nil || item.Group.ID <= previous || (account != "" && item.Group.AccountID != account) {
+			return errors.New("group list item is invalid")
+		}
+		previous, account = item.Group.ID, item.Group.AccountID
+	}
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("group page boundary is invalid")
+	}
+	return nil
+}
+
+func ValidateGroupMembershipAccess(value GroupMembershipAccess) error {
+	if ValidateGroupMembership(value.Membership) != nil || value.Membership.RemovedAt != nil {
+		return errors.New("group membership access is invalid")
+	}
+	expected := expectedCapabilitySet(struct {
+		Action   Action
+		Resource ResourceReference
+	}{ActionIAMGroupMembershipRemove, ResourceReference{Kind: ResourceGroupMembership, ID: string(value.Membership.ID)}})
+	if validateCapabilities(value.Capabilities, expected) != nil {
+		return errors.New("group membership capabilities are invalid")
+	}
+	return nil
+}
+
+func ValidateGroupMembershipList(value GroupMembershipList) error {
+	if value.APIVersion != APIVersion || value.Kind != "GroupMembershipList" ||
+		ValidateID("accountId", string(value.AccountID)) != nil || ValidateID("groupId", string(value.GroupID)) != nil ||
+		value.Items == nil || len(value.Items) > 100 {
+		return errors.New("group membership list is invalid")
+	}
+	var previous GroupMembershipID
+	for _, item := range value.Items {
+		membership := item.Membership
+		if ValidateGroupMembershipAccess(item) != nil || membership.AccountID != value.AccountID ||
+			membership.GroupID != value.GroupID || membership.ID <= previous {
+			return errors.New("group membership list item is invalid")
+		}
+		previous = membership.ID
+	}
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("group membership page boundary is invalid")
+	}
+	return nil
+}
+
+func ValidateAccountList(value AccountList) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccountList" || value.Items == nil || len(value.Items) > 100 {
+		return errors.New("account list is invalid")
 	}
 	var previous string
 	for _, item := range value.Items {
-		if ValidateOrganizationAccount(item) != nil || string(item.Organization.ID) <= previous {
-			return errors.New("organization list item is invalid")
+		if ValidateAccountAccess(item) != nil || string(item.Account.ID) <= previous {
+			return errors.New("account list item is invalid")
 		}
-		previous = string(item.Organization.ID)
+		previous = string(item.Account.ID)
 	}
-	if value.NextAfter != "" && (previous == "" || value.NextAfter != previous) {
-		return errors.New("organization page boundary is invalid")
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("account page boundary is invalid")
 	}
 	return nil
+}
+
+func ValidateAccountAccess(value AccountAccess) error {
+	expected := expectedCapabilitySet(
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountSetStatus, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccountRootCredentialsRecover, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+	)
+	return errors.Join(ValidateAccount(value.Account), validateCapabilities(value.Capabilities, expected))
 }
 
 func validateLoginName(value string) error {

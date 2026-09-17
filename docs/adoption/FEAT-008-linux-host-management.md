@@ -12,6 +12,7 @@
 | Legacy PaaS | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Git objects only; never the donor worktree |
 | IAM/Audit and delivery foundation | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Git objects only; narrow execution/observability/lifecycle slices |
 | PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Git objects only; rationale, not runtime evidence |
+| K2 IAM/Audit authority | `644fff09446fc8ffb003cc53cf2fb55d4f58828a` | Git objects only; backend contracts, authority storage, HTTP adapters and independent-process gates |
 
 Source identities are owned by [the fixed-source entry](sources.yaml).
 The target and iterative roadmap were pushed in `fbdb250` before these Git
@@ -34,6 +35,9 @@ sections, not an unreviewed transitive implementation closure.
 | Foundation `deploy/compose/middleware/observability/victoriametrics/promscrape.yaml` | `REFERENCE` | Periodic collection and trusted scrape identities inform the integration. Its application scrape jobs are not host measurements or proof of current host-observability acceptance. |
 | Design `docs/paas/adoption-manifest.yaml`: staged adoption and dependency boundaries | `REFERENCE` | Preserve independently verifiable slices and explicit unknown/stale state. |
 | Same design manifest: GitLab/current-DevOps execution authority and release inventory | `REJECT` | Matrix owns its independent host runtime and offline lifecycle; donor CI/product topology is not a runtime prerequisite. |
+| K2 `api/iam/v1`, IAM authority and migrations: accounts, policies, groups, roles, role sessions and AccessKeys through the fixed decision/replay boundary | `ADAPT` | Replace the older role-binding authorization model with the current closed product-profile authority. Preserve Matrix installation identity, local recovery, node enrollment and tenant isolation while binding signed AccessKey requests to exact external request facts. |
+| K2 Audit contracts, IAM proof adapter and authority-process evidence required by those decisions | `ADAPT` | Accept only the matching installation-scoped facts and exact historical producer proof needed by the selected IAM authority. Keep Audit as an independently deployable authority and preserve its existing chain, query and installation partitions. |
+| K2 donor UI, donor PaaS runtime/profile, release composition, FEAT status and checkpoints | `REJECT` | The Phase 3 branch owns its PaaS schema, one-time node-enrollment journey, signed topology and release evidence. Donor acceptance does not prove the combined IAM 30 / Audit 18 / PaaS 6 product. |
 
 The initial external-source review copies no files and creates no donor
 build/runtime dependency. Existing accepted Matrix adapters, validators,

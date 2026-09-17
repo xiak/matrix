@@ -23,7 +23,7 @@ func (service *Service) Ingest(
 	if err != nil {
 		return auditv1.IngestionResult{}, err
 	}
-	if iamv1.ValidateAuditProducerAuthorization(producer) != nil || producer.TenantID != iamv1.OrganizationID(event.TenantID) ||
+	if iamv1.ValidateAuditProducerAuthorization(producer) != nil || producer.TenantID != iamv1.AccountID(event.TenantID) ||
 		producer.InstallationID != event.InstallationID {
 		return auditv1.IngestionResult{}, ErrUnavailable
 	}

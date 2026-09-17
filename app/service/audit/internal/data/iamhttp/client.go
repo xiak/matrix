@@ -73,7 +73,7 @@ func (client *Client) ResolveAuditProducer(
 	}
 	var identity iamv1.AuditProducerAuthorization
 	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &identity) != nil ||
-		iamv1.ValidateAuditProducerAuthorization(identity) != nil || identity.TenantID != iamv1.OrganizationID(request.Event.TenantID) ||
+		iamv1.ValidateAuditProducerAuthorization(identity) != nil || identity.TenantID != iamv1.AccountID(request.Event.TenantID) ||
 		identity.InstallationID != request.Event.InstallationID {
 		return iamv1.AuditProducerAuthorization{}, auditlog.ErrUnavailable
 	}
@@ -115,10 +115,48 @@ func (client *Client) Authorize(
 	}
 	var decision iamv1.AuthorizationDecision
 	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &decision) != nil ||
-		iamv1.ValidateAuthorizationDecision(decision) != nil {
+		iamv1.CheckAuthorizationDecisionForRequest(decision, authorization) != nil {
 		return iamv1.AuthorizationDecision{}, auditlog.ErrUnavailable
 	}
 	return decision, nil
+}
+
+func (client *Client) AuthorizeAccessKey(
+	ctx context.Context,
+	request iamv1.AccessKeyAuthorizationRequest,
+) (iamv1.AccessKeyAuthorization, error) {
+	if client == nil || client.http == nil {
+		return iamv1.AccessKeyAuthorization{}, auditlog.ErrUnavailable
+	}
+	if ctx == nil || iamv1.ValidateAccessKeyAuthorizationRequest(request) != nil {
+		return iamv1.AccessKeyAuthorization{}, auditlog.ErrInvalidArgument
+	}
+	body, err := iamv1.EncodeAccessKeyAuthorizationRequest(request)
+	if err != nil {
+		return iamv1.AccessKeyAuthorization{}, auditlog.ErrInvalidArgument
+	}
+	defer clear(body)
+	response, err := client.http.Do(
+		ctx,
+		http.MethodPost,
+		"/v1/authorize:access-key",
+		bytes.NewReader(body),
+		"application/json",
+		client.serviceCredential,
+		iamv1.Secret{},
+	)
+	if err != nil {
+		return iamv1.AccessKeyAuthorization{}, fmt.Errorf("call IAM authority: %w", auditlog.ErrUnavailable)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return iamv1.AccessKeyAuthorization{}, statusError(response.StatusCode)
+	}
+	result, err := iamv1.DecodeAccessKeyAuthorization(response.Body)
+	if err != nil || iamv1.CheckAccessKeyAuthorizationForRequest(result, request) != nil {
+		return iamv1.AccessKeyAuthorization{}, auditlog.ErrUnavailable
+	}
+	return result, nil
 }
 
 func (client *Client) VerifyInstallation(
@@ -158,9 +196,7 @@ func (client *Client) VerifyInstallation(
 	}
 	var decision iamv1.AuthorizationDecision
 	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &decision) != nil ||
-		iamv1.ValidateAuthorizationDecision(decision) != nil ||
-		decision.Action != authorization.Action || decision.Resource != authorization.Resource ||
-		decision.RequestID != authorization.RequestID {
+		iamv1.CheckAuthorizationDecisionForRequest(decision, authorization) != nil {
 		return iamv1.AuthorizationDecision{}, auditlog.ErrUnavailable
 	}
 	return decision, nil
@@ -172,6 +208,8 @@ func statusError(status int) error {
 		return auditlog.ErrUnauthenticated
 	case http.StatusForbidden:
 		return auditlog.ErrForbidden
+	case http.StatusConflict:
+		return auditlog.ErrConflict
 	default:
 		return auditlog.ErrUnavailable
 	}
