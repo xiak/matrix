@@ -1,7 +1,9 @@
 # FEAT-008: existing Linux hosts and remote application delivery
 
 - Status: Accepted; P3-0 through P3-6, Gates A through E and Gates F1 through
-  F10 are complete on pushed source `be3c4a96b4381426c01cd6315eaa3713c2855982`
+  F10 are complete on pushed source `be3c4a96b4381426c01cd6315eaa3713c2855982`;
+  the K2 authority successor release and final real-host command gate are
+  complete on pushed source `16b42679a3f19d73ee41af016e81ef2b95b938fd`
 - Target: Matrix PaaS Phase 3
 - Design date: 2026-08-27
 - Active branch: `feat/host-self-enrollment`
@@ -1947,6 +1949,81 @@ and clears plaintext buffers; authentication tests require both local and
 session storage to remain empty. The real browser session also returned to
 login on a fresh document navigation, confirming its page-memory boundary.
 All transferred one-time join files were removed after successful import.
+
+## K2 authority successor release closure
+
+Pushed source `16b42679a3f19d73ee41af016e81ef2b95b938fd` integrates the
+K2 IAM authority and signed service access-key boundary without reopening the
+accepted host model or adding SSH onboarding. Its
+[verification run](https://github.com/xiak/matrix/actions/runs/35214563892)
+completed successfully for the Go, UI, PostgreSQL/authority-process and real
+Linux node-process jobs. The resulting platform profile is IAM 30 / Audit 18 /
+PaaS 6 at contract revision 12; the node runtime revision is 7.
+
+The final offline artifacts are:
+
+- predecessor platform release `matrix-v0.3.0-k2-a-be3c4a96b438`, sourced from
+  the accepted `be3c4a96b4381426c01cd6315eaa3713c2855982` release, with
+  release-manifest SHA-256
+  `42f2897ee6deb587c275debe195855d31cab4e1d975fc8718bc75138677c86dc`;
+- successor platform release `matrix-v0.3.1-k2-b-16b42679a3f1`, sourced from
+  `16b42679a3f19d73ee41af016e81ef2b95b938fd`, with release-manifest SHA-256
+  `b00fe4322acd216735c3b7179678a45a19bb9127405f78192f937e7233874a30`;
+- node release `matrix-v0.3.1-node-k2-16b42679a3f1`, from the same successor
+  source, with release-manifest SHA-256
+  `4aadbd648d475546e7b1b3f32ac1f7d12d9e541d7efcd6f606c7402f30e68d38`;
+- the exact Linux phase gate executable with SHA-256
+  `dc12d7b0b9104614236833c388c09ce1c1bc5f2894d26a97e1a411ea119c7c3d`.
+
+An isolated, resource-limited Docker-in-Docker release exercise authenticated
+and installed release A, upgraded to release B, verified the platform, exercised
+credential recovery, backup, cross-profile rejection, rollback, selected-backup
+recovery, a real application and support evidence, and then repeated status and
+verification after restarting only its task-owned container. It used no shared
+Phase 2 service or remote reboot. All task containers and volumes were removed
+after the gate; no broad Docker prune was used. The signing private key was
+destroyed after the releases and tests were complete.
+
+A final one-command gate then enrolled existing host `172.30.1.161` from a
+fresh platform installed at release A and upgraded to release B. The
+short-lived enrollment
+`node-enrollment-df493b1ead7b7fb4b88a8cdf6620f423` completed as `READY` and
+atomically published target
+`execution-target-37ff698b6432e3d52ea16499c51d3c59` in
+`execution-pool-local`. The host ran the product-owned `mx node install`
+command once; its local `node status` and `node verify` both returned `READY`
+for node release `matrix-v0.3.1-node-k2-16b42679a3f1`. The resident node and
+collector ran in distinct systemd services with CPU, memory and task limits.
+
+Successive control-plane observations advanced from
+`2026-09-17T12:47:49.091707Z` to `2026-09-17T12:48:45.090641Z`. After the
+collector warm-up, CPU, memory and filesystem measurements were all
+`AVAILABLE`: four logical CPUs, 6,212,542,464 total memory bytes and a
+558,439,206,912-byte root filesystem were observed from the real host. The
+stored enrollment had consumed its credential and erased the salt, verifier
+and wrapped creation envelope. Its target-bound HTTPS connection remained
+enabled and the `paas.execution-target.registered` Audit outbox fact was
+delivered once.
+
+The negative resource gate also failed closed: an enrollment missing the
+selected pool's required `matrix-profile=local-compose` label terminated with
+`RESOURCE_CONFLICT` and published no target. The successful retry used a new
+platform enrollment and a new credential. The failed attempt was not mutated
+or replayed; its disposable test platform was destroyed before the fresh gate.
+
+Because the platform for this last test ran inside a nested task engine, the
+engine observed the host through its bridge gateway. Two task-only raw TCP
+forwarders made that observed address routable while preserving the product's
+end-to-end mTLS identity and peer binding. This was test-harness transport, not
+an SSH or caller-selected endpoint capability. SSH was used only to copy the
+offline bundle and invoke the command on the test VM.
+
+Cleanup stopped and disabled only the exact task-owned services, removed the
+one-time join document and the validated test roots on `172.30.1.160` and
+`172.30.1.161`, and removed the labeled local containers and volumes. Both VMs
+retained their original boot sessions from 2026-07-05; neither remote machine
+was rebooted. No other Phase environment, Docker object or host path was
+changed.
 
 ## Adoption
 
