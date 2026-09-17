@@ -631,3 +631,26 @@ not administrator discovery, RoleSession/AccessKey management or a new store.
 
 The source review is not an acceptance claim or a release migration promise;
 routes, qualification, shared edit windows and actual gates belong IAM/009.
+
+## Local MFA governance target review
+
+IAM/009 owns the target: a real USER binds a local TOTP authenticator,
+completes the required factors before receiving a login Session, and uses
+purpose-limited one-time recovery without acquiring another identity or
+platform permission. This is design review, not an implementation window.
+
+| Fixed source / slice | Decision | Rationale |
+| --- | --- | --- |
+| Matrix `644fff09446fc8ffb003cc53cf2fb55d4f58828a`, `authentication.go`, `credential.go`, password and transaction/outbox owners | `REUSE` password verification, redacted secrets, purpose-separated random credentials and transactions; `ADAPT` an explicit incomplete-authentication boundary | Password success currently issues a Session, and no TOTP/challenge authority exists. Do not put a pre-authentication challenge in the Session table, treat a factor-bound flag as completed MFA, or add a second IAM/STS service or generic store. |
+| Same fixed source, AccessKey material/keyring contract and ADR-0004 | `REFERENCE` custody and failure-closed requirements; `REJECT` direct use for MFA seeds | Its wrapping purpose, subject/material binding and installation consumer are specifically AccessKey. MFA needs an explicitly agreed independent material boundary, not an AccessKey row, password hash, cursor key or local-recovery secret repurposed as seed custody. No installation WIP or MFA custody implementation is adopted. |
+| Same fixed source, `local_recovery.go`, `000003_tenant_accounts` and `000004_local_credential_recovery` | `REUSE` original root/platform protection and exact immutable intent principles; `REJECT` implicit authenticator recovery authority | Existing capabilities only change passwords under their sealed purpose; neither online reset nor offline password recovery authorizes removal of a future factor. A DB-only epoch/consumption record also cannot prove non-revival across a restored backup. New purpose/backup boundaries require their actual owners and gates. |
+| Product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, `04-user-guide/users/login-and-operation-protection.md` | `REFERENCE` binding, step-up, login protection and recovery requirements; `REJECT` executable or current-policy inference | It is requirements prose, not code or proof of MFA, cookie sessions, risk scoring or automatically enforced administrator rules. Its encrypted recovery-code recommendation is not adopted: one-way verification suffices for offline high-entropy saved codes and avoids later recovery of plaintext. |
+
+[RFC6238](https://www.rfc-editor.org/rfc/rfc6238.html) and
+[RFC4226](https://www.rfc-editor.org/rfc/rfc4226.html) are `REFERENCE` for
+the OTP construction and independent fixed vectors, not source-code donors.
+[NIST SP800-63B](https://pages.nist.gov/800-63-4/sp800-63b.html) is
+`REFERENCE` for one-time verification, throttling, hashed saved recovery
+codes and the absence of OTP phishing resistance; this is not a compliance
+claim. No library/version is selected or added by this review. Runtime,
+material protection, recovery eligibility and acceptance belong solely009.
