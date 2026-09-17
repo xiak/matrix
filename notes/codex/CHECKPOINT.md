@@ -58,11 +58,13 @@ candidate with CI explicitly pending. It waits for a cumulative verified K2
 donor and keeps its own PaaS/host/release composition. Do not import another
 branch's WIP, profile, checkpoint or acceptance state.
 
-The IAM/backend/Audit evidence window is existing authority. A request for
-the next PaaS/Audit PEP, api/paas attribution and source Profile window has
-been sent, but no new window is confirmed. APISIX, NorthboundOrigin and
-installation consumer ownership must be explicitly coordinated; do not edit
-them based on this request alone. Exact agreed ingress design belongs007.
+The IAM/backend/Audit evidence window stays here. Consumer ownership is now
+confirmed: Phase3 integrates the verified cumulative donor once on its actual
+PaaS5 branch feat/host-self-enrollment, owning PaaS/Audit PEPs, api/paas key
+attribution, Operation/outbox, shared edge parsing/mapping, NorthboundOrigin,
+APISIX and installation/keyring/backup/release. Do not implement parallel
+PaaS2 consumers, edit Audit query PEP or change source release Profiles here.
+Exact agreed ingress and ownership boundaries belong007.
 
 Fixed donor references and REUSE/ADAPT/REFERENCE/REJECT decisions remain in
 the existing adoption owner. The unavailable f51 foundation object is not

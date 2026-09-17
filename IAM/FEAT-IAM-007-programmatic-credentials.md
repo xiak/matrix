@@ -229,6 +229,8 @@ IAM已保留原登录`SubjectContext`约束，并用独立`AccessKeyContext`进�
 - 原子验签/拒绝、nonce与历史证据已经实现；继续完成当前源码的累计回归、独立进程和CI，再交固定对象供实际PEP接入。K1继续使用真实无key的USER登录管理决定，不因新增程序载体取得额外权限。
 - 产品PEP、APISIX和NorthboundOrigin由所属owner在明确窗口消费累计固定对象；当前纯协议不改变它们。可信来源IP、Account/key网络限制、使用摘要及UI分别保留原验收，不以header转交或HMAC通过代替。
 
+消费者窗口已与Phase3明确：IAM分支只交付通过精确独立CI的累计后端固定对象；Phase3在`feat/host-self-enrollment`的实际PaaS5上一次适配PaaS authorization port/iamhttp/nethttp、`api/paas`的USER key归因及Operation/outbox、Audit query/verify、共用edge原始请求解析/映射，以及NorthboundOrigin/APISIX和安装keyring/备份/发布。本分支不在PaaS2上创建平行消费者，不预先改source release Profile。仍使用上文已冻结的两个`X-Matrix-External-*`头，不能复用node enrollment的`X-Matrix-Public-Origin`；双方只交换已验证固定对象，产品签名Allow及安装验收必须来自实际消费者组合。
+
 后端组合、业务消费、生产托管及最终发布是不同验收边界；继续使用现有owner，不建立第二套服务、文档或测试框架，也不将剩余需求移出目标。
 
 ## 验收
