@@ -30,8 +30,9 @@
 
 ## Continue the full goal
 
-Read AGENTS, IAM/FEAT-IAM-007-programmatic-credentials.md and ADR-0004,
-then owning code/tests. Keep each exact source's evidence separate from
+Read AGENTS and IAM/FEAT-IAM-009-security-governance.md for the next IAM
+slice; 007 and ADR-0004 own the verified K2 handoff and consumer boundaries.
+Then read owning code/tests. Keep each exact source's evidence separate from
 the previous baseline. Correct actual failures; do not raise test limits,
 remove cases or rerun solely because an observation timed out.
 
@@ -41,6 +42,19 @@ signed PaaS/Audit business authorization, not another metadata-only API.
 Request reconstruction must bind real HTTP bytes and exact trusted external
 origin/path conversion, with once-only IAM results and product idempotency.
 No fake Session, second PDP, generic SessionStore or Redis nonce authority.
+
+Own-login-session S1 design/adoption is committed and pushed at
+5e3f2e5e37cb4b0f605db980d177524273ef92ac. It covers the actual USER's
+directory, current Session identity, ending another Session, exact original
+caller/intent completion and bidirectional password/logout/status races.
+It is design only, not implemented or accepted. Phase3 agreed the narrow
+semantics but has NOT opened the API/SQL window while integrating IAM30 with
+PaaS5. IAM31, lookup24 and revoke6 remain proposals; do not edit public
+implementation, allocate a release revision or depend on consumer WIP.
+Safe work before that window is the existing 009/adoption design. Resume
+implementation only after the fixed consumer checkpoint and explicit window
+confirmation. UX received the fixed design, not an instruction to wire a
+nonexistent endpoint. No UI work is done here.
 
 Remaining delegation/IP, product/service integration, governance, UI,
 capacity/HA and signed installation/backup/release gates stay with their FEAT
