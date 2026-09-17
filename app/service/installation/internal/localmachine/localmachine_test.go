@@ -1431,6 +1431,14 @@ func TestFrozenPredecessorVerificationDoesNotRequireFutureIAMSecrets(t *testing.
 		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
 	)
 	for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring, layout.IAMCursorKey} {
+		// newUpgradePlan stages both sides of the transition in one fixture root.
+		// Reconstruct the frozen predecessor state before authenticating it;
+		// staging the successor below must recreate both successor-only secrets.
+		if err := os.Remove(filepath.Join(
+			plan.Source.Root, filepath.FromSlash(relative),
+		)); err != nil {
+			t.Fatalf("remove staged successor IAM secret %q: %v", relative, err)
+		}
 		if _, err := os.Stat(filepath.Join(
 			plan.Source.Root, filepath.FromSlash(relative),
 		)); !errors.Is(err, os.ErrNotExist) {

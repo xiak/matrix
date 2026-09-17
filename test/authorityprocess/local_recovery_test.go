@@ -105,7 +105,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	old := start(oldBinary)
 	primary := loginIAM(t, endpoint, "admin", initialAdminPassword, "schema3-primary-login")
 	changePasswordIAM(t, endpoint, primary.Credential, initialAdminPassword, changedAdminPassword, "schema3-primary-change")
-	member := createIAMUser(t, endpoint, primary.Credential, "retained.local.viewer", "Retained local viewer", initialReaderPassword, "schema3-member-create")
+	member := createLegacyIAMUser(t, endpoint, primary.Credential, "retained.local.viewer", "Retained local viewer", initialReaderPassword, "schema3-member-create")
 	memberSession := loginIAM(t, endpoint, "retained.local.viewer@organization-process", initialReaderPassword, "schema3-member-login")
 	changePasswordIAM(t, endpoint, memberSession.Credential, initialReaderPassword, changedReaderPassword, "schema3-member-change")
 	binding := putLegacyIAMBinding(t, endpoint, primary.Credential, member.ID, legacyRolePaaSViewer, "schema3-member-grant")

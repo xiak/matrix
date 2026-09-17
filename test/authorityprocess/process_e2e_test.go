@@ -404,7 +404,7 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable string, baseline retai
 	}
 	administrator := loginIAM(t, endpoint, "admin", initialAdminPassword, "request-upgrade-admin-login")
 	changePasswordIAM(t, endpoint, administrator.Credential, initialAdminPassword, changedAdminPassword, "request-upgrade-admin-password")
-	user := createIAMUser(t, endpoint, administrator.Credential, "retained.viewer", "Retained viewer", initialReaderPassword, "request-upgrade-member")
+	user := createLegacyIAMUser(t, endpoint, administrator.Credential, "retained.viewer", "Retained viewer", initialReaderPassword, "request-upgrade-member")
 	member := loginIAM(t, endpoint, oldChildLogin, initialReaderPassword, "request-upgrade-member-login")
 	legacyTemporary := loginIAM(t, endpoint, oldChildLogin, initialReaderPassword, "request-upgrade-old-temporary")
 	changePasswordIAM(t, endpoint, member.Credential, initialReaderPassword, changedReaderPassword, "request-upgrade-member-password")
@@ -420,14 +420,20 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable string, baseline retai
 	// history. Equal bootstrap facts alone do not attest an executable's source.
 	const bootstrapReceiptQuery = `SELECT jsonb_build_array(installation_id,content_digest,
 		organization_id,administrator_principal_id,applied_at)::text FROM iam.bootstrap_receipts WHERE singleton`
-	const platformHistoryQuery = `SELECT COALESCE(jsonb_agg(jsonb_build_array(tenant_id,id,
+	const legacyPlatformHistoryQuery = `SELECT COALESCE(jsonb_agg(jsonb_build_array(tenant_id,id,
 		principal_id,role_name,resource_version,created_at,updated_at,revoked_at) ORDER BY tenant_id,id),'[]'::jsonb)::text
 		FROM iam.role_bindings WHERE role_name='PLATFORM_OPERATOR'`
+	const currentPlatformHistoryQuery = `SELECT COALESCE(jsonb_agg(jsonb_build_array(tenant_id,id,
+		target_id,'PLATFORM_OPERATOR',resource_version,created_at,updated_at,revoked_at) ORDER BY tenant_id,id),'[]'::jsonb)::text
+		FROM iam.policy_attachments WHERE policy_id=$1`
+	const invalidPlatformHistoryQuery = `SELECT count(*) FROM iam.policy_attachments
+		WHERE policy_id=$1 AND (target_kind<>'USER' OR authority_scope<>'INSTALLATION'
+			OR installation_id IS DISTINCT FROM 'installation-process')`
 	var bootstrapReceipt, platformHistory string
 	if err := admin.QueryRow(ctx, bootstrapReceiptQuery).Scan(&bootstrapReceipt); err != nil {
 		t.Fatal("read predecessor bootstrap identity receipt")
 	}
-	if err := admin.QueryRow(ctx, platformHistoryQuery).Scan(&platformHistory); err != nil {
+	if err := admin.QueryRow(ctx, legacyPlatformHistoryQuery).Scan(&platformHistory); err != nil {
 		t.Fatal("read predecessor platform grant/revocation history")
 	}
 	rows, err := admin.Query(ctx, "SELECT event_id,event_document FROM iam.audit_outbox")
@@ -485,7 +491,14 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable string, baseline retai
 		if err := admin.QueryRow(ctx, bootstrapReceiptQuery).Scan(&currentReceipt); err != nil || currentReceipt != bootstrapReceipt {
 			t.Fatal("migration/bootstrap replay/restart changed the original bootstrap identity receipt")
 		}
-		if err := admin.QueryRow(ctx, platformHistoryQuery).Scan(&currentPlatformHistory); err != nil || currentPlatformHistory != platformHistory {
+		if err := admin.QueryRow(ctx, currentPlatformHistoryQuery, iamv1.SystemPolicyPlatformOperator).Scan(&currentPlatformHistory); err != nil {
+			t.Fatal("read migrated platform authority history")
+		}
+		var invalidPlatformHistory int
+		if err := admin.QueryRow(ctx, invalidPlatformHistoryQuery, iamv1.SystemPolicyPlatformOperator).Scan(&invalidPlatformHistory); err != nil {
+			t.Fatal("validate migrated platform authority scope")
+		}
+		if currentPlatformHistory != platformHistory || invalidPlatformHistory != 0 {
 			t.Fatal("migration/bootstrap replay/restart granted absent platform authority or rewrote its history")
 		}
 		for _, invalid := range []string{member.Credential, legacyTemporary.Credential, legacyCurrent.Credential, administrator.Credential} {
@@ -1889,6 +1902,45 @@ func createIAMUser(
 		t.Fatalf("decode IAM user %s: %v", loginName, err)
 	}
 	return user
+}
+
+type legacyIAMPrincipal struct {
+	APIVersion     string            `json:"apiVersion"`
+	Kind           string            `json:"kind"`
+	ID             iamv1.PrincipalID `json:"id"`
+	OrganizationID string            `json:"organizationId"`
+}
+
+// createLegacyIAMUser speaks the fixed predecessor contract while that
+// predecessor executable is still running. The current /v1/users contract is
+// used only after the retained-data upgrade has completed.
+func createLegacyIAMUser(
+	t *testing.T,
+	endpoint string,
+	bearer string,
+	loginName string,
+	displayName string,
+	password string,
+	requestID string,
+) legacyIAMPrincipal {
+	t.Helper()
+	response := performJSON(t, http.MethodPost, endpoint+"/v1/principals", bearer, struct {
+		LoginName       string `json:"loginName"`
+		DisplayName     string `json:"displayName"`
+		InitialPassword string `json:"initialPassword"`
+		RequestID       string `json:"requestId"`
+	}{LoginName: loginName, DisplayName: displayName, InitialPassword: password, RequestID: requestID})
+	if response.Status != http.StatusCreated {
+		t.Fatalf("create legacy IAM user %s status=%d", loginName, response.Status)
+	}
+	var principal legacyIAMPrincipal
+	if err := json.Unmarshal(response.Body, &principal); err != nil ||
+		principal.APIVersion != iamv1.APIVersion || principal.Kind != "Principal" ||
+		iamv1.ValidateID("principalId", string(principal.ID)) != nil ||
+		iamv1.ValidateID("organizationId", string(principal.OrganizationID)) != nil {
+		t.Fatalf("decode legacy IAM user %s: %v", loginName, err)
+	}
+	return principal
 }
 
 func createIAMPolicyAttachment(

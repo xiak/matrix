@@ -635,6 +635,13 @@ func authenticateRecoveryPlan(
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
 			errors.Join(platformcommand.ErrEffectVerification, err)
 	}
+	if !platformcommand.SupportsRecoveryTarget(
+		currentBundle.Manifest, targetBundle.Manifest,
+	) {
+		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
+			errors.Join(platformcommand.ErrEffectPrecondition,
+				errors.New("recovery target is not the current release or its supported immediate predecessor"))
+	}
 	currentOrigin, currentOriginErr := topology.ResolveInstalledNorthboundOrigin(
 		currentBundle.Manifest, plan.Current.NorthboundOrigin,
 	)
@@ -648,13 +655,6 @@ func authenticateRecoveryPlan(
 				platformcommand.ErrEffectVerification,
 				errors.New("recovery plan northbound origin is invalid"),
 			)
-	}
-	if !platformcommand.SupportsRecoveryTarget(
-		currentBundle.Manifest, targetBundle.Manifest,
-	) {
-		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
-			errors.Join(platformcommand.ErrEffectPrecondition,
-				errors.New("recovery target is not the current release or its supported immediate predecessor"))
 	}
 	current := plan.Current
 	current.Bundle = currentBundle
