@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -123,6 +124,7 @@ func TestPostgresAuthorityIntegration(t *testing.T) {
 	assertLeastPrivilegeLogin(t, ctx, iamWorker, "matrix_iam_worker")
 	assertLeastPrivilegeLogin(t, ctx, auditRuntime, "matrix_audit_runtime")
 	assertAuthorityDatabaseAttackSurface(t, ctx, iamAPI, iamWorker, auditRuntime)
+	assertAuditRepositoryIsolation(t, ctx, adminConfig)
 
 	assertIAMUninitialized(t, ctx, iamAPI)
 	fixture := applyIAMBootstrap(t, ctx, admin, iamAPI)
@@ -439,6 +441,42 @@ func assertAuditContractCatalog(
 				}, "22023")
 			}
 		}
+	}
+}
+
+func assertAuditRepositoryIsolation(t *testing.T, ctx context.Context, adminConfig *pgx.ConnConfig) {
+	t.Helper()
+	config, err := pgxpool.ParseConfig(adminConfig.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig = adminConfig.Copy()
+	config.ConnConfig.User, config.ConnConfig.Password = auditRuntimeTestRole, authorityTestPassword
+	config.MaxConns = 2
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository, err := NewRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.WithinTransaction(ctx, func(ctx context.Context, tx auditlog.Transaction) error {
+		var isolation, user string
+		actual := tx.(*transaction).tx
+		if err := actual.QueryRow(ctx, "SHOW transaction_isolation").Scan(&isolation); err != nil {
+			return err
+		}
+		if err := actual.QueryRow(ctx, "SELECT session_user").Scan(&user); err != nil {
+			return err
+		}
+		if isolation != "repeatable read" || user != auditRuntimeTestRole {
+			return fmt.Errorf("unexpected runtime transaction boundary: isolation=%s user=%s", isolation, user)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

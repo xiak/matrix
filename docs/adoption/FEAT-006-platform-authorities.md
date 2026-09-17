@@ -67,6 +67,14 @@ integrity, archive, recovery, and export subsystems.
 | Retention, deletion, archive, S3/AWS/KMS/Tink/Zstd, edge WAL, replay, projection rebuild, snapshot export, and fifty-one-migration closure | `REJECT` | Phase 1 retention is indefinite and exposes no delete or archive path. These subsystems introduce configuration, credentials, workers, data copies, rollback branches, and failure modes that the accepted target explicitly defers. |
 | Audit SDK client/outbox/auth helpers | `REFERENCE` for retry classification; `REJECT` as a dependency | Bounded responses, terminal versus retryable HTTP classification, duplicate-as-delivered behavior, fencing validation, and redacted failure classes inform adapters. The SDK brings protobuf/runtime-profile/TLS/token-provider abstractions and a generic event model that are not the target contract. |
 
+The independent-chain target and invariant gates in FEAT-006 precede this
+focused current-owner replacement; it introduces no additional donor runtime.
+
+| Fixed current Audit slice | Decision | Rationale |
+| --- | --- | --- |
+| Matrix `b4bf4110efae1f3604d86587feb867579a8cfe50` repository transaction and error mapping | `ADAPT` | Replace only Audit SERIALIZABLE with REPEATABLE READ: exact event/head locks, immutable records and unique replay identity already own the invariant. Preserve stable snapshots, whole-transaction 40001/40P01 retry, five attempts and unknown-outcome refusal; do not apply this isolation choice to IAM. |
+| The same fixed ingestion/query owner and `000001_authority` event/head/append functions | `REUSE` | Retain event-before-head ordering, early locking for audited reads, exact proof, SQL/ACL/RLS, atomic registry/record/head writes, canonical bytes and hash chains. Cross-chain interference does not justify a global lock, larger retry budget or weakened replay conflict. |
+
 ## PaaS design comparison
 
 The design donor is `REFERENCE` for keeping IAM and Audit as independent

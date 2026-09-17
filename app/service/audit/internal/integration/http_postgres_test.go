@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,16 +30,17 @@ import (
 )
 
 const (
-	auditHTTPPostgresDSN   = "MATRIX_AUDIT_HTTP_POSTGRES_TEST_DSN"
-	auditHTTPTestRole      = "matrix_audit_http_test_runtime"
-	auditHTTPTestPassword  = "matrix-audit-http-test-only"
-	producerCredentialA    = "mx1.AuditHTTPProducerCredentialA000000000000001"
-	producerCredentialB    = "mx1.AuditHTTPProducerCredentialB000000000000001"
-	paasProducerCredential = "mx1.AuditHTTPPaaSProducerCredential0000000000001"
-	readerCredentialA      = "mx1.AuditHTTPReaderCredentialA0000000000000001"
-	readerCredentialB      = "mx1.AuditHTTPReaderCredentialB0000000000000001"
-	deniedCredential       = "mx1.AuditHTTPDeniedCredential00000000000000001"
-	verifierCredential     = "mx1.AuditHTTPVerifierCredential0000000000000001"
+	auditHTTPPostgresDSN       = "MATRIX_AUDIT_HTTP_POSTGRES_TEST_DSN"
+	auditHTTPTestRole          = "matrix_audit_http_test_runtime"
+	auditHTTPTestPassword      = "matrix-audit-http-test-only"
+	producerCredentialA        = "mx1.AuditHTTPProducerCredentialA000000000000001"
+	producerCredentialB        = "mx1.AuditHTTPProducerCredentialB000000000000001"
+	platformProducerCredential = "mx1.AuditHTTPPlatformProducer000000000000000001"
+	paasProducerCredential     = "mx1.AuditHTTPPaaSProducerCredential0000000000001"
+	readerCredentialA          = "mx1.AuditHTTPReaderCredentialA0000000000000001"
+	readerCredentialB          = "mx1.AuditHTTPReaderCredentialB0000000000000001"
+	deniedCredential           = "mx1.AuditHTTPDeniedCredential00000000000000001"
+	verifierCredential         = "mx1.AuditHTTPVerifierCredential0000000000000001"
 )
 
 func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
@@ -73,6 +75,7 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 	}
 	poolConfig.ConnConfig.User = auditHTTPTestRole
 	poolConfig.ConnConfig.Password = auditHTTPTestPassword
+	poolConfig.MaxConns = 2
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		t.Fatalf("open Audit HTTP runtime pool: %v", err)
@@ -327,6 +330,8 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 	)
 
 	assertAuditedReadSerialization(t, ctx, admin, pool, repository, iam)
+	assertCompetingAuditEvents(t, ctx, admin, repository, iam)
+	assertIndependentAuditChainWriters(t, ctx, admin, repository, iam)
 	iam.failure = errors.New("native IAM failure contains " + readerCredentialA + " and native-provider-path")
 	failure := performAuditRequest(
 		handler,
@@ -340,6 +345,325 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 		bytes.Contains(failure.Body.Bytes(), []byte("native IAM failure")) ||
 		bytes.Contains(failure.Body.Bytes(), []byte(`native-provider-path`)) {
 		t.Fatalf("Audit IAM outage leaked native data: status=%d body=%s", failure.Code, failure.Body.String())
+	}
+}
+
+// This barrier surrounds a real append, not a synthetic database error. It
+// proves independent-chain progress and exercises actual lock/snapshot waits.
+type auditAppendPauseRepository struct {
+	auditlog.Repository
+	arrived           chan<- struct{}
+	resume            <-chan struct{}
+	attempts          *atomic.Int32
+	rejectAfterAppend bool
+}
+
+func (repository auditAppendPauseRepository) WithinTransaction(ctx context.Context, callback func(context.Context, auditlog.Transaction) error) error {
+	repository.attempts.Add(1)
+	return repository.Repository.WithinTransaction(ctx, func(ctx context.Context, tx auditlog.Transaction) error {
+		return callback(ctx, auditAppendPauseTransaction{Transaction: tx, repository: repository})
+	})
+}
+
+type auditAppendPauseTransaction struct {
+	auditlog.Transaction
+	repository auditAppendPauseRepository
+}
+
+func (tx auditAppendPauseTransaction) AppendRecord(ctx context.Context, mutation auditlog.AppendMutation) (auditv1.IngestionOutcome, error) {
+	if tx.repository.arrived != nil {
+		select {
+		case tx.repository.arrived <- struct{}{}:
+		default:
+		}
+		select {
+		case <-tx.repository.resume:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	outcome, err := tx.Transaction.AppendRecord(ctx, mutation)
+	if err == nil && tx.repository.rejectAfterAppend {
+		return "", auditlog.ErrUnavailable
+	}
+	return outcome, err
+}
+
+func concurrentAuditEvent(id string, installation bool) auditv1.Event {
+	event := integrationEvent(auditv1.EventID(id), "organization-a", auditv1.ActionIAMBootstrapApplied, auditv1.TargetInstallation, "installation-test", time.Now().UTC().Truncate(time.Microsecond))
+	if installation {
+		event.TenantID, event.InstallationID = "", "organization-a"
+		event.Action = auditv1.ActionIAMTenantEnabled
+		event.Target = auditv1.TargetReference{Kind: auditv1.TargetOrganization, ID: "organization-a"}
+		event.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: "principal-test"}
+		event.IAMDecisionID = auditv1.DecisionID("decision-" + id)
+	}
+	return event
+}
+
+func assertIndependentAuditChainWriters(t *testing.T, ctx context.Context, admin *pgx.Conn, repository auditlog.Repository, iam *integrationIAM) {
+	t.Helper()
+	for round := 0; round < 3; round++ {
+		t.Run(fmt.Sprintf("independent-chains-%d", round), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			arrived, resume := make(chan struct{}, 2), make(chan struct{})
+			release := sync.OnceFunc(func() { close(resume) })
+			defer release()
+			type outcome struct {
+				result auditv1.IngestionResult
+				err    error
+			}
+			done := make(chan outcome, 2)
+			attempts := []*atomic.Int32{new(atomic.Int32), new(atomic.Int32)}
+			events := []auditv1.Event{concurrentAuditEvent(fmt.Sprintf("independent-%d-0", round), false), concurrentAuditEvent(fmt.Sprintf("independent-%d-1", round), round%2 == 0)}
+			if round%2 != 0 {
+				events[1].TenantID = "organization-b"
+			}
+			for _, event := range events {
+				chain := auditauthority.ChainFor(event.TenantID, event.InstallationID)
+				if err := repository.WithinTransaction(ctx, func(ctx context.Context, tx auditlog.Transaction) error {
+					_, _, err := tx.LockChainHead(ctx, chain)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for index, event := range events {
+				writer, err := auditlog.NewService(auditAppendPauseRepository{Repository: repository, arrived: arrived, resume: resume, attempts: attempts[index]}, iam, auditlog.Config{CursorKey: bytes.Repeat([]byte{0x6a}, 32), MaxTransactionAttempts: 1})
+				if err != nil {
+					t.Fatal(err)
+				}
+				credential := producerCredentialA
+				if index == 1 {
+					credential = producerCredentialB
+					if event.InstallationID != "" {
+						credential = platformProducerCredential
+					}
+				}
+				secret, err := iamv1.NewSecret(credential)
+				if err != nil {
+					t.Fatal(err)
+				}
+				go func() { result, err := writer.Ingest(ctx, secret, event); done <- outcome{result, err} }()
+			}
+			for range 2 {
+				select {
+				case <-arrived:
+				case result := <-done:
+					t.Fatal("writer ended before independent head barrier", result.err)
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+			}
+			release()
+			for range 2 {
+				select {
+				case result := <-done:
+					if result.err != nil || result.result.Outcome != auditv1.IngestionAccepted {
+						t.Fatal("independent chain required conflict retry", result.err)
+					}
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				}
+			}
+			for _, count := range attempts {
+				if count.Load() != 1 {
+					t.Fatal("independent chain silently retried")
+				}
+			}
+			for _, event := range events {
+				chain := auditauthority.ChainFor(event.TenantID, event.InstallationID)
+				if err := repository.WithinTransaction(ctx, func(ctx context.Context, tx auditlog.Transaction) error {
+					records, err := tx.ReadChain(ctx, chain, 1, 1000)
+					if err != nil {
+						return err
+					}
+					genesis, err := auditauthority.GenesisCheckpoint(chain)
+					if err != nil {
+						return err
+					}
+					last, err := auditauthority.VerifyChain(genesis, records)
+					if err != nil {
+						return err
+					}
+					var head uint64
+					if err := admin.QueryRow(ctx, "SELECT last_sequence FROM audit.chain_heads WHERE chain_id=$1", string(chain)).Scan(&head); err != nil {
+						return err
+					}
+					if head != last.Sequence {
+						return errors.New("head and immutable chain differ")
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func assertCompetingAuditEvents(t *testing.T, parent context.Context, admin *pgx.Conn, repository auditlog.Repository, iam *integrationIAM) {
+	t.Helper()
+	// The installation chain has never been used: its first pair proves the
+	// absent-head race, not merely concurrent updates of an existing head.
+	for _, scenario := range []string{"genesis", "same-chain", "equal-event", "changed-event", "cross-scope-event", "rollback-after-append"} {
+		t.Run("competing-"+scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+			defer cancel()
+			first := concurrentAuditEvent("competing-"+scenario+"-a", scenario == "genesis")
+			second := concurrentAuditEvent("competing-"+scenario+"-b", scenario == "genesis")
+			if scenario == "equal-event" || scenario == "changed-event" {
+				second = first
+			}
+			if scenario == "changed-event" {
+				second.RequestDigest = "sha256:" + strings.Repeat("7", 64)
+			}
+			if scenario == "cross-scope-event" {
+				second = concurrentAuditEvent(string(first.EventID), true)
+			}
+			chain := auditauthority.ChainFor(first.TenantID, first.InstallationID)
+			var before uint64
+			var headExists bool
+			if err := admin.QueryRow(ctx, "SELECT COALESCE((SELECT last_sequence FROM audit.chain_heads WHERE chain_id=$1),0),EXISTS(SELECT 1 FROM audit.chain_heads WHERE chain_id=$1)", string(chain)).Scan(&before, &headExists); err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "genesis" && (before != 0 || headExists) {
+				t.Fatal("genesis fixture already exists")
+			}
+			arrived, resume := make(chan struct{}, 1), make(chan struct{})
+			release := sync.OnceFunc(func() { close(resume) })
+			defer release()
+			firstAttempts, secondAttempts := new(atomic.Int32), new(atomic.Int32)
+			writerA, err := auditlog.NewService(auditAppendPauseRepository{Repository: repository, arrived: arrived, resume: resume, attempts: firstAttempts, rejectAfterAppend: scenario == "rollback-after-append"}, iam, auditlog.Config{CursorKey: bytes.Repeat([]byte{0x6a}, 32)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			writerB, err := auditlog.NewService(auditAppendPauseRepository{Repository: repository, attempts: secondAttempts}, iam, auditlog.Config{CursorKey: bytes.Repeat([]byte{0x6a}, 32)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			type completed struct {
+				result auditv1.IngestionResult
+				err    error
+			}
+			doneA, doneB := make(chan completed, 1), make(chan completed, 1)
+			start := func(writer *auditlog.Service, event auditv1.Event, done chan<- completed) {
+				credential := producerCredentialA
+				if event.InstallationID != "" {
+					credential = platformProducerCredential
+				}
+				secret, err := iamv1.NewSecret(credential)
+				if err != nil {
+					t.Fatal(err)
+				}
+				go func() { result, err := writer.Ingest(ctx, secret, event); done <- completed{result, err} }()
+			}
+			start(writerA, first, doneA)
+			select {
+			case <-arrived:
+			case result := <-doneA:
+				t.Fatal("first writer ended before append barrier", result.err)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			start(writerB, second, doneB)
+			// Observe an actual PostgreSQL lock wait, not a sleep or goroutine
+			// launch, before releasing the first transaction. B's snapshot is
+			// already taken when it waits on event/head/genesis uniqueness.
+			for {
+				var waiting bool
+				if err := admin.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND usename=$1 AND wait_event_type='Lock' AND cardinality(pg_blocking_pids(pid))>0)", auditHTTPTestRole).Scan(&waiting); err != nil {
+					t.Fatal(err)
+				}
+				if waiting {
+					break
+				}
+				select {
+				case result := <-doneB:
+					t.Fatal("second writer did not wait on the real event/head", result.err)
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				case <-time.After(5 * time.Millisecond):
+				}
+			}
+			release()
+			var a, b completed
+			select {
+			case a = <-doneA:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			select {
+			case b = <-doneB:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			expectedIncrease := uint64(2)
+			if scenario == "rollback-after-append" {
+				if !errors.Is(a.err, auditlog.ErrUnavailable) || a.result.Record.Sequence != 0 || firstAttempts.Load() != 1 {
+					t.Fatal("unknown/unavailable transaction was retried or returned a record", a.err)
+				}
+				expectedIncrease = 1
+			} else if a.err != nil || a.result.Outcome != auditv1.IngestionAccepted || a.result.Record.Sequence != before+1 {
+				t.Fatal("first writer failed", a.err)
+			}
+			switch scenario {
+			case "equal-event":
+				expectedIncrease = 1
+				if b.err != nil || b.result.Outcome != auditv1.IngestionDuplicate || b.result.Record.RecordHash != a.result.Record.RecordHash || b.result.Record.Sequence != a.result.Record.Sequence || secondAttempts.Load() < 2 {
+					t.Fatal("waiting equal event did not retry its old snapshot and return the exact original", b.err)
+				}
+			case "changed-event", "cross-scope-event":
+				expectedIncrease = 1
+				if !errors.Is(b.err, auditlog.ErrConflict) || b.result.Record.Sequence != 0 {
+					t.Fatal("changed replay did not remain a conflict", b.err)
+				}
+			default:
+				if b.err != nil || b.result.Outcome != auditv1.IngestionAccepted || b.result.Record.Sequence != before+expectedIncrease {
+					t.Fatal("same-chain writer lost ordering or genesis", b.err)
+				}
+				if scenario != "rollback-after-append" && secondAttempts.Load() < 2 {
+					t.Fatal("changed head did not trigger a whole-transaction retry")
+				}
+			}
+			var after, records, registry uint64
+			if err := admin.QueryRow(ctx, "SELECT (SELECT last_sequence FROM audit.chain_heads WHERE chain_id=$1),(SELECT count(*) FROM audit.records WHERE chain_id=$1),(SELECT count(*) FROM audit.event_registry WHERE chain_id=$1)", string(chain)).Scan(&after, &records, &registry); err != nil {
+				t.Fatal(err)
+			}
+			if after != before+expectedIncrease || records != after || registry != after {
+				t.Fatalf("head/record/registry partial write: before=%d after=%d records=%d registry=%d", before, after, records, registry)
+			}
+			if scenario == "rollback-after-append" {
+				var records, registry int
+				if err := admin.QueryRow(ctx, "SELECT (SELECT count(*) FROM audit.records WHERE source='IAM' AND event_id=$1),(SELECT count(*) FROM audit.event_registry WHERE source='IAM' AND event_id=$1)", string(first.EventID)).Scan(&records, &registry); err != nil {
+					t.Fatal(err)
+				}
+				if records != 0 || registry != 0 {
+					t.Fatal("rolled-back event left durable evidence")
+				}
+			}
+			if err := repository.WithinTransaction(ctx, func(ctx context.Context, tx auditlog.Transaction) error {
+				records, err := tx.ReadChain(ctx, chain, 1, 1000)
+				if err != nil {
+					return err
+				}
+				checkpoint, err := auditauthority.GenesisCheckpoint(chain)
+				if err != nil {
+					return err
+				}
+				last, err := auditauthority.VerifyChain(checkpoint, records)
+				if err != nil {
+					return err
+				}
+				if last.Sequence != after {
+					return errors.New("committed chain does not reach its head")
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -365,7 +689,8 @@ func assertAuditedReadSerialization(t *testing.T, ctx context.Context, admin *pg
 					t.Fatal(err)
 				}
 				var before uint64
-				if err := admin.QueryRow(ctx, "SELECT last_sequence FROM audit.chain_heads WHERE chain_id='tenant:organization-a'").Scan(&before); err != nil {
+				var beforeHash string
+				if err := admin.QueryRow(ctx, "SELECT last_sequence,last_record_hash FROM audit.chain_heads WHERE chain_id='tenant:organization-a'").Scan(&before, &beforeHash); err != nil {
 					t.Fatal(err)
 				}
 				path := "/v1/records:query"
@@ -426,13 +751,18 @@ func assertAuditedReadSerialization(t *testing.T, ctx context.Context, admin *pg
 				}
 				if verify {
 					var result auditv1.ChainVerification
-					if json.Unmarshal(response.Body.Bytes(), &result) != nil || auditv1.ValidateChainVerification(result) != nil || result.ToSequence != before {
-						t.Fatal("verification included its own not-yet-committed fact")
+					if json.Unmarshal(response.Body.Bytes(), &result) != nil || auditv1.ValidateChainVerification(result) != nil || result.FromSequence != 1 || result.ToSequence != before || uint64(result.RecordCount) != before || result.LastRecordHash != beforeHash || !result.Complete {
+						t.Fatal("verification did not return the complete locked prefix excluding its own fact")
 					}
 				} else {
 					var result auditv1.RecordPage
-					if json.Unmarshal(response.Body.Bytes(), &result) != nil || auditv1.ValidateRecordPage(result) != nil || len(result.Records) == 0 || result.Records[0].Sequence != before {
-						t.Fatal("query included its own not-yet-committed fact")
+					if json.Unmarshal(response.Body.Bytes(), &result) != nil || auditv1.ValidateRecordPage(result) != nil || len(result.Records) == 0 || uint64(len(result.Records)) != before || result.Records[0].RecordHash != beforeHash || result.NextCursor != "" {
+						t.Fatal("query did not return the complete locked prefix excluding its own fact")
+					}
+					for index, record := range result.Records {
+						if record.Sequence != before-uint64(index) || record.Event.TenantID != "organization-a" || record.Event.InstallationID != "" {
+							t.Fatal("query returned a gap, duplicate, or another chain in the locked prefix")
+						}
 					}
 				}
 			})
@@ -829,17 +1159,24 @@ func (client *integrationIAM) ResolveAuditProducer(
 	organizationID := iamv1.AccountID("")
 	purpose := iamv1.ServiceIAM
 	principalID := iamv1.PrincipalID("service-iam")
+	installationID := "installation-example"
 	switch {
 	case secretEquals(credential, producerCredentialA):
 		organizationID = "organization-a"
 	case secretEquals(credential, producerCredentialB):
 		organizationID = "organization-b"
+	case secretEquals(credential, platformProducerCredential):
+		organizationID, installationID = "organization-a", "organization-a"
 	case secretEquals(credential, paasProducerCredential):
 		organizationID, purpose, principalID = "organization-a", iamv1.ServicePaaS, "service-paas"
 	default:
 		return iamv1.AuditProducerAuthorization{}, auditlog.ErrUnauthenticated
 	}
-	if request.Event.TenantID != "organization-a" && request.Event.TenantID != "organization-b" {
+	if secretEquals(credential, platformProducerCredential) {
+		if request.Event.InstallationID != installationID || request.Event.TenantID != "" {
+			return iamv1.AuditProducerAuthorization{}, auditlog.ErrForbidden
+		}
+	} else if request.Event.TenantID != "organization-a" && request.Event.TenantID != "organization-b" {
 		return iamv1.AuditProducerAuthorization{}, auditlog.ErrForbidden
 	}
 	source := auditv1.SourceIAM
@@ -852,10 +1189,10 @@ func (client *integrationIAM) ResolveAuditProducer(
 	}
 	return iamv1.AuditProducerAuthorization{
 		APIVersion: iamv1.APIVersion, Kind: "AuditProducerAuthorization",
-		TenantID: iamv1.AccountID(request.Event.TenantID), ContentDigest: digest,
+		TenantID: iamv1.AccountID(request.Event.TenantID), InstallationID: request.Event.InstallationID, ContentDigest: digest,
 		Producer: iamv1.ServiceIdentity{
 			APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
-			InstallationID: "installation-example",
+			InstallationID: installationID,
 			AccountID:      organizationID, PrincipalID: principalID, Purpose: purpose,
 		},
 	}, nil

@@ -484,8 +484,17 @@ Internal `tenant:` and `installation:` chain keys keep equal raw IDs separate.
 Existing tenant canonical bytes, hashes and cursors remain unchanged. The one
 public `auditv1.CanonicalizeEvent` encoder serves ingestion, replay and proof.
 
-Serializable Audit transactions retry only known rolled-back serialization
-or deadlock failures (PostgreSQL 40001/40P01). The default remains five attempts;
+Audit transactions use REPEATABLE READ with one stable snapshot. The SQL
+authority locks the exact event identity before its selected chain head;
+records and registry entries are immutable, and head/record/registry updates
+commit together. Waiting on a concurrently changed head or genesis insertion
+still aborts the old snapshot and retries the whole transaction. Different
+chains do not require serialization through shared index-page predicate
+dependencies. This is not a general change to IAM isolation or permission to
+add mutable cross-chain state without revisiting its concurrency invariant.
+
+Only known rolled-back serialization or deadlock failures are retried
+(PostgreSQL 40001/40P01). The default remains five attempts;
 competing chain writers wait with bounded exponential jitter between attempts
 (5 ms initial minimum, less than 100 ms per scheduled wait). Cancellation ends
 the wait and prevents a new attempt. Authentication, authorization, invalid
@@ -500,33 +509,49 @@ chain. Only a validated successful read appends it, so the response excludes
 its own access fact and a failed read leaves no partial success record.
 Installation verification uses the same preparation after finding its exact
 immutable probe; a missing probe still returns PENDING without an access fact.
-The other tenant's head is not locked. SERIALIZABLE, five paced attempts,
-canonical encoding, schema/profile, producer proof and public contracts stay
-unchanged; the independent HTTP gate still has no client retries.
+The other tenant's head is not locked. Five paced attempts, canonical encoding,
+schema/profile, producer proof, SQL/ACL and public contracts stay unchanged;
+the independent HTTP gate still has no client retries.
 
-The `89cd60c9bd64ddf0fccb10b5b8df64309f5e118c`
-[Verification35051957349](https://github.com/xiak/matrix/actions/runs/35051957349)
-passed Go, node and IAM PostgreSQL cases but failed the independent process
-job on a platform query returning 503; database logs show concurrent
-serialization conflicts at that time. Its local passes do not make that CI
-accepted. The existing Audit HTTP/PG owner now pauses real query/verification
-reads and proves selected-head exclusion with another restricted connection,
-independent other-tenant access, exactly one committed success fact, and no
-fact on rejection. All four interleavings fail on the preceding implementation
-and pass with early acquisition (PG18, 3.560s); this is a deterministic lock/
-atomicity regression, not a claim of reproducing every CI scheduling detail.
-Two fresh-database IAM/Audit/PaaS process race gates pass with the correction
-(52.215s and 48.042s on 2026-09-16), retaining current authorization, actual
-restricted runtime logins, two-account resources/outboxes and installation
-verification. The same isolated candidate passes the real dual-schema/RLS
-regression (5.776s) and Audit HTTP gate (3.729s), full-repository race/vet,
-module verification, byte-stable generation and Linux amd64 builds. These
-checks exclude uncommitted Role work. The correction is fixed at
-`f9ca482df5bde3c8689e9d105f382e178a6abdab`;
+The existing HTTP/PG gate observes actual lock waits and restricted database
+sessions, not incidental call order. It covers absent-head creation, same-chain
+consecutive sequences, equal-event replay after an old-snapshot retry, changed
+content and cross-scope identity conflicts, and rollback after a real append.
+Head, records, registry and full-chain verification must agree. Three paired
+independent-chain schedules (including equal raw tenant/installation IDs) must
+each succeed in one transaction; this test-only attempt limit does not change
+the production retry budget. Paused query/verification gates prove a complete
+locked prefix excluding their own success fact, selected-head exclusion,
+other-tenant progress, and no success fact on failure. The authority gate
+also checks actual transaction isolation and session_user.
+
+The earlier early-head-lock correction remains fixed at
+`f9ca482df5bde3c8689e9d105f382e178a6abdab` with
 [Verification35054751383](https://github.com/xiak/matrix/actions/runs/35054751383)
-was independently checked against that exact SHA: Go, authority-process and
-node-process all completed successfully. This closes the attachment
-prerequisite's Audit regression, not Role/STS or HA acceptance.
+success; it did not prove absence of cross-chain SSI interference. The later
+`b4bf4110efae1f3604d86587feb867579a8cfe50`
+[Verification35165984088](https://github.com/xiak/matrix/actions/runs/35165984088)
+failed authority-runtime and its aggregate check: platform integrity returned
+503, with database 40001 pivot failures. Go, node and authority-storage passed;
+that is not an accepted run. A fresh local process replay passed, so it is not
+claimed to reproduce the CI's exact five-attempt exhaustion. Instead, a real
+PG18 barrier reproduced cross-chain SSI conflicts in all three schedules,
+while the narrowly changed repository passed those schedules plus replay and
+atomicity cases. No SQL, error classification or retry-count change is used
+to turn the failure green. Final cumulative CI remains required before this
+correction is handed off as verified.
+
+On 2026-09-17 the isolated correction (excluding pending AccessKey work)
+passed the real PG18 restricted-role/immutable-history and retained-tenant
+upgrade gates in 7.784s, the strengthened HTTP gate in 4.165s, and independent
+two-IAM/Audit/PaaS processes with both dispatchers in 67.906s. The process
+gate retains installation verification, current revocation, tenant separation,
+actual runtime database identities and historical proof. Its final clean tree
+`3b880a2f65c99bf4f3bc975c4204f6d73a737fb9` also passed whole-repository race/p2
+(including architecture), vet, module verification, byte-stable contract
+generation and Linux amd64 build with Go2/512MiB. Local success is not the
+pending exact-commit independent CI result, a capacity SLO or full IAM/HA
+acceptance.
 
 Phase 1 retention is `INDEFINITE`: there is no purge, overwrite, truncate, or
 tenant deletion path. Configurable expiry, archive tiers, legal hold, and
