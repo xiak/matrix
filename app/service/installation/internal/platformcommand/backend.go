@@ -1071,20 +1071,7 @@ func (backend *Backend) recover(
 }
 
 func releaseNorthboundOrigin(manifest release.Manifest, current string) (string, error) {
-	if topology.ValidateInstalledContract(manifest) != nil {
-		return "", errors.New("release topology is unsupported")
-	}
-	switch manifest.TopologyDigest {
-	case topology.ContractDigest():
-		if externalrequest.ValidateOrigin(current) != nil {
-			return "", errors.New("release northbound origin is invalid")
-		}
-		return current, nil
-	case topology.SupportedPredecessorContractDigest():
-		return "", nil
-	default:
-		return "", errors.New("release topology is unsupported")
-	}
+	return topology.ResolveInstalledNorthboundOrigin(manifest, current)
 }
 
 func (backend *Backend) recoverCredentials(ctx context.Context, request cli.Request) (result cli.Result, returnErr error) {

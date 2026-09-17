@@ -484,6 +484,17 @@ func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing
 	predecessor := current
 	predecessor.Database = release.SupportedDatabasePredecessorProfile()
 	predecessor.TopologyDigest = SupportedPredecessorContractDigest()
+	currentOrigin, err := ResolveInstalledNorthboundOrigin(current, options.NorthboundOrigin)
+	if err != nil || currentOrigin != options.NorthboundOrigin {
+		t.Fatalf("resolve current northbound origin = %q / %v", currentOrigin, err)
+	}
+	predecessorOrigin, err := ResolveInstalledNorthboundOrigin(predecessor, options.NorthboundOrigin)
+	if err != nil || predecessorOrigin != "" {
+		t.Fatalf("resolve predecessor northbound origin = %q / %v", predecessorOrigin, err)
+	}
+	if _, err := ResolveInstalledNorthboundOrigin(current, ""); err == nil {
+		t.Fatal("current installed topology accepted an absent northbound origin")
+	}
 	if _, err := Compile(predecessor, options); err == nil {
 		t.Fatal("current target compiler accepted the frozen predecessor")
 	}

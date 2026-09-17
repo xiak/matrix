@@ -189,6 +189,28 @@ func ValidateInstalledContract(manifest release.Manifest) error {
 	return err
 }
 
+// ResolveInstalledNorthboundOrigin returns the origin state owned by the
+// authenticated installed topology. The current topology requires the
+// already sealed canonical origin, while the frozen predecessor predates the
+// boundary and must not retain successor-only journal state.
+func ResolveInstalledNorthboundOrigin(manifest release.Manifest, current string) (string, error) {
+	digest, err := installedContractDigest(manifest)
+	if err != nil {
+		return "", err
+	}
+	switch digest {
+	case ContractDigest():
+		if externalrequest.ValidateOrigin(current) != nil {
+			return "", errors.New("platform northbound origin is invalid")
+		}
+		return current, nil
+	case SupportedPredecessorContractDigest():
+		return "", nil
+	default:
+		return "", errors.New("installed platform topology contract is unsupported")
+	}
+}
+
 func installedContractDigest(manifest release.Manifest) (string, error) {
 	if err := release.ValidateManifest(manifest); err != nil {
 		return "", fmt.Errorf("release manifest cannot supply installed platform topology: %w", err)

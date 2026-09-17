@@ -13,6 +13,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/release"
+	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
 const (
@@ -615,7 +616,6 @@ func authenticateRecoveryPlan(
 		plan.Current.CorrelationID == "" ||
 		plan.Current.CorrelationID != plan.Target.CorrelationID ||
 		plan.Current.Listener != plan.Target.Listener || plan.Current.Port != plan.Target.Port ||
-		plan.Current.NorthboundOrigin != plan.Target.NorthboundOrigin ||
 		plan.Current.Trust != plan.Target.Trust ||
 		!bytes.Equal(plan.Current.TrustBytes, plan.Target.TrustBytes) ||
 		!backupIDPattern.MatchString(plan.BackupID) || !validSHA256(plan.BackupDigest) {
@@ -634,6 +634,20 @@ func authenticateRecoveryPlan(
 	if err != nil {
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
 			errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	currentOrigin, currentOriginErr := topology.ResolveInstalledNorthboundOrigin(
+		currentBundle.Manifest, plan.Current.NorthboundOrigin,
+	)
+	targetOrigin, targetOriginErr := topology.ResolveInstalledNorthboundOrigin(
+		targetBundle.Manifest, plan.Current.NorthboundOrigin,
+	)
+	if currentOriginErr != nil || targetOriginErr != nil ||
+		currentOrigin != plan.Current.NorthboundOrigin || targetOrigin != plan.Target.NorthboundOrigin {
+		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
+			errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("recovery plan northbound origin is invalid"),
+			)
 	}
 	if !platformcommand.SupportsRecoveryTarget(
 		currentBundle.Manifest, targetBundle.Manifest,
