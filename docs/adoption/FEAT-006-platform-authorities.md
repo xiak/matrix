@@ -654,3 +654,27 @@ the OTP construction and independent fixed vectors, not source-code donors.
 codes and the absence of OTP phishing resistance; this is not a compliance
 claim. No library/version is selected or added by this review. Runtime,
 material protection, recovery eligibility and acceptance belong solely009.
+
+## Password and authentication-budget target review
+
+IAM/009 owns account-governed password changes and bounded multi-instance
+authentication; configuration is not an authorization Policy. This review
+does not open the shared implementation window or alter installed defaults.
+
+| Fixed source / slice | Decision | Rationale |
+| --- | --- | --- |
+| Matrix `644fff09446fc8ffb003cc53cf2fb55d4f58828a`, `authority/password.go` and its current tests | `REUSE` the strict versioned Argon2id verifier, salts and redacted secret handling; `ADAPT` new-password rules separately | Account rules must not change hashing cost or reinterpret old password bytes. Existing byte-count/category rules are current behavior, not evidence that account settings, history or a blocklist exist. |
+| Same fixed source, `authentication.go`, `management.go`, `service.go`, `lookup_login`, `user_credentials` and existing password mutation functions | `REUSE` canonical realm resolution, real credential generations and transaction/outbox ownership; `ADAPT` durable authentication outcomes and bounded admission | Current authentication errors roll back the workflow transaction. Failure counts need committed outcomes, while cross-replica in-flight attempts must not bypass a post-hash counter. Existing changed_at is real password history metadata, not a collection of prior password verifiers. |
+| Same fixed source, `issue_session`, `lookup_session`, IAM process/HTTP entry and `processhttp/server.go` | `REUSE` database time, absolute expiry and current qualification; `REFERENCE` process limits only | HTTP connection timeouts and a default eight-hour Session do not provide per-account settings, idle expiry, crypto-work admission or cluster-wide abuse protection. Product/edge source addresses require their actual consumer authority, not arbitrary forwarded headers. |
+| Product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, `04-user-guide/users/login-and-operation-protection.md` | `REFERENCE` configurable password, expiry, history and login restrictions; `REJECT` unsupported implementation/default inference | Product prose supplies requirements, not proof of persisted counters, current MFA or a trusted network source. Do not infer root/platform credential control from tenant administrator status. |
+
+The official [password-rules reference](https://cloud.tencent.com/document/product/598/36249)
+is `REFERENCE` for the distinction between configurable subuser rules and
+credential operations. Vendor-specific minima, composition defaults,
+lockout durations and the public hashing description are not adopted as a
+Matrix cryptographic implementation or production default.
+[NIST password-verifier requirements](https://pages.nist.gov/800-63-4/sp800-63b.html#passwordver)
+are `REFERENCE` for length, blocklists, full-secret verification and bounded
+attempts, not a Matrix compliance claim. Rules, actual budgets, history
+retention, permissions and acceptance remain with009; no blocklist dataset,
+new dependency or configurable production API is adopted by this review.
