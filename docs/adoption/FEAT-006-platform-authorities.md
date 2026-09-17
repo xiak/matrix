@@ -615,3 +615,19 @@ confirms creation-only Secret disclosure and overlapping keys;
 explicit covered components, application requirements and replay/HTTP
 ambiguity attacks. This is not a claim that Matrix implements the whole RFC
 or the vendor's protocol. Runtime and acceptance facts remain solely in007.
+
+## Login session self-management target review
+
+The smallest target is owned by IAM/009 S1: the authenticated USER lists its
+own actual login Sessions and irreversibly ends another, preserving current
+credential-generation checks, exact intent and immutable tenant facts. It is
+not administrator discovery, RoleSession/AccessKey management or a new store.
+
+| Fixed source / slice | Decision | Rationale |
+| --- | --- | --- |
+| Matrix `644fff09446fc8ffb003cc53cf2fb55d4f58828a`, `authentication.go`, `management.go` and original session SQL | `REUSE` real Session/generation and transaction/outbox; `ADAPT` owner-bound discovery and atomic self-revocation | Existing logout proves its current bearer, while the five-argument SQL function only relates supplied principal and target in its self branch. Adapt that same owner with the actual caller Session and replace its weaker shape; do not create a second revoker. The original terminal row/outbox lacks a unique caller-Session/request binding, so a narrowly typed immutable self-revocation completion is required for exact replay. Neither caller IDs nor `applied=false` prove that intent. No blanket self permission is added to the administrator action. |
+| Same fixed source, original opaque `CursorCodec`, Role self-exit and immutable outbox/terminal receipt checks | `REUSE` bounded encoding and original fact ownership; `ADAPT` the closed login-session purpose and exact completion binding | A cursor is not a permit or a frozen directory snapshot. Keep a single codec and database authority; do not copy Role issuance/source-authority vectors into a login Session, fabricate a Session or add Redis/generic SessionStore. A revoked target or historical event alone does not prove this request completed. |
+| Product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, `04-user-guide/users/login-and-operation-protection.md` | `REFERENCE` session expiry/revocation and authentication-strength boundaries; `REJECT` unproven device/online metadata or runtime adoption | A physical device is not a Session. Client/IP/activity/MFA labels require real trustworthy inputs. Source prose is not an implementation, database authority or reason to introduce unsupported providers, cookies or risk scores into S1. |
+
+The source review is not an acceptance claim or a release migration promise;
+routes, qualification, shared edit windows and actual gates belong IAM/009.
