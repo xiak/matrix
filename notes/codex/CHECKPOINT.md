@@ -56,6 +56,15 @@ implementation only after the fixed consumer checkpoint and explicit window
 confirmation. UX received the fixed design, not an instruction to wire a
 nonexistent endpoint. No UI work is done here.
 
+MFA S2 design/adoption is committed and pushed at
+a378429b5d8912a265e2b5077ddf229a160e3793, in the same009 owner. It
+separates incomplete authentication from Session, covers forced enrollment,
+shared OTP consumption and explicit recovery, and identifies custody,
+non-rollback recovery and cross-context step-up gaps. This is design only;
+no API/SQL, source/release version, runtime or acceptance state changed.
+Public fields, budgets and privileged recovery remain to be frozen with
+their owners. Do not treat this design as a production consumer donor.
+
 Remaining delegation/IP, product/service integration, governance, UI,
 capacity/HA and signed installation/backup/release gates stay with their FEAT
 owners. Existing key lifecycle or Role backend acceptance does not satisfy
