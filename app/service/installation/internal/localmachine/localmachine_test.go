@@ -592,6 +592,11 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	wrappingKeyMaterial := wrappingKeyring.Keys[0].KeyMaterial.CopyBytes()
 	defer clear(wrappingKeyMaterial)
 	wrappingKeyring = iamv1.AccessKeyWrappingKeyring{}
+	iamCursorKey := readTestFile(t, plan.Root, layout.IAMCursorKey)
+	auditCursorKey := readTestFile(t, plan.Root, layout.AuditCursorKey)
+	if len(iamCursorKey) != 64 || len(auditCursorKey) != 64 || bytes.Equal(iamCursorKey, auditCursorKey) {
+		t.Fatal("IAM and Audit cursor keys are not independent installation secrets")
+	}
 	issuerCertificate := readTestFile(t, plan.Root, layout.EnrollmentIssuerCertificate)
 	issuerPrivateKey := readTestFile(t, plan.Root, layout.EnrollmentIssuerPrivateKey)
 	defer clear(issuerPrivateKey)
@@ -1418,17 +1423,19 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 	assertReleaseConfiguration(t, source)
 }
 
-func TestFrozenPredecessorVerificationDoesNotRequireFutureAccessKeyWrappingKeyring(t *testing.T) {
+func TestFrozenPredecessorVerificationDoesNotRequireFutureIAMSecrets(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")
 	}
 	plan := newUpgradePlan(
 		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
 	)
-	if _, err := os.Stat(filepath.Join(
-		plan.Source.Root, filepath.FromSlash(layout.IAMAccessKeyWrappingKeyring),
-	)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("frozen predecessor access-key wrapping keyring error = %v", err)
+	for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring, layout.IAMCursorKey} {
+		if _, err := os.Stat(filepath.Join(
+			plan.Source.Root, filepath.FromSlash(relative),
+		)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("frozen predecessor future IAM secret %q error = %v", relative, err)
+		}
 	}
 	source, err := authenticateInstalledPlan(plan.Source)
 	if err != nil {
@@ -1443,6 +1450,9 @@ func TestFrozenPredecessorVerificationDoesNotRequireFutureAccessKeyWrappingKeyri
 	}
 	if _, err := readAccessKeyWrappingKeyring(plan.Target.Root, plan.Target.InstallationID); err != nil {
 		t.Fatalf("successor staging did not materialize access-key wrapping keyring: %v", err)
+	}
+	if cursorKey := readTestFile(t, plan.Target.Root, layout.IAMCursorKey); len(cursorKey) != 64 {
+		t.Fatal("successor staging did not materialize the IAM cursor key")
 	}
 }
 
@@ -2931,7 +2941,7 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 		t.Fatalf("stage upgrade source: %v", err)
 	}
 	if source.Bundle.Manifest.TopologyDigest == topology.SupportedPredecessorContractDigest() {
-		for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring} {
+		for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring, layout.IAMCursorKey} {
 			if err := os.Remove(filepath.Join(source.Root, filepath.FromSlash(relative))); err != nil {
 				t.Fatalf("remove future predecessor fixture %q: %v", relative, err)
 			}
@@ -3033,7 +3043,7 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 	paths := []string{
 		layout.ReleaseTrust, layout.IAMBootstrap, layout.IAMAccessKeyWrappingKeyring, layout.AuditIAMCredential,
 		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
-		layout.InstallationVerifierCredential, layout.AuditCursorKey,
+		layout.InstallationVerifierCredential, layout.IAMCursorKey, layout.AuditCursorKey,
 		layout.EnrollmentIssuerCertificate, layout.EnrollmentIssuerPrivateKey,
 		layout.EnrollmentIngressCertificate, layout.EnrollmentIngressPrivateKey,
 		layout.EnrollmentControllerCertificate, layout.EnrollmentControllerPrivateKey,

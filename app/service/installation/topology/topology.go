@@ -136,16 +136,18 @@ func predecessorContractDescription() contract {
 	description.Substitutions = slices.DeleteFunc(description.Substitutions, func(value string) bool {
 		return value == "northboundOrigin"
 	})
-	removeAccessKeyWrapping(description.Compose.Services)
+	removeSuccessorIAMSecrets(description.Compose.Services)
 	removeExternalRequestBoundary(description.Compose.Services)
 	return description
 }
 
-func removeAccessKeyWrapping(services map[string]serviceConfig) {
+func removeSuccessorIAMSecrets(services map[string]serviceConfig) {
 	iam := services["iam"]
 	delete(iam.Environment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE")
+	delete(iam.Environment, "MATRIX_IAM_CURSOR_KEY_FILE")
 	iam.Volumes = slices.DeleteFunc(iam.Volumes, func(value mount) bool {
-		return value.Target == "/run/matrix/iam-access-key-wrapping-keyring.json"
+		return value.Target == "/run/matrix/iam-access-key-wrapping-keyring.json" ||
+			value.Target == "/run/matrix/iam-cursor-key"
 	})
 	services["iam"] = iam
 }
@@ -217,7 +219,7 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 			return Result{}, errors.New("platform northbound origin is invalid")
 		}
 	case SupportedPredecessorContractDigest():
-		removeAccessKeyWrapping(services)
+		removeSuccessorIAMSecrets(services)
 		removeExternalRequestBoundary(services)
 	default:
 		return Result{}, errors.New("platform topology contract is unsupported")
@@ -341,6 +343,7 @@ func compileServices(
 	paasWorkerDSN := path.Join(root, layout.PaaSWorker)
 	bootstrapIAM := path.Join(root, layout.IAMBootstrap)
 	accessKeyWrappingKeyring := path.Join(root, layout.IAMAccessKeyWrappingKeyring)
+	iamCursorKey := path.Join(root, layout.IAMCursorKey)
 	auditIAMCredential := path.Join(root, layout.AuditIAMCredential)
 	iamAuditCredential := path.Join(root, layout.IAMAuditCredential)
 	paasIAMCredential := path.Join(root, layout.PaaSIAMCredential)
@@ -413,12 +416,14 @@ func compileServices(
 		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE": "/run/matrix/iam-access-key-wrapping-keyring.json",
 		"MATRIX_IAM_DATABASE_DSN_FILE":                "/run/matrix/iam-api-dsn",
 		"MATRIX_IAM_BOOTSTRAP_FILE":                   "/run/matrix/iam-bootstrap.json",
+		"MATRIX_IAM_CURSOR_KEY_FILE":                  "/run/matrix/iam-cursor-key",
 		"MATRIX_IAM_LISTEN_ADDRESS":                   "0.0.0.0:8080",
 	}
 	iam.Volumes = []mount{
 		bind(iamAPIDSN, "/run/matrix/iam-api-dsn", true),
 		bind(bootstrapIAM, "/run/matrix/iam-bootstrap.json", true),
 		bind(accessKeyWrappingKeyring, "/run/matrix/iam-access-key-wrapping-keyring.json", true),
+		bind(iamCursorKey, "/run/matrix/iam-cursor-key", true),
 	}
 	iam.DependsOn = healthy("postgres")
 

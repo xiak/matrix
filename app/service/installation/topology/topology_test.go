@@ -72,6 +72,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	enrollmentIssuerMounts := 0
 	enrollmentIngressMounts := 0
 	accessKeyWrappingMounts := 0
+	iamCursorKeyMounts := 0
 	for name, raw := range services {
 		service := raw.(map[string]any)
 		mounts, _ := service["volumes"].([]any)
@@ -106,6 +107,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					t.Fatal("access-key wrapping keyring crossed its IAM API boundary")
 				}
 			}
+			if mount["source"] == path.Join(options.Root, layout.IAMCursorKey) {
+				iamCursorKeyMounts++
+				if name != "iam" || mount["target"] != "/run/matrix/iam-cursor-key" || mount["read_only"] != true {
+					t.Fatal("IAM cursor key crossed its IAM API boundary")
+				}
+			}
 		}
 	}
 	if controllerMounts != 2 {
@@ -119,6 +126,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 	if accessKeyWrappingMounts != 1 {
 		t.Fatal("access-key wrapping keyring lacks its single IAM API mount")
+	}
+	if iamCursorKeyMounts != 1 {
+		t.Fatal("IAM cursor key lacks its single IAM API mount")
 	}
 	if services["iam"].(map[string]any)["environment"].(map[string]any)["MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE"] != "/run/matrix/iam-access-key-wrapping-keyring.json" {
 		t.Fatal("IAM does not consume the installation-owned access-key wrapping keyring")
@@ -159,8 +169,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE",
 		},
 		"iam": {
-			"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE", "MATRIX_IAM_BOOTSTRAP_FILE", "MATRIX_IAM_DATABASE_DSN_FILE",
-			"MATRIX_IAM_LISTEN_ADDRESS",
+			"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE", "MATRIX_IAM_BOOTSTRAP_FILE", "MATRIX_IAM_CURSOR_KEY_FILE",
+			"MATRIX_IAM_DATABASE_DSN_FILE", "MATRIX_IAM_LISTEN_ADDRESS",
 		},
 		"iam-audit-dispatcher": {
 			"MATRIX_IAM_AUDIT_CREDENTIAL_FILE", "MATRIX_IAM_AUDIT_DATABASE_DSN_FILE",
@@ -519,12 +529,13 @@ func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing
 	if environment["MATRIX_PAAS_NORTHBOUND_ORIGIN"] != "" ||
 		document.Services["audit"].Environment["MATRIX_AUDIT_NORTHBOUND_ORIGIN"] != "" ||
 		document.Services["audit"].Environment["MATRIX_AUDIT_INSTALLATION_ID"] != "" ||
-		document.Services["iam"].Environment["MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE"] != "" {
+		document.Services["iam"].Environment["MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE"] != "" ||
+		document.Services["iam"].Environment["MATRIX_IAM_CURSOR_KEY_FILE"] != "" {
 		t.Fatal("frozen predecessor gained the successor access-key trust boundary")
 	}
 	for _, volume := range document.Services["iam"].Volumes {
-		if volume.Target == "/run/matrix/iam-access-key-wrapping-keyring.json" {
-			t.Fatal("frozen predecessor gained the successor wrapping key mount")
+		if volume.Target == "/run/matrix/iam-access-key-wrapping-keyring.json" || volume.Target == "/run/matrix/iam-cursor-key" {
+			t.Fatal("frozen predecessor gained a successor IAM secret mount")
 		}
 	}
 	predecessorAPISIX := document.Services["apisix"]

@@ -133,7 +133,12 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	); err != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
-	cursorKey, err := ensureRandomHex(plan.Root, layout.AuditCursorKey, entropy)
+	cursorKey, err := ensureRandomHex(plan.Root, layout.IAMCursorKey, entropy)
+	if err != nil {
+		return err
+	}
+	clear(cursorKey)
+	cursorKey, err = ensureRandomHex(plan.Root, layout.AuditCursorKey, entropy)
 	if err != nil {
 		return err
 	}

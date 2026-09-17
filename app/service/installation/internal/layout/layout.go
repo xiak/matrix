@@ -45,6 +45,7 @@ const (
 
 	IAMBootstrap                   = "secrets/authority/iam-bootstrap.json"
 	IAMAccessKeyWrappingKeyring    = "secrets/authority/iam-access-key-wrapping-keyring.json"
+	IAMCursorKey                   = "secrets/authority/iam-cursor-key"
 	AuditIAMCredential             = "secrets/authority/audit-iam-credential"
 	IAMAuditCredential             = "secrets/authority/iam-audit-credential"
 	PaaSIAMCredential              = "secrets/authority/paas-iam-credential"
