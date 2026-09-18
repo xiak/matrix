@@ -6,12 +6,22 @@
   task's independent worktree is writable. Updated 2026-09-18.
 - Latest pushed production implementation:
   **159bb302fed89161c4b60afeb4a6f41f9bd99820**, atomic self-revocation of other
-  login Sessions (IAM/009 S1b). Remote feature HEAD was verified at this SHA.
-- Exact-SHA [Verification35318292984](https://github.com/xiak/matrix/actions/runs/35318292984)
-  is live, **not accepted**. Latest GitHub API observation: node-process
-  success; go/authority-storage in_progress; authority-runtime queued.
-  The aggregate workflow still reports queued. Verify this specific run/jobs
-  next; an observation timeout is not termination and never warrants restart.
+  login Sessions (IAM/009 S1b). Its first CI35318292984 is terminal failure:
+  storage hit the shared Go ten-minute package timer; Go/node/runtime passed.
+  Runtime logs confirm own Sessions213.561s, retained/process137.821s and
+  capacity129.82s. Those successes do not override storage/aggregate failure.
+- Latest pushed scheduling repair:
+  **2cd045b01a27e85617f8272e5f55491fd311aaca**. It changes only the existing
+  workflow and IAM009/011 evidence; production and test bodies match159bb302.
+  Compiled test discovery runs each of five general IAM fixtures separately,
+  serially, retaining Role and three Session fixtures in their original lanes.
+  Local exact-once partition, twelve Bash entrypoints, failure propagation and
+  unchanged DSNs/databases/limits passed; no local YAML-parser claim.
+- Exact-SHA [Verification35320384077](https://github.com/xiak/matrix/actions/runs/35320384077)
+  is live, **not accepted**. Latest GitHub API observation: Go105521343246,
+  storage105521343672 and node105521343831 in_progress; runtime105521343449
+  queued. Verify these actual jobs next; an observation timeout is not
+  termination and never warrants restart. Do not rerun terminal35318292984.
 - Local final clean-export whole-source race/architecture, vet, modules,
   byte-identical API generation and Linux amd64 build passed. Real PG18.4
   restricted-role IAM/Audit/PaaS, cumulative policy/attachment/key/Role/recovery,
@@ -78,8 +88,8 @@ unique Audit canonical encoder/old chains are unchanged. No second Session,
 Redis authority or generic receipt. Role source qualification, accepted
 Operations and long connections keep their existing owner boundaries.
 
-On all five35318292984 checks succeeding, update009 and this checkpoint, then
-hand off only fixed159bb302/CI to existing consumers. Do not inherit their
+On all five35320384077 checks succeeding, update009/011 and this checkpoint,
+then hand off fixed159bb302 plus2cd045b0/CI to existing consumers. Do not inherit their
 UI/release acceptance or commission work implicitly. On failure inspect the
 actual gate; do not increase limits/deadlines, reduce crypto cost or omit cases.
 
