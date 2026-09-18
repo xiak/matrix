@@ -10,12 +10,12 @@
   identical generation, Linux build, cumulative PG18 IAM/Role/Audit/PaaS,
   actual fixed predecessor executables and independent authority processes
   passed. Exact evidence and failed precursor boundaries belong IAM/009.
-- Verification35301228478 belongs to that exact SHA and was confirmed queued
-  after push. Its independent CI is NOT yet accepted. Inspect that same run;
-  do not re-trigger or restart it merely because an observation times out.
-  Latest independently verified cumulative predecessor remains
-  644fff09446fc8ffb003cc53cf2fb55d4f58828a, Verification35184409378,
-  all five jobs successful.
+- Verification35301228478 was confirmed through the GitHub API at that exact
+  SHA: go, node-process, authority-storage, authority-runtime and
+  authority-process all completed/success on 2026-09-18. S1 backend is now
+  independently accepted; UI and the complete009 remain unaccepted. Original
+  per-test costs, cases and time budgets were preserved. Do not rerun a
+  completed job solely to re-observe its already verified result.
 - Current source is IAM31/Audit18/PaaS2, IAM product Profile r5.
   Published release profile/revision unchanged. Backend verification does
   not establish UI, signed business, installation or final release acceptance.
@@ -55,10 +55,10 @@ later passes do not explain away those failures or justify weaker costs.
 
 ## Next delivery step
 
-Verify exact CI35301228478 and every job before calling3080922f independently
-accepted. On failure inspect the actual failing owner and preserve original
-budgets/cases; on success update the existing009 evidence and this one
-checkpoint, then hand the fixed source to UX/UI for the Session UI.
+The fixed3080922f source, exact successful CI and closed Session routes have
+been handed to UX/UI for its own branch and real browser acceptance. Only
+fixed-object integration is authorized; its implementation and evidence do
+not become accepted in this branch merely because the backend passed.
 No UI/browser work is done in this branch.
 
 The remaining009 design is already committed: S2 local MFA, S3 password/
@@ -67,6 +67,14 @@ not available APIs. Public fields, protected material, authentication-failure
 facts, budgets and privileged recovery must be frozen with their owners
 before corresponding shared implementation. No generic SessionStore,
 Redis authorization authority, fake Session or second PDP.
+
+MFA needs independently protected seed custody, explicit privileged factor
+recovery and a backup/non-rollback boundary; existing password recovery does
+not authorize removing a factor. An asynchronous user choice is pending on
+whether to assign a bounded installation integration goal to the original
+engineer, extend this task's installation boundary, or defer MFA for another
+IAM slice. No option has been accepted and no such work commissioned. Do not
+infer consent from the preselected option or from the existing full IAM goal.
 
 Remaining delegation/IP, product/service integration, governance, UI,
 capacity/HA and signed installation/backup/release gates stay with their
@@ -77,16 +85,18 @@ whole goal complete from a local backend slice.
 ## Shared windows and peers
 
 UX/UI工程师 01a07b21-9a0d-7fd0-b090-7827ce18262e owns UI/browser work
-in feat/cloud-console-ux. It has the S1 and MFA design references, not a
-handoff of independently accepted3080922f. Its latest reply confirms that
-unfrozen MFA APIs will not be wired.
+in feat/cloud-console-ux. It has now received independently accepted3080922f
+and a scoped request to implement Session UI, preserving its own consumer
+baseline and real browser gates. Its prior reply confirms that unfrozen MFA
+APIs will not be wired; no S1 UI completion has been reported.
 
 Phase3 01a04149-5dbb-7300-9e4c-31d9e85c8ada explicitly opened the S1
 window after fixed c2fbd9e38d424e68c0466618ee74613aced3c3fb.
 That task subsequently reported completion and asked for fixed SHA/CI-only
 handoffs; further integration requires a user-opened integration goal.
 Do not reopen its work or assume its consumer/release acceptance belongs
-to this branch.
+to this branch. It received the fixed3080922f/CI success as an informational
+handoff only, explicitly without commissioning MFA or reopening integration.
 
 The PaaS/Audit business PEPs, shared ingress parsing/origin mapping, APISIX,
 installation/keyring/backup and release composition are not edited here.
