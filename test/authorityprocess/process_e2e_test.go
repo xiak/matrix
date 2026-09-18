@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -3326,10 +3327,28 @@ finished:
 }
 
 type iamCapacityCall struct {
-	lane    string
-	request *http.Request
-	status  int
-	verify  func([]byte) (string, bool) // optional newly issued test secret, validity
+	lane     string
+	request  *http.Request
+	status   int
+	verify   func([]byte) (string, bool) // optional newly issued test secret, validity
+	interval time.Duration               // independent lane's planned start interval; zero is unpaced
+}
+
+type iamCapacitySchedule uint8
+
+const (
+	iamCapacityPaired iamCapacitySchedule = iota
+	iamCapacityIndependent
+)
+
+type iamCapacityResult struct {
+	index     int
+	status    int
+	body      []byte
+	started   time.Time
+	completed time.Time
+	scheduled time.Time // absent for unpaced closed-loop requests
+	failed    bool
 }
 
 func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica, auditEndpoint, paasEndpoint, platformBearer string) []string {
@@ -3573,7 +3592,7 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 				}
 			}
 			waitAllIAMOutboxDelivered(t, ctx, database)
-			secrets = append(secrets, runIAMCapacityStage(t, ctx, database, stage, concurrency, calls)...)
+			secrets = append(secrets, runIAMCapacityStage(t, ctx, database, stage, concurrency, iamCapacityPaired, calls)...)
 		}
 	}
 	for _, kind := range []string{"business-read", "management-mix", "wrong-password-mix"} {
@@ -3599,7 +3618,28 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 			}
 		}
 		waitAllIAMOutboxDelivered(t, ctx, database)
-		secrets = append(secrets, runIAMCapacityStage(t, ctx, database, kind, 2, calls)...)
+		secrets = append(secrets, runIAMCapacityStage(t, ctx, database, kind, 2, iamCapacityPaired, calls)...)
+	}
+	// A control and an independently progressing peer remove the paired
+	// client's barrier. This is bounded interference evidence, not admission
+	// control, open-loop saturation or a tenant fairness guarantee.
+	for _, pressured := range []bool{false, true} {
+		stage, concurrency := "independent-control", 1
+		if pressured {
+			stage, concurrency = "independent-wrong-password", 2
+		}
+		var calls []iamCapacityCall
+		for index := range 100 {
+			server := servers[index%2]
+			if pressured {
+				calls = append(calls, loginCall(accounts[0], server, fmt.Sprintf("capacity-%s-pressure-%d", stage, index), true))
+			}
+			call := policyCall(accounts[1], server, fmt.Sprintf("capacity-%s-probe-%d", stage, index), "capacity-selected", true, true)
+			call.interval = 100 * time.Millisecond
+			calls = append(calls, call)
+		}
+		waitAllIAMOutboxDelivered(t, ctx, database)
+		secrets = append(secrets, runIAMCapacityStage(t, ctx, database, stage, concurrency, iamCapacityIndependent, calls)...)
 	}
 	// A successful write is followed by new requests through both real replicas;
 	// measured Deny is expected service work, never counted as an HTTP failure.
@@ -3608,7 +3648,7 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 	for index := range 200 {
 		calls = append(calls, policyCall(accounts[index%2], servers[(index/2)%2], fmt.Sprintf("capacity-revoked-%d", index), "capacity-selected", false, index%2 != 0))
 	}
-	secrets = append(secrets, runIAMCapacityStage(t, ctx, database, "post-revocation", 2, calls)...)
+	secrets = append(secrets, runIAMCapacityStage(t, ctx, database, "post-revocation", 2, iamCapacityPaired, calls)...)
 	// A well-formed login response is not enough: every measured credential
 	// must authenticate its actual USER on the other process. These reads are
 	// deliberately outside all timed stages and confer no business permission.
@@ -3796,30 +3836,246 @@ func TestIAMCapacityPercentiles(t *testing.T) {
 	}
 }
 
-func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, name string, concurrency int, calls []iamCapacityCall) []string {
+// Only scheduling and HTTP transport run concurrently. Response verification
+// stays on the receiving test goroutine, including immutable evidence capture.
+func dispatchIAMCapacityCalls(ctx context.Context, client *http.Client, started time.Time, concurrency int, schedule iamCapacitySchedule, calls []iamCapacityCall) (<-chan iamCapacityResult, error) {
+	if concurrency < 1 || concurrency > 2 || len(calls) == 0 || len(calls) > 200 || (schedule != iamCapacityPaired && schedule != iamCapacityIndependent) {
+		return nil, errors.New("invalid capacity workload budget")
+	}
+	lanes := make(map[string][]int)
+	for index, call := range calls {
+		if call.request == nil || call.lane == "" || call.interval < 0 || call.interval > 100*time.Millisecond || (schedule == iamCapacityPaired && call.interval != 0) {
+			return nil, errors.New("invalid capacity request schedule")
+		}
+		indexes := lanes[call.lane]
+		if len(indexes) > 0 && calls[indexes[0]].interval != call.interval {
+			return nil, errors.New("inconsistent capacity lane interval")
+		}
+		lanes[call.lane] = append(indexes, index)
+	}
+	if schedule == iamCapacityIndependent && len(lanes) != concurrency {
+		return nil, errors.New("independent capacity lanes exceed worker budget")
+	}
+	results := make(chan iamCapacityResult, concurrency)
+	execute := func(index int, scheduled time.Time) bool {
+		if !scheduled.IsZero() {
+			if delay := time.Until(scheduled); delay > 0 {
+				timer := time.NewTimer(delay)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					return false
+				}
+			}
+		}
+		if ctx.Err() != nil {
+			return false
+		}
+		result := iamCapacityResult{index: index, scheduled: scheduled, started: time.Now()}
+		response, err := client.Do(calls[index].request.Clone(ctx))
+		if err != nil {
+			result.failed = true
+		} else {
+			result.status = response.StatusCode
+			result.body, err = io.ReadAll(io.LimitReader(response.Body, 2*1024*1024+1))
+			closeErr := response.Body.Close()
+			result.failed = err != nil || closeErr != nil || len(result.body) > 2*1024*1024
+		}
+		result.completed = time.Now()
+		select {
+		case results <- result:
+			return true
+		case <-ctx.Done():
+			clear(result.body)
+			return false
+		}
+	}
+	go func() {
+		defer close(results)
+		var workers sync.WaitGroup
+		if schedule == iamCapacityIndependent {
+			for _, indexes := range lanes {
+				workers.Go(func() {
+					for ordinal, index := range indexes {
+						var scheduled time.Time
+						if calls[index].interval > 0 {
+							scheduled = started.Add(time.Duration(ordinal) * calls[index].interval)
+						}
+						if !execute(index, scheduled) {
+							return
+						}
+					}
+				})
+			}
+			workers.Wait()
+			return
+		}
+		for offset := 0; offset < len(calls) && ctx.Err() == nil; offset += concurrency {
+			for index := offset; index < min(offset+concurrency, len(calls)); index++ {
+				workers.Go(func() { execute(index, time.Time{}) })
+			}
+			workers.Wait()
+		}
+	}()
+	return results, nil
+}
+
+func TestIAMCapacityScheduling(t *testing.T) {
+	for _, schedule := range []iamCapacitySchedule{iamCapacityPaired, iamCapacityIndependent} {
+		t.Run(fmt.Sprint(schedule), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			pressureStarted, releasePressure := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(releasePressure) }) }
+			var active, peak atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				now := active.Add(1)
+				defer active.Add(-1)
+				for observed := peak.Load(); now > observed; observed = peak.Load() {
+					if peak.CompareAndSwap(observed, now) {
+						break
+					}
+				}
+				if r.URL.Path == "/pressure-0" {
+					close(pressureStarted)
+					select {
+					case <-releasePressure:
+					case <-r.Context().Done():
+						return
+					}
+				}
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer server.Close()
+			defer release()
+			var calls []iamCapacityCall
+			for _, path := range []string{"pressure-0", "probe-0", "pressure-1", "probe-1"} {
+				request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/"+path, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				calls = append(calls, iamCapacityCall{lane: strings.Split(path, "-")[0], request: request})
+			}
+			results, err := dispatchIAMCapacityCalls(ctx, server.Client(), time.Now(), 2, schedule, calls)
+			if err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-pressureStarted:
+			case <-ctx.Done():
+				t.Fatal("pressure request did not start")
+			}
+			var seen [4]bool
+			observe := func(result iamCapacityResult) {
+				if result.index < 0 || result.index >= len(seen) || seen[result.index] || result.failed || result.status != http.StatusNoContent || result.completed.Before(result.started) {
+					t.Fatal("capacity dispatcher lost, duplicated or misreported a request")
+				}
+				seen[result.index] = true
+			}
+			// Independent probes must finish twice while the peer is held.
+			// Paired mode must keep the original batch barrier instead.
+			for needed := 1; needed <= 1+int(schedule); needed++ {
+				select {
+				case result := <-results:
+					if result.index != needed*2-1 {
+						t.Fatal("capacity probe acquired its peer's completion")
+					}
+					observe(result)
+				case <-ctx.Done():
+					t.Fatal("normal lane could not progress under the declared schedule")
+				}
+			}
+			if schedule == iamCapacityPaired {
+				select {
+				case <-results:
+					t.Fatal("paired schedule removed the existing batch barrier")
+				case <-time.After(20 * time.Millisecond):
+				}
+			}
+			release()
+			for result := range results {
+				observe(result)
+			}
+			if ctx.Err() != nil || peak.Load() > 2 || seen != [4]bool{true, true, true, true} {
+				t.Fatal("capacity schedule exceeded concurrency or omitted a sample")
+			}
+		})
+	}
+	t.Run("pace-and-cancel", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var invoked atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { invoked.Add(1); w.WriteHeader(http.StatusNoContent) }))
+		defer server.Close()
+		var calls []iamCapacityCall
+		for range 3 {
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls = append(calls, iamCapacityCall{lane: "probe", request: request, interval: 20 * time.Millisecond})
+		}
+		started := time.Now()
+		results, err := dispatchIAMCapacityCalls(ctx, server.Client(), started, 1, iamCapacityIndependent, calls)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for result := range results {
+			if result.index != count || result.scheduled != started.Add(time.Duration(count)*20*time.Millisecond) || result.started.Before(result.scheduled) || result.failed || result.status != http.StatusNoContent {
+				t.Fatal("paced request was sent early, reordered or silently lost")
+			}
+			count++
+		}
+		if count != 3 {
+			t.Fatal("paced lane did not account for all samples")
+		}
+		cancelled, stop := context.WithCancel(ctx)
+		results, err = dispatchIAMCapacityCalls(cancelled, server.Client(), time.Now().Add(time.Second), 1, iamCapacityIndependent, calls)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stop()
+		if _, ok := <-results; ok || invoked.Load() != 3 {
+			t.Fatal("cancelled pacing leaked another request")
+		}
+		for _, invalid := range []struct {
+			concurrency int
+			schedule    iamCapacitySchedule
+			calls       []iamCapacityCall
+		}{
+			{0, iamCapacityIndependent, calls}, {3, iamCapacityIndependent, calls}, {1, 99, calls},
+			{1, iamCapacityIndependent, nil}, {2, iamCapacityIndependent, calls}, {1, iamCapacityPaired, calls},
+			{1, iamCapacityIndependent, make([]iamCapacityCall, 201)},
+		} {
+			if _, err := dispatchIAMCapacityCalls(ctx, server.Client(), time.Now(), invalid.concurrency, invalid.schedule, invalid.calls); err == nil {
+				t.Fatal("invalid capacity budget started work")
+			}
+		}
+	})
+}
+
+func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, name string, concurrency int, schedule iamCapacitySchedule, calls []iamCapacityCall) []string {
 	t.Helper()
-	if concurrency < 1 || concurrency > 2 || len(calls) == 0 || len(calls) > 200 {
-		t.Fatal("capacity stage exceeded its fixed workload budget")
-	}
-	type completedCall struct {
-		index    int
-		status   int
-		body     []byte
-		duration time.Duration
-		failed   bool
-	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	type laneResult struct {
-		latencies []time.Duration
-		failures  int
-		statuses  map[int]int
-		errors    map[string]int
+		latencies                []time.Duration
+		failures                 int
+		statuses                 map[int]int
+		errors                   map[string]int
+		starts                   []time.Time
+		first, last              time.Time
+		lags, scheduledLatencies []time.Duration
+		interval                 time.Duration
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.MaxConnsPerHost, transport.MaxIdleConnsPerHost, transport.MaxIdleConns = 2, 2, 4
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	results := make(chan completedCall, 2)
 	lanes := make(map[string]*laneResult)
 	var secrets []string
 	var samples, peakConnections, peakActive, peakLockWaiting, peakOutbox int
@@ -3841,59 +4097,57 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 	sample()
 	cpuStart := capacityCPU(t)
 	started := time.Now()
+	results, err := dispatchIAMCapacityCalls(ctx, client, started, concurrency, schedule, calls)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	for offset := 0; offset < len(calls); offset += concurrency {
-		batch := min(concurrency, len(calls)-offset)
-		for index := offset; index < offset+batch; index++ {
-			go func(index int) {
-				begin := time.Now()
-				result := completedCall{index: index}
-				response, err := client.Do(calls[index].request)
-				if err != nil {
-					result.failed = true
-				} else {
-					result.status = response.StatusCode
-					result.body, err = io.ReadAll(io.LimitReader(response.Body, 2*1024*1024+1))
-					closeErr := response.Body.Close()
-					result.failed = err != nil || closeErr != nil || len(result.body) > 2*1024*1024
-				}
-				result.duration = time.Since(begin)
-				results <- result
-			}(index)
-		}
-		for remaining := batch; remaining > 0; {
-			select {
-			case result := <-results:
-				remaining--
-				call := calls[result.index]
-				lane := lanes[call.lane]
-				if lane == nil {
-					lane = &laneResult{statuses: make(map[int]int), errors: make(map[string]int)}
-					lanes[call.lane] = lane
-				}
-				lane.latencies = append(lane.latencies, result.duration)
-				lane.statuses[result.status]++
-				secret, valid := call.verify(result.body)
-				if secret != "" {
-					secrets = append(secrets, secret)
-				}
-				if result.failed || result.status != call.status || !valid {
-					lane.failures++
-					reason := "response-contract"
-					if result.failed {
-						reason = "transport-or-body"
-					} else if result.status != call.status {
-						reason = "unexpected-status"
-					}
-					lane.errors[reason]++
-				}
-				clear(result.body)
-			case <-ticker.C:
-				sample()
-			case <-ctx.Done():
-				t.Fatal("capacity workload exceeded the original process-fixture deadline")
+	for remaining := len(calls); remaining > 0; {
+		select {
+		case result, ok := <-results:
+			if !ok {
+				t.Fatal("capacity schedule ended without accounting for every request")
 			}
+			remaining--
+			call := calls[result.index]
+			lane := lanes[call.lane]
+			if lane == nil {
+				lane = &laneResult{statuses: make(map[int]int), errors: make(map[string]int), interval: call.interval}
+				lanes[call.lane] = lane
+			}
+			lane.latencies = append(lane.latencies, result.completed.Sub(result.started))
+			lane.starts = append(lane.starts, result.started)
+			if lane.first.IsZero() || result.started.Before(lane.first) {
+				lane.first = result.started
+			}
+			if result.completed.After(lane.last) {
+				lane.last = result.completed
+			}
+			if !result.scheduled.IsZero() {
+				lane.lags = append(lane.lags, result.started.Sub(result.scheduled))
+				lane.scheduledLatencies = append(lane.scheduledLatencies, result.completed.Sub(result.scheduled))
+			}
+			lane.statuses[result.status]++
+			secret, valid := call.verify(result.body)
+			if secret != "" {
+				secrets = append(secrets, secret)
+			}
+			if result.failed || result.status != call.status || !valid {
+				lane.failures++
+				reason := "response-contract"
+				if result.failed {
+					reason = "transport-or-body"
+				} else if result.status != call.status {
+					reason = "unexpected-status"
+				}
+				lane.errors[reason]++
+			}
+			clear(result.body)
+		case <-ticker.C:
+			sample()
+		case <-ctx.Done():
+			t.Fatal("capacity workload exceeded the original process-fixture deadline")
 		}
 	}
 	elapsed := time.Since(started)
@@ -3912,8 +4166,12 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 	sort.Strings(names)
 	for _, laneName := range names {
 		lane := lanes[laneName]
+		load := "closed-loop-paired-batches"
+		if schedule == iamCapacityIndependent {
+			load = "closed-loop-independent-lanes"
+		}
 		observation := map[string]any{
-			"stage": name, "lane": laneName, "concurrency": concurrency, "load": "closed-loop-paired-batches",
+			"stage": name, "lane": laneName, "concurrency": concurrency, "load": load,
 			"samples": len(lane.latencies), "failures": lane.failures, "statusCounts": lane.statuses, "errorCounts": lane.errors,
 			"elapsedMS": float64(elapsed) / float64(time.Millisecond), "verifiedRequestsPerSecond": float64(len(lane.latencies)-lane.failures) / elapsed.Seconds(),
 			"p50MS":              float64(capacityPercentile(lane.latencies, 50)) / float64(time.Millisecond),
@@ -3924,6 +4182,41 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 			"observedIAMActivePeak": peakActive, "observedIAMLockWaitingPeak": peakLockWaiting, "observedIAMOutboxPeak": peakOutbox,
 			"poolWaitDuration": nil, "lockWaitDuration": nil, "runnerCPUChange": cpuEnd,
 			"runnerMemoryCurrentBytes": capacityCgroupNumber(t, "memory.current"), "runnerMemoryPeakBytes": capacityCgroupNumber(t, "memory.peak"),
+		}
+		if schedule == iamCapacityIndependent {
+			observation["laneStartMS"] = float64(lane.first.Sub(started)) / float64(time.Millisecond)
+			observation["laneEndMS"] = float64(lane.last.Sub(started)) / float64(time.Millisecond)
+			observation["laneVerifiedRequestsPerSecond"] = float64(len(lane.latencies)-lane.failures) / lane.last.Sub(lane.first).Seconds()
+			observation["plannedIntervalMS"], observation["schedulingLagP99MS"], observation["scheduledCompletionP99MS"] = nil, nil, nil
+			if len(lane.lags) != 0 {
+				observation["plannedIntervalMS"] = float64(lane.interval) / float64(time.Millisecond)
+				for _, metric := range []struct {
+					name   string
+					values []time.Duration
+				}{
+					{"schedulingLag", lane.lags}, {"scheduledCompletion", lane.scheduledLatencies},
+				} {
+					for _, percentile := range []int{50, 95, 99, 100} {
+						observation[fmt.Sprintf("%sP%dMS", metric.name, percentile)] = float64(capacityPercentile(metric.values, percentile)) / float64(time.Millisecond)
+					}
+				}
+			}
+			observation["samplesStartedDuringPeerWindow"] = nil
+			for peerName, peer := range lanes {
+				if peerName == laneName {
+					continue
+				}
+				var overlap int
+				for _, begin := range lane.starts {
+					if !begin.Before(peer.first) && begin.Before(peer.last) {
+						overlap++
+					}
+				}
+				observation["samplesStartedDuringPeerWindow"] = overlap
+				if overlap == 0 {
+					t.Errorf("independent capacity stage %s lane %s never overlapped its peer", name, laneName)
+				}
+			}
 		}
 		encoded, err := json.Marshal(observation)
 		if err != nil {
