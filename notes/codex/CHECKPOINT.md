@@ -4,7 +4,7 @@
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Only this
   task's independent worktree is writable. Updated 2026-09-18.
-- Latest pushed implementation is
+- Latest pushed production implementation is
   3080922f6ae1871f1c351d5ee30f03551fc3c605, owner-bound login Session
   self-management (S1). Local whole-source race/architecture, vet, modules,
   identical generation, Linux build, cumulative PG18 IAM/Role/Audit/PaaS,
@@ -16,6 +16,20 @@
   independently accepted; UI and the complete009 remain unaccepted. Original
   per-test costs, cases and time budgets were preserved. Do not rerun a
   completed job solely to re-observe its already verified result.
+- Latest pushed gate slice is
+  f6cfe47d24003096ddca974525a5ee63507da10d, bounded multi-account HTTP/PG
+  observation in the original authorityprocess owner. IAM/011 owns its
+  precise evidence and limits. Final capacity gate passed98.00s:2000 timed
+  requests,400 unique new bearers verified on the opposite IAM replica,
+  1200 exact historical PDP results, immutable outbox and complete chains.
+  The original independent process scenario passed57.57s in another PG18 DB.
+  Windows clean-export whole-source race/architecture,vet,modules and CI
+  YAML/Bash checks passed. No production API/SQL/UI/profile was changed.
+- Verification35306329508 was read through the GitHub API at exactf6cfe47d:
+  go,node-process,authority-storage were running and authority-runtime queued.
+  It is NOT independently accepted yet. Poll this exact run, not the old S1
+  success or a new branch head; do not restart on an observation timeout.
+  The full goal remains active, including unaccepted capacity/fairness/HA.
 - Current source is IAM31/Audit18/PaaS2, IAM product Profile r5.
   Published release profile/revision unchanged. Backend verification does
   not establish UI, signed business, installation or final release acceptance.
@@ -55,6 +69,23 @@ later passes do not explain away those failures or justify weaker costs.
 
 ## Next delivery step
 
+First collect the terminal result of35306329508 and inspect the actual
+bounded capacity step as well as every required job. Its runner is2CPU/
+1536MiB/PIDs256 with existing5s HTTP/6min fixture and20min CI lane budgets.
+Metrics are closed-loop paired batches at concurrency1/2, not saturation,
+server-enforced fairness, pool-wait duration or a product SLO. Counter peaks
+include client/production children and build; sampled zero locks is not zero
+wait duration. The local test PG and empty network have been removed after
+ownership and zero-client checks; no other task or shared service was changed.
+
+Do not test a full source checkout containing ignored source exports as if
+it were a clean release tree: the architecture walker rightly sees those
+copies. Use an exact clean archive outside the repository. The slim Go image
+also lacks a real machine-id, so the original real-host probe tests fail
+there; do not fabricate one or skip them. The supported local Windows
+clean-export whole-source run passed unchanged. These failed precursor
+boundaries are recorded in011 and do not negate the separate PG process pass.
+
 The fixed3080922f source, exact successful CI and closed Session routes have
 been handed to UX/UI for its own branch and real browser acceptance. Only
 fixed-object integration is authorized; its implementation and evidence do
@@ -87,8 +118,12 @@ whole goal complete from a local backend slice.
 UX/UI工程师 01a07b21-9a0d-7fd0-b090-7827ce18262e owns UI/browser work
 in feat/cloud-console-ux. It has now received independently accepted3080922f
 and a scoped request to implement Session UI, preserving its own consumer
-baseline and real browser gates. Its prior reply confirms that unfrozen MFA
-APIs will not be wired; no S1 UI completion has been reported.
+baseline and real browser gates. Its latest explicit reply confirms the
+fixed source/semantics but says S1 UI has not yet been written; its existing
+service-navigation/flicker work is not S1 delivery. The missing session page,
+strict adapters,unknown-result request reuse,current logout and real browser
+gate remain theirs. Unfrozen MFA APIs will not be wired; no S1 UI fixed SHA
+or completion has been reported.
 
 Phase3 01a04149-5dbb-7300-9e4c-31d9e85c8ada explicitly opened the S1
 window after fixed c2fbd9e38d424e68c0466618ee74613aced3c3fb.

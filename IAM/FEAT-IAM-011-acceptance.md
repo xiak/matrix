@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；AC-11已有服务副本证据，受限容量首片已通过本地真实测量、原独立进程回归及全仓检查，本片独立CI待固定提交后确认。完整容量/HA、安装及整体需求未验收。
+- 状态：实施中；AC-11已有服务副本证据，受限容量首片固定`f6cfe47d24003096ddca974525a5ee63507da10d`已通过本地真实测量、原独立进程回归及全仓检查并推送；[独立CI35306329508](https://github.com/xiak/matrix/actions/runs/35306329508)已核对精确SHA、仍在运行，尚未独立验收。完整容量/HA、安装及整体需求未验收。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -86,7 +86,7 @@ AC-11 的服务副本证据：2026-09-11 现有 `TestIndependentIAMAuditAndPaaSP
 
 相同测试源码的原`TestIndependentIAMAuditAndPaaSProcesses`在另一空白PG18数据库通过57.57s，证明新增测量模式没有替换原业务/隔离/撤权/故障场景。全仓回归必须用支持本地主机探测的正常环境和干净源码：精简Go容器缺机器标识，导致3个原主机探测测试失败；原工作区中被Git忽略的旧源码副本被架构遍历检查命中，也不能记为源归档门禁通过。不伪造机器标识、不删改用例或扩大架构排除规则来取得通过。
 
-最终同一测试源码的Windows/amd64干净导出在Go1.26.3、GOMAXPROCS2下通过`go test -race -p 2 -count=1 ./...`（含architecture）、`go vet -p 2 ./...`和`go mod verify`；工作流YAML及新增Bash步骤解析通过，原20分钟lane预算/max-parallel1未改。默认无DSN的测试不冒充数据库验收，真实进程/PG范围仅为上列已运行门禁。本片没有生产API、SQL、schema/profile、UI或安装变更，独立CI待精确固定SHA确认。
+最终同一测试源码的Windows/amd64干净导出在Go1.26.3、GOMAXPROCS2下通过`go test -race -p 2 -count=1 ./...`（含architecture）、`go vet -p 2 ./...`和`go mod verify`；工作流YAML及新增Bash步骤解析通过，原20分钟lane预算/max-parallel1未改。默认无DSN的测试不冒充数据库验收，真实进程/PG范围仅为上列已运行门禁。本片没有生产API、SQL、schema/profile、UI或安装变更；固定源及独立CI状态见本文件顶部，不能继承此前S1的CI结果。
 
 ## 固定消费者的集成检查
 
