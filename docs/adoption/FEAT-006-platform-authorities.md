@@ -702,3 +702,17 @@ spreadsheet clients and save/reopen. No universal safe-CSV claim, report
 framework, data warehouse, background principal or new permission is adopted
 by this design review. Cross-product queries and actual acceptance belong
 to009 and the respective source owner.
+
+## Bounded capacity observation target review
+
+IAM/011 owns the real-runtime measurement and its acceptance limits. This
+slice does not change a production permission or reuse another task's fixture.
+
+| Fixed source / slice | Decision | Rationale |
+| --- | --- | --- |
+| Matrix `3080922f6ae1871f1c351d5ee30f03551fc3c605`, `test/authorityprocess/process_e2e_test.go` | `REUSE` current bootstrap, restricted runtime DSNs, real binaries, HTTP setup and outbox/chain checks; `ADAPT` a closed bounded measurement mode | Preserve actual two-instance identities and original deadlines/costs. Each measured request must verify its response and account/subject; health checks, mock PDPs and aggregate process durations cannot stand in for capacity. No second test framework or published profile is introduced. |
+| Same fixed source, group/custom-policy/boundary HTTP fixtures and current request-bound authorization | `REUSE` supported data/authority construction; `REFERENCE` its workload scale | Current fixtures provide real input contracts, not a claimed saturation load, tenant fairness budget or HA deployment. Fixed closed-loop samples and sampled PostgreSQL waits must state what they cannot measure. |
+
+The legacy framework metrics and Redis authority closure remain rejected by
+the foundation review. No legacy telemetry implementation, external load
+service or production debug endpoint is adopted.

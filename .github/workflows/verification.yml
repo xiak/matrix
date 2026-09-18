@@ -92,7 +92,7 @@ jobs:
               ;;
             authority-runtime)
               databases=(matrix_iam_upgrade_compiled_ci matrix_iam_upgrade_roles_ci matrix_iam_upgrade_role_authority_ci
-                matrix_iam_upgrade_own_session_ci matrix_authority_process_ci)
+                matrix_iam_upgrade_own_session_ci matrix_authority_process_ci matrix_authority_process_capacity_ci)
               ;;
             *) exit 1 ;;
           esac
@@ -156,6 +156,48 @@ jobs:
           MATRIX_IAM_OWN_SESSION_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_upgrade_own_session_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_authority_process_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
         run: time go test -race -p 1 -count=1 ./test/authorityprocess
+
+      - name: Bounded IAM HTTP and PostgreSQL capacity observation
+        if: matrix.lane == 'authority-runtime'
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          AUTHORITY_LABEL: iam-authority-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
+          CAPACITY_RUN: ${{ github.run_id }}_${{ github.run_attempt }}
+        run: |
+          test "$(docker inspect --format '{{ index .Config.Labels "matrix.task" }}' "$POSTGRES_CONTAINER_ID")" = "$AUTHORITY_LABEL"
+          mapfile -t networks < <(docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{"\n"}}{{end}}' "$POSTGRES_CONTAINER_ID" | sed '/^$/d')
+          test "${#networks[@]}" = 1
+          postgres_host="$(docker inspect --format '{{.Name}}' "$POSTGRES_CONTAINER_ID")"
+          postgres_host="${postgres_host#/}"
+          capacity_name="matrix-iam-capacity-${CAPACITY_RUN}"
+          capacity_cache="${capacity_name}-build"
+          capacity_source="$RUNNER_TEMP/${capacity_name}-source.tar"
+          cleanup_capacity() {
+            if docker inspect "$capacity_name" >/dev/null 2>&1; then
+              test "$(docker inspect --format '{{ index .Config.Labels "matrix.task" }}' "$capacity_name")" = "$AUTHORITY_LABEL" || return 1
+              docker rm --force "$capacity_name"
+            fi
+            if docker volume inspect "$capacity_cache" >/dev/null 2>&1; then
+              test "$(docker volume inspect --format '{{ index .Labels "matrix.task" }}' "$capacity_cache")" = "$AUTHORITY_LABEL" || return 1
+              docker volume rm "$capacity_cache"
+            fi
+          }
+          trap cleanup_capacity EXIT
+          # The exact tracked source, without a foreign-owned .git directory
+          # or machine-local edits, is also the local measurement boundary.
+          test ! -e "$capacity_source"
+          git archive --format=tar --output="$capacity_source" HEAD
+          docker volume create --label "matrix.task=$AUTHORITY_LABEL" --label matrix.slice=iam-capacity "$capacity_cache"
+          export MATRIX_IAM_CAPACITY_POSTGRES_TEST_DSN="postgres://postgres:matrix-authority-ci-test-only@${postgres_host}:5432/matrix_authority_process_capacity_ci_${CAPACITY_RUN}?sslmode=disable"
+          docker run --rm --name "$capacity_name" --label "matrix.task=$AUTHORITY_LABEL" --label matrix.slice=iam-capacity \
+            --cpus 2 --memory 1536m --memory-swap 1536m --pids-limit 256 --cgroupns private --network "${networks[0]}" \
+            --mount "type=bind,source=$capacity_source,target=/source.tar,readonly" \
+            --mount "type=bind,source=$(go env GOMODCACHE),target=/modules,readonly" \
+            --mount "type=volume,source=$capacity_cache,target=/cache" \
+            -e GOMAXPROCS=2 -e GOMEMLIMIT=512MiB -e GOCACHE=/cache -e GOMODCACHE=/modules \
+            -e MATRIX_IAM_CAPACITY_POSTGRES_TEST_DSN \
+            golang@sha256:1ecb7edf62a0408027bd5729dfd6b1b8766e578e8df93995b225dfd0944eb651 \
+            sh -c 'mkdir /work && tar -xf /source.tar -C /work && cd /work && go test -race -p 1 -count=1 -v ./test/authorityprocess -run "^TestIAMCapacityProcesses$"'
 
   authority-process:
     # Preserve the branch-protection check. The matrix result is success only

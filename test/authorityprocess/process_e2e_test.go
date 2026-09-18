@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1949,7 +1951,25 @@ func extractFixedAuthoritySource(t *testing.T, ctx context.Context, root, tempor
 }
 
 func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
-	testIndependentAuthorityProcesses(t, false)
+	testIndependentAuthorityProcesses(t, authorityProcessFull)
+}
+
+type authorityProcessMode uint8
+
+const (
+	authorityProcessFull authorityProcessMode = iota
+	authorityProcessBrowser
+	authorityProcessCapacity
+)
+
+// An opt-in bounded observation, not a production SLO or an open-loop load
+// generator. The ordinary security gate retains its entire original flow.
+func TestIAMCapacityProcesses(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_CAPACITY_POSTGRES_TEST_DSN") == "" {
+		t.Skip("set MATRIX_IAM_CAPACITY_POSTGRES_TEST_DSN to a separate disposable PG18 database")
+	}
+	assertIAMCapacityLimits(t)
+	testIndependentAuthorityProcesses(t, authorityProcessCapacity)
 }
 
 // This opt-in fixture is for observed browser acceptance, not an unattended
@@ -1958,16 +1978,20 @@ func TestIAMConsoleBrowser(t *testing.T) {
 	if os.Getenv("MATRIX_IAM_CONSOLE_BROWSER") != "1" {
 		t.Skip("set MATRIX_IAM_CONSOLE_BROWSER=1 for the bounded local browser fixture")
 	}
-	testIndependentAuthorityProcesses(t, true)
+	testIndependentAuthorityProcesses(t, authorityProcessBrowser)
 }
 
-func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
-	dsn := os.Getenv(authorityProcessDSN)
+func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) {
+	variable, prefix := authorityProcessDSN, "matrix_authority_process_"
+	if mode == authorityProcessCapacity {
+		variable, prefix = "MATRIX_IAM_CAPACITY_POSTGRES_TEST_DSN", "matrix_authority_process_capacity_"
+	}
+	dsn := os.Getenv(variable)
 	if dsn == "" {
-		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", authorityProcessDSN)
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
 	}
 	duration := 6 * time.Minute
-	if browser {
+	if mode == authorityProcessBrowser {
 		duration = 30 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
@@ -1977,7 +2001,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	if err != nil {
 		t.Fatalf("parse authority process DSN: %v", err)
 	}
-	if !strings.HasPrefix(adminConfig.Database, "matrix_authority_process_") {
+	if !strings.HasPrefix(adminConfig.Database, prefix) {
 		t.Fatalf("refusing authority process database %q", adminConfig.Database)
 	}
 	adminConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
@@ -2270,7 +2294,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 		changedAdminPassword,
 		"request-admin-password",
 	)
-	if browser {
+	if mode == authorityProcessBrowser {
 		runIAMConsoleBrowser(t, ctx, admin, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start)
 		return
 	}
@@ -2293,6 +2317,10 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	})
 	waitHTTPStatus(t, ctx, replicaProcess, replicaEndpoint+"/ready", http.StatusOK)
 	assertRuntimeProcessLogins(t, ctx, admin, replicaLogin)
+	if mode == authorityProcessCapacity {
+		sensitive = append(sensitive, measureIAMCapacity(t, ctx, admin, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential)...)
+		return
+	}
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, replicaEndpoint, adminLogin.Credential, "principal-admin", "request-replica-existing-session", true))
 	sensitive = append(sensitive, proveTenantAccountProcesses(t, ctx, admin, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential,
@@ -3253,6 +3281,618 @@ finished:
 		t.Fatal("browser facts failed the real Audit chain verification")
 	}
 	t.Log("browser fixture finished with real set/replace/remove facts; visual assertions belong to recorded browser observations")
+}
+
+type iamCapacityCall struct {
+	lane    string
+	request *http.Request
+	status  int
+	verify  func([]byte) (string, bool) // optional newly issued test secret, validity
+}
+
+func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica, auditEndpoint, paasEndpoint, platformBearer string) []string {
+	t.Helper()
+	const (
+		initial = "Capacity-Initial-Password-63!"
+		changed = "Capacity-Changed-Password-74!"
+		wrong   = "Capacity-Incorrect-Password-85!"
+	)
+	type accountFixture struct {
+		id          iamv1.AccountID
+		root        string
+		simple      iamv1.User
+		complex     iamv1.User
+		simpleLogin loginResult
+		groupLogin  loginResult
+		attachment  iamv1.PolicyAttachment
+	}
+	accounts := make([]accountFixture, 2)
+	secrets := []string{initial, changed, wrong}
+	// Deny deliberately omits public authority data. Check its real ownership
+	// against immutable stored evidence after timing, never widen the response.
+	type observedDecision struct {
+		ID        string                      `json:"id"`
+		AccountID iamv1.AccountID             `json:"tenant_id"`
+		UserID    iamv1.PrincipalID           `json:"principal_id"`
+		Document  iamv1.AuthorizationDecision `json:"document"`
+	}
+	var decisions []observedDecision
+	var plannedDecisions int
+	var issuedLogins []struct {
+		login  loginResult
+		server string
+	}
+	issuedSessions := make(map[iamv1.SessionID]bool)
+	issuedCredentials := make(map[string]bool)
+	var plannedLogins int
+	for index := range accounts {
+		account := &accounts[index]
+		account.id = iamv1.AccountID(fmt.Sprintf("account-capacity-%d", index))
+		rootName := fmt.Sprintf("capacity.root.%d", index)
+		opened := performJSON(t, http.MethodPost, endpoint+"/v1/accounts", platformBearer, map[string]any{
+			"id": account.id, "displayName": "Capacity account", "rootLoginName": rootName,
+			"rootDisplayName": "Capacity owner", "initialPassword": initial, "requestId": "capacity-open-" + string(account.id),
+		})
+		var created iamv1.Account
+		if opened.Status != http.StatusCreated || json.Unmarshal(opened.Body, &created) != nil || iamv1.ValidateAccount(created) != nil || created.ID != account.id {
+			t.Fatal("capacity account was not created through the real authority")
+		}
+		owner := loginIAM(t, endpoint, rootName, initial, "capacity-root-login-"+string(account.id))
+		changePasswordIAM(t, endpoint, owner.Credential, initial, changed, "capacity-root-password-"+string(account.id))
+		account.root = owner.Credential
+		secrets = append(secrets, owner.Credential)
+		account.simple = createIAMUser(t, endpoint, account.root, "capacity.simple", "Simple capacity user", initial, "capacity-simple-create")
+		account.complex = createIAMUser(t, endpoint, account.root, "capacity.group", "Group capacity user", initial, "capacity-group-create")
+		account.simpleLogin = loginIAM(t, endpoint, "capacity.simple@"+string(account.id), initial, "capacity-simple-login")
+		account.groupLogin = loginIAM(t, replica, "capacity.group@"+string(account.id), initial, "capacity-group-login")
+		changePasswordIAM(t, endpoint, account.simpleLogin.Credential, initial, changed, "capacity-simple-password")
+		changePasswordIAM(t, replica, account.groupLogin.Credential, initial, changed, "capacity-group-password")
+		secrets = append(secrets, account.simpleLogin.Credential, account.groupLogin.Credential)
+		account.attachment = createIAMPolicyAttachment(t, endpoint, account.root, account.simple.ID, iamv1.SystemPolicyPaaSViewer, "capacity-simple-attach")
+		for groupIndex := range 8 {
+			requestID := fmt.Sprintf("capacity-group-%d", groupIndex)
+			response := performJSON(t, http.MethodPost, endpoint+"/v1/groups", account.root,
+				iamv1.CreateGroupRequest{Name: fmt.Sprintf("Capacity group %d", groupIndex), RequestID: requestID})
+			var group iamv1.Group
+			if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &group) != nil || iamv1.ValidateGroup(group) != nil || group.AccountID != account.id {
+				t.Fatal("capacity group creation lost its authority")
+			}
+			response = performJSON(t, http.MethodPost, endpoint+"/v1/groups/"+string(group.ID)+"/memberships", account.root,
+				iamv1.CreateGroupMembershipRequest{UserID: account.complex.ID, RequestID: requestID + "-join"})
+			var membership iamv1.GroupMembership
+			if response.Status != http.StatusOK || json.Unmarshal(response.Body, &membership) != nil || iamv1.ValidateGroupMembership(membership) != nil || membership.UserID != account.complex.ID || membership.GroupID != group.ID || membership.AccountID != account.id {
+				t.Fatal("capacity group membership was not actually established")
+			}
+			document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{
+					{SID: "scoped-reader", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourcePrefixInAuthority, ID: "capacity-"}},
+						Conditions: []iamv1.PolicyCondition{
+							{Key: iamv1.ConditionIAMAccountID, Operator: iamv1.PolicyStringEquals, Values: []string{string(account.id)}},
+							{Key: iamv1.ConditionIAMPrincipalID, Operator: iamv1.PolicyStringEquals, Values: []string{string(account.complex.ID)}},
+						}},
+					{SID: "explicit-deny", Effect: iamv1.PolicyDeny, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "capacity-blocked"}}},
+				}}
+			response = performJSON(t, http.MethodPost, endpoint+"/v1/policies", account.root,
+				iamv1.CreatePolicyRequest{DisplayName: fmt.Sprintf("Capacity policy %d", groupIndex), Document: document, RequestID: requestID + "-policy"})
+			var policy iamv1.PolicyDetail
+			if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &policy) != nil || iamv1.ValidatePolicyDetail(policy) != nil || policy.Policy.AccountID != account.id {
+				t.Fatal("capacity custom policy did not compile in its account")
+			}
+			response = performJSON(t, http.MethodPost, endpoint+"/v1/policy-attachments", account.root,
+				iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}, PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion, RequestID: requestID + "-attach"})
+			var attachment iamv1.PolicyAttachment
+			if response.Status != http.StatusOK || json.Unmarshal(response.Body, &attachment) != nil || iamv1.ValidatePolicyAttachment(attachment) != nil || attachment.PolicyID != policy.Policy.ID || attachment.Target.ID != string(group.ID) {
+				t.Fatal("capacity group policy was not actually attached")
+			}
+		}
+		boundaryDocument := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "upper-bound", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+				Resources: []iamv1.PolicyResourceSelector{
+					{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "capacity-selected"},
+					{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "capacity-blocked"},
+				}}}}
+		response := performJSON(t, http.MethodPost, endpoint+"/v1/policies", account.root,
+			iamv1.CreatePolicyRequest{DisplayName: "Capacity upper bound", Document: boundaryDocument, RequestID: "capacity-boundary-policy"})
+		var policy iamv1.PolicyDetail
+		if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &policy) != nil || iamv1.ValidatePolicyDetail(policy) != nil {
+			t.Fatal("capacity upper bound publication failed")
+		}
+		boundaryPath := endpoint + "/v1/users/" + string(account.complex.ID) + "/permission-boundary"
+		response = performJSON(t, http.MethodGet, boundaryPath, account.root, nil)
+		var boundary iamv1.UserPermissionBoundary
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &boundary) != nil || iamv1.ValidateUserPermissionBoundary(boundary) != nil || boundary.Policy != nil {
+			t.Fatal("capacity user had an unexpected upper bound")
+		}
+		response = performJSON(t, http.MethodPut, boundaryPath, account.root,
+			iamv1.SetUserPermissionBoundaryRequest{PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion, ResourceVersion: boundary.ResourceVersion, RequestID: "capacity-boundary-set"})
+		if response.Status != http.StatusOK {
+			t.Fatal("capacity upper bound was not applied")
+		}
+		for _, server := range []string{endpoint, replica} {
+			response = performJSON(t, http.MethodGet, server+"/v1/auth/me", account.groupLogin.Credential, nil)
+			var identity iamv1.CurrentIdentity
+			if response.Status != http.StatusOK || json.Unmarshal(response.Body, &identity) != nil || iamv1.ValidateCurrentIdentity(identity) != nil || len(identity.PolicySources) != 8 || identity.PermissionBoundary.Policy == nil || identity.PermissionBoundary.Policy.PolicyID != policy.Policy.ID {
+				t.Fatal("capacity fixture is not exercising the actual group/boundary sources")
+			}
+			for _, source := range identity.PolicySources {
+				if source.Kind != iamv1.PolicyGrantGroup || source.Membership == nil || source.Membership.UserID != account.complex.ID {
+					t.Fatal("capacity fixture replaced group inheritance with direct permission")
+				}
+			}
+		}
+		for _, id := range []paasv1.ResourceID{"capacity-selected", "capacity-blocked", "capacity-beyond"} {
+			operation := createPaaSApplication(t, paasEndpoint, account.root, id, string(id), "create-"+string(id), http.StatusCreated)
+			if operation.Scope.TenantID != paasv1.TenantID(account.id) {
+				t.Fatal("capacity resource setup changed its tenant")
+			}
+		}
+		getPaaSApplication(t, paasEndpoint, account.simpleLogin.Credential, "capacity-selected", http.StatusOK)
+		getPaaSApplication(t, paasEndpoint, account.groupLogin.Credential, "capacity-selected", http.StatusOK)
+		getPaaSApplication(t, paasEndpoint, account.groupLogin.Credential, "capacity-blocked", http.StatusForbidden)
+		getPaaSApplication(t, paasEndpoint, account.groupLogin.Credential, "capacity-beyond", http.StatusForbidden)
+	}
+	t.Log("IAM capacity workload: two measured accounts, four ordinary users, sixteen inherited groups/policies, two upper bounds and six persisted applications; management load adds one hundred empty groups")
+	makeCall := func(lane, method, server, path, bearer string, body any, status int, verify func([]byte) (string, bool)) iamCapacityCall {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			var err error
+			encoded, err = json.Marshal(body)
+			if err != nil {
+				t.Fatal("capacity request encoding failed")
+			}
+		}
+		request, err := http.NewRequestWithContext(ctx, method, server+path, bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatal("capacity request construction failed")
+		}
+		if body != nil {
+			request.Header.Set("Content-Type", "application/json")
+		}
+		if bearer != "" {
+			request.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		return iamCapacityCall{lane: lane, request: request, status: status, verify: verify}
+	}
+	loginCall := func(account accountFixture, server, id string, incorrect bool) iamCapacityCall {
+		password, status, lane := changed, http.StatusOK, "login-"+string(account.id)
+		if incorrect {
+			password, status, lane = wrong, http.StatusUnauthorized, "wrong-password-"+string(account.id)
+		} else {
+			plannedLogins++
+		}
+		return makeCall(lane, http.MethodPost, server, "/v1/auth/login", "", map[string]string{
+			"loginName": "capacity.simple@" + string(account.id), "password": password, "requestId": id,
+		}, status, func(body []byte) (string, bool) {
+			if incorrect {
+				var problem iamv1.Problem
+				return "", json.Unmarshal(body, &problem) == nil && problem.Status == http.StatusUnauthorized && !bytes.Contains(body, []byte(`"credential"`)) && !bytes.Contains(body, []byte(password))
+			}
+			var value struct {
+				Session            iamv1.Session `json:"session"`
+				Credential         string        `json:"credential"`
+				MustChangePassword bool          `json:"mustChangePassword"`
+			}
+			valid := json.Unmarshal(body, &value) == nil && iamv1.ValidateSession(value.Session) == nil && value.Session.AccountID == account.id && value.Session.PrincipalID == account.simple.ID && value.Session.Status == iamv1.SessionActive && value.Session.RevokedAt == nil && !value.MustChangePassword && strings.HasPrefix(value.Credential, "mx1.") && !issuedSessions[value.Session.ID] && !issuedCredentials[value.Credential]
+			if valid {
+				other := replica
+				if server == replica {
+					other = endpoint
+				}
+				issuedSessions[value.Session.ID], issuedCredentials[value.Credential] = true, true
+				issuedLogins = append(issuedLogins, struct {
+					login  loginResult
+					server string
+				}{login: loginResult{Session: value.Session, Credential: value.Credential}, server: other})
+			}
+			return value.Credential, valid
+		})
+	}
+	policyCall := func(account accountFixture, server, id, resource string, complex, allowed bool) iamCapacityCall {
+		plannedDecisions++
+		user, bearer, kind := account.simple, account.simpleLogin.Credential, "simple"
+		if complex {
+			user, bearer, kind = account.complex, account.groupLogin.Credential, "group-boundary"
+		}
+		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: resource}, iamv1.AuthorizationResourceInstance, "", id, id)
+		if err != nil {
+			t.Fatal("capacity authorization request is outside the product declaration")
+		}
+		call := makeCall(kind+"-"+string(account.id), http.MethodPost, server, "/v1/authorize", paasServiceCredential, request, http.StatusOK, func(body []byte) (string, bool) {
+			var decision iamv1.AuthorizationDecision
+			valid := json.Unmarshal(body, &decision) == nil && capacityDecisionMatches(decision, request, account.id, user.ID, allowed)
+			if valid {
+				decisions = append(decisions, observedDecision{ID: string(decision.ID), AccountID: account.id, UserID: user.ID, Document: decision})
+			}
+			return "", valid
+		})
+		call.request.Header.Set("Matrix-Subject-Credential", bearer)
+		return call
+	}
+	servers := []string{endpoint, replica}
+	for _, concurrency := range []int{1, 2} {
+		for _, kind := range []string{"login", "simple", "group-boundary"} {
+			stage := fmt.Sprintf("%s-c%d", kind, concurrency)
+			calls := make([]iamCapacityCall, 0, 200)
+			for index := range 200 {
+				account, server := accounts[index%2], servers[(index/2)%2]
+				id := fmt.Sprintf("capacity-%s-%d", stage, index)
+				if kind == "login" {
+					calls = append(calls, loginCall(account, server, id, false))
+				} else {
+					resource := "capacity-selected"
+					if kind == "group-boundary" {
+						resource = []string{"capacity-selected", "capacity-blocked", "capacity-beyond"}[(index/2)%3]
+					}
+					calls = append(calls, policyCall(account, server, id, resource, kind == "group-boundary", resource == "capacity-selected"))
+				}
+			}
+			waitAllIAMOutboxDelivered(t, ctx, database)
+			secrets = append(secrets, runIAMCapacityStage(t, ctx, database, stage, concurrency, calls)...)
+		}
+	}
+	for _, kind := range []string{"business-read", "management-mix", "wrong-password-mix"} {
+		calls := make([]iamCapacityCall, 0, 200)
+		for index := range 200 {
+			account, server := accounts[index%2], servers[(index/2)%2]
+			id := fmt.Sprintf("capacity-%s-%d", kind, index)
+			switch {
+			case kind == "business-read":
+				calls = append(calls, makeCall(kind+"-"+string(account.id), http.MethodGet, paasEndpoint, "/v1/applications/capacity-selected", account.simpleLogin.Credential, nil, http.StatusOK, func(body []byte) (string, bool) {
+					var application paasv1.Application
+					return "", json.Unmarshal(body, &application) == nil && paasv1.ValidateApplication(application) == nil && application.Metadata.ID == "capacity-selected" && application.Metadata.Scope.TenantID == paasv1.TenantID(account.id)
+				}))
+			case kind == "management-mix" && index%2 == 0:
+				calls = append(calls, makeCall("management-"+string(account.id), http.MethodPost, server, "/v1/groups", account.root, iamv1.CreateGroupRequest{Name: fmt.Sprintf("Capacity new group %d", index), RequestID: id}, http.StatusCreated, func(body []byte) (string, bool) {
+					var group iamv1.Group
+					return "", json.Unmarshal(body, &group) == nil && iamv1.ValidateGroup(group) == nil && group.AccountID == account.id && group.Name == fmt.Sprintf("Capacity new group %d", index)
+				}))
+			case kind == "wrong-password-mix" && index%2 == 0:
+				calls = append(calls, loginCall(account, server, id, true))
+			default:
+				calls = append(calls, policyCall(account, server, id, "capacity-selected", true, true))
+			}
+		}
+		waitAllIAMOutboxDelivered(t, ctx, database)
+		secrets = append(secrets, runIAMCapacityStage(t, ctx, database, kind, 2, calls)...)
+	}
+	// A successful write is followed by new requests through both real replicas;
+	// measured Deny is expected service work, never counted as an HTTP failure.
+	revokeIAMPolicyAttachment(t, replica, accounts[0].root, accounts[0].attachment.ID, accounts[0].attachment.ResourceVersion, "capacity-revoke-simple")
+	calls := make([]iamCapacityCall, 0, 200)
+	for index := range 200 {
+		calls = append(calls, policyCall(accounts[index%2], servers[(index/2)%2], fmt.Sprintf("capacity-revoked-%d", index), "capacity-selected", false, index%2 != 0))
+	}
+	secrets = append(secrets, runIAMCapacityStage(t, ctx, database, "post-revocation", 2, calls)...)
+	// A well-formed login response is not enough: every measured credential
+	// must authenticate its actual USER on the other process. These reads are
+	// deliberately outside all timed stages and confer no business permission.
+	if plannedLogins == 0 || len(issuedLogins) != plannedLogins {
+		t.Fatal("capacity login observation lost or reused an issued session")
+	}
+	for _, issued := range issuedLogins {
+		response := performJSON(t, http.MethodGet, issued.server+"/v1/auth/me", issued.login.Credential, nil)
+		var identity iamv1.CurrentIdentity
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &identity) != nil || iamv1.ValidateCurrentIdentity(identity) != nil || identity.Account.ID != issued.login.Session.AccountID || identity.User.ID != issued.login.Session.PrincipalID || identity.IdentityKind != iamv1.IdentityUser || identity.User.MustChangePassword {
+			t.Fatal("a measured login credential could not authenticate its actual USER on the other IAM process")
+		}
+	}
+	for _, account := range accounts {
+		for _, resource := range []paasv1.ResourceID{"capacity-selected", "capacity-blocked", "capacity-beyond"} {
+			getPaaSApplication(t, paasEndpoint, account.root, resource, http.StatusOK)
+		}
+	}
+	assertRuntimeProcessLogins(t, ctx, database, iamAPILogin, "matrix_authority_process_iam_replica", iamWorkerLogin, auditRuntimeLogin, paasAPILogin, paasWorkerLogin)
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	waitAllPaaSOutboxDelivered(t, ctx, database)
+	var outboxCount, recordCount int
+	var sameFacts bool
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.audit_outbox),count(record.event_id),
+		COALESCE(bool_and(record.event_document=outbox.event_document),false)
+		FROM iam.audit_outbox outbox LEFT JOIN audit.records record
+		ON record.source='IAM' AND record.event_id=outbox.event_id`).Scan(&outboxCount, &recordCount, &sameFacts); err != nil || outboxCount == 0 || recordCount != outboxCount || !sameFacts {
+		t.Fatal("capacity load lost, duplicated or rewrote a committed IAM audit fact")
+	}
+	encodedDecisions, err := json.Marshal(decisions)
+	if err != nil || plannedDecisions == 0 || len(decisions) != plannedDecisions {
+		t.Fatal("capacity observation lost a request-bound authorization result")
+	}
+	var recorded int
+	var confined bool
+	if err := database.QueryRow(ctx, `WITH expected AS (
+		SELECT * FROM jsonb_to_recordset($1::jsonb) AS e(id text,tenant_id text,principal_id text,document jsonb))
+		SELECT count(*),COALESCE(bool_and(d.principal_id=e.principal_id AND d.document::jsonb=e.document
+			AND d.allowed=(e.document->>'allowed')::boolean AND d.request_id=e.document->>'requestId'
+			AND d.action_name=e.document->>'action' AND d.target_kind=e.document->'resource'->>'kind'
+			AND d.target_id=e.document->'resource'->>'id'),false)
+		FROM expected e JOIN iam.authorization_decisions d ON d.tenant_id=e.tenant_id AND d.id=e.id`, string(encodedDecisions)).Scan(&recorded, &confined); err != nil || !confined || recorded != len(decisions) {
+		t.Fatal("measured Allow/Deny did not preserve its exact private account/actor/request evidence")
+	}
+	for _, account := range accounts {
+		verification := verifyAudit(t, auditEndpoint, account.root)
+		if verification.State != auditv1.VerificationVerified || !verification.Complete || verification.TenantID != auditv1.TenantID(account.id) {
+			t.Fatal("capacity load did not preserve its account audit chain")
+		}
+	}
+	return secrets
+}
+
+func capacityCgroupNumber(t *testing.T, name string) uint64 {
+	t.Helper()
+	content, err := os.ReadFile("/sys/fs/cgroup/" + name)
+	if err != nil {
+		t.Fatal("capacity observation requires its own readable cgroup v2 counters")
+	}
+	value, err := strconv.ParseUint(strings.TrimSpace(string(content)), 10, 64)
+	if err != nil {
+		t.Fatal("capacity observation requires a finite cgroup counter/limit")
+	}
+	return value
+}
+
+func assertIAMCapacityLimits(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Fatal("capacity observation requires a bounded Linux runner")
+	}
+	content, err := os.ReadFile("/sys/fs/cgroup/cpu.max")
+	parts := strings.Fields(string(content))
+	if err != nil || len(parts) != 2 {
+		t.Fatal("capacity observation has no cgroup CPU ceiling")
+	}
+	quota, quotaErr := strconv.ParseUint(parts[0], 10, 64)
+	period, periodErr := strconv.ParseUint(parts[1], 10, 64)
+	if quotaErr != nil || periodErr != nil || quota == 0 || period == 0 || period > 1_000_000_000 || quota > 2*period || runtime.GOMAXPROCS(0) != 2 {
+		t.Fatal("capacity runner exceeds the fixed two-CPU budget")
+	}
+	memory, pids := capacityCgroupNumber(t, "memory.max"), capacityCgroupNumber(t, "pids.max")
+	if memory == 0 || memory > 1536*1024*1024 || pids == 0 || pids > 256 {
+		t.Fatal("capacity runner exceeds the fixed memory/PID budget")
+	}
+	t.Logf("IAM_CAPACITY_LIMITS go=%s cpu_quota=%d cpu_period=%d memory_max=%d pids_max=%d gomaxprocs=2; test client and authority executables share these limits; PostgreSQL is separately bounded", runtime.Version(), quota, period, memory, pids)
+}
+
+func capacityCPU(t *testing.T) map[string]uint64 {
+	t.Helper()
+	content, err := os.ReadFile("/sys/fs/cgroup/cpu.stat")
+	if err != nil {
+		t.Fatal("capacity CPU observation is unavailable")
+	}
+	result := make(map[string]uint64)
+	for _, line := range strings.Split(string(content), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) != 2 || (parts[0] != "usage_usec" && parts[0] != "nr_throttled" && parts[0] != "throttled_usec") {
+			continue
+		}
+		value, err := strconv.ParseUint(parts[1], 10, 64)
+		if err != nil {
+			t.Fatal("invalid capacity CPU counter")
+		}
+		result[parts[0]] = value
+	}
+	if len(result) != 3 {
+		t.Fatal("capacity CPU observation is incomplete")
+	}
+	return result
+}
+
+func capacityPercentile(values []time.Duration, percentile int) time.Duration {
+	if len(values) == 0 || percentile < 1 || percentile > 100 {
+		return 0
+	}
+	ordered := append([]time.Duration(nil), values...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	return ordered[(len(ordered)*percentile+99)/100-1]
+}
+
+func capacityDecisionMatches(decision iamv1.AuthorizationDecision, request iamv1.AuthorizationRequest, account iamv1.AccountID, user iamv1.PrincipalID, allowed bool) bool {
+	if iamv1.ValidateAuthorizationDecision(decision) != nil || decision.Allowed != allowed || decision.RequestID != request.RequestID || decision.CorrelationID != request.CorrelationID || decision.Action != request.Action || decision.Resource != request.Resource || decision.Profile == nil || *decision.Profile != request.Profile || decision.ResourceMode != request.ResourceMode || decision.CollectionUsage != request.CollectionUsage {
+		return false
+	}
+	if !allowed {
+		return decision.TenantID == "" && decision.InstallationID == "" && decision.Subject == nil
+	}
+	return decision.TenantID == account && decision.InstallationID == "" && decision.Subject != nil && decision.Subject.Type == iamv1.SubjectUser && decision.Subject.ID == string(user) && decision.Subject.RoleSession == nil && decision.Subject.AccessKeyID == ""
+}
+
+func TestIAMCapacityDecisionAttribution(t *testing.T) {
+	request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "capacity-selected"}, iamv1.AuthorizationResourceInstance, "", "capacity-request", "capacity-correlation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, allowed := range []bool{false, true} {
+		decision := func() iamv1.AuthorizationDecision {
+			profile := request.Profile
+			value := iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "capacity-decision", Allowed: allowed,
+				Reason: iamv1.DecisionDenied, Action: request.Action, Resource: request.Resource, RequestID: request.RequestID, CorrelationID: request.CorrelationID,
+				DecidedAt: time.Unix(1_800_000_000, 0).UTC(), Profile: &profile, ResourceMode: request.ResourceMode}
+			if allowed {
+				value.Reason, value.TenantID = iamv1.DecisionAllowed, "capacity-account"
+				value.Subject = &iamv1.Subject{Type: iamv1.SubjectUser, ID: "capacity-user"}
+			}
+			return value
+		}
+		if !capacityDecisionMatches(decision(), request, "capacity-account", "capacity-user", allowed) {
+			t.Fatal("a valid current Allow or authority-free Deny was discarded")
+		}
+		for _, mutate := range []func(*iamv1.AuthorizationDecision){
+			func(d *iamv1.AuthorizationDecision) { d.Allowed = !allowed },
+			func(d *iamv1.AuthorizationDecision) { d.TenantID = "another-account" },
+			func(d *iamv1.AuthorizationDecision) {
+				d.Subject = &iamv1.Subject{Type: iamv1.SubjectUser, ID: "another-user"}
+			},
+			func(d *iamv1.AuthorizationDecision) { d.RequestID = "another-request" },
+			func(d *iamv1.AuthorizationDecision) { d.CorrelationID = "another-correlation" },
+			func(d *iamv1.AuthorizationDecision) { d.Resource.ID = "another-resource" },
+			func(d *iamv1.AuthorizationDecision) { d.Profile = nil },
+		} {
+			value := decision()
+			mutate(&value)
+			if capacityDecisionMatches(value, request, "capacity-account", "capacity-user", allowed) {
+				t.Fatal("a wrong decision or leaked Deny identity was counted as valid work")
+			}
+		}
+	}
+}
+
+func TestIAMCapacityPercentiles(t *testing.T) {
+	values := make([]time.Duration, 100)
+	for index := range values {
+		values[index] = time.Duration(100-index) * time.Millisecond
+	}
+	for _, percentile := range []int{50, 95, 99, 100} {
+		if capacityPercentile(values, percentile) != time.Duration(percentile)*time.Millisecond {
+			t.Fatal("capacity percentiles omitted a tail sample")
+		}
+	}
+	if values[0] != 100*time.Millisecond || capacityPercentile(nil, 99) != 0 || capacityPercentile([]time.Duration{5 * time.Second}, 99) != 5*time.Second {
+		t.Fatal("capacity observations were mutated or an error-duration sample was lost")
+	}
+}
+
+func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, name string, concurrency int, calls []iamCapacityCall) []string {
+	t.Helper()
+	if concurrency < 1 || concurrency > 2 || len(calls) == 0 || len(calls) > 200 {
+		t.Fatal("capacity stage exceeded its fixed workload budget")
+	}
+	type completedCall struct {
+		index    int
+		status   int
+		body     []byte
+		duration time.Duration
+		failed   bool
+	}
+	type laneResult struct {
+		latencies []time.Duration
+		failures  int
+		statuses  map[int]int
+		errors    map[string]int
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.MaxConnsPerHost, transport.MaxIdleConnsPerHost, transport.MaxIdleConns = 2, 2, 4
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	results := make(chan completedCall, 2)
+	lanes := make(map[string]*laneResult)
+	var secrets []string
+	var samples, peakConnections, peakActive, peakLockWaiting, peakOutbox int
+	sample := func() {
+		var connections, active, locked, perLogin, backlog int
+		err := database.QueryRow(ctx, `WITH observed AS (
+			SELECT state,wait_event_type,count(*) OVER (PARTITION BY usename) AS per_login
+			FROM pg_stat_activity WHERE datname=current_database() AND application_name=ANY($1))
+			SELECT count(*),count(*) FILTER (WHERE state='active'),
+			count(*) FILTER (WHERE state='active' AND wait_event_type='Lock'),COALESCE(max(per_login),0),
+			(SELECT count(*) FROM iam.audit_outbox WHERE status <> 'DELIVERED') FROM observed`,
+			[]string{"matrix-authority-process:" + iamAPILogin, "matrix-authority-process:matrix_authority_process_iam_replica"}).Scan(&connections, &active, &locked, &perLogin, &backlog)
+		if err != nil || perLogin > 2 || connections > 4 {
+			t.Fatal("capacity database observation failed or runtime connection ceiling was exceeded")
+		}
+		samples++
+		peakConnections, peakActive, peakLockWaiting, peakOutbox = max(peakConnections, connections), max(peakActive, active), max(peakLockWaiting, locked), max(peakOutbox, backlog)
+	}
+	sample()
+	cpuStart := capacityCPU(t)
+	started := time.Now()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for offset := 0; offset < len(calls); offset += concurrency {
+		batch := min(concurrency, len(calls)-offset)
+		for index := offset; index < offset+batch; index++ {
+			go func(index int) {
+				begin := time.Now()
+				result := completedCall{index: index}
+				response, err := client.Do(calls[index].request)
+				if err != nil {
+					result.failed = true
+				} else {
+					result.status = response.StatusCode
+					result.body, err = io.ReadAll(io.LimitReader(response.Body, 2*1024*1024+1))
+					closeErr := response.Body.Close()
+					result.failed = err != nil || closeErr != nil || len(result.body) > 2*1024*1024
+				}
+				result.duration = time.Since(begin)
+				results <- result
+			}(index)
+		}
+		for remaining := batch; remaining > 0; {
+			select {
+			case result := <-results:
+				remaining--
+				call := calls[result.index]
+				lane := lanes[call.lane]
+				if lane == nil {
+					lane = &laneResult{statuses: make(map[int]int), errors: make(map[string]int)}
+					lanes[call.lane] = lane
+				}
+				lane.latencies = append(lane.latencies, result.duration)
+				lane.statuses[result.status]++
+				secret, valid := call.verify(result.body)
+				if secret != "" {
+					secrets = append(secrets, secret)
+				}
+				if result.failed || result.status != call.status || !valid {
+					lane.failures++
+					reason := "response-contract"
+					if result.failed {
+						reason = "transport-or-body"
+					} else if result.status != call.status {
+						reason = "unexpected-status"
+					}
+					lane.errors[reason]++
+				}
+				clear(result.body)
+			case <-ticker.C:
+				sample()
+			case <-ctx.Done():
+				t.Fatal("capacity workload exceeded the original process-fixture deadline")
+			}
+		}
+	}
+	elapsed := time.Since(started)
+	sample()
+	cpuEnd := capacityCPU(t)
+	for key, before := range cpuStart {
+		if cpuEnd[key] < before {
+			t.Fatal("capacity counter reset during one stage")
+		}
+		cpuEnd[key] -= before
+	}
+	names := make([]string, 0, len(lanes))
+	for lane := range lanes {
+		names = append(names, lane)
+	}
+	sort.Strings(names)
+	for _, laneName := range names {
+		lane := lanes[laneName]
+		observation := map[string]any{
+			"stage": name, "lane": laneName, "concurrency": concurrency, "load": "closed-loop-paired-batches",
+			"samples": len(lane.latencies), "failures": lane.failures, "statusCounts": lane.statuses, "errorCounts": lane.errors,
+			"elapsedMS": float64(elapsed) / float64(time.Millisecond), "verifiedRequestsPerSecond": float64(len(lane.latencies)-lane.failures) / elapsed.Seconds(),
+			"p50MS":              float64(capacityPercentile(lane.latencies, 50)) / float64(time.Millisecond),
+			"p95MS":              float64(capacityPercentile(lane.latencies, 95)) / float64(time.Millisecond),
+			"p99MS":              float64(capacityPercentile(lane.latencies, 99)) / float64(time.Millisecond),
+			"maxMS":              float64(capacityPercentile(lane.latencies, 100)) / float64(time.Millisecond),
+			"samplingIntervalMS": 100, "databaseSamples": samples, "observedIAMConnectionsPeak": peakConnections,
+			"observedIAMActivePeak": peakActive, "observedIAMLockWaitingPeak": peakLockWaiting, "observedIAMOutboxPeak": peakOutbox,
+			"poolWaitDuration": nil, "lockWaitDuration": nil, "runnerCPUChange": cpuEnd,
+			"runnerMemoryCurrentBytes": capacityCgroupNumber(t, "memory.current"), "runnerMemoryPeakBytes": capacityCgroupNumber(t, "memory.peak"),
+		}
+		encoded, err := json.Marshal(observation)
+		if err != nil {
+			t.Fatal("capacity observation encoding failed")
+		}
+		t.Logf("IAM_CAPACITY %s", encoded)
+		if lane.failures != 0 || len(lane.latencies) != 100 {
+			t.Errorf("capacity stage %s lane %s: samples=%d failures=%d; no retries or samples discarded", name, laneName, len(lane.latencies), lane.failures)
+		}
+	}
+	return secrets
 }
 
 func buildAuthorityBinaries(
