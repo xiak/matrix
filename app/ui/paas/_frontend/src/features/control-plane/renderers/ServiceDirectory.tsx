@@ -36,7 +36,7 @@ function ServiceEntry({ service, query = "", onNavigate, onRemoveFavorite }: { s
   const toggleFavorite = useConsoleUiStore((state) => state.toggleFavoriteService);
   const visitService = useConsoleUiStore((state) => state.visitService);
   return <li className={styles.service}>
-    <Link className={styles.serviceLink} data-service-link="true" href={service.href} onNavigate={onNavigate} onAccepted={() => visitService(service.id)}>
+    <Link className={styles.serviceLink} data-service-link="true" href={service.href} onAccepted={() => { onNavigate?.(); visitService(service.id); }}>
       <span className={styles.serviceName}><span><MatchText query={query} text={service.label} /></span><ArrowUpRight aria-hidden="true" /></span>
       <span className={styles.serviceDescription}><MatchText query={query} text={service.description} /></span>
     </Link>

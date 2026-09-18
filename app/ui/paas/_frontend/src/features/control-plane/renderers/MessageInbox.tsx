@@ -30,7 +30,7 @@ function MessageItem({ message, read, expanded, onToggle, onNavigate }: { messag
       {expanded ? <div className={styles.detail}>
         <p>{message.description}</p>
         {message.category === "alert" ? <p className={styles.hint}>{t("alertReadHint")}</p> : null}
-        {message.href ? <Button asChild size="small" variant="secondary"><Link href={message.href} onClick={onNavigate}>{t(`destinations.${message.category}`)}</Link></Button> : null}
+        {message.href ? <Button asChild size="small" variant="secondary"><Link href={message.href} onAccepted={onNavigate}>{t(`destinations.${message.category}`)}</Link></Button> : null}
       </div> : null}
     </details>
   </li>;

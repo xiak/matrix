@@ -43,14 +43,14 @@ function RouteContent({ href }: { href: string }) {
   return <output aria-label="Current content">{href}</output>;
 }
 
-function NavigationControls() {
+function NavigationControls({ onAccepted }: { onAccepted?(): void }) {
   const navigation = useConsoleNavigation();
   return <>
     <output aria-label="Pending destination">{navigation.pendingHref ?? "idle"}</output>
     <output aria-label="Pending section">{navigation.pendingSelection?.section ?? "idle"}</output>
     <ConsoleLink href="/console/">Home</ConsoleLink>
     <ConsoleLink href="/console/resources/">Resources</ConsoleLink>
-    <ConsoleLink href="/console/logs/">Logs</ConsoleLink>
+    <ConsoleLink href="/console/logs/" onAccepted={onAccepted}>Logs</ConsoleLink>
     <ConsoleLink href="/console/access/groups/?id=group%2Fexample">Group detail</ConsoleLink>
     <ConsoleLink href="/console/access/groups/">Group directory</ConsoleLink>
     <ConsoleLink href="/console/quotas/" onNavigate={(event) => event.preventDefault()}>Blocked</ConsoleLink>
@@ -71,12 +71,12 @@ const headerProps: React.ComponentProps<typeof ConsoleHeader> = {
   productName: "Console", scope: { regionId: "all", onRegionChange() {} }, identity: { accountType: "Primary", loginName: "preview", principalId: "preview", tenant: { name: "Preview" } }, onLogout() {}, onPrepareServices() {}, revoking: false
 };
 
-function Harness({ initialHref = "/console/", withDraft = false, withHeader = false }: { initialHref?: string; withDraft?: boolean; withHeader?: boolean }) {
+function Harness({ initialHref = "/console/", onAccepted, withDraft = false, withHeader = false }: { initialHref?: string; onAccepted?(): void; withDraft?: boolean; withHeader?: boolean }) {
   const [href, setHref] = useState(initialHref);
   router.push.mockImplementation((target: string) => setHref(target));
   return <ConsoleNavigationProvider selection={parseControlPlanePathname(href.split(/[?#]/)[0] ?? "")}>
     {withHeader ? <ConsoleHeader {...headerProps} /> : null}
-    <NavigationControls />
+    <NavigationControls onAccepted={onAccepted} />
     <Suspense fallback={<span>Route fallback</span>}><RouteContent href={href} />{withDraft && href === initialHref ? <DraftProbe /> : null}</Suspense>
   </ConsoleNavigationProvider>;
 }
@@ -204,6 +204,18 @@ describe("Console navigation", () => {
     expect(screen.getByLabelText("Pending section").textContent).toBe("resources");
     await act(async () => request.release());
     expect(screen.getByLabelText("Pending section").textContent).toBe("idle");
+  });
+
+  it("runs accepted-navigation effects only after the destination frame is in the DOM", async () => {
+    const request = hold("/console/logs/");
+    const observed: string[] = [];
+    render(<Harness onAccepted={() => observed.push(screen.getByLabelText("Pending section").textContent ?? "missing")} />);
+
+    fireEvent.click(screen.getByRole("link", { name: "Logs" }));
+
+    expect(observed).toEqual(["logs"]);
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("/console/logs/");
+    await act(async () => request.release());
   });
 
   it("keeps the latest destination when navigation interrupts a slower visit", async () => {

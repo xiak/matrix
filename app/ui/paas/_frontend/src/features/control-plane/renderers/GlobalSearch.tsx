@@ -63,10 +63,12 @@ export function GlobalSearch({ open, onOpenChange, results, onChoose, inactive =
   }
 
   function choose(item: GlobalSearchResultScene) {
-    onOpenChange(false);
-    setQuery("");
-    setActiveIndex(0);
-    navigation.navigate(item.href, { onAccepted: () => onChoose?.(item.id) });
+    navigation.navigate(item.href, { onAccepted: () => {
+      onOpenChange(false);
+      setQuery("");
+      setActiveIndex(0);
+      onChoose?.(item.id);
+    } });
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {

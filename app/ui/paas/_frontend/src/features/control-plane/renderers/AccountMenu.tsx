@@ -134,7 +134,7 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking }
                 <Link
                   className={styles.menuItem}
                   href="/console/access/"
-                  onClick={() => onOpenChange(false)}
+                  onAccepted={() => onOpenChange(false)}
                   ref={(node) => { items.current[0] = node; }}
                   role="menuitem"
                   tabIndex={activeItem === 0 ? 0 : -1}

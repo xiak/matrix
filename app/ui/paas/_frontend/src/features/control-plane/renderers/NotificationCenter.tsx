@@ -61,11 +61,11 @@ export function NotificationCenter({ activeOperationCount, messages, onOpenChang
       {open ? (
         <HeaderPopover align="end" id={panelId} label={t("title")} onKeyDown={handleKeyDown} size="medium">
           <HeaderPopoverHeader
-            action={<Link href="/console/messages/" onClick={() => onOpenChange(false)}>{t("viewAll")}</Link>}
+            action={<Link href="/console/messages/" onAccepted={() => onOpenChange(false)}>{t("viewAll")}</Link>}
             description={t("count", { count })}
             title={t("title")}
           />
-          {activeOperationCount > 0 ? <Link className={styles.activeTasks} href="/console/operations/" onClick={() => onOpenChange(false)}><Workflow aria-hidden="true" /><span><strong>{t("runningTasks", { count: activeOperationCount })}</strong><small>{t("taskProgressHint")}</small></span><ChevronRight aria-hidden="true" /></Link> : null}
+          {activeOperationCount > 0 ? <Link className={styles.activeTasks} href="/console/operations/" onAccepted={() => onOpenChange(false)}><Workflow aria-hidden="true" /><span><strong>{t("runningTasks", { count: activeOperationCount })}</strong><small>{t("taskProgressHint")}</small></span><ChevronRight aria-hidden="true" /></Link> : null}
           <MessageInbox compact messages={messages} onNavigate={() => onOpenChange(false)} />
         </HeaderPopover>
       ) : null}

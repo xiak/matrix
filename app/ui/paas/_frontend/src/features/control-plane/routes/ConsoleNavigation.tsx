@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useTransition, type ComponentProps, type ReactNode } from "react";
+import { createContext, useContext, useLayoutEffect, useState, useTransition, type ComponentProps, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
@@ -32,11 +32,16 @@ function ConsoleNavigationBoundary({ selection, children }: { selection: Control
   const router = useRouter();
   const requestLeave = useLeaveConfirmation();
   const [isPending, startTransition] = useTransition();
-  const [destination, setDestination] = useState<string | null>(null);
+  const [destination, setDestination] = useState<{ href: string; onAccepted?(): void } | null>(null);
   const currentHref = consoleRouteHref(selection);
   // Destination identity is urgent; only route content belongs to the router
   // transition. Regional loading feedback owns its own anti-flash delay.
-  const pendingHref = isPending ? destination : null;
+  const pendingHref = isPending ? destination?.href ?? null : null;
+
+  // Overlay and compact-navigation dismissal is an accepted-navigation side
+  // effect. Run it after the destination frame has reached the DOM so closing
+  // a launcher can never reveal the old page for a frame.
+  useLayoutEffect(() => { destination?.onAccepted?.(); }, [destination]);
 
   function navigate(href: string, options?: NavigationOptions) {
     const target = canonicalHref(href);
@@ -46,18 +51,19 @@ function ConsoleNavigationBoundary({ selection, children }: { selection: Control
       ? canonicalHref(window.location.pathname + window.location.search + window.location.hash)
       : currentHref;
     if (target === committed && !isPending) { options?.onAccepted?.(); return; }
+    if (target === destination?.href && isPending) { options?.onAccepted?.(); return; }
     const proceed = () => {
-      options?.onAccepted?.();
-      setDestination(target);
+      // An entity query changes this client-owned workspace, not its page.
+      // Next integrates native history with useSearchParams without fetching
+      // another RSC tree or replacing the persistent console shell.
+      if (target.split(/[?#]/)[0] === committed.split(/[?#]/)[0]) {
+        if (options?.replace) window.history.replaceState(null, "", href);
+        else window.history.pushState(null, "", href);
+        options?.onAccepted?.();
+        return;
+      }
+      setDestination({ href: target, onAccepted: options?.onAccepted });
       startTransition(() => {
-        // An entity query changes this client-owned workspace, not its page.
-        // Next integrates native history with useSearchParams without fetching
-        // another RSC tree or replacing the persistent console shell.
-        if (!isPending && target.split(/[?#]/)[0] === committed.split(/[?#]/)[0]) {
-          if (options?.replace) window.history.replaceState(null, "", href);
-          else window.history.pushState(null, "", href);
-          return;
-        }
         const navigate = options?.replace ? router.replace : router.push;
         // ContentPage owns its scroll viewport and route-position memory.
         // Next's document scroll handling otherwise advances that viewport by
