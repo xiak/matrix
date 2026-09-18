@@ -8,9 +8,11 @@
   independently scheduled account-interference observation. Only existing
   test/authorityprocess/process_e2e_test.go and IAM/011 changed.
 - Exact-source [Verification35338576115](https://github.com/xiak/matrix/actions/runs/35338576115)
-  was freshly inspected as QUEUED after push. Its result is NOT accepted.
-  Reinspect that exact run/commit before waiting; do not restart a live run
-  or infer success from the preceding commit.
+  is TERMINAL SUCCESS. Go105579041664, storage105579041956,
+  node105579041951, runtime105579041868 and aggregate105585506979 all
+  completed/success. Actual logs and all23 capacity records were inspected;
+  the bounded independent-traffic increment is ACCEPTED in IAM/011, not
+  full capacity/fairness/HA or the IAM goal. Do not restart terminal gates.
 - Latest accepted production is still **159bb302fed89161c4b60afeb4a6f41f9bd99820**,
   S1b atomic other-login-session self-revocation, cumulatively accepted at
   **7cf857bba48eb5d7da487162c43e8f52534db133** / Verification35324569376,
@@ -62,8 +64,17 @@ All local process handles are terminal. Both runners auto-removed; after
 zero-client, exact-ID/owner/empty-mount checks, the sole task-specific PG and
 empty network were stopped/removed. No local fixture is live. Preserve the
 task-owned Go cache. No foreign/shared/remote resource was modified.
-Next: inspect exact7f02 CI and its real capacity/storage/runtime logs, then
-update acceptance only if actual gates pass. Keep full-goal gaps below.
+The read-only CI watcher has also completed; no local handle remains live.
+Exact7f02 CI ran all five IAM storage fixtures, Role/STS272.855s, own Session
+three tests198.778s, retained/independent130.012s and capacity155.24s. Its
+capacity data is exactly12stages/23rows/2300requests, failures0. B's control
+and interference P99 were121.29/54.21ms and scheduling-lag P99 72.41/2.81ms;
+all tails were retained. B/A overlap counts100/98. Raw cumulative memory.peak
+1610813440 was preserved, not trimmed or described as production headroom.
+Full metrics and acceptance boundaries stay in IAM/011; do not mix this run
+with local measurements or infer enforced tenant budgets from success.
+Next scope remains the unfinished FEATs and unapproved choices below, not
+another rerun of accepted Session or capacity gates.
 
 ## Accepted rollback points and Session contract
 
