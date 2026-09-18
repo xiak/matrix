@@ -39,10 +39,13 @@
   all8 IAM integration-test selections passed. All new runtime resources
   were removed after exact ownership, zero-client and empty-network checks.
 - Verification35309235630 was read through the GitHub API at exactb6f57d01:
-  go/node-process succeeded; authority-storage was live, runtime queued.
-  It is NOT independently accepted yet. Poll this exact run, not the old S1
-  success or a documentation head; do not restart on an observation timeout.
-  The full goal remains active, including unaccepted capacity/fairness/HA.
+  go,node-process,authority-storage,authority-runtime and authority-process
+  are all completed/success. Actual job logs prove original storage groups,
+  moved session/expiry140.471s, retained/normal processes147.921s and full
+  capacity143.34s. All20 metric rows/2000 samples have zero validation failures;
+  limits and unchanged source blob were checked. The bounded measurement
+  slice is independently accepted; complete capacity/fairness/HA is not.
+  Do not poll or rerun this now-terminal successful run.
 - Current source is IAM31/Audit18/PaaS2, IAM product Profile r5.
   Published release profile/revision unchanged. Backend verification does
   not establish UI, signed business, installation or final release acceptance.
@@ -82,13 +85,15 @@ later passes do not explain away those failures or justify weaker costs.
 
 ## Next delivery step
 
-First collect the terminal result of35309235630 and inspect the actual
-bounded capacity step as well as every required job. Its runner is2CPU/
-1536MiB/PIDs256 with existing5s HTTP/6min fixture and20min CI lane budgets.
+The capacity repair is now independently verified at35309235630/b6f57d01.
+Its runner is2CPU/1536MiB/PIDs256 with existing5s HTTP/6min fixture and20min
+CI lane budgets. No pending CI, local process or running fixture remains for
+this slice; do not manufacture a verified wait by polling completed work.
 Metrics are closed-loop paired batches at concurrency1/2, not saturation,
 server-enforced fairness, pool-wait duration or a product SLO. Counter peaks
 include client/production children and build; sampled zero locks is not zero
-wait duration. The local test PG and empty network have been removed after
+wait duration. CI current/peak counters approached the configured memory cap;
+no production headroom is established. The local test PG and empty network have been removed after
 ownership and zero-client checks; no other task or shared service was changed.
 
 Do not test a full source checkout containing ignored source exports as if

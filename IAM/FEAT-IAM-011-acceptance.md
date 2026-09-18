@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；AC-11已有服务副本证据，受限容量首片固定`f6cfe47d24003096ddca974525a5ee63507da10d`已通过本地真实测量、原独立进程回归及全仓检查并推送；[独立CI35306329508](https://github.com/xiak/matrix/actions/runs/35306329508)因存储作业超时及容量步骤的数据库DNS错误未通过。服务寻址和测试分配修正固定`b6f57d0126f66be62ec0615ee22d10b7d7226a10`已通过本地真实复验并推送；[独立CI35309235630](https://github.com/xiak/matrix/actions/runs/35309235630)已核对精确SHA、正在运行，尚未独立验收。完整容量/HA、安装及整体需求未验收。
+- 状态：实施中；AC-11的服务副本与受限容量测量首片已通过。固定`b6f57d0126f66be62ec0615ee22d10b7d7226a10`的[独立CI35309235630](https://github.com/xiak/matrix/actions/runs/35309235630)已核对精确SHA、五项全部completed/success，并核实完整容量样本和原安全门禁实际执行。旧`f6cfe47d`的失败不回填为成功，修正与证据见下。完整容量/公平性/HA、安装及整体需求未验收。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -91,6 +91,10 @@ AC-11 的服务副本证据：2026-09-11 现有 `TestIndependentIAMAuditAndPaaSP
 固定`f6cfe47d`的独立CI中，Go、node及原保留数据/独立进程步骤通过，但存储作业被原20分钟上限取消；各组输出`ok`不能覆盖最终取消。容量步骤在连接空白数据库时因自动容器长名称无法解析而失败，负载尚未开始，不是容量测量通过或服务性能失败的证据。修正只在原两个串行lane之间移动本人Session与静默到期两项测试及其各自数据库，仍精确运行一次；数据库连接采用并校验[Actions服务标签对应的网络别名](https://docs.github.com/en/actions/tutorials/use-containerized-services/create-postgresql-service-containers)，不使用生成的容器名称或共享宿主端口。原测试、哈希成本、TTL、请求/fixture/作业预算和并发/资源限额不变。YAML/Bash及前后语义核对证明原6条测试命令、23项DSN和24个唯一数据库未删减，IAM整合测试的三个互补筛选各覆盖原用例一次。
 
 该寻址修正在本任务独立PG18.4重现了同样的122字符容器名失败，随后使用同网络的真实`postgres`别名通过完整容量门禁84.09s（package85.140s），2000样本全部符合预期；没有改动测试Go blob或生产源码。runner仍为2CPU/1536MiB/PIDs256，PG使用与CI相同固定镜像且为1CPU/768MiB/PIDs192、禁止额外swap和宿主端口；不把这一复验与上表不同PG配置的测量混算。原工作流的标签/单网络/别名准入也在该真实容器上通过，错误owner标签在任何fixture变更前拒绝。随后串行运行移组后的原本人Session及静默锁内到期测试，分别通过75.18s、61.85s（package138.082s），使用各自空白数据库和原race/期限/用例。本地通过不覆盖已失败的独立CI或完整容量/HA缺口。
+
+固定`b6f57d01`的独立CI已逐项核实Go、node-process、authority-storage、authority-runtime及最终authority-process均成功。存储步骤16分33秒，原Audit数据/HTTP、IAM一般事务（package544.543s）、Role/STS（368.699s）和PaaS数据库均实际执行；移组后的本人会话/到期package140.471s、保留数据及原独立进程package147.921s均通过。容量测试通过143.34s（package144.403s），日志恰有10阶段×2账号×100样本，2000次全部符合预期、无剔除或客户端重试；400新凭据、1200历史决定及最终outbox/链检查仍由同一已核对的测试源码执行。
+
+CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.max=1610612736、PIDs256。累计memory.peak原值为1610915840字节，采样current峰值1610461184字节，均不裁剪、混成单IAM常驻内存或解释成尚有生产余量；计数覆盖编译、客户端及全部子进程。IAM连接采样峰值4、活动2、待投递116；未获得池/锁总等待、持续到达的饱和点、过载公平性或数据库主备切换证据。该独立通过只接受声明的有界工作集与回归，不构成生产容量/SLO或整个AC-11完成。
 
 ## 固定消费者的集成检查
 
