@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；AC-11已有服务副本证据，受限容量首片固定`f6cfe47d24003096ddca974525a5ee63507da10d`已通过本地真实测量、原独立进程回归及全仓检查并推送；[独立CI35306329508](https://github.com/xiak/matrix/actions/runs/35306329508)已核对精确SHA、仍在运行，尚未独立验收。完整容量/HA、安装及整体需求未验收。
+- 状态：实施中；AC-11已有服务副本证据，受限容量首片固定`f6cfe47d24003096ddca974525a5ee63507da10d`已通过本地真实测量、原独立进程回归及全仓检查并推送；[独立CI35306329508](https://github.com/xiak/matrix/actions/runs/35306329508)已核对精确SHA，因存储作业超时及容量步骤的数据库DNS错误未通过，不能视为独立验收。既有工作流的服务寻址和测试分配已修正并通过本地真实复验，独立CI仍待确认。完整容量/HA、安装及整体需求未验收。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -88,6 +88,10 @@ AC-11 的服务副本证据：2026-09-11 现有 `TestIndependentIAMAuditAndPaaSP
 
 最终同一测试源码的Windows/amd64干净导出在Go1.26.3、GOMAXPROCS2下通过`go test -race -p 2 -count=1 ./...`（含architecture）、`go vet -p 2 ./...`和`go mod verify`；工作流YAML及新增Bash步骤解析通过，原20分钟lane预算/max-parallel1未改。默认无DSN的测试不冒充数据库验收，真实进程/PG范围仅为上列已运行门禁。本片没有生产API、SQL、schema/profile、UI或安装变更；固定源及独立CI状态见本文件顶部，不能继承此前S1的CI结果。
 
+固定`f6cfe47d`的独立CI中，Go、node及原保留数据/独立进程步骤通过，但存储作业被原20分钟上限取消；各组输出`ok`不能覆盖最终取消。容量步骤在连接空白数据库时因自动容器长名称无法解析而失败，负载尚未开始，不是容量测量通过或服务性能失败的证据。修正只在原两个串行lane之间移动本人Session与静默到期两项测试及其各自数据库，仍精确运行一次；数据库连接采用并校验[Actions服务标签对应的网络别名](https://docs.github.com/en/actions/tutorials/use-containerized-services/create-postgresql-service-containers)，不使用生成的容器名称或共享宿主端口。原测试、哈希成本、TTL、请求/fixture/作业预算和并发/资源限额不变。YAML/Bash及前后语义核对证明原6条测试命令、23项DSN和24个唯一数据库未删减，IAM整合测试的三个互补筛选各覆盖原用例一次。
+
+该寻址修正在本任务独立PG18.4重现了同样的122字符容器名失败，随后使用同网络的真实`postgres`别名通过完整容量门禁84.09s（package85.140s），2000样本全部符合预期；没有改动测试Go blob或生产源码。runner仍为2CPU/1536MiB/PIDs256，PG使用与CI相同固定镜像且为1CPU/768MiB/PIDs192、禁止额外swap和宿主端口；不把这一复验与上表不同PG配置的测量混算。原工作流的标签/单网络/别名准入也在该真实容器上通过，错误owner标签在任何fixture变更前拒绝。随后串行运行移组后的原本人Session及静默锁内到期测试，分别通过75.18s、61.85s（package138.082s），使用各自空白数据库和原race/期限/用例。本地通过不覆盖已失败的独立CI或完整容量/HA缺口。
+
 ## 固定消费者的集成检查
 
 最终可发布组合尚未冻结，须在功能收敛后按首版基线规则与安装 owner 重新核对实际 schema、函数契约和二进制。开发阶段的联调版本不能提前作为最终发布 profile，也不能把不同分支的 PaaS 版本混为一谈。以下既有消费者必须在切换候选中通过真实数据检查；中间源码、同 schema 数字或静态编译不能替代：
@@ -105,7 +109,7 @@ AC-11 的服务副本证据：2026-09-11 现有 `TestIndependentIAMAuditAndPaaSP
 
 只使用本工作区、任务标签和唯一命名的数据库/容器/网络/卷/端口。Go 默认 GOMAXPROCS=2、-p 2；PG/引擎 CPU/内存/PID 限额；重型门禁串行。不得重启任何远端机器或共享服务，不使用其他 Phase 的运行实例。未运行命令不进入 runbook。
 
-独立CI的数据库门禁分为`authority-storage`与`authority-runtime`两个串行lane，`max-parallel=1`；每个lane各有20分钟预算和独立受限PG实例。前者验证Audit历史/HTTP、IAM当前事务/并发和PaaS数据库，后者验证已发布安装器的效果前拒绝、固定解释前驱与真实独立进程。`authority-process`仅作为2分钟的汇总检查，两个lane都成功才成功，失败、取消或跳过均不能放行。Go和node-process仍是独立检查。
+独立CI的数据库门禁分为`authority-storage`与`authority-runtime`两个串行lane，`max-parallel=1`；每个lane各有20分钟预算和独立受限PG实例。前者验证Audit历史/HTTP、IAM一般事务及Role/STS矩阵和PaaS数据库，后者串行验证已发布安装器的效果前拒绝、本人Session与静默锁内到期、固定解释前驱、真实独立进程及受限容量。`authority-process`仅作为2分钟的汇总检查，两个lane都成功才成功，失败、取消或跳过均不能放行。Go和node-process仍是独立检查。
 
 IAM的Role/STS、本人Session和其他矩阵以互补的`-run/-skip`串行调用，使用各自独立数据库，不能漏场景或以默认无DSN的SKIP冒充真库验收。保持Go单进程默认10分钟、IAM独立组矩阵120秒/策略聚合240秒，以及原锁等待、HTTP、进程预算和fixture规模；不增大并发、资源或重试，不弱化密码计算。真实会话到期可在同一矩阵执行其他独立案例期间自然流逝，但到期前正向控制、数据库时间、到期后拒绝、历史证据及后续账号停用顺序都必须验证，不改TTL或伪造时钟。锁内到期另用原owner下的静默数据库、生产最小TTL及120秒预算，要求原事务没有序列化重试掩盖时间检查；该数据库也串行运行，不借另一个矩阵的写入获得偶然正确的结果。
 
