@@ -135,11 +135,21 @@ jobs:
         run: |
           time go test -race -p 1 -count=1 ./app/service/audit/internal/data/postgres \
             ./app/service/audit/internal/integration
-          # Distinct existing fixtures, still serial and each with its original
-          # context/lock deadline. Do not make all IAM scenarios share one
-          # process's aggregate ten-minute timer, or silently skip a scenario.
-          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
-            -skip '^(TestIAMRoleAndManagementReferencesPostgres|TestIAMOwnSession(Postgres|ExpiryPostgres|BulkPostgres))$'
+          # Discover compiled tests so a new storage fixture is not silently
+          # omitted. Each runs serially with its original context/lock deadline
+          # and Go's default timer; unrelated fixtures do not share that timer.
+          iam_tests="$(go test -race -p 1 -list '^Test' ./app/service/iam/internal/integration)"
+          iam_storage_count=0
+          while IFS= read -r iam_test; do
+            [[ "$iam_test" =~ ^Test[A-Za-z0-9_]+$ ]] || continue
+            case "$iam_test" in
+              TestIAMRoleAndManagementReferencesPostgres|TestIAMOwnSessionPostgres|TestIAMOwnSessionExpiryPostgres|TestIAMOwnSessionBulkPostgres) continue ;;
+            esac
+            printf 'IAM fixture: %s\n' "$iam_test"
+            time go test -race -p 1 -count=1 ./app/service/iam/internal/integration -run "^${iam_test}$"
+            iam_storage_count=$((iam_storage_count + 1))
+          done <<< "$iam_tests"
+          test "$iam_storage_count" -gt 0
           time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
             -run '^TestIAMRoleAndManagementReferencesPostgres$'
           time go test -race -p 1 -count=1 ./app/service/paas/internal/apphosting/data/postgres
