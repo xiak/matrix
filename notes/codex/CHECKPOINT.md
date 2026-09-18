@@ -39,7 +39,7 @@
   all8 IAM integration-test selections passed. All new runtime resources
   were removed after exact ownership, zero-client and empty-network checks.
 - Verification35309235630 was read through the GitHub API at exactb6f57d01:
-  node-process succeeded; go/authority-storage were live, runtime queued.
+  go/node-process succeeded; authority-storage was live, runtime queued.
   It is NOT independently accepted yet. Poll this exact run, not the old S1
   success or a documentation head; do not restart on an observation timeout.
   The full goal remains active, including unaccepted capacity/fairness/HA.
@@ -135,18 +135,22 @@ whole goal complete from a local backend slice.
 ## Shared windows and peers
 
 UX/UI工程师 01a07b21-9a0d-7fd0-b090-7827ce18262e owns UI/browser work
-in feat/cloud-console-ux. It has now received independently accepted3080922f
-and a scoped request to implement Session UI, preserving its own consumer
-baseline and real browser gates. Its navigation fix is now fixedec5e832a,
-confirmed as an existing Git object, but is not S1 delivery. A further scoped
-S1 implementation request was sent after that task completed. Its latest
-turn is already terminal/idle, with no S1 fixed SHA or implementation evidence
-available through the task snapshot. Do not describe it as actively coding
-or keep polling an idle turn as a live wait; explicit delivery confirmation
-is still needed. The session page,
-strict adapters,unknown-result request reuse,current logout and real browser
-gate remain theirs. Unfrozen MFA APIs will not be wired; no S1 UI fixed SHA
-or completion has been reported.
+in feat/cloud-console-ux. S1 UI is actually implemented at verified Git object
+8e8b0f608827fb00c9a0e677e78ec12a7e047315, the parent of navigation fix
+ec5e832ad42cafea31cd731cfdbaa046b3537229. The peer initially supplied a wrong
+full SHA sharing the prefix; use this verified object, not the bad suffix.
+Its adapter/provider and fixed FEAT-007 were inspected read-only; no UI or
+assets imported. It consumes independently accepted3080922f. IAM/010 and the
+existing adoption owner record this handoff, not inherited acceptance.
+
+The peer explicitly confirms MOCK/DEV browser evidence and no real revoke.
+Real A/B login/revoke, next-request rejection/current survival, actual logout
+and the remaining S1 integration gates are still unaccepted. Its current
+human priority preserves the MOCK progress entry and defers final login
+validation. Do not commission that gate, supply a fixture to bypass this
+priority, operate its environment, or poll an idle turn as live work. Resume
+real browser acceptance only under a clarified user arrangement. No MFA or
+password-rule consumer has been commissioned.
 
 Phase3 01a04149-5dbb-7300-9e4c-31d9e85c8ada explicitly opened the S1
 window after fixed c2fbd9e38d424e68c0466618ee74613aced3c3fb.

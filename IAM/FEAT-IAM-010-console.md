@@ -51,6 +51,12 @@
 
 固定 `ef51b1d509e7e38dfb2146416c7e057a97638765` 的 [Verification 34850453837](https://github.com/xiak/matrix/actions/runs/34850453837) 已通过 GitHub API 核实精确 SHA，Go、authority-process、node-process 全部 completed/success。该对象仅当前身份消费，不包含后续边界管理表单。
 
+### 本人登录会话的固定 UI 交接
+
+已只读核对`feat/cloud-console-ux`的固定`8e8b0f608827fb00c9a0e677e78ec12a7e047315`及其后继`ec5e832ad42cafea31cd731cfdbaa046b3537229`。前者实现本人会话页面、严格列表/撤销适配器、当前会话标识和未知结果保留原意图，消费后端固定`3080922f6ae1871f1c351d5ee30f03551fc3c605`；后者是全服务导航修复，不代替会话功能。此次只确认固定源交接，没有导入其 UI、嵌入产物或验收状态。
+
+其前端检查、MOCK和DEV浏览器证据由[该固定对象的 FEAT-007](https://github.com/xiak/matrix/blob/8e8b0f608827fb00c9a0e677e78ec12a7e047315/docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence)拥有；明确没有执行真实会话撤销。IAM-UI-06/S1仍缺真实IAM+PG的双登录、A撤销B后B下一受保护请求被拒且A保持、实际当前退出，以及forced-change/分页/未知结果的组合验收。页面、确认框或模拟响应不能代替这些行为。UX/UI当前人工优先级保留MOCK入口并暂不启动最终登录验证，因此保持此门禁未验收，不擅自启用真实登录或操作其环境；后续按明确安排使用既有独立受限fixture。MFA及密码规则仍是各自未完成切片，不计入这次S1前端交付。
+
 ### User 边界管理增量证据
 
 UserAccess 的九项基础能力与附件撤销能力由同一事务的当前 PDP、准确 Account Root 关系和目标构造；每页仅读取一次 root 所属关系，不逐用户额外查询。新 set/remove 能力绑定 USER ID，缺失任一能力的严格契约/客户端投影拒绝。可用性只表示管理者可以尝试，不把“尚未设置边界”或所选 Policy 状态猜成写入成功条件。
