@@ -9272,6 +9272,40 @@ func proveRoleSessionManagement(t *testing.T, ctx context.Context, handler http.
 
 func proveRoleSessionManagementSecurity(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
 	t.Helper()
+	newAccount := func(t *testing.T, id string) (iamv1.Account, string) {
+		t.Helper()
+		response := performIAMRequest(handler, http.MethodPost, "/v1/accounts", operator, mustIAMJSON(t, map[string]any{
+			"id": id, "displayName": id, "rootLoginName": id, "rootDisplayName": id,
+			"initialPassword": initialDeveloperPassword, "requestId": id + "-account"}))
+		var account iamv1.Account
+		if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &account) != nil {
+			t.Fatal("create management security account")
+		}
+		root := localRecoveryLogin(t, handler, id, initialDeveloperPassword, true)
+		return account, localRecoveryChangePassword(t, handler, root, initialDeveloperPassword, changedDeveloperPassword)
+	}
+	newUser := func(t *testing.T, account iamv1.Account, root, name string) (iamv1.User, string) {
+		t.Helper()
+		response := performIAMRequest(handler, http.MethodPost, "/v1/users", root, mustIAMJSON(t, map[string]any{
+			"loginName": name, "displayName": name, "initialPassword": initialDeveloperPassword, "requestId": name}))
+		var user iamv1.User
+		if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &user) != nil {
+			t.Fatal("create management security user")
+		}
+		login := localRecoveryLogin(t, handler, name+"@"+string(account.ID), initialDeveloperPassword, true)
+		return user, localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
+	}
+	// Ordinary mutations change only the fresh manager or RoleSession, never
+	// the account, root or issuing User. Reuse that real HTTP-created identity;
+	// root recovery and account suspension keep their own complete fixtures.
+	sharedAccount, sharedRoot := newAccount(t, "session-security-shared")
+	sharedSource, sharedSourceBearer := newUser(t, sharedAccount, sharedRoot, "session-security-shared-source")
+	response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", sharedRoot, mustIAMJSON(t, iamv1.CreatePolicyAttachmentRequest{
+		Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(sharedSource.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator,
+		PolicyResourceVersion: 1, RequestID: "session-security-shared-source-grant"}))
+	if response.Code != http.StatusOK {
+		t.Fatal("grant management security source")
+	}
 	for _, adminFirst := range []bool{false, true} {
 		for index, change := range []string{"logout", "password-default", "password-false", "reset", "disabled", "user-grant", "group-grant", "membership", "recover", "suspend", "source-revoke", "role-exit"} {
 			if !t.Run(fmt.Sprintf("admin_first_%t_%s", adminFirst, change), func(t *testing.T) {
@@ -9290,21 +9324,10 @@ func proveRoleSessionManagementSecurity(t *testing.T, ctx context.Context, handl
 						t.Fatal("decode admin security fixture")
 					}
 				}
-				var account iamv1.Account
-				call(http.MethodPost, "/v1/accounts", operator, map[string]any{"id": prefix, "displayName": prefix, "rootLoginName": prefix,
-					"rootDisplayName": prefix, "initialPassword": initialDeveloperPassword, "requestId": prefix + "-account"}, &account)
-				root := localRecoveryLogin(t, handler, prefix, initialDeveloperPassword, true)
-				root = localRecoveryChangePassword(t, handler, root, initialDeveloperPassword, changedDeveloperPassword)
-				newUser := func(name string) (iamv1.User, string) {
-					t.Helper()
-					var user iamv1.User
-					call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": name, "displayName": name,
-						"initialPassword": initialDeveloperPassword, "requestId": prefix + "-" + name}, &user)
-					login := localRecoveryLogin(t, handler, name+"@"+string(account.ID), initialDeveloperPassword, true)
-					return user, localRecoveryChangePassword(t, handler, login, initialDeveloperPassword, changedDeveloperPassword)
+				account, root := sharedAccount, sharedRoot
+				if change == "recover" || change == "suspend" {
+					account, root = newAccount(t, prefix)
 				}
-				source, sourceBearer := newUser("source")
-				actor, actorBearer := newUser("manager")
 				attach := func(target iamv1.PolicyAttachmentTarget, policy iamv1.PolicyID, suffix string) iamv1.PolicyAttachment {
 					t.Helper()
 					var result iamv1.PolicyAttachment
@@ -9312,7 +9335,20 @@ func proveRoleSessionManagementSecurity(t *testing.T, ctx context.Context, handl
 						PolicyResourceVersion: 1, RequestID: prefix + "-" + suffix}, &result)
 					return result
 				}
-				attach(iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(source.ID)}, iamv1.SystemPolicyAccountAdministrator, "source-grant")
+				source, sourceBearer := sharedSource, sharedSourceBearer
+				if account.ID != sharedAccount.ID {
+					source, sourceBearer = newUser(t, account, root, prefix+"-source")
+					attach(iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(source.ID)}, iamv1.SystemPolicyAccountAdministrator, "source-grant")
+				}
+				var actor iamv1.User
+				actorBearer := root
+				if change == "recover" {
+					var identity iamv1.CurrentIdentity
+					call(http.MethodGet, "/v1/auth/me", root, nil, &identity)
+					actor = identity.User
+				} else {
+					actor, actorBearer = newUser(t, account, root, prefix+"-manager")
+				}
 				var grant iamv1.PolicyAttachment
 				var group iamv1.Group
 				var membership iamv1.GroupMembership
@@ -9321,11 +9357,7 @@ func proveRoleSessionManagementSecurity(t *testing.T, ctx context.Context, handl
 					call(http.MethodPost, "/v1/groups/"+string(group.ID)+"/memberships", root,
 						iamv1.CreateGroupMembershipRequest{UserID: actor.ID, RequestID: prefix + "-join"}, &membership)
 					grant = attach(iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)}, iamv1.SystemPolicyAccountAdministrator, "group-grant")
-				} else if change == "recover" {
-					var identity iamv1.CurrentIdentity
-					call(http.MethodGet, "/v1/auth/me", root, nil, &identity)
-					actor, actorBearer = identity.User, root
-				} else {
+				} else if change != "recover" {
 					grant = attach(iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(actor.ID)}, iamv1.SystemPolicyAccountAdministrator, "actor-grant")
 				}
 				var role iamv1.Role
@@ -9541,6 +9573,12 @@ func proveRoleSessionManagementSecurity(t *testing.T, ctx context.Context, handl
 				t.FailNow()
 			}
 		}
+	}
+	if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", sharedRoot, nil); response.Code != http.StatusOK {
+		t.Fatal("case-local security mutations changed the shared account or root")
+	}
+	if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", sharedSourceBearer, nil); response.Code != http.StatusOK {
+		t.Fatal("case-local security mutations changed the shared issuing identity")
 	}
 }
 
