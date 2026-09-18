@@ -594,3 +594,86 @@ describe("IAM HTTP account boundary", () => {
     await expect(httpAccountRepository.execute("bearer", { kind: "set-alias", alias: "acme", resourceVersion: 1 })).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 });
+
+describe("IAM HTTP own-session boundary", () => {
+  const session = {
+    apiVersion,
+    kind: "Session",
+    id: "session-001",
+    organizationId: account.id,
+    principalId: user.id,
+    status: "ACTIVE",
+    issuedAt: "2026-09-11T07:00:00.000001Z",
+    expiresAt: "2026-09-11T09:00:00.000001Z"
+  };
+  const observation = {
+    apiVersion,
+    kind: "SessionList",
+    accountId: account.id,
+    userId: user.id,
+    currentSessionId: session.id,
+    observedAt: timestamp,
+    items: [session]
+  };
+
+  it("lists only the authenticated user's canonical live session projection", async () => {
+    const fetcher = reply(observation);
+    const page = await httpIamRepository.sessions!.list("transient-bearer");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/sessions");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer transient-bearer" } });
+    expect(page).toMatchObject({ accountId: account.id, userId: user.id, currentSessionId: session.id, nextCursor: null });
+    expect(page.items).toEqual([expect.objectContaining({ id: session.id, status: "ACTIVE" })]);
+  });
+
+  it("passes an opaque continuation unchanged and accepts a full-page next cursor", async () => {
+    const items = Array.from({ length: 100 }, (_, index) => ({
+      ...session,
+      id: `session-${index.toString().padStart(3, "0")}`
+    }));
+    const fetcher = reply({ ...observation, items, nextCursor: "ic1.Opaque_signed-continuation" });
+    const page = await httpIamRepository.sessions!.list("transient-bearer", "ic1.Current_signed-continuation");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/sessions?after=ic1.Current_signed-continuation");
+    expect(page.nextCursor).toBe("ic1.Opaque_signed-continuation");
+  });
+
+  it("fails closed on foreign, expired, unordered, revoked or extended session projections", async () => {
+    for (const invalid of [
+      { ...observation, accountId: "other-account" },
+      { ...observation, items: [{ ...session, organizationId: "other-account" }] },
+      { ...observation, items: [{ ...session, principalId: "other-user" }] },
+      { ...observation, items: [{ ...session, status: "REVOKED" }] },
+      { ...observation, items: [{ ...session, revokedAt: timestamp }] },
+      { ...observation, items: [{ ...session, issuedAt: "2026-09-11T08:00:00.000001Z" }] },
+      { ...observation, items: [{ ...session, expiresAt: timestamp }] },
+      { ...observation, items: [{ ...session, id: "session-002" }, session] },
+      { ...observation, items: null },
+      { ...observation, items: [session], nextCursor: "ic1.not-allowed-on-short-page" },
+      { ...observation, items: [session], device: "invented" }
+    ]) {
+      reply(invalid);
+      await expect(httpIamRepository.sessions!.list("transient-bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("sends only the retained request identity and verifies the exact revoked target", async () => {
+    const response = { outcome: "APPLIED", revocation: { apiVersion, kind: "Revocation", id: session.id, resourceVersion: 2, revokedAt: timestamp } };
+    const fetcher = reply(response);
+    expect(await httpIamRepository.sessions!.revoke("transient-bearer", session.id, "ui-session-revoke-fixed")).toEqual({
+      outcome: "APPLIED",
+      revocation: { id: session.id, resourceVersion: 2, revokedAt: timestamp }
+    });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/sessions/${session.id}:revoke`);
+    expect(firstRequest(fetcher)[1].method).toBe("POST");
+    expect(requestBody(fetcher)).toEqual({ requestId: "ui-session-revoke-fixed" });
+    for (const invalid of [
+      { ...response, outcome: "UNKNOWN" },
+      { ...response, revocation: { ...response.revocation, id: "session-other" } },
+      { ...response, revocation: { ...response.revocation, resourceVersion: 0 } },
+      { ...response, revocation: { ...response.revocation, target: session.id } },
+      { ...response, receipt: {} }
+    ]) {
+      reply(invalid);
+      await expect(httpIamRepository.sessions!.revoke("transient-bearer", session.id, "ui-session-revoke-fixed")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+});

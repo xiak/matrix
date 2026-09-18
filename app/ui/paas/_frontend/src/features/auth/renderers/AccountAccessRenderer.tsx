@@ -26,6 +26,7 @@ import { AccessSecuritySettings, AccessUserSso } from "./AccessSecuritySettings"
 import { AccessEnterpriseAccounts } from "./AccessEnterpriseAccounts";
 import { AccountPolicyDirectory } from "./AccountPolicyDirectory";
 import { AccountTenantWorkspace } from "./AccountTenantWorkspace";
+import { OwnSessionsPage } from "./OwnSessionsPage";
 import styles from "./AccountAccessRenderer.module.css";
 
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
@@ -79,7 +80,14 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   </div>;
 }
 
-export function AccountAccessRenderer({ view = "overview", entityId, policyMethod, onNavigate }: { view?: AccountAccessView; entityId?: string; policyMethod?: string; onNavigate(view: AccountAccessView, id?: string, method?: PolicyCreationMethod): void }) {
+type AccountAccessRendererProps = { view?: AccountAccessView; entityId?: string; policyMethod?: string; onNavigate(view: AccountAccessView, id?: string, method?: PolicyCreationMethod): void };
+
+export function AccountAccessRenderer(props: AccountAccessRendererProps) {
+  if (props.view === "sessions") return <OwnSessionsPage />;
+  return <ManagedAccountAccessRenderer {...props} />;
+}
+
+function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMethod, onNavigate }: AccountAccessRendererProps) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const access = useAccountAccess();

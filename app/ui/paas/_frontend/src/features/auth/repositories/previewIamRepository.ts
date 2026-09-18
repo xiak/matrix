@@ -26,11 +26,13 @@ import type {
 import { enterprisePrincipalId, previewUserPrincipalId, type AccessWorkspace } from "../domain/accessWorkspace";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import { applyUserBatch } from "../domain/userBatch";
+import type { OwnSessionRevocation, SessionSummary } from "../domain/session";
 import type { AccountRepository, IamRepository, LoginResult } from "./iamRepository";
 import { createPreviewAccessWorkspace } from "./previewAccessWorkspace";
 
 export const previewCredential = "matrix-ux-preview-memory-only";
 const previewAt = "2026-09-08T09:00:00Z";
+const previewSessionObservedAt = "2026-09-18T12:00:00Z";
 
 let account: Account = {
   id: "org-xiak",
@@ -71,6 +73,34 @@ let userPlatformPolicies: Record<string, string[]> = {};
 const previewGroupVersions = new Map<string, { resourceVersion: number; updatedAt: string }>();
 const previewMemberships = new Map<string, GroupMembership>();
 const previewGroupAttachments = new Map<string, GroupPolicyAttachment>();
+const initialPreviewSessions: SessionSummary[] = [
+  {
+    id: "session-ux-preview",
+    organizationId: "org-xiak",
+    principalId: "principal-admin",
+    status: "ACTIVE",
+    issuedAt: "2026-09-07T01:00:00Z",
+    expiresAt: "2099-09-07T01:00:00Z"
+  },
+  {
+    id: "session-ux-preview-002",
+    organizationId: "org-xiak",
+    principalId: "principal-admin",
+    status: "ACTIVE",
+    issuedAt: "2026-09-08T03:30:00Z",
+    expiresAt: "2099-09-08T03:30:00Z"
+  },
+  {
+    id: "session-ux-preview-003",
+    organizationId: "org-xiak",
+    principalId: "principal-admin",
+    status: "ACTIVE",
+    issuedAt: "2026-09-12T10:15:00Z",
+    expiresAt: "2099-09-12T10:15:00Z"
+  }
+];
+let previewOwnSessions = structuredClone(initialPreviewSessions);
+const previewOwnSessionReplays = new Map<string, { targetSessionId: string; result: OwnSessionRevocation }>();
 
 function requirePreviewCredential(credential: string): void {
   if (credential !== previewCredential) throw new Error("INVALID_PREVIEW_CREDENTIAL");
@@ -88,6 +118,11 @@ function clearPreviewGroupContractState(): void {
   previewGroupVersions.clear();
   previewMemberships.clear();
   previewGroupAttachments.clear();
+}
+
+function resetPreviewOwnSessions(): void {
+  previewOwnSessions = structuredClone(initialPreviewSessions);
+  previewOwnSessionReplays.clear();
 }
 
 const initialPreviewState = structuredClone({ account, users, accounts, userPlatformPolicies });
@@ -120,6 +155,45 @@ export const previewIamRepository: IamRepository = {
     accounts = initial.accounts;
     userPlatformPolicies = initial.userPlatformPolicies;
     clearPreviewGroupContractState();
+    resetPreviewOwnSessions();
+  },
+  sessions: {
+    async list(credential, after) {
+      requirePreviewCredential(credential);
+      if (after !== undefined) throw new HttpProblem(422, "PREVIEW_SESSION_CURSOR_UNAVAILABLE");
+      return {
+        accountId: account.id,
+        userId: account.rootIdentity.principalId,
+        currentSessionId: "session-ux-preview",
+        observedAt: previewSessionObservedAt,
+        items: structuredClone(previewOwnSessions).sort((left, right) => left.id.localeCompare(right.id)),
+        nextCursor: null
+      };
+    },
+    async revoke(credential, targetSessionId, requestId) {
+      requirePreviewCredential(credential);
+      requireRequestId(requestId);
+      if (targetSessionId === "session-ux-preview") throw new HttpProblem(409, "CURRENT_SESSION_REQUIRES_LOGOUT");
+      const replay = previewOwnSessionReplays.get(requestId);
+      if (replay) {
+        if (replay.targetSessionId !== targetSessionId) throw new HttpProblem(409, "REQUEST_ID_CONFLICT");
+        return structuredClone({ ...replay.result, outcome: "EQUAL_REPLAY" as const });
+      }
+      if (!previewOwnSessions.some((session) => session.id === targetSessionId)) {
+        throw new HttpProblem(409, "SESSION_NOT_REVOCABLE");
+      }
+      const result: OwnSessionRevocation = {
+        outcome: "APPLIED",
+        revocation: {
+          id: targetSessionId,
+          resourceVersion: 2,
+          revokedAt: previewSessionObservedAt
+        }
+      };
+      previewOwnSessions = previewOwnSessions.filter((session) => session.id !== targetSessionId);
+      previewOwnSessionReplays.set(requestId, { targetSessionId, result: structuredClone(result) });
+      return structuredClone(result);
+    }
   }
 };
 

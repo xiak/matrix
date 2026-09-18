@@ -82,9 +82,19 @@ generic provider schemas before a real second implementation exists.
     preview data. Attach and revoke commands bind exact policy/attachment
     resource versions, and a changed directory version requires reselection.
     The service opens an overview followed by bookmarkable user, group,
-    policy, role, role-SSO, user-SSO, federated-account, API-key, user-settings
-    and tenant-management workspaces. These use grouped service-local
+    policy, role, role-SSO, user-SSO, federated-account, API-key, login-session,
+    user-settings and tenant-management workspaces. These use grouped service-local
     navigation, not another global product menu or a long top-level tab bar.
+    Login-session management is intrinsic to the authenticated user and does
+    not require user-directory authority. It lists only that user's active
+    opaque login sessions, identifies the exact current session, uses normal
+    logout for the current session and an idempotent revoke command for another
+    session. An unknown revoke outcome retains the original credential,
+    caller-session, target-session and request ID only in provider memory so an
+    explicit retry cannot create a second intent; a new login clears it. The UI
+    never presents a session as a physical device, recent activity, source IP
+    or proof of online status, and it explains that ending a login session does
+    not delete resources, revoke independent API keys or stop accepted work.
     An optional repository capability supplies the extended MOCK workspace.
     Its account-scoped data is isolated from the live IAM adapter and never
     grants real permissions. The live adapter has no such capability and
@@ -1561,17 +1571,19 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-Verified on 2026-09-17 against the current all-service navigation slice.
+Verified on 2026-09-18 against the current all-service navigation and
+own-login-session slices.
 
 | Gate | Evidence |
 | --- | --- |
-| Supported frontend runtime | Node 24.19.0; complete `build:embedded` and `check` passed: type checking, lint, architecture, styles, 548 Vitest cases across 36 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
-| Theme and static-export boundary | 228 semantic contrast pairs passed across light, mixed and dark workspace/shell surfaces. Production preview was disabled; all 214 embedded files matched the normalized immutable export. |
+| Supported frontend runtime | Node 24.19.0; complete `build:embedded` plus type, lint, architecture, style and test gates passed: 560 Vitest cases across 39 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
+| Theme and static-export boundary | 228 semantic contrast pairs passed across light, mixed and dark workspace/shell surfaces. Production preview was disabled; all 219 embedded files matched the normalized immutable export. |
 | UI host and architecture | `go test ./app/ui/paas/...` passed against the regenerated embedded console. |
 | Static query boundary | Supported client detail/creation queries retained identical HTML and CSP; ambiguous, malformed and authority-bearing selectors were rejected. |
 | Destination/frame boundary | Tests compare route-known metadata with loaded scenes for all seven directory services without constructing empty resource snapshots or mutation workspaces. Opening product discovery starts one coalesced provider read. Preview-owned services project immediately from ExperienceSnapshot; the resulting product-wide snapshot projects every directory service without another read. Suspended IAM-to-Logs and IAM-to-PostgreSQL transitions expose the target content structure immediately, keep it inert until commit and never restore the outgoing IAM page. |
 | Loading/render isolation | Regional PageSkeleton/TableSkeleton tests verify immediate localized status, a local 200ms placeholder delay, fast-unmount cancellation and destination reset. Destination-specific loading renders stable headings and containers synchronously while only provider-owned rows/cards receive delayed placeholders. Suspended-shell tests verify unchanged Header/viewport nodes, no account-menu render from the skeleton timer and one coalesced resource read. IAM itself starts no PaaS read before explicit product discovery or navigation intent. |
 | Real DEV browser | Using the real Products & services directory on the normal DEV server, IAM-to-Regions, Applications, PostgreSQL installations, Logs, DevOps, Observability and back-to-IAM navigation each produced the correct URL, H1, product context and destination content. A stale development HMR CSS-chunk error caused by live editing disappeared after reload; no new console warning or error was emitted. |
+| Own login sessions | The strict browser adapter consumes the fixed IAM contract at `3080922f6ae1871f1c351d5ee30f03551fc3c605`: owner-bound active sessions, opaque cursor and exact-target idempotent revoke only. Tests reject unknown fields, foreign account/user projections, invalid time windows, noncanonical ordering/cursors and mismatched revocation targets. Provider tests prove exact request-ID reuse after an unknown outcome, no replay across a new login and credential-scoped 401 expiry. Preview and renderer tests distinguish sessions from devices/online activity and keep the current logout separate from confirmed other-session revocation. The real DEV deep link rendered the fixed content and three MOCK sessions at desktop and `390 × 844px`; the page width remained 390px while only the 820px native table scrolled internally. Refresh, compact page actions and inline revoke confirmation remained reachable. A fresh reload/login emitted no new warning or error. No real session was revoked. This is frontend integration against the named contract, not inheritance of its backend acceptance. |
 | Draft-leave browser behavior | A temporary, unsubmitted JSON draft remained intact after Continue editing. Discard and leave then immediately displayed the Regions frame; the old editor and loading feedback were absent after the actual route commit. No policy or association was created or changed. |
 
 Same-path detail-query tests retain encoded IDs, draft-leave protection and

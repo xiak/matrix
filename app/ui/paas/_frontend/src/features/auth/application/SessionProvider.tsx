@@ -18,6 +18,7 @@ import type {
 } from "../domain/session";
 import { httpIamRepository } from "../repositories/httpIamRepository";
 import type { IamRepository } from "../repositories/iamRepository";
+import { OwnSessionsProvider } from "./OwnSessionsProvider";
 
 export type SessionErrorCode = "invalidCredentials" | "tooManyAttempts" | "loginUnavailable"
   | "invalidCurrentPassword" | "passwordPolicy" | "passwordConflict" | "passwordUnavailable" | "logoutUnavailable";
@@ -185,7 +186,9 @@ export function SessionProvider({
   return (
     <CredentialContext.Provider value={credentialValue}>
       <SessionContext.Provider value={sessionValue}>
-        {children}
+        <OwnSessionsProvider repository={repository} credential={credential} current={current} expire={expire}>
+          {children}
+        </OwnSessionsProvider>
       </SessionContext.Provider>
     </CredentialContext.Provider>
   );

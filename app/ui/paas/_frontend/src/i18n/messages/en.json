@@ -192,6 +192,57 @@
       "logoutUnavailable": "IAM could not sign you out. The session remains in this page's memory."
     }
   },
+  "OwnSessions": {
+    "title": "Login sessions",
+    "scopeTitle": "Active credentials for the current user",
+    "description": "Review the current user's active login sessions and end other sessions that are no longer needed.",
+    "notDevices": "A session is not a physical device or proof of online activity. One device can hold several sessions, and several tabs can share one session.",
+    "refresh": "Refresh sessions",
+    "activeTitle": "Active sessions",
+    "activeHint": "Only login sessions that can still make protected requests for the current user are shown.",
+    "observedAt": "Observed at",
+    "loading": "Loading login sessions…",
+    "table": "Active login sessions",
+    "sessionId": "Session ID",
+    "issuedAt": "Issued",
+    "expiresAt": "Expires",
+    "status": "Status",
+    "actions": "Actions",
+    "current": "Current session",
+    "active": "Active",
+    "currentHint": "Held by this page",
+    "end": "End session",
+    "exitCurrent": "Sign out current session",
+    "confirmTitle": "Confirm ending this login session",
+    "confirmHint": "Future protected requests made by this session will be rejected.",
+    "confirm": "End session",
+    "cancel": "Cancel",
+    "uncertainTitle": "The revocation result is not confirmed",
+    "uncertain": "The network or service response did not confirm the outcome. Retrying reuses the original request instead of creating a new revocation intent.",
+    "retryOriginal": "Retry original request",
+    "empty": "No login sessions to show",
+    "emptyHint": "This page has no active login sessions.",
+    "impact": "Ending a login session does not delete resources, revoke independent API keys, or stop background work that was already accepted.",
+    "currentAbsent": "A later page may omit the current session. That does not mean the current session has signed out.",
+    "page": "Page {page}",
+    "previous": "Previous page",
+    "next": "Next page",
+    "loadTitle": "Login sessions cannot be loaded right now",
+    "loadDescription": "The fixed page content is available; retry the session data when ready.",
+    "retryLoad": "Load again",
+    "unavailableTitle": "Login session management is not connected in this environment",
+    "unavailableDescription": "The current IAM adapter does not provide the own-session interface.",
+    "errors": {
+      "unavailable": "IAM cannot load login sessions right now. Try again later.",
+      "forbidden": "This login is not allowed to manage its own sessions.",
+      "conflict": "This action conflicts with the current session state or an unconfirmed operation.",
+      "rejected": "IAM rejected this revocation request. Refresh and try again."
+    },
+    "success": {
+      "ended": "The login session has ended.",
+      "replayed": "The original revocation is confirmed complete; no second revocation was created."
+    }
+  },
   "ServiceNavigation": {
     "favorites": "Favorite services",
     "addFavorite": "Add favorite services",
@@ -333,6 +384,10 @@
       "keys": {
         "label": "API keys",
         "hint": "Programmatic access"
+      },
+      "sessions": {
+        "label": "Login sessions",
+        "hint": "Own sessions and secure sign-out"
       },
       "simulator": {
         "label": "Access simulator",

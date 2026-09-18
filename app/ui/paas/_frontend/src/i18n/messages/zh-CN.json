@@ -192,6 +192,57 @@
       "logoutUnavailable": "IAM 注销失败，会话仍保留在当前页面内存中"
     }
   },
+  "OwnSessions": {
+    "title": "登录会话",
+    "scopeTitle": "当前用户的有效登录凭证",
+    "description": "查看当前用户仍有效的登录会话，并结束不再使用的其他会话。",
+    "notDevices": "会话不是物理设备，也不代表在线状态；同一设备可以有多个会话，多个标签页也可能共享一个会话。",
+    "refresh": "刷新会话",
+    "activeTitle": "有效会话",
+    "activeHint": "这里只列出当前用户仍可用于受保护请求的登录会话。",
+    "observedAt": "观察时间",
+    "loading": "正在读取登录会话…",
+    "table": "有效登录会话",
+    "sessionId": "会话 ID",
+    "issuedAt": "签发时间",
+    "expiresAt": "到期时间",
+    "status": "状态",
+    "actions": "操作",
+    "current": "当前会话",
+    "active": "有效",
+    "currentHint": "由当前页面持有",
+    "end": "结束会话",
+    "exitCurrent": "退出当前会话",
+    "confirmTitle": "确认结束登录会话",
+    "confirmHint": "结束后，该会话的后续受保护请求会被拒绝。",
+    "confirm": "确认结束",
+    "cancel": "取消",
+    "uncertainTitle": "撤销结果尚未确认",
+    "uncertain": "网络或服务响应未能确认结果。重试会复用原请求，不会创建新的撤销意图。",
+    "retryOriginal": "重试原操作",
+    "empty": "没有可显示的登录会话",
+    "emptyHint": "当前分页没有仍有效的登录会话。",
+    "impact": "结束登录会话不会删除资源、撤销独立 API 密钥，也不会停止已经接受的后台操作。",
+    "currentAbsent": "后续分页可能不包含当前会话；这不表示当前会话已经退出。",
+    "page": "第 {page} 页",
+    "previous": "上一页",
+    "next": "下一页",
+    "loadTitle": "暂时无法读取登录会话",
+    "loadDescription": "固定页面内容已可用；请重试会话数据。",
+    "retryLoad": "重新读取",
+    "unavailableTitle": "此环境尚未接入登录会话管理",
+    "unavailableDescription": "当前 IAM 适配器没有提供本人登录会话接口。",
+    "errors": {
+      "unavailable": "IAM 暂时无法读取登录会话，请稍后重试。",
+      "forbidden": "当前登录不允许管理本人会话。",
+      "conflict": "该操作与当前会话状态或待确认操作冲突。",
+      "rejected": "IAM 拒绝了该撤销请求，请刷新后重试。"
+    },
+    "success": {
+      "ended": "登录会话已结束。",
+      "replayed": "已确认原撤销操作完成；没有创建第二次撤销。"
+    }
+  },
   "ServiceNavigation": {
     "favorites": "收藏的服务",
     "addFavorite": "添加收藏的服务",
@@ -333,6 +384,10 @@
       "keys": {
         "label": "API 密钥",
         "hint": "程序访问凭证"
+      },
+      "sessions": {
+        "label": "登录会话",
+        "hint": "本人会话与安全退出"
       },
       "simulator": {
         "label": "权限模拟",

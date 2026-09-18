@@ -1,4 +1,4 @@
-import type { SessionSummary } from "../domain/session";
+import type { OwnSessionPage, OwnSessionRevocation, SessionSummary } from "../domain/session";
 import type {
   AccountAccess,
   AccountCommand,
@@ -26,6 +26,10 @@ export interface IamRepository {
   login(command: LoginCommand): Promise<LoginResult>;
   changePassword(credential: string, command: ChangePasswordCommand): Promise<void>;
   logout(credential: string): Promise<void>;
+  sessions?: {
+    list(credential: string, after?: string): Promise<OwnSessionPage>;
+    revoke(credential: string, targetSessionId: string, requestId: string): Promise<OwnSessionRevocation>;
+  };
 }
 
 export interface AccountRepository {

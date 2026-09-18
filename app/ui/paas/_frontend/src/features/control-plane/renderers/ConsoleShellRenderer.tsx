@@ -22,6 +22,7 @@ import {
   Building2,
   ChartNoAxesCombined,
   CircleGauge,
+  Clock3,
   Database,
   FileText,
   Star,
@@ -93,6 +94,7 @@ const navigationIcons = {
   policy: FileText,
   sso: Network,
   key: KeyRound,
+  sessions: Clock3,
   users: Users,
   settings: Settings2,
   tenants: Building2,
@@ -325,7 +327,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const headerProductName = committedFrame.productId === "console" ? t("consoleName") : directory(`services.${committedFrame.productId}.name`);
   const selectedPage = frame.navigation.find((item) => item.selected);
   const localNavigation = frame.navigation.filter((item) => {
-    if (frame.section !== "access" || item.id === "access" || item.id === "settings") return true;
+    if (frame.section !== "access" || item.id === "access" || item.id === "sessions" || item.id === "settings") return true;
     if (item.id === "users") return accountCapabilities.canListUsers;
     if (item.id === "groups") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canListGroups;
     if (item.id === "policies") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canViewPolicies;
@@ -524,7 +526,7 @@ export function ConsoleShellRenderer({ accountRepository, experience, repository
   if (!session.current || (session.phase !== "authenticated" && session.phase !== "revoking")) return <Suspense fallback={<ShellFrame><PageSkeleton label={t("welcome")} layout="access" /></ShellFrame>}><ConsoleSignIn returnTo={returnTo} /></Suspense>;
   return (
     <ConsoleNavigationProvider selection={selection}>
-      <AccountAccessProvider active={selection.section === "access"} repository={accountRepository}>
+      <AccountAccessProvider active={selection.section === "access" && selection.view !== "sessions"} repository={accountRepository}>
         <ControlPlaneProvider experience={experience} repository={repository} selection={selection}>
           <ConsoleShell experience={experience} />
         </ControlPlaneProvider>

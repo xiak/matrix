@@ -24,6 +24,7 @@ import type {
   UserPolicyAttachment,
   UserPermissionBoundary
 } from "../domain/accounts";
+import type { OwnSessionPage, OwnSessionRevocation, SessionSummary } from "../domain/session";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand, LoginResult } from "./iamRepository";
 
 type LoginWire = {
@@ -66,11 +67,14 @@ function accountTimestamp(value: unknown): string {
   return result;
 }
 
+function timestampOrder(value: string): string {
+  return value.slice(0, 19) + "." + value.slice(19, -1).slice(1).padEnd(6, "0");
+}
+
 function chronologicalTimestamps(created: unknown, updated: unknown) {
   const createdAt = accountTimestamp(created);
   const updatedAt = accountTimestamp(updated);
-  const order = (value: string) => value.slice(0, 19) + "." + value.slice(19, -1).slice(1).padEnd(6, "0");
-  if (order(updatedAt) < order(createdAt)) throw new Error("INVALID_IAM_RESPONSE");
+  if (timestampOrder(updatedAt) < timestampOrder(createdAt)) throw new Error("INVALID_IAM_RESPONSE");
   return { createdAt, updatedAt };
 }
 
@@ -335,6 +339,66 @@ function pageCursor(value: unknown): string {
 
 function pageQuery(after?: string): string {
   return after === undefined ? "" : `?after=${encodeURIComponent(pageCursor(after))}`;
+}
+
+function parseOwnSession(value: unknown): SessionSummary {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "organizationId", "principalId", "status", "issuedAt", "expiresAt"]);
+  requireAccountKind(wire, "Session");
+  if (wire.status !== "ACTIVE") throw new Error("INVALID_IAM_RESPONSE");
+  const issuedAt = accountTimestamp(wire.issuedAt);
+  const expiresAt = accountTimestamp(wire.expiresAt);
+  if (timestampOrder(issuedAt) >= timestampOrder(expiresAt)) throw new Error("INVALID_IAM_RESPONSE");
+  return {
+    id: accountIdentifier(wire.id),
+    organizationId: accountIdentifier(wire.organizationId),
+    principalId: accountIdentifier(wire.principalId),
+    status: "ACTIVE",
+    issuedAt,
+    expiresAt
+  };
+}
+
+function parseOwnSessionPage(value: unknown): OwnSessionPage {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "userId", "currentSessionId", "observedAt", "items"], ["nextCursor"]);
+  requireAccountKind(wire, "SessionList");
+  if (!Array.isArray(wire.items) || wire.items.length > 100) throw new Error("INVALID_IAM_RESPONSE");
+  const accountId = accountIdentifier(wire.accountId);
+  const userId = accountIdentifier(wire.userId);
+  const currentSessionId = accountIdentifier(wire.currentSessionId);
+  const observedAt = accountTimestamp(wire.observedAt);
+  const observedOrder = timestampOrder(observedAt);
+  const items = wire.items.map(parseOwnSession);
+  if (items.some((item, index) =>
+    item.organizationId !== accountId ||
+    item.principalId !== userId ||
+    (index > 0 && items[index - 1]!.id >= item.id) ||
+    timestampOrder(item.issuedAt) > observedOrder ||
+    timestampOrder(item.expiresAt) <= observedOrder
+  )) throw new Error("INVALID_IAM_RESPONSE");
+  const nextCursor = wire.nextCursor === undefined ? null : pageCursor(wire.nextCursor);
+  if (nextCursor && items.length !== 100) throw new Error("INVALID_IAM_RESPONSE");
+  return { accountId, userId, currentSessionId, observedAt, items, nextCursor };
+}
+
+function parseOwnSessionRevocation(value: unknown, targetSessionId: string): OwnSessionRevocation {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["outcome", "revocation"]);
+  if (wire.outcome !== "APPLIED" && wire.outcome !== "EQUAL_REPLAY") throw new Error("INVALID_IAM_RESPONSE");
+  const revocation = accountRecord(wire.revocation);
+  exactKeys(revocation, ["apiVersion", "kind", "id", "resourceVersion", "revokedAt"]);
+  requireAccountKind(revocation, "Revocation");
+  const id = accountIdentifier(revocation.id);
+  if (id !== targetSessionId) throw new Error("INVALID_IAM_RESPONSE");
+  return {
+    outcome: wire.outcome,
+    revocation: {
+      id,
+      resourceVersion: accountVersion(revocation.resourceVersion),
+      revokedAt: accountTimestamp(revocation.revokedAt)
+    }
+  };
 }
 
 function orderedDirectoryPage(ids: string[], next: unknown, after?: string): string | null {
@@ -801,5 +865,23 @@ export const httpIamRepository: IamRepository = {
       headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" },
       body: JSON.stringify({ requestId: requestToken("ui-logout-") })
     });
+  },
+  sessions: {
+    async list(credential: string, after?: string): Promise<OwnSessionPage> {
+      return parseOwnSessionPage(await requestJSON<unknown>(
+        `/api/iam/v1/auth/sessions${pageQuery(after)}`,
+        { headers: accountHeaders(credential) }
+      ));
+    },
+    async revoke(credential: string, targetSessionId: string, requestId: string): Promise<OwnSessionRevocation> {
+      const target = accountIdentifier(targetSessionId);
+      const request = accountIdentifier(requestId);
+      const value = await requestJSON<unknown>(`/api/iam/v1/auth/sessions/${encodeURIComponent(target)}:revoke`, {
+        method: "POST",
+        headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: request })
+      });
+      return parseOwnSessionRevocation(value, target);
+    }
   }
 };

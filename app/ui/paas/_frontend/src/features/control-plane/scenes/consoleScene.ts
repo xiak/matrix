@@ -7,6 +7,7 @@ export type NavigationIconKind =
   | "policy"
   | "sso"
   | "key"
+  | "sessions"
   | "users"
   | "settings"
   | "tenants"
