@@ -16,19 +16,32 @@
   independently accepted; UI and the complete009 remain unaccepted. Original
   per-test costs, cases and time budgets were preserved. Do not rerun a
   completed job solely to re-observe its already verified result.
-- Latest pushed gate slice is
-  f6cfe47d24003096ddca974525a5ee63507da10d, bounded multi-account HTTP/PG
-  observation in the original authorityprocess owner. IAM/011 owns its
-  precise evidence and limits. Final capacity gate passed98.00s:2000 timed
-  requests,400 unique new bearers verified on the opposite IAM replica,
-  1200 exact historical PDP results, immutable outbox and complete chains.
-  The original independent process scenario passed57.57s in another PG18 DB.
-  Windows clean-export whole-source race/architecture,vet,modules and CI
-  YAML/Bash checks passed. No production API/SQL/UI/profile was changed.
-- Verification35306329508 was read through the GitHub API at exactf6cfe47d:
-  go,node-process,authority-storage were running and authority-runtime queued.
+- Latest pushed gate fix is
+  b6f57d0126f66be62ec0615ee22d10b7d7226a10. It only changes the existing
+  verification workflow and IAM/011: validate/use the registered postgres
+  network alias, and move the unchanged own-session/quiet-expiry pair and
+  their databases from storage to runtime. Both serial lanes remain20min;
+  all original tests, DSNs, deadlines, costs and limits are preserved.
+  The underlying capacity implementation remains fixedf6cfe47d and test blob
+  6c5490447d9cd8717685243a96c00e722688c532; no production/API/SQL/UI/profile
+  change. IAM/011 owns all precise evidence and limitations.
+- Verification35306329508 at exactf6cfe47d is terminal, cancelled/failed:
+  storage exceeded20min; capacity failed before workload when the generated
+  long container name could not resolve. Go,node and the original retained/
+  process step passed, but the aggregate did not. Do not rerun that old run
+  or treat component ok output as job acceptance.
+- The exact long-name failure was reproduced locally. The registered alias
+  passed the full capacity gate84.09s/2000 correct samples, including all400
+  new bearers,1200 historical decisions and immutable outbox/complete chains.
+  SameCI PG18.4 image,1CPU/768MiB/PIDs192; runner2CPU/1536MiB/PIDs256.
+  The moved tests then passed75.18s/61.85s, package138.082s, serially in their
+  own databases. Workflow YAML/Bash, unchanged commands/DSNs/databases and
+  all8 IAM integration-test selections passed. All new runtime resources
+  were removed after exact ownership, zero-client and empty-network checks.
+- Verification35309235630 was read through the GitHub API at exactb6f57d01:
+  node-process succeeded; go/authority-storage were live, runtime queued.
   It is NOT independently accepted yet. Poll this exact run, not the old S1
-  success or a new branch head; do not restart on an observation timeout.
+  success or a documentation head; do not restart on an observation timeout.
   The full goal remains active, including unaccepted capacity/fairness/HA.
 - Current source is IAM31/Audit18/PaaS2, IAM product Profile r5.
   Published release profile/revision unchanged. Backend verification does
@@ -69,7 +82,7 @@ later passes do not explain away those failures or justify weaker costs.
 
 ## Next delivery step
 
-First collect the terminal result of35306329508 and inspect the actual
+First collect the terminal result of35309235630 and inspect the actual
 bounded capacity step as well as every required job. Its runner is2CPU/
 1536MiB/PIDs256 with existing5s HTTP/6min fixture and20min CI lane budgets.
 Metrics are closed-loop paired batches at concurrency1/2, not saturation,
@@ -107,6 +120,12 @@ engineer, extend this task's installation boundary, or defer MFA for another
 IAM slice. No option has been accepted and no such work commissioned. Do not
 infer consent from the preselected option or from the existing full IAM goal.
 
+A separate asynchronous choice is also pending for S3: authorize the narrow
+tenant security-setting read/write actions for ordinary subusers, without
+control of root/platform identities, or prioritize MFA with its installation
+owner. No response has been received; goal continuation is not approval to
+add these new permissions or commission installation work.
+
 Remaining delegation/IP, product/service integration, governance, UI,
 capacity/HA and signed installation/backup/release gates stay with their
 FEAT owners. External integrations remain explicitly deferred in012.
@@ -118,9 +137,13 @@ whole goal complete from a local backend slice.
 UX/UI工程师 01a07b21-9a0d-7fd0-b090-7827ce18262e owns UI/browser work
 in feat/cloud-console-ux. It has now received independently accepted3080922f
 and a scoped request to implement Session UI, preserving its own consumer
-baseline and real browser gates. Its latest explicit reply confirms the
-fixed source/semantics but says S1 UI has not yet been written; its existing
-service-navigation/flicker work is not S1 delivery. The missing session page,
+baseline and real browser gates. Its navigation fix is now fixedec5e832a,
+confirmed as an existing Git object, but is not S1 delivery. A further scoped
+S1 implementation request was sent after that task completed. Its latest
+turn is already terminal/idle, with no S1 fixed SHA or implementation evidence
+available through the task snapshot. Do not describe it as actively coding
+or keep polling an idle turn as a live wait; explicit delivery confirmation
+is still needed. The session page,
 strict adapters,unknown-result request reuse,current logout and real browser
 gate remain theirs. Unfrozen MFA APIs will not be wired; no S1 UI fixed SHA
 or completion has been reported.
