@@ -123,6 +123,8 @@ IAM的一般事务从实际编译测试目录枚举，除另有入口的Role/STS
 
 该固定源的[Verification35320384077](https://github.com/xiak/matrix/actions/runs/35320384077)确认五项一般事务全部实际通过，package分别195.624s、115.918s、102.317s、160.149s和35.688s；原包计时器不再截断恢复fixture。整次CI仍为failure：后续Role管理子组触达自身120秒期限，PaaS数据库未运行，具体准备开销与修正归[006管理会话门禁](./FEAT-IAM-006-roles-and-sts.md#r3管理会话本地证据)，不能增加期限或把503计为正确业务结果。Go、node及runtime lane成功，本人会话package228.908s、保留数据/独立进程package150.818s、容量142.62s；容量日志为10阶段、20行、每行100样本且失败请求0。原失败与新候选验收分开，不用通过的作业覆盖失败作业。
 
+累计修正固定`7cf857bba48eb5d7da487162c43e8f52534db133`的[Verification35324569376](https://github.com/xiak/matrix/actions/runs/35324569376)已核实精确SHA，go、node-process、authority-storage、authority-runtime及最终authority-process五项全部completed/success。实际日志中五项IAM一般事务分别192.299s、105.885s、93.644s、145.385s和32.371s，完整Role/STS包333.093s，Audit数据/HTTP6.240s/2.320s，PaaS数据库2.418s，均实际执行；本人Session三项226.359s及保留数据/独立进程148.830s也通过。容量140.29s（package141.349s），10阶段×2账号×100样本全部符合预期、failures为0；原400次凭据发行、1200份历史决定与outbox/链检查由同一测试owner保持。主Go门禁为1.26.8，容量仍使用固定Go1.26.5镜像和2CPU/1536MiB/PIDs256限额，不混成新的资源基线或完整HA证据。
+
 这些分组只管理验收流程，不构成容量或HA结论。固定版本的成功和失败证据归各功能FEAT；后续通过不回填旧失败，增加作业预算也不证明场景正确或性能达标。
 
 ## 完成条件
