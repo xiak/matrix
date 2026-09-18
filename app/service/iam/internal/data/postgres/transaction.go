@@ -338,6 +338,7 @@ func (value *transaction) LookupSession(
 		verificationDigest                                          string
 		policies                                                    []byte
 		boundary                                                    []byte
+		credentialGeneration                                        uint64
 	)
 	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.lookup_session($1)", lookupDigest).Scan(
 		&organizationID,
@@ -363,6 +364,7 @@ func (value *transaction) LookupSession(
 		&verificationDigest,
 		&policies,
 		&boundary,
+		&credentialGeneration,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.SessionCredential{}, false, nil
@@ -427,13 +429,42 @@ func (value *transaction) LookupSession(
 	}
 	if iamv1.ValidateOrganization(subject.Organization) != nil ||
 		iamv1.ValidatePrincipal(subject.Principal) != nil ||
-		iamv1.ValidateSession(subject.Session) != nil {
+		iamv1.ValidateSession(subject.Session) != nil || credentialGeneration == 0 || credentialGeneration > 9007199254740991 {
 		return identityaccess.SessionCredential{}, false, identityaccess.ErrUnavailable
 	}
 	return identityaccess.SessionCredential{
-		Subject:            subject,
-		VerificationDigest: verificationDigest,
+		Subject:              subject,
+		VerificationDigest:   verificationDigest,
+		CredentialGeneration: credentialGeneration,
 	}, true, nil
+}
+
+func (value *transaction) ListOwnSessions(ctx context.Context, read identityaccess.OwnSessionRead) ([]iamv1.Session, error) {
+	if iamv1.ValidateID("accountId", string(read.AccountID)) != nil || iamv1.ValidateID("userId", string(read.UserID)) != nil ||
+		iamv1.ValidateID("currentSessionId", string(read.CurrentSessionID)) != nil || (read.After != "" && iamv1.ValidateID("after", read.After) != nil) {
+		return nil, identityaccess.ErrInvalidArgument
+	}
+	rows, err := value.tx.Query(ctx, "SELECT * FROM iam.list_own_sessions($1,$2,$3,$4)", string(read.AccountID), string(read.UserID), string(read.CurrentSessionID), read.After)
+	if err != nil {
+		return nil, mapSubjectDatabaseError("list own IAM sessions", err)
+	}
+	defer rows.Close()
+	items := make([]iamv1.Session, 0, iamv1.DirectoryPageSize+1)
+	for rows.Next() {
+		item := iamv1.Session{APIVersion: iamv1.APIVersion, Kind: "Session", AccountID: read.AccountID, PrincipalID: read.UserID}
+		if err := rows.Scan(&item.ID, &item.Status, &item.IssuedAt, &item.ExpiresAt); err != nil {
+			return nil, mapDatabaseError("decode own IAM session", err)
+		}
+		item.IssuedAt, item.ExpiresAt = item.IssuedAt.UTC(), item.ExpiresAt.UTC()
+		if iamv1.ValidateSession(item) != nil || len(items) >= iamv1.DirectoryPageSize+1 {
+			return nil, identityaccess.ErrUnavailable
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, mapSubjectDatabaseError("list own IAM sessions", err)
+	}
+	return items, nil
 }
 
 // The same boundary decoder protects USER authentication carriers; a key must
@@ -809,6 +840,7 @@ func (value *transaction) RevokeSession(
 	if iamv1.ValidateID("organizationId", string(mutation.AccountID)) != nil ||
 		iamv1.ValidateID("sessionId", string(mutation.SessionID)) != nil ||
 		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
+		iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.Revocation{}, false, identityaccess.ErrInvalidArgument
 	}
@@ -828,12 +860,13 @@ func (value *transaction) RevokeSession(
 	var applied bool
 	err = value.tx.QueryRow(
 		ctx,
-		"SELECT * FROM iam.revoke_session($1, $2, $3, $4, $5::jsonb)",
+		"SELECT * FROM iam.revoke_session($1, $2, $3, $4, $5::jsonb, $6)",
 		string(mutation.AccountID),
 		string(mutation.SessionID),
 		string(mutation.ActorPrincipalID),
 		decisionID,
 		event,
+		string(mutation.ActorSessionID),
 	).Scan(&version, &revokedAt, &applied)
 	clear(event)
 	if err != nil {

@@ -92,6 +92,235 @@ func TestIAMRetainedSessionProcessUpgrade(t *testing.T) {
 	testIAMRetainedProcessUpgrade(t, "MATRIX_IAM_SESSION_UPGRADE_POSTGRES_TEST_DSN", "a36cf9817f522549b995ea9c1f0d873499b4fe62", true)
 }
 
+func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
+	const variable = "MATRIX_IAM_OWN_SESSION_UPGRADE_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(variable)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_upgrade_own_session_") {
+		t.Fatal("own-session predecessor requires its own disposable database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	admin, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect retained own-session database")
+	}
+	defer admin.Close(context.Background())
+	assertPostgres18(t, ctx, admin)
+	assertCleanSchemas(t, ctx, admin)
+	root, temporary := repositoryRoot(t), t.TempDir()
+	// The actual accepted IAM30 executable creates the retained identities and
+	// sessions. This tests the changed Session ABI, not release admission or
+	// every unpublished schema revision.
+	baseline := extractFixedAuthoritySource(t, ctx, root, temporary, "644fff09446fc8ffb003cc53cf2fb55d4f58828a")
+	oldMigrator := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor", "./app/service/iam/cmd/matrix-iam")
+	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-session-current", "./app/service/iam/cmd/matrix-iam")
+	apiDSN := runtimeDSN(t, config, "matrix_iam_api_login", processDBPassword)
+	var migrationEnvironment []string
+	for _, value := range []struct{ name, dsn string }{
+		{"MATRIX_MIGRATION_DATABASE_DSN_FILE", dsn},
+		{"MATRIX_MIGRATION_IAM_API_DSN_FILE", localRecoveryMigrationDSN(t, apiDSN)},
+		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword))},
+		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword))},
+	} {
+		migrationEnvironment = append(migrationEnvironment, value.name+"="+writeProtectedFile(t, temporary, value.name, []byte(value.dsn)))
+	}
+	var children []*childProcess
+	sensitive := []string{initialAdminPassword, changedAdminPassword, initialReaderPassword, changedReaderPassword, processDBPassword}
+	defer func() {
+		for _, child := range children {
+			child.stop()
+		}
+		assertProcessOutputsSanitized(t, children, sensitive...)
+	}()
+	for _, action := range []string{"apply", "verify"} {
+		child := startChild(t, baseline, oldMigrator, migrationEnvironment, action)
+		children = append(children, child)
+		if err := child.wait(30 * time.Second); err != nil {
+			t.Fatal("actual IAM30 migrator failed")
+		}
+	}
+	bootstrap, err := iamv1.EncodeBootstrapDocument(processBootstrap(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrapPath := writeProtectedFile(t, temporary, "iam-bootstrap", bootstrap)
+	clear(bootstrap)
+	address := freeAddress(t)
+	endpoint := "http://" + address
+	// Both exact executables support the same existing key-custody contract.
+	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-api-dsn", []byte(apiDSN)),
+		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
+		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("37", 32))),
+		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + writeProcessAccessKeyWrapping(t, temporary, processBootstrap(t))}
+	start := func(binary string, version uint64) *childProcess {
+		t.Helper()
+		child := startChild(t, root, binary, environment)
+		children = append(children, child)
+		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
+		assertRuntimeProcessLogins(t, ctx, admin, "matrix_iam_api_login")
+		response := performJSON(t, http.MethodGet, endpoint+"/ready", "", nil)
+		var readiness iamv1.Readiness
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &readiness) != nil || readiness.SchemaVersion != version {
+			t.Fatal("session executable readiness does not match its actual schema")
+		}
+		return child
+	}
+	old := start(oldBinary, 30)
+	primary := loginIAM(t, endpoint, "admin", initialAdminPassword, "own-upgrade-root-login")
+	changePasswordIAM(t, endpoint, primary.Credential, initialAdminPassword, changedAdminPassword, "own-upgrade-root-password")
+	member := createIAMUser(t, endpoint, primary.Credential, "retained.sessions", "Retained sessions", initialReaderPassword, "own-upgrade-user")
+	realm := member.LoginName + "@" + string(member.AccountID)
+	a := loginIAM(t, endpoint, realm, initialReaderPassword, "own-upgrade-first")
+	changePasswordIAM(t, endpoint, a.Credential, initialReaderPassword, changedReaderPassword, "own-upgrade-password")
+	b := loginIAM(t, endpoint, realm, changedReaderPassword, "own-upgrade-second")
+	ended := loginIAM(t, endpoint, realm, changedReaderPassword, "own-upgrade-ended")
+	unknown := loginIAM(t, endpoint, realm, changedReaderPassword, "own-upgrade-unknown")
+	revokeIAMSession(t, endpoint, primary.Credential, ended.Session.ID, "own-upgrade-old-revocation")
+	// Missing lineage is a negative storage fixture, not proof that a newer
+	// executable issued a historical NULL-generation session.
+	if _, err := admin.Exec(ctx, "UPDATE iam.sessions SET credential_version=NULL WHERE tenant_id=$1 AND id=$2", member.AccountID, unknown.Session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", unknown.Credential, nil); response.Status != http.StatusUnauthorized {
+		t.Fatal("predecessor accepted unknown credential lineage")
+	}
+	forcedUser := createIAMUser(t, endpoint, primary.Credential, "retained.forced", "Retained forced change", initialReaderPassword, "own-upgrade-forced-user")
+	forcedA := loginIAM(t, endpoint, forcedUser.LoginName+"@"+string(forcedUser.AccountID), initialReaderPassword, "own-upgrade-forced-a")
+	forcedB := loginIAM(t, endpoint, forcedUser.LoginName+"@"+string(forcedUser.AccountID), initialReaderPassword, "own-upgrade-forced-b")
+	for _, session := range []loginResult{primary, a, b, ended, unknown, forcedA, forcedB} {
+		sensitive = append(sensitive, session.Credential)
+	}
+	identityState := func() []byte {
+		t.Helper()
+		var state []byte
+		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
+		 'bootstrap',(SELECT jsonb_agg(jsonb_build_array(singleton,installation_id,content_digest,organization_id,administrator_principal_id,applied_at)) FROM iam.bootstrap_receipts),
+		 'credentials',(SELECT jsonb_agg(jsonb_build_array(tenant_id,principal_id,password_hash,credential_version,changed_at) ORDER BY tenant_id,principal_id) FROM iam.user_credentials),
+		 'users',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,status,must_change_password,resource_version) ORDER BY tenant_id,id) FROM iam.principals),
+		 'attachments',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,target_id,policy_id,authority_scope,installation_id,resource_version,revoked_at) ORDER BY tenant_id,id) FROM iam.policy_attachments),
+		 'sessions',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,principal_id,status,credential_version,issued_at,expires_at,revoked_at,resource_version) ORDER BY tenant_id,id) FROM iam.sessions))`).Scan(&state); err != nil {
+			t.Fatal("read retained session/credential invariants", err)
+		}
+		return state
+	}
+	originalState := identityState()
+	var originalFacts []auditv1.Event
+	rows, err := admin.Query(ctx, "SELECT event_document FROM iam.audit_outbox ORDER BY tenant_id,event_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var encoded []byte
+		var event auditv1.Event
+		if rows.Scan(&encoded) != nil || json.Unmarshal(encoded, &event) != nil {
+			t.Fatal("decode original session predecessor fact")
+		}
+		originalFacts = append(originalFacts, event)
+	}
+	rows.Close()
+	if rows.Err() != nil || len(originalFacts) == 0 {
+		t.Fatal("predecessor facts missing")
+	}
+	old.stop()
+	for range 2 {
+		if err := iammigration.Up(ctx, admin); err != nil {
+			t.Fatal("apply retained own-session schema", err)
+		}
+		if err := iammigration.Verify(ctx, admin); err != nil {
+			t.Fatal("verify retained own-session schema", err)
+		}
+	}
+	var shape bool
+	if err := admin.QueryRow(ctx, `SELECT schema_version=31 AND iam.login_session_contract_ready()
+	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb)') IS NULL
+	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb,text)') IS NOT NULL
+	 AND (SELECT cardinality(proallargtypes)=25 AND proargnames[25]='credential_generation' FROM pg_proc WHERE oid='iam.lookup_session(text)'::regprocedure)
+	 FROM iam.readiness()`).Scan(&shape); err != nil || !shape {
+		t.Fatal("retained database did not replace the exact Session ABI", err)
+	}
+	current := start(currentBinary, 31)
+	if !bytes.Equal(originalState, identityState()) {
+		t.Fatal("migration or equal bootstrap changed original identity/credential state")
+	}
+	list := func(session loginResult, want int) iamv1.SessionList {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/sessions", session.Credential, nil)
+		var page iamv1.SessionList
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &page) != nil || iamv1.ValidateSessionList(page) != nil ||
+			page.CurrentSessionID != session.Session.ID || page.UserID != session.Session.PrincipalID || page.AccountID != session.Session.AccountID || len(page.Items) != want {
+			t.Fatal("retained session directory lost its actual identity or live membership")
+		}
+		return page
+	}
+	list(a, 2)
+	list(forcedA, 2)
+	for _, session := range []loginResult{ended, unknown} {
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/sessions", session.Credential, nil); response.Status != http.StatusUnauthorized {
+			t.Fatal("migration revived ended or unknown-lineage session")
+		}
+	}
+	if response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/sessions/"+string(ended.Session.ID)+":revoke", a.Credential, iamv1.RevokeSessionRequest{RequestID: "own-upgrade-adopt-old-end"}); response.Status != http.StatusConflict {
+		t.Fatal("old administrator revocation became a new self completion")
+	}
+	request := iamv1.RevokeSessionRequest{RequestID: "own-upgrade-self"}
+	path := endpoint + "/v1/auth/sessions/" + string(b.Session.ID) + ":revoke"
+	response := performJSON(t, http.MethodPost, path, a.Credential, request)
+	var completed iamv1.RevokeOwnSessionResponse
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &completed) != nil || completed.Outcome != "APPLIED" {
+		t.Fatal("retained user could not end another original session")
+	}
+	if response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/sessions/"+string(forcedB.Session.ID)+":revoke", forcedA.Credential, iamv1.RevokeSessionRequest{RequestID: "own-upgrade-forced-self"}); response.Status != http.StatusOK {
+		t.Fatal("retained forced-change user lost intrinsic self reduction")
+	}
+	var stillForced bool
+	if err := admin.QueryRow(ctx, "SELECT must_change_password FROM iam.principals WHERE tenant_id=$1 AND id=$2", forcedUser.AccountID, forcedUser.ID).Scan(&stillForced); err != nil || !stillForced {
+		t.Fatal("self reduction upgraded a retained temporary session")
+	}
+	completedState := identityState()
+	current.stop()
+	if err := iammigration.Up(ctx, admin); err != nil {
+		t.Fatal("replay completed own-session schema", err)
+	}
+	current = start(currentBinary, 31)
+	if !bytes.Equal(completedState, identityState()) {
+		t.Fatal("restart/schema replay changed completed session state")
+	}
+	list(a, 1)
+	list(forcedA, 1)
+	response = performJSON(t, http.MethodPost, path, a.Credential, request)
+	var replay iamv1.RevokeOwnSessionResponse
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &replay) != nil || replay.Outcome != "EQUAL_REPLAY" || replay.Revocation != completed.Revocation {
+		t.Fatal("retained session replay changed original completion")
+	}
+	var completions int
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.session_self_revocations WHERE request_id=$1", request.RequestID).Scan(&completions); err != nil || completions != 1 {
+		t.Fatal("retained session replay duplicated completion")
+	}
+	for _, event := range originalFacts {
+		var encoded []byte
+		var retained auditv1.Event
+		if err := admin.QueryRow(ctx, "SELECT event_document FROM iam.audit_outbox WHERE event_id=$1", event.EventID).Scan(&encoded); err != nil || json.Unmarshal(encoded, &retained) != nil {
+			t.Fatal("original predecessor fact disappeared")
+		}
+		before, beforeDigest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+		after, afterDigest, afterErr := auditv1.CanonicalizeEvent(auditv1.SourceIAM, retained)
+		if err != nil || afterErr != nil || before != after || beforeDigest != afterDigest {
+			t.Fatal("retained predecessor canonical bytes changed")
+		}
+		if response := performJSON(t, http.MethodPost, endpoint+"/v1/audit-producer:resolve", iamServiceCredential, iamv1.ResolveAuditProducerRequest{Event: retained}); response.Status != http.StatusOK {
+			t.Fatal("original predecessor fact lost its exact historical proof")
+		}
+	}
+	current.stop()
+	t.Log("actual IAM30 -> IAM31 retained sessions, NULL lineage, forced reduction, exact completion, original receipt/canonical/proof and restart passed; no release compatibility claim")
+}
+
 func TestIAMRetainedRoleCapabilityProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_ROLE_PROFILE_UPGRADE_POSTGRES_TEST_DSN"
 	dsn := os.Getenv(variable)
@@ -1973,7 +2202,7 @@ func testIndependentAuthorityProcesses(t *testing.T, browser bool) {
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 30, Audit: 18, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 31, Audit: 18, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -4227,6 +4456,7 @@ func proveTenantAccountProcesses(
 	sensitive = append(sensitive, roleOperator.Credential)
 	sensitive = append(sensitive, proveRoleManagementProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, roleOperator.Credential, withAuditOutage, restartIAM)...)
 	sensitive = append(sensitive, proveAccessKeyProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
+	sensitive = append(sensitive, proveOwnSessionProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
 	readAccount := func(id string) iamv1.Account {
 		t.Helper()
 		response := performJSON(t, http.MethodGet, endpoint+"/v1/accounts/"+id, bearer, nil)
@@ -4378,6 +4608,161 @@ func proveTenantAccountProcesses(
 
 // These are real application resources, database-service records and reserved
 // quota. The local provisioner gate separately proves a running engine.
+func proveOwnSessionProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, ownerBearer string,
+	withAuditOutage func(func()), restartIAM func()) []string {
+	t.Helper()
+	user := createIAMUser(t, endpoint, ownerBearer, "session.owner", "Session owner", initialDeveloperPassword, "process-own-user")
+	realm := user.LoginName + "@" + string(user.AccountID)
+	a := loginIAM(t, endpoint, realm, initialDeveloperPassword, "process-own-login-a")
+	b := loginIAM(t, replicaEndpoint, realm, initialDeveloperPassword, "process-own-login-b")
+	c := loginIAM(t, replicaEndpoint, realm, initialDeveloperPassword, "process-own-login-c")
+	sensitive := []string{a.Credential, b.Credential, c.Credential}
+	call := func(method, base, path, bearer string, body any, want int, result any) {
+		t.Helper()
+		response := performJSON(t, method, base+path, bearer, body)
+		if response.Status != want {
+			t.Fatalf("own-session process %s status=%d want=%d", path, response.Status, want)
+		}
+		if result != nil {
+			reflect.ValueOf(result).Elem().SetZero()
+			decoder := json.NewDecoder(bytes.NewReader(response.Body))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(result); err != nil {
+				t.Fatal("invalid own-session response", err)
+			}
+		}
+	}
+	var page iamv1.SessionList
+	call(http.MethodGet, replicaEndpoint, "/v1/auth/sessions", a.Credential, nil, http.StatusOK, &page)
+	if iamv1.ValidateSessionList(page) != nil || page.CurrentSessionID != a.Session.ID || page.UserID != user.ID || len(page.Items) != 3 {
+		t.Fatal("replica directory lost actual caller/owner")
+	}
+	call(http.MethodGet, endpoint, "/v1/auth/sessions", iamServiceCredential, nil, http.StatusUnauthorized, nil)
+	intent := iamv1.RevokeSessionRequest{RequestID: "process-own-lost-reply"}
+	path := "/v1/auth/sessions/" + string(b.Session.ID) + ":revoke"
+	call(http.MethodPost, endpoint, path, homeBearer, intent, http.StatusForbidden, nil)
+	var original iamv1.RevokeOwnSessionResponse
+	var fact auditv1.Event
+	var originalBytes, originalDigest string
+	withAuditOutage(func() {
+		// Only the TCP reply is lost: the production IAM process receives the
+		// real request and commits before the proxy aborts the client connection.
+		target, err := url.Parse(endpoint)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proxy := httputil.NewSingleHostReverseProxy(target)
+		transport := &http.Transport{DisableKeepAlives: true, MaxConnsPerHost: 1}
+		proxy.Transport = transport
+		completed := make(chan iamv1.RevokeOwnSessionResponse, 1)
+		proxy.ModifyResponse = func(response *http.Response) error {
+			var result iamv1.RevokeOwnSessionResponse
+			err := json.NewDecoder(io.LimitReader(response.Body, 8192)).Decode(&result)
+			_ = response.Body.Close()
+			if response.StatusCode != http.StatusOK || err != nil {
+				result = iamv1.RevokeOwnSessionResponse{}
+			}
+			completed <- result
+			return errors.New("synthetic lost own-session completion")
+		}
+		proxy.ErrorHandler = func(http.ResponseWriter, *http.Request, error) { panic(http.ErrAbortHandler) }
+		lost := httptest.NewUnstartedServer(proxy)
+		lost.Config.ReadHeaderTimeout, lost.Config.WriteTimeout = 5*time.Second, 10*time.Second
+		lost.Start()
+		defer lost.Close()
+		defer transport.CloseIdleConnections()
+		body, err := json.Marshal(intent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, lost.URL+path, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+a.Credential)
+		request.Header.Set("Content-Type", "application/json")
+		client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+		response, lostErr := client.Do(request)
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		if lostErr == nil {
+			t.Fatal("client received a supposedly lost completion")
+		}
+		select {
+		case original = <-completed:
+		case <-time.After(10 * time.Second):
+			t.Fatal("lost reply did not reach IAM")
+		case <-ctx.Done():
+			t.Fatal("lost reply gate expired")
+		}
+		if iamv1.ValidateRevokeOwnSessionResponse(original) != nil || original.Outcome != "APPLIED" {
+			t.Fatal("lost reply did not follow a committed self revocation")
+		}
+		call(http.MethodGet, replicaEndpoint, "/v1/auth/sessions", b.Credential, nil, http.StatusUnauthorized, nil)
+		call(http.MethodGet, replicaEndpoint, "/v1/auth/sessions", a.Credential, nil, http.StatusOK, &page)
+		if len(page.Items) != 2 {
+			t.Fatal("self revocation ended an unrelated login")
+		}
+		call(http.MethodPost, replicaEndpoint, path, c.Credential, intent, http.StatusConflict, nil)
+		var encoded []byte
+		if err := admin.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2`, user.AccountID, intent.RequestID).Scan(&encoded); err != nil || json.Unmarshal(encoded, &fact) != nil {
+			t.Fatal("missing committed self fact", err)
+		}
+		originalBytes, originalDigest, err = auditv1.CanonicalizeEvent(auditv1.SourceIAM, fact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		restartIAM()
+		var replay iamv1.RevokeOwnSessionResponse
+		call(http.MethodPost, endpoint, path, a.Credential, intent, http.StatusOK, &replay)
+		if replay.Outcome != "EQUAL_REPLAY" || replay.Revocation != original.Revocation {
+			t.Fatal("restart changed original self completion")
+		}
+		call(http.MethodPost, replicaEndpoint, path, a.Credential, iamv1.RevokeSessionRequest{RequestID: "process-own-different-intent"}, http.StatusConflict, nil)
+		call(http.MethodPost, endpoint, "/v1/auth/logout", a.Credential, iamv1.LogoutRequest{RequestID: "process-own-exit-a"}, http.StatusOK, nil)
+		call(http.MethodPost, replicaEndpoint, path, a.Credential, intent, http.StatusUnauthorized, nil)
+	})
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	assertAuditEventCount(t, ctx, admin, string(fact.EventID), 1)
+	pageOfFacts := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMSessionRevoked}, http.StatusOK)
+	matched := 0
+	for _, record := range pageOfFacts.Records {
+		if record.Event.EventID == fact.EventID {
+			canonical, digest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, record.Event)
+			if err != nil || canonical != originalBytes || digest != originalDigest {
+				t.Fatal("delayed delivery changed original self fact", err)
+			}
+			matched++
+		}
+	}
+	if matched != 1 {
+		t.Fatal("original self fact was not visible exactly once")
+	}
+	changePasswordIAM(t, endpoint, c.Credential, initialDeveloperPassword, changedDeveloperPassword, "process-own-password")
+	createIAMPolicyAttachment(t, endpoint, ownerBearer, user.ID, iamv1.SystemPolicyPaaSDeveloper, "process-own-paas")
+	d := loginIAM(t, replicaEndpoint, realm, changedDeveloperPassword, "process-own-login-d")
+	sensitive = append(sensitive, d.Credential)
+	operation := createPaaSApplication(t, paasEndpoint, c.Credential, "application-own-session", "own-session", "process-own-application", http.StatusCreated)
+	getPaaSApplication(t, paasEndpoint, d.Credential, operation.Target.ID, http.StatusOK)
+	call(http.MethodPost, replicaEndpoint, "/v1/auth/sessions/"+string(d.Session.ID)+":revoke", c.Credential, iamv1.RevokeSessionRequest{RequestID: "process-own-end-d"}, http.StatusOK, nil)
+	getPaaSApplication(t, paasEndpoint, d.Credential, operation.Target.ID, http.StatusUnauthorized)
+	getPaaSApplication(t, paasEndpoint, c.Credential, operation.Target.ID, http.StatusOK)
+	call(http.MethodPost, endpoint, "/v1/auth/logout", c.Credential, iamv1.LogoutRequest{RequestID: "process-own-exit-c"}, http.StatusOK, nil)
+	getPaaSApplication(t, paasEndpoint, ownerBearer, operation.Target.ID, http.StatusOK)
+	var tenant, creator string
+	if err := admin.QueryRow(ctx, `SELECT tenant_id,document#>>'{requestedBy,id}' FROM paas.operations WHERE id=$1`, operation.ID).Scan(&tenant, &creator); err != nil || tenant != string(user.AccountID) || creator != string(user.ID) {
+		t.Fatal("session termination changed accepted Operation ownership", err)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete {
+		t.Fatal("session lifecycle broke its tenant chain")
+	}
+	return sensitive
+}
+
 func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, ownerBearer, roleBearer string,
 	withAuditOutage func(func()), restartIAM func()) []string {
 	t.Helper()
@@ -6463,8 +6848,9 @@ func assertRuntimeProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Co
 }
 
 // Synthetic test custody, never an installation generator. The caller passes
-// this file only to the current IAM network executable, not its predecessor,
-// migrator, local-recovery entry, dispatcher or product services.
+// this file only to IAM network executables with this exact custody contract,
+// never to an older unsupported predecessor, migrator, local-recovery entry,
+// dispatcher or product service.
 func writeProcessAccessKeyWrapping(t *testing.T, directory string, bootstrap iamv1.BootstrapDocument) string {
 	t.Helper()
 	digest, err := iamv1.BootstrapDigest(bootstrap)

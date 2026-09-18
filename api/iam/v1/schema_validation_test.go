@@ -347,6 +347,40 @@ func TestRoleDisplayAndSelfDiscoverySchemasStayClosed(t *testing.T) {
 	}
 }
 
+func TestOwnLoginSessionSchemasExposeOnlyBoundedPublicObservations(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	session := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"Session","id":"session-a","organizationId":"account-a","principalId":"user-a","status":"ACTIVE","issuedAt":"2026-09-17T00:00:00Z","expiresAt":"2026-09-17T01:00:00Z"}`
+	list := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"SessionList","accountId":"account-a","userId":"user-a","currentSessionId":"session-current","observedAt":"2026-09-17T00:01:00Z","items":[` + session + `]}`
+	revocation := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"Revocation","id":"session-a","resourceVersion":2,"revokedAt":"2026-09-17T00:01:00Z"}`
+	for _, test := range []struct {
+		kind, wire string
+		valid      bool
+	}{
+		{"SessionList", list, true},
+		{"SessionList", strings.Replace(list, `"items":[`+session+`]`, `"items":[]`, 1), true},
+		{"SessionList", strings.Replace(list, `"items":[`+session+`]`, `"items":null`, 1), false},
+		{"SessionList", strings.Replace(list, `"items":[`+session+`]`, `"items":[`+strings.Repeat(session+",", DirectoryPageSize)+session+`]`, 1), false},
+		{"SessionList", strings.Replace(list, `"ACTIVE"`, `"REVOKED"`, 1), false},
+		{"SessionList", strings.TrimSuffix(list, "}") + `,"credentialGeneration":1}`, false},
+		{"SessionList", strings.TrimSuffix(list, "}") + `,"nextCursor":"ir1.wrong-purpose"}`, false},
+		{"SessionList", strings.Replace(list, `"id":"session-a"`, `"id":"session-a","credential":"secret"`, 1), false},
+		{"RevokeOwnSessionResponse", `{"outcome":"APPLIED","revocation":` + revocation + `}`, true},
+		{"RevokeOwnSessionResponse", `{"outcome":"EQUAL_REPLAY","revocation":` + revocation + `}`, true},
+		{"RevokeOwnSessionResponse", `{"outcome":"ALREADY_REVOKED","revocation":` + revocation + `}`, false},
+		{"RevokeSessionRequest", `{"requestId":"revoke-own"}`, true},
+		{"RevokeSessionRequest", `{"requestId":"revoke-own","currentSessionId":"caller-selected"}`, false},
+		{"RevokeSessionRequest", `{"requestId":"revoke-own","accountId":"foreign"}`, false},
+	} {
+		instance, err := jsonschema.UnmarshalJSON(strings.NewReader(test.wire))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := compileIAMOpenAPISchema(t, api, test.kind).Validate(instance); (err == nil) != test.valid {
+			t.Fatalf("%s accepted=%v want=%v: %v", test.kind, err == nil, test.valid, err)
+		}
+	}
+}
+
 func TestRoleSessionManagementSchemasAreBoundedAndNonSecret(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	session := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSession","id":"session-a","accountId":"account-a","roleId":"role-a","sourceUserId":"user-a","status":"ACTIVE","issuedAt":"2026-09-17T00:00:00Z","expiresAt":"2026-09-17T01:00:00Z"}`

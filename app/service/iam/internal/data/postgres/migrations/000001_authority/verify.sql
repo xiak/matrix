@@ -130,7 +130,7 @@ BEGIN
             'matrix_iam_api', 'iam.change_password(text,text,text,text,jsonb,text,boolean)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.revoke_session(text,text,text,text,jsonb)', 'EXECUTE'
+            'matrix_iam_api', 'iam.revoke_session(text,text,text,text,jsonb,text)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_iam_api', 'iam.create_user(text,text,text,text,text,text,text,jsonb)', 'EXECUTE'
@@ -293,7 +293,8 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>30 OR NOT iam.authorization_decision_contract_ready()
+    IF (SELECT schema_version FROM iam.readiness())<>31 OR NOT iam.authorization_decision_contract_ready()
+        OR NOT iam.login_session_contract_ready()
         OR NOT iam.policy_attachment_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';
     END IF;

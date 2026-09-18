@@ -49,6 +49,7 @@ type Transaction interface {
 	LookupLogin(context.Context, string) (LoginAccount, bool, error)
 	IssueSession(context.Context, SessionMutation) (iamv1.Session, error)
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
+	ListOwnSessions(context.Context, OwnSessionRead) ([]iamv1.Session, error)
 	LookupRoleSession(context.Context, string) (RoleSessionCredential, bool, error)
 	LookupRoleSessionForExit(context.Context, string) (RoleSessionExitCredential, bool, error)
 	ExitRoleSession(context.Context, string, auditv1.Event) (iamv1.RoleSession, error)
@@ -535,8 +536,16 @@ type SessionMutation struct {
 }
 
 type SessionCredential struct {
-	Subject            authority.SubjectContext
-	VerificationDigest string
+	Subject              authority.SubjectContext
+	VerificationDigest   string
+	CredentialGeneration uint64
+}
+
+type OwnSessionRead struct {
+	AccountID        iamv1.AccountID
+	UserID           iamv1.PrincipalID
+	CurrentSessionID iamv1.SessionID
+	After            string
 }
 
 type RoleSessionCredential struct {
@@ -625,6 +634,7 @@ type SessionRevocationMutation struct {
 	AccountID        iamv1.AccountID
 	SessionID        iamv1.SessionID
 	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
 }

@@ -13,6 +13,52 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
+func TestOwnLoginSessionCursorBindsTheCallerAndCredentialGeneration(t *testing.T) {
+	now := authorityTestTime()
+	codec, _ := NewCursorCodec(bytes.Repeat([]byte{0x63}, 32))
+	replica, _ := NewCursorCodec(bytes.Repeat([]byte{0x63}, 32))
+	subject := authoritySubject(now)
+	subject.Principal.MustChangePassword = true
+	query := DirectoryQuery{InstallationID: subject.InstallationID, LoginSessions: &LoginSessionDirectoryRevision{CredentialGeneration: 9}}
+	cursor, err := codec.Encode(subject, query, "session-last", now)
+	if err != nil {
+		t.Fatal("restricted user without business grants cannot continue own sessions", err)
+	}
+	if position, err := replica.Decode(cursor, subject, query, now.Add(time.Minute)); err != nil || position != "session-last" {
+		t.Fatal("own session page did not continue across instances", err)
+	}
+	for name, change := range map[string]func(*SubjectContext, *DirectoryQuery){
+		"generation":    func(_ *SubjectContext, q *DirectoryQuery) { q.LoginSessions.CredentialGeneration++ },
+		"no generation": func(_ *SubjectContext, q *DirectoryQuery) { q.LoginSessions.CredentialGeneration = 0 },
+		"session":       func(s *SubjectContext, _ *DirectoryQuery) { s.Session.ID = "another-login" },
+		"user":          func(s *SubjectContext, _ *DirectoryQuery) { s.Principal.ID = "another-user" },
+		"account":       func(s *SubjectContext, _ *DirectoryQuery) { s.Organization.ID = "another-account" },
+		"installation":  func(_ *SubjectContext, q *DirectoryQuery) { q.InstallationID = "another-installation" },
+		"revoked": func(s *SubjectContext, _ *DirectoryQuery) {
+			s.Session.Status = iamv1.SessionRevoked
+			s.Session.RevokedAt = &now
+		},
+		"disabled":         func(s *SubjectContext, _ *DirectoryQuery) { s.Principal.Status = iamv1.PrincipalDisabled },
+		"mixed management": func(_ *SubjectContext, q *DirectoryQuery) { q.Action = iamv1.ActionIAMUserList },
+		"mixed discovery": func(_ *SubjectContext, q *DirectoryQuery) {
+			q.AssumableRoles = &RoleDiscoveryRevision{CredentialGeneration: 9, DirectoryRevision: 1}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changedSubject, changedQuery := subject, query
+			revision := *query.LoginSessions
+			changedQuery.LoginSessions = &revision
+			change(&changedSubject, &changedQuery)
+			if _, err := replica.Decode(cursor, changedSubject, changedQuery, now); !errors.Is(err, ErrInvalidCursor) {
+				t.Fatal("changed own-session authority accepted continuation", err)
+			}
+		})
+	}
+	if _, err := replica.Decode(cursor, subject, query, now.Add(cursorLifetime)); !errors.Is(err, ErrInvalidCursor) {
+		t.Fatal("expired own-session cursor accepted")
+	}
+}
+
 func TestSelfRoleCursorHidesFilteredPositionAndBindsCurrentSnapshot(t *testing.T) {
 	now := authorityTestTime()
 	key := bytes.Repeat([]byte{0x75}, 32)

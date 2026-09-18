@@ -406,6 +406,33 @@ func ValidateSession(value Session) error {
 	return errors.Join(problems...)
 }
 
+func ValidateSessionList(value SessionList) error {
+	if value.APIVersion != APIVersion || value.Kind != "SessionList" || value.Items == nil || len(value.Items) > DirectoryPageSize ||
+		ValidateID("accountId", string(value.AccountID)) != nil || ValidateID("userId", string(value.UserID)) != nil ||
+		ValidateID("currentSessionId", string(value.CurrentSessionID)) != nil || validateTime("observedAt", value.ObservedAt) != nil {
+		return errors.New("session list is invalid")
+	}
+	var previous SessionID
+	for _, item := range value.Items {
+		if ValidateSession(item) != nil || item.AccountID != value.AccountID || item.PrincipalID != value.UserID ||
+			item.ID <= previous || item.Status != SessionActive || item.IssuedAt.After(value.ObservedAt) || !value.ObservedAt.Before(item.ExpiresAt) {
+			return errors.New("session observation is invalid")
+		}
+		previous = item.ID
+	}
+	if value.NextCursor != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextCursor) != nil) {
+		return errors.New("session continuation is invalid")
+	}
+	return nil
+}
+
+func ValidateRevokeOwnSessionResponse(value RevokeOwnSessionResponse) error {
+	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
+		return errors.New("session revocation outcome is invalid")
+	}
+	return ValidateRevocation(value.Revocation)
+}
+
 func ValidateReadiness(value Readiness) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "Readiness" {

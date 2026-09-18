@@ -66,6 +66,7 @@ func (service *Authority) Logout(
 			AccountID:        subject.Subject.Organization.ID,
 			SessionID:        subject.Subject.Session.ID,
 			ActorPrincipalID: subject.Subject.Principal.ID,
+			ActorSessionID:   subject.Subject.Session.ID,
 			AuditEvent:       event,
 		})
 		if err != nil {
@@ -464,6 +465,61 @@ func (service *Authority) RevokePolicyAttachment(ctx context.Context, credential
 	return result, nil
 }
 
+func (service *Authority) RevokeOwnSession(ctx context.Context, credential iamv1.Secret, sessionID iamv1.SessionID, request iamv1.RevokeSessionRequest) (iamv1.RevokeOwnSessionResponse, error) {
+	if iamv1.ValidateID("sessionId", string(sessionID)) != nil || iamv1.ValidateRevokeSessionRequest(request) != nil {
+		return iamv1.RevokeOwnSessionResponse{}, ErrInvalidArgument
+	}
+	var result iamv1.RevokeOwnSessionResponse
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		if subject.Subject.Principal.Type != iamv1.PrincipalUser {
+			return ErrUnauthenticated
+		}
+		if sessionID == subject.Subject.Session.ID {
+			return ErrConflict
+		}
+		input := struct {
+			ActorSessionID iamv1.SessionID `json:"actorSessionId"`
+			SessionID      iamv1.SessionID `json:"sessionId"`
+			RequestID      string          `json:"requestId"`
+		}{subject.Subject.Session.ID, sessionID, request.RequestID}
+		digest, err := digestSanitized("revoke-own-session", input)
+		if err != nil {
+			return err
+		}
+		event, err := service.newManagementEvent(subject, auditv1.ActionIAMSessionRevoked, auditv1.TargetSession,
+			string(sessionID), "", digest, request.RequestID, now)
+		if err != nil {
+			return err
+		}
+		revocation, applied, err := tx.RevokeSession(ctx, SessionRevocationMutation{AccountID: subject.Subject.Organization.ID,
+			SessionID: sessionID, ActorPrincipalID: subject.Subject.Principal.ID, ActorSessionID: subject.Subject.Session.ID, AuditEvent: event})
+		if err != nil {
+			return err
+		}
+		outcome := "EQUAL_REPLAY"
+		if applied {
+			outcome = "APPLIED"
+		}
+		result = iamv1.RevokeOwnSessionResponse{Outcome: outcome, Revocation: revocation}
+		if iamv1.ValidateRevokeOwnSessionResponse(result) != nil || revocation.ID != string(sessionID) {
+			return ErrUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.RevokeOwnSessionResponse{}, err
+	}
+	return result, nil
+}
+
 func (service *Authority) RevokeSession(
 	ctx context.Context,
 	credential iamv1.Secret,
@@ -493,6 +549,7 @@ func (service *Authority) RevokeSession(
 				AccountID:        subject.Subject.Organization.ID,
 				SessionID:        sessionID,
 				ActorPrincipalID: subject.Subject.Principal.ID,
+				ActorSessionID:   subject.Subject.Session.ID,
 				DecisionID:       decision.ID,
 				AuditEvent:       event,
 			})

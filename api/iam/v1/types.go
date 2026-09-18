@@ -72,6 +72,19 @@ type Session struct {
 	RevokedAt   *time.Time    `json:"revokedAt,omitempty"`
 }
 
+// SessionList observes the authenticated user's live login sessions. A session
+// reference is not a bearer, a physical device, or proof of online activity.
+type SessionList struct {
+	APIVersion       string      `json:"apiVersion"`
+	Kind             string      `json:"kind"`
+	AccountID        AccountID   `json:"accountId"`
+	UserID           PrincipalID `json:"userId"`
+	CurrentSessionID SessionID   `json:"currentSessionId"`
+	ObservedAt       time.Time   `json:"observedAt"`
+	Items            []Session   `json:"items"`
+	NextCursor       string      `json:"nextCursor,omitempty"`
+}
+
 type InitialOrganization struct {
 	ID          AccountID `json:"id"`
 	DisplayName string    `json:"displayName"`
@@ -506,6 +519,11 @@ type ResetUserPasswordRequest struct {
 
 type RevokeSessionRequest struct {
 	RequestID string `json:"requestId"`
+}
+
+type RevokeOwnSessionResponse struct {
+	Outcome    string     `json:"outcome"`
+	Revocation Revocation `json:"revocation"`
 }
 
 type Revocation struct {

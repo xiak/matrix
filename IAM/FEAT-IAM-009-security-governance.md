@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：设计；S1的本人登录会话目录、逐个撤销及精确重放语义已与公共消费者对齐；其IAM30/PaaS5固定集成期间，S1公共实现窗口尚未开放，函数形状/源码版本仅为提案。S2本地MFA、S3安全规则/认证预算、S4安全报告/闲置治理已补设计及源码缺口，尚未冻结全部材料、权限和公共契约。均未实施/未验收，不并入007的K2固定交接，也不作为其消费者接入前置。
+- 状态：S1后端已实现并通过本地累计真库、保留数据、独立进程及全仓检查；固定提交独立CI和UI交付尚待收口，未验收。公共消费者已在固定`c2fbd9e38d424e68c0466618ee74613aced3c3fb`后明确开放并冻结S1共享编辑窗口，不继承其集成验收状态。S1范围为本人登录会话目录、逐个撤销及精确重放，源码IAM31/Audit18。S2本地MFA、S3安全规则/认证预算、S4安全报告/闲置治理仍仅设计，尚未冻结全部材料、权限和公共契约，未实施/未验收。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -28,9 +28,9 @@
 
 强制改密的当前有效临时会话允许这组只缩减本人访问面的安全补救，但仍不得访问业务、修改权限或清除forced-change。结束其他会话不改变密码、generation、must-change标志、策略或RootIdentity。NULL/失配generation、已撤销/到期的caller、停用User或暂停Account均失败关闭，不能为自管理“恢复”认证资格。原改密的默认撤销其他、forced强撤其他及锁内保留当前会话语义不变；当前会话的退出仍走既有logout。
 
-#### 拟定的封闭入口
+#### 封闭入口
 
-下列是实施前提交给公共契约消费者的提案，不是已存在API；实际请求/响应、SQL签名与schema须在独立窗口一并冻结。007的固定`644fff09`已完成独立CI及交接，消费者无需等待S1。
+下列请求/响应及SQL形状已在S1独立编辑窗口确认，随同一实现切片验证；本节不是运行验收证据。007的固定`644fff09`已完成独立CI及交接，消费者无需等待S1。
 
 | 入口 | 行为与边界 |
 | --- | --- |
@@ -45,21 +45,21 @@ items必须是非NULL数组、至多100项、同Account/USER、ID严格递增且
 
 #### 事务、历史与并发
 
-撤销目标的不可变归属必须在锁内验证；仅在事务外查出同USER不够。顺序沿现有Account→USER→凭据→Session；同USER命令共用真实principal屏障，多个Session按稳定ID取锁。当前bearer的真实session/generation、Account/User状态及目标资格在锁内重检；SERIALIZABLE重试重读整个身份，不能保留等待前的旧认证结果。缺失、跨用户、跨账号、Role/Key替换均无效果，也不泄露另一个目标是否存在。
+撤销目标的不可变归属必须在锁内验证；仅在事务外查出同USER不够。顺序沿现有Account→USER→凭据→Session；同USER命令共用真实principal屏障，多个Session按稳定ID取锁。当前bearer的真实session/generation、Account/User状态及目标资格在锁内重检；取得锁后以数据库当前时钟重新判断caller和target到期，不能沿用等待前的事务时间。原事实时间与canonical不因此改写。SERIALIZABLE重试重读整个身份，不能保留等待前的旧认证结果。缺失、跨用户、跨账号、Role/Key替换均无效果，也不泄露另一个目标是否存在。
 
 精确重放绑定原USER、实际调用Session、目标Session、requestId和封闭输入承诺，只返回原完成信息，不再次更新状态或补第二个事实。已由其他意图、logout、改密/reset/recover撤销的目标不冒充本命令成功；已到期目标同样不是新的可执行撤销。更换bearer后复用相同requestId不能把原“保留当前、结束另一会话”的意图换成另一次操作。未知回包保留原意图；当前认证资格已经失效时不能凭旧请求ID取得新许可，需正常重新登录并由用户明确发起新意图。
 
 先验证当前caller，再读取其Account/USER下的完成关联。准确完成优先于目标今天的到期状态，EQUAL_REPLAY仍返回原Revocation；它不表示目标今天仍可登录。只有原意图尚未完成时，才按当前目标资格执行新撤销。输入承诺使用本人撤销的封闭目的，包含实际actor Session、目标Session与requestId，不与logout或管理员命令互认。保留原Session的日常改密不把其旧游标变有效；仍有效的同一Session查询自己的原完成只读取历史，不重做副作用。
 
-沿用`iam.session.revoked`的原租户事实含义，真实USER为actor、被结束的Session为target；自管理不填写伪造iamDecisionId。状态、不可变输入/完成关联及outbox必须同事务，旧canonical/hash和管理员事实保持。现有终态和outbox没有原调用Session到请求意图的唯一绑定，不能把旧函数的`applied=false`当成准确重放；因此拟在原Session SQL owner增加仅用于本人撤销另一会话的不可变完成关联。它以Account/USER/requestId唯一，绑定真实caller/target Session、输入承诺、原Revocation与outbox事件，准确约束同USER归属和一个目标的一次完成。它不是可复用许可或第二个Session模型，不新增通用receipt服务。API/worker没有直接表读写权限；真实FK、强制RLS、不可变/禁止truncate及同事务完整性由数据库验证。当前记录、claim、service identity或K2 key证据都不因本设计而改变。
+沿用`iam.session.revoked`的原租户事实含义，真实USER为actor、被结束的Session为target；自管理不填写伪造iamDecisionId。状态、不可变输入/完成关联及outbox必须同事务，旧canonical/hash和管理员事实保持。原终态和outbox没有原调用Session到请求意图的唯一绑定，不能把旧函数的`applied=false`当成准确重放；原Session SQL owner现以`session_self_revocations`保存仅用于本人撤销另一会话的不可变完成关联。它以Account/USER/requestId唯一，绑定真实caller/target Session、输入承诺、原Revocation与outbox事件，准确约束同USER归属和一个目标的一次完成。它不是可复用许可或第二个Session模型，不新增通用receipt服务。API/worker没有直接表读写权限；真实FK、强制RLS、不可变/禁止truncate及同事务完整性由数据库验证。当前记录、claim、service identity或K2 key证据都不因本设计而改变。
 
-#### SQL形状与所有权提案
+#### SQL形状与所有权
 
 复用`000001_authority`的Session拥有者，不新增迁移目录或平行撤销器。当前`lookup_session(text)`保持原23个输出列的顺序，仅在末尾追加内部`credential_generation bigint`，供本人游标绑定；旧NULL代际行继续不可认证，不回填。新增`list_own_sessions(tenant text,user text,current_session text,after text)`只返回`id/status/issued_at/expires_at`四列，固定按ID取至多101条以生成100项页面，无秘密或caller可选limit。它在同一权威快照中核对当前Session和同User有效代际，适配器复用真实已认证Account/User构造原Session投影。
 
-原`revoke_session(text,text,text,text,jsonb)`拟在末尾追加真实`actor_session_id text`，返回仍为`resource_version/revoked_at/applied`。logout、管理员撤销与本人入口均传实际bearer对应的Session；删除旧五参函数并验证不存在，不留未重检当前会话的旁路。管理员分支仍要求原精确Decision且拒绝forced-change，logout仍只结束调用会话；无Decision的本人另一会话分支要求上述精确完成关联。管理员和目标不同User时按稳定ID同时锁定双方principal，再检查当前actor和目标，不能倒置原密码/状态/恢复锁序。旧logout或管理员的已撤销结果不是本人新意图的EQUAL_REPLAY。
+原`revoke_session(text,text,text,text,jsonb)`已在末尾追加真实`actor_session_id text`，返回仍为`resource_version/revoked_at/applied`。logout、管理员撤销与本人入口均传实际bearer对应的Session；删除旧五参函数并验证不存在，不留未重检当前会话的旁路。管理员分支仍要求原精确Decision且拒绝forced-change，logout仍只结束调用会话；无Decision的本人另一会话分支要求上述精确完成关联。管理员和目标不同User时按稳定ID同时锁定双方principal，再检查当前actor和目标，不能倒置原密码/状态/恢复锁序。旧logout或管理员的已撤销结果不是本人新意图的EQUAL_REPLAY。
 
-提议的源码版本为IAM31/Audit18，仅对应真实IAM函数/表/ACL/readiness变化；尚未冻结或修改实现。record9/contract4、evidence5、claim7、lookup_service5及旧canonical不变。此片不分配最终release contractRevision、不改发布profile；安装owner在实际消费者组合中另行冻结和验收，源码数字增加不产生升级许可。
+本片冻结的源码版本为IAM31/Audit18，对应真实IAM函数/表/ACL/readiness变化。record9/contract4、evidence5、claim7、lookup_service5及旧canonical不变。此片不分配最终release contractRevision、不改发布profile；安装owner在实际消费者组合中另行冻结和验收，源码数字增加不产生升级许可。
 
 结束登录会话不会删除资源、改策略、停应用或撤销独立AccessKey。以该登录会话为来源的RoleSession继续按006现有来源有效性约束关闭，不能另造“同时撤销所有凭据”的伪承诺；已接受Operation、后台任务和长连接是否继续沿原产品边界，不声称实现推送式实时断连。
 
@@ -74,6 +74,7 @@ items必须是非NULL数组、至多100项、同Account/USER、ID严格递增且
 | A结束B与保留其他会话的日常改密 | 改密先提交时以锁内当前代际判定；撤销先提交时B不得随代际推进复活，A仍遵循原保留规则 |
 | A结束B与默认/强制改密、reset、recover | 先结束的目标不冒充新意图成功；当前caller被撤销后旧命令拒绝，无部分完成或成功outbox |
 | A结束B与User/Account停用 | 停用先提交后不能继续使用旧认证快照；撤销先提交的原事实仍可投递，资源/Operation不被删除或终止 |
+| 等待真实锁期间caller或target到期 | caller已到期则无权执行；只有target到期则新意图冲突，不产生撤销或成功事实。独立静默数据库验证原事务未借序列化重试取得新时间 |
 | 提交后回包丢失、重启再重放 | 原有效A只能取回同一完成；变体、换caller或新意图操作已结束目标均不能产生第二次完成 |
 
 - 两Account、每个至少两个USER、同名登录与两个实际IAM副本：目录只含本人，当前标识来自实际bearer，另一会话结束后跨副本新请求拒绝，当前会话继续有效；普通无业务策略的User和forced-change会话均有上述最窄自管理能力，但仍不能访问业务。
@@ -82,9 +83,29 @@ items必须是非NULL数组、至多100项、同Account/USER、ID严格递增且
 - 末端outbox失败整笔回滚；真正提交后丢失响应、当前认证随后撤销、重启与schema等值重放不重做原意图。Audit延迟投递保留原事实/归属/hash，不按当前登录资格重写历史。
 - 真实PG18、受限登录/RLS与SQL越权、原unit/architecture/security/进程门禁及精确SHA独立CI归现有owner。UI全部交UX/UI工程师，在固定契约就绪后再接入并独立做浏览器闭环，不由本片替代。
 
-沿用`api/iam/v1`契约/生成测试、`authority/cursor_test.go`、`identityaccess/service_test.go`和`nethttp/handler_test.go`证明封闭输入/响应、凭据分离、游标绑定及用例控制流。真实SQL/RLS、撤销竞争与旧函数消失归既有`integration/http_postgres_test.go`的附件/会话owner；跨副本、原TCP故障、Audit失联及重启归`test/authorityprocess/process_e2e_test.go`，不增加平行测试框架。先聚焦再累计回归，不修改现有单项时间、密码成本或规模来取得通过。保留数据验证只选择实际受支持固定前驱及明确受影响的会话证据，不要求为每个未发布中间schema维持永久升级链。
+沿用`api/iam/v1`契约/生成测试、`authority/cursor_test.go`、`identityaccess/service_test.go`和`nethttp/handler_test.go`证明封闭输入/响应、凭据分离、游标绑定及用例控制流。真实SQL/RLS、撤销竞争与旧函数消失归既有`integration/http_postgres_test.go`的附件/会话owner；其中锁内真实到期使用独立静默数据库，明确检查没有序列化重试或死锁掩盖原时间检查。跨副本、原TCP故障、Audit失联及重启归`test/authorityprocess/process_e2e_test.go`，不增加平行测试框架。先聚焦再累计回归，不修改现有单项时间、密码成本或规模来取得通过。保留数据验证使用实际固定`644fff09`的IAM30 executable/schema创建身份、正常/forced/已撤销会话，再验证IAM31的精确新形状、原事实和重启；NULL代际只作为明确的负向损坏样本，不伪称该旧程序发行。此片不要求为每个未发布中间schema维持永久升级链，也不证明跨release准入。
 
-S1仅设计先行，源码版本/函数形状提案尚待公共窗口确认，release contractRevision不提前分配。不变更Phase3的PaaS/Audit查询PEP、edge解析、NorthboundOrigin/APISIX、source release Profile或安装工作，也不要求其等待S1。
+S1仅在本分支实施，release contractRevision不提前分配。不变更Phase3的PaaS/Audit查询PEP、edge解析、NorthboundOrigin/APISIX、source release Profile或安装工作，也不要求其等待S1。固定`c2fbd9e3`中S1所需会话类型/校验/生成器、IAM PostgreSQL、authentication/management与cursor和本分支固定`644fff09`相同；只核对固定对象，不导入其PaaS6、发布profile或文档。最终交接必须有本片精确SHA、独立CI及真实PG18保留数据/并发证据。
+
+#### S1当前运行证据
+
+2026-09-18在本任务干净Git导出上验证；真实PG18限1CPU/1GiB，Linux Go1.26.5 runner限2CPU/1536MiB、GOMAXPROCS=2，数据库门禁串行`-race -p 1`。不改生产密码成本、最小60秒Session TTL或单项时限。
+
+| 门禁 | 当前结果与范围 |
+| --- | --- |
+| `TestIAMOwnSessionPostgres` | 91.88s通过；本人/跨账号/载体/101项分页、RLS及函数形状、末端失败原子性、22种已控制先后顺序的会话/密码/状态/原root与平台恢复竞争、真实自然到期与历史重放 |
+| `TestIAMOwnSessionExpiryPostgres` | 62.28s通过；两个请求分别在等待真实principal锁期间caller或target到期，原事务无序列化重试/死锁，分别拒绝且无完成/状态/outbox副作用 |
+| `TestIAMRetainedOwnSessionProcessUpgrade` | 10.25s通过；真实`644fff09` IAM30产生正常/forced/已撤销会话，IAM31双次迁移、原六字段bootstrap receipt、NULL代际拒绝、旧canonical/proof、准确本人完成及重启保持 |
+| `TestIndependentIAMAuditAndPaaSProcesses` | 56.63s通过；受限实际数据库登录、两个IAM与Audit/PaaS/dispatcher、提交后真正断开TCP、重启/准确重放、Audit延迟投递/原链、PaaS资源及Operation归属保持 |
+| 既有IAM累计回归 | 同一最终代码另用新数据库，策略权威164.44s、附件/会话竞争105.14s、AccessKey92.43s、账号HTTP142.97s、本地凭据恢复30.20s全部通过，包合计536.266s；保留原密码成本、所有场景和各自时限 |
+| Role/STS累计回归 | `TestIAMRoleAndManagementReferencesPostgres`七个独立数据库全部通过，343.05s；保留原角色写入、承担/退出、发现、管理员会话管理、业务授权、安全竞争和私有引用门禁 |
+| Audit/PaaS累计回归 | 双authority数据库及旧tenant记录保留升级包4.773s、Audit HTTP包2.124s、PaaS数据库包1.900s通过；审计测试遗漏的IAM30断言已替换为实际IAM31，初始化前/后ready状态、受限登录、RLS、历史及租约fence断言保留，没有Audit生产改动 |
+| 既有固定前驱 | 原Role capability、Role authority和Policy三个真实前驱程序门禁分别9.68s/18.42s/22.10s通过，包51.231s；原策略/信任/历史/撤销不被新Session函数形状改写，不构成release兼容许可 |
+| 全仓检查 | Windows Go1.26.3干净导出的全仓race（含architecture）、vet、模块校验、生成文件集合/字节一致、Linux amd64构建通过；不把通用Linux容器缺少真实machine-id导致的旧本机安装adapter失败称为整仓Linux通过 |
+
+到期门禁有实际反例：仅恢复等待前`transaction_timestamp()`判定的SQL时，已到期caller仍返回200并执行撤销。原多写入矩阵未可靠识别这一错误，已由静默数据库、真实时间及无重试断言替换该到期证明；锁后使用`clock_timestamp()`的最终实现通过。原事实时间和Audit canonical没有重写。
+
+既有附件/会话并发矩阵曾在本机原120秒预算超时，固定`644fff09`在同一限额中也出现120.07s失败。当前代码的CPU采样诊断在原预算100.31s通过，采样主要为Argon2与race检查、该次无CPU限流；这不证明先前超时的全部原因已解决，不降低成本、删场景或延长预算。其后同一最终代码的新数据库累计回归105.14s通过，独立CI仍待验证；后继成功不回填旧失败。以上仅S1后端证据，不证明UI、安装/profile兼容、容量/HA或完整009已验收。
 
 ### S2：本地TOTP、认证挑战与恢复
 

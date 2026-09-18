@@ -380,6 +380,50 @@ func TestIAMHTTPStrictDecodingAndRedactedProblems(t *testing.T) {
 	}
 }
 
+func TestIAMOwnSessionRoutesRejectSelectorsBeforeWorkflow(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	handler := newTestHandler(t, workflow)
+	for _, test := range []struct {
+		method, target, body string
+		bearer               bool
+		status               int
+	}{
+		{http.MethodGet, "/v1/auth/sessions", "", true, http.StatusOK},
+		{http.MethodGet, "/v1/auth/sessions", "", false, http.StatusUnauthorized},
+		{http.MethodGet, "/v1/auth/sessions?userId=foreign", "", true, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/sessions?accountId=foreign", "", true, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/sessions?currentSessionId=other", "", true, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/sessions?after=ic1.one&after=ic1.two", "", true, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/sessions?after=session-id", "", true, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/sessions", `{}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions", `{}`, true, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"revoke-own"}`, true, http.StatusOK},
+		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"revoke-own"}`, false, http.StatusUnauthorized},
+		{http.MethodPost, "/v1/auth/sessions/other:revoke?userId=foreign", `{"requestId":"revoke-own"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"revoke-own","currentSessionId":"foreign"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"revoke-own","accountId":"foreign"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"one","requestId":"two"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions/nested/other:revoke", `{"requestId":"revoke-own"}`, true, http.StatusNotFound},
+	} {
+		before := workflow.ownSessionCalls
+		request := httptest.NewRequest(test.method, test.target, strings.NewReader(test.body))
+		if test.bearer {
+			request.Header.Set("Authorization", "Bearer actual-login-credential")
+		}
+		if test.body != "" {
+			request.Header.Set("Content-Type", "application/json")
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != test.status || (response.Code != http.StatusOK && workflow.ownSessionCalls != before) {
+			t.Fatalf("%s %s status=%d want=%d or rejected input reached workflow", test.method, test.target, response.Code, test.status)
+		}
+		if response.Code == http.StatusOK && (response.Header().Get("Cache-Control") != "no-store" || strings.Contains(response.Body.String(), "actual-login-credential")) {
+			t.Fatal("own session response exposed or cached authentication material")
+		}
+	}
+}
+
 func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	handler := newTestHandler(t, workflow)
@@ -566,6 +610,7 @@ func TestIAMHTTPUserDetailUpdateAndDeleteAreBoundToTheRoute(t *testing.T) {
 type httpWorkflow struct {
 	Workflow
 	policyCalls             int
+	ownSessionCalls         int
 	policyPlatform          bool
 	policyCredential        iamv1.Secret
 	profileErr              error
@@ -919,6 +964,19 @@ func (workflow *httpWorkflow) RevokePolicyAttachment(
 		APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(id),
 		ResourceVersion: 2, RevokedAt: workflow.login.Session.IssuedAt,
 	}, nil
+}
+
+func (workflow *httpWorkflow) ListOwnSessions(_ context.Context, _ iamv1.Secret, _ string) (iamv1.SessionList, error) {
+	workflow.ownSessionCalls++
+	session := workflow.login.Session
+	return iamv1.SessionList{APIVersion: iamv1.APIVersion, Kind: "SessionList", AccountID: session.AccountID,
+		UserID: session.PrincipalID, CurrentSessionID: session.ID, ObservedAt: session.IssuedAt, Items: []iamv1.Session{session}}, nil
+}
+
+func (workflow *httpWorkflow) RevokeOwnSession(ctx context.Context, credential iamv1.Secret, id iamv1.SessionID, request iamv1.RevokeSessionRequest) (iamv1.RevokeOwnSessionResponse, error) {
+	workflow.ownSessionCalls++
+	revocation, err := workflow.RevokeSession(ctx, credential, id, request)
+	return iamv1.RevokeOwnSessionResponse{Outcome: "APPLIED", Revocation: revocation}, err
 }
 
 func (workflow *httpWorkflow) RevokeSession(

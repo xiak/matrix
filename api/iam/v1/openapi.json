@@ -19461,6 +19461,26 @@
         ],
         "type": "object"
       },
+      "RevokeOwnSessionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "outcome": {
+            "enum": [
+              "APPLIED",
+              "EQUAL_REPLAY"
+            ],
+            "type": "string"
+          },
+          "revocation": {
+            "$ref": "#/components/schemas/Revocation"
+          }
+        },
+        "required": [
+          "outcome",
+          "revocation"
+        ],
+        "type": "object"
+      },
       "RevokePolicyAttachmentRequest": {
         "additionalProperties": false,
         "properties": {
@@ -20398,6 +20418,67 @@
             "$ref": "#/components/schemas/ID"
           }
         ]
+      },
+      "SessionList": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "type": "string"
+          },
+          "currentSessionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "items": {
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Session"
+                },
+                {
+                  "properties": {
+                    "revokedAt": false,
+                    "status": {
+                      "const": "ACTIVE"
+                    }
+                  }
+                }
+              ]
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "nextCursor": {
+            "maxLength": 384,
+            "minLength": 5,
+            "not": {
+              "pattern": "[^A-Za-z0-9._-]"
+            },
+            "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "userId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "currentSessionId",
+          "items",
+          "kind",
+          "observedAt",
+          "userId"
+        ],
+        "type": "object"
       },
       "SessionStatus": {
         "enum": [
@@ -22010,6 +22091,121 @@
           }
         },
         "summary": "Revoke the source user's original issuance without requiring current assume authority"
+      }
+    },
+    "/v1/auth/sessions": {
+      "get": {
+        "operationId": "listOwnSessions",
+        "parameters": [
+          {
+            "description": "Pass nextCursor unchanged. Bound to this actual login session, credential generation and installation; no account/user/current-session selectors.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "maxLength": 384,
+              "minLength": 5,
+              "not": {
+                "pattern": "[^A-Za-z0-9._-]"
+              },
+              "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Observe only the current user's valid login sessions; not devices or online activity"
+      }
+    },
+    "/v1/auth/sessions/{sessionId}:revoke": {
+      "post": {
+        "operationId": "revokeOwnSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeOwnSessionResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "End another login session of the current user; the current session must use logout"
       }
     },
     "/v1/authorization-profiles": {

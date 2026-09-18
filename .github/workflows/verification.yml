@@ -86,11 +86,13 @@ jobs:
             authority-storage)
               databases=(matrix_authority_ci matrix_audit_upgrade_ci matrix_audit_http_ci
                 matrix_iam_http_ci matrix_iam_policy_ci matrix_iam_recovery_ci matrix_iam_attachment_ci
+                matrix_iam_own_session_ci matrix_iam_own_session_expiry_ci
                 matrix_iam_roles_ci matrix_iam_references_ci matrix_iam_role_sessions_ci matrix_iam_role_discovery_ci
                 matrix_iam_role_management_ci matrix_iam_role_authorization_ci matrix_iam_role_security_ci matrix_iam_access_keys_ci matrix_paas_ci)
               ;;
             authority-runtime)
-              databases=(matrix_iam_upgrade_compiled_ci matrix_iam_upgrade_roles_ci matrix_iam_upgrade_role_authority_ci matrix_authority_process_ci)
+              databases=(matrix_iam_upgrade_compiled_ci matrix_iam_upgrade_roles_ci matrix_iam_upgrade_role_authority_ci
+                matrix_iam_upgrade_own_session_ci matrix_authority_process_ci)
               ;;
             *) exit 1 ;;
           esac
@@ -108,9 +110,9 @@ jobs:
               -run '^TestPublishedExecutableRejectsNewManifestBeforeEffects$'
       # Unpublished IAM development revisions are not production upgrade
       # baselines. Fixed IAM21 document interpretation and R1 USER-only
-      # compilations and R2 role evidence prove the distinct FEAT005/006 boundaries,
-      # not release upgrade admission. Other historical-binary diagnostics
-      # stay opt-in.
+      # compilations, R2 role evidence and accepted IAM30 login sessions prove
+      # the distinct FEAT005/006/009 boundaries, not release upgrade admission.
+      # Other historical-binary diagnostics stay opt-in.
       - name: PostgreSQL authority storage and HTTP gates
         if: matrix.lane == 'authority-storage'
         env:
@@ -121,6 +123,8 @@ jobs:
           MATRIX_IAM_POLICY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_policy_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_RECOVERY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_recovery_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_ATTACHMENT_SESSION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_attachment_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_OWN_SESSION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_own_session_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_OWN_SESSION_EXPIRY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_own_session_expiry_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_ROLE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_roles_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_ROLE_SESSION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_role_sessions_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_ROLE_DISCOVERY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_role_discovery_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
@@ -137,9 +141,11 @@ jobs:
           # context/lock deadline. Do not make all IAM scenarios share one
           # process's aggregate ten-minute timer, or silently skip a scenario.
           time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
-            -skip '^TestIAMRoleAndManagementReferencesPostgres$'
+            -skip '^(TestIAMRoleAndManagementReferencesPostgres|TestIAMOwnSession(Postgres|ExpiryPostgres))$'
           time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
             -run '^TestIAMRoleAndManagementReferencesPostgres$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMOwnSession(Postgres|ExpiryPostgres)$'
           time go test -race -p 1 -count=1 ./app/service/paas/internal/apphosting/data/postgres
       - name: Retained data and actual authority processes
         if: matrix.lane == 'authority-runtime'
@@ -147,6 +153,7 @@ jobs:
           MATRIX_IAM_POLICY_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_upgrade_compiled_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_ROLE_PROFILE_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_upgrade_roles_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_ROLE_AUTHORITY_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_upgrade_role_authority_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_OWN_SESSION_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_upgrade_own_session_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_authority_process_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
         run: time go test -race -p 1 -count=1 ./test/authorityprocess
 

@@ -41,8 +41,8 @@ BEGIN
     END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS lookup
         WHERE lookup.oid=to_regprocedure('iam.lookup_session(text)')
-        AND cardinality(lookup.proallargtypes)=24 AND lookup.proargnames[23:24]=ARRAY['policies','boundary']
-        AND lookup.proallargtypes[23:24]=ARRAY['jsonb'::regtype::oid,'jsonb'::regtype::oid]) THEN
+        AND cardinality(lookup.proallargtypes)=25 AND lookup.proargnames[23:25]=ARRAY['policies','boundary','credential_generation']
+        AND lookup.proallargtypes[23:25]=ARRAY['jsonb'::regtype::oid,'jsonb'::regtype::oid,'bigint'::regtype::oid]) THEN
         RAISE EXCEPTION 'IAM session policy snapshot shape is invalid';
     END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_attribute AS evidence
@@ -77,7 +77,7 @@ END $verify_policy_authority$;
 DO $verify_customer_policy_publication$
 DECLARE function_name text;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 30::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 31::bigint THEN
         RAISE EXCEPTION 'IAM policy publication schema version is invalid';
     END IF;
     IF iam.policy_version_contract_ready() IS DISTINCT FROM true THEN

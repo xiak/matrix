@@ -194,6 +194,10 @@ func buildPaths() object {
 		"/v1/auth/logout": object{"post": mutationOperation(
 			"logout", "Revoke the current session", "LogoutRequest", "LogoutResponse", "200", nil, nil,
 		)},
+		"/v1/auth/sessions": object{"get": readOperation("listOwnSessions", "Observe only the current user's valid login sessions; not devices or online activity", "SessionList", nil,
+			[]any{object{"name": "after", "in": "query", "required": false, "schema": pageCursorSchema(), "description": "Pass nextCursor unchanged. Bound to this actual login session, credential generation and installation; no account/user/current-session selectors."}})},
+		"/v1/auth/sessions/{sessionId}:revoke": object{"post": mutationOperation("revokeOwnSession", "End another login session of the current user; the current session must use logout", "RevokeSessionRequest", "RevokeOwnSessionResponse", "200", nil,
+			[]any{openapi31.PathIDParameter("sessionId")})},
 		"/v1/auth/password": object{"post": mutationOperation(
 			"changePassword", "Change the current user password", "ChangePasswordRequest", "ChangePasswordResponse", "200", nil, nil,
 		)},
@@ -413,6 +417,8 @@ func structContracts() map[string]reflect.Type {
 		"CreatePolicyAttachmentRequest":       openapi31.StructType[iamv1.CreatePolicyAttachmentRequest](),
 		"RevokePolicyAttachmentRequest":       openapi31.StructType[iamv1.RevokePolicyAttachmentRequest](),
 		"Session":                             openapi31.StructType[iamv1.Session](),
+		"SessionList":                         openapi31.StructType[iamv1.SessionList](),
+		"RevokeOwnSessionResponse":            openapi31.StructType[iamv1.RevokeOwnSessionResponse](),
 		"InitialOrganization":                 openapi31.StructType[iamv1.InitialOrganization](),
 		"InitialAdministrator":                openapi31.StructType[iamv1.InitialAdministrator](),
 		"BootstrapServiceCredential":          openapi31.StructType[iamv1.BootstrapServiceCredential](),
@@ -723,7 +729,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if jsonName == "loginAlias" {
 		base = object{"anyOf": []any{object{"type": "null"}, object{"type": "string", "pattern": `^[a-z][a-z0-9-]{1,61}[a-z0-9]$`, "minLength": 3, "maxLength": 63}}}
 	}
-	if jsonName == "nextAfter" {
+	if jsonName == "nextAfter" || (owner == "SessionList" && jsonName == "nextCursor") {
 		base = pageCursorSchema()
 		if owner == "AssumableRoleList" {
 			base = roleDiscoveryCursorSchema()
@@ -734,6 +740,15 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	}
 	if (owner == "UserList" || owner == "AccountList" || owner == "GroupList" || owner == "GroupMembershipList") && jsonName == "items" {
 		base["maxItems"] = 100
+	}
+	if owner == "SessionList" && jsonName == "items" {
+		base["maxItems"] = iamv1.DirectoryPageSize
+		base["items"] = object{"allOf": []any{openapi31.Ref("Session"), object{"properties": object{
+			"status": object{"const": string(iamv1.SessionActive)}, "revokedAt": false,
+		}}}}
+	}
+	if owner == "RevokeOwnSessionResponse" && jsonName == "outcome" {
+		base = object{"type": "string", "enum": []string{"APPLIED", "EQUAL_REPLAY"}}
 	}
 	if owner == "PolicyList" && jsonName == "items" {
 		base["maxItems"] = iamv1.MaxPolicyListItems

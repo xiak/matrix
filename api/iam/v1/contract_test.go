@@ -29,6 +29,51 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func TestOwnLoginSessionContractsBindARealObservation(t *testing.T) {
+	now := time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)
+	valid := SessionList{APIVersion: APIVersion, Kind: "SessionList", AccountID: "account-one", UserID: "user-one",
+		CurrentSessionID: "session-current", ObservedAt: now, Items: []Session{{APIVersion: APIVersion, Kind: "Session",
+			ID: "session-other", AccountID: "account-one", PrincipalID: "user-one", Status: SessionActive,
+			IssuedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour)}}}
+	if err := ValidateSessionList(valid); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*SessionList){
+		"null items":                func(v *SessionList) { v.Items = nil },
+		"wrong account":             func(v *SessionList) { v.Items[0].AccountID = "account-two" },
+		"wrong user":                func(v *SessionList) { v.Items[0].PrincipalID = "user-two" },
+		"duplicate":                 func(v *SessionList) { v.Items = append(v.Items, v.Items[0]) },
+		"expired":                   func(v *SessionList) { v.Items[0].ExpiresAt = now },
+		"future issuance":           func(v *SessionList) { v.Items[0].IssuedAt = now.Add(time.Minute) },
+		"revoked":                   func(v *SessionList) { v.Items[0].Status = SessionRevoked; v.Items[0].RevokedAt = &now },
+		"invalid current reference": func(v *SessionList) { v.CurrentSessionID = "" },
+		"short continued page":      func(v *SessionList) { v.NextCursor = "ic1.AAAA" },
+		"oversized":                 func(v *SessionList) { v.Items = make([]Session, DirectoryPageSize+1) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := valid
+			value.Items = append([]Session(nil), valid.Items...)
+			mutate(&value)
+			if ValidateSessionList(value) == nil {
+				t.Fatal("invalid session observation accepted")
+			}
+		})
+	}
+	empty := valid
+	empty.Items = []Session{}
+	if err := ValidateSessionList(empty); err != nil {
+		t.Fatal(err)
+	}
+	result := RevokeOwnSessionResponse{Outcome: "APPLIED", Revocation: Revocation{APIVersion: APIVersion, Kind: "Revocation",
+		ID: "session-other", ResourceVersion: 2, RevokedAt: now}}
+	for _, outcome := range []string{"APPLIED", "EQUAL_REPLAY", "", "ALREADY_REVOKED"} {
+		result.Outcome = outcome
+		if (ValidateRevokeOwnSessionResponse(result) == nil) != (outcome == "APPLIED" || outcome == "EQUAL_REPLAY") {
+			t.Fatalf("unexpected revocation outcome validation for %q", outcome)
+		}
+	}
+}
+
 func TestAccessKeySubjectLineageRequiresItsOwnDeclaredCarrier(t *testing.T) {
 	valid := `{"type":"USER","id":"user-one","accessKeyId":"key-one"}`
 	for _, test := range []struct {

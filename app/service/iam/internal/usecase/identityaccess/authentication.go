@@ -123,6 +123,73 @@ func (service *Authority) Login(
 	return response, nil
 }
 
+func (service *Authority) ListOwnSessions(ctx context.Context, credential iamv1.Secret, after string) (iamv1.SessionList, error) {
+	if after != "" && iamv1.ValidatePageCursor(after) != nil {
+		return iamv1.SessionList{}, ErrInvalidArgument
+	}
+	var result iamv1.SessionList
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		if subject.Subject.Principal.Type != iamv1.PrincipalUser || subject.CredentialGeneration == 0 || subject.CredentialGeneration > 9007199254740991 {
+			return ErrUnauthenticated
+		}
+		status, err := tx.BootstrapStatus(ctx)
+		if err != nil || iamv1.ValidateBootstrapStatus(status) != nil || status.State != iamv1.BootstrapReady || service.cursors == nil {
+			return ErrUnavailable
+		}
+		query := authority.DirectoryQuery{InstallationID: status.InstallationID,
+			LoginSessions: &authority.LoginSessionDirectoryRevision{CredentialGeneration: subject.CredentialGeneration}}
+		position := ""
+		if after != "" {
+			position, err = service.cursors.Decode(after, subject.Subject, query, now)
+			if err != nil {
+				return ErrInvalidArgument
+			}
+		}
+		items, err := tx.ListOwnSessions(ctx, OwnSessionRead{AccountID: subject.Subject.Organization.ID,
+			UserID: subject.Subject.Principal.ID, CurrentSessionID: subject.Subject.Session.ID, After: position})
+		if err != nil {
+			return err
+		}
+		if items == nil || len(items) > iamv1.DirectoryPageSize+1 {
+			return ErrUnavailable
+		}
+		// Validate even the lookahead before deciding whether continuation exists.
+		for i, item := range items {
+			if iamv1.ValidateSession(item) != nil || item.AccountID != subject.Subject.Organization.ID ||
+				item.PrincipalID != subject.Subject.Principal.ID || item.Status != iamv1.SessionActive ||
+				item.IssuedAt.After(now) || !now.Before(item.ExpiresAt) || string(item.ID) <= position ||
+				(i > 0 && item.ID <= items[i-1].ID) {
+				return ErrUnavailable
+			}
+		}
+		result = iamv1.SessionList{APIVersion: iamv1.APIVersion, Kind: "SessionList", AccountID: subject.Subject.Organization.ID,
+			UserID: subject.Subject.Principal.ID, CurrentSessionID: subject.Subject.Session.ID, ObservedAt: now, Items: items}
+		if len(items) > iamv1.DirectoryPageSize {
+			result.Items = items[:iamv1.DirectoryPageSize]
+			result.NextCursor, err = service.sealDirectoryPage(subject, query, string(result.Items[len(result.Items)-1].ID), now)
+			if err != nil {
+				return err
+			}
+		}
+		if iamv1.ValidateSessionList(result) != nil {
+			return ErrUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.SessionList{}, err
+	}
+	return result, nil
+}
+
 func (service *Authority) ServiceIdentity(
 	ctx context.Context,
 	credential iamv1.Secret,

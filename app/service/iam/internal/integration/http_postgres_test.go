@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"reflect"
 	"slices"
@@ -173,21 +174,21 @@ func holdRecordedIdentityDecisions(t *testing.T, ctx context.Context, database *
 	}
 }
 
-// Stop one real key request either after evaluation (before the decision FK),
+// Stop one real IAM request either after evaluation (before the decision FK),
 // or after its material/locks exist but before commit. The peer command is
 // never paused by this fixture; production row locks must order the effects.
-func holdAccessKeyRequest(t *testing.T, ctx context.Context, database *pgx.Conn, requestID string, afterWrite bool) (func() int32, func()) {
+func holdIAMRequest(t *testing.T, ctx context.Context, database *pgx.Conn, requestID string, afterWrite bool, action auditv1.Action) (func() int32, func()) {
 	t.Helper()
-	if iamv1.ValidateID("requestId", requestID) != nil {
-		t.Fatal("invalid AccessKey barrier intent")
+	if iamv1.ValidateID("requestId", requestID) != nil || (afterWrite && iamv1.ValidateID("action", string(action)) != nil) {
+		t.Fatal("invalid IAM barrier intent")
 	}
 	table, condition := "iam.authorization_decisions", "NEW.request_id=TG_ARGV[0]"
 	if afterWrite {
-		table, condition = "iam.audit_outbox", "NEW.event_document->>'requestId'=TG_ARGV[0] AND NEW.event_document->>'action'='iam.access-key.created'"
+		table, condition = "iam.audit_outbox", "NEW.event_document->>'requestId'=TG_ARGV[0] AND NEW.event_document->>'action'=TG_ARGV[1]"
 	}
 	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_key_linearization() RETURNS trigger LANGUAGE plpgsql AS $body$
 	 BEGIN IF `+condition+` THEN PERFORM pg_advisory_xact_lock_shared(54854,29); END IF; RETURN NEW; END $body$;
-	 CREATE TRIGGER matrix_key_linearization BEFORE INSERT ON `+table+` FOR EACH ROW EXECUTE FUNCTION public.matrix_key_linearization('`+requestID+`');
+	 CREATE TRIGGER matrix_key_linearization BEFORE INSERT ON `+table+` FOR EACH ROW EXECUTE FUNCTION public.matrix_key_linearization('`+requestID+`','`+string(action)+`');
 	 SELECT pg_advisory_lock(54854,29)`); err != nil {
 		t.Fatal("install key linearization barrier", err)
 	}
@@ -2359,6 +2360,873 @@ func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler ht
 	call(http.MethodPut, path, root, set, http.StatusForbidden, nil)
 	call(http.MethodGet, path, root, nil, http.StatusForbidden, nil)
 	call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
+}
+
+func TestIAMOwnSessionPostgres(t *testing.T) {
+	const environment = "MATRIX_IAM_OWN_SESSION_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(environment)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_own_session_") {
+		t.Fatal("own-session gate requires an isolated database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	database, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect own-session database")
+	}
+	defer database.Close(context.Background())
+	assertIAMPostgres18(t, ctx, database)
+	assertCleanIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	createIAMHTTPRole(t, ctx, database)
+	trace := &iamTransactionFailureTrace{}
+	t.Cleanup(func() {
+		if count := trace.deadlock.Load(); count != 0 {
+			t.Errorf("own-session gate hid %d deadlocks", count)
+		}
+	})
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, trace)
+	document := iamHTTPBootstrap(t)
+	initial, err := workflow.Bootstrap(ctx, document)
+	if err != nil {
+		t.Fatal("bootstrap own-session fixture", err)
+	}
+	var handlers []http.Handler
+	for index := range 3 {
+		poolConfig, err := pgxpool.ParseConfig(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		poolConfig.ConnConfig.User, poolConfig.ConnConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+		poolConfig.ConnConfig.Tracer, poolConfig.MaxConns = trace, 2
+		pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(pool.Close)
+		repository, err := iampostgres.NewRepository(pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		options := identityaccess.Config{CursorKey: bytes.Repeat([]byte{0x39}, 32)}
+		if index == 2 {
+			options.SessionLifetime = time.Minute
+		}
+		replica, err := identityaccess.NewAuthority(repository, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		endpoint, err := iamhttp.NewHandler(replica, iamhttp.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		handlers = append(handlers, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestContext, cancelRequest := context.WithCancel(r.Context())
+			defer cancelRequest()
+			stop := context.AfterFunc(ctx, cancelRequest)
+			defer stop()
+			endpoint.ServeHTTP(w, r.WithContext(requestContext))
+		}))
+	}
+	root := localRecoveryLogin(t, handlers[0], "admin", adminPassword, true)
+	root = localRecoveryChangePassword(t, handlers[0], root, adminPassword, changedAdminPassword)
+	verify := proveOwnLoginSessions(t, ctx, handlers, database, root)
+	if _, err := database.Exec(ctx, `DO $role$ BEGIN
+        IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='`+localRecoveryTestRole+`') THEN
+            CREATE ROLE `+localRecoveryTestRole+` LOGIN PASSWORD '`+iamHTTPTestPassword+`'
+                NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+        END IF;
+        END $role$; GRANT matrix_iam_credential_recovery TO `+localRecoveryTestRole); err != nil {
+		t.Fatal(err)
+	}
+	local := localRecoveryWorkflow(t, ctx, dsn, localRecoveryTestRole, trace)
+	capability := iamv1.LocalCredentialRecoveryAuthority{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryAuthority", Purpose: iamv1.LocalCredentialRecoveryPurpose,
+		Scope:         iamv1.LocalCredentialRecoveryScope{InstallationID: document.InstallationID, BootstrapDigest: initial.ContentDigest, AccountID: document.Organization.ID, PrincipalID: document.Administrator.ID},
+		CapabilityKey: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x7a}, 32)))}
+	proveOwnSessionLocalRecovery(t, ctx, handlers, database, local, capability)
+	applyIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	replayed, err := workflow.Bootstrap(ctx, document)
+	if err != nil || initial.AppliedAt == nil || replayed.AppliedAt == nil || !initial.AppliedAt.Equal(*replayed.AppliedAt) {
+		t.Fatal("own-session replay changed bootstrap receipt", err)
+	}
+	verify()
+}
+
+func TestIAMOwnSessionExpiryPostgres(t *testing.T) {
+	const environment = "MATRIX_IAM_OWN_SESSION_EXPIRY_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(environment)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_own_session_expiry_") {
+		t.Fatal("session expiry requires its own quiet disposable database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	database, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect quiet session-expiry database")
+	}
+	defer database.Close(context.Background())
+	assertIAMPostgres18(t, ctx, database)
+	assertCleanIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	createIAMHTTPRole(t, ctx, database)
+	trace := &iamTransactionFailureTrace{}
+	normal := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, trace)
+	document := iamHTTPBootstrap(t)
+	if _, err := normal.Bootstrap(ctx, document); err != nil {
+		t.Fatal(err)
+	}
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolConfig.ConnConfig.User, poolConfig.ConnConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+	poolConfig.ConnConfig.Tracer, poolConfig.MaxConns = trace, 2
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository, err := iampostgres.NewRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	short, err := identityaccess.NewAuthority(repository, identityaccess.Config{SessionLifetime: time.Minute, CursorKey: bytes.Repeat([]byte{0x39}, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var handlers []http.Handler
+	for _, workflow := range []*identityaccess.Authority{normal, short} {
+		handler, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		handlers = append(handlers, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestContext, cancelRequest := context.WithCancel(r.Context())
+			defer cancelRequest()
+			stop := context.AfterFunc(ctx, cancelRequest)
+			defer stop()
+			handler.ServeHTTP(w, r.WithContext(requestContext))
+		}))
+	}
+	longBearer := localRecoveryLogin(t, handlers[0], "admin", adminPassword, true)
+	localRecoveryChangePassword(t, handlers[0], longBearer, adminPassword, changedAdminPassword)
+	shortBearer := localRecoveryLogin(t, handlers[1], "admin", changedAdminPassword, false)
+	var longPage, shortPage iamv1.SessionList
+	for index, candidate := range []struct {
+		bearer string
+		page   *iamv1.SessionList
+	}{{longBearer, &longPage}, {shortBearer, &shortPage}} {
+		response := performIAMRequest(handlers[index], http.MethodGet, "/v1/auth/sessions", candidate.bearer, nil)
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), candidate.page) != nil || iamv1.ValidateSessionList(*candidate.page) != nil {
+			t.Fatal("real pre-expiry session directory failed")
+		}
+	}
+	var expires time.Time
+	for _, session := range shortPage.Items {
+		if session.ID == shortPage.CurrentSessionID {
+			if session.ExpiresAt.Sub(session.IssuedAt) != time.Minute {
+				t.Fatal("expiry fixture changed the production minimum lifetime")
+			}
+			expires = session.ExpiresAt
+		}
+	}
+	if expires.IsZero() {
+		t.Fatal("actual short session is missing")
+	}
+	blocker, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(context.Background())
+	if _, err := blocker.Exec(ctx, "SELECT id FROM iam.principals WHERE tenant_id=$1 AND id=$2 FOR NO KEY UPDATE", document.Organization.ID, document.Administrator.ID); err != nil {
+		t.Fatal(err)
+	}
+	observer, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer observer.Close(context.Background())
+	// No other writer runs in this database while these original transactions
+	// wait. Serializable retries must not hide a stale transaction-time check.
+	finished := []chan *httptest.ResponseRecorder{make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)}
+	for index, candidate := range []struct {
+		bearer  string
+		target  iamv1.SessionID
+		request string
+	}{{shortBearer, longPage.CurrentSessionID, "expiry-caller"}, {longBearer, shortPage.CurrentSessionID, "expiry-target"}} {
+		body := mustIAMJSON(t, iamv1.RevokeSessionRequest{RequestID: candidate.request})
+		go func() {
+			finished[index] <- performIAMRequest(handlers[index], http.MethodPost, "/v1/auth/sessions/"+string(candidate.target)+":revoke", candidate.bearer, body)
+		}()
+		wait, stop := context.WithTimeout(ctx, 5*time.Second)
+		ticker := time.NewTicker(10 * time.Millisecond)
+		for {
+			var waiting int
+			if err := observer.QueryRow(wait, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND usename=$1
+			 AND state='active' AND wait_event_type='Lock' AND cardinality(pg_blocking_pids(pid))>0`, iamHTTPTestRole).Scan(&waiting); err != nil {
+				t.Fatal("observe original expiry transaction lock", err)
+			}
+			if waiting == index+1 {
+				break
+			}
+			select {
+			case <-ticker.C:
+			case <-wait.Done():
+				t.Fatal("session expiry transaction never reached its lock")
+			}
+		}
+		ticker.Stop()
+		stop()
+	}
+	var live bool
+	if err := observer.QueryRow(ctx, "SELECT clock_timestamp()<$1", expires).Scan(&live); err != nil || !live {
+		t.Fatal("sessions were not valid when both writers acquired their snapshots")
+	}
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for live {
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			t.Fatal("actual session expiry exceeded its original gate budget")
+		}
+		if err := observer.QueryRow(ctx, "SELECT clock_timestamp()<$1", expires).Scan(&live); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := blocker.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for index, want := range []int{http.StatusForbidden, http.StatusConflict} {
+		select {
+		case response := <-finished[index]:
+			if response.Code != want {
+				t.Errorf("lock-time expiry case=%d status=%d want=%d", index, response.Code, want)
+			}
+		case <-ctx.Done():
+			t.Fatal("expiry transaction did not finish")
+		}
+	}
+	if trace.serialization.Load() != 0 || trace.deadlock.Load() != 0 {
+		t.Fatal("a transaction retry obscured the original lock-time expiry check")
+	}
+	var effects int
+	if err := observer.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.session_self_revocations)+
+	 (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId' IN('expiry-caller','expiry-target'))+
+	 (SELECT count(*) FROM iam.sessions WHERE status<>'ACTIVE')`).Scan(&effects); err != nil || effects != 0 {
+		t.Fatal("expired caller or target produced revocation effects", err)
+	}
+	if response := performIAMRequest(handlers[0], http.MethodGet, "/v1/auth/sessions", longBearer, nil); response.Code != http.StatusOK {
+		t.Fatal("expired writer revoked the still-valid session")
+	}
+}
+
+func proveOwnLoginSessions(t *testing.T, ctx context.Context, handlers []http.Handler, database *pgx.Conn, root string) func() {
+	t.Helper()
+	const temporary = "Session-Temporary-Password-71!"
+	const changed = "Session-Changed-Password-82!"
+	type loginResult struct {
+		Session            iamv1.Session `json:"session"`
+		Credential         string        `json:"credential"`
+		MustChangePassword bool          `json:"mustChangePassword"`
+	}
+	call := func(t *testing.T, replica int, method, path, bearer string, body any, expected int, result any) {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handlers[replica], method, path, bearer, encoded)
+		if response.Code != expected {
+			t.Fatalf("own-session %s %s: status=%d want=%d body=%s", method, path, response.Code, expected, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("own-session response is cacheable")
+		}
+		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+			t.Fatal("decode own-session response")
+		}
+	}
+	login := func(t *testing.T, name, password string) loginResult {
+		t.Helper()
+		var result loginResult
+		call(t, 0, http.MethodPost, "/v1/auth/login", "", map[string]any{"loginName": name, "password": password, "requestId": "own-session-login"}, http.StatusOK, &result)
+		if result.Credential == "" || iamv1.ValidateSession(result.Session) != nil {
+			t.Fatal("invalid login fixture")
+		}
+		return result
+	}
+	createUser := func(t *testing.T, bearer, name string) iamv1.User {
+		t.Helper()
+		var result iamv1.User
+		call(t, 0, http.MethodPost, "/v1/users", bearer, map[string]any{"loginName": name, "displayName": "Own sessions", "initialPassword": temporary, "requestId": "own-create-" + name}, http.StatusCreated, &result)
+		return result
+	}
+	user := createUser(t, root, "ownsession")
+	other := createUser(t, root, "othersession")
+	a, b, c := login(t, user.LoginName+"@"+string(user.AccountID), temporary), login(t, user.LoginName+"@"+string(user.AccountID), temporary), login(t, user.LoginName+"@"+string(user.AccountID), temporary)
+	otherLogin := login(t, other.LoginName+"@"+string(other.AccountID), temporary)
+	// The production minimum lifetime really elapses while the independent
+	// pagination/concurrency cases run. No clock or persisted timestamp is edited.
+	var short loginResult
+	call(t, 2, http.MethodPost, "/v1/auth/login", "", map[string]any{"loginName": other.LoginName + "@" + string(other.AccountID), "password": temporary, "requestId": "own-short-login"}, http.StatusOK, &short)
+	if short.Session.ExpiresAt.Sub(short.Session.IssuedAt) != time.Minute {
+		t.Fatal("short session did not use the production lifetime floor")
+	}
+	call(t, 1, http.MethodGet, "/v1/auth/sessions", short.Credential, nil, http.StatusOK, nil)
+	path := func(session iamv1.SessionID) string { return "/v1/auth/sessions/" + string(session) + ":revoke" }
+	request := iamv1.RevokeSessionRequest{RequestID: "own-original"}
+	var original iamv1.RevokeOwnSessionResponse
+	t.Run("forced_self_reduction_and_exact_completion", func(t *testing.T) {
+		var page iamv1.SessionList
+		call(t, 1, http.MethodGet, "/v1/auth/sessions", a.Credential, nil, http.StatusOK, &page)
+		if iamv1.ValidateSessionList(page) != nil || page.CurrentSessionID != a.Session.ID || len(page.Items) != 3 || page.UserID != user.ID {
+			t.Fatal("forced user did not see only its own real sessions")
+		}
+		call(t, 0, http.MethodGet, "/v1/users", a.Credential, nil, http.StatusForbidden, nil)
+		call(t, 0, http.MethodPost, path(a.Session.ID), a.Credential, request, http.StatusConflict, nil)
+		call(t, 0, http.MethodPost, path(otherLogin.Session.ID), a.Credential, request, http.StatusForbidden, nil)
+		call(t, 0, http.MethodPost, path(b.Session.ID), a.Credential, request, http.StatusOK, &original)
+		if iamv1.ValidateRevokeOwnSessionResponse(original) != nil || original.Outcome != "APPLIED" {
+			t.Fatal("missing self revocation completion")
+		}
+		var repeated iamv1.RevokeOwnSessionResponse
+		call(t, 1, http.MethodPost, path(b.Session.ID), a.Credential, request, http.StatusOK, &repeated)
+		if repeated.Outcome != "EQUAL_REPLAY" || repeated.Revocation != original.Revocation {
+			t.Fatal("self replay changed original result")
+		}
+		call(t, 1, http.MethodGet, "/v1/auth/sessions", b.Credential, nil, http.StatusUnauthorized, nil)
+		call(t, 0, http.MethodPost, path(b.Session.ID), c.Credential, request, http.StatusConflict, nil)
+		call(t, 0, http.MethodPost, path(c.Session.ID), a.Credential, request, http.StatusConflict, nil)
+		call(t, 0, http.MethodPost, path(b.Session.ID), a.Credential, iamv1.RevokeSessionRequest{RequestID: "own-new-intent"}, http.StatusConflict, nil)
+		var unchanged bool
+		if err := database.QueryRow(ctx, "SELECT must_change_password FROM iam.principals WHERE tenant_id=$1 AND id=$2", user.AccountID, user.ID).Scan(&unchanged); err != nil || !unchanged {
+			t.Fatal("self revocation cleared forced password", err)
+		}
+	})
+	if t.Failed() {
+		t.FailNow()
+	}
+	t.Run("private_storage_and_live_contract", func(t *testing.T) {
+		for _, attack := range []struct{ role, sql, code string }{
+			{"matrix_iam_api", `SELECT * FROM iam.session_self_revocations`, "42501"},
+			{"matrix_iam_worker", `SELECT * FROM iam.session_self_revocations`, "42501"},
+			{"matrix_iam_api", `SELECT iam.self_session_revocation_digest('a','b','c')`, "42501"},
+			{"matrix_iam_worker", `SELECT * FROM iam.list_own_sessions('a','b','c','')`, "42501"},
+			{"matrix_iam_api", `SELECT * FROM iam.revoke_session(NULL,NULL,NULL,NULL,NULL)`, "42883"},
+			{"matrix_iam_worker", `SELECT * FROM iam.revoke_session(NULL,NULL,NULL,NULL,NULL,NULL)`, "42501"},
+			{"matrix_iam_owner", `UPDATE iam.session_self_revocations SET request_id='forged-intent'`, "42501"},
+			{"matrix_iam_owner", `DELETE FROM iam.session_self_revocations`, "42501"},
+			{"matrix_iam_owner", `TRUNCATE iam.session_self_revocations`, "42501"},
+		} {
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", user.AccountID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+attack.role); err != nil {
+				t.Fatal(err)
+			}
+			_, rejected := tx.Exec(ctx, attack.sql)
+			_ = tx.Rollback(ctx)
+			var failure *pgconn.PgError
+			if !errors.As(rejected, &failure) {
+				t.Fatal("storage attack did not produce a PostgreSQL rejection")
+			}
+			if failure.Code != attack.code {
+				t.Fatalf("own-session storage boundary role=%s code=%s", attack.role, failure.Code)
+			}
+		}
+		for _, query := range []struct {
+			sql  string
+			args []any
+		}{
+			{`SELECT * FROM iam.list_own_sessions($1,$2,$3,'')`, []any{user.AccountID, user.ID, otherLogin.Session.ID}},
+			{`SELECT * FROM iam.list_own_sessions($1,$2,$3,'')`, []any{user.AccountID, other.ID, a.Session.ID}},
+		} {
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_api"); err != nil {
+				t.Fatal(err)
+			}
+			_, rejected := tx.Exec(ctx, query.sql, query.args...)
+			_ = tx.Rollback(ctx)
+			var failure *pgconn.PgError
+			if !errors.As(rejected, &failure) || failure.Code != "42501" {
+				t.Fatal("SQL caller/owner substitution reached directory")
+			}
+		}
+		for _, drift := range []string{
+			`GRANT SELECT ON iam.session_self_revocations TO matrix_iam_api`,
+			`GRANT SELECT(request_id) ON iam.session_self_revocations TO matrix_iam_worker`,
+			`ALTER TABLE iam.session_self_revocations NO FORCE ROW LEVEL SECURITY`,
+			`ALTER TABLE iam.session_self_revocations DROP CONSTRAINT session_self_revocations_actor_fk`,
+			`ALTER TABLE iam.session_self_revocations DROP CONSTRAINT session_self_revocations_target_fk`,
+			`ALTER TABLE iam.session_self_revocations DROP CONSTRAINT session_self_revocations_event_fk`,
+			`ALTER TABLE iam.session_self_revocations DISABLE TRIGGER self_revocations_are_immutable`,
+			`ALTER TABLE iam.sessions DISABLE TRIGGER sessions_match_self_completion`,
+			`ALTER TABLE iam.audit_outbox DISABLE TRIGGER outbox_matches_self_completion`,
+			`ALTER FUNCTION iam.list_own_sessions(text,text,text,text) SECURITY INVOKER`,
+			`ALTER FUNCTION iam.revoke_session(text,text,text,text,jsonb,text) STABLE`,
+			`GRANT EXECUTE ON FUNCTION iam.revoke_session(text,text,text,text,jsonb,text) TO matrix_iam_worker`,
+			`ALTER FUNCTION iam.lookup_session(text) SET search_path=pg_catalog,public`,
+		} {
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, drift); err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal("inject isolated own-session contract drift", err)
+			}
+			var ready bool
+			err = tx.QueryRow(ctx, "SELECT ready FROM iam.readiness()").Scan(&ready)
+			_ = tx.Rollback(ctx)
+			if err != nil || ready {
+				t.Fatal("drift did not close readiness", err)
+			}
+		}
+		// Even a storage owner cannot rewrite the historical target and leave its
+		// completion apparently valid. Force deferred checks before rollback.
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, rejected := tx.Exec(ctx, `UPDATE iam.sessions SET status='ACTIVE',revoked_at=NULL WHERE tenant_id=$1 AND id=$2`, user.AccountID, b.Session.ID)
+		if rejected == nil {
+			_, rejected = tx.Exec(ctx, "SET CONSTRAINTS ALL IMMEDIATE")
+		}
+		_ = tx.Rollback(ctx)
+		var failure *pgconn.PgError
+		if !errors.As(rejected, &failure) || failure.Code != "23514" {
+			t.Fatal("completion permitted a revived target", rejected)
+		}
+		var ready bool
+		if err := database.QueryRow(ctx, "SELECT ready FROM iam.readiness()").Scan(&ready); err != nil || !ready {
+			t.Fatal("original contract did not recover after rollback", err)
+		}
+	})
+	a.Credential = localRecoveryChangePassword(t, handlers[0], a.Credential, temporary, changed)
+	call(t, 1, http.MethodGet, "/v1/auth/sessions", c.Credential, nil, http.StatusUnauthorized, nil)
+	call(t, 1, http.MethodPost, path(b.Session.ID), a.Credential, request, http.StatusOK, &original)
+	if original.Outcome != "EQUAL_REPLAY" {
+		t.Fatal("retained caller lost its historical completion")
+	}
+	var accountB iamv1.Account
+	call(t, 0, http.MethodPost, "/v1/accounts", root, map[string]any{"id": "own-session-account-b", "displayName": "Own session account B",
+		"rootLoginName": "ownrootb", "rootDisplayName": "Own root B", "initialPassword": temporary, "requestId": "own-account-b"}, http.StatusCreated, &accountB)
+	rootB := localRecoveryLogin(t, handlers[0], "ownrootb", temporary, true)
+	rootB = localRecoveryChangePassword(t, handlers[0], rootB, temporary, changed)
+	userB := createUser(t, rootB, "ownsession")
+	foreign := login(t, userB.LoginName+"@"+string(accountB.ID), temporary)
+	var extra []loginResult
+	t.Run("real_pagination_and_isolation", func(t *testing.T) {
+		for range iamv1.DirectoryPageSize {
+			extra = append(extra, login(t, user.LoginName+"@"+string(user.AccountID), changed))
+		}
+		var first, second iamv1.SessionList
+		call(t, 0, http.MethodGet, "/v1/auth/sessions", a.Credential, nil, http.StatusOK, &first)
+		if iamv1.ValidateSessionList(first) != nil || len(first.Items) != 100 || first.NextCursor == "" || first.CurrentSessionID != a.Session.ID {
+			t.Fatal("missing real 101-session lookahead")
+		}
+		query := "/v1/auth/sessions?after=" + url.QueryEscape(first.NextCursor)
+		call(t, 1, http.MethodGet, query, a.Credential, nil, http.StatusOK, &second)
+		if iamv1.ValidateSessionList(second) != nil || len(second.Items) != 1 || second.NextCursor != "" || second.Items[0].ID <= first.Items[99].ID {
+			t.Fatal("invalid final session page")
+		}
+		for _, caller := range []loginResult{extra[0], otherLogin, foreign} {
+			call(t, 1, http.MethodGet, query, caller.Credential, nil, http.StatusUnprocessableEntity, nil)
+		}
+		call(t, 0, http.MethodPost, path(foreign.Session.ID), a.Credential, iamv1.RevokeSessionRequest{RequestID: "own-cross-account"}, http.StatusForbidden, nil)
+		var change iamv1.ChangePasswordResponse
+		call(t, 0, http.MethodPost, "/v1/auth/password", a.Credential, map[string]any{"currentPassword": changed, "newPassword": "Session-Next-Password-93!",
+			"revokeOtherSessions": false, "requestId": "own-retain-sessions"}, http.StatusOK, &change)
+		call(t, 1, http.MethodGet, query, a.Credential, nil, http.StatusUnprocessableEntity, nil)
+		call(t, 1, http.MethodGet, "/v1/auth/sessions", extra[0].Credential, nil, http.StatusOK, &first)
+		call(t, 1, http.MethodGet, "/v1/auth/sessions", b.Credential, nil, http.StatusUnauthorized, nil)
+		call(t, 1, http.MethodPost, path(b.Session.ID), a.Credential, request, http.StatusOK, &original)
+	})
+	if t.Failed() {
+		t.FailNow()
+	}
+	t.Run("late_outbox_failure_rolls_back", func(t *testing.T) {
+		if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_own_session_outbox_fault() RETURNS trigger LANGUAGE plpgsql AS $body$
+		 BEGIN IF NEW.event_document->>'requestId'='own-outbox-failure' THEN RAISE EXCEPTION 'synthetic own-session outbox fault'; END IF; RETURN NEW; END $body$;
+		 CREATE TRIGGER matrix_own_session_outbox_fault BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_own_session_outbox_fault()`); err != nil {
+			t.Fatal(err)
+		}
+		call(t, 0, http.MethodPost, path(extra[0].Session.ID), a.Credential, iamv1.RevokeSessionRequest{RequestID: "own-outbox-failure"}, http.StatusServiceUnavailable, nil)
+		if _, err := database.Exec(ctx, `DROP TRIGGER matrix_own_session_outbox_fault ON iam.audit_outbox; DROP FUNCTION public.matrix_own_session_outbox_fault()`); err != nil {
+			t.Fatal(err)
+		}
+		call(t, 1, http.MethodGet, "/v1/auth/sessions", extra[0].Credential, nil, http.StatusOK, nil)
+		var partial int
+		if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.session_self_revocations WHERE request_id='own-outbox-failure')+
+		 (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId'='own-outbox-failure')`).Scan(&partial); err != nil || partial != 0 {
+			t.Fatal("outbox failure persisted partial completion", err)
+		}
+	})
+	for _, mutation := range []string{"mutual", "logout", "change-default", "change-true", "change-false", "forced-change", "reset", "disable-user", "disable-account", "recover-root"} {
+		for _, selfFirst := range []bool{true, false} {
+			t.Run(fmt.Sprintf("concurrent_%s_self-first-%t", mutation, selfFirst), func(t *testing.T) {
+				prefix := fmt.Sprintf("own-race-%s-%t", mutation, selfFirst)
+				var member iamv1.User
+				var account iamv1.Account
+				var realm string
+				if mutation == "disable-account" || mutation == "recover-root" {
+					call(t, 0, http.MethodPost, "/v1/accounts", root, map[string]any{"id": prefix, "displayName": "Racing account", "rootLoginName": prefix, "rootDisplayName": "Racing root", "initialPassword": temporary, "requestId": prefix + "-create"}, http.StatusCreated, &account)
+					realm = prefix
+				} else {
+					member = createUser(t, root, prefix)
+					realm = member.LoginName + "@" + string(member.AccountID)
+				}
+				firstLogin := login(t, realm, temporary)
+				if member.ID == "" {
+					member.ID, member.AccountID = firstLogin.Session.PrincipalID, firstLogin.Session.AccountID
+				}
+				password := temporary
+				if mutation != "forced-change" {
+					firstLogin.Credential = localRecoveryChangePassword(t, handlers[0], firstLogin.Credential, temporary, changed)
+					password = changed
+				}
+				secondLogin := login(t, realm, password)
+				type command struct {
+					path, bearer, request string
+					body                  any
+					action                auditv1.Action
+				}
+				self := command{path(secondLogin.Session.ID), firstLogin.Credential, prefix + "-self", iamv1.RevokeSessionRequest{RequestID: prefix + "-self"}, auditv1.ActionIAMSessionRevoked}
+				other := command{bearer: firstLogin.Credential, request: prefix + "-peer"}
+				wantSecond := http.StatusOK
+				switch mutation {
+				case "mutual":
+					other.path, other.bearer, other.action = path(firstLogin.Session.ID), secondLogin.Credential, auditv1.ActionIAMSessionRevoked
+					other.body = iamv1.RevokeSessionRequest{RequestID: other.request}
+					wantSecond = http.StatusUnauthorized
+				case "logout":
+					other.path, other.action = "/v1/auth/logout", auditv1.ActionIAMSessionRevoked
+					other.body = iamv1.LogoutRequest{RequestID: other.request}
+					if !selfFirst {
+						wantSecond = http.StatusUnauthorized
+					}
+				case "change-default", "change-true", "change-false", "forced-change":
+					other.path, other.action = "/v1/auth/password", auditv1.ActionIAMUserPasswordChanged
+					change := map[string]any{"currentPassword": password, "newPassword": "Session-Racing-Password-37!", "requestId": other.request}
+					if mutation != "change-default" {
+						change["revokeOtherSessions"] = mutation == "change-true"
+					}
+					other.body = change
+					if !selfFirst && mutation != "change-false" {
+						wantSecond = http.StatusConflict
+					}
+				case "disable-account", "recover-root":
+					other.bearer = root
+					if mutation == "disable-account" {
+						other.path, other.action = "/v1/accounts/"+string(account.ID)+":set-status", auditv1.ActionIAMAccountDisabled
+						other.body = iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled, ResourceVersion: account.ResourceVersion, RequestID: other.request}
+					} else {
+						other.path, other.action = "/v1/accounts/"+string(account.ID)+":recover-root-credentials", auditv1.ActionIAMAccountRootCredentialsRecovered
+						other.body = map[string]any{"initialPassword": "Session-Recovered-Root-59!", "resourceVersion": account.ResourceVersion, "requestId": other.request}
+					}
+					if !selfFirst {
+						wantSecond = http.StatusUnauthorized
+					}
+				case "reset", "disable-user":
+					var access iamv1.UserAccess
+					call(t, 0, http.MethodGet, "/v1/users/"+string(member.ID), root, nil, http.StatusOK, &access)
+					other.bearer = root
+					if mutation == "reset" {
+						other.path, other.action = "/v1/users/"+string(member.ID)+":reset-password", auditv1.ActionIAMUserPasswordReset
+						other.body = map[string]any{"initialPassword": "Session-Racing-Reset-48!", "resourceVersion": access.User.ResourceVersion, "requestId": other.request}
+					} else {
+						other.path, other.action = "/v1/users/"+string(member.ID)+":set-status", auditv1.ActionIAMUserStatusSet
+						other.body = iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: access.User.ResourceVersion, RequestID: other.request}
+					}
+					if !selfFirst {
+						wantSecond = http.StatusUnauthorized
+					}
+				}
+				first, second := self, other
+				if !selfFirst {
+					first, second = other, self
+				}
+				await, release := holdIAMRequest(t, ctx, database, first.request, true, first.action)
+				firstBody, secondBody := mustIAMJSON(t, first.body), mustIAMJSON(t, second.body)
+				finishedFirst, finishedSecond := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+				go func() {
+					finishedFirst <- performIAMRequest(handlers[0], http.MethodPost, first.path, first.bearer, firstBody)
+				}()
+				firstPID := await()
+				go func() {
+					finishedSecond <- performIAMRequest(handlers[1], http.MethodPost, second.path, second.bearer, secondBody)
+				}()
+				wait, cancelWait := context.WithTimeout(ctx, 5*time.Second)
+				defer cancelWait()
+				ticker := time.NewTicker(10 * time.Millisecond)
+				defer ticker.Stop()
+				for {
+					var blocked bool
+					if err := database.QueryRow(wait, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))`, firstPID).Scan(&blocked); err != nil {
+						t.Fatal("observe production session lock", err)
+					}
+					if blocked {
+						break
+					}
+					select {
+					case response := <-finishedSecond:
+						t.Fatalf("peer bypassed uncommitted session writer: status=%d", response.Code)
+					case <-ticker.C:
+					case <-wait.Done():
+						t.Fatal("peer did not reach production session lock")
+					}
+				}
+				release()
+				var responseFirst, responseSecond *httptest.ResponseRecorder
+				select {
+				case responseFirst = <-finishedFirst:
+				case <-ctx.Done():
+					t.Fatal("first session writer did not finish")
+				}
+				select {
+				case responseSecond = <-finishedSecond:
+				case <-ctx.Done():
+					t.Fatal("second session writer did not finish")
+				}
+				if responseFirst.Code != http.StatusOK || (responseSecond.Code != wantSecond && !(wantSecond == http.StatusUnauthorized && responseSecond.Code == http.StatusForbidden)) {
+					t.Fatalf("session lock outcome first=%d second=%d want=%d", responseFirst.Code, responseSecond.Code, wantSecond)
+				}
+				var firstFacts, secondFacts int
+				if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE event_document->>'requestId'=$1 AND event_document->>'action'=$2),
+				 count(*) FILTER(WHERE event_document->>'requestId'=$3 AND event_document->>'action'=$4) FROM iam.audit_outbox
+				 WHERE event_document->>'requestId' IN($1,$3)`, first.request, first.action, second.request, second.action).Scan(&firstFacts, &secondFacts); err != nil {
+					t.Fatal(err)
+				}
+				wantFacts := 0
+				if wantSecond == http.StatusOK {
+					wantFacts = 1
+				}
+				if firstFacts != 1 || secondFacts != wantFacts {
+					t.Fatal("failed peer left partial or duplicate success facts")
+				}
+				if mutation == "mutual" {
+					survivor, ended := firstLogin, secondLogin
+					if !selfFirst {
+						survivor, ended = secondLogin, firstLogin
+					}
+					call(t, 1, http.MethodGet, "/v1/auth/sessions", survivor.Credential, nil, http.StatusOK, nil)
+					call(t, 0, http.MethodGet, "/v1/auth/sessions", ended.Credential, nil, http.StatusUnauthorized, nil)
+				} else {
+					want := http.StatusUnauthorized
+					if mutation == "logout" && !selfFirst {
+						want = http.StatusOK
+					}
+					call(t, 1, http.MethodGet, "/v1/auth/sessions", secondLogin.Credential, nil, want, nil)
+				}
+			})
+		}
+	}
+	var originalFact []byte
+	t.Run("real_absolute_expiration", func(t *testing.T) {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			var expired bool
+			if err := database.QueryRow(ctx, "SELECT transaction_timestamp()>=$1", short.Session.ExpiresAt).Scan(&expired); err != nil {
+				t.Fatal(err)
+			}
+			if expired {
+				break
+			}
+			select {
+			case <-ticker.C:
+			case <-ctx.Done():
+				t.Fatal("real session expiration exceeded the gate budget")
+			}
+		}
+		call(t, 0, http.MethodGet, "/v1/auth/sessions", short.Credential, nil, http.StatusUnauthorized, nil)
+		var page iamv1.SessionList
+		call(t, 1, http.MethodGet, "/v1/auth/sessions", otherLogin.Credential, nil, http.StatusOK, &page)
+		if len(page.Items) != 1 || page.Items[0].ID != otherLogin.Session.ID {
+			t.Fatal("directory listed an expired session")
+		}
+		call(t, 0, http.MethodPost, path(short.Session.ID), otherLogin.Credential, iamv1.RevokeSessionRequest{RequestID: "own-expired-target"}, http.StatusConflict, nil)
+	})
+	t.Run("unknown_and_wrong_credential_generations", func(t *testing.T) {
+		for index, assignment := range []string{"NULL", "credential_version+1"} {
+			candidate := extra[index+1]
+			if _, err := database.Exec(ctx, "UPDATE iam.sessions SET credential_version="+assignment+" WHERE tenant_id=$1 AND id=$2", user.AccountID, candidate.Session.ID); err != nil {
+				t.Fatal(err)
+			}
+			call(t, 1, http.MethodGet, "/v1/auth/sessions", candidate.Credential, nil, http.StatusUnauthorized, nil)
+			call(t, 0, http.MethodPost, path(candidate.Session.ID), a.Credential, iamv1.RevokeSessionRequest{RequestID: fmt.Sprintf("own-invalid-generation-%d", index)}, http.StatusConflict, nil)
+			var page iamv1.SessionList
+			call(t, 1, http.MethodGet, "/v1/auth/sessions", a.Credential, nil, http.StatusOK, &page)
+			if slices.ContainsFunc(page.Items, func(item iamv1.Session) bool { return item.ID == candidate.Session.ID }) {
+				t.Fatal("directory retained an unusable generation")
+			}
+		}
+	})
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2
+	 AND event_document->>'action'='iam.session.revoked'`, user.AccountID, request.RequestID).Scan(&originalFact); err != nil {
+		t.Fatal(err)
+	}
+	var fact auditv1.Event
+	if err := json.Unmarshal(originalFact, &fact); err != nil {
+		t.Fatal(err)
+	}
+	originalCanonical, originalDigest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, fact)
+	if err != nil {
+		t.Fatal("self fact has no valid canonical encoding", err)
+	}
+	call(t, 1, http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: fact}, http.StatusOK, nil)
+	return func() {
+		var repeated iamv1.RevokeOwnSessionResponse
+		call(t, 1, http.MethodPost, path(b.Session.ID), a.Credential, request, http.StatusOK, &repeated)
+		if repeated.Outcome != "EQUAL_REPLAY" || repeated.Revocation != original.Revocation {
+			t.Fatal("schema replay changed self completion")
+		}
+		call(t, 0, http.MethodGet, "/v1/auth/sessions", b.Credential, nil, http.StatusUnauthorized, nil)
+		call(t, 0, http.MethodGet, "/v1/auth/sessions", short.Credential, nil, http.StatusUnauthorized, nil)
+		for _, candidate := range extra[1:3] {
+			call(t, 1, http.MethodGet, "/v1/auth/sessions", candidate.Credential, nil, http.StatusUnauthorized, nil)
+		}
+		var facts, receipts int
+		var retained []byte
+		if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.session_self_revocations WHERE tenant_id=$1 AND user_id=$2 AND request_id=$3`, user.AccountID, user.ID, request.RequestID).Scan(&receipts); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2
+		 AND event_document->>'action'='iam.session.revoked'`, user.AccountID, request.RequestID).Scan(&facts); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2
+		 AND event_document->>'action'='iam.session.revoked'`, user.AccountID, request.RequestID).Scan(&retained); err != nil || receipts != 1 || facts != 1 || !bytes.Equal(retained, originalFact) {
+			t.Fatal("replay rewrote or duplicated original self fact", err)
+		}
+		var after auditv1.Event
+		if json.Unmarshal(retained, &after) != nil {
+			t.Fatal("invalid retained fact")
+		}
+		canonical, digest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, after)
+		if err != nil || canonical != originalCanonical || digest != originalDigest {
+			t.Fatal("replay changed original audit bytes/digest", err)
+		}
+		call(t, 0, http.MethodPost, "/v1/auth/logout", a.Credential, iamv1.LogoutRequest{RequestID: "own-finish"}, http.StatusOK, nil)
+		call(t, 1, http.MethodPost, path(b.Session.ID), a.Credential, request, http.StatusUnauthorized, nil)
+		call(t, 1, http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: after}, http.StatusOK, nil)
+		after.RequestID = "forged-history"
+		call(t, 1, http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: after}, http.StatusForbidden, nil)
+	}
+}
+
+func proveOwnSessionLocalRecovery(t *testing.T, ctx context.Context, handlers []http.Handler, database *pgx.Conn, local *identityaccess.Authority, capability iamv1.LocalCredentialRecoveryAuthority) {
+	t.Helper()
+	for _, selfFirst := range []bool{true, false} {
+		t.Run(fmt.Sprintf("platform_recovery_self-first-%t", selfFirst), func(t *testing.T) {
+			prefix := fmt.Sprintf("own-platform-recovery-%t", selfFirst)
+			caller := localRecoveryLogin(t, handlers[0], "admin", changedAdminPassword, false)
+			target := localRecoveryLogin(t, handlers[1], "admin", changedAdminPassword, false)
+			var directory iamv1.SessionList
+			response := performIAMRequest(handlers[1], http.MethodGet, "/v1/auth/sessions", target, nil)
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &directory) != nil {
+				t.Fatal("read original primary session directory")
+			}
+			path := "/v1/auth/sessions/" + string(directory.CurrentSessionID) + ":revoke"
+			body := mustIAMJSON(t, iamv1.RevokeSessionRequest{RequestID: prefix + "-self"})
+			request := localRecoveryRequest(t, ctx, local, capability, prefix+"-recover", "Session-Platform-Recovered-69!")
+			prior := readLocalRecoveryState(t, ctx, database, capability.Scope)
+			firstRequest, firstAction, waitingRole := prefix+"-self", auditv1.ActionIAMSessionRevoked, localRecoveryTestRole
+			if !selfFirst {
+				firstRequest, firstAction, waitingRole = request.CommandID, auditv1.ActionIAMInstallationPrimaryCredentialsRecovered, iamHTTPTestRole
+			}
+			await, release := holdIAMRequest(t, ctx, database, firstRequest, true, firstAction)
+			selfDone := make(chan *httptest.ResponseRecorder, 1)
+			type recoveryResult struct {
+				result iamv1.LocalCredentialRecoveryResult
+				err    error
+			}
+			recoveryDone := make(chan recoveryResult, 1)
+			self := func() { selfDone <- performIAMRequest(handlers[0], http.MethodPost, path, caller, body) }
+			recover := func() {
+				result, err := local.RecoverLocalCredentials(ctx, capability, request)
+				recoveryDone <- recoveryResult{result, err}
+			}
+			if selfFirst {
+				go self()
+				await()
+				go recover()
+			} else {
+				go recover()
+				await()
+				go self()
+			}
+			waitForLocalRecoveryLock(t, ctx, database, waitingRole)
+			release()
+			var selfResult *httptest.ResponseRecorder
+			var recovered recoveryResult
+			select {
+			case selfResult = <-selfDone:
+			case <-ctx.Done():
+				t.Fatal("self revocation did not complete after recovery barrier")
+			}
+			select {
+			case recovered = <-recoveryDone:
+			case <-ctx.Done():
+				t.Fatal("platform recovery did not complete after self barrier")
+			}
+			wantSelf, wantFacts := http.StatusUnauthorized, 0
+			if selfFirst {
+				wantSelf, wantFacts = http.StatusOK, 1
+			}
+			if recovered.err != nil || (selfResult.Code != wantSelf && !(wantSelf == http.StatusUnauthorized && selfResult.Code == http.StatusForbidden)) {
+				t.Fatalf("platform recovery/self outcomes: recovery=%v self=%d want=%d", recovered.err, selfResult.Code, wantSelf)
+			}
+			next := readLocalRecoveryState(t, ctx, database, capability.Scope)
+			if next.generation != prior.generation+1 || next.passwordHash == prior.passwordHash || !next.mustChange || next.activeSessions != 0 ||
+				next.facts != prior.facts+1 || next.receipts != prior.receipts+1 || next.bindings != prior.bindings || next.services != prior.services ||
+				next.owner != prior.owner || next.organizationStatus != prior.organizationStatus || next.organizationVersion != prior.organizationVersion || next.principalStatus != prior.principalStatus {
+				t.Fatal("recovery/self race changed authority or retained an old session")
+			}
+			var facts, receipts int
+			if err := database.QueryRow(ctx, `SELECT
+			 (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2 AND event_document->>'action'='iam.session.revoked'),
+			 (SELECT count(*) FROM iam.session_self_revocations WHERE tenant_id=$1 AND user_id=$3 AND request_id=$2)`, capability.Scope.AccountID, prefix+"-self", capability.Scope.PrincipalID).Scan(&facts, &receipts); err != nil || facts != wantFacts || receipts != wantFacts {
+				t.Fatal("failed or completed self race left partial/duplicate evidence", err)
+			}
+			for _, bearer := range []string{caller, target} {
+				if response := performIAMRequest(handlers[1], http.MethodGet, "/v1/auth/sessions", bearer, nil); response.Code != http.StatusUnauthorized {
+					t.Fatal("platform recovery left old primary session usable")
+				}
+			}
+			if response := performIAMRequest(handlers[0], http.MethodPost, path, caller, body); response.Code != http.StatusUnauthorized {
+				t.Fatal("old self intent bypassed recovered caller qualification")
+			}
+			assertLocalRecoveryReplay(t, ctx, local, capability, request, recovered.result)
+			if next != readLocalRecoveryState(t, ctx, database, capability.Scope) {
+				t.Fatal("replay changed completed platform recovery")
+			}
+			// Prepare the other order only through the original primary's real
+			// forced password change; no credential, binding or session DML.
+			fresh := localRecoveryLogin(t, handlers[0], "admin", "Session-Platform-Recovered-69!", true)
+			localRecoveryChangePassword(t, handlers[0], fresh, "Session-Platform-Recovered-69!", changedAdminPassword)
+			assertLocalRecoveryReplay(t, ctx, local, capability, request, recovered.result)
+		})
+	}
 }
 
 func TestIAMPolicyAttachmentSessionPostgres(t *testing.T) {
@@ -6815,7 +7683,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 				if keyFirst {
 					wantKey = http.StatusCreated
 				}
-				await, release := holdAccessKeyRequest(t, ctx, database, prefix+"-create", keyFirst)
+				await, release := holdIAMRequest(t, ctx, database, prefix+"-create", keyFirst, auditv1.ActionIAMAccessKeyCreated)
 				keyFinished, mutationFinished := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
 				keyPath := "/v1/users/" + string(target.ID) + "/access-keys"
 				keyBody := mustIAMJSON(t, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: prefix + "-create"})

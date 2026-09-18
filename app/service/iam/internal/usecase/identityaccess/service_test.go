@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"testing/synctest"
@@ -16,6 +17,94 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 )
+
+func TestOwnLoginSessionWorkflowBindsTheActualCallerAndRejectsBadStorage(t *testing.T) {
+	tx := newCoreTransaction()
+	service, err := NewAuthority(&coreRepository{transaction: tx}, Config{CursorKey: bytes.Repeat([]byte{0x31}, 32)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	login := func() iamv1.LoginResponse {
+		t.Helper()
+		result, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "own-login"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	a, b := login(), login()
+	// Neither ordinary grants nor clearing forced-change is necessary for this
+	// possession-bound reduction. SQL concurrency/history is proved in PG18.
+	tx.attachments = map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment{}
+	page, err := service.ListOwnSessions(t.Context(), a.Credential, "")
+	if err != nil || iamv1.ValidateSessionList(page) != nil || len(page.Items) != 2 || page.CurrentSessionID != a.Session.ID ||
+		page.UserID != a.Session.PrincipalID || !page.ObservedAt.Equal(tx.now) || len(tx.authorizations) != 0 {
+		t.Fatal("self directory invented management authority or a caller", err)
+	}
+	if _, err := service.RevokeOwnSession(t.Context(), a.Credential, a.Session.ID, iamv1.RevokeSessionRequest{RequestID: "own-current"}); !errors.Is(err, ErrConflict) || tx.sessionRevocation != nil {
+		t.Fatal("current session bypassed logout", err)
+	}
+	for _, purpose := range []authority.CredentialType{authority.CredentialService, authority.CredentialRoleSession} {
+		wrong, err := authority.NewCredentialIssuer(nil).Issue(purpose, "own-other-carrier")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.ListOwnSessions(t.Context(), wrong.Credential, ""); !errors.Is(err, ErrUnauthenticated) {
+			t.Fatal("non-login directory", err)
+		}
+		if _, err := service.RevokeOwnSession(t.Context(), wrong.Credential, b.Session.ID, iamv1.RevokeSessionRequest{RequestID: "own-wrong"}); !errors.Is(err, ErrUnauthenticated) || tx.sessionRevocation != nil {
+			t.Fatal("non-login revocation", err)
+		}
+	}
+	for _, variant := range []string{"null", "cross-account", "cross-user", "duplicate", "expired", "lookahead"} {
+		t.Run(variant, func(t *testing.T) {
+			items := []iamv1.Session{a.Session}
+			switch variant {
+			case "null":
+				items = nil
+			case "cross-account":
+				items[0].AccountID = "unrelated-account"
+			case "cross-user":
+				items[0].PrincipalID = "unrelated-user"
+			case "duplicate":
+				items = append(items, items[0])
+			case "expired":
+				items[0].ExpiresAt = tx.now
+			case "lookahead":
+				items = make([]iamv1.Session, 101)
+				for i := range items {
+					items[i] = a.Session
+					items[i].ID = iamv1.SessionID(fmt.Sprintf("own-%03d", i))
+				}
+				items[100].PrincipalID = "unrelated-lookahead"
+			}
+			tx.ownSessionItems = &items
+			defer func() { tx.ownSessionItems = nil }()
+			if _, err := service.ListOwnSessions(t.Context(), a.Credential, ""); !errors.Is(err, ErrUnavailable) {
+				t.Fatal("untrusted storage became a public page", err)
+			}
+		})
+	}
+	request := iamv1.RevokeSessionRequest{RequestID: "own-revoke"}
+	result, err := service.RevokeOwnSession(t.Context(), a.Credential, b.Session.ID, request)
+	if err != nil || result.Outcome != "APPLIED" || result.Revocation.ID != string(b.Session.ID) || tx.sessionRevocation == nil || len(tx.authorizations) != 0 {
+		t.Fatal("self reduction required or created a business permit", err)
+	}
+	mutation := *tx.sessionRevocation
+	if mutation.AccountID != a.Session.AccountID || mutation.ActorPrincipalID != a.Session.PrincipalID || mutation.ActorSessionID != a.Session.ID || mutation.SessionID != b.Session.ID ||
+		mutation.DecisionID != "" || mutation.AuditEvent.IAMDecisionID != "" || mutation.AuditEvent.Actor.Type != auditv1.ActorUser ||
+		mutation.AuditEvent.Actor.ID != auditv1.ActorID(a.Session.PrincipalID) || mutation.AuditEvent.Target.ID != string(b.Session.ID) ||
+		mutation.AuditEvent.RequestID != request.RequestID || auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		t.Fatal("self reduction lost actual caller/target or fabricated an audit decision")
+	}
+	if _, err := service.ListOwnSessions(t.Context(), b.Credential, ""); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("ended caller reached directory", err)
+	}
+}
 
 func TestRoleSelfExitUsesOnlyExactCredentialPossession(t *testing.T) {
 	tx := newCoreTransaction()
@@ -958,6 +1047,8 @@ type coreTransaction struct {
 	attachments             map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment
 	attachmentSession       iamv1.SessionID
 	revocationSession       iamv1.SessionID
+	sessionRevocation       *SessionRevocationMutation
+	ownSessionItems         *[]iamv1.Session
 	localRecoveryInspection iamv1.LocalCredentialRecoveryInspection
 	localRecoveryResult     iamv1.LocalCredentialRecoveryResult
 	localRecoveryMutation   *LocalCredentialRecoveryMutation
@@ -1204,7 +1295,8 @@ func (transaction *coreTransaction) IssueSession(
 			Session:      mutation.Session,
 			Policies:     transaction.attachedPolicies(principal.ID),
 		},
-		VerificationDigest: mutation.VerificationDigest,
+		VerificationDigest:   mutation.VerificationDigest,
+		CredentialGeneration: 1,
 	}
 	return mutation.Session, nil
 }
@@ -1228,6 +1320,22 @@ func (transaction *coreTransaction) LookupSession(
 	binding.Subject.Policies = transaction.attachedPolicies(principal.ID)
 	binding.Subject.Boundary = &authority.ResolvedUserBoundary{State: "NONE", AccountID: principal.AccountID, UserID: principal.ID, UserResourceVersion: principal.ResourceVersion}
 	return binding, true, nil
+}
+
+func (transaction *coreTransaction) ListOwnSessions(_ context.Context, read OwnSessionRead) ([]iamv1.Session, error) {
+	if transaction.ownSessionItems != nil {
+		return *transaction.ownSessionItems, nil
+	}
+	items := make([]iamv1.Session, 0)
+	for _, binding := range transaction.sessions {
+		item := binding.Subject.Session
+		if item.AccountID == read.AccountID && item.PrincipalID == read.UserID && item.Status == iamv1.SessionActive &&
+			transaction.now.Before(item.ExpiresAt) && string(item.ID) > read.After {
+			items = append(items, item)
+		}
+	}
+	slices.SortFunc(items, func(a, b iamv1.Session) int { return strings.Compare(string(a.ID), string(b.ID)) })
+	return items[:min(len(items), iamv1.DirectoryPageSize+1)], nil
 }
 
 func (transaction *coreTransaction) LookupPassword(
@@ -1339,6 +1447,7 @@ func (transaction *coreTransaction) RevokeSession(
 	_ context.Context,
 	mutation SessionRevocationMutation,
 ) (iamv1.Revocation, bool, error) {
+	transaction.sessionRevocation = &mutation
 	for lookup, binding := range transaction.sessions {
 		if binding.Subject.Session.ID != mutation.SessionID {
 			continue
