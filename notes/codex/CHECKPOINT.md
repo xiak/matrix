@@ -5,17 +5,19 @@
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Only this
   task's independent worktree is writable. Updated 2026-09-18.
 - Latest pushed production: **159bb302fed89161c4b60afeb4a6f41f9bd99820**,
-  atomic self-revocation of other login Sessions (IAM/009 S1b). Local complete
-  gates passed, but cumulative independent CI has not passed: NOT ACCEPTED.
+  atomic self-revocation of other login Sessions (IAM/009 S1b). The backend
+  slice is ACCEPTED in cumulative7cf after all local and independent gates;
+  UI, full009 and the full IAM goal are not accepted.
 - Latest pushed test repair: **7cf857bba48eb5d7da487162c43e8f52534db133**.
   Only the existing Role-management security fixture and IAM006/009/011
   evidence changed. Production API/SQL, all 24 controlled interleavings,
   original deadlines, password cost and resource limits remain unchanged.
 - Exact-source [Verification35324569376](https://github.com/xiak/matrix/actions/runs/35324569376)
-  is live, not accepted. GitHub API observation: Go105534536961,
-  storage105534537050 and node105534537109 in_progress; runtime105534537245
-  queued. Observe these exact jobs next. A polling timeout is not termination
-  and never justifies starting a duplicate gate.
+  is TERMINAL SUCCESS. Go105534536961, storage105534537050,
+  node105534537109, runtime105534537245 and aggregate105542517138 all
+  completed/success; actual logs and capacity samples were inspected.
+  Acceptance owner updates are pushed as7e7e1ba09d7271f0b8ca24a47b15269d8dceb391.
+  Do not restart terminal gates merely to re-observe these results.
 - IAM32/Audit19/PaaS2, IAM product Profile r5. Published release profile and
   revision unchanged. Source versions do not establish release/N-1, UI or
   complete IAM acceptance. The full goal remains ACTIVE.
@@ -63,11 +65,21 @@ container and empty internal network. Go cache remains. No local fixture is
 live; do not recreate it merely to observe completed results. No other
 task/shared/remote resource was changed.
 
-Next observe35324569376 and inspect actual executed gates, not just a green
-summary. On all five checks succeeding, update009/011 and this checkpoint,
-then provide fixed-source informational handoffs to existing consumers. On
-failure inspect that specific test; do not raise budgets or weaken coverage.
-The remaining IAM goal is not narrowed to this Session slice.
+Exact7cf CI confirms all five general IAM fixtures passed, complete Role/STS
+package333.093s, Audit data/HTTP6.240s/2.320s and PaaS data2.418s. Runtime
+actually ran own Session tests226.359s, retained/independent processes148.830s
+and capacity140.29s. Capacity log has10 stages x2 account lanes x100 samples,
+2000 total and failures0; source also checks all400 issued credentials,
+1200 historical decisions, actual runtime database users and complete chains.
+Go gate used1.26.8, capacity kept pinned1.26.5 and original2CPU/1536MiB/PIDs256.
+Published-installer rejection0.020s and actual Linux node25.66s also passed;
+they do not prove a new signed release or another branch's host acceptance.
+
+Fixed7cf/CI and the acceptance owner update were sent to both existing
+consumers as informational handoffs; no new task/browser/runtime was started.
+Next scope remains S2/S3 and the other FEAT gaps below. The unapproved owner
+and permission choices are still unanswered; automatic continuation is not
+approval. Do not narrow the full goal to this completed Session slice.
 
 ## Accepted rollback points and contract boundary
 
@@ -114,13 +126,16 @@ feat/cloud-console-ux. No foreign source or runtime is writable. S1 consumer
 8e8b0f608827fb00c9a0e677e78ec12a7e047315 (parent of ec5e832) consumes308;
 MOCK/DEV only, real login/revoke remains deferred by human priority.010 and
 adoption own that handoff, not UI acceptance. It confirmed S1b's backend
-window and awaits fixed independently verified interfaces; do not commission
-browser/MFA/security-setting work implicitly.
+window and has now received fixed7cf/CI and the strict request/result/replay
+contract. Do not infer consumption or real browser acceptance from receipt,
+and do not commission browser/MFA/security-setting work implicitly.
 
 Phase3 task01a04149-5dbb-7300-9e4c-31d9e85c8ada opened the S1b window after
 fixedc2fbd9e38d424e68c0466618ee74613aced3c3fb. It has completed and requests
 fixed-SHA/CI informational handoffs only. Do not reopen it or inherit its
-consumer/release status. PaaS/Audit business enforcement, ingress/APISIX,
+consumer/release status. It has now received fixed7cf/CI, exact ABI and
+remaining scope as an informational handoff, with no request to start work.
+PaaS/Audit business enforcement, ingress/APISIX,
 installation/keyring/backup and release composition are not edited here.
 
 ## Runtime discipline
