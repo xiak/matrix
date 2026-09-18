@@ -4,150 +4,132 @@
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Only this
   task's independent worktree is writable. Updated 2026-09-18.
-- Latest pushed production: **159bb302fed89161c4b60afeb4a6f41f9bd99820**,
-  atomic self-revocation of other login Sessions (IAM/009 S1b). The backend
-  slice is ACCEPTED in cumulative7cf after all local and independent gates;
-  UI, full009 and the full IAM goal are not accepted.
-- Latest pushed test repair: **7cf857bba48eb5d7da487162c43e8f52534db133**.
-  Only the existing Role-management security fixture and IAM006/009/011
-  evidence changed. Production API/SQL, all 24 controlled interleavings,
-  original deadlines, password cost and resource limits remain unchanged.
-- Exact-source [Verification35324569376](https://github.com/xiak/matrix/actions/runs/35324569376)
-  is TERMINAL SUCCESS. Go105534536961, storage105534537050,
-  node105534537109, runtime105534537245 and aggregate105542517138 all
-  completed/success; actual logs and capacity samples were inspected.
-  Acceptance owner updates are pushed as7e7e1ba09d7271f0b8ca24a47b15269d8dceb391.
-  Do not restart terminal gates merely to re-observe these results.
-- IAM32/Audit19/PaaS2, IAM product Profile r5. Published release profile and
-  revision unchanged. Source versions do not establish release/N-1, UI or
-  complete IAM acceptance. The full goal remains ACTIVE.
+- Latest pushed test slice: **7f02d41960f6ca74e49b24f895ad8fc649fc5e49**,
+  independently scheduled account-interference observation. Only existing
+  test/authorityprocess/process_e2e_test.go and IAM/011 changed.
+- Exact-source [Verification35338576115](https://github.com/xiak/matrix/actions/runs/35338576115)
+  was freshly inspected as QUEUED after push. Its result is NOT accepted.
+  Reinspect that exact run/commit before waiting; do not restart a live run
+  or infer success from the preceding commit.
+- Latest accepted production is still **159bb302fed89161c4b60afeb4a6f41f9bd99820**,
+  S1b atomic other-login-session self-revocation, cumulatively accepted at
+  **7cf857bba48eb5d7da487162c43e8f52534db133** / Verification35324569376,
+  five checks completed/success. Acceptance owners fixed7e7e1ba0.
+- IAM32/Audit19/PaaS2, IAM product Profile r5; published release profile and
+  revision unchanged. The full IAM goal remains ACTIVE, not complete.
 
-## Current evidence and next action
+## Current slice and evidence
 
-Read AGENTS, IAM/FEAT-IAM-009-security-governance.md, then owning code/tests.
-IAM/006 owns Role/STS fixture preparation, IAM/011 owns cumulative CI and
-capacity, IAM/007 and ADR-0004 own signed-key/custody boundaries.
+Read AGENTS, IAM/FEAT-IAM-011-acceptance.md and its existing process test.
+009 owns Session/security governance; 006 owns Role/STS; 007 and ADR-0004
+own signed-key/custody boundaries. No production/API/SQL, UI, installation,
+permissions, workflow budgets or other worktree changed in7f02.
 
-The first S1b CI35318292984 failed at the shared Go ten-minute package timer;
-Go/node/runtime passed. Fixed2cd045b01a27e85617f8272e5f55491fd311aaca splits
-the five general IAM fixtures into separate serial processes. Its exact
-CI35320384077 is terminal FAILURE, not live: all five general fixtures
-actually passed, then Role management reached its own120-second deadline;
-PaaS database command was not reached. Go/node/runtime passed, aggregate
-correctly failed. Do not rerun either terminal run just to re-observe it.
+Original capacity paired batches forced each account to wait for its peer.
+They remain intact:2000 requests,400 real logins,1200 timed decisions.
+The increment adds a100-request complex-PDP control plus100 independently
+progressing wrong-password requests in A and100 paced complex decisions in B.
+Each independent lane has one worker; total concurrency at most2, B's planned
+interval100ms. Response verification remains on the receiving goroutine.
+Record actual starts/ends, lane throughput, scheduling lateness and planned
+completion latency; no missing samples/retries or secret output. Actual peer
+window overlap is checked, not inferred from launching goroutines.
 
-The Role timeout was during a fixture's fresh-root forced-password change,
-not the platform offline-recovery transaction. Exact2cd source reproduced
-locally; CPU samples concentrated on real Argon2 and race probes. Reusing
-only the unchanged Account/root was insufficient: one repetition still
-timed out during final migration verification despite all24 cases passing.
+Current test Go blob0937e73110c3b2dbcde6fc6bfcf68764fd5e548b passed full
+capacity104.91s (package105.956s) on a clean source export. Go1.26.5 runner
+2CPU/1536MiB/PIDs256/GOMAXPROCS2/GOMEMLIMIT512MiB; separate PG18.4
+1CPU/768MiB/PIDs192,512MiB temporary data, no host port or extra swap.
+12stages/23rows/2300requests, failures0;400 unique credentials were actually
+authenticated on the other replica and1400 exact historical decisions were
+checked, alongside current revocation, runtime DB users, outbox and chains.
 
-Fixed7cf additionally reuses the unchanged issuing USER in ordinary cases.
-Every identity is created, logged in and changed through real HTTP. Each
-manager, Role, RoleSession, intent and competition remains independent;
-root recovery/account suspension keep four dedicated complete fixtures.
-Shared root/source are authenticated again at the end. No direct credential
-seeding, fake password implementation, case removal, retry-until-green or
-deadline/resource increase. Original101-history/pagination/storage attacks,
-atomic outbox, double migration/bootstrap replay and deadlock tracing remain.
+B normal P99 was19.11ms and under A pressure18.35ms; planned completion P99
+19.75/18.63ms.99 B samples started in A's window,90 A samples in B's.
+These are bounded local observations, NOT evidence of enforced tenant
+fairness, overload budgets, an open-loop saturation point or a production
+SLO. The slightly faster pressured result is not a performance improvement
+claim. Exact metrics and unmeasured boundaries belong only to IAM/011.
 
-Exact candidate code tree5705841ac19e7697d2e80e5906ae9bfe6b2889e5 passed the
-whole management group twice in distinct new PG18.4 databases:80.60s/78.18s.
-PG1CPU/768MiB/PIDs192, Go1.26.8 runner2CPU/1536MiB/PIDs256,
-GOMAXPROCS2/GOMEMLIMIT512MiB, serial race/p1, original120-second deadline.
-Clean native Go1.26.3 export passed focused integration compilation/default
-race, architecture and vet. Default external SKIPs are not database evidence.
-Exact scope and failed predecessors are recorded in IAM/006.
+Same test source: original independent-process security flow passed56.37s
+(package57.415s) in another fresh PG18 database. Clean Windows/amd64 Go1.26.3
+export passed whole-repository race-p2 tests including architecture, vet-p2
+and module verification, all GOMAXPROCS2. Default DSN SKIPs are not real DB
+evidence. New default scheduler tests cover the original batch barrier,
+independent progress, bounded concurrency, pacing, cancellation and rejection
+of invalid plans; they do not substitute for real IAM/Audit/PaaS processes.
 
-All local handles are terminal. All runner containers ended; zero-client
-checks preceded removal of this slice's synthetic databases, temporary PG
-container and empty internal network. Go cache remains. No local fixture is
-live; do not recreate it merely to observe completed results. No other
-task/shared/remote resource was changed.
+All local process handles are terminal. Both runners auto-removed; after
+zero-client, exact-ID/owner/empty-mount checks, the sole task-specific PG and
+empty network were stopped/removed. No local fixture is live. Preserve the
+task-owned Go cache. No foreign/shared/remote resource was modified.
+Next: inspect exact7f02 CI and its real capacity/storage/runtime logs, then
+update acceptance only if actual gates pass. Keep full-goal gaps below.
 
-Exact7cf CI confirms all five general IAM fixtures passed, complete Role/STS
-package333.093s, Audit data/HTTP6.240s/2.320s and PaaS data2.418s. Runtime
-actually ran own Session tests226.359s, retained/independent processes148.830s
-and capacity140.29s. Capacity log has10 stages x2 account lanes x100 samples,
-2000 total and failures0; source also checks all400 issued credentials,
-1200 historical decisions, actual runtime database users and complete chains.
-Go gate used1.26.8, capacity kept pinned1.26.5 and original2CPU/1536MiB/PIDs256.
-Published-installer rejection0.020s and actual Linux node25.66s also passed;
-they do not prove a new signed release or another branch's host acceptance.
+## Accepted rollback points and Session contract
 
-Fixed7cf/CI and the acceptance owner update were sent to both existing
-consumers as informational handoffs; no new task/browser/runtime was started.
-Next scope remains S2/S3 and the other FEAT gaps below. The unapproved owner
-and permission choices are still unanswered; automatic continuation is not
-approval. Do not narrow the full goal to this completed Session slice.
-
-## Accepted rollback points and contract boundary
-
-- S1 backend3080922f6ae1871f1c351d5ee30f03551fc3c605 /35301228478: all five
-  checks successful; own Session directory and single-target self-revocation
-  accepted, not UI or full009. S1b retained-state gate uses that actual IAM31
-  executable, not every unpublished schema revision.
+- S1 backend3080922f6ae1871f1c351d5ee30f03551fc3c605 /35301228478:
+  five checks successful; own Session directory and single-target
+  self-revocation, not UI or full009.
 - Capacity/scheduling b6f57d0126f66be62ec0615ee22d10b7d7226a10 /35309235630:
-  all five checks successful. IAM/011 owns bounded measurements; these are
-  not saturation/fairness, a production SLO, memory headroom or database HA.
-  Old f6cfe47d/35306329508 remains failed/cancelled.
+  five checks successful; original bounded measurements, not HA/fairness.
+- S1b cumulative7cf /35324569376: terminal SUCCESS, all five logs inspected.
+  General IAM fixtures ran individually; full Role/STS333.093s, own Session
+  three tests226.359s, retained/independent148.830s, capacity140.29s.
+  Original failed159/35318292984 and2cd/35320384077 remain failures.
+  Their timing/fixture repairs and exact boundaries are owned by006/011;
+  do not rerun terminal jobs or retain old worktree implementations.
 
-S1b is only POST /v1/auth/sessions:revoke-others with strict{requestId}.
-Current Account/USER/retained Session come from actual LOGIN_SESSION bearer;
-root and forced-change self-reduction allowed, Role/Key/Service/selectors
-rejected. Atomic immutable completion binds original caller/intent and exact
-other-session set, including empty. Exact replay returns original count/time,
+S1b is POST /v1/auth/sessions:revoke-others with strict{requestId}. Current
+Account/USER/retained Session derive from actual LOGIN_SESSION; root and
+forced-change self-reduction allowed, Role/Key/Service/selectors rejected.
+Atomic immutable completion binds original caller/intent and exact other
+sessions, including an empty set. Exact replay returns original count/time,
 does not revoke later logins and still authenticates the current caller.
-No new administrator privilege, Session model, cache authority or generic
-receipt. SQL ACL/RLS/locks/post-lock expiry and one tenant IAM fact are owned
-by009. lookup_session24/revoke_session6, lookup_service5/claim7,
-record9/contract4/evidence5, ServiceIdentity and canonical/old chains stay.
+No new admin privilege, Session model/cache authority or generic receipt.
+lookup_session24/revoke_session6, lookup_service5/claim7,
+record9/contract4/evidence5, ServiceIdentity and old canonical/chains stay.
 
-## Unfinished scope and unapproved choices
+## Unfinished full goal and unapproved choices
 
 S2 MFA, S3 security rules/authentication budgets and S4 reports/idle governance
-remain design, not available APIs. MFA custody, privileged factor recovery
-and backup/non-rollback integration require an owner choice; password
-recovery does not authorize removing a factor. The user has not answered
-whether the installation owner or this task should take that integration.
-S3's narrow tenant security-setting read/write permissions also remain
-unapproved. Preselected options and automatic goal continuation are not
-approval. Do not silently implement either expansion or reopen another task.
+remain design, not available APIs. MFA seed custody, factor recovery and
+backup/non-rollback integration require an owner choice: original installation
+owner or explicit authorization to expand this task. Password recovery does
+not authorize removing a factor. S3's separate tenant security-settings
+read/write permissions are also UNAPPROVED. No answer has arrived; automatic
+goal continuation or preselected options are not approval. Do not silently
+implement either expansion or reopen another task.
 
-Delegation/IP, signed business enforcement, service roles/ABAC, governance,
-UI, capacity/HA and final signed installation/backup/release remain with their
-FEAT owners. External integration deferrals stay explicit in012. Final
-acceptance requires the original full goal, not a locally green subset.
+Those choices do not block independent in-scope progress such as7f02.
+Remaining delegation/IP, signed business enforcement, service roles/ABAC,
+governance, UI, capacity/HA and final signed installation/backup/release stay
+with their original FEAT owners. External deferrals remain explicit in012.
+Keep the full goal, not a goal narrowed to Session or test measurement.
 
 ## Shared windows and peers
 
 UX/UI工程师01a07b21-9a0d-7fd0-b090-7827ce18262e owns UI/browser in
-feat/cloud-console-ux. No foreign source or runtime is writable. S1 consumer
-8e8b0f608827fb00c9a0e677e78ec12a7e047315 (parent of ec5e832) consumes308;
-MOCK/DEV only, real login/revoke remains deferred by human priority.010 and
-adoption own that handoff, not UI acceptance. It confirmed S1b's backend
-window and has now received fixed7cf/CI and the strict request/result/replay
-contract. Do not infer consumption or real browser acceptance from receipt,
-and do not commission browser/MFA/security-setting work implicitly.
+feat/cloud-console-ux. No foreign source/runtime writable. S1 consumer
+8e8b0f608827fb00c9a0e677e78ec12a7e047315 is MOCK/DEV only; real browser
+login/revoke remains deferred by human priority. It received fixed7cf/CI and
+strict S1b contract as an informational handoff; no consumer/browser acceptance
+is inferred. Do not commission browser/MFA/security work implicitly.
 
-Phase3 task01a04149-5dbb-7300-9e4c-31d9e85c8ada opened the S1b window after
-fixedc2fbd9e38d424e68c0466618ee74613aced3c3fb. It has completed and requests
-fixed-SHA/CI informational handoffs only. Do not reopen it or inherit its
-consumer/release status. It has now received fixed7cf/CI, exact ABI and
-remaining scope as an informational handoff, with no request to start work.
-PaaS/Audit business enforcement, ingress/APISIX,
-installation/keyring/backup and release composition are not edited here.
+Phase3 task01a04149-5dbb-7300-9e4c-31d9e85c8ada completed and requests only
+fixed-SHA/CI informational handoffs. It received accepted7cf, unchanged ABI
+and boundaries. Do not reopen it or inherit consumer/release acceptance.
+PaaS/Audit business enforcement, ingress/APISIX, installation/keyring/backup
+and release composition are outside this test-only slice.
 
 ## Runtime discipline
 
 No subagents/new tasks. Repository-local Xiak <Jellal@aliyun.com> only.
-Go2/-p2 with bounded memory; heavy real DB gates serial race-p1 in uniquely
-named/labelled CPU/memory/PID-limited fixtures. Verify live handles before
-waiting and exact resource ownership before cleanup; no broad prune.
-Clean exports outside the repository keep ignored duplicate source out of
-architecture checks. Isolated Git indexes preserve the actual index.
-Native host-probe and bounded Linux PG/process evidence are distinct; never
-fake machine-id or skip host assertions for a slim runner.
-No remote1.3/.160/.161, withdrawn GitLab/root1.5 work, foreign WIP/checkpoints,
-shared restart or global configuration. Machine-local paths and uncommitted
-state do not belong in this portable checkpoint.
+Go2/-p2 with bounded memory; heavy real PG gates serial race-p1 with unique
+task names/labels and explicit CPU/memory/PID limits. Confirm a handle is
+live before waiting and exact ownership before cleanup; no broad prune.
+Clean exports outside the repository avoid ignored duplicate source in
+architecture checks. Isolated Git indexes leave the actual index untouched.
+Do not fake host machine-id, weaken checks/password cost, increase budgets or
+discard cases/samples for green. No remote1.3/.160/.161, withdrawn GitLab/1.5,
+foreign WIP/checkpoint, shared restart or global config. Machine-local paths
+and uncommitted state do not belong in this portable checkpoint.
