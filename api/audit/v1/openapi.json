@@ -67,6 +67,7 @@
           "iam.bootstrap.applied",
           "iam.session.issued",
           "iam.session.revoked",
+          "iam.session.others-revoked",
           "iam.password.changed",
           "iam.principal.created",
           "iam.role-binding.put",
@@ -1506,6 +1507,32 @@
                   "properties": {
                     "action": {
                       "const": "iam.session.revoked"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.session.others-revoked"
                     }
                   },
                   "required": [
@@ -4876,6 +4903,52 @@
                   "properties": {
                     "kind": {
                       "const": "SESSION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.session.others-revoked"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
                     },
                     "tenantId": false
                   },

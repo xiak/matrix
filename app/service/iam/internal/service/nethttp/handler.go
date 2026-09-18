@@ -88,6 +88,7 @@ type Workflow interface {
 	Logout(context.Context, iamv1.Secret, iamv1.LogoutRequest) (iamv1.LogoutResponse, error)
 	ListOwnSessions(context.Context, iamv1.Secret, string) (iamv1.SessionList, error)
 	RevokeOwnSession(context.Context, iamv1.Secret, iamv1.SessionID, iamv1.RevokeSessionRequest) (iamv1.RevokeOwnSessionResponse, error)
+	RevokeOtherSessions(context.Context, iamv1.Secret, iamv1.RevokeSessionRequest) (iamv1.RevokeOtherSessionsResponse, error)
 	ChangePassword(context.Context, iamv1.Secret, iamv1.ChangePasswordRequest) (iamv1.ChangePasswordResponse, error)
 	CreateUser(context.Context, iamv1.Secret, iamv1.CreateUserRequest) (iamv1.User, error)
 	CreatePolicyAttachment(context.Context, iamv1.Secret, iamv1.CreatePolicyAttachmentRequest) (iamv1.PolicyAttachment, error)
@@ -153,6 +154,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/account:alias", value.setAccountAlias)
 	routes.HandleFunc("/v1/auth/logout", value.logout)
 	routes.HandleFunc("/v1/auth/sessions", value.listOwnSessions)
+	routes.HandleFunc("/v1/auth/sessions:revoke-others", value.revokeOtherSessions)
 	routes.HandleFunc("/v1/auth/sessions/", value.revokeOwnSession)
 	routes.HandleFunc("/v1/auth/password", value.changePassword)
 	routes.HandleFunc("/v1/authorize", value.authorize)
@@ -634,6 +636,26 @@ func (value *handler) listOwnSessions(response http.ResponseWriter, request *htt
 		return
 	}
 	result, err := value.workflow.ListOwnSessions(request.Context(), credential, after)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) revokeOtherSessions(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.RevokeSessionRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.RevokeOtherSessions(request.Context(), credential, body)
 	if err != nil {
 		value.writeError(response, request, err)
 		return

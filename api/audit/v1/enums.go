@@ -80,6 +80,7 @@ const (
 	ActionIAMBootstrapApplied                        Action = "iam.bootstrap.applied"
 	ActionIAMSessionIssued                           Action = "iam.session.issued"
 	ActionIAMSessionRevoked                          Action = "iam.session.revoked"
+	ActionIAMOtherSessionsRevoked                    Action = "iam.session.others-revoked"
 	ActionIAMPasswordChanged                         Action = "iam.password.changed"
 	ActionIAMPrincipalCreated                        Action = "iam.principal.created"
 	ActionIAMRoleBindingPut                          Action = "iam.role-binding.put"
@@ -250,6 +251,7 @@ var allActions = []Action{
 	ActionIAMBootstrapApplied,
 	ActionIAMSessionIssued,
 	ActionIAMSessionRevoked,
+	ActionIAMOtherSessionsRevoked,
 	ActionIAMPasswordChanged,
 	ActionIAMPrincipalCreated,
 	ActionIAMRoleBindingPut,
@@ -405,6 +407,9 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionIAMSessionRevoked: {
 		Source: SourceIAM, Target: TargetSession, Results: []Result{ResultSucceeded}, IAMDecisionPermitted: true,
+	},
+	ActionIAMOtherSessionsRevoked: {
+		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true,
 	},
 	ActionIAMPasswordChanged: {
 		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded},

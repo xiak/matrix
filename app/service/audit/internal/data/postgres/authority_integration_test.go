@@ -449,6 +449,15 @@ func assertAuditContractCatalog(
 				invalid = append(invalid, candidate)
 			}
 		}
+		if action == auditv1.ActionIAMOtherSessionsRevoked {
+			candidate := event
+			candidate.Target.ID = "another-users-principal"
+			invalid = append(invalid, candidate)
+			candidate = event
+			candidate.Actor = auditv1.ActorReference{Type: auditv1.ActorRole, ID: event.Actor.ID,
+				RoleSession: &auditv1.RoleSessionReference{SessionID: "catalog-role-session", SourceUserID: "catalog-source"}}
+			invalid = append(invalid, candidate)
+		}
 		if contract.IAMDecisionRequired {
 			candidate := event
 			candidate.IAMDecisionID = ""
@@ -1085,7 +1094,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 31 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 32 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
@@ -1166,7 +1175,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 31 || checkedAt.IsZero() {
+	if ready || schemaVersion != 32 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -2332,6 +2341,9 @@ func authorityAuditEvent(
 	}
 	if contract.UserActorRequired {
 		event.Actor.Type = auditv1.ActorUser
+	}
+	if action == auditv1.ActionIAMOtherSessionsRevoked {
+		event.Target.ID = string(event.Actor.ID)
 	}
 	if contract.RoleActorRequired {
 		event.Actor = auditv1.ActorReference{Type: auditv1.ActorRole, ID: "catalog-base-role",

@@ -19461,6 +19461,56 @@
         ],
         "type": "object"
       },
+      "RevokeOtherSessionsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "type": "string"
+          },
+          "completedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "currentSessionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "OtherSessionsRevocation"
+          },
+          "outcome": {
+            "enum": [
+              "APPLIED",
+              "EQUAL_REPLAY"
+            ],
+            "type": "string"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "revokedCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "userId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "completedAt",
+          "currentSessionId",
+          "kind",
+          "outcome",
+          "requestId",
+          "revokedCount",
+          "userId"
+        ],
+        "type": "object"
+      },
       "RevokeOwnSessionResponse": {
         "additionalProperties": false,
         "properties": {
@@ -22206,6 +22256,61 @@
           }
         },
         "summary": "End another login session of the current user; the current session must use logout"
+      }
+    },
+    "/v1/auth/sessions:revoke-others": {
+      "post": {
+        "operationId": "revokeOtherSessions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeOtherSessionsResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Atomically end the current user's other login sessions; exact replay preserves later logins"
       }
     },
     "/v1/authorization-profiles": {

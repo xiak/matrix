@@ -106,6 +106,78 @@ func TestOwnLoginSessionWorkflowBindsTheActualCallerAndRejectsBadStorage(t *test
 	}
 }
 
+func TestOtherSessionWorkflowRequiresActualCallerAndExactCompletion(t *testing.T) {
+	tx := newCoreTransaction()
+	service, err := NewAuthority(&coreRepository{transaction: tx}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "other-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.attachments = map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment{}
+	request := iamv1.RevokeSessionRequest{RequestID: "other-revoke"}
+	valid := iamv1.RevokeOtherSessionsResponse{APIVersion: iamv1.APIVersion, Kind: "OtherSessionsRevocation", Outcome: "APPLIED",
+		AccountID: login.Session.AccountID, UserID: login.Session.PrincipalID, CurrentSessionID: login.Session.ID,
+		RequestID: request.RequestID, RevokedCount: 0, CompletedAt: tx.now}
+	tx.otherSessionResult = valid
+	result, err := service.RevokeOtherSessions(t.Context(), login.Credential, request)
+	if err != nil || result != valid || tx.otherSessionRevocation == nil || len(tx.authorizations) != 0 {
+		t.Fatal("forced-change self reduction invented management authority", err)
+	}
+	mutation := *tx.otherSessionRevocation
+	if mutation.AccountID != valid.AccountID || mutation.UserID != valid.UserID || mutation.ActorSessionID != valid.CurrentSessionID ||
+		mutation.AuditEvent.Action != auditv1.ActionIAMOtherSessionsRevoked || mutation.AuditEvent.Target.ID != string(valid.UserID) ||
+		mutation.AuditEvent.Actor.ID != auditv1.ActorID(valid.UserID) || mutation.AuditEvent.IAMDecisionID != "" ||
+		mutation.AuditEvent.RequestID != request.RequestID || auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		t.Fatal("other session intent lost its actual owner")
+	}
+	for _, mutate := range []func(*iamv1.RevokeOtherSessionsResponse){
+		func(v *iamv1.RevokeOtherSessionsResponse) { v.AccountID = "foreign" },
+		func(v *iamv1.RevokeOtherSessionsResponse) { v.UserID = "foreign" },
+		func(v *iamv1.RevokeOtherSessionsResponse) { v.CurrentSessionID = "foreign" },
+		func(v *iamv1.RevokeOtherSessionsResponse) { v.RequestID = "foreign" },
+		func(v *iamv1.RevokeOtherSessionsResponse) { v.CompletedAt = v.CompletedAt.Add(time.Microsecond) },
+		func(v *iamv1.RevokeOtherSessionsResponse) { v.CompletedAt = v.CompletedAt.Add(-time.Microsecond) },
+		func(v *iamv1.RevokeOtherSessionsResponse) { v.Outcome = "UNKNOWN" },
+	} {
+		tx.otherSessionResult = valid
+		mutate(&tx.otherSessionResult)
+		if _, err := service.RevokeOtherSessions(t.Context(), login.Credential, request); !errors.Is(err, ErrUnavailable) {
+			t.Fatal("invalid storage completion escaped", err)
+		}
+	}
+	tx.otherSessionResult = valid
+	tx.otherSessionResult.Outcome = "EQUAL_REPLAY"
+	tx.otherSessionResult.CompletedAt = tx.now.Add(-time.Second)
+	if _, err := service.RevokeOtherSessions(t.Context(), login.Credential, request); err != nil {
+		t.Fatal(err)
+	}
+	for _, purpose := range []authority.CredentialType{authority.CredentialService, authority.CredentialRoleSession} {
+		wrong, err := authority.NewCredentialIssuer(nil).Issue(purpose, "wrong-carrier")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx.otherSessionRevocation = nil
+		if _, err := service.RevokeOtherSessions(t.Context(), wrong.Credential, request); !errors.Is(err, ErrUnauthenticated) || tx.otherSessionRevocation != nil {
+			t.Fatal("non-login carrier reached reduction", err)
+		}
+	}
+	tx.otherSessionError = ErrConflict
+	if _, err := service.RevokeOtherSessions(t.Context(), login.Credential, request); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	tx.otherSessionRevocation = nil
+	if _, err := service.RevokeOtherSessions(t.Context(), login.Credential, iamv1.RevokeSessionRequest{}); !errors.Is(err, ErrInvalidArgument) || tx.otherSessionRevocation != nil {
+		t.Fatal("bad intent reached storage", err)
+	}
+}
+
 func TestRoleSelfExitUsesOnlyExactCredentialPossession(t *testing.T) {
 	tx := newCoreTransaction()
 	service, err := NewAuthority(&coreRepository{transaction: tx}, Config{})
@@ -1048,6 +1120,9 @@ type coreTransaction struct {
 	attachmentSession       iamv1.SessionID
 	revocationSession       iamv1.SessionID
 	sessionRevocation       *SessionRevocationMutation
+	otherSessionRevocation  *OtherSessionRevocationMutation
+	otherSessionResult      iamv1.RevokeOtherSessionsResponse
+	otherSessionError       error
 	ownSessionItems         *[]iamv1.Session
 	localRecoveryInspection iamv1.LocalCredentialRecoveryInspection
 	localRecoveryResult     iamv1.LocalCredentialRecoveryResult
@@ -1055,6 +1130,11 @@ type coreTransaction struct {
 	profileErr              error
 	accessKeyCustody        *AccessKeyCustody
 	accessKeyCustodyErr     error
+}
+
+func (transaction *coreTransaction) RevokeOtherSessions(_ context.Context, mutation OtherSessionRevocationMutation) (iamv1.RevokeOtherSessionsResponse, error) {
+	transaction.otherSessionRevocation = &mutation
+	return transaction.otherSessionResult, transaction.otherSessionError
 }
 
 func (transaction *coreTransaction) ReadAccessKeyCustody(context.Context) (AccessKeyCustody, error) {

@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1后端固定`3080922f6ae1871f1c351d5ee30f03551fc3c605`已通过本地累计真库、保留数据、独立进程、全仓检查及五项独立CI；本人会话目录、逐个撤销及精确重放的后端切片已验收，UI与完整009尚未验收。公共消费者在固定`c2fbd9e38d424e68c0466618ee74613aced3c3fb`后明确开放S1共享编辑窗口，不继承其集成验收状态。源码IAM31/Audit18，未分配发布revision。S2本地MFA、S3安全规则/认证预算、S4安全报告/闲置治理仍仅设计，尚未冻结全部材料、权限和公共契约，未实施/未验收。
+- 状态：S1后端固定`3080922f6ae1871f1c351d5ee30f03551fc3c605`已通过本地累计真库、保留数据、独立进程、全仓检查及五项独立CI，本人会话目录/逐个撤销/精确重放已验收。S1b一键结束其他会话的后端实现和本地累计门禁已完成，独立CI待验；当前候选源码IAM32/Audit19，未分配发布revision。UI与完整009尚未验收。S2本地MFA、S3安全规则/认证预算、S4安全报告/闲置治理仍仅设计，尚未冻结全部材料、权限和公共契约，未实施/未验收。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -107,6 +107,45 @@ S1仅在本分支实施，release contractRevision不提前分配。不变更Pha
 到期门禁有实际反例：仅恢复等待前`transaction_timestamp()`判定的SQL时，已到期caller仍返回200并执行撤销。原多写入矩阵未可靠识别这一错误，已由静默数据库、真实时间及无重试断言替换该到期证明；锁后使用`clock_timestamp()`的最终实现通过。原事实时间和Audit canonical没有重写。
 
 既有附件/会话并发矩阵曾在本机原120秒预算超时，固定`644fff09`在同一限额中也出现120.07s失败。当前代码的CPU采样诊断在原预算100.31s通过，采样主要为Argon2与race检查、该次无CPU限流；这不证明先前超时的全部原因已解决，不降低成本、删场景或延长预算。其后同一最终代码的新数据库累计回归105.14s及上述固定源码独立CI均通过；后继成功不回填旧失败。以上仅S1后端证据，不证明UI、安装/profile兼容、容量/HA或完整009已验收。
+
+### S1b：一键结束本人其他登录会话
+
+本片后端实现及本地门禁已完成，独立CI待验、尚未宣告验收，补齐IAM-SEC-02的批量自助减权；不代替S2–S4、UI或完整009。已验证并推送的`3080922f`及受限容量回归`b6f57d01`是回滚点。Phase3与UX/UI owner均确认本片IAM/Audit公共窗口无冲突；UI仍按其既定优先级独立工作，不提前消费候选接口。
+
+唯一新增入口为`POST /v1/auth/sessions:revoke-others`，严格复用`RevokeSessionRequest{requestId}`。当前Account、USER和保留的Session只从真实LOGIN_SESSION bearer取得；原root与forced-change自助减权可用，Role/AccessKey/ServiceIdentity、selector、目标列表和caller提供的当前Session均拒绝。不新增PDP权限或管理员能力。本人逐项撤销、目录和logout保持原契约。
+
+响应`RevokeOtherSessionsResponse`含`apiVersion`、`kind=OtherSessionsRevocation`、`outcome=APPLIED|EQUAL_REPLAY`、`accountId/userId/currentSessionId/requestId`、`revokedCount`和`completedAt`。数量为实际原子终止的会话数，允许零；时间与数量在精确重放时保持原值。响应不返回目标秘密或无界Session数组，也不宣称物理设备、全部凭据或推送式断连。
+
+复用Account→稳定USER→credential→稳定Session锁序及SERIALIZABLE重试；锁后以数据库当前时钟再次检查actor有效性。仅结束同USER、非当前、未撤销、未到期且与当前密码代际一致的登录Session。并发新登录按事务序列化次序解释，不用发行时间猜测其所属意图；一次命令只执行原一致快照中的集合，后继新登录不因原命令重放被终止。密码、generation、must-change、User/Account状态、策略、Key和业务资源均不变。派生Role、已接受Operation与长连接仍沿原拥有者边界。
+
+原单目标`session_self_revocations`仍只证明逐项命令，不能把循环调用或其目标唯一键当成批量完成。原Session SQL owner新增目的限定的`session_other_revocations`完成关系及`session_other_revocation_targets`终态证据关系：完成以Account/USER/requestId唯一，绑定实际actor Session、封闭输入摘要、原时间/数量及单一outbox事件；目标关系绑定同Account/USER的实际Session、终态resourceVersion和完成归属。两者均强制RLS、不可变、不可truncate、受限角色无直接读写权限；FK与延迟完整性校验保证目标终态、准确数量和原事实一致。零目标也有完成和事实，避免网络重试误伤之后的新会话。不新增通用receipt服务、第二Session模型或Session epoch。
+
+先重新认证并锁内验证actor，再读取该目的的原完成；只有相同USER、actor Session和输入承诺返回EQUAL_REPLAY。换caller重用requestId冲突；已失效caller不能通过原完成取得资格。新意图正常观察当时集合。末端写入/超时失败全部回滚，不能返回部分成功；数据库查询与原请求期限不放宽，也不静默截取前100项。
+
+单一新增tenant事实为`iam.session.others-revoked`：source IAM、actor实际USER、target PRINCIPAL且ID等于actor、result SUCCEEDED；不允许decision、operation、Key/Role/SYSTEM actor、installation scope或target.tenantId。事件摘要仅绑定本封闭请求，目标集合和数量由IAM同事务不可变完成证据证明；IAM-source producer仍验证原已提交outbox，后续停用不丢失历史投递。零目标事实表示该意图已完成，不伪称结束了某个不存在的Session。旧事件canonical/hash、lookup_session24、lookup_service5、claim7、record9/contract4及evidence5不变。
+
+新增`iam.revoke_other_sessions(text,text,text,jsonb)`返回`revoked_count bigint/completed_at timestamptz/applied boolean`，仅原API数据库角色可执行；原六参单项函数不变。候选源码IAM32/Audit19反映真实新表/函数和封闭Audit动作；readiness/verify核对形状、ACL和约束，不能只比较数字。产品Profile和发布revision不变，安装组合另验，不授跨版本发布许可。
+
+验收沿既有contract、identityaccess、nethttp、PostgreSQL和authorityprocess owner：两账号/同名User及多真实会话、超过一页的完整集合、当前保留/其他主体不变；零目标/重复/换caller/新登录后重放；forced/root与拒绝载体；并发互相批量撤销、单项/logout/change/reset/recover和账号/成员状态的双向次序；锁内真实到期、末端故障回滚、真正提交后断链及重启/等值schema不重做；受限SQL/RLS/伪造目标和数量/事实拒绝，原Audit链及延迟历史投递。不得把默认无DSN的跳过、mock或单项旧门禁算成本片真实验收。保留数据以本片固定前驱`3080922f`的真实Session及单项完成为起点，不遍历所有未发布schema。UI及完整发布仍独立验收。
+
+#### S1b当前运行证据
+
+2026-09-18，下列本地候选源码门禁及累计回归已通过；独立CI仍待验证，S1b未宣告验收。真实PG18.4固定镜像限1CPU/1GiB/PIDs192，Linux Go1.26.5 runner限2CPU/1536MiB/PIDs256、GOMAXPROCS=2、GOMEMLIMIT=512MiB，串行`-race -p 1`；单项期限与生产密码成本未放宽。所有门禁终态成功、数据库无客户端且测试库已逐项释放后，已清理本轮专属临时PG及空网络；未操作其他任务资源。
+
+| 门禁 | 已观察到的结果与范围 |
+| --- | --- |
+| `TestIAMOwnSessionBulkPostgres` | 76.89s；真实101个有效目标、NULL/错误代际排除、当前/其他用户/其他账号保持；零目标与后继新登录的精确重放、末端回滚、强制改密与原root；27组受控交错包含相互批量、单项、退出、三种改密、reset、停用、原root/平台恢复、同意图竞争及并发新登录。私有表/RLS、不可变目标、伪造数量/actor/target/digest/时间/决定/跨账号caller均被实际约束拒绝且无部分事实。 |
+| `TestIAMOwnSessionPostgres` | 69.28s；提取复用的并发门禁仍完整执行原逐项撤销、分页、自然到期、22组安全交错及平台恢复；没有用批量场景替换旧断言。 |
+| `TestIAMOwnSessionExpiryPostgres` | 最终61.83s；四个原事务在等待真实principal锁期间经历相同真实60秒到期：单项caller/target与批量caller到期均拒绝，仍有效caller的批量意图则完成空集，不计入已到期target、不修改Session。准确零目标完成及单一事实保持；无序列化重试或死锁替代锁后时钟证明，期限和最小会话寿命未改。 |
+| `TestIAMRetainedOwnSessionProcessUpgrade` | 17.02s；实际固定`3080922f`的IAM31程序产生正常/forced/已撤销/NULL负向会话及原单项完成，IAM32双次迁移、六字段bootstrap receipt、原会话/附件/凭据和canonical/proof保持；新批量完成在重启后只精确重放，后继登录不被终止。不是跨release准入证明。 |
+| `TestIndependentIAMAuditAndPaaSProcesses` | 59.14s；实际受限登录、两IAM及Audit/PaaS/dispatcher，批量提交后真正丢失TCP回包、重启、当前保留/被结束会话的下一业务请求拒绝；来源用户停用后历史仍投递一次，完整tenant链及应用/Operation归属保持。真实Role凭据不能调用该USER入口。 |
+| Audit与PaaS聚焦回归 | 新闭合事实的双authority/SQL错误actor与目标约束3.56s、旧tenant记录保留0.15s、Audit HTTP1.08s、PaaS数据库0.84s通过。 |
+| IAM累计回归 | 策略存储包153.432s、策略关联/会话96.72s、AccessKey81.11s、IAM HTTP与账号/凭据生命周期125.46s、平台本地凭据恢复26.56s通过；保留原密码成本、场景及各自期限。 |
+| Role累计回归 | 角色管理35.47s、发行71.97s、发现11.34s、会话管理97.50s、业务授权34.50s、私有引用11.24s通过；最终安全交错63.17s，保留原36种并增加批量结束真实Role来源Session的双向次序，另保留交叠组删除。新场景证明当前caller保留、来源登录和Role下一请求均拒绝、先提交决定/事实准确且历史证明继续有效。 |
+| 固定前驱累计保留数据 | 既有实际旧策略程序19.04s、Role能力程序9.71s、Role授权程序18.20s通过。仅证明所属FEAT明确的数据保留边界，不将开发schema序号自动纳入发布兼容。 |
+| 静态及全仓检查 | Windows Go1.26.3干净导出的全仓race/architecture、vet、模块校验、API生成字节一致和Linux amd64构建通过。CI的10个既有Bash代码块、Session测试选择及原限额已核对，不把本机缺少YAML解析器称为解析通过。 |
+
+失败边界保持明确：一轮新负向fixture将JSON字节按simple protocol传成bytea，先得到22P02，未触达期望的完整性约束；已改为真实JSON文本，随后同一攻击矩阵按准确23514/23503通过，未放宽生产校验。一次累计回归的建库准备因旧临时库累积填满本任务256MiB临时盘而中止；当时没有新的门禁在运行，不能计为通过。仅移除该已停止的自有临时实例，后续保持同限额、串行独立建库，并在每项完成且无连接后释放该项库；不提高磁盘/CPU/内存/期限，不操作共享引擎或其他任务资源。
 
 ### S2：本地TOTP、认证挑战与恢复
 

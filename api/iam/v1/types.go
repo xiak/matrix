@@ -526,6 +526,20 @@ type RevokeOwnSessionResponse struct {
 	Revocation Revocation `json:"revocation"`
 }
 
+// RevokeOtherSessionsResponse describes one completed self-reduction intent,
+// including an empty set. It never grants permission to repeat its effects.
+type RevokeOtherSessionsResponse struct {
+	APIVersion       string      `json:"apiVersion"`
+	Kind             string      `json:"kind"`
+	Outcome          string      `json:"outcome"`
+	AccountID        AccountID   `json:"accountId"`
+	UserID           PrincipalID `json:"userId"`
+	CurrentSessionID SessionID   `json:"currentSessionId"`
+	RequestID        string      `json:"requestId"`
+	RevokedCount     uint64      `json:"revokedCount"`
+	CompletedAt      time.Time   `json:"completedAt"`
+}
+
 type Revocation struct {
 	APIVersion      string    `json:"apiVersion"`
 	Kind            string    `json:"kind"`

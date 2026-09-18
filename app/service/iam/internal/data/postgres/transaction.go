@@ -833,6 +833,37 @@ func (value *transaction) ChangePassword(
 	return response, nil
 }
 
+func (value *transaction) RevokeOtherSessions(ctx context.Context, mutation identityaccess.OtherSessionRevocationMutation) (iamv1.RevokeOtherSessionsResponse, error) {
+	if iamv1.ValidateID("accountId", string(mutation.AccountID)) != nil || iamv1.ValidateID("userId", string(mutation.UserID)) != nil ||
+		iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil ||
+		mutation.AuditEvent.Action != auditv1.ActionIAMOtherSessionsRevoked || mutation.AuditEvent.TenantID != auditv1.TenantID(mutation.AccountID) ||
+		mutation.AuditEvent.Actor.ID != auditv1.ActorID(mutation.UserID) {
+		return iamv1.RevokeOtherSessionsResponse{}, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.RevokeOtherSessionsResponse{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	result := iamv1.RevokeOtherSessionsResponse{APIVersion: iamv1.APIVersion, Kind: "OtherSessionsRevocation",
+		AccountID: mutation.AccountID, UserID: mutation.UserID, CurrentSessionID: mutation.ActorSessionID, RequestID: mutation.AuditEvent.RequestID}
+	var applied bool
+	if err := value.tx.QueryRow(ctx, "SELECT * FROM iam.revoke_other_sessions($1,$2,$3,$4::jsonb)",
+		mutation.AccountID, mutation.UserID, mutation.ActorSessionID, event).Scan(&result.RevokedCount, &result.CompletedAt, &applied); err != nil {
+		return iamv1.RevokeOtherSessionsResponse{}, mapAuthorizationDatabaseError("revoke other IAM sessions", err)
+	}
+	result.CompletedAt = result.CompletedAt.UTC()
+	result.Outcome = "EQUAL_REPLAY"
+	if applied {
+		result.Outcome = "APPLIED"
+	}
+	if iamv1.ValidateRevokeOtherSessionsResponse(result) != nil {
+		return iamv1.RevokeOtherSessionsResponse{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
 func (value *transaction) RevokeSession(
 	ctx context.Context,
 	mutation identityaccess.SessionRevocationMutation,

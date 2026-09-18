@@ -74,6 +74,38 @@ func TestOwnLoginSessionContractsBindARealObservation(t *testing.T) {
 	}
 }
 
+func TestOtherSessionRevocationIsAClosedCompletionIncludingZeroTargets(t *testing.T) {
+	valid := RevokeOtherSessionsResponse{APIVersion: APIVersion, Kind: "OtherSessionsRevocation", Outcome: "APPLIED",
+		AccountID: "account-one", UserID: "user-one", CurrentSessionID: "session-one", RequestID: "request-one",
+		CompletedAt: time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)}
+	for _, count := range []uint64{0, 1, 101, 9007199254740991} {
+		for _, outcome := range []string{"APPLIED", "EQUAL_REPLAY"} {
+			value := valid
+			value.RevokedCount, value.Outcome = count, outcome
+			if err := ValidateRevokeOtherSessionsResponse(value); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, mutate := range []func(*RevokeOtherSessionsResponse){
+		func(v *RevokeOtherSessionsResponse) { v.APIVersion = "other/v1" },
+		func(v *RevokeOtherSessionsResponse) { v.Kind = "Revocation" },
+		func(v *RevokeOtherSessionsResponse) { v.Outcome = "ALREADY_REVOKED" },
+		func(v *RevokeOtherSessionsResponse) { v.AccountID = "" },
+		func(v *RevokeOtherSessionsResponse) { v.UserID = "" },
+		func(v *RevokeOtherSessionsResponse) { v.CurrentSessionID = "" },
+		func(v *RevokeOtherSessionsResponse) { v.RequestID = "" },
+		func(v *RevokeOtherSessionsResponse) { v.CompletedAt = time.Time{} },
+		func(v *RevokeOtherSessionsResponse) { v.RevokedCount = 9007199254740992 },
+	} {
+		value := valid
+		mutate(&value)
+		if ValidateRevokeOtherSessionsResponse(value) == nil {
+			t.Fatal("invalid other-session completion accepted")
+		}
+	}
+}
+
 func TestAccessKeySubjectLineageRequiresItsOwnDeclaredCarrier(t *testing.T) {
 	valid := `{"type":"USER","id":"user-one","accessKeyId":"key-one"}`
 	for _, test := range []struct {

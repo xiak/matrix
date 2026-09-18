@@ -404,6 +404,14 @@ func TestIAMOwnSessionRoutesRejectSelectorsBeforeWorkflow(t *testing.T) {
 		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"revoke-own","accountId":"foreign"}`, true, http.StatusBadRequest},
 		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"one","requestId":"two"}`, true, http.StatusBadRequest},
 		{http.MethodPost, "/v1/auth/sessions/nested/other:revoke", `{"requestId":"revoke-own"}`, true, http.StatusNotFound},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others", `{"requestId":"revoke-others"}`, true, http.StatusOK},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others", `{"requestId":"revoke-others"}`, false, http.StatusUnauthorized},
+		{http.MethodGet, "/v1/auth/sessions:revoke-others", "", true, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others?userId=foreign", `{"requestId":"revoke-others"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others", `{"requestId":"revoke-others","currentSessionId":"foreign"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others", `{"requestId":"revoke-others","accountId":"foreign"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others", `{"requestId":"revoke-others","sessionIds":[]}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others", `{"requestId":"one","requestId":"two"}`, true, http.StatusBadRequest},
 	} {
 		before := workflow.ownSessionCalls
 		request := httptest.NewRequest(test.method, test.target, strings.NewReader(test.body))
@@ -977,6 +985,14 @@ func (workflow *httpWorkflow) RevokeOwnSession(ctx context.Context, credential i
 	workflow.ownSessionCalls++
 	revocation, err := workflow.RevokeSession(ctx, credential, id, request)
 	return iamv1.RevokeOwnSessionResponse{Outcome: "APPLIED", Revocation: revocation}, err
+}
+
+func (workflow *httpWorkflow) RevokeOtherSessions(_ context.Context, _ iamv1.Secret, request iamv1.RevokeSessionRequest) (iamv1.RevokeOtherSessionsResponse, error) {
+	workflow.ownSessionCalls++
+	session := workflow.login.Session
+	return iamv1.RevokeOtherSessionsResponse{APIVersion: iamv1.APIVersion, Kind: "OtherSessionsRevocation", Outcome: "APPLIED",
+		AccountID: session.AccountID, UserID: session.PrincipalID, CurrentSessionID: session.ID, RequestID: request.RequestID,
+		CompletedAt: session.IssuedAt}, nil
 }
 
 func (workflow *httpWorkflow) RevokeSession(

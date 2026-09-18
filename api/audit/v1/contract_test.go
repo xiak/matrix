@@ -34,6 +34,38 @@ func TestCanonicalEventPreservesTenantBytesAndDigest(t *testing.T) {
 	}
 }
 
+func TestOtherSessionFactIsOnlyTheTenantUsersOwnReduction(t *testing.T) {
+	valid := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-others", TenantID: "account-one",
+		Actor: ActorReference{Type: ActorUser, ID: "user-one"}, Action: ActionIAMOtherSessionsRevoked,
+		Target: TargetReference{Kind: TargetPrincipal, ID: "user-one"}, Result: ResultSucceeded,
+		RequestDigest: "sha256:" + strings.Repeat("a", 64), RequestID: "request-one", CorrelationID: "request-one",
+		OccurredAt: time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)}
+	if _, _, err := CanonicalizeEvent(SourceIAM, valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*Event){
+		func(v *Event) { v.Actor.Type = ActorSystem },
+		func(v *Event) { v.Actor.Type = ActorServiceAccount },
+		func(v *Event) { v.Actor.AccessKeyID = "key-one" },
+		func(v *Event) { v.Target.ID = "another-user" },
+		func(v *Event) { v.Target.Kind = TargetSession },
+		func(v *Event) { v.Target.TenantID = v.TenantID },
+		func(v *Event) { v.TenantID, v.InstallationID = "", "installation-one" },
+		func(v *Event) { v.IAMDecisionID = "invented-permit" },
+		func(v *Event) { v.OperationID = "invented-operation" },
+		func(v *Event) { v.Result = ResultDenied },
+	} {
+		value := valid
+		mutate(&value)
+		if ValidateEventForSource(SourceIAM, value) == nil {
+			t.Fatal("unrelated authority accepted as session self-reduction")
+		}
+	}
+	if ValidateEventForSource(SourcePaaS, valid) == nil {
+		t.Fatal("another producer accepted")
+	}
+}
+
 func TestAccessKeyFactsRequireRealTenantUserDecisions(t *testing.T) {
 	event := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-key", TenantID: "account-a",
 		Actor: ActorReference{Type: ActorUser, ID: "manager-a"}, IAMDecisionID: "decision-key", Target: TargetReference{Kind: TargetAccessKey, ID: "key-a"},
@@ -208,6 +240,9 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		}
 		if contract.UserActorRequired {
 			event.Actor.Type = ActorUser
+		}
+		if action == ActionIAMOtherSessionsRevoked {
+			event.Target.ID = string(event.Actor.ID)
 		}
 		if contract.RoleActorRequired {
 			event.Actor = ActorReference{Type: ActorRole, ID: "role-example",

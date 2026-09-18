@@ -198,6 +198,7 @@ func buildPaths() object {
 			[]any{object{"name": "after", "in": "query", "required": false, "schema": pageCursorSchema(), "description": "Pass nextCursor unchanged. Bound to this actual login session, credential generation and installation; no account/user/current-session selectors."}})},
 		"/v1/auth/sessions/{sessionId}:revoke": object{"post": mutationOperation("revokeOwnSession", "End another login session of the current user; the current session must use logout", "RevokeSessionRequest", "RevokeOwnSessionResponse", "200", nil,
 			[]any{openapi31.PathIDParameter("sessionId")})},
+		"/v1/auth/sessions:revoke-others": object{"post": mutationOperation("revokeOtherSessions", "Atomically end the current user's other login sessions; exact replay preserves later logins", "RevokeSessionRequest", "RevokeOtherSessionsResponse", "200", nil, nil)},
 		"/v1/auth/password": object{"post": mutationOperation(
 			"changePassword", "Change the current user password", "ChangePasswordRequest", "ChangePasswordResponse", "200", nil, nil,
 		)},
@@ -419,6 +420,7 @@ func structContracts() map[string]reflect.Type {
 		"Session":                             openapi31.StructType[iamv1.Session](),
 		"SessionList":                         openapi31.StructType[iamv1.SessionList](),
 		"RevokeOwnSessionResponse":            openapi31.StructType[iamv1.RevokeOwnSessionResponse](),
+		"RevokeOtherSessionsResponse":         openapi31.StructType[iamv1.RevokeOtherSessionsResponse](),
 		"InitialOrganization":                 openapi31.StructType[iamv1.InitialOrganization](),
 		"InitialAdministrator":                openapi31.StructType[iamv1.InitialAdministrator](),
 		"BootstrapServiceCredential":          openapi31.StructType[iamv1.BootstrapServiceCredential](),
@@ -747,8 +749,16 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			"status": object{"const": string(iamv1.SessionActive)}, "revokedAt": false,
 		}}}}
 	}
-	if owner == "RevokeOwnSessionResponse" && jsonName == "outcome" {
+	if (owner == "RevokeOwnSessionResponse" || owner == "RevokeOtherSessionsResponse") && jsonName == "outcome" {
 		base = object{"type": "string", "enum": []string{"APPLIED", "EQUAL_REPLAY"}}
+	}
+	if owner == "RevokeOtherSessionsResponse" {
+		if jsonName == "kind" {
+			base = object{"const": "OtherSessionsRevocation"}
+		}
+		if jsonName == "revokedCount" {
+			base = object{"type": "integer", "minimum": 0, "maximum": uint64(9007199254740991)}
+		}
 	}
 	if owner == "PolicyList" && jsonName == "items" {
 		base["maxItems"] = iamv1.MaxPolicyListItems

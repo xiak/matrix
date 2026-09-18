@@ -2362,6 +2362,365 @@ func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler ht
 	call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
 }
 
+func TestIAMOwnSessionBulkPostgres(t *testing.T) {
+	dsn := os.Getenv("MATRIX_IAM_OWN_SESSION_BULK_POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set MATRIX_IAM_OWN_SESSION_BULK_POSTGRES_TEST_DSN to an own clean PostgreSQL 18 database")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_own_session_bulk_") {
+		t.Fatal("bulk session gate requires an isolated database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	database, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect bulk session database")
+	}
+	defer database.Close(context.Background())
+	assertIAMPostgres18(t, ctx, database)
+	assertCleanIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	createIAMHTTPRole(t, ctx, database)
+	trace := &iamTransactionFailureTrace{}
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, trace)
+	document := iamHTTPBootstrap(t)
+	initial, err := workflow.Bootstrap(ctx, document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var handlers []http.Handler
+	for range 2 {
+		replica := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, trace)
+		endpoint, err := iamhttp.NewHandler(replica, iamhttp.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		handlers = append(handlers, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestContext, stop := context.WithCancel(r.Context())
+			defer stop()
+			cancelWithFixture := context.AfterFunc(ctx, stop)
+			defer cancelWithFixture()
+			endpoint.ServeHTTP(w, r.WithContext(requestContext))
+		}))
+	}
+	call := func(replica int, method, path, bearer string, body any, expected int, result any) {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handlers[replica], method, path, bearer, encoded)
+		if response.Code != expected {
+			t.Fatalf("bulk session %s %s status=%d want=%d body=%s", method, path, response.Code, expected, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("session response is cacheable")
+		}
+		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+			t.Fatal("decode bulk session response")
+		}
+	}
+	type loginResult struct {
+		Session            iamv1.Session `json:"session"`
+		Credential         string        `json:"credential"`
+		MustChangePassword bool          `json:"mustChangePassword"`
+	}
+	login := func(name, password string) loginResult {
+		t.Helper()
+		var result loginResult
+		call(0, http.MethodPost, "/v1/auth/login", "", map[string]any{"loginName": name, "password": password, "requestId": "bulk-login"}, http.StatusOK, &result)
+		if result.Credential == "" || iamv1.ValidateSession(result.Session) != nil {
+			t.Fatal("invalid real login")
+		}
+		return result
+	}
+	const endpoint = "/v1/auth/sessions:revoke-others"
+	reduce := func(bearer, request string) iamv1.RevokeOtherSessionsResponse {
+		t.Helper()
+		var result iamv1.RevokeOtherSessionsResponse
+		call(1, http.MethodPost, endpoint, bearer, iamv1.RevokeSessionRequest{RequestID: request}, http.StatusOK, &result)
+		if iamv1.ValidateRevokeOtherSessionsResponse(result) != nil {
+			t.Fatal("invalid bulk completion")
+		}
+		return result
+	}
+	rootA, rootB := login("admin", adminPassword), login("admin", adminPassword)
+	rootCompletion := reduce(rootA.Credential, "bulk-root")
+	if rootCompletion.Outcome != "APPLIED" || rootCompletion.RevokedCount != 1 || rootCompletion.CurrentSessionID != rootA.Session.ID {
+		t.Fatal("forced root reduction changed owner")
+	}
+	call(0, http.MethodGet, "/v1/auth/sessions", rootB.Credential, nil, http.StatusUnauthorized, nil)
+	root := localRecoveryChangePassword(t, handlers[0], rootA.Credential, adminPassword, changedAdminPassword)
+	const password = "Bulk-Session-Temporary-Password-47!"
+	create := func(bearer, name string) iamv1.User {
+		t.Helper()
+		var user iamv1.User
+		call(0, http.MethodPost, "/v1/users", bearer, map[string]any{"loginName": name, "displayName": "Bulk session user", "initialPassword": password, "requestId": "bulk-user-" + name}, http.StatusCreated, &user)
+		return user
+	}
+	user, unrelated := create(root, "bulkuser"), create(root, "unrelated")
+	call(0, http.MethodPost, "/v1/accounts", root, map[string]any{"id": "bulk-other-account", "displayName": "Other bulk account",
+		"rootLoginName": "bulk.other.root", "rootDisplayName": "Other root", "initialPassword": password, "requestId": "bulk-account"}, http.StatusCreated, nil)
+	foreignRoot := localRecoveryLogin(t, handlers[0], "bulk.other.root", password, true)
+	foreignRoot = localRecoveryChangePassword(t, handlers[0], foreignRoot, password, "Bulk-Other-Root-Password-58!")
+	foreignUser := create(foreignRoot, "bulkuser")
+	foreign := login(foreignUser.LoginName+"@"+string(foreignUser.AccountID), password)
+	name := user.LoginName + "@" + string(user.AccountID)
+	a := login(name, password)
+	other := login(unrelated.LoginName+"@"+string(unrelated.AccountID), password)
+	zero := reduce(other.Credential, "bulk-empty")
+	if zero.RevokedCount != 0 || zero.Outcome != "APPLIED" {
+		t.Fatal("empty intent was not completed")
+	}
+	laterOther := login(unrelated.LoginName+"@"+string(unrelated.AccountID), password)
+	replayed := reduce(other.Credential, "bulk-empty")
+	replayed.Outcome = "APPLIED"
+	if replayed != zero {
+		t.Fatal("empty replay changed original completion")
+	}
+	call(0, http.MethodGet, "/v1/auth/sessions", laterOther.Credential, nil, http.StatusOK, nil)
+	var candidates []loginResult
+	for range 103 {
+		candidates = append(candidates, login(name, password))
+	}
+	for index, assignment := range []string{"NULL", "credential_version+1"} {
+		if _, err := database.Exec(ctx, "UPDATE iam.sessions SET credential_version="+assignment+" WHERE tenant_id=$1 AND id=$2", user.AccountID, candidates[index].Session.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var hashBefore string
+	var generationBefore uint64
+	if err := database.QueryRow(ctx, "SELECT password_hash,credential_version FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", user.AccountID, user.ID).Scan(&hashBefore, &generationBefore); err != nil {
+		t.Fatal(err)
+	}
+	before := reduce(a.Credential, "bulk-original")
+	if before.Outcome != "APPLIED" || before.RevokedCount != 101 || before.CurrentSessionID != a.Session.ID || before.UserID != user.ID {
+		t.Fatal("bulk reduction truncated its set or counted unusable generations")
+	}
+	for _, candidate := range candidates {
+		call(0, http.MethodGet, "/v1/auth/sessions", candidate.Credential, nil, http.StatusUnauthorized, nil)
+	}
+	call(0, http.MethodGet, "/v1/auth/sessions", a.Credential, nil, http.StatusOK, nil)
+	call(0, http.MethodGet, "/v1/users", a.Credential, nil, http.StatusForbidden, nil)
+	call(0, http.MethodGet, "/v1/auth/sessions", other.Credential, nil, http.StatusOK, nil)
+	call(1, http.MethodGet, "/v1/auth/sessions", laterOther.Credential, nil, http.StatusOK, nil)
+	call(1, http.MethodGet, "/v1/auth/sessions", foreign.Credential, nil, http.StatusOK, nil)
+	var unchanged bool
+	if err := database.QueryRow(ctx, `SELECT p.must_change_password AND c.password_hash=$3 AND c.credential_version=$4
+	 FROM iam.principals p JOIN iam.user_credentials c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id WHERE p.tenant_id=$1 AND p.id=$2`, user.AccountID, user.ID, hashBefore, generationBefore).Scan(&unchanged); err != nil || !unchanged {
+		t.Fatal("bulk reduction changed password or forced-change", err)
+	}
+	later := login(name, password)
+	replayed = reduce(a.Credential, "bulk-original")
+	if replayed.Outcome != "EQUAL_REPLAY" {
+		t.Fatal("bulk replay did not identify original intent")
+	}
+	replayed.Outcome = "APPLIED"
+	if replayed != before {
+		t.Fatal("bulk replay changed count or time")
+	}
+	call(0, http.MethodGet, "/v1/auth/sessions", later.Credential, nil, http.StatusOK, nil)
+	call(0, http.MethodPost, endpoint, later.Credential, iamv1.RevokeSessionRequest{RequestID: "bulk-original"}, http.StatusConflict, nil)
+	for _, attack := range []struct{ role, sql, code string }{
+		{"matrix_iam_api", "SELECT * FROM iam.session_other_revocations", "42501"},
+		{"matrix_iam_worker", "SELECT * FROM iam.session_other_revocation_targets", "42501"},
+		{"matrix_iam_worker", "SELECT * FROM iam.revoke_other_sessions(NULL,NULL,NULL,NULL)", "42501"},
+		{"matrix_iam_credential_recovery", "SELECT * FROM iam.revoke_other_sessions(NULL,NULL,NULL,NULL)", "42501"},
+		{"matrix_iam_owner", "UPDATE iam.session_other_revocations SET revoked_count=0", "42501"},
+		{"matrix_iam_owner", "DELETE FROM iam.session_other_revocation_targets", "42501"},
+		{"matrix_iam_owner", "TRUNCATE iam.session_other_revocations,iam.session_other_revocation_targets", "42501"},
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", user.AccountID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+attack.role); err != nil {
+			t.Fatal(err)
+		}
+		_, rejected := tx.Exec(ctx, attack.sql)
+		_ = tx.Rollback(ctx)
+		var failure *pgconn.PgError
+		if !errors.As(rejected, &failure) || failure.Code != attack.code {
+			t.Fatalf("bulk storage role=%s expected rejection=%s got=%v", attack.role, attack.code, rejected)
+		}
+	}
+	// A completed set cannot gain another target or have a terminal session
+	// restored, even through the migration owner in this isolated fixture.
+	for _, attack := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO iam.session_other_revocation_targets(tenant_id,user_id,request_id,session_id,resource_version) VALUES($1,$2,'bulk-original',$3,2)`, []any{user.AccountID, user.ID, later.Session.ID}},
+		{`UPDATE iam.sessions SET status='ACTIVE',revoked_at=NULL WHERE tenant_id=$1 AND id=$2`, []any{user.AccountID, candidates[2].Session.ID}},
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, rejected := tx.Exec(ctx, attack.sql, attack.args...)
+		if rejected == nil {
+			rejected = tx.Commit(ctx)
+		} else {
+			_ = tx.Rollback(ctx)
+		}
+		if rejected == nil {
+			t.Fatal("sealed bulk completion changed")
+		}
+	}
+	for _, attack := range []string{
+		"ALTER TABLE iam.session_other_revocations NO FORCE ROW LEVEL SECURITY",
+		"ALTER TABLE iam.session_other_revocation_targets DISABLE TRIGGER other_session_target_before_seal",
+		"GRANT EXECUTE ON FUNCTION iam.revoke_other_sessions(text,text,text,jsonb) TO matrix_iam_worker",
+		"ALTER TABLE iam.session_other_revocation_targets DROP CONSTRAINT session_other_targets_completion_fk",
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, attack); err != nil {
+			t.Fatal(err)
+		}
+		var ready bool
+		if err := tx.QueryRow(ctx, "SELECT iam.login_session_contract_ready()").Scan(&ready); err != nil || ready {
+			t.Fatal("bulk contract drift remained ready", err)
+		}
+		_ = tx.Rollback(ctx)
+	}
+	for _, scope := range []iamv1.AccountID{user.AccountID, foreignUser.AccountID} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", scope); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM iam.session_other_revocations WHERE tenant_id=$1", user.AccountID).Scan(&count); err != nil || (scope == user.AccountID && count == 0) || (scope != user.AccountID && count != 0) {
+			t.Fatal("bulk history crossed tenant RLS", err)
+		}
+		_ = tx.Rollback(ctx)
+	}
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_bulk_outbox_failure() RETURNS trigger LANGUAGE plpgsql AS $body$
+	 BEGIN IF NEW.event_document->>'requestId'='bulk-failure' THEN RAISE EXCEPTION 'bulk end failure'; END IF; RETURN NEW; END $body$;
+	 CREATE TRIGGER matrix_bulk_failure BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.matrix_bulk_outbox_failure()`); err != nil {
+		t.Fatal(err)
+	}
+	call(0, http.MethodPost, endpoint, a.Credential, iamv1.RevokeSessionRequest{RequestID: "bulk-failure"}, http.StatusServiceUnavailable, nil)
+	call(1, http.MethodGet, "/v1/auth/sessions", later.Credential, nil, http.StatusOK, nil)
+	var partial int
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.session_other_revocations WHERE request_id='bulk-failure')+
+	 (SELECT count(*) FROM iam.session_other_revocation_targets WHERE request_id='bulk-failure')`).Scan(&partial); err != nil || partial != 0 {
+		t.Fatal("failed bulk left partial completion", err)
+	}
+	if _, err := database.Exec(ctx, "DROP TRIGGER matrix_bulk_failure ON iam.audit_outbox; DROP FUNCTION public.matrix_bulk_outbox_failure()"); err != nil {
+		t.Fatal(err)
+	}
+	if result := reduce(a.Credential, "bulk-failure"); result.RevokedCount != 1 || result.Outcome != "APPLIED" {
+		t.Fatal("failed intent was partially committed")
+	}
+	var originalFact []byte
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE event_document->>'requestId'='bulk-original' AND event_document->>'action'='iam.session.others-revoked'`).Scan(&originalFact); err != nil {
+		t.Fatal(err)
+	}
+	var fact auditv1.Event
+	if json.Unmarshal(originalFact, &fact) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, fact) != nil {
+		t.Fatal("bulk security fact is invalid")
+	}
+	for _, corruption := range []string{"count", "actor", "target", "digest", "time", "decision", "foreign-caller"} {
+		forged := fact
+		forged.RequestID, forged.CorrelationID = "bulk-corrupt-"+corruption, "bulk-corrupt-"+corruption
+		forged.EventID = auditv1.EventID(forged.RequestID)
+		if err := database.QueryRow(ctx, "SELECT iam.other_session_revocation_digest($1,$2)", a.Session.ID, forged.RequestID).Scan(&forged.RequestDigest); err != nil {
+			t.Fatal(err)
+		}
+		digest, occurred := forged.RequestDigest, forged.OccurredAt
+		caller, count, code := a.Session.ID, 0, "23514"
+		switch corruption {
+		case "count":
+			count = 1 // No target row: a syntactically valid count is not evidence.
+		case "actor":
+			forged.Actor.ID = auditv1.ActorID(unrelated.ID)
+		case "target":
+			forged.Target.ID = string(unrelated.ID)
+		case "digest":
+			forged.RequestDigest = "sha256:" + strings.Repeat("0", 64)
+		case "time":
+			forged.OccurredAt = forged.OccurredAt.Add(time.Microsecond)
+		case "decision":
+			forged.IAMDecisionID = "fabricated-business-allow"
+		case "foreign-caller":
+			caller, code = foreign.Session.ID, "23503"
+		}
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", user.AccountID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err != nil {
+			t.Fatal(err)
+		}
+		_, rejected := tx.Exec(ctx, `INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
+		 VALUES($1,$2,$3::jsonb,$4,$4,$4)`, user.AccountID, forged.EventID, string(mustIAMJSON(t, forged)), occurred)
+		if rejected == nil {
+			_, rejected = tx.Exec(ctx, `INSERT INTO iam.session_other_revocations(tenant_id,user_id,request_id,actor_session_id,input_digest,completed_at,revoked_count,event_id)
+			 VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, user.AccountID, user.ID, forged.RequestID, caller, digest, occurred, count, forged.EventID)
+		}
+		if rejected == nil {
+			rejected = tx.Commit(ctx)
+		} else {
+			_ = tx.Rollback(ctx)
+		}
+		var failure *pgconn.PgError
+		if !errors.As(rejected, &failure) || failure.Code != code {
+			t.Fatalf("bulk completion corruption=%s was not rejected by its invariant: %v", corruption, rejected)
+		}
+		var effects int
+		if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.audit_outbox WHERE event_id=$1)+
+		 (SELECT count(*) FROM iam.session_other_revocations WHERE request_id=$1)`, forged.RequestID).Scan(&effects); err != nil || effects != 0 {
+			t.Fatal("corrupt bulk completion left partial success evidence", err)
+		}
+	}
+	call(1, http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: fact}, http.StatusOK, nil)
+	applyIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	replayed = reduce(a.Credential, "bulk-original")
+	replayed.Outcome = "APPLIED"
+	if replayed != before {
+		t.Fatal("schema replay repeated bulk effects")
+	}
+	var stable []byte
+	if err := database.QueryRow(ctx, "SELECT event_document FROM iam.audit_outbox WHERE event_id=$1", fact.EventID).Scan(&stable); err != nil || !bytes.Equal(stable, originalFact) {
+		t.Fatal("bulk fact changed during schema replay", err)
+	}
+	proveOwnSessionWriters(t, ctx, handlers, database, root, true)
+	if _, err := database.Exec(ctx, `DO $role$ BEGIN
+        IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='`+localRecoveryTestRole+`') THEN
+            CREATE ROLE `+localRecoveryTestRole+` LOGIN PASSWORD '`+iamHTTPTestPassword+`'
+                NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+        END IF;
+        END $role$; GRANT matrix_iam_credential_recovery TO `+localRecoveryTestRole); err != nil {
+		t.Fatal(err)
+	}
+	local := localRecoveryWorkflow(t, ctx, dsn, localRecoveryTestRole, trace)
+	capability := iamv1.LocalCredentialRecoveryAuthority{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryAuthority", Purpose: iamv1.LocalCredentialRecoveryPurpose,
+		Scope:         iamv1.LocalCredentialRecoveryScope{InstallationID: document.InstallationID, BootstrapDigest: initial.ContentDigest, AccountID: document.Organization.ID, PrincipalID: document.Administrator.ID},
+		CapabilityKey: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x7a}, 32)))}
+	proveOwnSessionLocalRecovery(t, ctx, handlers, database, local, capability, true)
+	if trace.deadlock.Load() != 0 {
+		t.Fatal("bulk gate hid a deadlock")
+	}
+}
+
 func TestIAMOwnSessionPostgres(t *testing.T) {
 	const environment = "MATRIX_IAM_OWN_SESSION_POSTGRES_TEST_DSN"
 	dsn := os.Getenv(environment)
@@ -2448,7 +2807,7 @@ func TestIAMOwnSessionPostgres(t *testing.T) {
 	capability := iamv1.LocalCredentialRecoveryAuthority{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryAuthority", Purpose: iamv1.LocalCredentialRecoveryPurpose,
 		Scope:         iamv1.LocalCredentialRecoveryScope{InstallationID: document.InstallationID, BootstrapDigest: initial.ContentDigest, AccountID: document.Organization.ID, PrincipalID: document.Administrator.ID},
 		CapabilityKey: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x7a}, 32)))}
-	proveOwnSessionLocalRecovery(t, ctx, handlers, database, local, capability)
+	proveOwnSessionLocalRecovery(t, ctx, handlers, database, local, capability, false)
 	applyIAMSchema(t, ctx, database)
 	applyIAMSchema(t, ctx, database)
 	replayed, err := workflow.Bootstrap(ctx, document)
@@ -2559,15 +2918,20 @@ func TestIAMOwnSessionExpiryPostgres(t *testing.T) {
 	defer observer.Close(context.Background())
 	// No other writer runs in this database while these original transactions
 	// wait. Serializable retries must not hide a stale transaction-time check.
-	finished := []chan *httptest.ResponseRecorder{make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)}
+	finished := []chan *httptest.ResponseRecorder{make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)}
 	for index, candidate := range []struct {
 		bearer  string
 		target  iamv1.SessionID
 		request string
-	}{{shortBearer, longPage.CurrentSessionID, "expiry-caller"}, {longBearer, shortPage.CurrentSessionID, "expiry-target"}} {
+	}{{shortBearer, longPage.CurrentSessionID, "expiry-caller"}, {longBearer, shortPage.CurrentSessionID, "expiry-target"},
+		{shortBearer, "", "expiry-bulk"}, {longBearer, "", "expiry-bulk-target"}} {
 		body := mustIAMJSON(t, iamv1.RevokeSessionRequest{RequestID: candidate.request})
+		path := "/v1/auth/sessions/" + string(candidate.target) + ":revoke"
+		if candidate.target == "" {
+			path = "/v1/auth/sessions:revoke-others"
+		}
 		go func() {
-			finished[index] <- performIAMRequest(handlers[index], http.MethodPost, "/v1/auth/sessions/"+string(candidate.target)+":revoke", candidate.bearer, body)
+			finished[index] <- performIAMRequest(handlers[index%len(handlers)], http.MethodPost, path, candidate.bearer, body)
 		}()
 		wait, stop := context.WithTimeout(ctx, 5*time.Second)
 		ticker := time.NewTicker(10 * time.Millisecond)
@@ -2591,7 +2955,7 @@ func TestIAMOwnSessionExpiryPostgres(t *testing.T) {
 	}
 	var live bool
 	if err := observer.QueryRow(ctx, "SELECT clock_timestamp()<$1", expires).Scan(&live); err != nil || !live {
-		t.Fatal("sessions were not valid when both writers acquired their snapshots")
+		t.Fatal("sessions were not valid when all writers acquired their snapshots")
 	}
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -2608,11 +2972,19 @@ func TestIAMOwnSessionExpiryPostgres(t *testing.T) {
 	if err := blocker.Rollback(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for index, want := range []int{http.StatusForbidden, http.StatusConflict} {
+	for index, want := range []int{http.StatusForbidden, http.StatusConflict, http.StatusForbidden, http.StatusOK} {
 		select {
 		case response := <-finished[index]:
 			if response.Code != want {
 				t.Errorf("lock-time expiry case=%d status=%d want=%d", index, response.Code, want)
+			}
+			if index == 3 {
+				var completed iamv1.RevokeOtherSessionsResponse
+				if json.Unmarshal(response.Body.Bytes(), &completed) != nil || iamv1.ValidateRevokeOtherSessionsResponse(completed) != nil ||
+					completed.Outcome != "APPLIED" || completed.RevokedCount != 0 || completed.CurrentSessionID != longPage.CurrentSessionID ||
+					completed.RequestID != "expiry-bulk-target" {
+					t.Error("bulk intent counted a target that expired while waiting for its lock")
+				}
 			}
 		case <-ctx.Done():
 			t.Fatal("expiry transaction did not finish")
@@ -2622,10 +2994,16 @@ func TestIAMOwnSessionExpiryPostgres(t *testing.T) {
 		t.Fatal("a transaction retry obscured the original lock-time expiry check")
 	}
 	var effects int
-	if err := observer.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.session_self_revocations)+
-	 (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId' IN('expiry-caller','expiry-target'))+
+	if err := observer.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.session_self_revocations)+(SELECT count(*) FROM iam.session_other_revocations WHERE request_id<>'expiry-bulk-target')+
+	 (SELECT count(*) FROM iam.session_other_revocation_targets)+
+	 (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId' IN('expiry-caller','expiry-target','expiry-bulk'))+
 	 (SELECT count(*) FROM iam.sessions WHERE status<>'ACTIVE')`).Scan(&effects); err != nil || effects != 0 {
 		t.Fatal("expired caller or target produced revocation effects", err)
+	}
+	if err := observer.QueryRow(ctx, `SELECT
+	 (SELECT count(*) FROM iam.session_other_revocations WHERE request_id='expiry-bulk-target' AND revoked_count=0)+
+	 (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId'='expiry-bulk-target' AND event_document->>'action'='iam.session.others-revoked')`).Scan(&effects); err != nil || effects != 2 {
+		t.Fatal("empty post-lock bulk intent lost its single completion and fact", err)
 	}
 	if response := performIAMRequest(handlers[0], http.MethodGet, "/v1/auth/sessions", longBearer, nil); response.Code != http.StatusOK {
 		t.Fatal("expired writer revoked the still-valid session")
@@ -2881,165 +3259,7 @@ func proveOwnLoginSessions(t *testing.T, ctx context.Context, handlers []http.Ha
 			t.Fatal("outbox failure persisted partial completion", err)
 		}
 	})
-	for _, mutation := range []string{"mutual", "logout", "change-default", "change-true", "change-false", "forced-change", "reset", "disable-user", "disable-account", "recover-root"} {
-		for _, selfFirst := range []bool{true, false} {
-			t.Run(fmt.Sprintf("concurrent_%s_self-first-%t", mutation, selfFirst), func(t *testing.T) {
-				prefix := fmt.Sprintf("own-race-%s-%t", mutation, selfFirst)
-				var member iamv1.User
-				var account iamv1.Account
-				var realm string
-				if mutation == "disable-account" || mutation == "recover-root" {
-					call(t, 0, http.MethodPost, "/v1/accounts", root, map[string]any{"id": prefix, "displayName": "Racing account", "rootLoginName": prefix, "rootDisplayName": "Racing root", "initialPassword": temporary, "requestId": prefix + "-create"}, http.StatusCreated, &account)
-					realm = prefix
-				} else {
-					member = createUser(t, root, prefix)
-					realm = member.LoginName + "@" + string(member.AccountID)
-				}
-				firstLogin := login(t, realm, temporary)
-				if member.ID == "" {
-					member.ID, member.AccountID = firstLogin.Session.PrincipalID, firstLogin.Session.AccountID
-				}
-				password := temporary
-				if mutation != "forced-change" {
-					firstLogin.Credential = localRecoveryChangePassword(t, handlers[0], firstLogin.Credential, temporary, changed)
-					password = changed
-				}
-				secondLogin := login(t, realm, password)
-				type command struct {
-					path, bearer, request string
-					body                  any
-					action                auditv1.Action
-				}
-				self := command{path(secondLogin.Session.ID), firstLogin.Credential, prefix + "-self", iamv1.RevokeSessionRequest{RequestID: prefix + "-self"}, auditv1.ActionIAMSessionRevoked}
-				other := command{bearer: firstLogin.Credential, request: prefix + "-peer"}
-				wantSecond := http.StatusOK
-				switch mutation {
-				case "mutual":
-					other.path, other.bearer, other.action = path(firstLogin.Session.ID), secondLogin.Credential, auditv1.ActionIAMSessionRevoked
-					other.body = iamv1.RevokeSessionRequest{RequestID: other.request}
-					wantSecond = http.StatusUnauthorized
-				case "logout":
-					other.path, other.action = "/v1/auth/logout", auditv1.ActionIAMSessionRevoked
-					other.body = iamv1.LogoutRequest{RequestID: other.request}
-					if !selfFirst {
-						wantSecond = http.StatusUnauthorized
-					}
-				case "change-default", "change-true", "change-false", "forced-change":
-					other.path, other.action = "/v1/auth/password", auditv1.ActionIAMUserPasswordChanged
-					change := map[string]any{"currentPassword": password, "newPassword": "Session-Racing-Password-37!", "requestId": other.request}
-					if mutation != "change-default" {
-						change["revokeOtherSessions"] = mutation == "change-true"
-					}
-					other.body = change
-					if !selfFirst && mutation != "change-false" {
-						wantSecond = http.StatusConflict
-					}
-				case "disable-account", "recover-root":
-					other.bearer = root
-					if mutation == "disable-account" {
-						other.path, other.action = "/v1/accounts/"+string(account.ID)+":set-status", auditv1.ActionIAMAccountDisabled
-						other.body = iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled, ResourceVersion: account.ResourceVersion, RequestID: other.request}
-					} else {
-						other.path, other.action = "/v1/accounts/"+string(account.ID)+":recover-root-credentials", auditv1.ActionIAMAccountRootCredentialsRecovered
-						other.body = map[string]any{"initialPassword": "Session-Recovered-Root-59!", "resourceVersion": account.ResourceVersion, "requestId": other.request}
-					}
-					if !selfFirst {
-						wantSecond = http.StatusUnauthorized
-					}
-				case "reset", "disable-user":
-					var access iamv1.UserAccess
-					call(t, 0, http.MethodGet, "/v1/users/"+string(member.ID), root, nil, http.StatusOK, &access)
-					other.bearer = root
-					if mutation == "reset" {
-						other.path, other.action = "/v1/users/"+string(member.ID)+":reset-password", auditv1.ActionIAMUserPasswordReset
-						other.body = map[string]any{"initialPassword": "Session-Racing-Reset-48!", "resourceVersion": access.User.ResourceVersion, "requestId": other.request}
-					} else {
-						other.path, other.action = "/v1/users/"+string(member.ID)+":set-status", auditv1.ActionIAMUserStatusSet
-						other.body = iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: access.User.ResourceVersion, RequestID: other.request}
-					}
-					if !selfFirst {
-						wantSecond = http.StatusUnauthorized
-					}
-				}
-				first, second := self, other
-				if !selfFirst {
-					first, second = other, self
-				}
-				await, release := holdIAMRequest(t, ctx, database, first.request, true, first.action)
-				firstBody, secondBody := mustIAMJSON(t, first.body), mustIAMJSON(t, second.body)
-				finishedFirst, finishedSecond := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
-				go func() {
-					finishedFirst <- performIAMRequest(handlers[0], http.MethodPost, first.path, first.bearer, firstBody)
-				}()
-				firstPID := await()
-				go func() {
-					finishedSecond <- performIAMRequest(handlers[1], http.MethodPost, second.path, second.bearer, secondBody)
-				}()
-				wait, cancelWait := context.WithTimeout(ctx, 5*time.Second)
-				defer cancelWait()
-				ticker := time.NewTicker(10 * time.Millisecond)
-				defer ticker.Stop()
-				for {
-					var blocked bool
-					if err := database.QueryRow(wait, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))`, firstPID).Scan(&blocked); err != nil {
-						t.Fatal("observe production session lock", err)
-					}
-					if blocked {
-						break
-					}
-					select {
-					case response := <-finishedSecond:
-						t.Fatalf("peer bypassed uncommitted session writer: status=%d", response.Code)
-					case <-ticker.C:
-					case <-wait.Done():
-						t.Fatal("peer did not reach production session lock")
-					}
-				}
-				release()
-				var responseFirst, responseSecond *httptest.ResponseRecorder
-				select {
-				case responseFirst = <-finishedFirst:
-				case <-ctx.Done():
-					t.Fatal("first session writer did not finish")
-				}
-				select {
-				case responseSecond = <-finishedSecond:
-				case <-ctx.Done():
-					t.Fatal("second session writer did not finish")
-				}
-				if responseFirst.Code != http.StatusOK || (responseSecond.Code != wantSecond && !(wantSecond == http.StatusUnauthorized && responseSecond.Code == http.StatusForbidden)) {
-					t.Fatalf("session lock outcome first=%d second=%d want=%d", responseFirst.Code, responseSecond.Code, wantSecond)
-				}
-				var firstFacts, secondFacts int
-				if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE event_document->>'requestId'=$1 AND event_document->>'action'=$2),
-				 count(*) FILTER(WHERE event_document->>'requestId'=$3 AND event_document->>'action'=$4) FROM iam.audit_outbox
-				 WHERE event_document->>'requestId' IN($1,$3)`, first.request, first.action, second.request, second.action).Scan(&firstFacts, &secondFacts); err != nil {
-					t.Fatal(err)
-				}
-				wantFacts := 0
-				if wantSecond == http.StatusOK {
-					wantFacts = 1
-				}
-				if firstFacts != 1 || secondFacts != wantFacts {
-					t.Fatal("failed peer left partial or duplicate success facts")
-				}
-				if mutation == "mutual" {
-					survivor, ended := firstLogin, secondLogin
-					if !selfFirst {
-						survivor, ended = secondLogin, firstLogin
-					}
-					call(t, 1, http.MethodGet, "/v1/auth/sessions", survivor.Credential, nil, http.StatusOK, nil)
-					call(t, 0, http.MethodGet, "/v1/auth/sessions", ended.Credential, nil, http.StatusUnauthorized, nil)
-				} else {
-					want := http.StatusUnauthorized
-					if mutation == "logout" && !selfFirst {
-						want = http.StatusOK
-					}
-					call(t, 1, http.MethodGet, "/v1/auth/sessions", secondLogin.Credential, nil, want, nil)
-				}
-			})
-		}
-	}
+	proveOwnSessionWriters(t, ctx, handlers, database, root, false)
 	var originalFact []byte
 	t.Run("real_absolute_expiration", func(t *testing.T) {
 		ticker := time.NewTicker(100 * time.Millisecond)
@@ -3134,11 +3354,315 @@ func proveOwnLoginSessions(t *testing.T, ctx context.Context, handlers []http.Ha
 	}
 }
 
-func proveOwnSessionLocalRecovery(t *testing.T, ctx context.Context, handlers []http.Handler, database *pgx.Conn, local *identityaccess.Authority, capability iamv1.LocalCredentialRecoveryAuthority) {
+func proveOwnSessionWriters(t *testing.T, ctx context.Context, handlers []http.Handler, database *pgx.Conn, root string, bulk bool) {
+	t.Helper()
+	const temporary = "Session-Temporary-Password-71!"
+	const changed = "Session-Changed-Password-82!"
+	type loginResult struct {
+		Session            iamv1.Session `json:"session"`
+		Credential         string        `json:"credential"`
+		MustChangePassword bool          `json:"mustChangePassword"`
+	}
+	call := func(t *testing.T, replica int, method, path, bearer string, body any, expected int, result any) {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handlers[replica], method, path, bearer, encoded)
+		if response.Code != expected {
+			t.Fatalf("own-session %s %s: status=%d want=%d body=%s", method, path, response.Code, expected, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("own-session response is cacheable")
+		}
+		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+			t.Fatal("decode own-session response")
+		}
+	}
+	login := func(t *testing.T, name, password string) loginResult {
+		t.Helper()
+		var result loginResult
+		call(t, 0, http.MethodPost, "/v1/auth/login", "", map[string]any{"loginName": name, "password": password, "requestId": "own-session-login"}, http.StatusOK, &result)
+		if result.Credential == "" || iamv1.ValidateSession(result.Session) != nil {
+			t.Fatal("invalid login fixture")
+		}
+		return result
+	}
+	createUser := func(t *testing.T, bearer, name string) iamv1.User {
+		t.Helper()
+		var result iamv1.User
+		call(t, 0, http.MethodPost, "/v1/users", bearer, map[string]any{"loginName": name, "displayName": "Own sessions", "initialPassword": temporary, "requestId": "own-create-" + name}, http.StatusCreated, &result)
+		return result
+	}
+	path := func(session iamv1.SessionID) string { return "/v1/auth/sessions/" + string(session) + ":revoke" }
+	mutations := []string{"mutual", "logout", "change-default", "change-true", "change-false", "forced-change", "reset", "disable-user", "disable-account", "recover-root"}
+	if bulk {
+		mutations = append(mutations, "single", "same-intent", "login")
+	}
+	for _, mutation := range mutations {
+		for _, selfFirst := range []bool{true, false} {
+			if mutation == "same-intent" && !selfFirst {
+				continue
+			}
+			t.Run(fmt.Sprintf("concurrent_%s_self-first-%t", mutation, selfFirst), func(t *testing.T) {
+				prefix := fmt.Sprintf("own-race-%s-%t", mutation, selfFirst)
+				if bulk {
+					prefix = "bulk-" + prefix
+				}
+				var member iamv1.User
+				var account iamv1.Account
+				var realm string
+				if mutation == "disable-account" || mutation == "recover-root" {
+					call(t, 0, http.MethodPost, "/v1/accounts", root, map[string]any{"id": prefix, "displayName": "Racing account", "rootLoginName": prefix, "rootDisplayName": "Racing root", "initialPassword": temporary, "requestId": prefix + "-create"}, http.StatusCreated, &account)
+					realm = prefix
+				} else {
+					member = createUser(t, root, prefix)
+					realm = member.LoginName + "@" + string(member.AccountID)
+				}
+				firstLogin := login(t, realm, temporary)
+				if member.ID == "" {
+					member.ID, member.AccountID = firstLogin.Session.PrincipalID, firstLogin.Session.AccountID
+				}
+				password := temporary
+				if mutation != "forced-change" {
+					firstLogin.Credential = localRecoveryChangePassword(t, handlers[0], firstLogin.Credential, temporary, changed)
+					password = changed
+				}
+				secondLogin := login(t, realm, password)
+				type command struct {
+					path, bearer, request string
+					body                  any
+					action                auditv1.Action
+				}
+				self := command{path(secondLogin.Session.ID), firstLogin.Credential, prefix + "-self", iamv1.RevokeSessionRequest{RequestID: prefix + "-self"}, auditv1.ActionIAMSessionRevoked}
+				if bulk {
+					self.path, self.action = "/v1/auth/sessions:revoke-others", auditv1.ActionIAMOtherSessionsRevoked
+				}
+				other := command{bearer: firstLogin.Credential, request: prefix + "-peer"}
+				wantSecond := http.StatusOK
+				switch mutation {
+				case "mutual":
+					other.path, other.bearer, other.action = path(firstLogin.Session.ID), secondLogin.Credential, auditv1.ActionIAMSessionRevoked
+					other.body = iamv1.RevokeSessionRequest{RequestID: other.request}
+					if bulk {
+						other.path, other.action = self.path, self.action
+					}
+					wantSecond = http.StatusUnauthorized
+				case "single":
+					other.path, other.action = path(secondLogin.Session.ID), auditv1.ActionIAMSessionRevoked
+					other.body = iamv1.RevokeSessionRequest{RequestID: other.request}
+					if selfFirst {
+						wantSecond = http.StatusConflict
+					}
+				case "same-intent":
+					other = self
+				case "login":
+					other.path, other.bearer, other.action = "/v1/auth/login", "", auditv1.ActionIAMSessionIssued
+					other.body = map[string]any{"loginName": realm, "password": password, "requestId": other.request}
+				case "logout":
+					other.path, other.action = "/v1/auth/logout", auditv1.ActionIAMSessionRevoked
+					other.body = iamv1.LogoutRequest{RequestID: other.request}
+					if !selfFirst {
+						wantSecond = http.StatusUnauthorized
+					}
+				case "change-default", "change-true", "change-false", "forced-change":
+					other.path, other.action = "/v1/auth/password", auditv1.ActionIAMUserPasswordChanged
+					change := map[string]any{"currentPassword": password, "newPassword": "Session-Racing-Password-37!", "requestId": other.request}
+					if mutation != "change-default" {
+						change["revokeOtherSessions"] = mutation == "change-true"
+					}
+					other.body = change
+					if !bulk && !selfFirst && mutation != "change-false" {
+						wantSecond = http.StatusConflict
+					}
+				case "disable-account", "recover-root":
+					other.bearer = root
+					if mutation == "disable-account" {
+						other.path, other.action = "/v1/accounts/"+string(account.ID)+":set-status", auditv1.ActionIAMAccountDisabled
+						other.body = iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled, ResourceVersion: account.ResourceVersion, RequestID: other.request}
+					} else {
+						other.path, other.action = "/v1/accounts/"+string(account.ID)+":recover-root-credentials", auditv1.ActionIAMAccountRootCredentialsRecovered
+						other.body = map[string]any{"initialPassword": "Session-Recovered-Root-59!", "resourceVersion": account.ResourceVersion, "requestId": other.request}
+					}
+					if !selfFirst {
+						wantSecond = http.StatusUnauthorized
+					}
+				case "reset", "disable-user":
+					var access iamv1.UserAccess
+					call(t, 0, http.MethodGet, "/v1/users/"+string(member.ID), root, nil, http.StatusOK, &access)
+					other.bearer = root
+					if mutation == "reset" {
+						other.path, other.action = "/v1/users/"+string(member.ID)+":reset-password", auditv1.ActionIAMUserPasswordReset
+						other.body = map[string]any{"initialPassword": "Session-Racing-Reset-48!", "resourceVersion": access.User.ResourceVersion, "requestId": other.request}
+					} else {
+						other.path, other.action = "/v1/users/"+string(member.ID)+":set-status", auditv1.ActionIAMUserStatusSet
+						other.body = iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: access.User.ResourceVersion, RequestID: other.request}
+					}
+					if !selfFirst {
+						wantSecond = http.StatusUnauthorized
+					}
+				}
+				first, second := self, other
+				if !selfFirst {
+					first, second = other, self
+				}
+				await, release := holdIAMRequest(t, ctx, database, first.request, true, first.action)
+				firstBody, secondBody := mustIAMJSON(t, first.body), mustIAMJSON(t, second.body)
+				finishedFirst, finishedSecond := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
+				go func() {
+					finishedFirst <- performIAMRequest(handlers[0], http.MethodPost, first.path, first.bearer, firstBody)
+				}()
+				firstPID := await()
+				go func() {
+					finishedSecond <- performIAMRequest(handlers[1], http.MethodPost, second.path, second.bearer, secondBody)
+				}()
+				wait, cancelWait := context.WithTimeout(ctx, 5*time.Second)
+				defer cancelWait()
+				ticker := time.NewTicker(10 * time.Millisecond)
+				defer ticker.Stop()
+				var responseSecond *httptest.ResponseRecorder
+				if mutation == "login" {
+					// A new login inserts a distinct row. Both transactions overlap,
+					// but SERIALIZABLE can order the reduction before that issuance.
+					// Do not infer its membership from start/issue/commit timestamps.
+					select {
+					case responseSecond = <-finishedSecond:
+					case <-wait.Done():
+						t.Fatal("independent session issuance/reduction did not finish")
+					}
+				}
+				for mutation != "login" {
+					var blocked bool
+					if err := database.QueryRow(wait, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))`, firstPID).Scan(&blocked); err != nil {
+						t.Fatal("observe production session lock", err)
+					}
+					if blocked {
+						break
+					}
+					select {
+					case response := <-finishedSecond:
+						t.Fatalf("peer bypassed uncommitted session writer: status=%d", response.Code)
+					case <-ticker.C:
+					case <-wait.Done():
+						t.Fatal("peer did not reach production session lock")
+					}
+				}
+				release()
+				var responseFirst *httptest.ResponseRecorder
+				select {
+				case responseFirst = <-finishedFirst:
+				case <-ctx.Done():
+					t.Fatal("first session writer did not finish")
+				}
+				if responseSecond == nil {
+					select {
+					case responseSecond = <-finishedSecond:
+					case <-ctx.Done():
+						t.Fatal("second session writer did not finish")
+					}
+				}
+				if responseFirst.Code != http.StatusOK || (responseSecond.Code != wantSecond && !(wantSecond == http.StatusUnauthorized && responseSecond.Code == http.StatusForbidden)) {
+					t.Fatalf("session lock outcome first=%d second=%d want=%d", responseFirst.Code, responseSecond.Code, wantSecond)
+				}
+				var firstFacts, secondFacts int
+				if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE event_document->>'requestId'=$1 AND event_document->>'action'=$2),
+				 count(*) FILTER(WHERE event_document->>'requestId'=$3 AND event_document->>'action'=$4) FROM iam.audit_outbox
+				 WHERE event_document->>'requestId' IN($1,$3)`, first.request, first.action, second.request, second.action).Scan(&firstFacts, &secondFacts); err != nil {
+					t.Fatal(err)
+				}
+				wantFacts := 0
+				if wantSecond == http.StatusOK {
+					wantFacts = 1
+				}
+				if bulk {
+					selfResponse := responseFirst
+					if !selfFirst {
+						selfResponse = responseSecond
+					}
+					var completions, targets int
+					if err := database.QueryRow(ctx, `SELECT
+					 (SELECT count(*) FROM iam.session_other_revocations WHERE tenant_id=$1 AND user_id=$2 AND request_id=$3),
+					 (SELECT count(*) FROM iam.session_other_revocation_targets WHERE tenant_id=$1 AND user_id=$2 AND request_id=$3)`,
+						member.AccountID, member.ID, self.request).Scan(&completions, &targets); err != nil {
+						t.Fatal(err)
+					}
+					if selfResponse.Code == http.StatusOK {
+						var completed iamv1.RevokeOtherSessionsResponse
+						wantCount := uint64(1)
+						if !selfFirst && (mutation == "single" || mutation == "change-default" || mutation == "change-true" || mutation == "forced-change") {
+							wantCount = 0
+						}
+						if json.Unmarshal(selfResponse.Body.Bytes(), &completed) != nil || iamv1.ValidateRevokeOtherSessionsResponse(completed) != nil ||
+							completed.Outcome != "APPLIED" || completed.RevokedCount != wantCount || completed.CurrentSessionID != firstLogin.Session.ID ||
+							completed.AccountID != member.AccountID || completed.UserID != member.ID || completions != 1 || targets != int(wantCount) {
+							t.Fatal("bulk completion did not reflect the actually serialized set")
+						}
+						if mutation == "same-intent" {
+							var replay iamv1.RevokeOtherSessionsResponse
+							if json.Unmarshal(responseSecond.Body.Bytes(), &replay) != nil || replay.Outcome != "EQUAL_REPLAY" {
+								t.Fatal("concurrent equal intent did not reuse the original completion")
+							}
+							replay.Outcome = "APPLIED"
+							if replay != completed {
+								t.Fatal("concurrent equal intent changed the original count or time")
+							}
+						}
+					} else if completions != 0 || targets != 0 {
+						t.Fatal("rejected bulk writer left a partial completion")
+					}
+				}
+				if firstFacts != 1 || secondFacts != wantFacts {
+					t.Fatal("failed peer left partial or duplicate success facts")
+				}
+				if mutation == "login" {
+					loginResponse := responseSecond
+					if !selfFirst {
+						loginResponse = responseFirst
+					}
+					var fresh loginResult
+					if json.Unmarshal(loginResponse.Body.Bytes(), &fresh) != nil || iamv1.ValidateSession(fresh.Session) != nil || fresh.Credential == "" {
+						t.Fatal("concurrent login did not issue a real session")
+					}
+					var replay iamv1.RevokeOtherSessionsResponse
+					call(t, 0, http.MethodPost, self.path, self.bearer, self.body, http.StatusOK, &replay)
+					if replay.Outcome != "EQUAL_REPLAY" || replay.RevokedCount != 1 {
+						t.Fatal("overlapping login changed the original reduction intent")
+					}
+					call(t, 1, http.MethodGet, "/v1/auth/sessions", fresh.Credential, nil, http.StatusOK, nil)
+				}
+				if mutation == "mutual" {
+					survivor, ended := firstLogin, secondLogin
+					if !selfFirst {
+						survivor, ended = secondLogin, firstLogin
+					}
+					call(t, 1, http.MethodGet, "/v1/auth/sessions", survivor.Credential, nil, http.StatusOK, nil)
+					call(t, 0, http.MethodGet, "/v1/auth/sessions", ended.Credential, nil, http.StatusUnauthorized, nil)
+				} else {
+					want := http.StatusUnauthorized
+					if mutation == "logout" && !selfFirst {
+						want = http.StatusOK
+					}
+					call(t, 1, http.MethodGet, "/v1/auth/sessions", secondLogin.Credential, nil, want, nil)
+					if bulk && (strings.HasPrefix(mutation, "change-") || mutation == "forced-change" || mutation == "single" || mutation == "same-intent") {
+						call(t, 0, http.MethodGet, "/v1/auth/sessions", firstLogin.Credential, nil, http.StatusOK, nil)
+					}
+				}
+			})
+		}
+	}
+}
+
+func proveOwnSessionLocalRecovery(t *testing.T, ctx context.Context, handlers []http.Handler, database *pgx.Conn, local *identityaccess.Authority, capability iamv1.LocalCredentialRecoveryAuthority, bulk bool) {
 	t.Helper()
 	for _, selfFirst := range []bool{true, false} {
 		t.Run(fmt.Sprintf("platform_recovery_self-first-%t", selfFirst), func(t *testing.T) {
 			prefix := fmt.Sprintf("own-platform-recovery-%t", selfFirst)
+			selfAction, completionTable := auditv1.ActionIAMSessionRevoked, "iam.session_self_revocations"
+			if bulk {
+				prefix = "bulk-" + prefix
+				selfAction, completionTable = auditv1.ActionIAMOtherSessionsRevoked, "iam.session_other_revocations"
+			}
 			caller := localRecoveryLogin(t, handlers[0], "admin", changedAdminPassword, false)
 			target := localRecoveryLogin(t, handlers[1], "admin", changedAdminPassword, false)
 			var directory iamv1.SessionList
@@ -3147,10 +3671,13 @@ func proveOwnSessionLocalRecovery(t *testing.T, ctx context.Context, handlers []
 				t.Fatal("read original primary session directory")
 			}
 			path := "/v1/auth/sessions/" + string(directory.CurrentSessionID) + ":revoke"
+			if bulk {
+				path = "/v1/auth/sessions:revoke-others"
+			}
 			body := mustIAMJSON(t, iamv1.RevokeSessionRequest{RequestID: prefix + "-self"})
 			request := localRecoveryRequest(t, ctx, local, capability, prefix+"-recover", "Session-Platform-Recovered-69!")
 			prior := readLocalRecoveryState(t, ctx, database, capability.Scope)
-			firstRequest, firstAction, waitingRole := prefix+"-self", auditv1.ActionIAMSessionRevoked, localRecoveryTestRole
+			firstRequest, firstAction, waitingRole := prefix+"-self", selfAction, localRecoveryTestRole
 			if !selfFirst {
 				firstRequest, firstAction, waitingRole = request.CommandID, auditv1.ActionIAMInstallationPrimaryCredentialsRecovered, iamHTTPTestRole
 			}
@@ -3196,6 +3723,13 @@ func proveOwnSessionLocalRecovery(t *testing.T, ctx context.Context, handlers []
 			if recovered.err != nil || (selfResult.Code != wantSelf && !(wantSelf == http.StatusUnauthorized && selfResult.Code == http.StatusForbidden)) {
 				t.Fatalf("platform recovery/self outcomes: recovery=%v self=%d want=%d", recovered.err, selfResult.Code, wantSelf)
 			}
+			if bulk && selfFirst {
+				var completed iamv1.RevokeOtherSessionsResponse
+				if json.Unmarshal(selfResult.Body.Bytes(), &completed) != nil || iamv1.ValidateRevokeOtherSessionsResponse(completed) != nil ||
+					completed.Outcome != "APPLIED" || completed.RevokedCount != uint64(prior.activeSessions-1) {
+					t.Fatal("platform recovery altered the earlier bulk completion")
+				}
+			}
 			next := readLocalRecoveryState(t, ctx, database, capability.Scope)
 			if next.generation != prior.generation+1 || next.passwordHash == prior.passwordHash || !next.mustChange || next.activeSessions != 0 ||
 				next.facts != prior.facts+1 || next.receipts != prior.receipts+1 || next.bindings != prior.bindings || next.services != prior.services ||
@@ -3204,8 +3738,8 @@ func proveOwnSessionLocalRecovery(t *testing.T, ctx context.Context, handlers []
 			}
 			var facts, receipts int
 			if err := database.QueryRow(ctx, `SELECT
-			 (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2 AND event_document->>'action'='iam.session.revoked'),
-			 (SELECT count(*) FROM iam.session_self_revocations WHERE tenant_id=$1 AND user_id=$3 AND request_id=$2)`, capability.Scope.AccountID, prefix+"-self", capability.Scope.PrincipalID).Scan(&facts, &receipts); err != nil || facts != wantFacts || receipts != wantFacts {
+			 (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2 AND event_document->>'action'=$4),
+			 (SELECT count(*) FROM `+completionTable+` WHERE tenant_id=$1 AND user_id=$3 AND request_id=$2)`, capability.Scope.AccountID, prefix+"-self", capability.Scope.PrincipalID, selfAction).Scan(&facts, &receipts); err != nil || facts != wantFacts || receipts != wantFacts {
 				t.Fatal("failed or completed self race left partial/duplicate evidence", err)
 			}
 			for _, bearer := range []string{caller, target} {
@@ -10618,7 +11152,7 @@ func proveRoleAuthorizationSecurityInterleavings(t *testing.T, ctx context.Conte
 	t.Helper()
 	for _, businessFirst := range []bool{false, true} {
 		for index, change := range []string{"logout", "password-default", "password-true", "password-false", "reset", "disable-delete", "recover", "suspend",
-			"role-disable", "role-delete", "trust", "source-grant", "role-grant", "role-boundary", "source-revoke", "role-exit", "group-grant", "group-delete"} {
+			"role-disable", "role-delete", "trust", "source-grant", "role-grant", "role-boundary", "source-revoke", "role-exit", "group-grant", "group-delete", "other-sessions"} {
 			if !t.Run(fmt.Sprintf("%s_business_first_%t", change, businessFirst), func(t *testing.T) {
 				prefix := fmt.Sprintf("role-interleaving-%t-%02d", businessFirst, index)
 				call := func(method, path, bearer string, body any, output any) {
@@ -10698,6 +11232,10 @@ func proveRoleAuthorizationSecurityInterleavings(t *testing.T, ctx context.Conte
 				securityMethod, securityPath, securityBearer := http.MethodPost, "/v1/auth/logout", login
 				var securityBody any = iamv1.LogoutRequest{RequestID: securityID}
 				switch change {
+				case "other-sessions":
+					securityBearer = localRecoveryLogin(t, handler, user.LoginName+"@"+string(user.AccountID), changedDeveloperPassword, false)
+					securityPath = "/v1/auth/sessions:revoke-others"
+					securityBody = iamv1.RevokeSessionRequest{RequestID: securityID}
 				case "password-default", "password-true", "password-false":
 					securityPath = "/v1/auth/password"
 					body := map[string]any{"currentPassword": changedDeveloperPassword, "newPassword": "Role-Interleaving-Replaced-Password-47!", "requestId": securityID}
@@ -10865,6 +11403,13 @@ func proveRoleAuthorizationSecurityInterleavings(t *testing.T, ctx context.Conte
 								t.Fatal("business-first success lost its actual role authority")
 							}
 						}
+						if change == "other-sessions" && result.done == securityDone {
+							var completed iamv1.RevokeOtherSessionsResponse
+							if json.Unmarshal(response.Body.Bytes(), &completed) != nil || iamv1.ValidateRevokeOtherSessionsResponse(completed) != nil ||
+								completed.Outcome != "APPLIED" || completed.RevokedCount != 1 || completed.AccountID != user.AccountID || completed.UserID != user.ID {
+								t.Fatal("bulk source reduction did not terminate the actual Role source login")
+							}
+						}
 					case <-blockedContext.Done():
 						t.Fatal("serialized authority requests did not complete")
 					}
@@ -10876,6 +11421,12 @@ func proveRoleAuthorizationSecurityInterleavings(t *testing.T, ctx context.Conte
 				}
 				if response := performIAMRequestWithSubject(handler, businessBytes, paasCredential, token); response.Code != http.StatusUnauthorized {
 					t.Fatal("committed security change did not invalidate next protected request")
+				}
+				if change == "other-sessions" {
+					call(http.MethodGet, "/v1/auth/sessions", securityBearer, nil, nil)
+					if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/sessions", login, nil); response.Code != http.StatusUnauthorized {
+						t.Fatal("bulk source termination kept the original login alive")
+					}
 				}
 				var decisions, facts, successes int
 				if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$2 AND subject_type='ROLE'),

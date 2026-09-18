@@ -352,6 +352,7 @@ func TestOwnLoginSessionSchemasExposeOnlyBoundedPublicObservations(t *testing.T)
 	session := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"Session","id":"session-a","organizationId":"account-a","principalId":"user-a","status":"ACTIVE","issuedAt":"2026-09-17T00:00:00Z","expiresAt":"2026-09-17T01:00:00Z"}`
 	list := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"SessionList","accountId":"account-a","userId":"user-a","currentSessionId":"session-current","observedAt":"2026-09-17T00:01:00Z","items":[` + session + `]}`
 	revocation := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"Revocation","id":"session-a","resourceVersion":2,"revokedAt":"2026-09-17T00:01:00Z"}`
+	others := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"OtherSessionsRevocation","outcome":"APPLIED","accountId":"account-a","userId":"user-a","currentSessionId":"session-a","requestId":"request-a","revokedCount":0,"completedAt":"2026-09-18T00:00:00Z"}`
 	for _, test := range []struct {
 		kind, wire string
 		valid      bool
@@ -370,6 +371,14 @@ func TestOwnLoginSessionSchemasExposeOnlyBoundedPublicObservations(t *testing.T)
 		{"RevokeSessionRequest", `{"requestId":"revoke-own"}`, true},
 		{"RevokeSessionRequest", `{"requestId":"revoke-own","currentSessionId":"caller-selected"}`, false},
 		{"RevokeSessionRequest", `{"requestId":"revoke-own","accountId":"foreign"}`, false},
+		{"RevokeOtherSessionsResponse", others, true},
+		{"RevokeOtherSessionsResponse", strings.Replace(others, `"APPLIED"`, `"EQUAL_REPLAY"`, 1), true},
+		{"RevokeOtherSessionsResponse", strings.Replace(others, `"revokedCount":0`, `"revokedCount":101`, 1), true},
+		{"RevokeOtherSessionsResponse", strings.Replace(others, `"revokedCount":0`, `"revokedCount":-1`, 1), false},
+		{"RevokeOtherSessionsResponse", strings.Replace(others, `"revokedCount":0`, `"revokedCount":9007199254740992`, 1), false},
+		{"RevokeOtherSessionsResponse", strings.Replace(others, `"APPLIED"`, `"UNKNOWN"`, 1), false},
+		{"RevokeOtherSessionsResponse", strings.TrimSuffix(others, "}") + `,"targets":[]}`, false},
+		{"RevokeOtherSessionsResponse", strings.Replace(others, `"kind":"OtherSessionsRevocation"`, `"kind":"Revocation"`, 1), false},
 	} {
 		instance, err := jsonschema.UnmarshalJSON(strings.NewReader(test.wire))
 		if err != nil {

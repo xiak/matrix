@@ -64,6 +64,7 @@ type Transaction interface {
 	RecordAuthorization(context.Context, AuthorizationMutation) error
 	ChangePassword(context.Context, PasswordMutation) (iamv1.ChangePasswordResponse, error)
 	RevokeSession(context.Context, SessionRevocationMutation) (iamv1.Revocation, bool, error)
+	RevokeOtherSessions(context.Context, OtherSessionRevocationMutation) (iamv1.RevokeOtherSessionsResponse, error)
 	CreateUser(context.Context, UserMutation) (iamv1.User, error)
 	LookupPolicy(context.Context, iamv1.AccountID, iamv1.PolicyID) (iamv1.Policy, bool, error)
 	LookupPolicyAttachment(context.Context, iamv1.AccountID, iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error)
@@ -637,6 +638,13 @@ type SessionRevocationMutation struct {
 	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
+}
+
+type OtherSessionRevocationMutation struct {
+	AccountID      iamv1.AccountID
+	UserID         iamv1.PrincipalID
+	ActorSessionID iamv1.SessionID
+	AuditEvent     auditv1.Event
 }
 
 type UserMutation struct {

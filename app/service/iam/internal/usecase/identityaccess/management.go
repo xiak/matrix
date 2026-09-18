@@ -465,6 +465,55 @@ func (service *Authority) RevokePolicyAttachment(ctx context.Context, credential
 	return result, nil
 }
 
+func (service *Authority) RevokeOtherSessions(ctx context.Context, credential iamv1.Secret, request iamv1.RevokeSessionRequest) (iamv1.RevokeOtherSessionsResponse, error) {
+	if iamv1.ValidateRevokeSessionRequest(request) != nil {
+		return iamv1.RevokeOtherSessionsResponse{}, ErrInvalidArgument
+	}
+	var result iamv1.RevokeOtherSessionsResponse
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		if subject.Subject.Principal.Type != iamv1.PrincipalUser {
+			return ErrUnauthenticated
+		}
+		input := struct {
+			ActorSessionID iamv1.SessionID `json:"actorSessionId"`
+			RequestID      string          `json:"requestId"`
+		}{subject.Subject.Session.ID, request.RequestID}
+		digest, err := digestSanitized("revoke-other-sessions", input)
+		if err != nil {
+			return err
+		}
+		event, err := service.newManagementEvent(subject, auditv1.ActionIAMOtherSessionsRevoked, auditv1.TargetPrincipal,
+			string(subject.Subject.Principal.ID), "", digest, request.RequestID, now)
+		if err != nil {
+			return err
+		}
+		result, err = tx.RevokeOtherSessions(ctx, OtherSessionRevocationMutation{AccountID: subject.Subject.Organization.ID,
+			UserID: subject.Subject.Principal.ID, ActorSessionID: subject.Subject.Session.ID, AuditEvent: event})
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidateRevokeOtherSessionsResponse(result) != nil || result.AccountID != subject.Subject.Organization.ID ||
+			result.UserID != subject.Subject.Principal.ID || result.CurrentSessionID != subject.Subject.Session.ID ||
+			result.RequestID != request.RequestID || result.CompletedAt.After(now) ||
+			(result.Outcome == "APPLIED" && !result.CompletedAt.Equal(now)) {
+			return ErrUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.RevokeOtherSessionsResponse{}, err
+	}
+	return result, nil
+}
+
 func (service *Authority) RevokeOwnSession(ctx context.Context, credential iamv1.Secret, sessionID iamv1.SessionID, request iamv1.RevokeSessionRequest) (iamv1.RevokeOwnSessionResponse, error) {
 	if iamv1.ValidateID("sessionId", string(sessionID)) != nil || iamv1.ValidateRevokeSessionRequest(request) != nil {
 		return iamv1.RevokeOwnSessionResponse{}, ErrInvalidArgument

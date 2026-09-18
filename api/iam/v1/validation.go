@@ -433,6 +433,16 @@ func ValidateRevokeOwnSessionResponse(value RevokeOwnSessionResponse) error {
 	return ValidateRevocation(value.Revocation)
 }
 
+func ValidateRevokeOtherSessionsResponse(value RevokeOtherSessionsResponse) error {
+	if value.APIVersion != APIVersion || value.Kind != "OtherSessionsRevocation" ||
+		(value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY") || value.RevokedCount > 9007199254740991 {
+		return errors.New("other session revocation is invalid")
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("userId", string(value.UserID)),
+		ValidateID("currentSessionId", string(value.CurrentSessionID)), ValidateID("requestId", value.RequestID),
+		validateTime("completedAt", value.CompletedAt))
+}
+
 func ValidateReadiness(value Readiness) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "Readiness" {
