@@ -96,6 +96,91 @@ func TestAuthenticationRecoveryClosureRejectsChangedIdentityOrEvidence(t *testin
 	}
 }
 
+func TestAuthenticationRecoveryIntentDigestBindsExactAuthenticatedTuple(t *testing.T) {
+	intent := authenticationRecoveryIntentFixture()
+	digest, err := AuthenticationRecoveryIntentDigest(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "sha256:c5dcca8fc48344aca236799ac55613f0e29cd748601a66ca3cb4e476e3df2522"
+	if digest != want {
+		t.Fatalf("recovery intent digest = %q, want %q", digest, want)
+	}
+	closure := authenticationRecoveryClosureFixture()
+	closure.RecoveryIntentDigest = digest
+	if err := ValidateAuthenticationRecoveryClosureForIntent(closure, intent); err != nil {
+		t.Fatalf("match closure to authenticated intent: %v", err)
+	}
+
+	changes := map[string]func(*AuthenticationRecoveryIntent){
+		"installation": func(v *AuthenticationRecoveryIntent) { v.InstallationID = "mxi-fedcba9876543210fedcba9876543210" },
+		"epoch":        func(v *AuthenticationRecoveryIntent) { v.Epoch++ },
+		"command":      func(v *AuthenticationRecoveryIntent) { v.CommandID = "cmd-fedcba9876543210fedcba9876543210" },
+		"backup":       func(v *AuthenticationRecoveryIntent) { v.BackupID = "backup-0123456789abcdef0123456789abcdef" },
+		"backup digest": func(v *AuthenticationRecoveryIntent) {
+			v.BackupDigest = "sha256:" + strings.Repeat("d", 64)
+		},
+		"source release": func(v *AuthenticationRecoveryIntent) { v.SourceReleaseID = "matrix-v1.2.2-abcdef123456" },
+		"source manifest": func(v *AuthenticationRecoveryIntent) {
+			v.SourceReleaseDigest = "sha256:" + strings.Repeat("e", 64)
+		},
+		"target release": func(v *AuthenticationRecoveryIntent) { v.TargetReleaseID = "matrix-v1.2.4-fedcba654321" },
+		"target manifest": func(v *AuthenticationRecoveryIntent) {
+			v.TargetReleaseDigest = "sha256:" + strings.Repeat("f", 64)
+		},
+		"custody": func(v *AuthenticationRecoveryIntent) {
+			v.TOTPCustodyDigest = "sha256:" + strings.Repeat("1", 64)
+		},
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			changed := intent
+			change(&changed)
+			changedDigest, err := AuthenticationRecoveryIntentDigest(changed)
+			if err != nil || changedDigest == digest {
+				t.Fatalf("changed intent digest = %q / %v", changedDigest, err)
+			}
+			if err := ValidateAuthenticationRecoveryClosureForIntent(closure, changed); !errors.Is(err, ErrInvalidAuthenticationRecoveryClosure) {
+				t.Fatalf("closure admitted changed intent: %v", err)
+			}
+		})
+	}
+}
+
+func TestAuthenticationRecoveryIntentRejectsUnauthenticatedShapes(t *testing.T) {
+	for name, change := range map[string]func(*AuthenticationRecoveryIntent){
+		"version": func(v *AuthenticationRecoveryIntent) { v.APIVersion = "installation.matrix.xiak.com/v2" },
+		"kind":    func(v *AuthenticationRecoveryIntent) { v.Kind = "RecoveryIntent" },
+		"purpose": func(v *AuthenticationRecoveryIntent) { v.Purpose = "IAM_TOTP_SEED_WRAPPING" },
+		"installation": func(v *AuthenticationRecoveryIntent) {
+			v.InstallationID = "mxi-other"
+		},
+		"zero epoch":  func(v *AuthenticationRecoveryIntent) { v.Epoch = 0 },
+		"large epoch": func(v *AuthenticationRecoveryIntent) { v.Epoch = uint64(math.MaxInt64) + 1 },
+		"command":     func(v *AuthenticationRecoveryIntent) { v.CommandID = "cmd-other" },
+		"backup":      func(v *AuthenticationRecoveryIntent) { v.BackupID = "backup-other" },
+		"backup digest": func(v *AuthenticationRecoveryIntent) {
+			v.BackupDigest = "sha256:" + strings.Repeat("a", 63)
+		},
+		"source release": func(v *AuthenticationRecoveryIntent) { v.SourceReleaseID = "release-source" },
+		"source digest":  func(v *AuthenticationRecoveryIntent) { v.SourceReleaseDigest = "caller-sha" },
+		"target release": func(v *AuthenticationRecoveryIntent) { v.TargetReleaseID = "release-target" },
+		"target digest":  func(v *AuthenticationRecoveryIntent) { v.TargetReleaseDigest = "caller-sha" },
+		"custody":        func(v *AuthenticationRecoveryIntent) { v.TOTPCustodyDigest = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := authenticationRecoveryIntentFixture()
+			change(&value)
+			if err := ValidateAuthenticationRecoveryIntent(value); !errors.Is(err, ErrInvalidAuthenticationRecoveryIntent) {
+				t.Fatalf("validate changed intent = %v", err)
+			}
+			if digest, err := AuthenticationRecoveryIntentDigest(value); !errors.Is(err, ErrInvalidAuthenticationRecoveryIntent) || digest != "" {
+				t.Fatalf("digest changed intent = %q / %v", digest, err)
+			}
+		})
+	}
+}
+
 func FuzzAuthenticationRecoveryClosureCanonicalBytes(f *testing.F) {
 	seed, err := EncodeAuthenticationRecoveryClosure(authenticationRecoveryClosureFixture())
 	if err != nil {
@@ -128,5 +213,19 @@ func authenticationRecoveryClosureFixture() AuthenticationRecoveryClosure {
 		BackupDigest:         "sha256:" + strings.Repeat("a", 64),
 		RecoveryIntentDigest: "sha256:" + strings.Repeat("b", 64),
 		TOTPCustodyDigest:    "sha256:" + strings.Repeat("c", 64),
+	}
+}
+
+func authenticationRecoveryIntentFixture() AuthenticationRecoveryIntent {
+	return AuthenticationRecoveryIntent{
+		APIVersion: AuthenticationRecoveryAPIVersion, Kind: AuthenticationRecoveryIntentKind,
+		Purpose:        AuthenticationRecoveryPurpose,
+		InstallationID: "mxi-0123456789abcdef0123456789abcdef", Epoch: 7,
+		CommandID:       "cmd-0123456789abcdef0123456789abcdef",
+		BackupID:        "backup-fedcba9876543210fedcba9876543210",
+		BackupDigest:    "sha256:" + strings.Repeat("a", 64),
+		SourceReleaseID: "matrix-v1.2.3-a1b2c3d4e5f6", SourceReleaseDigest: "sha256:" + strings.Repeat("2", 64),
+		TargetReleaseID: "matrix-v1.2.3-0f1e2d3c4b5a", TargetReleaseDigest: "sha256:" + strings.Repeat("3", 64),
+		TOTPCustodyDigest: "sha256:" + strings.Repeat("c", 64),
 	}
 }
