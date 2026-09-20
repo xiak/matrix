@@ -12,6 +12,7 @@
 | Legacy PaaS | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only through Git object commands; exclude its worktree. |
 | IAM/Audit foundation and delivery donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only through Git object commands; exclude its worktree. |
 | PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
+| Same-repository IAM TOTP backup-custody donor | `285706e3adf76fb0c109dad474f06266c8b67ab5` | Read only as a fixed Git object; exclude its worktree, profile, checkpoint and acceptance state. |
 
 The FEAT-005 supported host, signed bundle, fixed inventory, lifecycle,
 upgrade/rollback semantics, CLI surface, and real offline gates were committed
@@ -47,6 +48,14 @@ integration provider, and legacy UI plan are `REJECT`: FEAT-005 installs the
 new Docker/Compose-first product and cannot subprocess or depend on the old
 DevOps closure.
 
+## Phase 3 TOTP backup-custody comparison
+
+| Slice at fixed source | Decision | Rationale |
+| --- | --- | --- |
+| Existing installation-owned canonical custody adapter at `d479e1c57b6458852dd029227d32f3d56df6c5ad` | `REUSE` | Keep one encoder, decoder and digest owner for the sealed installation/bootstrap scope, keyset revision and sorted required-key commitments. Do not copy the donor's parallel adapter package. |
+| Dedicated backup-custody executable and database identity, read-only repeatable snapshot lease, exact IAM migration shape, bounded process protocol and real PostgreSQL gates | `ADAPT` | Preserve the purpose-only no-table-access identity and same-snapshot evidence. Integrate it into the signed IAM image and installation-owned backup state machine rather than importing the donor branch or widening an existing runtime role. |
+| Donor PaaS-1 profile, FEAT/checkpoint prose, release status and task-local acceptance claims | `REJECT` | The target owns PaaS 6 and independently verifies the `35/18/6+r13` preparation transition. SQL or donor test success cannot substitute for the signed installation backup/recovery gate. |
+
 ## Resulting implementation constraints
 
 1. Own the compact lifecycle in an `installation` context and keep one
@@ -78,5 +87,5 @@ DevOps closure.
    adopt tests tied to script layout, exact Compose text, ENV files, SQL text,
    line counts, or incidental command order.
 
-No donor source is copied and no donor repository is a build or runtime
-dependency.
+No donor repository or worktree is a build or runtime dependency. Every
+adapted slice is owned and verified by the target repository.

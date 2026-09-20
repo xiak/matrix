@@ -258,22 +258,27 @@ the following in an externally disconnected, task-owned runtime:
    writes the closed Audit evidence, passes restart plus signed
    upgrade/rollback gates, and leaves Phase 2 and every remote host untouched.
 
-Current source `d479e1c57b6458852dd029227d32f3d56df6c5ad` freezes the
-installation-owned, non-secret same-snapshot adapter contract. It binds the
-sealed installation/bootstrap scope, the observed keyset revision and the
-strictly sorted required `keyId`/format/commitment triples; its custody digest
-excludes the ephemeral PostgreSQL snapshot identifier. Canonical decoding
-rejects missing, null, duplicate, reordered, unknown, oversized or trailing
-input, while an explicit empty requirement set remains representable only for
-IAM to assert after a complete snapshot query. The exact source passed all
-four jobs in
-[independent CI](https://github.com/xiak/matrix/actions/runs/35491112269),
-plus local full-repository tests, focused race, architecture and vet. This is
-only the cross-process evidence contract: the purpose-only IAM snapshot
-helper, sealed backup-manifest consumption, restore-time keyring-superset
-check, durable `CLOSED`/one-shot reopen transactions, signed two-release
-transition and disconnected populated recovery gates remain unaccepted. The
-published database profile is unchanged.
+Source `d479e1c57b6458852dd029227d32f3d56df6c5ad` freezes the unique
+installation-owned, non-secret same-snapshot adapter contract. IAM source
+`84699d98a04f3741acedad0cbf19de6cb645d3a2` adds the purpose-only helper,
+dedicated no-table-access database identity and bounded snapshot lease; its
+[independent CI](https://github.com/xiak/matrix/actions/runs/35496544452)
+passed all four jobs. Installation source
+`9815916b8bf8ae5505a6bc96681dd92fe92f945c` consumes that helper from the
+exact signed IAM image, keeps the lease through `pg_dump --snapshot`, seals
+only the non-secret custody requirements into backup v4 and checks the local
+keyring superset before restore effects; its
+[independent CI](https://github.com/xiak/matrix/actions/runs/35497748914)
+also passed all four jobs. Source
+`5a68b8065c45b16d62ed2dfafe357b9ffd31dcf7` publishes the preparation
+profile `35/18/6+r13` with exact predecessor `30/18/6+r12`; predecessor
+backups remain v3 and cannot claim TOTP custody, while current backups require
+v4 proof. Its
+[independent CI](https://github.com/xiak/matrix/actions/runs/35498251532)
+passed all four jobs. These sources accept only the preparation-release backup
+custody and restore preflight slice. Durable `CLOSED`/one-shot reopen
+transactions, the MFA-enabling release and the disconnected populated
+recovery gate remain unaccepted, so the Phase 3 extension remains unaccepted.
 
 ## Incremental acceptance
 

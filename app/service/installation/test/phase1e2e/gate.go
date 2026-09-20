@@ -433,6 +433,17 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("post-upgrade-audit-association")
 	}
 	emit("release-b-upgrade-preservation")
+	var successorBackup mxResult
+	if value.releases.a.Manifest.Database != value.releases.b.Manifest.Database {
+		successorBackup, err = runMX(
+			ctx, value.releases.b, "backup", []string{"--root", value.config.root},
+			value.forbidden(secret, newPassword, bearer),
+		)
+		if err != nil || successorBackup.BackupID == "" || !successorBackup.Changed {
+			return fail("successor-protected-backup")
+		}
+		emit("successor-protected-backup")
+	}
 	if err := value.nativeReleasePair(ctx, bearer); err != nil {
 		return err
 	}
@@ -485,6 +496,33 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 			return fail("rejected-rollback-retained-successor-audit-history")
 		}
 		emit("cross-profile-platform-rollback-rejected")
+
+		restoredSuccessor, err := runMX(ctx, value.releases.b, "recover", []string{
+			"--root", value.config.root, "--backup", successorBackup.BackupID,
+		}, value.forbidden(secret, newPassword, bearer))
+		if err != nil || restoredSuccessor.ReleaseID != value.releases.b.Manifest.Release.ID ||
+			restoredSuccessor.PreviousID != "" || !restoredSuccessor.Changed {
+			return fail("successor-backup-recovery")
+		}
+		if _, err := assertPlatform(ctx, value.config.root, value.releases.b.Manifest, ""); err != nil {
+			return err
+		}
+		if err := value.assertWorkload(ctx, value.releases.b.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
+			return err
+		}
+		if err := value.assertPostUpgradeApplication(ctx, bearer, postUpgradeOperation, true); err != nil {
+			return err
+		}
+		restoredSuccessorAudit, err := value.edge.allAuditRecords(ctx, bearer)
+		if err != nil || !containsAuditHistory(restoredSuccessorAudit, auditRecordHashes(postUpgradeAudit)) {
+			return fail("successor-backup-audit-history")
+		}
+		if err := value.repeatedStatusAndVerify(
+			ctx, value.releases.b, value.releases.b.Manifest.Release.ID, "",
+		); err != nil {
+			return err
+		}
+		emit("successor-backup-recovery")
 	} else {
 		rollback, err := runMX(ctx, value.releases.b, "rollback", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
 		if err != nil || rollback.ReleaseID != value.releases.a.Manifest.Release.ID ||

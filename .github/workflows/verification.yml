@@ -265,3 +265,119 @@ jobs:
             "MATRIX_NODE_EXPORTER_BINARY=$RUNNER_TEMP/node_exporter-$NODE_EXPORTER_VERSION.linux-amd64/node_exporter" \
             "MATRIX_NODE_AUTHORITY_PROCESS_POSTGRES_TEST_DSN=$MATRIX_NODE_AUTHORITY_PROCESS_POSTGRES_TEST_DSN" \
             "$RUNNER_TEMP/authority-process.test" -test.v -test.count=1 -test.timeout=180s -test.run='^TestLinuxNodeAuthorityProcesses$'
+
+  platform-release:
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/phase3-mfa-recovery')
+    needs: [go, ui, authority-process, node-process]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PLATFORM_DIND: matrix-platform-release-${{ github.run_id }}-${{ github.run_attempt }}
+      PLATFORM_DATA_VOLUME: matrix-platform-data-${{ github.run_id }}-${{ github.run_attempt }}
+      PLATFORM_DOCKER_VOLUME: matrix-platform-docker-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: go.sum
+      - name: Prepare fixed release build inputs
+        run: |
+          sudo timeout 30s systemctl start docker
+          timeout 30s docker info --format '{{.ServerVersion}}'
+          docker pull apache/apisix:3.17.0-debian
+          docker pull alpine:3.24.1
+          docker pull docker:27.5.1-dind-alpine3.21
+          docker pull postgres:18
+          df -h "$RUNNER_TEMP" /var/lib/docker
+      - name: Assemble authenticated predecessor and preparation releases
+        run: |
+          predecessor_source="$RUNNER_TEMP/matrix-platform-predecessor"
+          git worktree add --detach "$predecessor_source" 9815916b8bf8ae5505a6bc96681dd92fe92f945c
+          go run -p 2 ./deploy/cmd/matrix-release keygen --key-id platform-ci \
+            --private-key "$RUNNER_TEMP/platform-release-private.json" \
+            --trust-key "$RUNNER_TEMP/platform-release-trust.json"
+          created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          (
+            cd "$predecessor_source"
+            go run -p 2 ./deploy/cmd/matrix-release assemble --target platform \
+              --repository "$predecessor_source" --output "$RUNNER_TEMP/platform-release-a" \
+              --version v0.4.0-preparation.1 --build-id "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-a" \
+              --created-at "$created_at" --private-key "$RUNNER_TEMP/platform-release-private.json" \
+              --trust-key "$RUNNER_TEMP/platform-release-trust.json"
+          )
+          release_a_id="$(jq -er '.release.id' "$RUNNER_TEMP/platform-release-a/release.json")"
+          go run -p 2 ./deploy/cmd/matrix-release assemble --target platform \
+            --repository "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/platform-release-b" \
+            --version v0.4.0-preparation.2 --build-id "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-b" \
+            --previous-id "$release_a_id" --previous-version v0.4.0-preparation.1 \
+            --created-at "$created_at" --private-key "$RUNNER_TEMP/platform-release-private.json" \
+            --trust-key "$RUNNER_TEMP/platform-release-trust.json"
+          CGO_ENABLED=0 go test -c -p 2 -o "$RUNNER_TEMP/phase1e2e.test" \
+            ./app/service/installation/test/phase1e2e
+      - name: Verify signed disconnected upgrade, custody backup and recovery
+        run: |
+          docker volume create --label "matrix.task=$PLATFORM_DIND" "$PLATFORM_DATA_VOLUME"
+          docker volume create --label "matrix.task=$PLATFORM_DIND" "$PLATFORM_DOCKER_VOLUME"
+          docker run --detach --name "$PLATFORM_DIND" --label "matrix.task=$PLATFORM_DIND" \
+            --privileged --cgroupns private --network none --cpus 2 --memory 4g --memory-swap 4g \
+            --pids-limit 768 --security-opt label=disable --env DOCKER_TLS_CERTDIR= \
+            --mount "type=volume,source=$PLATFORM_DATA_VOLUME,target=/data" \
+            --mount "type=volume,source=$PLATFORM_DOCKER_VOLUME,target=/var/lib/docker" \
+            --mount "type=bind,source=$RUNNER_TEMP/platform-release-a,target=/releases/a,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/platform-release-b,target=/releases/b,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/platform-release-trust.json,target=/releases/trust.json,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/phase1e2e.test,target=/gate/phase1e2e.test,readonly" \
+            docker:27.5.1-dind-alpine3.21 \
+            --tls=false --storage-driver=overlay2 --max-concurrent-downloads=1 --max-concurrent-uploads=1
+          for attempt in $(seq 1 60); do
+            if docker exec "$PLATFORM_DIND" docker info >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              docker logs "$PLATFORM_DIND"
+              exit 1
+            fi
+            sleep 1
+          done
+          timeout 2100s docker exec \
+            --env GOMAXPROCS=2 --env GOMEMLIMIT=512MiB \
+            --env MATRIX_PHASE1_E2E=1 --env MATRIX_PHASE1_E2E_PHASE=run \
+            --env MATRIX_PHASE1_ROOT=/data/matrix \
+            --env MATRIX_PHASE1_RELEASE_A=/releases/a \
+            --env MATRIX_PHASE1_RELEASE_B=/releases/b \
+            --env MATRIX_PHASE1_TRUST_KEY=/releases/trust.json \
+            "$PLATFORM_DIND" /gate/phase1e2e.test -test.v -test.count=1 \
+              -test.timeout=30m -test.run='^TestOfflinePhase1Lifecycle$'
+          docker restart --time 15 "$PLATFORM_DIND"
+          for attempt in $(seq 1 60); do
+            if docker exec "$PLATFORM_DIND" docker info >/dev/null 2>&1; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              docker logs "$PLATFORM_DIND"
+              exit 1
+            fi
+            sleep 1
+          done
+          timeout 300s docker exec \
+            --env GOMAXPROCS=2 --env GOMEMLIMIT=512MiB \
+            --env MATRIX_PHASE1_E2E=1 --env MATRIX_PHASE1_E2E_PHASE=after-restart \
+            --env MATRIX_PHASE1_ROOT=/data/matrix \
+            --env MATRIX_PHASE1_RELEASE_A=/releases/a \
+            --env MATRIX_PHASE1_TRUST_KEY=/releases/trust.json \
+            "$PLATFORM_DIND" /gate/phase1e2e.test -test.v -test.count=1 \
+              -test.timeout=4m -test.run='^TestOfflinePhase1Lifecycle$'
+      - name: Remove isolated release-gate resources
+        if: always()
+        run: |
+          docker rm --force "$PLATFORM_DIND" 2>/dev/null || true
+          docker volume rm "$PLATFORM_DATA_VOLUME" 2>/dev/null || true
+          docker volume rm "$PLATFORM_DOCKER_VOLUME" 2>/dev/null || true
+          git worktree remove --force "$RUNNER_TEMP/matrix-platform-predecessor" 2>/dev/null || true
+          git worktree prune
