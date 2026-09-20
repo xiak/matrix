@@ -12,9 +12,9 @@ const identity: AccountIdentity = {
   tenant: { id: "org-xiak", name: "Xiak 科技" }
 };
 
-function AccountMenuHarness({ onLogout = vi.fn() }: { onLogout?: () => void }) {
+function AccountMenuHarness({ onLogout = vi.fn(), roleAccessHref }: { onLogout?: () => void; roleAccessHref?: string }) {
   const [open, setOpen] = useState(false);
-  return <LocaleProvider><AccountMenu identity={identity} onLogout={onLogout} onOpenChange={setOpen} open={open} revoking={false} /></LocaleProvider>;
+  return <LocaleProvider><AccountMenu identity={identity} onLogout={onLogout} onOpenChange={setOpen} open={open} revoking={false} roleAccessHref={roleAccessHref} /></LocaleProvider>;
 }
 
 afterEach(cleanup);
@@ -74,5 +74,24 @@ describe("AccountMenu", () => {
 
     expect(screen.queryByRole("dialog", { name: "账号菜单" })).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("adds the preview-only role self-service entry to the same roving action group", async () => {
+    const user = userEvent.setup();
+    render(<AccountMenuHarness roleAccessHref="/console/access/role-access/" />);
+
+    await user.click(screen.getByRole("button", { name: "打开账号菜单，当前用户 preview-admin" }));
+    const access = screen.getByRole("menuitem", { name: /账号与权限/ });
+    const roleAccess = screen.getByRole("menuitem", { name: /角色切换体验.*成员视角/ });
+    const logout = screen.getByRole("menuitem", { name: "注销并撤销 IAM 会话" });
+    expect(screen.getAllByRole("menuitem")).toHaveLength(3);
+    expect(document.activeElement).toBe(access);
+
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(roleAccess);
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(logout);
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(access);
   });
 });

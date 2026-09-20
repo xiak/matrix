@@ -334,7 +334,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
     if (item.id === "tenants") return accountCapabilities.canReadAccounts;
     return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canListUsers;
   });
-  const accessTitles = { "create-user": accountText("createUserTitle"), "create-group": iamWorkspaceText("createGroup"), "create-policy": iamWorkspaceText("createPolicy"), "create-role": iamWorkspaceText("createRole"), tenants: accountText("tenantAccounts") };
+  const accessTitles = { "create-user": accountText("createUserTitle"), "create-group": iamWorkspaceText("createGroup"), "create-policy": iamWorkspaceText("createPolicy"), "create-role": iamWorkspaceText("createRole"), "role-access": accountText("roleAccessTitle"), tenants: accountText("tenantAccounts") };
   const accessView = frame.section === "access" ? pendingSelection?.view ?? navigation.selection.view : undefined;
   const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : frame.section === "overview" ? dashboard("title") : t(`pages.${frame.section}.title`);
   const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");
@@ -525,7 +525,7 @@ export function ConsoleShellRenderer({ accountRepository, experience, repository
   if (!session.current || (session.phase !== "authenticated" && session.phase !== "revoking")) return <Suspense fallback={<ShellFrame><PageSkeleton label={t("welcome")} layout="access" /></ShellFrame>}><ConsoleSignIn returnTo={returnTo} /></Suspense>;
   return (
     <ConsoleNavigationProvider selection={selection}>
-      <AccountAccessProvider active={selection.section === "access" && selection.view !== "sessions"} repository={accountRepository}>
+      <AccountAccessProvider active={selection.section === "access" && selection.view !== "sessions" && selection.view !== "role-access"} repository={accountRepository}>
         <ControlPlaneProvider experience={experience} repository={repository} selection={selection}>
           <ConsoleShell experience={experience} />
         </ControlPlaneProvider>

@@ -1,0 +1,38 @@
+.root { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); container: role-self-service / inline-size; }
+.actorHeader, .sessionHeader, .roleHeader, .sectionHeading { display: flex; min-width: 0; align-items: flex-start; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.actorHeader > div, .sessionHeader > div, .roleHeader > div, .sectionHeading > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.actorFacts, .sessionFacts, .reviewFacts { display: grid; margin: 0; gap: var(--xiak-spacing-comfortable); }
+.actorFacts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.sessionFacts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.reviewFacts { grid-template-columns: repeat(3, minmax(0, 1fr)); padding-bottom: var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); }
+.actorFacts > div, .sessionFacts > div, .reviewFacts > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.actorFacts dt, .sessionFacts dt, .reviewFacts dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.actorFacts dd, .sessionFacts dd, .reviewFacts dd { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
+.actorFacts dd span, .reviewFacts dd span { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-small); }
+.discovery { display: grid; gap: var(--xiak-spacing-default); }
+.roleGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); }
+.roleHeader code { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-caption); overflow-wrap: anywhere; }
+.roleBody, .reviewBody, .sessionBody { display: grid; gap: var(--xiak-spacing-default); }
+.roleBody p { min-height: 2.8em; margin: 0; color: var(--xiak-color-text-base); }
+.roleBody > button { justify-self: start; }
+.roleMeta { display: flex; flex-wrap: wrap; gap: var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.roleMeta span { display: inline-flex; align-items: center; gap: var(--xiak-spacing-narrow); }
+.roleMeta svg { width: 15px; height: 15px; }
+.reviewBody > :global(.xiak-form-field) { max-width: 360px; }
+.reviewActions, .confirmation > div:last-child { display: flex; flex-wrap: wrap; gap: var(--xiak-spacing-narrow); }
+.roleIdentity { display: flex; align-items: center; gap: var(--xiak-spacing-default); }
+.roleIdentity > span { display: grid; width: 42px; height: 42px; place-items: center; border-radius: var(--xiak-radius-control); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
+.roleIdentity svg { width: 21px; height: 21px; }
+.roleIdentity > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.roleIdentity small { color: var(--xiak-color-text-subtle); overflow-wrap: anywhere; }
+.confirmation { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.confirmation > div:first-child { display: grid; gap: var(--xiak-spacing-micro); }
+.confirmation span { color: var(--xiak-color-text-muted); }
+.focusHeading { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); line-height: var(--xiak-line-height-compact); }
+.focusHeading:focus { outline: none; }
+
+@container role-self-service (max-width: 720px) {
+  .actorFacts, .sessionFacts, .reviewFacts, .roleGrid { grid-template-columns: minmax(0, 1fr); }
+  .roleBody p { min-height: 0; }
+  .confirmation { align-items: flex-start; flex-direction: column; }
+}

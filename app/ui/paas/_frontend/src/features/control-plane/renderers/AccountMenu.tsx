@@ -10,7 +10,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent
 } from "react";
-import { ChevronRight, LogOut, ShieldCheck } from "lucide-react";
+import { ChevronRight, LogOut, Repeat2, ShieldCheck } from "lucide-react";
 import { HeaderPopover } from "./HeaderPopover";
 import styles from "./AccountMenu.module.css";
 
@@ -30,11 +30,12 @@ type AccountMenuProps = Readonly<{
   onOpenChange(open: boolean): void;
   open: boolean;
   revoking: boolean;
+  roleAccessHref?: string;
 }>;
 
 const accountMenuId = "global-account-menu";
 
-export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking }: AccountMenuProps) {
+export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking, roleAccessHref }: AccountMenuProps) {
   const t = useTranslations("AccountMenu");
   const trigger = useRef<HTMLButtonElement>(null);
   const items = useRef<Array<HTMLAnchorElement | HTMLButtonElement | null>>([]);
@@ -62,7 +63,7 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking }
   }
 
   function handleMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    const availableItems = revoking ? [0] : [0, 1];
+    const availableItems = revoking ? roleAccessHref ? [0, 1] : [0] : roleAccessHref ? [0, 1, 2] : [0, 1];
     const currentPosition = Math.max(0, availableItems.indexOf(activeItem));
     let nextPosition: number | undefined;
 
@@ -143,6 +144,18 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking }
                   <span className={styles.menuCopy}><strong>{t("access")}</strong><small>{t("accessHint")}</small></span>
                   <ChevronRight aria-hidden="true" className={styles.chevron} />
                 </Link>
+                {roleAccessHref ? <Link
+                  className={styles.menuItem}
+                  href={roleAccessHref}
+                  onAccepted={() => onOpenChange(false)}
+                  ref={(node) => { items.current[1] = node; }}
+                  role="menuitem"
+                  tabIndex={activeItem === 1 ? 0 : -1}
+                >
+                  <span aria-hidden="true" className={styles.menuIcon}><Repeat2 /></span>
+                  <span className={styles.menuCopy}><strong>{t("roleAccess")}</strong><small>{t("roleAccessHint")}</small></span>
+                  <ChevronRight aria-hidden="true" className={styles.chevron} />
+                </Link> : null}
               </PanelSections.Section>
               <PanelSections.Section role="none">
                 <button
@@ -150,9 +163,9 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking }
                   className={`${styles.menuItem} ${styles.dangerItem}`}
                   disabled={revoking}
                   onClick={onLogout}
-                  ref={(node) => { items.current[1] = node; }}
+                  ref={(node) => { items.current[roleAccessHref ? 2 : 1] = node; }}
                   role="menuitem"
-                  tabIndex={activeItem === 1 ? 0 : -1}
+                  tabIndex={activeItem === (roleAccessHref ? 2 : 1) ? 0 : -1}
                   type="button"
                 >
                   <span aria-hidden="true" className={styles.menuIcon}><LogOut /></span>

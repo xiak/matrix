@@ -81,7 +81,7 @@ export const ConsoleHeader = memo(function ConsoleHeader({ scene, productName, s
         {scene.preview ? <span className={styles.previewChip} title={t("previewHint")}><span aria-hidden="true" />MOCK<span className={styles.previewLabel}>{t("preview")}</span></span> : null}
         <div aria-label={t("globalTools")} className={styles.tools}>
           {scene.preview ? <NotificationCenter activeOperationCount={scene.activeOperationCount} messages={scene.messages} onOpenChange={openPanel("notifications")} open={activePanel === "notifications"} /> : null}
-          <AccountMenu identity={identity} onLogout={onLogout} onOpenChange={openPanel("account")} open={activePanel === "account"} revoking={revoking} />
+          <AccountMenu identity={identity} onLogout={onLogout} onOpenChange={openPanel("account")} open={activePanel === "account"} revoking={revoking} roleAccessHref={scene.preview ? "/console/access/role-access/" : undefined} />
         </div>
       </div>
       <RouteProgress />

@@ -469,6 +469,10 @@
         "label": "新建角色",
         "hint": "信任、权限与临时会话"
       },
+      "role-access": {
+        "label": "角色切换体验",
+        "hint": "发现并审阅可承担角色"
+      },
       "create-group": {
         "label": "新建用户组",
         "hint": "用户组信息与策略"
@@ -662,12 +666,59 @@
     "actions": "账号操作",
     "access": "账号与权限",
     "accessHint": "用户、角色与租户",
+    "roleAccess": "角色切换体验",
+    "roleAccessHint": "以成员视角预览可承担角色",
     "logoutLabel": "注销并撤销 IAM 会话",
     "logout": "退出登录",
     "loggingOut": "正在退出…",
     "logoutHint": "撤销当前 IAM 会话",
     "primary": "主账号",
     "child": "IAM 子账号"
+  },
+  "RoleSelfService": {
+    "title": "角色切换体验",
+    "mockBoundary": "独立 MOCK 成员场景：用于评审角色发现、承担与退出体验。不会改变顶部当前登录用户，不会签发真实凭据，也不读取管理员角色目录。",
+    "actorTitle": "成员自助场景",
+    "actorHint": "这个体验角色只有承担权限，没有角色列表、编辑或会话管理权限。",
+    "scenarioActor": "体验成员",
+    "sourceUser": "来源用户",
+    "account": "所属账号",
+    "managementAuthority": "管理权限",
+    "none": "无",
+    "assumeOnly": "仅可发现并承担满足全部条件的角色",
+    "discoveryTitle": "可承担角色",
+    "discoveryHint": "只返回当前成员此刻有资格承担的角色；未授权角色不会出现在目录中。",
+    "roleCount": "{count} 个角色",
+    "eligible": "可承担",
+    "maxDuration": "最长 {max} 分钟",
+    "resourceVersion": "版本 {version}",
+    "reviewRole": "审阅并承担",
+    "reviewRoleNamed": "审阅并承担 {name}",
+    "discoveryBoundary": "可承担不等于拥有角色管理权限，也不保证角色会话对未来业务请求始终允许；每个请求仍需实时鉴权。",
+    "purposes": {
+      "productionLogs": "临时审阅生产日志，不获得角色编辑或会话管理权限。",
+      "releaseObserver": "临时查看发布状态与结果，不获得发布操作权限。"
+    },
+    "reviewTitle": "审阅角色会话",
+    "reviewHint": "确认来源身份、目标角色与有效期后，再创建一次新的体验意图。",
+    "role": "目标角色",
+    "duration": "会话有效期",
+    "durationHint": "不能超过角色允许的 {max} 分钟；到期只是生命周期终态之一。",
+    "minutes": "{max} 分钟",
+    "unknownOutcome": "安全重试边界：真实请求会固定 requestId（{id}）。结果未知时必须查询原请求，不能直接再创建一次；若凭据丢失，应先撤销原意图再重新承担。",
+    "assumePreview": "创建体验角色会话",
+    "cancel": "取消",
+    "activeTitle": "体验角色身份",
+    "activeHint": "这里展示自助入口完成后的信息层级；真实身份必须由角色凭据重新验证。",
+    "previewRoleIdentity": "MOCK 角色身份",
+    "sessionId": "会话 ID",
+    "issuedAt": "创建时间",
+    "expiresAt": "到期时间",
+    "noCredential": "体验环境不会显示或保存真实角色凭据，也不会把当前 Header 登录态切换成该角色。真实首次成功只会返回一次秘密；相同请求重放不再返回。",
+    "exitRole": "结束体验角色",
+    "confirmExitTitle": "结束这个体验角色？",
+    "confirmExitHint": "真实退出只终止当前角色会话，不会自动恢复或签发来源用户凭据；来源用户会话必须重新检查。",
+    "confirmExit": "确认结束"
   },
   "UserWizard": {
     "steps": {
@@ -814,6 +865,7 @@
     }
   },
   "AccountAccess": {
+    "roleAccessTitle": "角色切换体验",
     "createUserTitle": "创建子用户",
     "createTenantTitle": "开通租户账号",
     "closeCreate": "关闭创建窗口",

@@ -469,6 +469,10 @@
         "label": "Create role",
         "hint": "Trust, permissions and temporary sessions"
       },
+      "role-access": {
+        "label": "Role switch preview",
+        "hint": "Discover and review assumable roles"
+      },
       "create-group": {
         "label": "Create group",
         "hint": "Group details and policies"
@@ -662,12 +666,59 @@
     "actions": "Account actions",
     "access": "Identity & access",
     "accessHint": "Users, roles and tenants",
+    "roleAccess": "Role switch preview",
+    "roleAccessHint": "Preview assumable roles as a member",
     "logoutLabel": "Sign out and revoke this IAM session",
     "logout": "Sign out",
     "loggingOut": "Signing out…",
     "logoutHint": "Revoke the current IAM session",
     "primary": "Primary account",
     "child": "IAM subaccount"
+  },
+  "RoleSelfService": {
+    "title": "Role switch preview",
+    "mockBoundary": "Isolated member MOCK for reviewing role discovery, assumption, and exit. It does not change the signed-in user in the header, issue a real credential, or read the administrator role directory.",
+    "actorTitle": "Member self-service scenario",
+    "actorHint": "This scenario actor can assume eligible roles but cannot list, edit, or administer roles or sessions.",
+    "scenarioActor": "Scenario member",
+    "sourceUser": "Source user",
+    "account": "Account",
+    "managementAuthority": "Management authority",
+    "none": "None",
+    "assumeOnly": "Can only discover and assume roles that satisfy every condition",
+    "discoveryTitle": "Assumable roles",
+    "discoveryHint": "Only roles this member can assume now are returned. Unauthorized roles are not disclosed.",
+    "roleCount": "{count} roles",
+    "eligible": "Eligible",
+    "maxDuration": "Up to {max} minutes",
+    "resourceVersion": "Version {version}",
+    "reviewRole": "Review and assume",
+    "reviewRoleNamed": "Review and assume {name}",
+    "discoveryBoundary": "Eligibility is not role-management authority and does not promise that future business requests will be allowed. Every request is authorized again.",
+    "purposes": {
+      "productionLogs": "Temporarily review production logs without role editing or session administration.",
+      "releaseObserver": "Temporarily inspect release status and outcomes without release-operation authority."
+    },
+    "reviewTitle": "Review role session",
+    "reviewHint": "Confirm the source identity, role, and lifetime before creating a new preview intent.",
+    "role": "Target role",
+    "duration": "Session duration",
+    "durationHint": "Cannot exceed the role limit of {max} minutes. Expiry is only one lifecycle terminal state.",
+    "minutes": "{max} minutes",
+    "unknownOutcome": "Safe retry boundary: a real request keeps requestId {id}. If the outcome is unknown, query the original request instead of issuing another. If its credential was lost, revoke the original intent before assuming again.",
+    "assumePreview": "Create preview role session",
+    "cancel": "Cancel",
+    "activeTitle": "Preview role identity",
+    "activeHint": "This shows the information hierarchy after self-service succeeds. A real role identity must be revalidated from its role credential.",
+    "previewRoleIdentity": "MOCK role identity",
+    "sessionId": "Session ID",
+    "issuedAt": "Issued",
+    "expiresAt": "Expires",
+    "noCredential": "The preview never displays or stores a real role credential and never replaces the header sign-in. A real first success reveals the secret once; an equal replay does not reveal it again.",
+    "exitRole": "End preview role",
+    "confirmExitTitle": "End this preview role?",
+    "confirmExitHint": "A real logout only terminates the role session. It does not restore or issue source-user credentials; that source session must be checked again.",
+    "confirmExit": "End role"
   },
   "UserWizard": {
     "steps": {
@@ -814,6 +865,7 @@
     }
   },
   "AccountAccess": {
+    "roleAccessTitle": "Role switch preview",
     "createUserTitle": "Create subuser",
     "createTenantTitle": "Create tenant account",
     "closeCreate": "Close account creation",
