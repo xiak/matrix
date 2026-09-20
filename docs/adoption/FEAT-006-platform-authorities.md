@@ -648,6 +648,8 @@ platform permission. This is design review, not an implementation window.
 | Same fixed source, AccessKey material/keyring contract and ADR-0004 | `REFERENCE` custody and failure-closed requirements; `REJECT` direct use for MFA seeds | Its wrapping purpose, subject/material binding and installation consumer are specifically AccessKey. MFA needs an explicitly agreed independent material boundary, not an AccessKey row, password hash, cursor key or local-recovery secret repurposed as seed custody. No installation WIP or MFA custody implementation is adopted. |
 | Same fixed source, `local_recovery.go`, `000003_tenant_accounts` and `000004_local_credential_recovery` | `REUSE` original root/platform protection and exact immutable intent principles; `REJECT` implicit authenticator recovery authority | Existing capabilities only change passwords under their sealed purpose; neither online reset nor offline password recovery authorizes removal of a future factor. A DB-only epoch/consumption record also cannot prove non-revival across a restored backup. New purpose/backup boundaries require their actual owners and gates. |
 | Product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, `04-user-guide/users/login-and-operation-protection.md` | `REFERENCE` binding, step-up, login protection and recovery requirements; `REJECT` executable or current-policy inference | It is requirements prose, not code or proof of MFA, cookie sessions, risk scoring or automatically enforced administrator rules. Its encrypted recovery-code recommendation is not adopted: one-way verification suffices for offline high-entropy saved codes and avoids later recovery of plaintext. |
+| Matrix `d68672514a8920eae0be9a6f0aff2eba2530fdd2`, `api/iam/v1/types.go`, `authentication.go`, `service.go` and PostgreSQL `repository.go` | `REUSE` actual USER/Session identity, strict Secret handling and Serializable transaction owner; `ADAPT` the login result and committed authentication-failure outcome | The password-to-Session path remains unchanged from `644fff09`; the fixed diff in authentication.go only adds S1 self-session discovery. Callback errors still roll back, so a rejected OTP/password result cannot be used as the transaction error after recording attempts. No Refresh Token or pre-authentication Session is adopted. |
+| Same fixed source, current product Profile, ACCOUNT resource, tenant credential protection and session lineage | `ADAPT` exactly two tenant security-settings actions and explicit current-setting checks; `REJECT` a new security-policy DSL, blanket SELF role or automatic administrator recovery powers | Account configuration, USER authenticator state and Session authentication facts are distinct. The MFA design changes no current action registration or system policy; publication/grant and protected-target behavior require their own implementation gates. |
 
 [RFC6238](https://www.rfc-editor.org/rfc/rfc6238.html) and
 [RFC4226](https://www.rfc-editor.org/rfc/rfc4226.html) are `REFERENCE` for
@@ -655,8 +657,25 @@ the OTP construction and independent fixed vectors, not source-code donors.
 [NIST SP800-63B](https://pages.nist.gov/800-63-4/sp800-63b.html) is
 `REFERENCE` for one-time verification, throttling, hashed saved recovery
 codes and the absence of OTP phishing resistance; this is not a compliance
-claim. No library/version is selected or added by this review. Runtime,
-material protection, recovery eligibility and acceptance belong solely009.
+claim. [RFC5869](https://www.rfc-editor.org/rfc/rfc5869.html) is `REFERENCE`
+for a purpose-separated derivation primitive, not permission to reuse an
+AccessKey keyring or its private codec for TOTP.
+
+The official [PostgreSQL18 PITR description](https://www.postgresql.org/docs/18/continuous-archiving.html)
+is `REFERENCE` for restoration to an earlier database state; `REJECT` any
+inference that a key stored separately, a database epoch or a restored Audit
+chain independently preserves later revocations. The supported recovery
+admission and replica isolation proof belong to installation with IAM, not a
+new generic anti-rollback subsystem inferred from this source.
+[OWASP factor-change guidance](https://cheatsheetseries.owasp.org/cheatsheets/Multifactor_Authentication_Cheat_Sheet.html#changing-mfa-factors)
+and [session guidance](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html#renew-the-session-id-after-any-privilege-level-change)
+are `REFERENCE` for reauthentication and preventing inherited stronger
+authentication; `REJECT` adding Refresh Tokens, permanent session elevation
+or a full notification center solely to mirror an example. Necessary real
+security delivery is still an explicit dependency, not replaced by Audit.
+No library/version is selected or added by this review. Runtime, material
+protection, recovery eligibility and acceptance belong solely009; this
+review does not make the proposed APIs or shared-owner work available.
 
 ## Password and authentication-budget target review
 
