@@ -354,9 +354,17 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		recovered, err := runMX(ctx, value.releases.b, "recover", []string{
 			"--root", value.config.root, "--backup", failureBackupID,
 		}, value.forbidden(secret, newPassword, bearer))
-		if err != nil || recovered.ReleaseID != value.releases.a.Manifest.Release.ID ||
-			recovered.PreviousID != "" || !recovered.Changed {
-			return fail("cross-profile-upgrade-recovery")
+		if err != nil {
+			return err
+		}
+		if recovered.ReleaseID != value.releases.a.Manifest.Release.ID {
+			return fail("cross-profile-upgrade-recovery-release")
+		}
+		if recovered.PreviousID != "" {
+			return fail("cross-profile-upgrade-recovery-previous")
+		}
+		if !recovered.Changed {
+			return fail("cross-profile-upgrade-recovery-change")
 		}
 		value.releaseAPreviousID = ""
 		if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
