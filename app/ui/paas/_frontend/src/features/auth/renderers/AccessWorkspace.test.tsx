@@ -13,7 +13,8 @@ import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import type { PolicyDocument } from "../domain/policyDocument";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { GroupDirectory } from "./GroupAccessWorkspace";
-import { buildAccessReport } from "../scenes/accessReport";
+import { AccessReports } from "./AccessReports";
+import { buildAccessReport, buildAccessSecuritySnapshot } from "../scenes/accessReport";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 import { previewAccountRepository, previewCredential, previewIamRepository } from "../repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
@@ -634,7 +635,7 @@ describe("CAM-style access workspace", () => {
     const id = new URL(link.getAttribute("href")!, "https://matrix.example.invalid").searchParams.get("id");
     expect(id).toBeTruthy();
     expect(within(table).queryByRole("link", { name: "MatrixReadOnlyAccess" })).toBeNull();
-    expect(screen.getByText("定期检查高权限用户").parentElement!.parentElement!.textContent).toContain("2 位用户");
+    expect(link.closest("tr")!.textContent).toContain("3");
     expect(screen.getByText(/此列表不是有效权限评估/)).toBeTruthy();
     await user.click(link);
     expect(screen.getByLabelText("Entity destination").textContent).toBe(id);
@@ -657,7 +658,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("button", { name: "ProductionLogReader" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "MatrixAuditReadOnly" })).toBeNull();
   });
-  it("does not present empty groups, inactive keys or mock protection as completed security", async () => {
+  it("keeps inactive keys, policy configuration and missing authenticator evidence semantically distinct", async () => {
     const { user } = await open("overview", { seed: async (extension) => {
       await extension.execute("preview", { kind: "change-group-members", id: "group-delivery", added: [], removed: ["principal-lin"] });
       await extension.execute("preview", { kind: "change-group-policies", id: "group-auditors", added: [], removed: ["policy-audit"] });
@@ -665,11 +666,12 @@ describe("CAM-style access workspace", () => {
       await extension.execute("preview", { kind: "set-key-status", id: "MOCK-pipeline-key", enabled: false });
       await extension.execute("preview", { kind: "save-settings", settings: { ...(await extension.read("preview")).settings, loginProtection: true } });
     } });
-    expect(await screen.findByText(/0 个用户组同时具有成员和策略/)).toBeTruthy();
-    expect(screen.getByText(/0 个启用的模拟密钥/)).toBeTruthy();
-    expect(screen.getByText("已保存模拟登录保护配置，未实际启用 MFA。")).toBeTruthy();
+    expect(await screen.findByText(/0 个启用的模拟长期密钥/)).toBeTruthy();
+    expect(screen.getByText(/这里显示账户策略，不代表用户已经绑定 MFA/)).toBeTruthy();
+    expect(screen.getByText(/当前数据未提供认证器绑定事实/)).toBeTruthy();
+    expect(screen.getAllByText("状态未知").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("已完成")).toBeNull();
-    await user.click(screen.getByRole("link", { name: "检查长期密钥" }));
+    await user.click(screen.getByRole("button", { name: "查看长期访问密钥" }));
     expect(await screen.findByRole("table", { name: "API 密钥" })).toBeTruthy();
   });
   it("filters mock user associations by direct and group sources and opens the same management detail", async () => {
@@ -2119,8 +2121,41 @@ describe("CAM-style access workspace", () => {
     const workspace = await extension.read("preview");
     const report = buildAccessReport("security", workspace, buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] }), "2026-09-09T00:00:00Z");
     expect(report.mode).toBe("MOCK");
+    expect(report.coverage.authenticatorEnrollment).toBe("UNKNOWN");
+    expect(report.checks?.find((check) => check.id === "mfaEvidence")?.state).toBe("unknown");
     expect(JSON.stringify(report)).not.toContain("EntityDescriptor");
     expect(JSON.stringify(report)).not.toContain("preview-only");
     expect(report.users).toHaveLength(2);
+  });
+  it("separates review, configured, unknown, and not-applicable security evidence", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const snapshot = buildAccessSecuritySnapshot(workspace);
+    expect(snapshot.counts).toEqual({ review: 4, configured: 1, notApplicable: 0, unknown: 1 });
+    expect(snapshot.checks.find((check) => check.id === "mfaEvidence")?.state).toBe("unknown");
+
+    const withoutApplicableUsers = structuredClone(workspace);
+    withoutApplicableUsers.userProfiles = {};
+    withoutApplicableUsers.userPolicies = {};
+    withoutApplicableUsers.keys = [];
+    const empty = buildAccessSecuritySnapshot(withoutApplicableUsers);
+    expect(empty.checks.find((check) => check.id === "activeKeys")?.state).toBe("notApplicable");
+    expect(empty.checks.find((check) => check.id === "loginProtection")?.state).toBe("notApplicable");
+    expect(empty.checks.find((check) => check.id === "mfaEvidence")?.state).toBe("notApplicable");
+  });
+  it("presents security evidence before report exports and links checks to their owning pages", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const onNavigate = vi.fn();
+    const user = userEvent.setup();
+    render(<LocaleProvider><AccessReports workspace={workspace} scene={scene} onNavigate={onNavigate} /></LocaleProvider>);
+    const card = screen.getByRole("heading", { name: "身份安全概览" }).closest("article")!;
+    expect(within(card).getByLabelText("身份安全检查状态")).toBeTruthy();
+    expect(within(card).getByText("MFA 绑定证据")).toBeTruthy();
+    expect(within(card).getAllByText("状态未知").length).toBeGreaterThanOrEqual(1);
+    expect(within(card).getByRole("button", { name: "导出报告" })).toBeTruthy();
+    await user.click(within(card).getByRole("button", { name: "查看长期访问密钥" }));
+    expect(onNavigate).toHaveBeenCalledWith("keys");
   });
 });

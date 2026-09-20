@@ -104,7 +104,10 @@ generic provider schemas before a real second implementation exists.
     session duration and console access; SAML/OIDC provider configuration,
     role mappings and user SSO; enterprise-directory visibility and member
     import; subuser key creation, status and deletion; password/session
-    configuration; and allowlisted credential/security reports. Referenced
+    configuration; and allowlisted credential/security reports. The overview
+    presents report evidence before export and distinguishes review,
+    configured, not-applicable and unknown states; missing authenticator or
+    activity evidence is never projected as false or safe. Referenced
     objects cannot be deleted, system policies cannot be changed, and keys
     must be disabled before deletion. A generated key secret is explicitly
     nonfunctional, displayed once, and excluded from stored workspace state
@@ -444,7 +447,7 @@ implemented or that a successful reference submission was exercised.
 
 | Workspace | Verified reference behavior | Matrix target and current gap |
 | --- | --- | --- |
-| Overview | Identity counts link to directories; high-privilege associations, recent sensitive actions, account identity, login links and security guidance are separate blocks. | Keep the existing overview composition; derive counts and guidance from the same workspace state. Never show simulated protection as real MFA or a real security assessment. |
+| Overview | Identity counts link to directories; high-privilege associations, recent sensitive actions, account identity, login links and security guidance are separate blocks. | Keep one evidence-first information flow: counts and recent actions, then an actionable security snapshot, permission principles and high-privilege candidates. The snapshot derives from the same workspace state, keeps exports secondary, and never presents simulated protection as real MFA or a real security assessment. |
 | Users | The subuser detail distinguishes access method from permission. The Owner detail exposes group management, while an ungranted user is guided to join a group, copy another user's permissions or attach policies. Adding permissions is a content-area selection/review flow. | Reuse the user wizard and permission selector, but treat the Tencent Owner group affordance as reference only. Matrix projects Account + RootIdentity as a compact owner summary and independent protected detail; only User rows participate in group, grant, credential and lifecycle tasks. Copying permissions must describe precisely which direct bindings or memberships are copied; it never clones passwords, keys, boundaries or role sessions. |
 | Groups | Creation is a three-step content page: basic information, policy selection, review. Empty policy selection is allowed. The selector separates available/selected items and states its per-operation limit. | Matrix uses a two-step group-only journey: details, then review. Creation produces an empty group and opens its detail; each member or direct-policy relationship is a separately reviewed command. Group detail explains inherited-grant impact. A group is not a login identity and cannot be assumed. |
 | Policy directory | All/preset views show policy name, product, permission category, description, last modified time and authorization action. Custom-only omits product and permission category. Presets cannot be deleted. | Adopt the directory task and compact search/filter hierarchy, but render only fields supplied by the fixed Matrix contract: stable ID, display name, management owner, tenant/installation scope, lifecycle status, default version and updated time. Product, description, permission category, policy content, affected subjects and effective access are not inferred. The bounded complete snapshot is paged only in the client; it is never presented as backend pagination. |
@@ -455,6 +458,19 @@ implemented or that a successful reference submission was exercised.
 | Role and user SSO | Role SSO uses an IdP and a role without mirroring employees as subusers; user SSO enters as an existing subuser. Provider creation distinguishes OIDC URL/client IDs/public keys from SAML metadata. | Group both routes under Identity providers, not Identity security. Federated accounts belong to Identities; API keys and user settings remain under Identity security. Preserve the current synthetic configuration boundary and separate routes. Provider validation is local shape validation only. No real discovery, key retrieval, enterprise login, enablement or enrollment is part of acceptance. |
 | Enterprise accounts | The current entry requires an enterprise administrator to scan and activate it. | Reference activation was skipped without clicking activate. Matrix's existing synthetic member-import demonstration remains explicitly MOCK; it is not evidence of a tested Tencent import or a connected corporate directory. |
 | API keys and settings | Key entry warns against primary-account long-lived keys and states that SecretKey is only shown at creation. Settings group password, account, login and security concerns. | Keep subuser-only, one-time nonfunctional MOCK credentials and separate settings sections. Reference key issuance, acknowledgement of saved keys, security mutations and enrollment were not performed. |
+
+The preview security snapshot follows the useful parts of AWS's
+[credential-report value semantics](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_getting-report.html)
+and Google Cloud's
+[review-before-apply recommendation workflow](https://docs.cloud.google.com/recommender/docs/use-api),
+without copying their product model. Matrix additionally requires an explicit
+`unknown` state because the current IAM contract does not expose authenticator
+enrollment, complete credential activity or a report collection watermark.
+`Not applicable` is reserved for a control that truly does not apply to the
+identity or credential carrier. This preview contract is aligned with
+`63ad9fd6cfb29525fcf6a51bc652e791adc49fc5:IAM/FEAT-IAM-009-security-governance.md`
+S4; it does not invent that document's pending report API, score risk, infer
+effective access or automatically apply a recommendation.
 
 #### MFA and self-session experience contract
 
@@ -516,15 +532,19 @@ outcomes retain and replay the exact original intent; they never create a
 second bulk operation. Confirmation is shown inline in the content area so the
 page title and action positions remain stable on desktop and compact layouts.
 
-Acceptance evidence on 2026-09-20: 572 frontend tests and three export-
+Acceptance evidence on 2026-09-20: 574 frontend tests and three export-
 normalization tests passed, along with type checking, lint, architecture and
 style checks (228 theme contrast pairs), 39-page production static generation,
 217-file embedded-export equivalence, and the Go UI-host tests. Browser checks
 covered the normal viewport and a 390 x 844 compact viewport for challenge,
 sessionless first setup, QR/manual setup, personal security cards, compact page
 actions and inline bulk-session confirmation. Browser warning/error inspection
-was empty. This evidence accepts only the MOCK UX plus the fixed self-session
-adapter; it is not evidence of a usable backend MFA or email-delivery API.
+was empty. The identity-security snapshot additionally passed a `360 x 800`
+check with `clientWidth == scrollWidth == 360`; its export menu returned focus
+to the trigger on `Escape`, and the evidence links navigated directly to their
+owning IAM pages. This evidence accepts only the MOCK UX plus the fixed self-
+session adapter; it is not evidence of a usable backend MFA, credential-report
+or email-delivery API.
 
 The generator and association contracts are supported by Tencent's
 [policy generator](https://cloud.tencent.com/document/product/598/37739) and
@@ -765,10 +785,15 @@ service wildcards and specific actions, in the current default version. The
 same content classification owns editor, detail and role-creation warnings.
 This is a review candidate, not an effective-access verdict: resource scope,
 conditions, explicit denies and boundaries still apply. User review counts
-include direct and inherited candidates once per user. Security guidance shows
-workspace facts and inspection links, never a completed security assessment:
-empty groups are not evidence of distributed permissions, unused keys are not
-encouraged, and saved MOCK protection does not imply real MFA activation.
+include direct and inherited candidates once per user. The identity-security
+snapshot replaces the former duplicate guidance/download cards with one main-
+column evidence flow: active long-lived keys, direct User grants, sign-in and
+sensitive-operation policy settings, pending password changes and unavailable
+MFA enrollment evidence. Every item links to its owning page when one exists;
+exports remain a secondary menu. Review, configured, not-applicable and
+unknown are separate states. Empty groups are not evidence of distributed
+permissions, zero active keys do not complete a security assessment, and a
+saved MOCK protection policy does not prove real MFA enrollment.
 The MOCK user directory displays and filters direct/group policy associations;
 the live directory displays only the fixed IAM contract's direct policy
 attachments. Empty-group membership and a boundary alone are not grants. A
@@ -1657,7 +1682,7 @@ own-login-session slices.
 
 | Gate | Evidence |
 | --- | --- |
-| Supported frontend runtime | Node 24.19.0; complete `build:embedded` plus type, lint, architecture, style and test gates passed: 572 Vitest cases across 39 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
+| Supported frontend runtime | Node 24.19.0; complete `build:embedded` plus type, lint, architecture, style and test gates passed: 574 Vitest cases across 39 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
 | Theme and static-export boundary | 228 semantic contrast pairs passed across light, mixed and dark workspace/shell surfaces. Production preview was disabled; all 217 embedded files matched the normalized immutable export. |
 | UI host and architecture | `go test ./app/ui/paas/...` passed against the regenerated embedded console. |
 | Static query boundary | Supported client detail/creation queries retained identical HTML and CSP; ambiguous, malformed and authority-bearing selectors were rejected. |

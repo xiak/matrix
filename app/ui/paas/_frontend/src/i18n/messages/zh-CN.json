@@ -959,18 +959,7 @@
     "ungrantedUsers": "未授权",
     "pendingPasswords": "待改密",
     "partialSummary": "统计仅覆盖当前已加载的用户，不代表全部用户。请在用户列表翻页查看其余记录。",
-    "accessChecklist": "访问与安全检查",
-    "delegateTitle": "为成员分配独立身份",
-    "delegateHint": "日常工作使用子用户，避免共享主账号凭据。",
-    "reviewAdmins": "定期检查高权限用户",
-    "reviewAdminsHint": "仅为确有需要的成员授予租户管理员角色。",
-    "reviewPolicyAttachments": "复核直接策略关联",
-    "managementSnapshotHint": "当前列表是管理快照，不代表最终权限；请结合用户组、边界和实时授权判定复核。",
-    "firstLoginTitle": "首次登录修改密码",
     "firstLoginHint": "新用户和重置密码的用户，必须先修改初始密码才能访问控制台资源。",
-    "userCount": "{count} 位用户",
-    "pendingCount": "{count} 位待完成",
-    "viewUsers": "查看用户",
     "viewRoles": "查看角色",
     "viewPolicies": "查看策略",
     "permissionPrinciples": "最小权限原则",
@@ -1873,11 +1862,47 @@
     "eventHistoryHint": "当前体验会话最近 100 条操作记录，仅用于预览，不作为真实安全审计凭证。",
     "highPolicies": "高权限策略",
     "highPoliciesHint": "当前默认版本包含权限管理操作的策略，供重点检查；此列表不是有效权限评估。",
-    "reviewPrivilegeHint": "统计直接或通过用户组关联高权限策略的用户（去重），以及租户管理员；不代表最终可执行的权限。",
-    "securityGuide": "安全指引",
+    "securityOverview": "身份安全概览",
+    "securityOverviewHint": "基于当前体验会话的本地建议，不代表真实风险分、最终权限或认证器状态。",
+    "securityStatusSummary": "身份安全检查状态",
+    "mockEvidence": "MOCK 快照",
+    "securityStates": {
+      "review": "需复核",
+      "configured": "已配置",
+      "unknown": "状态未知",
+      "notApplicable": "不适用"
+    },
+    "securityChecks": {
+      "activeKeys": {
+        "title": "长期访问密钥",
+        "hint": "{count} 个启用的模拟长期密钥。仅保留工作必需的编程访问凭证。"
+      },
+      "directGrants": {
+        "title": "用户直接授权",
+        "hint": "{count} 个用户直接关联策略。团队常规授权优先通过用户组，例外需单独复核。"
+      },
+      "loginProtection": {
+        "title": "登录保护策略",
+        "hint": "{count} 个控制台访问身份适用；这里显示账户策略，不代表用户已经绑定 MFA。"
+      },
+      "sensitiveProtection": {
+        "title": "敏感操作保护",
+        "hint": "当前仅显示模拟配置；真实挑战与会话契约尚未接入。"
+      },
+      "pendingPasswords": {
+        "title": "待修改密码",
+        "hint": "{count} 个控制台访问身份需要在首次登录时修改密码。"
+      },
+      "mfaEvidence": {
+        "title": "MFA 绑定证据",
+        "hint": "当前数据未提供认证器绑定事实，不能推断为未绑定或已安全。"
+      }
+    },
+    "reviewSecurityCheck": "查看{name}",
+    "exportReports": "导出报告",
     "credentialReport": "用户凭证报告",
     "securityReport": "安全分析报告",
-    "reportHint": "只导出当前模拟状态，不包含密码或 Secret。",
+    "reportHint": "只导出当前 MOCK 快照，不包含密码或 Secret；未知与不适用会明确区分。",
     "download": "下载报告",
     "noAudit": "暂无操作记录",
     "event": "操作事件",
@@ -1889,13 +1914,6 @@
     "providerCount": "身份提供商",
     "subusers": "子用户",
     "securityScore": "身份安全建议",
-    "guideGroups": "通过用户组管理权限",
-    "guideKeys": "检查长期密钥",
-    "guideMfa": "配置身份验证保护",
-    "guideGroupsHint": "{count} 个用户组同时具有成员和策略。仍需检查授权是否必要。",
-    "guideKeysHint": "{count} 个启用的模拟密钥。仅在必要时创建子用户密钥，停用闲置密钥。",
-    "guideProtectionSaved": "已保存模拟登录保护配置，未实际启用 MFA。",
-    "guideProtectionUnset": "尚未设置模拟登录保护；这里不会实际启用 MFA。",
     "configure": "去配置",
     "currentIdentity": "当前身份",
     "userPolicies": "用户关联策略（模拟）",

@@ -165,6 +165,19 @@
 .checklist p { margin: var(--xiak-spacing-narrow) 0 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.6; }
 .checklistIcon { width: 32px; height: 32px; }
 .checklistIcon svg { width: 16px; height: 16px; }
+.securityReportBody { display: grid; gap: var(--xiak-spacing-comfortable); }
+.securityReportSummary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-tight); margin: 0; }
+.securityReportSummary > div { display: grid; gap: var(--xiak-spacing-micro); min-width: 0; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel-hover); }
+.securityReportSummary dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.securityReportSummary dd { margin: 0; color: var(--xiak-color-text-strong); font-family: var(--xiak-font-numeric); font-size: var(--xiak-font-size-subtitle); font-weight: var(--xiak-font-weight-semibold); }
+.securityChecks { display: grid; margin: 0; padding: 0; list-style: none; }
+.securityChecks > li { display: flex; align-items: center; gap: var(--xiak-spacing-default); min-width: 0; padding-block: var(--xiak-spacing-comfortable); border-bottom: var(--xiak-border-subtle); }
+.securityChecks > li:first-child { padding-top: 0; }
+.securityChecks > li:last-child { padding-bottom: 0; border-bottom: 0; }
+.securityCheckCopy { display: grid; flex: 1; min-width: 0; gap: var(--xiak-spacing-narrow); }
+.securityCheckHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-tight); }
+.securityCheckHeading strong { color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-medium); }
+.securityCheckCopy p { margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.6; overflow-wrap: anywhere; }
 .fieldCaption { margin: 0 0 var(--xiak-spacing-narrow); }
 .identifier { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-narrow); min-width: 0; }
 .identifier code { min-width: 0; overflow-wrap: anywhere; white-space: normal; }

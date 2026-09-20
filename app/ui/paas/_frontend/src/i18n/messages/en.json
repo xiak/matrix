@@ -959,18 +959,7 @@
     "ungrantedUsers": "No permissions",
     "pendingPasswords": "Password pending",
     "partialSummary": "Statistics cover only the currently loaded users, not the entire directory. Use pagination in Users to see the remaining records.",
-    "accessChecklist": "Access and security checks",
-    "delegateTitle": "Give each member an identity",
-    "delegateHint": "Use subusers for everyday work instead of sharing the primary account's credentials.",
-    "reviewAdmins": "Review privileged users regularly",
-    "reviewAdminsHint": "Grant the tenant administrator role only to members who need it.",
-    "reviewPolicyAttachments": "Review direct policy attachments",
-    "managementSnapshotHint": "This is a management snapshot, not effective permission. Review groups, boundaries and live authorization decisions together.",
-    "firstLoginTitle": "Change passwords at first sign-in",
     "firstLoginHint": "New users and users with reset passwords must change their initial password before accessing console resources.",
-    "userCount": "{count, plural, one {# user} other {# users}}",
-    "pendingCount": "{count} pending",
-    "viewUsers": "View users",
     "viewRoles": "View roles",
     "viewPolicies": "View policies",
     "permissionPrinciples": "Least privilege",
@@ -1873,11 +1862,47 @@
     "eventHistoryHint": "The latest 100 operations in this preview session, not a real security audit trail.",
     "highPolicies": "High-privilege policies",
     "highPoliciesHint": "Policies whose current default version includes permission-management actions, for review. This is not an effective-access assessment.",
-    "reviewPrivilegeHint": "Counts users with direct or group-derived high-privilege policies once, plus tenant administrators. This does not describe effective access.",
-    "securityGuide": "Security guide",
+    "securityOverview": "Identity security overview",
+    "securityOverviewHint": "Local guidance derived from this preview session, not a real risk score, effective-access result, or authenticator status.",
+    "securityStatusSummary": "Identity security check status",
+    "mockEvidence": "MOCK snapshot",
+    "securityStates": {
+      "review": "Review",
+      "configured": "Configured",
+      "unknown": "Unknown",
+      "notApplicable": "Not applicable"
+    },
+    "securityChecks": {
+      "activeKeys": {
+        "title": "Long-lived access keys",
+        "hint": "{count} enabled mock long-lived keys. Keep programmatic credentials only where work requires them."
+      },
+      "directGrants": {
+        "title": "Direct user grants",
+        "hint": "{count} users have directly attached policies. Prefer groups for routine team access and review exceptions separately."
+      },
+      "loginProtection": {
+        "title": "Sign-in protection policy",
+        "hint": "Applies to {count} console identities. This is an account policy, not proof that users enrolled an MFA authenticator."
+      },
+      "sensitiveProtection": {
+        "title": "Sensitive-operation protection",
+        "hint": "Only the preview setting is available; the real challenge and session contract is not connected."
+      },
+      "pendingPasswords": {
+        "title": "Pending password changes",
+        "hint": "{count} console identities must change their password on first sign-in."
+      },
+      "mfaEvidence": {
+        "title": "MFA enrollment evidence",
+        "hint": "Authenticator enrollment facts are unavailable, so the UI cannot infer either unenrolled or secure."
+      }
+    },
+    "reviewSecurityCheck": "View {name}",
+    "exportReports": "Export reports",
     "credentialReport": "User credential report",
     "securityReport": "Security analysis report",
-    "reportHint": "Exports the current preview state only, never passwords or secrets.",
+    "reportHint": "Exports this MOCK snapshot only, never passwords or secrets; unknown and not-applicable values stay distinct.",
     "download": "Download report",
     "noAudit": "No operations yet",
     "event": "Event",
@@ -1889,13 +1914,6 @@
     "providerCount": "Identity providers",
     "subusers": "Subusers",
     "securityScore": "Identity security recommendations",
-    "guideGroups": "Manage permissions through groups",
-    "guideKeys": "Review long-lived keys",
-    "guideMfa": "Configure identity verification",
-    "guideGroupsHint": "{count} groups have both members and policies. Review whether their grants are necessary.",
-    "guideKeysHint": "{count} enabled mock keys. Create subuser keys only when needed and disable unused keys.",
-    "guideProtectionSaved": "Mock login protection is configured. Real MFA is not activated.",
-    "guideProtectionUnset": "Mock login protection is not configured. This preview cannot activate real MFA.",
     "configure": "Configure",
     "currentIdentity": "Current identity",
     "userPolicies": "User policies (mock)",
