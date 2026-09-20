@@ -2324,6 +2324,34 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
     expect((await extension.read("preview")).pendingAccountRuleChange).toEqual(pending);
   });
+  it("keeps account-rule writes closed when both the save and recovery journal are unavailable", async () => {
+    const { user, repository, extension } = await open("settings");
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    vi.mocked(repository.workspace!.execute)
+      .mockRejectedValueOnce(new Error("save timeout"))
+      .mockRejectedValueOnce(new Error("recovery journal timeout"));
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+
+    expect((await extension.read("preview")).pendingAccountRuleChange).toBeNull();
+    expect(await screen.findByText(/保存与本地恢复日志同时不可用/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+    expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
+
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("refresh-account"));
+    await waitFor(() => expect(repository.workspace!.read).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByTestId("go-settings"));
+    expect(await screen.findByText(/保存与本地恢复日志同时不可用/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
+  });
   it("keeps readable account rules unchanged when update capability is denied", async () => {
     const { user, extension } = await open("settings");
     const before = await extension.read("preview");

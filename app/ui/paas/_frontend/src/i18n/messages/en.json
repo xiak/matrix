@@ -371,7 +371,7 @@
       "notFound": "The original intent has no definitive result yet. It remains unknown and cannot be saved again.",
       "unavailable": "The original intent cannot be queried now. It remains unknown; retry later with the same intent."
     },
-    "accountInspectionUnavailable": "This error did not create a queryable MOCK intent. The page remains locked and never reuses credentials or resubmits the save.",
+    "accountInspectionUnavailable": "Both the save and the local recovery journal are unavailable, so this MOCK session cannot safely inspect the original intent. Account-rule writes remain closed across ordinary refreshes and route changes; end and re-enter the preview session to reset it. This boundary does not imply that a real platform may replace authoritative result lookup with signing in again.",
     "accountMockBoundary": "This account rule writes only to the isolated preview repository. IAM has not frozen public security-settings HTTP; a real failure must never fall back to this MOCK.",
     "feedback": {
       "removed": "The demonstration authenticator was removed. A real change would end affected login sessions.",

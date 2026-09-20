@@ -18,7 +18,7 @@ import type {
   PolicyAttachmentRevocation,
   UserPermissionBoundary
 } from "../domain/accounts";
-import { type AccessWorkspace, type AccessWorkspaceCommand } from "../domain/accessWorkspace";
+import { type AccessWorkspace, type AccessWorkspaceCommand, type PendingAccountRuleChange } from "../domain/accessWorkspace";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import type { AccountRepository } from "../repositories/iamRepository";
 import { httpAccountRepository } from "../repositories/httpIamRepository";
@@ -162,6 +162,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   // View context survives list/detail navigation, not account/session changes.
   // Keeping it outside React state avoids rerendering the shell on each keystroke.
   const viewSession = useMemo(() => ({ credential, tenantId, principalId }), [credential, tenantId, principalId]);
+  const unrecoverableAccountRule = useRef<{ session: typeof viewSession; intent: PendingAccountRuleChange } | null>(null);
   const storedPolicyView = useRef<{ session: typeof viewSession; view: PolicyDirectoryView } | null>(null);
   const policyDirectoryView = useMemo(() => ({
     read() { const stored = storedPolicyView.current; return stored?.session === viewSession ? stored.view : { ...defaultPolicyDirectoryView }; },
@@ -192,6 +193,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
 
   useEffect(() => {
     if (!active || !credential || !tenantId) return;
+    if (unrecoverableAccountRule.current?.session !== viewSession) unrecoverableAccountRule.current = null;
     let mounted = true;
     directoryRequest.current.users += 1;
     directoryRequest.current.accounts += 1;
@@ -208,7 +210,12 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       ]);
       // The advanced workspace is an explicit preview capability. Do not fetch its
       // larger graph unless the live directory boundary has authorized management.
-      const extension = users !== null && repository.workspace ? await repository.workspace.read(credential!) : null;
+      let extension = users !== null && repository.workspace ? await repository.workspace.read(credential!) : null;
+      const localLock = unrecoverableAccountRule.current?.session === viewSession ? unrecoverableAccountRule.current.intent : null;
+      if (extension && localLock) {
+        if (extension.pendingAccountRuleChange && extension.pendingAccountRuleChange.requestId !== localLock.requestId) throw new Error("INVALID_PREVIEW_RECOVERY_STATE");
+        extension = { ...extension, pendingAccountRuleChange: extension.pendingAccountRuleChange ?? localLock };
+      }
       if (users?.items.some((entry) => entry.user.accountId !== tenantId || entry.user.id === identity.account.rootIdentity.principalId)) throw new Error("INVALID_IAM_TENANT");
       if (tenantPolicies && tenantPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
       if (platformPolicies && platformPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
@@ -219,7 +226,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       (failure: unknown) => { if (mounted) { setScene(null); setWorkspace(null); setError(accountError(failure)); } })
       .finally(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
-  }, [active, credential, principalId, repository, revision, tenantId]);
+  }, [active, credential, principalId, repository, revision, tenantId, viewSession]);
 
   const loadUser = useCallback(async (userId: string): Promise<AccountUserScene> => {
     if (!active || !credential || !scene || !userId || userId === scene.accountOwner.id) throw new Error("INVALID_IAM_USER_TARGET");
@@ -409,7 +416,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) {
         const code = failure instanceof AccessWorkspaceError ? failure.code : accountError(failure);
         if (command.kind === "save-account-rule" && code === "unavailable") {
-          const unknownIntent = {
+          const unknownIntent: PendingAccountRuleChange = {
             requestId: command.requestId,
             baselineLoginProtection: command.expectedLoginProtection,
             requestedLoginProtection: command.loginProtection,
@@ -423,11 +430,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
               loginProtection: command.loginProtection
             });
             if (recovered.workspace.accountId !== tenantId || recovered.workspace.mode !== "preview") throw new Error("INVALID_IAM_TENANT");
+            unrecoverableAccountRule.current = null;
             setWorkspace(recovered.workspace);
           } catch {
             // The preview journal is the durable owner. Keep a provider-level lock
             // if that isolated journal is itself unavailable; never unlock on error.
-            setWorkspace((current) => current ? { ...current, pendingAccountRuleChange: unknownIntent } : current);
+            const unrecoverable = { ...unknownIntent, status: "UNRECOVERABLE" as const };
+            unrecoverableAccountRule.current = { session: viewSession, intent: unrecoverable };
+            setWorkspace((current) => current ? { ...current, pendingAccountRuleChange: unrecoverable } : current);
           }
         }
         setWorkspaceError(code);
@@ -454,7 +464,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

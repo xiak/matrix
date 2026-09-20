@@ -161,7 +161,7 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
           <div><dt>{t("verificationState")}</dt><dd>{t("verificationDiscarded")}</dd></div>
         </dl>
         <Alert status="warning">{t("accountUnknownBoundary")}</Alert>
-        {workspace.pendingAccountRuleChange ? <><FormField id={inspectionId} label={t("accountInspectionScenario")}><Select id={inspectionId} value={inspection} onValueChange={(value) => setInspection(value as InspectionScenario)} options={(["found-applied", "found-rejected", "not-found", "unavailable"] as const).map((value) => ({ value, label: t(`accountInspectionScenarios.${value}`) }))} /></FormField>
+        {workspace.pendingAccountRuleChange?.status === "UNKNOWN" ? <><FormField id={inspectionId} label={t("accountInspectionScenario")}><Select id={inspectionId} value={inspection} onValueChange={(value) => setInspection(value as InspectionScenario)} options={(["found-applied", "found-rejected", "not-found", "unavailable"] as const).map((value) => ({ value, label: t(`accountInspectionScenarios.${value}`) }))} /></FormField>
           {access.workspaceError ? <Alert status="danger">{t(`accountInspectionErrors.${access.workspaceError === "accountRuleResultNotFound" ? "notFound" : "unavailable"}`)}</Alert> : null}
           <div className={styles.flowActions}><Button disabled={access.busy} onClick={() => void inspect()}>{t(access.busy ? "inspectingOriginalIntent" : "inspectOriginalIntent")}</Button></div></> : <Alert>{t("accountInspectionUnavailable")}</Alert>}
       </Card.Body>

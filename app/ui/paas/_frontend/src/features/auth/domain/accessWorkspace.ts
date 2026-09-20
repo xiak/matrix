@@ -41,7 +41,7 @@ export type PendingAccountRuleChange = {
   requestId: string;
   baselineLoginProtection: boolean;
   requestedLoginProtection: boolean;
-  status: "UNKNOWN";
+  status: "UNKNOWN" | "UNRECOVERABLE";
 };
 export type EnterpriseMember = { id: string; name: string; department: string };
 export type EnterpriseAccount = { id: string; name: string; corporationId: string; visibleMemberIds: string[]; importedMemberIds: string[]; createdAt: string };
@@ -504,6 +504,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       const pending = state.pendingAccountRuleChange;
       if (!pending) throw new AccessWorkspaceError("invalid");
       if (pending.requestId !== command.requestId) invalid();
+      if (pending.status === "UNRECOVERABLE") throw new AccessWorkspaceError("accountRuleResultUnavailable");
       if (command.resultMode === "not-found") throw new AccessWorkspaceError("accountRuleResultNotFound");
       if (command.resultMode === "unavailable") throw new AccessWorkspaceError("accountRuleResultUnavailable");
       if (command.resultMode === "found-applied") state.settings = { ...state.settings, loginProtection: pending.requestedLoginProtection };
