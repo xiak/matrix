@@ -173,6 +173,17 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - `AccessWorkspace` 121 条用例完整通过。全前端并行回归的 583 条中 578 条通过，五条与本片无关的既有策略作者/版本用例在未放宽的五秒边界达到 5029–5270ms；五条原样隔离重跑以 11.45 秒全部通过。类型、lint、架构、228 组主题对比、三条静态归一化用例、39 页生产导出、218 个嵌入文件等价及 Go UI 宿主门禁通过。
 - 真实 DEV 浏览器在默认 `539px` 紧凑视口和 `360 × 800` 验证 trust 与体验会话内容区；小屏 document/body 均为 `clientWidth == scrollWidth == 360`，工作流标题获得焦点，Dialog 数为零，控制台 warning/error 为空。该结果只接受隔离 MOCK UX；命名的 IAM-006 固定来源尚未合入本分支，也没有真实 AssumeRole、一次性凭据或管理员会话 API 浏览器验收。
 
+### 成员自服务 Role 承担 MOCK 的开发验收证据
+
+2026-09-20，前端实现固定在已推送的
+[`8b703cfe6c65e342c1651ff438f53fafa96d9fb0`](https://github.com/xiak/matrix/commit/8b703cfe6c65e342c1651ff438f53fafa96d9fb0)。
+
+- 账号菜单只在隔离 DEV 体验中提供“角色切换体验”，深链为 `/console/access/role-access/`。它不加入租户管理员角色目录，也不启动 `AccountAccessProvider` 的 User、Policy、Role 管理读取；页面使用明确标记的成员场景来证明只有承担权限、没有角色管理权限的 User 仍可使用自服务入口。
+- 发现页只展示当前场景成员可以承担的角色，不泄露未授权 Role 或管理员总数。审阅固定展示来源 User、Account、准确 Role、资源版本和有界时长；结果未知提示要求保留原 `requestId` 查询，不能创建第二次签发，凭据丢失必须先撤销原意图再产生新意图。
+- MOCK 成功态只呈现非秘密会话身份、来源 User、签发和到期时间，明确不返回或保存真实 credential、不替换 Header 当前登录。退出确认说明真实 Role logout 不签发或复活来源 USER 凭据，来源会话必须重新检查。选择、审阅、成功与退出均在内容区完成，没有 Dialog。
+- 完整前端 40 个测试文件、587 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价和 Go UI 宿主门禁通过。真实 DEV 在桌面与 `360 × 800` 验证账号菜单入口、审阅和成功态；小屏 document `clientWidth == scrollWidth == 360`、Dialog 数为零，工作流标题获得焦点。浏览器仅保留生成文件出现前的旧 HMR 缺模块/缺翻译记录，当前旅程没有新增错误。
+- 该证据不表示 IAM-006 固定提交已经进入本分支，也不表示真实 `GET /v1/auth/assumable-roles`、`POST :assume`、当前 Role 身份、by-request 恢复或 logout 已接入。后续 LIVE 适配必须消费固定契约且不得在网络、5xx、404 或协议失败后回退本 MOCK。
+
 ### 本人安全通知地址 MOCK 的开发验收证据
 
 2026-09-20，前端实现固定在已推送的
