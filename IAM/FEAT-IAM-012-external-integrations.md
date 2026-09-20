@@ -1,6 +1,6 @@
 # FEAT-IAM-012：外部身份、通知与组织治理
 
-- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。本分支正在收口S1b首条邮箱验证、持久投递/重试及受限worker，已通过下述本地真实门禁，尚未形成固定提交独立验收。安装配置、后继MFA认证载体/安全事件接入、已有地址替换及真实UI未验收；其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
+- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)尚待全部结果，不称独立验收。安装配置、后继MFA认证载体/安全事件接入、已有地址替换及真实UI未验收；其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
 - Owner：IAM负责S1的地址验证、目的限定通知意图/投递和重试；installation负责受保护SMTP及必要私有材料配置，UX/UI负责本人交互。其他外部来源与计费保持各自业务边界。
 - S1a不等于完整S1或其他外部能力已实现；缺少前置时不提供假入口或伪成功。
 
@@ -64,7 +64,7 @@ SMTP目标、发件地址与认证材料只来自受保护部署配置的后续�
 
 ### S1b：本人邮箱验证与持久投递详细设计
 
-本节拥有正在实施的纵向切片；纯材料/私有codec已有固定验收，本分支HTTP/持久事务/worker的本地证据如下，未提交独立CI前不得作为可消费固定接口交接。先交付真实完整LOGIN_SESSION的本人首条邮箱验证和真实邮件投递；同一模型随后接入009的强制ENROLLMENT/STEP_UP与已有地址替换，不另建realm、联系人身份服务或通用消息中心。前置未完成的分支明确拒绝，不能把它们作为兼容的弱认证入口。
+本节拥有当前纵向切片；纯材料/私有codec已有固定验收，运行候选`07aa5062`的本地证据如下，全部独立CI通过前仅作为可审查固定对象，不继承其他分支或安装验收。先交付真实完整LOGIN_SESSION的本人首条邮箱验证和真实邮件投递；同一模型随后接入009的强制ENROLLMENT/STEP_UP与已有地址替换，不另建realm、联系人身份服务或通用消息中心。前置未完成的分支明确拒绝，不能把它们作为兼容的弱认证入口。
 
 #### 当前权威与增量边界
 
@@ -127,7 +127,7 @@ EmailVerificationKeyring最多8192字节、1至8个按keyId严格递增的格式
 
 #### 本分支持久运行实现与本地证据
 
-当前未固定运行增量使用IAM schema36、Audit schema20；PaaS仍为本分支原schema2，发布profile/revision未改。原密码尝试新增封闭`NOTIFICATION_CONTACT_VERIFY`目的及原Session/请求/地址承诺；reserve/consume七参数替换原五参数，不保留可混用目的的旧重载。失败预算提交先于密码计算或验证码解封，错误返回不返还额度。现有ServiceIdentity/lookup_service、七列Audit claim、Session查询/撤销及旧Audit canonical保持。
+当前固定候选使用IAM schema36、Audit schema20；PaaS仍为本分支原schema2，发布profile/revision未改。原密码尝试新增封闭`NOTIFICATION_CONTACT_VERIFY`目的及原Session/请求/地址承诺；reserve/consume七参数替换原五参数，不保留可混用目的的旧重载。失败预算提交先于密码计算或验证码解封，错误返回不返还额度。现有ServiceIdentity/lookup_service、七列Audit claim、Session查询/撤销及旧Audit canonical保持。
 
 `000013_security_mail`是原IAM持久化owner内的独立邮件权限边界：可信联系状态、原验证意图、共享预算、不可变通知和逐次租约观察。延迟约束同时核对原意图、真实USER/Session、封存scope、两种封闭事实与相应邮件；完成或终态不能被重放修改。新增tenant事实为`iam.notification-contact.verification-started`与`iam.notification-contact.verified`，actor/target均为本人USER，不含邮箱、密码、验证码或包装材料。首片新增`CONTACT_VERIFIED`安全模板，不拿MFA恢复/绑定模板冒充联系人验证。原历史producer proof消费精确已提交事实，停用USER不让历史通知或事实失去投递资格。
 
@@ -147,7 +147,7 @@ IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`�
 
 上述保留数据门禁曾拒绝不同测试共用同名PostgreSQL登录却配置不同口令的夹具；已统一合成测试口令后复验，未改生产等值迁移不得旋转口令的约束。门禁结束确认PG无客户端、Postfix空队列后，已删除自有容器及空网络、五个无人引用的旧测试卷；后补交错/Audit的tmpfs PG也已删除，按其唯一标签查询容器/网络/卷均零残留。未重启共享服务或操作其他任务/远端。
 
-本片仍需固定源码/独立CI及安装/UI消费者验收；后继MFA/账号配置交错与业务安全事件接入、运维聚合告警和受控恢复后的联系/在途意图隔离仍按上述需求逐片证明。当前只有稳定投递结果/错误类别和持久尝试记录，不把它们描述为已交付聚合告警。现有邮件证据不开放MFA，也不声称已有地址替换、ENROLLMENT/STEP_UP、旧备份重新开放或完整S1验收。
+本片仍需全部独立CI及安装/UI消费者验收；后继MFA/账号配置交错与业务安全事件接入、运维聚合告警和受控恢复后的联系/在途意图隔离仍按上述需求逐片证明。当前只有稳定投递结果/错误类别和持久尝试记录，不把它们描述为已交付聚合告警。现有邮件证据不开放MFA，也不声称已有地址替换、ENROLLMENT/STEP_UP、旧备份重新开放或完整S1验收。
 
 #### 投递、重试与事实
 

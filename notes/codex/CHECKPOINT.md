@@ -4,151 +4,105 @@
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Only this
   task's independent worktree is writable. Updated 2026-09-20.
-- IAM goal remains ACTIVE. User approved verified-address/SMTP/retry security
-  mail and bounded original-primary MFA recovery/backup isolation. Full MFA,
-  durable notification, recovery, security settings/report and real UI remain
-  unfinished. Do not redefine the goal as preparation or crypto alone.
-- Latest fixed/pushed implementation:
-  **8ccc632796727261563c952a89e4dfd3ce947144**, private mail contracts/material.
-  Exact Verification35498547391 was QUEUED at last GitHub API observation:
-  https://github.com/xiak/matrix/actions/runs/35498547391 . Confirm exact SHA
-  and all five job conclusions before independent-acceptance claims.
-- Source remains IAM35/Audit19/PaaS2; published profile/revision unchanged.
-  The mail slice has private pure contracts, no public HTTP, SQL, runtime FILE,
-  installation, worker or UI change.
-- Read AGENTS, the one owning FEAT (IAM/012 for mail, IAM/009 for MFA), then
-  its code/tests. Adoption: docs/adoption/FEAT-006-platform-authorities.md.
-  This checkpoint is not a duplicate requirement or acceptance owner.
+- IAM goal remains ACTIVE. User approved real security mail and bounded
+  original-primary MFA recovery/backup isolation. Full MFA, recovery,
+  security settings/report and real UI remain incomplete. Crypto/custody
+  and notification preparation are not the completed goal.
+- Latest fixed/pushed production candidate:
+  **07aa50627318708ed4d3ac9ce481b1e5829669d6**, verified first contact and
+  durable mail. Exact Verification35504960145 is still running:
+  https://github.com/xiak/matrix/actions/runs/35504960145 . Verify all five
+  jobs before final handoff; do not cancel it with another production push.
+- Source IAM36/Audit20/PaaS2; published profile/revision unchanged. No
+  installation, releasebuild, UI or other worktree changes are adopted.
+- Read AGENTS, IAM/012 for mail or IAM/009 for MFA, then owning code/tests.
+  Fixed adoption belongs to docs/adoption/FEAT-006-platform-authorities.md.
 
-## Fixed private mail contracts and material
+## Fixed first-contact and durable mail candidate
 
-8ccc6327 fixes strict private SecurityMailSMTPChannel and independent
-EmailVerificationKeyring codecs in api/iam/v1. Ordinary JSON/formatting
-cannot disclose their secrets; no insecure TLS or caller file/URL selector.
-The sole EmailVerificationCipherContext binds installation/bootstrap,
-Account/USER, original verification, exact recipient, credential/contact
-versions and original UTC-microsecond lifetime. Eight-digit uniform random
-codes and purpose-separated AES-GCM/HKDF remain pure material, not current
-eligibility, a durable attempt budget, consumption or an authentication key.
-ASCII address syntax moved to its sole API owner; no compatibility alias.
+07aa5062 owns four notification-contact HTTP routes, strict private request
+codecs and current LOGIN_SESSION first-address-only workflow. Contact
+NONE/VERIFIED, original verification state and SMTP observation are separate.
+No Role/Service/challenge carrier, caller identity selector, existing-address
+replacement, MFA enablement or mail-based authentication/recovery.
 
-Exact clean export passed full default race/architecture, vet, modules,
-122-file API generation inventory/hash equality and Linux amd64 build.
-Six code/test files matched the export. Both private codecs passed bounded
-20-second/2-worker fuzz. Existing DB/mailbox SKIPs are not new runtime proof.
-IAM/012 owns the detailed first-contact, shared budget, durable lease/retry
-design; its proposed HTTP/SQL/worker is not yet implemented/frozen for UI.
+The original shared password budget adds a closed intent-bound purpose;
+reserve/consume have seven parameters, no old five-parameter bypass.
+Confirmation debit commits before code comparison. Final transaction checks
+current Account/USER/Session/generation and original intent/expiry. Contact,
+completion, immutable IAM fact and safety notice commit together. The two
+new tenant Audit actions require same actual USER actor/target, never email,
+password, code or envelope. Committed facts and safety notices remain
+deliverable after USER disable; old address codes do not remain acceptable.
 
-## Independently accepted S1a transport
+matrix-iam-notification-dispatcher has its own role/login, two connections
+and two bounded loops. Claim commits before SMTP, 45s fence/lease and bounded
+retry; expired in-flight means UNKNOWN, not unsent. DATA250 is ACCEPTED,
+not final delivery/read or exactly once. Keyset/registration and sealed
+bootstrap scope are checked before work; missing/wrong custody fails closed.
 
-**841ebe89aa55121ac4686dc469006ed10b47f0eb**:
-Verification35496641320 exact SHA completed/success for go, node-process,
-authority-storage, authority-runtime and authority-process, confirmed by API.
-https://github.com/xiak/matrix/actions/runs/35496641320 . This does not fill
-the newer contract slice's still-pending independent CI.
+Frozen role/login: matrix_iam_notification_worker /
+matrix_iam_notification_worker_login. Migration adds exactly sixth protected
+FILE MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE. API/worker consume
+MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE; only worker consumes
+MATRIX_IAM_SECURITY_MAIL_SMTP_CHANNEL_FILE and
+MATRIX_IAM_NOTIFICATION_DATABASE_DSN_FILE. Public process selectors:
+MATRIX_IAM_NOTIFICATION_WORKER_ID / MATRIX_IAM_NOTIFICATION_LISTEN_ADDRESS.
+No TOTP/AccessKey/bootstrap/recovery/Audit-worker capability for mail delivery.
 
-Existing IAM authority owns the closed SecurityMail projection;
-data/smtp isolates the real external side effect.
-Verification and seven security templates have no caller-provided subject,
-body, headers, links or attachments. Secret-bearing values redact formatting
-and refuse ordinary JSON. This is not an address-verification endpoint.
+IAM/012 owns real PG mail/lease/attack evidence, HTTP + independent restricted
+worker + actual Postfix Maildir code confirmation, historical safety notice,
+controlled confirmation/lifecycle races, Audit all-action/chain checks,
+original service processes, retained IAM32 executable ->36 and actual
+snapshot/dump. Full default race/architecture, vet, modules, generation and
+Linux build passed. SKIP is not runtime evidence. Contact HTTP is an
+in-process real handler; the mail worker is a separate executable.
+All task fixtures from these gates were removed; no other resources touched.
 
-Only verified STARTTLS/implicit TLS >=1.2, followed by advertised AUTH PLAIN.
-No plaintext/insecure fallback or request-supplied channel. Two concurrent
-slots, no local wait queue, one connection/recipient, bounded time/input.
-Final DATA 250 = ACCEPTED, explicit 4xx/5xx = REJECTED, uncertain completion
-= UNKNOWN, effect-before failure = UNAVAILABLE. No implicit retries. Stable
-Message-ID binds installation/notification, not exactly-once delivery.
+Remaining: five-job CI; installer configuration/release; real UX; actual MFA
+enrollment/login/recovery/step-up and safety events; existing-address
+replacement; aggregate operational alerts; post-restore contact/pending-intent
+isolation. No claim of complete S1 or MFA.
 
-Same production clean export: full default race/architecture, vet, modules,
-API generation inventory/hash equality and Linux build passed. Final test
-addition: clean-export IAM/architecture race/vet and two complete SMTP runs.
-Actual task-exclusive Debian13/Postfix3.10.13, 2CPU/768MiB/Pids128, loopback
-dynamic port: synthetic verification/security mail reached real Maildir;
-bad password and external relay refused, duplicate ID delivered twice.
-Final real runs 5.39s/6.57s; package15.906s. The test container/network were
-removed after empty-queue and identity checks; other resources untouched.
-Protocol fixtures and this mailbox are not verified USER contact, durable
-retry, MFA event-atomic notification, published SMTP config or full S1.
+## Independently verified foundations
 
-Next mail slice must remain in the same012 owner: implement verified contact,
-durable intents/leases/retry and installer private configuration before
-exposing a usable endpoint. No generic message
-center, shared Audit worker credentials or recovery-by-email authority.
-Do not invent new public APIs or deployment FILE contracts without aligning
-the current authentication/challenge and installation consumers.
+- 8ccc632796727261563c952a89e4dfd3ce947144 mail codecs/material:
+  Verification35498547391 exact SHA and all five jobs success, rechecked
+  through authenticated GitHub API (not its former queued state).
+- 841ebe89aa55121ac4686dc469006ed10b47f0eb SMTP:
+  Verification35496641320 all five success, bounded real TLS/Postfix evidence.
+- 285706e3adf76fb0c109dad474f06266c8b67ab5 snapshot custody:
+  Verification35494523608 all five success; IAM/009 owns restricted helper,
+  retained data and actual dump evidence. Contract donors d479e1c5/2e6714bd.
 
-## Independently accepted TOTP/backup preparation
+Preserve ServiceIdentity/lookup_service5, Audit claim7, lookup_session24,
+revoke_session6, record9/contract4/evidence5 and old canonical/receipt/proof.
+Preparation rejects ANY retained TOTP factor at Login/Session/readiness.
+MFA enabling must replace that with actual lifecycle/session rules, not
+remove a guard or infer authentication from missing state.
 
-**285706e3adf76fb0c109dad474f06266c8b67ab5** (IAM35 same-snapshot custody):
-Verification35494523608 exact SHA completed/success for go, node-process,
-authority-storage, authority-runtime and authority-process, confirmed by API.
-https://github.com/xiak/matrix/actions/runs/35494523608 . Final handoff sent
-to installation owner; it does not inherit installation acceptance.
-Predecessors a36a35c2 (IAM34), 92e3073 (original gate corrections),04041d2
-(private TOTP material) also have confirmed five-job success in IAM/009.
+User prefers pquerna/otp over locally maintained OTP construction. Pin and
+review upstream, retain strict inputs/database time/collision replay rules
+and independent RFC/Node vectors; delete the replaced implementation.
+A library choice is not the actual MFA flow or a security-certification claim.
 
-Installation contract donors: fixed d479e1c57b6458852dd029227d32f3d56df6c5ad
-and 2e6714bd95ee7c0d90a289b7b9902539717386d3. Sole custody/lease codec is
-api/adapter/installation/v1. No duplicate digest or foreign profile.
+## Shared owners
 
-- matrix-iam-backup-custody snapshot reads only
-  MATRIX_IAM_BACKUP_CUSTODY_DATABASE_DSN_FILE. Dedicated role/login:
-  matrix_iam_backup_custody / matrix_iam_backup_custody_login; only
-  read_totp_backup_custody(), no table/auth/registration/recovery powers.
-- RR READ ONLY snapshot and all retained factor references are one view.
-  Canonical lease line, max600s; stdin exactly RELEASE\n plus EOF. Exit0
-  only rollback+close; 2INVALID/3FORBIDDEN/6UNAVAILABLE sanitized errors.
-  Snapshot is transient, never persistent evidence or current recovery proof.
-- Migration-only MATRIX_MIGRATION_IAM_BACKUP_CUSTODY_DSN_FILE. Existing
-  migrationprocess exact sorted/unique FILE limit is now5, not arbitrary.
-- Real PG18 retained IAM32 executable ->35, apply-twice/verify/restart,
-  restricted login, actual pg_dump/restore, interruption, dual authorities
-  and original independent IAM/Audit/PaaS/dispatchers passed (IAM/009).
-- MATRIX_IAM_TOTP_KEYRING_FILE -> /run/matrix/iam-totp-keyring.json remains
-  IAM-only individual read-only. One deployment's replicas share controlled
-  material; no auto-regeneration or per-replica key. Registration/custody
-  actually compares sealed bootstrap and exact known material commitments.
-- Preparation binary rejects ANY retained factor row, including REVOKED,
-  at actual Login/Session and readiness. MFA enabling must replace this
-  with real state/session behavior, not remove the guard. No active MFA yet.
+Installation01a04149-5dbb-7300-9e4c-31d9e85c8ada exclusively owns
+layout/localmachine/topology/release/releasebuild/FEAT005/offline. It received
+07aa5062 as candidate with CI pending. IAM owns its contracts/migration/worker
+and only sixth-FILE shape in shared migrationprocess. Restoration CLOSED,
+current recovery qualification and safe reopen remain unimplemented here.
+Key availability/old receipt cannot prove current post-backup authority.
 
-Preserve ServiceIdentity/lookup_service5, claim7, lookup_session24,
-revoke_session6, record9/contract4/evidence5, old canonical/receipt/proof.
-S3a password debit remains durable before hashing, max5/60s per USER and
-generation, one in-flight/30s, no refund on crash/unknown; Login/ChangePassword
-share it. Do not restore no-attempt or raw-hash authentication overloads.
+UX/UI01a07b21-9a0d-7fd0-b090-7827ce18262e owns all UI on its branch.
+It received07aa pending candidate and first-contact limits. loginProtection
+and SSO selection stay explicit MOCK, no invented LIVE endpoint. Existing
+Role/STS fixed62a18a48 plus0567c8b2 handed off for current public contracts;
+peer must independently verify its own integration/browser.
 
-## Coordination and remaining security boundaries
-
-Installation owner01a04149-5dbb-7300-9e4c-31d9e85c8ada,
-feat/phase3-mfa-recovery: exclusively owns backup consumer/install/profile
-window. It received 285/841 final CI and8ccc6327 pure-contract candidate with
-CI pending. Its same-snapshot consumer9815916 has reported final CI success;
-it now owns the separate35/18/6+r13 preparation release. Do not import its
-profile, WIP, node state or inherited acceptance. The next mail window is now
-approved: IAM/API/Audit, IAM migration library/matrix-iam-migrate, notification
-worker/role/login and only the sixth protected IAM FILE's exact shared
-migrationprocess shape/tests. Frozen migration FILE is
-MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE; login is
-matrix_iam_notification_worker_login. Never inherit mail powers through
-API/Audit-worker/verifier/backup/recovery roles. Installation still owns
-layout/localmachine/topology/release/releasebuild/FEAT005/offline tests and
-consumes only later fixed production/CI. No runtime code is implemented yet;
-HTTP remains proposed in IAM/012. UI owner received8ccc's flow design with
-this explicit non-LIVE boundary. Proceed with the actual first-contact and
-durable notification slice, not more standalone crypto as goal completion.
-Later CLOSED/reopen must use backup-external epoch, exact immutable intent,
-invalidate old Session/challenge/enrollment and fence OTP/attempt state;
-backup key availability is not current recovery eligibility. Unimplemented.
-
-UX/UI owner01a07b21-9a0d-7fd0-b090-7827ce18262e, feat/cloud-console-ux,
-owns all UI. Current MOCK/report progress is separate, not active MFA wire.
-Notify its owner of a fixed strict-union Login contract before real adapter.
-Reports preserve UNKNOWN versus FALSE/N/A and actual evidence coverage.
-
-Only fixed verified commits exchanged, no foreign WIP/resources. Local Git
-identity Xiak <Jellal@aliyun.com>. Go2/-p2, heavy PG serial race-p1, uniquely
-labelled limited resources. No new tasks/subagents. No remote1.3/.160/.161,
-withdrawn GitLab/1.5, global changes or Docker/system restart. No personal
-email/credentials. Markdown deliverables only.
+Only fixed objects exchanged; never foreign WIP/profile/acceptance.
+Xiak <Jellal@aliyun.com>, Go2/-p2, heavy PG serial race-p1 and unique limits.
+No extra agents/tasks, remote1.3/.160/.161, withdrawn GitLab/1.5, global
+configuration, Docker/WSL/system restart or prune. Markdown only, no personal
+mailboxes or credentials.
