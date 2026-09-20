@@ -466,6 +466,11 @@ clarification in `04041d2d3f7ed55225a5164bc2bc05251d25a6f1`. It does not import
 those commits as a runtime dependency and does not claim that their private
 keyring work exposes a usable MFA API.
 
+The accepted password-only login and self-session milestones explicitly do
+not cover MFA. Production MFA interaction remains owned by IAM-009's future
+fixed public contract and its own real-browser acceptance; an in-progress
+backend implementation or its CI status is not inherited as console evidence.
+
 - Password success enters a challenge or restricted enrollment state without
   creating a normal login session. Only a fresh, unused authenticator code may
   complete login. A forced password change invalidates the old challenge and
@@ -511,7 +516,7 @@ outcomes retain and replay the exact original intent; they never create a
 second bulk operation. Confirmation is shown inline in the content area so the
 page title and action positions remain stable on desktop and compact layouts.
 
-Acceptance evidence on 2026-09-20: 568 frontend tests and three export-
+Acceptance evidence on 2026-09-20: 571 frontend tests and three export-
 normalization tests passed, along with type checking, lint, architecture and
 style checks (228 theme contrast pairs), 39-page production static generation,
 217-file embedded-export equivalence, and the Go UI-host tests. Browser checks
@@ -1334,6 +1339,13 @@ filter is omitted until more than one supported User kind exists. The table has
 no trailing operation column. Usernames open details; leading checkboxes and a
 More actions menu beside Create user provide one command entry for single/bulk
 selection.
+Other detail-first IAM directories use the same hierarchy without pretending
+to support User-style bulk selection: Role, identity provider, federated
+identity, enterprise account and API-key names open their exact detail, and
+their edit, status, import and destructive commands live only in the stable
+detail title bar. They do not duplicate mutations in a trailing row-operation
+column. Compact layouts therefore preserve one clear navigation target per
+record and collect secondary commands in the shared page-action menu.
 The shared `TableSelectionCell` owns cell geometry and mixed-checkbox semantics;
 `TableActions` owns the menu, selection count, clear action, disabled explanations
 and keyboard behavior. IAM supplies eligibility. Header selection covers only
@@ -1645,7 +1657,7 @@ own-login-session slices.
 
 | Gate | Evidence |
 | --- | --- |
-| Supported frontend runtime | Node 24.19.0; complete `build:embedded` plus type, lint, architecture, style and test gates passed: 570 Vitest cases across 39 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
+| Supported frontend runtime | Node 24.19.0; complete `build:embedded` plus type, lint, architecture, style and test gates passed: 571 Vitest cases across 39 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
 | Theme and static-export boundary | 228 semantic contrast pairs passed across light, mixed and dark workspace/shell surfaces. Production preview was disabled; all 217 embedded files matched the normalized immutable export. |
 | UI host and architecture | `go test ./app/ui/paas/...` passed against the regenerated embedded console. |
 | Static query boundary | Supported client detail/creation queries retained identical HTML and CSP; ambiguous, malformed and authority-bearing selectors were rejected. |
@@ -2479,8 +2491,9 @@ publishing, MySQL, ELK, Redis, arbitrary Helm/Compose templates, customer
 images, public-cloud accounts, VM/network provisioning, Kubernetes,
 multi-region placement, high availability, read replicas, point-in-time
 restore, engine upgrades, installation deletion, live external IdP/LDAP,
-SAML/OIDC authentication, MFA enforcement, corporate-directory integration,
-custom-policy authorization and mobile-native applications remain outside
+SAML/OIDC authentication, production MFA enforcement pending IAM-009's fixed
+public contract and independent browser acceptance, corporate-directory
+integration, custom-policy authorization and mobile-native applications remain outside
 this target. Access-management configuration previews do not implement these
 backend security capabilities. Vendor-specific collaboration invitations,
 message-only identities and batch account creation are not represented as

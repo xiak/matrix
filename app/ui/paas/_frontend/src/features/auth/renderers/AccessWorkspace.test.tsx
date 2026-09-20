@@ -786,8 +786,21 @@ describe("CAM-style access workspace", () => {
     await open("roles");
     const directory = await screen.findByRole("table", { name: "角色" });
     expect(directory.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
     expect(within(directory).getByRole("button", { name: "PipelineDeploymentRole" }).closest("td")?.getAttribute("data-label")).toBe("名称");
     expect(within(directory).getByText("云服务").closest("td")?.getAttribute("data-label")).toBe("信任主体类型");
+  });
+  it("keeps identity-provider and federation mutations in their detail pages", async () => {
+    const { user } = await open("providers");
+    const providers = await screen.findByRole("table", { name: "角色 SSO" });
+    expect(within(providers).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(within(providers).queryByRole("button", { name: "编辑" })).toBeNull();
+    expect(within(providers).queryByRole("button", { name: "删除" })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "联合身份映射" }));
+    const federations = screen.getByRole("table", { name: "联合身份映射" });
+    expect(within(federations).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(within(federations).queryByRole("button", { name: "编辑" })).toBeNull();
+    expect(within(federations).queryByRole("button", { name: "删除" })).toBeNull();
   });
   it("creates a role in the content area with explicit trust, no preselected grants and a preserved localized draft", async () => {
     const { user, repository, extension } = await open("roles");
@@ -1522,6 +1535,7 @@ describe("CAM-style access workspace", () => {
   });
   it("shows dependency errors inside a destructive confirmation", async () => {
     const { user } = await open("providers");
+    await user.click(await screen.findByRole("button", { name: "EnterpriseSSO" }));
     await user.click(await screen.findByRole("button", { name: "删除" }));
     await user.type(screen.getByLabelText("输入名称以确认"), "EnterpriseSSO");
     await user.click(screen.getByRole("button", { name: "确认删除" }));
@@ -1996,6 +2010,11 @@ describe("CAM-style access workspace", () => {
   it("retains key-state failures, requires disable before deletion, and keeps cancellation non-mutating", async () => {
     const { user, repository, extension } = await open("keys");
     const before = await extension.read("preview");
+    const directory = await screen.findByRole("table", { name: "API 密钥" });
+    expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(within(directory).queryByRole("button", { name: "禁用" })).toBeNull();
+    expect(within(directory).queryByRole("button", { name: "删除" })).toBeNull();
+    await user.click(within(directory).getByRole("button", { name: "MOCK-pipeline-key" }));
     expect((screen.getByRole("button", { name: "删除" }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole("button", { name: "禁用" }));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
@@ -2083,6 +2102,10 @@ describe("CAM-style access workspace", () => {
     await user.type(screen.getByLabelText("企业名称"), "Preview Enterprise");
     await user.click(screen.getByRole("checkbox", { name: /Dev Member/ }));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
+    const directory = await screen.findByRole("table", { name: "企业微信" });
+    expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(within(directory).queryByRole("button", { name: "导入为子用户" })).toBeNull();
+    await user.click(within(directory).getByRole("button", { name: "Preview Enterprise" }));
     await user.click(await screen.findByRole("button", { name: "导入为子用户" }));
     await user.click(screen.getByRole("checkbox", { name: /Dev Member/ }));
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "导入为子用户" }));
