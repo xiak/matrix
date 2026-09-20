@@ -328,13 +328,13 @@ func artifactCatalogConfig(manifests ...release.Manifest) ([]byte, error) {
 
 func apisixMainConfig() []byte {
 	return replaceStaticAPISIXFragment(
-		predecessorAPISIXMainConfig(),
+		apisixMainConfigBeforeExternalRequestBoundary(),
 		[]byte("        proxy_set_header X-Matrix-Public-Origin \"\";\n"),
 		[]byte("        proxy_set_header X-Matrix-Public-Origin \"\";\n        proxy_set_header X-Matrix-External-Origin \"\";\n        proxy_set_header X-Matrix-External-Request-Target \"\";\n"),
 	)
 }
 
-func predecessorAPISIXMainConfig() []byte {
+func apisixMainConfigBeforeExternalRequestBoundary() []byte {
 	return replaceStaticAPISIXFragment(
 		legacyAPISIXMainConfig(),
 		[]byte("(?:exchange|recovery-challenge|recover))$\""),
@@ -418,7 +418,7 @@ func apisixStandaloneConfig(northboundOrigin string) ([]byte, error) {
 		return nil, errors.New("APISIX northbound origin is invalid")
 	}
 	withStripping := bytes.ReplaceAll(
-		predecessorAPISIXStandaloneConfig(),
+		apisixStandaloneConfigBeforeExternalRequestBoundary(),
 		[]byte("            - Matrix-Subject-Credential"),
 		[]byte("            - Matrix-Subject-Credential\n            - X-Matrix-External-Origin\n            - X-Matrix-External-Request-Target"),
 	)
@@ -492,7 +492,7 @@ func apisixStandaloneConfig(northboundOrigin string) ([]byte, error) {
 	return withStripping, nil
 }
 
-func predecessorAPISIXStandaloneConfig() []byte {
+func apisixStandaloneConfigBeforeExternalRequestBoundary() []byte {
 	withCompletionURI := replaceStaticAPISIXFragment(
 		legacyAPISIXStandaloneConfig(),
 		[]byte("      - /api/paas/v1/node-enrollments/*/recover\n"),
@@ -750,10 +750,8 @@ func installedAPISIXStandaloneConfig(manifest release.Manifest, northboundOrigin
 		return nil, err
 	}
 	switch manifest.Database {
-	case release.CurrentDatabaseProfile():
+	case release.CurrentDatabaseProfile(), release.SupportedDatabasePredecessorProfile():
 		return apisixStandaloneConfig(northboundOrigin)
-	case release.SupportedDatabasePredecessorProfile():
-		return predecessorAPISIXStandaloneConfig(), nil
 	default:
 		return nil, errors.New("installed release cannot select an APISIX route contract")
 	}
@@ -764,10 +762,8 @@ func installedAPISIXMainConfig(manifest release.Manifest) ([]byte, error) {
 		return nil, err
 	}
 	switch manifest.Database {
-	case release.CurrentDatabaseProfile():
+	case release.CurrentDatabaseProfile(), release.SupportedDatabasePredecessorProfile():
 		return apisixMainConfig(), nil
-	case release.SupportedDatabasePredecessorProfile():
-		return predecessorAPISIXMainConfig(), nil
 	default:
 		return nil, errors.New("installed release cannot select an APISIX main contract")
 	}

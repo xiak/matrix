@@ -526,31 +526,37 @@ func TestProviderVersionComparisonAcceptsBoundedDistributionMetadata(t *testing.
 	}
 }
 
-func TestFrozenPredecessorAPISIXRoutesMatchPublishedContract(t *testing.T) {
-	const publishedDigest = "sha256:9bd36e4e60ce2cc211bb5f2e36391686319212e1b5722a3106a9826b033ef07d"
-	digest := sha256.Sum256(predecessorAPISIXStandaloneConfig())
-	if got := "sha256:" + hex.EncodeToString(digest[:]); got != publishedDigest {
-		t.Fatalf("frozen predecessor APISIX digest = %q, want %q", got, publishedDigest)
+func TestExactPredecessorAPISIXRoutesMatchPublishedCurrentContract(t *testing.T) {
+	const publishedDigest = "sha256:53c4f1f5dd6eb0f5e922861ddeac879479171e107f8666b490d6075fbc450cc0"
+	const origin = "https://matrix.example.com:443"
+	current, err := apisixStandaloneConfig(origin)
+	if err != nil {
+		t.Fatal(err)
 	}
-	current, err := apisixStandaloneConfig("https://matrix.example.com:443")
-	if err != nil || bytes.Equal(predecessorAPISIXStandaloneConfig(), current) {
-		t.Fatal("current APISIX routes did not advance beyond the frozen predecessor")
+	digest := sha256.Sum256(current)
+	if got := "sha256:" + hex.EncodeToString(digest[:]); got != publishedDigest {
+		t.Fatalf("exact predecessor APISIX digest = %q, want %q", got, publishedDigest)
+	}
+	predecessor := newInstallPlan(t, release.SupportedDatabasePredecessorProfile()).Bundle.Manifest
+	installed, err := installedAPISIXStandaloneConfig(predecessor, origin)
+	if err != nil || !bytes.Equal(installed, current) {
+		t.Fatal("exact predecessor APISIX routes differ from their published current contract")
 	}
 	if bytes.Count(current, []byte(`X-Matrix-External-Origin: "https://matrix.example.com:443"`)) != 2 ||
 		bytes.Count(current, []byte(`X-Matrix-External-Request-Target: "$request_uri"`)) != 2 {
 		t.Fatal("current APISIX routes do not inject the exact external request boundary")
 	}
-	const publishedMainDigest = "sha256:af92fe49e77330f574bc1b06c86ebc16e3e87a56ecbc3e86c0286c6bb864460f"
-	mainDigest := sha256.Sum256(predecessorAPISIXMainConfig())
+	const publishedMainDigest = "sha256:dab1f95a4a5196df40d1064d969b4109037d3640f1399db2c0799497be11d14e"
+	currentMain := apisixMainConfig()
+	mainDigest := sha256.Sum256(currentMain)
 	if got := "sha256:" + hex.EncodeToString(mainDigest[:]); got != publishedMainDigest {
-		t.Fatalf("frozen predecessor APISIX main digest = %q, want %q", got, publishedMainDigest)
+		t.Fatalf("exact predecessor APISIX main digest = %q, want %q", got, publishedMainDigest)
 	}
-	if bytes.Equal(predecessorAPISIXMainConfig(), apisixMainConfig()) {
-		t.Fatal("current APISIX main configuration did not advance beyond the frozen predecessor")
-	}
-	if !bytes.Contains(predecessorAPISIXMainConfig(), []byte("ssl_protocols TLSv1.3;")) ||
-		!bytes.Contains(predecessorAPISIXMainConfig(), []byte("recover|complete")) {
-		t.Fatal("frozen predecessor APISIX main configuration differs from its TLS bootstrap contract")
+	installedMain, err := installedAPISIXMainConfig(predecessor)
+	if err != nil || !bytes.Equal(installedMain, currentMain) ||
+		!bytes.Contains(currentMain, []byte("ssl_protocols TLSv1.3;")) ||
+		!bytes.Contains(currentMain, []byte("recover|complete")) {
+		t.Fatal("exact predecessor APISIX main configuration differs from its published contract")
 	}
 }
 
@@ -1409,7 +1415,7 @@ func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t
 	}
 }
 
-func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *testing.T) {
+func TestUpgradeConfigurationRetainsAndRestoresTheExactAdjacentTopology(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")
 	}
@@ -1431,19 +1437,19 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE")) ||
 		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
 		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
-		bytes.Contains(predecessorCompose, []byte("MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE")) ||
-		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_NORTHBOUND_ORIGIN")) ||
-		bytes.Contains(predecessorCompose, []byte("MATRIX_AUDIT_NORTHBOUND_ORIGIN")) ||
+		!bytes.Contains(predecessorCompose, []byte("MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE")) ||
+		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_NORTHBOUND_ORIGIN")) ||
+		!bytes.Contains(predecessorCompose, []byte("MATRIX_AUDIT_NORTHBOUND_ORIGIN")) ||
 		!bytes.Contains(predecessorCompose, []byte(layout.EnrollmentIngressCertificate)) ||
 		!bytes.Contains(predecessorCompose, []byte(layout.EnrollmentIngressPrivateKey)) ||
 		!bytes.Contains(predecessorRoutes, []byte("matrix-paas-terminal")) ||
 		!bytes.Contains(predecessorRoutes, []byte("X-Matrix-Public-Origin")) ||
 		!bytes.Contains(predecessorRoutes, []byte("matrix-paas-node-enrollment-bootstrap")) ||
 		!bytes.Contains(predecessorRoutes, []byte("/complete")) ||
-		bytes.Contains(predecessorRoutes, []byte("X-Matrix-External-Origin")) ||
-		bytes.Contains(predecessorRoutes, []byte("X-Matrix-External-Request-Target")) ||
-		!bytes.Equal(predecessorMainConfig, predecessorAPISIXMainConfig()) {
-		t.Fatal("frozen adjacent predecessor differs from its signed topology")
+		!bytes.Contains(predecessorRoutes, []byte("X-Matrix-External-Origin")) ||
+		!bytes.Contains(predecessorRoutes, []byte("X-Matrix-External-Request-Target")) ||
+		!bytes.Equal(predecessorMainConfig, apisixMainConfig()) {
+		t.Fatal("exact adjacent predecessor differs from its signed topology")
 	}
 	if _, err := verifiedInstallationConfiguration(source); err != nil {
 		t.Fatalf("verify predecessor installation: %v", err)
@@ -1472,16 +1478,16 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 		!bytes.Contains(successorCompose, []byte("MATRIX_AUDIT_NORTHBOUND_ORIGIN")) ||
 		!bytes.Contains(successorCompose, []byte(layout.EnrollmentIngressCertificate)) ||
 		!bytes.Contains(successorCompose, []byte(layout.EnrollmentIngressPrivateKey)) ||
-		bytes.Equal(successorRoutes, predecessorRoutes) ||
+		!bytes.Equal(successorRoutes, predecessorRoutes) ||
 		!bytes.Contains(successorRoutes, []byte("matrix-paas-terminal")) ||
 		!bytes.Contains(successorRoutes, []byte("X-Matrix-Public-Origin")) ||
 		!bytes.Contains(successorRoutes, []byte("matrix-paas-node-enrollment-bootstrap")) ||
 		!bytes.Contains(successorRoutes, []byte("/complete")) ||
 		!bytes.Contains(successorRoutes, []byte("X-Matrix-External-Origin")) ||
 		!bytes.Contains(successorRoutes, []byte("X-Matrix-External-Request-Target")) ||
-		bytes.Equal(successorMainConfig, predecessorMainConfig) ||
+		!bytes.Equal(successorMainConfig, predecessorMainConfig) ||
 		!bytes.Equal(successorMainConfig, apisixMainConfig()) {
-		t.Fatal("schema upgrade did not add the external-request trust boundary while retaining enrollment topology")
+		t.Fatal("database-only profile upgrade changed the fixed edge trust boundary")
 	}
 
 	if err := restoreUpgradeConfiguration(plan); err != nil {
@@ -1499,47 +1505,29 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 	assertReleaseConfiguration(t, source)
 }
 
-func TestFrozenPredecessorVerificationDoesNotRequireFutureIAMSecrets(t *testing.T) {
+func TestExactPredecessorVerificationRequiresItsPublishedIAMSecrets(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")
 	}
 	plan := newUpgradePlan(
 		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
 	)
-	for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring, layout.IAMCursorKey} {
-		// newUpgradePlan stages both sides of the transition in one fixture root.
-		// Reconstruct the frozen predecessor state before authenticating it;
-		// staging the successor below must recreate both successor-only secrets.
-		if err := os.Remove(filepath.Join(
-			plan.Source.Root, filepath.FromSlash(relative),
-		)); err != nil {
-			t.Fatalf("remove staged successor IAM secret %q: %v", relative, err)
-		}
-		if _, err := os.Stat(filepath.Join(
-			plan.Source.Root, filepath.FromSlash(relative),
-		)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("frozen predecessor future IAM secret %q error = %v", relative, err)
-		}
-	}
 	source, err := authenticateInstalledPlan(plan.Source)
 	if err != nil {
 		t.Fatalf("authenticate frozen predecessor: %v", err)
 	}
 	defer clear(source.TrustBytes)
 	if _, err := verifiedInstallationConfiguration(source); err != nil {
-		t.Fatalf("verify frozen predecessor without future IAM secrets: %v", err)
-	}
-	if err := stageInstallation(plan.Target, rand.Reader); err != nil {
-		t.Fatalf("stage successor credentials: %v", err)
+		t.Fatalf("verify exact predecessor with its published IAM secrets: %v", err)
 	}
 	if _, err := readAccessKeyWrappingKeyring(plan.Target.Root, plan.Target.InstallationID); err != nil {
-		t.Fatalf("successor staging did not materialize access-key wrapping keyring: %v", err)
+		t.Fatalf("exact predecessor access-key wrapping keyring: %v", err)
 	}
 	if _, err := readTOTPKeyring(plan.Target.Root, plan.Target.InstallationID); err != nil {
 		t.Fatalf("successor staging did not materialize TOTP keyring: %v", err)
 	}
 	if cursorKey := readTestFile(t, plan.Target.Root, layout.IAMCursorKey); len(cursorKey) != 64 {
-		t.Fatal("successor staging did not materialize the IAM cursor key")
+		t.Fatal("exact predecessor did not retain the IAM cursor key")
 	}
 }
 
@@ -1669,10 +1657,11 @@ func TestSupportedPredecessorUpgradeAdmitsItsOwnedSharedIngressListener(t *testi
 	plan.Source.Listener = updatedSource.Listener
 	plan.Target.Listener = updatedSource.Listener
 	compiled, err := topology.CompileInstalled(updatedSource.Bundle.Manifest, topology.Options{
-		InstallationID: updatedSource.InstallationID,
-		Root:           updatedSource.Root,
-		Listener:       updatedSource.Listener,
-		Port:           updatedSource.Port,
+		InstallationID:   updatedSource.InstallationID,
+		Root:             updatedSource.Root,
+		Listener:         updatedSource.Listener,
+		Port:             updatedSource.Port,
+		NorthboundOrigin: updatedSource.NorthboundOrigin,
 	})
 	if err != nil {
 		t.Fatalf("compile predecessor fixture: %v", err)
@@ -3032,21 +3021,12 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 		CorrelationID: "cmd-11111111111111111111111111111111",
 		Listener:      "0.0.0.0", Port: 8080, Bundle: bundles[0],
 		Trust: fixtures[0].Trust, TrustBytes: trustBytes,
-	}
-	if source.Bundle.Manifest.TopologyDigest == topology.ContractDigest() {
-		source.NorthboundOrigin = "https://matrix.example.com:443"
+		NorthboundOrigin: "https://matrix.example.com:443",
 	}
 	if err := stageInstallation(source, rand.Reader); err != nil {
 		t.Fatalf("stage upgrade source: %v", err)
 	}
-	if source.Bundle.Manifest.TopologyDigest == topology.SupportedPredecessorContractDigest() {
-		for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring, layout.IAMCursorKey} {
-			if err := os.Remove(filepath.Join(source.Root, filepath.FromSlash(relative))); err != nil {
-				t.Fatalf("remove future predecessor fixture %q: %v", relative, err)
-			}
-		}
-	}
-	if source.Bundle.Manifest.TopologyDigest == topology.ContractDigest() {
+	if source.Bundle.Manifest.Database == release.CurrentDatabaseProfile() {
 		if err := configureInstallation(
 			context.Background(), newImageRuntime(source.Bundle.Manifest, true), source,
 		); err != nil {
@@ -3069,9 +3049,6 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	}
 	target := source
 	target.Bundle = bundles[1]
-	if target.Bundle.Manifest.TopologyDigest == topology.ContractDigest() {
-		target.NorthboundOrigin = "https://matrix.example.com:443"
-	}
 	target.PreviousID = source.Bundle.Manifest.Release.ID
 	target.PreviousDigest = source.Bundle.ManifestSHA256
 	if err := stageInstallation(target, rand.Reader); err != nil {

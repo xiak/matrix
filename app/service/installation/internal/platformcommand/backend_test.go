@@ -796,7 +796,8 @@ func TestPublishedScalarManifestDoesNotImplyRuntimeTopologyCompatibility(t *test
 	}
 }
 
-func TestFrozenAdjacentProfilePairAllowsUpgradeButRollbackRequiresAuthenticatedRecovery(t *testing.T) {
+func TestExactAdjacentProfilePairAllowsUpgradeButRollbackRequiresAuthenticatedRecovery(t *testing.T) {
+	const origin = "https://matrix.example.com:443"
 	current := release.CurrentDatabaseProfile()
 	predecessor := release.SupportedDatabasePredecessorProfile()
 	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, predecessor, current)
@@ -809,7 +810,7 @@ func TestFrozenAdjacentProfilePairAllowsUpgradeButRollbackRequiresAuthenticatedR
 	seedPublishedInstalledRelease(t, root, fixtures[0])
 	upgraded, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
-		NorthboundOrigin: "https://matrix.example.com:443",
+		NorthboundOrigin: origin,
 	})
 	if err != nil || upgraded.ReleaseID != fixtures[1].Manifest.Release.ID || !upgraded.Changed {
 		t.Fatalf("upgrade exact runtime profile pair: %#v / %v", upgraded, err)
@@ -848,11 +849,11 @@ func TestFrozenAdjacentProfilePairAllowsUpgradeButRollbackRequiresAuthenticatedR
 	}
 	completed := readJournal(t, root)
 	encoded, err := json.Marshal(completed)
-	if err != nil || completed.NorthboundOrigin != "" || completed.Last == nil ||
-		completed.Last.Command.NorthboundOrigin != "" ||
-		strings.Contains(string(encoded), `"northboundOrigin"`) ||
-		effects.recoveryPlan.Target.NorthboundOrigin != "" {
-		t.Fatalf("predecessor recovery retained successor-only origin state: %s / %#v", encoded, effects.recoveryPlan)
+	if err != nil || completed.NorthboundOrigin != origin || completed.Last == nil ||
+		completed.Last.Command.NorthboundOrigin != origin ||
+		!strings.Contains(string(encoded), `"northboundOrigin":"`+origin+`"`) ||
+		effects.recoveryPlan.Target.NorthboundOrigin != origin {
+		t.Fatal("exact predecessor recovery lost its published northbound origin")
 	}
 }
 

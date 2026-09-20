@@ -1,6 +1,7 @@
 package topology
 
 import (
+	"bytes"
 	"encoding/json"
 	"path"
 	"reflect"
@@ -481,10 +482,10 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 }
 
-func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing.T) {
-	const publishedPredecessorDigest = "sha256:3b5e33844c8f9fc90bcad489a071cc292b1b42d65dbe387adb05ffec562d9178"
+func TestCompileInstalledPinsCurrentAndExactPredecessorProfilePairs(t *testing.T) {
+	const publishedPredecessorDigest = "sha256:18629f764f41ed5129d7bb4cea9b6ff6204c87cb3bac69798c997a6a7b8d992f"
 	if got := SupportedPredecessorContractDigest(); got != publishedPredecessorDigest {
-		t.Fatalf("frozen predecessor topology digest = %q, want %q", got, publishedPredecessorDigest)
+		t.Fatalf("exact predecessor topology digest = %q, want %q", got, publishedPredecessorDigest)
 	}
 	options := Options{InstallationID: "mxi-" + strings.Repeat("b", 32), Root: "/data/xiak/matrix-predecessor", Listener: "0.0.0.0", Port: 8080, NorthboundOrigin: "https://matrix.example.com:443"}
 	current := topologyManifest()
@@ -496,8 +497,8 @@ func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing
 	if err != nil || !reflect.DeepEqual(gotCurrent, wantCurrent) {
 		t.Fatal("current installed topology changed through predecessor admission")
 	}
-	if ContractDigest() == SupportedPredecessorContractDigest() {
-		t.Fatal("current and frozen predecessor topology digests are not distinct")
+	if ContractDigest() != SupportedPredecessorContractDigest() {
+		t.Fatal("the exact predecessor changed a topology contract that its source did not change")
 	}
 
 	predecessor := current
@@ -508,103 +509,33 @@ func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing
 		t.Fatalf("resolve current northbound origin = %q / %v", currentOrigin, err)
 	}
 	predecessorOrigin, err := ResolveInstalledNorthboundOrigin(predecessor, options.NorthboundOrigin)
-	if err != nil || predecessorOrigin != "" {
+	if err != nil || predecessorOrigin != options.NorthboundOrigin {
 		t.Fatalf("resolve predecessor northbound origin = %q / %v", predecessorOrigin, err)
 	}
 	if _, err := ResolveInstalledNorthboundOrigin(current, ""); err == nil {
 		t.Fatal("current installed topology accepted an absent northbound origin")
 	}
+	if _, err := ResolveInstalledNorthboundOrigin(predecessor, ""); err == nil {
+		t.Fatal("exact predecessor topology accepted an absent northbound origin")
+	}
 	if _, err := Compile(predecessor, options); err == nil {
-		t.Fatal("current target compiler accepted the frozen predecessor")
+		t.Fatal("current target compiler accepted the predecessor database profile")
 	}
 	compiled, err := CompileInstalled(predecessor, options)
-	if err != nil || compiled.ContractDigest != predecessor.TopologyDigest {
+	if err != nil || compiled.ContractDigest != predecessor.TopologyDigest ||
+		!bytes.Equal(compiled.ComposeJSON, gotCurrent.ComposeJSON) {
 		t.Fatalf("compile predecessor topology: %#v %v", compiled, err)
-	}
-	var document composeDocument
-	if json.Unmarshal(compiled.ComposeJSON, &document) != nil || len(document.Services) != len(platformServiceNames) {
-		t.Fatal("predecessor topology inventory is incomplete")
-	}
-	environment := document.Services["paas-api"].Environment
-	if environment["MATRIX_PAAS_PUBLIC_BASE_PATH"] != "/api/paas/v1" {
-		t.Fatal("adjacent predecessor lost the retained terminal public path")
-	}
-	if environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"] != "false" {
-		t.Fatal("adjacent predecessor lost the retained terminal cookie policy")
-	}
-	if environment[enrollmentIssuerCertificateEnvironment] != enrollmentIssuerCertificateTarget ||
-		environment[enrollmentIssuerPrivateKeyEnvironment] != enrollmentIssuerPrivateKeyTarget {
-		t.Fatal("frozen predecessor lost its node enrollment issuer input")
-	}
-	if environment[enrollmentControllerCertificateEnvironment] == "" ||
-		environment[enrollmentControllerPrivateKeyEnvironment] == "" ||
-		environment[enrollmentControllerTrustEnvironment] == "" {
-		t.Fatal("frozen predecessor lost its published controller identity")
-	}
-	issuerMounts := 0
-	for _, volume := range document.Services["paas-api"].Volumes {
-		if volume.Target == enrollmentIssuerCertificateTarget || volume.Target == enrollmentIssuerPrivateKeyTarget {
-			issuerMounts++
-		}
-	}
-	if issuerMounts != 2 {
-		t.Fatal("frozen predecessor lost its enrollment issuer mounts")
-	}
-	workerEnvironment := document.Services["paas-worker"].Environment
-	if workerEnvironment[workerEnrollmentControllerCertificateEnvironment] == "" ||
-		workerEnvironment[workerEnrollmentControllerPrivateKeyEnvironment] == "" ||
-		workerEnvironment[workerEnrollmentControllerTrustEnvironment] == "" {
-		t.Fatal("frozen predecessor worker lost its published controller identity")
-	}
-	if environment["MATRIX_PAAS_NORTHBOUND_ORIGIN"] != "" ||
-		document.Services["audit"].Environment["MATRIX_AUDIT_NORTHBOUND_ORIGIN"] != "" ||
-		document.Services["audit"].Environment["MATRIX_AUDIT_INSTALLATION_ID"] != "" ||
-		document.Services["iam"].Environment["MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE"] != "" ||
-		document.Services["iam"].Environment["MATRIX_IAM_TOTP_KEYRING_FILE"] != "" ||
-		document.Services["iam"].Environment["MATRIX_IAM_CURSOR_KEY_FILE"] != "" {
-		t.Fatal("frozen predecessor gained the successor IAM secret boundary")
-	}
-	for _, volume := range document.Services["iam"].Volumes {
-		if volume.Target == "/run/matrix/iam-access-key-wrapping-keyring.json" ||
-			volume.Target == "/run/matrix/iam-totp-keyring.json" || volume.Target == "/run/matrix/iam-cursor-key" {
-			t.Fatal("frozen predecessor gained a successor IAM secret mount")
-		}
-	}
-	predecessorAPISIX := document.Services["apisix"]
-	if len(predecessorAPISIX.Ports) != 2 ||
-		predecessorAPISIX.Ports[0] != "0.0.0.0:8080:9080/tcp" ||
-		predecessorAPISIX.Ports[1] != "0.0.0.0:8443:9443/tcp" {
-		t.Fatal("frozen predecessor lost its node enrollment TLS ingress")
-	}
-	ingressMounts := 0
-	for _, volume := range predecessorAPISIX.Volumes {
-		if volume.Target == NodeEnrollmentIngressCertificateTarget || volume.Target == NodeEnrollmentIngressPrivateKeyTarget {
-			ingressMounts++
-		}
-	}
-	if ingressMounts != 2 {
-		t.Fatal("frozen predecessor lost its node enrollment ingress identity")
-	}
-	currentPaaS := mustDecodeCompose(t, gotCurrent.ComposeJSON).Services["paas-api"]
-	if currentPaaS.Environment[enrollmentIssuerCertificateEnvironment] != enrollmentIssuerCertificateTarget ||
-		currentPaaS.Environment[enrollmentIssuerPrivateKeyEnvironment] != enrollmentIssuerPrivateKeyTarget {
-		t.Fatal("current topology lost node enrollment issuer input")
-	}
-	if currentPaaS.Environment[enrollmentControllerCertificateEnvironment] == "" ||
-		currentPaaS.Environment[enrollmentControllerPrivateKeyEnvironment] == "" ||
-		currentPaaS.Environment[enrollmentControllerTrustEnvironment] == "" {
-		t.Fatal("current topology lost node enrollment controller identity")
 	}
 
 	for name, candidate := range map[string]release.Manifest{
-		"current profile with predecessor topology": func() release.Manifest {
-			value := current
-			value.TopologyDigest = SupportedPredecessorContractDigest()
+		"predecessor profile with stale older topology": func() release.Manifest {
+			value := predecessor
+			value.TopologyDigest = "sha256:3b5e33844c8f9fc90bcad489a071cc292b1b42d65dbe387adb05ffec562d9178"
 			return value
 		}(),
-		"predecessor profile with current topology": func() release.Manifest {
+		"unsupported database profile": func() release.Manifest {
 			value := predecessor
-			value.TopologyDigest = ContractDigest()
+			value.Database.ContractRevision--
 			return value
 		}(),
 		"unknown topology": func() release.Manifest {
