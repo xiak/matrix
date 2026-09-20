@@ -10,6 +10,7 @@ import { AccountLoginForm } from "./AccountLoginForm";
 import { AuthenticationChallengeForm } from "./AuthenticationChallengeForm";
 import { PasswordChangeForm } from "./PasswordChangeForm";
 import { EnrollmentRecoveryCodes } from "./EnrollmentRecoveryCodes";
+import { AuthenticatorRecoveryForm, isAuthenticatorRecoveryPhase } from "./AuthenticatorRecoveryForm";
 import styles from "./LoginRenderer.module.css";
 
 export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string }) {
@@ -19,6 +20,7 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
   const challenged = session.phase === "challenge-required" || session.phase === "verifying-challenge"
     || session.phase === "challenge-password-required" || session.phase === "changing-challenge-password"
     || session.phase === "reauthentication-required";
+  const recovering = isAuthenticatorRecoveryPhase(session.phase);
   return <App.Frame><App.Background /><App.Layers><App.Layer>
     <div className={styles.page}>
       <header className={styles.header}>
@@ -45,6 +47,7 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
         </section>
         <section aria-label={t("region")} className={styles.loginCard}>
           {session.phase === "recovery-codes-required" ? <EnrollmentRecoveryCodes />
+            : recovering ? <AuthenticatorRecoveryForm />
             : challenged ? <AuthenticationChallengeForm returnTo={returnTo} />
             : firstLogin ? <PasswordChangeForm returnTo={returnTo} />
               : <AccountLoginForm returnTo={returnTo} />}

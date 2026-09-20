@@ -182,7 +182,23 @@ const previewOtherSessionReplays = new Map<string, OtherSessionsRevocation>();
 
 let activePreviewCredential: string | null = null;
 let activeRecoveryChallenge: string | null = null;
-let activeLoginChallenge: { id: string; credential: string; nextStep: "TOTP" | "PASSWORD_CHANGE" } | null = null;
+let activeLoginChallenge: { id: string; credential: string; nextStep: "TOTP" | "PASSWORD_CHANGE" | "RECOVER" } | null = null;
+let activeOnlineRecovery: {
+  id: string;
+  requestId: string;
+  challengeId: string;
+  challengeCredential: string;
+  createdAt: string;
+  expiresAt: string;
+} | null = null;
+const previewRecoveryResults = new Map<string, {
+  id: string;
+  requestId: string;
+  state: "STARTED" | "COMPLETED" | "SUPERSEDED" | "EXPIRED";
+  createdAt: string;
+  expiresAt: string;
+  completedAt?: string;
+}>();
 const consumedRecoveryCodes = new Set<string>();
 
 export function isPreviewCredential(credential: string): boolean {
@@ -285,6 +301,8 @@ export function resetPreviewEnvironment(): void {
   previewLoginVerified = false;
   activePreviewCredential = null;
   activeRecoveryChallenge = null;
+  activeOnlineRecovery = null;
+  previewRecoveryResults.clear();
   activeLoginChallenge = null;
   consumedRecoveryCodes.clear();
   workspace.reset();
@@ -321,7 +339,7 @@ export const previewIamRepository: IamRepository = {
       activeLoginChallenge = {
         id: `preview-login-challenge-${crypto.randomUUID()}`,
         credential: `preview-challenge-${crypto.randomUUID()}`,
-        nextStep: "TOTP"
+        nextStep: mfa.recoveryState === "rebind-required" ? "RECOVER" : "TOTP"
       };
       return {
         outcome: "CHALLENGE_REQUIRED",
@@ -379,6 +397,97 @@ export const previewIamRepository: IamRepository = {
       activeLoginChallenge = null;
       activePreviewCredential = null;
       return { nextStep: "REAUTHENTICATE", changedAt: new Date().toISOString() };
+    },
+    async startRecovery(command) {
+      if (!activeLoginChallenge ||
+          (activeLoginChallenge.nextStep !== "TOTP" && activeLoginChallenge.nextStep !== "RECOVER") ||
+          command.challengeId !== activeLoginChallenge.id ||
+          command.challengeCredential !== activeLoginChallenge.credential) {
+        throw new HttpProblem(409, "PREVIEW_CHALLENGE_EXPIRED");
+      }
+      const recoveryCode = command.recoveryCode as typeof previewRecoveryCodes[number];
+      if (!previewRecoveryCodes.includes(recoveryCode) || consumedRecoveryCodes.has(recoveryCode)) {
+        throw new HttpProblem(401, "PREVIEW_RECOVERY_CODE_INVALID");
+      }
+      const state = workspace.snapshot().personalMfa;
+      if (state.recoveryState === "idle") await workspace.execute(previewCredential, { kind: "begin-personal-mfa-recovery" });
+      else if (state.recoveryState !== "rebind-required") throw new HttpProblem(409, "PREVIEW_RECOVERY_UNAVAILABLE");
+      consumedRecoveryCodes.add(recoveryCode);
+      const now = new Date();
+      const createdAt = now.toISOString();
+      const expiresAt = new Date(now.getTime() + 5 * 60_000).toISOString();
+      for (const [requestId, existing] of previewRecoveryResults) {
+        if (existing.state === "STARTED") previewRecoveryResults.set(requestId, { ...existing, state: "SUPERSEDED", completedAt: createdAt });
+      }
+      activeOnlineRecovery = {
+        id: `preview-authenticator-recovery-${crypto.randomUUID()}`,
+        requestId: command.requestId,
+        challengeId: `preview-recovery-challenge-${crypto.randomUUID()}`,
+        challengeCredential: `preview-recovery-secret-${crypto.randomUUID()}`,
+        createdAt,
+        expiresAt
+      };
+      const recovery = {
+        id: activeOnlineRecovery.id,
+        requestId: command.requestId,
+        state: "STARTED" as const,
+        createdAt,
+        expiresAt
+      };
+      previewRecoveryResults.set(command.requestId, recovery);
+      activeLoginChallenge = null;
+      return {
+        recovery,
+        challenge: {
+          id: activeOnlineRecovery.challengeId,
+          purpose: "RECOVERY" as const,
+          nextStep: "ENROLLMENT" as const,
+          expiresAt
+        },
+        challengeCredential: activeOnlineRecovery.challengeCredential,
+        provisioning: {
+          seed: "MTRXPREVIEWSEEDNOTREAL",
+          uri: "otpauth://totp/Matrix%20MOCK:preview-admin?secret=MTRXPREVIEWSEEDNOTREAL&issuer=Matrix%20MOCK"
+        }
+      };
+    },
+    async confirmRecovery(command) {
+      if (!activeOnlineRecovery || command.challengeId !== activeOnlineRecovery.challengeId ||
+          command.challengeCredential !== activeOnlineRecovery.challengeCredential ||
+          command.recoveryRequestId !== activeOnlineRecovery.requestId) {
+        throw new HttpProblem(409, "PREVIEW_RECOVERY_EXPIRED");
+      }
+      if (command.code !== "624810") throw new HttpProblem(401, "PREVIEW_CHALLENGE_INVALID_CODE");
+      await workspace.execute(previewCredential, { kind: "confirm-personal-mfa" });
+      const completedAt = new Date().toISOString();
+      const recovery = {
+        id: activeOnlineRecovery.id,
+        requestId: activeOnlineRecovery.requestId,
+        state: "COMPLETED" as const,
+        createdAt: activeOnlineRecovery.createdAt,
+        expiresAt: activeOnlineRecovery.expiresAt,
+        completedAt
+      };
+      previewRecoveryResults.set(recovery.requestId, recovery);
+      activeOnlineRecovery = null;
+      activePreviewCredential = null;
+      previewLoginVerified = false;
+      return {
+        recovery,
+        nextStep: "REAUTHENTICATE" as const,
+        recoveryCodes: Array.from({ length: 10 }, (_, index) => `MTRX-NEW-${String(index + 1).padStart(2, "0")}-SAFE`)
+      };
+    },
+    async inspectRecovery(command) {
+      if (!activeLoginChallenge ||
+          (activeLoginChallenge.nextStep !== "TOTP" && activeLoginChallenge.nextStep !== "RECOVER") ||
+          command.challengeId !== activeLoginChallenge.id ||
+          command.challengeCredential !== activeLoginChallenge.credential) {
+        throw new HttpProblem(409, "PREVIEW_CHALLENGE_EXPIRED");
+      }
+      const result = previewRecoveryResults.get(command.requestId);
+      if (!result) throw new HttpProblem(404, "PREVIEW_RECOVERY_NOT_FOUND");
+      return structuredClone(result);
     }
   },
   async changePassword(credential) { requirePreviewCredential(credential); },

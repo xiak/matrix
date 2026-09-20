@@ -690,6 +690,79 @@ describe("IAM HTTP account boundary", () => {
     expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
   });
 
+  it("uses sealed recovery routes without a bearer and validates the complete one-time ceremony", async () => {
+    const requestId = "recovery-request-one";
+    const createdAt = "2026-09-21T01:00:00Z";
+    const expiresAt = "2026-09-21T01:05:00Z";
+    const recovery = { apiVersion, kind: "AuthenticatorRecovery", id: "recovery-one", requestId, state: "STARTED", createdAt, expiresAt };
+    const recoveryChallenge = { apiVersion, kind: "AuthenticationChallenge", id: "recovery-challenge", purpose: "RECOVERY", nextStep: "ENROLLMENT", expiresAt };
+    const startFetch = reply({ recovery, challenge: recoveryChallenge, challengeCredential: "recovery-secret", provisioning: { seed: "SECRETBASE32", uri: "otpauth://totp/Matrix:test?secret=SECRETBASE32" } });
+    await expect(httpIamRepository.authenticationChallenges!.startRecovery!({
+      challengeId: "login-challenge", challengeCredential: "login-secret", recoveryCode: "RECOVERY-ONE", requestId
+    })).resolves.toMatchObject({ recovery: { requestId, state: "STARTED" }, challenge: { purpose: "RECOVERY", nextStep: "ENROLLMENT" } });
+    expect(firstRequest(startFetch)[0]).toBe("/api/iam/v1/auth/challenges/login-challenge:recover");
+    expect(requestBody(startFetch)).toEqual({ requestId, challengeCredential: "login-secret", recoveryCode: "RECOVERY-ONE" });
+    expect(firstRequest(startFetch)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `NEW-RECOVERY-${index}`);
+    const completed = { ...recovery, state: "COMPLETED", completedAt: "2026-09-21T01:02:00Z" };
+    const confirmFetch = reply({ recovery: completed, nextStep: "REAUTHENTICATE", recoveryCodes });
+    await expect(httpIamRepository.authenticationChallenges!.confirmRecovery!({
+      challengeId: "recovery-challenge", challengeCredential: "recovery-secret", code: "123456",
+      requestId: "confirm-request-one", recoveryRequestId: requestId
+    })).resolves.toMatchObject({ recovery: { requestId, state: "COMPLETED" }, recoveryCodes });
+    expect(firstRequest(confirmFetch)[0]).toBe("/api/iam/v1/auth/challenges/recovery-challenge:confirm-recovery");
+    expect(requestBody(confirmFetch)).toEqual({ requestId: "confirm-request-one", challengeCredential: "recovery-secret", code: "123456" });
+    expect(firstRequest(confirmFetch)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+
+    const inspectFetch = reply(completed);
+    await expect(httpIamRepository.authenticationChallenges!.inspectRecovery!({
+      challengeId: "fresh-login-challenge", challengeCredential: "fresh-login-secret", requestId
+    })).resolves.toMatchObject({ requestId, state: "COMPLETED" });
+    expect(firstRequest(inspectFetch)[0]).toBe("/api/iam/v1/auth/challenges/fresh-login-challenge:recovery-result");
+    expect(requestBody(inspectFetch)).toEqual({ requestId, challengeCredential: "fresh-login-secret" });
+    expect(firstRequest(inspectFetch)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+
+    reply({ ...recovery, state: "EXPIRED", completedAt: expiresAt });
+    await expect(httpIamRepository.authenticationChallenges!.inspectRecovery!({
+      challengeId: "fresh-login-challenge", challengeCredential: "fresh-login-secret", requestId
+    })).resolves.toMatchObject({ requestId, state: "EXPIRED", completedAt: expiresAt });
+  });
+
+  it("fails closed on malformed recovery metadata, crossed expiry, secret replay, or mixed login purpose", async () => {
+    const requestId = "recovery-request-one";
+    const createdAt = "2026-09-21T01:00:00Z";
+    const expiresAt = "2026-09-21T01:05:00Z";
+    const recovery = { apiVersion, kind: "AuthenticatorRecovery", id: "recovery-one", requestId, state: "STARTED", createdAt, expiresAt };
+    const challenge = { apiVersion, kind: "AuthenticationChallenge", id: "recovery-challenge", purpose: "RECOVERY", nextStep: "ENROLLMENT", expiresAt };
+    const command = { challengeId: "login-challenge", challengeCredential: "login-secret", recoveryCode: "RECOVERY-ONE", requestId };
+    for (const response of [
+      { recovery: { ...recovery, requestId: "another-request" }, challenge, challengeCredential: "secret", provisioning: { seed: "seed", uri: "uri" } },
+      { recovery: { ...recovery, expiresAt: "2026-09-21T01:05:01Z" }, challenge: { ...challenge, expiresAt: "2026-09-21T01:05:01Z" }, challengeCredential: "secret", provisioning: { seed: "seed", uri: "uri" } },
+      { recovery, challenge: { ...challenge, purpose: "LOGIN", nextStep: "TOTP" }, challengeCredential: "secret", provisioning: { seed: "seed", uri: "uri" } },
+      { recovery, challenge, challengeCredential: "secret", provisioning: { seed: "seed", uri: "uri" }, session: { id: "forbidden" } }
+    ]) {
+      reply(response);
+      await expect(httpIamRepository.authenticationChallenges!.startRecovery!(command)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    const completed = { ...recovery, state: "COMPLETED", completedAt: "2026-09-21T01:02:00Z" };
+    for (const response of [
+      { recovery: completed, nextStep: "REAUTHENTICATE", recoveryCodes: Array.from({ length: 9 }, (_, index) => `CODE-${index}`) },
+      { recovery: completed, nextStep: "REAUTHENTICATE", recoveryCodes: Array(10).fill("DUPLICATE") },
+      { recovery: { ...completed, completedAt: expiresAt }, nextStep: "REAUTHENTICATE", recoveryCodes: Array.from({ length: 10 }, (_, index) => `CODE-${index}`) }
+    ]) {
+      reply(response);
+      await expect(httpIamRepository.authenticationChallenges!.confirmRecovery!({
+        challengeId: "recovery-challenge", challengeCredential: "secret", code: "123456",
+        requestId: "confirm-request", recoveryRequestId: requestId
+      })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    reply({ outcome: "CHALLENGE_REQUIRED", challenge, challengeCredential: "secret" });
+    await expect(httpIamRepository.login({ loginName: "alex@acme", password: "synthetic-test-password" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
   it.each([
     { outcome: "AUTHENTICATED", credential: "bearer", mustChangePassword: false, challenge: { apiVersion, kind: "AuthenticationChallenge", id: "challenge", purpose: "LOGIN", nextStep: "TOTP", expiresAt: "2099-09-20T01:07:03Z" }, session: { apiVersion, kind: "Session", id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } },
     { outcome: "CHALLENGE_REQUIRED", challenge: { apiVersion, kind: "AuthenticationChallenge", id: "challenge", purpose: "LOGIN", nextStep: "RECOVERY", expiresAt: "2099-09-20T01:07:03Z" }, challengeCredential: "secret" },

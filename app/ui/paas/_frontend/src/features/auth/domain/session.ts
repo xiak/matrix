@@ -40,17 +40,63 @@ export type AuthenticatedSession = {
   session: SessionSummary;
 };
 
-export type AuthenticationChallenge = {
+export type LoginAuthenticationChallenge = {
   id: string;
   purpose: "LOGIN";
-  nextStep: "TOTP" | "PASSWORD_CHANGE";
+  nextStep: "TOTP" | "PASSWORD_CHANGE" | "RECOVER";
   expiresAt: string;
 };
+
+export type RecoveryAuthenticationChallenge = {
+  id: string;
+  purpose: "RECOVERY";
+  nextStep: "ENROLLMENT";
+  expiresAt: string;
+};
+
+export type AuthenticationChallenge = LoginAuthenticationChallenge | RecoveryAuthenticationChallenge;
 
 export type PendingAuthenticationChallenge = {
   loginName: string;
   challenge: AuthenticationChallenge;
   challengeCredential: string;
+};
+
+export type AuthenticatorRecoveryState = "STARTED" | "COMPLETED" | "SUPERSEDED" | "EXPIRED";
+
+export type AuthenticatorRecovery = {
+  id: string;
+  requestId: string;
+  state: AuthenticatorRecoveryState;
+  createdAt: string;
+  expiresAt: string;
+  completedAt?: string;
+};
+
+export type TOTPProvisioning = {
+  seed: string;
+  uri: string;
+};
+
+export type AuthenticatorRecoveryStart = {
+  recovery: AuthenticatorRecovery & { state: "STARTED" };
+  challenge: RecoveryAuthenticationChallenge;
+  challengeCredential: string;
+  provisioning: TOTPProvisioning;
+};
+
+export type AuthenticatorRecoveryConfirmation = {
+  recovery: AuthenticatorRecovery & { state: "COMPLETED"; completedAt: string };
+  nextStep: "REAUTHENTICATE";
+  recoveryCodes: string[];
+};
+
+export type PendingAuthenticatorRecovery = {
+  loginName: string;
+  requestId: string;
+  state: "STARTED" | "START_OUTCOME_UNKNOWN" | "MATERIAL_LOST" | "CONFIRM_OUTCOME_UNKNOWN" | "NOT_FOUND";
+  recovery?: AuthenticatorRecovery;
+  provisioning?: TOTPProvisioning;
 };
 
 export type AuthenticatedLoginResult = {
@@ -75,6 +121,14 @@ export type SessionPhase =
   | "authenticating"
   | "challenge-required"
   | "verifying-challenge"
+  | "recovery-code-required"
+  | "starting-recovery"
+  | "recovery-enrollment-required"
+  | "confirming-recovery"
+  | "recovery-result-required"
+  | "inspecting-recovery"
+  | "recovery-start-unknown"
+  | "recovery-confirm-unknown"
   | "challenge-password-required"
   | "changing-challenge-password"
   | "recovery-codes-required"

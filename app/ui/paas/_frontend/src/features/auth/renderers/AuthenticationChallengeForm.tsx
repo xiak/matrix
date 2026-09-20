@@ -99,6 +99,9 @@ export function AuthenticationChallengeForm({ returnTo }: { returnTo: string }) 
         {busy ? <LoaderCircle aria-hidden="true" className={styles.spinner} /> : null}
         {t(busy ? "verifyingCode" : "verifyCode")}{!busy ? <ArrowRight aria-hidden="true" /> : null}
       </Button>
+      <Button block disabled={busy} onClick={session.enterAuthenticatorRecovery} type="button" variant="secondary">
+        {t("cannotUseAuthenticator")}
+      </Button>
     </form>}
     <Button block disabled={busy} onClick={session.cancelAuthenticationChallenge} variant="ghost">
       <ArrowLeft aria-hidden="true" />{t("returnToSignIn")}

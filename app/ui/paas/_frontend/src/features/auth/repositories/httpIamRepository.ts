@@ -30,7 +30,17 @@ import type {
   UserPolicyAttachment,
   UserPermissionBoundary
 } from "../domain/accounts";
-import type { AuthenticationChallenge, LoginResult, OtherSessionsRevocation, OwnSessionPage, OwnSessionRevocation, SessionSummary } from "../domain/session";
+import type {
+  AuthenticationChallenge,
+  AuthenticatorRecovery,
+  AuthenticatorRecoveryConfirmation,
+  AuthenticatorRecoveryStart,
+  LoginResult,
+  OtherSessionsRevocation,
+  OwnSessionPage,
+  OwnSessionRevocation,
+  SessionSummary
+} from "../domain/session";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
 import type { AuthenticatorState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
@@ -1555,14 +1565,104 @@ function parseAuthenticationChallenge(value: unknown): AuthenticationChallenge {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "id", "purpose", "nextStep", "expiresAt"]);
   requireAccountKind(wire, "AuthenticationChallenge");
-  if (wire.purpose !== "LOGIN" || (wire.nextStep !== "TOTP" && wire.nextStep !== "PASSWORD_CHANGE")) {
+  const base = {
+    id: accountIdentifier(wire.id),
+    expiresAt: accountTimestamp(wire.expiresAt)
+  };
+  if (wire.purpose === "LOGIN" &&
+      (wire.nextStep === "TOTP" || wire.nextStep === "PASSWORD_CHANGE" || wire.nextStep === "RECOVER")) {
+    return { ...base, purpose: "LOGIN", nextStep: wire.nextStep };
+  }
+  if (wire.purpose === "RECOVERY" && wire.nextStep === "ENROLLMENT") {
+    return { ...base, purpose: "RECOVERY", nextStep: "ENROLLMENT" };
+  }
+  throw new Error("INVALID_IAM_RESPONSE");
+}
+
+function parseAuthenticatorRecovery(value: unknown, expectedRequestId?: string): AuthenticatorRecovery {
+  const wire = accountRecord(value);
+  const terminal = wire.state === "COMPLETED" || wire.state === "SUPERSEDED" || wire.state === "EXPIRED";
+  exactKeys(
+    wire,
+    terminal
+      ? ["apiVersion", "kind", "id", "requestId", "state", "createdAt", "expiresAt", "completedAt"]
+      : ["apiVersion", "kind", "id", "requestId", "state", "createdAt", "expiresAt"]
+  );
+  requireAccountKind(wire, "AuthenticatorRecovery");
+  if (wire.state !== "STARTED" && !terminal) throw new Error("INVALID_IAM_RESPONSE");
+  const requestId = accountIdentifier(wire.requestId);
+  if (expectedRequestId !== undefined && requestId !== accountIdentifier(expectedRequestId)) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const createdAt = accountTimestamp(wire.createdAt);
+  const expiresAt = accountTimestamp(wire.expiresAt);
+  const createdMicros = timestampMicros(createdAt);
+  const expiresMicros = timestampMicros(expiresAt);
+  if (expiresMicros <= createdMicros || expiresMicros - createdMicros > 300_000_000n) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const recovery: AuthenticatorRecovery = {
+    id: accountIdentifier(wire.id),
+    requestId,
+    state: wire.state as AuthenticatorRecovery["state"],
+    createdAt,
+    expiresAt
+  };
+  if (terminal) {
+    const completedAt = accountTimestamp(wire.completedAt);
+    const completedMicros = timestampMicros(completedAt);
+    if (completedMicros < createdMicros ||
+        (wire.state === "COMPLETED" && completedMicros >= expiresMicros) ||
+        (wire.state === "EXPIRED" && completedMicros < expiresMicros)) {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
+    recovery.completedAt = completedAt;
+  }
+  return recovery;
+}
+
+function responseSecret(value: unknown): string {
+  const result = accountText(value);
+  if (result.length > 16_384) throw new Error("INVALID_IAM_RESPONSE");
+  return result;
+}
+
+function parseAuthenticatorRecoveryStart(value: unknown, requestId: string): AuthenticatorRecoveryStart {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["recovery", "challenge", "challengeCredential", "provisioning"]);
+  const recovery = parseAuthenticatorRecovery(wire.recovery, requestId);
+  const challenge = parseAuthenticationChallenge(wire.challenge);
+  const provisioning = accountRecord(wire.provisioning);
+  exactKeys(provisioning, ["seed", "uri"]);
+  if (recovery.state !== "STARTED" || challenge.purpose !== "RECOVERY" ||
+      challenge.nextStep !== "ENROLLMENT" || challenge.expiresAt !== recovery.expiresAt) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
   return {
-    id: accountIdentifier(wire.id),
-    purpose: "LOGIN",
-    nextStep: wire.nextStep,
-    expiresAt: accountTimestamp(wire.expiresAt)
+    recovery: { ...recovery, state: "STARTED" },
+    challenge,
+    challengeCredential: responseSecret(wire.challengeCredential),
+    provisioning: { seed: responseSecret(provisioning.seed), uri: responseSecret(provisioning.uri) }
+  };
+}
+
+function parseAuthenticatorRecoveryConfirmation(
+  value: unknown,
+  recoveryRequestId: string
+): AuthenticatorRecoveryConfirmation {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["recovery", "nextStep", "recoveryCodes"]);
+  const recovery = parseAuthenticatorRecovery(wire.recovery, recoveryRequestId);
+  if (wire.nextStep !== "REAUTHENTICATE" || recovery.state !== "COMPLETED" || !recovery.completedAt ||
+      !Array.isArray(wire.recoveryCodes) || wire.recoveryCodes.length !== 10) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const recoveryCodes = wire.recoveryCodes.map(responseSecret);
+  if (new Set(recoveryCodes).size !== recoveryCodes.length) throw new Error("INVALID_IAM_RESPONSE");
+  return {
+    recovery: { ...recovery, state: "COMPLETED", completedAt: recovery.completedAt },
+    nextStep: "REAUTHENTICATE",
+    recoveryCodes
   };
 }
 
@@ -1583,9 +1683,11 @@ function parseLogin(value: unknown): LoginResult {
   if (wire.outcome === "CHALLENGE_REQUIRED") {
     exactKeys(wire, ["outcome", "challenge", "challengeCredential"]);
     if (typeof wire.challengeCredential !== "string" || !wire.challengeCredential) throw new Error("INVALID_IAM_RESPONSE");
+    const challenge = parseAuthenticationChallenge(wire.challenge);
+    if (challenge.purpose !== "LOGIN") throw new Error("INVALID_IAM_RESPONSE");
     return {
       outcome: "CHALLENGE_REQUIRED",
-      challenge: parseAuthenticationChallenge(wire.challenge),
+      challenge,
       challengeCredential: wire.challengeCredential
     };
   }
@@ -1600,7 +1702,7 @@ export const httpIamRepository: IamRepository = {
       body: JSON.stringify({ loginName: command.loginName, password: command.password, requestId: requestToken("ui-login-") })
     });
     const result = parseLogin(wire);
-    if (result.outcome === "CHALLENGE_REQUIRED" && result.challenge.nextStep !== "TOTP") {
+    if (result.outcome === "CHALLENGE_REQUIRED" && result.challenge.nextStep === "PASSWORD_CHANGE") {
       throw new Error("INVALID_IAM_RESPONSE");
     }
     return result;
@@ -1635,6 +1737,46 @@ export const httpIamRepository: IamRepository = {
       exactKeys(wire, ["nextStep", "changedAt"]);
       if (wire.nextStep !== "REAUTHENTICATE") throw new Error("INVALID_IAM_RESPONSE");
       return { nextStep: "REAUTHENTICATE", changedAt: accountTimestamp(wire.changedAt) };
+    },
+    async startRecovery(command) {
+      const requestId = accountIdentifier(command.requestId);
+      const wire = await requestJSON<unknown>(`/api/iam/v1/auth/challenges/${encodeURIComponent(accountIdentifier(command.challengeId))}:recover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId,
+          challengeCredential: responseSecret(command.challengeCredential),
+          recoveryCode: responseSecret(command.recoveryCode)
+        })
+      });
+      return parseAuthenticatorRecoveryStart(wire, requestId);
+    },
+    async confirmRecovery(command) {
+      if (!/^[0-9]{6}$/.test(command.code)) throw new Error("INVALID_IAM_RESPONSE");
+      const wire = await requestJSON<unknown>(`/api/iam/v1/auth/challenges/${encodeURIComponent(accountIdentifier(command.challengeId))}:confirm-recovery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId: accountIdentifier(command.requestId),
+          challengeCredential: responseSecret(command.challengeCredential),
+          code: command.code
+        })
+      });
+      return parseAuthenticatorRecoveryConfirmation(wire, command.recoveryRequestId);
+    },
+    async inspectRecovery(command) {
+      const requestId = accountIdentifier(command.requestId);
+      return parseAuthenticatorRecovery(await requestJSON<unknown>(
+        `/api/iam/v1/auth/challenges/${encodeURIComponent(accountIdentifier(command.challengeId))}:recovery-result`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            requestId,
+            challengeCredential: responseSecret(command.challengeCredential)
+          })
+        }
+      ), requestId);
     }
   },
   async changePassword(credential: string, command: ChangePasswordCommand): Promise<void> {

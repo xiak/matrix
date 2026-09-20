@@ -1,4 +1,12 @@
-import type { LoginResult, OtherSessionsRevocation, OwnSessionPage, OwnSessionRevocation } from "../domain/session";
+import type {
+  AuthenticatorRecovery,
+  AuthenticatorRecoveryConfirmation,
+  AuthenticatorRecoveryStart,
+  LoginResult,
+  OtherSessionsRevocation,
+  OwnSessionPage,
+  OwnSessionRevocation
+} from "../domain/session";
 import type {
   AccountAccess,
   AccountCommand,
@@ -26,12 +34,33 @@ export type LoginCommand = { loginName: string; password: string };
 export type ChangePasswordCommand = { currentPassword: string; newPassword: string; revokeOtherSessions?: boolean };
 export type VerifyAuthenticationChallengeCommand = { challengeId: string; challengeCredential: string; code: string };
 export type ChangeChallengePasswordCommand = { challengeId: string; challengeCredential: string; newPassword: string };
+export type StartAuthenticatorRecoveryCommand = {
+  challengeId: string;
+  challengeCredential: string;
+  recoveryCode: string;
+  requestId: string;
+};
+export type ConfirmAuthenticatorRecoveryCommand = {
+  challengeId: string;
+  challengeCredential: string;
+  code: string;
+  requestId: string;
+  recoveryRequestId: string;
+};
+export type InspectAuthenticatorRecoveryCommand = {
+  challengeId: string;
+  challengeCredential: string;
+  requestId: string;
+};
 
 export interface IamRepository {
   login(command: LoginCommand): Promise<LoginResult>;
   authenticationChallenges?: {
     verify(command: VerifyAuthenticationChallengeCommand): Promise<LoginResult>;
     changePassword(command: ChangeChallengePasswordCommand): Promise<{ nextStep: "REAUTHENTICATE"; changedAt: string }>;
+    startRecovery?(command: StartAuthenticatorRecoveryCommand): Promise<AuthenticatorRecoveryStart>;
+    confirmRecovery?(command: ConfirmAuthenticatorRecoveryCommand): Promise<AuthenticatorRecoveryConfirmation>;
+    inspectRecovery?(command: InspectAuthenticatorRecoveryCommand): Promise<AuthenticatorRecovery>;
   };
   changePassword(credential: string, command: ChangePasswordCommand): Promise<void>;
   logout(credential: string): Promise<void>;

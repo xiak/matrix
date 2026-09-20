@@ -93,6 +93,26 @@ describe("branded sign-in flows", () => {
     expect(localStorage.length + sessionStorage.length).toBe(0);
     expect(document.body.textContent).not.toContain("preview-challenge-");
   });
+  it("previews irreversible authenticator recovery without creating a session or persisting secrets", async () => {
+    const { user } = open(previewIamRepository);
+    await user.click(screen.getByRole("button", { name: "体验 MFA 登录挑战" }));
+    await user.click(screen.getByRole("button", { name: "无法使用当前身份验证器" }));
+    expect(screen.getByRole("heading", { name: "使用恢复码重新绑定" })).toBeTruthy();
+    expect(screen.getByText(/关闭页面也不能撤销/)).toBeTruthy();
+    await user.type(screen.getByLabelText("一次性恢复码"), "MTRX-RECOVER-01");
+    await user.click(screen.getByRole("button", { name: "消费恢复码并继续" }));
+    expect(await screen.findByRole("heading", { name: "绑定新的身份验证器" })).toBeTruthy();
+    expect(screen.getByText("MTRXPREVIEWSEEDNOTREAL")).toBeTruthy();
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+    await user.type(screen.getByLabelText("新身份验证器的 6 位验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "确认新身份验证器" }));
+    expect(await screen.findByRole("heading", { name: "保存一次性恢复码" })).toBeTruthy();
+    expect(screen.getAllByText(/^MTRX-NEW-/)).toHaveLength(10);
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+    expect(document.body.textContent).not.toContain("preview-recovery-secret-");
+  });
   it("requires a fresh login after challenge-bound password replacement", async () => {
     const { user } = open(previewIamRepository);
     await user.click(screen.getByRole("button", { name: "体验 MFA 登录挑战" }));

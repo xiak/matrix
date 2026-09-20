@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { LoginResult } from "../domain/session";
-import type { IamRepository } from "../repositories/iamRepository";
+import type { IamRepository, StartAuthenticatorRecoveryCommand } from "../repositories/iamRepository";
 import { SessionProvider, useSession } from "./SessionProvider";
 import { usePersonalSecurity } from "./PersonalSecurityProvider";
 
@@ -28,6 +28,7 @@ function Probe() {
       <span data-testid="challenge">{session.challenge?.challenge.nextStep ?? "none"}</span>
       <span data-testid="error">{session.error ?? "none"}</span>
       <span data-testid="recovery">{session.enrollmentRecovery?.recoveryCodes.join("|") ?? "none"}</span>
+      <span data-testid="authenticator-recovery">{session.authenticatorRecovery?.state ?? "none"}</span>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
       <button onClick={() => void session.login("bravo", "password")} type="button">login-b</button>
       <button
@@ -36,6 +37,12 @@ function Probe() {
       >change</button>
       <button onClick={() => void session.logout()} type="button">logout</button>
       <button onClick={() => void session.verifyAuthenticationChallenge("123456")} type="button">verify</button>
+      <button onClick={session.enterAuthenticatorRecovery} type="button">enter-recovery</button>
+      <button onClick={() => void session.startAuthenticatorRecovery("RECOVERY-ONE")} type="button">start-recovery</button>
+      <button onClick={() => void session.confirmAuthenticatorRecovery("654321")} type="button">confirm-recovery</button>
+      <button onClick={() => void session.inspectAuthenticatorRecovery()} type="button">inspect-recovery</button>
+      <button onClick={session.restartAuthenticatorRecovery} type="button">restart-recovery</button>
+      <button onClick={session.leaveAuthenticatorRecovery} type="button">leave-recovery</button>
       <button onClick={() => void session.changeChallengePassword("Changed-Admin-Password-73!")} type="button">challenge-change</button>
       <button onClick={session.acknowledgeReauthentication} type="button">acknowledge</button>
       <button onClick={session.acknowledgeEnrollmentRecovery} type="button">acknowledge-recovery</button>
@@ -244,6 +251,120 @@ describe("SessionProvider", () => {
     expect(screen.getByTestId("principal").textContent).toBe("none");
     await act(async () => fireEvent.click(screen.getByText("acknowledge")));
     expect(screen.getByTestId("phase").textContent).toBe("anonymous");
+  });
+
+  it("keeps authenticator recovery sessionless through irreversible start, rebind, and one-time codes", async () => {
+    const iam = repository();
+    iam.login = vi.fn().mockResolvedValue({
+      outcome: "CHALLENGE_REQUIRED",
+      challenge: { id: "login-challenge", purpose: "LOGIN", nextStep: "TOTP", expiresAt: "2099-09-20T01:07:03Z" },
+      challengeCredential: "login-challenge-secret"
+    });
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `NEW-RECOVERY-${index}`);
+    const startRecovery = vi.fn(async (command: StartAuthenticatorRecoveryCommand) => ({
+      recovery: { id: "recovery-one", requestId: command.requestId, state: "STARTED" as const, createdAt: "2026-09-21T01:00:00Z", expiresAt: "2099-09-20T01:07:03Z" },
+      challenge: { id: "recovery-challenge", purpose: "RECOVERY" as const, nextStep: "ENROLLMENT" as const, expiresAt: "2099-09-20T01:07:03Z" },
+      challengeCredential: "recovery-challenge-secret",
+      provisioning: { seed: "NEW-SEED-MUST-STAY-IN-MEMORY", uri: "otpauth://totp/Matrix:test?secret=NEW-SEED-MUST-STAY-IN-MEMORY" }
+    }));
+    iam.authenticationChallenges = {
+      verify: vi.fn(), changePassword: vi.fn(), inspectRecovery: vi.fn(),
+      startRecovery,
+      confirmRecovery: vi.fn(async (command) => ({
+        recovery: { id: "recovery-one", requestId: command.recoveryRequestId, state: "COMPLETED" as const, createdAt: "2026-09-21T01:00:00Z", expiresAt: "2099-09-20T01:07:03Z", completedAt: "2026-09-21T01:02:00Z" },
+        nextStep: "REAUTHENTICATE" as const,
+        recoveryCodes
+      }))
+    };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("enter-recovery")));
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-code-required");
+    await act(async () => fireEvent.click(screen.getByText("start-recovery")));
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-enrollment-required");
+    expect(screen.getByTestId("challenge").textContent).toBe("ENROLLMENT");
+    expect(screen.getByTestId("authenticator-recovery").textContent).toBe("STARTED");
+    expect(screen.container.textContent).not.toContain("NEW-SEED-MUST-STAY-IN-MEMORY");
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+    await act(async () => fireEvent.click(screen.getByText("confirm-recovery")));
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-codes-required");
+    expect(screen.getByTestId("challenge").textContent).toBe("none");
+    expect(screen.getByTestId("authenticator-recovery").textContent).toBe("none");
+    expect(screen.getByTestId("recovery").textContent).toContain("NEW-RECOVERY-9");
+  });
+
+  it("never auto-retries an unknown recovery start and inspects the original request after a fresh login", async () => {
+    const iam = repository();
+    let logins = 0;
+    iam.login = vi.fn(async () => ({
+      outcome: "CHALLENGE_REQUIRED" as const,
+      challenge: {
+        id: logins++ === 0 ? "login-original" : "login-fresh",
+        purpose: "LOGIN" as const,
+        nextStep: logins === 1 ? "TOTP" as const : "RECOVER" as const,
+        expiresAt: "2099-09-20T01:07:03Z"
+      },
+      challengeCredential: logins === 1 ? "original-secret" : "fresh-secret"
+    }));
+    const startRecovery = vi.fn().mockRejectedValue(new Error("connection ended after request write"));
+    const inspectRecovery = vi.fn(async (command) => ({
+      id: "recovery-unknown", requestId: command.requestId, state: "STARTED" as const,
+      createdAt: "2026-09-21T01:00:00Z", expiresAt: "2099-09-20T01:07:03Z"
+    }));
+    iam.authenticationChallenges = { verify: vi.fn(), changePassword: vi.fn(), startRecovery, confirmRecovery: vi.fn(), inspectRecovery };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("enter-recovery")));
+    await act(async () => fireEvent.click(screen.getByText("start-recovery")));
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-start-unknown");
+    expect(screen.getByTestId("error").textContent).toBe("recoveryOutcomeUnknown");
+    expect(startRecovery).toHaveBeenCalledOnce();
+    const originalRequestId = startRecovery.mock.calls[0]![0].requestId as string;
+    await act(async () => fireEvent.click(screen.getByText("leave-recovery")));
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-result-required");
+    await act(async () => fireEvent.click(screen.getByText("inspect-recovery")));
+    expect(inspectRecovery).toHaveBeenCalledWith({ challengeId: "login-fresh", challengeCredential: "fresh-secret", requestId: originalRequestId });
+    expect(startRecovery).toHaveBeenCalledOnce();
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-start-unknown");
+    expect(screen.getByTestId("authenticator-recovery").textContent).toBe("MATERIAL_LOST");
+    await act(async () => fireEvent.click(screen.getByText("restart-recovery")));
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-code-required");
+  });
+
+  it("does not inspect or replay one-time codes after an unknown recovery confirmation", async () => {
+    const iam = repository();
+    let logins = 0;
+    iam.login = vi.fn(async () => ({
+      outcome: "CHALLENGE_REQUIRED" as const,
+      challenge: { id: `login-${++logins}`, purpose: "LOGIN" as const, nextStep: "TOTP" as const, expiresAt: "2099-09-20T01:07:03Z" },
+      challengeCredential: `login-secret-${logins}`
+    }));
+    const inspectRecovery = vi.fn();
+    iam.authenticationChallenges = {
+      verify: vi.fn().mockResolvedValue({ outcome: "AUTHENTICATED", credential: secretCredential, mustChangePassword: false,
+        session: { id: "session-test", organizationId: "organization-test", principalId: "principal-test", status: "ACTIVE", issuedAt: "2026-08-26T12:00:00Z", expiresAt: "2099-08-26T20:00:00Z" } }),
+      changePassword: vi.fn(), inspectRecovery,
+      startRecovery: vi.fn(async (command) => ({
+        recovery: { id: "recovery-one", requestId: command.requestId, state: "STARTED" as const, createdAt: "2026-09-21T01:00:00Z", expiresAt: "2099-09-20T01:07:03Z" },
+        challenge: { id: "recovery-challenge", purpose: "RECOVERY" as const, nextStep: "ENROLLMENT" as const, expiresAt: "2099-09-20T01:07:03Z" },
+        challengeCredential: "recovery-secret", provisioning: { seed: "new-seed", uri: "otpauth://new" }
+      })),
+      confirmRecovery: vi.fn().mockRejectedValue(new Error("connection ended after commit"))
+    };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("enter-recovery")));
+    await act(async () => fireEvent.click(screen.getByText("start-recovery")));
+    await act(async () => fireEvent.click(screen.getByText("confirm-recovery")));
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-confirm-unknown");
+    await act(async () => fireEvent.click(screen.getByText("leave-recovery")));
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    expect(screen.getByTestId("phase").textContent).toBe("challenge-required");
+    expect(inspectRecovery).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByText("verify")));
+    expect(screen.getByTestId("phase").textContent).toBe("authenticated");
+    expect(screen.getByTestId("authenticator-recovery").textContent).toBe("none");
   });
 
   it("does not turn a rejected challenge into a session", async () => {
