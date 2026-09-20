@@ -248,6 +248,7 @@ function iamRepository(): IamRepository {
   return {
     async login() {
       return {
+        outcome: "AUTHENTICATED",
         credential: "memory-only-session",
         mustChangePassword: false,
         session: {

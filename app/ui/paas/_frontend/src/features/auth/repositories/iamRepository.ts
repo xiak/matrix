@@ -1,15 +1,9 @@
-import type { SessionSummary } from "../domain/session";
+import type { LoginResult } from "../domain/session";
 import type { Account, AccountCommand, AccountIdentity, AccountUser, DirectoryPage } from "../domain/accounts";
 
 export type LoginCommand = {
   loginName: string;
   password: string;
-};
-
-export type LoginResult = {
-  session: SessionSummary;
-  credential: string;
-  mustChangePassword: boolean;
 };
 
 export type ChangePasswordCommand = {
@@ -18,8 +12,27 @@ export type ChangePasswordCommand = {
   revokeOtherSessions?: boolean;
 };
 
+export type VerifyAuthenticationChallengeCommand = {
+  challengeId: string;
+  challengeCredential: string;
+  code: string;
+};
+
+export type ChangeChallengePasswordCommand = {
+  challengeId: string;
+  challengeCredential: string;
+  newPassword: string;
+};
+
 export interface IamRepository {
   login(command: LoginCommand): Promise<LoginResult>;
+  authenticationChallenges?: {
+    verify(command: VerifyAuthenticationChallengeCommand): Promise<LoginResult>;
+    changePassword(command: ChangeChallengePasswordCommand): Promise<{
+      nextStep: "REAUTHENTICATE";
+      changedAt: string;
+    }>;
+  };
   changePassword(
     credential: string,
     command: ChangePasswordCommand

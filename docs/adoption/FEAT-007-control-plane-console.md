@@ -12,6 +12,7 @@
 | Complete Discord-style Next.js UI | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Sole architecture and visual-style donor; read only through Git object commands and exclude its worktree. |
 | PaaS product-design record | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Product-boundary reference only; it is not a second UI architecture or style donor. |
 | Matrix IAM lifecycle and credential-session console | `5721b7b1a985f25c9730ddb9229a51f7f6c3b63a` | Fixed same-repository source only; preserve the current UI architecture and do not read its worktree or import generated assets or acceptance state. |
+| Matrix sessionless login-challenge console | `06e5b8c7576a77ed4ba7009fc1f46f294570a19b`, with stale-result fencing fixed by `1e1e021fdde9cbfc8078b2e3ca42f026ea7faf3d` | Fixed same-repository sources only; adapt the challenge semantics into the current console owners without importing its expanded UI architecture, preview path, generated assets, checkpoint, or acceptance state. |
 
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.
@@ -74,6 +75,7 @@ Matrix Phase 1 product.
 | --- | --- | --- |
 | Existing account provider, repository, scene and renderer | `ADAPT` | Consume FEAT-006's explicit platform tenant lifecycle and original-primary recovery without a second account model or UI-only authority. Retain version-bound confirmation, protected platform credentials and secret clearing. |
 | Session provider and existing login/settings forms | `ADAPT` | Offer the current ordinary-change session option, force the initial-change policy and keep credentials memory-only. Uncertain results and late responses cannot promote a temporary session or undo logout/expiry. |
+| Sessionless LOGIN challenge parser, provider transition fencing and challenge form at `06e5b8c7` plus `1e1e021f` | `ADAPT` | Preserve the disjoint challenge-or-Session response, private challenge credential, TOTP-before-Session behavior, rotated password challenge, forced fresh login and late-result invalidation. Implement them in the current repository/provider/login renderer; reject the donor's preview repository, i18n expansion, generated export and test evidence. |
 | Existing control-plane failure notice and refreshed order choices | `ADAPT` | Keep write failures visible through background polling and in the active compact panel; discard unauthorized snapshots and require an explicit valid target after choices disappear. Reuse existing behavior-test owners. |
 | Embedded export, donor FEAT/checkpoint and browser/offline results | `REJECT` as imported state | Regenerate this branch's static export and independently verify its consuming profile. Component evidence is not installed-browser or offline acceptance. |
 

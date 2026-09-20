@@ -11,6 +11,11 @@ const account = {
   primaryPrincipalId: "primary-acme", primaryLoginName: "acme.owner", loginAlias: "acme"
 };
 const binding = { apiVersion, kind: "RoleBinding", id: "binding-viewer", organizationId: "account-acme", principalId: "principal-alex", role: "PAAS_VIEWER" };
+const session = {
+  apiVersion, kind: "Session", id: "session", organizationId: "account-acme", principalId: "principal-alex",
+  status: "ACTIVE", issuedAt: "2026-08-27T00:00:00Z", expiresAt: "2099-08-27T00:00:00Z"
+};
+const authenticated = { outcome: "AUTHENTICATED", credential: "transient-bearer", mustChangePassword: false, session };
 
 function reply(body: unknown) {
   const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -44,11 +49,51 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("sends the qualified username as one login identifier", async () => {
-    const fetcher = reply({ credential: "transient-bearer", mustChangePassword: false,
-      session: { id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: "2026-08-27T00:00:00Z", expiresAt: "2099-08-27T00:00:00Z" } });
+    const fetcher = reply(authenticated);
     await httpIamRepository.login({ loginName: "alex@acme", password: "synthetic-test-password" });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/login");
     expect(requestBody(fetcher)).toEqual({ loginName: "alex@acme", password: "synthetic-test-password", requestId: expect.any(String) });
+  });
+
+  it("keeps login challenges sessionless and binds follow-up secrets to the path challenge", async () => {
+    const challenge = { apiVersion, kind: "AuthenticationChallenge", id: "challenge-a", purpose: "LOGIN",
+      nextStep: "TOTP", expiresAt: "2099-08-27T00:01:00Z" };
+    let fetcher = reply({ outcome: "CHALLENGE_REQUIRED", challenge, challengeCredential: "challenge-only-secret" });
+    const challenged = await httpIamRepository.login({ loginName: "alex@acme", password: "synthetic-test-password" });
+    expect(challenged).toEqual({ outcome: "CHALLENGE_REQUIRED", challenge: {
+      id: challenge.id, purpose: "LOGIN", nextStep: "TOTP", expiresAt: challenge.expiresAt
+    }, challengeCredential: "challenge-only-secret" });
+    expect(JSON.stringify(challenged)).not.toContain("session");
+
+    fetcher = reply(authenticated);
+    const verified = await httpIamRepository.authenticationChallenges!.verify({
+      challengeId: challenge.id, challengeCredential: "challenge-only-secret", code: "123456"
+    });
+    expect(verified.outcome).toBe("AUTHENTICATED");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/challenges/challenge-a:verify");
+    expect(requestBody(fetcher)).toEqual({ requestId: expect.any(String), challengeCredential: "challenge-only-secret", code: "123456" });
+
+    fetcher = reply({ nextStep: "REAUTHENTICATE", changedAt: "2026-08-27T00:02:00Z" });
+    await httpIamRepository.authenticationChallenges!.changePassword({
+      challengeId: challenge.id, challengeCredential: "rotated-challenge-secret", newPassword: "Changed-Password-73!"
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/challenges/challenge-a:password");
+    expect(requestBody(fetcher)).toEqual({ requestId: expect.any(String), challengeCredential: "rotated-challenge-secret", newPassword: "Changed-Password-73!" });
+  });
+
+  it("rejects mixed, recovery-purpose or otherwise ambiguous login results", async () => {
+    const challenge = { apiVersion, kind: "AuthenticationChallenge", id: "challenge-a", purpose: "LOGIN",
+      nextStep: "TOTP", expiresAt: "2099-08-27T00:01:00Z" };
+    for (const wire of [
+      { ...authenticated, challenge },
+      { outcome: "CHALLENGE_REQUIRED", challenge: { ...challenge, purpose: "RECOVERY", nextStep: "ENROLLMENT" }, challengeCredential: "secret" },
+      { outcome: "CHALLENGE_REQUIRED", challenge, challengeCredential: "secret", session },
+      { ...authenticated, session: { ...session, kind: "Principal" } }
+    ]) {
+      reply(wire);
+      await expect(httpIamRepository.login({ loginName: "alex@acme", password: "synthetic-test-password" }))
+        .rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 
   it("creates a user without an implicit role or caller-supplied tenant", async () => {

@@ -20,9 +20,23 @@ const child: AccountUser = { principal: { ...principal, id: "child-a", loginName
 const customer: Account = { organization: { id: "tenant-b", displayName: "Team B", status: "ACTIVE", resourceVersion: 4 }, primaryPrincipalId: "primary-b", primaryLoginName: "owner-b", loginAlias: null };
 const platformIdentity: AccountIdentity = { ...identity, principal: child.principal, roles: ["PLATFORM_OPERATOR"] };
 
+function authenticated(id = "primary-a") {
+  return { outcome: "AUTHENTICATED" as const, credential, mustChangePassword: false, session: {
+    id: "session-test", organizationId: "tenant-a", principalId: id, status: "ACTIVE" as const,
+    issuedAt: "2026-08-27T00:00:00Z", expiresAt: "2099-08-27T00:00:00Z"
+  } };
+}
+
+function challenged(nextStep: "TOTP" | "PASSWORD_CHANGE" = "TOTP", challengeCredential = "challenge-only-secret") {
+  return { outcome: "CHALLENGE_REQUIRED" as const, challenge: {
+    id: `challenge-${nextStep.toLowerCase()}`, purpose: "LOGIN" as const, nextStep,
+    expiresAt: "2099-08-27T00:01:00Z"
+  }, challengeCredential };
+}
+
 function iam(overrides: Partial<IamRepository> = {}, id = "primary-a"): IamRepository {
   return {
-    login: vi.fn().mockResolvedValue({ credential, mustChangePassword: false, session: { id: "session-test", organizationId: "tenant-a", principalId: id, status: "ACTIVE", issuedAt: "2026-08-27T00:00:00Z", expiresAt: "2099-08-27T00:00:00Z" } }),
+    login: vi.fn().mockResolvedValue(authenticated(id)),
     changePassword: vi.fn(), logout: vi.fn(), ...overrides
   };
 }
@@ -56,7 +70,7 @@ describe("qualified login", () => {
   it("forces other temporary sessions out, clears pending passwords and retains only the verified current session", async () => {
     let complete!: () => void;
     const source = iam({
-      login: vi.fn().mockResolvedValue({ credential, mustChangePassword: true, session: {
+      login: vi.fn().mockResolvedValue({ outcome: "AUTHENTICATED", credential, mustChangePassword: true, session: {
         id: "session-forced", organizationId: "tenant-a", principalId: "child-a", status: "ACTIVE",
         issuedAt: "2026-08-28T00:00:00Z", expiresAt: "2099-08-28T00:00:00Z"
       } }),
@@ -120,6 +134,65 @@ describe("qualified login", () => {
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
     expect(screen.getByRole("alert").textContent).toContain("主账号ID或别名");
     expect(repository.login).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a TOTP login sessionless and navigates only after the challenge succeeds", async () => {
+    const source = iam({
+      login: vi.fn().mockResolvedValue(challenged()),
+      authenticationChallenges: {
+        verify: vi.fn().mockResolvedValue(authenticated()),
+        changePassword: vi.fn()
+      }
+    });
+    const user = userEvent.setup();
+    const view = render(<SessionProvider repository={source}><LoginRenderer /></SessionProvider>);
+    await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+    await screen.findByRole("heading", { name: "输入身份验证器验证码" });
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(view.container.innerHTML).not.toContain("challenge-only-secret");
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+
+    await user.type(screen.getByLabelText("6 位验证码"), "123456");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await waitFor(() => expect(source.authenticationChallenges!.verify).toHaveBeenCalledWith({
+      challengeId: "challenge-totp", challengeCredential: "challenge-only-secret", code: "123456"
+    }));
+    expect(navigation.replace).toHaveBeenCalledOnce();
+    expect(navigation.replace).toHaveBeenCalledWith("/console/");
+  });
+
+  it("uses a rotated password challenge and requires a fresh login after changing the password", async () => {
+    const source = iam({
+      login: vi.fn().mockResolvedValue(challenged()),
+      authenticationChallenges: {
+        verify: vi.fn().mockResolvedValue(challenged("PASSWORD_CHANGE", "rotated-challenge-secret")),
+        changePassword: vi.fn().mockResolvedValue({ nextStep: "REAUTHENTICATE", changedAt: "2026-08-27T00:02:00Z" })
+      }
+    });
+    const user = userEvent.setup();
+    const view = render(<SessionProvider repository={source}><LoginRenderer /></SessionProvider>);
+    await user.type(screen.getByLabelText("密码", { exact: true }), "Temporary-Test-Password-49!");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+    await user.type(await screen.findByLabelText("6 位验证码"), "123456");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await screen.findByRole("heading", { name: "设置你的正式密码" });
+    expect(screen.queryByLabelText("当前初始密码")).toBeNull();
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(view.container.innerHTML).not.toContain("rotated-challenge-secret");
+
+    await user.type(screen.getByLabelText("新密码", { exact: true }), "Replacement-Test-Password-73!");
+    await user.type(screen.getByLabelText("确认新密码", { exact: true }), "Replacement-Test-Password-73!");
+    await user.click(screen.getByRole("button", { name: "更新密码" }));
+    await waitFor(() => expect(source.authenticationChallenges!.changePassword).toHaveBeenCalledWith({
+      challengeId: "challenge-password_change", challengeCredential: "rotated-challenge-secret",
+      newPassword: "Replacement-Test-Password-73!"
+    }));
+    await screen.findByRole("heading", { name: "请重新登录" });
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(view.container.innerHTML).not.toContain("Replacement-Test-Password-73!");
+    await user.click(screen.getByRole("button", { name: "返回登录" }));
+    expect(screen.getByRole("button", { name: "登录控制台" })).toBeTruthy();
   });
 });
 

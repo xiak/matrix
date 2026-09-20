@@ -5,6 +5,20 @@ import type { IamRepository } from "../repositories/iamRepository";
 import { SessionProvider, useSession, useSessionCredential } from "./SessionProvider";
 
 const secretCredential = "must-not-enter-browser-storage-or-dom";
+const challengeCredential = "must-not-become-a-session-bearer";
+
+function challenged(nextStep: "TOTP" | "PASSWORD_CHANGE" = "TOTP", credential = challengeCredential) {
+  return {
+    outcome: "CHALLENGE_REQUIRED" as const,
+    challenge: {
+      id: `challenge-${nextStep.toLowerCase()}`,
+      purpose: "LOGIN" as const,
+      nextStep,
+      expiresAt: "2099-08-26T20:00:00Z"
+    },
+    challengeCredential: credential
+  };
+}
 
 function Probe() {
   const session = useSession();
@@ -15,7 +29,12 @@ function Probe() {
       <span data-testid="principal">{session.current?.loginName ?? "none"}</span>
       <span data-testid="error">{session.error ?? "none"}</span>
       <span data-testid="has-credential">{String(hasCredential)}</span>
+      <span data-testid="has-challenge">{String(session.challenge !== null)}</span>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
+      <button onClick={() => void session.verifyAuthenticationChallenge("123456")} type="button">verify</button>
+      <button onClick={() => void session.changeChallengePassword("Changed-Admin-Password-73!")} type="button">challenge-password</button>
+      <button onClick={session.cancelAuthenticationChallenge} type="button">cancel-challenge</button>
+      <button onClick={session.acknowledgeReauthentication} type="button">acknowledge</button>
       <button
         onClick={() => void session.changePassword("Initial-Admin-Password-49!", "Changed-Admin-Password-73!")}
         type="button"
@@ -36,6 +55,7 @@ function repository({
   return {
     async login() {
       return {
+        outcome: "AUTHENTICATED",
         credential: secretCredential,
         mustChangePassword,
         session: {
@@ -47,6 +67,26 @@ function repository({
           expiresAt: "2099-08-26T20:00:00Z"
         }
       };
+    },
+    authenticationChallenges: {
+      async verify() {
+        return {
+          outcome: "AUTHENTICATED",
+          credential: secretCredential,
+          mustChangePassword: false,
+          session: {
+            id: "session-test",
+            organizationId: "organization-test",
+            principalId: "principal-test",
+            status: "ACTIVE",
+            issuedAt: "2026-08-26T12:00:00Z",
+            expiresAt: "2099-08-26T20:00:00Z"
+          }
+        };
+      },
+      async changePassword() {
+        return { nextStep: "REAUTHENTICATE", changedAt: "2026-08-26T12:01:00Z" };
+      }
     },
     async changePassword() {},
     async logout() {
@@ -70,6 +110,87 @@ describe("SessionProvider", () => {
     expect(screen.container.textContent).not.toContain(secretCredential);
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it("keeps a login challenge sessionless until TOTP verification succeeds", async () => {
+    const source = repository();
+    const authenticatedLogin = source.login;
+    source.login = vi.fn().mockResolvedValue(challenged());
+    source.authenticationChallenges!.verify = vi.fn().mockImplementation(async () => authenticatedLogin({ loginName: "admin", password: "unused" }));
+    const screen = render(<SessionProvider repository={source}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    expect(screen.getByTestId("phase").textContent).toBe("challenge-required");
+    expect(screen.getByTestId("has-credential").textContent).toBe("false");
+    expect(screen.getByTestId("has-challenge").textContent).toBe("true");
+    expect(screen.container.textContent).not.toContain(challengeCredential);
+    await act(async () => fireEvent.click(screen.getByText("verify")));
+    expect(source.authenticationChallenges!.verify).toHaveBeenCalledWith({
+      challengeId: "challenge-totp", challengeCredential, code: "123456"
+    });
+    expect(screen.getByTestId("phase").textContent).toBe("authenticated");
+    expect(screen.getByTestId("has-credential").textContent).toBe("true");
+    expect(screen.getByTestId("has-challenge").textContent).toBe("false");
+  });
+
+  it("uses the rotated challenge only for forced password replacement, then requires a fresh login", async () => {
+    const source = repository();
+    source.login = vi.fn().mockResolvedValue(challenged());
+    source.authenticationChallenges!.verify = vi.fn().mockResolvedValue(challenged("PASSWORD_CHANGE", "rotated-challenge"));
+    source.authenticationChallenges!.changePassword = vi.fn().mockResolvedValue({
+      nextStep: "REAUTHENTICATE", changedAt: "2026-08-26T12:01:00Z"
+    });
+    const screen = render(<SessionProvider repository={source}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("verify")));
+    expect(screen.getByTestId("phase").textContent).toBe("challenge-password-required");
+    expect(screen.getByTestId("has-credential").textContent).toBe("false");
+    await act(async () => fireEvent.click(screen.getByText("challenge-password")));
+    expect(source.authenticationChallenges!.changePassword).toHaveBeenCalledWith({
+      challengeId: "challenge-password_change", challengeCredential: "rotated-challenge",
+      newPassword: "Changed-Admin-Password-73!"
+    });
+    expect(screen.getByTestId("phase").textContent).toBe("reauthentication-required");
+    expect(screen.getByTestId("has-challenge").textContent).toBe("false");
+    expect(screen.getByTestId("has-credential").textContent).toBe("false");
+    await act(async () => fireEvent.click(screen.getByText("acknowledge")));
+    expect(screen.getByTestId("phase").textContent).toBe("anonymous");
+  });
+
+  it("retains only a definite invalid-code challenge and closes uncertain outcomes", async () => {
+    for (const [failure, expectedPhase, retained] of [
+      [new HttpProblem(401, "private upstream"), "challenge-required", true],
+      [new HttpProblem(429, "private upstream"), "challenge-required", true],
+      [new HttpProblem(409, "private upstream"), "anonymous", false],
+      [new Error("private upstream"), "anonymous", false]
+    ] as const) {
+      const source = repository();
+      source.login = vi.fn().mockResolvedValue(challenged());
+      source.authenticationChallenges!.verify = vi.fn().mockRejectedValue(failure);
+      const screen = render(<SessionProvider repository={source}><Probe /></SessionProvider>);
+      await act(async () => fireEvent.click(screen.getByText("login")));
+      await act(async () => fireEvent.click(screen.getByText("verify")));
+      expect(screen.getByTestId("phase").textContent).toBe(expectedPhase);
+      expect(screen.getByTestId("has-challenge").textContent).toBe(String(retained));
+      expect(screen.getByTestId("has-credential").textContent).toBe("false");
+      expect(screen.container.textContent).not.toContain("private upstream");
+      screen.unmount();
+    }
+  });
+
+  it("does not let a late challenge result survive cancellation", async () => {
+    let complete!: (result: Awaited<ReturnType<IamRepository["login"]>>) => void;
+    const source = repository();
+    const authenticatedLogin = source.login;
+    source.login = vi.fn().mockResolvedValue(challenged());
+    source.authenticationChallenges!.verify = () => new Promise((resolve) => { complete = resolve; });
+    const screen = render(<SessionProvider repository={source}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("verify")));
+    await act(async () => fireEvent.click(screen.getByText("cancel-challenge")));
+    await act(async () => complete(await authenticatedLogin({ loginName: "admin", password: "unused" })));
+    expect(screen.getByTestId("phase").textContent).toBe("anonymous");
+    expect(screen.getByTestId("has-credential").textContent).toBe("false");
+    expect(screen.getByTestId("has-challenge").textContent).toBe("false");
   });
 
   it("does not forget a session when IAM revocation fails", async () => {
@@ -185,6 +306,7 @@ describe("SessionProvider", () => {
     const login = source.login;
     source.login = async (command) => {
       const result = await login(command);
+      if (result.outcome !== "AUTHENTICATED") throw new Error("unexpected challenged fixture");
       return { ...result, session: { ...result.session, expiresAt: new Date(Date.now() + 100).toISOString() } };
     };
     source.changePassword = () => new Promise<void>((resolve) => { complete = resolve; });

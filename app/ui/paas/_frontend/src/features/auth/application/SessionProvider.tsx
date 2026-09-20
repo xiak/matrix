@@ -14,6 +14,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type {
   AuthenticatedSession,
   LoginOutcome,
+  PendingAuthenticationChallenge,
   SessionPhase
 } from "../domain/session";
 import { httpIamRepository } from "../repositories/httpIamRepository";
@@ -22,9 +23,14 @@ import type { IamRepository } from "../repositories/iamRepository";
 type SessionContextValue = {
   phase: SessionPhase;
   current: AuthenticatedSession | null;
+  challenge: PendingAuthenticationChallenge | null;
   error: string | null;
   clearError(): void;
   login(loginName: string, password: string): Promise<LoginOutcome | null>;
+  verifyAuthenticationChallenge(code: string): Promise<LoginOutcome | null>;
+  changeChallengePassword(newPassword: string): Promise<boolean>;
+  cancelAuthenticationChallenge(): void;
+  acknowledgeReauthentication(): void;
   changePassword(currentPassword: string, newPassword: string, revokeOtherSessions?: boolean): Promise<boolean>;
   logout(): Promise<boolean>;
 };
@@ -59,6 +65,23 @@ function passwordChangeMessage(error: unknown): string {
   return "无法确认改密结果，请重新登录后核对";
 }
 
+function challengeMessage(error: unknown): string {
+  if (error instanceof HttpProblem && error.status === 401) return "验证码不正确，请检查后重试";
+  if (error instanceof HttpProblem && error.status === 429) return "验证尝试过于频繁，请稍后重试";
+  if (error instanceof HttpProblem && (error.status === 403 || error.status === 409)) return "登录验证已过期，请重新登录";
+  return "无法确认验证结果，请重新登录";
+}
+
+function challengePasswordMessage(error: unknown): string {
+  if (error instanceof HttpProblem && error.status === 422) {
+    return "新密码需为 14–128 字节，且至少包含三类：大写字母、小写字母、数字、符号";
+  }
+  if (error instanceof HttpProblem && (error.status === 401 || error.status === 403 || error.status === 409)) {
+    return "改密验证已过期，请重新登录";
+  }
+  return "无法确认改密结果，请使用新密码重新登录核对";
+}
+
 export function SessionProvider({
   children,
   repository = httpIamRepository
@@ -68,20 +91,44 @@ export function SessionProvider({
 }) {
   const [phase, setPhase] = useState<SessionPhase>("anonymous");
   const [current, setCurrent] = useState<AuthenticatedSession | null>(null);
+  const [challenge, setChallenge] = useState<PendingAuthenticationChallenge | null>(null);
   const [credential, setCredential] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const transition = useRef(0);
+  const challengeRef = useRef<PendingAuthenticationChallenge | null>(null);
   const clearError = useCallback(() => { setError(null); }, []);
+
+  const replaceChallenge = useCallback((next: PendingAuthenticationChallenge | null) => {
+    challengeRef.current = next;
+    setChallenge(next);
+  }, []);
 
   const forget = useCallback(() => {
     transition.current++;
     setCredential(null);
     setCurrent(null);
+    replaceChallenge(null);
     setError(null);
     setPhase("anonymous");
-  }, []);
+  }, [replaceChallenge]);
 
   useEffect(() => () => { transition.current++; }, []);
+
+  useEffect(() => {
+    if (!challenge) return;
+    const remaining = Date.parse(challenge.challenge.expiresAt) - Date.now();
+    const delay = !Number.isFinite(remaining) || remaining <= 0
+      ? 0
+      : Math.min(remaining, 2_147_000_000);
+    const timer = window.setTimeout(() => {
+      if (challengeRef.current !== challenge) return;
+      transition.current++;
+      replaceChallenge(null);
+      setError("登录验证已过期，请重新登录");
+      setPhase("anonymous");
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [challenge, replaceChallenge]);
 
   useEffect(() => {
     if (!current) return;
@@ -95,11 +142,19 @@ export function SessionProvider({
 
   const login = useCallback(async (loginName: string, password: string) => {
     const attempt = ++transition.current;
+    replaceChallenge(null);
     setPhase("authenticating");
     setError(null);
     try {
       const result = await repository.login({ loginName, password });
       if (attempt !== transition.current) return null;
+      if (result.outcome === "CHALLENGE_REQUIRED") {
+        setCredential(null);
+        setCurrent(null);
+        replaceChallenge({ loginName, challenge: result.challenge, challengeCredential: result.challengeCredential });
+        setPhase(result.challenge.nextStep === "PASSWORD_CHANGE" ? "challenge-password-required" : "challenge-required");
+        return "challenge-required";
+      }
       setCredential(result.credential);
       setCurrent({ loginName, session: result.session });
       const outcome: LoginOutcome = result.mustChangePassword
@@ -115,7 +170,95 @@ export function SessionProvider({
       setPhase("anonymous");
       return null;
     }
-  }, [repository]);
+  }, [replaceChallenge, repository]);
+
+  const verifyAuthenticationChallenge = useCallback(async (code: string) => {
+    if (!challenge || challenge.challenge.nextStep !== "TOTP" ||
+        (phase !== "challenge-required" && phase !== "verifying-challenge") ||
+        !repository.authenticationChallenges) return null;
+    const requested = challenge;
+    const attempt = ++transition.current;
+    setPhase("verifying-challenge");
+    setError(null);
+    try {
+      const result = await repository.authenticationChallenges.verify({
+        challengeId: challenge.challenge.id,
+        challengeCredential: challenge.challengeCredential,
+        code
+      });
+      if (attempt !== transition.current || challengeRef.current !== requested) return null;
+      if (result.outcome === "CHALLENGE_REQUIRED") {
+        if (result.challenge.nextStep !== "PASSWORD_CHANGE") throw new Error("INVALID_IAM_RESPONSE");
+        replaceChallenge({ loginName: challenge.loginName, challenge: result.challenge, challengeCredential: result.challengeCredential });
+        setPhase("challenge-password-required");
+        return "password-change-required";
+      }
+      replaceChallenge(null);
+      setCredential(result.credential);
+      setCurrent({ loginName: challenge.loginName, session: result.session });
+      const outcome: LoginOutcome = result.mustChangePassword ? "password-change-required" : "authenticated";
+      setPhase(outcome);
+      return outcome;
+    } catch (verifyError) {
+      if (attempt !== transition.current || challengeRef.current !== requested) return null;
+      setError(challengeMessage(verifyError));
+      if (verifyError instanceof HttpProblem && (verifyError.status === 401 || verifyError.status === 429)) {
+        setPhase("challenge-required");
+      } else {
+        replaceChallenge(null);
+        setPhase("anonymous");
+      }
+      return null;
+    }
+  }, [challenge, phase, replaceChallenge, repository]);
+
+  const changeChallengePassword = useCallback(async (newPassword: string) => {
+    if (!challenge || challenge.challenge.nextStep !== "PASSWORD_CHANGE" ||
+        (phase !== "challenge-password-required" && phase !== "changing-challenge-password") ||
+        !repository.authenticationChallenges) return false;
+    const requested = challenge;
+    const attempt = ++transition.current;
+    setPhase("changing-challenge-password");
+    setError(null);
+    try {
+      await repository.authenticationChallenges.changePassword({
+        challengeId: challenge.challenge.id,
+        challengeCredential: challenge.challengeCredential,
+        newPassword
+      });
+      if (attempt !== transition.current || challengeRef.current !== requested) return false;
+      replaceChallenge(null);
+      setCredential(null);
+      setCurrent(null);
+      setPhase("reauthentication-required");
+      return true;
+    } catch (changeError) {
+      if (attempt !== transition.current || challengeRef.current !== requested) return false;
+      setError(challengePasswordMessage(changeError));
+      if (changeError instanceof HttpProblem && changeError.status === 422) {
+        setPhase("challenge-password-required");
+      } else {
+        replaceChallenge(null);
+        setCredential(null);
+        setCurrent(null);
+        setPhase("reauthentication-required");
+      }
+      return false;
+    }
+  }, [challenge, phase, replaceChallenge, repository]);
+
+  const cancelAuthenticationChallenge = useCallback(() => {
+    transition.current++;
+    replaceChallenge(null);
+    setError(null);
+    setPhase("anonymous");
+  }, [replaceChallenge]);
+
+  const acknowledgeReauthentication = useCallback(() => {
+    transition.current++;
+    setError(null);
+    setPhase("anonymous");
+  }, []);
 
   const changePassword = useCallback(async (
     currentPassword: string,
@@ -180,12 +323,17 @@ export function SessionProvider({
   const sessionValue = useMemo<SessionContextValue>(() => ({
     phase,
     current,
+    challenge,
     error,
     clearError,
     login,
+    verifyAuthenticationChallenge,
+    changeChallengePassword,
+    cancelAuthenticationChallenge,
+    acknowledgeReauthentication,
     changePassword,
     logout
-  }), [changePassword, clearError, current, error, login, logout, phase]);
+  }), [acknowledgeReauthentication, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, current, error, login, logout, phase, verifyAuthenticationChallenge]);
   const credentialValue = useMemo(() => ({ credential }), [credential]);
 
   return (

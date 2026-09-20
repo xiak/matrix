@@ -24,11 +24,14 @@ generic provider schemas before a real second implementation exists.
 
 1. The browser loads the independent Matrix control console through APISIX.
 2. A user logs in with only `loginName` and `password`. IAM derives the
-   organization and returns one opaque session plus the non-secret
-   password-change requirement. A first-login user must replace the initial
-   password in the same memory-only session before entering the console;
-   there is no organization selector, JWT, external identity provider, or
-   social-login branch.
+   organization. A user without a bound authenticator receives one opaque
+   session plus the non-secret password-change requirement. A user with a
+   bound authenticator receives a sessionless TOTP challenge instead; only a
+   completed challenge may create the opaque session. If that ceremony also
+   requires password replacement, it rotates into a private password challenge
+   and forces a fresh login after the change. Challenge credentials and user
+   bearers remain memory-only. There is no organization selector, JWT,
+   external identity provider, or social-login branch.
 3. The authenticated console shows an overview, service catalog, quota,
    service installations, and local-region configuration allowed by the
    user's fixed IAM role.
@@ -313,6 +316,11 @@ This branch's authority-consumption source passed 90 frontend behavior tests,
 type/lint/architecture and contrast checks, plus two static exports with two
 workers and matching Go-embedded output. These are source/component gates;
 the new consuming release has not yet passed installed-browser acceptance.
+The later Phase 3 login-challenge slice passed the complete locked-dependency
+frontend gate: typecheck, lint, architecture, 20 contrast pairs, 16 test files
+with 152 tests, and two clean two-worker static exports whose 72 generated
+files matched the Go embed boundary. Its installed-browser ceremony has not
+yet been repeated and remains open acceptance work.
 
 - Gate A implementation replaces the Phase 1 page with the complete donor-
   shaped App Router -> route -> provider -> repository -> scene -> renderer ->
@@ -365,8 +373,11 @@ Money movement, invoices, tax, discounts, metering-based billing, marketplace
 publishing, MySQL, ELK, Redis, arbitrary Helm/Compose templates, customer
 images, public-cloud accounts, VM/network provisioning, Kubernetes,
 multi-region placement, high availability, read replicas, point-in-time
-restore, engine upgrades, deletion, external IdP, LDAP, SAML, OIDC, MFA, and
-mobile-native applications remain outside this target.
+restore, engine upgrades, deletion, external IdP, LDAP, SAML, OIDC, additional
+authentication-factor families, and mobile-native applications remain outside
+this target. Phase 3's sole admitted TOTP and authenticator-recovery extension
+is owned by FEAT-005/006 and consumed by this console; it does not open a
+generic MFA provider surface.
 
 The product and source dependency boundaries remain owned by
 [`ADR-0002`](../architecture/ADR-0002-product-boundary.md) and
