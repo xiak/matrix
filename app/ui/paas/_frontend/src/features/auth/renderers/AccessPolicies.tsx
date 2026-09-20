@@ -1,7 +1,7 @@
 "use client";
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Dialog, EmptyState, FormField, Table, Tabs, TextArea } from "@ui/xiak";
+import { ActionMenu, Alert, Badge, Button, EmptyState, FormField, Table, Tabs, TextArea } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { policyUsageCounts, policyVersionLimit, type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
 import { includesPermissionManagement } from "../domain/policyDocument";
@@ -30,35 +30,55 @@ function PolicyDescriptionEditor({ policy, onClose }: { policy: AccessPolicy; on
   </WorkspaceDialog>;
 }
 
-function PolicyVersionHistory({ policy, usageCount, workspace, scene }: { policy: AccessPolicy; usageCount: number; workspace: AccessWorkspace; scene: AccountAccessScene }) {
+type PolicyVersionIntent = { action: "inspect" | "activate" | "delete"; version: number };
+
+function PolicyVersionActions({ version, onIntent }: { version: number; onIntent(intent: PolicyVersionIntent): void }) {
+  const t = useTranslations("IamWorkspace");
+  return <span data-version-actions={version}><ActionMenu
+    label={t("versionActions", { version })}
+    iconOnly
+    actions={[
+      { id: "activate", label: t("activateVersion", { version }), onSelect: () => onIntent({ action: "activate", version }) },
+      { id: "delete", label: t("deleteVersion", { version }), danger: true, onSelect: () => onIntent({ action: "delete", version }) }
+    ]}
+  /></span>;
+}
+
+function PolicyVersionHistory({ policy, usageCount, workspace, scene, onWorkflowChange }: { policy: AccessPolicy; usageCount: number; workspace: AccessWorkspace; scene: AccountAccessScene; onWorkflowChange(active: boolean): void }) {
   const t = useTranslations("IamWorkspace");
   const access = useAccountAccess();
   const p = useTranslations("PolicyWorkspace");
   const history = useRef<HTMLDivElement>(null);
-  const [intent, setIntent] = useState<{ action: "inspect" | "activate" | "delete"; version: number } | null>(null);
+  const intentHeading = useRef<HTMLHeadingElement>(null);
+  const returnFocus = useRef<{ kind: "inspect" | "actions"; version: number } | null>(null);
+  const [intent, setIntent] = useState<PolicyVersionIntent | null>(null);
   const revision = policy.versions.find((entry) => entry.id === intent?.version);
-  const close = () => setIntent(null);
-  return <div className={styles.stack} ref={history}>
-    <p className={styles.note}>{t("versionHistoryHint", { count: policy.versions.length, limit: policyVersionLimit })}</p>
-    {policy.kind === "custom" && policy.versions.length >= policyVersionLimit ? <Alert status="warning">{t("errors.versionLimit")}</Alert> : null}
-    <Table aria-label={t("versions")} mobileLayout="stack">
-      <thead><tr><th scope="col">{t("version")}</th><th scope="col">{t("created")}</th><th scope="col">{t("actions")}</th></tr></thead>
-      <tbody>{[...policy.versions].reverse().map((item) => <tr key={item.id}>
-        <td data-label={t("version")}>v{item.id} {item.id === policy.defaultVersion ? <Badge status="success">{t("defaultVersion")}</Badge> : null}</td>
-        <td data-label={t("created")}><WorkspaceTime value={item.createdAt} /></td>
-        <td data-label={t("actions")}><div className={styles.actions}>
-          <Button variant="ghost" size="small" aria-label={t("inspectVersion", { version: item.id })} onClick={() => setIntent({ action: "inspect", version: item.id })}>{t("viewContent")}</Button>
-          {policy.kind === "custom" && item.id !== policy.defaultVersion ? <>
-            <Button variant="ghost" size="small" aria-label={t("activateVersion", { version: item.id })} onClick={() => setIntent({ action: "activate", version: item.id })}>{t("setDefault")}</Button>
-            <Button variant="ghost" size="small" aria-label={t("deleteVersion", { version: item.id })} onClick={() => setIntent({ action: "delete", version: item.id })}>{t("delete")}</Button>
-          </> : null}
-        </div></td>
-      </tr>)}</tbody>
-    </Table>
-    {revision && intent?.action === "inspect" ? <Dialog open size="wide" title={t("inspectVersion", { version: revision.id })} closeLabel={t("close")} onClose={close} footer={<Button onClick={close} variant="secondary">{t("close")}</Button>}>
-      <p className={styles.note}>{t("inspectVersionHint")}</p><PolicyDocumentViewer document={revision.document} />
-    </Dialog> : null}
-    {revision && intent?.action === "activate" ? <WorkspaceDialog fallbackFocusRef={history} size="wide" title={t("activateVersion", { version: revision.id })} onClose={close} submitLabel={t("setDefault")} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "set-policy-version", id: policy.id, version: revision.id }))}>
+  const open = (next: PolicyVersionIntent) => { returnFocus.current = { kind: next.action === "inspect" ? "inspect" : "actions", version: next.version }; access.clearWorkspaceError(); onWorkflowChange(true); setIntent(next); };
+  const close = () => { access.clearWorkspaceError(); onWorkflowChange(false); setIntent(null); };
+  useEffect(() => () => onWorkflowChange(false), [onWorkflowChange]);
+  useLayoutEffect(() => {
+    if (intent) { intentHeading.current?.focus({ preventScroll: true }); intentHeading.current?.scrollIntoView?.({ block: "nearest" }); return; }
+    if (!returnFocus.current) return;
+    const focus = returnFocus.current;
+    const target = focus.kind === "inspect"
+      ? history.current?.querySelector<HTMLElement>(`[data-version-inspect="${focus.version}"]`)
+      : history.current?.querySelector<HTMLElement>(`[data-version-actions="${focus.version}"] button`);
+    returnFocus.current = null;
+    const restored = target ?? history.current;
+    restored?.focus({ preventScroll: true });
+  }, [intent, policy.defaultVersion, policy.versions.length]);
+
+  if (revision && intent) return <div aria-label={t("versions")} className={styles.stack} ref={history} role="group" tabIndex={-1}>
+    <div className={styles.sectionHeading}>
+      <Button variant="ghost" onClick={close}>{t("backToVersions")}</Button>
+      <h3 className={styles.detailTitle} ref={intentHeading} tabIndex={-1}>{t(intent.action === "inspect" ? "inspectVersion" : intent.action === "activate" ? "activateVersion" : "deleteVersion", { version: revision.id })}</h3>
+    </div>
+    {access.workspaceError ? <Alert status="danger">{t(`errors.${access.workspaceError}`)}</Alert> : null}
+    {intent.action === "inspect" ? <>
+      <p className={styles.note}>{t("inspectVersionHint")}</p>
+      <PolicyDocumentViewer document={revision.document} />
+    </> : null}
+    {intent.action === "activate" ? <>
       <Alert status="warning">{t("rollbackImpact", { count: usageCount })}</Alert>
       <PolicyDocumentChanges before={currentDocument(policy)} after={revision.document} />
       <PolicyAffectedIdentities policyId={policy.id} workspace={workspace} scene={scene} />
@@ -70,11 +90,26 @@ function PolicyVersionHistory({ policy, usageCount, workspace, scene }: { policy
           <pre className={styles.code} role="region" aria-label={t("targetRevision", { version: revision.id })} tabIndex={0}>{JSON.stringify(revision.document, null, 2)}</pre>
         </section>
       </div></details>
-    </WorkspaceDialog> : null}
-    {revision && intent?.action === "delete" ? <WorkspaceDialog fallbackFocusRef={history} size="wide" title={t("deleteVersion", { version: revision.id })} onClose={close} submitLabel={t("deleteConfirm")} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "delete-policy-version", id: policy.id, version: revision.id }))}>
+      <div className={styles.actions}><Button disabled={access.busy} onClick={async () => { if (await access.executeWorkspace({ kind: "set-policy-version", id: policy.id, version: revision.id })) { onWorkflowChange(false); setIntent(null); } }}>{t("setDefault")}</Button><Button disabled={access.busy} variant="secondary" onClick={close}>{t("cancel")}</Button></div>
+    </> : null}
+    {intent.action === "delete" ? <>
       <Alert status="warning">{t("deleteVersionHint", { version: revision.id })}</Alert>
       <PolicyDocumentViewer document={revision.document} />
-    </WorkspaceDialog> : null}
+      <div className={styles.actions}><Button disabled={access.busy} variant="danger" onClick={async () => { if (await access.executeWorkspace({ kind: "delete-policy-version", id: policy.id, version: revision.id })) { onWorkflowChange(false); setIntent(null); } }}>{t("deleteConfirm")}</Button><Button disabled={access.busy} variant="secondary" onClick={close}>{t("cancel")}</Button></div>
+    </> : null}
+  </div>;
+
+  return <div aria-label={t("versions")} className={styles.stack} ref={history} role="group" tabIndex={-1}>
+    <p className={styles.note}>{t("versionHistoryHint", { count: policy.versions.length, limit: policyVersionLimit })}</p>
+    {policy.kind === "custom" && policy.versions.length >= policyVersionLimit ? <Alert status="warning">{t("errors.versionLimit")}</Alert> : null}
+    <Table aria-label={t("versions")} mobileLayout="stack">
+      <thead><tr><th scope="col">{t("version")}</th><th scope="col">{t("created")}</th><th scope="col">{t("actions")}</th></tr></thead>
+      <tbody>{[...policy.versions].reverse().map((item) => <tr key={item.id}>
+        <td data-label={t("version")}><button className={styles.userLink} data-version-inspect={item.id} aria-label={t("inspectVersion", { version: item.id })} onClick={() => open({ action: "inspect", version: item.id })}>v{item.id}</button> {item.id === policy.defaultVersion ? <Badge status="success">{t("defaultVersion")}</Badge> : null}</td>
+        <td data-label={t("created")}><WorkspaceTime value={item.createdAt} /></td>
+        <td data-label={t("actions")}>{policy.kind === "custom" && item.id !== policy.defaultVersion ? <PolicyVersionActions version={item.id} onIntent={open} /> : <span aria-hidden="true">—</span>}</td>
+      </tr>)}</tbody>
+    </Table>
   </div>;
 }
 
@@ -117,13 +152,14 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
   const [associating, setAssociating] = useState<{ policies: AccessPolicy[]; additive?: boolean } | null>(null);
   const [editingDescription, setEditingDescription] = useState(false);
   const [choosingMethod, setChoosingMethod] = useState(false);
+  const [versionWorkflow, setVersionWorkflow] = useState(false);
   const selected = workspace.policies.find((policy) => policy.id === entityId);
   const usage = selected ? policyUsageCounts(workspace, selected.id) : null;
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("policies")}>{t("back")}</Button>} />;
   if (editing) return <PolicyAuthoringWizard {...editing} workspace={workspace} scene={scene} onBack={() => setEditing(null)} onDone={(id) => { setEditing(null); onOpen("policies", id); }} />;
   if (associating) return <PolicyAssociationWizard {...associating} workspace={workspace} scene={scene} onBack={() => setAssociating(null)} />;
   return <>
-    {access.workspaceError && !deleting && !editingDescription ? <Alert status="danger">{t(`errors.${access.workspaceError}`)}</Alert> : null}
+    {access.workspaceError && !deleting && !editingDescription && !versionWorkflow ? <Alert status="danger">{t(`errors.${access.workspaceError}`)}</Alert> : null}
     {selected ? <WorkspaceDetail title={selected.name} onBack={() => onOpen("policies")} actions={{
       primary: { id: "associate", label: t("associateTargets"), onSelect: () => setAssociating({ policies: [selected] }) },
       secondary: [
@@ -148,7 +184,7 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
       {includesPermissionManagement(currentDocument(selected)) ? <Alert status="warning">{t("highPrivilege")}</Alert> : null}
       <Tabs.Root defaultValue="document"><Tabs.List aria-label={selected.name}><Tabs.Trigger value="document">{t("document")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versions")}</Tabs.Trigger><Tabs.Trigger value="usage">{t("usage")} ({usage!.total})</Tabs.Trigger></Tabs.List>
         <Tabs.Content value="document"><PolicyDocumentViewer document={currentDocument(selected)} /></Tabs.Content>
-        <Tabs.Content value="versions"><PolicyVersionHistory policy={selected} usageCount={usage!.total} workspace={workspace} scene={scene} /></Tabs.Content>
+        <Tabs.Content value="versions"><PolicyVersionHistory policy={selected} usageCount={usage!.total} workspace={workspace} scene={scene} onWorkflowChange={setVersionWorkflow} /></Tabs.Content>
         <Tabs.Content value="usage"><PolicyUses policyId={selected.id} workspace={workspace} scene={scene} onOpen={onOpen} /></Tabs.Content>
       </Tabs.Root>
     </WorkspaceDetail> : <PolicyDirectory workspace={workspace} onCreate={() => setChoosingMethod(true)} onOpen={(id) => onOpen("policies", id)} onAssociate={(policies, additive) => setAssociating({ policies, additive })} />}
