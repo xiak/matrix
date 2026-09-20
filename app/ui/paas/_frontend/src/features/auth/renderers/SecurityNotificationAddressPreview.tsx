@@ -122,6 +122,7 @@ export function SecurityNotificationAddressPreview() {
       <ContactProgress current={1} />
       <dl className={styles.facts}>
         <div><dt>{t("address")}</dt><dd>{pendingAddress}</dd></div>
+        <div><dt>{t("verificationState")}</dt><dd><Badge status="warning">{t("verificationPending")}</Badge></dd></div>
         <div><dt>{t("deliveryState")}</dt><dd><Badge status="warning">{t("deliveryPending")}</Badge></dd></div>
         <div><dt>{t("expires")}</dt><dd>{t("expiresValue")}</dd></div>
       </dl>
@@ -136,14 +137,15 @@ export function SecurityNotificationAddressPreview() {
     </Card.Body>
   </Card>;
 
-  const state = verifiedAddress ? "VERIFIED" : pendingAddress ? "PENDING" : "NONE";
+  const state = verifiedAddress ? "VERIFIED" : "NONE";
   return <section aria-labelledby="security-notification-address" className={styles.section}>
-    <div className={styles.sectionHeading}><div><p>{t("eyebrow")}</p><h2 id="security-notification-address" ref={summaryHeading} tabIndex={-1}>{t("title")}</h2><span>{t("hint")}</span></div><Badge status={verifiedAddress ? "success" : pendingAddress ? "warning" : "neutral"}>{t(`states.${state}`)}</Badge></div>
+    <div className={styles.sectionHeading}><div><p>{t("eyebrow")}</p><h2 id="security-notification-address" ref={summaryHeading} tabIndex={-1}>{t("title")}</h2><span>{t("hint")}</span></div><Badge status={verifiedAddress ? "success" : pendingAddress ? "warning" : "neutral"}>{t(pendingAddress ? "verificationInProgress" : `states.${state}`)}</Badge></div>
     {completed ? <Alert status="success">{t("completed")}</Alert> : null}
     <Card><Card.Header><div className={styles.cardTitle}><span><Mail aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("cardTitle")}</Typography.Title><Typography.Text tone="muted">{t("cardHint")}</Typography.Text></div></div></Card.Header><Card.Body className={styles.cardBody}>
       <dl className={styles.facts}>
         <div><dt>{t("address")}</dt><dd>{verifiedAddress ?? pendingAddress ?? t("notConfigured")}</dd></div>
         <div><dt>{t("state")}</dt><dd>{t(`states.${state}`)}</dd></div>
+        {pendingAddress ? <div><dt>{t("verificationState")}</dt><dd>{t("verificationPending")}</dd></div> : null}
         <div><dt>{t("purpose")}</dt><dd>{t("purposeValue")}</dd></div>
         <div><dt>{t("owner")}</dt><dd>{t("ownerValue")}</dd></div>
         {pendingAddress ? <div><dt>{t("deliveryState")}</dt><dd>{t("deliveryPending")}</dd></div> : null}

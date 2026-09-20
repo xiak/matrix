@@ -2083,6 +2083,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "创建验证意图" }));
     const verifyTitle = screen.getByRole("heading", { name: "确认安全通知地址" });
     await waitFor(() => expect(verifyTitle).toBe(document.activeElement));
+    expect(screen.getByText("PENDING · 等待验证码")).toBeTruthy();
     expect(screen.getByText("等待投递器处理")).toBeTruthy();
     expect(screen.getByText(/没有渠道受理、最终送达或已读证据/)).toBeTruthy();
     expect(screen.queryByText("渠道已受理")).toBeNull();
@@ -2098,6 +2099,7 @@ describe("CAM-style access workspace", () => {
     const notification = screen.getByRole("region", { name: "安全通知" });
     await waitFor(() => expect(within(notification).getByRole("heading", { name: "安全通知" })).toBe(document.activeElement));
     expect(within(notification).getByText("preview.security@example.com")).toBeTruthy();
+    expect(within(notification).queryByText("PENDING · 等待验证码")).toBeNull();
     expect(within(notification).getAllByText("已验证").length).toBeGreaterThan(0);
     expect(within(notification).getByText(/不提供弱化旁路/)).toBeTruthy();
     expect(within(notification).queryByRole("button")).toBeNull();

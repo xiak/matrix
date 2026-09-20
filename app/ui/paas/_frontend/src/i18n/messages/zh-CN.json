@@ -346,11 +346,13 @@
     "purposeValue": "仅接收封闭的身份安全通知",
     "owner": "管理范围",
     "ownerValue": "仅当前登录用户本人",
+    "verificationState": "验证意图",
+    "verificationPending": "PENDING · 等待验证码",
+    "verificationInProgress": "验证中",
     "deliveryState": "投递观察",
     "deliveryPending": "等待投递器处理",
     "states": {
       "NONE": "未设置",
-      "PENDING": "等待验证码",
       "VERIFIED": "已验证",
       "ACCEPTED": "渠道已受理"
     },

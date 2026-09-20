@@ -346,11 +346,13 @@
     "purposeValue": "Closed identity-security notices only",
     "owner": "Management scope",
     "ownerValue": "Current signed-in user only",
+    "verificationState": "Verification intent",
+    "verificationPending": "PENDING · Waiting for code",
+    "verificationInProgress": "Verification in progress",
     "deliveryState": "Delivery observation",
     "deliveryPending": "Waiting for the dispatcher",
     "states": {
       "NONE": "Not configured",
-      "PENDING": "Waiting for code",
       "VERIFIED": "Verified",
       "ACCEPTED": "Accepted by channel"
     },
