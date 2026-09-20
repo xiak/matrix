@@ -27,6 +27,34 @@ func TestTOTPBackupSnapshotLeaseHasOneCanonicalNonSecretForm(t *testing.T) {
 	}
 }
 
+func TestTOTPBackupCustodyProcessProtocolIsClosedAndBounded(t *testing.T) {
+	if TOTPBackupCustodySnapshotCommand != "snapshot" ||
+		TOTPBackupCustodyDatabaseDSNFileEnvironment != "MATRIX_IAM_BACKUP_CUSTODY_DATABASE_DSN_FILE" ||
+		TOTPBackupCustodyMigrationDSNFileEnvironment != "MATRIX_MIGRATION_IAM_BACKUP_CUSTODY_DSN_FILE" ||
+		TOTPBackupCustodyReleaseFrame != "RELEASE\n" || len(TOTPBackupCustodyReleaseFrame) != 8 ||
+		TOTPBackupSnapshotLeaseMaximumSeconds != 600 {
+		t.Fatal("TOTP backup custody process protocol drifted")
+	}
+	exits := map[int]string{
+		TOTPBackupCustodyExitSuccess:     "",
+		TOTPBackupCustodyExitInvalid:     TOTPBackupCustodyErrorInvalid,
+		TOTPBackupCustodyExitForbidden:   TOTPBackupCustodyErrorForbidden,
+		TOTPBackupCustodyExitUnavailable: TOTPBackupCustodyErrorUnavailable,
+	}
+	if len(exits) != 4 || exits[0] != "" || exits[2] != "IAM_BACKUP_CUSTODY_INVALID" ||
+		exits[3] != "IAM_BACKUP_CUSTODY_FORBIDDEN" || exits[6] != "IAM_BACKUP_CUSTODY_UNAVAILABLE" {
+		t.Fatal("TOTP backup custody exit protocol is ambiguous")
+	}
+	for exitCode, errorCode := range exits {
+		if exitCode == TOTPBackupCustodyExitSuccess {
+			continue
+		}
+		if errorCode == "" || strings.ContainsAny(errorCode, " \t\r\n") {
+			t.Fatalf("exit %d has an unsafe stable error code %q", exitCode, errorCode)
+		}
+	}
+}
+
 func TestTOTPBackupCustodyDigestBindsScopeRevisionAndRequiredKeysOnly(t *testing.T) {
 	lease := totpBackupSnapshotLeaseFixture(t)
 	digest, err := TOTPBackupCustodyDigest(lease.Custody)

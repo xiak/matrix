@@ -15,11 +15,34 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
+// The snapshot helper writes exactly one canonical lease line and then keeps
+// its exporting transaction open. A consumer may request normal closure only
+// by writing TOTPBackupCustodyReleaseFrame and immediately closing stdin; the
+// helper accepts success only after it observes EOF with no other bytes. Exit
+// zero means that exact rollback/close path completed, never that a backup was
+// independently verified or published. All other, unknown, interrupted, or
+// timed-out outcomes are failures and the ephemeral lease must not be reused.
 const (
-	TOTPBackupCustodyAPIVersion     = "installation.matrix.xiak.com/v1"
-	TOTPBackupCustodyKind           = "IAMTOTPBackupCustody"
-	TOTPBackupSnapshotLeaseKind     = "IAMTOTPBackupSnapshotLease"
-	TOTPBackupCustodyPurpose        = "IAM_TOTP_BACKUP_CUSTODY"
+	TOTPBackupCustodyAPIVersion = "installation.matrix.xiak.com/v1"
+	TOTPBackupCustodyKind       = "IAMTOTPBackupCustody"
+	TOTPBackupSnapshotLeaseKind = "IAMTOTPBackupSnapshotLease"
+	TOTPBackupCustodyPurpose    = "IAM_TOTP_BACKUP_CUSTODY"
+
+	TOTPBackupCustodySnapshotCommand             = "snapshot"
+	TOTPBackupCustodyDatabaseDSNFileEnvironment  = "MATRIX_IAM_BACKUP_CUSTODY_DATABASE_DSN_FILE"
+	TOTPBackupCustodyMigrationDSNFileEnvironment = "MATRIX_MIGRATION_IAM_BACKUP_CUSTODY_DSN_FILE"
+	TOTPBackupCustodyReleaseFrame                = "RELEASE\n"
+	TOTPBackupSnapshotLeaseMaximumSeconds        = 600
+
+	TOTPBackupCustodyExitSuccess     = 0
+	TOTPBackupCustodyExitInvalid     = 2
+	TOTPBackupCustodyExitForbidden   = 3
+	TOTPBackupCustodyExitUnavailable = 6
+
+	TOTPBackupCustodyErrorInvalid     = "IAM_BACKUP_CUSTODY_INVALID"
+	TOTPBackupCustodyErrorForbidden   = "IAM_BACKUP_CUSTODY_FORBIDDEN"
+	TOTPBackupCustodyErrorUnavailable = "IAM_BACKUP_CUSTODY_UNAVAILABLE"
+
 	MaximumTOTPBackupCustodyBytes   = int64(8192)
 	maximumPostgresSnapshotIDLength = 96
 )
