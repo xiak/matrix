@@ -186,7 +186,10 @@ func TestAuthorityDomainsKeepPureDependencies(t *testing.T) {
 					if strings.HasPrefix(imported, modulePath) && imported != owningAPI {
 						t.Errorf("%s: authority domain cannot import %q", filepath.ToSlash(relative), imported)
 					}
-					if isThirdPartyImport(imported) && imported != "golang.org/x/crypto/argon2" {
+					// IAM reuses only the reviewed pure OTP construction. Keep
+					// provider, persistence and transport dependencies closed.
+					approvedOTP := context == "iam" && (imported == "github.com/pquerna/otp" || imported == "github.com/pquerna/otp/hotp")
+					if isThirdPartyImport(imported) && imported != "golang.org/x/crypto/argon2" && !approvedOTP {
 						t.Errorf("%s: authority domain has unapproved external dependency %q", filepath.ToSlash(relative), imported)
 					}
 					for _, forbidden := range []string{"database/", "net", "os", "syscall"} {
