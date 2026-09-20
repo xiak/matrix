@@ -63,6 +63,11 @@ export type TOTPEnrollmentStart =
       enrollment: TOTPEnrollment;
     };
 
+export type TOTPEnrollmentIntent = {
+  requestId: string;
+  state: "UNKNOWN" | "KNOWN";
+};
+
 export type TOTPEnrollmentConfirmation = {
   enrollment: TOTPEnrollment;
   nextStep: "REAUTHENTICATE";

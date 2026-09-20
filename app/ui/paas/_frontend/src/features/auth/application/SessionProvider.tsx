@@ -204,13 +204,12 @@ export function SessionProvider({
         setCredential(null);
         setCurrent(null);
         replaceChallenge({ loginName, challenge: result.challenge, challengeCredential: result.challengeCredential });
-        const unresolvedRecovery = authenticatorRecoveryRef.current;
+        const pendingRecovery = authenticatorRecoveryRef.current;
+        const unresolvedRecovery = pendingRecovery?.loginName === loginName ? pendingRecovery : null;
         setPhase(result.challenge.nextStep === "PASSWORD_CHANGE"
           ? "challenge-password-required"
           : result.challenge.nextStep === "RECOVER"
-            ? unresolvedRecovery?.state === "CONFIRM_OUTCOME_UNKNOWN"
-              ? "recovery-confirm-unknown"
-              : unresolvedRecovery ? "recovery-result-required" : "recovery-code-required"
+            ? unresolvedRecovery ? "recovery-result-required" : "recovery-code-required"
             : unresolvedRecovery?.state === "CONFIRM_OUTCOME_UNKNOWN"
               ? "challenge-required"
               : unresolvedRecovery ? "recovery-result-required" : "challenge-required");

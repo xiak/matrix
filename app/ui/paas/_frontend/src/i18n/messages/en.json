@@ -2877,6 +2877,16 @@
       "verifyContactFirst": "Verify a security-notification address before first enrollment.",
       "firstOnly": "The live contract currently supports first enrollment only. Re-enter the current password to continue.",
       "start": "Start enrollment",
+      "pendingIntent": "The previous enrollment request has no confirmed outcome. Do not resubmit the password or create a second intent.",
+      "pendingIntentBoundary": "Only the original requestId and non-secret state are retained. The password, setup secret and authenticator code were not saved; query the original request first.",
+      "requestId": "Original request ID",
+      "intentState": "Local knowledge",
+      "intent": {
+        "UNKNOWN": "Outcome unknown",
+        "KNOWN": "Original request found"
+      },
+      "inspect": "Query original enrollment",
+      "inspecting": "Querying…",
       "boundReadOnly": "An authenticator is connected. Replacement, removal, and recovery-code regeneration have no frozen public contract, so this page exposes no pretend actions.",
       "recoveryUnavailable": "IAM requires recovery, but its contract is not frozen. Do not bypass this boundary through an admin button or MOCK flow.",
       "secretWarning": "The setup secret is returned only by this first-enrollment response. Add it to a local authenticator now; the page never persists it.",
@@ -2886,6 +2896,7 @@
       "uri": "View this TOTP URI",
       "enrollmentId": "Enrollment ID",
       "restart": "Start again",
+      "confirmedElsewhere": "This enrollment was completed elsewhere. The current session may have been revoked; return to sign-in and use the new authenticator.",
       "code": "6-digit authenticator code",
       "codeHint": "Enter the current code. Confirmation revokes old sessions and returns recovery codes only once.",
       "confirm": "Verify and finish enrollment"
@@ -2906,6 +2917,9 @@
       "contactStart": "Email verification could not start. Check the password and address, or retry the original intent later.",
       "contactConfirm": "The email code could not be confirmed. It may be incorrect, used, or expired.",
       "enrollmentStart": "First enrollment could not start. Confirm the notification address is verified and the security revision is current.",
+      "enrollmentOutcomeUnknown": "The enrollment submission outcome is unknown. This page kept the original requestId; query it before doing anything else and do not resubmit.",
+      "enrollmentInspect": "The original enrollment intent cannot be queried right now. Keep this page and requestId, then try again later.",
+      "enrollmentNotFound": "IAM cannot find the original request right now, but that does not prove it was never submitted. Keep querying the same requestId and do not create another intent.",
       "enrollmentConfirm": "The authenticator code could not be confirmed. Check it; do not create a second intent when the outcome is uncertain.",
       "cancel": "The enrollment could not be cancelled. Keep this page open and retry."
     }

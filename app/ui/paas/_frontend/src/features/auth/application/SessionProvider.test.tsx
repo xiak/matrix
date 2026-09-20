@@ -367,6 +367,89 @@ describe("SessionProvider", () => {
     expect(screen.getByTestId("authenticator-recovery").textContent).toBe("none");
   });
 
+  it.each(["STARTED", "EXPIRED"] as const)("inspects the original recovery after a pre-commit confirmation loss resolves to %s", async (recoveryState) => {
+    const iam = repository();
+    let logins = 0;
+    iam.login = vi.fn(async () => ({
+      outcome: "CHALLENGE_REQUIRED" as const,
+      challenge: {
+        id: logins++ === 0 ? "login-original" : "login-after-loss",
+        purpose: "LOGIN" as const,
+        nextStep: logins === 1 ? "TOTP" as const : "RECOVER" as const,
+        expiresAt: "2099-09-20T01:07:03Z"
+      },
+      challengeCredential: logins === 1 ? "original-secret" : "fresh-secret"
+    }));
+    const startRecovery = vi.fn(async (command: StartAuthenticatorRecoveryCommand) => ({
+      recovery: { id: "recovery-pre-commit", requestId: command.requestId, state: "STARTED" as const, createdAt: "2026-09-21T01:00:00Z", expiresAt: "2099-09-20T01:07:03Z" },
+      challenge: { id: "recovery-challenge", purpose: "RECOVERY" as const, nextStep: "ENROLLMENT" as const, expiresAt: "2099-09-20T01:07:03Z" },
+      challengeCredential: "recovery-secret", provisioning: { seed: "never-persist", uri: "otpauth://never-persist" }
+    }));
+    const inspectRecovery = vi.fn(async (command) => ({
+      id: "recovery-pre-commit", requestId: command.requestId, state: recoveryState,
+      createdAt: "2026-09-21T01:00:00Z", expiresAt: "2099-09-20T01:07:03Z",
+      ...(recoveryState === "EXPIRED" ? { completedAt: "2099-09-20T01:07:03Z" } : {})
+    }));
+    iam.authenticationChallenges = {
+      verify: vi.fn(), changePassword: vi.fn(), startRecovery, inspectRecovery,
+      confirmRecovery: vi.fn().mockRejectedValue(new Error("connection ended before commit"))
+    };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("enter-recovery")));
+    await act(async () => fireEvent.click(screen.getByText("start-recovery")));
+    await act(async () => fireEvent.click(screen.getByText("confirm-recovery")));
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-confirm-unknown");
+    const originalRequestId = startRecovery.mock.calls[0]![0].requestId as string;
+
+    await act(async () => fireEvent.click(screen.getByText("leave-recovery")));
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-result-required");
+    await act(async () => fireEvent.click(screen.getByText("inspect-recovery")));
+    expect(inspectRecovery).toHaveBeenCalledWith({ challengeId: "login-after-loss", challengeCredential: "fresh-secret", requestId: originalRequestId });
+    expect(screen.getByTestId("phase").textContent).toBe(recoveryState === "STARTED" ? "recovery-start-unknown" : "recovery-code-required");
+    expect(screen.getByTestId("recovery").textContent).toBe("none");
+    expect(startRecovery).toHaveBeenCalledOnce();
+    expect(iam.authenticationChallenges.confirmRecovery).toHaveBeenCalledOnce();
+
+    if (recoveryState === "STARTED") {
+      await act(async () => fireEvent.click(screen.getByText("restart-recovery")));
+      expect(screen.getByTestId("phase").textContent).toBe("recovery-code-required");
+      expect(startRecovery).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("does not let one login name's unresolved recovery alter another identity's challenge", async () => {
+    const iam = repository();
+    iam.login = vi.fn(async ({ loginName }) => ({
+      outcome: "CHALLENGE_REQUIRED" as const,
+      challenge: { id: `challenge-${loginName}`, purpose: "LOGIN" as const, nextStep: "TOTP" as const, expiresAt: "2099-09-20T01:07:03Z" },
+      challengeCredential: `secret-${loginName}`
+    }));
+    const inspectRecovery = vi.fn();
+    iam.authenticationChallenges = {
+      verify: vi.fn().mockResolvedValue({ outcome: "AUTHENTICATED", credential: `${secretCredential}-bravo`, mustChangePassword: false,
+        session: { id: "session-bravo", organizationId: "organization-test", principalId: "principal-bravo", status: "ACTIVE", issuedAt: "2026-08-26T12:00:00Z", expiresAt: "2099-08-26T20:00:00Z" } }),
+      changePassword: vi.fn(), inspectRecovery,
+      startRecovery: vi.fn().mockRejectedValue(new Error("connection ended after request write")),
+      confirmRecovery: vi.fn()
+    };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("enter-recovery")));
+    await act(async () => fireEvent.click(screen.getByText("start-recovery")));
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-start-unknown");
+    await act(async () => fireEvent.click(screen.getByText("leave-recovery")));
+
+    await act(async () => fireEvent.click(screen.getByText("login-b")));
+    expect(screen.getByTestId("phase").textContent).toBe("challenge-required");
+    expect(inspectRecovery).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByText("verify")));
+    expect(screen.getByTestId("phase").textContent).toBe("authenticated");
+    expect(screen.getByTestId("principal").textContent).toBe("bravo");
+    expect(screen.getByTestId("authenticator-recovery").textContent).toBe("none");
+  });
+
   it("does not turn a rejected challenge into a session", async () => {
     const iam = repository();
     iam.login = vi.fn().mockResolvedValue({ outcome: "CHALLENGE_REQUIRED", challenge: { id: "challenge-one", purpose: "LOGIN", nextStep: "TOTP", expiresAt: "2099-09-20T01:07:03Z" }, challengeCredential: "challenge-secret" });

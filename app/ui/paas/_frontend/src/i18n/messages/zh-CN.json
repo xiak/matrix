@@ -2877,6 +2877,16 @@
       "verifyContactFirst": "首次绑定前必须先验证安全通知地址。",
       "firstOnly": "当前真实接口只支持首次绑定。请重新验证当前密码后继续。",
       "start": "开始绑定",
+      "pendingIntent": "上一次绑定请求的结果尚未确认。不要再次提交密码或创建第二个绑定意图。",
+      "pendingIntentBoundary": "这里只保留原 requestId 和非秘密状态。密码、设置密钥与动态验证码均未保存；请先查询原请求。",
+      "requestId": "原请求 ID",
+      "intentState": "本地认知",
+      "intent": {
+        "UNKNOWN": "结果未知",
+        "KNOWN": "已找到原请求"
+      },
+      "inspect": "查询原绑定意图",
+      "inspecting": "正在查询…",
       "boundReadOnly": "验证器已绑定。替换、移除与重新生成恢复码尚无冻结的公开契约，因此本页不提供伪操作。",
       "recoveryUnavailable": "IAM 已要求恢复，但恢复接口尚未冻结。请勿通过管理员按钮或 MOCK 绕过恢复边界。",
       "secretWarning": "设置密钥只在本次首次绑定响应中返回。请立即添加到本地验证器；页面不会持久化它。",
@@ -2886,6 +2896,7 @@
       "uri": "查看本次 TOTP URI",
       "enrollmentId": "绑定流程 ID",
       "restart": "重新开始",
+      "confirmedElsewhere": "该绑定已在其他位置完成。当前会话可能已被撤销；请返回登录页，使用新验证器重新登录。",
       "code": "6 位动态验证码",
       "codeHint": "输入验证器当前显示的验证码。确认成功会撤销旧会话，并只展示一次恢复码。",
       "confirm": "验证并完成绑定"
@@ -2906,6 +2917,9 @@
       "contactStart": "无法开始邮箱验证。请检查密码、邮箱格式或稍后按原意图重试。",
       "contactConfirm": "无法确认邮箱验证码。验证码可能错误、已使用或已过期。",
       "enrollmentStart": "无法开始首次绑定。请确认通知地址已验证且安全版本没有变化。",
+      "enrollmentOutcomeUnknown": "首次绑定的提交结果未知。页面已保留原 requestId；请先查询原请求，不要重复提交。",
+      "enrollmentInspect": "暂时无法查询原绑定意图。请保留本页和原 requestId，稍后重试。",
+      "enrollmentNotFound": "IAM 当前未找到原请求，但这不能证明请求从未提交。继续使用原 requestId 查询，不要创建第二个意图。",
       "enrollmentConfirm": "无法确认动态验证码。请检查验证码；结果不明确时不要创建第二个绑定意图。",
       "cancel": "无法取消当前绑定流程。请保留当前页面并重试。"
     }

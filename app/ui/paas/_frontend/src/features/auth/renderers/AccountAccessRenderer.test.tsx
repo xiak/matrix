@@ -659,6 +659,72 @@ describe("account access", () => {
     expect(security.confirmTOTPEnrollment).not.toHaveBeenCalled();
   });
 
+  it("keeps an unknown first-enrollment request across content remounts and resolves only that intent", async () => {
+    const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "admin@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+    let originalRequestId = "";
+    const enrollment = { id: "enrollment-unknown", requestId: "", factorRevision: 1, state: "PENDING" as const, createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z", completedAt: null };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND" as const, factorRevision: 1, factorId: null }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn().mockImplementation(async (_credential: string, command: { requestId: string }) => {
+        originalRequestId = command.requestId;
+        enrollment.requestId = command.requestId;
+        throw new Error("connection lost after submit");
+      }),
+      totpEnrollment: vi.fn(),
+      totpEnrollmentByRequest: vi.fn().mockImplementation(async (_credential: string, requestId: string) => ({ ...enrollment, requestId })),
+      cancelTOTPEnrollment: vi.fn().mockImplementation(async (_credential: string, enrollmentId: string) => ({ ...enrollment, id: enrollmentId, state: "CANCELLED" as const, completedAt: "2026-09-11T08:02:00Z" })),
+      confirmTOTPEnrollment: vi.fn()
+    };
+    const { user, view } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    await screen.findByText("admin@example.com");
+    await user.type(screen.getByLabelText("当前密码"), "Private-Password-49!");
+    await user.click(screen.getByRole("button", { name: "开始绑定" }));
+
+    expect(await screen.findByText(/上一次绑定请求的结果尚未确认/)).toBeTruthy();
+    expect(screen.getByText(originalRequestId)).toBeTruthy();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+    expect(view.container.innerHTML).not.toContain("Private-Password-49!");
+
+    await user.click(screen.getByTestId("nav-users"));
+    await screen.findByRole("table", { name: "租户用户列表" });
+    await user.click(screen.getByTestId("nav-settings"));
+    expect(await screen.findByText(originalRequestId)).toBeTruthy();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "查询原绑定意图" }));
+    expect(await screen.findByText(/等值重放/)).toBeTruthy();
+    expect(security.totpEnrollmentByRequest).toHaveBeenCalledWith(credential, originalRequestId);
+    expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
+    expect(screen.queryByText(/手动设置密钥/)).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "取消绑定" }));
+    await waitFor(() => expect(security.cancelTOTPEnrollment).toHaveBeenCalledWith(credential, "enrollment-unknown"));
+    expect(await screen.findByRole("button", { name: "开始绑定" })).toBeTruthy();
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+  });
+
+  it("does not treat a missing by-request lookup as proof that an unknown enrollment never committed", async () => {
+    const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "admin@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND" as const, factorRevision: 1, factorId: null }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn().mockRejectedValue(new Error("connection lost after submit")),
+      totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn().mockRejectedValue(new HttpProblem(404, "IAM_NOT_FOUND")), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    await screen.findByText("admin@example.com");
+    await user.type(screen.getByLabelText("当前密码"), "Private-Password-49!");
+    await user.click(screen.getByRole("button", { name: "开始绑定" }));
+    await user.click(await screen.findByRole("button", { name: "查询原绑定意图" }));
+
+    expect(await screen.findByText(/不能证明请求从未提交/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "开始绑定" })).toBeNull();
+    expect(screen.getByRole("button", { name: "查询原绑定意图" })).toBeTruthy();
+  });
+
   it("allows an unprivileged user to inspect its own settings without querying admin directories", async () => {
     const reader: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", permissionBoundary: { accountId: account.id, userId: child.user.id, resourceVersion: child.user.resourceVersion, policy: null }, policySources: [], capabilities: currentCapabilities(false) };
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(reader), listUsers: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) });
