@@ -3,144 +3,123 @@
 > Non-authoritative portable memory. Validate Git and the owning FEAT.
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Only this
-  task's independent worktree is writable. Updated 2026-09-18.
-- Latest pushed test slice: **7f02d41960f6ca74e49b24f895ad8fc649fc5e49**,
-  independently scheduled account-interference observation. Only existing
-  test/authorityprocess/process_e2e_test.go and IAM/011 changed.
-- Exact-source [Verification35338576115](https://github.com/xiak/matrix/actions/runs/35338576115)
-  is TERMINAL SUCCESS. Go105579041664, storage105579041956,
-  node105579041951, runtime105579041868 and aggregate105585506979 all
-  completed/success. Actual logs and all23 capacity records were inspected;
-  the bounded independent-traffic increment is ACCEPTED in IAM/011, not
-  full capacity/fairness/HA or the IAM goal. Do not restart terminal gates.
-- Latest accepted production is still **159bb302fed89161c4b60afeb4a6f41f9bd99820**,
-  S1b atomic other-login-session self-revocation, cumulatively accepted at
-  **7cf857bba48eb5d7da487162c43e8f52534db133** / Verification35324569376,
-  five checks completed/success. Acceptance owners fixed7e7e1ba0.
-- IAM32/Audit19/PaaS2, IAM product Profile r5; published release profile and
-  revision unchanged. The full IAM goal remains ACTIVE, not complete.
+  task's independent worktree is writable. Updated 2026-09-20.
+- User requested continuing the IAM goal from the detailed MFA design.
+  The goal is ACTIVE, not complete; do not narrow it to primitives or tests.
+- Design fixed and pushed: **6fa39fda**. IAM/FEAT-IAM-009-security-governance.md
+  owns S2/S3 details; its existing adoption record owns source decisions.
+- Latest pushed implementation: **ad93b84fa1cbe902b148e62a9d0f0924a5473a98**,
+  first S2a internal TOTP and purpose-bound recovery-code primitives.
+  [Verification35484114635](https://github.com/xiak/matrix/actions/runs/35484114635)
+  was confirmed for the exact SHA but only QUEUED. No CI success claim.
+- This slice changes only authority credential/TOTP code and tests plus009
+  and adoption. No public API, SQL, current authentication path, UI,
+  installation, workflow, schema or release profile change.
+  Source IAM32/Audit19/PaaS2 and IAM product Profile r5 remain unchanged.
 
-## Current slice and evidence
+## Current implementation and evidence
 
-Read AGENTS, IAM/FEAT-IAM-011-acceptance.md and its existing process test.
-009 owns Session/security governance; 006 owns Role/STS; 007 and ADR-0004
-own signed-key/custody boundaries. No production/API/SQL, UI, installation,
-permissions, workflow budgets or other worktree changed in7f02.
+Read AGENTS, IAM/FEAT-IAM-009-security-governance.md S2/S3, then the actual
+authority code/tests. ADR-0004 is specifically AccessKey custody; TOTP
+does not reuse its keyring, wrapping purpose or private codec.
 
-Original capacity paired batches forced each account to wait for its peer.
-They remain intact:2000 requests,400 real logins,1200 timed decisions.
-The increment adds a100-request complex-PDP control plus100 independently
-progressing wrong-password requests in A and100 paced complex decisions in B.
-Each independent lane has one worker; total concurrency at most2, B's planned
-interval100ms. Response verification remains on the receiving goroutine.
-Record actual starts/ends, lane throughput, scheduling lateness and planned
-completion latency; no missing samples/retries or secret output. Actual peer
-window overlap is checked, not inferred from launching goroutines.
+TOTP uses20-byte random seed, canonical Base32, HMAC-SHA1,6 ASCII digits,
+30 seconds and a fixed adjacent-step window. The pure verifier takes an
+authoritative database instant and the factor's locked consumption watermark.
+It returns only a candidate step, rejects any consumed matching step and
+handles the independently found adjacent collision at910737/910738.
+-1 means proven never consumed, never missing/unknown. No local replay cache.
 
-Current test Go blob0937e73110c3b2dbcde6fc6bfcf68764fd5e548b passed full
-capacity104.91s (package105.956s) on a clean source export. Go1.26.5 runner
-2CPU/1536MiB/PIDs256/GOMAXPROCS2/GOMEMLIMIT512MiB; separate PG18.4
-1CPU/768MiB/PIDs192,512MiB temporary data, no host port or extra swap.
-12stages/23rows/2300requests, failures0;400 unique credentials were actually
-authenticated on the other replica and1400 exact historical decisions were
-checked, alongside current revocation, runtime DB users, outbox and chains.
+Recovery codes are mrc1 plus128 random bits in strict unpadded Base64URL.
+The one-way verifier binds purpose, installation, Account, USER, batch and
+code ID. This is not a generic bearer type, password-reset capability or
+completed recovery. Original Secret redaction/serialization remains.
+No seed envelope, enrollment, challenge endpoint, SQL consumption, attempt
+budget or MFA-enabled login is implemented by this fixed slice.
 
-B normal P99 was19.11ms and under A pressure18.35ms; planned completion P99
-19.75/18.63ms.99 B samples started in A's window,90 A samples in B's.
-These are bounded local observations, NOT evidence of enforced tenant
-fairness, overload budgets, an open-loop saturation point or a production
-SLO. The slightly faster pressured result is not a performance improvement
-claim. Exact metrics and unmeasured boundaries belong only to IAM/011.
+Local evidence: six focused behavior tests with race; original authority/API
+race and vet;20-second/2-worker fuzz completed83581 executions, no failure.
+RFC vectors and independent Node standard-crypto vectors cover epoch/2038/
+maximum date, windows/collision and recovery verifier. They are synthetic
+algorithm oracles, not real authenticator/browser acceptance.
+Clean-source Go1.26.3 Windows export passed all default race tests-p2/count1,
+architecture, vet and module verification; Linux/amd64 build passed.
+GOMAXPROCS2/GOMEMLIMIT512MiB. Default external SKIPs are not PG/runtime gates.
+No PG/container/network/service/remote resource started; all local test/build
+handles are terminal. Preserve normal compiler/fuzz caches.
 
-Same test source: original independent-process security flow passed56.37s
-(package57.415s) in another fresh PG18 database. Clean Windows/amd64 Go1.26.3
-export passed whole-repository race-p2 tests including architecture, vet-p2
-and module verification, all GOMAXPROCS2. Default DSN SKIPs are not real DB
-evidence. New default scheduler tests cover the original batch barrier,
-independent progress, bounded concurrency, pacing, cancellation and rejection
-of invalid plans; they do not substitute for real IAM/Audit/PaaS processes.
+## Next scope and dependencies
 
-All local process handles are terminal. Both runners auto-removed; after
-zero-client, exact-ID/owner/empty-mount checks, the sole task-specific PG and
-empty network were stopped/removed. No local fixture is live. Preserve the
-task-owned Go cache. No foreign/shared/remote resource was modified.
-The read-only CI watcher has also completed; no local handle remains live.
-Exact7f02 CI ran all five IAM storage fixtures, Role/STS272.855s, own Session
-three tests198.778s, retained/independent130.012s and capacity155.24s. Its
-capacity data is exactly12stages/23rows/2300requests, failures0. B's control
-and interference P99 were121.29/54.21ms and scheduling-lag P99 72.41/2.81ms;
-all tails were retained. B/A overlap counts100/98. Raw cumulative memory.peak
-1610813440 was preserved, not trimmed or described as production headroom.
-Full metrics and acceptance boundaries stay in IAM/011; do not mix this run
-with local measurements or infer enforced tenant budgets from success.
-Next scope remains the unfinished FEATs and unapproved choices below, not
-another rerun of accepted Session or capacity gates.
+Confirm the exact-SHA CI without restarting unchanged or terminal gates.
+Continue009's declared slices, not another repetition of accepted Session/
+capacity work. Shared durable attempts and committed rejection are required
+before MFA can open. Current Login/ChangePassword still verify passwords
+inside the old callback transaction; callback errors roll back. Do not claim
+rate limiting exists or store a counter only in a rolled-back error path.
 
-## Accepted rollback points and Session contract
+Public login eventually uses a strict authenticated/challenge union, never
+a half-valid Session. Initial enrollment, proven voluntary removal, lost
+factor and corrupt/unknown state have distinct qualifications. Root and
+unrevoked platform attachment protections remain. security-settings is not
+an authorization Policy; exactly two designed read/update actions are
+planned, not registered/granted. Approval to continue does not mean shared
+implementation has been accepted or that these APIs are currently usable.
 
-- S1 backend3080922f6ae1871f1c351d5ee30f03551fc3c605 /35301228478:
-  five checks successful; own Session directory and single-target
-  self-revocation, not UI or full009.
-- Capacity/scheduling b6f57d0126f66be62ec0615ee22d10b7d7226a10 /35309235630:
-  five checks successful; original bounded measurements, not HA/fairness.
-- S1b cumulative7cf /35324569376: terminal SUCCESS, all five logs inspected.
-  General IAM fixtures ran individually; full Role/STS333.093s, own Session
-  three tests226.359s, retained/independent148.830s, capacity140.29s.
-  Original failed159/35318292984 and2cd/35320384077 remain failures.
-  Their timing/fixture repairs and exact boundaries are owned by006/011;
-  do not rerun terminal jobs or retain old worktree implementations.
+On2026-09-20 fixed design6fa39fda was sent to existing peers for bounded
+contract review only; no code/environment changes requested:
+- Phase3 task01a04149-5dbb-7300-9e4c-31d9e85c8ada returned a read-only review.
+  Its fixed installation source16b42679 offers a REFERENCE/ADAPT pattern,
+  not an imported implementation or new editing window. Exact source still
+  needs local fixed-object inspection before adoption.
+- UX/UI工程师01a07b21-9a0d-7fd0-b090-7827ce18262e received the interaction
+  proposal. Its turn completed but no review text was returned. Do not invent
+  agreement. It owns UI/browser in feat/cloud-console-ux; no UI edits here.
 
-S1b is POST /v1/auth/sessions:revoke-others with strict{requestId}. Current
-Account/USER/retained Session derive from actual LOGIN_SESSION; root and
-forced-change self-reduction allowed, Role/Key/Service/selectors rejected.
-Atomic immutable completion binds original caller/intent and exact other
-sessions, including an empty set. Exact replay returns original count/time,
-does not revoke later logins and still authenticates the current caller.
-No new admin privilege, Session model/cache authority or generic receipt.
-lookup_session24/revoke_session6, lookup_service5/claim7,
-record9/contract4/evidence5, ServiceIdentity and old canonical/chains stay.
+Phase3 confirmed four unfrozen dependencies:
+1. Dedicated TOTP keyring bound to installationId AND bootstrapDigest,
+   keysetRevision/activeKeyId and multiple keys. IAM supplies a same-snapshot
+   nonsecret custody summary of all required key IDs/commitments for backup.
+   Backups must not archive or overwrite live keyring material.
+2. Installation seals a restore authentication CLOSED barrier outside the DB
+   rollback scope, consumed by every IAM route/readiness; old gate-unaware
+   releases must be rejected before effects. ABI/capability not frozen.
+3. Reopening requires trustworthy post-backup security evidence OR independently
+   authorized invalidation/rebinding. Neither exists. Original password-only
+   recovery does not authorize MFA recovery or prove no later revocation.
+4. FEAT012 real notification owner/channel/verified recipient is absent;
+   Deferred is not delivery. Audit or a mock inbox cannot substitute.
 
-## Unfinished full goal and unapproved choices
+Two concise async user questions were submitted and remain unanswered:
+- authorize a minimal verified-address/SMTP/retry security-notification slice
+  here, with protected configuration by installation, or keep it deferred;
+- authorize a bounded original protected-root MFA-recovery/restore-isolation
+  increment jointly with installation, or retain recovery refusal.
+Do not treat preselected answers as approval. Independent internal work may
+continue; do not commission external implementation or open MFA prematurely.
+No new tasks/subagents, new generic recovery system, blanket SYSTEM actor,
+Refresh Token or physical Identity/STS split.
 
-S2 MFA, S3 security rules/authentication budgets and S4 reports/idle governance
-remain design, not available APIs. MFA seed custody, factor recovery and
-backup/non-rollback integration require an owner choice: original installation
-owner or explicit authorization to expand this task. Password recovery does
-not authorize removing a factor. S3's separate tenant security-settings
-read/write permissions are also UNAPPROVED. No answer has arrived; automatic
-goal continuation or preselected options are not approval. Do not silently
-implement either expansion or reopen another task.
+## Preserved accepted rollback points
 
-Those choices do not block independent in-scope progress such as7f02.
-Remaining delegation/IP, signed business enforcement, service roles/ABAC,
-governance, UI, capacity/HA and final signed installation/backup/release stay
-with their original FEAT owners. External deferrals remain explicit in012.
-Keep the full goal, not a goal narrowed to Session or test measurement.
-
-## Shared windows and peers
-
-UX/UI工程师01a07b21-9a0d-7fd0-b090-7827ce18262e owns UI/browser in
-feat/cloud-console-ux. No foreign source/runtime writable. S1 consumer
-8e8b0f608827fb00c9a0e677e78ec12a7e047315 is MOCK/DEV only; real browser
-login/revoke remains deferred by human priority. It received fixed7cf/CI and
-strict S1b contract as an informational handoff; no consumer/browser acceptance
-is inferred. Do not commission browser/MFA/security work implicitly.
-
-Phase3 task01a04149-5dbb-7300-9e4c-31d9e85c8ada completed and requests only
-fixed-SHA/CI informational handoffs. It received accepted7cf, unchanged ABI
-and boundaries. Do not reopen it or inherit consumer/release acceptance.
-PaaS/Audit business enforcement, ingress/APISIX, installation/keyring/backup
-and release composition are outside this test-only slice.
+- S1 own-session3080922f6ae1871f1c351d5ee30f03551fc3c605.
+- S1b production159bb302fed89161c4b60afeb4a6f41f9bd99820, cumulative
+  7cf857bba48eb5d7da487162c43e8f52534db133 / Verification35324569376,
+  five checks successful. Evidence stays009; UI/full009 not accepted.
+- Independent account-interference measurement7f02d41960f6ca74e49b24f895ad8fc649fc5e49
+  / Verification35338576115, five checks successful. All measurements and
+  limits stay011. Neither observations nor this MFA slice prove fairness,
+  overload enforcement, production capacity or database HA.
+- lookup_session24/revoke_session6, lookup_service5/claim7,
+  record9/contract4/evidence5, ServiceIdentity and old canonical/chains remain.
 
 ## Runtime discipline
 
 No subagents/new tasks. Repository-local Xiak <Jellal@aliyun.com> only.
-Go2/-p2 with bounded memory; heavy real PG gates serial race-p1 with unique
-task names/labels and explicit CPU/memory/PID limits. Confirm a handle is
-live before waiting and exact ownership before cleanup; no broad prune.
-Clean exports outside the repository avoid ignored duplicate source in
-architecture checks. Isolated Git indexes leave the actual index untouched.
-Do not fake host machine-id, weaken checks/password cost, increase budgets or
-discard cases/samples for green. No remote1.3/.160/.161, withdrawn GitLab/1.5,
-foreign WIP/checkpoint, shared restart or global config. Machine-local paths
-and uncommitted state do not belong in this portable checkpoint.
+Go2/-p2 with bounded memory; heavy PG gates serial race-p1, unique names/
+labels and explicit CPU/memory/PID limits. Verify ownership and terminal
+handles before cleanup; no broad prune/shared restart.
+Clean exports outside the repository avoid ignored duplicate build sources
+in architecture checks. Temporary indexes never replace the real index.
+Do not weaken password cost, timeouts, gates or coverage for green.
+No remote1.3/.160/.161, withdrawn GitLab/1.5, foreign WIP/checkpoint or global
+configuration edits. Machine-local paths are not portable memory.
