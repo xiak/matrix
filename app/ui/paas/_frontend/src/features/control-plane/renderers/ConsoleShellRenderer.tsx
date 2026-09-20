@@ -272,8 +272,8 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
     closeWorkspace();
   }, [navigation.pendingHref, closeSidebar, closeWorkspace]);
 
-  // Product-directory opening normally starts this read first. This second
-  // boundary also covers favorites, global search and direct service links.
+  // Static product discovery never starts a business-data read. The accepted
+  // destination owns preparation, including favorites, search and direct links.
   useEffect(() => {
     if (!pendingSelection || pendingSelection.section === "access") return;
     void prepareControlPlane();
@@ -392,7 +392,6 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
           <ConsoleHeader
             identity={headerIdentity}
             onLogout={headerLogout}
-            onPrepareServices={prepareControlPlane}
             revoking={session.phase === "revoking"}
             scene={committedFrame}
             productName={frame.preview ? headerProductName : productName}

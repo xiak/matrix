@@ -8,14 +8,13 @@ import { ServiceDirectory } from "./ServiceDirectory";
 import styles from "./ProductLauncher.module.css";
 
 type ProductLauncherProps = Readonly<{
-  onPrepare(): void | Promise<void>;
   onOpenChange(open: boolean): void;
   open: boolean;
 }>;
 
 const panelId = "global-product-launcher";
 
-export function ProductLauncher({ onOpenChange, onPrepare, open }: ProductLauncherProps) {
+export function ProductLauncher({ onOpenChange, open }: ProductLauncherProps) {
   const t = useTranslations("ServiceDirectory");
   const trigger = useRef<HTMLButtonElement>(null);
 
@@ -49,7 +48,6 @@ export function ProductLauncher({ onOpenChange, onPrepare, open }: ProductLaunch
             closeAndRestoreFocus();
             return;
           }
-          void onPrepare();
           onOpenChange(true);
         }}
         open={open}

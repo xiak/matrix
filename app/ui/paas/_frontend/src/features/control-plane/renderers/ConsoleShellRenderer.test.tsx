@@ -272,10 +272,13 @@ describe("ConsoleShellRenderer", () => {
       view: "users"
     });
     const users = await screen.findByRole("table", { name: "租户用户列表" });
+    contentRender.mockClear();
 
     await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
-    expect(load).toHaveBeenCalledTimes(1);
+    expect(load).not.toHaveBeenCalled();
+    expect(contentRender).not.toHaveBeenCalled();
     fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /日志服务/ }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
 
     expect(screen.getByRole("heading", { level: 1, name: "日志概览" })).toBeTruthy();
     expect(screen.getByText("Matrix · Log Service").closest("[inert]")).toBeTruthy();
@@ -287,7 +290,7 @@ describe("ConsoleShellRenderer", () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the database page structure stable while IAM product prefetch is still pending", async () => {
+  it("keeps the database page structure stable while destination data is still pending", async () => {
     let resolveSnapshot!: (value: ControlPlaneSnapshot) => void;
     let releaseRoute!: () => void;
     const load = vi.fn(() => new Promise<ControlPlaneSnapshot>((resolve) => { resolveSnapshot = resolve; }));
@@ -304,7 +307,9 @@ describe("ConsoleShellRenderer", () => {
     const users = await screen.findByRole("table", { name: "租户用户列表" });
 
     await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
+    expect(load).not.toHaveBeenCalled();
     fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /云数据库 PostgreSQL/ }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
 
     expect(screen.getByRole("heading", { level: 1, name: "数据库实例" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 2, name: "组织服务实例" })).toBeTruthy();

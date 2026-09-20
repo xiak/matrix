@@ -1640,17 +1640,17 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-Verified on 2026-09-18 against the current all-service navigation and
+Verified on 2026-09-20 against the current all-service navigation and
 own-login-session slices.
 
 | Gate | Evidence |
 | --- | --- |
-| Supported frontend runtime | Node 24.19.0; complete `build:embedded` plus type, lint, architecture, style and test gates passed: 561 Vitest cases across 39 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
-| Theme and static-export boundary | 228 semantic contrast pairs passed across light, mixed and dark workspace/shell surfaces. Production preview was disabled; all 219 embedded files matched the normalized immutable export. |
+| Supported frontend runtime | Node 24.19.0; complete `build:embedded` plus type, lint, architecture, style and test gates passed: 568 Vitest cases across 39 files and three static-normalization cases. Existing worker bounds and timeouts were unchanged. |
+| Theme and static-export boundary | 228 semantic contrast pairs passed across light, mixed and dark workspace/shell surfaces. Production preview was disabled; all 217 embedded files matched the normalized immutable export. |
 | UI host and architecture | `go test ./app/ui/paas/...` passed against the regenerated embedded console. |
 | Static query boundary | Supported client detail/creation queries retained identical HTML and CSP; ambiguous, malformed and authority-bearing selectors were rejected. |
-| Destination/frame boundary | Tests compare route-known metadata with loaded scenes for all seven directory services without constructing empty resource snapshots or mutation workspaces. Opening product discovery starts one coalesced provider read. Preview-owned services project immediately from ExperienceSnapshot; the resulting product-wide snapshot projects every directory service without another read. Suspended IAM-to-Logs and IAM-to-PostgreSQL transitions expose the target content structure immediately, keep it inert until commit and never restore the outgoing IAM page. A navigation-order regression test proves launchers and compact navigation receive their accepted callback only after the destination section is present in the DOM. |
-| Loading/render isolation | Regional PageSkeleton/TableSkeleton tests verify immediate localized status, a local 200ms placeholder delay, fast-unmount cancellation and destination reset. Destination-specific loading renders stable headings and containers synchronously while only provider-owned rows/cards receive delayed placeholders. Suspended-shell tests verify unchanged Header/viewport nodes, no account-menu render from the skeleton timer and one coalesced resource read. IAM itself starts no PaaS read before explicit product discovery or navigation intent. |
+| Destination/frame boundary | Tests compare route-known metadata with loaded scenes for all seven directory services without constructing empty resource snapshots or mutation workspaces. Opening the static product directory performs no provider read and does not rerender the business content boundary; the accepted destination starts one coalesced provider read. Preview-owned services project immediately from ExperienceSnapshot; the resulting product-wide snapshot projects every directory service without another read. Suspended IAM-to-Logs and IAM-to-PostgreSQL transitions expose the target content structure immediately, keep it inert until commit and never restore the outgoing IAM page. A navigation-order regression test proves launchers and compact navigation receive their accepted callback only after the destination section is present in the DOM. |
+| Loading/render isolation | Regional PageSkeleton/TableSkeleton tests verify immediate localized status, a local 200ms placeholder delay, fast-unmount cancellation and destination reset. Destination-specific loading renders stable headings and containers synchronously while only provider-owned rows/cards receive delayed placeholders. Suspended-shell tests verify unchanged Header/viewport nodes, no account-menu render from the skeleton timer and one coalesced resource read. IAM itself starts no PaaS read before an accepted non-IAM navigation intent. |
 | Real DEV browser | Using the real Products & services directory on the normal DEV server, IAM-to-Regions, Applications, PostgreSQL installations, Logs, DevOps, Observability and back-to-IAM navigation each produced the correct URL, H1, product context and destination content. A stale development HMR CSS-chunk error caused by live editing disappeared after reload; no new console warning or error was emitted. |
 | Own login sessions | The strict browser adapter consumes the fixed IAM contract at `3080922f6ae1871f1c351d5ee30f03551fc3c605`: owner-bound active sessions, opaque cursor and exact-target idempotent revoke only. Tests reject unknown fields, foreign account/user projections, invalid time windows, noncanonical ordering/cursors and mismatched revocation targets. Provider tests prove exact request-ID reuse after an unknown outcome, no replay across a new login and credential-scoped 401 expiry. Preview and renderer tests distinguish sessions from devices/online activity and keep the current logout separate from confirmed other-session revocation. The real DEV deep link rendered the fixed content and three MOCK sessions at desktop and `390 × 844px`; the page width remained 390px while only the 820px native table scrolled internally. Refresh, compact page actions and inline revoke confirmation remained reachable. A fresh reload/login emitted no new warning or error. No real session was revoked. This is frontend integration against the named contract, not inheritance of its backend acceptance. |
 | Draft-leave browser behavior | A temporary, unsubmitted JSON draft remained intact after Continue editing. Discard and leave then immediately displayed the Regions frame; the old editor and loading feedback were absent after the actual route commit. No policy or association was created or changed. |
@@ -2176,11 +2176,16 @@ and is not inherited as a new backend acceptance result.
   Production MOCK checks at `1440 × 900px` measured representative Header
   click processing at 12–63ms and Event Timing durations at 40–112ms without CPU
   throttling. These are local observations, not a field-performance guarantee.
-  The product directory still fails the slow-CPU target: a 4x-throttled production
-  trace on the IAM roles page measured about 1,052ms interaction latency, including
-  substantial first-mount style/layout work. The eager feature graph and first
-  directory mount remain performance acceptance work; functionality passing is
-  not a claim that all components now meet the responsiveness target.
+  A prior 4x-throttled production trace on the IAM roles page measured about
+  1,052ms interaction latency, including an eager product-wide provider read and
+  substantial first-mount style/layout work. Product discovery no longer starts
+  that provider read: regressions prove the IAM content renderer is untouched,
+  while choosing a concrete service starts the single destination read. A fresh
+  memory-only DEV session measured 121ms automation wall time from click to the
+  visible seven-service directory and 204ms from choosing PostgreSQL to its
+  destination structure and loaded preview rows. These are unthrottled local
+  observations, not a field-performance guarantee. First-mount style/layout still
+  requires a new 4x production trace before closing the responsiveness target.
   Production preview network checks confirm ordinary and dynamic segment
   prefetch returns 200 after normalization, with no console errors during the
   checked navigation and Header interactions. Go HTTP tests independently prove
