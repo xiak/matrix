@@ -1249,8 +1249,12 @@ func TestBackupBindsCurrentAccessKeyWrappingKeyWithoutArchivingIt(t *testing.T) 
 	}
 
 	predecessor := newInstallPlan(t, release.SupportedDatabasePredecessorProfile())
+	if err := stageInstallation(predecessor, rand.Reader); err != nil {
+		t.Fatal(err)
+	}
 	legacyBinding, legacyVersion, err := backupAccessKeyWrappingForRelease(predecessor)
-	if err != nil || legacyBinding != nil || legacyVersion != predecessorBackupAPIVersion {
+	if err != nil || legacyBinding == nil || !validSHA256(legacyBinding.Commitment) ||
+		legacyVersion != accessKeyBackupAPIVersion {
 		t.Fatalf("predecessor backup wrapping contract = %#v / %q / %v", legacyBinding, legacyVersion, err)
 	}
 }

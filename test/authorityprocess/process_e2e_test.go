@@ -899,13 +899,12 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	assertIAMEventsStoredOnce(t, ctx, admin)
 	paasProcess := start(binaries.paas, paasEnvironment)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
-	// Exercise the exact source services together without weakening signed
-	// release admission. The published profile advances only after the complete
-	// MFA preparation release (runtime guards plus coherent backup custody) is
-	// accepted, not merely because this IAM schema compiles.
+	// Exercise the exact source services together and keep the signed release
+	// profile aligned with the now-complete MFA preparation runtime and backup
+	// custody contract.
 	profile := installationrelease.AuthoritySchemas{IAM: 35, Audit: 18, PaaS: 6}
-	if installationrelease.CurrentDatabaseProfile().Authorities == profile {
-		t.Fatal("unreleased IAM custody shape was published without its complete release gate")
+	if current := installationrelease.CurrentDatabaseProfile(); current.Authorities != profile || current.ContractRevision != 13 {
+		t.Fatalf("published database profile = %#v, want authorities %#v revision 13", current, profile)
 	}
 	for _, authority := range []struct {
 		name, endpoint string

@@ -877,27 +877,29 @@ func verifyBackupDirectory(
 }
 
 func backupAccessKeyWrappingForRelease(plan platformcommand.InstallPlan) (*backupAccessKeyWrapping, string, error) {
+	version := ""
 	switch plan.Bundle.Manifest.Database {
 	case release.SupportedDatabasePredecessorProfile():
-		return nil, predecessorBackupAPIVersion, nil
+		version = accessKeyBackupAPIVersion
 	case release.CurrentDatabaseProfile():
-		keyring, err := readAccessKeyWrappingKeyring(plan.Root, plan.InstallationID)
-		if err != nil {
-			return nil, "", errors.Join(platformcommand.ErrEffectVerification, err)
-		}
-		keyID := keyring.ActiveWrappingKeyID
-		commitment, err := iamv1.AccessKeyWrappingKeyCommitment(keyring, keyID)
-		keyring = iamv1.AccessKeyWrappingKeyring{}
-		if err != nil {
-			return nil, "", errors.Join(platformcommand.ErrEffectVerification, err)
-		}
-		return &backupAccessKeyWrapping{WrappingKeyID: keyID, Commitment: commitment}, backupAPIVersion, nil
+		version = backupAPIVersion
 	default:
 		return nil, "", errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("backup release profile is unsupported"),
 		)
 	}
+	keyring, err := readAccessKeyWrappingKeyring(plan.Root, plan.InstallationID)
+	if err != nil {
+		return nil, "", errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	keyID := keyring.ActiveWrappingKeyID
+	commitment, err := iamv1.AccessKeyWrappingKeyCommitment(keyring, keyID)
+	keyring = iamv1.AccessKeyWrappingKeyring{}
+	if err != nil {
+		return nil, "", errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	return &backupAccessKeyWrapping{WrappingKeyID: keyID, Commitment: commitment}, version, nil
 }
 
 func verifyBackupAccessKeyWrapping(
@@ -905,31 +907,30 @@ func verifyBackupAccessKeyWrapping(
 	manifest release.Manifest,
 	backup backupManifest,
 ) error {
+	wantVersion := ""
 	switch manifest.Database {
 	case release.SupportedDatabasePredecessorProfile():
-		if backup.APIVersion != predecessorBackupAPIVersion || backup.AccessKeyWrapping != nil {
-			return errors.New("predecessor backup contains an unsupported access-key wrapping commitment")
-		}
-		return nil
+		wantVersion = accessKeyBackupAPIVersion
 	case release.CurrentDatabaseProfile():
-		if backup.APIVersion != backupAPIVersion || backup.AccessKeyWrapping == nil {
-			return errors.New("current backup lacks its access-key wrapping commitment")
-		}
-		keyring, err := readAccessKeyWrappingKeyring(root, installationID)
-		if err != nil {
-			return err
-		}
-		commitment, err := iamv1.AccessKeyWrappingKeyCommitment(keyring, backup.AccessKeyWrapping.WrappingKeyID)
-		keyring = iamv1.AccessKeyWrappingKeyring{}
-		if err != nil || subtle.ConstantTimeCompare(
-			[]byte(commitment), []byte(backup.AccessKeyWrapping.Commitment),
-		) != 1 {
-			return errors.New("backup access-key wrapping commitment differs from the installation")
-		}
-		return nil
+		wantVersion = backupAPIVersion
 	default:
 		return errors.New("backup access-key wrapping profile is unsupported")
 	}
+	if backup.APIVersion != wantVersion || backup.AccessKeyWrapping == nil {
+		return errors.New("backup lacks its access-key wrapping commitment")
+	}
+	keyring, err := readAccessKeyWrappingKeyring(root, installationID)
+	if err != nil {
+		return err
+	}
+	commitment, err := iamv1.AccessKeyWrappingKeyCommitment(keyring, backup.AccessKeyWrapping.WrappingKeyID)
+	keyring = iamv1.AccessKeyWrappingKeyring{}
+	if err != nil || subtle.ConstantTimeCompare(
+		[]byte(commitment), []byte(backup.AccessKeyWrapping.Commitment),
+	) != 1 {
+		return errors.New("backup access-key wrapping commitment differs from the installation")
+	}
+	return nil
 }
 
 func readVerifiedBackupDirectory(
