@@ -95,8 +95,44 @@ func (service *Authority) ChangePassword(
 		authority.ValidatePassword(request.NewPassword) != nil {
 		return iamv1.ChangePasswordResponse{}, ErrInvalidArgument
 	}
+	if err := service.acquirePasswordWork(ctx); err != nil {
+		return iamv1.ChangePasswordResponse{}, err
+	}
+	defer service.releasePasswordWork()
+	attemptID, err := service.config.NewID("password-attempt")
+	if err != nil {
+		return iamv1.ChangePasswordResponse{}, ErrUnavailable
+	}
+	var attempt PasswordAttempt
+	var admitted bool
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		attempt, admitted, err = tx.ReservePasswordAttempt(ctx, PasswordAttemptRequest{ID: attemptID,
+			AccountID: subject.Subject.Organization.ID, UserID: subject.Subject.Principal.ID, SessionID: subject.Subject.Session.ID})
+		return err
+	})
+	if err != nil {
+		return iamv1.ChangePasswordResponse{}, err
+	}
+	if err := service.verifyReservedPassword(ctx, request.CurrentPassword, attempt, admitted); err != nil {
+		return iamv1.ChangePasswordResponse{}, err
+	}
+	replacement, err := service.passwords.Hash(request.NewPassword)
+	if err != nil {
+		if errors.Is(err, authority.ErrWeakPassword) {
+			return iamv1.ChangePasswordResponse{}, ErrInvalidArgument
+		}
+		return iamv1.ChangePasswordResponse{}, ErrUnavailable
+	}
 	var response iamv1.ChangePasswordResponse
-	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
 		if err != nil {
 			return err
@@ -105,30 +141,9 @@ func (service *Authority) ChangePassword(
 		if err != nil {
 			return err
 		}
-		stored, found, err := transaction.LookupPassword(
-			transactionContext,
-			subject.Subject.Organization.ID,
-			subject.Subject.Principal.ID,
-		)
-		if err != nil {
-			return err
-		}
-		if !found {
-			return ErrUnavailable
-		}
-		verified, err := service.passwords.Verify(request.CurrentPassword, stored)
-		if err != nil {
-			return ErrUnavailable
-		}
-		if !verified {
+		if subject.Subject.Organization.ID != attempt.AccountID || subject.Subject.Principal.ID != attempt.PrincipalID ||
+			subject.Subject.Session.ID != attempt.SessionID {
 			return ErrUnauthenticated
-		}
-		replacement, err := service.passwords.Hash(request.NewPassword)
-		if err != nil {
-			if errors.Is(err, authority.ErrWeakPassword) {
-				return ErrInvalidArgument
-			}
-			return ErrUnavailable
 		}
 		revokeOthers := subject.Subject.Principal.MustChangePassword || request.RevokeOtherSessions == nil || *request.RevokeOtherSessions
 		requestDigest, err := digestSanitized("password-change", passwordDigestInput{
@@ -151,11 +166,13 @@ func (service *Authority) ChangePassword(
 			return err
 		}
 		response, err = transaction.ChangePassword(transactionContext, PasswordMutation{
+			AttemptID:            attempt.ID,
+			AttemptSequence:      attempt.Sequence,
 			AccountID:            subject.Subject.Organization.ID,
 			PrincipalID:          subject.Subject.Principal.ID,
 			SessionID:            subject.Subject.Session.ID,
 			RevokeOtherSessions:  revokeOthers,
-			ExpectedPasswordHash: stored,
+			ExpectedPasswordHash: attempt.PasswordHash,
 			NewPasswordHash:      replacement,
 			AuditEvent:           event,
 		})

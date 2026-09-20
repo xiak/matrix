@@ -22065,6 +22065,24 @@
           "422": {
             "$ref": "#/components/responses/ProblemResponse"
           },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This IAM instance's bounded password-work capacity is occupied; this discloses no user-specific attempt budget.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "500": {
             "$ref": "#/components/responses/ProblemResponse"
           },
@@ -22205,6 +22223,24 @@
           },
           "422": {
             "$ref": "#/components/responses/ProblemResponse"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This IAM instance's bounded password-work capacity is occupied; this discloses no user-specific attempt budget.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "$ref": "#/components/responses/ProblemResponse"

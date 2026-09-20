@@ -6,7 +6,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
-const SchemaVersion uint64 = 30
+const SchemaVersion uint64 = 33
 
 func (service *Authority) Readiness(ctx context.Context) (iamv1.Readiness, error) {
 	var snapshot ReadinessSnapshot

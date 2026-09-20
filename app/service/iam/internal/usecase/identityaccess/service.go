@@ -58,12 +58,13 @@ func NewAuthority(repository Repository, config Config) (*Authority, error) {
 	}
 	config.AccessKeyWrapping = nil
 	return &Authority{
-		repository:  repository,
-		config:      config,
-		passwords:   authority.NewPasswordHasher(nil),
-		credentials: authority.NewCredentialIssuer(nil),
-		cursors:     cursors,
-		accessKeys:  wrapping,
+		repository:   repository,
+		config:       config,
+		passwords:    authority.NewPasswordHasher(nil),
+		credentials:  authority.NewCredentialIssuer(nil),
+		cursors:      cursors,
+		accessKeys:   wrapping,
+		passwordWork: make(chan struct{}, 2),
 	}, nil
 }
 

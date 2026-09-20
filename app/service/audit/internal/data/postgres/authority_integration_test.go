@@ -1085,37 +1085,16 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 30 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 33 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
-	var tenantID, principalID, passwordHash, organizationStatus, principalStatus string
-	var mustChangePassword bool
-	if err := iamAPI.QueryRow(
-		ctx,
-		"SELECT * FROM iam.lookup_login($1)",
-		fixture.LoginName,
-	).Scan(
-		&tenantID,
-		&principalID,
-		&passwordHash,
-		&organizationStatus,
-		&principalStatus,
-		&mustChangePassword,
-	); err != nil {
-		t.Fatalf("lookup IAM login: %v", err)
+	_, err := iamAPI.Exec(ctx, "SELECT * FROM iam.lookup_login($1)", fixture.LoginName)
+	assertAuthorityPostgresCode(t, err, "42501")
+	sequence := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, "lookup-boundary-attempt", "")
+	if _, err := iamAPI.Exec(ctx, "SELECT iam.reject_password_attempt($1,$2,$3,$4)", fixture.TenantID, fixture.Administrator, "lookup-boundary-attempt", sequence); err != nil {
+		t.Fatal("complete the bounded lookup fixture", err)
 	}
-	if tenantID != string(fixture.TenantID) || principalID != fixture.Administrator ||
-		passwordHash != fixture.PasswordHash || organizationStatus != "ACTIVE" ||
-		principalStatus != "ACTIVE" || !mustChangePassword {
-		t.Fatalf(
-			"IAM login lookup tenant=%q principal=%q organization=%q principalStatus=%q mustChange=%t",
-			tenantID,
-			principalID,
-			organizationStatus,
-			principalStatus,
-			mustChangePassword,
-		)
-	}
+	var tenantID, principalID string
 	for _, service := range fixture.Services {
 		var purpose, verificationDigest, installationID string
 		if err := iamAPI.QueryRow(
@@ -1166,7 +1145,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 30 || checkedAt.IsZero() {
+	if ready || schemaVersion != 33 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -1649,6 +1628,30 @@ func assertAuditImmutability(
 	}
 }
 
+// This storage fixture exercises the actual restricted SQL contract. It is
+// not a second password verifier or an end-to-end authentication claim; the
+// IAM HTTP/process gates own that proof. Reservation commits before mutation.
+func reserveIAMPasswordAttempt(t *testing.T, ctx context.Context, iamAPI *pgx.Conn, fixture iamBootstrapFixture, attemptID, sessionID string) uint64 {
+	t.Helper()
+	var login, tenant, principal, session any = fixture.LoginName, nil, nil, nil
+	if sessionID != "" {
+		login, tenant, principal, session = nil, string(fixture.TenantID), fixture.Administrator, sessionID
+	}
+	var actualTenant, actualPrincipal, hash string
+	var mustChange bool
+	var generation, sequence uint64
+	var expires time.Time
+	if err := iamAPI.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,$2,$3,$4,$5)", login, tenant, principal, session, attemptID).
+		Scan(&actualTenant, &actualPrincipal, &hash, &mustChange, &generation, &sequence, &expires); err != nil {
+		t.Fatal("reserve IAM storage fixture password attempt", err)
+	}
+	if actualTenant != string(fixture.TenantID) || actualPrincipal != fixture.Administrator || hash != fixture.PasswordHash ||
+		!mustChange || generation == 0 || sequence == 0 || expires.IsZero() {
+		t.Fatal("password reservation changed the real bootstrap subject")
+	}
+	return sequence
+}
+
 func assertIAMSessionDatabaseTime(
 	t *testing.T,
 	ctx context.Context,
@@ -1658,6 +1661,8 @@ func assertIAMSessionDatabaseTime(
 ) {
 	t.Helper()
 	issue := func(sessionID, seed string) (string, string, time.Time, time.Time) {
+		attemptID := "attempt-session-" + seed
+		sequence := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, attemptID, "")
 		lookupDigest := authorityDigest("session-lookup-" + seed)
 		verificationDigest := authorityDigest("session-verification-" + seed)
 		event := authorityAuditEvent(
@@ -1666,6 +1671,7 @@ func assertIAMSessionDatabaseTime(
 			sessionID,
 			auditv1.ActionIAMSessionIssued,
 		)
+		event.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
 		var before, after, issuedAt, expiresAt time.Time
 		if err := admin.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&before); err != nil {
 			t.Fatalf("read database time before session issue: %v", err)
@@ -1683,7 +1689,7 @@ func assertIAMSessionDatabaseTime(
 		if err := tx.QueryRow(
 			ctx,
 			`SELECT * FROM iam.issue_session(
-				$1, $2, $3, $4, $5, 60, $6::jsonb
+				$1, $2, $3, $4, $5, 60, $6::jsonb, $7, $8
 			)`,
 			sessionID,
 			string(fixture.TenantID),
@@ -1691,6 +1697,8 @@ func assertIAMSessionDatabaseTime(
 			lookupDigest,
 			verificationDigest,
 			authorityJSON(t, event),
+			attemptID,
+			sequence,
 		).Scan(&issuedAt, &expiresAt); err != nil {
 			t.Fatalf("issue IAM session %s: %v", sessionID, err)
 		}
@@ -1722,11 +1730,13 @@ func assertIAMSessionDatabaseTime(
 		"session-stale-time",
 		auditv1.ActionIAMSessionIssued,
 	)
+	staleTimeEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
+	staleSequence := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, "stale-time-attempt", "")
 	var ignoredIssuedAt, ignoredExpiresAt time.Time
 	err := iamAPI.QueryRow(
 		ctx,
 		`SELECT * FROM iam.issue_session(
-			$1, $2, $3, $4, $5, 60, $6::jsonb
+			$1, $2, $3, $4, $5, 60, $6::jsonb, $7, $8
 		)`,
 		"session-stale-time",
 		string(fixture.TenantID),
@@ -1734,8 +1744,13 @@ func assertIAMSessionDatabaseTime(
 		authorityDigest("stale-time-lookup"),
 		authorityDigest("stale-time-verification"),
 		authorityJSON(t, staleTimeEvent),
+		"stale-time-attempt",
+		staleSequence,
 	).Scan(&ignoredIssuedAt, &ignoredExpiresAt)
 	assertAuthorityPostgresCode(t, err, "22023")
+	if _, err := iamAPI.Exec(ctx, "SELECT iam.reject_password_attempt($1,$2,$3,$4)", fixture.TenantID, fixture.Administrator, "stale-time-attempt", staleSequence); err != nil {
+		t.Fatal("finish stale-time fixture without refunding its reservation", err)
+	}
 
 	lookupA, verificationA, _, _ := issue("session-expiring", "expiring")
 	assertIAMSessionLookup(t, ctx, iamAPI, fixture, lookupA, verificationA, "session-expiring")
@@ -1787,7 +1802,7 @@ func assertIAMSessionDatabaseTime(
 	err = missingTx.QueryRow(
 		ctx,
 		`SELECT * FROM iam.issue_session(
-			$1, $2, $3, $4, $5, 60, $6::jsonb
+			$1, $2, $3, $4, $5, 60, $6::jsonb, $7, $8
 		)`,
 		"session-missing",
 		string(fixture.TenantID),
@@ -1795,6 +1810,8 @@ func assertIAMSessionDatabaseTime(
 		authorityDigest("missing-lookup"),
 		authorityDigest("missing-verification"),
 		authorityJSON(t, missingEvent),
+		"missing-subject-attempt",
+		uint64(1),
 	).Scan(&ignoredIssuedAt, &ignoredExpiresAt)
 	assertAuthorityPostgresCode(t, err, "42501")
 	var afterOutbox int
@@ -1913,6 +1930,29 @@ func assertIAMAuthorizationCatalog(
 	fixture iamBootstrapFixture,
 ) {
 	t.Helper()
+	loginSequence := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, "catalog-login-attempt", "")
+	sessionTransaction, err := iamAPI.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessionTime time.Time
+	if err := sessionTransaction.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&sessionTime); err != nil {
+		_ = sessionTransaction.Rollback(ctx)
+		t.Fatal(err)
+	}
+	sessionEvent := authorityAuditEvent("event-catalog-session", fixture.TenantID, "session-catalog", auditv1.ActionIAMSessionIssued)
+	sessionEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
+	sessionEvent.OccurredAt = sessionTime.UTC()
+	if _, err := sessionTransaction.Exec(ctx, "SELECT * FROM iam.issue_session($1,$2,$3,$4,$5,60,$6::jsonb,$7,$8)",
+		"session-catalog", string(fixture.TenantID), fixture.Administrator,
+		authorityDigest("catalog-session-lookup"), authorityDigest("catalog-session-verification"), authorityJSON(t, sessionEvent), "catalog-login-attempt", loginSequence); err != nil {
+		_ = sessionTransaction.Rollback(ctx)
+		t.Fatalf("establish the current session for catalog password replacement: %v", err)
+	}
+	if err := sessionTransaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	passwordSequence := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, "catalog-password-attempt", "session-catalog")
 	passwordTransaction, err := iamAPI.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -1923,20 +1963,12 @@ func assertIAMAuthorizationCatalog(
 		t.Fatal(err)
 	}
 	passwordEvent := authorityAuditEvent("event-catalog-password", fixture.TenantID, fixture.Administrator, auditv1.ActionIAMUserPasswordChanged)
-	passwordEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
+	passwordEvent.Actor = sessionEvent.Actor
 	passwordEvent.OccurredAt = passwordTime.UTC()
-	sessionEvent := authorityAuditEvent("event-catalog-session", fixture.TenantID, "session-catalog", auditv1.ActionIAMSessionIssued)
-	sessionEvent.Actor = passwordEvent.Actor
-	sessionEvent.OccurredAt = passwordTime.UTC()
-	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.issue_session($1,$2,$3,$4,$5,60,$6::jsonb)",
-		"session-catalog", string(fixture.TenantID), fixture.Administrator,
-		authorityDigest("catalog-session-lookup"), authorityDigest("catalog-session-verification"), authorityJSON(t, sessionEvent)); err != nil {
-		_ = passwordTransaction.Rollback(ctx)
-		t.Fatalf("establish the current session for catalog password replacement: %v", err)
-	}
-	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.change_password($1,$2,$3,$4,$5::jsonb,$6,$7)",
+	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.change_password($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9)",
 		string(fixture.TenantID), fixture.Administrator, fixture.PasswordHash,
-		strings.TrimSuffix(fixture.PasswordHash, strings.Repeat("A", 43))+strings.Repeat("B", 42)+"A", authorityJSON(t, passwordEvent), "session-catalog", true); err != nil {
+		strings.TrimSuffix(fixture.PasswordHash, strings.Repeat("A", 43))+strings.Repeat("B", 42)+"A", authorityJSON(t, passwordEvent), "session-catalog", true,
+		"catalog-password-attempt", passwordSequence); err != nil {
 		_ = passwordTransaction.Rollback(ctx)
 		t.Fatalf("prepare current platform authority through the password mutation: %v", err)
 	}

@@ -235,6 +235,16 @@ func TestIAMHTTPAuthorizationProfileDiscoveryRequiresUserSession(t *testing.T) {
 	}
 }
 
+func TestIAMHTTPAuthenticationOverloadIsBoundedAndSanitized(t *testing.T) {
+	response := httptest.NewRecorder()
+	value := &handler{}
+	value.writeError(response, httptest.NewRequest(http.MethodPost, "/v1/auth/login", nil), identityaccess.ErrOverloaded)
+	if response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") != "1" ||
+		!strings.Contains(response.Body.String(), "iam.authentication.busy") || strings.Contains(response.Body.String(), "remaining") {
+		t.Fatal("authentication overload lost its bounded public response")
+	}
+}
+
 func TestIAMHTTPAuthorizationProfileDiscoveryRejectsInvalidMetadata(t *testing.T) {
 	for _, test := range []struct {
 		name    string

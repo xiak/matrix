@@ -27,6 +27,27 @@ func (service *Authority) Login(
 	if iamv1.ValidateLoginRequest(request) != nil {
 		return iamv1.LoginResponse{}, ErrInvalidArgument
 	}
+	if err := service.acquirePasswordWork(ctx); err != nil {
+		return iamv1.LoginResponse{}, err
+	}
+	defer service.releasePasswordWork()
+	attemptID, err := service.config.NewID("password-attempt")
+	if err != nil {
+		return iamv1.LoginResponse{}, ErrUnavailable
+	}
+	var attempt PasswordAttempt
+	var admitted bool
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		var err error
+		attempt, admitted, err = tx.ReservePasswordAttempt(ctx, PasswordAttemptRequest{ID: attemptID, LoginName: request.LoginName})
+		return err
+	})
+	if err != nil {
+		return iamv1.LoginResponse{}, err
+	}
+	if err := service.verifyReservedPassword(ctx, request.Password, attempt, admitted); err != nil {
+		return iamv1.LoginResponse{}, err
+	}
 	requestDigest, err := digestSanitized("login", loginDigestInput{
 		LoginName: request.LoginName,
 		RequestID: request.RequestID,
@@ -36,25 +57,6 @@ func (service *Authority) Login(
 	}
 	var response iamv1.LoginResponse
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
-		account, found, err := transaction.LookupLogin(transactionContext, request.LoginName)
-		if err != nil {
-			return err
-		}
-		stored := dummyPasswordHash
-		if found {
-			stored = account.PasswordHash
-		}
-		verified, verifyErr := service.passwords.Verify(request.Password, stored)
-		if verifyErr != nil {
-			if found {
-				return ErrUnavailable
-			}
-			return ErrUnauthenticated
-		}
-		if !found || !verified || account.AccountStatus != iamv1.AccountActive ||
-			account.PrincipalStatus != iamv1.PrincipalActive {
-			return ErrUnauthenticated
-		}
 		sessionID, err := service.config.NewID("session")
 		if err != nil {
 			return ErrUnavailable
@@ -71,8 +73,8 @@ func (service *Authority) Login(
 			APIVersion:  iamv1.APIVersion,
 			Kind:        "Session",
 			ID:          iamv1.SessionID(sessionID),
-			AccountID:   account.AccountID,
-			PrincipalID: account.PrincipalID,
+			AccountID:   attempt.AccountID,
+			PrincipalID: attempt.PrincipalID,
 			Status:      iamv1.SessionActive,
 			IssuedAt:    now,
 			ExpiresAt:   now.Add(service.config.SessionLifetime),
@@ -83,9 +85,9 @@ func (service *Authority) Login(
 		}
 		event, err := newAuditEvent(
 			eventID,
-			account.AccountID,
+			attempt.AccountID,
 			"",
-			auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(account.PrincipalID)},
+			auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(attempt.PrincipalID)},
 			auditv1.ActionIAMSessionIssued,
 			auditv1.TargetReference{Kind: auditv1.TargetSession, ID: sessionID},
 			auditv1.ResultSucceeded,
@@ -99,6 +101,8 @@ func (service *Authority) Login(
 			return err
 		}
 		storedSession, err := transaction.IssueSession(transactionContext, SessionMutation{
+			AttemptID:          attempt.ID,
+			AttemptSequence:    attempt.Sequence,
 			Session:            session,
 			LookupDigest:       issued.LookupDigest,
 			VerificationDigest: issued.VerificationDigest,
@@ -110,7 +114,7 @@ func (service *Authority) Login(
 		response = iamv1.LoginResponse{
 			Session:            storedSession,
 			Credential:         issued.Credential,
-			MustChangePassword: account.MustChangePassword,
+			MustChangePassword: attempt.MustChangePassword,
 		}
 		return nil
 	})
@@ -121,6 +125,58 @@ func (service *Authority) Login(
 		return iamv1.LoginResponse{}, ErrUnavailable
 	}
 	return response, nil
+}
+
+// This is a per-process memory/CPU bound, not a cluster-wide attempt counter.
+// No queue is allocated, and business authorization uses no password slot.
+func (service *Authority) acquirePasswordWork(ctx context.Context) error {
+	if ctx == nil {
+		return ErrInvalidArgument
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if service == nil || service.passwordWork == nil {
+		return ErrUnavailable
+	}
+	select {
+	case service.passwordWork <- struct{}{}:
+		return nil
+	default:
+		return ErrOverloaded
+	}
+}
+
+func (service *Authority) releasePasswordWork() { <-service.passwordWork }
+
+func (service *Authority) verifyReservedPassword(ctx context.Context, password iamv1.Secret, attempt PasswordAttempt, admitted bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stored := dummyPasswordHash
+	if admitted {
+		stored = attempt.PasswordHash
+	}
+	// Reservation has committed and released every connection/lock before the
+	// expensive verifier runs. Unknown, suppressed and inactive users use dummy.
+	verified, err := service.passwords.Verify(password, stored)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if !admitted {
+		return ErrUnauthenticated
+	}
+	if verified {
+		return nil
+	}
+	// Authentication rejection is an outcome AFTER a successful commit; using
+	// ErrUnauthenticated as the callback error would roll back the failure.
+	if err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		return tx.RejectPasswordAttempt(ctx, attempt)
+	}); err != nil {
+		return err
+	}
+	return ErrUnauthenticated
 }
 
 func (service *Authority) ServiceIdentity(

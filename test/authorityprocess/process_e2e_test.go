@@ -851,7 +851,14 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	assertIAMEventsStoredOnce(t, ctx, admin)
 	paasProcess := start(binaries.paas, paasEnvironment)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
-	profile := installationrelease.CurrentDatabaseProfile().Authorities
+	// Exercise the exact source services together without weakening signed
+	// release admission. The published profile advances only after the complete
+	// MFA preparation release (runtime guards plus coherent backup custody) is
+	// accepted, not merely because this IAM schema compiles.
+	profile := installationrelease.AuthoritySchemas{IAM: 33, Audit: 18, PaaS: 6}
+	if installationrelease.CurrentDatabaseProfile().Authorities == profile {
+		t.Fatal("unreleased IAM password-attempt shape was published without its complete release gate")
+	}
 	for _, authority := range []struct {
 		name, endpoint string
 		version        uint64
@@ -866,7 +873,7 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 		}
 		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &readiness) != nil ||
 			readiness.SchemaVersion != authority.version {
-			t.Fatalf("%s runtime schema=%d does not match release profile=%d (status=%d)",
+			t.Fatalf("%s runtime schema=%d does not match source profile=%d (status=%d)",
 				authority.name, readiness.SchemaVersion, authority.version, response.Status)
 		}
 	}

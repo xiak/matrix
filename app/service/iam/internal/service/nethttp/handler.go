@@ -1168,6 +1168,9 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusForbidden, "iam.authorization.denied", "IAM authorization denied")
 	case errors.Is(err, identityaccess.ErrConflict):
 		writeProblem(response, requestID, http.StatusConflict, "iam.state.conflict", "IAM state conflict")
+	case errors.Is(err, identityaccess.ErrOverloaded):
+		response.Header().Set("Retry-After", "1")
+		writeProblem(response, requestID, http.StatusTooManyRequests, "iam.authentication.busy", "IAM authentication busy")
 	default:
 		writeProblem(response, requestID, http.StatusServiceUnavailable, "iam.unavailable", "IAM unavailable")
 	}

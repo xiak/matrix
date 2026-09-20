@@ -741,6 +741,35 @@ CREATE TABLE IF NOT EXISTS iam.sessions (
 -- neither migration replay nor explicit retention may bless those rows.
 ALTER TABLE iam.sessions ADD COLUMN IF NOT EXISTS credential_version bigint CHECK (credential_version > 0);
 
+-- One bounded slot per real USER. Sequence never resets with a window or
+-- credential change; replacing this temporary slot cannot replay old proof.
+CREATE TABLE IF NOT EXISTS iam.password_attempts (
+    tenant_id text COLLATE "C" NOT NULL,
+    principal_id text COLLATE "C" NOT NULL,
+    credential_version bigint NOT NULL CHECK (credential_version > 0),
+    account_version bigint NOT NULL CHECK (account_version > 0),
+    principal_version bigint NOT NULL CHECK (principal_version > 0),
+    window_started_at timestamptz(6) NOT NULL,
+    used_attempts integer NOT NULL CHECK (used_attempts BETWEEN 0 AND 5),
+    attempt_sequence bigint NOT NULL CHECK (attempt_sequence > 0),
+    attempt_id text COLLATE "C" NOT NULL CHECK (attempt_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
+    purpose text COLLATE "C" NOT NULL,
+    session_id text COLLATE "C",
+    state text COLLATE "C" NOT NULL CHECK (state IN ('RESERVED','SUCCEEDED','REJECTED','ABANDONED')),
+    reserved_at timestamptz(6) NOT NULL,
+    expires_at timestamptz(6) NOT NULL,
+    completed_at timestamptz(6),
+    PRIMARY KEY (tenant_id,principal_id),
+    -- Deleted users lose their password row, not their permanent identity or
+    -- this bounded history. Credential generation is rechecked by the functions.
+    FOREIGN KEY (tenant_id,principal_id) REFERENCES iam.principals(tenant_id,id),
+    FOREIGN KEY (tenant_id,session_id) REFERENCES iam.sessions(tenant_id,id),
+    CHECK ((purpose='LOGIN' AND session_id IS NULL) OR (purpose='PASSWORD_CHANGE' AND session_id IS NOT NULL)),
+    CHECK (expires_at=reserved_at+interval '30 seconds'),
+    CHECK ((state='RESERVED' AND completed_at IS NULL) OR (state<>'RESERVED' AND completed_at IS NOT NULL)),
+    CHECK (state='SUCCEEDED' OR used_attempts>0)
+);
+
 CREATE TABLE IF NOT EXISTS iam.session_index (
     lookup_digest text COLLATE "C" PRIMARY KEY,
     tenant_id text COLLATE "C" NOT NULL,
@@ -966,6 +995,8 @@ ALTER TABLE iam.policy_attachments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.policy_attachments FORCE ROW LEVEL SECURITY;
 ALTER TABLE iam.user_credentials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.user_credentials FORCE ROW LEVEL SECURITY;
+ALTER TABLE iam.password_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.password_attempts FORCE ROW LEVEL SECURITY;
 ALTER TABLE iam.service_credentials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.service_credentials FORCE ROW LEVEL SECURITY;
 ALTER TABLE iam.sessions ENABLE ROW LEVEL SECURITY;
@@ -980,7 +1011,7 @@ DECLARE
     table_name text;
 BEGIN
     FOREACH table_name IN ARRAY ARRAY[
-        'principals', 'policy_attachments', 'user_credentials',
+        'principals', 'policy_attachments', 'user_credentials', 'password_attempts',
         'service_credentials', 'sessions', 'authorization_decisions'
     ]
     LOOP
@@ -1597,7 +1628,7 @@ BEGIN
                   AND NOT snapshot.prosecdef AND snapshot.proowner='matrix_iam_owner'::regrole)
             AND to_regprocedure('iam.set_organization_status(text,text,text,text,text,bigint,jsonb)') IS NULL
             AND to_regprocedure('iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb)') IS NULL
-           AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean)') IS NOT NULL
+           AND iam.password_attempt_contract_ready()
            AND to_regprocedure('iam.change_password(text,text,text,text,jsonb)') IS NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc AS recovery
                 WHERE recovery.oid IN (
@@ -1650,7 +1681,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           30::bigint,
+           33::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1719,6 +1750,143 @@ BEGIN
 END
 $function$;
 
+-- The resolver above is internal. The only runtime path to a password hash
+-- reserves durable work before returning it. The two input shapes are closed:
+-- login realm, or a currently authenticated same-user Session for recheck.
+CREATE OR REPLACE FUNCTION iam.reserve_password_attempt(
+    submitted_login_name text, submitted_tenant_id text, submitted_principal_id text,
+    submitted_session_id text, submitted_attempt_id text
+)
+RETURNS TABLE (tenant_id text, principal_id text, password_hash text, must_change_password boolean,
+    credential_generation bigint, attempt_sequence bigint, expires_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE
+    account_id text; user_id text; account_version bigint;
+    subject iam.principals%ROWTYPE; credential iam.user_credentials%ROWTYPE;
+    caller iam.sessions%ROWTYPE; budget iam.password_attempts%ROWTYPE;
+    effective_now timestamptz(6); next_sequence bigint; used integer; window_start timestamptz;
+BEGIN
+    IF COALESCE(submitted_attempt_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='password attempt is invalid';
+    END IF;
+    IF submitted_login_name IS NOT NULL THEN
+        IF submitted_tenant_id IS NOT NULL OR submitted_principal_id IS NOT NULL OR submitted_session_id IS NOT NULL THEN
+            RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='password attempt purpose is invalid';
+        END IF;
+        SELECT r.tenant_id,r.principal_id INTO account_id,user_id FROM iam.lookup_login(submitted_login_name) r;
+        IF NOT FOUND THEN RETURN; END IF;
+    ELSE
+        IF COALESCE(submitted_tenant_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            OR COALESCE(submitted_principal_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            OR COALESCE(submitted_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+            RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='password attempt subject is invalid';
+        END IF;
+        account_id:=submitted_tenant_id; user_id:=submitted_principal_id;
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',account_id,true);
+    SELECT a.resource_version INTO account_version FROM iam.accounts a WHERE a.id=account_id AND a.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RETURN; END IF;
+    SELECT * INTO subject FROM iam.principals p WHERE p.tenant_id=account_id AND p.id=user_id
+        AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL FOR UPDATE;
+    IF NOT FOUND THEN RETURN; END IF;
+    SELECT * INTO credential FROM iam.user_credentials c WHERE c.tenant_id=account_id AND c.principal_id=user_id FOR UPDATE;
+    IF NOT FOUND THEN RETURN; END IF;
+    IF submitted_session_id IS NOT NULL THEN
+        SELECT * INTO caller FROM iam.sessions s WHERE s.tenant_id=account_id AND s.principal_id=user_id
+            AND s.id=submitted_session_id FOR UPDATE;
+        IF NOT FOUND OR caller.status<>'ACTIVE' OR caller.revoked_at IS NOT NULL
+            OR caller.credential_version IS DISTINCT FROM credential.credential_version THEN RETURN; END IF;
+    END IF;
+    SELECT * INTO budget FROM iam.password_attempts b WHERE b.tenant_id=account_id AND b.principal_id=user_id FOR UPDATE;
+    effective_now:=clock_timestamp();
+    IF submitted_session_id IS NOT NULL AND caller.expires_at<=effective_now THEN RETURN; END IF;
+    IF budget.credential_version=credential.credential_version THEN
+        -- Neither a fresh purpose, caller request ID nor another replica refunds
+        -- a reservation. A crashed verifier costs an attempt until window expiry.
+        IF budget.state='RESERVED' AND budget.expires_at>effective_now THEN RETURN; END IF;
+        IF budget.state='RESERVED' THEN
+            UPDATE iam.password_attempts b SET state='ABANDONED',completed_at=effective_now
+                WHERE b.tenant_id=account_id AND b.principal_id=user_id;
+        END IF;
+        IF budget.window_started_at+interval '60 seconds'>effective_now THEN
+            IF budget.used_attempts>=5 THEN RETURN; END IF;
+            used:=budget.used_attempts; window_start:=budget.window_started_at;
+        END IF;
+    END IF;
+    IF budget.attempt_id=submitted_attempt_id THEN RETURN; END IF;
+    used:=COALESCE(used,0)+1; window_start:=COALESCE(window_start,effective_now);
+    next_sequence:=COALESCE(budget.attempt_sequence,0)+1;
+    INSERT INTO iam.password_attempts AS b (tenant_id,principal_id,credential_version,account_version,principal_version,
+        window_started_at,used_attempts,attempt_sequence,attempt_id,purpose,session_id,state,reserved_at,expires_at)
+    VALUES (account_id,user_id,credential.credential_version,account_version,subject.resource_version,
+        window_start,used,next_sequence,submitted_attempt_id,
+        CASE WHEN submitted_session_id IS NULL THEN 'LOGIN' ELSE 'PASSWORD_CHANGE' END,
+        submitted_session_id,'RESERVED',effective_now,effective_now+interval '30 seconds')
+    ON CONFLICT ON CONSTRAINT password_attempts_pkey DO UPDATE SET
+        credential_version=EXCLUDED.credential_version,account_version=EXCLUDED.account_version,principal_version=EXCLUDED.principal_version,
+        window_started_at=EXCLUDED.window_started_at,used_attempts=EXCLUDED.used_attempts,attempt_sequence=EXCLUDED.attempt_sequence,
+        attempt_id=EXCLUDED.attempt_id,purpose=EXCLUDED.purpose,session_id=EXCLUDED.session_id,state='RESERVED',
+        reserved_at=EXCLUDED.reserved_at,expires_at=EXCLUDED.expires_at,completed_at=NULL;
+    RETURN QUERY SELECT account_id,user_id,credential.password_hash,subject.must_change_password,
+        credential.credential_version,next_sequence,effective_now+interval '30 seconds';
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.reject_password_attempt(tenant text,subject_id text,attempt text,sequence bigint)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts a WHERE a.id=tenant FOR SHARE;
+    PERFORM 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id FOR UPDATE;
+    -- Stale completion is a no-op, never a change to another/new-generation
+    -- attempt. The already committed debit does not depend on this response.
+    UPDATE iam.password_attempts b SET state=CASE WHEN b.expires_at>clock_timestamp() THEN 'REJECTED' ELSE 'ABANDONED' END,
+        completed_at=clock_timestamp()
+        WHERE b.tenant_id=tenant AND b.principal_id=subject_id AND b.attempt_id=attempt
+            AND b.attempt_sequence=sequence AND b.state='RESERVED';
+END
+$function$;
+
+-- Not granted to a runtime role. Call only in the final mutation transaction;
+-- success consumption rolls back with any later Session/password/outbox error.
+CREATE OR REPLACE FUNCTION iam.consume_password_attempt(tenant text,subject_id text,session_id text,attempt text,sequence bigint)
+RETURNS bigint LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE
+    account_version bigint; subject iam.principals%ROWTYPE; credential iam.user_credentials%ROWTYPE;
+    caller iam.sessions%ROWTYPE; budget iam.password_attempts%ROWTYPE; effective_now timestamptz;
+BEGIN
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    SELECT a.resource_version INTO account_version FROM iam.accounts a WHERE a.id=tenant AND a.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password attempt is unavailable'; END IF;
+    SELECT * INTO subject FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id
+        AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password attempt is unavailable'; END IF;
+    SELECT * INTO credential FROM iam.user_credentials c WHERE c.tenant_id=tenant AND c.principal_id=subject_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password attempt is unavailable'; END IF;
+    IF session_id IS NOT NULL THEN
+        SELECT * INTO caller FROM iam.sessions s WHERE s.tenant_id=tenant AND s.principal_id=subject_id AND s.id=session_id FOR UPDATE;
+        IF NOT FOUND OR caller.status<>'ACTIVE' OR caller.revoked_at IS NOT NULL
+            OR caller.credential_version IS DISTINCT FROM credential.credential_version THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password attempt is unavailable';
+        END IF;
+    END IF;
+    SELECT * INTO budget FROM iam.password_attempts b WHERE b.tenant_id=tenant AND b.principal_id=subject_id FOR UPDATE;
+    effective_now:=clock_timestamp();
+    IF NOT FOUND OR budget.attempt_id IS DISTINCT FROM attempt OR budget.attempt_sequence IS DISTINCT FROM sequence
+        OR budget.session_id IS DISTINCT FROM session_id OR budget.state<>'RESERVED'
+        OR budget.purpose<>(CASE WHEN session_id IS NULL THEN 'LOGIN' ELSE 'PASSWORD_CHANGE' END)
+        OR budget.credential_version<>credential.credential_version OR budget.account_version<>account_version
+        OR budget.principal_version<>subject.resource_version OR budget.expires_at<=effective_now
+        OR (session_id IS NOT NULL AND caller.expires_at<=effective_now) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password attempt is unavailable';
+    END IF;
+    UPDATE iam.password_attempts b SET state='SUCCEEDED',completed_at=effective_now,used_attempts=0,window_started_at=effective_now
+        WHERE b.tenant_id=tenant AND b.principal_id=subject_id;
+    RETURN credential.credential_version;
+END
+$function$;
+
+DROP FUNCTION IF EXISTS iam.issue_session(text,text,text,text,text,integer,jsonb);
 CREATE OR REPLACE FUNCTION iam.issue_session(
     submitted_session_id text,
     submitted_tenant_id text,
@@ -1726,7 +1894,9 @@ CREATE OR REPLACE FUNCTION iam.issue_session(
     submitted_lookup_digest text,
     submitted_verification_digest text,
     submitted_lifetime_seconds integer,
-    submitted_audit_event jsonb
+    submitted_audit_event jsonb,
+    submitted_attempt_id text,
+    submitted_attempt_sequence bigint
 )
 RETURNS TABLE (issued_at timestamptz, expires_at timestamptz)
 LANGUAGE plpgsql
@@ -1749,21 +1919,12 @@ BEGIN
     END IF;
     effective_expires_at := effective_now + make_interval(secs => submitted_lifetime_seconds);
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
-    SELECT credential.credential_version INTO password_version
-      FROM iam.accounts AS organization
-      JOIN iam.principals AS principal ON principal.tenant_id = organization.id
-      JOIN iam.user_credentials AS credential
-        ON credential.tenant_id = principal.tenant_id AND credential.principal_id = principal.id
-     WHERE organization.id = submitted_tenant_id AND organization.status = 'ACTIVE'
-       AND principal.id = submitted_principal_id AND principal.principal_type = 'USER'
-       AND principal.status = 'ACTIVE';
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'session subject is unavailable';
-    END IF;
+    password_version:=iam.consume_password_attempt(submitted_tenant_id,submitted_principal_id,NULL,submitted_attempt_id,submitted_attempt_sequence);
     PERFORM iam.assert_audit_event(
         submitted_audit_event, submitted_tenant_id,
         'iam.session.issued', 'SESSION', submitted_session_id, 'SUCCEEDED'
     );
+    PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_principal_id,submitted_audit_event);
     INSERT INTO iam.sessions (
         tenant_id, id, principal_id, verification_digest, status, resource_version,
         issued_at, expires_at, credential_version
@@ -1783,6 +1944,40 @@ BEGIN
     );
     RETURN QUERY SELECT effective_now, effective_expires_at;
 END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.password_attempt_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT COALESCE(
+        EXISTS (SELECT 1 FROM pg_catalog.pg_class c WHERE c.oid=to_regclass('iam.password_attempts')
+            AND c.relrowsecurity AND c.relforcerowsecurity AND c.relowner='matrix_iam_owner'::regrole)
+        AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid=to_regclass('iam.password_attempts') AND NOT c.convalidated)
+        AND EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('iam.reserve_password_attempt(text,text,text,text,text)')
+            AND p.prosecdef AND p.proretset AND p.prorettype='record'::regtype AND p.proowner='matrix_iam_owner'::regrole
+            AND p.proallargtypes=ARRAY['text'::regtype,'text'::regtype,'text'::regtype,'text'::regtype,'text'::regtype,
+                'text'::regtype,'text'::regtype,'text'::regtype,'boolean'::regtype,'bigint'::regtype,'bigint'::regtype,'timestamptz'::regtype]::oid[]
+            AND p.proargnames=ARRAY['submitted_login_name','submitted_tenant_id','submitted_principal_id','submitted_session_id','submitted_attempt_id',
+                'tenant_id','principal_id','password_hash','must_change_password','credential_generation','attempt_sequence','expires_at'])
+        AND (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.oid IN (
+                to_regprocedure('iam.reserve_password_attempt(text,text,text,text,text)'),
+                to_regprocedure('iam.reject_password_attempt(text,text,text,bigint)'),
+                to_regprocedure('iam.issue_session(text,text,text,text,text,integer,jsonb,text,bigint)'),
+                to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint)'))
+            AND p.prosecdef AND p.proowner='matrix_iam_owner'::regrole
+            AND has_function_privilege('matrix_iam_api',p.oid,'EXECUTE')
+            AND NOT has_function_privilege('matrix_iam_worker',p.oid,'EXECUTE')
+            AND NOT has_function_privilege('matrix_iam_credential_recovery',p.oid,'EXECUTE')
+            AND NOT has_function_privilege('public',p.oid,'EXECUTE'))=4
+        AND (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.oid IN (
+                to_regprocedure('iam.consume_password_attempt(text,text,text,text,bigint)'),to_regprocedure('iam.lookup_login(text)'))
+            AND p.proowner='matrix_iam_owner'::regrole
+            AND NOT has_function_privilege('matrix_iam_api',p.oid,'EXECUTE')
+            AND NOT has_function_privilege('matrix_iam_worker',p.oid,'EXECUTE')
+            AND NOT has_function_privilege('matrix_iam_credential_recovery',p.oid,'EXECUTE')
+            AND NOT has_function_privilege('public',p.oid,'EXECUTE'))=2
+        AND to_regprocedure('iam.lookup_password(text,text)') IS NULL
+        AND to_regprocedure('iam.issue_session(text,text,text,text,text,integer,jsonb)') IS NULL
+        AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean)') IS NULL,false)
 $function$;
 
 CREATE OR REPLACE FUNCTION iam.current_policy_snapshot(tenant text, principal text)
@@ -2370,39 +2565,10 @@ BEGIN
 END
 $function$;
 
-CREATE OR REPLACE FUNCTION iam.lookup_password(
-    submitted_tenant_id text,
-    submitted_principal_id text
-)
-RETURNS TABLE (password_hash text)
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, pg_temp
-AS $function$
-BEGIN
-    IF submitted_tenant_id COLLATE "C"
-            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_principal_id COLLATE "C"
-            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
-        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'password subject is invalid';
-    END IF;
-    PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
-    RETURN QUERY
-    SELECT credential.password_hash
-      FROM iam.user_credentials AS credential
-      JOIN iam.accounts AS organization ON organization.id = credential.tenant_id
-      JOIN iam.principals AS principal
-        ON principal.tenant_id = credential.tenant_id
-       AND principal.id = credential.principal_id
-     WHERE credential.tenant_id = submitted_tenant_id
-       AND credential.principal_id = submitted_principal_id
-       AND organization.status = 'ACTIVE'
-       AND principal.principal_type = 'USER'
-       AND principal.status = 'ACTIVE';
-END
-$function$;
+DROP FUNCTION IF EXISTS iam.lookup_password(text,text);
 
 DROP FUNCTION IF EXISTS iam.change_password(text,text,text,text,jsonb);
+DROP FUNCTION IF EXISTS iam.change_password(text,text,text,text,jsonb,text,boolean);
 CREATE OR REPLACE FUNCTION iam.change_password(
     submitted_tenant_id text,
     submitted_principal_id text,
@@ -2410,7 +2576,9 @@ CREATE OR REPLACE FUNCTION iam.change_password(
     submitted_new_password_hash text,
     submitted_audit_event jsonb,
     submitted_session_id text,
-    submitted_revoke_other_sessions boolean
+    submitted_revoke_other_sessions boolean,
+    submitted_attempt_id text,
+    submitted_attempt_sequence bigint
 )
 RETURNS TABLE (changed_at timestamptz, bootstrap_file_retirable boolean)
 LANGUAGE plpgsql
@@ -2422,7 +2590,6 @@ DECLARE
     changed integer;
     retirable boolean;
     subject iam.principals%ROWTYPE;
-    current_session iam.sessions%ROWTYPE;
     previous_version bigint;
     revoke_others boolean;
 BEGIN
@@ -2438,31 +2605,18 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'password mutation is invalid';
     END IF;
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
-    -- All credential changes share the principal lock with reset/recovery and
-    -- platform grants; the caller cannot select a session in the public API.
-    PERFORM 1 FROM iam.accounts AS organization
-     WHERE organization.id=submitted_tenant_id AND organization.status='ACTIVE' FOR SHARE;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='password organization is unavailable';
-    END IF;
+    -- The consumed reservation locks and rechecks the same principal, password
+    -- and actual bearer Session as reset/recovery/logout and platform grants.
+    previous_version:=iam.consume_password_attempt(submitted_tenant_id,submitted_principal_id,submitted_session_id,
+        submitted_attempt_id,submitted_attempt_sequence);
     SELECT * INTO subject FROM iam.principals AS principal
      WHERE principal.tenant_id = submitted_tenant_id AND principal.id = submitted_principal_id
-       AND principal.principal_type = 'USER' AND principal.status = 'ACTIVE' FOR UPDATE;
-    IF NOT FOUND THEN
-        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'password subject is unavailable';
-    END IF;
-    SELECT credential.credential_version INTO previous_version FROM iam.user_credentials AS credential
+       AND principal.principal_type = 'USER' AND principal.status = 'ACTIVE';
+    PERFORM 1 FROM iam.user_credentials AS credential
      WHERE credential.tenant_id = submitted_tenant_id AND credential.principal_id = submitted_principal_id
-       AND credential.password_hash = submitted_expected_password_hash FOR UPDATE;
+       AND credential.password_hash = submitted_expected_password_hash;
     IF NOT FOUND THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'password changed concurrently';
-    END IF;
-    SELECT * INTO current_session FROM iam.sessions AS session
-     WHERE session.tenant_id = submitted_tenant_id AND session.principal_id = submitted_principal_id
-       AND session.id = submitted_session_id AND session.status = 'ACTIVE'
-       AND session.revoked_at IS NULL AND session.expires_at > effective_now FOR UPDATE;
-    IF NOT FOUND OR current_session.credential_version IS DISTINCT FROM previous_version THEN
-        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'password session is unavailable';
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'password changed concurrently';
     END IF;
     revoke_others := subject.must_change_password OR submitted_revoke_other_sessions;
     PERFORM iam.assert_audit_event(
@@ -3149,22 +3303,22 @@ GRANT EXECUTE ON FUNCTION iam.bootstrap_status() TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.readiness() TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.current_authorization_profiles() TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_authorization_profile(text,bigint,text) TO matrix_iam_api;
-GRANT EXECUTE ON FUNCTION iam.lookup_login(text) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.reserve_password_attempt(text,text,text,text,text) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.reject_password_attempt(text,text,text,bigint) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.apply_bootstrap(
     text, text, text, text, text, text, text, text, jsonb, jsonb
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.issue_session(
-    text, text, text, text, text, integer, jsonb
+    text, text, text, text, text, integer, jsonb, text, bigint
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_session(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_service(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_service_policies(text, text) TO matrix_iam_api;
-GRANT EXECUTE ON FUNCTION iam.lookup_password(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.record_authorization(
     text, text, jsonb, jsonb, jsonb, jsonb, integer, jsonb, jsonb
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.change_password(
-    text, text, text, text, jsonb, text, boolean
+    text, text, text, text, jsonb, text, boolean, text, bigint
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.revoke_session(
     text, text, text, text, jsonb
