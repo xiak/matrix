@@ -3,6 +3,7 @@ package phase1e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,11 +16,70 @@ import (
 	"time"
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
+
+func TestMissingAuditActionsAreStableAndTargetBound(t *testing.T) {
+	want := map[auditv1.Action]string{
+		auditv1.ActionIAMBootstrapApplied:      "",
+		auditv1.ActionIAMPasswordChanged:       "principal-admin",
+		auditv1.ActionPaaSApplicationCreated:   "application-a",
+		auditv1.ActionPaaSDeploymentUpdated:    "deployment-a",
+		auditv1.ActionPaaSConfigurationCreated: "configuration-a",
+	}
+	records := []auditv1.AuditRecord{
+		{Event: auditv1.Event{Action: auditv1.ActionIAMBootstrapApplied}},
+		{Event: auditv1.Event{Action: auditv1.ActionIAMPasswordChanged, Target: auditv1.TargetReference{ID: "principal-other"}}},
+		{Event: auditv1.Event{Action: auditv1.ActionPaaSApplicationCreated, Target: auditv1.TargetReference{ID: "application-a"}}},
+		{Event: auditv1.Event{Action: auditv1.ActionPaaSDeploymentUpdated, Target: auditv1.TargetReference{ID: "deployment-a"}}},
+	}
+	missing := missingAuditActions(records, want)
+	wantMissing := []auditv1.Action{
+		auditv1.ActionIAMPasswordChanged,
+		auditv1.ActionPaaSConfigurationCreated,
+	}
+	if !slices.Equal(missing, wantMissing) ||
+		auditActionFailureStep(missing) != "iam-password-changed-and-paas-configuration-created" {
+		t.Fatalf("missing audit actions = %v", missing)
+	}
+}
+
+func TestAuditHistoryPaginationMatchesIntegrityVerificationBound(t *testing.T) {
+	var pages atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		defer request.Body.Close()
+		var query auditv1.QueryRecordsRequest
+		if request.Method != http.MethodPost || request.URL.Path != "/api/audit/v1/records:query" ||
+			json.NewDecoder(request.Body).Decode(&query) != nil || query.PageSize != auditv1.MaxPageSize {
+			http.Error(response, "invalid request", http.StatusBadRequest)
+			return
+		}
+		page := pages.Add(1)
+		next := auditv1.Cursor("")
+		if page < 9 {
+			next = auditv1.Cursor("v1." + fmt.Sprintf("%016d", page) + "." + strings.Repeat("s", 43))
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(auditv1.RecordPage{
+			APIVersion: auditv1.APIVersion,
+			Kind:       "AuditRecordPage",
+			TenantID:   "organization-default",
+			Records:    []auditv1.AuditRecord{},
+			NextCursor: next,
+		})
+	}))
+	defer server.Close()
+	client := newEdgeClient(server.URL)
+	defer client.close()
+	records, err := client.allAuditRecords(context.Background(), []byte("test-bearer"))
+	if err != nil || len(records) != 0 || pages.Load() != 9 {
+		t.Fatalf("audit pages = %d, records = %d, err = %v", pages.Load(), len(records), err)
+	}
+}
 
 func TestPlatformEdgeBoundaryFollowsTheSignedTopology(t *testing.T) {
 	compiled, _, err := expectedPlatformServices(

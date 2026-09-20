@@ -291,8 +291,14 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		auditv1.ActionPaaSDeploymentUpdated:            string(deploymentID),
 	}
 	recordsBeforeBackup, err := value.edge.waitAuditActions(ctx, bearer, wantInitialAudit)
-	if err != nil || !scanAuditForConfigurationValues(recordsBeforeBackup, settingOne, settingTwo) {
-		return fail("initial-audit-delivery")
+	if err != nil {
+		if errors.Is(err, errAuditActionsDidNotArrive) {
+			return fail("initial-audit-missing-" + auditActionFailureStep(missingAuditActions(recordsBeforeBackup, wantInitialAudit)))
+		}
+		return fail("initial-audit-query")
+	}
+	if !scanAuditForConfigurationValues(recordsBeforeBackup, settingOne, settingTwo) {
+		return fail("initial-audit-configuration-redaction")
 	}
 	if _, err := value.edge.verifyAuditChain(ctx, bearer); err != nil {
 		return fail("initial-audit-integrity")
