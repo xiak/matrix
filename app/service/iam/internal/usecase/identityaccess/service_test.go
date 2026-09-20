@@ -18,6 +18,106 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 )
 
+type passwordEntropyProbe struct {
+	testing    *testing.T
+	repository *coreRepository
+}
+
+func (probe passwordEntropyProbe) Read(value []byte) (int, error) {
+	if probe.repository.inTransaction {
+		probe.testing.Fatal("expensive new-password hashing held a transaction")
+	}
+	for i := range value {
+		value[i] = byte(i + 17)
+	}
+	return len(value), nil
+}
+
+func TestPasswordAttemptsCommitBeforeVerificationAndNeverReuseAStaleResult(t *testing.T) {
+	tx := newCoreTransaction()
+	repository := &coreRepository{transaction: tx}
+	service, err := NewAuthority(repository, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), document); err != nil {
+		t.Fatal(err)
+	}
+	loginRequest := iamv1.LoginRequest{LoginName: "admin", Password: document.Administrator.Password, RequestID: "same-public-id"}
+	wrong := loginRequest
+	wrong.Password = coreSecret(t, "Wrong-Candidate-Password-86!")
+	for range 2 {
+		if _, err := service.Login(t.Context(), wrong); !errors.Is(err, ErrUnauthenticated) {
+			t.Fatal("wrong candidate", err)
+		}
+	}
+	if len(tx.rejectedAttempts) != 2 || tx.rejectedAttempts[0] == tx.rejectedAttempts[1] || len(tx.sessions) != 0 {
+		t.Fatal("caller request identity reused a guess or rejection issued a Session")
+	}
+	// A reservation commit can be unknown. It cannot be treated as admission,
+	// and no expensive verifier/final issuing transaction may follow it.
+	commits := 0
+	repository.afterTransaction = func(err error) error {
+		commits++
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ErrUnavailable
+	}
+	if _, err := service.Login(t.Context(), loginRequest); !errors.Is(err, ErrUnavailable) || commits != 1 || len(tx.sessions) != 0 {
+		t.Fatal("unknown reservation commit was accepted", err)
+	}
+	repository.afterTransaction = nil
+	current, err := service.Login(t.Context(), loginRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.passwords = authority.NewPasswordHasher(passwordEntropyProbe{t, repository})
+	if _, err := service.ChangePassword(t.Context(), current.Credential, iamv1.ChangePasswordRequest{
+		CurrentPassword: document.Administrator.Password, NewPassword: coreSecret(t, "After-Reservation-Password-46!"), RequestID: "outside-lock"}); err != nil {
+		t.Fatal(err)
+	}
+	// Moving the slow verifier out must not preserve a once-correct result after
+	// a concurrent mutation. The actual SQL generation/status races are PG gates.
+	loginRequest.Password = coreSecret(t, "After-Reservation-Password-46!")
+	repository.afterTransaction = func(err error) error {
+		if len(tx.passwordAttempts) > 0 {
+			tx.passwords[tx.principal.ID] = dummyPasswordHash
+		}
+		return err
+	}
+	before := len(tx.sessions)
+	if _, err := service.Login(t.Context(), loginRequest); !errors.Is(err, ErrUnauthenticated) || len(tx.sessions) != before {
+		t.Fatal("stale computed password result issued a Session", err)
+	}
+}
+
+func TestPasswordWorkHasNoQueueAndPrivateAttemptsCannotSerialize(t *testing.T) {
+	service, err := NewAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := service.acquirePasswordWork(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := service.acquirePasswordWork(t.Context()); !errors.Is(err, ErrOverloaded) {
+		t.Fatal("unbounded crypto work", err)
+	}
+	service.releasePasswordWork()
+	if err := service.acquirePasswordWork(t.Context()); err != nil {
+		t.Fatal("slot was not released", err)
+	}
+	service.releasePasswordWork()
+	service.releasePasswordWork()
+	attempt := PasswordAttempt{PasswordHash: authority.PasswordHash("private-verifier")}
+	if encoded, err := json.Marshal(attempt); err == nil || strings.Contains(string(encoded), "private-verifier") || strings.Contains(fmt.Sprintf("%+v %#v", attempt, attempt), "private-verifier") {
+		t.Fatal("private attempt exposed the verifier")
+	}
+}
+
 func TestOwnLoginSessionWorkflowBindsTheActualCallerAndRejectsBadStorage(t *testing.T) {
 	tx := newCoreTransaction()
 	service, err := NewAuthority(&coreRepository{transaction: tx}, Config{CursorKey: bytes.Repeat([]byte{0x31}, 32)})
@@ -1091,14 +1191,22 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 }
 
 type coreRepository struct {
-	transaction *coreTransaction
+	transaction      *coreTransaction
+	inTransaction    bool
+	afterTransaction func(error) error
 }
 
 func (repository *coreRepository) WithinTransaction(
 	ctx context.Context,
 	callback func(context.Context, Transaction) error,
 ) error {
-	return callback(ctx, repository.transaction)
+	repository.inTransaction = true
+	err := callback(ctx, repository.transaction)
+	repository.inTransaction = false
+	if repository.afterTransaction != nil {
+		return repository.afterTransaction(err)
+	}
+	return err
 }
 
 type coreTransaction struct {
@@ -1115,6 +1223,9 @@ type coreTransaction struct {
 	roleExitEvents          []auditv1.Event
 	authorizations          []AuthorizationMutation
 	passwords               map[iamv1.PrincipalID]authority.PasswordHash
+	passwordAttempts        map[iamv1.PrincipalID]PasswordAttempt
+	attemptSequence         uint64
+	rejectedAttempts        []string
 	users                   map[iamv1.PrincipalID]iamv1.Principal
 	attachments             map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment
 	attachmentSession       iamv1.SessionID
@@ -1338,26 +1449,44 @@ func (transaction *coreTransaction) ApplyBootstrap(
 	return authority.BootstrapApply, nil
 }
 
-func (transaction *coreTransaction) LookupLogin(
-	_ context.Context,
-	loginName string,
-) (LoginAccount, bool, error) {
-	localName, suffix, qualified := strings.Cut(loginName, "@")
-	for principalID, principal := range transaction.users {
-		primary := principalID == transaction.principal.ID
-		if principal.LoginName != localName || qualified == primary || (qualified && suffix != string(principal.AccountID)) {
-			continue
+func (transaction *coreTransaction) ReservePasswordAttempt(_ context.Context, request PasswordAttemptRequest) (PasswordAttempt, bool, error) {
+	var selected iamv1.Principal
+	if request.LoginName != "" {
+		localName, suffix, qualified := strings.Cut(request.LoginName, "@")
+		for principalID, principal := range transaction.users {
+			primary := principalID == transaction.principal.ID
+			if principal.LoginName == localName && qualified != primary && (!qualified || suffix == string(principal.AccountID)) {
+				selected = principal
+			}
 		}
-		return LoginAccount{
-			AccountID:          principal.AccountID,
-			PrincipalID:        principalID,
-			PasswordHash:       transaction.passwords[principalID],
-			AccountStatus:      transaction.organization.Status,
-			PrincipalStatus:    principal.Status,
-			MustChangePassword: principal.MustChangePassword,
-		}, true, nil
+	} else if request.AccountID == transaction.organization.ID {
+		for _, binding := range transaction.sessions {
+			if binding.Subject.Session.ID == request.SessionID && binding.Subject.Principal.ID == request.UserID &&
+				binding.Subject.Session.Status == iamv1.SessionActive && transaction.now.Before(binding.Subject.Session.ExpiresAt) {
+				selected = transaction.users[request.UserID]
+			}
+		}
 	}
-	return LoginAccount{}, false, nil
+	if selected.ID == "" || selected.Status != iamv1.PrincipalActive || transaction.organization.Status != iamv1.AccountActive {
+		return PasswordAttempt{}, false, nil
+	}
+	if transaction.passwordAttempts == nil {
+		transaction.passwordAttempts = make(map[iamv1.PrincipalID]PasswordAttempt)
+	}
+	transaction.attemptSequence++
+	attempt := PasswordAttempt{ID: request.ID, Sequence: transaction.attemptSequence, AccountID: selected.AccountID, PrincipalID: selected.ID,
+		SessionID: request.SessionID, PasswordHash: transaction.passwords[selected.ID], CredentialGeneration: 1,
+		MustChangePassword: selected.MustChangePassword, ExpiresAt: transaction.now.Add(30 * time.Second)}
+	transaction.passwordAttempts[selected.ID] = attempt
+	return attempt, true, nil
+}
+
+func (transaction *coreTransaction) RejectPasswordAttempt(_ context.Context, attempt PasswordAttempt) error {
+	transaction.rejectedAttempts = append(transaction.rejectedAttempts, attempt.ID)
+	if current := transaction.passwordAttempts[attempt.PrincipalID]; current.ID == attempt.ID && current.Sequence == attempt.Sequence {
+		delete(transaction.passwordAttempts, attempt.PrincipalID)
+	}
+	return nil
 }
 
 func (transaction *coreTransaction) IssueSession(
@@ -1368,6 +1497,12 @@ func (transaction *coreTransaction) IssueSession(
 	if !found {
 		return iamv1.Session{}, ErrUnauthenticated
 	}
+	attempt := transaction.passwordAttempts[principal.ID]
+	if attempt.ID != mutation.AttemptID || attempt.Sequence != mutation.AttemptSequence || attempt.SessionID != "" ||
+		transaction.passwords[principal.ID] != attempt.PasswordHash || !transaction.now.Before(attempt.ExpiresAt) {
+		return iamv1.Session{}, ErrUnauthenticated
+	}
+	delete(transaction.passwordAttempts, principal.ID)
 	transaction.sessions[mutation.LookupDigest] = SessionCredential{
 		Subject: authority.SubjectContext{
 			Organization: transaction.organization,
@@ -1416,18 +1551,6 @@ func (transaction *coreTransaction) ListOwnSessions(_ context.Context, read OwnS
 	}
 	slices.SortFunc(items, func(a, b iamv1.Session) int { return strings.Compare(string(a.ID), string(b.ID)) })
 	return items[:min(len(items), iamv1.DirectoryPageSize+1)], nil
-}
-
-func (transaction *coreTransaction) LookupPassword(
-	_ context.Context,
-	organizationID iamv1.AccountID,
-	principalID iamv1.PrincipalID,
-) (authority.PasswordHash, bool, error) {
-	if organizationID != transaction.organization.ID {
-		return "", false, nil
-	}
-	password, found := transaction.passwords[principalID]
-	return password, found, nil
 }
 
 func (transaction *coreTransaction) LookupService(
@@ -1497,9 +1620,15 @@ func (transaction *coreTransaction) ChangePassword(
 	_ context.Context,
 	mutation PasswordMutation,
 ) (iamv1.ChangePasswordResponse, error) {
-	if transaction.passwords[mutation.PrincipalID] != mutation.ExpectedPasswordHash {
-		return iamv1.ChangePasswordResponse{}, ErrRetryableTransaction
+	attempt := transaction.passwordAttempts[mutation.PrincipalID]
+	if attempt.ID != mutation.AttemptID || attempt.Sequence != mutation.AttemptSequence || attempt.SessionID != mutation.SessionID ||
+		!transaction.now.Before(attempt.ExpiresAt) {
+		return iamv1.ChangePasswordResponse{}, ErrUnauthenticated
 	}
+	if transaction.passwords[mutation.PrincipalID] != mutation.ExpectedPasswordHash {
+		return iamv1.ChangePasswordResponse{}, ErrUnauthenticated
+	}
+	delete(transaction.passwordAttempts, mutation.PrincipalID)
 	transaction.passwords[mutation.PrincipalID] = mutation.NewPasswordHash
 	principal := transaction.users[mutation.PrincipalID]
 	for lookup, binding := range transaction.sessions {

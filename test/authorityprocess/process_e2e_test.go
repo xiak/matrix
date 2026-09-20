@@ -116,10 +116,10 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 	assertPostgres18(t, ctx, admin)
 	assertCleanSchemas(t, ctx, admin)
 	root, temporary := repositoryRoot(t), t.TempDir()
-	// The actual accepted IAM31 executable creates the retained identities,
+	// The actual accepted IAM32 executable creates the retained identities,
 	// sessions and individual self completion. This tests the Session ABI, not release admission or
 	// every unpublished schema revision.
-	baseline := extractFixedAuthoritySource(t, ctx, root, temporary, "3080922f6ae1871f1c351d5ee30f03551fc3c605")
+	baseline := extractFixedAuthoritySource(t, ctx, root, temporary, "7cf857bba48eb5d7da487162c43e8f52534db133")
 	oldMigrator := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
 	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor", "./app/service/iam/cmd/matrix-iam")
 	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-session-current", "./app/service/iam/cmd/matrix-iam")
@@ -145,7 +145,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		child := startChild(t, baseline, oldMigrator, migrationEnvironment, action)
 		children = append(children, child)
 		if err := child.wait(30 * time.Second); err != nil {
-			t.Fatal("actual IAM31 migrator failed")
+			t.Fatal("actual IAM32 migrator failed")
 		}
 	}
 	bootstrap, err := iamv1.EncodeBootstrapDocument(processBootstrap(t))
@@ -174,7 +174,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		}
 		return child
 	}
-	old := start(oldBinary, 31)
+	old := start(oldBinary, 32)
 	primary := loginIAM(t, endpoint, "admin", initialAdminPassword, "own-upgrade-root-login")
 	changePasswordIAM(t, endpoint, primary.Credential, initialAdminPassword, changedAdminPassword, "own-upgrade-root-password")
 	member := createIAMUser(t, endpoint, primary.Credential, "retained.sessions", "Retained sessions", initialReaderPassword, "own-upgrade-user")
@@ -250,7 +250,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=32 AND iam.login_session_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=33 AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb)') IS NULL
 	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb,text)') IS NOT NULL
 	 AND (SELECT cardinality(proallargtypes)=25 AND proargnames[25]='credential_generation' FROM pg_proc WHERE oid='iam.lookup_session(text)'::regprocedure)
@@ -260,7 +260,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 	 FROM iam.readiness()`).Scan(&shape); err != nil || !shape {
 		t.Fatal("retained database did not replace the exact Session ABI", err)
 	}
-	current := start(currentBinary, 32)
+	current := start(currentBinary, 33)
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
 	}
@@ -311,13 +311,27 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		t.Fatal("self reduction upgraded a retained temporary session")
 	}
 	completedState := identityState()
+	for range 2 {
+		response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/login", "", map[string]any{"loginName": realm, "password": "Wrong-Retained-Password-71!", "requestId": "retained-budget"})
+		if response.Status != http.StatusUnauthorized {
+			t.Fatal("retained wrong password was not rejected")
+		}
+	}
+	var attemptState []byte
+	if err := admin.QueryRow(ctx, "SELECT to_jsonb(b) FROM iam.password_attempts b WHERE tenant_id=$1 AND principal_id=$2", member.AccountID, member.ID).Scan(&attemptState); err != nil {
+		t.Fatal(err)
+	}
 	current.stop()
 	if err := iammigration.Up(ctx, admin); err != nil {
 		t.Fatal("replay completed own-session schema", err)
 	}
-	current = start(currentBinary, 32)
+	current = start(currentBinary, 33)
 	if !bytes.Equal(completedState, identityState()) {
 		t.Fatal("restart/schema replay changed completed session state")
+	}
+	var afterAttempt []byte
+	if err := admin.QueryRow(ctx, "SELECT to_jsonb(b) FROM iam.password_attempts b WHERE tenant_id=$1 AND principal_id=$2", member.AccountID, member.ID).Scan(&afterAttempt); err != nil || !bytes.Equal(attemptState, afterAttempt) {
+		t.Fatal("actual process restart/schema replay refunded guesses", err)
 	}
 	list(a, 1)
 	list(forcedA, 2)
@@ -363,7 +377,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		}
 	}
 	current.stop()
-	t.Log("actual IAM31 -> IAM32 retained sessions/individual completion, NULL lineage, forced bulk reduction, exact replay/new-login survival, original receipt/canonical/proof and restart passed; no release compatibility claim")
+	t.Log("actual IAM32 -> IAM33 retained sessions/individual completion, NULL lineage, forced bulk reduction, shared password attempts, exact replay/new-login survival, original receipt/canonical/proof and restart passed; no release compatibility claim")
 }
 
 func TestIAMRetainedRoleCapabilityProcessUpgrade(t *testing.T) {
@@ -2269,7 +2283,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 32, Audit: 19, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 33, Audit: 19, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")

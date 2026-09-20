@@ -16,6 +16,7 @@ var (
 	ErrForbidden            = errors.New("IAM authorization denied")
 	ErrConflict             = errors.New("IAM state conflicts with the request")
 	ErrUnavailable          = errors.New("IAM authority is unavailable")
+	ErrOverloaded           = errors.New("IAM authentication work is at capacity")
 	ErrRetryableTransaction = errors.New("IAM transaction is retryable")
 )
 
@@ -46,14 +47,14 @@ type Transaction interface {
 	LookupAuthorizationProfile(context.Context, iamv1.AuthorizationProfileReference) (iamv1.AuthorizationProfile, bool, error)
 	BootstrapStatus(context.Context) (iamv1.BootstrapStatus, error)
 	ApplyBootstrap(context.Context, BootstrapMutation) (authority.BootstrapOutcome, error)
-	LookupLogin(context.Context, string) (LoginAccount, bool, error)
+	ReservePasswordAttempt(context.Context, PasswordAttemptRequest) (PasswordAttempt, bool, error)
+	RejectPasswordAttempt(context.Context, PasswordAttempt) error
 	IssueSession(context.Context, SessionMutation) (iamv1.Session, error)
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
 	ListOwnSessions(context.Context, OwnSessionRead) ([]iamv1.Session, error)
 	LookupRoleSession(context.Context, string) (RoleSessionCredential, bool, error)
 	LookupRoleSessionForExit(context.Context, string) (RoleSessionExitCredential, bool, error)
 	ExitRoleSession(context.Context, string, auditv1.Event) (iamv1.RoleSession, error)
-	LookupPassword(context.Context, iamv1.AccountID, iamv1.PrincipalID) (authority.PasswordHash, bool, error)
 	LookupService(context.Context, string) (ServiceCredential, bool, error)
 	ReadAuditEvidence(context.Context, iamv1.ServiceIdentity, auditv1.Event) (AuditEvidence, bool, error)
 	LookupServicePolicies(
@@ -520,16 +521,38 @@ type BootstrapMutation struct {
 	AuditEvent     auditv1.Event
 }
 
-type LoginAccount struct {
-	AccountID          iamv1.AccountID
-	PrincipalID        iamv1.PrincipalID
-	PasswordHash       authority.PasswordHash
-	AccountStatus      iamv1.AccountStatus
-	PrincipalStatus    iamv1.PrincipalStatus
-	MustChangePassword bool
+// LoginName or the authenticated Session tuple, never both. Only the service
+// generates ID; a public request ID is not an authentication-attempt identity.
+type PasswordAttemptRequest struct {
+	ID        string
+	LoginName string
+	AccountID iamv1.AccountID
+	UserID    iamv1.PrincipalID
+	SessionID iamv1.SessionID
 }
 
+// Private, bounded authority snapshot. Success may only be consumed by the
+// final session/password transaction, not converted to a reusable permit.
+type PasswordAttempt struct {
+	ID                   string
+	Sequence             uint64
+	AccountID            iamv1.AccountID
+	PrincipalID          iamv1.PrincipalID
+	SessionID            iamv1.SessionID
+	PasswordHash         authority.PasswordHash
+	CredentialGeneration uint64
+	MustChangePassword   bool
+	ExpiresAt            time.Time
+}
+
+func (PasswordAttempt) String() string               { return "[REDACTED]" }
+func (PasswordAttempt) GoString() string             { return "identityaccess.PasswordAttempt{[REDACTED]}" }
+func (PasswordAttempt) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
+func (*PasswordAttempt) UnmarshalJSON([]byte) error  { return ErrUnavailable }
+
 type SessionMutation struct {
+	AttemptID          string
+	AttemptSequence    uint64
 	Session            iamv1.Session
 	LookupDigest       string
 	VerificationDigest string
@@ -622,6 +645,8 @@ type UserBoundaryMutation struct {
 }
 
 type PasswordMutation struct {
+	AttemptID            string
+	AttemptSequence      uint64
 	AccountID            iamv1.AccountID
 	PrincipalID          iamv1.PrincipalID
 	SessionID            iamv1.SessionID
@@ -737,10 +762,11 @@ type ReadinessSnapshot struct {
 }
 
 type Authority struct {
-	repository  Repository
-	config      Config
-	passwords   *authority.PasswordHasher
-	credentials *authority.CredentialIssuer
-	cursors     *authority.CursorCodec
-	accessKeys  *accessKeyWrapping
+	repository   Repository
+	config       Config
+	passwords    *authority.PasswordHasher
+	credentials  *authority.CredentialIssuer
+	cursors      *authority.CursorCodec
+	accessKeys   *accessKeyWrapping
+	passwordWork chan struct{}
 }

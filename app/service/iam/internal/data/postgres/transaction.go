@@ -246,31 +246,45 @@ func (value *transaction) ApplyBootstrap(
 	}
 }
 
-func (value *transaction) LookupLogin(
-	ctx context.Context,
-	loginName string,
-) (identityaccess.LoginAccount, bool, error) {
-	var account identityaccess.LoginAccount
-	var passwordHash string
-	var organizationStatus, principalStatus string
-	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.lookup_login($1)", loginName).Scan(
-		&account.AccountID,
-		&account.PrincipalID,
-		&passwordHash,
-		&organizationStatus,
-		&principalStatus,
-		&account.MustChangePassword,
-	)
+func (value *transaction) ReservePasswordAttempt(ctx context.Context, request identityaccess.PasswordAttemptRequest) (identityaccess.PasswordAttempt, bool, error) {
+	if iamv1.ValidateID("attemptId", request.ID) != nil {
+		return identityaccess.PasswordAttempt{}, false, identityaccess.ErrInvalidArgument
+	}
+	var login, tenant, user, session any
+	if request.LoginName != "" {
+		if request.AccountID != "" || request.UserID != "" || request.SessionID != "" {
+			return identityaccess.PasswordAttempt{}, false, identityaccess.ErrInvalidArgument
+		}
+		login = request.LoginName
+	} else {
+		if iamv1.ValidateID("accountId", string(request.AccountID)) != nil ||
+			iamv1.ValidateID("userId", string(request.UserID)) != nil || iamv1.ValidateID("sessionId", string(request.SessionID)) != nil {
+			return identityaccess.PasswordAttempt{}, false, identityaccess.ErrInvalidArgument
+		}
+		tenant, user, session = request.AccountID, request.UserID, request.SessionID
+	}
+	result := identityaccess.PasswordAttempt{ID: request.ID, SessionID: request.SessionID}
+	var stored string
+	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,$2,$3,$4,$5)",
+		login, tenant, user, session, request.ID).Scan(&result.AccountID, &result.PrincipalID, &stored,
+		&result.MustChangePassword, &result.CredentialGeneration, &result.Sequence, &result.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return identityaccess.LoginAccount{}, false, nil
+		return identityaccess.PasswordAttempt{}, false, nil
 	}
 	if err != nil {
-		return identityaccess.LoginAccount{}, false, mapDatabaseError("lookup IAM login", err)
+		return identityaccess.PasswordAttempt{}, false, mapDatabaseError("reserve IAM password attempt", err)
 	}
-	account.PasswordHash = authority.PasswordHash(passwordHash)
-	account.AccountStatus = iamv1.AccountStatus(organizationStatus)
-	account.PrincipalStatus = iamv1.PrincipalStatus(principalStatus)
-	return account, true, nil
+	if result.CredentialGeneration == 0 || result.Sequence == 0 || stored == "" || result.ExpiresAt.IsZero() {
+		return identityaccess.PasswordAttempt{}, false, identityaccess.ErrUnavailable
+	}
+	result.PasswordHash, result.ExpiresAt = authority.PasswordHash(stored), result.ExpiresAt.UTC()
+	return result, true, nil
+}
+
+func (value *transaction) RejectPasswordAttempt(ctx context.Context, attempt identityaccess.PasswordAttempt) error {
+	_, err := value.tx.Exec(ctx, "SELECT iam.reject_password_attempt($1,$2,$3,$4)",
+		attempt.AccountID, attempt.PrincipalID, attempt.ID, attempt.Sequence)
+	return mapDatabaseError("reject IAM password attempt", err)
 }
 
 func (value *transaction) IssueSession(
@@ -278,6 +292,7 @@ func (value *transaction) IssueSession(
 	mutation identityaccess.SessionMutation,
 ) (iamv1.Session, error) {
 	if iamv1.ValidateSession(mutation.Session) != nil ||
+		iamv1.ValidateID("attemptId", mutation.AttemptID) != nil || mutation.AttemptSequence == 0 ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.Session{}, identityaccess.ErrInvalidArgument
 	}
@@ -293,7 +308,7 @@ func (value *transaction) IssueSession(
 	err = value.tx.QueryRow(
 		ctx,
 		`SELECT * FROM iam.issue_session(
-			$1, $2, $3, $4, $5, $6, $7::jsonb
+			$1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9
 		)`,
 		string(mutation.Session.ID),
 		string(mutation.Session.AccountID),
@@ -302,6 +317,8 @@ func (value *transaction) IssueSession(
 		mutation.VerificationDigest,
 		int(lifetime/time.Second),
 		event,
+		mutation.AttemptID,
+		mutation.AttemptSequence,
 	).Scan(&issuedAt, &expiresAt)
 	clear(event)
 	if err != nil {
@@ -687,31 +704,6 @@ func (value *transaction) decodeAttachedPolicies(ctx context.Context, encoded []
 	return policies, nil
 }
 
-func (value *transaction) LookupPassword(
-	ctx context.Context,
-	organizationID iamv1.AccountID,
-	principalID iamv1.PrincipalID,
-) (authority.PasswordHash, bool, error) {
-	if iamv1.ValidateID("organizationId", string(organizationID)) != nil ||
-		iamv1.ValidateID("principalId", string(principalID)) != nil {
-		return "", false, identityaccess.ErrInvalidArgument
-	}
-	var passwordHash string
-	err := value.tx.QueryRow(
-		ctx,
-		"SELECT * FROM iam.lookup_password($1, $2)",
-		string(organizationID),
-		string(principalID),
-	).Scan(&passwordHash)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, mapDatabaseError("lookup IAM password", err)
-	}
-	return authority.PasswordHash(passwordHash), true, nil
-}
-
 func (value *transaction) RecordAuthorization(
 	ctx context.Context,
 	mutation identityaccess.AuthorizationMutation,
@@ -802,6 +794,7 @@ func (value *transaction) ChangePassword(
 		iamv1.ValidateID("principalId", string(mutation.PrincipalID)) != nil ||
 		iamv1.ValidateID("sessionId", string(mutation.SessionID)) != nil ||
 		mutation.ExpectedPasswordHash == "" || mutation.NewPasswordHash == "" ||
+		iamv1.ValidateID("attemptId", mutation.AttemptID) != nil || mutation.AttemptSequence == 0 ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.ChangePasswordResponse{}, identityaccess.ErrInvalidArgument
 	}
@@ -812,7 +805,7 @@ func (value *transaction) ChangePassword(
 	var response iamv1.ChangePasswordResponse
 	err = value.tx.QueryRow(
 		ctx,
-		"SELECT * FROM iam.change_password($1, $2, $3, $4, $5::jsonb, $6, $7)",
+		"SELECT * FROM iam.change_password($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)",
 		string(mutation.AccountID),
 		string(mutation.PrincipalID),
 		string(mutation.ExpectedPasswordHash),
@@ -820,6 +813,8 @@ func (value *transaction) ChangePassword(
 		event,
 		string(mutation.SessionID),
 		mutation.RevokeOtherSessions,
+		mutation.AttemptID,
+		mutation.AttemptSequence,
 	).Scan(&response.ChangedAt, &response.BootstrapFileRetirable)
 	clear(event)
 	if err != nil {

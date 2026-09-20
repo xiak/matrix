@@ -701,12 +701,14 @@ schema/profile acceptance is imported by this foundation.
 ## Password and authentication-budget target review
 
 IAM/009 owns account-governed password changes and bounded multi-instance
-authentication; configuration is not an authorization Policy. This review
-does not open the shared implementation window or alter installed defaults.
+authentication; configuration is not an authorization Policy. S3a now adapts
+the original authentication owner; this review is not runtime acceptance or
+permission to change an installed release profile.
 
 | Fixed source / slice | Decision | Rationale |
 | --- | --- | --- |
 | Matrix `644fff09446fc8ffb003cc53cf2fb55d4f58828a`, `authority/password.go` and its current tests | `REUSE` the strict versioned Argon2id verifier, salts and redacted secret handling; `ADAPT` new-password rules separately | Account rules must not change hashing cost or reinterpret old password bytes. Existing byte-count/category rules are current behavior, not evidence that account settings, history or a blocklist exist. |
+| Matrix `7cf857bba48eb5d7da487162c43e8f52534db133` (IAM32), original Login/ChangePassword, PostgreSQL adapter and `000001_authority`; byte-identical in those owners to fixed `04041d2d` | `REUSE` strict realm, credential generations, original mutation/outbox and locks; `ADAPT` committed bounded reservations and atomic final consumption; `REJECT` bare hash lookup and no-attempt mutation overloads | The source still runs slow verification in its transaction and callback authentication errors roll back. Moving only the hash is unsafe: a later mutation must consume the original attempt/generation and recheck locked identity versions. IAM32's actual executable is the selected retained-data predecessor; it replaces an ever-growing unpublished schema chain, not a release compatibility claim. |
 | Same fixed source, `authentication.go`, `management.go`, `service.go`, `lookup_login`, `user_credentials` and existing password mutation functions | `REUSE` canonical realm resolution, real credential generations and transaction/outbox ownership; `ADAPT` durable authentication outcomes and bounded admission | Current authentication errors roll back the workflow transaction. Failure counts need committed outcomes, while cross-replica in-flight attempts must not bypass a post-hash counter. Existing changed_at is real password history metadata, not a collection of prior password verifiers. |
 | Same fixed source, `issue_session`, `lookup_session`, IAM process/HTTP entry and `processhttp/server.go` | `REUSE` database time, absolute expiry and current qualification; `REFERENCE` process limits only | HTTP connection timeouts and a default eight-hour Session do not provide per-account settings, idle expiry, crypto-work admission or cluster-wide abuse protection. Product/edge source addresses require their actual consumer authority, not arbitrary forwarded headers. |
 | Product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, `04-user-guide/users/login-and-operation-protection.md` | `REFERENCE` configurable password, expiry, history and login restrictions; `REJECT` unsupported implementation/default inference | Product prose supplies requirements, not proof of persisted counters, current MFA or a trusted network source. Do not infer root/platform credential control from tenant administrator status. |

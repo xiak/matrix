@@ -264,6 +264,13 @@ func mutationOperation(
 ) object {
 	responses := openapi31.ProblemResponses("400", "401", "403", "409", "413", "415", "422", "500", "503")
 	responses[status] = openapi31.JSONResponse("Command completed.", responseSchema)
+	if operationID == "login" || operationID == "changePassword" {
+		responses["429"] = object{
+			"description": "This IAM instance's bounded password-work capacity is occupied; this discloses no user-specific attempt budget.",
+			"headers":     object{"Retry-After": object{"schema": object{"type": "string", "const": "1"}}},
+			"content":     object{"application/problem+json": object{"schema": openapi31.Ref("Problem")}},
+		}
+	}
 	if operationID == "createAccessKey" {
 		responses["200"] = openapi31.JSONResponse("Original nonsecret completion; no secret is reissued.", responseSchema)
 	}

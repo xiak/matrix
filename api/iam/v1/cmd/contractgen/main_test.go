@@ -21,3 +21,14 @@ func TestGeneratedOpenAPIIsCurrent(t *testing.T) {
 		t.Fatal("openapi.json is stale; run go generate ./api/iam/v1")
 	}
 }
+
+func TestPasswordOverloadOnlyDocumentsTheBoundedAuthenticationEntrypoints(t *testing.T) {
+	for _, operation := range []string{"login", "changePassword", "createUser"} {
+		value := mutationOperation(operation, "test", "LoginRequest", "LoginResponse", "200", nil, nil)
+		responses := value["responses"].(object)
+		_, present := responses["429"]
+		if present != (operation != "createUser") {
+			t.Fatal("overload contract leaked to unrelated commands")
+		}
+	}
+}

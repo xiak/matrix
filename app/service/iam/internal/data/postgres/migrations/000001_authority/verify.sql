@@ -41,7 +41,7 @@ BEGIN
       INTO missing
       FROM (VALUES
         ('bootstrap_receipts'), ('accounts'), ('principals'),
-        ('policy_attachments'), ('user_credentials'), ('login_index'),
+        ('policy_attachments'), ('user_credentials'), ('password_attempts'), ('login_index'),
         ('service_credentials'), ('service_credential_index'),
         ('sessions'), ('session_index'), ('authorization_decisions'),
         ('audit_outbox')
@@ -67,7 +67,7 @@ BEGIN
       INTO missing
       FROM (VALUES
         ('accounts'), ('principals'), ('policy_attachments'),
-        ('user_credentials'), ('service_credentials'), ('sessions'),
+        ('user_credentials'), ('password_attempts'), ('service_credentials'), ('sessions'),
         ('authorization_decisions'), ('audit_outbox')
       ) AS required(name)
      WHERE NOT EXISTS (
@@ -109,10 +109,11 @@ BEGIN
        )
        OR NOT has_function_privilege('matrix_iam_api', 'iam.bootstrap_status()', 'EXECUTE')
        OR NOT has_function_privilege('matrix_iam_api', 'iam.readiness()', 'EXECUTE')
-       OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_login(text)', 'EXECUTE')
+       OR has_function_privilege('matrix_iam_api', 'iam.lookup_login(text)', 'EXECUTE')
+       OR NOT iam.password_attempt_contract_ready()
        OR NOT has_function_privilege(
             'matrix_iam_api',
-            'iam.issue_session(text,text,text,text,text,integer,jsonb)',
+            'iam.issue_session(text,text,text,text,text,integer,jsonb,text,bigint)',
             'EXECUTE'
        )
        OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_session(text)', 'EXECUTE')
@@ -120,14 +121,13 @@ BEGIN
        OR NOT has_function_privilege(
             'matrix_iam_api', 'iam.lookup_service_policies(text,text)', 'EXECUTE'
        )
-       OR NOT has_function_privilege('matrix_iam_api', 'iam.lookup_password(text,text)', 'EXECUTE')
        OR NOT has_function_privilege(
             'matrix_iam_api',
             'iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb,jsonb)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.change_password(text,text,text,text,jsonb,text,boolean)', 'EXECUTE'
+            'matrix_iam_api', 'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_iam_api', 'iam.revoke_session(text,text,text,text,jsonb,text)', 'EXECUTE'
@@ -170,7 +170,7 @@ BEGIN
        )
        OR has_function_privilege(
             'matrix_iam_worker',
-            'iam.change_password(text,text,text,text,jsonb,text,boolean)',
+            'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint)',
             'EXECUTE'
        )
        OR has_function_privilege(
@@ -293,7 +293,7 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>32 OR NOT iam.authorization_decision_contract_ready()
+    IF (SELECT schema_version FROM iam.readiness())<>33 OR NOT iam.authorization_decision_contract_ready()
         OR NOT iam.login_session_contract_ready()
         OR NOT iam.policy_attachment_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';

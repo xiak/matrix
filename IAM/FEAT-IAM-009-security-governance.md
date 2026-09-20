@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。当前源码IAM32/Audit19，未分配发布revision；UI与完整009尚未验收。S2/S3详细设计已固定`6fa39fda`，S2a内部TOTP/恢复码、私有keyring及种子加密基础片已实现并通过本地检查；完整S2及S3/S4未实施验收。下述HTTP、持久化和交付分工不是已开放API或已完成协作；材料托管、恢复与通知的发布前置尚未全部完成。
+- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。S3a登录/改密共享密码尝试已实施，源码IAM33/Audit19，本地最终回归通过、独立CI待确认，未分配发布revision；UI与完整009尚未验收。S2/S3详细设计已固定`6fa39fda`，S2a内部TOTP/恢复码、私有keyring及种子加密基础片已实现并通过本地检查；完整S2/S3/S4尚未验收。下述HTTP、持久化和交付分工不是已开放API或已完成协作；材料托管、恢复与通知的发布前置尚未全部完成。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -177,7 +177,7 @@ S2a后继材料基础片由`api/iam/v1/totp_wrapping.go`单一拥有私有keyrin
 
 本材料片不读取生产文件、不注册keyset、不查询数据库引用、不迁移/轮换真实数据，也不证明备份可恢复、运行副本一致或MFA已开放。后继同快照custody摘要不能拿`TOTPKeysetDigest`代替：后者只证明一套给定材料的内容，前者还必须证明准确备份快照依赖。标准算法参考[Go随机nonce GCM](https://pkg.go.dev/crypto/cipher#NewGCMWithRandomNonce)及[HKDF](https://www.rfc-editor.org/rfc/rfc5869.html)；独立Node标准crypto向量核对原始材料承诺、集合摘要、每记录派生密钥和解密后实际RFC验证码，不以同一实现自算向量作唯一证明。
 
-材料片固定`04041d2d3f7ed55225a5164bc2bc05251d25a6f1`本地门禁（2026-09-20）：新私有codec/承诺/加密互换及既有AccessKey聚焦race通过；私有codec和密文输入各20秒、最多2 worker的fuzz分别完成547018和705841次执行，无失败，这不是QPS/容量证据。最终代码干净Git导出完成全仓默认race/architecture、vet、模块校验、生成前后全部文件集合及SHA256一致、Linux amd64构建，GOMAXPROCS=2/GOMEMLIMIT=512MiB。外部环境SKIP仍不计真库/进程验收；本片无新DB、容器或远端操作。[Verification35485632542](https://github.com/xiak/matrix/actions/runs/35485632542)已核对精确SHA，但最后观察仅queued，不能继承前驱或安装分支的通过结论。
+材料片固定`04041d2d3f7ed55225a5164bc2bc05251d25a6f1`本地门禁（2026-09-20）：新私有codec/承诺/加密互换及既有AccessKey聚焦race通过；私有codec和密文输入各20秒、最多2 worker的fuzz分别完成547018和705841次执行，无失败，这不是QPS/容量证据。最终代码干净Git导出完成全仓默认race/architecture、vet、模块校验、生成前后全部文件集合及SHA256一致、Linux amd64构建，GOMAXPROCS=2/GOMEMLIMIT=512MiB。外部环境SKIP仍不计真库/进程验收；本片无新DB、容器或远端操作。[Verification35485632542](https://github.com/xiak/matrix/actions/runs/35485632542)2026-09-20经GitHub API再次核实精确SHA及completed/success；它仍不证明后继IAM33、实际MFA或安装分支已验收。
 
 #### 不同状态不能混用
 
@@ -312,6 +312,10 @@ TOTP验证需要可用种子，不能仅存单向摘要；数据库应存目的�
 
 #### 登录与一次性消费
 
+材料准备版与MFA启用版须有不同的精确数据库/函数行为门禁，不能由manifest自声明capabilities或仅比较schema大小推断兼容。准备版必须核对注册材料与实际仍需解密的行；出现其不理解的ACTIVE/PENDING或其他需解密状态时，除readiness为false，实际Login、Session查验及受保护认证路径也须失败关闭。不能假设所有调用方都遵守健康探针。具体状态集、registry/need形状和准备→启用的发布profile尚待后继材料消费切片冻结；本片IAM33密码预算不充作材料准备版证明。
+
+已与installation冻结运行配置名`MATRIX_IAM_TOTP_KEYRING_FILE`及目标`/run/matrix/iam-totp-keyring.json`，仅IAM单文件只读挂载，不能给其他服务或挂父目录。本节是配置契约，不是已运行命令或本分支已启用消费者。备份要求单一exported snapshot：持有REPEATABLE READ READ ONLY事务的目的限定helper从同一视图得出注册历史/实际依赖，pg_dump在lease未结束时导入该snapshot；普通两次query或当前keyset摘要不证明一致性。required稳定key承诺与本地superset核对不能替代当前恢复资格，helper/只读函数/传输ABI尚未冻结。
+
 登录响应必须明确区分“已发行Session”与“需要继续认证”，不能在挑战分支返回半有效bearer。仅密码、账号和User当前状态验证成功后签发短期挑战，不在错误密码/未知realm时暴露是否绑定MFA。完成挑战时，在原Account→USER→凭据锁序下重新检查主体状态、密码代际、因子修订及挑战；密码改变、因子替换或挑战终止使旧阶段证明失效，不根据请求中的user/account字段换主体。原密码Session及不支持新响应的旧客户端不能绕过所需因子。
 
 首次设置、合法解绑后重新设置与已绑定因子丢失是不同资格。账号要求MFA时，只有明确NEVER_BOUND或具备原合法解绑完成的REMOVED才能获得密码验证后的设置挑战；后者保留原历史，不改称“从未绑定”。因子行被删除、损坏或状态未知不能推导这两种资格。设置挑战只允许必要的初始改密和绑定，不允许读取业务、创建Key、承担Role或调整安全策略。初始改密仍须原子推进密码代际、撤销旧会话和挑战，再用新密码重新开始设置；不让旧挑战跨代际升级，也不通过设置清除must-change。绑定完成结束设置流程，正常重新登录并使用尚未消费的TOTP，才发行Session。它复用同一密码用例的不变量，但不是借现有普通Session或普通改密bearer冒充未完成认证。
@@ -413,14 +417,14 @@ RootIdentity仍是原Account的原USER，恢复不能转让root、启用暂停�
 
 ### S3：账号安全规则、认证预算与期限
 
-本节细化IAM-SEC-01/02/04的后继目标，不改变当前规则、公共接口或schema。最小可验路径是：账号管理员设置本账号日常User的密码规则，两个IAM副本一致执行创建/改密/重置，有限次数的真实错误认证不能通过并发、realm别名、重启或事务回滚取得额外尝试；另一账号和业务鉴权仍受独立预算保护。密码规则不是005的授权Policy，不能参与Allow/Deny或授予密码重置权。
+本节细化IAM-SEC-01/02/04；共享密码尝试已进入下述S3a实现，账号规则及期限仍是待实施设计，不能把整个S3称为已开放。最小可验路径是：账号管理员设置本账号日常User的密码规则，两个IAM副本一致执行创建/改密/重置，有限次数的真实错误认证不能通过并发、realm别名、重启或事务回滚取得额外尝试；另一账号和业务鉴权仍受独立预算保护。密码规则不是005的授权Policy，不能参与Allow/Deny或授予密码重置权。
 
 固定`644fff09`的事实与差距如下，不能把已有HTTP timeout当成安全治理：
 
-| 现有owner | 当前行为 | 本需求缺口 |
+| 现有owner | 该固定前驱行为 | 本需求缺口 |
 | --- | --- | --- |
 | `authority/password.go` | 固定Argon2id 64MiB/3次/并行1；新密码14–128 UTF-8字节、四类至少三类、拒绝空白/控制字符；Verify按保存格式核对原完整秘密 | 无账号规则、历史/常见密码检查；Hash同时负责固定规则，需区分产品规则与不可由租户降低的哈希成本 |
-| `authentication.go` / `lookup_login` | 当前realm解析后验证真hash或dummy hash；错误结果结束事务，成功直接发行Session | 无已持久化的认证失败预算；不能在同一回滚分支顺便写计数后宣称限流生效 |
+| `authentication.go` / `lookup_login` | realm解析后在事务内验证真hash或dummy hash；错误结果结束事务，成功直接发行Session | S3a现已替换为计算前提交预算、锁外验证与最终原子消费；MFA部分认证及Account公平配额仍未完成 |
 | `user_credentials` | 当前hash、真实changed_at及单调credential_version | 无历史密码集合或已验证规则版本；不能从hash推测长度/复杂度，也不能补造旧密码历史 |
 | `service.go` / `issue_session` / `lookup_session` | 默认8小时绝对期限，用例配置允许1分钟至24小时；数据库时间、撤销和密码代际参与资格 | 无账号会话期限配置、可信last-activity或idle expiry；HTTP连接IdleTimeout不等于Session闲置过期 |
 
@@ -468,6 +472,32 @@ false→true收紧时，最小方案单调推进本Account日常User的登录资
 常见/泄露密码拦截必须有固定、可离线提供、经过授权且版本/摘要可核对的数据源和有界比较，不能把待设置密码发送给第三方或在日志记录匹配明文。词表格式/来源、变更回退和容量门禁尚未选定；没有它不能声称已完成弱密码拦截。恢复码、OTP和AccessKey秘密不是用户口令，不受此词表或复杂度设置控制。
 
 #### 认证尝试的持久预算
+
+##### S3a：登录与改密共享密码尝试
+
+本片实现及本地门禁已完成，独立CI未确认前不标验收。已验证并推送的`04041d2d`是修改前回滚点。只替换原Login/ChangePassword的密码核对与原Session/credential SQL拥有者；不开放MFA、账号设置API或改变既有改密保留当前会话规则。源码IAM33用于实际新函数/ACL/readiness形状，Audit不变，不分配发布revision或修改installation的完整profile。
+
+首片固定防猜测预算为同一真实USER、同一credential generation在60秒窗口内最多5次保留、同时最多1次在途、单次30秒有效。成功的完整单因子登录或本人改密才清零；未来MFA部分成功不得调用此成功分支。额度在计算前持久扣除，过期、进程中断、取消、提交未知和失败均不退还。窗口按数据库时间恢复，不停用账号或删除凭据。该限制同样约束正确密码，不能用正确猜测绕过已生效抑制；它是本片可验证的产品值，不是标准要求或完整抗拒绝服务承诺。
+
+每USER只有一条有界预算行，包含单调attempt sequence、最近服务器随机attemptId、LOGIN/PASSWORD_CHANGE目的、实际调用Session（后者必填）、原Account/User版本与credential generation、窗口已用次数及RESERVED/终态。下一尝试使用更大的sequence，不把同一尝试从终态改回RESERVED；不保存无限匿名登录名、也不以caller requestId去重猜测。过期只释放槽位；覆盖上一次临时状态不删除已提交Session/outbox或成功事实。跨realm别名、IAM副本、登录/旧密码重验共用该行，不同USER/Account隔离。
+
+短保留事务和最终提交均沿Account共享锁→USER→credential→实际Session→尝试锁序。最终成功须精确消费原attemptId+sequence，重查原身份版本、凭据代际、当前状态及锁后数据库时间；旧结果不能跨改密、停用/复用或超时继续发行。成功消费与Session/改密及原outbox同事务；坏密码在单独短事务提交REJECTED后才返回401。失败提交不确定返回不可用，不返额度、不签Session。旧无尝试的issue_session/change_password形状删除；裸lookup_password删除，lookup_login仅留作内部唯一realm解析器，不授API/worker直接执行。服务可信验证密码，SQL消费不声称能证明Go已经做过Argon2。
+
+两个目的共用每IAM Authority实例最多2个非排队工作槽，覆盖真实/dummy核对及本人新密码hash，固定Argon2成本不变。槽耗尽返回统一429、`iam.authentication.busy`及`Retry-After: 1`；仅登录/改密OpenAPI声明该行为。未知/抑制/停用身份统一401并做有界dummy核对，不提供剩余额度、专属冷却或用户存在信息。此本地资源限制不是集群全局配额，也不证明时序完全不可区分。Account公平配额、OTP/挑战预算和011洪泛容量仍为未完成前置，不能据此标记完整S2/S3已验收。
+
+验收沿原service/HTTP/PG18/authorityprocess拥有者：失败提交及回包丢失、过期无返额、别名/双副本共享、不同租户同名隔离、锁外hash时并发改密/停用/退出、最终outbox失败原子性、旧attempt/重复完成不能签第二Session、真实runtime ACL/RLS/函数形状、重启/等值迁移不重置额度。仅选实际固定IAM32前驱保留数据，不重跑未发布的1至32整链；这也不构成跨release升级许可。
+
+2026-09-20本地真实门禁使用本任务独立Windows PostgreSQL18.6目录/随机loopback端口，不借用Docker、其他Phase或远端。Windows Job约束2个逻辑CPU、1GiB总内存、24个进程；PG最多16个连接、64MiB shared_buffers/4MiB work_mem且关闭parallel workers。Go使用GOMAXPROCS=2/GOMEMLIMIT=512MiB，数据库门禁串行race/-p1，未降低密码成本、原场景或单项时限。
+
+| 现有测试拥有者内的门禁 | 本地结果与边界 |
+| --- | --- |
+| `TestIAMPasswordAttemptsPostgres` | 最终矩阵63.39s通过；两个受限运行身份池、同名跨租户/别名、登录与改密共用5次限制、失败落库、未知输入无新行、真实30秒槽位到期无返额/60秒窗口恢复、并发reset拒绝旧计算、schema/bootstrap/新Authority不清额度、原子Session/outbox和ACL/精确形状；真实SQL证明已消费尝试不能再签Session、改密目的不能换成登录且拒绝后原尝试不被消费 |
+| `TestIAMHTTPPostgresVerticalSlice` | 84.36s通过；原租户/成员/删除/别名/生命周期、密码选项及change/reset/recover/logout/旧密码登录竞争、平台附件与凭据保护、历史生产者及物理owner/审计链保持 |
+| `TestIAMRetainedOwnSessionProcessUpgrade` | 20.10s通过；真实固定`7cf857bb` IAM32 executable产生原数据，IAM33双次迁移/原六字段receipt/原绑定及canonical/proof保留；实际进程重启不清密码尝试，NULL/撤销Session不复活。旧Session完成/forced批量减权门禁保留，未声称跨release兼容 |
+| `TestIndependentIAMAuditAndPaaSProcesses` | 68.66s通过；实际受限数据库登录、双IAM及Audit/PaaS/dispatcher进程、真实HTTP/原outbox/审计及资源隔离回归；源码readiness精确33/19/2，不改已发布profile |
+| 默认/架构及构建检查 | 相同最终生产代码的干净导出全仓race/architecture通过；最后追加的SQL攻击在上述新PG18门禁通过。最终导出vet、模块校验、724文件生成集合及SHA256一致、Linux amd64构建通过；外部DSN的默认SKIP不是运行证据 |
+
+候选仍需精确固定源码的独立CI确认；上表不替代未完成的Account公平配额、密码规则、MFA/通知/恢复或完整009验收。本机默认DSN缺失时的SKIP不作为上述证据；原Docker不可用没有被用来降低门禁或重启共享服务。
 
 必须分清三种限制：进程/入口预算保护CPU、内存和连接；当前实际USER/凭据预算限制猜测；Account公平预算避免一个账号占满认证资源。前者可以有每副本本地上限，但不能冒充集群级尝试上限；后两者需要共享权威状态，所有IAM副本按相同数据库时间核对。安装/edge的限额是补充，不授权IAM失联时回退到内存计数或旧Allow。
 

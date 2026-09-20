@@ -2362,6 +2362,356 @@ func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler ht
 	call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
 }
 
+func TestIAMPasswordAttemptsPostgres(t *testing.T) {
+	dsn := os.Getenv("MATRIX_IAM_PASSWORD_ATTEMPTS_POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set MATRIX_IAM_PASSWORD_ATTEMPTS_POSTGRES_TEST_DSN to an isolated PostgreSQL 18 database")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_password_attempts_") {
+		t.Fatal("password attempt gate needs its own database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	database, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close(context.Background())
+	assertIAMPostgres18(t, ctx, database)
+	assertCleanIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	createIAMHTTPRole(t, ctx, database)
+	trace := &iamTransactionFailureTrace{}
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, trace)
+	document := iamHTTPBootstrap(t)
+	if _, err := workflow.Bootstrap(ctx, document); err != nil {
+		t.Fatal(err)
+	}
+	var handlers []http.Handler
+	for range 2 {
+		replica := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, trace)
+		handler, err := iamhttp.NewHandler(replica, iamhttp.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		handlers = append(handlers, handler)
+	}
+	call := func(replica int, method, path, bearer string, body any, status int, result any) {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handlers[replica], method, path, bearer, encoded)
+		if response.Code != status {
+			t.Fatalf("password gate %s status=%d want=%d body=%s", path, response.Code, status, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("authentication response was cacheable")
+		}
+		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+			t.Fatal("invalid authentication response")
+		}
+	}
+	type loginResult struct {
+		Session    iamv1.Session `json:"session"`
+		Credential string        `json:"credential"`
+	}
+	login := func(replica int, name, password string, status int) loginResult {
+		t.Helper()
+		var result loginResult
+		var target any
+		if status == http.StatusOK {
+			target = &result
+		}
+		call(replica, http.MethodPost, "/v1/auth/login", "", map[string]any{"loginName": name, "password": password, "requestId": "repeated-public-id"}, status, target)
+		if status == http.StatusOK && (iamv1.ValidateSession(result.Session) != nil || result.Credential == "") {
+			t.Fatal("no actual Session")
+		}
+		return result
+	}
+	root := login(0, "admin", adminPassword, http.StatusOK)
+	root.Credential = localRecoveryChangePassword(t, handlers[0], root.Credential, adminPassword, changedAdminPassword)
+	const password = "Password-Attempt-Member-71!"
+	create := func(root, name string) iamv1.User {
+		t.Helper()
+		var user iamv1.User
+		call(0, http.MethodPost, "/v1/users", root, map[string]any{"loginName": name, "displayName": "Attempt gate user", "initialPassword": password, "requestId": "attempt-user-" + name}, http.StatusCreated, &user)
+		return user
+	}
+	user := create(root.Credential, "guessuser")
+	unrelated := create(root.Credential, "otheruser")
+	call(0, http.MethodPost, "/v1/accounts", root.Credential, map[string]any{"id": "attempt-other-account", "displayName": "Attempt other account",
+		"rootLoginName": "attempt.other.root", "rootDisplayName": "Other root", "initialPassword": password, "requestId": "attempt-account"}, http.StatusCreated, nil)
+	foreignRoot := login(1, "attempt.other.root", password, http.StatusOK)
+	foreignRoot.Credential = localRecoveryChangePassword(t, handlers[1], foreignRoot.Credential, password, "Other-Attempt-Root-Password-52!")
+	foreignUser := create(foreignRoot.Credential, "guessuser")
+	call(0, http.MethodPost, "/v1/account:alias", root.Credential, map[string]any{"alias": "attempt-account-alias", "resourceVersion": 1, "requestId": "attempt-alias"}, http.StatusOK, nil)
+	name := user.LoginName + "@" + string(user.AccountID)
+	current := login(0, name, password, http.StatusOK)
+	for index := range 5 {
+		if index%2 == 0 {
+			login(index%2, "guessuser@attempt-account-alias", "Wrong-Attempt-Password-87!", http.StatusUnauthorized)
+		} else {
+			call(index%2, http.MethodPost, "/v1/auth/password", current.Credential, map[string]any{"currentPassword": "Wrong-Attempt-Password-87!",
+				"newPassword": "Never-Changed-Password-81!", "requestId": "repeated-public-id"}, http.StatusUnauthorized, nil)
+		}
+	}
+	var used int
+	var state string
+	var sequence int64
+	var windowStarted time.Time
+	if err := database.QueryRow(ctx, "SELECT used_attempts,state,attempt_sequence,window_started_at FROM iam.password_attempts WHERE tenant_id=$1 AND principal_id=$2", user.AccountID, user.ID).
+		Scan(&used, &state, &sequence, &windowStarted); err != nil || used != 5 || state != "REJECTED" {
+		t.Fatal("failure budget rolled back", err)
+	}
+	login(1, name, password, http.StatusUnauthorized)
+	login(0, "guessuser@attempt-account-alias", password, http.StatusUnauthorized)
+	call(1, http.MethodGet, "/v1/auth/sessions", current.Credential, nil, http.StatusOK, nil)
+	login(1, foreignUser.LoginName+"@"+string(foreignUser.AccountID), password, http.StatusOK)
+	login(0, unrelated.LoginName+"@"+string(unrelated.AccountID), password, http.StatusOK)
+	var countBefore, countAfter int
+	if err := database.QueryRow(ctx, "SELECT count(*) FROM iam.password_attempts").Scan(&countBefore); err != nil {
+		t.Fatal(err)
+	}
+	for index := range 8 {
+		login(index%2, fmt.Sprintf("unknown-%d@unknown-account", index), password, http.StatusUnauthorized)
+	}
+	if err := database.QueryRow(ctx, "SELECT count(*) FROM iam.password_attempts").Scan(&countAfter); err != nil || countBefore != countAfter {
+		t.Fatal("unknown identities allocated unbounded rows", err)
+	}
+	// Pause after expensive verification, before the final mutation. A real
+	// administrator reset can commit while no subject lock is held; the old
+	// computed result must then fail its original generation/version checks.
+	raceUser := create(root.Credential, "raceuser")
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolConfig.ConnConfig.User, poolConfig.ConnConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+	poolConfig.MaxConns = 2
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository, err := iampostgres.NewRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arrived, resume := make(chan struct{}), make(chan struct{})
+	var ids atomic.Int64
+	var paused atomic.Bool
+	stalled, err := identityaccess.NewAuthority(repository, identityaccess.Config{NewID: func(prefix string) (string, error) {
+		if prefix == "session" && paused.CompareAndSwap(false, true) {
+			close(arrived)
+			select {
+			case <-resume:
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		return fmt.Sprintf("%s-reserved-race-%d", prefix, ids.Add(1)), nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := make(chan error, 1)
+	go func() {
+		_, err := stalled.Login(ctx, iamv1.LoginRequest{LoginName: raceUser.LoginName + "@" + string(raceUser.AccountID),
+			Password: iamHTTPSecret(t, password), RequestID: "stale-password-race"})
+		finished <- err
+	}()
+	select {
+	case <-arrived:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	call(0, http.MethodPost, "/v1/users/"+string(raceUser.ID)+":reset-password", root.Credential,
+		map[string]any{"initialPassword": "Reset-In-Flight-Password-43!", "resourceVersion": raceUser.ResourceVersion, "requestId": "reset-while-hashing"}, http.StatusOK, nil)
+	close(resume)
+	select {
+	case err := <-finished:
+		if !errors.Is(err, identityaccess.ErrUnauthenticated) {
+			t.Fatal("stale password result survived reset", err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := database.QueryRow(ctx, "SELECT count(*) FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2", raceUser.AccountID, raceUser.ID).Scan(&countAfter); err != nil || countAfter != 0 {
+		t.Fatal("stale result left a Session", err)
+	}
+	login(1, raceUser.LoginName+"@"+string(raceUser.AccountID), "Reset-In-Flight-Password-43!", http.StatusOK)
+	applyIAMSchema(t, ctx, database)
+	if _, err := workflow.Bootstrap(ctx, document); err != nil {
+		t.Fatal(err)
+	}
+	// New pool/Authority and migration/bootstrap replay do not reset a counter.
+	restarted := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, trace)
+	if _, err := restarted.Login(ctx, iamv1.LoginRequest{LoginName: name, Password: iamHTTPSecret(t, password), RequestID: "after-replay"}); !errors.Is(err, identityaccess.ErrUnauthenticated) {
+		t.Fatal("replay or new authority refunded guesses", err)
+	}
+	var unchanged bool
+	if err := database.QueryRow(ctx, "SELECT used_attempts=5 AND attempt_sequence=$3 AND window_started_at=$4 FROM iam.password_attempts WHERE tenant_id=$1 AND principal_id=$2",
+		user.AccountID, user.ID, sequence, windowStarted).Scan(&unchanged); err != nil || !unchanged {
+		t.Fatal("suppressed calls changed the attempt", err)
+	}
+	var shape bool
+	if err := database.QueryRow(ctx, "SELECT iam.password_attempt_contract_ready() AND (SELECT schema_version=33 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
+		t.Fatal("password function/ACL shape not ready", err)
+	}
+	apiConfig := config.Copy()
+	apiConfig.User, apiConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+	api, err := pgx.ConnectConfig(ctx, apiConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer api.Close(context.Background())
+	for _, attack := range []string{"SELECT * FROM iam.lookup_login('admin')", "SELECT * FROM iam.password_attempts", "DELETE FROM iam.password_attempts",
+		"SELECT iam.consume_password_attempt('a','b',NULL,'c',1)"} {
+		_, err := api.Exec(ctx, attack)
+		var pgerr *pgconn.PgError
+		if !errors.As(err, &pgerr) || pgerr.Code != "42501" {
+			t.Fatal("runtime gained raw verification/counter authority", err)
+		}
+	}
+	// Use an independent user to prove crash/expiry while the suppressed user's
+	// real window elapses. No clock selector or UPDATE to invent positive expiry.
+	abandoned := create(root.Credential, "abandoned")
+	reserve := func(connection *pgx.Conn, user iamv1.User, id string) (identityaccess.PasswordAttempt, bool, error) {
+		var attempt identityaccess.PasswordAttempt
+		var hash string
+		err := connection.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,NULL,NULL,NULL,$2)", user.LoginName+"@"+string(user.AccountID), id).
+			Scan(&attempt.AccountID, &attempt.PrincipalID, &hash, &attempt.MustChangePassword, &attempt.CredentialGeneration, &attempt.Sequence, &attempt.ExpiresAt)
+		attempt.ID, attempt.PasswordHash = id, authority.PasswordHash(hash)
+		return attempt, !errors.Is(err, pgx.ErrNoRows), err
+	}
+	reserved, found, err := reserve(api, abandoned, "abandoned-first")
+	if err != nil || !found {
+		t.Fatal("cannot reserve bounded work", err)
+	}
+	if _, found, err := reserve(api, abandoned, "while-in-flight"); found || !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatal("second in-flight attempt admitted", err)
+	}
+	waitUntil := func(target time.Time) {
+		t.Helper()
+		var now time.Time
+		if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
+			t.Fatal(err)
+		}
+		if delay := target.Sub(now) + 50*time.Millisecond; delay > 0 {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+		}
+	}
+	waitUntil(reserved.ExpiresAt)
+	next, found, err := reserve(api, abandoned, "after-abandonment")
+	if err != nil || !found || next.Sequence <= reserved.Sequence {
+		t.Fatal("expired slot was not replaced by a new attempt", err)
+	}
+	if err := database.QueryRow(ctx, "SELECT used_attempts FROM iam.password_attempts WHERE tenant_id=$1 AND principal_id=$2", abandoned.AccountID, abandoned.ID).Scan(&used); err != nil || used != 2 {
+		t.Fatal("expired work refunded a guess", err)
+	}
+	if _, err := api.Exec(ctx, "SELECT iam.reject_password_attempt($1,$2,$3,$4)", abandoned.AccountID, abandoned.ID, reserved.ID, reserved.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(ctx, "SELECT state='RESERVED' AND attempt_sequence=$3 FROM iam.password_attempts WHERE tenant_id=$1 AND principal_id=$2", abandoned.AccountID, abandoned.ID, next.Sequence).Scan(&unchanged); err != nil || !unchanged {
+		t.Fatal("stale completion consumed the next attempt", err)
+	}
+	if _, err := api.Exec(ctx, "SELECT iam.reject_password_attempt($1,$2,$3,$4)", abandoned.AccountID, abandoned.ID, next.ID, next.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(windowStarted.Add(time.Minute))
+	recovered := login(1, name, password, http.StatusOK)
+	if recovered.Session.ID == current.Session.ID {
+		t.Fatal("window expiry reused an old Session")
+	}
+	if err := database.QueryRow(ctx, "SELECT used_attempts=0 AND state='SUCCEEDED' AND attempt_sequence>$3 FROM iam.password_attempts WHERE tenant_id=$1 AND principal_id=$2", user.AccountID, user.ID, sequence).Scan(&unchanged); err != nil || !unchanged {
+		t.Fatal("complete login failed to consume its attempt", err)
+	}
+	// A trusted verifier still has to consume the correct one-time purpose.
+	// Use an otherwise valid new Session/event, so a duplicate row or malformed
+	// event cannot accidentally stand in for the attempt rejection.
+	var originalEvent []byte
+	if err := database.QueryRow(ctx, "SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.session.issued' AND event_document->'target'->>'id'=$2",
+		user.AccountID, recovered.Session.ID).Scan(&originalEvent); err != nil {
+		t.Fatal(err)
+	}
+	var event auditv1.Event
+	if json.Unmarshal(originalEvent, &event) != nil {
+		t.Fatal("read original Session fact")
+	}
+	event.EventID, event.Target.ID, event.RequestID, event.CorrelationID = "attempt-reuse-event", "attempt-reuse-session", "attempt-reuse", "attempt-reuse"
+	if auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil {
+		t.Fatal("attempt attack must use a valid Session event")
+	}
+	refuseSession := func(attemptID string, attemptSequence uint64) {
+		t.Helper()
+		_, err := api.Exec(ctx, "SELECT * FROM iam.issue_session($1,$2,$3,$4,$5,60,$6::jsonb,$7,$8)",
+			event.Target.ID, user.AccountID, user.ID, "sha256:"+strings.Repeat("d", 64), "sha256:"+strings.Repeat("c", 64), string(mustIAMJSON(t, event)), attemptID, attemptSequence)
+		var pgerr *pgconn.PgError
+		if !errors.As(err, &pgerr) || pgerr.Code != "42501" {
+			t.Fatal("Session mutation accepted a used or wrong-purpose attempt", err)
+		}
+	}
+	var consumedID string
+	var consumedSequence uint64
+	if err := database.QueryRow(ctx, "SELECT attempt_id,attempt_sequence FROM iam.password_attempts WHERE tenant_id=$1 AND principal_id=$2", user.AccountID, user.ID).
+		Scan(&consumedID, &consumedSequence); err != nil {
+		t.Fatal(err)
+	}
+	refuseSession(consumedID, consumedSequence)
+	changeAttempt := identityaccess.PasswordAttempt{ID: "change-purpose-only"}
+	var privateHash string
+	if err := api.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt(NULL,$1,$2,$3,$4)", user.AccountID, user.ID, recovered.Session.ID, changeAttempt.ID).
+		Scan(&changeAttempt.AccountID, &changeAttempt.PrincipalID, &privateHash, &changeAttempt.MustChangePassword,
+			&changeAttempt.CredentialGeneration, &changeAttempt.Sequence, &changeAttempt.ExpiresAt); err != nil {
+		t.Fatal("reserve actual caller password recheck", err)
+	}
+	refuseSession(changeAttempt.ID, changeAttempt.Sequence)
+	if err := database.QueryRow(ctx, "SELECT state='RESERVED' AND purpose='PASSWORD_CHANGE' AND attempt_sequence=$3 FROM iam.password_attempts WHERE tenant_id=$1 AND principal_id=$2",
+		user.AccountID, user.ID, changeAttempt.Sequence).Scan(&unchanged); err != nil || !unchanged {
+		t.Fatal("rejected purpose substitution consumed the valid attempt", err)
+	}
+	if err := database.QueryRow(ctx, "SELECT (SELECT count(*) FROM iam.sessions WHERE id=$1)+(SELECT count(*) FROM iam.audit_outbox WHERE event_id=$2)", event.Target.ID, event.EventID).
+		Scan(&countAfter); err != nil || countAfter != 0 {
+		t.Fatal("attempt replay/substitution left a Session or success fact", err)
+	}
+	// Finish the real reserved recheck normally; its debit is not refunded.
+	if _, err := api.Exec(ctx, "SELECT iam.reject_password_attempt($1,$2,$3,$4)", user.AccountID, user.ID, changeAttempt.ID, changeAttempt.Sequence); err != nil {
+		t.Fatal(err)
+	}
+	// Force the last outbox write to fail after successful attempt consumption.
+	// The original debit survives; no Session or SUCCEEDED result can survive.
+	if _, err := database.Exec(ctx, `CREATE FUNCTION iam.reject_attempt_outbox() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN
+		IF NEW.event_document->>'requestId'='attempt-outbox-failure' THEN RAISE EXCEPTION 'synthetic bounded failure'; END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER reject_attempt_outbox BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION iam.reject_attempt_outbox();`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRow(ctx, "SELECT count(*) FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2", user.AccountID, user.ID).Scan(&countBefore); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workflow.Login(ctx, iamv1.LoginRequest{LoginName: name, Password: iamHTTPSecret(t, password), RequestID: "attempt-outbox-failure"}); !errors.Is(err, identityaccess.ErrUnavailable) {
+		t.Fatal("outbox failure did not close authentication", err)
+	}
+	if err := database.QueryRow(ctx, "SELECT count(*) FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2", user.AccountID, user.ID).Scan(&countAfter); err != nil || countBefore != countAfter {
+		t.Fatal("failed outbox left a Session", err)
+	}
+	if err := database.QueryRow(ctx, "SELECT used_attempts=2 AND state='RESERVED' FROM iam.password_attempts WHERE tenant_id=$1 AND principal_id=$2", user.AccountID, user.ID).Scan(&unchanged); err != nil || !unchanged {
+		t.Fatal("failed final transaction refunded or consumed its attempt", err)
+	}
+	if trace.deadlock.Load() != 0 {
+		t.Fatal("password gate hid a lock-order deadlock")
+	}
+}
+
 func TestIAMOwnSessionBulkPostgres(t *testing.T) {
 	dsn := os.Getenv("MATRIX_IAM_OWN_SESSION_BULK_POSTGRES_TEST_DSN")
 	if dsn == "" {
@@ -13958,14 +14308,15 @@ func provePasswordSessionRaces(t *testing.T, ctx context.Context, handler http.H
 				identity(current, false)
 				identity(other, changeStatus != http.StatusOK)
 			case "old-password-login":
-				if changeStatus != http.StatusOK || (peerStatus != http.StatusOK && peerStatus != http.StatusUnauthorized) {
+				if !((changeStatus == http.StatusOK && (peerStatus == http.StatusOK || peerStatus == http.StatusUnauthorized)) ||
+					(changeStatus == http.StatusUnauthorized && peerStatus == http.StatusOK)) {
 					t.Fatalf("old-password login/replacement did not serialize: %d/%d", changeStatus, peerStatus)
 				}
 				if peerStatus == http.StatusOK {
-					identity(credential(peerResponse), false)
+					identity(credential(peerResponse), changeStatus != http.StatusOK)
 				}
 				identity(current, true)
-				identity(other, false)
+				identity(other, changeStatus != http.StatusOK)
 			}
 			identity(loggedOut, false)
 			for requestID, succeeded := range map[string]bool{changeID: changeStatus == http.StatusOK, competingID: mutation == "change" && peerStatus == http.StatusOK} {
