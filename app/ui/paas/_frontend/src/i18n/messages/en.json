@@ -347,6 +347,7 @@
     "owner": "Management scope",
     "ownerValue": "Current signed-in user only",
     "deliveryState": "Delivery observation",
+    "deliveryPending": "Waiting for the dispatcher",
     "states": {
       "NONE": "Not configured",
       "PENDING": "Waiting for code",
@@ -378,7 +379,7 @@
     "verifyHint": "The code proves current possession of the address only. It cannot sign in, reset a password, remove MFA, or grant permission.",
     "expires": "Expires",
     "expiresValue": "10 minutes after creation",
-    "acceptedBoundary": "ACCEPTED means only that the SMTP channel accepted the message. It does not mean delivered or read. This MOCK performs no delivery.",
+    "pendingBoundary": "Only a page-local verification intent exists and its state is PENDING. This MOCK called no SMTP channel and has no evidence of acceptance, final delivery, or reading.",
     "demoCode": "MOCK 8-digit code: {code}",
     "codeLabel": "8-digit email verification code",
     "codeHint": "A real code is single-use. Wrong attempts spend the shared budget; a new session or intent does not refund it.",

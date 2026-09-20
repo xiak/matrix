@@ -122,10 +122,10 @@ export function SecurityNotificationAddressPreview() {
       <ContactProgress current={1} />
       <dl className={styles.facts}>
         <div><dt>{t("address")}</dt><dd>{pendingAddress}</dd></div>
-        <div><dt>{t("deliveryState")}</dt><dd><Badge status="success">{t("states.ACCEPTED")}</Badge></dd></div>
+        <div><dt>{t("deliveryState")}</dt><dd><Badge status="warning">{t("deliveryPending")}</Badge></dd></div>
         <div><dt>{t("expires")}</dt><dd>{t("expiresValue")}</dd></div>
       </dl>
-      <Alert status="warning">{t("acceptedBoundary")}</Alert>
+      <Alert status="warning">{t("pendingBoundary")}</Alert>
       <Alert>{t("demoCode", { code: demonstrationCode })}</Alert>
       <form className={styles.form} onSubmit={confirm}>
         <FormField id={codeId} label={t("codeLabel")} hint={t("codeHint")}><Input autoComplete="one-time-code" id={codeId} inputMode="numeric" maxLength={8} onChange={(event) => { setCode(event.target.value.replace(/\D/g, "")); setError(null); }} pattern="[0-9]{8}" required value={code} /></FormField>
@@ -146,7 +146,7 @@ export function SecurityNotificationAddressPreview() {
         <div><dt>{t("state")}</dt><dd>{t(`states.${state}`)}</dd></div>
         <div><dt>{t("purpose")}</dt><dd>{t("purposeValue")}</dd></div>
         <div><dt>{t("owner")}</dt><dd>{t("ownerValue")}</dd></div>
-        {pendingAddress ? <div><dt>{t("deliveryState")}</dt><dd>{t("states.ACCEPTED")}</dd></div> : null}
+        {pendingAddress ? <div><dt>{t("deliveryState")}</dt><dd>{t("deliveryPending")}</dd></div> : null}
       </dl>
       {verifiedAddress ? <Alert>{t("firstSliceBoundary")}</Alert> : <div className={styles.actions}><Button ref={trigger} onClick={begin}>{t(pendingAddress ? "resume" : "start")}</Button></div>}
     </Card.Body></Card>

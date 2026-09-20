@@ -347,6 +347,7 @@
     "owner": "管理范围",
     "ownerValue": "仅当前登录用户本人",
     "deliveryState": "投递观察",
+    "deliveryPending": "等待投递器处理",
     "states": {
       "NONE": "未设置",
       "PENDING": "等待验证码",
@@ -378,7 +379,7 @@
     "verifyHint": "验证码只证明当前地址持有，不登录、不重置密码、不移除 MFA，也不授予权限。",
     "expires": "有效期限",
     "expiresValue": "创建后 10 分钟",
-    "acceptedBoundary": "ACCEPTED 只表示 SMTP 渠道已受理，不代表邮件最终送达或已读。本 MOCK 没有实际投递。",
+    "pendingBoundary": "当前只创建了页面内验证意图，状态为 PENDING。本 MOCK 未调用 SMTP，也没有渠道受理、最终送达或已读证据。",
     "demoCode": "MOCK 8 位验证码：{code}",
     "codeLabel": "8 位邮箱验证码",
     "codeHint": "真实验证码一次消费；错误尝试会占用共享预算，换 Session 或重建意图不会返还额度。",
