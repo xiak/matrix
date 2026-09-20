@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, EmptyState, FormField, Table, Tabs, TextArea } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
@@ -25,7 +25,7 @@ function RoleTrustReview({ role, proposed, workspace, scene }: { role: AccessRol
   const previous = subjects(role), next = subjects(proposed);
   const name = (id: string) => role.principalType === "account" ? scene.users.find((user) => user.id === id)?.loginName ?? id : workspace.providers.find((provider) => provider.id === id)?.name ?? id;
   return <div className={styles.stack}>
-    <h3 className={styles.stepTitle} tabIndex={-1}>{t("reviewTrust")}</h3>
+    <h3 className={styles.stepTitle} data-trust-review-heading tabIndex={-1}>{t("reviewTrust")}</h3>
     <div><strong>{role.name}</strong><p className={styles.note}>{role.id}</p></div>
     <Alert status="warning">{t("trustChangeHint")}</Alert>
     <div className={styles.policyComparison}>{(["before", "after"] as const).map((side) => <Card key={side} aria-label={t(side)}>
@@ -46,21 +46,31 @@ function RoleTrustReview({ role, proposed, workspace, scene }: { role: AccessRol
 function RoleTrustEditor({ role, workspace, scene, onClose }: { role: AccessRole; workspace: AccessWorkspace; scene: AccountAccessScene; onClose(): void }) {
   const t = useTranslations("RoleWorkspace"), w = useTranslations("IamWorkspace"), access = useAccountAccess();
   const [trust, setTrust] = useState<RoleTrust>(role), [review, setReview] = useState(false), [invalid, setInvalid] = useState(false);
-  const stage = useRef<HTMLDivElement>(null), previousReview = useRef(review);
+  const stage = useRef<HTMLElement>(null), heading = useRef<HTMLHeadingElement>(null), invalidAlert = useRef<HTMLDivElement>(null), errorAlert = useRef<HTMLDivElement>(null), previousReview = useRef(review);
   const changed = role.principal !== trust.principal || role.trustedUserIds.length !== trust.trustedUserIds.length || role.trustedUserIds.some((id) => !trust.trustedUserIds.includes(id));
-  useEffect(() => {
+  useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
+  useLayoutEffect(() => {
     if (previousReview.current === review) return;
     previousReview.current = review;
-    stage.current?.querySelector<HTMLElement>(review ? 'h3[tabindex]' : 'input[type="search"], [role="combobox"]:not([disabled])')?.focus();
+    stage.current?.querySelector<HTMLElement>(review ? '[data-trust-review-heading]' : 'input[type="search"], [role="combobox"]:not([disabled])')?.focus();
   }, [review]);
-  return <WorkspaceDialog size="wide" title={t("editTrust")} onClose={onClose} submitDisabled={!changed} validationError={invalid ? t("invalidTrust") : undefined} submitLabel={review ? w("save") : t("reviewChange")} onSubmit={async () => {
+  useLayoutEffect(() => { if (invalid) invalidAlert.current?.querySelector<HTMLElement>('[role="alert"]')?.focus({ preventScroll: true }); }, [invalid]);
+  useLayoutEffect(() => { if (access.workspaceError) errorAlert.current?.querySelector<HTMLElement>('[role="alert"]')?.focus({ preventScroll: true }); }, [access.workspaceError]);
+  const submit = async () => {
     try { validateRoleTrust(workspace, trust, scene.users.map((user) => user.id)); } catch { setInvalid(true); return false; }
     setInvalid(false);
     if (!review) { setReview(true); return false; }
-    return Boolean(await access.executeWorkspace({ kind: "update-role-trust", id: role.id, principal: trust.principal, trustedUserIds: trust.trustedUserIds }));
-  }}>
-    <div ref={stage} className={styles.stack}>{review ? <><RoleTrustReview role={role} proposed={trust} workspace={workspace} scene={scene} /><Button variant="ghost" onClick={() => { access.clearWorkspaceError(); setReview(false); }}>{t("backToSelection")}</Button></> : <><RoleTrustFields locked workspace={workspace} users={scene.users.map((user) => ({ id: user.id, name: user.loginName }))} value={trust} onChange={(value) => { setTrust(value); setInvalid(false); access.clearWorkspaceError(); }} />{!changed ? <p className={styles.note}>{t("noTrustChanges")}</p> : null}</>}</div>
-  </WorkspaceDialog>;
+    if (await access.executeWorkspace({ kind: "update-role-trust", id: role.id, principal: trust.principal, trustedUserIds: trust.trustedUserIds })) onClose();
+    return false;
+  };
+  return <section ref={stage} className={styles.stack} role="group" aria-label={t("editTrust")}>
+    <div className={styles.sectionHeading}><Button variant="ghost" disabled={access.busy} onClick={onClose}>{t("backToTrust")}</Button><h3 className={styles.detailTitle} ref={heading} tabIndex={-1}>{t("editTrust")}</h3></div>
+    {access.workspaceError ? <div ref={errorAlert}><Alert status="danger" tabIndex={-1}>{w(`errors.${access.workspaceError}`)}</Alert></div> : null}
+    <form className={styles.stack} aria-busy={access.busy || undefined} onSubmit={(event) => { event.preventDefault(); if (!access.busy && changed) void submit(); }}>
+      <fieldset className={styles.editorFields} disabled={access.busy}>{review ? <><RoleTrustReview role={role} proposed={trust} workspace={workspace} scene={scene} /><Button variant="ghost" onClick={() => { access.clearWorkspaceError(); setReview(false); }}>{t("backToSelection")}</Button></> : <><RoleTrustFields locked workspace={workspace} users={scene.users.map((user) => ({ id: user.id, name: user.loginName }))} value={trust} onChange={(value) => { setTrust(value); setInvalid(false); access.clearWorkspaceError(); }} />{invalid ? <div ref={invalidAlert}><Alert status="danger" tabIndex={-1}>{t("invalidTrust")}</Alert></div> : null}{!changed ? <p className={styles.note}>{t("noTrustChanges")}</p> : null}</>}</fieldset>
+      <div className={styles.actions}><Button type="submit" disabled={access.busy || !changed}>{review ? w("save") : t("reviewChange")}</Button><Button type="button" variant="secondary" disabled={access.busy} onClick={onClose}>{w("cancel")}</Button></div>
+    </form>
+  </section>;
 }
 function RoleSettingsEditor({ role, onClose }: { role: AccessRole; onClose(): void }) {
   const t = useTranslations("RoleWorkspace"), access = useAccountAccess();
@@ -80,7 +90,12 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
   const t = useTranslations("IamWorkspace"), r = useTranslations("RoleWorkspace"), access = useAccountAccess();
   const [dialog, setDialog] = useState<"metadata" | "trust" | "settings" | "add" | "remove" | null>(null);
   const [deleting, setDeleting] = useState<AccessRole | null>(null);
+  const trustTrigger = useRef<HTMLButtonElement>(null), previousTrustOpen = useRef(false);
   const selected = workspace.roles.find((role) => role.id === entityId);
+  useLayoutEffect(() => {
+    if (previousTrustOpen.current && dialog !== "trust") trustTrigger.current?.focus({ preventScroll: true });
+    previousTrustOpen.current = dialog === "trust";
+  }, [dialog]);
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("roles")}>{t("back")}</Button>} />;
   const principalLabel = (role: AccessRole) => role.principalType === "provider" ? workspace.providers.find((provider) => provider.id === role.principal)?.name ?? role.principal : role.principal;
   return <>
@@ -91,13 +106,12 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
         <Tabs.Content className={styles.stack} value="policies"><div className={styles.actions}><Button variant="secondary" onClick={() => setDialog("add")}>{r("addPolicies")}</Button><Button variant="ghost" disabled={!selected.policyIds.length} onClick={() => setDialog("remove")}>{r("removePolicies")}</Button></div><p className={styles.note}>{r("permissionsHint")}</p><Table aria-label={t("permissions")} mobileLayout="stack"><thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("type")}</th><th scope="col">{r("effectiveVersion")}</th></tr></thead><tbody>{selected.policyIds.map((id) => { const policy = workspace.policies.find((policy) => policy.id === id); return <tr key={id}><td data-label={t("name")}><button className={styles.userLink} onClick={() => onOpen("policies", id)}>{policy?.name ?? id}</button><small>{policy?.description}</small></td><td data-label={t("type")}>{policy ? t(policy.kind) : "—"}</td><td data-label={r("effectiveVersion")}>{policy ? "v" + policy.defaultVersion : "—"}</td></tr>; })}</tbody></Table>{!selected.policyIds.length ? <p className={styles.note}>{r("noPermissions")}</p> : null}
           <PermissionBoundary workspace={workspace} value={selected.boundaryPolicyId} onOpen={(id) => onOpen("policies", id)} onSave={(policyId) => access.executeWorkspace({ kind: "set-role-boundary", id: selected.id, policyId })} />
         </Tabs.Content>
-        <Tabs.Content className={styles.stack} value="trust"><div><Button variant="secondary" onClick={() => setDialog("trust")}>{r("editTrust")}</Button></div><Alert>{r(`trustHints.${selected.principalType}`)}</Alert><dl className={styles.facts}><div><dt>{t("principal")}</dt><dd>{principalLabel(selected)}</dd></div>{selected.principalType === "account" ? <div><dt>{r("trustedUsers")}</dt><dd><div className={styles.actions}>{selected.trustedUserIds.map((id) => <button key={id} className={styles.userLink} onClick={() => onOpen("users", id)}>{scene.users.find((user) => user.id === id)?.loginName ?? id}</button>)}</div></dd></div> : null}</dl><pre className={styles.code} role="region" aria-label={r("trustDocument")} tabIndex={0}>{JSON.stringify(roleTrustDocument(selected), null, 2)}</pre>{selected.principalType === "account" ? <><p className={styles.note}>{r("requiredAction")}</p><pre className={styles.code}>{JSON.stringify({ action: ["iam:assumeRole"], resource: [formatPolicyResource({ service: "iam", tenant: workspace.accountId, region: "global", type: "role", id: selected.id })] }, null, 2)}</pre></> : null}</Tabs.Content>
+        <Tabs.Content className={styles.stack} value="trust">{dialog === "trust" ? <RoleTrustEditor role={selected} workspace={workspace} scene={scene} onClose={() => setDialog(null)} /> : <><div><Button ref={trustTrigger} variant="secondary" onClick={() => { access.clearWorkspaceError(); setDialog("trust"); }}>{r("editTrust")}</Button></div><Alert>{r(`trustHints.${selected.principalType}`)}</Alert><dl className={styles.facts}><div><dt>{t("principal")}</dt><dd>{principalLabel(selected)}</dd></div>{selected.principalType === "account" ? <div><dt>{r("trustedUsers")}</dt><dd><div className={styles.actions}>{selected.trustedUserIds.map((id) => <button key={id} className={styles.userLink} onClick={() => onOpen("users", id)}>{scene.users.find((user) => user.id === id)?.loginName ?? id}</button>)}</div></dd></div> : null}</dl><pre className={styles.code} role="region" aria-label={r("trustDocument")} tabIndex={0}>{JSON.stringify(roleTrustDocument(selected), null, 2)}</pre>{selected.principalType === "account" ? <><p className={styles.note}>{r("requiredAction")}</p><pre className={styles.code}>{JSON.stringify({ action: ["iam:assumeRole"], resource: [formatPolicyResource({ service: "iam", tenant: workspace.accountId, region: "global", type: "role", id: selected.id })] }, null, 2)}</pre></> : null}</>}</Tabs.Content>
         <Tabs.Content value="sessions"><RoleSessions role={selected} workspace={workspace} scene={scene} onOpen={onOpen} /></Tabs.Content>
         <Tabs.Content className={styles.stack} value="settings"><div><Button variant="secondary" onClick={() => setDialog("settings")}>{r("editSettings")}</Button></div><dl className={styles.facts}><div><dt>{t("sessionMinutes")}</dt><dd>{selected.sessionMinutes}</dd></div><div><dt>{t("consoleAccess")}</dt><dd>{t(selected.consoleAccess ? "enabled" : "disabled")}</dd></div></dl><Alert>{r("settingsChangeHint")}</Alert></Tabs.Content>
       </Tabs.Root>
     </WorkspaceDetail> : <WorkspaceCollection title={t("roles")} description={t("roleHint")} items={workspace.roles} keywords={(role) => [role.description, principalLabel(role)].join(" ")} filter={{ label: t("principalType"), options: ["account", "service", "provider"].map((value) => ({ value, label: t(value === "service" ? "servicePrincipal" : value as "account" | "provider") })), matches: (role, value) => role.principalType === value }} create={{ label: t("createRole"), onClick: onCreate }} columns={[t("name"), t("principalType"), t("principal"), t("created")]} row={(role) => <><td><button className={styles.userLink} onClick={() => onOpen("roles", role.id)}>{role.name}</button><small>{role.description}</small></td><td>{t(role.principalType === "service" ? "servicePrincipal" : role.principalType)}</td><td>{principalLabel(role)}</td><td><WorkspaceTime value={role.createdAt} /></td></>} />}
     {selected && dialog === "metadata" ? <RoleMetadataEditor role={selected} onClose={() => setDialog(null)} /> : null}
-    {selected && dialog === "trust" ? <RoleTrustEditor role={selected} workspace={workspace} scene={scene} onClose={() => setDialog(null)} /> : null}
     {selected && dialog === "settings" ? <RoleSettingsEditor role={selected} onClose={() => setDialog(null)} /> : null}
     {selected && (dialog === "add" || dialog === "remove") ? <RolePolicyEditor role={selected} workspace={workspace} mode={dialog} onClose={() => setDialog(null)} /> : null}
     {deleting ? <WorkspaceDelete name={deleting.name} impact={<Alert status="warning">{r("deleteImpact")}</Alert>} onClose={() => setDeleting(null)} onConfirm={async () => { const result = await access.executeWorkspace({ kind: "delete-role", id: deleting.id }); if (result && entityId === deleting.id) onOpen("roles"); return result; }} /> : null}
