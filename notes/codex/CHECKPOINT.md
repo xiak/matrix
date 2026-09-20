@@ -9,16 +9,22 @@
   security settings/report and real UI remain incomplete. Crypto/custody
   and notification preparation are not the completed goal.
 - Latest fixed/pushed production candidate:
-  **07aa50627318708ed4d3ac9ce481b1e5829669d6**, verified first contact and
-  durable mail. Exact Verification35504960145 is still running:
-  https://github.com/xiak/matrix/actions/runs/35504960145 . Verify all five
+  **5e185e95c9d474443a26171a5f2616816e53bdba**, pinned OTP construction
+  replacement only. Its exact Verification35506581374 is still running:
+  https://github.com/xiak/matrix/actions/runs/35506581374 . Verify all five
   jobs before final handoff; do not cancel it with another production push.
 - Source IAM36/Audit20/PaaS2; published profile/revision unchanged. No
   installation, releasebuild, UI or other worktree changes are adopted.
 - Read AGENTS, IAM/012 for mail or IAM/009 for MFA, then owning code/tests.
   Fixed adoption belongs to docs/adoption/FEAT-006-platform-authorities.md.
 
-## Fixed first-contact and durable mail candidate
+## Fixed first-contact and durable mail
+
+07aa50627318708ed4d3ac9ce481b1e5829669d6 / Verification35504960145 was
+rechecked through authenticated GitHub API: exact SHA, go/node-process/
+authority-storage/authority-runtime/authority-process all completed/success.
+Both installation and UX received that final confirmation, not their own
+integration or release acceptance.
 
 07aa5062 owns four notification-contact HTTP routes, strict private request
 codecs and current LOGIN_SESSION first-address-only workflow. Contact
@@ -59,7 +65,7 @@ Linux build passed. SKIP is not runtime evidence. Contact HTTP is an
 in-process real handler; the mail worker is a separate executable.
 All task fixtures from these gates were removed; no other resources touched.
 
-Remaining: five-job CI; installer configuration/release; real UX; actual MFA
+Remaining: installer configuration/release; real UX; actual MFA
 enrollment/login/recovery/step-up and safety events; existing-address
 replacement; aggregate operational alerts; post-restore contact/pending-intent
 isolation. No claim of complete S1 or MFA.
@@ -81,22 +87,31 @@ Preparation rejects ANY retained TOTP factor at Login/Session/readiness.
 MFA enabling must replace that with actual lifecycle/session rules, not
 remove a guard or infer authentication from missing state.
 
-User prefers pquerna/otp over locally maintained OTP construction. Pin and
-review upstream, retain strict inputs/database time/collision replay rules
-and independent RFC/Node vectors; delete the replaced implementation.
-A library choice is not the actual MFA flow or a security-certification claim.
+5e185e95 reuses github.com/pquerna/otp v1.5.0 at upstream
+5971b1ef1d6652fec2caed37f11e5cacd9249f78, pinned Go sums. Original local OTP
+construction is deleted. Only authority may import otp/hotp; fixed SHA1/6
+digits/30 seconds, strict canonical input BEFORE upstream normalization,
+database time and all-match collision/replay checks remain MATRIX rules.
+The library does not persist consumption or authenticate a Session.
+RFC/independent Node vectors, focused race and 20s/2-worker fuzz passed.
+Per-command Go1.26.7 full default race/architecture, vet, modules, generation
+and Linux build passed. No global Go setting or schema/API/profile change.
+govulncheck v1.8.0 on actual IAM entry found zero reachable/imported-package
+alerts with Go1.26.7, three unused-module alerts; not a security certification.
+The default local Go1.26.3 had seven reachable standard-library findings;
+installation was told to assess its own actual signed build, not inherit this.
 
 ## Shared owners
 
 Installation01a04149-5dbb-7300-9e4c-31d9e85c8ada exclusively owns
 layout/localmachine/topology/release/releasebuild/FEAT005/offline. It received
-07aa5062 as candidate with CI pending. IAM owns its contracts/migration/worker
+07aa5062 with final five-job CI success. IAM owns its contracts/migration/worker
 and only sixth-FILE shape in shared migrationprocess. Restoration CLOSED,
 current recovery qualification and safe reopen remain unimplemented here.
 Key availability/old receipt cannot prove current post-backup authority.
 
 UX/UI01a07b21-9a0d-7fd0-b090-7827ce18262e owns all UI on its branch.
-It received07aa pending candidate and first-contact limits. loginProtection
+It received07aa final CI and first-contact limits. loginProtection
 and SSO selection stay explicit MOCK, no invented LIVE endpoint. Existing
 Role/STS fixed62a18a48 plus0567c8b2 handed off for current public contracts;
 peer must independently verify its own integration/browser.
