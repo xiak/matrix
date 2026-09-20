@@ -27,10 +27,20 @@ function repository({
   revoke = async (_credential: string, targetSessionId: string) => ({
     outcome: "APPLIED" as const,
     revocation: { id: targetSessionId, resourceVersion: 2, revokedAt: "2026-09-18T12:00:00Z" }
+  }),
+  revokeOthers = async (_credential: string, requestId: string) => ({
+    outcome: "APPLIED" as const,
+    accountId: "account-acme",
+    userId: "user-alex",
+    currentSessionId: "session-caller-1",
+    requestId,
+    revokedCount: 1,
+    completedAt: "2026-09-18T12:00:00Z"
   })
 }: {
   list?: NonNullable<IamRepository["sessions"]>["list"];
   revoke?: NonNullable<IamRepository["sessions"]>["revoke"];
+  revokeOthers?: NonNullable<IamRepository["sessions"]>["revokeOthers"];
 } = {}): IamRepository {
   let logins = 0;
   return {
@@ -51,7 +61,7 @@ function repository({
     },
     async changePassword() {},
     async logout() {},
-    sessions: { list, revoke }
+    sessions: { list, revoke, revokeOthers }
   };
 }
 
@@ -63,10 +73,12 @@ function Probe() {
     <output aria-label="error">{own.error ?? "none"}</output>
     <output aria-label="success">{own.success ?? "none"}</output>
     <output aria-label="uncertain">{own.uncertainTargetId ?? "none"}</output>
+    <output aria-label="uncertain-others">{own.uncertainOthers ? "yes" : "no"}</output>
     <output aria-label="count">{own.page?.items.length ?? 0}</output>
     <button onClick={() => { void session.login("alex@acme", "synthetic-password"); }}>login</button>
     <button onClick={() => { void own.load(); }}>load</button>
     <button onClick={() => { void own.revoke("session-target"); }}>revoke</button>
+    <button onClick={() => { void own.revokeOthers(); }}>revoke-others</button>
   </div>;
 }
 
@@ -118,6 +130,34 @@ describe("OwnSessionsProvider", () => {
     expect(requests[0]!.credential).toBe(credentials[0]);
     expect(requests[1]!.credential).toBe(credentials[1]);
     expect(requests[1]!.requestId).not.toBe(requests[0]!.requestId);
+  });
+
+  it("reuses one end-other-sessions intent after an unknown outcome", async () => {
+    const requests: string[] = [];
+    const revokeOthers = vi.fn(async (_credential: string, requestId: string) => {
+      requests.push(requestId);
+      if (requests.length === 1) throw new Error("connection lost");
+      return {
+        outcome: "EQUAL_REPLAY" as const,
+        accountId: "account-acme",
+        userId: "user-alex",
+        currentSessionId: "session-caller-1",
+        requestId,
+        revokedCount: 1,
+        completedAt: "2026-09-18T12:00:00Z"
+      };
+    });
+    const screen = render(<SessionProvider repository={repository({ revokeOthers })}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("load")));
+    await waitFor(() => expect(screen.getByLabelText("count").textContent).toBe("2"));
+    await act(async () => fireEvent.click(screen.getByText("revoke-others")));
+    await waitFor(() => expect(screen.getByLabelText("uncertain-others").textContent).toBe("yes"));
+    await act(async () => fireEvent.click(screen.getByText("revoke-others")));
+    await waitFor(() => expect(screen.getByLabelText("success").textContent).toBe("others-replayed"));
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toBe(requests[0]);
+    expect(screen.getByLabelText("count").textContent).toBe("1");
   });
 
   it("expires only the credential rejected by the session endpoint", async () => {

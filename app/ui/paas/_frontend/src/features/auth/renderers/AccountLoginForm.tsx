@@ -7,6 +7,7 @@ import { ArrowRight, LoaderCircle } from "lucide-react";
 import { Button, FormField, Alert, Input, PasswordInput, Tabs } from "@ui/xiak";
 import { useSession } from "../application/SessionProvider";
 import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
+import { MfaLoginPreview } from "./MfaPreviewExperience";
 import styles from "./LoginRenderer.module.css";
 
 export function AccountLoginForm({ returnTo }: { returnTo: string }) {
@@ -18,6 +19,7 @@ export function AccountLoginForm({ returnTo }: { returnTo: string }) {
   const [password, setPassword] = useState("");
   const [formError, setFormError] = useState<"primaryIdentifier" | "childIdentifier" | null>(null);
   const [submission, setSubmission] = useState<"login" | "preview" | null>(null);
+  const [mfaPreview, setMfaPreview] = useState(false);
   const busy = session.phase === "authenticating";
   const error = formError ?? session.error;
 
@@ -55,6 +57,8 @@ export function AccountLoginForm({ returnTo }: { returnTo: string }) {
     setSubmission(null);
     if (outcome === "authenticated") router.replace(returnTo, { scroll: false });
   }
+
+  if (mfaPreview) return <MfaLoginPreview onBack={() => setMfaPreview(false)} onAuthenticated={() => { void enterPreview(); }} />;
 
   return <>
     <div className={styles.cardHeading}>
@@ -97,6 +101,7 @@ export function AccountLoginForm({ returnTo }: { returnTo: string }) {
         {busy && submission === "preview" ? <LoaderCircle aria-hidden="true" className={styles.spinner} /> : null}
         {t(busy && submission === "preview" ? "previewPending" : "previewAction")}<ArrowRight aria-hidden="true" />
       </Button>
+      <Button block disabled={busy} onClick={() => setMfaPreview(true)} variant="ghost">{t("previewMfaAction")}</Button>
     </div> : null}
   </>;
 }

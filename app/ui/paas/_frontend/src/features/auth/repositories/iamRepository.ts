@@ -1,4 +1,4 @@
-import type { OwnSessionPage, OwnSessionRevocation, SessionSummary } from "../domain/session";
+import type { OtherSessionsRevocation, OwnSessionPage, OwnSessionRevocation, SessionSummary } from "../domain/session";
 import type {
   AccountAccess,
   AccountCommand,
@@ -29,6 +29,7 @@ export interface IamRepository {
   sessions?: {
     list(credential: string, after?: string): Promise<OwnSessionPage>;
     revoke(credential: string, targetSessionId: string, requestId: string): Promise<OwnSessionRevocation>;
+    revokeOthers(credential: string, requestId: string): Promise<OtherSessionsRevocation>;
   };
 }
 

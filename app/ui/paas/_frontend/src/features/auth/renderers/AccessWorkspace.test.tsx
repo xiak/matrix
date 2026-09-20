@@ -2004,24 +2004,42 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("暂无记录")).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
   });
+  it("models personal MFA, scoped step-up and the frozen account requirement without invented settings", async () => {
+    const { user } = await open("settings");
+    expect(screen.getByRole("heading", { name: "身份验证方法" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "多因素认证要求" })).toBeTruthy();
+    expect(screen.queryByLabelText("密码最小长度")).toBeNull();
+    expect(screen.queryByLabelText("会话时长（分钟）")).toBeNull();
+    expect(screen.getByText("安全事件邮件")).toBeTruthy();
+    expect(screen.getAllByText("尚不可用").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    expect(screen.getByRole("heading", { name: "验证身份后替换验证器" })).toBeTruthy();
+    expect(screen.getByText(/不增加任何 IAM 权限/)).toBeTruthy();
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    expect(screen.getByRole("heading", { name: "替换身份验证器" })).toBeTruthy();
+    expect(screen.getByText(/原验证器继续有效/)).toBeTruthy();
+  });
   it.each(["settings", "user-sso"] as const)("retains %s inputs on failure and saves only its owned settings on retry", async (view) => {
     const { user, repository, extension } = await open(view);
     const before = await extension.read("preview");
+    const saveName = view === "settings" ? "保存 MFA 要求" : "保存";
     if (view === "settings") {
-      fireEvent.change(screen.getByLabelText("密码最小长度"), { target: { value: "16" } });
-      await user.click(screen.getByRole("checkbox", { name: "登录保护（模拟 MFA）" }));
+      await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
     } else {
       await select(user, "选择身份提供商", "EnterpriseSSO · SAML");
       await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
     }
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
-    await user.click(screen.getByRole("button", { name: "保存" }));
+    await user.click(screen.getByRole("button", { name: saveName }));
     await screen.findByText("暂时无法完成操作，请重试。");
     expect(await extension.read("preview")).toEqual(before);
-    await user.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect((screen.getByRole("button", { name: "保存" }) as HTMLButtonElement).disabled).toBe(true));
+    await user.click(screen.getByRole("button", { name: saveName }));
+    await waitFor(() => expect((screen.getByRole("button", { name: saveName }) as HTMLButtonElement).disabled).toBe(true));
     const state = await extension.read("preview");
-    expect(state.settings).toEqual({ ...before.settings, ...(view === "settings" ? { passwordMinLength: 16, loginProtection: true } : { userSsoEnabled: true, userSsoProviderId: "idp-example" }) });
+    expect(state.settings).toEqual({ ...before.settings, ...(view === "settings" ? { loginProtection: true } : { userSsoEnabled: true, userSsoProviderId: "idp-example" }) });
     expect(state.providers).toEqual(before.providers);
     expect(state.userPolicies).toEqual(before.userPolicies);
     expect(repository.execute).not.toHaveBeenCalled();

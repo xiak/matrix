@@ -16,6 +16,7 @@ export function OwnSessionsPage() {
   const session = useSession();
   const initiated = useRef(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [confirmingOthers, setConfirmingOthers] = useState(false);
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
   const [cursorIndex, setCursorIndex] = useState(0);
 
@@ -54,18 +55,34 @@ export function OwnSessionsPage() {
     setConfirmingId(null);
   };
 
+  const confirmRevokeOthers = async () => {
+    await sessions.revokeOthers();
+    setConfirmingOthers(false);
+  };
+
   const page = sessions.page;
   const currentListed = page?.items.some((item) => item.id === page.currentSessionId) ?? false;
   const activeCursor = cursors[cursorIndex];
+  const busy = sessions.loading || Boolean(sessions.revokingId) || sessions.revokingOthers;
+  const unresolved = Boolean(sessions.uncertainTargetId) || sessions.uncertainOthers;
+  const hasOtherSessions = Boolean(page && (page.nextCursor || page.items.some((item) => item.id !== page.currentSessionId)));
   const actions = <ContentPage.Commands label={collection("pageActions")} secondary={[{
+    id: "revoke-others",
+    label: t("endOthers"),
+    icon: <LogOut aria-hidden="true" />,
+    danger: true,
+    disabled: busy || unresolved || !hasOtherSessions,
+    disabledReason: unresolved ? t("resolveUncertainFirst") : !hasOtherSessions ? t("noOtherSessions") : undefined,
+    onSelect: () => { sessions.clearFeedback(); setConfirmingOthers(true); setConfirmingId(null); }
+  }, {
     id: "refresh",
     label: t("refresh"),
     icon: <RefreshCcw aria-hidden="true" />,
-    disabled: sessions.loading || Boolean(sessions.revokingId),
+    disabled: busy,
     onSelect: () => { void sessions.load(activeCursor); }
   }]} />;
 
-  return <section aria-label={t("title")} aria-busy={sessions.loading || Boolean(sessions.revokingId)} className={styles.root}>
+  return <section aria-label={t("title")} aria-busy={busy} className={styles.root}>
     <ContentPage.Heading title={t("title")} scrollKey="own-login-sessions" actions={actions} />
     <div className={styles.intro}>
       <div>
@@ -75,8 +92,21 @@ export function OwnSessionsPage() {
       <Alert status="info"><ShieldCheck aria-hidden="true" />{t("notDevices")}</Alert>
     </div>
 
+    {confirmingOthers ? <Alert status="warning" className={styles.bulkConfirmation}>
+      <div><strong>{t("confirmOthersTitle")}</strong><span>{t("confirmOthersHint")}</span></div>
+      <div>
+        <Button disabled={sessions.revokingOthers} onClick={() => { void confirmRevokeOthers(); }} size="small" variant="danger">{t("confirmOthers")}</Button>
+        <Button disabled={sessions.revokingOthers} onClick={() => setConfirmingOthers(false)} size="small" variant="ghost">{t("cancel")}</Button>
+      </div>
+    </Alert> : null}
     {sessions.error ? <Alert status="danger">{t(`errors.${sessions.error}`)}</Alert> : null}
-    {sessions.success ? <Alert status="success">{t(`success.${sessions.success}`)}</Alert> : null}
+    {sessions.success ? <Alert status="success">{sessions.success === "others-ended" || sessions.success === "others-replayed"
+      ? t(`success.${sessions.success}`, { count: sessions.otherRevokedCount ?? 0 })
+      : t(`success.${sessions.success}`)}</Alert> : null}
+    {sessions.uncertainOthers ? <Alert status="warning" className={styles.uncertain}>
+      <div><strong>{t("uncertainOthersTitle")}</strong><span>{t("uncertainOthers")}</span></div>
+      <Button disabled={sessions.revokingOthers} onClick={() => { void sessions.revokeOthers(); }} size="small" variant="secondary">{t("retryOriginal")}</Button>
+    </Alert> : null}
     {sessions.uncertainTargetId ? <Alert status="warning" className={styles.uncertain}>
       <div><strong>{t("uncertainTitle")}</strong><span>{t("uncertain")}</span></div>
       <Button disabled={Boolean(sessions.revokingId)} onClick={() => { void sessions.revoke(sessions.uncertainTargetId!); }} size="small" variant="secondary">{t("retryOriginal")}</Button>
@@ -104,13 +134,13 @@ export function OwnSessionsPage() {
                 <span>{t("confirmHint")}</span>
                 <div><Button disabled={sessions.revokingId === item.id} onClick={() => { void confirmRevoke(item.id); }} size="small" variant="secondary">{t("confirm")}</Button><Button disabled={Boolean(sessions.revokingId)} onClick={() => setConfirmingId(null)} size="small" variant="ghost">{t("cancel")}</Button></div>
               </div> : isCurrent ? <Button disabled={session.phase === "revoking"} onClick={() => { void session.logout(); }} size="small" variant="ghost"><LogOut aria-hidden="true" />{t("exitCurrent")}</Button>
-                : <Button disabled={Boolean(sessions.revokingId || sessions.uncertainTargetId)} onClick={() => { sessions.clearFeedback(); setConfirmingId(item.id); }} size="small" variant="ghost">{t("end")}</Button>}</td>
+                : <Button disabled={Boolean(sessions.revokingId || sessions.revokingOthers || sessions.uncertainTargetId || sessions.uncertainOthers)} onClick={() => { sessions.clearFeedback(); setConfirmingId(item.id); }} size="small" variant="ghost">{t("end")}</Button>}</td>
             </tr>;
           })}</tbody>
         </Table>
         {!page.items.length ? <EmptyState title={t("empty")} description={t("emptyHint")} /> : null}
         <Table.Footer note={<div className={styles.footerNotes}><span>{t("impact")}</span>{cursorIndex > 0 && !currentListed ? <span>{t("currentAbsent")}</span> : null}</div>}>
-          <TablePagination mode="cursor" disabled={sessions.loading || Boolean(sessions.revokingId)} summary={t("page", { page: cursorIndex + 1 })}
+          <TablePagination mode="cursor" disabled={busy} summary={t("page", { page: cursorIndex + 1 })}
             previous={{ label: t("previous"), disabled: cursorIndex === 0, onClick: () => { void move(cursorIndex - 1, cursors[cursorIndex - 1]); } }}
             next={{ label: t("next"), disabled: !page.nextCursor, onClick: () => { void next(); } }} />
         </Table.Footer>

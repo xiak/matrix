@@ -676,4 +676,43 @@ describe("IAM HTTP own-session boundary", () => {
       await expect(httpIamRepository.sessions!.revoke("transient-bearer", session.id, "ui-session-revoke-fixed")).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });
+
+  it("ends other sessions without caller selectors and verifies the complete receipt", async () => {
+    const requestId = "ui-session-revoke-others-fixed";
+    const response = {
+      apiVersion,
+      kind: "OtherSessionsRevocation",
+      outcome: "APPLIED",
+      accountId: account.id,
+      userId: user.id,
+      currentSessionId: session.id,
+      requestId,
+      revokedCount: 2,
+      completedAt: timestamp
+    };
+    const fetcher = reply(response);
+    expect(await httpIamRepository.sessions!.revokeOthers("transient-bearer", requestId)).toEqual({
+      outcome: "APPLIED",
+      accountId: account.id,
+      userId: user.id,
+      currentSessionId: session.id,
+      requestId,
+      revokedCount: 2,
+      completedAt: timestamp
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/sessions:revoke-others");
+    expect(firstRequest(fetcher)[1].method).toBe("POST");
+    expect(requestBody(fetcher)).toEqual({ requestId });
+    for (const invalid of [
+      { ...response, outcome: "UNKNOWN" },
+      { ...response, kind: "Revocation" },
+      { ...response, requestId: "other-request" },
+      { ...response, revokedCount: -1 },
+      { ...response, revokedCount: Number.MAX_SAFE_INTEGER + 1 },
+      { ...response, targets: [] }
+    ]) {
+      reply(invalid);
+      await expect(httpIamRepository.sessions!.revokeOthers("transient-bearer", requestId)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
 });

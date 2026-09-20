@@ -26,7 +26,7 @@ import type {
 import { enterprisePrincipalId, previewUserPrincipalId, type AccessWorkspace } from "../domain/accessWorkspace";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import { applyUserBatch } from "../domain/userBatch";
-import type { OwnSessionRevocation, SessionSummary } from "../domain/session";
+import type { OtherSessionsRevocation, OwnSessionRevocation, SessionSummary } from "../domain/session";
 import type { AccountRepository, IamRepository, LoginResult } from "./iamRepository";
 import { createPreviewAccessWorkspace } from "./previewAccessWorkspace";
 
@@ -101,6 +101,7 @@ const initialPreviewSessions: SessionSummary[] = [
 ];
 let previewOwnSessions = structuredClone(initialPreviewSessions);
 const previewOwnSessionReplays = new Map<string, { targetSessionId: string; result: OwnSessionRevocation }>();
+const previewOtherSessionReplays = new Map<string, OtherSessionsRevocation>();
 
 function requirePreviewCredential(credential: string): void {
   if (credential !== previewCredential) throw new Error("INVALID_PREVIEW_CREDENTIAL");
@@ -123,6 +124,7 @@ function clearPreviewGroupContractState(): void {
 function resetPreviewOwnSessions(): void {
   previewOwnSessions = structuredClone(initialPreviewSessions);
   previewOwnSessionReplays.clear();
+  previewOtherSessionReplays.clear();
 }
 
 const initialPreviewState = structuredClone({ account, users, accounts, userPlatformPolicies });
@@ -192,6 +194,26 @@ export const previewIamRepository: IamRepository = {
       };
       previewOwnSessions = previewOwnSessions.filter((session) => session.id !== targetSessionId);
       previewOwnSessionReplays.set(requestId, { targetSessionId, result: structuredClone(result) });
+      return structuredClone(result);
+    },
+    async revokeOthers(credential, requestId) {
+      requirePreviewCredential(credential);
+      requireRequestId(requestId);
+      const replay = previewOtherSessionReplays.get(requestId);
+      if (replay) return structuredClone({ ...replay, outcome: "EQUAL_REPLAY" as const });
+      const currentSessionId = "session-ux-preview";
+      const revokedCount = previewOwnSessions.filter((session) => session.id !== currentSessionId).length;
+      const result: OtherSessionsRevocation = {
+        outcome: "APPLIED",
+        accountId: account.id,
+        userId: account.rootIdentity.principalId,
+        currentSessionId,
+        requestId,
+        revokedCount,
+        completedAt: previewSessionObservedAt
+      };
+      previewOwnSessions = previewOwnSessions.filter((session) => session.id === currentSessionId);
+      previewOtherSessionReplays.set(requestId, structuredClone(result));
       return structuredClone(result);
     }
   }

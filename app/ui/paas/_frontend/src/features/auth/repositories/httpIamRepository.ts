@@ -24,7 +24,7 @@ import type {
   UserPolicyAttachment,
   UserPermissionBoundary
 } from "../domain/accounts";
-import type { OwnSessionPage, OwnSessionRevocation, SessionSummary } from "../domain/session";
+import type { OtherSessionsRevocation, OwnSessionPage, OwnSessionRevocation, SessionSummary } from "../domain/session";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand, LoginResult } from "./iamRepository";
 
 type LoginWire = {
@@ -398,6 +398,29 @@ function parseOwnSessionRevocation(value: unknown, targetSessionId: string): Own
       resourceVersion: accountVersion(revocation.resourceVersion),
       revokedAt: accountTimestamp(revocation.revokedAt)
     }
+  };
+}
+
+function parseOtherSessionsRevocation(value: unknown, requestId: string): OtherSessionsRevocation {
+  const wire = accountRecord(value);
+  exactKeys(wire, [
+    "apiVersion", "kind", "outcome", "accountId", "userId", "currentSessionId",
+    "requestId", "revokedCount", "completedAt"
+  ]);
+  requireAccountKind(wire, "OtherSessionsRevocation");
+  if (wire.outcome !== "APPLIED" && wire.outcome !== "EQUAL_REPLAY") throw new Error("INVALID_IAM_RESPONSE");
+  if (wire.requestId !== requestId) throw new Error("INVALID_IAM_RESPONSE");
+  if (typeof wire.revokedCount !== "number" || !Number.isSafeInteger(wire.revokedCount) || wire.revokedCount < 0) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return {
+    outcome: wire.outcome,
+    accountId: accountIdentifier(wire.accountId),
+    userId: accountIdentifier(wire.userId),
+    currentSessionId: accountIdentifier(wire.currentSessionId),
+    requestId,
+    revokedCount: wire.revokedCount,
+    completedAt: accountTimestamp(wire.completedAt)
   };
 }
 
@@ -882,6 +905,15 @@ export const httpIamRepository: IamRepository = {
         body: JSON.stringify({ requestId: request })
       });
       return parseOwnSessionRevocation(value, target);
+    },
+    async revokeOthers(credential: string, requestId: string): Promise<OtherSessionsRevocation> {
+      const request = accountIdentifier(requestId);
+      const value = await requestJSON<unknown>("/api/iam/v1/auth/sessions:revoke-others", {
+        method: "POST",
+        headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: request })
+      });
+      return parseOtherSessionsRevocation(value, request);
     }
   }
 };

@@ -456,6 +456,71 @@ implemented or that a successful reference submission was exercised.
 | Enterprise accounts | The current entry requires an enterprise administrator to scan and activate it. | Reference activation was skipped without clicking activate. Matrix's existing synthetic member-import demonstration remains explicitly MOCK; it is not evidence of a tested Tencent import or a connected corporate directory. |
 | API keys and settings | Key entry warns against primary-account long-lived keys and states that SecretKey is only shown at creation. Settings group password, account, login and security concerns. | Keep subuser-only, one-time nonfunctional MOCK credentials and separate settings sections. Reference key issuance, acknowledgement of saved keys, security mutations and enrollment were not performed. |
 
+#### MFA and self-session experience contract
+
+The console may prototype the security experience before the IAM HTTP surface is
+available, but it must not make an unimplemented protection look active. The
+high-fidelity MFA preview follows the fixed S2/S3 design in
+`6fa39fda:IAM/FEAT-IAM-009-security-governance.md` and the notification-address
+clarification in `04041d2d3f7ed55225a5164bc2bc05251d25a6f1`. It does not import
+those commits as a runtime dependency and does not claim that their private
+keyring work exposes a usable MFA API.
+
+- Password success enters a challenge or restricted enrollment state without
+  creating a normal login session. Only a fresh, unused authenticator code may
+  complete login. A forced password change invalidates the old challenge and
+  requires a new login attempt.
+- First binding and lawful post-removal binding share a guided setup, but lost
+  factor recovery never falls back to that path. A recovery code opens only a
+  restricted rebind flow and never signs the user in. Installation recovery or
+  missing recovery material remains unavailable rather than becoming an admin
+  reset button.
+- Replacement keeps the existing factor valid until the new factor is
+  confirmed. Removal requires current policy to permit it plus fresh strong
+  reauthentication. Recovery-code regeneration also requires strong
+  reauthentication, invalidates the old batch, and shows the new batch once.
+- Sensitive-operation proof is operation-, target-, version- and input-bound,
+  short-lived and single-use. The preview must not present a reusable elevated
+  session or imply additional IAM authority.
+- When IAM proves a sessionless first-enrollment state but no trusted security
+  notification address exists, the future flow must enter restricted address
+  verification before authenticator setup. With no real delivery contract the
+  step is unavailable and no session is issued. Email is security notification,
+  not an MFA or password-recovery factor; the preview contains no fake send form.
+- Demo codes, QR cells and recovery material are deliberately nonfunctional and
+  page-local. They are not persisted in browser storage, returned after their
+  one-time view, or sent to IAM. The settings page separates personal factor
+  management from the account-wide `requiredForUsers` policy and labels
+  unavailable delivery dependencies explicitly.
+
+The interaction shape is consistent with Tencent CAM's documented next-login
+MFA setup and virtual-MFA protection, AWS IAM's explicit virtual-device
+registration, and Microsoft Entra's guided security-info registration:
+the stable page shell renders immediately, only data-dependent regions load,
+and setup requires explicit verification before activation. Reference sources:
+[Tencent CAM identity security](https://cloud.tencent.com/document/product/598/73859),
+[Tencent virtual MFA](https://cloud.tencent.com/document/product/598/117845),
+[AWS virtual MFA](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_mfa_enable_virtual.html),
+and [Microsoft combined registration](https://learn.microsoft.com/en-us/entra/identity/authentication/concept-registration-mfa-sspr-combined).
+
+The fixed self-session contract additionally exposes
+`POST /v1/auth/sessions:revoke-others`. The console sends only the retained
+`requestId`, verifies the complete account/user/current-session receipt, keeps
+the current session, and reports the actual atomic revocation count. Unknown
+outcomes retain and replay the exact original intent; they never create a
+second bulk operation. Confirmation is shown inline in the content area so the
+page title and action positions remain stable on desktop and compact layouts.
+
+Acceptance evidence on 2026-09-20: 568 frontend tests and three export-
+normalization tests passed, along with type checking, lint, architecture and
+style checks (228 theme contrast pairs), 39-page production static generation,
+217-file embedded-export equivalence, and the Go UI-host tests. Browser checks
+covered the normal viewport and a 390 x 844 compact viewport for challenge,
+sessionless first setup, QR/manual setup, personal security cards, compact page
+actions and inline bulk-session confirmation. Browser warning/error inspection
+was empty. This evidence accepts only the MOCK UX plus the fixed self-session
+adapter; it is not evidence of a usable backend MFA or email-delivery API.
+
 The generator and association contracts are supported by Tencent's
 [policy generator](https://cloud.tencent.com/document/product/598/37739) and
 [authorization management](https://cloud.tencent.com/document/product/598/10602)

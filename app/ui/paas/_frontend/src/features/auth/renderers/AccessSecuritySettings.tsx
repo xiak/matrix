@@ -1,29 +1,14 @@
 "use client";
 import { useId, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, Checkbox, FormField, Input, Select, Typography } from "@ui/xiak";
+import { Badge, Button, Card, Checkbox, FormField, Select, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccessSettings, AccessWorkspace } from "../domain/accessWorkspace";
+import { MfaSecurityPreview } from "./MfaPreviewExperience";
 import styles from "./AccountAccessRenderer.module.css";
 
 export function AccessSecuritySettings({ workspace }: { workspace: AccessWorkspace }) {
-  const t = useTranslations("IamWorkspace");
-  const access = useAccountAccess();
-  const id = useId();
-  const [draft, setDraft] = useState(workspace.settings);
-  const changed = JSON.stringify(draft) !== JSON.stringify(workspace.settings);
-  const number = (field: "passwordMinLength" | "passwordExpiryDays" | "preventPasswordReuse" | "sessionMinutes", min: number, max: number) => <FormField id={id + field} label={t(field)}><Input id={id + field} type="number" required min={min} max={max} value={draft[field]} onChange={(event) => setDraft({ ...draft, [field]: Number(event.target.value) })} /></FormField>;
-  const check = (field: "requireComplexity" | "loginProtection" | "sensitiveProtection") => <Checkbox checked={draft[field]} onChange={(event) => setDraft({ ...draft, [field]: event.target.checked })}>{t(field)}</Checkbox>;
-  return <form className={styles.stack} onSubmit={async (event) => { event.preventDefault(); await access.executeWorkspace({ kind: "save-settings", settings: { ...draft, userSsoEnabled: workspace.settings.userSsoEnabled, userSsoProviderId: workspace.settings.userSsoProviderId } }); }}>
-    <Alert>{t("securityMock")}</Alert>
-    <fieldset className={styles.editorFields} disabled={access.busy}>
-      <div className={styles.settingsGrid}>
-        <Card><Card.Header><Typography.Title as="h2" level={3}>{t("passwordRules")}</Typography.Title></Card.Header><Card.Body className={styles.stack}>{number("passwordMinLength", 12, 64)}{number("passwordExpiryDays", 0, 365)}{number("preventPasswordReuse", 0, 24)}{check("requireComplexity")}</Card.Body></Card>
-        <Card><Card.Header><Typography.Title as="h2" level={3}>{t("loginSettings")}</Typography.Title></Card.Header><Card.Body className={styles.stack}>{number("sessionMinutes", 15, 720)}{check("loginProtection")}{check("sensitiveProtection")}<p className={styles.note}>{t("securityMock")}</p></Card.Body></Card>
-      </div>
-      <div className={styles.actions}><Button disabled={!changed || access.busy} type="submit">{t("save")}</Button><Button disabled={!changed || access.busy} variant="secondary" onClick={() => setDraft(workspace.settings)}>{t("cancel")}</Button></div>
-    </fieldset>
-  </form>;
+  return <MfaSecurityPreview workspace={workspace} />;
 }
 
 export function AccessUserSso({ workspace, onProviders }: { workspace: AccessWorkspace; onProviders(): void }) {

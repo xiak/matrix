@@ -41,4 +41,17 @@ describe("OwnSessionsPage", () => {
     await waitFor(() => expect(screen.queryByText("session-ux-preview-002")).toBeNull());
     expect(screen.getByText("登录会话已结束。")).toBeTruthy();
   });
+
+  it("keeps the bulk action stable and confirms it inline before preserving the current session", async () => {
+    const screen = render(<LocaleProvider><SessionProvider repository={previewIamRepository}><Harness /></SessionProvider></LocaleProvider>);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "进入体验" })));
+    await waitFor(() => expect(screen.getByText("session-ux-preview-003")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "结束其他会话" }));
+    expect(screen.getByText("保留当前会话，结束其余登录会话？")).toBeTruthy();
+    expect(screen.getByText(/包括后续分页中的会话/)).toBeTruthy();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "确认结束其他会话" })));
+    await waitFor(() => expect(screen.queryByText("session-ux-preview-003")).toBeNull());
+    expect(screen.getByText("session-ux-preview")).toBeTruthy();
+    expect(screen.getByText("已结束 2 个其他登录会话，当前会话保留。")).toBeTruthy();
+  });
 });

@@ -30,7 +30,7 @@ describe("translation contracts", () => {
     const errors: unknown[] = [];
     const t = createTranslator({ locale, messages: locale === "en" ? en : zhCN, onError: (error) => errors.push(error) });
     for (const key of leafKeys(zhCN)) {
-      const rendered = t(key as Parameters<typeof t>[0], { label: "状态: 启用", services: 2, service: "Logs", statements: 3, rules: 2, actions: 4, conditions: "Source IP", effect: "Allow", user: "preview-reader", path: "$.statement[0]", type: "topic", region: "region-a", name: "matrix-admin", count: 2, title: "Task finished", state: "Unread", shown: 2, loaded: 10, action: "Disable", page: 1, pages: 2, current: 2, total: 5, selected: 2, results: 3, remaining: 10, needed: 20, index: 1, policies: 2, groups: 1, users: 3, members: 3, number: 1, limit: 5, version: 2, decision: "Allow", max: 60, id: "org-preview", reason: "Protected identity", side: locale === "en" ? "Before" : "变更前" });
+      const rendered = t(key as Parameters<typeof t>[0], { label: "状态: 启用", services: 2, service: "Logs", statements: 3, rules: 2, actions: 4, conditions: "Source IP", effect: "Allow", user: "preview-reader", path: "$.statement[0]", type: "topic", region: "region-a", name: "matrix-admin", count: 2, title: "Task finished", state: "Unread", shown: 2, loaded: 10, action: "Disable", page: 1, pages: 2, current: 2, total: 5, selected: 2, results: 3, remaining: 10, needed: 20, index: 1, policies: 2, groups: 1, users: 3, members: 3, number: 1, limit: 5, version: 2, decision: "Allow", max: 60, id: "org-preview", reason: "Protected identity", code: "000000", password: "preview-only", side: locale === "en" ? "Before" : "变更前" });
       expect(rendered.trim().length).toBeGreaterThan(0);
       expect(rendered).not.toContain("{name}");
     }

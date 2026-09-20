@@ -29,4 +29,19 @@ describe("preview own login sessions", () => {
     await expect(previewIamRepository.sessions!.revoke(previewCredential, "session-ux-preview-003", "preview-revoke-1")).rejects.toBeInstanceOf(HttpProblem);
     await expect(previewIamRepository.sessions!.revoke(previewCredential, "session-ux-preview", "preview-revoke-current")).rejects.toMatchObject({ status: 409 });
   });
+
+  it("atomically ends every other session and preserves an exact replay receipt", async () => {
+    const first = await previewIamRepository.sessions!.revokeOthers(previewCredential, "preview-revoke-others-1");
+    const replay = await previewIamRepository.sessions!.revokeOthers(previewCredential, "preview-revoke-others-1");
+    expect(first).toMatchObject({
+      outcome: "APPLIED",
+      accountId: "org-xiak",
+      userId: "principal-admin",
+      currentSessionId: "session-ux-preview",
+      requestId: "preview-revoke-others-1",
+      revokedCount: 2
+    });
+    expect(replay).toEqual({ ...first, outcome: "EQUAL_REPLAY" });
+    expect((await previewIamRepository.sessions!.list(previewCredential)).items.map((item) => item.id)).toEqual(["session-ux-preview"]);
+  });
 });

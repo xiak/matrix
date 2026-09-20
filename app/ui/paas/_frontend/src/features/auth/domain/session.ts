@@ -25,6 +25,16 @@ export type OwnSessionRevocation = {
   };
 };
 
+export type OtherSessionsRevocation = {
+  outcome: "APPLIED" | "EQUAL_REPLAY";
+  accountId: string;
+  userId: string;
+  currentSessionId: string;
+  requestId: string;
+  revokedCount: number;
+  completedAt: string;
+};
+
 export type AuthenticatedSession = {
   loginName: string;
   session: SessionSummary;

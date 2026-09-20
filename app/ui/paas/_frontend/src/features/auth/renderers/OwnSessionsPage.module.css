@@ -12,6 +12,7 @@
 .intro > div:first-child,
 .cardHeader > div,
 .uncertain > div,
+.bulkConfirmation > div:first-child,
 .status,
 .observed,
 .footerNotes {
@@ -75,6 +76,22 @@
   align-items: center;
 }
 
+.bulkConfirmation {
+  align-items: center;
+}
+
+.bulkConfirmation > div:last-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--xiak-spacing-tight);
+}
+
+.bulkConfirmation span {
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+  line-height: 1.6;
+}
+
 @media (min-width: 700px) {
   .intro {
     grid-template-columns: minmax(0, 1fr) minmax(300px, 0.9fr);
@@ -82,6 +99,10 @@
   }
 
   .uncertain {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .bulkConfirmation {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 }
