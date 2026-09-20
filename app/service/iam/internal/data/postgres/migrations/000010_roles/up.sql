@@ -1125,7 +1125,8 @@ BEGIN
       ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id
       WHERE c.tenant_id=stored.tenant_id AND c.principal_id=stored.source_user_id AND s.id=stored.source_session_id
         AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp()
-        AND s.credential_version=c.credential_version AND c.credential_version=stored.credential_generation FOR SHARE OF c,s;
+        AND s.credential_version=c.credential_version AND c.credential_version=stored.credential_generation
+        AND iam.session_mfa_eligible(stored.tenant_id,stored.source_user_id,s.id) FOR SHARE OF c,s;
     IF NOT FOUND THEN RETURN NULL; END IF;
     SELECT * INTO selected FROM iam.roles WHERE tenant_id=stored.tenant_id AND id=stored.role_id
       AND status='ACTIVE' AND deleted_at IS NULL AND security_generation=stored.security_generation

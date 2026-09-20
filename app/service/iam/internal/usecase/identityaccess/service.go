@@ -61,6 +61,13 @@ func NewAuthority(repository Repository, config Config) (*Authority, error) {
 	if err != nil {
 		return nil, err
 	}
+	var totpSeeds *authority.TOTPSeedProtector
+	if config.TOTPKeyring != nil {
+		totpSeeds, err = authority.NewTOTPSeedProtector(*config.TOTPKeyring)
+		if err != nil {
+			return nil, ErrInvalidArgument
+		}
+	}
 	config.TOTPKeyring = nil
 	var email *authority.EmailVerificationProtector
 	if config.EmailVerificationKeyring != nil {
@@ -78,6 +85,7 @@ func NewAuthority(repository Repository, config Config) (*Authority, error) {
 		cursors:      cursors,
 		accessKeys:   wrapping,
 		totp:         totp,
+		totpSeeds:    totpSeeds,
 		email:        email,
 		passwordWork: make(chan struct{}, 2),
 	}, nil

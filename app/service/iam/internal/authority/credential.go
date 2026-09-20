@@ -30,9 +30,10 @@ var (
 type CredentialType string
 
 const (
-	CredentialSession     CredentialType = "SESSION"
-	CredentialService     CredentialType = "SERVICE"
-	CredentialRoleSession CredentialType = "ROLE_SESSION"
+	CredentialSession                 CredentialType = "SESSION"
+	CredentialService                 CredentialType = "SERVICE"
+	CredentialRoleSession             CredentialType = "ROLE_SESSION"
+	CredentialAuthenticationChallenge CredentialType = "AUTHENTICATION_CHALLENGE"
 )
 
 type CredentialIssuer struct {
@@ -144,7 +145,7 @@ func VerifyCredential(
 }
 
 func knownCredentialType(value CredentialType) bool {
-	return value == CredentialSession || value == CredentialService || value == CredentialRoleSession
+	return value == CredentialSession || value == CredentialService || value == CredentialRoleSession || value == CredentialAuthenticationChallenge
 }
 
 const mfaRecoveryCodePrefix = "mrc1."

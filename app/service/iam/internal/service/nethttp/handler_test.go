@@ -317,6 +317,157 @@ func TestIAMHTTPPolicyDirectoriesDeriveScopeOnlyFromRoute(t *testing.T) {
 	}
 }
 
+func TestIAMHTTPChallengePasswordRejectsAmbiguousCarriers(t *testing.T) {
+	const route = "/v1/auth/challenges/challenge-one:password"
+	const valid = `{"requestId":"change-one","challengeCredential":"synthetic-challenge-secret","newPassword":"Synthetic-New-Password-827!"}`
+	for _, sample := range []struct {
+		name, path, method, body, authorization string
+		status                                  int
+	}{
+		{"valid-reaches-workflow", route, http.MethodPost, valid, "", http.StatusServiceUnavailable},
+		{"bearer-and-challenge", route, http.MethodPost, valid, "Bearer synthetic-session", http.StatusBadRequest},
+		{"query-selector", route + "?userId=other", http.MethodPost, valid, "", http.StatusBadRequest},
+		{"body-selector", route, http.MethodPost, strings.Replace(valid, `"requestId":`, `"accountId":"other","requestId":`, 1), "", http.StatusBadRequest},
+		{"retain-session", route, http.MethodPost, strings.Replace(valid, `"requestId":`, `"revokeOtherSessions":false,"requestId":`, 1), "", http.StatusBadRequest},
+		{"old-password", route, http.MethodPost, strings.Replace(valid, `"requestId":`, `"currentPassword":"old","requestId":`, 1), "", http.StatusBadRequest},
+		{"null-password", route, http.MethodPost, strings.Replace(valid, `"Synthetic-New-Password-827!"`, `null`, 1), "", http.StatusBadRequest},
+		{"duplicate-credential", route, http.MethodPost, strings.Replace(valid, `"requestId":`, `"challengeCredential":"other","requestId":`, 1), "", http.StatusBadRequest},
+		{"wrong-method", route, http.MethodGet, valid, "", http.StatusMethodNotAllowed},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			request := httptest.NewRequest(sample.method, sample.path, strings.NewReader(sample.body))
+			request.Header.Set("Content-Type", "application/json")
+			if sample.authorization != "" {
+				request.Header.Set("Authorization", sample.authorization)
+			}
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != sample.status || response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("restricted password transport differs", response.Code)
+			}
+			if (workflow.verifiedChallengeID != "") != (sample.status == http.StatusServiceUnavailable) {
+				t.Fatal("invalid request reached password workflow")
+			}
+			if strings.Contains(response.Body.String(), "synthetic-challenge-secret") || strings.Contains(response.Body.String(), "Synthetic-New-Password-827!") {
+				t.Fatal("password problem exposed authentication material")
+			}
+		})
+	}
+}
+
+func TestIAMHTTPChallengeVerificationRejectsAmbiguousCarriers(t *testing.T) {
+	valid := `{"requestId":"verify-one","challengeCredential":"synthetic-challenge-secret","code":"123456"}`
+	for _, sample := range []struct {
+		name, path, method, body, authorization string
+		status                                  int
+	}{
+		{"valid", "/v1/auth/challenges/challenge-one:verify", http.MethodPost, valid, "", http.StatusOK},
+		{"bearer-and-challenge", "/v1/auth/challenges/challenge-one:verify", http.MethodPost, valid, "Bearer synthetic-session", http.StatusBadRequest},
+		{"query-selector", "/v1/auth/challenges/challenge-one:verify?userId=other", http.MethodPost, valid, "", http.StatusBadRequest},
+		{"body-selector", "/v1/auth/challenges/challenge-one:verify", http.MethodPost, strings.Replace(valid, `"requestId":`, `"accountId":"other","requestId":`, 1), "", http.StatusBadRequest},
+		{"missing-credential", "/v1/auth/challenges/challenge-one:verify", http.MethodPost, `{"requestId":"verify-one","code":"123456"}`, "", http.StatusBadRequest},
+		{"null-code", "/v1/auth/challenges/challenge-one:verify", http.MethodPost, strings.Replace(valid, `"123456"`, `null`, 1), "", http.StatusBadRequest},
+		{"wrong-method", "/v1/auth/challenges/challenge-one:verify", http.MethodGet, valid, "", http.StatusMethodNotAllowed},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			endpoint := newTestHandler(t, workflow)
+			req := httptest.NewRequest(sample.method, sample.path, strings.NewReader(sample.body))
+			req.Header.Set("Content-Type", "application/json")
+			if sample.authorization != "" {
+				req.Header.Set("Authorization", sample.authorization)
+			}
+			response := httptest.NewRecorder()
+			endpoint.ServeHTTP(response, req)
+			if response.Code != sample.status || response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("restricted challenge transport differs", response.Code)
+			}
+			if (workflow.verifiedChallengeID != "") == (sample.status != http.StatusOK) {
+				t.Fatal("invalid carrier reached authentication workflow")
+			}
+			if sample.status != http.StatusOK && (strings.Contains(response.Body.String(), "synthetic-challenge-secret") || strings.Contains(response.Body.String(), "123456")) {
+				t.Fatal("problem exposed authentication material")
+			}
+		})
+	}
+}
+
+func TestIAMHTTPEnrollmentAcceptsOnlyCurrentSessionAndClosedCommands(t *testing.T) {
+	start := `{"requestId":"enroll-one","password":"synthetic-password","expectedFactorRevision":1}`
+	confirm := `{"requestId":"confirm-one","code":"123456"}`
+	for _, sample := range []struct {
+		name, method, path, body string
+		bearer                   bool
+		status                   int
+		calls                    int
+	}{
+		{"start", http.MethodPost, "/v1/auth/totp/enrollments", start, true, http.StatusServiceUnavailable, 1},
+		{"confirm", http.MethodPost, "/v1/auth/totp/enrollments/factor-one:confirm", confirm, true, http.StatusServiceUnavailable, 1},
+		{"malformed-code-is-attempt", http.MethodPost, "/v1/auth/totp/enrollments/factor-one:confirm", strings.Replace(confirm, "123456", "not-a-code", 1), true, http.StatusServiceUnavailable, 1},
+		{"state", http.MethodGet, "/v1/auth/authenticators", "", true, http.StatusServiceUnavailable, 1},
+		{"metadata", http.MethodGet, "/v1/auth/totp/enrollments/factor-one", "", true, http.StatusServiceUnavailable, 1},
+		{"original-intent", http.MethodGet, "/v1/auth/totp/enrollments/by-request/enroll-one", "", true, http.StatusServiceUnavailable, 1},
+		{"cancel", http.MethodDelete, "/v1/auth/totp/enrollments/factor-one", "", true, http.StatusServiceUnavailable, 1},
+		{"missing-bearer", http.MethodPost, "/v1/auth/totp/enrollments", start, false, http.StatusUnauthorized, 0},
+		{"query-user", http.MethodPost, "/v1/auth/totp/enrollments?userId=other", start, true, http.StatusBadRequest, 0},
+		{"body-user", http.MethodPost, "/v1/auth/totp/enrollments", strings.Replace(start, `"requestId":`, `"userId":"other","requestId":`, 1), true, http.StatusBadRequest, 0},
+		{"dual-carrier", http.MethodPost, "/v1/auth/totp/enrollments", strings.Replace(start, `"requestId":`, `"challengeCredential":"synthetic-challenge","requestId":`, 1), true, http.StatusBadRequest, 0},
+		{"null-revision", http.MethodPost, "/v1/auth/totp/enrollments", strings.Replace(start, `:1}`, `:null}`, 1), true, http.StatusBadRequest, 0},
+		{"duplicate-request", http.MethodPost, "/v1/auth/totp/enrollments", strings.TrimSuffix(start, "}") + `,"requestId":"another"}`, true, http.StatusBadRequest, 0},
+		{"cancel-body", http.MethodDelete, "/v1/auth/totp/enrollments/factor-one", "{}", true, http.StatusBadRequest, 0},
+		{"metadata-body", http.MethodGet, "/v1/auth/totp/enrollments/factor-one", "{}", true, http.StatusBadRequest, 0},
+		{"request-query", http.MethodGet, "/v1/auth/totp/enrollments/by-request/enroll-one?accountId=other", "", true, http.StatusBadRequest, 0},
+		{"metadata-method", http.MethodPatch, "/v1/auth/totp/enrollments/factor-one", "", true, http.StatusMethodNotAllowed, 0},
+		{"nested-factor", http.MethodGet, "/v1/auth/totp/enrollments/factor/other", "", true, http.StatusNotFound, 0},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			request := httptest.NewRequest(sample.method, sample.path, strings.NewReader(sample.body))
+			if sample.body != "" {
+				request.Header.Set("Content-Type", "application/json")
+			}
+			if sample.bearer {
+				request.Header.Set("Authorization", "Bearer synthetic-session")
+			}
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != sample.status || workflow.totpCalls != sample.calls {
+				t.Fatalf("enrollment boundary status=%d calls=%d", response.Code, workflow.totpCalls)
+			}
+			if response.Header().Get("Cache-Control") != "no-store" || strings.Contains(response.Body.String(), "synthetic-") {
+				t.Fatal("enrollment error cached or exposed secret input")
+			}
+		})
+	}
+}
+
+func TestIAMHTTPLoginChallengeNeverPublishesSessionFields(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	secret, err := iamv1.NewSecret("example-only-challenge-credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow.login = iamv1.LoginResponse{Outcome: iamv1.LoginChallengeRequired,
+		Challenge: &iamv1.AuthenticationChallenge{APIVersion: iamv1.APIVersion, Kind: "AuthenticationChallenge",
+			ID: "challenge-one", Purpose: "LOGIN", NextStep: "TOTP", ExpiresAt: time.Date(2026, 9, 20, 1, 7, 3, 0, time.UTC)},
+		ChallengeCredential: secret}
+	handler := newTestHandler(t, workflow)
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/login",
+		strings.NewReader(`{"loginName":"admin","password":"Example-only-password!49","requestId":"login-one"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("challenge result was not a non-cacheable authentication response")
+	}
+	var result iamv1.LoginResponse
+	if iamv1.DecodeRequest(response.Body, &result) != nil || result.Outcome != iamv1.LoginChallengeRequired ||
+		result.Credential.Present() || result.Session != (iamv1.Session{}) || result.ChallengeCredential != secret {
+		t.Fatal("challenge result changed its purpose or exposed a Session")
+	}
+}
+
 func TestIAMHTTPStrictDecodingAndRedactedProblems(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	handler := newTestHandler(t, workflow)
@@ -642,6 +793,8 @@ type httpWorkflow struct {
 	loginErr                error
 	identityCalls           int
 	loginCalls              int
+	verifiedChallengeID     string
+	totpCalls               int
 	getUserCalls            int
 	updateUserCalls         int
 	deleteUserCalls         int
@@ -788,6 +941,7 @@ func newHTTPWorkflow(t *testing.T) *httpWorkflow {
 			Purpose:        iamv1.ServicePaaS,
 		},
 		login: iamv1.LoginResponse{
+			Outcome: iamv1.LoginAuthenticated,
 			Session: iamv1.Session{
 				APIVersion:  iamv1.APIVersion,
 				Kind:        "Session",
@@ -864,6 +1018,41 @@ func (workflow *httpWorkflow) Login(context.Context, iamv1.LoginRequest) (iamv1.
 		return iamv1.LoginResponse{}, workflow.loginErr
 	}
 	return workflow.login, nil
+}
+
+func (workflow *httpWorkflow) VerifyAuthenticationChallenge(_ context.Context, id string, _ iamv1.VerifyAuthenticationChallengeRequest) (iamv1.LoginResponse, error) {
+	workflow.verifiedChallengeID = id
+	return workflow.login, nil
+}
+
+func (workflow *httpWorkflow) ChangeChallengePassword(_ context.Context, id string, _ iamv1.ChallengePasswordChangeRequest) (iamv1.ChallengePasswordChangeResponse, error) {
+	workflow.verifiedChallengeID = id
+	return iamv1.ChallengePasswordChangeResponse{}, identityaccess.ErrUnavailable
+}
+
+func (workflow *httpWorkflow) AuthenticatorState(context.Context, iamv1.Secret) (iamv1.AuthenticatorState, error) {
+	workflow.totpCalls++
+	return iamv1.AuthenticatorState{}, identityaccess.ErrUnavailable
+}
+func (workflow *httpWorkflow) StartTOTPEnrollment(context.Context, iamv1.Secret, iamv1.StartTOTPEnrollmentRequest) (iamv1.StartTOTPEnrollmentResponse, error) {
+	workflow.totpCalls++
+	return iamv1.StartTOTPEnrollmentResponse{}, identityaccess.ErrUnavailable
+}
+func (workflow *httpWorkflow) TOTPEnrollment(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error) {
+	workflow.totpCalls++
+	return iamv1.TOTPEnrollment{}, identityaccess.ErrUnavailable
+}
+func (workflow *httpWorkflow) TOTPEnrollmentByRequest(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error) {
+	workflow.totpCalls++
+	return iamv1.TOTPEnrollment{}, identityaccess.ErrUnavailable
+}
+func (workflow *httpWorkflow) CancelTOTPEnrollment(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error) {
+	workflow.totpCalls++
+	return iamv1.TOTPEnrollment{}, identityaccess.ErrUnavailable
+}
+func (workflow *httpWorkflow) ConfirmTOTPEnrollment(context.Context, iamv1.Secret, string, iamv1.ConfirmTOTPEnrollmentRequest) (iamv1.ConfirmTOTPEnrollmentResponse, error) {
+	workflow.totpCalls++
+	return iamv1.ConfirmTOTPEnrollmentResponse{}, identityaccess.ErrUnavailable
 }
 
 func (workflow *httpWorkflow) Logout(

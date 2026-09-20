@@ -196,27 +196,31 @@ func TestDispatchFailureNeverInventsAnUnsentOrSuccessfulResult(t *testing.T) {
 }
 
 func TestDispatchHistoricalNoticeCannotCarryVerificationSecret(t *testing.T) {
-	config, repository, _ := dispatchFixture(t)
-	repository.claims[0].Kind = authority.MailContactVerified
-	sends := 0
-	dispatcher, err := NewDispatcher(repository, dispatchTestSubmitter(func(_ context.Context, message authority.SecurityMail) (authority.MailSubmission, error) {
-		sends++
-		if message.VerificationCode.Present() || !message.VerificationExpiresAt.IsZero() {
-			t.Error("notice carried old verification")
-		}
-		return authority.MailSubmission{State: authority.MailAccepted, SMTPCode: 250}, nil
-	}), config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := dispatcher.DispatchOnce(t.Context()); err == nil || sends != 0 {
-		t.Fatal("notice accepted old ciphertext")
-	}
-	_, _, claim := dispatchFixture(t)
-	claim.Kind, claim.Sealed = authority.MailContactVerified, authority.SealedEmailVerificationCode{}
-	repository.claims = []Claim{claim}
-	if result, err := dispatcher.DispatchOnce(t.Context()); err != nil || !result.Claimed || sends != 1 {
-		t.Fatal("historical notice rejected", err)
+	for _, kind := range []authority.SecurityMailKind{authority.MailContactVerified, authority.MailAuthenticatorBound} {
+		t.Run(string(kind), func(t *testing.T) {
+			config, repository, _ := dispatchFixture(t)
+			repository.claims[0].Kind = kind
+			sends := 0
+			dispatcher, err := NewDispatcher(repository, dispatchTestSubmitter(func(_ context.Context, message authority.SecurityMail) (authority.MailSubmission, error) {
+				sends++
+				if message.VerificationCode.Present() || !message.VerificationExpiresAt.IsZero() {
+					t.Error("notice carried old verification")
+				}
+				return authority.MailSubmission{State: authority.MailAccepted, SMTPCode: 250}, nil
+			}), config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := dispatcher.DispatchOnce(t.Context()); err == nil || sends != 0 {
+				t.Fatal("notice accepted old ciphertext")
+			}
+			_, _, claim := dispatchFixture(t)
+			claim.Kind, claim.Sealed = kind, authority.SealedEmailVerificationCode{}
+			repository.claims = []Claim{claim}
+			if result, err := dispatcher.DispatchOnce(t.Context()); err != nil || !result.Claimed || sends != 1 {
+				t.Fatal("historical notice rejected", err)
+			}
+		})
 	}
 }
 

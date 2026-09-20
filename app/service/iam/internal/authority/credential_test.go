@@ -286,10 +286,10 @@ func TestCredentialFailuresAreNormalized(t *testing.T) {
 	}
 }
 
-func TestRoleCredentialsCannotBeReinterpretedAsLoginOrServiceCredentials(t *testing.T) {
+func TestCredentialPurposesCannotBeReinterpretedAsAnotherCarrier(t *testing.T) {
 	// Identical entropy deliberately removes randomness as an explanation for
 	// different digests. Purpose and binding must independently isolate them.
-	types := []CredentialType{CredentialSession, CredentialService, CredentialRoleSession}
+	types := []CredentialType{CredentialSession, CredentialService, CredentialRoleSession, CredentialAuthenticationChallenge}
 	for _, issuedType := range types {
 		issued, err := NewCredentialIssuer(bytes.NewReader(bytes.Repeat([]byte{0x71}, 32))).Issue(issuedType, "same-id")
 		if err != nil {

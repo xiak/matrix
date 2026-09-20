@@ -260,7 +260,7 @@ func (value *transaction) ReservePasswordAttempt(ctx context.Context, request id
 		if iamv1.ValidateID("accountId", string(request.AccountID)) != nil ||
 			iamv1.ValidateID("userId", string(request.UserID)) != nil || iamv1.ValidateID("sessionId", string(request.SessionID)) != nil ||
 			!((request.Purpose == identityaccess.PasswordAttemptChange && request.IntentDigest == "") ||
-				(request.Purpose == identityaccess.PasswordAttemptNotificationContact && iamv1.ValidateDigest("intentDigest", request.IntentDigest) == nil)) {
+				((request.Purpose == identityaccess.PasswordAttemptNotificationContact || request.Purpose == identityaccess.PasswordAttemptTOTPEnrollment) && iamv1.ValidateDigest("intentDigest", request.IntentDigest) == nil)) {
 			return identityaccess.PasswordAttempt{}, false, identityaccess.ErrInvalidArgument
 		}
 		tenant, user, session = request.AccountID, request.UserID, request.SessionID

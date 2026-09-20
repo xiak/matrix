@@ -138,6 +138,19 @@ CREATE TABLE IF NOT EXISTS iam.security_notifications (
 );
 CREATE INDEX IF NOT EXISTS security_notifications_due ON iam.security_notifications(next_attempt_at,tenant_id,id)
     WHERE state IN ('PENDING','RETRY_WAIT','IN_FLIGHT');
+-- Extend only the closed security-notice kind. The original address/lease
+-- constraints remain; an MFA notice carries no verification code envelope.
+ALTER TABLE iam.security_notifications DROP CONSTRAINT IF EXISTS security_notifications_kind_check;
+ALTER TABLE iam.security_notifications ADD CONSTRAINT security_notifications_kind_check
+    CHECK(kind IN ('ADDRESS_VERIFICATION','CONTACT_VERIFIED','AUTHENTICATOR_BOUND'));
+ALTER TABLE iam.security_notifications DROP CONSTRAINT IF EXISTS security_notifications_check2;
+ALTER TABLE iam.security_notifications ADD CONSTRAINT security_notifications_check2
+    CHECK((kind='ADDRESS_VERIFICATION' AND contact_revision=0)
+        OR (kind IN ('CONTACT_VERIFIED','AUTHENTICATOR_BOUND') AND contact_revision=1));
+DROP TRIGGER IF EXISTS verify_totp_binding ON iam.security_notifications;
+CREATE CONSTRAINT TRIGGER verify_totp_binding AFTER INSERT OR UPDATE ON iam.security_notifications
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.verify_totp_binding();
+ALTER TABLE iam.security_notifications ENABLE ALWAYS TRIGGER verify_totp_binding;
 CREATE TABLE IF NOT EXISTS iam.security_notification_attempts (
     tenant_id text COLLATE "C" NOT NULL,
     notification_id text COLLATE "C" NOT NULL,
@@ -408,9 +421,11 @@ BEGIN
         OR caller.credential_version IS DISTINCT FROM credential.credential_version THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='notification subject unavailable';
     END IF;
-    -- This first-contact binary must not bypass a retained MFA requirement.
-    IF EXISTS(SELECT 1 FROM iam.totp_authenticators a WHERE a.tenant_id=tenant AND a.user_id=subject_id) THEN
-        RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='notification authentication is unavailable';
+    -- Evaluate this Session's actual authentication facts against the
+    -- current factor state; a bound User is neither automatically allowed
+    -- nor categorically denied access to their own contact information.
+    IF NOT iam.session_mfa_eligible(tenant,subject_id,caller_id) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='notification subject unavailable';
     END IF;
     RETURN credential.credential_version;
 END $function$;
@@ -526,7 +541,7 @@ BEGIN
                 WHERE n.tenant_id=candidate.tenant_id AND n.id=candidate.id;
             CONTINUE;
         END IF;
-        eligible:=candidate.kind='CONTACT_VERIFIED';
+        eligible:=candidate.kind IN ('CONTACT_VERIFIED','AUTHENTICATOR_BOUND');
         IF candidate.kind='ADDRESS_VERIFICATION' THEN
             SELECT EXISTS(SELECT 1 FROM iam.accounts a JOIN iam.principals p ON p.tenant_id=a.id
                 JOIN iam.user_credentials c ON (c.tenant_id,c.principal_id)=(p.tenant_id,p.id)
@@ -536,7 +551,7 @@ BEGIN
                     AND c.credential_version=original.credential_generation AND s.id=original.session_id AND s.status='ACTIVE'
                     AND s.revoked_at IS NULL AND s.credential_version=c.credential_version AND s.expires_at>effective_now
                     AND original.state='PENDING' AND original.expires_at>effective_now
-                    AND NOT EXISTS(SELECT 1 FROM iam.totp_authenticators f WHERE (f.tenant_id,f.user_id)=(p.tenant_id,p.id))) INTO eligible;
+                    AND iam.session_mfa_eligible(p.tenant_id,p.id,s.id)) INTO eligible;
         END IF;
         IF NOT eligible THEN
             UPDATE iam.security_notifications n SET state='EXPIRED',updated_at=effective_now

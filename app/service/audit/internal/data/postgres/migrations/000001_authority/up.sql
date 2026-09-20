@@ -372,6 +372,7 @@ BEGIN
         ('iam.session.others-revoked', 'IAM', 'PRINCIPAL', 'SUCCEEDED', false, false, false),
         ('iam.notification-contact.verification-started', 'IAM', 'USER', 'SUCCEEDED', false, false, false),
         ('iam.notification-contact.verified', 'IAM', 'USER', 'SUCCEEDED', false, false, false),
+        ('iam.authenticator.bound', 'IAM', 'PRINCIPAL', 'SUCCEEDED', false, false, false),
         ('iam.password.changed', 'IAM', 'PRINCIPAL', 'SUCCEEDED', false, false, false),
         ('iam.principal.created', 'IAM', 'PRINCIPAL', 'SUCCEEDED', true, true, false),
         ('iam.role-binding.put', 'IAM', 'ROLE_BINDING', 'SUCCEEDED', true, true, false),
@@ -494,7 +495,7 @@ BEGIN
        OR (action_name='iam.role-session.exited' AND (
             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'ROLE'
             OR submitted_event#>>'{actor,roleSession,sessionId}' IS DISTINCT FROM submitted_event#>>'{target,id}'))
-       OR (action_name IN ('iam.session.others-revoked','iam.notification-contact.verification-started','iam.notification-contact.verified') AND (
+       OR (action_name IN ('iam.session.others-revoked','iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound') AND (
             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER'
             OR submitted_event#>>'{actor,id}' IS DISTINCT FROM submitted_event#>>'{target,id}'))
         OR (action_name IN ('iam.account.alias-set','iam.user.created','iam.user.updated','iam.user.deleted','iam.user.status-set',
@@ -581,7 +582,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        20::bigint,
+        21::bigint,
         transaction_timestamp()
 $function$;
 
@@ -895,6 +896,7 @@ BEGIN
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.session.revoked', 'iam.session.others-revoked', 'iam.password.changed',
             'iam.notification-contact.verification-started','iam.notification-contact.verified',
+            'iam.authenticator.bound',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',
             'iam.platform-policy-attachment.created', 'iam.platform-policy-attachment.revoked',
             'iam.principal.created', 'iam.role-binding.put',

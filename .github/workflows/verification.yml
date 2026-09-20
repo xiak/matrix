@@ -91,9 +91,9 @@ jobs:
               ;;
             authority-runtime)
               databases=(matrix_iam_own_session_ci matrix_iam_own_session_expiry_ci matrix_iam_own_session_bulk_ci matrix_iam_password_attempts_ci matrix_iam_totp_custody_ci
-                matrix_iam_totp_backup_ci matrix_iam_totp_backup_process_ci matrix_iam_notification_ci
+                matrix_iam_totp_backup_ci matrix_iam_totp_backup_process_ci matrix_iam_notification_ci matrix_iam_totp_enrollment_ci
                 matrix_iam_upgrade_compiled_ci matrix_iam_upgrade_roles_ci matrix_iam_upgrade_role_authority_ci
-                matrix_iam_upgrade_own_session_ci matrix_authority_process_ci matrix_authority_process_capacity_ci)
+                matrix_iam_upgrade_own_session_ci matrix_iam_upgrade_pre_mfa_ci matrix_authority_process_ci matrix_authority_process_capacity_ci)
               ;;
             *) exit 1 ;;
           esac
@@ -111,8 +111,9 @@ jobs:
               -run '^TestPublishedExecutableRejectsNewManifestBeforeEffects$'
       # Unpublished IAM development revisions are not production upgrade
       # baselines. Fixed IAM21 document interpretation and R1 USER-only
-      # compilations, R2 role evidence and accepted IAM32 sessions prove
-      # the distinct FEAT005/006/009 boundaries, not release upgrade admission.
+      # compilations, R2 role evidence, accepted IAM32 sessions and IAM36's
+      # pre-MFA notification state prove distinct FEAT005/006/009/012 boundaries,
+      # not release upgrade admission.
       # Other historical-binary diagnostics stay opt-in.
       - name: PostgreSQL authority storage and HTTP gates
         if: matrix.lane == 'authority-storage'
@@ -164,12 +165,13 @@ jobs:
           MATRIX_IAM_TOTP_CUSTODY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_custody_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_TOTP_BACKUP_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_backup_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_NOTIFICATION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_notification_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_ENROLLMENT_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_enrollment_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
         # Existing tests retain their databases/deadlines. Bulk reduction adds
         # one isolated fixture within the same two serial twenty-minute lanes;
         # no existing scenario or password cost is reduced.
         run: |
           time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
-            -run '^TestIAM(OwnSession(Postgres|ExpiryPostgres|BulkPostgres)|PasswordAttemptsPostgres|TOTPCustodyPostgres|TOTPBackupSnapshotPostgres|NotificationContactPostgres)$'
+            -run '^TestIAM(OwnSession(Postgres|ExpiryPostgres|BulkPostgres)|PasswordAttemptsPostgres|TOTPCustodyPostgres|TOTPEnrollmentPostgres|TOTPBackupSnapshotPostgres|NotificationContactPostgres)$'
       - name: Retained data and actual authority processes
         if: matrix.lane == 'authority-runtime'
         env:
@@ -177,6 +179,7 @@ jobs:
           MATRIX_IAM_ROLE_PROFILE_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_upgrade_roles_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_ROLE_AUTHORITY_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_upgrade_role_authority_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_OWN_SESSION_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_upgrade_own_session_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_PRE_MFA_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_upgrade_pre_mfa_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_authority_process_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_TOTP_BACKUP_PROCESS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_backup_process_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_BACKUP_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}

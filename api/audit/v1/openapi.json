@@ -30,6 +30,7 @@
           "iam.user.password-changed",
           "iam.notification-contact.verification-started",
           "iam.notification-contact.verified",
+          "iam.authenticator.bound",
           "iam.group.created",
           "iam.role.created",
           "iam.role.updated",
@@ -547,6 +548,32 @@
                   "properties": {
                     "action": {
                       "const": "iam.notification-contact.verified"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.authenticator.bound"
                     }
                   },
                   "required": [
@@ -3225,6 +3252,52 @@
                   "properties": {
                     "kind": {
                       "const": "USER"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.authenticator.bound"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
                     },
                     "tenantId": false
                   },
@@ -6810,6 +6883,7 @@
         "enum": [
           "ACCOUNT",
           "USER",
+          "PRINCIPAL",
           "GROUP",
           "ROLE",
           "ROLE_SESSION",
@@ -6817,7 +6891,6 @@
           "POLICY",
           "GROUP_MEMBERSHIP",
           "ORGANIZATION",
-          "PRINCIPAL",
           "INSTALLATION",
           "SESSION",
           "ROLE_BINDING",
