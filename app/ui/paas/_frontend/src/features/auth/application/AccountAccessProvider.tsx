@@ -25,7 +25,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
-import type { RoleAccess, RoleDirectory } from "../domain/roles";
+import type { RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation } from "../domain/roles";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
 type WorkspaceExecutionError = AccessWorkspaceError["code"] | AccountError;
@@ -84,6 +84,9 @@ export type RoleAccessClient = {
   accountId: string;
   list(after?: string): Promise<RoleDirectory>;
   read(roleId: string): Promise<RoleAccess>;
+  listSessions(roleId: string, filter: RoleSessionFilter, after?: string): Promise<RoleSessionDirectory>;
+  readSession(roleId: string, sessionId: string): Promise<RoleSessionAccess>;
+  revokeSession(roleId: string, sessionId: string, requestId: string): Promise<RoleSessionRevocation>;
 };
 
 export type PolicyDirectoryView = { query: string; kind: string; service: string; category: string; sort: string; page: number; pageSize: number };
@@ -384,7 +387,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return {
       accountId,
       list: (after) => scoped(roleRepository.list(credential, accountId, after)),
-      read: (roleId) => scoped(roleRepository.read(credential, accountId, roleId))
+      read: (roleId) => scoped(roleRepository.read(credential, accountId, roleId)),
+      listSessions: (roleId, filter, after) => scoped(roleRepository.listSessions(credential, accountId, roleId, filter, after)),
+      readSession: (roleId, sessionId) => scoped(roleRepository.readSession(credential, accountId, roleId, sessionId)),
+      revokeSession: (roleId, sessionId, requestId) => scoped(roleRepository.revokeSession(credential, accountId, roleId, sessionId, requestId))
     };
   }, [active, credential, expireSession, repository, scene, tenantId]);
 

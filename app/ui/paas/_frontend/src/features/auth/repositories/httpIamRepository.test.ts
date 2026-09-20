@@ -55,7 +55,7 @@ function profileEntry(product = "paas") {
   };
 }
 
-function capability(action: string, kind: "ACCOUNT" | "USER" | "GROUP" | "ROLE" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT" | "ACCESS_KEY", id: string, available = true, restrictionReason = "AUTHORITY_REQUIRED") {
+function capability(action: string, kind: "ACCOUNT" | "USER" | "GROUP" | "ROLE" | "ROLE_SESSION" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT" | "ACCESS_KEY", id: string, available = true, restrictionReason = "AUTHORITY_REQUIRED") {
   return { action, resource: { kind, id }, available, ...(available ? {} : { restrictionReason }) };
 }
 
@@ -144,7 +144,7 @@ const roleAttachment = {
 };
 const roleCapabilityActions = [
   "iam.role.read", "iam.role.update", "iam.role.set-status", "iam.role.delete", "iam.role-trust.set",
-  "iam.role-policy-attachment.create", "iam.role.permission-boundary.set", "iam.role.permission-boundary.remove"
+  "iam.role-policy-attachment.create", "iam.role.permission-boundary.set", "iam.role.permission-boundary.remove", "iam.role-session.list"
 ];
 function roleCapabilities(value = role, attachments = [roleAttachment]) {
   return [
@@ -170,7 +170,7 @@ async function roleAccess() {
 
 describe("IAM HTTP role boundary", () => {
   it("loads the account-confined role directory without caller selectors", async () => {
-    const fetcher = reply({ apiVersion, kind: "RoleList", accountId: account.id, items: [{ role, capabilities: roleCapabilities(role, []).slice(0, 8) }] });
+    const fetcher = reply({ apiVersion, kind: "RoleList", accountId: account.id, items: [{ role, capabilities: roleCapabilities(role, []).slice(0, 9) }] });
     const directory = await httpAccountRepository.roles!.list("bearer", account.id);
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/roles");
     expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
@@ -207,10 +207,79 @@ describe("IAM HTTP role boundary", () => {
 
   it("keeps role cursors opaque, bounded and tied to complete pages", async () => {
     await expect(httpAccountRepository.roles!.list("bearer", account.id, "ir1.discovery-cursor")).rejects.toThrow("INVALID_IAM_RESPONSE");
-    reply({ apiVersion, kind: "RoleList", accountId: account.id, items: [{ role, capabilities: roleCapabilities(role, []).slice(0, 8) }], nextAfter: "ic1.next-page" });
+    reply({ apiVersion, kind: "RoleList", accountId: account.id, items: [{ role, capabilities: roleCapabilities(role, []).slice(0, 9) }], nextAfter: "ic1.next-page" });
     await expect(httpAccountRepository.roles!.list("bearer", account.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
     reply({ apiVersion, kind: "RoleList", accountId: "account-foreign", items: [] });
     await expect(httpAccountRepository.roles!.list("bearer", account.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+});
+
+const roleSessionObservedAt = "2026-09-11T08:30:00Z";
+const roleSession = {
+  apiVersion, kind: "RoleSession", id: "rs1.incident-review", accountId: account.id, roleId: role.id,
+  sourceUserId: user.id, status: "ACTIVE", issuedAt: timestamp, expiresAt: "2026-09-11T09:00:00Z"
+};
+function roleSessionListing(session: typeof roleSession & Record<string, unknown> = roleSession, lifecycle = "UNREVOKED", available = true) {
+  return {
+    session,
+    sourceUser: { id: user.id, loginName: user.loginName, displayName: user.displayName },
+    lifecycle,
+    revokeCapability: capability("iam.role-session.revoke", "ROLE_SESSION", session.id, available, available ? "AUTHORITY_REQUIRED" : "SESSION_NOT_REVOCABLE")
+  };
+}
+function roleSessionDirectory(items = [roleSessionListing()], nextAfter?: string) {
+  return { apiVersion, kind: "RoleSessionList", accountId: account.id, roleId: role.id, observedAt: roleSessionObservedAt, items, ...(nextAfter ? { nextAfter } : {}) };
+}
+
+describe("IAM HTTP role-session boundary", () => {
+  it("uses exact server filters and preserves opaque empty-window cursors", async () => {
+    let fetcher = reply(roleSessionDirectory());
+    const result = await httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "sourceUser", exactId: user.id, lifecycle: "ALL" });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/sessions?sourceUserId=${user.id}&lifecycle=ALL`);
+    expect(result.items[0]).toMatchObject({ lifecycle: "UNREVOKED", session: { id: roleSession.id }, sourceUser: { id: user.id } });
+
+    fetcher = reply(roleSessionDirectory([], "ic1.next-window"));
+    const empty = await httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "session", exactId: "", lifecycle: "UNREVOKED" });
+    expect(empty).toMatchObject({ items: [], nextAfter: "ic1.next-window" });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/sessions`);
+
+    fetcher = reply(roleSessionDirectory([], "ic1.next-window"));
+    await httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "session", exactId: "", lifecycle: "UNREVOKED" }, "ic1.previous-window");
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/sessions?after=ic1.previous-window`);
+  });
+
+  it("rejects invented lifecycle, source, capability and private response fields", async () => {
+    const invalid = [
+      roleSessionDirectory([{ ...roleSessionListing(), lifecycle: "EXPIRED" }]),
+      roleSessionDirectory([{ ...roleSessionListing(), sourceUser: { id: "user-other", loginName: "other", displayName: "Other" } }]),
+      roleSessionDirectory([{ ...roleSessionListing(), revokeCapability: capability("iam.role-session.revoke", "ROLE_SESSION", "rs1.other") }]),
+      roleSessionDirectory([{ ...roleSessionListing(), session: { ...roleSession, sourceSessionId: "private-login-session" } }])
+    ];
+    for (const response of invalid) {
+      reply(response);
+      await expect(httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "session", exactId: "", lifecycle: "ALL" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("reads one exact observation and revokes with only the retained request ID", async () => {
+    let fetcher = reply({ apiVersion, kind: "RoleSessionAccess", observedAt: roleSessionObservedAt, item: roleSessionListing() });
+    const exact = await httpAccountRepository.roles!.readSession("bearer", account.id, role.id, roleSession.id);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/sessions/${roleSession.id}`);
+    expect(exact.item.session.id).toBe(roleSession.id);
+
+    const revoked = { ...roleSession, status: "REVOKED", revokedAt: "2026-09-11T08:31:00Z" };
+    fetcher = reply({ outcome: "APPLIED", session: revoked });
+    const result = await httpAccountRepository.roles!.revokeSession("bearer", account.id, role.id, roleSession.id, "ui-role-session-revoke-one");
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/sessions/${roleSession.id}:revoke`);
+    expect(requestBody(fetcher)).toEqual({ requestId: "ui-role-session-revoke-one" });
+    expect(result).toMatchObject({ outcome: "APPLIED", session: { status: "REVOKED" } });
+  });
+
+  it("does not accept a successful revoke shape with an active session or leaked credential", async () => {
+    for (const response of [{ outcome: "APPLIED", session: roleSession }, { outcome: "APPLIED", session: { ...roleSession, status: "REVOKED", revokedAt: "2026-09-11T08:31:00Z" }, credential: "secret" }]) {
+      reply(response);
+      await expect(httpAccountRepository.roles!.revokeSession("bearer", account.id, role.id, roleSession.id, "ui-role-session-revoke-one")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 });
 

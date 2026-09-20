@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
@@ -14,12 +14,12 @@ const role = {
 };
 const roleActions: RoleCapabilityAction[] = [
   "iam.role.read", "iam.role.update", "iam.role.set-status", "iam.role.delete", "iam.role-trust.set",
-  "iam.role-policy-attachment.create", "iam.role.permission-boundary.set", "iam.role.permission-boundary.remove", "iam.role.assume"
+  "iam.role-policy-attachment.create", "iam.role.permission-boundary.set", "iam.role.permission-boundary.remove", "iam.role-session.list"
 ];
 const capabilities = roleActions.map((action) => ({
   action, resource: { kind: "ROLE" as const, id: role.id }, available: action !== "iam.role.delete", restrictionReason: action === "iam.role.delete" ? "AUTHORITY_REQUIRED" as const : null
 }));
-const directory: RoleDirectory = { accountId: role.accountId, items: [{ role, capabilities: capabilities.slice(0, 8) }], nextAfter: null };
+const directory: RoleDirectory = { accountId: role.accountId, items: [{ role, capabilities }], nextAfter: null };
 const access: RoleAccess = {
   role,
   trustVersion: {
@@ -32,8 +32,20 @@ const access: RoleAccess = {
     scope: "TENANT", resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp
   }],
   capabilities: [...capabilities, {
+    action: "iam.role.assume", resource: { kind: "ROLE", id: role.id }, available: false, restrictionReason: "AUTHORITY_REQUIRED"
+  }, {
     action: "iam.role-policy-attachment.revoke", resource: { kind: "POLICY_ATTACHMENT", id: "attachment-reviewer" }, available: true, restrictionReason: null
   }]
+};
+const liveSession = {
+  id: "rs1.incident-review", accountId: role.accountId, roleId: role.id, sourceUserId: "user-alex", status: "ACTIVE" as const,
+  issuedAt: timestamp, expiresAt: "2026-09-21T09:00:00Z", revokedAt: null
+};
+const liveSessionItem = {
+  session: liveSession,
+  sourceUser: { id: "user-alex", loginName: "alex", displayName: "Alex" },
+  lifecycle: "UNREVOKED" as const,
+  revokeCapability: { action: "iam.role-session.revoke" as const, resource: { kind: "ROLE_SESSION" as const, id: liveSession.id }, available: true, restrictionReason: null }
 };
 
 function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
@@ -41,6 +53,9 @@ function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
     accountId: role.accountId,
     list: vi.fn().mockResolvedValue(directory),
     read: vi.fn().mockResolvedValue(access),
+    listSessions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, observedAt: timestamp, items: [], nextAfter: null }),
+    readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
+    revokeSession: vi.fn().mockRejectedValue(new Error("unused session revoke")),
     ...overrides
   };
 }
@@ -63,7 +78,8 @@ describe("AccountLiveRoles", () => {
 
   it("opens an inline detail with distinct trust, grant and capability evidence", async () => {
     const user = userEvent.setup();
-    render(<LocaleProvider><AccountLiveRoles client={client()} entityId={role.id} onOpen={vi.fn()} /></LocaleProvider>);
+    const api = client();
+    render(<LocaleProvider><AccountLiveRoles client={api} entityId={role.id} onOpen={vi.fn()} /></LocaleProvider>);
 
     expect(screen.getByRole("heading", { name: role.id })).toBeTruthy();
     expect(await screen.findByRole("heading", { name: role.name })).toBeTruthy();
@@ -73,7 +89,38 @@ describe("AccountLiveRoles", () => {
     expect(screen.getByText("USER · user-alex")).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "当前操作能力" }));
     expect(screen.getByText("iam.role.assume")).toBeTruthy();
+    expect(api.listSessions).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("loads live sessions only on demand and preserves one revoke request through an unknown outcome", async () => {
+    const user = userEvent.setup();
+    const revoked = { ...liveSession, status: "REVOKED" as const, revokedAt: "2026-09-21T08:31:00Z" };
+    const api = client({
+      listSessions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, observedAt: "2026-09-21T08:30:00Z", items: [liveSessionItem], nextAfter: null }),
+      readSession: vi.fn().mockResolvedValue({ observedAt: "2026-09-21T08:30:10Z", item: liveSessionItem }),
+      revokeSession: vi.fn().mockRejectedValueOnce(new Error("connection lost")).mockResolvedValue({ outcome: "APPLIED", session: revoked })
+    });
+    render(<LocaleProvider><AccountLiveRoles client={api} entityId={role.id} onOpen={vi.fn()} /></LocaleProvider>);
+
+    expect(await screen.findByRole("heading", { name: role.name })).toBeTruthy();
+    expect(api.listSessions).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("tab", { name: "角色会话" }));
+    expect(await screen.findByText(liveSession.id)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: `会话 ${liveSession.id} 的操作` }));
+    await user.click(screen.getByRole("menuitem", { name: "撤销会话" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const workflow = screen.getByRole("group", { name: "撤销会话" });
+    await user.click(within(workflow).getByRole("button", { name: "撤销会话" }));
+    expect(await within(workflow).findByText("撤销结果尚未确认", { exact: false })).toBeTruthy();
+    await user.click(within(workflow).getByRole("button", { name: "读取权威状态" }));
+    expect(await within(workflow).findByText("仍观测为未撤销", { exact: false })).toBeTruthy();
+    await user.click(within(workflow).getByRole("button", { name: "重试原请求" }));
+    expect(await screen.findByRole("heading", { name: "没有匹配的角色会话" })).toBeTruthy();
+    const revoke = vi.mocked(api.revokeSession);
+    expect(revoke.mock.calls[1]?.[2]).toBe(revoke.mock.calls[0]?.[2]);
+    expect(api.readSession).toHaveBeenCalledWith(role.id, liveSession.id);
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: "角色会话" }));
   });
 
   it("shows a local LIVE error and never substitutes preview role data", async () => {

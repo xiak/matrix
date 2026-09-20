@@ -54,7 +54,8 @@ function TemplateDirectory({ policy, triggerRef, onOpen }: {
   </div>;
 }
 
-function TemplateDetail({ policy, reviewRef, onReview, onOpenPolicy }: {
+function TemplateDetail({ accountId, policy, reviewRef, onReview, onOpenPolicy }: {
+  accountId: string;
   policy?: AccessPolicy;
   reviewRef: RefObject<HTMLButtonElement | null>;
   onReview(): void;
@@ -66,6 +67,7 @@ function TemplateDetail({ policy, reviewRef, onReview, onOpenPolicy }: {
   return <div className={styles.stack}>
     <div className={styles.sectionHeading}><div><span>{t("detail.eyebrow")}</span><h3>{previewTemplate.product}</h3><p>{t("detail.hint")}</p></div><Badge status="warning">{t("states.notAuthorized")}</Badge></div>
     <dl className={styles.facts}>
+      <div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div>
       <div><dt>{t("fields.templateRevision")}</dt><dd>v{previewTemplate.revision}</dd></div>
       <div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div>
       <div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div>
@@ -81,7 +83,8 @@ function TemplateDetail({ policy, reviewRef, onReview, onOpenPolicy }: {
   </div>;
 }
 
-function ConsentReview({ policy, stage, onStageChange, onClose }: {
+function ConsentReview({ accountId, policy, stage, onStageChange, onClose }: {
+  accountId: string;
   policy?: AccessPolicy;
   stage: number;
   onStageChange(stage: number): void;
@@ -98,7 +101,7 @@ function ConsentReview({ policy, stage, onStageChange, onClose }: {
       <Card.Header className={styles.cardHeading}>{stage === 0 ? <KeyRound aria-hidden="true" /> : stage === 1 ? <ShieldCheck aria-hidden="true" /> : <Boxes aria-hidden="true" />}<div><span>{t("stageLabel", { current: stage + 1, total: stageIds.length })}</span><h3>{t(`review.${currentStage}.title`)}</h3></div></Card.Header>
       <Card.Body className={styles.cardBody}>
         <p className={styles.lead}>{t(`review.${currentStage}.lead`)}</p>
-        {stage === 0 ? <dl className={styles.facts}><div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div><div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div><div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div></dl> : null}
+        {stage === 0 ? <><dl className={styles.facts}><div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div><div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div><div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div><div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div></dl><Alert status="info">{t("review.identity.passRoleBoundary")}</Alert></> : null}
         {stage === 1 ? <><div className={styles.permissionReference}><div><span>{t("fields.policySnapshot")}</span><strong>{policy && version ? `${policy.name} · v${previewTemplate.policyVersion}` : "—"}</strong></div><Badge>{t("review.permissions.immutable")}</Badge></div><ul className={styles.permissionList}>{actions.map((action) => <li key={action}><code>{action}</code></li>)}</ul><Alert status="warning">{t("review.permissions.crossProduct")}</Alert></> : null}
         {stage === 2 ? <><ul className={styles.boundaries}>{(["explicit", "shortTerm", "noExpansion", "cleanup"] as const).map((item) => <li key={item}><strong>{t(`review.consent.items.${item}.title`)}</strong><p>{t(`review.consent.items.${item}.hint`)}</p></li>)}</ul><Alert status="warning">{t("review.consent.unavailable")}</Alert></> : null}
       </Card.Body>
@@ -151,7 +154,7 @@ export function ServiceAuthorizationPreview({ workspace, onClose, onOpenPolicy }
     </div>
     <Alert status="warning">{t("boundary")}</Alert>
     {view === "directory" ? <TemplateDirectory policy={policy} triggerRef={templateTrigger} onOpen={() => setView("detail")} /> : null}
-    {view === "detail" ? <TemplateDetail policy={policy} reviewRef={reviewTrigger} onReview={() => { setStage(0); setView("review"); }} onOpenPolicy={onOpenPolicy} /> : null}
-    {view === "review" ? <ConsentReview policy={policy} stage={stage} onStageChange={setStage} onClose={() => setView("detail")} /> : null}
+    {view === "detail" ? <TemplateDetail accountId={workspace.accountId} policy={policy} reviewRef={reviewTrigger} onReview={() => { setStage(0); setView("review"); }} onOpenPolicy={onOpenPolicy} /> : null}
+    {view === "review" ? <ConsentReview accountId={workspace.accountId} policy={policy} stage={stage} onStageChange={setStage} onClose={() => setView("detail")} /> : null}
   </section>;
 }

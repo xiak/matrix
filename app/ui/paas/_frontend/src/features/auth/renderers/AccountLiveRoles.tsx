@@ -8,6 +8,7 @@ import { accountError, type RoleAccessClient } from "../application/AccountAcces
 import type { AccountAccessView } from "../domain/accounts";
 import type { RoleAccess, RoleCapability, RoleListing } from "../domain/roles";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { LiveRoleSessions } from "./LiveRoleSessions";
 import styles from "./AccountAccessRenderer.module.css";
 
 type OpenRoleEntity = (view: AccountAccessView, id?: string) => void;
@@ -28,6 +29,7 @@ function RoleDetail({ client, roleId, onOpen }: { client: RoleAccessClient; role
   const [access, setAccess] = useState<RoleAccess | null>(null);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
+  const [section, setSection] = useState("permissions");
 
   const retry = useCallback(() => {
     setPhase("loading");
@@ -74,10 +76,11 @@ function RoleDetail({ client, roleId, onOpen }: { client: RoleAccessClient; role
         <div><dt>{t("updated")}</dt><dd><WorkspaceTime value={access.role.updatedAt} /></dd></div>
       </dl>
       {access.role.tags.length ? <div className={styles.roleTags}>{access.role.tags.map((tag) => <Badge key={tag.key}>{tag.key}: {tag.value}</Badge>)}</div> : null}
-      <Tabs.Root defaultValue="permissions">
+      <Tabs.Root value={section} onValueChange={setSection}>
         <Tabs.List aria-label={access.role.name}>
           <Tabs.Trigger value="permissions">{t("livePermissions")} ({access.policyAttachments.length})</Tabs.Trigger>
           <Tabs.Trigger value="trust">{t("liveTrust")} ({access.trustVersion.document.statements.length})</Tabs.Trigger>
+          <Tabs.Trigger value="sessions">{t("liveSessions")}</Tabs.Trigger>
           <Tabs.Trigger value="capabilities">{t("availableOperations")}</Tabs.Trigger>
         </Tabs.List>
         <Tabs.Content className={styles.stack} value="permissions">
@@ -107,6 +110,9 @@ function RoleDetail({ client, roleId, onOpen }: { client: RoleAccessClient; role
             <pre className={styles.code}>{JSON.stringify(access.trustVersion.document, null, 2)}</pre>
           </details>
           <p className={styles.note}>{t("verifiedDigest")}: <code>{access.trustVersion.contentDigest}</code></p>
+        </Tabs.Content>
+        <Tabs.Content className={styles.stack} value="sessions">
+          {section === "sessions" ? <LiveRoleSessions client={client} roleId={roleId} listCapability={access.capabilities.find((capability) => capability.action === "iam.role-session.list")!} /> : null}
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="capabilities">
           <Alert>{t("capabilitySnapshotHint")}</Alert>
