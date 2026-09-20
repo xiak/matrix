@@ -54,7 +54,7 @@ export type PersonalMfaPreviewState = {
   reauthenticationRequired: boolean;
   recoveryState: "idle" | "rebind-required";
 };
-export type AccessEvent = { id: string; action: AccessWorkspaceCommand["kind"] | "sign-in" | "batch-users"; target: string; at: string };
+export type AccessEvent = { id: string; action: Exclude<AccessWorkspaceCommand["kind"], "remember-account-rule-change-unknown"> | "sign-in" | "batch-users"; target: string; at: string };
 export type PreviewUserProfile = {
   consoleAccess: boolean; programmaticAccess: boolean; passwordResetRequired: boolean;
   loginProtection: boolean; tags: { key: string; value: string }[];
@@ -118,6 +118,8 @@ export type AccessWorkspaceCommand =
   | { kind: "delete-enterprise"; id: string }
   | { kind: "import-enterprise-members"; id: string; memberIds: string[] }
   | { kind: "save-account-rule"; requestId: string; expectedLoginProtection: boolean; loginProtection: boolean; responseMode: "success" | "response-lost" }
+  /** Preview client journal only; this is not a future IAM mutation contract. */
+  | { kind: "remember-account-rule-change-unknown"; requestId: string; expectedLoginProtection: boolean; loginProtection: boolean }
   | { kind: "inspect-account-rule-change"; requestId: string; resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable" }
   | { kind: "save-sso-settings"; userSsoEnabled: boolean; userSsoProviderId: string };
 
@@ -202,6 +204,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
   const id = "id" in command && command.id ? command.id : context.id;
   const createdAt = context.at;
   let target = id;
+  let recordEvent = true;
   switch (command.kind) {
     case "create-subuser": {
       const principalId = previewUserPrincipalId(command.loginName);
@@ -491,6 +494,12 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       else state.settings = { ...state.settings, loginProtection: command.loginProtection };
       target = source.accountId; break;
     }
+    case "remember-account-rule-change-unknown": {
+      if (state.pendingAccountRuleChange || !command.requestId.trim() || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection) invalid();
+      state.pendingAccountRuleChange = { requestId: command.requestId, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
+      recordEvent = false;
+      target = source.accountId; break;
+    }
     case "inspect-account-rule-change": {
       const pending = state.pendingAccountRuleChange;
       if (!pending) throw new AccessWorkspaceError("invalid");
@@ -507,6 +516,6 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       state.settings = { ...state.settings, userSsoEnabled: command.userSsoEnabled, userSsoProviderId: command.userSsoProviderId }; target = source.accountId; break;
     }
   }
-  state.events = [{ id: context.id, action: command.kind, target, at: context.at }, ...state.events].slice(0, 100);
+  if (recordEvent && command.kind !== "remember-account-rule-change-unknown") state.events = [{ id: context.id, action: command.kind, target, at: context.at }, ...state.events].slice(0, 100);
   return state;
 }

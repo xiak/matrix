@@ -408,6 +408,28 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         return { issuedKey: result.issuedKey };
       } catch (failure) {
         const code = failure instanceof AccessWorkspaceError ? failure.code : accountError(failure);
+        if (command.kind === "save-account-rule" && code === "unavailable") {
+          const unknownIntent = {
+            requestId: command.requestId,
+            baselineLoginProtection: command.expectedLoginProtection,
+            requestedLoginProtection: command.loginProtection,
+            status: "UNKNOWN" as const
+          };
+          try {
+            const recovered = await repository.workspace.execute(credential, {
+              kind: "remember-account-rule-change-unknown",
+              requestId: command.requestId,
+              expectedLoginProtection: command.expectedLoginProtection,
+              loginProtection: command.loginProtection
+            });
+            if (recovered.workspace.accountId !== tenantId || recovered.workspace.mode !== "preview") throw new Error("INVALID_IAM_TENANT");
+            setWorkspace(recovered.workspace);
+          } catch {
+            // The preview journal is the durable owner. Keep a provider-level lock
+            // if that isolated journal is itself unavailable; never unlock on error.
+            setWorkspace((current) => current ? { ...current, pendingAccountRuleChange: unknownIntent } : current);
+          }
+        }
         setWorkspaceError(code);
         onError?.(code);
         return null;

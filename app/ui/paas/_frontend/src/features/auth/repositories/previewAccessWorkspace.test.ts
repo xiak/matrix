@@ -638,6 +638,9 @@ describe("access workspace preview invariants", () => {
   });
   it("locks an unknown account-rule intent until its original result is definitive", () => {
     const initial = initialAccessWorkspace("org-xiak");
+    const journaled = applyAccessWorkspaceCommand(initial, { kind: "remember-account-rule-change-unknown", requestId: "account-rule-timeout", expectedLoginProtection: false, loginProtection: true }, context);
+    expect(journaled.pendingAccountRuleChange).toEqual({ requestId: "account-rule-timeout", baselineLoginProtection: false, requestedLoginProtection: true, status: "UNKNOWN" });
+    expect(journaled.events).toEqual(initial.events);
     const unknown = applyAccessWorkspaceCommand(initial, { kind: "save-account-rule", requestId: "account-rule-1", expectedLoginProtection: false, loginProtection: true, responseMode: "response-lost" }, context);
     expect(unknown.settings.loginProtection).toBe(false);
     expect(unknown.pendingAccountRuleChange).toEqual({ requestId: "account-rule-1", baselineLoginProtection: false, requestedLoginProtection: true, status: "UNKNOWN" });
