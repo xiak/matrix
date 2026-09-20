@@ -5,16 +5,14 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hkdf"
-	"crypto/hmac"
-	"crypto/sha1"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base32"
-	"encoding/binary"
 	"errors"
 	"io"
 	"time"
 
+	"github.com/pquerna/otp"
+	"github.com/pquerna/otp/hotp"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
@@ -165,14 +163,23 @@ func VerifyTOTP(seed, code iamv1.Secret, databaseTime time.Time, lastConsumedSte
 		}
 	}
 	current := databaseTime.Unix() / totpPeriodSeconds
+	// Keep canonical input and authoritative time/replay policy here. The
+	// library owns RFC4226 HMAC/truncation and constant-time code comparison;
+	// its wall-clock boolean TOTP shortcut cannot return a consumable step or
+	// detect a collision spanning an already consumed step.
+	encodedSeed, passcode := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(material), string(candidate)
 	matched, replay := int64(-1), false
 	for step := max(int64(0), current-1); step <= min(totpMaximumStep, current+1); step++ {
-		expected := totpCode(material, uint64(step))
-		if subtle.ConstantTimeCompare(candidate, expected[:]) == 1 {
+		valid, err := hotp.ValidateCustom(passcode, uint64(step), encodedSeed, hotp.ValidateOpts{
+			Digits: otp.DigitsSix, Algorithm: otp.AlgorithmSHA1, Encoder: otp.EncoderDefault,
+		})
+		if err != nil {
+			return 0, ErrAuthorityUnavailable
+		}
+		if valid {
 			matched = step
 			replay = replay || step <= lastConsumedStep
 		}
-		clear(expected[:])
 	}
 	// A collision spanning an already consumed and a fresh candidate is a
 	// replay, not permission to select a more convenient matching time step.
@@ -196,23 +203,4 @@ func totpSeedMaterial(seed iamv1.Secret) ([]byte, error) {
 		return nil, ErrAuthorityUnavailable
 	}
 	return material, nil
-}
-
-func totpCode(material []byte, step uint64) [totpDigits]byte {
-	var counter [8]byte
-	binary.BigEndian.PutUint64(counter[:], step)
-	// HMAC-SHA1 is the fixed RFC4226 authenticator construction, not a
-	// collision-resistant content digest or a selectable policy algorithm.
-	mac := hmac.New(sha1.New, material)
-	_, _ = mac.Write(counter[:])
-	digest := mac.Sum(nil)
-	defer clear(digest)
-	offset := digest[len(digest)-1] & 0x0f
-	number := (binary.BigEndian.Uint32(digest[offset:offset+4]) & 0x7fffffff) % 1000000
-	var result [totpDigits]byte
-	for index := len(result) - 1; index >= 0; index-- {
-		result[index] = byte(number%10) + '0'
-		number /= 10
-	}
-	return result
 }

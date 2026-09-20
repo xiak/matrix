@@ -698,9 +698,9 @@ are `REFERENCE` for reauthentication and preventing inherited stronger
 authentication; `REJECT` adding Refresh Tokens, permanent session elevation
 or a full notification center solely to mirror an example. Necessary real
 security delivery is still an explicit dependency, not replaced by Audit.
-No library/version is selected or added by this review. Runtime, material
-protection, recovery eligibility and acceptance belong solely009; this
-review does not make the proposed APIs or shared-owner work available.
+Runtime, material protection, recovery eligibility and acceptance belong
+solely009; reference guidance does not make the proposed APIs or shared-owner
+work available. The bounded OTP library adoption below changes no such authority.
 
 The first009 S2a internal foundation `REUSE`s the fixed `d6867251`
 CredentialIssuer entropy and Secret redaction owners, and `ADAPT`s a
@@ -708,9 +708,21 @@ purpose-scoped one-way verifier for random MFA recovery codes. It does not
 add recovery to the generic bearer credential catalog. RFC vectors and
 independently computed Node standard-crypto vectors are `REFERENCE` test
 oracles, not another production verifier or a library/runtime dependency.
-The fixed TOTP domain algorithm is new code in the existing authority owner;
-no donor authenticator service, enrollment flow or secret envelope is copied.
-Pure validation does not implement durable consumption or prove deployment.
+The current OTP construction `REUSE`s `github.com/pquerna/otp v1.5.0`, fixed
+upstream commit `5971b1ef1d6652fec2caed37f11e5cacd9249f78` (Apache-2.0), as a
+normal checksum-pinned module dependency, not copied source. The reviewed
+`hotp.ValidateCustom` performs RFC4226 construction and constant-time code
+comparison with fixed SHA1/six-digit/default encoding. Matrix `07aa5062`'s
+canonical Secret/seed validation, database-time window and consumed-step
+collision rule are `REUSE`; its local HMAC/truncation implementation is
+`REJECT` and removed. The convenience wall-clock/boolean `totp.Validate`,
+input normalization, arbitrary algorithm/window selection, exported `otp.Key`
+and QR/URI generation are `REJECT` for this authentication boundary. The
+module's indirect `boombuler/barcode` dependency is pinned to
+`6c824513bacc` (MIT); no barcode path is invoked by this slice.
+No donor authenticator service, enrollment flow or secret envelope is copied.
+Pure validation does not implement durable consumption or prove deployment;
+the existing independent RFC/Node vectors remain the behavioral oracle.
 
 The follow-on TOTP material slice `REUSE`s the same strict Secret and
 contractjson owners, and the existing uint32BE field-framing primitive with

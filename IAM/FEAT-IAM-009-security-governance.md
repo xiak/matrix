@@ -159,7 +159,13 @@ S1仅在本分支实施，release contractRevision不提前分配。不变更Pha
 
 用户已要求按本稿继续目标。先在既有`authority`域实现固定TOTP参数的秘密生成/纯校验和恢复码的用途/主体绑定验证，继而冻结独立私有keyring并实现种子认证加密；不开放MFA配置、挑战HTTP入口或改动原LoginResponse，不修改安装、UI、SQL、schema或发布profile。两项security-settings动作仍待完整S2c权限切片，不随本片提前授予。
 
-`totp.go`及其测试是现有认证域内新增的算法/时间窗边界：当前password/opaque credential拥有者没有此边界，不建立新的service、store或通用因子框架。秘密使用原`iamv1.Secret`，生成复用原`CredentialIssuer`的受控熵源；恢复码生成和单向验证继续由现有`credential.go`/测试拥有。参数固定为20字节种子、HMAC-SHA1、6位ASCII码、30秒、当前前后各一步；不增加可由请求选择的算法或窗口。
+`totp.go`及其测试拥有认证域的固定参数、严格输入和消费时间窗，不建立新的service、store或通用因子框架。秘密使用原`iamv1.Secret`，生成复用原`CredentialIssuer`的受控熵源；恢复码生成和单向验证继续由现有`credential.go`/测试拥有。参数固定为20字节种子、HMAC-SHA1、6位ASCII码、30秒、当前前后各一步；不增加可由请求选择的算法或窗口。
+
+标准OTP构造采用固定`github.com/pquerna/otp v1.5.0`（上游`5971b1ef1d6652fec2caed37f11e5cacd9249f78`），只调用`hotp.ValidateCustom`的固定SHA1/六位/十进制分支；删除本地HMAC组装、动态截断和数字生成实现，不保留双实现。Go标准库仍是上游HMAC的底层原语；库不负责MATRIX的密钥、认证挑战、共享预算、事务、通知或恢复。原Secret与canonical Base32/ASCII校验先于上游，拒绝大小写归一化、空白裁剪和宽松padding。只对数据库当前时刻的有界三个候选counter求值，检查全部匹配与已消费水位，返回最高未消费匹配；不用本机时钟的布尔TOTP捷径，不把返回true解释为已原子消费。
+
+架构门禁只允许IAM authority导入经过复核的`otp`与`otp/hotp`，不为其他外部SDK、Audit域或API开放依赖。模块间接带入barcode/QR代码，但本片不调用其URI/图片/Key对象，不将其秘密类型暴露为公开契约；独立向量仍是测试预期，不改为由被测库生成答案。版本与模块checksum固定在go.mod/go.sum，沿现有依赖更新机制维护；采用开源库不是安全审计或“最安全”证明。该纯算法替换不变更SQL、API、材料格式或发布profile，也不开放MFA登录。
+
+替换在已推送`07aa5062`之后进行。本地固定参数/RFC4226及6238/独立边界和相邻步碰撞回归通过race，严格输入20秒/2-worker fuzz通过；库的宽松空白/大小写行为没有改变MATRIX输入边界。Go1.26.7进程级工具链完成全仓默认race/architecture、vet、模块校验、122文件API重新生成集合/哈希一致性及Linux amd64构建，未改全局Go。`govulncheck v1.8.0`对实际IAM入口报告0已知可达、0已导入package告警，3项仅依赖module级未调用；这是当次静态分析，不是无漏洞证明。原本机Go1.26.3对同入口报告7项标准库可达公告，不能据纯OTP包扫描无告警掩盖；构建工具链差异已同步安装owner，具体签名包仍须核对自身工具链和验收。
 
 TOTP校验只返回须在原子事务内消费的准确时间步，不持久化消费，不发行身份凭据。调用方未来必须在权威锁下传入数据库时刻和原因子已消费水位，并在同一成功事务推进；`-1`仅表示已证明从未消费，不能用于缺失/未知行。恢复码验证同样只证明持有原主体/批次下的材料，不证明其未消费、恢复资格或当前权限。该基础片的纯函数通过不等于跨副本一次性消费、真实MFA、托管、通知或恢复已验收。
 

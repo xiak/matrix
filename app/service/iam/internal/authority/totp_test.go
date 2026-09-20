@@ -91,14 +91,25 @@ func TestTOTPRejectsMalformedOrUnknownAuthorityState(t *testing.T) {
 	seed := authoritySecret(t, "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
 	code := authoritySecret(t, "287082")
 	now := time.Unix(59, 0).UTC()
+	// Reject control characters at the existing Secret boundary, before an
+	// upstream OTP normalizer could trim them into a valid credential.
+	for _, invalid := range []string{"287082\n", "\t287082\r\n", "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ\n"} {
+		if secret, err := iamv1.NewSecret(invalid); err != iamv1.ErrInvalidSecret || secret.Present() {
+			t.Fatal("control characters reached OTP validation")
+		}
+	}
 	for _, invalid := range []iamv1.Secret{{}, authoritySecret(t, "28708"), authoritySecret(t, "0287082"),
 		authoritySecret(t, "+87082"), authoritySecret(t, "28708 "), authoritySecret(t, "２８７０８２"),
+		authoritySecret(t, " 287082"), authoritySecret(t, "287082 "),
 		authoritySecret(t, "28708x"), authoritySecret(t, "287082.0"), authoritySecret(t, "000000")} {
 		if step, err := VerifyTOTP(seed, invalid, now, -1); err != ErrTOTPRejected || step != 0 {
 			t.Fatal("malformed or incorrect code accepted")
 		}
 	}
 	for _, invalid := range []iamv1.Secret{{}, authoritySecret(t, "gezdgnbvgy3tqojqgezdgnbvgy3tqojq"),
+		authoritySecret(t, "Gezdgnbvgy3tqojqgezDGNBVGY3TQOJQ"),
+		authoritySecret(t, " GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"),
+		authoritySecret(t, "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ "),
 		authoritySecret(t, "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ="), authoritySecret(t, strings.Repeat("0", 32)),
 		authoritySecret(t, strings.Repeat("A", 31)), authoritySecret(t, strings.Repeat("A", 33)),
 		authoritySecret(t, "mx1."+strings.Repeat("A", 43)), authoritySecret(t, "mrc1."+strings.Repeat("A", 22))} {
