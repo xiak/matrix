@@ -138,11 +138,11 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 ### 本人安全通知地址 MOCK 的开发验收证据
 
 2026-09-20，前端实现固定在已推送的
-[`9842533d7ba2b719c9a58d3cfa09464aef1822e3`](https://github.com/xiak/matrix/commit/9842533d7ba2b719c9a58d3cfa09464aef1822e3)，
+[`223e84cc86a7b721ab4a5a9223e639998eadac19`](https://github.com/xiak/matrix/commit/223e84cc86a7b721ab4a5a9223e639998eadac19)，
 设计来源为本文件记录的 IAM-012 S1b 固定提交。
 
 - 原重复占位项被独立安全通知区块替换；本人可在内容区完成地址/当前密码、八位验证码和确认摘要三步，不打开 Dialog，也不改变个人 MFA 或 Account 安全策略状态。
-- 创建页面内验证意图后只显示 `PENDING` 与“等待投递器处理”；因为 MOCK 未调用 SMTP，它不能显示 `ACCEPTED` 或暗示渠道已受理。后续真实读取只能按后端权威观察更新状态。
+- 联系地址状态与待处理验证意图分开：意图 `PENDING` 时地址仍为 `NONE`，摘要另列“验证意图”和“投递观察”。因为 MOCK 未调用 SMTP，它只能显示“等待投递器处理”，不能显示 `ACCEPTED` 或暗示渠道已受理；后续真实读取只能按后端权威观察更新状态。
 - 行为用例证明错误密码、错误验证码、取消与完成边界；完成只保存在当前页面实例，并明确显示 MOCK、无 IAM 写入、无真实 SMTP，以及 `ACCEPTED` 不等于已投递或已读。
 - 进入流程聚焦标题，取消恢复稳定触发器，完成聚焦确认摘要；桌面和 `360 × 800` DEV 浏览器均无页面横向溢出，紧凑页面 document/body 均为 `clientWidth == scrollWidth == 360`，无 Dialog，控制台 warning/error 为空。
 - 完整前端、主题、生产导出、嵌入等价及 Go UI 宿主门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；本证据不宣称 IAM-012 已有公开 HTTP、持久化、发送 worker 或真实投递验收。
