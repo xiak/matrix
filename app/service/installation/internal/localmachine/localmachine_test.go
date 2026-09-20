@@ -3818,7 +3818,8 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 			"--set=VERBOSITY=sqlstate", "mktemp", "RESTORE_OBJECT_CONFLICT",
 			"RESTORE_REFERENCE", "RESTORE_AUTHORITY", "RESTORE_DEPENDENCY",
 			"RESTORE_INTEGRITY", "RESTORE_TRANSACTION", "RESTORE_PIPELINE",
-			"RESTORE_CLIENT", "PIPESTATUS",
+			"RESTORE_CLIENT", "RESTORE_CLIENT_FATAL", "RESTORE_CONNECTION",
+			"RESTORE_CLIENT_SCRIPT", "PIPESTATUS",
 			"--username=matrix --dbname=matrix",
 		} {
 			if !strings.Contains(databaseRestoreScript, required) {
@@ -3903,6 +3904,9 @@ func TestRestoreDatabaseDumpReturnsOnlyClosedDiagnostics(t *testing.T) {
 		"RESTORE_TRANSACTION\n":     platformcommand.RecoveryFailureDatabaseRestoreTransaction,
 		"RESTORE_PIPELINE\n":        platformcommand.RecoveryFailureDatabaseRestorePipeline,
 		"RESTORE_CLIENT\n":          platformcommand.RecoveryFailureDatabaseRestoreClient,
+		"RESTORE_CLIENT_FATAL\n":    platformcommand.RecoveryFailureDatabaseRestoreClientFatal,
+		"RESTORE_CONNECTION\n":      platformcommand.RecoveryFailureDatabaseRestoreConnection,
+		"RESTORE_CLIENT_SCRIPT\n":   platformcommand.RecoveryFailureDatabaseRestoreClientScript,
 		"RESTORE_UNKNOWN\n":         platformcommand.RecoveryFailureDatabaseRestore,
 		"private relation name\n":   platformcommand.RecoveryFailureDatabaseRestore,
 		"RESTORE_REFERENCE\nextra":  platformcommand.RecoveryFailureDatabaseRestore,
@@ -3993,6 +3997,27 @@ func TestDatabaseRestoreScriptEmitsOnlyClosedSQLStateClass(t *testing.T) {
 		run(t,
 			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
 			"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'client failed without SQLSTATE' >&2\nexit 3\n",
+			"RESTORE_CLIENT_SCRIPT\n", false,
+		)
+	})
+	t.Run("fatal client failure", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\nexit 1\n",
+			"RESTORE_CLIENT_FATAL\n", false,
+		)
+	})
+	t.Run("connection failure", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\nexit 2\n",
+			"RESTORE_CONNECTION\n", false,
+		)
+	})
+	t.Run("unrecognized client status", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\nexit 9\n",
 			"RESTORE_CLIENT\n", false,
 		)
 	})

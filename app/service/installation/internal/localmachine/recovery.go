@@ -50,7 +50,14 @@ if [ "${database_status}" -ne 0 ]; then
     2BP01) printf '%s\n' 'RESTORE_DEPENDENCY' ;;
     23???) printf '%s\n' 'RESTORE_INTEGRITY' ;;
     40???) printf '%s\n' 'RESTORE_TRANSACTION' ;;
-    *) printf '%s\n' 'RESTORE_CLIENT' ;;
+    *)
+      case "${database_status}" in
+        1) printf '%s\n' 'RESTORE_CLIENT_FATAL' ;;
+        2) printf '%s\n' 'RESTORE_CONNECTION' ;;
+        3) printf '%s\n' 'RESTORE_CLIENT_SCRIPT' ;;
+        *) printf '%s\n' 'RESTORE_CLIENT' ;;
+      esac
+      ;;
   esac
 else
   printf '%s\n' 'RESTORE_PIPELINE'
@@ -890,6 +897,12 @@ func classifyDatabaseRestoreDiagnostic(
 		return platformcommand.RecoveryFailureDatabaseRestorePipeline
 	case "RESTORE_CLIENT":
 		return platformcommand.RecoveryFailureDatabaseRestoreClient
+	case "RESTORE_CLIENT_FATAL":
+		return platformcommand.RecoveryFailureDatabaseRestoreClientFatal
+	case "RESTORE_CONNECTION":
+		return platformcommand.RecoveryFailureDatabaseRestoreConnection
+	case "RESTORE_CLIENT_SCRIPT":
+		return platformcommand.RecoveryFailureDatabaseRestoreClientScript
 	default:
 		return platformcommand.RecoveryFailureDatabaseRestore
 	}

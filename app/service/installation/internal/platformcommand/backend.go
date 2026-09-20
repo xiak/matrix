@@ -73,6 +73,9 @@ const (
 	RecoveryFailureDatabaseRestoreTransaction    RecoveryFailureBoundary = "DATABASE_RESTORE_TRANSACTION"
 	RecoveryFailureDatabaseRestorePipeline       RecoveryFailureBoundary = "DATABASE_RESTORE_PIPELINE"
 	RecoveryFailureDatabaseRestoreClient         RecoveryFailureBoundary = "DATABASE_RESTORE_CLIENT"
+	RecoveryFailureDatabaseRestoreClientFatal    RecoveryFailureBoundary = "DATABASE_RESTORE_CLIENT_FATAL"
+	RecoveryFailureDatabaseRestoreConnection     RecoveryFailureBoundary = "DATABASE_RESTORE_CONNECTION"
+	RecoveryFailureDatabaseRestoreClientScript   RecoveryFailureBoundary = "DATABASE_RESTORE_CLIENT_SCRIPT"
 	RecoveryFailureSecretRestore                 RecoveryFailureBoundary = "SECRET_RESTORE"
 	RecoveryFailureMigration                     RecoveryFailureBoundary = "MIGRATION"
 )
@@ -101,6 +104,8 @@ func BindRecoveryFailure(boundary RecoveryFailureBoundary, cause error) error {
 		RecoveryFailureDatabaseRestoreAuthority, RecoveryFailureDatabaseRestoreDependency,
 		RecoveryFailureDatabaseRestoreIntegrity, RecoveryFailureDatabaseRestoreTransaction,
 		RecoveryFailureDatabaseRestorePipeline, RecoveryFailureDatabaseRestoreClient,
+		RecoveryFailureDatabaseRestoreClientFatal, RecoveryFailureDatabaseRestoreConnection,
+		RecoveryFailureDatabaseRestoreClientScript,
 		RecoveryFailureSecretRestore, RecoveryFailureMigration:
 		return &recoveryFailureBoundaryError{boundary: boundary, cause: cause}
 	default:
@@ -1484,6 +1489,8 @@ func recoveryVerificationFailureCode(phase lifecycle.Phase, err error) string {
 		RecoveryFailureDatabaseRestoreAuthority, RecoveryFailureDatabaseRestoreDependency,
 		RecoveryFailureDatabaseRestoreIntegrity, RecoveryFailureDatabaseRestoreTransaction,
 		RecoveryFailureDatabaseRestorePipeline, RecoveryFailureDatabaseRestoreClient,
+		RecoveryFailureDatabaseRestoreClientFatal, RecoveryFailureDatabaseRestoreConnection,
+		RecoveryFailureDatabaseRestoreClientScript,
 		RecoveryFailureSecretRestore, RecoveryFailureMigration:
 		return "RECOVERY_" + string(failure.boundary) + "_VERIFICATION_FAILED"
 	default:
