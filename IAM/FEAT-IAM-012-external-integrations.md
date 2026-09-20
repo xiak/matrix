@@ -1,6 +1,6 @@
 # FEAT-IAM-012：外部身份、通知与组织治理
 
-- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输已通过本地协议、独立Postfix真实邮箱及固定提交独立CI。S1b的私有配置/验证码材料已实现，完整地址验证、持久投递/重试、安装配置及真实USER端到端通知尚未实现/验收；其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
+- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。本分支正在收口S1b首条邮箱验证、持久投递/重试及受限worker，已通过下述本地真实门禁，尚未形成固定提交独立验收。安装配置、后继MFA认证载体/安全事件接入、已有地址替换及真实UI未验收；其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
 - Owner：IAM负责S1的地址验证、目的限定通知意图/投递和重试；installation负责受保护SMTP及必要私有材料配置，UX/UI负责本人交互。其他外部来源与计费保持各自业务边界。
 - S1a不等于完整S1或其他外部能力已实现；缺少前置时不提供假入口或伪成功。
 
@@ -14,7 +14,7 @@
 | IAM-EXT-04 | 微信/企业微信关联导入、范围、解除、登录保护 | 第三方企业主体、审核凭据、回调/消息通道 | 获准沙箱/企业账号；真实导入/撤销/断联、账号绑定证明与隐私最小化 |
 | IAM-EXT-05 | Passkey/WebAuthn 登录与管理 | 正式可信 origin/RP ID 与真实设备 | 注册/认证/跨 origin 拒绝/删除、设备丢失恢复及浏览器硬件门禁；不以纯 mock 通过 |
 | IAM-EXT-06 | 跨账号协作者和角色承担，外部主体确认与信任双边撤销 | 本轮先关闭跨账号信任 | 两个真实账号、受邀同意、错主体/外部 ID、任一侧撤销、原始身份和资源归属完整 |
-| IAM-EXT-07 | NotificationContact、消息订阅、手机号/邮件验证与短信 MFA | S1a传输已有下述独立实收证据；USER可信接收地址、持久投递和正式安装通道仍缺；完整订阅/短信仍延期 | S1按下述真实门禁；未验证地址不绑定，联系人不能认证/授权，邮件不替代MFA因子 |
+| IAM-EXT-07 | NotificationContact、消息订阅、手机号/邮件验证与短信 MFA | 本分支已实现本人首条邮箱验证/持久投递并有下述本地实收证据；固定独立CI、正式安装通道及MFA接入仍缺；完整订阅/短信仍延期 | S1按下述真实门禁；未验证地址不绑定，联系人不能认证/授权，邮件不替代MFA因子 |
 | IAM-EXT-08 | 组织树、Account 管理、SCP 类上限继承 | 跨账号组织与可信所有者未建设 | 真实组织层次、上限交集/显式 Deny、成员移动与并发撤销、root 与服务例外封闭定义 |
 | IAM-EXT-09 | 跨账号资源策略/ACL、匿名访问 | 没有声明支持的业务资源 owner | 至少一个真实产品声明协议，两侧许可、ACL 组合、匿名限制和列举隔离完整 |
 | IAM-EXT-10 | 支付/账单/实名/账号关闭/销毁审批 | 本产品无商业计费和销毁编排 | 独立业务权威、可审计批准/延迟删除、资源保留和法律要求确认 |
@@ -28,7 +28,7 @@
 
 该能力是已批准的IAM增量，不新增身份服务。安全接收地址属于真实Account/USER的非认证联系状态，不是Principal、Role、登录realm或恢复凭据。日常本人管理必须使用当前LOGIN_SESSION和该操作所需的再次认证；已有MFA时不能以更弱方式换走原可信地址。首次强制MFA设置尚无Session时，只允许009已证明NEVER_BOUND/合法REMOVED且密码已验证的当前ENROLLMENT挑战建立第一条地址；must-change尚未完成、已存在可信地址、丢失因子、损坏/未知状态及恢复旧备份均不能借此更换地址。它是受限设置的一个子步骤，不发行普通Session，也不将challenge放宽为用户资料bearer。地址验证码只证明该地址的当前持有，不允许登录、重置密码、移除MFA、切换账号或授予权限。初次验证、修改后验证和原地址告警的状态/API、受保护身份约束及并发规则先在本owner冻结，不能把普通User资料修改权扩展为安全接收地址控制权。
 
-IAM负责验证期限/共享尝试预算、验证码一次消费、地址修订、原安全事件与通知意图的原子关联、受限领取/完成及有界重试；SMTP适配器只负责实际传输与结果归一化。installation负责SMTP配置和凭据的私有文件、用途/安装绑定、校验、最小挂载与启动/恢复行为；不能把服务器/端口/凭据交给业务请求选择，不能让普通API或Audit worker取得通道凭据。私有格式由下述S1b纯契约拥有；数据库角色、运行FILE及部署入口尚未实施，不生成空接口或占位服务。
+IAM负责验证期限/共享尝试预算、验证码一次消费、地址修订、原安全事件与通知意图的原子关联、受限领取/完成及有界重试；SMTP适配器只负责实际传输与结果归一化。installation负责SMTP配置和凭据的私有文件、用途/安装绑定、校验、最小挂载与启动/恢复行为；不能把服务器/端口/凭据交给业务请求选择，不能让普通API或Audit worker取得通道凭据。私有格式由下述S1b纯契约拥有；本分支的角色、FILE消费者和独立worker不等于installation已交付部署入口。
 
 地址验证邮件与安全告警邮件必须分开：前者可携带只用于原验证意图的秘密，后者不携带密码、种子、OTP、恢复码或可授予登录/恢复能力的链接。异步地址验证所需秘密必须有用途限定的受保护交付契约，不能明文放在普通JSON/outbox/support，也不能复用TOTP/AccessKey/离线恢复材料。下述独立包装契约不代替持久预算、当前身份及一次消费；这些前置未完成前不创建可用验证入口。
 
@@ -38,7 +38,7 @@ IAM负责验证期限/共享尝试预算、验证码一次消费、地址修订�
 
 SMTP成功最多证明渠道受理，不能冒充最终送达或已读；无可靠回执时保持准确观察。连接/提交结果未知不直接写失败并无条件重复，按提供者可证明能力核对；没有幂等/查询能力时明确允许可识别重复，但不能声称恰好一次。失败有限重试并持久告警；临时投递故障不回滚已经完成的身份安全变更，缺少第一条真实通道则仍阻塞完整MFA发布。
 
-验收沿现有IAM/API/PG/authorityprocess、安装及UX/UI owner：跨账号地址/验证意图拒绝、旧会话/旧地址修订不能确认、同验证码并发一次消费、错误返回后预算保留、地址变化与凭据/账号停用交错、原事件与投递意图失败原子性、受限角色与秘密不泄漏、受理后失联/重启/租约冲突及真实邮件接收。协议fixture只能证明SMTP协议行为，不能代替用户授权的实际通道、已验证地址和收信证据。下述专属Postfix实收仅证明传输到合成测试邮箱；尚无真实USER已验证地址或正式安装通道，不复制私密邮箱凭据或自行使用个人邮箱。
+验收沿现有IAM/API/PG/authorityprocess、安装及UX/UI owner：跨账号地址/验证意图拒绝、旧会话/旧地址修订不能确认、同验证码并发一次消费、错误返回后预算保留、地址变化与凭据/账号停用交错、原事件与投递意图失败原子性、受限角色与秘密不泄漏、受理后失联/重启/租约冲突及真实邮件接收。协议fixture只能证明SMTP协议行为，不能代替实际通道、已验证地址和收信证据。S1a专属Postfix只证明合成邮箱传输；S1b另以真实USER、HTTP及独立worker证明下述地址确认和安全邮件。两者都不是正式安装通道或个人邮箱交付，不复制私密邮箱凭据或自行使用个人邮箱。
 
 本S1不重新开放其他延期能力，也不预分配schema/release revision。具体接口、来源采用记录及发布兼容在实现切片冻结；009拥有哪些安全事件必须通知，本文件拥有通知/地址验证机制，installation拥有配置与恢复交付。
 
@@ -64,7 +64,7 @@ SMTP目标、发件地址与认证材料只来自受保护部署配置的后续�
 
 ### S1b：本人邮箱验证与持久投递详细设计
 
-本节定义下一纵向切片；其纯材料/私有codec增量已实施并进入下述门禁，HTTP/持久事务/worker尚未实现或验收。先交付真实完整LOGIN_SESSION的本人首条邮箱验证和真实邮件投递；同一模型随后接入009的强制ENROLLMENT/STEP_UP与已有地址替换，不另建realm、联系人身份服务或通用消息中心。前置未完成的分支明确拒绝，不能把它们作为兼容的弱认证入口。
+本节拥有正在实施的纵向切片；纯材料/私有codec已有固定验收，本分支HTTP/持久事务/worker的本地证据如下，未提交独立CI前不得作为可消费固定接口交接。先交付真实完整LOGIN_SESSION的本人首条邮箱验证和真实邮件投递；同一模型随后接入009的强制ENROLLMENT/STEP_UP与已有地址替换，不另建realm、联系人身份服务或通用消息中心。前置未完成的分支明确拒绝，不能把它们作为兼容的弱认证入口。
 
 #### 当前权威与增量边界
 
@@ -85,7 +85,7 @@ SMTP目标、发件地址与认证材料只来自受保护部署配置的后续�
 4. 确认仅接受原意图ID、验证码、请求ID和原认证载体。Account/USER、发起Session、密码代际、联系修订、意图绝对期限及后继的factor/settings修订都在锁内重验；调用者不能以新body、URL或别的Session接管原意图。正确码的消费、联系修订推进、原不可变完成及成功事实同事务；同码并发最多一个变化。
 5. 错码是必须提交预算的业务拒绝，不能用回滚异常返还次数。确认回包丢失时，本人可查询原意图的非秘密完成；查询不再次提交候选码、不重新判定为一次成功。不同请求意图或密码/地址代际变化不能复用旧完成授予新资格。新密码登录、重建challenge或切换副本不复活终止意图。
 
-拟定HTTP由`api/iam/v1`原生成owner统一实现和交接后才冻结：`GET /v1/auth/notification-contact`、`POST /v1/auth/notification-contact/verifications`、`GET /v1/auth/notification-contact/verifications/{id}`、`POST /v1/auth/notification-contact/verifications/{id}:confirm`。不接受accountId/userId/SMTP服务器/发件人/任意模板selector。普通Session分支与后继ENROLLMENT分支严格互斥；首片只开放前者，不能预先接受一个尚无真实状态机的challenge凭据。读取原完成仍须证明本人，不是全局command查询。所有秘密请求走原严格解码、专用编码与`no-store`，不会放入URL或浏览器持久化。
+本分支HTTP由`api/iam/v1`原生成owner统一实现，固定交接后才供UI接线：`GET /v1/auth/notification-contact`、`POST /v1/auth/notification-contact/verifications`、`GET /v1/auth/notification-contact/verifications/{id}`、`POST /v1/auth/notification-contact/verifications/{id}:confirm`。不接受accountId/userId/SMTP服务器/发件人/任意模板selector。普通Session分支与后继ENROLLMENT分支严格互斥；首片只开放前者，不能预先接受一个尚无真实状态机的challenge凭据。读取原完成仍须证明本人，不是全局command查询。所有秘密请求走原严格解码、专用编码与`no-store`，不会放入URL或浏览器持久化。
 
 后继已有地址替换必须证明当前密码及已绑定因子对应的目标限定STEP_UP；变更要求按操作前有效规则判断。旧地址在新地址实际确认前继续接收安全告警，新地址不能消除已创建的原地址通知。确认替换后旧/新地址各有封闭通知，原通知目的/收件修订保持。强制ENROLLMENT只允许已经证明NEVER_BOUND/合法REMOVED的首次地址子步骤，不允许丢失因子或旧备份借此换走既有地址。相关新模板/事实须与这条实际变更一起加入，不能用七种现有模板冒充地址替换；本设计不授权管理员代换、在线MFA恢复或邮件登录。
 
@@ -99,15 +99,15 @@ SMTP目标、发件地址与认证材料只来自受保护部署配置的后续�
 
 #### 目的限定材料与安装交接
 
-以下私有命名及单向隔离已由installation owner确认不与同快照consumer冲突；本固定增量只实现IAM纯契约/材料，未因此增加部署进程、运行FILE、迁移、schema/profile或发布revision：
+以下私有命名及单向隔离已由installation owner确认不与同快照consumer冲突；固定`8ccc6327`只实现纯契约/材料，下述S1b运行增量才实现消费者、专用角色和迁移，不替installation推进发布profile或revision：
 
-| 材料/进程 | 拟定最小契约与暴露范围 |
+| 材料/进程 | 最小契约与暴露范围 |
 | --- | --- |
 | `SecurityMailSMTPChannel` | `apiVersion/kind/purpose=IAM_SECURITY_MAIL_SUBMISSION/scope{installationId,bootstrapDigest}/host/port/tlsMode/username/password/from/可选trustedCaPem`；唯一私有codec，不接受URL、客户端路径、TLS关闭或跳过证书选项。仅邮件投递进程持有；IAM API、Audit/PaaS、verifier/support不持有 |
 | `EmailVerificationKeyring` | `purpose=IAM_EMAIL_VERIFICATION_WRAPPING`、同封存scope、修订/activeKeyId及受限有序key集合；每key格式1、独立32字节随机材料及非秘密承诺。只供IAM与邮件投递进程保护原验证意图；不是TOTP/AccessKey/离线恢复材料或通用消息加密服务 |
 | `matrix-iam-notification-dispatcher` | 独立受限数据库登录`matrix_iam_notification_worker_login`及role`matrix_iam_notification_worker`；只领取/完成已提交通知，单实例最多2个在途。不是用户或服务principal，不获取通用PDP/原Audit worker权限 |
 
-后继IAM运行片的编辑边界已对齐：IAM拥有其API/Audit、原迁移library/`matrix-iam-migrate`、通知worker及对应真实测试；专用迁移FILE冻结为`MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE`，仅允许在共享migrationprocess中实施第六个受保护IAM角色文件直接要求的精确形状/测试，不能变成任意FILE或权限入口。installation继续独占layout、localmachine、topology、release/releasebuild、FEAT-005及签名离线门禁，只在后继固定生产提交及精确CI之后集成文件挂载和发布profile。本次窗口许可不等于这些消费者、角色或函数已经实现，也不授权把当前准备版profile改标为通知可用。
+IAM运行片的编辑边界已对齐：IAM拥有其API/Audit、原迁移library/`matrix-iam-migrate`、通知worker及对应真实测试；专用迁移FILE冻结为`MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE`，共享migrationprocess只增加第六个受保护IAM角色文件直接要求的精确形状/测试，不能变成任意FILE或权限入口。installation继续独占layout、localmachine、topology、release/releasebuild、FEAT-005及签名离线门禁，只在后继固定生产提交及精确CI之后集成文件挂载和发布profile。不得把当前准备版profile改标为通知可用。
 
 验证码按独立AES-256-GCM/HKDF用途密封；上下文绑定封存安装/bootstrap、Account、USER、原验证ID、确切接收地址、联系修订、密码代际、原签发/到期及keyId/格式。通知私有持久行只存秘密的认证密文，不存明文或可离线遍历的短码无密钥摘要；生命周期比较时仍重验当前权威，能够解密不等于可以确认。普通JSON、原Audit outbox、Audit、错误和support不输出原码、密文或keyring。重试使用原已保存密文和同一意图，不生成新码、不延长有效期。受控恢复须终止备份中的未完成验证及未发送验证邮件；具备历史密钥不自动赋予恢复后重发资格。
 
@@ -123,7 +123,31 @@ EmailVerificationKeyring最多8192字节、1至8个按keyId严格递增的格式
 
 原`CredentialIssuer`新增均匀拒绝采样的8位随机码生成；比较只接受相同的8位ASCII码，用常量时间比较。`EmailVerificationCipherContext`复用已有uint32BE字段分界原语，但使用独立HKDF-info/AAD域；真实安装/bootstrap、Account/USER、验证ID、邮箱的local-part大小写、generation/联系修订、UTC微秒签发与10分钟内到期、keyId/格式全部绑定。原authority中的密封/解封只接受该目的8字节明文、随机12字节nonce和24字节认证密文，错误不返回部分秘密；调用方key缓冲不被修改。纯密码学不消费验证码、不维护失败计数、不发Session，也不自动检查当前SQL资格。后继原子事务未完成前仍不开放验证入口或MFA启用。
 
-2026-09-20本增量的干净Git导出通过全仓默认`race`/architecture、`vet`、模块校验、122个API文件生成集合及SHA256完全一致、Linux amd64构建；Go1.26.3、GOMAXPROCS=2/GOMEMLIMIT=512MiB，六个代码/测试文件与受验导出逐一核对相同。原contract/domain门禁覆盖规范私有codec、用途/安装/原意图绑定、错密钥和移植密文、熵失败、长度/时间/CA边界、秘密格式化及普通JSON拒绝。两个私有codec各20秒/2 worker fuzz通过（keyring197481次、SMTP368684次）；不是性能承诺。独立CI待该固定增量确认，不用S1a成功回填。本片没有SQL或运行FILE变化，默认数据库/真实邮箱SKIP不计新验收；已有Postfix证据只证明S1a传输，不能代替上述尚未实现的本人验证和持久投递。
+2026-09-20纯材料增量的干净Git导出通过全仓默认`race`/architecture、`vet`、模块校验、122个API文件生成集合及SHA256完全一致、Linux amd64构建；Go1.26.3、GOMAXPROCS=2/GOMEMLIMIT=512MiB，六个代码/测试文件与受验导出逐一核对相同。原contract/domain门禁覆盖规范私有codec、用途/安装/原意图绑定、错密钥和移植密文、熵失败、长度/时间/CA边界、秘密格式化及普通JSON拒绝。两个私有codec各20秒/2 worker fuzz通过（keyring197481次、SMTP368684次）；不是性能承诺。固定`8ccc632796727261563c952a89e4dfd3ce947144`的[Verification35498547391](https://github.com/xiak/matrix/actions/runs/35498547391)已核实精确SHA及go、node-process、authority-storage、authority-runtime、authority-process五项completed/success。该固定片没有SQL或运行FILE变化，默认数据库/真实邮箱SKIP不计新验收，也不替下述工作中的持久事务取得独立验收。
+
+#### 本分支持久运行实现与本地证据
+
+当前未固定运行增量使用IAM schema36、Audit schema20；PaaS仍为本分支原schema2，发布profile/revision未改。原密码尝试新增封闭`NOTIFICATION_CONTACT_VERIFY`目的及原Session/请求/地址承诺；reserve/consume七参数替换原五参数，不保留可混用目的的旧重载。失败预算提交先于密码计算或验证码解封，错误返回不返还额度。现有ServiceIdentity/lookup_service、七列Audit claim、Session查询/撤销及旧Audit canonical保持。
+
+`000013_security_mail`是原IAM持久化owner内的独立邮件权限边界：可信联系状态、原验证意图、共享预算、不可变通知和逐次租约观察。延迟约束同时核对原意图、真实USER/Session、封存scope、两种封闭事实与相应邮件；完成或终态不能被重放修改。新增tenant事实为`iam.notification-contact.verification-started`与`iam.notification-contact.verified`，actor/target均为本人USER，不含邮箱、密码、验证码或包装材料。首片新增`CONTACT_VERIFIED`安全模板，不拿MFA恢复/绑定模板冒充联系人验证。原历史producer proof消费精确已提交事实，停用USER不让历史通知或事实失去投递资格。
+
+独立`matrix-iam-notification-dispatcher`只持有专用数据库角色。实际数据库领取结果固定18列，worker只可执行read-keyset、claim和complete三个目的函数，无表DML、用户认证、Audit worker或恢复能力。API仅可调用对应本人事务，不可领取邮件；readiness核对实际函数形状、角色分离、授权、强制RLS和历史约束。每次领取前核对受保护keyring与当前封存注册集合，事务提交后才进行SMTP；实例两条有界循环、两条数据库连接，结果不确定保留原租约，不能内存重发。
+
+IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`；只有worker读取`MATRIX_IAM_SECURITY_MAIL_SMTP_CHANNEL_FILE`、`MATRIX_IAM_NOTIFICATION_DATABASE_DSN_FILE`，并使用非秘密`MATRIX_IAM_NOTIFICATION_WORKER_ID`及`MATRIX_IAM_NOTIFICATION_LISTEN_ADDRESS`。安装通道、完整profile、受控恢复隔离及文件挂载仍归installation；这些消费者通过本地进程测试不等于已形成签名安装包。
+
+本地门禁使用本任务独立PG18、真实Postfix及唯一数据库/容器/网络标识，Go限2/-p2，重型门禁串行race/-p1。实际已通过：
+
+- API/IAM/Audit与共享migrationprocess的聚焦默认race；严格公开投递状态组合、秘密请求codec、私有FILE、用途/密文/当前scope、提交前不得发送及两并发上限。
+- 全仓默认race/architecture、vet、模块校验、122个API文件重新生成的集合/SHA256一致及Linux amd64构建通过；默认外部环境SKIP不计真实数据库/SMTP验收。最后的测试增量另以对应API、IAM及Audit真实门禁复验。
+- `TestIAMNotificationContactPostgres`完整97.67s：两个Account同名USER、跨意图/Session拒绝、同码并发一次消费、两副本/新意图/Session/重新构造authority不返还预算；真实45秒租约失联后UNKNOWN与30秒退避、旧fence拒绝、权限/schema损坏失败关闭；已提交事实的精确proof及变体拒绝。
+- `computed_confirmation_rechecks_current_identity_and_intent`真实PG race 16.35s：预算已提交、候选码已正确比较后，由另一authority实际改密、停用USER、退出或建立新意图；原确认全部拒绝，联系人/成功事实/安全通知均无部分写入，已扣次数不返还。该受控交错是当前身份的最终事务边界证明，不以数据库直接修改身份模拟生命周期。
+- 同一门禁内真实HTTP、独立受限通知可执行程序与认证STARTTLS Postfix实收10.25s；从Maildir实际取码后HTTP确认，USER停用后重启通知进程仍收到原安全邮件。通过`pg_stat_activity`核对真实worker登录，两次邮件均保存DATA250受理观察；IAM HTTP在该路径为真实handler的进程内HTTP服务器，不能描述成完整签名多服务部署。
+- Audit全封闭动作目录/不可变记录PG race 9.15s、Audit HTTP及链并发1.53s通过；新联系动作只接受本人USER actor/target，错误主体类型、他人或带业务decision/operation均拒绝。原动作生成夹具已遵守新动作自身约束，不放宽生产校验。
+- 原独立IAM/Audit/PaaS及dispatcher回归179.27s；固定IAM32真实旧executable→当前IAM36的apply两次/verify/等值bootstrap/重启24.35s，保留Session、不可变完成、原六字段receipt和canonical/proof；同快照backup helper、实际pg_dump/import及严格关闭20.70s。这些是具体源码/schema行为，不是任意历史版本、跨profile或签名升级准入。
+
+上述保留数据门禁曾拒绝不同测试共用同名PostgreSQL登录却配置不同口令的夹具；已统一合成测试口令后复验，未改生产等值迁移不得旋转口令的约束。门禁结束确认PG无客户端、Postfix空队列后，已删除自有容器及空网络、五个无人引用的旧测试卷；后补交错/Audit的tmpfs PG也已删除，按其唯一标签查询容器/网络/卷均零残留。未重启共享服务或操作其他任务/远端。
+
+本片仍需固定源码/独立CI及安装/UI消费者验收；后继MFA/账号配置交错与业务安全事件接入、运维聚合告警和受控恢复后的联系/在途意图隔离仍按上述需求逐片证明。当前只有稳定投递结果/错误类别和持久尝试记录，不把它们描述为已交付聚合告警。现有邮件证据不开放MFA，也不声称已有地址替换、ENROLLMENT/STEP_UP、旧备份重新开放或完整S1验收。
 
 #### 投递、重试与事实
 

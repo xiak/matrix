@@ -28,6 +28,8 @@
           "iam.user.status-set",
           "iam.user.password-reset",
           "iam.user.password-changed",
+          "iam.notification-contact.verification-started",
+          "iam.notification-contact.verified",
           "iam.group.created",
           "iam.role.created",
           "iam.role.updated",
@@ -493,6 +495,58 @@
                   "properties": {
                     "action": {
                       "const": "iam.user.password-changed"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.notification-contact.verification-started"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.notification-contact.verified"
                     }
                   },
                   "required": [
@@ -3051,6 +3105,98 @@
               "properties": {
                 "action": {
                   "const": "iam.user.password-changed"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "USER"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.notification-contact.verification-started"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "USER"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.notification-contact.verified"
                 }
               },
               "required": [

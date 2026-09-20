@@ -35,6 +35,130 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func TestNotificationContactAndVerificationAreClosedCurrentUserContracts(t *testing.T) {
+	now := time.Date(2026, 9, 20, 8, 0, 0, 0, time.UTC)
+	contact := NotificationContact{APIVersion: APIVersion, Kind: "NotificationContact", AccountID: "account-a", UserID: "user-a", State: "NONE"}
+	if err := ValidateNotificationContact(contact); err != nil {
+		t.Fatal(err)
+	}
+	contact.PendingVerificationID = "verification-a"
+	if err := ValidateNotificationContact(contact); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []func(*NotificationContact){
+		func(v *NotificationContact) { v.Email = "receiver@example.test" },
+		func(v *NotificationContact) { v.VerifiedAt = &now },
+		func(v *NotificationContact) { v.ResourceVersion = 1 },
+		func(v *NotificationContact) { v.State = "UNKNOWN" },
+	} {
+		invalid := contact
+		change(&invalid)
+		if ValidateNotificationContact(invalid) == nil {
+			t.Fatal("unverified state carried trusted contact fields")
+		}
+	}
+	contact.State, contact.ResourceVersion, contact.Email, contact.VerifiedAt, contact.PendingVerificationID = "VERIFIED", 1, "receiver@example.test", &now, ""
+	if err := ValidateNotificationContact(contact); err != nil {
+		t.Fatal(err)
+	}
+	contact.PendingVerificationID = "verification-a"
+	if ValidateNotificationContact(contact) == nil {
+		t.Fatal("first-contact API accepted replacement state")
+	}
+	verification := NotificationContactVerification{APIVersion: APIVersion, Kind: "NotificationContactVerification", ID: "verification-a", AccountID: "account-a", UserID: "user-a",
+		RequestID: "request-a", Email: "receiver@example.test", State: "PENDING", IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute), Delivery: NotificationDeliveryObservation{State: "PENDING", UpdatedAt: now}}
+	if err := ValidateNotificationContactVerification(verification); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []func(*NotificationContactVerification){
+		func(v *NotificationContactVerification) { v.ExpiresAt = v.ExpiresAt.Add(time.Second) },
+		func(v *NotificationContactVerification) { v.CompletedAt = &now },
+		func(v *NotificationContactVerification) { v.State = "VERIFIED" },
+		func(v *NotificationContactVerification) { v.Delivery.UpdatedAt = now.Add(-time.Microsecond) },
+		func(v *NotificationContactVerification) { v.Email = "user@example.test\r\nBcc:other@example.test" },
+	} {
+		invalid := verification
+		change(&invalid)
+		if ValidateNotificationContactVerification(invalid) == nil {
+			t.Fatal("invalid verification projection accepted")
+		}
+	}
+	verification.State, verification.CompletedAt = "VERIFIED", &now
+	if err := ValidateNotificationContactVerification(verification); err != nil {
+		t.Fatal(err)
+	}
+	verification.CompletedAt = &verification.ExpiresAt
+	if ValidateNotificationContactVerification(verification) == nil {
+		t.Fatal("verification succeeded after expiry")
+	}
+	verification.State = "EXPIRED"
+	if err := ValidateNotificationContactVerification(verification); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNotificationDeliveryNeverConfusesUncertaintyAndAcceptance(t *testing.T) {
+	now := time.Date(2026, 9, 20, 8, 0, 0, 0, time.UTC)
+	for _, test := range []struct {
+		state    string
+		attempts uint32
+		outcome  string
+		code     uint16
+		valid    bool
+	}{
+		{"PENDING", 0, "", 0, true}, {"IN_FLIGHT", 1, "", 0, true}, {"IN_FLIGHT", 2, "UNKNOWN", 0, true},
+		{"RETRY_WAIT", 1, "UNKNOWN", 0, true}, {"RETRY_WAIT", 2, "UNAVAILABLE", 0, true}, {"RETRY_WAIT", 4, "REJECTED", 450, true},
+		{"ACCEPTED", 1, "ACCEPTED", 250, true}, {"FAILED", 1, "REJECTED", 550, true}, {"FAILED", 5, "UNKNOWN", 0, true},
+		{"EXPIRED", 0, "", 0, true}, {"EXPIRED", 2, "UNKNOWN", 0, true},
+		{"DELIVERED", 1, "ACCEPTED", 250, false}, {"PENDING", 1, "", 0, false}, {"PENDING", 0, "UNKNOWN", 0, false},
+		{"IN_FLIGHT", 1, "UNKNOWN", 0, false}, {"IN_FLIGHT", 2, "", 0, false}, {"RETRY_WAIT", 0, "UNKNOWN", 0, false},
+		{"RETRY_WAIT", 5, "UNKNOWN", 0, false}, {"RETRY_WAIT", 1, "REJECTED", 550, false}, {"ACCEPTED", 1, "UNKNOWN", 0, false},
+		{"ACCEPTED", 1, "ACCEPTED", 251, false}, {"FAILED", 1, "UNKNOWN", 0, false}, {"FAILED", 1, "REJECTED", 450, false},
+		{"EXPIRED", 1, "", 0, false}, {"EXPIRED", 0, "UNKNOWN", 0, false}, {"EXPIRED", 5, "UNKNOWN", 0, false},
+		{"EXPIRED", 1, "REJECTED", 550, false}, {"RETRY_WAIT", 1, "UNKNOWN", 250, false}, {"IN_FLIGHT", 6, "UNKNOWN", 0, false},
+	} {
+		value := NotificationDeliveryObservation{State: test.state, Attempts: test.attempts, LastOutcome: test.outcome, LastSMTPCode: test.code, UpdatedAt: now}
+		if got := ValidateNotificationDeliveryObservation(value) == nil; got != test.valid {
+			t.Errorf("%+v valid=%v want=%v", value, got, test.valid)
+		}
+	}
+}
+
+func TestNotificationSecretRequestsNeedExplicitEncodingAndRejectSelectors(t *testing.T) {
+	password, _ := NewSecret("notification-test-private-password")
+	code, _ := NewSecret("01234567")
+	start := StartNotificationContactVerificationRequest{Email: "receiver@example.test", Password: password, RequestID: "request-a"}
+	confirm := ConfirmNotificationContactVerificationRequest{Code: code, RequestID: "request-b"}
+	for _, secret := range []any{start, confirm} {
+		if _, err := json.Marshal(secret); err == nil {
+			t.Fatal("secret request used ordinary JSON")
+		}
+		if text := fmt.Sprintf("%v %#v", secret, secret); strings.Contains(text, "receiver@") || strings.Contains(text, "private-password") || strings.Contains(text, "01234567") {
+			t.Fatal("secret request leaked formatting")
+		}
+	}
+	encoded, err := EncodeStartNotificationContactVerificationRequest(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roundTrip StartNotificationContactVerificationRequest
+	if err := contractjson.DecodeObjectBytes(encoded, 4096, &roundTrip); err != nil || ValidateStartNotificationContactVerificationRequest(roundTrip) != nil || roundTrip.Email != start.Email {
+		t.Fatal("explicit start codec", err)
+	}
+	for _, field := range []string{`"accountId":"other"`, `"userId":"other"`, `"host":"smtp.example.test"`, `"template":"CUSTOM"`} {
+		bad := append(bytes.Clone(encoded[:len(encoded)-1]), []byte(","+field+"}")...)
+		if err := contractjson.DecodeObjectBytes(bad, 4096, &roundTrip); err == nil {
+			t.Fatal("start accepted authority selector")
+		}
+	}
+	for _, candidate := range []string{"1234567", "123456789", "12a45678", "１２３４５６７８"} {
+		confirm.Code, _ = NewSecret(candidate)
+		if _, err := EncodeConfirmNotificationContactVerificationRequest(confirm); err == nil {
+			t.Fatal("noncanonical confirmation code accepted")
+		}
+	}
+}
+
 func TestSecurityMailSMTPChannelIsOnlyACanonicalPrivateFile(t *testing.T) {
 	password, _ := NewSecret("synthetic-mail-password")
 	value := SecurityMailSMTPChannel{APIVersion: APIVersion, Kind: "SecurityMailSMTPChannel", Purpose: SecurityMailSubmissionPurpose,

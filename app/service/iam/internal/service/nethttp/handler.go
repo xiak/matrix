@@ -90,6 +90,10 @@ type Workflow interface {
 	RevokeOwnSession(context.Context, iamv1.Secret, iamv1.SessionID, iamv1.RevokeSessionRequest) (iamv1.RevokeOwnSessionResponse, error)
 	RevokeOtherSessions(context.Context, iamv1.Secret, iamv1.RevokeSessionRequest) (iamv1.RevokeOtherSessionsResponse, error)
 	ChangePassword(context.Context, iamv1.Secret, iamv1.ChangePasswordRequest) (iamv1.ChangePasswordResponse, error)
+	NotificationContact(context.Context, iamv1.Secret) (iamv1.NotificationContact, error)
+	NotificationVerification(context.Context, iamv1.Secret, string) (iamv1.NotificationContactVerification, error)
+	StartNotificationVerification(context.Context, iamv1.Secret, iamv1.StartNotificationContactVerificationRequest) (iamv1.NotificationContactVerification, error)
+	ConfirmNotificationContact(context.Context, iamv1.Secret, string, iamv1.ConfirmNotificationContactVerificationRequest) (iamv1.NotificationContactVerification, error)
 	CreateUser(context.Context, iamv1.Secret, iamv1.CreateUserRequest) (iamv1.User, error)
 	CreatePolicyAttachment(context.Context, iamv1.Secret, iamv1.CreatePolicyAttachmentRequest) (iamv1.PolicyAttachment, error)
 	RevokePolicyAttachment(
@@ -157,6 +161,9 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/sessions:revoke-others", value.revokeOtherSessions)
 	routes.HandleFunc("/v1/auth/sessions/", value.revokeOwnSession)
 	routes.HandleFunc("/v1/auth/password", value.changePassword)
+	routes.HandleFunc("/v1/auth/notification-contact", value.notificationContact)
+	routes.HandleFunc("/v1/auth/notification-contact/verifications", value.startNotificationVerification)
+	routes.HandleFunc("/v1/auth/notification-contact/verifications/", value.notificationVerification)
 	routes.HandleFunc("/v1/authorize", value.authorize)
 	routes.HandleFunc("/v1/authorize:access-key", value.authorizeAccessKey)
 	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
@@ -1235,6 +1242,8 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusForbidden, "iam.authorization.denied", "IAM authorization denied")
 	case errors.Is(err, identityaccess.ErrConflict):
 		writeProblem(response, requestID, http.StatusConflict, "iam.state.conflict", "IAM state conflict")
+	case errors.Is(err, identityaccess.ErrVerificationRejected):
+		writeProblem(response, requestID, http.StatusUnprocessableEntity, "iam.verification.rejected", "IAM verification rejected")
 	case errors.Is(err, identityaccess.ErrOverloaded):
 		response.Header().Set("Retry-After", "1")
 		writeProblem(response, requestID, http.StatusTooManyRequests, "iam.authentication.busy", "IAM authentication busy")

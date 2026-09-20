@@ -62,6 +62,14 @@ func NewAuthority(repository Repository, config Config) (*Authority, error) {
 		return nil, err
 	}
 	config.TOTPKeyring = nil
+	var email *authority.EmailVerificationProtector
+	if config.EmailVerificationKeyring != nil {
+		email, err = authority.NewEmailVerificationProtector(*config.EmailVerificationKeyring)
+		if err != nil {
+			return nil, ErrInvalidArgument
+		}
+	}
+	config.EmailVerificationKeyring = nil
 	return &Authority{
 		repository:   repository,
 		config:       config,
@@ -70,6 +78,7 @@ func NewAuthority(repository Repository, config Config) (*Authority, error) {
 		cursors:      cursors,
 		accessKeys:   wrapping,
 		totp:         totp,
+		email:        email,
 		passwordWork: make(chan struct{}, 2),
 	}, nil
 }

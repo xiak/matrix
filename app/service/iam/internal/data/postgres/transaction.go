@@ -252,21 +252,27 @@ func (value *transaction) ReservePasswordAttempt(ctx context.Context, request id
 	}
 	var login, tenant, user, session any
 	if request.LoginName != "" {
-		if request.AccountID != "" || request.UserID != "" || request.SessionID != "" {
+		if request.AccountID != "" || request.UserID != "" || request.SessionID != "" || request.Purpose != identityaccess.PasswordAttemptLogin || request.IntentDigest != "" {
 			return identityaccess.PasswordAttempt{}, false, identityaccess.ErrInvalidArgument
 		}
 		login = request.LoginName
 	} else {
 		if iamv1.ValidateID("accountId", string(request.AccountID)) != nil ||
-			iamv1.ValidateID("userId", string(request.UserID)) != nil || iamv1.ValidateID("sessionId", string(request.SessionID)) != nil {
+			iamv1.ValidateID("userId", string(request.UserID)) != nil || iamv1.ValidateID("sessionId", string(request.SessionID)) != nil ||
+			!((request.Purpose == identityaccess.PasswordAttemptChange && request.IntentDigest == "") ||
+				(request.Purpose == identityaccess.PasswordAttemptNotificationContact && iamv1.ValidateDigest("intentDigest", request.IntentDigest) == nil)) {
 			return identityaccess.PasswordAttempt{}, false, identityaccess.ErrInvalidArgument
 		}
 		tenant, user, session = request.AccountID, request.UserID, request.SessionID
 	}
-	result := identityaccess.PasswordAttempt{ID: request.ID, SessionID: request.SessionID}
+	result := identityaccess.PasswordAttempt{ID: request.ID, SessionID: request.SessionID, Purpose: request.Purpose, IntentDigest: request.IntentDigest}
 	var stored string
-	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,$2,$3,$4,$5)",
-		login, tenant, user, session, request.ID).Scan(&result.AccountID, &result.PrincipalID, &stored,
+	var intent any
+	if request.IntentDigest != "" {
+		intent = request.IntentDigest
+	}
+	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,$2,$3,$4,$5,$6,$7)",
+		login, tenant, user, session, request.ID, request.Purpose, intent).Scan(&result.AccountID, &result.PrincipalID, &stored,
 		&result.MustChangePassword, &result.CredentialGeneration, &result.Sequence, &result.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.PasswordAttempt{}, false, nil

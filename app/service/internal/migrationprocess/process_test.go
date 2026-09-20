@@ -55,11 +55,12 @@ func TestRunAdmitsOnlyFixedActionsAndExactSecretFiles(t *testing.T) {
 	}
 }
 
-func TestRunBoundsFivePurposeSeparatedFiles(t *testing.T) {
+func TestRunBoundsSixPurposeSeparatedFiles(t *testing.T) {
 	environments := []string{
 		"MATRIX_MIGRATION_DATABASE_DSN_FILE",
 		"MATRIX_MIGRATION_IAM_API_DSN_FILE",
 		"MATRIX_MIGRATION_IAM_BACKUP_CUSTODY_DSN_FILE",
+		"MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE",
 		"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE",
 		"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE",
 	}
@@ -83,7 +84,7 @@ func TestRunBoundsFivePurposeSeparatedFiles(t *testing.T) {
 	configuration := Configuration{DSNFileEnvironments: environments, Apply: action, Verify: action}
 	for _, name := range []string{"apply", "verify"} {
 		if err := Run(t.Context(), []string{name}, configuration); err != nil {
-			t.Fatal("five fixed private files were rejected", err)
+			t.Fatal("six fixed private files were rejected", err)
 		}
 	}
 	for _, invalid := range [][]string{

@@ -42,7 +42,7 @@ func (service *Authority) Login(
 			return err
 		}
 		var err error
-		attempt, admitted, err = tx.ReservePasswordAttempt(ctx, PasswordAttemptRequest{ID: attemptID, LoginName: request.LoginName})
+		attempt, admitted, err = tx.ReservePasswordAttempt(ctx, PasswordAttemptRequest{ID: attemptID, LoginName: request.LoginName, Purpose: PasswordAttemptLogin})
 		return err
 	})
 	if err != nil {

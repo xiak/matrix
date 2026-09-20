@@ -38,33 +38,33 @@ func TestSecurityMailSMTPOutcomes(t *testing.T) {
 	for _, test := range []struct {
 		name  string
 		mode  TLSMode
-		state SubmissionState
+		state authority.MailSubmissionState
 		code  int
 		body  bool
 	}{
-		{"accepted", STARTTLS, Accepted, 0, true},
-		{"accepted", ImplicitTLS, Accepted, 0, true},
-		{"verification", STARTTLS, Accepted, 0, true},
-		{"lost-quit", STARTTLS, Accepted, 0, true},
-		{"lost-final", STARTTLS, Unknown, 0, true},
-		{"hold-final", STARTTLS, Unknown, 0, true},
-		{"bad-final", STARTTLS, Unknown, 0, true},
-		{"unexpected-final", STARTTLS, Unknown, 0, true},
-		{"large-final", STARTTLS, Unknown, 0, true},
-		{"truncated-final", STARTTLS, Unknown, 0, true},
-		{"bare-lf-final", STARTTLS, Unknown, 0, true},
-		{"temporary-final", STARTTLS, Rejected, 451, true},
-		{"permanent-final", STARTTLS, Rejected, 550, true},
-		{"reject-data", STARTTLS, Rejected, 554, false},
-		{"reject-recipient", STARTTLS, Rejected, 550, false},
-		{"reject-sender", STARTTLS, Rejected, 553, false},
-		{"reject-auth", STARTTLS, Rejected, 535, false},
-		{"no-auth", STARTTLS, Unavailable, 0, false},
-		{"wrong-auth", STARTTLS, Unavailable, 0, false},
-		{"no-starttls", STARTTLS, Unavailable, 0, false},
-		{"reject-starttls", STARTTLS, Rejected, 454, false},
-		{"bad-greeting", STARTTLS, Unavailable, 0, false},
-		{"large-greeting", STARTTLS, Unavailable, 0, false},
+		{"accepted", STARTTLS, authority.MailAccepted, 250, true},
+		{"accepted", ImplicitTLS, authority.MailAccepted, 250, true},
+		{"verification", STARTTLS, authority.MailAccepted, 250, true},
+		{"lost-quit", STARTTLS, authority.MailAccepted, 250, true},
+		{"lost-final", STARTTLS, authority.MailUnknown, 0, true},
+		{"hold-final", STARTTLS, authority.MailUnknown, 0, true},
+		{"bad-final", STARTTLS, authority.MailUnknown, 0, true},
+		{"unexpected-final", STARTTLS, authority.MailUnknown, 0, true},
+		{"large-final", STARTTLS, authority.MailUnknown, 0, true},
+		{"truncated-final", STARTTLS, authority.MailUnknown, 0, true},
+		{"bare-lf-final", STARTTLS, authority.MailUnknown, 0, true},
+		{"temporary-final", STARTTLS, authority.MailRejected, 451, true},
+		{"permanent-final", STARTTLS, authority.MailRejected, 550, true},
+		{"reject-data", STARTTLS, authority.MailRejected, 554, false},
+		{"reject-recipient", STARTTLS, authority.MailRejected, 550, false},
+		{"reject-sender", STARTTLS, authority.MailRejected, 553, false},
+		{"reject-auth", STARTTLS, authority.MailRejected, 535, false},
+		{"no-auth", STARTTLS, authority.MailUnavailable, 0, false},
+		{"wrong-auth", STARTTLS, authority.MailUnavailable, 0, false},
+		{"no-starttls", STARTTLS, authority.MailUnavailable, 0, false},
+		{"reject-starttls", STARTTLS, authority.MailRejected, 454, false},
+		{"bad-greeting", STARTTLS, authority.MailUnavailable, 0, false},
+		{"large-greeting", STARTTLS, authority.MailUnavailable, 0, false},
 	} {
 		t.Run(test.name+"/"+string(test.mode), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -85,7 +85,7 @@ func TestSecurityMailSMTPOutcomes(t *testing.T) {
 				message.VerificationExpiresAt = message.OccurredAt.Add(5 * time.Minute)
 			}
 			result, err := client.Submit(ctx, message)
-			if err != nil || result != (Submission{State: test.state, SMTPCode: test.code}) {
+			if err != nil || result != (authority.MailSubmission{State: test.state, SMTPCode: test.code}) {
 				t.Fatalf("submission outcome=%+v, error=%v", result, err)
 			}
 			observed := awaitSMTP(t, observations)
@@ -136,7 +136,7 @@ func TestSecurityMailSMTPCertificateAndTLSFailures(t *testing.T) {
 					t.Fatal(err)
 				}
 				result, err := client.Submit(context.Background(), smtpMessage())
-				if err != nil || result.State != Unavailable {
+				if err != nil || result.State != authority.MailUnavailable {
 					t.Fatalf("bad TLS result=%+v err=%v", result, err)
 				}
 				observed := awaitSMTP(t, observations)
@@ -152,7 +152,8 @@ func TestSecurityMailSMTPConfigAndRedaction(t *testing.T) {
 	certificate, roots := smtpCertificate(t, "127.0.0.1")
 	config, observations := smtpPeer(t, certificate, roots, STARTTLS, "accepted")
 	for _, mutate := range []func(*Config){
-		func(c *Config) { c.InstallationID = "mxi-invalid" },
+		func(c *Config) { c.InstallationID = "" },
+		func(c *Config) { c.InstallationID = "installation\r\n" },
 		func(c *Config) { c.Port = 0 },
 		func(c *Config) { c.Host = "smtp://matrix.test" },
 		func(c *Config) { c.Host = "matrix.test\r\n" },
@@ -167,6 +168,18 @@ func TestSecurityMailSMTPConfigAndRedaction(t *testing.T) {
 		mutate(&candidate)
 		if _, err := NewClient(candidate); !errors.Is(err, ErrConfig) {
 			t.Fatal("bad channel accepted")
+		}
+	}
+	// Installation syntax belongs to the IAM bootstrap/private-file contract.
+	// SMTP must not invent a second ID namespace for already sealed installs.
+	for _, installation := range []string{"installation-http-integration", "mxi-" + strings.Repeat("a", 32)} {
+		candidate := config
+		candidate.InstallationID = installation
+		if iamv1.ValidateID("installationId", installation) != nil {
+			t.Fatal("invalid contract fixture")
+		}
+		if _, err := NewClient(candidate); err != nil {
+			t.Fatal("SMTP rejected an IAM installation identity", err)
 		}
 	}
 	client, err := NewClient(config)
@@ -193,11 +206,11 @@ func TestSecurityMailSMTPConfigAndRedaction(t *testing.T) {
 		t.Fatal("nil context accepted")
 	}
 	var unavailable *Client
-	if result, err := unavailable.Submit(context.Background(), smtpMessage()); err != nil || result.State != Unavailable {
+	if result, err := unavailable.Submit(context.Background(), smtpMessage()); err != nil || result.State != authority.MailUnavailable {
 		t.Fatal("nil client accepted")
 	}
 	// Earlier invalid submissions must not consume the peer's sole connection.
-	if result, err := client.Submit(context.Background(), smtpMessage()); err != nil || result.State != Accepted {
+	if result, err := client.Submit(context.Background(), smtpMessage()); err != nil || result.State != authority.MailAccepted {
 		t.Fatal("valid submission failed")
 	}
 	if awaitSMTP(t, observations).connections.Load() != 1 {
@@ -286,7 +299,7 @@ func TestSecurityMailSMTPBoundedConcurrencyAndCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	results := make(chan Submission, 2)
+	results := make(chan authority.MailSubmission, 2)
 	for range 2 {
 		go func() { result, _ := client.Submit(ctx, smtpMessage()); results <- result }()
 	}
@@ -300,14 +313,14 @@ func TestSecurityMailSMTPBoundedConcurrencyAndCancellation(t *testing.T) {
 	}
 	start := time.Now()
 	result, err := client.Submit(ctx, smtpMessage())
-	if err != nil || result.State != Unavailable || time.Since(start) > 500*time.Millisecond {
+	if err != nil || result.State != authority.MailUnavailable || time.Since(start) > 500*time.Millisecond {
 		t.Fatal("capacity queued or accepted more sockets")
 	}
 	cancel()
 	for range 2 {
 		select {
 		case result := <-results:
-			if result.State != Unavailable {
+			if result.State != authority.MailUnavailable {
 				t.Fatal("cancelled pre-DATA request did not close")
 			}
 		case <-time.After(time.Second):
@@ -404,7 +417,7 @@ func TestSecurityMailPostfixMailbox(t *testing.T) {
 		Kind: authority.MailAuthenticatorBound, OccurredAt: verification.OccurredAt}
 	for _, message := range []authority.SecurityMail{verification, security, security} {
 		result, err := client.Submit(context.Background(), message)
-		if err != nil || result.State != Accepted {
+		if err != nil || result.State != authority.MailAccepted {
 			t.Fatalf("real Postfix did not accept valid submission: %+v", result)
 		}
 	}
@@ -466,12 +479,12 @@ func TestSecurityMailPostfixMailbox(t *testing.T) {
 	}
 	config.Password = mustSMTPSecret(t, "incorrect-test-password")
 	wrongCredential, _ := NewClient(config)
-	if result, err := wrongCredential.Submit(context.Background(), security); err != nil || result != (Submission{State: Rejected, SMTPCode: 535}) {
+	if result, err := wrongCredential.Submit(context.Background(), security); err != nil || result != (authority.MailSubmission{State: authority.MailRejected, SMTPCode: 535}) {
 		t.Fatal("real SMTP accepted wrong credentials")
 	}
 	external := security
 	external.Recipient = "receiver@outside.invalid"
-	if result, err := client.Submit(context.Background(), external); err != nil || result.State != Rejected || result.SMTPCode < 500 {
+	if result, err := client.Submit(context.Background(), external); err != nil || result.State != authority.MailRejected || result.SMTPCode < 500 {
 		t.Fatal("test SMTP did not reject external relay")
 	}
 	_, after := mailbox()

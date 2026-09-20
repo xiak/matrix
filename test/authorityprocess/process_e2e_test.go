@@ -133,6 +133,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword))},
 		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword))},
 		{installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment, localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword))},
+		{"MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_notification_worker_login", processDBPassword))},
 	} {
 		migrationEnvironment = append(migrationEnvironment, value.name+"="+writeProtectedFile(t, temporary, value.name, []byte(value.dsn)))
 	}
@@ -258,7 +259,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=35 AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=36 AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb)') IS NULL
 	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb,text)') IS NOT NULL
 	 AND (SELECT cardinality(proallargtypes)=25 AND proargnames[25]='credential_generation' FROM pg_proc WHERE oid='iam.lookup_session(text)'::regprocedure)
@@ -268,7 +269,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 	 FROM iam.readiness()`).Scan(&shape); err != nil || !shape {
 		t.Fatal("retained database did not replace the exact Session ABI", err)
 	}
-	current := start(currentBinary, 35)
+	current := start(currentBinary, 36)
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
 	}
@@ -333,7 +334,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 	if err := iammigration.Up(ctx, admin); err != nil {
 		t.Fatal("replay completed own-session schema", err)
 	}
-	current = start(currentBinary, 35)
+	current = start(currentBinary, 36)
 	if !bytes.Equal(completedState, identityState()) {
 		t.Fatal("restart/schema replay changed completed session state")
 	}
@@ -385,7 +386,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		}
 	}
 	current.stop()
-	t.Log("actual IAM32 -> IAM35 migrator/runtime retained sessions/individual completion, NULL lineage, forced bulk reduction, shared password attempts, exact replay/new-login survival, original receipt/canonical/proof and restart passed; no release compatibility claim")
+	t.Log("actual IAM32 -> IAM36 migrator/runtime retained sessions/individual completion, NULL lineage, forced bulk reduction, shared password attempts, exact replay/new-login survival, original receipt/canonical/proof and restart passed; no release compatibility claim")
 }
 
 func TestIAMRetainedRoleCapabilityProcessUpgrade(t *testing.T) {
@@ -424,6 +425,7 @@ func TestIAMRetainedRoleCapabilityProcessUpgrade(t *testing.T) {
 		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword))},
 		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword))},
 		{installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment, localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword))},
+		{"MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_notification_worker_login", processDBPassword))},
 	} {
 		migrationEnvironment = append(migrationEnvironment, value.name+"="+writeProtectedFile(t, temporary, value.name, []byte(value.dsn)))
 	}
@@ -626,6 +628,7 @@ func TestIAMRetainedRoleAuthorityProcessUpgrade(t *testing.T) {
 		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword))},
 		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword))},
 		{installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment, localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword))},
+		{"MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_notification_worker_login", processDBPassword))},
 	} {
 		migrationEnvironment = append(migrationEnvironment, value.name+"="+file(value.name, value.dsn))
 	}
@@ -966,6 +969,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", localRecoveryMigrationDSN(t, workerDSN)},
 		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, recoveryDSN)},
 		{installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment, localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword))},
+		{"MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_notification_worker_login", processDBPassword))},
 	} {
 		migrationEnvironment = append(migrationEnvironment, value.name+"="+writeProtectedFile(t, temporary, value.name, []byte(value.dsn)))
 	}
@@ -2298,7 +2302,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 35, Audit: 19, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 36, Audit: 20, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")

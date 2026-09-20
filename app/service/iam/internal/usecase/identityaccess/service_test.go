@@ -1349,6 +1349,10 @@ func (transaction *coreTransaction) RevokeOtherSessions(_ context.Context, mutat
 	return transaction.otherSessionResult, transaction.otherSessionError
 }
 
+func (transaction *coreTransaction) ReadEmailVerificationKeyset(context.Context) (*authority.EmailVerificationKeyset, error) {
+	return nil, nil
+}
+
 func (transaction *coreTransaction) ReadAccessKeyCustody(context.Context) (AccessKeyCustody, error) {
 	if transaction.accessKeyCustodyErr != nil {
 		return AccessKeyCustody{}, transaction.accessKeyCustodyErr

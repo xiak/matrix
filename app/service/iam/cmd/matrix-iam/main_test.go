@@ -60,6 +60,65 @@ func TestIAMNetworkConfigurationRequiresPrivateFiles(t *testing.T) {
 	}
 }
 
+func TestEmailVerificationFileCannotChooseAnotherBootstrap(t *testing.T) {
+	encodedBootstrap, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "api", "iam", "v1", "examples", "bootstrap-document.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(encodedBootstrap))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := iamv1.NewSecret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x61}, 32)))
+	document := iamv1.EmailVerificationKeyring{APIVersion: iamv1.APIVersion, Kind: "EmailVerificationKeyring", Purpose: iamv1.EmailVerificationWrappingPurpose,
+		Scope: iamv1.SecurityMailInstallationScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest}, KeysetRevision: 1, ActiveKeyID: "email-key",
+		Keys: []iamv1.EmailVerificationWrappingKey{{KeyID: "email-key", FormatVersion: 1, KeyMaterial: key}}}
+	path := filepath.Join(t.TempDir(), "email-private.json")
+	write := func(value iamv1.EmailVerificationKeyring) {
+		t.Helper()
+		encoded, err := iamv1.EncodeEmailVerificationKeyring(value)
+		defer clear(encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, encoded, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(document)
+	actual, err := readEmailVerificationKeyring(path, bootstrap)
+	if err != nil || actual.Scope != document.Scope {
+		t.Fatal("exact email custody rejected", err)
+	}
+	for _, mutate := range []func(*iamv1.EmailVerificationKeyring){
+		func(v *iamv1.EmailVerificationKeyring) { v.Scope.InstallationID = "another-installation" },
+		func(v *iamv1.EmailVerificationKeyring) { v.Scope.BootstrapDigest = "sha256:" + strings.Repeat("a", 64) },
+	} {
+		wrong := document
+		mutate(&wrong)
+		write(wrong)
+		if result, err := readEmailVerificationKeyring(path, bootstrap); err == nil || len(result.Keys) != 0 {
+			t.Fatal("foreign email custody accepted")
+		}
+	}
+	write(document)
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readEmailVerificationKeyring(path, bootstrap); err == nil {
+			t.Fatal("broadly readable email key accepted")
+		}
+	}
+	if _, err := readEmailVerificationKeyring(filepath.Join(t.TempDir(), "missing.json"), bootstrap); err == nil {
+		t.Fatal("missing key was generated or ignored")
+	}
+}
+
 func TestAccessKeyWrappingFileBindsActualBootstrap(t *testing.T) {
 	encodedBootstrap, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "api", "iam", "v1", "examples", "bootstrap-document.json"))
 	if err != nil {
