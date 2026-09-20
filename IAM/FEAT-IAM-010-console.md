@@ -169,6 +169,7 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 - 严格 HTTP 用例验证唯一无参数 GET、完整字段保留及空/超限、乱序/重复、额外字段、非法摘要、命名空间、scope/shape/condition/result 组合全部失败关闭；Provider 用例验证首次切页才读取、Account 不一致拒绝及 403/404/5xx 局部错误。
 - 组件行为验证产品详情在内容区展开而非 Dialog，进入聚焦详情标题，返回聚焦并带回原产品；策略目录状态在页签切换后保留。隔离 DEV 目录使用同一组件与契约形状，同时明确声明 MOCK 不可信、不授权。
+- 公共表格的显式移动堆叠边界在 `4e57ebdcec4c05fca0f223411460a1952d9c656a` 调整到 `560px` 容器宽度；`539px` DEV 真实浏览器中的目录显示 18 个带列标签的值，document/body 均满足 `clientWidth === scrollWidth === 539`，没有 Dialog 或清洁重载后的新增 warning/error。该共享修改不改变目录契约，也不把默认的密集选择表改成堆叠布局。
 - 同一提交的完整前端、主题、生产导出、嵌入等价及 Go UI 宿主门禁证据由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；本节只接受目录契约和 IAM 交互结果。
 - DEV 浏览器在桌面和 `360 × 800` 验证页签切换无整页骨架闪动、详情进入/返回、移动堆叠与焦点滚动；小屏 document/body 均为 `clientWidth == scrollWidth == 360`，无 Dialog，控制台 warning/error 为空。该结果是隔离 MOCK UX 验收，不冒充固定 IAM 真实进程浏览器验收。
 
