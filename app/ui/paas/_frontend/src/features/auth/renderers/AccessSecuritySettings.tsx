@@ -28,7 +28,7 @@ export function AccessUserSso({ workspace, onProviders }: { workspace: AccessWor
   const settings: AccessSettings = { ...workspace.settings, userSsoEnabled: enabled, userSsoProviderId: providerId };
   return <Card><Card.Header><Typography.Title as="h2" level={3}>{t("userSso")}</Typography.Title><Badge status={workspace.settings.userSsoEnabled ? "success" : "neutral"}>{t(workspace.settings.userSsoEnabled ? "enabled" : "disabled")}</Badge></Card.Header><Card.Body className={styles.stack}>
     <p className={styles.note}>{t("ssoHint")}</p><p className={styles.flow}>{t("ssoFlow")}</p>
-    {workspace.providers.length ? <form className={styles.form} onSubmit={async (event) => { event.preventDefault(); await access.executeWorkspace({ kind: "save-settings", settings }); }}>
+    {workspace.providers.length ? <form className={styles.form} onSubmit={async (event) => { event.preventDefault(); await access.executeWorkspace({ kind: "save-sso-settings", userSsoEnabled: settings.userSsoEnabled, userSsoProviderId: settings.userSsoProviderId }); }}>
       <fieldset className={styles.editorFields} disabled={access.busy}>
         <FormField id={id} label={t("ssoProvider")}><Select id={id} required={enabled} value={providerId} options={[{ value: "", label: t("ssoProvider") }, ...workspace.providers.filter((provider) => provider.enabled).map((provider) => ({ value: provider.id, label: provider.name + " · " + provider.protocol }))]} onValueChange={(value) => setProviderId(value)} /></FormField>
         <Checkbox checked={enabled} onChange={(event) => setEnabled(event.target.checked)}>{t("ssoEnable")}</Checkbox>

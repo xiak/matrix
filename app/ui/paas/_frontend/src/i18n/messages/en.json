@@ -330,6 +330,14 @@
     "sessionEffectTighten": "Tightening requires reauthentication without iterating every session row",
     "sessionEffectRelax": "Relaxing never revives a session that is already invalid",
     "accountReviewBoundary": "Reauthentication is bound to this account, target value, and operation. It is not general authorization and cannot bypass the permission check when saving.",
+    "accountSaveScenario": "MOCK save outcome",
+    "accountSaveScenarioHint": "This selection only exercises recovery paths. It is not a backend request field or public contract.",
+    "accountSaveScenarios": {
+      "success": "Save succeeds",
+      "denied": "Read allowed, update denied",
+      "conflict": "Rule version conflicts",
+      "response-lost": "Response lost after submission (outcome unknown)"
+    },
     "verifyAccountChange": "Continue to identity verification",
     "accountConflictTitle": "The rule changed during review",
     "accountConflictHint": "The save was not applied. Reload the current account rule, then edit from the new baseline.",
@@ -340,6 +348,30 @@
     "accountConflictBoundary": "The save is not replayed automatically, and the password or verification code just entered is never reused. Reload, review, and verify again.",
     "reloadCurrentRule": "Reload current rule",
     "reloadingRule": "Reloading current rule…",
+    "accountDeniedTitle": "This identity cannot update the account rule",
+    "accountDeniedHint": "Reading and updating the rule are separate capabilities. Seeing the current value does not imply permission to change it.",
+    "updateDenied": "Update denied",
+    "accountDeniedBoundary": "The save was not applied and the visible rule is unchanged. The one-time proof, password and verification code were discarded; nothing is retried automatically.",
+    "backToCurrentRule": "Return to current rule",
+    "accountUnknownTitle": "The account-rule save outcome is unknown",
+    "accountUnknownHint": "The request may have committed or may not have applied. A network or 5xx response is not definitive failure.",
+    "outcomeUnknown": "Outcome unknown",
+    "originalIntent": "Original intent",
+    "accountUnknownBoundary": "A second save cannot start while the original intent is locked. The password, verification code and operation proof have left the page; only the authoritative result of the original intent may be queried.",
+    "accountInspectionScenario": "MOCK original-intent query result",
+    "accountInspectionScenarios": {
+      "found-applied": "Original change confirmed applied",
+      "found-rejected": "Original change confirmed not applied",
+      "not-found": "No definitive result yet (remain unknown)",
+      "unavailable": "Query unavailable (remain unknown)"
+    },
+    "inspectOriginalIntent": "Query original intent",
+    "inspectingOriginalIntent": "Querying original intent…",
+    "accountInspectionErrors": {
+      "notFound": "The original intent has no definitive result yet. It remains unknown and cannot be saved again.",
+      "unavailable": "The original intent cannot be queried now. It remains unknown; retry later with the same intent."
+    },
+    "accountInspectionUnavailable": "This error did not create a queryable MOCK intent. The page remains locked and never reuses credentials or resubmits the save.",
     "accountMockBoundary": "This account rule writes only to the isolated preview repository. IAM has not frozen public security-settings HTTP; a real failure must never fall back to this MOCK.",
     "feedback": {
       "removed": "The demonstration authenticator was removed. A real change would end affected login sessions.",
@@ -347,7 +379,8 @@
       "bound": "The demonstration authenticator is connected and the one-time material has left the current content area.",
       "regenerated": "Demonstration recovery codes were regenerated and the old batch is no longer usable.",
       "policyEnabled": "The MOCK MFA requirement was saved. No real environment changed.",
-      "policyDisabled": "Optional MOCK MFA was saved. Personal authenticators remain connected."
+      "policyDisabled": "Optional MOCK MFA was saved. Personal authenticators remain connected.",
+      "policyRejected": "The original intent is confirmed not applied and the current rule is unchanged. Any new change requires a new review and one-time proof."
     }
   },
   "SecurityNotificationPreview": {
@@ -2237,7 +2270,9 @@
       "associationLimit": "Appending these associations would exceed 30 for a user. Nothing was committed. Reduce the selection.",
       "reauthenticationRequired": "Security credentials changed, so this session cannot perform protected actions. Sign out and sign in with the password and new code.",
       "keyResultNotFound": "The original requestId has no definitive result yet. The creation intent remains UNKNOWN and cannot be retried as a new create.",
-      "keyResultUnavailable": "The original requestId cannot be inspected right now. The creation intent remains UNKNOWN; retry later with the same requestId."
+      "keyResultUnavailable": "The original requestId cannot be inspected right now. The creation intent remains UNKNOWN; retry later with the same requestId.",
+      "accountRuleResultNotFound": "The original account-rule intent has no definitive result yet.",
+      "accountRuleResultUnavailable": "The original account-rule intent cannot be queried right now."
     },
     "events": {
       "create-subuser": "Create subuser",
@@ -2269,7 +2304,9 @@
       "begin-personal-mfa-recovery": "Begin personal MFA recovery",
       "complete-personal-mfa-reauthentication": "Complete personal MFA reauthentication",
       "set-user-policies": "Update user policies",
-      "save-settings": "Save security settings",
+      "save-account-rule": "Save account security rule",
+      "inspect-account-rule-change": "Inspect original account security-rule intent",
+      "save-sso-settings": "Save user SSO settings",
       "set-user-groups": "Update memberships",
       "update-user": "Edit user",
       "delete-user": "Delete user",

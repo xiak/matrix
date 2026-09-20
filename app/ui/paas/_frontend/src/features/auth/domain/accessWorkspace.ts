@@ -36,6 +36,13 @@ export type AccessKeyOwnerState = "active" | "passwordChangeRequired" | "disable
 export type PendingAccessKeyCreation =
   | { ownerId: string; requestId: string; status: "UNKNOWN" }
   | { ownerId: string; requestId: string; keyId: string; status: "COMMITTED_SECRET_LOST" };
+/** Preview recovery state only; it does not define a future IAM wire contract. */
+export type PendingAccountRuleChange = {
+  requestId: string;
+  baselineLoginProtection: boolean;
+  requestedLoginProtection: boolean;
+  status: "UNKNOWN";
+};
 export type EnterpriseMember = { id: string; name: string; department: string };
 export type EnterpriseAccount = { id: string; name: string; corporationId: string; visibleMemberIds: string[]; importedMemberIds: string[]; createdAt: string };
 export function enterprisePrincipalId(accountId: string, memberId: string): string { return "principal-wecom-" + accountId + "-" + memberId; }
@@ -62,6 +69,7 @@ export type AccessWorkspace = {
   userProfiles: Record<string, PreviewUserProfile>;
   userBoundaries: Record<string, string>; roleSessions: AccessRoleSession[];
   pendingKeyCreation: PendingAccessKeyCreation | null;
+  pendingAccountRuleChange: PendingAccountRuleChange | null;
   testResources: { id: string; reference: string; tags?: Record<string, string> }[];
   // Synthetic diagnostic inputs, not canned decisions or authorization rules.
   testRequests: { id: "path" | "duplicate" | "tags" | "deny" | "boundary" | "ungranted"; request: AccessTestRequest }[];
@@ -109,7 +117,9 @@ export type AccessWorkspaceCommand =
   | { kind: "save-enterprise"; id?: string; name: string; corporationId: string; visibleMemberIds: string[] }
   | { kind: "delete-enterprise"; id: string }
   | { kind: "import-enterprise-members"; id: string; memberIds: string[] }
-  | { kind: "save-settings"; settings: AccessSettings };
+  | { kind: "save-account-rule"; requestId: string; expectedLoginProtection: boolean; loginProtection: boolean; responseMode: "success" | "response-lost" }
+  | { kind: "inspect-account-rule-change"; requestId: string; resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable" }
+  | { kind: "save-sso-settings"; userSsoEnabled: boolean; userSsoProviderId: string };
 
 export const policyVersionLimit = 5;
 
@@ -475,11 +485,26 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       enterprise.importedMemberIds = [...new Set([...enterprise.importedMemberIds, ...command.memberIds])];
       target = enterprise.name; break;
     }
-    case "save-settings": {
-      const s = command.settings;
-      if (typeof s.loginProtection !== "boolean" || typeof s.userSsoEnabled !== "boolean" || typeof s.userSsoProviderId !== "string") invalid();
-      if (s.userSsoEnabled && !exists(state.providers, s.userSsoProviderId).enabled) invalid();
-      state.settings = { ...s }; target = source.accountId; break;
+    case "save-account-rule": {
+      if (state.pendingAccountRuleChange || !command.requestId.trim() || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection) invalid();
+      if (command.responseMode === "response-lost") state.pendingAccountRuleChange = { requestId: command.requestId, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
+      else state.settings = { ...state.settings, loginProtection: command.loginProtection };
+      target = source.accountId; break;
+    }
+    case "inspect-account-rule-change": {
+      const pending = state.pendingAccountRuleChange;
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.requestId !== command.requestId) invalid();
+      if (command.resultMode === "not-found") throw new AccessWorkspaceError("accountRuleResultNotFound");
+      if (command.resultMode === "unavailable") throw new AccessWorkspaceError("accountRuleResultUnavailable");
+      if (command.resultMode === "found-applied") state.settings = { ...state.settings, loginProtection: pending.requestedLoginProtection };
+      state.pendingAccountRuleChange = null;
+      target = source.accountId; break;
+    }
+    case "save-sso-settings": {
+      if (typeof command.userSsoEnabled !== "boolean" || typeof command.userSsoProviderId !== "string") invalid();
+      if (command.userSsoEnabled && !exists(state.providers, command.userSsoProviderId).enabled) invalid();
+      state.settings = { ...state.settings, userSsoEnabled: command.userSsoEnabled, userSsoProviderId: command.userSsoProviderId }; target = source.accountId; break;
     }
   }
   state.events = [{ id: context.id, action: command.kind, target, at: context.at }, ...state.events].slice(0, 100);

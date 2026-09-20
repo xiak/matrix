@@ -330,6 +330,14 @@
     "sessionEffectTighten": "收紧后要求重新认证；不逐行遍历会话",
     "sessionEffectRelax": "降低要求不会恢复已经失效的会话",
     "accountReviewBoundary": "再次认证只绑定当前账号、目标规则值和本次操作；它不是通用授权，也不能绕过保存时的权限检查。",
+    "accountSaveScenario": "MOCK 保存结果",
+    "accountSaveScenarioHint": "此选择仅用于验收不同恢复路径，不代表后端请求参数或公开契约。",
+    "accountSaveScenarios": {
+      "success": "保存成功",
+      "denied": "读取允许，但更新被拒绝",
+      "conflict": "规则版本发生冲突",
+      "response-lost": "提交后响应丢失（结果未知）"
+    },
     "verifyAccountChange": "继续验证身份",
     "accountConflictTitle": "规则已在审阅期间发生变化",
     "accountConflictHint": "保存未应用。请重新读取当前账号规则，再从新的基线开始编辑。",
@@ -340,6 +348,30 @@
     "accountConflictBoundary": "不会自动重放保存，也不会复用刚才的密码或动态验证码。重新载入后需要再次审阅并验证。",
     "reloadCurrentRule": "重新载入当前规则",
     "reloadingRule": "正在载入当前规则…",
+    "accountDeniedTitle": "当前身份不能更新账号规则",
+    "accountDeniedHint": "规则读取与规则更新是两项独立能力；能看到当前值不代表可以修改。",
+    "updateDenied": "更新被拒绝",
+    "accountDeniedBoundary": "保存未应用，当前可见规则保持不变。一次性证明和刚输入的密码、动态验证码已丢弃；不会自动重试。",
+    "backToCurrentRule": "返回当前规则",
+    "accountUnknownTitle": "账号规则的保存结果未知",
+    "accountUnknownHint": "请求可能已提交，也可能尚未应用；不能把网络或 5xx 当成明确失败。",
+    "outcomeUnknown": "结果未知",
+    "originalIntent": "原始意图",
+    "accountUnknownBoundary": "原始意图锁定期间不能创建第二次保存。密码、动态验证码和操作证明均已从页面移除；只能查询原意图的权威结果。",
+    "accountInspectionScenario": "MOCK 原意图查询结果",
+    "accountInspectionScenarios": {
+      "found-applied": "确认原变更已应用",
+      "found-rejected": "确认原变更未应用",
+      "not-found": "暂未查询到确定结果（保持未知）",
+      "unavailable": "查询暂不可用（保持未知）"
+    },
+    "inspectOriginalIntent": "按原意图查询",
+    "inspectingOriginalIntent": "正在查询原意图…",
+    "accountInspectionErrors": {
+      "notFound": "原意图暂未返回确定结果，状态仍为未知，不能重新保存。",
+      "unavailable": "暂时无法查询原意图，状态仍为未知，请稍后按同一意图重试。"
+    },
+    "accountInspectionUnavailable": "当前错误没有形成可查询的 MOCK 原意图；页面仍保持锁定，不会复用凭据或再次保存。",
     "accountMockBoundary": "此账号规则仅写入隔离体验仓库。IAM 尚未固定公开 security-settings HTTP；真实失败不得回退此 MOCK。",
     "feedback": {
       "removed": "演示验证器已移除；真实操作会结束受影响的登录会话。",
@@ -347,7 +379,8 @@
       "bound": "演示验证器已绑定；一次性材料已从当前内容区移除。",
       "regenerated": "演示恢复码已重新生成，旧批次不再可用。",
       "policyEnabled": "已保存模拟强制 MFA 要求；真实环境不会因此改变。",
-      "policyDisabled": "已保存模拟可选 MFA 要求；个人已绑定验证器不会被删除。"
+      "policyDisabled": "已保存模拟可选 MFA 要求；个人已绑定验证器不会被删除。",
+      "policyRejected": "原意图已确认未应用；当前规则保持不变。如需再次修改，必须创建新的审阅和一次性证明。"
     }
   },
   "SecurityNotificationPreview": {
@@ -2237,7 +2270,9 @@
       "associationLimit": "追加后有用户超过 30 个关联项，整批未提交。请减少选择。",
       "reauthenticationRequired": "安全凭证已变化，当前会话不能继续执行受保护操作。请注销，并使用密码和新的验证码重新登录。",
       "keyResultNotFound": "原 requestId 暂未查询到确定结果。创建意图仍为未知，不能重新创建。",
-      "keyResultUnavailable": "暂时无法查询原 requestId。创建意图仍为未知，请稍后按同一 requestId 重试。"
+      "keyResultUnavailable": "暂时无法查询原 requestId。创建意图仍为未知，请稍后按同一 requestId 重试。",
+      "accountRuleResultNotFound": "原账号规则意图暂未查询到确定结果。",
+      "accountRuleResultUnavailable": "暂时无法查询原账号规则意图。"
     },
     "events": {
       "create-subuser": "创建子用户",
@@ -2269,7 +2304,9 @@
       "begin-personal-mfa-recovery": "开始本人 MFA 恢复",
       "complete-personal-mfa-reauthentication": "完成本人 MFA 重新认证",
       "set-user-policies": "调整用户授权",
-      "save-settings": "保存安全设置",
+      "save-account-rule": "保存账号安全规则",
+      "inspect-account-rule-change": "查询账号安全规则原意图",
+      "save-sso-settings": "保存用户 SSO 设置",
       "set-user-groups": "调整用户组",
       "update-user": "编辑用户",
       "delete-user": "删除用户",

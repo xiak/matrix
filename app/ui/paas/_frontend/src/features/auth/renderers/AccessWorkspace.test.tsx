@@ -62,7 +62,7 @@ function AccountRefresh() {
 function ReauthenticationGuardProbe() {
   const access = useAccountAccess();
   return <>
-    <button data-testid="guard-workspace" onClick={() => void access.executeWorkspace({ kind: "save-settings", settings: { loginProtection: false, userSsoEnabled: false, userSsoProviderId: "" } })}>Protected workspace mutation</button>
+    <button data-testid="guard-workspace" onClick={() => void access.executeWorkspace({ kind: "save-sso-settings", userSsoEnabled: false, userSsoProviderId: "" })}>Protected workspace mutation</button>
     <button data-testid="guard-group" onClick={() => void access.groups?.create({ name: "BlockedGroup", description: "must not reach adapter", requestId: "blocked-group" }).catch(() => undefined)}>Protected group mutation</button>
   </>;
 }
@@ -685,7 +685,7 @@ describe("CAM-style access workspace", () => {
       await extension.execute("preview", { kind: "change-group-policies", id: "group-auditors", added: [], removed: ["policy-audit"] });
       await extension.execute("preview", { kind: "change-group-policies", id: "group-operators", added: [], removed: ["policy-delivery", "policy-tag-logs"] });
       await extension.execute("preview", { kind: "set-key-status", id: "MOCK-pipeline-key", ownerState: "active", status: "DISABLED", resourceVersion: 2, requestId: "disable-pipeline-key" });
-      await extension.execute("preview", { kind: "save-settings", settings: { ...(await extension.read("preview")).settings, loginProtection: true } });
+      await extension.execute("preview", { kind: "save-account-rule", requestId: "seed-account-rule", expectedLoginProtection: false, loginProtection: true, responseMode: "success" });
     } });
     expect(await screen.findByText(/0 个启用的模拟长期密钥/)).toBeTruthy();
     expect(screen.getByText(/这里显示账户策略，不代表用户已经绑定 MFA/)).toBeTruthy();
@@ -2248,43 +2248,71 @@ describe("CAM-style access workspace", () => {
     expect(within(notification).queryByRole("button")).toBeNull();
     expect(repository.execute).not.toHaveBeenCalled();
   });
-  it.each(["settings", "user-sso"] as const)("retains %s inputs on failure and saves only its owned settings on retry", async (view) => {
-    const { user, repository, extension } = await open(view);
+  it("retains user SSO inputs on failure and saves only its owned settings on retry", async () => {
+    const { user, repository, extension } = await open("user-sso");
     const before = await extension.read("preview");
-    if (view === "settings") {
-      await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
-      await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
-      await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
-      const review = screen.getByRole("heading", { name: "审阅账号安全规则变更" });
-      await waitFor(() => expect(review).toBe(document.activeElement));
-      expect(screen.getByText("主身份及持有未撤销平台附件的受保护身份")).toBeTruthy();
-      await user.click(screen.getByRole("button", { name: "继续验证身份" }));
-      const verification = screen.getByRole("heading", { name: "验证身份后更新账号安全规则" });
-      await waitFor(() => expect(verification).toBe(document.activeElement));
-      await user.type(screen.getByLabelText("当前密码"), "demo-password");
-      await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
-    } else {
-      await select(user, "选择身份提供商", "EnterpriseSSO · SAML");
-      await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
-    }
+    await select(user, "选择身份提供商", "EnterpriseSSO · SAML");
+    await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
-    const saveName = view === "settings" ? "验证并继续" : "保存";
-    await user.click(screen.getByRole("button", { name: saveName }));
+    await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("暂时无法完成操作，请重试。");
     expect(await extension.read("preview")).toEqual(before);
-    await user.click(screen.getByRole("button", { name: saveName }));
-    if (view === "settings") {
-      await waitFor(() => expect(screen.queryByRole("heading", { name: "验证身份后更新账号安全规则" })).toBeNull());
-      expect(screen.getByRole("button", { name: "编辑模拟规则" })).toBeTruthy();
-      await waitFor(() => expect(screen.getByRole("heading", { name: "多因素认证要求" })).toBe(document.activeElement));
-    } else {
-      await waitFor(() => expect((screen.getByRole("button", { name: saveName }) as HTMLButtonElement).disabled).toBe(true));
-    }
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect((screen.getByRole("button", { name: "保存" }) as HTMLButtonElement).disabled).toBe(true));
     const state = await extension.read("preview");
-    expect(state.settings).toEqual({ ...before.settings, ...(view === "settings" ? { loginProtection: true } : { userSsoEnabled: true, userSsoProviderId: "idp-example" }) });
+    expect(state.settings).toEqual({ ...before.settings, userSsoEnabled: true, userSsoProviderId: "idp-example" });
     expect(state.providers).toEqual(before.providers);
     expect(state.userPolicies).toEqual(before.userPolicies);
     expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("locks an unknown account-rule save, discards secrets and recovers only through the original intent", async () => {
+    const { user, extension } = await open("settings");
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await select(user, "MOCK 保存结果", "提交后响应丢失（结果未知）");
+    await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+
+    const unknown = await screen.findByRole("heading", { name: "账号规则的保存结果未知" });
+    await waitFor(() => expect(unknown).toBe(document.activeElement));
+    expect(screen.queryByText("操作已完成。")).toBeNull();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+    expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
+    expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
+    const pending = (await extension.read("preview")).pendingAccountRuleChange;
+    expect(pending).toMatchObject({ baselineLoginProtection: false, requestedLoginProtection: true, status: "UNKNOWN" });
+
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("go-settings"));
+    expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
+    await select(user, "MOCK 原意图查询结果", "暂未查询到确定结果（保持未知）");
+    await user.click(screen.getByRole("button", { name: "按原意图查询" }));
+    expect(await screen.findByText(/状态仍为未知，不能重新保存/)).toBeTruthy();
+    expect((await extension.read("preview")).pendingAccountRuleChange).toEqual(pending);
+    await select(user, "MOCK 原意图查询结果", "确认原变更已应用");
+    await user.click(screen.getByRole("button", { name: "按原意图查询" }));
+    expect(await screen.findByText(/已保存模拟强制 MFA 要求/)).toBeTruthy();
+    expect((await extension.read("preview")).settings.loginProtection).toBe(true);
+    expect((await extension.read("preview")).pendingAccountRuleChange).toBeNull();
+  });
+  it("keeps readable account rules unchanged when update capability is denied", async () => {
+    const { user, extension } = await open("settings");
+    const before = await extension.read("preview");
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await select(user, "MOCK 保存结果", "读取允许，但更新被拒绝");
+    await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    expect(await screen.findByRole("heading", { name: "当前身份不能更新账号规则" })).toBeTruthy();
+    expect(screen.getByText(/能看到当前值不代表可以修改/)).toBeTruthy();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+    expect(await extension.read("preview")).toEqual(before);
   });
   it("discards a stale account-rule review and its operation-bound proof after conflict", async () => {
     const { user, repository, extension } = await open("settings");

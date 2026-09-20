@@ -402,7 +402,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         if (result.workspace.accountId !== tenantId || result.workspace.mode !== "preview") throw new Error("INVALID_IAM_TENANT");
         setWorkspace(result.workspace);
         if (command.kind === "create-subuser" || command.kind === "delete-user" || command.kind === "update-user" || command.kind === "import-enterprise-members") { setLoading(true); setRevision((current) => current + 1); }
-        setSuccess("completed");
+        if (!(command.kind === "save-account-rule" && command.responseMode === "response-lost")) {
+          setSuccess("completed");
+        }
         return { issuedKey: result.issuedKey };
       } catch (failure) {
         const code = failure instanceof AccessWorkspaceError ? failure.code : accountError(failure);

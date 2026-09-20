@@ -631,10 +631,27 @@ describe("access workspace preview invariants", () => {
   });
   it("rejects malformed owned settings and requires an available SSO provider", () => {
     const state = initialAccessWorkspace("org-xiak");
-    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-settings", settings: { ...state.settings, loginProtection: null as unknown as boolean } }, context)).toThrow("invalid");
-    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-settings", settings: { ...state.settings, userSsoEnabled: true, userSsoProviderId: "missing" } }, context)).toThrow("notFound");
-    const updated = applyAccessWorkspaceCommand(state, { kind: "save-settings", settings: { ...state.settings, userSsoEnabled: true, userSsoProviderId: "idp-example" } }, context);
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-account-rule", requestId: "", expectedLoginProtection: false, loginProtection: true, responseMode: "success" }, context)).toThrow("invalid");
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-sso-settings", userSsoEnabled: true, userSsoProviderId: "missing" }, context)).toThrow("notFound");
+    const updated = applyAccessWorkspaceCommand(state, { kind: "save-sso-settings", userSsoEnabled: true, userSsoProviderId: "idp-example" }, context);
     expect(updated.settings.userSsoEnabled).toBe(true);
+  });
+  it("locks an unknown account-rule intent until its original result is definitive", () => {
+    const initial = initialAccessWorkspace("org-xiak");
+    const unknown = applyAccessWorkspaceCommand(initial, { kind: "save-account-rule", requestId: "account-rule-1", expectedLoginProtection: false, loginProtection: true, responseMode: "response-lost" }, context);
+    expect(unknown.settings.loginProtection).toBe(false);
+    expect(unknown.pendingAccountRuleChange).toEqual({ requestId: "account-rule-1", baselineLoginProtection: false, requestedLoginProtection: true, status: "UNKNOWN" });
+    expect(() => applyAccessWorkspaceCommand(unknown, { kind: "save-account-rule", requestId: "account-rule-2", expectedLoginProtection: false, loginProtection: true, responseMode: "success" }, context)).toThrow("invalid");
+    expect(() => applyAccessWorkspaceCommand(unknown, { kind: "inspect-account-rule-change", requestId: "account-rule-1", resultMode: "not-found" }, context)).toThrow("accountRuleResultNotFound");
+    expect(() => applyAccessWorkspaceCommand(unknown, { kind: "inspect-account-rule-change", requestId: "account-rule-1", resultMode: "unavailable" }, context)).toThrow("accountRuleResultUnavailable");
+    const applied = applyAccessWorkspaceCommand(unknown, { kind: "inspect-account-rule-change", requestId: "account-rule-1", resultMode: "found-applied" }, context);
+    expect(applied.settings.loginProtection).toBe(true);
+    expect(applied.pendingAccountRuleChange).toBeNull();
+
+    const another = applyAccessWorkspaceCommand(initial, { kind: "save-account-rule", requestId: "account-rule-3", expectedLoginProtection: false, loginProtection: true, responseMode: "response-lost" }, context);
+    const rejected = applyAccessWorkspaceCommand(another, { kind: "inspect-account-rule-change", requestId: "account-rule-3", resultMode: "found-rejected" }, context);
+    expect(rejected.settings.loginProtection).toBe(false);
+    expect(rejected.pendingAccountRuleChange).toBeNull();
   });
   it("imports visible enterprise members as ungranted preview users and resets them only through the explicit demo reset", async () => {
     resetPreviewEnvironment();

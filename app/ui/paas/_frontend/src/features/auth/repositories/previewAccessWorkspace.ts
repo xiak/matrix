@@ -48,7 +48,7 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
       "principal-qiao": { consoleAccess: true, programmaticAccess: true, passwordResetRequired: false, loginProtection: false, tags: [{ key: "team", value: "delivery" }] },
       "principal-wu": { consoleAccess: true, programmaticAccess: false, passwordResetRequired: false, loginProtection: false, tags: [] }
     },
-    userBoundaries: { "principal-qiao": "policy-delivery-boundary" }, roleSessions: [], pendingKeyCreation: null,
+    userBoundaries: { "principal-qiao": "policy-delivery-boundary" }, roleSessions: [], pendingKeyCreation: null, pendingAccountRuleChange: null,
     enterpriseMembers: [{ id: "dev01", name: "Dev Member", department: "Delivery" }, { id: "ops01", name: "Ops Member", department: "Operations" }, { id: "audit01", name: "Audit Member", department: "Security" }],
     groups: [
       { id: "group-delivery", name: "DeliveryTeam", description: "Application delivery team", memberIds: ["principal-lin"], policyIds: ["policy-delivery"], createdAt: at },
