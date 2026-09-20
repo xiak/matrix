@@ -170,6 +170,9 @@
 .securityReportSummary > div { display: grid; gap: var(--xiak-spacing-micro); min-width: 0; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel-hover); }
 .securityReportSummary dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .securityReportSummary dd { margin: 0; color: var(--xiak-color-text-strong); font-family: var(--xiak-font-numeric); font-size: var(--xiak-font-size-subtitle); font-weight: var(--xiak-font-weight-semibold); }
+.securityEvidenceHeading { display: grid; gap: var(--xiak-spacing-micro); }
+.securityEvidenceHeading strong { color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-medium); }
+.securityEvidenceHeading span, .securityEvidenceState { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.5; }
 .securityChecks { display: grid; margin: 0; padding: 0; list-style: none; }
 .securityChecks > li { display: flex; align-items: center; gap: var(--xiak-spacing-default); min-width: 0; padding-block: var(--xiak-spacing-comfortable); border-bottom: var(--xiak-border-subtle); }
 .securityChecks > li:first-child { padding-top: 0; }

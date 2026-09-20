@@ -2124,13 +2124,23 @@
     "highPolicies": "High-privilege policies",
     "highPoliciesHint": "Policies whose current default version includes permission-management actions, for review. This is not an effective-access assessment.",
     "securityOverview": "Identity security overview",
-    "securityOverviewHint": "Local guidance derived from this preview session, not a real risk score, effective-access result, or authenticator status.",
+    "securityOverviewHint": "Local guidance derived from this preview session, not a real risk score, effective-access result, or authenticator status; conclusions and evidence coverage are shown separately.",
     "securityStatusSummary": "Identity security check status",
+    "securityEvidenceCoverage": "Evidence coverage",
+    "securityEvidenceStatusSummary": "Identity security evidence coverage",
+    "securityEvidenceHint": "Unobserved does not mean no activity. Incomplete coverage cannot be extrapolated to the whole account.",
+    "securityEvidenceLabel": "Evidence",
     "mockEvidence": "MOCK snapshot",
     "securityStates": {
       "review": "Review",
       "configured": "Configured",
       "unknown": "Unknown",
+      "notApplicable": "Not applicable"
+    },
+    "securityEvidenceStates": {
+      "observed": "Observed",
+      "incomplete": "Incomplete coverage",
+      "unobserved": "Unobserved",
       "notApplicable": "Not applicable"
     },
     "securityChecks": {
@@ -2159,7 +2169,7 @@
     "exportReports": "Export reports",
     "credentialReport": "User credential report",
     "securityReport": "Security analysis report",
-    "reportHint": "Exports this MOCK snapshot only, never passwords or secrets; unknown and not-applicable values stay distinct.",
+    "reportHint": "Exports this MOCK snapshot only, never passwords or secrets; unknown, not applicable, unobserved and incomplete coverage stay distinct.",
     "download": "Download report",
     "noAudit": "No operations yet",
     "event": "Event",

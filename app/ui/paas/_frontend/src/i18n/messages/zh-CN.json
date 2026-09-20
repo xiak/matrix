@@ -2124,13 +2124,23 @@
     "highPolicies": "高权限策略",
     "highPoliciesHint": "当前默认版本包含权限管理操作的策略，供重点检查；此列表不是有效权限评估。",
     "securityOverview": "身份安全概览",
-    "securityOverviewHint": "基于当前体验会话的本地建议，不代表真实风险分、最终权限或认证器状态。",
+    "securityOverviewHint": "基于当前体验会话的本地建议，不代表真实风险分、最终权限或认证器状态；结论与证据覆盖分别呈现。",
     "securityStatusSummary": "身份安全检查状态",
+    "securityEvidenceCoverage": "证据覆盖",
+    "securityEvidenceStatusSummary": "身份安全证据覆盖",
+    "securityEvidenceHint": "未观测不等于没有活动；覆盖不完整时，已加载结果不能外推到整个账号。",
+    "securityEvidenceLabel": "证据",
     "mockEvidence": "MOCK 快照",
     "securityStates": {
       "review": "需复核",
       "configured": "已配置",
       "unknown": "状态未知",
+      "notApplicable": "不适用"
+    },
+    "securityEvidenceStates": {
+      "observed": "已观测",
+      "incomplete": "覆盖不完整",
+      "unobserved": "未观测",
       "notApplicable": "不适用"
     },
     "securityChecks": {
@@ -2159,7 +2169,7 @@
     "exportReports": "导出报告",
     "credentialReport": "用户凭证报告",
     "securityReport": "安全分析报告",
-    "reportHint": "只导出当前 MOCK 快照，不包含密码或 Secret；未知与不适用会明确区分。",
+    "reportHint": "只导出当前 MOCK 快照，不包含密码或 Secret；未知、不适用、未观测与覆盖不完整会明确区分。",
     "download": "下载报告",
     "noAudit": "暂无操作记录",
     "event": "操作事件",

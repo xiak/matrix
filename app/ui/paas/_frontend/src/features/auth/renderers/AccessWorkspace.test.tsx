@@ -2301,8 +2301,10 @@ describe("CAM-style access workspace", () => {
     const workspace = await extension.read("preview");
     const report = buildAccessReport("security", workspace, buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] }), "2026-09-09T00:00:00Z");
     expect(report.mode).toBe("MOCK");
-    expect(report.coverage.authenticatorEnrollment).toBe("UNKNOWN");
+    expect(report.coverage.authenticatorEnrollment).toBe("UNOBSERVED");
     expect(report.checks?.find((check) => check.id === "mfaEvidence")?.state).toBe("unknown");
+    expect(report.checks?.find((check) => check.id === "mfaEvidence")?.evidence).toBe("unobserved");
+    expect(report.coverage.activityEvidence).toBe("UNOBSERVED");
     expect(JSON.stringify(report)).not.toContain("EntityDescriptor");
     expect(JSON.stringify(report)).not.toContain("preview-only");
     expect(report.users).toHaveLength(2);
@@ -2312,7 +2314,9 @@ describe("CAM-style access workspace", () => {
     const workspace = await extension.read("preview");
     const snapshot = buildAccessSecuritySnapshot(workspace);
     expect(snapshot.counts).toEqual({ review: 3, configured: 1, notApplicable: 0, unknown: 1 });
+    expect(snapshot.evidenceCounts).toEqual({ observed: 4, incomplete: 0, unobserved: 1, notApplicable: 0 });
     expect(snapshot.checks.find((check) => check.id === "mfaEvidence")?.state).toBe("unknown");
+    expect(snapshot.checks.find((check) => check.id === "mfaEvidence")?.evidence).toBe("unobserved");
 
     const withoutApplicableUsers = structuredClone(workspace);
     withoutApplicableUsers.userProfiles = {};
@@ -2322,6 +2326,10 @@ describe("CAM-style access workspace", () => {
     expect(empty.checks.find((check) => check.id === "activeKeys")?.state).toBe("notApplicable");
     expect(empty.checks.find((check) => check.id === "loginProtection")?.state).toBe("notApplicable");
     expect(empty.checks.find((check) => check.id === "mfaEvidence")?.state).toBe("notApplicable");
+
+    const partial = buildAccessSecuritySnapshot(withoutApplicableUsers, false);
+    expect(partial.checks.find((check) => check.id === "directGrants")).toMatchObject({ state: "unknown", evidence: "incomplete" });
+    expect(partial.checks.find((check) => check.id === "mfaEvidence")).toMatchObject({ state: "unknown", evidence: "unobserved" });
   });
   it("presents security evidence before report exports and links checks to their owning pages", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
@@ -2332,8 +2340,10 @@ describe("CAM-style access workspace", () => {
     render(<LocaleProvider><AccessReports workspace={workspace} scene={scene} onNavigate={onNavigate} /></LocaleProvider>);
     const card = screen.getByRole("heading", { name: "身份安全概览" }).closest("article")!;
     expect(within(card).getByLabelText("身份安全检查状态")).toBeTruthy();
+    expect(within(card).getByLabelText("身份安全证据覆盖")).toBeTruthy();
     expect(within(card).getByText("MFA 绑定证据")).toBeTruthy();
     expect(within(card).getAllByText("状态未知").length).toBeGreaterThanOrEqual(1);
+    expect(within(card).getAllByText("证据: 未观测").length).toBeGreaterThanOrEqual(1);
     expect(within(card).getByRole("button", { name: "导出报告" })).toBeTruthy();
     await user.click(within(card).getByRole("button", { name: "查看长期访问密钥" }));
     expect(onNavigate).toHaveBeenCalledWith("keys");

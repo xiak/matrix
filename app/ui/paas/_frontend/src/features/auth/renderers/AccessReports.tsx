@@ -24,7 +24,7 @@ export function AccessReports({ workspace, scene, onNavigate }: {
 }) {
   const t = useTranslations("IamWorkspace");
   const [failed, setFailed] = useState(false);
-  const snapshot = buildAccessSecuritySnapshot(workspace);
+  const snapshot = buildAccessSecuritySnapshot(workspace, scene.directoryComplete);
 
   function download(kind: "credentials" | "security") {
     try {
@@ -54,6 +54,16 @@ export function AccessReports({ workspace, scene, onNavigate }: {
           <dd>{snapshot.counts[state]}</dd>
         </div>)}
       </dl>
+      <div className={styles.securityEvidenceHeading}>
+        <strong>{t("securityEvidenceCoverage")}</strong>
+        <span>{t("securityEvidenceHint")}</span>
+      </div>
+      <dl className={styles.securityReportSummary} aria-label={t("securityEvidenceStatusSummary")}>
+        {(["observed", "incomplete", "unobserved", "notApplicable"] as const).map((state) => <div key={state}>
+          <dt>{t(`securityEvidenceStates.${state}`)}</dt>
+          <dd>{snapshot.evidenceCounts[state]}</dd>
+        </div>)}
+      </dl>
       <ul className={styles.securityChecks}>
         {snapshot.checks.map((check) => {
           const title = t(`securityChecks.${check.id}.title`);
@@ -64,6 +74,7 @@ export function AccessReports({ workspace, scene, onNavigate }: {
                 <Badge status={badgeStatus[check.state]}>{t(`securityStates.${check.state}`)}</Badge>
               </div>
               <p>{t(`securityChecks.${check.id}.hint`, { count: check.count ?? 0 })}</p>
+              <span className={styles.securityEvidenceState}>{t("securityEvidenceLabel")}: {t(`securityEvidenceStates.${check.evidence}`)}</span>
             </div>
             {check.target ? <Button aria-label={t("reviewSecurityCheck", { name: title })} size="small" variant="ghost" onClick={() => onNavigate(check.target!)}>
               {t("view")}<ArrowRight aria-hidden="true" />
