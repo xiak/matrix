@@ -452,6 +452,23 @@ tests pass.
 
 ## Implementation evidence
 
+Phase 3's pre-MFA password boundary is fixed at source
+`0edcf588d0662daf279895352f6bfbfe768659f4`. A durable per-USER reservation
+enforces a shared five-attempt/60-second budget and one bounded in-flight
+verification across replicas; Argon2 remains outside database locks, while the
+final Session or password transaction consumes the exact purpose, credential
+generation and reservation under lock. The API role can no longer execute raw
+password lookup functions or superseded mutation overloads. Unknown and
+suppressed identities still perform bounded dummy verification without
+allocating authority rows. The exact source passed `go`, `ui`,
+`authority-process` and `node-process` in
+[independent CI](https://github.com/xiak/matrix/actions/runs/35490308071),
+including the PostgreSQL 18 cross-replica, replay, reset, rollback and
+restricted-role gates. Its source readiness is IAM 33 / Audit 18 / PaaS 6;
+the signed release profile deliberately remains IAM 30 / Audit 18 / PaaS 6,
+revision 12. This is a fail-closed preparation slice, not an MFA-enabled or
+installable release claim.
+
 The fixed `26f3569` account/proof slice is integrated with this branch's host
 admission. Fresh PostgreSQL 18 race gates passed IAM/Audit HTTP, dual-schema
 privilege and immutable-storage attacks, and retained Audit/PaaS upgrades.
