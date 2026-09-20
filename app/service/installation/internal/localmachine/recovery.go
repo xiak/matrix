@@ -25,7 +25,13 @@ diagnostic="$(mktemp)"
 trap 'rm -f -- "${diagnostic}"' EXIT
 set +e
 {
-  printf '%s\n' 'BEGIN;' 'DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;'
+  printf '%s\n' \
+    'BEGIN;' \
+    'DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;' \
+    'CREATE SCHEMA audit AUTHORIZATION matrix_audit_owner;' \
+    'CREATE SCHEMA iam AUTHORIZATION matrix_iam_owner;' \
+    'CREATE SCHEMA managedservice AUTHORIZATION CURRENT_USER;' \
+    'CREATE SCHEMA paas AUTHORIZATION CURRENT_USER;'
   if pg_restore --file=- --exit-on-error --no-privileges --no-password --strict-names \
       --schema=audit --schema=iam --schema=managedservice --schema=paas 2>/dev/null; then
     printf '%s\n' 'COMMIT;'

@@ -3813,6 +3813,10 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 		}
 		for _, required := range []string{
 			"BEGIN;", "DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;",
+			"CREATE SCHEMA audit AUTHORIZATION matrix_audit_owner;",
+			"CREATE SCHEMA iam AUTHORIZATION matrix_iam_owner;",
+			"CREATE SCHEMA managedservice AUTHORIZATION CURRENT_USER;",
+			"CREATE SCHEMA paas AUTHORIZATION CURRENT_USER;",
 			"pg_restore --file=- --exit-on-error --no-privileges --no-password --strict-names",
 			"--schema=audit --schema=iam --schema=managedservice --schema=paas 2>/dev/null",
 			"COMMIT;", "ROLLBACK;", "psql -X --set=ON_ERROR_STOP=1",
@@ -3828,10 +3832,21 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 				return true, fmt.Errorf("recovery restore transaction lacks %s", required)
 			}
 		}
-		for _, forbidden := range []string{"--clean", "--no-owner", "--schema=public"} {
+		for _, forbidden := range []string{
+			"--clean", "--no-owner", "--schema=public", "CREATE SCHEMA public",
+		} {
 			if strings.Contains(databaseRestoreScript, forbidden) {
 				return true, fmt.Errorf("recovery restore transaction contains %s", forbidden)
 			}
+		}
+		drop := strings.Index(databaseRestoreScript, "DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;")
+		audit := strings.Index(databaseRestoreScript, "CREATE SCHEMA audit AUTHORIZATION matrix_audit_owner;")
+		iam := strings.Index(databaseRestoreScript, "CREATE SCHEMA iam AUTHORIZATION matrix_iam_owner;")
+		managedservice := strings.Index(databaseRestoreScript, "CREATE SCHEMA managedservice AUTHORIZATION CURRENT_USER;")
+		paas := strings.Index(databaseRestoreScript, "CREATE SCHEMA paas AUTHORIZATION CURRENT_USER;")
+		restore := strings.Index(databaseRestoreScript, "pg_restore --file=-")
+		if drop < 0 || !(drop < audit && audit < iam && iam < managedservice && managedservice < paas && paas < restore) {
+			return true, errors.New("recovery restore schema reset order is invalid")
 		}
 		runtimeBoundary.recoveryRestores++
 		return true, nil
