@@ -348,15 +348,9 @@ jobs:
           git worktree prune
           docker builder prune --all --force
           docker image prune --force
-          docker image rm \
-            apache/apisix:3.17.0-debian \
-            apache/apisix@sha256:6cbf65f3085d1386bfd636b7e88400c163c3641841909e674af7896a5766b092
-          docker image rm \
-            alpine:3.24.1 \
-            alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
-          docker image rm \
-            postgres:18 \
-            postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a
+          docker image rm apache/apisix:3.17.0-debian
+          docker image rm alpine:3.24.1
+          docker image rm postgres:18
           go clean -cache -testcache -modcache
           du -sh "$RUNNER_TEMP/platform-release-a" "$RUNNER_TEMP/platform-release-b"
           docker system df
