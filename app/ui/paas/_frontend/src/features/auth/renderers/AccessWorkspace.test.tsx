@@ -2135,6 +2135,9 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "身份验证方法" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "多因素认证要求" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "登录时的 MFA 要求" })).toBeTruthy();
+    expect(screen.getByText("当前规则")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "编辑模拟规则" })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" })).toBeNull();
     expect(screen.queryByLabelText("密码最小长度")).toBeNull();
     expect(screen.queryByLabelText("会话时长（分钟）")).toBeNull();
     expect(screen.getByRole("heading", { name: "安全通知" })).toBeTruthy();
@@ -2223,6 +2226,7 @@ describe("CAM-style access workspace", () => {
     const { user, repository, extension } = await open(view);
     const before = await extension.read("preview");
     if (view === "settings") {
+      await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
       await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
       await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
       const review = screen.getByRole("heading", { name: "审阅账号安全规则变更" });
@@ -2245,7 +2249,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: saveName }));
     if (view === "settings") {
       await waitFor(() => expect(screen.queryByRole("heading", { name: "验证身份后更新账号安全规则" })).toBeNull());
-      expect((screen.getByRole("button", { name: "审阅规则变更" }) as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.getByRole("button", { name: "编辑模拟规则" })).toBeTruthy();
       await waitFor(() => expect(screen.getByRole("heading", { name: "多因素认证要求" })).toBe(document.activeElement));
     } else {
       await waitFor(() => expect((screen.getByRole("button", { name: saveName }) as HTMLButtonElement).disabled).toBe(true));
@@ -2255,6 +2259,35 @@ describe("CAM-style access workspace", () => {
     expect(state.providers).toEqual(before.providers);
     expect(state.userPolicies).toEqual(before.userPolicies);
     expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("discards a stale account-rule review and its operation-bound proof after conflict", async () => {
+    const { user, repository, extension } = await open("settings");
+    const before = await extension.read("preview");
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new HttpProblem(409, "IAM_STATE_CONFLICT"));
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+
+    const conflict = await screen.findByRole("heading", { name: "规则已在审阅期间发生变化" });
+    await waitFor(() => expect(conflict).toBe(document.activeElement));
+    expect(screen.getByText("本次证明已作废，不能用于新的规则版本")).toBeTruthy();
+    expect(screen.getByText(/不会自动重放保存/)).toBeTruthy();
+    expect(await extension.read("preview")).toEqual(before);
+
+    await user.click(screen.getByRole("button", { name: "重新载入当前规则" }));
+    await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("button", { name: "编辑模拟规则" })).toBeTruthy();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+    expect((screen.getByLabelText("当前密码") as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("6 位动态验证码") as HTMLInputElement).value).toBe("");
   });
   it("saves SSO settings only to the preview adapter", async () => {
     const { user, repository, extension } = await open("user-sso");

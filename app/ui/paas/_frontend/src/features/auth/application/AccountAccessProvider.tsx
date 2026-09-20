@@ -26,6 +26,7 @@ import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
+type WorkspaceExecutionError = AccessWorkspaceError["code"] | AccountError;
 
 export type UserBoundarySnapshot = {
   user: AccountUserScene;
@@ -79,8 +80,8 @@ type AccountAccess = {
   policyDirectoryView: { read(): PolicyDirectoryView; remember(value: PolicyDirectoryView): void };
   userDirectoryView: { read(): UserDirectoryView; remember(value: UserDirectoryView): void };
   workspace: AccessWorkspace | null;
-  workspaceError: AccessWorkspaceError["code"] | AccountError | null;
-  executeWorkspace(command: AccessWorkspaceCommand): Promise<{ issuedKey?: { id: string; secret: string } } | null>;
+  workspaceError: WorkspaceExecutionError | null;
+  executeWorkspace(command: AccessWorkspaceCommand, onError?: (error: WorkspaceExecutionError) => void): Promise<{ issuedKey?: { id: string; secret: string } } | null>;
   clearWorkspaceError(): void;
   clearFeedback(): void;
   groups: GroupAccessClient | null;
@@ -390,7 +391,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     authorizationProfiles,
     workspace, workspaceError,
     clearWorkspaceError, clearFeedback,
-    async executeWorkspace(command) {
+    async executeWorkspace(command, onError) {
       if (!active || !credential || !scene?.canListUsers || !repository.workspace || loading || mutationPending.current) return null;
       if (workspace?.personalMfa.reauthenticationRequired) { setWorkspaceError("reauthenticationRequired"); return null; }
       if ("principalId" in command && command.principalId === scene.accountOwner.id) { setWorkspaceError("forbidden"); return null; }
@@ -404,7 +405,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         setSuccess("completed");
         return { issuedKey: result.issuedKey };
       } catch (failure) {
-        setWorkspaceError(failure instanceof AccessWorkspaceError ? failure.code : accountError(failure));
+        const code = failure instanceof AccessWorkspaceError ? failure.code : accountError(failure);
+        setWorkspaceError(code);
+        onError?.(code);
         return null;
       } finally { mutationPending.current = false; setBusy(false); }
     },
