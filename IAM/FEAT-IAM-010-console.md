@@ -5,7 +5,7 @@
 - 全局导航、视觉体系、响应式布局和隔离 MOCK 体验由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md) 拥有；固定来源由 [adoption review](../docs/adoption/FEAT-007-control-plane-console.md) 拥有。不引入另一套 IAM UI。
 - 当前 IAM 集成基线固定为 `04041d2d3f7ed55225a5164bc2bc05251d25a6f1`（Verification `35485632542` completed/success）。该来源只固定当前 API 与权威对象，不把 IAM 各 FEAT 的未完成验收继承为 UI 验收。
 - 权限能力目录的 CAT-06 固定契约为 `40407e2710a45ee1000552146cd362740074369a`，对应 IAM 累积来源 `a36a35c2eddbeb7c76a8d7c140e180b24a169aab`。它只固定只读目录及其错误边界，不接受租户注册产品、目录生命周期或策略作者发布能力。
-- 本人安全通知、首次 TOTP 绑定及原登录挑战的固定契约来源为 `f5cec0e132ad18900d9a5a5629eae04fda4817f1`。受限自助恢复客户端按 IAM-009 S2b 候选 `48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e` 的三个封闭接口实现；该候选的独立 CI 因平台 billing/spending 未取得 runner，完整十码跨窗口和真实浏览器仍未验收，因此这里只固定客户端解释与隔离 MOCK，不把后端候选称为已发布或继承其验收。
+- 本人安全通知、首次 TOTP 绑定及原登录挑战的固定契约来源为 `f5cec0e132ad18900d9a5a5629eae04fda4817f1`。受限自助恢复客户端按 IAM-009 S2b 候选 `48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e` 的三个封闭接口实现。IAM 的 `80a6e6d18288df7f5d89ffee40722ee9aa614ee7` 已在真实 PostgreSQL 18.6 上完成十码逐条耗尽、两次自然十分钟窗口及相关 race/vet 验证；其独立 CI 仍因平台 billing/spending 未取得 runner，真实 IAM 浏览器也未验收，因此这里只固定客户端解释与隔离 MOCK，不把候选称为已发布或继承未完成的发布验收。
 
 ## 需求
 
@@ -312,12 +312,12 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 2026-09-21，前端实现与同步嵌入资源起始于
 [`3c9a49fb`](https://github.com/xiak/matrix/commit/3c9a49fb)，确认未知与身份隔离加固固定在
 [`d7d6333d`](https://github.com/xiak/matrix/commit/d7d6333d135a65648269443789799d1fccf0b638)，契约解释固定到 IAM-009 S2b 候选
-`48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e`；后端独立 CI、完整十码跨窗口和真实 IAM 浏览器仍按本文顶部限制保持未验收。
+`48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e`；后端十码耗尽与跨窗口验证固定在 `80a6e6d18288df7f5d89ffee40722ee9aa614ee7`，独立 CI 与真实 IAM 浏览器仍按本文顶部限制保持未验收。
 
 - 严格 HTTP 适配只调用 `:recover`、`:confirm-recovery` 与 `:recovery-result` 三个无 bearer 路由，发送各自闭合字段并保留原 requestId。客户端验证 challenge purpose/nextStep、五分钟期限、开始 challenge 与 recovery 同期限、终态时间、请求关联及确认结果恰好十条非空唯一恢复码；额外字段、混合 LOGIN/RECOVERY purpose、过期完成或秘密重放形状均失败关闭。
 - Provider 把普通 TOTP、恢复码输入、不可逆开始、新因子确认、结果查询、开始未知和确认未知建成不同阶段。开始网络/5xx 结果未知时不自动重试；重新登录后只查询原非秘密状态。`STARTED` 且材料丢失或 `NOT_FOUND` 均只允许用户明确选择另一条码的新意图。确认未知后，新的 `LOGIN/TOTP` 仍优先验证新因子；新的 `LOGIN/RECOVER` 则查询原 requestId，以区分确认前断线留下的 `STARTED`/`EXPIRED`，不能循环停在仅返回登录的页面，也不查询或重放十码。未决恢复严格匹配原 loginName，不改变另一身份的挑战阶段。
 - DEV MOCK 与 LIVE 使用同一 Provider/repository/rendering 边界，展示不可逆副作用、手动设置密钥、当前新 OTP 及十条一次性恢复码；秘密不进入 URL、storage 或控制台日志。`539px` 浏览器完整走通恢复码→新因子→十码，document/body 均为 `clientWidth == scrollWidth == 539`，最终 warning/error 为空。
-- 完整前端 42 个测试文件、657 条用例和三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。`539px` DEV 复验仍完整走通恢复码→新因子→十码，document/body 均无横向溢出且 warning/error 为空。该结果不替代 IAM 候选的独立 CI、真实进程浏览器、完整十码耗尽跨窗口或发布 profile 验收。
+- 完整前端 42 个测试文件、657 条用例和三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。`539px` DEV 复验仍完整走通恢复码→新因子→十码，document/body 均无横向溢出且 warning/error 为空。该结果与后端 `80a6e6d1` 的真实 PostgreSQL 十码耗尽证据互补，但不替代 IAM 候选的独立 CI、真实进程浏览器或发布 profile 验收。
 
 ### 账号级 MFA 要求 MOCK 的开发验收证据
 
