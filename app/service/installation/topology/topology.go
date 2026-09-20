@@ -144,9 +144,11 @@ func predecessorContractDescription() contract {
 func removeSuccessorIAMSecrets(services map[string]serviceConfig) {
 	iam := services["iam"]
 	delete(iam.Environment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE")
+	delete(iam.Environment, "MATRIX_IAM_TOTP_KEYRING_FILE")
 	delete(iam.Environment, "MATRIX_IAM_CURSOR_KEY_FILE")
 	iam.Volumes = slices.DeleteFunc(iam.Volumes, func(value mount) bool {
 		return value.Target == "/run/matrix/iam-access-key-wrapping-keyring.json" ||
+			value.Target == "/run/matrix/iam-totp-keyring.json" ||
 			value.Target == "/run/matrix/iam-cursor-key"
 	})
 	services["iam"] = iam
@@ -365,6 +367,7 @@ func compileServices(
 	paasWorkerDSN := path.Join(root, layout.PaaSWorker)
 	bootstrapIAM := path.Join(root, layout.IAMBootstrap)
 	accessKeyWrappingKeyring := path.Join(root, layout.IAMAccessKeyWrappingKeyring)
+	totpKeyring := path.Join(root, layout.IAMTOTPKeyring)
 	iamCursorKey := path.Join(root, layout.IAMCursorKey)
 	auditIAMCredential := path.Join(root, layout.AuditIAMCredential)
 	iamAuditCredential := path.Join(root, layout.IAMAuditCredential)
@@ -436,6 +439,7 @@ func compileServices(
 	)
 	iam.Environment = map[string]string{
 		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE": "/run/matrix/iam-access-key-wrapping-keyring.json",
+		"MATRIX_IAM_TOTP_KEYRING_FILE":                "/run/matrix/iam-totp-keyring.json",
 		"MATRIX_IAM_DATABASE_DSN_FILE":                "/run/matrix/iam-api-dsn",
 		"MATRIX_IAM_BOOTSTRAP_FILE":                   "/run/matrix/iam-bootstrap.json",
 		"MATRIX_IAM_CURSOR_KEY_FILE":                  "/run/matrix/iam-cursor-key",
@@ -445,6 +449,7 @@ func compileServices(
 		bind(iamAPIDSN, "/run/matrix/iam-api-dsn", true),
 		bind(bootstrapIAM, "/run/matrix/iam-bootstrap.json", true),
 		bind(accessKeyWrappingKeyring, "/run/matrix/iam-access-key-wrapping-keyring.json", true),
+		bind(totpKeyring, "/run/matrix/iam-totp-keyring.json", true),
 		bind(iamCursorKey, "/run/matrix/iam-cursor-key", true),
 	}
 	iam.DependsOn = healthy("postgres")

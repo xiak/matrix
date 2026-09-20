@@ -592,6 +592,21 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	wrappingKeyMaterial := wrappingKeyring.Keys[0].KeyMaterial.CopyBytes()
 	defer clear(wrappingKeyMaterial)
 	wrappingKeyring = iamv1.AccessKeyWrappingKeyring{}
+	totpKeyring, err := readTOTPKeyring(plan.Root, plan.InstallationID)
+	if err != nil || totpKeyring.Scope != (iamv1.TOTPWrappingScope{
+		InstallationID: bootstrap.InstallationID, BootstrapDigest: bootstrapDigest,
+	}) || totpKeyring.KeysetRevision != 1 || len(totpKeyring.Keys) != 1 ||
+		totpKeyring.ActiveKeyID != "totp-wrapping-v1" ||
+		totpKeyring.Keys[0].KeyID != totpKeyring.ActiveKeyID ||
+		totpKeyring.Keys[0].FormatVersion != 1 {
+		t.Fatal("TOTP keyring is not bound to the sealed IAM bootstrap")
+	}
+	totpKeyMaterial := totpKeyring.Keys[0].KeyMaterial.CopyBytes()
+	defer clear(totpKeyMaterial)
+	totpKeyring = iamv1.TOTPKeyring{}
+	if bytes.Equal(totpKeyMaterial, wrappingKeyMaterial) {
+		t.Fatal("TOTP and AccessKey wrapping reused key material")
+	}
 	iamCursorKey := readTestFile(t, plan.Root, layout.IAMCursorKey)
 	auditCursorKey := readTestFile(t, plan.Root, layout.AuditCursorKey)
 	if len(iamCursorKey) != 64 || len(auditCursorKey) != 64 || bytes.Equal(iamCursorKey, auditCursorKey) {
@@ -906,6 +921,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		controllerPrivateKeyPEM,
 		localAuthority.CapabilityKey.CopyBytes(),
 		wrappingKeyMaterial,
+		totpKeyMaterial,
 	}
 	for _, credential := range serviceCredentials {
 		secrets = append(secrets, credential)
@@ -1132,6 +1148,59 @@ func TestAccessKeyWrappingKeyringCannotAdoptSubstitutedMaterial(t *testing.T) {
 			}
 			if !equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
 				t.Fatal("rejected wrapping keyring changed installation credentials")
+			}
+		})
+	}
+}
+
+func TestTOTPKeyringCannotAdoptWrongScopeOrMalformedMaterial(t *testing.T) {
+	for _, mode := range []string{"installation", "bootstrap", "invalid key material", "absent keyring"} {
+		t.Run(mode, func(t *testing.T) {
+			plan := newInstallPlan(t)
+			if err := stageInstallation(plan, rand.Reader); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(plan.Root, filepath.FromSlash(layout.IAMTOTPKeyring))
+			content := readTestFile(t, plan.Root, layout.IAMTOTPKeyring)
+			switch mode {
+			case "installation":
+				content = bytes.Replace(content, []byte(plan.InstallationID), []byte("mxi-ffffffffffffffffffffffffffffffff"), 1)
+			case "bootstrap":
+				content = bytes.Replace(content, []byte(`"bootstrapDigest":"sha256:`), []byte(`"bootstrapDigest":"sha256:f`), 1)
+			case "invalid key material":
+				marker := []byte(`"keyMaterial":"`)
+				index := bytes.Index(content, marker)
+				if index < 0 || index+len(marker) >= len(content) {
+					t.Fatal("keyring fixture lacks key material")
+				}
+				content[index+len(marker)] = '?'
+			case "absent keyring":
+				if os.Remove(path) != nil {
+					t.Fatal("remove keyring fixture")
+				}
+				if _, err := readTOTPKeyring(plan.Root, plan.InstallationID); !errors.Is(err, platformcommand.ErrEffectVerification) {
+					t.Fatal("read silently created a missing TOTP keyring")
+				}
+				if err := ensureTOTPKeyring(plan.Root, plan.InstallationID, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectUnavailable) {
+					t.Fatalf("missing TOTP keyring did not require fresh entropy: %v", err)
+				}
+				if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("failed key generation left partial TOTP material")
+				}
+				return
+			}
+			if os.WriteFile(path, content, 0o600) != nil {
+				t.Fatal("write substituted keyring fixture")
+			}
+			before := snapshotManagedCredentials(t, plan.Root)
+			if _, err := readTOTPKeyring(plan.Root, plan.InstallationID); !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatal("wrong-scope or malformed TOTP keyring was accepted")
+			}
+			if err := stageInstallation(plan, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatal("staging replay adopted a wrong-scope or malformed TOTP keyring")
+			}
+			if !equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
+				t.Fatal("rejected TOTP keyring changed installation credentials")
 			}
 		})
 	}
@@ -1430,7 +1499,7 @@ func TestFrozenPredecessorVerificationDoesNotRequireFutureIAMSecrets(t *testing.
 	plan := newUpgradePlan(
 		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
 	)
-	for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring, layout.IAMCursorKey} {
+	for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring, layout.IAMCursorKey} {
 		// newUpgradePlan stages both sides of the transition in one fixture root.
 		// Reconstruct the frozen predecessor state before authenticating it;
 		// staging the successor below must recreate both successor-only secrets.
@@ -1451,13 +1520,16 @@ func TestFrozenPredecessorVerificationDoesNotRequireFutureIAMSecrets(t *testing.
 	}
 	defer clear(source.TrustBytes)
 	if _, err := verifiedInstallationConfiguration(source); err != nil {
-		t.Fatalf("verify frozen predecessor without future access-key wrapping keyring: %v", err)
+		t.Fatalf("verify frozen predecessor without future IAM secrets: %v", err)
 	}
 	if err := stageInstallation(plan.Target, rand.Reader); err != nil {
 		t.Fatalf("stage successor credentials: %v", err)
 	}
 	if _, err := readAccessKeyWrappingKeyring(plan.Target.Root, plan.Target.InstallationID); err != nil {
 		t.Fatalf("successor staging did not materialize access-key wrapping keyring: %v", err)
+	}
+	if _, err := readTOTPKeyring(plan.Target.Root, plan.Target.InstallationID); err != nil {
+		t.Fatalf("successor staging did not materialize TOTP keyring: %v", err)
 	}
 	if cursorKey := readTestFile(t, plan.Target.Root, layout.IAMCursorKey); len(cursorKey) != 64 {
 		t.Fatal("successor staging did not materialize the IAM cursor key")
@@ -2949,7 +3021,7 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 		t.Fatalf("stage upgrade source: %v", err)
 	}
 	if source.Bundle.Manifest.TopologyDigest == topology.SupportedPredecessorContractDigest() {
-		for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring, layout.IAMCursorKey} {
+		for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring, layout.IAMCursorKey} {
 			if err := os.Remove(filepath.Join(source.Root, filepath.FromSlash(relative))); err != nil {
 				t.Fatalf("remove future predecessor fixture %q: %v", relative, err)
 			}
@@ -3049,7 +3121,7 @@ func readTestFile(t *testing.T, root, relative string) []byte {
 func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 	t.Helper()
 	paths := []string{
-		layout.ReleaseTrust, layout.IAMBootstrap, layout.IAMAccessKeyWrappingKeyring, layout.AuditIAMCredential,
+		layout.ReleaseTrust, layout.IAMBootstrap, layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring, layout.AuditIAMCredential,
 		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
 		layout.InstallationVerifierCredential, layout.IAMCursorKey, layout.AuditCursorKey,
 		layout.EnrollmentIssuerCertificate, layout.EnrollmentIssuerPrivateKey,

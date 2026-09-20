@@ -72,12 +72,19 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	enrollmentIssuerMounts := 0
 	enrollmentIngressMounts := 0
 	accessKeyWrappingMounts := 0
+	totpKeyringMounts := 0
 	iamCursorKeyMounts := 0
 	for name, raw := range services {
 		service := raw.(map[string]any)
 		mounts, _ := service["volumes"].([]any)
 		for _, rawMount := range mounts {
 			mount := rawMount.(map[string]any)
+			mountSource, _ := mount["source"].(string)
+			totpSource := path.Join(options.Root, layout.IAMTOTPKeyring)
+			if mountSource != "" && mountSource != totpSource &&
+				strings.HasPrefix(totpSource, strings.TrimRight(mountSource, "/")+"/") {
+				t.Fatal("platform service mounted a parent of the TOTP keyring")
+			}
 			if mount["source"] == path.Join(options.Root, layout.NodeControllerDirectory) {
 				controllerMounts++
 				if (name != "paas-api" && name != "paas-worker") || mount["target"] != "/run/matrix/node-controller" || mount["read_only"] != true {
@@ -107,6 +114,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					t.Fatal("access-key wrapping keyring crossed its IAM API boundary")
 				}
 			}
+			if mount["source"] == path.Join(options.Root, layout.IAMTOTPKeyring) {
+				totpKeyringMounts++
+				if name != "iam" || mount["target"] != "/run/matrix/iam-totp-keyring.json" || mount["read_only"] != true {
+					t.Fatal("TOTP keyring crossed its IAM API boundary")
+				}
+			}
 			if mount["source"] == path.Join(options.Root, layout.IAMCursorKey) {
 				iamCursorKeyMounts++
 				if name != "iam" || mount["target"] != "/run/matrix/iam-cursor-key" || mount["read_only"] != true {
@@ -127,11 +140,17 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	if accessKeyWrappingMounts != 1 {
 		t.Fatal("access-key wrapping keyring lacks its single IAM API mount")
 	}
+	if totpKeyringMounts != 1 {
+		t.Fatal("TOTP keyring lacks its single IAM API mount")
+	}
 	if iamCursorKeyMounts != 1 {
 		t.Fatal("IAM cursor key lacks its single IAM API mount")
 	}
 	if services["iam"].(map[string]any)["environment"].(map[string]any)["MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE"] != "/run/matrix/iam-access-key-wrapping-keyring.json" {
 		t.Fatal("IAM does not consume the installation-owned access-key wrapping keyring")
+	}
+	if services["iam"].(map[string]any)["environment"].(map[string]any)["MATRIX_IAM_TOTP_KEYRING_FILE"] != "/run/matrix/iam-totp-keyring.json" {
+		t.Fatal("IAM does not receive the installation-owned TOTP keyring")
 	}
 	if services["paas-api"].(map[string]any)["environment"].(map[string]any)["MATRIX_PAAS_NODE_CONNECTIONS_FILE"] != "/run/matrix/node-controller/configuration.json" {
 		t.Fatal("PaaS does not consume the signed controller mount")
@@ -170,7 +189,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		},
 		"iam": {
 			"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE", "MATRIX_IAM_BOOTSTRAP_FILE", "MATRIX_IAM_CURSOR_KEY_FILE",
-			"MATRIX_IAM_DATABASE_DSN_FILE", "MATRIX_IAM_LISTEN_ADDRESS",
+			"MATRIX_IAM_DATABASE_DSN_FILE", "MATRIX_IAM_LISTEN_ADDRESS", "MATRIX_IAM_TOTP_KEYRING_FILE",
 		},
 		"iam-audit-dispatcher": {
 			"MATRIX_IAM_AUDIT_CREDENTIAL_FILE", "MATRIX_IAM_AUDIT_DATABASE_DSN_FILE",
@@ -541,11 +560,13 @@ func TestCompileInstalledPinsCurrentAndFrozenPredecessorTopologyPairs(t *testing
 		document.Services["audit"].Environment["MATRIX_AUDIT_NORTHBOUND_ORIGIN"] != "" ||
 		document.Services["audit"].Environment["MATRIX_AUDIT_INSTALLATION_ID"] != "" ||
 		document.Services["iam"].Environment["MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE"] != "" ||
+		document.Services["iam"].Environment["MATRIX_IAM_TOTP_KEYRING_FILE"] != "" ||
 		document.Services["iam"].Environment["MATRIX_IAM_CURSOR_KEY_FILE"] != "" {
-		t.Fatal("frozen predecessor gained the successor access-key trust boundary")
+		t.Fatal("frozen predecessor gained the successor IAM secret boundary")
 	}
 	for _, volume := range document.Services["iam"].Volumes {
-		if volume.Target == "/run/matrix/iam-access-key-wrapping-keyring.json" || volume.Target == "/run/matrix/iam-cursor-key" {
+		if volume.Target == "/run/matrix/iam-access-key-wrapping-keyring.json" ||
+			volume.Target == "/run/matrix/iam-totp-keyring.json" || volume.Target == "/run/matrix/iam-cursor-key" {
 			t.Fatal("frozen predecessor gained a successor IAM secret mount")
 		}
 	}

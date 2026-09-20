@@ -99,6 +99,9 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	if err := ensureAccessKeyWrappingKeyring(plan.Root, plan.InstallationID, entropy); err != nil {
 		return err
 	}
+	if err := ensureTOTPKeyring(plan.Root, plan.InstallationID, entropy); err != nil {
+		return err
+	}
 	if err := ensureLocalCredentialRecoveryAuthority(plan.Root, plan.InstallationID, entropy); err != nil {
 		return err
 	}
@@ -821,22 +824,109 @@ func readAccessKeyWrappingKeyring(root, installationID string) (iamv1.AccessKeyW
 }
 
 func accessKeyWrappingScope(root, installationID string) (iamv1.AccessKeyWrappingScope, error) {
+	sealedInstallationID, bootstrapDigest, err := sealedIAMBootstrapScope(root, installationID)
+	if err != nil {
+		return iamv1.AccessKeyWrappingScope{}, err
+	}
+	return iamv1.AccessKeyWrappingScope{
+		InstallationID: sealedInstallationID, BootstrapDigest: bootstrapDigest,
+	}, nil
+}
+
+// TOTP wrapping material is independent from AccessKey wrapping material. It
+// is created once for the sealed installation and never regenerated on replay.
+// Database custody/history and MFA enablement are separate IAM gates.
+func ensureTOTPKeyring(root, installationID string, entropy io.Reader) error {
+	relative := filepath.FromSlash(layout.IAMTOTPKeyring)
+	exists, err := managedFileExists(root, relative)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	if exists {
+		_, err := readTOTPKeyring(root, installationID)
+		return err
+	}
+	scope, err := totpWrappingScope(root, installationID)
+	if err != nil {
+		return err
+	}
+	random := make([]byte, 32)
+	if _, err := io.ReadFull(entropy, random); err != nil {
+		clear(random)
+		return errors.Join(platformcommand.ErrEffectUnavailable, err)
+	}
+	materialText := base64.RawURLEncoding.EncodeToString(random)
+	clear(random)
+	material, err := iamv1.NewSecret(materialText)
+	materialText = ""
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	const keyID = "totp-wrapping-v1"
+	keyring := iamv1.TOTPKeyring{
+		APIVersion: iamv1.APIVersion, Kind: "TOTPKeyring",
+		Purpose: iamv1.TOTPWrappingPurpose, Scope: scope,
+		KeysetRevision: 1, ActiveKeyID: keyID,
+		Keys: []iamv1.TOTPWrappingKey{{
+			KeyID: keyID, FormatVersion: 1, KeyMaterial: material,
+		}},
+	}
+	encoded, err := iamv1.EncodeTOTPKeyring(keyring)
+	keyring = iamv1.TOTPKeyring{}
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	defer clear(encoded)
+	if err := writeManagedOnce(root, relative, encoded); err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	return nil
+}
+
+func readTOTPKeyring(root, installationID string) (iamv1.TOTPKeyring, error) {
+	expected, err := totpWrappingScope(root, installationID)
+	if err != nil {
+		return iamv1.TOTPKeyring{}, err
+	}
+	encoded, err := readManagedFile(
+		root, filepath.FromSlash(layout.IAMTOTPKeyring), iamv1.MaxTOTPKeyringBytes,
+	)
+	if err != nil {
+		return iamv1.TOTPKeyring{}, platformcommand.ErrEffectVerification
+	}
+	defer clear(encoded)
+	keyring, err := iamv1.DecodeTOTPKeyring(bytes.NewReader(encoded))
+	if err != nil || keyring.Scope != expected {
+		return iamv1.TOTPKeyring{}, platformcommand.ErrEffectVerification
+	}
+	return keyring, nil
+}
+
+func totpWrappingScope(root, installationID string) (iamv1.TOTPWrappingScope, error) {
+	sealedInstallationID, bootstrapDigest, err := sealedIAMBootstrapScope(root, installationID)
+	if err != nil {
+		return iamv1.TOTPWrappingScope{}, err
+	}
+	return iamv1.TOTPWrappingScope{
+		InstallationID: sealedInstallationID, BootstrapDigest: bootstrapDigest,
+	}, nil
+}
+
+func sealedIAMBootstrapScope(root, installationID string) (string, string, error) {
 	encoded, err := readManagedFile(root, filepath.FromSlash(layout.IAMBootstrap), maximumCredentialFile)
 	if err != nil {
-		return iamv1.AccessKeyWrappingScope{}, platformcommand.ErrEffectVerification
+		return "", "", platformcommand.ErrEffectVerification
 	}
 	defer clear(encoded)
 	document, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(encoded))
 	if err != nil || document.InstallationID != installationID {
-		return iamv1.AccessKeyWrappingScope{}, platformcommand.ErrEffectVerification
+		return "", "", platformcommand.ErrEffectVerification
 	}
 	digest, err := iamv1.BootstrapDigest(document)
 	if err != nil {
-		return iamv1.AccessKeyWrappingScope{}, platformcommand.ErrEffectVerification
+		return "", "", platformcommand.ErrEffectVerification
 	}
-	return iamv1.AccessKeyWrappingScope{
-		InstallationID: document.InstallationID, BootstrapDigest: digest,
-	}, nil
+	return document.InstallationID, digest, nil
 }
 
 // The local issuing key is installation-owned, not a service credential or
