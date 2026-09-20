@@ -3986,6 +3986,13 @@ func TestDatabaseRestoreScriptEmitsOnlyClosedSQLStateClass(t *testing.T) {
 			"RESTORE_OBJECT_CONFLICT\n", false,
 		)
 	})
+	t.Run("server SQLSTATE with source prefix", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'psql:<stdin>:17: ERROR:  42P07' 'private relation name' >&2\nexit 3\n",
+			"RESTORE_OBJECT_CONFLICT\n", false,
+		)
+	})
 	t.Run("archive pipeline", func(t *testing.T) {
 		run(t,
 			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\nexit 9\n",

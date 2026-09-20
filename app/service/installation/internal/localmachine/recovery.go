@@ -42,7 +42,15 @@ if [ "${generator_status}" -eq 0 ] && [ "${database_status}" -eq 0 ]; then
   exit 0
 fi
 if [ "${database_status}" -ne 0 ]; then
-  sqlstate="$(LC_ALL=C awk '/^[A-Z]+:  [0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]$/ { print substr($0, length($0)-4); exit }' "${diagnostic}")"
+  sqlstate="$(LC_ALL=C awk '{
+    for (field = 1; field < NF; field++) {
+      if (($field == "ERROR:" || $field == "FATAL:" || $field == "PANIC:") &&
+          $(field + 1) ~ /^[0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]$/) {
+        print $(field + 1)
+        exit
+      }
+    }
+  }' "${diagnostic}")"
   case "${sqlstate}" in
     42P06|42P07|42710) printf '%s\n' 'RESTORE_OBJECT_CONFLICT' ;;
     42704|42P01|3F000) printf '%s\n' 'RESTORE_REFERENCE' ;;
