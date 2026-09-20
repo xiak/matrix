@@ -39,7 +39,7 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
           </div>
         </section>
         <section aria-label={t("region")} className={styles.loginCard}>
-          {firstLogin ? <PasswordChangeForm /> : <AccountLoginForm returnTo={returnTo} />}
+          {firstLogin ? <PasswordChangeForm returnTo={returnTo} /> : <AccountLoginForm returnTo={returnTo} />}
           <p className={styles.securityNote}><ShieldCheck aria-hidden="true" /><span>{t(uxPreviewEnabled ? "previewSecurity" : "security")}</span></p>
         </section>
       </main>

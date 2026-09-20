@@ -170,18 +170,15 @@
     "previewSecurity": "MOCK never writes to your platform. Sessions stay in this page only.",
     "firstLogin": "First sign-in · {name}",
     "changeTitle": "Set your own password",
-    "changeHint": "Your initial password starts a restricted session. After the update succeeds, this session ends; sign in again with the new password.",
+    "changeHint": "Your initial password starts a restricted session. Set a new password to open the console.",
     "currentPassword": "Current initial password",
     "newPassword": "New password",
     "confirmPassword": "Confirm new password",
     "passwordPolicy": "14–128 bytes, no spaces. Include at least three of: uppercase letters, lowercase letters, numbers and symbols.",
-    "savePassword": "Save and sign in again",
+    "savePassword": "Save and open console",
     "savingPassword": "Updating password…",
     "exitSession": "Exit this session",
     "exitingSession": "Signing out…",
-    "notices": {
-      "passwordChanged": "Your password was updated and the restricted session ended. Sign in again with the new password."
-    },
     "errors": {
       "primaryIdentifier": "Use your account username, or switch to IAM user sign-in.",
       "childIdentifier": "Enter username@account-ID-or-alias.",

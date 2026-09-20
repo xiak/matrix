@@ -13,7 +13,6 @@ function Probe() {
       <span data-testid="phase">{session.phase}</span>
       <span data-testid="principal">{session.current?.loginName ?? "none"}</span>
       <span data-testid="error">{session.error ?? "none"}</span>
-      <span data-testid="notice">{session.notice ?? "none"}</span>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
       <button
         onClick={() => void session.changePassword("Initial-Admin-Password-49!", "Changed-Admin-Password-73!")}
@@ -125,7 +124,7 @@ describe("SessionProvider", () => {
     expect(screen.getByTestId("error").textContent).toBe("none");
   });
 
-  it("ends the restricted credential after a first-login password change", async () => {
+  it("requires a first-login password change before authenticating", async () => {
     const screen = render(
       <SessionProvider repository={repository({ mustChangePassword: true })}>
         <Probe />
@@ -136,11 +135,7 @@ describe("SessionProvider", () => {
     expect(screen.getByTestId("principal").textContent).toBe("admin");
     expect(screen.container.textContent).not.toContain(secretCredential);
     await act(async () => fireEvent.click(screen.getByText("change")));
-    await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("anonymous"));
-    expect(screen.getByTestId("principal").textContent).toBe("none");
-    expect(screen.getByTestId("notice").textContent).toBe("passwordChanged");
-    await act(async () => fireEvent.click(screen.getByText("login")));
-    expect(screen.getByTestId("notice").textContent).toBe("none");
+    await waitFor(() => expect(screen.getByTestId("phase").textContent).toBe("authenticated"));
   });
 
   it("keeps a failed first-login password change inside the required scene", async () => {

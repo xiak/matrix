@@ -170,18 +170,15 @@
     "previewSecurity": "MOCK 不写入真实平台；会话仅保留在当前页面。",
     "firstLogin": "首次登录 · {name}",
     "changeTitle": "设置你的正式密码",
-    "changeHint": "初始密码只能建立受限会话。更新成功后，此会话会结束；请使用新密码重新登录。",
+    "changeHint": "初始密码只能建立受限会话。完成更新后才能进入控制台。",
     "currentPassword": "当前初始密码",
     "newPassword": "新密码",
     "confirmPassword": "确认新密码",
     "passwordPolicy": "14–128 字节，不含空格，且至少包含大写字母、小写字母、数字、符号中的三类。",
-    "savePassword": "保存并重新登录",
+    "savePassword": "保存并进入控制台",
     "savingPassword": "正在更新密码…",
     "exitSession": "退出此会话",
     "exitingSession": "正在退出…",
-    "notices": {
-      "passwordChanged": "密码已更新，受限会话已经结束。请使用新密码重新登录。"
-    },
     "errors": {
       "primaryIdentifier": "请使用主账号登录名；子账号请切换登录方式",
       "childIdentifier": "请输入 子用户名@主账号ID或别名",

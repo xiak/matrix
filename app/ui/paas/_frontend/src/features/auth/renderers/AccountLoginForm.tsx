@@ -78,7 +78,6 @@ export function AccountLoginForm({ returnTo }: { returnTo: string }) {
     <div className={styles.cardHeading}>
       <h1>{t("welcome")}</h1><p>{t("welcomeHint")}</p>
     </div>
-    {session.notice ? <Alert status="success">{t(`notices.${session.notice}`)}</Alert> : null}
     <Tabs.Root value={mode} onValueChange={changeMode}>
       <Tabs.List aria-label={t("mode")}>
         <Tabs.Trigger disabled={busy} value="primary">{t("primary")}</Tabs.Trigger>

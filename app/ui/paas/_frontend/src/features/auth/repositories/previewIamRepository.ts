@@ -318,7 +318,7 @@ export const previewIamRepository: IamRepository = {
     activePreviewCredential = `matrix-ux-preview-${crypto.randomUUID()}`;
     return loginResult(activePreviewCredential);
   },
-  async changePassword(credential) { requirePreviewCredential(credential); invalidateActivePreviewCredential(credential); },
+  async changePassword(credential) { requirePreviewCredential(credential); },
   async logout(credential) {
     requirePreviewCredential(credential);
     invalidateActivePreviewCredential(credential);
