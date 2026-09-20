@@ -21,6 +21,7 @@ import type {
 import { type AccessWorkspace, type AccessWorkspaceCommand, type PendingAccountRuleChange } from "../domain/accessWorkspace";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import type { AccountRepository } from "../repositories/iamRepository";
+import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
@@ -69,6 +70,15 @@ export type AuthorizationProfileClient = {
   load(): Promise<AuthorizationProfileLoad>;
 };
 
+export type AccessKeyClient = {
+  accountId: string;
+  list(userId: string): Promise<AccessKeyDirectory>;
+  read(userId: string, accessKeyId: string): Promise<AccessKeyAccess>;
+  create(userId: string, command: { userResourceVersion: number; requestId: string }): Promise<AccessKeyCreation>;
+  setStatus(userId: string, accessKeyId: string, command: { accessKeyResourceVersion: number; requestId: string; status: AccessKeyStatus }): Promise<AccessKeyStatusChange>;
+  delete(userId: string, accessKeyId: string, command: { accessKeyResourceVersion: number; requestId: string }): Promise<AccessKeyDeletion>;
+};
+
 export type PolicyDirectoryView = { query: string; kind: string; service: string; category: string; sort: string; page: number; pageSize: number };
 export const defaultPolicyDirectoryView: PolicyDirectoryView = { query: "", kind: "all", service: "all", category: "all", sort: "name", page: 1, pageSize: 10 };
 export type UserDirectoryView = { query: string; state: string; role: string };
@@ -87,6 +97,7 @@ type AccountAccess = {
   groups: GroupAccessClient | null;
   permissionBoundaries: UserBoundaryClient | null;
   authorizationProfiles: AuthorizationProfileClient | null;
+  accessKeys: AccessKeyClient | null;
   scene: AccountAccessScene | null;
   loading: boolean;
   busy: boolean;
@@ -320,6 +331,33 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [active, credential, expireSession, repository, scene, tenantId]);
 
+  const accessKeys = useMemo<AccessKeyClient | null>(() => {
+    const keyRepository = repository.accessKeys;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !keyRepository || !scene.canListUsers) return null;
+    const accountId = scene.accountId;
+    const target = (userId: string) => {
+      if (!userId || userId === scene.accountOwner.id || !scene.users.some((user) => user.id === userId)) throw new Error("INVALID_IAM_USER_TARGET");
+      return userId;
+    };
+    const scoped = async <T,>(request: Promise<T>): Promise<T> => {
+      try { return await request; }
+      catch (failure) {
+        if (failure instanceof HttpProblem && failure.status === 401 && expireSession(credential)) {
+          setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+        }
+        throw failure;
+      }
+    };
+    return {
+      accountId,
+      list: (userId) => scoped(keyRepository.list(credential, accountId, target(userId))),
+      read: (userId, accessKeyId) => scoped(keyRepository.read(credential, accountId, target(userId), accessKeyId)),
+      create: (userId, command) => scoped(keyRepository.create(credential, accountId, target(userId), command)),
+      setStatus: (userId, accessKeyId, command) => scoped(keyRepository.setStatus(credential, accountId, target(userId), accessKeyId, command)),
+      delete: (userId, accessKeyId, command) => scoped(keyRepository.delete(credential, accountId, target(userId), accessKeyId, command))
+    };
+  }, [active, credential, expireSession, repository, scene, tenantId]);
+
   const loadUsersPage = useCallback(async (after: string) => {
     if (!active || !credential || !scene || loading || mutationPending.current) return;
     const source = scene;
@@ -396,6 +434,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     groups,
     permissionBoundaries,
     authorizationProfiles,
+    accessKeys,
     workspace, workspaceError,
     clearWorkspaceError, clearFeedback,
     async executeWorkspace(command, onError) {
@@ -464,7 +503,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, accessKeys, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

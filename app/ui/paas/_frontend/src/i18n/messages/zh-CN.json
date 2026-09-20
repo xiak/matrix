@@ -1030,7 +1030,9 @@
       "SYSTEM_ACCOUNT_PROTECTED": "系统账号受保护，不能执行此操作。",
       "TARGET_DISABLED": "目标用户已禁用，需先恢复其状态。",
       "TARGET_CREDENTIAL_CHANGE_REQUIRED": "目标用户必须先完成密码修改。",
-      "TARGET_MUST_BE_DISABLED": "删除前必须先禁用该用户。"
+      "TARGET_MUST_BE_DISABLED": "删除前必须先禁用该用户。",
+      "ACCESS_KEY_LIMIT_REACHED": "该用户已达到访问密钥数量上限。",
+      "RESOURCE_VERSION_EXHAUSTED": "该对象不能继续更新，请联系平台管理员。"
     },
     "disableUser": "禁用用户",
     "enableUser": "启用用户",
@@ -2143,6 +2145,22 @@
     "keyRevision": "密钥资源版本",
     "keyUserRevision": "用户资源版本",
     "keyProductBoundary": "当前产品接口尚未接入访问密钥验签。本页只预览管理生命周期，不能用于任何真实业务 API。真实接入必须依据 AccessKey 专属 ActionCapability 判断管理权限与平台保护，不能从用户列表权限、名称或启用状态推断。",
+    "keyLiveProductBoundary": "本页使用固定的访问密钥管理契约，但产品接口尚未开放访问密钥验签。这里可以管理凭据生命周期，不代表密钥已经能够调用任何云产品 API。",
+    "keyLiveLoading": "正在读取该用户的访问密钥…",
+    "keyLiveSaving": "正在提交…",
+    "keyLiveRetry": "重新读取",
+    "keyConfirmCreate": "确认创建",
+    "keyLiveCreated": "访问密钥已创建",
+    "keyLiveSecretWarning": "请立即将 Secret 保存到受保护的凭据存储。离开此步骤后无法再次查看；不要复制到聊天、工单或源码中。",
+    "keyLiveAcknowledge": "我已将 Secret 保存到受保护的位置，并理解它无法再次显示",
+    "keyLiveReplayTitle": "原创建请求已完成",
+    "keyLiveReplay": "相同 requestId 已经创建密钥 {id}。为防止秘密泄露，重放只返回非秘密结果，Secret 无法再次显示。",
+    "keyLiveErrors": {
+      "forbidden": "当前身份没有管理该用户访问密钥的权限。",
+      "routeUnavailable": "当前运行的 IAM 进程尚未提供访问密钥管理接口。",
+      "conflict": "用户或密钥状态已变化。请重新读取后再操作，并保留不确定请求的原 requestId。",
+      "unavailable": "暂时无法读取或更新访问密钥。未收到可信结果时不要生成新的 requestId。"
+    },
     "keyNoUsageEvidence": "当前契约没有可靠的最后使用时间或访问日志。不能因“没有记录”推断密钥未被使用或可以安全删除。",
     "keyInlineWorkflow": "操作在当前内容区完成，不打开模态框。",
     "keyCreateReview": "核对并创建访问密钥",

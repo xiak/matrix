@@ -55,7 +55,7 @@ function profileEntry(product = "paas") {
   };
 }
 
-function capability(action: string, kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT", id: string, available = true, restrictionReason = "AUTHORITY_REQUIRED") {
+function capability(action: string, kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT" | "ACCESS_KEY", id: string, available = true, restrictionReason = "AUTHORITY_REQUIRED") {
   return { action, resource: { kind, id }, available, ...(available ? {} : { restrictionReason }) };
 }
 
@@ -130,6 +130,68 @@ function membershipPage() {
   return { apiVersion, kind: "GroupMembershipList", accountId: account.id, groupId: group.id, items: [{ membership,
     capabilities: [capability("iam.group-membership.remove", "GROUP_MEMBERSHIP", membership.id)] }] };
 }
+
+const accessKey = { apiVersion, kind: "AccessKey", id: "mak1.alex-primary", accountId: account.id, userId: user.id,
+  status: "ENABLED", resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };
+function accessKeyAccess(value = accessKey) {
+  return { key: value, capabilities: [
+    capability("iam.access-key.read", "ACCESS_KEY", value.id),
+    capability("iam.access-key.set-status", "ACCESS_KEY", value.id),
+    capability("iam.access-key.delete", "ACCESS_KEY", value.id, value.status === "DISABLED", "TARGET_MUST_BE_DISABLED")
+  ] };
+}
+function accessKeyList() {
+  return { apiVersion, kind: "AccessKeyList", accountId: account.id, userId: user.id, userResourceVersion: user.resourceVersion,
+    capabilities: [capability("iam.access-key.create", "USER", user.id)], items: [accessKeyAccess()] };
+}
+
+describe("IAM HTTP access-key boundary", () => {
+  it("loads one exact per-user directory without an account selector", async () => {
+    const fetcher = reply(accessKeyList());
+    const result = await httpAccountRepository.accessKeys!.list("bearer", account.id, user.id);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/users/${user.id}/access-keys`);
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(result).toMatchObject({ accountId: account.id, userId: user.id, userResourceVersion: 2 });
+    expect(result.items[0]?.key).toMatchObject({ id: accessKey.id, status: "ENABLED", resourceVersion: 1 });
+  });
+
+  it("accepts the one-time secret only on a first applied creation", async () => {
+    const fetcher = reply({ outcome: "APPLIED", key: accessKey, secret: "mak1.secret-material" });
+    const result = await httpAccountRepository.accessKeys!.create("bearer", account.id, user.id, { userResourceVersion: 2, requestId: "create-key-1" });
+    expect(result).toEqual(expect.objectContaining({ outcome: "APPLIED", secret: "mak1.secret-material" }));
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/users/${user.id}/access-keys`);
+    expect(requestBody(fetcher)).toEqual({ userResourceVersion: 2, requestId: "create-key-1" });
+
+    reply({ outcome: "EQUAL_REPLAY", key: accessKey, secret: "must-not-repeat" });
+    await expect(httpAccountRepository.accessKeys!.create("bearer", account.id, user.id, { userResourceVersion: 2, requestId: "create-key-1" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("keeps exact capability resource bindings and ordered key identities", async () => {
+    reply({ ...accessKeyList(), items: [{ ...accessKeyAccess(), capabilities: [
+      capability("iam.access-key.read", "ACCESS_KEY", "another-key"),
+      capability("iam.access-key.set-status", "ACCESS_KEY", accessKey.id),
+      capability("iam.access-key.delete", "ACCESS_KEY", accessKey.id)
+    ] }] });
+    await expect(httpAccountRepository.accessKeys!.list("bearer", account.id, user.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+
+    reply({ ...accessKeyList(), items: [accessKeyAccess({ ...accessKey, id: "mak1.z" }), accessKeyAccess({ ...accessKey, id: "mak1.a" })] });
+    await expect(httpAccountRepository.accessKeys!.list("bearer", account.id, user.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("updates and deletes one key at its exact resource version", async () => {
+    const disabled = { ...accessKey, status: "DISABLED", resourceVersion: 2, updatedAt: "2026-09-11T08:01:00Z" };
+    let fetcher = reply({ outcome: "APPLIED", key: disabled });
+    const status = await httpAccountRepository.accessKeys!.setStatus("bearer", account.id, user.id, accessKey.id, { accessKeyResourceVersion: 1, requestId: "disable-key-1", status: "DISABLED" });
+    expect(status.key).toMatchObject({ status: "DISABLED", resourceVersion: 2 });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/users/${user.id}/access-keys/${accessKey.id}:set-status`);
+    expect(requestBody(fetcher)).toEqual({ accessKeyResourceVersion: 1, requestId: "disable-key-1", status: "DISABLED" });
+
+    fetcher = reply({ outcome: "APPLIED", deletion: { apiVersion, kind: "AccessKeyDeletion", id: accessKey.id, accountId: account.id, userId: user.id, resourceVersion: 3, deletedAt: "2026-09-11T08:02:00Z" } });
+    const deletion = await httpAccountRepository.accessKeys!.delete("bearer", account.id, user.id, accessKey.id, { accessKeyResourceVersion: 2, requestId: "delete-key-1" });
+    expect(deletion.deletion).toMatchObject({ id: accessKey.id, resourceVersion: 3 });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/users/${user.id}/access-keys/${accessKey.id}:delete`);
+  });
+});
 
 describe("IAM HTTP group boundary", () => {
   it("reads group detail and direct attachments without caller account selectors", async () => {

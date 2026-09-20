@@ -32,7 +32,12 @@ export type IamAction =
   | "iam.policy-attachment.create"
   | "iam.platform-policy-attachment.create"
   | "iam.policy-attachment.revoke"
-  | "iam.platform-policy-attachment.revoke";
+  | "iam.platform-policy-attachment.revoke"
+  | "iam.access-key.list"
+  | "iam.access-key.create"
+  | "iam.access-key.read"
+  | "iam.access-key.set-status"
+  | "iam.access-key.delete";
 
 export type CapabilityRestriction =
   | "AUTHORITY_REQUIRED"
@@ -43,11 +48,13 @@ export type CapabilityRestriction =
   | "SYSTEM_ACCOUNT_PROTECTED"
   | "TARGET_DISABLED"
   | "TARGET_CREDENTIAL_CHANGE_REQUIRED"
-  | "TARGET_MUST_BE_DISABLED";
+  | "TARGET_MUST_BE_DISABLED"
+  | "ACCESS_KEY_LIMIT_REACHED"
+  | "RESOURCE_VERSION_EXHAUSTED";
 
 export type ActionCapability = {
   action: IamAction;
-  resource: { kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT"; id: string };
+  resource: { kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT" | "ACCESS_KEY"; id: string };
   available: boolean;
   restrictionReason: CapabilityRestriction | null;
 };

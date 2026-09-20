@@ -22,6 +22,7 @@ import { AccessRoles } from "./AccessRoles";
 import { RoleCreationWizard } from "./RoleCreationWizard";
 import { AccessProviders, AccessFederations } from "./AccessIdentity";
 import { AccessCredentials } from "./AccessCredentials";
+import { LiveAccessCredentials } from "./LiveAccessCredentials";
 import { AccessSecuritySettings, AccessUserSso } from "./AccessSecuritySettings";
 import { AccessEnterpriseAccounts } from "./AccessEnterpriseAccounts";
 import { AccountPolicyDirectory } from "./AccountPolicyDirectory";
@@ -124,6 +125,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "create-group" ? <GroupCreationWizard workspace={workspace ?? undefined} onBack={() => onNavigate("groups")} onDone={(id) => onNavigate("groups", id)} /> :
       view === "groups" && workspace ? <AccessGroups key={entityId ?? "groups"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
       view === "groups" && access.groups ? <AccountLiveGroups key={`${access.groups.accountId}:${entityId ?? "groups"}`} client={access.groups} entityId={entityId} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
+      view === "keys" && !workspace && access.accessKeys ? <LiveAccessCredentials client={access.accessKeys} scene={scene} /> :
       !workspace ? <EmptyState title={w("notConnected")} description={w("notConnectedHint")} /> :
       view === "create-policy" ? <PolicyAuthoringWizard method={policyCreationMethod(policyMethod)} workspace={workspace} scene={scene} doneLabel={w("finishBack")} onBack={() => onNavigate("policies")} onDone={() => onNavigate("policies")} /> :
       view === "create-role" ? <RoleCreationWizard workspace={workspace} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :

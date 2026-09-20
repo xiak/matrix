@@ -31,6 +31,7 @@ import type {
   UserPermissionBoundary
 } from "../domain/accounts";
 import type { AuthenticationChallenge, LoginResult, OtherSessionsRevocation, OwnSessionPage, OwnSessionRevocation, SessionSummary } from "../domain/session";
+import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
 
 function accountRecord(value: unknown): Record<string, unknown> {
@@ -97,20 +98,23 @@ const capabilityActions = new Set<IamAction>([
   "iam.user.update", "iam.user.delete", "iam.user.set-status",
   "iam.user.permission-boundary.set", "iam.user.permission-boundary.remove",
   "iam.user.reset-password", "iam.policy-attachment.create", "iam.platform-policy-attachment.create",
-  "iam.policy-attachment.revoke", "iam.platform-policy-attachment.revoke"
+  "iam.policy-attachment.revoke", "iam.platform-policy-attachment.revoke",
+  "iam.access-key.list", "iam.access-key.create", "iam.access-key.read", "iam.access-key.set-status", "iam.access-key.delete"
 ]);
 
 const capabilityRestrictions = new Set<CapabilityRestriction>([
   "AUTHORITY_REQUIRED", "CURRENT_CREDENTIAL_CHANGE_REQUIRED", "SELF_PROTECTED", "ROOT_IDENTITY_PROTECTED",
   "INSTALLATION_AUTHORITY_PROTECTED", "SYSTEM_ACCOUNT_PROTECTED", "TARGET_DISABLED",
-  "TARGET_CREDENTIAL_CHANGE_REQUIRED", "TARGET_MUST_BE_DISABLED"
+  "TARGET_CREDENTIAL_CHANGE_REQUIRED", "TARGET_MUST_BE_DISABLED", "ACCESS_KEY_LIMIT_REACHED", "RESOURCE_VERSION_EXHAUSTED"
 ]);
 
 function capabilityResourceKind(action: IamAction): ActionCapability["resource"]["kind"] {
+  if (action === "iam.access-key.read" || action === "iam.access-key.set-status" || action === "iam.access-key.delete") return "ACCESS_KEY";
   if (action === "iam.user.read" || action === "iam.user.update" || action === "iam.user.delete" ||
       action === "iam.user.permission-boundary.set" || action === "iam.user.permission-boundary.remove" ||
       action === "iam.user.set-status" || action === "iam.user.reset-password" ||
-      action === "iam.policy-attachment.create" || action === "iam.platform-policy-attachment.create") return "USER";
+      action === "iam.policy-attachment.create" || action === "iam.platform-policy-attachment.create" ||
+      action === "iam.access-key.list" || action === "iam.access-key.create") return "USER";
   if (action === "iam.policy-attachment.revoke" || action === "iam.platform-policy-attachment.revoke" ||
       action === "iam.group-policy-attachment.revoke") return "POLICY_ATTACHMENT";
   if (action === "iam.group.read" || action === "iam.group.update" || action === "iam.group.delete" ||
@@ -301,6 +305,105 @@ function parseGroup(value: unknown): Group {
     resourceVersion: accountVersion(wire.resourceVersion),
     ...chronologicalTimestamps(wire.createdAt, wire.updatedAt)
   };
+}
+
+function parseManagedAccessKey(value: unknown): ManagedAccessKey {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "userId", "status", "resourceVersion", "createdAt", "updatedAt"]);
+  requireAccountKind(wire, "AccessKey");
+  if (wire.status !== "ENABLED" && wire.status !== "DISABLED") throw new Error("INVALID_IAM_RESPONSE");
+  const resourceVersion = accountVersion(wire.resourceVersion);
+  if (resourceVersion === 1 && wire.status !== "ENABLED") throw new Error("INVALID_IAM_RESPONSE");
+  return {
+    id: accountIdentifier(wire.id),
+    accountId: accountIdentifier(wire.accountId),
+    userId: accountIdentifier(wire.userId),
+    status: wire.status,
+    resourceVersion,
+    ...chronologicalTimestamps(wire.createdAt, wire.updatedAt)
+  };
+}
+
+function accessKeyCapabilities(accessKeyId: string): Array<Pick<ActionCapability, "action" | "resource">> {
+  return (["iam.access-key.read", "iam.access-key.set-status", "iam.access-key.delete"] as const).map((action) => ({
+    action,
+    resource: { kind: "ACCESS_KEY" as const, id: accessKeyId }
+  }));
+}
+
+function parseAccessKeyAccess(value: unknown, accountId: string, userId: string, accessKeyId?: string): AccessKeyAccess {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["key", "capabilities"]);
+  const key = parseManagedAccessKey(wire.key);
+  if (key.accountId !== accountId || key.userId !== userId || (accessKeyId !== undefined && key.id !== accessKeyId)) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return { key, capabilities: parseCapabilities(wire.capabilities, accessKeyCapabilities(key.id)) };
+}
+
+function parseAccessKeyDirectory(value: unknown, accountId: string, userId: string): AccessKeyDirectory {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "userId", "userResourceVersion", "capabilities", "items"]);
+  requireAccountKind(wire, "AccessKeyList");
+  if (wire.accountId !== accountId || wire.userId !== userId || !Array.isArray(wire.items) || wire.items.length > 2) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const items = wire.items.map((item) => parseAccessKeyAccess(item, accountId, userId));
+  if (items.some((item, index) => index > 0 && items[index - 1]!.key.id >= item.key.id)) throw new Error("INVALID_IAM_RESPONSE");
+  return {
+    accountId,
+    userId,
+    userResourceVersion: accountVersion(wire.userResourceVersion),
+    capabilities: parseCapabilities(wire.capabilities, [{ action: "iam.access-key.create", resource: { kind: "USER", id: userId } }]),
+    items
+  };
+}
+
+function parseAccessKeyCreation(value: unknown, accountId: string, userId: string): AccessKeyCreation {
+  const wire = accountRecord(value);
+  if (wire.outcome === "APPLIED") {
+    exactKeys(wire, ["outcome", "key", "secret"]);
+    if (typeof wire.secret !== "string" || wire.secret.length < 1 || wire.secret.length > 16384) throw new Error("INVALID_IAM_RESPONSE");
+    const key = parseManagedAccessKey(wire.key);
+    if (key.accountId !== accountId || key.userId !== userId || key.resourceVersion !== 1 || key.status !== "ENABLED") throw new Error("INVALID_IAM_RESPONSE");
+    return { outcome: "APPLIED", key, secret: wire.secret };
+  }
+  if (wire.outcome !== "EQUAL_REPLAY") throw new Error("INVALID_IAM_RESPONSE");
+  exactKeys(wire, ["outcome", "key"]);
+  const key = parseManagedAccessKey(wire.key);
+  if (key.accountId !== accountId || key.userId !== userId || key.resourceVersion !== 1 || key.status !== "ENABLED") throw new Error("INVALID_IAM_RESPONSE");
+  return { outcome: "EQUAL_REPLAY", key };
+}
+
+function parseAccessKeyStatusChange(value: unknown, accountId: string, userId: string, accessKeyId: string, commandVersion: number, status: AccessKeyStatus): AccessKeyStatusChange {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["outcome", "key"]);
+  if (wire.outcome !== "APPLIED" && wire.outcome !== "EQUAL_REPLAY") throw new Error("INVALID_IAM_RESPONSE");
+  const key = parseManagedAccessKey(wire.key);
+  if (key.accountId !== accountId || key.userId !== userId || key.id !== accessKeyId || key.status !== status || key.resourceVersion !== commandVersion + 1) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return { outcome: wire.outcome, key };
+}
+
+function parseAccessKeyDeletion(value: unknown, accountId: string, userId: string, accessKeyId: string, commandVersion: number): AccessKeyDeletion {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["outcome", "deletion"]);
+  if (wire.outcome !== "APPLIED" && wire.outcome !== "EQUAL_REPLAY") throw new Error("INVALID_IAM_RESPONSE");
+  const deletion = accountRecord(wire.deletion);
+  exactKeys(deletion, ["apiVersion", "kind", "id", "accountId", "userId", "resourceVersion", "deletedAt"]);
+  requireAccountKind(deletion, "AccessKeyDeletion");
+  const result = {
+    id: accountIdentifier(deletion.id),
+    accountId: accountIdentifier(deletion.accountId),
+    userId: accountIdentifier(deletion.userId),
+    resourceVersion: accountVersion(deletion.resourceVersion),
+    deletedAt: accountTimestamp(deletion.deletedAt)
+  };
+  if (result.accountId !== accountId || result.userId !== userId || result.id !== accessKeyId || result.resourceVersion !== commandVersion + 1) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return { outcome: wire.outcome, deletion: result };
 }
 
 function parseGroupAccess(value: unknown, accountId: string): GroupAccess {
@@ -727,6 +830,56 @@ function accountPage<T>(value: unknown, kind: string, parse: (item: unknown) => 
 function accountHeaders(credential: string): HeadersInit { return { Authorization: `Bearer ${credential}` }; }
 
 export const httpAccountRepository: AccountRepository = {
+  accessKeys: {
+    async list(credential, accountId, userId) {
+      const target = accountIdentifier(userId);
+      return parseAccessKeyDirectory(await requestJSON<unknown>(
+        `/api/iam/v1/users/${encodeURIComponent(target)}/access-keys`,
+        { headers: accountHeaders(credential) }
+      ), accountIdentifier(accountId), target);
+    },
+    async read(credential, accountId, userId, accessKeyId) {
+      const target = accountIdentifier(userId);
+      const keyId = accountIdentifier(accessKeyId);
+      return parseAccessKeyAccess(await requestJSON<unknown>(
+        `/api/iam/v1/users/${encodeURIComponent(target)}/access-keys/${encodeURIComponent(keyId)}`,
+        { headers: accountHeaders(credential) }
+      ), accountIdentifier(accountId), target, keyId);
+    },
+    async create(credential, accountId, userId, command) {
+      const target = accountIdentifier(userId);
+      const userResourceVersion = accountVersion(command.userResourceVersion);
+      return parseAccessKeyCreation(await postAccount(
+        credential,
+        `/api/iam/v1/users/${encodeURIComponent(target)}/access-keys`,
+        { userResourceVersion, requestId: accountIdentifier(command.requestId) }
+      ), accountIdentifier(accountId), target);
+    },
+    async setStatus(credential, accountId, userId, accessKeyId, command) {
+      const target = accountIdentifier(userId);
+      const keyId = accountIdentifier(accessKeyId);
+      const accessKeyResourceVersion = accountVersion(command.accessKeyResourceVersion);
+      if (accessKeyResourceVersion === Number.MAX_SAFE_INTEGER || (command.status !== "ENABLED" && command.status !== "DISABLED")) {
+        throw new Error("INVALID_IAM_REQUEST");
+      }
+      return parseAccessKeyStatusChange(await postAccount(
+        credential,
+        `/api/iam/v1/users/${encodeURIComponent(target)}/access-keys/${encodeURIComponent(keyId)}:set-status`,
+        { accessKeyResourceVersion, requestId: accountIdentifier(command.requestId), status: command.status }
+      ), accountIdentifier(accountId), target, keyId, accessKeyResourceVersion, command.status);
+    },
+    async delete(credential, accountId, userId, accessKeyId, command) {
+      const target = accountIdentifier(userId);
+      const keyId = accountIdentifier(accessKeyId);
+      const accessKeyResourceVersion = accountVersion(command.accessKeyResourceVersion);
+      if (accessKeyResourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+      return parseAccessKeyDeletion(await postAccount(
+        credential,
+        `/api/iam/v1/users/${encodeURIComponent(target)}/access-keys/${encodeURIComponent(keyId)}:delete`,
+        { accessKeyResourceVersion, requestId: accountIdentifier(command.requestId) }
+      ), accountIdentifier(accountId), target, keyId, accessKeyResourceVersion);
+    }
+  },
   permissionBoundaries: {
     async read(credential, accountId, userId) {
       return parseUserPermissionBoundary(await requestJSON<unknown>(

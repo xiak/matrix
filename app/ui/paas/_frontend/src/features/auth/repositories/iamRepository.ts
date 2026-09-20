@@ -17,6 +17,7 @@ import type {
   UserPermissionBoundary
 } from "../domain/accounts";
 import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWorkspace";
+import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
 import type { UserBatchCommand } from "../domain/userBatch";
 
 export type LoginCommand = { loginName: string; password: string };
@@ -54,6 +55,23 @@ export interface AccountRepository {
       resourceVersion: number;
       requestId: string;
     }): Promise<UserPermissionBoundary>;
+  };
+  accessKeys?: {
+    list(credential: string, accountId: string, userId: string): Promise<AccessKeyDirectory>;
+    read(credential: string, accountId: string, userId: string, accessKeyId: string): Promise<AccessKeyAccess>;
+    create(credential: string, accountId: string, userId: string, command: {
+      userResourceVersion: number;
+      requestId: string;
+    }): Promise<AccessKeyCreation>;
+    setStatus(credential: string, accountId: string, userId: string, accessKeyId: string, command: {
+      accessKeyResourceVersion: number;
+      requestId: string;
+      status: AccessKeyStatus;
+    }): Promise<AccessKeyStatusChange>;
+    delete(credential: string, accountId: string, userId: string, accessKeyId: string, command: {
+      accessKeyResourceVersion: number;
+      requestId: string;
+    }): Promise<AccessKeyDeletion>;
   };
   // Explicit, isolated DEMO capabilities. The live HTTP adapter never exposes them.
   executeUserBatch?(credential: string, command: UserBatchCommand): Promise<{ workspace: AccessWorkspace }>;

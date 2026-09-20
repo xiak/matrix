@@ -1030,7 +1030,9 @@
       "SYSTEM_ACCOUNT_PROTECTED": "This system account is protected from this action.",
       "TARGET_DISABLED": "The target user is disabled and must be enabled first.",
       "TARGET_CREDENTIAL_CHANGE_REQUIRED": "The target user must complete a password change first.",
-      "TARGET_MUST_BE_DISABLED": "Disable this user before deleting it."
+      "TARGET_MUST_BE_DISABLED": "Disable this user before deleting it.",
+      "ACCESS_KEY_LIMIT_REACHED": "This user has reached the access-key limit.",
+      "RESOURCE_VERSION_EXHAUSTED": "This object cannot be updated again. Contact a platform administrator."
     },
     "disableUser": "Disable user",
     "enableUser": "Enable user",
@@ -2143,6 +2145,22 @@
     "keyRevision": "Key resource version",
     "keyUserRevision": "User resource version",
     "keyProductBoundary": "Product APIs do not accept these access keys yet. This page previews the management lifecycle only and cannot authenticate any real workload API. A live adapter must use AccessKey-specific ActionCapabilities for management authority and platform protection; user-directory access, names and enabled state are not substitutes.",
+    "keyLiveProductBoundary": "This page uses the fixed access-key management contract, but product APIs do not accept access-key signatures yet. Managing a credential lifecycle here does not mean that the key can call any cloud product API.",
+    "keyLiveLoading": "Loading this user's access keys…",
+    "keyLiveSaving": "Submitting…",
+    "keyLiveRetry": "Reload",
+    "keyConfirmCreate": "Confirm creation",
+    "keyLiveCreated": "Access key created",
+    "keyLiveSecretWarning": "Save the Secret in protected credential storage now. It cannot be viewed again after you leave this step. Never paste it into chat, tickets, or source code.",
+    "keyLiveAcknowledge": "I saved the Secret in a protected location and understand that it cannot be shown again",
+    "keyLiveReplayTitle": "Original creation already completed",
+    "keyLiveReplay": "The same requestId already created key {id}. Replays return only the non-secret result, so the Secret cannot be shown again.",
+    "keyLiveErrors": {
+      "forbidden": "Your current identity cannot manage access keys for this user.",
+      "routeUnavailable": "The running IAM process does not provide the access-key management route yet.",
+      "conflict": "The user or key state changed. Reload before acting and preserve the original requestId for an uncertain request.",
+      "unavailable": "Access keys cannot be read or updated right now. Do not generate a new requestId without a trustworthy result."
+    },
     "keyNoUsageEvidence": "The current contract has no reliable last-used time or access history. Absence of records cannot prove that a key is unused or safe to delete.",
     "keyInlineWorkflow": "The operation stays in the content area and does not open a modal.",
     "keyCreateReview": "Review and create access key",
