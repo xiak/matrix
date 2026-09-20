@@ -379,6 +379,26 @@ IAM37的`totp_authentication_contract_ready()`由迁移verify与实际readiness�
 
 结构错误400、未认证/错误或过期证明401、当前已认证但权限/资格不足403、版本或不同意图冲突409、全局资源预算耗尽429、数据库/必要材料不可用503；与具体用户存在性相关的抑制不返回可枚举的剩余次数或专属冷却原因。状态码沿原Problem契约冻结，不用错误文本传秘密或恢复指令。已提交但回包丢失的secret响应不重发原秘密；只能通过持有原上下文查询非秘密完成，或重新认证发起新意图。完成查询不验证新的候选OTP，更不能把不同候选值当成原成功。该只读查询的路径/保留期限随具体命令一并冻结，不新增通用receipt API。
 
+#### S2b受限自助恢复增量
+
+此增量正在实施，尚无可用恢复HTTP或实际消费验收，不改变f5cec0e1的交付结论。开始时把新PENDING因子与独立RECOVERY挑战一并提交，种子在重试事务之外生成/封装一次。公开`AuthenticatorRecovery`仅描述原ID/requestId、`STARTED/COMPLETED/SUPERSEDED/EXPIRED`和期限/完成时间，不含主体selector或秘密；它不是普通Session首次绑定的Enrollment：开始已终止旧因子并消费一条码，关闭页面不能撤回这些效果。
+
+| 拟定封闭入口 | 输入与结果 |
+| --- | --- |
+| `POST /v1/auth/challenges/{id}:recover` | 只收`requestId/challengeCredential/recoveryCode`；接受当前LOGIN/TOTP或有确切原恢复历史的LOGIN/RECOVER。首次成功返回恢复元数据、新RECOVERY/ENROLLMENT挑战及独立秘密、一次性provisioning；不返回Session或重发秘密 |
+| `POST /v1/auth/challenges/{id}:confirm-recovery` | 复用验证码请求形状`requestId/challengeCredential/code`，但只接受RECOVERY/ENROLLMENT；正确新TOTP原子完成新绑定、新恢复批次、旧批次终止及通知，只返回完成元数据、新十码和`REAUTHENTICATE` |
+| `POST /v1/auth/challenges/{id}:recovery-result` | 只收当前LOGIN挑战持有凭据及原恢复`requestId`，读取同USER的原非秘密元数据；NOT_FOUND不证明提交回滚、不消费新码、不自动开启意图 |
+
+LoginResponse仍只允许LOGIN挑战；不能因为通用Challenge可以描述RECOVERY，就让密码登录直接发行重绑能力。RECOVERY挑战、PENDING因子及恢复仪式均不得晚于原LOGIN挑战期限，读取或重试不续期。开始回包未知时，以新密码验证得到的LOGIN挑战查原元数据；新种子或挑战秘密丢失时，明确使用另一条原批次码开启新意图，并永久终止旧未完成恢复及PENDING因子。完成回包未知不重发新恢复码；持有新因子可以正常重登，重发码仍须独立强认证流程。
+
+候选恢复码在共享USER尝试预算已提交后比较；非空畸形码也计次，错误challenge秘密不能借公开ID扣他人预算。仅检查同USER唯一有效批次固定十条不可变验证值，按原码ID做用途绑定比较，不因首个匹配提前退出；被消费码永不重新允许。并发同码只一次成功，不同码也不能越过已经消费的原LOGIN挑战。新挑战、新意图、副本、重启及因子修订推进不能返还预算。
+
+开始/确认沿Account→USER→password→MFA→原批次/因子→challenge/尝试锁序重验当前状态及锁后数据库时间。RECOVERY_REQUIRED只有与合法开始的不可变完成、已撤销原因子及剩余批次相符时才可再次恢复；迁移发现的未知旧因子不能仅凭同名状态取得资格。密码代际改变、停用、另一恢复或批次终止使旧工作失效。恢复不改密码、不清除forced、不发Session；forced用户重绑后仍须走密码+新TOTP的原强制改密路径。
+
+成功开始/完成各提交一个封闭`iam.authenticator.recovery-started/recovered`本人USER tenant事实和原VERIFIED地址的非秘密通知，不修改地址/角色/Policy。RootIdentity或平台附件不阻止本人持有当前密码及原码的自助操作，但不能据此授予管理员重置他人MFA的能力；丢失全部材料的本地恢复仍独立。实际SQL/函数和Audit目录拟协调源码IAM38/Audit22，发布profile/revision未分配。必须证明两副本单码/双码竞争、失败预算、outbox失败回滚、开始/完成后TCP丢失、剩余码重启、新绑定后旧批次拒绝、改密/停用交错及真实通知/历史Audit，不能以纯codec通过称恢复已交付。
+
+2026-09-21首个契约准备增量在原types/validation/encoding/contractgen及测试owner落地：开始/查询请求只有各自闭合字段，秘密必须显式编码；恢复元数据与一次性结果分开，STARTED不能带null完成，成功完成必须严格早于到期，开始的挑战/恢复期限必须相等；普通LoginResponse拒绝RECOVERY，即使独立Challenge已能描述该目的。验证码确认复用已有严格请求形状，不另建同形DTO。OpenAPI只增加相应components及目的组合约束，尚未注册这三个路径或连接任何数据库效果；当前源码仍IAM37/Audit21，拟定38/22未作为已实现版本写入readiness。新门禁先因缺类型/缺schema失败，补齐后API/生成器/architecture race通过；累计全仓默认race、vet、模块校验、122个API文件再次生成哈希一致和Linux amd64构建通过。没有启动数据库/SMTP/容器或把SKIP算作真实恢复证据；尚不提供原子消费、重绑或UI可用声明。
+
 #### 事务、锁序与失败结果
 
 复用当前SERIALIZABLE边界，但认证失败必须是可提交的业务结果。仓储callback返回错误会回滚；因此尝试已验证失败时先提交`REJECTED`及计数，用例在提交成功后映射401。数据库异常、提交未知或必要计数不能持久化时不发行Session，也不把未知结果当作可免费重试。

@@ -26,6 +26,125 @@ import (
 	"github.com/xiak/matrix/api/contractjson"
 )
 
+func TestAuthenticatorRecoveryWireNeverBecomesLoginOrSecretReplay(t *testing.T) {
+	secret := func(value string) Secret {
+		t.Helper()
+		result, err := NewSecret(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	started := time.Date(2026, 9, 20, 12, 1, 0, 0, time.UTC)
+	recovery := AuthenticatorRecovery{APIVersion: APIVersion, Kind: "AuthenticatorRecovery", ID: "recovery-a",
+		RequestID: "request-a", State: "STARTED", CreatedAt: started, ExpiresAt: started.Add(4 * time.Minute)}
+	challenge := AuthenticationChallenge{APIVersion: APIVersion, Kind: "AuthenticationChallenge", ID: "challenge-recovery",
+		Purpose: "RECOVERY", NextStep: "ENROLLMENT", ExpiresAt: recovery.ExpiresAt}
+	response := StartAuthenticatorRecoveryResponse{Recovery: recovery, Challenge: challenge,
+		ChallengeCredential: secret("private-challenge"), Provisioning: TOTPProvisioning{Seed: secret("private-seed"), URI: secret("private-uri")}}
+	encoded, err := EncodeStartAuthenticatorRecoveryResponse(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded StartAuthenticatorRecoveryResponse
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Recovery != recovery || decoded.Challenge != challenge {
+		t.Fatal("recovery binding changed in the private codec")
+	}
+	if _, err := json.Marshal(response); !errors.Is(err, ErrSecretSerialization) {
+		t.Fatal("ordinary marshal exposed recovery material")
+	}
+	if strings.Contains(fmt.Sprintf("%+v", response), "private-") {
+		t.Fatal("formatting exposed recovery material")
+	}
+	if ValidateLoginResponse(LoginResponse{Outcome: LoginChallengeRequired, Challenge: &challenge, ChallengeCredential: response.ChallengeCredential}) == nil {
+		t.Fatal("recovery challenge became a password-login result")
+	}
+	for _, mutate := range []func(*StartAuthenticatorRecoveryResponse){
+		func(v *StartAuthenticatorRecoveryResponse) { v.Challenge.Purpose = "LOGIN" },
+		func(v *StartAuthenticatorRecoveryResponse) { v.Challenge.NextStep = "TOTP" },
+		func(v *StartAuthenticatorRecoveryResponse) {
+			v.Challenge.ExpiresAt = v.Challenge.ExpiresAt.Add(time.Second)
+		},
+		func(v *StartAuthenticatorRecoveryResponse) { v.Recovery.State = "COMPLETED" },
+		func(v *StartAuthenticatorRecoveryResponse) { v.ChallengeCredential = Secret{} },
+		func(v *StartAuthenticatorRecoveryResponse) { v.Provisioning.Seed = Secret{} },
+	} {
+		altered := response
+		mutate(&altered)
+		if _, err := EncodeStartAuthenticatorRecoveryResponse(altered); err == nil {
+			t.Fatal("invalid recovery ceremony was encoded")
+		}
+	}
+	completed := started.Add(time.Minute)
+	recovery.State, recovery.CompletedAt = "COMPLETED", &completed
+	codes := make([]Secret, 10)
+	for i := range codes {
+		codes[i] = secret(fmt.Sprintf("synthetic-recovery-%02d", i))
+	}
+	confirmation := ConfirmAuthenticatorRecoveryResponse{Recovery: recovery, NextStep: "REAUTHENTICATE", RecoveryCodes: codes}
+	encoded, err = EncodeConfirmAuthenticatorRecoveryResponse(confirmation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var confirmed ConfirmAuthenticatorRecoveryResponse
+	if err := json.Unmarshal(encoded, &confirmed); err != nil || len(confirmed.RecoveryCodes) != 10 {
+		t.Fatal("recovery completion did not round trip")
+	}
+	if _, err := json.Marshal(confirmation); !errors.Is(err, ErrSecretSerialization) {
+		t.Fatal("ordinary marshal exposed replacement codes")
+	}
+	confirmation.RecoveryCodes[9] = confirmation.RecoveryCodes[0]
+	if ValidateConfirmAuthenticatorRecoveryResponse(confirmation) == nil {
+		t.Fatal("duplicate recovery codes were accepted")
+	}
+}
+
+func TestAuthenticatorRecoveryRequestsArePurposeLimitedAndSecretFreeToInspect(t *testing.T) {
+	start := `{"requestId":"recover-a","challengeCredential":"private-challenge","recoveryCode":"candidate"}`
+	for _, body := range []string{start, strings.Replace(start, `"candidate"`, `"malformed-but-still-an-attempt"`, 1)} {
+		var value StartAuthenticatorRecoveryRequest
+		if err := DecodeRequest(strings.NewReader(body), &value); err != nil {
+			t.Fatal("nonempty candidate must reach the durable debit")
+		}
+		if _, err := json.Marshal(value); !errors.Is(err, ErrSecretSerialization) {
+			t.Fatal("ordinary marshal exposed a recovery request")
+		}
+	}
+	for _, member := range []string{`"accountId":"another"`, `"userId":"another"`, `"password":"unused"`,
+		`"code":"123456"`, `"roleId":"administrator"`, `"recoveryCode":"duplicate"`} {
+		var value StartAuthenticatorRecoveryRequest
+		if DecodeRequest(strings.NewReader(strings.TrimSuffix(start, "}")+","+member+"}"), &value) == nil {
+			t.Fatal("recovery request accepted a selector, alternate proof or duplicate")
+		}
+	}
+	for _, candidate := range []string{`null`, `""`, `123456`, `{}`} {
+		var value StartAuthenticatorRecoveryRequest
+		if DecodeRequest(strings.NewReader(strings.Replace(start, `"candidate"`, candidate, 1)), &value) == nil {
+			t.Fatal("invalid recovery secret carrier accepted")
+		}
+	}
+	inspect := `{"requestId":"recover-a","challengeCredential":"current-login-challenge"}`
+	var query InspectAuthenticatorRecoveryRequest
+	if DecodeRequest(strings.NewReader(inspect), &query) != nil {
+		t.Fatal("exact recovery query rejected")
+	}
+	if DecodeRequest(strings.NewReader(strings.TrimSuffix(inspect, "}")+`,"recoveryCode":"old-code"}`), &query) == nil {
+		t.Fatal("inspection accepted another recovery attempt")
+	}
+	for _, body := range []string{
+		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticatorRecovery","id":"r","requestId":"q","state":"STARTED","createdAt":"2026-09-20T12:00:00Z","expiresAt":"2026-09-20T12:05:00Z","completedAt":null}`,
+		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticatorRecovery","id":"r","requestId":"q","state":"COMPLETED","createdAt":"2026-09-20T12:00:00Z","expiresAt":"2026-09-20T12:05:00Z","completedAt":"2026-09-20T12:05:00Z"}`,
+	} {
+		var value AuthenticatorRecovery
+		if json.Unmarshal([]byte(body), &value) == nil {
+			t.Fatal("recovery metadata erased or extended a terminal boundary")
+		}
+	}
+}
+
 var removedBuiltinRoleNames = []string{
 	"ORGANIZATION_ADMIN",
 	"PLATFORM_OPERATOR",

@@ -14,6 +14,60 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestAuthenticatorRecoverySchemasSeparateLoginProofFromRebinding(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	recovery := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticatorRecovery","id":"recovery-a","requestId":"request-a","state":"STARTED","createdAt":"2026-09-20T12:01:00Z","expiresAt":"2026-09-20T12:05:00Z"}`
+	challenge := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticationChallenge","id":"challenge-b","purpose":"RECOVERY","nextStep":"ENROLLMENT","expiresAt":"2026-09-20T12:05:00Z"}`
+	start := `{"recovery":` + recovery + `,"challenge":` + challenge + `,"challengeCredential":"synthetic-credential","provisioning":{"seed":"synthetic-seed","uri":"synthetic-uri"}}`
+	request := `{"requestId":"request-a","challengeCredential":"synthetic-credential","recoveryCode":"candidate"}`
+	query := `{"requestId":"request-a","challengeCredential":"synthetic-credential"}`
+	login := `{"outcome":"CHALLENGE_REQUIRED","challenge":` + challenge + `,"challengeCredential":"synthetic-credential"}`
+	for index, sample := range []struct {
+		kind, wire string
+		valid      bool
+	}{
+		{"AuthenticatorRecovery", recovery, true},
+		{"AuthenticatorRecovery", strings.TrimSuffix(recovery, "}") + `,"completedAt":null}`, false},
+		{"AuthenticatorRecovery", strings.Replace(recovery, `"STARTED"`, `"COMPLETED"`, 1), false},
+		{"StartAuthenticatorRecoveryRequest", request, true},
+		{"StartAuthenticatorRecoveryRequest", strings.Replace(request, `"candidate"`, `""`, 1), false},
+		{"StartAuthenticatorRecoveryRequest", strings.TrimSuffix(request, "}") + `,"accountId":"other"}`, false},
+		{"InspectAuthenticatorRecoveryRequest", query, true},
+		{"InspectAuthenticatorRecoveryRequest", strings.TrimSuffix(query, "}") + `,"recoveryCode":"another"}`, false},
+		{"StartAuthenticatorRecoveryResponse", start, true},
+		{"StartAuthenticatorRecoveryResponse", strings.Replace(start, `"RECOVERY"`, `"LOGIN"`, 1), false},
+		{"StartAuthenticatorRecoveryResponse", strings.Replace(start, `"ENROLLMENT"`, `"TOTP"`, 1), false},
+		{"StartAuthenticatorRecoveryResponse", strings.TrimSuffix(start, "}") + `,"session":null}`, false},
+		{"LoginResponse", login, false},
+		{"LoginResponse", strings.Replace(strings.Replace(login, `"RECOVERY"`, `"LOGIN"`, 1), `"ENROLLMENT"`, `"RECOVER"`, 1), true},
+	} {
+		schema := compileIAMOpenAPISchema(t, api, sample.kind)
+		var raw any
+		if json.Unmarshal([]byte(sample.wire), &raw) != nil {
+			t.Fatal("invalid synthetic fixture")
+		}
+		if (schema.Validate(raw) == nil) != sample.valid {
+			t.Fatalf("sample %d schema/runtime recovery boundary differs", index)
+		}
+		var value any
+		switch sample.kind {
+		case "AuthenticatorRecovery":
+			value = new(AuthenticatorRecovery)
+		case "StartAuthenticatorRecoveryRequest":
+			value = new(StartAuthenticatorRecoveryRequest)
+		case "InspectAuthenticatorRecoveryRequest":
+			value = new(InspectAuthenticatorRecoveryRequest)
+		case "StartAuthenticatorRecoveryResponse":
+			value = new(StartAuthenticatorRecoveryResponse)
+		case "LoginResponse":
+			value = new(LoginResponse)
+		}
+		if (json.Unmarshal([]byte(sample.wire), value) == nil) != sample.valid {
+			t.Fatalf("sample %d decoder recovery boundary differs", index)
+		}
+	}
+}
+
 func TestAuthenticationChallengeRequestHasOneRestrictedSecretCarrier(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "VerifyAuthenticationChallengeRequest")
 	valid := `{"requestId":"verify-one","challengeCredential":"synthetic-challenge-material","code":"123456"}`

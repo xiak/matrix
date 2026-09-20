@@ -284,7 +284,7 @@ func ValidateLoginResponse(value LoginResponse) error {
 		return ValidateSession(value.Session)
 	case LoginChallengeRequired:
 		if value.Challenge == nil || !value.ChallengeCredential.Present() || value.Credential.Present() ||
-			value.Session != (Session{}) || value.MustChangePassword {
+			value.Session != (Session{}) || value.MustChangePassword || value.Challenge.Purpose != "LOGIN" {
 			return errors.New("challenged login result is invalid")
 		}
 		return ValidateAuthenticationChallenge(*value.Challenge)
@@ -303,9 +303,20 @@ func ValidateVerifyAuthenticationChallengeRequest(value VerifyAuthenticationChal
 }
 
 func ValidateAuthenticationChallenge(value AuthenticationChallenge) error {
-	if value.APIVersion != APIVersion || value.Kind != "AuthenticationChallenge" ||
-		value.Purpose != "LOGIN" || (value.NextStep != "TOTP" && value.NextStep != "PASSWORD_CHANGE") {
+	if value.APIVersion != APIVersion || value.Kind != "AuthenticationChallenge" {
 		return errors.New("authentication challenge is invalid")
+	}
+	switch value.Purpose {
+	case "LOGIN":
+		if value.NextStep != "TOTP" && value.NextStep != "PASSWORD_CHANGE" && value.NextStep != "RECOVER" {
+			return errors.New("login challenge stage is invalid")
+		}
+	case "RECOVERY":
+		if value.NextStep != "ENROLLMENT" {
+			return errors.New("recovery challenge stage is invalid")
+		}
+	default:
+		return errors.New("authentication challenge purpose is invalid")
 	}
 	return errors.Join(ValidateID("challenge.id", value.ID), validateTime("challenge.expiresAt", value.ExpiresAt))
 }
@@ -413,14 +424,85 @@ func ValidateConfirmTOTPEnrollmentResponse(value ConfirmTOTPEnrollmentResponse) 
 	if value.Enrollment.State != "CONFIRMED" || value.NextStep != "REAUTHENTICATE" || len(value.RecoveryCodes) != 10 {
 		return errors.New("enrollment confirmation is invalid")
 	}
+	return validateRecoveryCodes(value.RecoveryCodes)
+}
+
+func validateRecoveryCodes(codes []Secret) error {
+	if len(codes) != 10 {
+		return ErrInvalidSecret
+	}
 	seen := make(map[string]bool, 10)
-	for _, code := range value.RecoveryCodes {
+	for _, code := range codes {
 		if !code.Present() || seen[code.reveal()] {
 			return ErrInvalidSecret
 		}
 		seen[code.reveal()] = true
 	}
 	return nil
+}
+
+func ValidateAuthenticatorRecovery(value AuthenticatorRecovery) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthenticatorRecovery" ||
+		ValidateID("recovery.id", value.ID) != nil || ValidateID("recovery.requestId", value.RequestID) != nil ||
+		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
+		!value.ExpiresAt.After(value.CreatedAt) || value.ExpiresAt.Sub(value.CreatedAt) > 5*time.Minute {
+		return errors.New("authenticator recovery is invalid")
+	}
+	if value.State == "STARTED" {
+		if value.CompletedAt != nil {
+			return errors.New("started recovery has completion")
+		}
+		return nil
+	}
+	if value.CompletedAt == nil || validateTime("completedAt", *value.CompletedAt) != nil || value.CompletedAt.Before(value.CreatedAt) {
+		return errors.New("recovery completion is invalid")
+	}
+	switch value.State {
+	case "COMPLETED":
+		if !value.CompletedAt.Before(value.ExpiresAt) {
+			return errors.New("expired recovery was completed")
+		}
+	case "SUPERSEDED":
+	case "EXPIRED":
+		if value.CompletedAt.Before(value.ExpiresAt) {
+			return errors.New("unexpired recovery was expired")
+		}
+	default:
+		return errors.New("recovery state is invalid")
+	}
+	return nil
+}
+
+func ValidateStartAuthenticatorRecoveryRequest(value StartAuthenticatorRecoveryRequest) error {
+	// Nonempty malformed candidates are debited before domain verification.
+	if !value.ChallengeCredential.Present() || !value.RecoveryCode.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateInspectAuthenticatorRecoveryRequest(value InspectAuthenticatorRecoveryRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateStartAuthenticatorRecoveryResponse(value StartAuthenticatorRecoveryResponse) error {
+	if ValidateAuthenticatorRecovery(value.Recovery) != nil || value.Recovery.State != "STARTED" ||
+		ValidateAuthenticationChallenge(value.Challenge) != nil || value.Challenge.Purpose != "RECOVERY" ||
+		!value.Challenge.ExpiresAt.Equal(value.Recovery.ExpiresAt) || !value.ChallengeCredential.Present() ||
+		!value.Provisioning.Seed.Present() || !value.Provisioning.URI.Present() {
+		return errors.New("started recovery response is invalid")
+	}
+	return nil
+}
+
+func ValidateConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorRecoveryResponse) error {
+	if ValidateAuthenticatorRecovery(value.Recovery) != nil || value.Recovery.State != "COMPLETED" || value.NextStep != "REAUTHENTICATE" {
+		return errors.New("confirmed recovery response is invalid")
+	}
+	return validateRecoveryCodes(value.RecoveryCodes)
 }
 
 func ValidateLogoutRequest(value LogoutRequest) error {
