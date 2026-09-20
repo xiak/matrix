@@ -86,6 +86,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	bootstrapPath := writeProtectedFile(t, temporary, "iam-bootstrap.json", encoded)
 	clear(encoded)
 	iamCursorKeyPath, iamAccessKeyWrappingPath := writeProcessIAMPrivateAuthority(t, temporary, bootstrap)
+	iamTOTPKeyPath := writeProcessTOTPKeyring(t, temporary, bootstrap)
 	dsnPath := writeProtectedFile(t, temporary, "iam-schema3-dsn", []byte(runtimeDSN(t, config, iamAPILogin, processDBPassword)))
 	address := freeAddress(t)
 	endpoint := "http://" + address
@@ -104,7 +105,11 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		assertProcessOutputsSanitized(t, children, initialAdminPassword, changedAdminPassword, initialReaderPassword, changedReaderPassword)
 	}()
 	start := func(binary string) *childProcess {
-		child := startChild(t, root, binary, environment)
+		currentEnvironment := append([]string(nil), environment...)
+		if binary == currentBinary {
+			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_TOTP_KEYRING_FILE="+iamTOTPKeyPath)
+		}
+		child := startChild(t, root, binary, currentEnvironment)
 		children = append(children, child)
 		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
 		return child
@@ -147,7 +152,8 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		t.Fatal("schema3 fixture has no real committed facts")
 	}
 	old.stop()
-	unmigrated := startChild(t, root, currentBinary, environment)
+	unmigratedEnvironment := append(append([]string(nil), environment...), "MATRIX_IAM_TOTP_KEYRING_FILE="+iamTOTPKeyPath)
+	unmigrated := startChild(t, root, currentBinary, unmigratedEnvironment)
 	children = append(children, unmigrated)
 	if err := unmigrated.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
 		t.Fatal("schema4 executable accepted the unmigrated schema3 database")
@@ -155,11 +161,12 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	apiDSN := runtimeDSN(t, config, "matrix_iam_api_login", processDBPassword)
 	workerDSN := runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword)
 	recoveryDSN := runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword)
+	custodyDSN := runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword)
 	for range 2 {
-		if err := iammigration.ApplyWithLocalRecovery(ctx, dsn, localRecoveryMigrationDSN(t, apiDSN), localRecoveryMigrationDSN(t, workerDSN), localRecoveryMigrationDSN(t, recoveryDSN)); err != nil {
+		if err := iammigration.ApplyWithLocalRecovery(ctx, dsn, localRecoveryMigrationDSN(t, apiDSN), localRecoveryMigrationDSN(t, workerDSN), localRecoveryMigrationDSN(t, recoveryDSN), localRecoveryMigrationDSN(t, custodyDSN)); err != nil {
 			t.Fatalf("provision schema4 purpose-only recovery login: %v", err)
 		}
-		if err := iammigration.VerifyInstalledWithLocalRecovery(ctx, dsn, localRecoveryMigrationDSN(t, apiDSN), localRecoveryMigrationDSN(t, workerDSN), localRecoveryMigrationDSN(t, recoveryDSN)); err != nil {
+		if err := iammigration.VerifyInstalledWithLocalRecovery(ctx, dsn, localRecoveryMigrationDSN(t, apiDSN), localRecoveryMigrationDSN(t, workerDSN), localRecoveryMigrationDSN(t, recoveryDSN), localRecoveryMigrationDSN(t, custodyDSN)); err != nil {
 			t.Fatalf("verify installed recovery login: %v", err)
 		}
 	}

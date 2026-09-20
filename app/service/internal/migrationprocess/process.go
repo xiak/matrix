@@ -57,7 +57,7 @@ func Run(ctx context.Context, arguments []string, configuration Configuration) e
 
 func validateConfiguration(configuration Configuration) error {
 	if len(configuration.DSNFileEnvironments) < 2 ||
-		len(configuration.DSNFileEnvironments) > 4 ||
+		len(configuration.DSNFileEnvironments) > 5 ||
 		configuration.Apply == nil || configuration.Verify == nil {
 		return errors.New("migration process configuration is invalid")
 	}

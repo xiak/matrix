@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
@@ -2596,7 +2597,7 @@ func TestIAMTOTPCustodyPostgres(t *testing.T) {
 		t.Fatal("restart reclassified retained factor", err)
 	}
 	var shape bool
-	if err := database.QueryRow(ctx, "SELECT iam.totp_custody_contract_ready() AND (SELECT schema_version=34 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
+	if err := database.QueryRow(ctx, "SELECT iam.totp_custody_contract_ready() AND iam.totp_backup_custody_contract_ready() AND (SELECT schema_version=35 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
 		t.Fatal("TOTP contract shape", err)
 	}
 }
@@ -2604,6 +2605,256 @@ func TestIAMTOTPCustodyPostgres(t *testing.T) {
 type passwordGateLoginResult struct {
 	Session    iamv1.Session `json:"session"`
 	Credential string        `json:"credential"`
+}
+
+func TestIAMTOTPBackupSnapshotPostgres(t *testing.T) {
+	// This exact installation-private login is cluster-scoped, including when
+	// the data and executable gates use different databases in the same runner.
+	const backupTestPassword = "matrix-authority-process-test-only"
+	dsn := os.Getenv("MATRIX_IAM_TOTP_BACKUP_POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set MATRIX_IAM_TOTP_BACKUP_POSTGRES_TEST_DSN to an isolated PostgreSQL 18 database")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_totp_backup_") {
+		t.Fatal("TOTP snapshot gate needs its own database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	admin, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(context.Background())
+	assertIAMPostgres18(t, ctx, admin)
+	assertCleanIAMSchema(t, ctx, admin)
+	applyIAMSchema(t, ctx, admin)
+	createIAMHTTPRole(t, ctx, admin)
+	if _, err := admin.Exec(ctx, `DO $role$ BEGIN
+	 IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='matrix_iam_backup_custody_login') THEN
+	 CREATE ROLE matrix_iam_backup_custody_login LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+	 END IF; END $role$;
+	 ALTER ROLE matrix_iam_backup_custody_login PASSWORD 'matrix-authority-process-test-only';
+	 GRANT matrix_iam_backup_custody TO matrix_iam_backup_custody_login;`); err != nil {
+		t.Fatal(err)
+	}
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	poolConfig.ConnConfig.User, poolConfig.ConnConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+	poolConfig.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	repository, err := iampostgres.NewRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := iamHTTPBootstrap(t)
+	document.InstallationID = "mxi-00112233445566778899aabbccddeeff"
+	keyring := iamHTTPTOTPKeyring(t, document)
+	wrapping := iamHTTPAccessKeyWrapping(t, document)
+	newReplica := func() *identityaccess.Authority {
+		t.Helper()
+		workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{TOTPKeyring: &keyring, AccessKeyWrapping: &wrapping})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return workflow
+	}
+	workflow := newReplica()
+	if _, err := bootstrapIAMWithTOTP(t, ctx, workflow, document); err != nil {
+		t.Fatal(err)
+	}
+	backupConfig := config.Copy()
+	backupConfig.User, backupConfig.Password = "matrix_iam_backup_custody_login", backupTestPassword
+	open := func() *iampostgres.TOTPBackupSnapshot {
+		t.Helper()
+		snapshot, err := iampostgres.OpenTOTPBackupSnapshot(ctx, backupConfig)
+		if err != nil {
+			t.Fatal("open actual purpose-only snapshot", err)
+		}
+		t.Cleanup(func() { _ = snapshot.Close() })
+		return snapshot
+	}
+	first := open()
+	firstLease := first.Lease()
+	if firstLease.Custody.InstallationID != document.InstallationID || firstLease.Custody.BootstrapDigest != keyring.Scope.BootstrapDigest ||
+		firstLease.Custody.KeysetRevision != 1 || firstLease.Custody.RequiredKeys == nil || len(firstLease.Custody.RequiredKeys) != 0 ||
+		installationv1.ValidateTOTPBackupSnapshotLease(firstLease) != nil {
+		t.Fatal("initial snapshot did not prove exact empty scope")
+	}
+	keyring.KeysetRevision = 2
+	keyring.Keys = append(keyring.Keys, iamv1.TOTPWrappingKey{KeyID: "totp-next", FormatVersion: 1,
+		KeyMaterial: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x75}, 32)))})
+	keyring.ActiveKeyID = "totp-next"
+	if err := newReplica().RegisterTOTPKeyset(ctx); err != nil {
+		t.Fatal("read-only snapshot blocked later registration", err)
+	}
+	// Structurally valid retained rows deliberately do not imply enrollment is
+	// enabled. Both pending and revoked references require their original keys.
+	for index, keyID := range []string{"totp-http", "totp-next"} {
+		factorID := fmt.Sprintf("backup-factor-%d", index)
+		state := []string{"REVOKED", "PENDING"}[index]
+		if _, err := admin.Exec(ctx, `INSERT INTO iam.totp_authenticators
+		 (id,tenant_id,user_id,installation_id,key_id,format_version,nonce,ciphertext,state,last_consumed_step,created_at)
+		 VALUES($1,$2,$3,$4,$5,1,$6,$7,$8,-1,clock_timestamp())`, factorID, document.Organization.ID,
+			document.Administrator.ID, document.InstallationID, keyID,
+			bytes.Repeat([]byte{byte(0x74 + index)}, 12), bytes.Repeat([]byte{byte(0x76 + index)}, 36), state); err != nil {
+			t.Fatal(err)
+		}
+	}
+	importView := func(lease installationv1.TOTPBackupSnapshotLease, wantRevision, wantFactors int) {
+		t.Helper()
+		if installationv1.ValidateTOTPBackupSnapshotLease(lease) != nil {
+			t.Fatal("invalid snapshot fixture")
+		}
+		reader, err := pgx.ConnectConfig(ctx, config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reader.Close(context.Background())
+		tx, err := reader.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(context.Background())
+		if _, err := tx.Exec(ctx, "SET TRANSACTION SNAPSHOT '"+lease.SnapshotID+"'"); err != nil {
+			t.Fatal("import live exact snapshot", err)
+		}
+		var revision, factors int
+		if err := tx.QueryRow(ctx, `SELECT (SELECT max(revision) FROM iam.totp_keysets),
+		 (SELECT count(*) FROM iam.totp_authenticators)`).Scan(&revision, &factors); err != nil || revision != wantRevision || factors != wantFactors {
+			t.Fatal("custody and imported database view diverged", revision, factors, err)
+		}
+	}
+	importView(firstLease, 1, 0)
+	second := open()
+	secondLease := second.Lease()
+	if secondLease.Custody.KeysetRevision != 2 || len(secondLease.Custody.RequiredKeys) != 2 {
+		t.Fatal("fresh snapshot lost retained references")
+	}
+	for i, required := range secondLease.Custody.RequiredKeys {
+		digest, err := iamv1.TOTPKeyMaterialCommitment(keyring, keyring.Keys[i].KeyID)
+		if err != nil || required.KeyID != keyring.Keys[i].KeyID || required.FormatVersion != 1 || required.Commitment != digest {
+			t.Fatal("snapshot requirement did not bind exact registered material")
+		}
+	}
+	importView(secondLease, 2, 2)
+	for _, snapshot := range []*iampostgres.TOTPBackupSnapshot{first, second} {
+		if err := snapshot.Close(); err != nil {
+			t.Fatal("normal snapshot rollback failed", err)
+		}
+	}
+	tx, err := admin.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, expiredErr := tx.Exec(ctx, "SET TRANSACTION SNAPSHOT '"+firstLease.SnapshotID+"'")
+	_ = tx.Rollback(context.Background())
+	if expiredErr == nil {
+		t.Fatal("closed snapshot remained reusable")
+	}
+	if snapshot, err := iampostgres.OpenTOTPBackupSnapshot(ctx, config); !errors.Is(err, iampostgres.ErrBackupCustodyForbidden) || snapshot != nil {
+		t.Fatal("administrator DSN substituted for dedicated login", err)
+	}
+	for _, attack := range []string{"SELECT * FROM iam.totp_authenticators", "SELECT iam.register_totp_keyset('{}')",
+		"SELECT * FROM iam.readiness()", "SET ROLE matrix_iam_api", "SELECT iam.read_totp_backup_custody()"} {
+		connection, err := pgx.ConnectConfig(ctx, backupConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, attackErr := connection.Exec(ctx, attack)
+		_ = connection.Close(context.Background())
+		var pgError *pgconn.PgError
+		if !errors.As(attackErr, &pgError) || pgError.Code != "42501" {
+			t.Fatal("backup role escaped purpose/read-only boundary", attack, attackErr)
+		}
+	}
+	if _, err := admin.Exec(ctx, "GRANT EXECUTE ON FUNCTION iam.read_totp_backup_custody() TO matrix_iam_api"); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, err := iampostgres.OpenTOTPBackupSnapshot(ctx, backupConfig); err == nil || snapshot != nil {
+		t.Fatal("weakened function grant did not close custody")
+	}
+	if _, err := admin.Exec(ctx, "REVOKE EXECUTE ON FUNCTION iam.read_totp_backup_custody() FROM matrix_iam_api"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, "GRANT SELECT ON iam.totp_wrapping_registry TO matrix_iam_backup_custody_login"); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, err := iampostgres.OpenTOTPBackupSnapshot(ctx, backupConfig); !errors.Is(err, iampostgres.ErrBackupCustodyForbidden) || snapshot != nil {
+		t.Fatal("direct login grant bypassed purpose-only credential check", err)
+	}
+	if _, err := admin.Exec(ctx, "REVOKE SELECT ON iam.totp_wrapping_registry FROM matrix_iam_backup_custody_login"); err != nil {
+		t.Fatal(err)
+	}
+	applyIAMSchema(t, ctx, admin)
+	replayed := open()
+	if !reflect.DeepEqual(replayed.Lease().Custody, secondLease.Custody) || replayed.Lease().CustodyDigest != secondLease.CustodyDigest {
+		t.Fatal("migration changed same-snapshot material requirements")
+	}
+	if err := replayed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// An incomplete retained record must not yield a plausible key requirement,
+	// even if an administrative restore damaged a NOT NULL invariant. These are
+	// deliberate isolated-database faults, never supported mutation operations.
+	var originalNonce []byte
+	if err := admin.QueryRow(ctx, "SELECT nonce FROM iam.totp_authenticators WHERE id='backup-factor-0'").Scan(&originalNonce); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `BEGIN;
+	 ALTER TABLE iam.totp_authenticators ALTER COLUMN nonce DROP NOT NULL;
+	 ALTER TABLE iam.totp_authenticators DISABLE TRIGGER cannot_update;
+	 UPDATE iam.totp_authenticators SET nonce=NULL WHERE id='backup-factor-0';
+	 ALTER TABLE iam.totp_authenticators ENABLE ALWAYS TRIGGER cannot_update;
+	 COMMIT`); err != nil {
+		t.Fatal("plant incomplete retained-record fixture", err)
+	}
+	if snapshot, err := iampostgres.OpenTOTPBackupSnapshot(ctx, backupConfig); !errors.Is(err, iampostgres.ErrBackupCustodyUnavailable) || snapshot != nil {
+		t.Fatal("incomplete ciphertext became a valid backup requirement", err)
+	}
+	if _, err := admin.Exec(ctx, `BEGIN;
+	 ALTER TABLE iam.totp_authenticators DISABLE TRIGGER cannot_update;
+	 UPDATE iam.totp_authenticators SET nonce=$1 WHERE id='backup-factor-0';
+	 ALTER TABLE iam.totp_authenticators ENABLE ALWAYS TRIGGER cannot_update;
+	 ALTER TABLE iam.totp_authenticators ALTER COLUMN nonce SET NOT NULL;
+	 COMMIT`, originalNonce); err != nil {
+		t.Fatal("restore own negative fixture", err)
+	}
+	// The server also bounds an orphaned exporter, independently of the helper
+	// reading its control pipe. A dead lease can never complete successfully.
+	shortContext, shortCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer shortCancel()
+	orphan, err := iampostgres.OpenTOTPBackupSnapshot(shortContext, backupConfig)
+	if err != nil {
+		t.Fatal("open bounded orphan fixture", err)
+	}
+	defer orphan.Close()
+	<-shortContext.Done()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var live int
+		if err := admin.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database()
+		 AND usename='matrix_iam_backup_custody_login' AND application_name='matrix-iam-backup-custody'`).Scan(&live); err != nil {
+			t.Fatal(err)
+		}
+		if live == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("database retained an orphaned exporter beyond its lease")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := orphan.Close(); !errors.Is(err, iampostgres.ErrBackupCustodyUnavailable) {
+		t.Fatal("expired lease was reported as successful release", err)
+	}
 }
 
 func TestIAMPasswordAttemptsPostgres(t *testing.T) {
@@ -2798,7 +3049,7 @@ func TestIAMPasswordAttemptsPostgres(t *testing.T) {
 		t.Fatal("suppressed calls changed the attempt", err)
 	}
 	var shape bool
-	if err := database.QueryRow(ctx, "SELECT iam.password_attempt_contract_ready() AND (SELECT schema_version=34 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
+	if err := database.QueryRow(ctx, "SELECT iam.password_attempt_contract_ready() AND (SELECT schema_version=35 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
 		t.Fatal("password function/ACL shape not ready", err)
 	}
 	apiConfig := config.Copy()

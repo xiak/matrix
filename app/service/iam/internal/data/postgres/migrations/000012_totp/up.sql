@@ -122,12 +122,12 @@ BEGIN
         VALUES(receipt.installation_id,supplied_revision,document,effective_now);
 END $function$;
 
-CREATE OR REPLACE FUNCTION iam.read_totp_custody()
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+-- Shared validation, not a grant to read the tables. Both the locked runtime
+-- transaction and the read-only backup snapshot use this exact invariant.
+CREATE OR REPLACE FUNCTION iam.totp_keyset_snapshot()
+RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE receipt iam.bootstrap_receipts%ROWTYPE; latest iam.totp_keysets%ROWTYPE; key_count integer;
-    prior_custody_scope text; has_authenticators boolean;
 BEGIN
-    LOCK TABLE iam.totp_keysets IN SHARE MODE;
     SELECT * INTO receipt FROM iam.bootstrap_receipts WHERE singleton;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='TOTP installation is unavailable'; END IF;
     SELECT * INTO latest FROM iam.totp_keysets WHERE installation_id=receipt.installation_id ORDER BY revision DESC LIMIT 1;
@@ -141,18 +141,78 @@ BEGIN
                 WHERE k=jsonb_build_object('keyId',r.key_id,'formatVersion',r.format_version,'materialCommitment',r.material_commitment))) THEN
         RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='TOTP custody is incompatible';
     END IF;
+    RETURN latest.registration;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.read_totp_custody()
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE registration jsonb; prior_custody_scope text; has_authenticators boolean;
+BEGIN
+    LOCK TABLE iam.totp_keysets IN SHARE MODE;
+    registration:=iam.totp_keyset_snapshot();
     prior_custody_scope:=current_setting('matrix.iam_totp_custody',true);
     PERFORM set_config('matrix.iam_totp_custody','trusted',true);
     SELECT EXISTS(SELECT 1 FROM iam.totp_authenticators) INTO has_authenticators;
     PERFORM set_config('matrix.iam_totp_custody',COALESCE(prior_custody_scope,''),true);
-    RETURN jsonb_build_object('keyset',latest.registration,'hasAuthenticators',has_authenticators);
+    RETURN jsonb_build_object('keyset',registration,'hasAuthenticators',has_authenticators);
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.read_totp_backup_custody()
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE registration jsonb; required_keys jsonb; prior_custody_scope text;
+BEGIN
+    IF session_user<>'matrix_iam_backup_custody_login'
+        OR NOT pg_has_role(session_user,'matrix_iam_backup_custody','USAGE')
+        OR EXISTS(SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname=session_user
+            AND (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls))
+        OR EXISTS(SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname NOT IN (session_user,'matrix_iam_backup_custody')
+            AND pg_has_role(session_user,r.oid,'MEMBER'))
+        OR EXISTS(SELECT 1 FROM pg_catalog.pg_class c WHERE c.relnamespace='iam'::regnamespace
+            AND c.relkind IN ('r','p','v','m','f')
+            AND has_table_privilege(session_user,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'))
+        OR EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace='iam'::regnamespace
+            AND p.oid<>to_regprocedure('iam.read_totp_backup_custody()') AND has_function_privilege(session_user,p.oid,'EXECUTE'))
+        OR current_setting('transaction_isolation')<>'repeatable read'
+        OR current_setting('transaction_read_only')<>'on' THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='TOTP backup custody context is forbidden';
+    END IF;
+    IF NOT iam.totp_custody_contract_ready() OR NOT iam.totp_backup_custody_contract_ready()
+        OR (SELECT schema_version FROM iam.readiness())<>35 THEN
+        RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='TOTP backup custody shape is unavailable';
+    END IF;
+    registration:=iam.totp_keyset_snapshot();
+    prior_custody_scope:=current_setting('matrix.iam_totp_custody',true);
+    PERFORM set_config('matrix.iam_totp_custody','trusted',true);
+    IF EXISTS(SELECT 1 FROM iam.totp_authenticators f
+        LEFT JOIN iam.totp_wrapping_registry k ON (k.installation_id,k.key_id)=(f.installation_id,f.key_id)
+        WHERE f.installation_id<>registration#>>'{scope,installationId}'
+            OR k.key_id IS NULL OR f.format_version IS DISTINCT FROM k.format_version OR f.format_version IS DISTINCT FROM 1
+            OR f.state IS NULL OR f.state NOT IN ('PENDING','ACTIVE','REVOKED')
+            OR octet_length(f.nonce) IS DISTINCT FROM 12 OR octet_length(f.ciphertext) IS DISTINCT FROM 36) THEN
+        RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='TOTP backup references are unavailable';
+    END IF;
+    SELECT COALESCE(jsonb_agg(jsonb_build_object('keyId',k.key_id,'formatVersion',k.format_version,
+        'commitment',k.material_commitment) ORDER BY k.key_id COLLATE "C"),'[]'::jsonb) INTO required_keys
+        FROM iam.totp_wrapping_registry k WHERE EXISTS(SELECT 1 FROM iam.totp_authenticators f
+            WHERE (f.installation_id,f.key_id)=(k.installation_id,k.key_id));
+    PERFORM set_config('matrix.iam_totp_custody',COALESCE(prior_custody_scope,''),true);
+    RETURN jsonb_build_object('apiVersion','installation.matrix.xiak.com/v1','kind','IAMTOTPBackupCustody',
+        'purpose','IAM_TOTP_BACKUP_CUSTODY','installationId',registration#>>'{scope,installationId}',
+        'bootstrapDigest',registration#>>'{scope,bootstrapDigest}','keysetRevision',registration->'keysetRevision',
+        'requiredKeys',required_keys);
 END $function$;
 
 REVOKE ALL ON iam.totp_wrapping_registry,iam.totp_keysets,iam.totp_authenticators
-    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody;
 REVOKE ALL ON FUNCTION iam.register_totp_keyset(jsonb),iam.read_totp_custody()
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.register_totp_keyset(jsonb),iam.read_totp_custody() TO matrix_iam_api;
+REVOKE ALL ON FUNCTION iam.totp_keyset_snapshot(),iam.read_totp_backup_custody()
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody;
+REVOKE ALL ON ALL TABLES IN SCHEMA iam FROM matrix_iam_backup_custody;
+REVOKE ALL ON SCHEMA iam FROM matrix_iam_backup_custody;
+GRANT USAGE ON SCHEMA iam TO matrix_iam_backup_custody;
+GRANT EXECUTE ON FUNCTION iam.read_totp_backup_custody() TO matrix_iam_backup_custody;
 
 CREATE OR REPLACE FUNCTION iam.totp_custody_contract_ready()
 RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
@@ -188,3 +248,40 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         AND (SELECT prorettype='jsonb'::regtype FROM pg_catalog.pg_proc WHERE oid=to_regprocedure('iam.read_totp_custody()')),false)
 $function$;
 REVOKE ALL ON FUNCTION iam.totp_custody_contract_ready() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+
+CREATE OR REPLACE FUNCTION iam.totp_backup_custody_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT COALESCE(
+        EXISTS(SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname='matrix_iam_backup_custody'
+            AND NOT r.rolsuper AND NOT r.rolcanlogin AND NOT r.rolcreatedb AND NOT r.rolcreaterole
+            AND NOT r.rolreplication AND NOT r.rolbypassrls)
+        AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname<>'matrix_iam_backup_custody'
+            AND pg_has_role('matrix_iam_backup_custody',r.oid,'MEMBER'))
+        AND NOT pg_has_role('matrix_iam_api','matrix_iam_backup_custody','MEMBER')
+        AND NOT pg_has_role('matrix_iam_worker','matrix_iam_backup_custody','MEMBER')
+        AND NOT pg_has_role('matrix_iam_credential_recovery','matrix_iam_backup_custody','MEMBER')
+        AND has_schema_privilege('matrix_iam_backup_custody','iam','USAGE')
+        AND NOT has_schema_privilege('matrix_iam_backup_custody','iam','CREATE')
+        AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_class c WHERE c.relnamespace='iam'::regnamespace
+            AND c.relkind IN ('r','p','v','m','f')
+            AND has_table_privilege('matrix_iam_backup_custody',c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'))
+        AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace='iam'::regnamespace
+            AND p.oid<>to_regprocedure('iam.read_totp_backup_custody()')
+            AND has_function_privilege('matrix_iam_backup_custody',p.oid,'EXECUTE'))
+        AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('iam.read_totp_backup_custody()')
+            AND p.proowner='matrix_iam_owner'::regrole AND p.prosecdef AND NOT p.proretset
+            AND p.prorettype='jsonb'::regtype AND p.provolatile='s' AND p.pronargs=0
+            AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+            AND has_function_privilege('matrix_iam_backup_custody',p.oid,'EXECUTE')
+            AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) permission
+                WHERE permission.grantee NOT IN (p.proowner,'matrix_iam_backup_custody'::regrole)
+                    OR (permission.grantee='matrix_iam_backup_custody'::regrole AND permission.is_grantable)))
+        AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('iam.totp_keyset_snapshot()')
+            AND p.proowner='matrix_iam_owner'::regrole AND NOT p.prosecdef AND NOT p.proretset
+            AND p.prorettype='jsonb'::regtype AND p.provolatile='s' AND p.pronargs=0
+            AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+            AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) permission
+                WHERE permission.grantee<>p.proowner)),false)
+$function$;
+REVOKE ALL ON FUNCTION iam.totp_backup_custody_contract_ready()
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody;

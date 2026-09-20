@@ -903,7 +903,7 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	// release admission. The published profile advances only after the complete
 	// MFA preparation release (runtime guards plus coherent backup custody) is
 	// accepted, not merely because this IAM schema compiles.
-	profile := installationrelease.AuthoritySchemas{IAM: 34, Audit: 18, PaaS: 6}
+	profile := installationrelease.AuthoritySchemas{IAM: 35, Audit: 18, PaaS: 6}
 	if installationrelease.CurrentDatabaseProfile().Authorities == profile {
 		t.Fatal("unreleased IAM custody shape was published without its complete release gate")
 	}
@@ -1415,7 +1415,7 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	// A fresh IAM process advances only the nonsecret TOTP key registration.
 	// The already-running process retains its original protected file snapshot,
 	// so direct password and Session requests must fail closed until restart.
-	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/sessions", adminLogin.Credential, nil); response.Status != http.StatusOK {
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", adminLogin.Credential, nil); response.Status != http.StatusOK {
 		t.Fatalf("TOTP drift fixture lacks a working Session: %d", response.Status)
 	}
 	totpBytes, err := os.ReadFile(iamTOTPKeyPath)
@@ -1455,10 +1455,10 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	if response.Status != http.StatusServiceUnavailable {
 		t.Fatalf("stale TOTP process accepted direct login: %d", response.Status)
 	}
-	if response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/sessions", adminLogin.Credential, nil); response.Status != http.StatusServiceUnavailable {
+	if response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", adminLogin.Credential, nil); response.Status != http.StatusServiceUnavailable {
 		t.Fatalf("stale TOTP process accepted existing Session: %d", response.Status)
 	}
-	if response = performJSON(t, http.MethodGet, nextEndpoint+"/v1/auth/sessions", adminLogin.Credential, nil); response.Status != http.StatusOK {
+	if response = performJSON(t, http.MethodGet, nextEndpoint+"/v1/auth/me", adminLogin.Credential, nil); response.Status != http.StatusOK {
 		t.Fatalf("matching TOTP process lost existing Session: %d", response.Status)
 	}
 	nextProcess.stop()
