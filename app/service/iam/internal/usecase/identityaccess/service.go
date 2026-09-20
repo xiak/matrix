@@ -57,6 +57,11 @@ func NewAuthority(repository Repository, config Config) (*Authority, error) {
 		return nil, err
 	}
 	config.AccessKeyWrapping = nil
+	totp, err := newTOTPRegistration(config.TOTPKeyring)
+	if err != nil {
+		return nil, err
+	}
+	config.TOTPKeyring = nil
 	return &Authority{
 		repository:   repository,
 		config:       config,
@@ -64,6 +69,7 @@ func NewAuthority(repository Repository, config Config) (*Authority, error) {
 		credentials:  authority.NewCredentialIssuer(nil),
 		cursors:      cursors,
 		accessKeys:   wrapping,
+		totp:         totp,
 		passwordWork: make(chan struct{}, 2),
 	}, nil
 }

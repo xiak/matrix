@@ -26,6 +26,7 @@ type Config struct {
 	NewID                  func(prefix string) (string, error)
 	CursorKey              []byte
 	AccessKeyWrapping      *iamv1.AccessKeyWrappingKeyring
+	TOTPKeyring            *iamv1.TOTPKeyring
 }
 
 type Repository interface {
@@ -39,6 +40,8 @@ type Transaction interface {
 	TransactionTime(context.Context) (time.Time, error)
 	CheckCurrentAuthorizationProfiles(context.Context) error
 	ReadAccessKeyCustody(context.Context) (AccessKeyCustody, error)
+	RegisterTOTPKeyset(context.Context, TOTPKeysetRegistration) error
+	ReadTOTPCustody(context.Context) (TOTPCustody, error)
 	LookupAccessKey(context.Context, string, iamv1.AccessKeyID, string, iamv1.ProductID) (AccessKeyCredential, bool, error)
 	ReadAccessKeys(context.Context, AccessKeyRead) (AccessKeyDirectory, error)
 	ReserveAccessKey(context.Context, AccessKeyReservation) (AccessKeyReservationResult, error)
@@ -768,5 +771,6 @@ type Authority struct {
 	credentials  *authority.CredentialIssuer
 	cursors      *authority.CursorCodec
 	accessKeys   *accessKeyWrapping
+	totp         *TOTPKeysetRegistration
 	passwordWork chan struct{}
 }

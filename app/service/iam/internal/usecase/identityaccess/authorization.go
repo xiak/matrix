@@ -51,6 +51,9 @@ func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredent
 		if err := service.checkAccessKeyCustody(ctx, tx); err != nil {
 			return err
 		}
+		if err := service.checkTOTPCustody(ctx, tx); err != nil {
+			return err
+		}
 		credential, found, err := tx.LookupAccessKey(ctx, lookupDigest, parameters.AccessKeyID, parameters.InstallationID, parameters.Audience)
 		if err != nil {
 			return err

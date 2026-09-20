@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。S3a登录/改密共享密码尝试已实施，源码IAM33/Audit19，本地最终回归通过、独立CI待确认，未分配发布revision；UI与完整009尚未验收。S2/S3详细设计已固定`6fa39fda`，S2a内部TOTP/恢复码、私有keyring及种子加密基础片已实现并通过本地检查；完整S2/S3/S4尚未验收。下述HTTP、持久化和交付分工不是已开放API或已完成协作；材料托管、恢复与通知的发布前置尚未全部完成。
+- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。S3a登录/改密共享密码尝试已实施，源码IAM33/Audit19，本地最终回归及固定92e3073的五项独立CI通过，未分配发布revision；UI与完整009尚未验收。S2/S3详细设计已固定`6fa39fda`，S2a内部TOTP/恢复码、私有keyring及种子加密基础片已实现并通过本地检查；完整S2/S3/S4尚未验收。下述HTTP、持久化和交付分工不是已开放API或已完成协作；材料托管、恢复与通知的发布前置尚未全部完成。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -181,6 +181,16 @@ S2a后继材料基础片由`api/iam/v1/totp_wrapping.go`单一拥有私有keyrin
 
 #### 不同状态不能混用
 
+S2a运行时后继已在本分支实现并通过下述本地门禁，独立CI仍待固定提交后确认：网络进程必须读取已冻结的独立TOTP文件；启动时以封存bootstrap tuple注册非秘密材料承诺，不能生成替代秘密。沿原owner增加`000012_totp`是因为多key注册历史及种子持久状态与AccessKey具有不同的用途/退役边界，不复制其单key表或新建服务。源码IAM34/Audit19，发布profile/revision不变。
+
+本片`register_totp_keyset(jsonb)→void`仅接收`scope/keysetRevision/activeKeyId/contentDigest/keys`；每key为`keyId/formatVersion/materialCommitment`，所有摘要由已验证的私有codec计算。SQL可信边界仍是持有材料的IAM进程，不宣称数据库可独立验证32字节原密钥。封存scope必须精确匹配，注册与读请求串行保持不可变key身份/同revision集合、单调revision；没有数据/副本/备份退役证明前不允许去掉任何已注册key。精确重放不新增记录。该函数没有在线HTTP或worker入口。
+
+`read_totp_custody()→jsonb`只返回当前完整非秘密注册和`hasAuthenticators`，不是备份lease或同快照required-key摘要。原登录保留尝试与最终发行、Session和Role认证以及readiness都核对本副本实际材料；旧集合实例不能因文件已在另一副本替换而继续认证。本准备程序对任何持久认证器记录（包括REVOKED）均失败关闭，不能把缺少可用因子解释为从未绑定；它不实现/开放绑定、MFA挑战或恢复。后继启用片必须以真正因子/Session状态机替换该拒绝规则，不能删检查直接放行。
+
+该片必须在原测试owner证明：私有文件/用途/scope错误及缺失关闭；真实受限PG首次注册/等值重放/升级revision、同ID换材料/同revision变体/退役/越安装拒绝且无部分注册；另一个真实IAM副本观察注册推进后拒绝旧材料；真实登录和旧Session请求对未知认证器状态失败，不只测ready；登记竞争与读取锁顺序、RLS/ACL/不可变历史、重启/双迁移保留，以及原密码/Role/AccessKey/历史Audit回归。仅测试插入的不可用种子记录是负向边界夹具，不是已实现的绑定路径；没有真实绑定/OTP消费/通知/恢复门禁仍不能称MFA可用。
+
+本地真实PostgreSQL18.6证据沿原owner：独立2逻辑CPU/1GiB/24进程限制、16连接/64MiB shared buffers；Go2/512MiB、race/-p1串行。`TestIAMTOTPCustodyPostgres`最终2.52s覆盖精确注册/变体无部分写、读锁阻止登记越过在途请求、两个不同同revision集合并发仅一方成功、真实密文REVOKED行使登录/Session/重启失败关闭和双迁移保留。原IAM HTTP累计104.94s；实际固定`7cf857bb` IAM32 executable→IAM34保留Session/原receipt/canonical/proof及重启最终15.13s。独立IAM/Audit/PaaS与两个dispatcher门禁最终106.91s，包括真实受限登录、两IAM及新IAM进程推进集合revision后旧两个进程的真实Login/Session均503、匹配材料实例仍接受原有效Session、重启后原业务和历史投递继续。没有借用Docker/远端/其他任务资源；这些源码实验不证明新发布profile或备份恢复兼容。最终同生产源码的clean-export全仓race/架构、vet、模块校验、728文件生成清单/哈希一致性及Linux amd64构建通过；独立CI尚待确认。
+
 | 状态或材料 | 责任与限制 |
 | --- | --- |
 | Account的`security-settings` | 同Account单份有版本的安全配置；保存日常User的密码/MFA/会话要求，不表示某个人已经绑定因子，也不是授权Policy |
@@ -312,9 +322,9 @@ TOTP验证需要可用种子，不能仅存单向摘要；数据库应存目的�
 
 #### 登录与一次性消费
 
-材料准备版与MFA启用版须有不同的精确数据库/函数行为门禁，不能由manifest自声明capabilities或仅比较schema大小推断兼容。准备版必须核对注册材料与实际仍需解密的行；出现其不理解的ACTIVE/PENDING或其他需解密状态时，除readiness为false，实际Login、Session查验及受保护认证路径也须失败关闭。不能假设所有调用方都遵守健康探针。具体状态集、registry/need形状和准备→启用的发布profile尚待后继材料消费切片冻结；本片IAM33密码预算不充作材料准备版证明。
+材料准备版与MFA启用版须有不同的精确数据库/函数行为门禁，不能由manifest自声明capabilities或仅比较schema大小推断兼容。准备版必须核对注册材料与实际仍需解密的行；出现其不理解的ACTIVE/PENDING或其他需解密状态时，除readiness为false，实际Login、Session查验及受保护认证路径也须失败关闭。不能假设所有调用方都遵守健康探针。源码IAM34的注册/读形状与拒绝全部保留因子行的行为已在上文实现；实际因子状态机、同快照备份helper及准备→启用的发布profile尚未完成，IAM33密码预算本身不充作这些证明。
 
-已与installation冻结运行配置名`MATRIX_IAM_TOTP_KEYRING_FILE`及目标`/run/matrix/iam-totp-keyring.json`，仅IAM单文件只读挂载，不能给其他服务或挂父目录。本节是配置契约，不是已运行命令或本分支已启用消费者。备份要求单一exported snapshot：持有REPEATABLE READ READ ONLY事务的目的限定helper从同一视图得出注册历史/实际依赖，pg_dump在lease未结束时导入该snapshot；普通两次query或当前keyset摘要不证明一致性。required稳定key承诺与本地superset核对不能替代当前恢复资格，helper/只读函数/传输ABI尚未冻结。
+已与installation冻结运行配置名`MATRIX_IAM_TOTP_KEYRING_FILE`及目标`/run/matrix/iam-totp-keyring.json`，仅IAM单文件只读挂载，不能给其他服务或挂父目录。本分支IAM34已消费独立受保护文件，安装挂载/交付仍由installation自己的固定证据负责。备份要求单一exported snapshot：持有REPEATABLE READ READ ONLY事务的目的限定helper从同一视图得出注册历史/实际依赖，pg_dump在lease未结束时导入该snapshot；普通两次query或当前keyset摘要不证明一致性。required稳定key承诺与本地superset核对不能替代当前恢复资格；同快照交接及只读helper属于后继切片，不将当前`read_totp_custody`称为已具备该能力。
 
 登录响应必须明确区分“已发行Session”与“需要继续认证”，不能在挑战分支返回半有效bearer。仅密码、账号和User当前状态验证成功后签发短期挑战，不在错误密码/未知realm时暴露是否绑定MFA。完成挑战时，在原Account→USER→凭据锁序下重新检查主体状态、密码代际、因子修订及挑战；密码改变、因子替换或挑战终止使旧阶段证明失效，不根据请求中的user/account字段换主体。原密码Session及不支持新响应的旧客户端不能绕过所需因子。
 
@@ -501,7 +511,7 @@ false→true收紧时，最小方案单调推进本Account日常User的登录资
 | `TestIndependentIAMAuditAndPaaSProcesses` | 68.66s通过；实际受限数据库登录、双IAM及Audit/PaaS/dispatcher进程、真实HTTP/原outbox/审计及资源隔离回归；源码readiness精确33/19/2，不改已发布profile |
 | 默认/架构及构建检查 | 相同最终生产代码的干净导出全仓race/architecture通过；最后追加的SQL攻击在上述新PG18门禁通过。最终导出vet、模块校验、724文件生成集合及SHA256一致、Linux amd64构建通过；外部DSN的默认SKIP不是运行证据 |
 
-初始`31c18531`的[Verification35488659078](https://github.com/xiak/matrix/actions/runs/35488659078)未通过：Audit存储夹具还直接调用裸密码查询/旧函数，会话并发夹具还要求新登录绕过同USER写锁；两处已在原测试owner按当前契约替换并完成上述本地复验，没有恢复旁路、删场景、增时限或修改生产实现。后继候选仍需精确固定源码的独立CI确认，不能回填该失败。上表不替代未完成的Account公平配额、密码规则、MFA/通知/恢复或完整009验收。本机默认DSN缺失时的SKIP不作为上述证据；原Docker不可用没有被用来降低门禁或重启共享服务。
+初始`31c18531`的[Verification35488659078](https://github.com/xiak/matrix/actions/runs/35488659078)未通过：Audit存储夹具还直接调用裸密码查询/旧函数，会话并发夹具还要求新登录绕过同USER写锁；两处已在原测试owner按当前契约替换并完成上述本地复验，没有恢复旁路、删场景、增时限或修改生产实现。累计固定`92e3073e290104089af3e02ddaaa6a7d8fb2c457`的[Verification35489211152](https://github.com/xiak/matrix/actions/runs/35489211152)已在2026-09-20以GitHub API核实精确SHA，go、node-process、authority-storage、authority-runtime、authority-process全部completed/success；这个后继成功不回填原失败。上表不替代未完成的Account公平配额、密码规则、MFA/通知/恢复或完整009验收。本机默认DSN缺失时的SKIP不作为上述证据；原Docker不可用没有被用来降低门禁或重启共享服务。
 
 必须分清三种限制：进程/入口预算保护CPU、内存和连接；当前实际USER/凭据预算限制猜测；Account公平预算避免一个账号占满认证资源。前者可以有每副本本地上限，但不能冒充集群级尝试上限；后两者需要共享权威状态，所有IAM副本按相同数据库时间核对。安装/edge的限额是补充，不授权IAM失联时回退到内存计数或旧Allow。
 

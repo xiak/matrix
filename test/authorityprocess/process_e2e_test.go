@@ -163,7 +163,11 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + writeProcessAccessKeyWrapping(t, temporary, processBootstrap(t))}
 	start := func(binary string, version uint64) *childProcess {
 		t.Helper()
-		child := startChild(t, root, binary, environment)
+		currentEnvironment := append([]string(nil), environment...)
+		if binary == currentBinary {
+			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_TOTP_KEYRING_FILE="+writeProcessTOTPKeyring(t, temporary, processBootstrap(t)))
+		}
+		child := startChild(t, root, binary, currentEnvironment)
 		children = append(children, child)
 		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
 		assertRuntimeProcessLogins(t, ctx, admin, "matrix_iam_api_login")
@@ -250,7 +254,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=33 AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=34 AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb)') IS NULL
 	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb,text)') IS NOT NULL
 	 AND (SELECT cardinality(proallargtypes)=25 AND proargnames[25]='credential_generation' FROM pg_proc WHERE oid='iam.lookup_session(text)'::regprocedure)
@@ -260,7 +264,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 	 FROM iam.readiness()`).Scan(&shape); err != nil || !shape {
 		t.Fatal("retained database did not replace the exact Session ABI", err)
 	}
-	current := start(currentBinary, 33)
+	current := start(currentBinary, 34)
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
 	}
@@ -325,7 +329,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 	if err := iammigration.Up(ctx, admin); err != nil {
 		t.Fatal("replay completed own-session schema", err)
 	}
-	current = start(currentBinary, 33)
+	current = start(currentBinary, 34)
 	if !bytes.Equal(completedState, identityState()) {
 		t.Fatal("restart/schema replay changed completed session state")
 	}
@@ -377,7 +381,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		}
 	}
 	current.stop()
-	t.Log("actual IAM32 -> IAM33 retained sessions/individual completion, NULL lineage, forced bulk reduction, shared password attempts, exact replay/new-login survival, original receipt/canonical/proof and restart passed; no release compatibility claim")
+	t.Log("actual IAM32 -> IAM34 retained sessions/individual completion, NULL lineage, forced bulk reduction, shared password attempts, exact replay/new-login survival, original receipt/canonical/proof and restart passed; no release compatibility claim")
 }
 
 func TestIAMRetainedRoleCapabilityProcessUpgrade(t *testing.T) {
@@ -448,7 +452,7 @@ func TestIAMRetainedRoleCapabilityProcessUpgrade(t *testing.T) {
 	start := func(binary string) *childProcess {
 		currentEnvironment := append([]string(nil), environment...)
 		if binary == currentBinary {
-			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
+			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile, "MATRIX_IAM_TOTP_KEYRING_FILE="+writeProcessTOTPKeyring(t, temporary, processBootstrap(t)))
 		}
 		child := startChild(t, root, binary, currentEnvironment)
 		children = append(children, child)
@@ -624,7 +628,7 @@ func TestIAMRetainedRoleAuthorityProcessUpgrade(t *testing.T) {
 	wrappingFile := writeProcessAccessKeyWrapping(t, temporary, processBootstrap(t))
 	start := func(binary string, environment []string) *childProcess {
 		if binary == binaries.iam {
-			environment = append(append([]string(nil), environment...), "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
+			environment = append(append([]string(nil), environment...), "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile, "MATRIX_IAM_TOTP_KEYRING_FILE="+writeProcessTOTPKeyring(t, temporary, processBootstrap(t)))
 		}
 		child := startChild(t, root, binary, environment)
 		children = append(children, child)
@@ -986,7 +990,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("35", 32))),
 	}
 	wrappingFile := writeProcessAccessKeyWrapping(t, temporary, processBootstrap(t))
-	currentEnvironment := append(append([]string(nil), environment...), "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
+	currentEnvironment := append(append([]string(nil), environment...), "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile, "MATRIX_IAM_TOTP_KEYRING_FILE="+writeProcessTOTPKeyring(t, temporary, processBootstrap(t)))
 	start := func(binary string, configuration []string) *childProcess {
 		t.Helper()
 		child := startChild(t, root, binary, configuration)
@@ -1749,7 +1753,7 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 	start := func(binary string) *childProcess {
 		currentEnvironment := append([]string(nil), environment...)
 		if binary == currentBinary {
-			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
+			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile, "MATRIX_IAM_TOTP_KEYRING_FILE="+writeProcessTOTPKeyring(t, temporary, processBootstrap(t)))
 		}
 		child := startChild(t, root, binary, currentEnvironment)
 		children = append(children, child)
@@ -1796,7 +1800,7 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable, fixedCommit string, q
 		t.Fatal("old installation has no retained facts")
 	}
 	// Exercise schema rejection with the current process's complete inputs.
-	unmigratedEnvironment := append(append([]string(nil), environment...), "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile)
+	unmigratedEnvironment := append(append([]string(nil), environment...), "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+wrappingFile, "MATRIX_IAM_TOTP_KEYRING_FILE="+writeProcessTOTPKeyring(t, temporary, processBootstrap(t)))
 	unmigrated := startChild(t, root, currentBinary, unmigratedEnvironment)
 	children = append(children, unmigrated)
 	if err := unmigrated.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
@@ -2153,6 +2157,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	)
 	iamCursorKeyPath := writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("35", 32)))
 	iamWrappingKeyPath := writeProcessAccessKeyWrapping(t, temporary, bootstrap)
+	iamTOTPKeyPath := writeProcessTOTPKeyring(t, temporary, bootstrap)
 
 	iamAddress := freeAddress(t)
 	auditAddress := freeAddress(t)
@@ -2168,6 +2173,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"MATRIX_IAM_LISTEN_ADDRESS=" + iamAddress,
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + iamCursorKeyPath,
 		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + iamWrappingKeyPath,
+		"MATRIX_IAM_TOTP_KEYRING_FILE=" + iamTOTPKeyPath,
 	}
 	auditEnvironment := []string{
 		"MATRIX_AUDIT_DATABASE_DSN_FILE=" + auditDSNPath,
@@ -2231,24 +2237,26 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		assertProcessOutputsSanitized(t, children, sensitive...)
 	}()
 
-	for _, candidate := range []string{"", filepath.Join(temporary, "missing-keyring"),
-		writeProtectedFile(t, temporary, "invalid-keyring", []byte("{}"))} {
-		environment := []string{}
-		for _, entry := range iamEnvironment {
-			if !strings.HasPrefix(entry, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=") {
-				environment = append(environment, entry)
+	for _, variable := range []string{"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE", "MATRIX_IAM_TOTP_KEYRING_FILE"} {
+		for _, candidate := range []string{"", filepath.Join(temporary, "missing-keyring"),
+			writeProtectedFile(t, temporary, "invalid-keyring", []byte("{}"))} {
+			environment := []string{}
+			for _, entry := range iamEnvironment {
+				if !strings.HasPrefix(entry, variable+"=") {
+					environment = append(environment, entry)
+				}
 			}
-		}
-		if candidate != "" {
-			environment = append(environment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE="+candidate)
-		}
-		invalid := start(binaries.iam, environment)
-		if err := invalid.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
-			t.Fatal("IAM network process accepted missing/invalid wrapping file")
-		}
-		var effects int
-		if err := admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.bootstrap_receipts)+(SELECT count(*) FROM iam.access_key_wrapping_registry)+(SELECT count(*) FROM iam.audit_outbox)`).Scan(&effects); err != nil || effects != 0 {
-			t.Fatal("invalid wrapping startup changed installation state", err)
+			if candidate != "" {
+				environment = append(environment, variable+"="+candidate)
+			}
+			invalid := start(binaries.iam, environment)
+			if err := invalid.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
+				t.Fatal("IAM network process accepted missing/invalid wrapping file", variable)
+			}
+			var effects int
+			if err := admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.bootstrap_receipts)+(SELECT count(*) FROM iam.access_key_wrapping_registry)+(SELECT count(*) FROM iam.totp_wrapping_registry)+(SELECT count(*) FROM iam.audit_outbox)`).Scan(&effects); err != nil || effects != 0 {
+				t.Fatal("invalid wrapping startup changed installation state", variable, err)
+			}
 		}
 	}
 	iamProcess := start(binaries.iam, iamEnvironment)
@@ -2283,7 +2291,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 33, Audit: 19, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 34, Audit: 19, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -2365,13 +2373,15 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	replicaDSNPath := writeProtectedFile(t, temporary, "iam-replica-dsn", []byte(runtimeDSN(t, adminConfig, replicaLogin, processDBPassword)))
 	replicaAddress := freeAddress(t)
 	replicaEndpoint := "http://" + replicaAddress
-	replicaProcess := start(binaries.iam, []string{
+	replicaEnvironment := []string{
 		"MATRIX_IAM_DATABASE_DSN_FILE=" + replicaDSNPath,
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
 		"MATRIX_IAM_LISTEN_ADDRESS=" + replicaAddress,
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + iamCursorKeyPath,
 		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + iamWrappingKeyPath,
-	})
+		"MATRIX_IAM_TOTP_KEYRING_FILE=" + iamTOTPKeyPath,
+	}
+	replicaProcess := start(binaries.iam, replicaEnvironment)
 	waitHTTPStatus(t, ctx, replicaProcess, replicaEndpoint+"/ready", http.StatusOK)
 	assertRuntimeProcessLogins(t, ctx, admin, replicaLogin)
 	if mode == authorityProcessCapacity {
@@ -3152,6 +3162,78 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	// A real new IAM process advances the nonsecret registration. The two
+	// existing processes keep their original file snapshots: direct requests,
+	// not only readiness, must fail until they consume matching material.
+	// The earlier outage scenario deliberately stopped this replica.
+	replicaProcess = start(binaries.iam, replicaEnvironment)
+	waitHTTPStatus(t, ctx, replicaProcess, replicaEndpoint+"/ready", http.StatusOK)
+	for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/sessions", adminLogin.Credential, nil); response.Status != http.StatusOK {
+			t.Fatalf("TOTP drift fixture lacks a working Session: %d", response.Status)
+		}
+	}
+	totpBytes, err := os.ReadFile(iamTOTPKeyPath)
+	if err != nil {
+		t.Fatal("read own TOTP process fixture")
+	}
+	totpKeyring, err := iamv1.DecodeTOTPKeyring(bytes.NewReader(totpBytes))
+	clear(totpBytes)
+	if err != nil {
+		t.Fatal("decode own TOTP process fixture")
+	}
+	totpKeyring.KeysetRevision++
+	totpBytes, err = iamv1.EncodeTOTPKeyring(totpKeyring)
+	if err != nil {
+		t.Fatal("encode next TOTP process fixture")
+	}
+	nextTOTPPath := writeProtectedFile(t, temporary, "iam-totp-keyring-next.json", totpBytes)
+	clear(totpBytes)
+	nextAddress := freeAddress(t)
+	nextEnvironment := append([]string(nil), iamEnvironment...)
+	for i, entry := range nextEnvironment {
+		if strings.HasPrefix(entry, "MATRIX_IAM_TOTP_KEYRING_FILE=") {
+			nextEnvironment[i] = "MATRIX_IAM_TOTP_KEYRING_FILE=" + nextTOTPPath
+		}
+		if strings.HasPrefix(entry, "MATRIX_IAM_LISTEN_ADDRESS=") {
+			nextEnvironment[i] = "MATRIX_IAM_LISTEN_ADDRESS=" + nextAddress
+		}
+	}
+	nextProcess := start(binaries.iam, nextEnvironment)
+	nextEndpoint := "http://" + nextAddress
+	waitHTTPStatus(t, ctx, nextProcess, nextEndpoint+"/ready", http.StatusOK)
+	for _, endpoint := range []string{iamEndpoint, replicaEndpoint} {
+		response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/login", "", struct {
+			LoginName string `json:"loginName"`
+			Password  string `json:"password"`
+			RequestID string `json:"requestId"`
+		}{
+			LoginName: "admin", Password: changedAdminPassword, RequestID: "process-stale-totp-login"})
+		if response.Status != http.StatusServiceUnavailable {
+			t.Fatalf("stale TOTP process accepted direct login: %d", response.Status)
+		}
+		response = performJSON(t, http.MethodGet, endpoint+"/v1/auth/sessions", adminLogin.Credential, nil)
+		if response.Status != http.StatusServiceUnavailable {
+			t.Fatalf("stale TOTP process accepted existing Session: %d", response.Status)
+		}
+	}
+	if response := performJSON(t, http.MethodGet, nextEndpoint+"/v1/auth/sessions", adminLogin.Credential, nil); response.Status != http.StatusOK {
+		t.Fatalf("matching TOTP process lost existing Session: %d", response.Status)
+	}
+	nextProcess.stop()
+	iamProcess.stop()
+	replicaProcess.stop()
+	for _, environment := range [][]string{iamEnvironment, replicaEnvironment} {
+		for i, entry := range environment {
+			if strings.HasPrefix(entry, "MATRIX_IAM_TOTP_KEYRING_FILE=") {
+				environment[i] = "MATRIX_IAM_TOTP_KEYRING_FILE=" + nextTOTPPath
+			}
+		}
+	}
+	iamProcess = start(binaries.iam, iamEnvironment)
+	replicaProcess = start(binaries.iam, replicaEnvironment)
+	waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
+	waitHTTPStatus(t, ctx, replicaProcess, replicaEndpoint+"/ready", http.StatusOK)
 	paasDispatcher.stop()
 	createPaaSApplication(
 		t,
@@ -7568,7 +7650,8 @@ func assertProcessOutputsSanitized(
 	plaintexts ...string,
 ) {
 	t.Helper()
-	plaintexts = append(plaintexts, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x57}, 32)))
+	plaintexts = append(plaintexts, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x57}, 32)),
+		base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x74}, 32)))
 	for _, child := range children {
 		output := child.output()
 		for _, plaintext := range plaintexts {
@@ -7988,6 +8071,24 @@ func writeProcessAccessKeyWrapping(t *testing.T, directory string, bootstrap iam
 	}
 	defer clear(encoded)
 	return writeProtectedFile(t, directory, "iam-access-key-wrapping.json", encoded)
+}
+
+func writeProcessTOTPKeyring(t *testing.T, directory string, bootstrap iamv1.BootstrapDocument) string {
+	t.Helper()
+	digest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring := iamv1.TOTPKeyring{APIVersion: iamv1.APIVersion, Kind: "TOTPKeyring", Purpose: iamv1.TOTPWrappingPurpose,
+		Scope:          iamv1.TOTPWrappingScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest},
+		KeysetRevision: 1, ActiveKeyID: "process-totp", Keys: []iamv1.TOTPWrappingKey{{KeyID: "process-totp", FormatVersion: 1,
+			KeyMaterial: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x74}, 32)))}}}
+	encoded, err := iamv1.EncodeTOTPKeyring(keyring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	return writeProtectedFile(t, directory, "iam-totp-keyring.json", encoded)
 }
 
 func writeProtectedFile(

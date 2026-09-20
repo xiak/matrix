@@ -11,6 +11,9 @@ import (
 )
 
 func (service *Authority) authenticateRoleSession(ctx context.Context, tx Transaction, credential iamv1.Secret, now time.Time) (RoleSessionCredential, error) {
+	if err := service.checkTOTPCustody(ctx, tx); err != nil {
+		return RoleSessionCredential{}, err
+	}
 	digest, err := authority.LookupCredentialDigest(authority.CredentialRoleSession, credential)
 	if err != nil {
 		return RoleSessionCredential{}, ErrUnauthenticated

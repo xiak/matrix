@@ -698,6 +698,17 @@ independent Node vectors are `REFERENCE`, not a third-party key service or
 runtime dependency. No source gate, installation recovery capability or
 schema/profile acceptance is imported by this foundation.
 
+The runtime custody increment `REUSE`s fixed
+`04041d2d3f7ed55225a5164bc2bc05251d25a6f1`'s single private codec, immutable
+per-key commitment and set digest. It `ADAPT`s the protected file checks and
+actual bootstrap scope validation from fixed `92e3073`'s IAM network entry,
+without reusing AccessKey's purpose/registry or importing installation WIP.
+The separate TOTP SQL owner protects multi-key history and real encrypted seed
+references. Its preparation executable rejects any retained authenticator
+state; this is not a donor enrollment implementation, a backup snapshot lease,
+MFA recovery qualification or acceptance of an enabling release. No legacy
+library, runtime service or foreign worktree becomes a dependency.
+
 ## Password and authentication-budget target review
 
 IAM/009 owns account-governed password changes and bounded multi-instance

@@ -60,7 +60,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 	api := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, nil)
 	local := localRecoveryWorkflow(t, ctx, dsn, localRecoveryTestRole, nil)
 	document := iamHTTPBootstrap(t)
-	status, err := api.Bootstrap(ctx, document)
+	status, err := bootstrapIAMWithTOTP(t, ctx, api, document)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,7 +518,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 			if next != readLocalRecoveryState(t, ctx, database, authority.Scope) {
 				t.Fatal("old completed recovery changed revoked state")
 			}
-			if _, err := api.Bootstrap(ctx, document); err != nil {
+			if _, err := bootstrapIAMWithTOTP(t, ctx, api, document); err != nil {
 				t.Fatal(err)
 			}
 			applyIAMSchema(t, ctx, database)
@@ -627,6 +627,37 @@ func assertLocalRecoveryClosedSQLFact(t *testing.T, ctx context.Context, databas
 	}
 }
 
+func iamHTTPTOTPKeyring(t *testing.T, document iamv1.BootstrapDocument) iamv1.TOTPKeyring {
+	t.Helper()
+	digest, err := iamv1.BootstrapDigest(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return iamv1.TOTPKeyring{APIVersion: iamv1.APIVersion, Kind: "TOTPKeyring", Purpose: iamv1.TOTPWrappingPurpose,
+		Scope:          iamv1.TOTPWrappingScope{InstallationID: document.InstallationID, BootstrapDigest: digest},
+		KeysetRevision: 1, ActiveKeyID: "totp-http", Keys: []iamv1.TOTPWrappingKey{{KeyID: "totp-http", FormatVersion: 1,
+			KeyMaterial: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x74}, 32)))}}}
+}
+
+func newIAMAuthorityWithTOTP(t *testing.T, repository identityaccess.Repository, options identityaccess.Config) (*identityaccess.Authority, error) {
+	t.Helper()
+	keyring := iamHTTPTOTPKeyring(t, iamHTTPBootstrap(t))
+	options.TOTPKeyring = &keyring
+	return identityaccess.NewAuthority(repository, options)
+}
+
+func bootstrapIAMWithTOTP(t *testing.T, ctx context.Context, workflow *identityaccess.Authority, document iamv1.BootstrapDocument) (iamv1.BootstrapStatus, error) {
+	t.Helper()
+	status, err := workflow.Bootstrap(ctx, document)
+	if err != nil {
+		return iamv1.BootstrapStatus{}, err
+	}
+	if err := workflow.RegisterTOTPKeyset(ctx); err != nil {
+		return iamv1.BootstrapStatus{}, err
+	}
+	return status, nil
+}
+
 func localRecoveryWorkflow(t *testing.T, ctx context.Context, dsn, user string, trace pgx.QueryTracer, keyring ...iamv1.AccessKeyWrappingKeyring) *identityaccess.Authority {
 	t.Helper()
 	config, err := pgxpool.ParseConfig(dsn)
@@ -655,7 +686,7 @@ func localRecoveryWorkflow(t *testing.T, ctx context.Context, dsn, user string, 
 	if len(keyring) == 1 {
 		options.AccessKeyWrapping = &keyring[0]
 	}
-	workflow, err := identityaccess.NewAuthority(repository, options)
+	workflow, err := newIAMAuthorityWithTOTP(t, repository, options)
 	if err != nil {
 		t.Fatal(err)
 	}
