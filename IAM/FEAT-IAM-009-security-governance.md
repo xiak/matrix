@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。S3a登录/改密共享密码尝试已实施，源码IAM33/Audit19，本地最终回归及固定92e3073的五项独立CI通过，未分配发布revision；UI与完整009尚未验收。S2/S3详细设计已固定`6fa39fda`，S2a内部TOTP/恢复码、私有keyring及种子加密基础片已实现并通过本地检查；完整S2/S3/S4尚未验收。下述HTTP、持久化和交付分工不是已开放API或已完成协作；材料托管、恢复与通知的发布前置尚未全部完成。
+- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。S3a登录/改密共享密码尝试已实施，本地回归及固定92e3073的五项独立CI通过，未分配发布revision。S2首次TOTP绑定、登录挑战及强制改密已固定f5cec0e1；在线恢复码重绑后端及其本地数据库/进程/真实邮件证据归下述S2b，当前源码IAM38/Audit22，尚无独立CI验收。完整S2/S3/S4、UI与009发布均未完成；尚未实现的详细设计路由不是可用API，离线恢复及材料/通知的安装发布前置仍由其真实owner另验。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -299,7 +299,7 @@ LOGIN挑战 + 有效恢复码
 
 #### 拟定HTTP契约
 
-S2b正在原owner实施，尚无完整MFA验收。LoginResponse已在工作树严格区分AUTHENTICATED与CHALLENGE_REQUIRED：前者必须完整包含Session、credential和mustChangePassword（即使false也不能省略），后者只有challenge及独立持有秘密，连null/false形式的Session分支字段也拒绝。当前挑战仅LOGIN目的的TOTP及其已验证PASSWORD_CHANGE阶段，后继ENROLLMENT/RECOVERY/STEP_UP须随真实实现扩展，不先开放任意purpose/nextStep字符串。契约、示例、生成器与当前密码登录producer一起替换；既有客户端不能靠缺省outcome猜测认证成功。已接通本人首次绑定、已绑定USER的实际Login和verify HTTP及下述强制改密阶段；首次强制设置、恢复及完整启用条件尚未接齐，不能发布当前未完成的schema/API组合。
+S2b正在原owner实施，尚无完整MFA验收。LoginResponse严格区分AUTHENTICATED与CHALLENGE_REQUIRED：前者必须完整包含Session、credential和mustChangePassword（即使false也不能省略），后者只有challenge及独立持有秘密，连null/false形式的Session分支字段也拒绝。登录响应只允许LOGIN目的的TOTP、已验证PASSWORD_CHANGE或有确切恢复历史的RECOVER阶段；下述在线恢复入口另行发行RECOVERY/ENROLLMENT，不因通用Challenge类型支持该目的而允许密码登录直接发行恢复能力。首次强制设置和STEP_UP仍须随其真实实现开放，不接受任意purpose/nextStep字符串。契约、示例、生成器与密码登录producer一起替换；既有客户端不能靠缺省outcome猜测认证成功。本人首次绑定、已绑定USER登录、强制改密及受限在线恢复已接通；首次强制设置、离线恢复及完整启用条件尚未接齐，不能发布当前未完成的schema/API组合。
 
 当前工作树的`TestIAMTOTPEnrollmentPostgres`已在独立PG18（1CPU/1GiB/Pids192、16连接）、Go1.26.7/GOMAXPROCS2/512MiB、串行race下最终24.83s通过，包含实际邮件分支：真实受限API登录、从测试Maildir取码并完成现有通知地址确认后，经HTTP读取NEVER_BOUND、创建绑定、核对一次性provisioning、按原requestId读取及元数据重放、取消PENDING。正式绑定使用HTTP发行的种子；保留受限SQL的在途OTP攻击及最终outbox明确注入失败后的整笔回滚检查，再经实际HTTP确认，同事务提交因子、十条单向恢复码、安全通知与两个旧Session撤销。十条返回码各精确匹配一个带安装/USER/批次/码引用的持久验证值，旧会话重发确认被拒；原密码发行函数不能绕过MFA。
 
@@ -319,7 +319,7 @@ S2b正在原owner实施，尚无完整MFA验收。LoginResponse已在工作树�
 
 IAM37的`totp_authentication_contract_ready()`由迁移verify与实际readiness复用：检查挑战/预算/恢复材料/USER认证状态的列类型、NULL边界、复合归属键、唯一性和有界索引、强制RLS/唯一策略、表及列授权；同时核对目的限定函数的精确输入/结果、安全定义者、search_path、ACL/无额外重载，以及Session认证事实/因子消费/完成/通知关联触发器的ALWAYS和延迟约束形状。它不复制TOTP算法或Audit编码，也不以schema数字、SQL文本快照或“有几张表”替代实际约束。
 
-当前恢复材料只发行、尚未开放消费/替换，因此批次与码的更新、删除、截断均关闭。新消费流程必须随其原子状态机替换该更新保护，不能直接放宽表权限；现有API、Audit/通知worker和凭据恢复身份都不能取得校验材料或私有锁函数。
+IAM37基线只发行恢复材料，批次与码的更新、删除、截断全部关闭。IAM38的下述在线恢复以原子状态机替换消费/批次终止保护，不放宽直接表权限：只有已提交真实尝试的目的限定函数可以读取原批次校验投影；API不能任意读取材料或调用私有锁函数，Audit/通知worker和离线凭据恢复身份没有该消费能力。
 
 真实旧程序门禁发现：直接遍历强制RLS下的Account会漏掉旧USER。迁移现在只在原MFA状态表确实不存在时，经已有且已校验的account_roots枚举各Account并在对应租户范围读取USER；不新增全局读取能力或“legacy标记”。无任何原因子历史的旧USER建立NEVER_BOUND；已有因子证据（含REVOKED）只能进入RECOVERY_REQUIRED。表已存在时，等值迁移不补缺行、不重新推断NEVER_BOUND；正常新建USER仍由原事务触发器初始化。缺失/未知状态在实际认证入口失败关闭，不能靠重启修复成新资格。
 
@@ -381,9 +381,9 @@ IAM37的`totp_authentication_contract_ready()`由迁移verify与实际readiness�
 
 #### S2b受限自助恢复增量
 
-此增量正在实施，尚无可用恢复HTTP或实际消费验收，不改变f5cec0e1的交付结论。开始时把新PENDING因子与独立RECOVERY挑战一并提交，种子在重试事务之外生成/封装一次。公开`AuthenticatorRecovery`仅描述原ID/requestId、`STARTED/COMPLETED/SUPERSEDED/EXPIRED`和期限/完成时间，不含主体selector或秘密；它不是普通Session首次绑定的Enrollment：开始已终止旧因子并消费一条码，关闭页面不能撤回这些效果。
+三个在线恢复HTTP入口和实际消费事务已接通，并完成下述本地运行门禁；独立CI与消费者验收未完成，不改变f5cec0e1的交付结论。开始时把新PENDING因子与独立RECOVERY挑战一并提交，种子在重试事务之外生成/封装一次。公开`AuthenticatorRecovery`仅描述原ID/requestId、`STARTED/COMPLETED/SUPERSEDED/EXPIRED`和期限/完成时间，不含主体selector或秘密；它不是普通Session首次绑定的Enrollment：开始已终止旧因子并消费一条码，关闭页面不能撤回这些效果。
 
-| 拟定封闭入口 | 输入与结果 |
+| 封闭入口 | 输入与结果 |
 | --- | --- |
 | `POST /v1/auth/challenges/{id}:recover` | 只收`requestId/challengeCredential/recoveryCode`；接受当前LOGIN/TOTP或有确切原恢复历史的LOGIN/RECOVER。首次成功返回恢复元数据、新RECOVERY/ENROLLMENT挑战及独立秘密、一次性provisioning；不返回Session或重发秘密 |
 | `POST /v1/auth/challenges/{id}:confirm-recovery` | 复用验证码请求形状`requestId/challengeCredential/code`，但只接受RECOVERY/ENROLLMENT；正确新TOTP原子完成新绑定、新恢复批次、旧批次终止及通知，只返回完成元数据、新十码和`REAUTHENTICATE` |
@@ -393,11 +393,31 @@ LoginResponse仍只允许LOGIN挑战；不能因为通用Challenge可以描述RE
 
 候选恢复码在共享USER尝试预算已提交后比较；非空畸形码也计次，错误challenge秘密不能借公开ID扣他人预算。仅检查同USER唯一有效批次固定十条不可变验证值，按原码ID做用途绑定比较，不因首个匹配提前退出；被消费码永不重新允许。并发同码只一次成功，不同码也不能越过已经消费的原LOGIN挑战。新挑战、新意图、副本、重启及因子修订推进不能返还预算。
 
-开始/确认沿Account→USER→password→MFA→原批次/因子→challenge/尝试锁序重验当前状态及锁后数据库时间。RECOVERY_REQUIRED只有与合法开始的不可变完成、已撤销原因子及剩余批次相符时才可再次恢复；迁移发现的未知旧因子不能仅凭同名状态取得资格。密码代际改变、停用、另一恢复或批次终止使旧工作失效。恢复不改密码、不清除forced、不发Session；forced用户重绑后仍须走密码+新TOTP的原强制改密路径。
+开始/确认沿Account→USER→password→MFA→原批次/因子→challenge/尝试锁序重验当前状态及锁后数据库时间。RECOVERY_REQUIRED只有与合法开始的不可变事实、已撤销原因子及尚未终止的原批次相符时才可取得LOGIN/RECOVER挑战；即使十条码均已消费，仍可查询本人原恢复元数据，但开始新意图必须另有未消费码。迁移发现的未知旧因子不能仅凭同名状态取得资格。密码代际改变、停用、另一恢复或批次终止使旧工作失效。恢复不改密码、不清除forced、不发Session；forced用户重绑后仍须走密码+新TOTP的原强制改密路径。
 
-成功开始/完成各提交一个封闭`iam.authenticator.recovery-started/recovered`本人USER tenant事实和原VERIFIED地址的非秘密通知，不修改地址/角色/Policy。RootIdentity或平台附件不阻止本人持有当前密码及原码的自助操作，但不能据此授予管理员重置他人MFA的能力；丢失全部材料的本地恢复仍独立。实际SQL/函数和Audit目录拟协调源码IAM38/Audit22，发布profile/revision未分配。必须证明两副本单码/双码竞争、失败预算、outbox失败回滚、开始/完成后TCP丢失、剩余码重启、新绑定后旧批次拒绝、改密/停用交错及真实通知/历史Audit，不能以纯codec通过称恢复已交付。
+成功开始/完成各提交一个封闭`iam.authenticator.recovery-started/recovered`本人USER tenant事实和原VERIFIED地址的非秘密通知，不修改地址/角色/Policy。RootIdentity或平台附件不阻止本人持有当前密码及原码的自助操作，但不能据此授予管理员重置他人MFA的能力；丢失全部材料的本地恢复仍独立。当前SQL/函数和Audit目录对应源码IAM38/Audit22，发布profile/revision未分配。必须证明两副本单码/双码竞争、失败预算、outbox失败回滚、开始/完成后TCP丢失、剩余码重启、新绑定后旧批次拒绝、改密/停用交错及真实通知/历史Audit，不能以纯codec或单进程通过称恢复已交付。
 
-2026-09-21首个契约准备增量在原types/validation/encoding/contractgen及测试owner落地：开始/查询请求只有各自闭合字段，秘密必须显式编码；恢复元数据与一次性结果分开，STARTED不能带null完成，成功完成必须严格早于到期，开始的挑战/恢复期限必须相等；普通LoginResponse拒绝RECOVERY，即使独立Challenge已能描述该目的。验证码确认复用已有严格请求形状，不另建同形DTO。OpenAPI只增加相应components及目的组合约束，尚未注册这三个路径或连接任何数据库效果；当前源码仍IAM37/Audit21，拟定38/22未作为已实现版本写入readiness。新门禁先因缺类型/缺schema失败，补齐后API/生成器/architecture race通过；累计全仓默认race、vet、模块校验、122个API文件再次生成哈希一致和Linux amd64构建通过。没有启动数据库/SMTP/容器或把SKIP算作真实恢复证据；尚不提供原子消费、重绑或UI可用声明。
+开始/查询请求只有各自闭合字段，秘密必须显式编码；恢复元数据与一次性结果分开，STARTED不能带null完成，成功完成必须严格早于到期，开始的挑战/恢复期限必须相等；普通LoginResponse拒绝RECOVERY，即使独立Challenge已能描述该目的。验证码确认复用已有严格请求形状，不另建同形DTO。首次绑定与重绑复用TOTP绑定事务参数和十条恢复码生成，不保留第二套OTP算法、绑定证明或通知投递器。内部PostgreSQL时间投影先转UTC再进入公开严格校验，不放宽公开日期契约。
+
+2026-09-21本地增量证据：自有PostgreSQL18.6、受限API登录、两独立Authority的`TestIAMTOTPEnrollmentPostgres` race通过（包34.023s），包括原首次绑定/登录/强制改密回归、41类真实目录破坏失败关闭及十类恢复场景：正常完成、丢失开始材料后的显式替代、两挑战同码竞争、同挑战两码竞争、共享失败预算、开始/确认末端通知故障回滚、forced义务保留、reset/停用交错。开始和确认竞争各只有一个成功；安全交错在真实尝试事务提交后暂停，另一Authority完成reset/停用，再放行旧请求，密码代际/MFA/因子/挑战/事实无部分覆盖；重新启用不复活旧恢复挑战。恢复码逐条消费、批次终止、新因子登录及两类事实/通知关联由真实数据核对，不使用SQL文本快照。API/IAM/Audit/HTTP/dispatcher/architecture聚焦race通过；HTTP拒绝混用bearer、selector、重复/null秘密、保留Session和密码字段。
+
+随后全仓默认race、vet通过，两个拥有者OpenAPI重新生成字节一致；通知dispatcher的既有无秘密通知用例扩展到两个恢复事件后race通过，IAM/Audit Linux amd64构建通过。独立自有数据库中的IAM/Audit双schema受限角色与存储隔离门禁8.159s、Audit HTTP4.112s通过，覆盖新封闭action的校验，未替代真实IAM outbox历史投递。
+
+最终TOTP enrollment/recovery、custody、备份快照和密码尝试四类PG18门禁串行race再次通过，包126.157s，其中custody2.74s、备份快照4.35s、密码尝试63.10s。并发密码夹具在真实保留事务提交后暂停并捕获旧hash，reset可先完成，旧hash的后继校验不能签Session；不再依赖最终事务内的ID生成调用位置推断“没有持锁”。备份故障夹具在重启用不可变触发器前先实际执行已排队的deferred约束，不关闭新增恢复证明。两项均为既有测试owner的夹具修正，没有放宽生产锁序、权限或认证条件。未配置真实数据库/SMTP的默认SKIP不计为运行证据。
+
+其后的独立可执行程序门禁`TestIndependentIAMAuditAndPaaSProcesses`在新自有PG18.6数据库上race通过83.36s（包86.631s），保留原受限runtime实际登录、双IAM、Audit、PaaS、双dispatcher及所有原跨租户路径。恢复的开始与确认均由真实IAM提交后在代理处中断TCP回包，客户端确实没有收到成功；三个阶段分别重启两IAM。开始秘密丢失后，只用新密码证明查询原STARTED，明确以另一条原批次码开启替代；原意图变为SUPERSEDED并保留准确原期限/完成时间。完成回包丢失后不重发十码，新因子加当前密码可以正常登录。捕获的丢失回包只用于测试证据和脱敏检查，不当成客户端已取得的材料。
+
+同一进程门禁核对两条原码已消费、旧批次终止、五次USER预算没有因重启/新意图返还，新的PASSWORD_TOTP Session有实际认证修订；原Session/LOGIN与RECOVERY秘密均不能作为IAM/PaaS/Audit bearer。停用USER后再恢复IAM dispatcher，两个开始事实和一个完成事实仍通过历史proof入原tenant链；精确重复不新增记录，伪造requestId拒绝，整链验证通过。通知仅证明三个原地址/原验证意图/修订的已提交任务，邮箱取码仍是明确的合成custody夹具，不冒充SMTP实收。
+
+`TestIAMRetainedMFAProcessUpgrade`使用固定`f5cec0e132ad18900d9a5a5629eae04fda4817f1`的实际IAM37 migrator和binary创建真实绑定、十条恢复码、已消费OTP、MFA Session及未完成LOGIN挑战，再由当前IAM38 apply/verify两次、等值bootstrap及重启。最终race通过18.01s（包21.417s）：原密文/预算/消费/会话/通知及原canonical/receipt/proof保持，不补造恢复记录；原客户端保存码随后完成重绑，旧真实MFA bearer即时拒绝，新因子可登录。完成后再实际执行当前migrator的apply/verify并重启，精确完成、消费码及终止批次不变，旧bearer和原挑战仍拒绝。原IAM32/36保留数据门禁也分别通过14.05s/15.05s（包32.312s）。这些是选定固定源码的数据库行为证据，不是已发布release跨profile升级许可；不要求逐一回放全部未发布schema。新MFA predecessor已接入原CI的独立数据库及串行authority-runtime gate，没有改变发布profile或扩大runner并发。
+
+最终新增自有PG18.6与Postfix3.10.13串行race门禁通过89.54s（包93.080s），覆盖原41类readiness破坏及12类恢复场景。真实邮件子例12.83s：从独立测试Maildir取验证码，建立原可信地址；开始恢复后由生产通知可执行程序实收第一封，停止worker，再确认新因子并停用USER；重启同一受限worker仍实收原地址的完成通知。两条原通知均保存DATA250/ACCEPTED，正文目的、原验证ID/地址修订准确，未包含密码、种子/URI、验证码或新旧十码。原绑定通知子例2.81s也通过；独立SMTP实收/错误认证/外部转发拒绝门禁3.07s（包5.267s）通过。通知机制归012，这些是专属本地邮箱实收，不是公网最终送达、已读或签名安装通道验收。
+
+同轮实际锁等待子例31.39s：原尝试事务提交后，在独立事务仅锁定该USER，`pg_stat_activity/pg_blocking_pids`确认受限runtime真正等待；数据库时钟经过原30秒期限后才释放锁。候选OTP仍在允许窗口内，但最终恢复401，因子/挑战/批次/事实及已扣预算无部分变更。没有改服务器时间、期限或消费记录。缺TOTP密钥、缺邮件包装材料以及有效格式但不匹配封存承诺的种子密钥分别在开始/确认返回503，不消费原码、不签能力也不改预算；同一真实数据随后仍能正常恢复。
+
+最终Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB全仓默认race、architecture、vet及模块校验通过；122个API tracked文件重新生成集合/字节一致，全部包Linux amd64构建和diff检查通过。数据库已无客户端、测试邮箱队列为空后，按准确ID及owner/task标签仅清理本轮两个临时容器、两个空网络和合成SMTP配置文件；本轮标签下容器/网络/卷均零残留。临时空目录删除被工具策略拒绝，保留待人工清理；未操作共享或远端服务。
+
+整片仍未验收：完整十码耗尽跨窗口路径、浏览器恢复与独立CI尚须完成；step-up/受限首次强制设置仍属后继S2，离线CLOSED/reconcile/reopen及发布profile由安装主任务独占实施，本片没有修改其契约或消费者。纯契约回滚点c13f6d11的独立CI35521839561因平台billing/spending限制未分配runner、五job零步骤，不能记为代码回归通过或失败；本增量尚无独立CI结论。
 
 #### 事务、锁序与失败结果
 

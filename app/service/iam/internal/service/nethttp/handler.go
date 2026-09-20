@@ -87,6 +87,9 @@ type Workflow interface {
 	Login(context.Context, iamv1.LoginRequest) (iamv1.LoginResponse, error)
 	VerifyAuthenticationChallenge(context.Context, string, iamv1.VerifyAuthenticationChallengeRequest) (iamv1.LoginResponse, error)
 	ChangeChallengePassword(context.Context, string, iamv1.ChallengePasswordChangeRequest) (iamv1.ChallengePasswordChangeResponse, error)
+	StartAuthenticatorRecovery(context.Context, string, iamv1.StartAuthenticatorRecoveryRequest) (iamv1.StartAuthenticatorRecoveryResponse, error)
+	ConfirmAuthenticatorRecovery(context.Context, string, iamv1.VerifyAuthenticationChallengeRequest) (iamv1.ConfirmAuthenticatorRecoveryResponse, error)
+	InspectAuthenticatorRecovery(context.Context, string, iamv1.InspectAuthenticatorRecoveryRequest) (iamv1.AuthenticatorRecovery, error)
 	AuthenticatorState(context.Context, iamv1.Secret) (iamv1.AuthenticatorState, error)
 	StartTOTPEnrollment(context.Context, iamv1.Secret, iamv1.StartTOTPEnrollmentRequest) (iamv1.StartTOTPEnrollmentResponse, error)
 	TOTPEnrollment(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error)
@@ -504,8 +507,11 @@ func (value *handler) authenticationChallenge(response http.ResponseWriter, requ
 		return
 	}
 	suffix := ":verify"
-	if strings.HasSuffix(request.URL.Path, ":password") {
-		suffix = ":password"
+	for _, candidate := range []string{":password", ":recover", ":confirm-recovery", ":recovery-result"} {
+		if strings.HasSuffix(request.URL.Path, candidate) {
+			suffix = candidate
+			break
+		}
 	}
 	id, ok := commandPathID(response, request, "/v1/auth/challenges/", suffix, "challengeId")
 	if !ok {
@@ -532,6 +538,10 @@ func (value *handler) authenticationChallenge(response http.ResponseWriter, requ
 			return
 		}
 		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	if suffix == ":recover" || suffix == ":confirm-recovery" || suffix == ":recovery-result" {
+		value.authenticatorRecovery(response, request, id, suffix)
 		return
 	}
 	body, ok := decodeJSON[iamv1.VerifyAuthenticationChallengeRequest](value, response, request)
@@ -1307,6 +1317,8 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusForbidden, "iam.authorization.denied", "IAM authorization denied")
 	case errors.Is(err, identityaccess.ErrConflict):
 		writeProblem(response, requestID, http.StatusConflict, "iam.state.conflict", "IAM state conflict")
+	case errors.Is(err, identityaccess.ErrAuthenticatorRecoveryNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, "iam.authenticator-recovery.not-found", "Authenticator recovery not found")
 	case errors.Is(err, identityaccess.ErrTOTPEnrollmentNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.totp.enrollment.not-found", "TOTP enrollment not found")
 	case errors.Is(err, identityaccess.ErrVerificationRejected):

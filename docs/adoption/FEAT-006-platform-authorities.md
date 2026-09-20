@@ -745,6 +745,20 @@ state; this is not a donor enrollment implementation, a backup snapshot lease,
 MFA recovery qualification or acceptance of an enabling release. No legacy
 library, runtime service or foreign worktree becomes a dependency.
 
+The online recovery target in IAM/009 `REUSE`s fixed Matrix
+`f5cec0e132ad18900d9a5a5629eae04fda4817f1`'s encrypted TOTP factor, ten scoped
+one-way saved-code verifiers, shared USER attempt budget, strict challenge
+codec and transaction/outbox owner. It `ADAPT`s the existing LOGIN proof and
+factor transition into a distinct two-stage recovery, rather than treating a
+saved code as a Session or replaying ordinary first enrollment. Recovery
+metadata is separately observable; secret-response replay, automatic budget
+refund and implicit offline recovery authority are `REJECT`. The exact IAM37
+binary/migrator is the retained-data predecessor for its actual factors,
+consumption, challenges and Session facts. No older unpublished schema ladder,
+foreign worktree, inherited CI result or signed release compatibility is
+adopted. Fixed `c13f6d11db8055b660c18731a427594d265ff9b2`'s pure recovery
+codec is `REUSE`; it is not evidence of a completed recovery transaction.
+
 The same-snapshot backup target remains in IAM/009. It `REUSE`s fixed
 `d479e1c57b6458852dd029227d32f3d56df6c5ad`'s sole
 `api/adapter/installation/v1` custody/lease contract and its same-source

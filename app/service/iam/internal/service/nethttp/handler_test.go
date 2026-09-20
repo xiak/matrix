@@ -356,6 +356,54 @@ func TestIAMHTTPChallengePasswordRejectsAmbiguousCarriers(t *testing.T) {
 	}
 }
 
+func TestIAMHTTPAuthenticatorRecoveryRejectsAmbiguousCarriers(t *testing.T) {
+	for _, command := range []struct{ suffix, body string }{
+		{"recover", `{"requestId":"recover-one","challengeCredential":"synthetic-challenge-secret","recoveryCode":"synthetic-recovery-code"}`},
+		{"confirm-recovery", `{"requestId":"confirm-one","challengeCredential":"synthetic-challenge-secret","code":"123456"}`},
+		{"recovery-result", `{"requestId":"recover-one","challengeCredential":"synthetic-challenge-secret"}`},
+	} {
+		t.Run(command.suffix, func(t *testing.T) {
+			route := "/v1/auth/challenges/challenge-one:" + command.suffix
+			for _, sample := range []struct {
+				name, path, method, body, authorization string
+				status                                  int
+			}{
+				{"valid", route, http.MethodPost, command.body, "", http.StatusServiceUnavailable},
+				{"bearer-and-challenge", route, http.MethodPost, command.body, "Bearer synthetic-session", http.StatusBadRequest},
+				{"query-selector", route + "?userId=other", http.MethodPost, command.body, "", http.StatusBadRequest},
+				{"body-selector", route, http.MethodPost, strings.Replace(command.body, `"requestId":`, `"accountId":"other","requestId":`, 1), "", http.StatusBadRequest},
+				{"password", route, http.MethodPost, strings.Replace(command.body, `"requestId":`, `"password":"not-accepted","requestId":`, 1), "", http.StatusBadRequest},
+				{"retain-session", route, http.MethodPost, strings.Replace(command.body, `"requestId":`, `"revokeOtherSessions":false,"requestId":`, 1), "", http.StatusBadRequest},
+				{"null-credential", route, http.MethodPost, strings.Replace(command.body, `"synthetic-challenge-secret"`, `null`, 1), "", http.StatusBadRequest},
+				{"duplicate-credential", route, http.MethodPost, strings.Replace(command.body, `"requestId":`, `"challengeCredential":"other","requestId":`, 1), "", http.StatusBadRequest},
+				{"wrong-method", route, http.MethodGet, command.body, "", http.StatusMethodNotAllowed},
+			} {
+				t.Run(sample.name, func(t *testing.T) {
+					workflow := newHTTPWorkflow(t)
+					request := httptest.NewRequest(sample.method, sample.path, strings.NewReader(sample.body))
+					request.Header.Set("Content-Type", "application/json")
+					if sample.authorization != "" {
+						request.Header.Set("Authorization", sample.authorization)
+					}
+					response := httptest.NewRecorder()
+					newTestHandler(t, workflow).ServeHTTP(response, request)
+					if response.Code != sample.status || response.Header().Get("Cache-Control") != "no-store" {
+						t.Fatal("restricted recovery transport differs", response.Code)
+					}
+					if (workflow.verifiedChallengeID != "") != (sample.status == http.StatusServiceUnavailable) {
+						t.Fatal("invalid request reached recovery workflow")
+					}
+					for _, secret := range []string{"synthetic-challenge-secret", "synthetic-recovery-code", "123456", "not-accepted"} {
+						if strings.Contains(response.Body.String(), secret) {
+							t.Fatal("recovery problem exposed authentication material")
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestIAMHTTPChallengeVerificationRejectsAmbiguousCarriers(t *testing.T) {
 	valid := `{"requestId":"verify-one","challengeCredential":"synthetic-challenge-secret","code":"123456"}`
 	for _, sample := range []struct {
@@ -1028,6 +1076,21 @@ func (workflow *httpWorkflow) VerifyAuthenticationChallenge(_ context.Context, i
 func (workflow *httpWorkflow) ChangeChallengePassword(_ context.Context, id string, _ iamv1.ChallengePasswordChangeRequest) (iamv1.ChallengePasswordChangeResponse, error) {
 	workflow.verifiedChallengeID = id
 	return iamv1.ChallengePasswordChangeResponse{}, identityaccess.ErrUnavailable
+}
+
+func (workflow *httpWorkflow) StartAuthenticatorRecovery(_ context.Context, id string, _ iamv1.StartAuthenticatorRecoveryRequest) (iamv1.StartAuthenticatorRecoveryResponse, error) {
+	workflow.verifiedChallengeID = id
+	return iamv1.StartAuthenticatorRecoveryResponse{}, identityaccess.ErrUnavailable
+}
+
+func (workflow *httpWorkflow) ConfirmAuthenticatorRecovery(_ context.Context, id string, _ iamv1.VerifyAuthenticationChallengeRequest) (iamv1.ConfirmAuthenticatorRecoveryResponse, error) {
+	workflow.verifiedChallengeID = id
+	return iamv1.ConfirmAuthenticatorRecoveryResponse{}, identityaccess.ErrUnavailable
+}
+
+func (workflow *httpWorkflow) InspectAuthenticatorRecovery(_ context.Context, id string, _ iamv1.InspectAuthenticatorRecoveryRequest) (iamv1.AuthenticatorRecovery, error) {
+	workflow.verifiedChallengeID = id
+	return iamv1.AuthenticatorRecovery{}, identityaccess.ErrUnavailable
 }
 
 func (workflow *httpWorkflow) AuthenticatorState(context.Context, iamv1.Secret) (iamv1.AuthenticatorState, error) {

@@ -81,7 +81,8 @@ func ValidateEvent(value Event) error {
 			problems = append(problems, errors.New("role self-exit must target the actor's exact session"))
 		}
 		if (value.Action == ActionIAMOtherSessionsRevoked || value.Action == ActionIAMNotificationContactVerificationStarted ||
-			value.Action == ActionIAMNotificationContactVerified || value.Action == ActionIAMAuthenticatorBound) && value.Target.ID != string(value.Actor.ID) {
+			value.Action == ActionIAMNotificationContactVerified || value.Action == ActionIAMAuthenticatorBound ||
+			value.Action == ActionIAMAuthenticatorRecoveryStarted || value.Action == ActionIAMAuthenticatorRecovered) && value.Target.ID != string(value.Actor.ID) {
 			problems = append(problems, errors.New("self-service event must target the actual actor"))
 		}
 		if contract.PlatformOnly != (value.InstallationID != "") ||

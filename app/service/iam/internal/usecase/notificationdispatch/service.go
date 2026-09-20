@@ -142,7 +142,7 @@ func (service *Dispatcher) DispatchOnce(ctx context.Context) (Result, error) {
 			return Result{Claimed: true}, ErrUnavailable
 		}
 		message.VerificationExpiresAt = claim.Binding.ExpiresAt
-	case authority.MailContactVerified, authority.MailAuthenticatorBound:
+	case authority.MailContactVerified, authority.MailAuthenticatorBound, authority.MailRecoveryStarted, authority.MailAuthenticatorRecovered:
 		if len(claim.Sealed.Nonce) != 0 || len(claim.Sealed.Ciphertext) != 0 || claim.Sealed.KeyID != "" || claim.Sealed.FormatVersion != 0 {
 			return Result{Claimed: true}, ErrUnavailable
 		}

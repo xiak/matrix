@@ -43,7 +43,7 @@ type MFARecoveryCodeVerifier struct {
 	VerificationDigest string `json:"verificationDigest"`
 }
 
-type TOTPEnrollmentConfirmation struct {
+type TOTPBindingConfirmation struct {
 	Attempt                 TOTPAttempt
 	VerifiedStep            int64
 	BatchID, NotificationID string
@@ -284,27 +284,9 @@ func (service *Authority) ConfirmTOTPEnrollment(ctx context.Context, credential 
 	if !admitted {
 		return iamv1.ConfirmTOTPEnrollmentResponse{}, ErrUnauthenticated
 	}
-	batchID, err := service.config.NewID("recovery-batch")
+	batchID, codes, verifiers, err := service.newRecoveryBatch(attempt.AccountID, attempt.UserID)
 	if err != nil {
-		return iamv1.ConfirmTOTPEnrollmentResponse{}, ErrUnavailable
-	}
-	codes := make([]iamv1.Secret, 10)
-	verifiers := make([]MFARecoveryCodeVerifier, 10)
-	for i := range codes {
-		codeID, err := service.config.NewID("recovery-code")
-		if err != nil {
-			return iamv1.ConfirmTOTPEnrollmentResponse{}, ErrUnavailable
-		}
-		code, err := service.credentials.IssueMFARecoveryCode()
-		if err != nil {
-			return iamv1.ConfirmTOTPEnrollmentResponse{}, ErrUnavailable
-		}
-		digest, err := authority.DigestMFARecoveryCode(authority.MFARecoveryCodeScope{InstallationID: service.totp.Scope.InstallationID,
-			AccountID: attempt.AccountID, UserID: attempt.UserID, BatchID: batchID, CodeID: codeID}, code)
-		if err != nil {
-			return iamv1.ConfirmTOTPEnrollmentResponse{}, ErrUnavailable
-		}
-		codes[i], verifiers[i] = code, MFARecoveryCodeVerifier{ID: codeID, VerificationDigest: digest}
+		return iamv1.ConfirmTOTPEnrollmentResponse{}, err
 	}
 	eventID, err := service.config.NewID("event")
 	if err != nil {
@@ -353,7 +335,7 @@ func (service *Authority) ConfirmTOTPEnrollment(ctx context.Context, credential 
 		if err != nil {
 			return err
 		}
-		result, err = tx.ConfirmTOTPEnrollment(ctx, TOTPEnrollmentConfirmation{Attempt: attempt, VerifiedStep: step, BatchID: batchID,
+		result, err = tx.ConfirmTOTPEnrollment(ctx, TOTPBindingConfirmation{Attempt: attempt, VerifiedStep: step, BatchID: batchID,
 			NotificationID: notificationID, Codes: verifiers, AuditEvent: event})
 		return err
 	})
