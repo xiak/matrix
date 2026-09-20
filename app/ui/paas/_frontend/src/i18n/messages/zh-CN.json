@@ -2150,7 +2150,7 @@
       },
       "directGrants": {
         "title": "用户直接授权",
-        "hint": "{count} 个用户直接关联策略。团队常规授权优先通过用户组，例外需单独复核。"
+        "hint": "已加载范围内 {count} 个用户直接关联策略。团队常规授权优先通过用户组，例外需单独复核。"
       },
       "loginProtection": {
         "title": "登录保护策略",
@@ -2158,7 +2158,7 @@
       },
       "pendingPasswords": {
         "title": "待修改密码",
-        "hint": "{count} 个控制台访问身份需要在首次登录时修改密码。"
+        "hint": "已加载范围内 {count} 个控制台访问身份需要在首次登录时修改密码。"
       },
       "mfaEvidence": {
         "title": "MFA 绑定证据",

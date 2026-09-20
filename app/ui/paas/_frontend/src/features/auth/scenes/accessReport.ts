@@ -41,9 +41,9 @@ export function buildAccessSecuritySnapshot(workspace: AccessWorkspace, director
     },
     {
       id: "directGrants",
-      state: profiles.length === 0
-        ? directoryComplete ? "notApplicable" : "unknown"
-        : directGrants ? "review" : "configured",
+      state: directGrants
+        ? "review"
+        : !directoryComplete ? "unknown" : profiles.length === 0 ? "notApplicable" : "configured",
       evidence: profiles.length === 0 && directoryComplete ? "notApplicable" : directoryComplete ? "observed" : "incomplete",
       count: directGrants,
       target: "users"
@@ -59,9 +59,9 @@ export function buildAccessSecuritySnapshot(workspace: AccessWorkspace, director
     },
     {
       id: "pendingPasswords",
-      state: consoleUsers === 0
-        ? directoryComplete ? "notApplicable" : "unknown"
-        : pendingPasswords ? "review" : "configured",
+      state: pendingPasswords
+        ? "review"
+        : !directoryComplete ? "unknown" : consoleUsers === 0 ? "notApplicable" : "configured",
       evidence: consoleUsers === 0 && directoryComplete ? "notApplicable" : directoryComplete ? "observed" : "incomplete",
       count: pendingPasswords,
       target: "users"

@@ -2150,7 +2150,7 @@
       },
       "directGrants": {
         "title": "Direct user grants",
-        "hint": "{count} users have directly attached policies. Prefer groups for routine team access and review exceptions separately."
+        "hint": "Within the loaded scope, {count} users have directly attached policies. Prefer groups for routine team access and review exceptions separately."
       },
       "loginProtection": {
         "title": "Sign-in protection policy",
@@ -2158,7 +2158,7 @@
       },
       "pendingPasswords": {
         "title": "Pending password changes",
-        "hint": "{count} console identities must change their password on first sign-in."
+        "hint": "Within the loaded scope, {count} console identities must change their password on first sign-in."
       },
       "mfaEvidence": {
         "title": "MFA enrollment evidence",

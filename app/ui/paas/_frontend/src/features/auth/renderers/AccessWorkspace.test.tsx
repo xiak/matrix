@@ -2330,6 +2330,13 @@ describe("CAM-style access workspace", () => {
     const partial = buildAccessSecuritySnapshot(withoutApplicableUsers, false);
     expect(partial.checks.find((check) => check.id === "directGrants")).toMatchObject({ state: "unknown", evidence: "incomplete" });
     expect(partial.checks.find((check) => check.id === "mfaEvidence")).toMatchObject({ state: "unknown", evidence: "unobserved" });
+
+    const partialWithVisibleUsers = structuredClone(workspace);
+    partialWithVisibleUsers.userPolicies = Object.fromEntries(Object.keys(partialWithVisibleUsers.userPolicies).map((id) => [id, []]));
+    partialWithVisibleUsers.userProfiles = Object.fromEntries(Object.entries(partialWithVisibleUsers.userProfiles).map(([id, profile]) => [id, { ...profile, passwordResetRequired: false }]));
+    const partialWithoutVisibleFindings = buildAccessSecuritySnapshot(partialWithVisibleUsers, false);
+    expect(partialWithoutVisibleFindings.checks.find((check) => check.id === "directGrants")).toMatchObject({ state: "unknown", count: 0, evidence: "incomplete" });
+    expect(partialWithoutVisibleFindings.checks.find((check) => check.id === "pendingPasswords")).toMatchObject({ state: "unknown", count: 0, evidence: "incomplete" });
   });
   it("presents security evidence before report exports and links checks to their owning pages", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
