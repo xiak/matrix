@@ -1,6 +1,6 @@
 "use client";
 
-import { Children, Fragment, cloneElement, isValidElement, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type RefObject } from "react";
+import { Children, Fragment, cloneElement, isValidElement, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type Ref, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableToolbar, TablePagination, Transfer, type PageCommand } from "@ui/xiak";
@@ -24,7 +24,7 @@ function labelCollectionCells(content: ReactNode, columns: readonly string[]) {
     : cell);
 }
 
-export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, keywords, filter, embedded = false, status, loadMore, footerNote }: {
+export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, keywords, filter, embedded = false, status, loadMore, footerNote, workflow, createActionRef, createFocusRef }: {
   title: string; description: string; items: T[]; columns: string[];
   row(item: T): ReactNode; create?: { label: string; disabled?: boolean; reason?: string; onClick(): void }; embedded?: boolean;
   keywords?(item: T): string;
@@ -32,6 +32,9 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   status?: string;
   loadMore?: { label: string; disabled?: boolean; busy?: boolean; onClick(): void };
   footerNote?: ReactNode;
+  workflow?: ReactNode;
+  createActionRef?: RefObject<HTMLButtonElement | null>;
+  createFocusRef?: Ref<{ focus(): void }>;
 }) {
   const t = useTranslations("IamWorkspace");
   const collection = useTranslations("Collection");
@@ -49,9 +52,10 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   const pages = Math.max(1, Math.ceil(matches.length / pageSize));
   const currentPage = Math.min(page, pages);
   const reset = () => { setQuery(""); setKind("all"); setPage(1); };
-  const action = create ? <Button disabled={create.disabled} title={create.reason} onClick={create.onClick} size="small"><Plus aria-hidden="true" />{create.label}</Button> : null;
+  const action = create ? <Button ref={createActionRef} disabled={create.disabled} title={create.reason} onClick={create.onClick} size="small"><Plus aria-hidden="true" />{create.label}</Button> : null;
   return <Card aria-description={description}>
-    {!embedded ? <ContentPage.Heading title={title} scrollKey={`collection:${title}`} actions={create ? <ContentPage.Commands label={collection("pageActions")} primary={{ id: "create", label: create.label, icon: <Plus aria-hidden="true" />, disabled: create.disabled, disabledReason: create.disabled ? create.reason : undefined, onSelect: create.onClick }} /> : undefined} /> : null}
+    {!embedded ? <ContentPage.Heading title={title} scrollKey={`collection:${title}`} actions={!workflow && create ? <ContentPage.Commands label={collection("pageActions")} primaryRef={createActionRef} focusRef={createFocusRef} primary={{ id: "create", label: create.label, icon: <Plus aria-hidden="true" />, disabled: create.disabled, disabledReason: create.disabled ? create.reason : undefined, onSelect: create.onClick }} /> : undefined} /> : null}
+    {workflow ?? <>
     <TableToolbar labels={toolbarLabels} search={{ label: t("search"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
       actions={embedded ? action : null}
       filters={filter ? [{ id: "kind", label: filter.label, options: [{ value: "all", label: t("all") }, ...filter.options], value: kind, onChange: (value) => { setKind(value); setPage(1); } }] : []}
@@ -63,16 +67,18 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
         trailing={loadMore ? <Button disabled={loadMore.disabled || loadMore.busy} onClick={loadMore.onClick} size="small" variant="secondary">{loadMore.label}</Button> : null}
         labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />
     </Table.Footer>
+    </>}
   </Card>;
 }
 
-export function WorkspaceDetail({ title, onBack, actions, children, embedded = false, primaryActionRef }: {
+export function WorkspaceDetail({ title, onBack, actions, children, embedded = false, primaryActionRef, actionFocusRef }: {
   title: string; onBack(): void; actions?: { primary?: PageCommand; secondary?: readonly PageCommand[] }; children: ReactNode; embedded?: boolean;
   primaryActionRef?: RefObject<HTMLButtonElement | null>;
+  actionFocusRef?: Ref<{ focus(): void }>;
 }) {
   const t = useTranslations("IamWorkspace");
   const c = useTranslations("Collection");
-  const commands = actions ? <ContentPage.Commands label={c("pageActions")} primaryRef={primaryActionRef} {...actions} /> : undefined;
+  const commands = actions ? <ContentPage.Commands label={c("pageActions")} primaryRef={primaryActionRef} focusRef={actionFocusRef} {...actions} /> : undefined;
   return <div className={styles.detailWorkspace}>{embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{t("back")}</Button><h2 className={styles.detailTitle}>{title}</h2>{commands}</div> : <ContentPage.Heading title={title} scrollKey={`detail:${title}`} back={{ label: t("back"), onClick: onBack }} actions={commands} focus />}{children}</div>;
 }
 
