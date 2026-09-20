@@ -9,20 +9,46 @@
   durable notification, recovery, security settings/report and real UI remain
   unfinished. Do not redefine the goal as preparation or crypto alone.
 - Latest fixed/pushed implementation:
-  **841ebe89aa55121ac4686dc469006ed10b47f0eb**, security-mail transport S1a.
-  Exact Verification35496641320 was QUEUED at last GitHub API observation:
-  https://github.com/xiak/matrix/actions/runs/35496641320 . Confirm exact SHA
+  **8ccc632796727261563c952a89e4dfd3ce947144**, private mail contracts/material.
+  Exact Verification35498547391 was QUEUED at last GitHub API observation:
+  https://github.com/xiak/matrix/actions/runs/35498547391 . Confirm exact SHA
   and all five job conclusions before independent-acceptance claims.
 - Source remains IAM35/Audit19/PaaS2; published profile/revision unchanged.
-  The mail slice has no public API, SQL, installation, worker or UI change.
+  The mail slice has private pure contracts, no public HTTP, SQL, runtime FILE,
+  installation, worker or UI change.
 - Read AGENTS, the one owning FEAT (IAM/012 for mail, IAM/009 for MFA), then
   its code/tests. Adoption: docs/adoption/FEAT-006-platform-authorities.md.
   This checkpoint is not a duplicate requirement or acceptance owner.
 
-## Fixed S1a mail boundary
+## Fixed private mail contracts and material
 
-Existing IAM authority owns the closed SecurityMail projection and bounded
-ASCII address syntax; new data/smtp isolates the real external side effect.
+8ccc6327 fixes strict private SecurityMailSMTPChannel and independent
+EmailVerificationKeyring codecs in api/iam/v1. Ordinary JSON/formatting
+cannot disclose their secrets; no insecure TLS or caller file/URL selector.
+The sole EmailVerificationCipherContext binds installation/bootstrap,
+Account/USER, original verification, exact recipient, credential/contact
+versions and original UTC-microsecond lifetime. Eight-digit uniform random
+codes and purpose-separated AES-GCM/HKDF remain pure material, not current
+eligibility, a durable attempt budget, consumption or an authentication key.
+ASCII address syntax moved to its sole API owner; no compatibility alias.
+
+Exact clean export passed full default race/architecture, vet, modules,
+122-file API generation inventory/hash equality and Linux amd64 build.
+Six code/test files matched the export. Both private codecs passed bounded
+20-second/2-worker fuzz. Existing DB/mailbox SKIPs are not new runtime proof.
+IAM/012 owns the detailed first-contact, shared budget, durable lease/retry
+design; its proposed HTTP/SQL/worker is not yet implemented/frozen for UI.
+
+## Independently accepted S1a transport
+
+**841ebe89aa55121ac4686dc469006ed10b47f0eb**:
+Verification35496641320 exact SHA completed/success for go, node-process,
+authority-storage, authority-runtime and authority-process, confirmed by API.
+https://github.com/xiak/matrix/actions/runs/35496641320 . This does not fill
+the newer contract slice's still-pending independent CI.
+
+Existing IAM authority owns the closed SecurityMail projection;
+data/smtp isolates the real external side effect.
 Verification and seven security templates have no caller-provided subject,
 body, headers, links or attachments. Secret-bearing values redact formatting
 and refuse ordinary JSON. This is not an address-verification endpoint.
@@ -45,9 +71,9 @@ removed after empty-queue and identity checks; other resources untouched.
 Protocol fixtures and this mailbox are not verified USER contact, durable
 retry, MFA event-atomic notification, published SMTP config or full S1.
 
-Next mail slice must remain in the same012 owner: freeze verified contact,
-purpose-limited secret delivery, durable intents/leases/retry and installer
-private configuration before exposing a usable endpoint. No generic message
+Next mail slice must remain in the same012 owner: implement verified contact,
+durable intents/leases/retry and installer private configuration before
+exposing a usable endpoint. No generic message
 center, shared Audit worker credentials or recovery-by-email authority.
 Do not invent new public APIs or deployment FILE contracts without aligning
 the current authentication/challenge and installation consumers.
@@ -97,8 +123,13 @@ share it. Do not restore no-attempt or raw-hash authentication overloads.
 
 Installation owner01a04149-5dbb-7300-9e4c-31d9e85c8ada,
 feat/phase3-mfa-recovery: exclusively owns backup consumer/install/profile
-window. It received 285 final CI and841 SMTP candidate/CI-pending boundary.
-No need to import duplicate contract donors, its WIP/profile or node state.
+window. It received 285/841 final CI and8ccc6327 pure-contract candidate with
+CI pending. Its same-snapshot consumer9815916 has reported final CI success;
+it now owns the separate35/18/6+r13 preparation release. Do not import its
+profile, WIP, node state or inherited acceptance. Current mail window is
+pure IAM contract/design; next runtime/DB/worker and migration-file6 boundary
+was requested, not yet approved. No FILE/SQL/shared migrationprocess edit
+until that owner alignment; HTTP is still only proposed in IAM/012.
 Later CLOSED/reopen must use backup-external epoch, exact immutable intent,
 invalidate old Session/challenge/enrollment and fence OTP/attempt state;
 backup key availability is not current recovery eligibility. Unimplemented.
