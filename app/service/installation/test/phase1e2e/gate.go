@@ -281,7 +281,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	wantInitialAudit := map[auditv1.Action]string{
 		auditv1.ActionIAMBootstrapApplied:              "",
 		auditv1.ActionIAMSessionIssued:                 "",
-		auditv1.ActionIAMPasswordChanged:               "principal-admin",
+		auditv1.ActionIAMUserPasswordChanged:           "principal-admin",
 		auditv1.ActionIAMAuthorizationDecided:          "",
 		auditv1.ActionPaaSApplicationCreated:           string(applicationID),
 		auditv1.ActionPaaSConfigurationCreated:         string(configurationID),

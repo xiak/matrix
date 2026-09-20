@@ -26,7 +26,7 @@ import (
 func TestMissingAuditActionsAreStableAndTargetBound(t *testing.T) {
 	want := map[auditv1.Action]string{
 		auditv1.ActionIAMBootstrapApplied:      "",
-		auditv1.ActionIAMPasswordChanged:       "principal-admin",
+		auditv1.ActionIAMUserPasswordChanged:   "principal-admin",
 		auditv1.ActionPaaSApplicationCreated:   "application-a",
 		auditv1.ActionPaaSDeploymentUpdated:    "deployment-a",
 		auditv1.ActionPaaSConfigurationCreated: "configuration-a",
@@ -39,11 +39,11 @@ func TestMissingAuditActionsAreStableAndTargetBound(t *testing.T) {
 	}
 	missing := missingAuditActions(records, want)
 	wantMissing := []auditv1.Action{
-		auditv1.ActionIAMPasswordChanged,
+		auditv1.ActionIAMUserPasswordChanged,
 		auditv1.ActionPaaSConfigurationCreated,
 	}
 	if !slices.Equal(missing, wantMissing) ||
-		auditActionFailureStep(missing) != "iam-password-changed-and-paas-configuration-created" {
+		auditActionFailureStep(missing) != "iam-user-password-changed-and-paas-configuration-created" {
 		t.Fatalf("missing audit actions = %v", missing)
 	}
 }
