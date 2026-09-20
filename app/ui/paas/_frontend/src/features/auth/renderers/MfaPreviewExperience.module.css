@@ -17,12 +17,13 @@
 .actions, .flowActions, .loginLinks { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); }
 .flowActions { justify-content: flex-end; }
 .policyForm > p { margin: -8px 0 0 28px; color: var(--xiak-color-text-muted); line-height: 1.7; }
-.plannedGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); }
+.plannedGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--xiak-spacing-default); }
 .plannedGrid > div { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-comfortable); background: var(--xiak-color-bg-panel); }
 .plannedGrid svg { width: 18px; height: 18px; color: var(--xiak-color-text-muted); }
 .plannedGrid span { display: grid; gap: 4px; }
 .plannedGrid small { color: var(--xiak-color-text-muted); line-height: 1.6; }
 .flowCard { max-width: 920px; }
+.flowTitle { margin: 0 0 4px; color: var(--xiak-color-text-strong); font-size: 16px; line-height: 1.45; }
 .steps { display: grid; grid-template-columns: repeat(4, 1fr); margin: 0; padding: 0; list-style: none; }
 .steps li { position: relative; display: grid; justify-items: center; gap: 8px; color: var(--xiak-color-text-muted); text-align: center; }
 .steps li::before { position: absolute; z-index: 0; top: 15px; right: 50%; left: -50%; height: 1px; background: var(--xiak-color-border-subtle); content: ""; }
@@ -32,6 +33,14 @@
 .steps li[data-active="true"] { color: var(--xiak-color-text-strong); }
 .steps li[data-active="true"] > span { border-color: var(--xiak-color-brand); background: var(--xiak-color-brand); color: var(--xiak-color-text-on-accent); }
 .steps small { line-height: 1.4; }
+.contactSteps { display: grid; grid-template-columns: repeat(3, 1fr); margin: 0; padding: 0; list-style: none; }
+.contactSteps li { position: relative; display: grid; justify-items: center; gap: 8px; color: var(--xiak-color-text-muted); text-align: center; }
+.contactSteps li::before { position: absolute; z-index: 0; top: 15px; right: 50%; left: -50%; height: 1px; background: var(--xiak-color-border-subtle); content: ""; }
+.contactSteps li:first-child::before { display: none; }
+.contactSteps li > span { z-index: 1; display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid var(--xiak-color-border-control); border-radius: 50%; background: var(--xiak-color-bg-panel); font-size: var(--xiak-font-size-small); }
+.contactSteps li[data-active="true"] { color: var(--xiak-color-text-strong); }
+.contactSteps li[data-active="true"] > span { border-color: var(--xiak-color-brand); background: var(--xiak-color-brand); color: var(--xiak-color-text-on-accent); }
+.contactSteps small { line-height: 1.4; }
 .flowLead, .loginHeading, .completion { display: flex; align-items: flex-start; gap: var(--xiak-spacing-comfortable); }
 .flowLead > svg, .loginHeading > svg, .completion > svg { width: 28px; height: 28px; flex: none; color: var(--xiak-color-brand); }
 .flowLead strong, .loginHeading h1, .completion h1 { margin: 0; color: var(--xiak-color-text-strong); font-size: 20px; line-height: 1.4; }
@@ -60,7 +69,7 @@
   .sectionHeading { align-items: flex-start; }
   .enrollmentGrid { grid-template-columns: 1fr; justify-items: center; padding: 18px; }
   .manualKey { width: 100%; }
-  .steps small { display: none; }
+  .steps small, .contactSteps small { display: none; }
   .codes { grid-template-columns: 1fr; }
   .facts > div { grid-template-columns: 1fr; gap: 4px; }
 }

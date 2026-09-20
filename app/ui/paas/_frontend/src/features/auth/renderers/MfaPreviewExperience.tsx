@@ -27,6 +27,7 @@ import {
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import styles from "./MfaPreviewExperience.module.css";
+import { SecurityNotificationAddressPreview } from "./SecurityNotificationAddressPreview";
 
 const demonstrationCode = "624810";
 const demonstrationRecoveryCode = "MTRX-RECOVER-01";
@@ -190,6 +191,7 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
   return <div className={styles.securityRoot}>
     <Alert>{t("mockBoundary")}</Alert>
     {feedback ? <Alert status="success">{t(`feedback.${feedback}`)}</Alert> : null}
+    <SecurityNotificationAddressPreview />
     <section aria-labelledby="personal-security" className={styles.section}>
       <div className={styles.sectionHeading}><div><p>{t("personalEyebrow")}</p><h2 id="personal-security">{t("personalTitle")}</h2><span>{t("personalHint")}</span></div><Badge status={factorState === "bound" ? "success" : required ? "warning" : "neutral"}>{t(factorState === "bound" ? "bound" : required ? "bindingRequired" : "notBound")}</Badge></div>
       <div className={styles.securityCards}>
@@ -214,7 +216,7 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
     </section>
     <section aria-labelledby="planned-security" className={styles.section}>
       <div className={styles.sectionHeading}><div><p>{t("plannedEyebrow")}</p><h2 id="planned-security">{t("plannedTitle")}</h2><span>{t("plannedHint")}</span></div></div>
-      <div className={styles.plannedGrid}><div><Mail aria-hidden="true" /><span><strong>{t("securityEmail")}</strong><small>{t("securityEmailHint")}</small></span><Badge>{t("unavailable")}</Badge></div><div><LockKeyhole aria-hidden="true" /><span><strong>{t("operationProtection")}</strong><small>{t("operationProtectionHint")}</small></span><Badge>{t("designing")}</Badge></div></div>
+      <div className={styles.plannedGrid}><div><LockKeyhole aria-hidden="true" /><span><strong>{t("operationProtection")}</strong><small>{t("operationProtectionHint")}</small></span><Badge>{t("designing")}</Badge></div></div>
     </section>
   </div>;
 }

@@ -2055,8 +2055,8 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "多因素认证要求" })).toBeTruthy();
     expect(screen.queryByLabelText("密码最小长度")).toBeNull();
     expect(screen.queryByLabelText("会话时长（分钟）")).toBeNull();
-    expect(screen.getByText("安全事件邮件")).toBeTruthy();
-    expect(screen.getAllByText("尚不可用").length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: "安全通知" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "验证第一条地址" })).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "替换验证器" }));
     expect(screen.getByRole("heading", { name: "验证身份后替换验证器" })).toBeTruthy();
@@ -2066,6 +2066,40 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "验证并继续" }));
     expect(screen.getByRole("heading", { name: "替换身份验证器" })).toBeTruthy();
     expect(screen.getByText(/原验证器继续有效/)).toBeTruthy();
+  });
+  it("keeps first security-notification address verification personal, inline, and explicitly MOCK", async () => {
+    const { user, repository } = await open("settings");
+    const trigger = screen.getByRole("button", { name: "验证第一条地址" });
+    await user.click(trigger);
+    const flowTitle = screen.getByRole("heading", { name: "验证第一条安全通知地址" });
+    await waitFor(() => expect(flowTitle).toBe(document.activeElement));
+    await user.click(within(flowTitle.closest("article")!).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "验证第一条地址" })).toBe(document.activeElement));
+
+    await user.click(screen.getByRole("button", { name: "验证第一条地址" }));
+    await user.type(screen.getByLabelText("安全通知邮箱"), "preview.security@example.com");
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.click(screen.getByRole("button", { name: "创建验证意图" }));
+    const verifyTitle = screen.getByRole("heading", { name: "确认安全通知地址" });
+    await waitFor(() => expect(verifyTitle).toBe(document.activeElement));
+    expect(screen.getAllByText("渠道已受理").length).toBeGreaterThan(0);
+    expect(screen.getByText(/不代表邮件最终送达或已读/)).toBeTruthy();
+    expect(screen.queryByText("已送达")).toBeNull();
+
+    await user.type(screen.getByLabelText("8 位邮箱验证码"), "00000000");
+    await user.click(screen.getByRole("button", { name: "确认地址" }));
+    expect(screen.getByText("验证码无效、已使用或已过期。地址仍未验证。")).toBeTruthy();
+    await user.clear(screen.getByLabelText("8 位邮箱验证码"));
+    await user.type(screen.getByLabelText("8 位邮箱验证码"), "48392017");
+    await user.click(screen.getByRole("button", { name: "确认地址" }));
+
+    const notification = screen.getByRole("region", { name: "安全通知" });
+    await waitFor(() => expect(within(notification).getByRole("heading", { name: "安全通知" })).toBe(document.activeElement));
+    expect(within(notification).getByText("preview.security@example.com")).toBeTruthy();
+    expect(within(notification).getAllByText("已验证").length).toBeGreaterThan(0);
+    expect(within(notification).getByText(/不提供弱化旁路/)).toBeTruthy();
+    expect(within(notification).queryByRole("button")).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
   });
   it.each(["settings", "user-sso"] as const)("retains %s inputs on failure and saves only its owned settings on retry", async (view) => {
     const { user, repository, extension } = await open(view);
