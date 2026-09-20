@@ -6,7 +6,7 @@
 - Updated: 2026-09-21
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `bd8b28d70d105f2994ab62bf5c2e0c83644d1975`
+- Pushed UI source: `80225dce692921aaaeda12e96b58a464f931da30`
 
 ## Authoritative route
 
