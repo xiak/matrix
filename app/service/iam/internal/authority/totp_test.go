@@ -2,10 +2,14 @@ package authority
 
 import (
 	"bytes"
+	"crypto/hkdf"
+	"crypto/sha256"
 	"encoding/base32"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -152,6 +156,194 @@ func TestTOTPSeedGenerationAndRedaction(t *testing.T) {
 	if err != nil || len(decoded) != 20 {
 		t.Fatal("generated seed cannot be provisioned with the fixed profile")
 	}
+}
+
+func totpSeedVector(t testing.TB) (TOTPSeedScope, []byte, SealedTOTPSeed) {
+	t.Helper()
+	scope := TOTPSeedScope{Installation: iamv1.TOTPWrappingScope{InstallationID: "install-a", BootstrapDigest: "sha256:" + strings.Repeat("a", 64)},
+		AccountID: "account-a", UserID: "user-a", FactorID: "factor-a"}
+	key := make([]byte, 32)
+	for index := range key {
+		key[index] = byte(index)
+	}
+	nonce, err := hex.DecodeString("000102030405060708090a0b")
+	if err != nil {
+		t.Fatal("invalid synthetic nonce")
+	}
+	ciphertext, err := hex.DecodeString("7ecc6f281a39028cd07fc642c83e9d09dbeced6573cc883bb6e93cabb44e5adba303f69c")
+	if err != nil {
+		t.Fatal("invalid independent ciphertext")
+	}
+	return scope, key, SealedTOTPSeed{FormatVersion: 1, KeyID: "key-a", Nonce: nonce, Ciphertext: ciphertext}
+}
+
+func TestTOTPSeedProtectionIndependentVector(t *testing.T) {
+	scope, wrapping, sealed := totpSeedVector(t)
+	// Node crypto.hkdfSync + AES-256-GCM, synthetic KEK00..1f and seed
+	// RFC4226's ASCII12345678901234567890. Production accepts no nonce selector.
+	info, aad, err := iamv1.TOTPSeedContext(scope.Installation, scope.AccountID, scope.UserID, scope.FactorID, "key-a")
+	if err != nil || bytes.Equal(info, aad) {
+		t.Fatal("context domains were not distinct")
+	}
+	derived, err := hkdf.Key(sha256.New, wrapping, []byte(totpSeedKeySalt), string(info), 32)
+	defer clear(derived)
+	if err != nil || hex.EncodeToString(derived) != "251cb0a5f10fb7a40a7f31140a85f16d71f72872f04920bd9954e0baf11fd197" {
+		t.Fatal("per-factor key differed from independent HKDF vector")
+	}
+	seed, err := OpenTOTPSeed(scope, "key-a", wrapping, sealed)
+	if err != nil || !bytes.Equal(seed.CopyBytes(), []byte("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")) {
+		t.Fatal("independent envelope did not recover exact seed")
+	}
+	if step, err := VerifyTOTP(seed, authoritySecret(t, "287082"), time.Unix(59, 0).UTC(), -1); err != nil || step != 1 {
+		t.Fatal("unwrapped seed could not verify real RFC code")
+	}
+	otherInfo, otherAAD, err := iamv1.AccessKeySecretContext(scope.Installation.InstallationID, scope.AccountID, scope.UserID, scope.FactorID, "key-a")
+	if err != nil || bytes.Equal(info, otherInfo) || bytes.Equal(aad, otherAAD) {
+		t.Fatal("AccessKey and TOTP shared wrapping contexts")
+	}
+}
+
+func TestTOTPSeedProtectionRejectsSubstitution(t *testing.T) {
+	scope, wrapping, original := totpSeedVector(t)
+	for name, change := range map[string]func(*TOTPSeedScope, *SealedTOTPSeed){
+		"installation": func(s *TOTPSeedScope, _ *SealedTOTPSeed) { s.Installation.InstallationID = "install-b" },
+		"bootstrap": func(s *TOTPSeedScope, _ *SealedTOTPSeed) {
+			s.Installation.BootstrapDigest = "sha256:" + strings.Repeat("b", 64)
+		},
+		"account":          func(s *TOTPSeedScope, _ *SealedTOTPSeed) { s.AccountID = "account-b" },
+		"user":             func(s *TOTPSeedScope, _ *SealedTOTPSeed) { s.UserID = "user-b" },
+		"factor":           func(s *TOTPSeedScope, _ *SealedTOTPSeed) { s.FactorID = "factor-b" },
+		"format":           func(_ *TOTPSeedScope, s *SealedTOTPSeed) { s.FormatVersion = 2 },
+		"reference":        func(_ *TOTPSeedScope, s *SealedTOTPSeed) { s.KeyID = "key-b" },
+		"nonce":            func(_ *TOTPSeedScope, s *SealedTOTPSeed) { s.Nonce[0] ^= 1 },
+		"ciphertext":       func(_ *TOTPSeedScope, s *SealedTOTPSeed) { s.Ciphertext[0] ^= 1 },
+		"tag":              func(_ *TOTPSeedScope, s *SealedTOTPSeed) { s.Ciphertext[len(s.Ciphertext)-1] ^= 1 },
+		"missing nonce":    func(_ *TOTPSeedScope, s *SealedTOTPSeed) { s.Nonce = nil },
+		"long nonce":       func(_ *TOTPSeedScope, s *SealedTOTPSeed) { s.Nonce = append(s.Nonce, 0) },
+		"short ciphertext": func(_ *TOTPSeedScope, s *SealedTOTPSeed) { s.Ciphertext = s.Ciphertext[:len(s.Ciphertext)-1] },
+		"long ciphertext":  func(_ *TOTPSeedScope, s *SealedTOTPSeed) { s.Ciphertext = append(s.Ciphertext, 0) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidateScope, candidate := scope, original
+			candidate.Nonce = bytes.Clone(original.Nonce)
+			candidate.Ciphertext = bytes.Clone(original.Ciphertext)
+			change(&candidateScope, &candidate)
+			if result, err := OpenTOTPSeed(candidateScope, "key-a", wrapping, candidate); err != ErrTOTPSeedProtection || result.Present() {
+				t.Fatal("substituted envelope exposed seed or diagnostic")
+			}
+		})
+	}
+	// Changing both the requested key and the envelope's key reference still
+	// fails, even if someone configured the same raw bytes under another ID.
+	candidate := original
+	candidate.KeyID = "key-b"
+	if result, err := OpenTOTPSeed(scope, "key-b", wrapping, candidate); err != ErrTOTPSeedProtection || result.Present() {
+		t.Fatal("key identity was not authenticated")
+	}
+	for _, key := range [][]byte{nil, wrapping[:31], append(bytes.Clone(wrapping), 0), bytes.Repeat([]byte{0x7f}, 32)} {
+		if result, err := OpenTOTPSeed(scope, "key-a", key, original); err != ErrTOTPSeedProtection || result.Present() {
+			t.Fatal("wrong wrapping material decrypted")
+		}
+	}
+}
+
+func TestTOTPSeedProtectionRoundTripRotationAndRedaction(t *testing.T) {
+	scope, wrapping, _ := totpSeedVector(t)
+	seed := authoritySecret(t, "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+	sealed, err := SealTOTPSeed(scope, "key-a", wrapping, seed)
+	if err != nil || sealed.FormatVersion != 1 || len(sealed.Nonce) != 12 || len(sealed.Ciphertext) != 36 {
+		t.Fatal("seed was not wrapped in exact format")
+	}
+	opened, err := OpenTOTPSeed(scope, "key-a", wrapping, sealed)
+	if err != nil || !bytes.Equal(opened.CopyBytes(), seed.CopyBytes()) {
+		t.Fatal("random-nonce envelope changed seed")
+	}
+	newKey := bytes.Repeat([]byte{0x55}, 32)
+	rewrapped, err := SealTOTPSeed(scope, "key-b", newKey, opened)
+	if err != nil {
+		t.Fatal("new key could not wrap same immutable factor")
+	}
+	if result, err := OpenTOTPSeed(scope, "key-b", newKey, rewrapped); err != nil || !bytes.Equal(result.CopyBytes(), seed.CopyBytes()) {
+		t.Fatal("rewrapped seed changed")
+	}
+	if result, err := OpenTOTPSeed(scope, "key-a", wrapping, sealed); err != nil || !bytes.Equal(result.CopyBytes(), seed.CopyBytes()) {
+		t.Fatal("new key interfered with old envelope")
+	}
+	if result, err := OpenTOTPSeed(scope, "key-b", newKey, sealed); err != ErrTOTPSeedProtection || result.Present() {
+		t.Fatal("new active key reinterpreted old ciphertext")
+	}
+	for _, value := range []any{sealed, &sealed} {
+		if output, err := json.Marshal(value); !errors.Is(err, ErrTOTPSeedProtection) || len(output) != 0 {
+			t.Fatal("private seed envelope serialized")
+		}
+		for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q"} {
+			output := fmt.Sprintf(format, value)
+			if strings.Contains(output, string(seed.CopyBytes())) || strings.Contains(output, hex.EncodeToString(sealed.Ciphertext)) {
+				t.Fatal("private envelope exposed by formatting")
+			}
+		}
+	}
+	var decoded SealedTOTPSeed
+	if err := json.Unmarshal([]byte(`{"FormatVersion":1,"KeyID":"key-a"}`), &decoded); err != ErrTOTPSeedProtection || !reflect.DeepEqual(decoded, SealedTOTPSeed{}) {
+		t.Fatal("ordinary decoder accepted private envelope")
+	}
+	for _, invalid := range []iamv1.Secret{{}, authoritySecret(t, "gezdgnbvgy3tqojqgezdgnbvgy3tqojq"), authoritySecret(t, "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ="), authoritySecret(t, "mrc1.cXFxcXFxcXFxcXFxcXFxcQ")} {
+		if got, err := SealTOTPSeed(scope, "key-a", wrapping, invalid); err != ErrTOTPSeedProtection || !reflect.DeepEqual(got, SealedTOTPSeed{}) {
+			t.Fatal("non-TOTP material accepted")
+		}
+	}
+	for _, invalid := range []string{"", " key-a", "key\n-a", strings.Repeat("a", 129)} {
+		if got, err := SealTOTPSeed(scope, invalid, wrapping, seed); err != ErrTOTPSeedProtection || !reflect.DeepEqual(got, SealedTOTPSeed{}) {
+			t.Fatal("invalid key identity accepted")
+		}
+	}
+	for index := range 6 {
+		candidate := scope
+		switch index {
+		case 0:
+			candidate.Installation.InstallationID = ""
+		case 1:
+			candidate.Installation.BootstrapDigest = ""
+		case 2:
+			candidate.AccountID = ""
+		case 3:
+			candidate.UserID = ""
+		case 4:
+			candidate.FactorID = ""
+		case 5:
+			candidate.FactorID = "bad\x00id"
+		}
+		if got, err := SealTOTPSeed(candidate, "key-a", wrapping, seed); err != ErrTOTPSeedProtection || !reflect.DeepEqual(got, SealedTOTPSeed{}) {
+			t.Fatal("invalid seed scope accepted")
+		}
+	}
+	for _, invalid := range [][]byte{nil, wrapping[:31]} {
+		if got, err := SealTOTPSeed(scope, "key-a", invalid, seed); err != ErrTOTPSeedProtection || !reflect.DeepEqual(got, SealedTOTPSeed{}) {
+			t.Fatal("invalid wrapping key accepted")
+		}
+	}
+	_, unchanged, _ := totpSeedVector(t)
+	if !bytes.Equal(wrapping, unchanged) || !bytes.Equal(seed.CopyBytes(), []byte("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")) {
+		t.Fatal("caller-owned material was modified")
+	}
+}
+
+func FuzzTOTPSeedEnvelope(f *testing.F) {
+	scope, key, vector := totpSeedVector(f)
+	f.Add(vector.Nonce, vector.Ciphertext, uint8(1), "key-a")
+	f.Add([]byte{}, []byte{}, uint8(0), "")
+	f.Fuzz(func(t *testing.T, nonce, ciphertext []byte, format uint8, keyID string) {
+		seed, err := OpenTOTPSeed(scope, keyID, key, SealedTOTPSeed{FormatVersion: format, KeyID: keyID, Nonce: nonce, Ciphertext: ciphertext})
+		if err != nil {
+			if err != ErrTOTPSeedProtection || seed.Present() {
+				t.Fatal("failed envelope exposed partial secret or error")
+			}
+			return
+		}
+		if !bytes.Equal(seed.CopyBytes(), []byte("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")) {
+			t.Fatal("unmodified authentication tag accepted another plaintext")
+		}
+	})
 }
 
 func FuzzTOTPStrictInputs(f *testing.F) {

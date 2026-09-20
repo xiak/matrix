@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -108,8 +107,8 @@ func AccessKeySecretContext(installationID string, accountID AccountID, userID P
 		}
 	}
 	fields := [][]byte{[]byte("ACCESS_KEY_SECRET"), {1}, []byte(installationID), []byte(accountID), []byte(userID), []byte(accessKeyID), []byte(wrappingKeyID)}
-	return accessKeyBindingBytes("matrix.iam.access-key-secret.kdf-info.v1", fields...),
-		accessKeyBindingBytes("matrix.iam.access-key-secret.aad.v1", fields...), nil
+	return credentialBindingBytes("matrix.iam.access-key-secret.kdf-info.v1", fields...),
+		credentialBindingBytes("matrix.iam.access-key-secret.aad.v1", fields...), nil
 }
 
 // AccessKeyWrappingKeyCommitment is non-secret consistency evidence for one
@@ -125,24 +124,12 @@ func AccessKeyWrappingKeyCommitment(value AccessKeyWrappingKeyring, wrappingKeyI
 		return "", ErrInvalidAccessKeyWrappingKeyring
 	}
 	defer clear(material)
-	encoded := accessKeyBindingBytes("matrix.iam.access-key-wrapping-key.commitment.v1",
+	encoded := credentialBindingBytes("matrix.iam.access-key-wrapping-key.commitment.v1",
 		[]byte(value.Purpose), []byte(value.Scope.InstallationID), []byte(value.Scope.BootstrapDigest),
 		[]byte(wrappingKeyID), []byte{value.Keys[0].FormatVersion}, material)
 	defer clear(encoded)
 	digest := sha256.Sum256(encoded)
 	return "sha256:" + hex.EncodeToString(digest[:]), nil
-}
-
-// This is the single length-prefix primitive for key contexts and per-key
-// commitments. Callers above validate their bounded, purpose-specific fields.
-func accessKeyBindingBytes(domain string, fields ...[]byte) []byte {
-	encoded := binary.BigEndian.AppendUint32(nil, uint32(len(domain)))
-	encoded = append(encoded, domain...)
-	for _, field := range fields {
-		encoded = binary.BigEndian.AppendUint32(encoded, uint32(len(field)))
-		encoded = append(encoded, field...)
-	}
-	return encoded
 }
 
 // The only plain-material wire representation is private to the explicit

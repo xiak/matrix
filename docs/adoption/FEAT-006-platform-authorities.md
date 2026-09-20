@@ -688,6 +688,16 @@ The fixed TOTP domain algorithm is new code in the existing authority owner;
 no donor authenticator service, enrollment flow or secret envelope is copied.
 Pure validation does not implement durable consumption or prove deployment.
 
+The follow-on TOTP material slice `REUSE`s the same strict Secret and
+contractjson owners, and the existing uint32BE field-framing primitive with
+byte-preserving AccessKey regression. It `ADAPT`s only the separation pattern:
+an independent private TOTP codec and multi-key set are new, not an alias of
+AccessKey custody. Per-key evidence excludes mutable set revision/selection;
+the separately purposed set digest includes them. Go standard HKDF/GCM and
+independent Node vectors are `REFERENCE`, not a third-party key service or
+runtime dependency. No source gate, installation recovery capability or
+schema/profile acceptance is imported by this foundation.
+
 ## Password and authentication-budget target review
 
 IAM/009 owns account-governed password changes and bounded multi-instance

@@ -1,8 +1,13 @@
 package authority
 
 import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base32"
 	"encoding/binary"
@@ -13,7 +18,10 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
-var ErrTOTPRejected = errors.New("TOTP verification failed")
+var (
+	ErrTOTPRejected       = errors.New("TOTP verification failed")
+	ErrTOTPSeedProtection = errors.New("TOTP seed protection failed")
+)
 
 const (
 	totpSeedBytes     = 20
@@ -21,7 +29,98 @@ const (
 	totpDigits        = 6
 	totpMaximumUnix   = int64(253402300799)
 	totpMaximumStep   = totpMaximumUnix / totpPeriodSeconds
+	totpSeedKeySalt   = "matrix.iam.totp-seed.hkdf-sha256.v1"
 )
+
+type TOTPSeedScope struct {
+	Installation iamv1.TOTPWrappingScope
+	AccountID    iamv1.AccountID
+	UserID       iamv1.PrincipalID
+	FactorID     string
+}
+
+// Ciphertext and its metadata stay in the private factor authority. Even a
+// sealed seed is not a public factor response, log field or Audit payload.
+type SealedTOTPSeed struct {
+	FormatVersion uint8
+	KeyID         string
+	Nonce         []byte
+	Ciphertext    []byte
+}
+
+func (SealedTOTPSeed) String() string   { return "[REDACTED]" }
+func (SealedTOTPSeed) GoString() string { return "authority.SealedTOTPSeed{[REDACTED]}" }
+func (SealedTOTPSeed) MarshalJSON() ([]byte, error) {
+	return nil, ErrTOTPSeedProtection
+}
+func (*SealedTOTPSeed) UnmarshalJSON([]byte) error { return ErrTOTPSeedProtection }
+
+// SealTOTPSeed encrypts exactly the fixed 20-byte seed under a per-factor
+// HKDF key. It accepts no caller-selected nonce. The lifecycle must reserve
+// the immutable factor ID and seal at most once for that factor/key version;
+// retries reuse the result, and rewrapping requires the original row CAS.
+// This primitive neither registers keys nor grants enrollment/recovery.
+func SealTOTPSeed(scope TOTPSeedScope, keyID string, wrappingKey []byte, seed iamv1.Secret) (SealedTOTPSeed, error) {
+	aead, aad, err := totpSeedCipher(scope, keyID, wrappingKey)
+	if err != nil {
+		return SealedTOTPSeed{}, err
+	}
+	plaintext, err := totpSeedMaterial(seed)
+	defer clear(plaintext)
+	if err != nil {
+		return SealedTOTPSeed{}, ErrTOTPSeedProtection
+	}
+	protected := aead.Seal(nil, nil, plaintext, aad)
+	defer clear(protected)
+	return SealedTOTPSeed{FormatVersion: 1, KeyID: keyID,
+		Nonce: bytes.Clone(protected[:12]), Ciphertext: bytes.Clone(protected[12:])}, nil
+}
+
+func OpenTOTPSeed(scope TOTPSeedScope, keyID string, wrappingKey []byte, sealed SealedTOTPSeed) (iamv1.Secret, error) {
+	if sealed.FormatVersion != 1 || sealed.KeyID != keyID || len(sealed.Nonce) != 12 || len(sealed.Ciphertext) != totpSeedBytes+16 {
+		return iamv1.Secret{}, ErrTOTPSeedProtection
+	}
+	aead, aad, err := totpSeedCipher(scope, keyID, wrappingKey)
+	if err != nil {
+		return iamv1.Secret{}, err
+	}
+	protected := append(bytes.Clone(sealed.Nonce), sealed.Ciphertext...)
+	defer clear(protected)
+	plaintext, err := aead.Open(nil, nil, protected, aad)
+	defer clear(plaintext)
+	if err != nil || len(plaintext) != totpSeedBytes {
+		return iamv1.Secret{}, ErrTOTPSeedProtection
+	}
+	seed, err := iamv1.NewSecret(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(plaintext))
+	if err != nil {
+		return iamv1.Secret{}, ErrTOTPSeedProtection
+	}
+	return seed, nil
+}
+
+func totpSeedCipher(scope TOTPSeedScope, keyID string, wrappingKey []byte) (cipher.AEAD, []byte, error) {
+	if len(wrappingKey) != 32 {
+		return nil, nil, ErrTOTPSeedProtection
+	}
+	info, aad, err := iamv1.TOTPSeedContext(scope.Installation, scope.AccountID, scope.UserID, scope.FactorID, keyID)
+	if err != nil {
+		return nil, nil, ErrTOTPSeedProtection
+	}
+	recordKey, err := hkdf.Key(sha256.New, wrappingKey, []byte(totpSeedKeySalt), string(info), 32)
+	if err != nil {
+		return nil, nil, ErrTOTPSeedProtection
+	}
+	defer clear(recordKey)
+	block, err := aes.NewCipher(recordKey)
+	if err != nil {
+		return nil, nil, ErrTOTPSeedProtection
+	}
+	aead, err := cipher.NewGCMWithRandomNonce(block)
+	if err != nil {
+		return nil, nil, ErrTOTPSeedProtection
+	}
+	return aead, aad, nil
+}
 
 func (issuer *CredentialIssuer) IssueTOTPSeed() (iamv1.Secret, error) {
 	if issuer == nil || issuer.entropy == nil {

@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。当前源码IAM32/Audit19，未分配发布revision；UI与完整009尚未验收。S2/S3详细设计已固定`6fa39fda`，S2a首个内部TOTP/恢复码域基础片已实现并通过本地聚焦检查；完整S2及S3/S4未实施验收。下述HTTP、持久化和交付分工不是已开放API或已完成协作；材料托管、恢复与通知的发布前置尚未全部确认。
+- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。当前源码IAM32/Audit19，未分配发布revision；UI与完整009尚未验收。S2/S3详细设计已固定`6fa39fda`，S2a内部TOTP/恢复码、私有keyring及种子加密基础片已实现并通过本地检查；完整S2及S3/S4未实施验收。下述HTTP、持久化和交付分工不是已开放API或已完成协作；材料托管、恢复与通知的发布前置尚未全部完成。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -153,11 +153,11 @@ S1仅在本分支实施，release contractRevision不提前分配。不变更Pha
 
 本稿根据2026-09-20确认的设计方向细化，只增加S3所列两个安全配置授权动作的设计，不顺带增加管理员重置他人认证器的权限、客服系统、全局身份、组级安全策略语言、Refresh Token或新身份服务。现有密码恢复权限不扩展为MFA恢复权。UI交UX/UI owner，本文只约束数据、行为和交互结果；不另写一份平行页面设计或路线图。
 
-固定`644fff09`中，Login在密码验证后直接发行Session，凭据目的仅有SESSION/SERVICE/ROLE_SESSION；尚无MFA挑战、因子状态、OTP消费或认证强度证据。现有密码重置、租户root恢复和平台离线恢复都不能因此被解释为MFA恢复。用户无手机号、邮件或微信也应能使用本地TOTP；短信、外部风险引擎和Passkey仍按012的前置处理。
+固定`644fff09`中，Login在密码验证后直接发行Session，凭据目的仅有SESSION/SERVICE/ROLE_SESSION；尚无MFA挑战、因子状态、OTP消费或认证强度证据。现有密码重置、租户root恢复和平台离线恢复都不能因此被解释为MFA恢复。TOTP算法与验证码验证不依赖手机号、微信或外部IdP；用户已选择的首期安全通知通道是邮件，所以实际启用还须满足012的可信接收地址与真实投递前置，不能继续声称完整本片完全不需通知地址。邮件只提供安全通知，不作为MFA因子或恢复授权；内网SMTP/邮箱可以满足私有交付，不要求公有云消息服务。短信、外部风险引擎和Passkey仍按012的前置处理。
 
 #### S2a当前实施边界
 
-用户已要求按本稿继续目标。先在既有`authority`域实现固定TOTP参数的秘密生成/纯校验和恢复码的用途/主体绑定验证；不开放MFA配置、挑战HTTP入口或改动原LoginResponse，不修改安装、UI、SQL、schema或发布profile。两项security-settings动作仍待完整S2c权限切片，不随本片提前授予。
+用户已要求按本稿继续目标。先在既有`authority`域实现固定TOTP参数的秘密生成/纯校验和恢复码的用途/主体绑定验证，继而冻结独立私有keyring并实现种子认证加密；不开放MFA配置、挑战HTTP入口或改动原LoginResponse，不修改安装、UI、SQL、schema或发布profile。两项security-settings动作仍待完整S2c权限切片，不随本片提前授予。
 
 `totp.go`及其测试是现有认证域内新增的算法/时间窗边界：当前password/opaque credential拥有者没有此边界，不建立新的service、store或通用因子框架。秘密使用原`iamv1.Secret`，生成复用原`CredentialIssuer`的受控熵源；恢复码生成和单向验证继续由现有`credential.go`/测试拥有。参数固定为20字节种子、HMAC-SHA1、6位ASCII码、30秒、当前前后各一步；不增加可由请求选择的算法或窗口。
 
@@ -170,6 +170,14 @@ TOTP校验只返回须在原子事务内消费的准确时间步，不持久化�
 本地聚焦证据：六个TOTP/恢复码行为测试通过race；原authority/API累计race及vet通过；20秒、最多2 worker的TOTP输入fuzz完成83581次执行且无失败。独立Node HMAC向量包括epoch、2038、最大支持日期和910737/910738相邻步的相同码，恢复码SHA256也按独立实现核对；均为公开合成材料，不是用户凭据或真实认证器浏览器验收。秘密仍由原Secret拒绝普通JSON/格式化输出。尚未据此声称材料托管、一次性SQL消费或MFA启用。
 
 2026-09-20本片在干净源码导出、Go1.26.3 Windows/amd64下完成全仓默认`-race -p 2 -count=1`（含architecture）、vet和模块校验，GOMAXPROCS=2/GOMEMLIMIT=512MiB；Linux/amd64构建也通过。未改API生成物、现有SQL或对外运行路径，未启动PG/容器；默认因缺少DSN/运行环境而SKIP的门禁不计为真实运行证据。精确提交的独立CI仍需确认后才记为通过。
+
+S2a后继材料基础片由`api/iam/v1/totp_wrapping.go`单一拥有私有keyring、每key承诺、keyset摘要和格式1的种子上下文。新增文件是为了独立TOTP材料边界，不能复用007的AccessKey kind/purpose/文件；现有contract测试拥有它的严格输入、秘密脱敏及不进入公开OpenAPI的门禁。两种凭据共享的仅是原uint32BE长度分界原语，移入既有encoding owner并保留原AccessKey context/signature/nonce字节；没有通用keyring、材料provider或第二套Audit canonical。
+
+`authority/totp.go`在已有算法owner增加`SealTOTPSeed/OpenTOTPSeed`：独立HKDF-SHA256目的、AES-256-GCM、标准库生成96位nonce，认证并加密固定20字节种子。上下文还绑定准确bootstrapDigest、Account/USER、不可重用factorId及keyId；格式、key引用、nonce/ciphertext/tag或任一归属改变均拒绝。每factor/key版本只应封装一次，事务重试复用结果，重封装用原行CAS；本片纯函数不替代此后持久生命周期。集合revision/active切换不改旧密文身份，已撤销因子不会因可解密而重新获得认证资格。
+
+本材料片不读取生产文件、不注册keyset、不查询数据库引用、不迁移/轮换真实数据，也不证明备份可恢复、运行副本一致或MFA已开放。后继同快照custody摘要不能拿`TOTPKeysetDigest`代替：后者只证明一套给定材料的内容，前者还必须证明准确备份快照依赖。标准算法参考[Go随机nonce GCM](https://pkg.go.dev/crypto/cipher#NewGCMWithRandomNonce)及[HKDF](https://www.rfc-editor.org/rfc/rfc5869.html)；独立Node标准crypto向量核对原始材料承诺、集合摘要、每记录派生密钥和解密后实际RFC验证码，不以同一实现自算向量作唯一证明。
+
+材料片本地门禁（2026-09-20）：新私有codec/承诺/加密互换及既有AccessKey聚焦race通过；私有codec和密文输入各20秒、最多2 worker的fuzz分别完成547018和705841次执行，无失败，这不是QPS/容量证据。最终代码干净Git导出完成全仓默认race/architecture、vet、模块校验、生成前后全部文件集合及SHA256一致、Linux amd64构建，GOMAXPROCS=2/GOMEMLIMIT=512MiB。外部环境SKIP仍不计真库/进程验收；本片无新DB、容器或远端操作。新固定提交的独立CI另行核实，不能继承前驱或安装分支的通过结论。
 
 #### 不同状态不能混用
 
@@ -277,6 +285,8 @@ step-up通过只证明本次再次认证，不等于PDP Allow，也不提升整�
 #### 绑定、替换与秘密托管
 
 已有本人登录会话的主动首次绑定需重新验证当前密码；forced-change先沿既有密码流程完成，不能通过绑定清除must-change。账号强制MFA且无可用登录会话时的首次设置，走下述独立受限挑战，不绕过要求先发普通Session。待确认种子不能用于登录；必须证明持有该种子所产生的有效码，才在同一事务确认绑定并写入事实。替换需旧因子或合法恢复证明，加上新因子有效码；新因子确认前旧绑定仍生效，确认时原子终止旧绑定，不制造密码单独登录的空窗。
+
+首次强制设置的ENROLLMENT挑战只在已证明NEVER_BOUND/合法REMOVED、当前密码及修订仍有效且不存在待替换的可信地址时，允许012的首次通知地址验证子步骤；尚需初始改密时必须先改密并重新取得挑战。此子步骤不取得Session、普通资料修改或更换既有安全接收地址的权限。验证码只证明当前意图中地址的持有，不清除因子要求；地址确认后仍须完成真实TOTP绑定并正常重登。LOST/RECOVERY_REQUIRED、未知/损坏因子或旧库恢复不能通过这个首次设置分支接管接收地址。
 
 种子、provisioning URI/二维码和恢复码均属秘密，只经受保护连接的专用一次性响应传输，普通JSON、HTTP请求URL/query、审计、日志、support和浏览器持久缓存不得保存。provisioning URI内的种子参数仅是一次性内容，不能导航到第三方或发送给外部二维码服务。复制/打印是用户对恢复材料的显式操作，不自动下载到共享目录。创建回包未知只查询原非秘密完成；不重新展示种子或恢复码。无法继续持有原待绑定凭据时，明确废弃该待绑定意图后重新开始，不能悄悄创建替代秘密。
 

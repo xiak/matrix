@@ -619,6 +619,220 @@ func TestAccessKeyCreationSecretIsNotAReplayOrDeletionResult(t *testing.T) {
 	}
 }
 
+func totpTestKeyring(t testing.TB) TOTPKeyring {
+	t.Helper()
+	var keys []TOTPWrappingKey
+	for index, material := range []string{"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8", "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8"} {
+		secret, err := NewSecret(material)
+		if err != nil {
+			t.Fatal("invalid synthetic key material")
+		}
+		keys = append(keys, TOTPWrappingKey{KeyID: "key-" + string(rune('a'+index)), FormatVersion: 1, KeyMaterial: secret})
+	}
+	return TOTPKeyring{APIVersion: APIVersion, Kind: "TOTPKeyring", Purpose: TOTPWrappingPurpose,
+		Scope:          TOTPWrappingScope{InstallationID: "install-a", BootstrapDigest: "sha256:" + strings.Repeat("a", 64)},
+		KeysetRevision: 1, ActiveKeyID: "key-a", Keys: keys}
+}
+
+func TestTOTPKeyringPrivateCodecAndStrictBounds(t *testing.T) {
+	value := totpTestKeyring(t)
+	encoded, err := EncodeTOTPKeyring(value)
+	defer clear(encoded)
+	if err != nil {
+		t.Fatal("valid private keyring did not encode")
+	}
+	decoded, err := DecodeTOTPKeyring(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(decoded, value) {
+		t.Fatal("private codec changed the scoped keyset")
+	}
+	for _, protected := range []any{value, &value, value.Keys[0], &value.Keys[0]} {
+		if output, err := json.Marshal(protected); !errors.Is(err, ErrInvalidTOTPKeyring) || len(output) != 0 {
+			t.Fatal("ordinary JSON exposed key material")
+		}
+		for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q"} {
+			if strings.Contains(fmt.Sprintf(format, protected), string(value.Keys[0].KeyMaterial.CopyBytes())) {
+				t.Fatal("key material escaped formatting")
+			}
+		}
+	}
+	var ordinary TOTPKeyring
+	var ordinaryKey TOTPWrappingKey
+	if err := json.Unmarshal(encoded, &ordinary); !errors.Is(err, ErrInvalidTOTPKeyring) || len(ordinary.Keys) != 0 {
+		t.Fatal("ordinary decoder bypassed private codec")
+	}
+	if err := json.Unmarshal([]byte(`{"keyId":"key-a","formatVersion":1,"keyMaterial":"secret"}`), &ordinaryKey); !errors.Is(err, ErrInvalidTOTPKeyring) || ordinaryKey.KeyMaterial.Present() {
+		t.Fatal("ordinary key decoder accepted material")
+	}
+	wire := string(encoded)
+	for name, invalid := range map[string]string{
+		"empty": "", "null": "null", "array": "[]", "whitespace": " " + wire, "newline": wire + "\n", "trailing": wire + "{}",
+		"duplicate":         strings.Replace(wire, `"keysetRevision":1`, `"keysetRevision":1,"keysetRevision":1`, 1),
+		"nested duplicate":  strings.Replace(wire, `"formatVersion":1`, `"formatVersion":1,"formatVersion":1`, 1),
+		"unknown":           strings.Replace(wire, `"formatVersion":1`, `"formatVersion":1,"targetUser":"user-a"`, 1),
+		"case alias":        strings.Replace(wire, `"activeKeyId"`, `"ActiveKeyId"`, 1),
+		"escaped field":     strings.Replace(wire, `"kind"`, `"k\u0069nd"`, 1),
+		"reordered":         strings.Replace(wire, `"apiVersion":"iam.matrix.xiak.com/v1","kind":"TOTPKeyring"`, `"kind":"TOTPKeyring","apiVersion":"iam.matrix.xiak.com/v1"`, 1),
+		"purpose":           strings.Replace(wire, TOTPWrappingPurpose, AccessKeyWrappingPurpose, 1),
+		"kind":              strings.Replace(wire, `"TOTPKeyring"`, `"AccessKeyWrappingKeyring"`, 1),
+		"version":           strings.Replace(wire, APIVersion, "iam.matrix.xiak.com/v2", 1),
+		"missing revision":  strings.Replace(wire, `"keysetRevision":1,`, "", 1),
+		"zero revision":     strings.Replace(wire, `"keysetRevision":1`, `"keysetRevision":0`, 1),
+		"null revision":     strings.Replace(wire, `"keysetRevision":1`, `"keysetRevision":null`, 1),
+		"bigint overflow":   strings.Replace(wire, `"keysetRevision":1`, `"keysetRevision":9223372036854775808`, 1),
+		"negative revision": strings.Replace(wire, `"keysetRevision":1`, `"keysetRevision":-1`, 1),
+		"decimal revision":  strings.Replace(wire, `"keysetRevision":1`, `"keysetRevision":1.0`, 1),
+		"exponent revision": strings.Replace(wire, `"keysetRevision":1`, `"keysetRevision":1e0`, 1),
+		"null scope":        strings.Replace(wire, `"installationId":"install-a"`, `"installationId":null`, 1),
+		"id":                strings.Replace(wire, `"install-a"`, `"install a"`, 1),
+		"digest":            strings.Replace(wire, "sha256:", "SHA256:", 1),
+		"missing active":    strings.Replace(wire, `"activeKeyId":"key-a"`, `"activeKeyId":"key-missing"`, 1),
+		"duplicate keys":    strings.Replace(wire, `"keyId":"key-b"`, `"keyId":"key-a"`, 1),
+		"unordered keys":    strings.Replace(wire, `"keyId":"key-b"`, `"keyId":"key-0"`, 1),
+		"unknown format":    strings.Replace(wire, `"formatVersion":1`, `"formatVersion":2`, 1),
+		"null material":     strings.Replace(wire, `"keyMaterial":"`+string(value.Keys[0].KeyMaterial.CopyBytes())+`"`, `"keyMaterial":null`, 1),
+		"short material":    strings.Replace(wire, string(value.Keys[0].KeyMaterial.CopyBytes()), base64.RawURLEncoding.EncodeToString(make([]byte, 31)), 1),
+		"padded material":   strings.Replace(wire, string(value.Keys[0].KeyMaterial.CopyBytes()), string(value.Keys[0].KeyMaterial.CopyBytes())+"=", 1),
+		"pad bits":          strings.Replace(wire, "kaGxwdHh8", "kaGxwdHh9", 1),
+		"null keys":         wire[:strings.Index(wire, `"keys":`)] + `"keys":null}`,
+		"empty keys":        wire[:strings.Index(wire, `"keys":`)] + `"keys":[]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			decoded, err := DecodeTOTPKeyring(strings.NewReader(invalid))
+			if err != ErrInvalidTOTPKeyring || !reflect.DeepEqual(decoded, TOTPKeyring{}) {
+				t.Fatal("malformed private file exposed partial material or an unnormalized error")
+			}
+		})
+	}
+	for _, reader := range []io.Reader{nil, iotest.ErrReader(errors.New(wire)), io.MultiReader(strings.NewReader(wire), iotest.ErrReader(errors.New(wire)))} {
+		if got, err := DecodeTOTPKeyring(reader); err != ErrInvalidTOTPKeyring || !reflect.DeepEqual(got, TOTPKeyring{}) {
+			t.Fatal("reader failure exposed material or an underlying error")
+		}
+	}
+	oversized := strings.NewReader(strings.Repeat(" ", int(MaxTOTPKeyringBytes)+100))
+	if got, err := DecodeTOTPKeyring(oversized); err != ErrInvalidTOTPKeyring || len(got.Keys) != 0 || oversized.Len() < 99 {
+		t.Fatal("private read exceeded its bound")
+	}
+	for _, count := range []int{0, 1, 8, 9} {
+		candidate := totpTestKeyring(t)
+		candidate.Keys = nil
+		for i := range count {
+			candidate.Keys = append(candidate.Keys, TOTPWrappingKey{KeyID: "key-" + string(rune('a'+i)), FormatVersion: 1, KeyMaterial: value.Keys[0].KeyMaterial})
+		}
+		candidate.KeysetRevision = MaxTOTPKeysetRevision
+		output, err := EncodeTOTPKeyring(candidate)
+		defer clear(output)
+		if count == 0 || count == 9 {
+			if err != ErrInvalidTOTPKeyring || len(output) != 0 {
+				t.Fatal("invalid key count encoded")
+			}
+		} else if got, err := DecodeTOTPKeyring(bytes.NewReader(output)); err != nil || len(got.Keys) != count || got.KeysetRevision != MaxTOTPKeysetRevision {
+			t.Fatal("supported key count or exact maximum revision failed round trip")
+		}
+	}
+	if output, err := EncodeTOTPKeyring(TOTPKeyring{}); err != ErrInvalidTOTPKeyring || len(output) != 0 {
+		t.Fatal("zero keyring encoded")
+	}
+	if _, err := DecodeAccessKeyWrappingKeyring(bytes.NewReader(encoded)); err != ErrInvalidAccessKeyWrappingKeyring {
+		t.Fatal("AccessKey accepted a TOTP keyring")
+	}
+}
+
+func TestTOTPCommitmentsSeparateImmutableKeysFromTheirSet(t *testing.T) {
+	value := totpTestKeyring(t)
+	// Independently computed with Node standard SHA256 and uint32BE framing.
+	want := "sha256:fb8f77f4172568f896c5d473f79ddf5b96647aabcef0aad85172973e55bfaf7d"
+	wantSet := "sha256:45a5565aea0c9252a9b37bd4969048d4fa8628b9ae7242b3679b149e6e309353"
+	if got, err := TOTPKeyMaterialCommitment(value, "key-a"); err != nil || got != want {
+		t.Fatal("key commitment differed from independent vector")
+	}
+	if got, err := TOTPKeysetDigest(value); err != nil || got != wantSet {
+		t.Fatal("set digest differed from independent vector")
+	}
+	for name, mutate := range map[string]func(*TOTPKeyring){
+		"revision":        func(v *TOTPKeyring) { v.KeysetRevision++ },
+		"active":          func(v *TOTPKeyring) { v.ActiveKeyID = "key-b" },
+		"retained subset": func(v *TOTPKeyring) { v.Keys = v.Keys[:1] },
+		"added key":       func(v *TOTPKeyring) { key := v.Keys[1]; key.KeyID = "key-c"; v.Keys = append(v.Keys, key) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := value
+			candidate.Keys = slices.Clone(value.Keys)
+			mutate(&candidate)
+			if got, err := TOTPKeyMaterialCommitment(candidate, "key-a"); err != nil || got != want {
+				t.Fatal("set change invalidated retained immutable key evidence")
+			}
+			if got, err := TOTPKeysetDigest(candidate); err != nil || got == wantSet {
+				t.Fatal("set change did not change set digest")
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*TOTPKeyring){
+		"installation": func(v *TOTPKeyring) { v.Scope.InstallationID = "install-b" },
+		"bootstrap":    func(v *TOTPKeyring) { v.Scope.BootstrapDigest = "sha256:" + strings.Repeat("b", 64) },
+		"material":     func(v *TOTPKeyring) { v.Keys[0].KeyMaterial = v.Keys[1].KeyMaterial },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := value
+			candidate.Keys = slices.Clone(value.Keys)
+			mutate(&candidate)
+			if got, err := TOTPKeyMaterialCommitment(candidate, "key-a"); err != nil || got == want {
+				t.Fatal("substituted key kept commitment")
+			}
+			if got, err := TOTPKeysetDigest(candidate); err != nil || got == wantSet {
+				t.Fatal("substituted key kept set digest")
+			}
+		})
+	}
+	if got, err := TOTPKeyMaterialCommitment(value, "missing"); err != ErrInvalidTOTPKeyring || got != "" {
+		t.Fatal("unknown key produced a commitment")
+	}
+	if got, err := TOTPKeysetDigest(TOTPKeyring{}); err != ErrInvalidTOTPKeyring || got != "" {
+		t.Fatal("invalid set produced a digest")
+	}
+	access := AccessKeyWrappingKeyring{APIVersion: APIVersion, Kind: "AccessKeyWrappingKeyring", Purpose: AccessKeyWrappingPurpose,
+		Scope: AccessKeyWrappingScope{InstallationID: value.Scope.InstallationID, BootstrapDigest: value.Scope.BootstrapDigest}, ActiveWrappingKeyID: "key-a",
+		Keys: []AccessKeyWrappingKey{{WrappingKeyID: "key-a", FormatVersion: 1, KeyMaterial: value.Keys[0].KeyMaterial}}}
+	if digest, err := AccessKeyWrappingKeyCommitment(access, "key-a"); err != nil || digest == want {
+		t.Fatal("different credential purposes shared a commitment")
+	}
+	encoded, err := EncodeAccessKeyWrappingKeyring(access)
+	defer clear(encoded)
+	if err != nil {
+		t.Fatal("could not build AccessKey private source")
+	}
+	if got, err := DecodeTOTPKeyring(bytes.NewReader(encoded)); err != ErrInvalidTOTPKeyring || len(got.Keys) != 0 {
+		t.Fatal("TOTP accepted AccessKey private source")
+	}
+}
+
+func FuzzTOTPKeyringCanonicalPrivateFile(f *testing.F) {
+	encoded, err := EncodeTOTPKeyring(totpTestKeyring(f))
+	if err != nil {
+		f.Fatal("synthetic keyring failed")
+	}
+	defer clear(encoded)
+	for _, wire := range []string{string(encoded), "null", "{}", string(encoded) + "\n", strings.Replace(string(encoded), `"keysetRevision":1`, `"keysetRevision":null`, 1)} {
+		f.Add(wire)
+	}
+	f.Fuzz(func(t *testing.T, wire string) {
+		value, err := DecodeTOTPKeyring(strings.NewReader(wire))
+		if err != nil {
+			if err != ErrInvalidTOTPKeyring || !reflect.DeepEqual(value, TOTPKeyring{}) {
+				t.Fatal("invalid private input returned data")
+			}
+			return
+		}
+		canonical, err := EncodeTOTPKeyring(value)
+		defer clear(canonical)
+		if err != nil || string(canonical) != wire {
+			t.Fatal("accepted input was not canonical")
+		}
+		if digest, err := TOTPKeysetDigest(value); err != nil || ValidateDigest("keyset", digest) != nil {
+			t.Fatal("valid keyring had no set evidence")
+		}
+	})
+}
+
 func TestAccessKeyWrappingKeyringHasOneExplicitCanonicalPrivateCodec(t *testing.T) {
 	material := "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 	wire := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccessKeyWrappingKeyring","purpose":"IAM_ACCESS_KEY_SECRET_WRAPPING","scope":{"installationId":"install-a","bootstrapDigest":"sha256:` + strings.Repeat("a", 64) + `"},"activeWrappingKeyId":"wrap-a","keys":[{"wrappingKeyId":"wrap-a","formatVersion":1,"keyMaterial":"` + material + `"}]}`
@@ -5282,7 +5496,7 @@ func TestIAMLoginResponsePublishesPasswordChangeRequirement(t *testing.T) {
 
 func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 	document := loadIAMOpenAPI(t)
-	for _, privateType := range []string{"AccessKeyWrappingKeyring", "AccessKeyWrappingKey", "AccessKeyWrappingScope", "AccessKeyCredential", "AccessKeyAuthorizationEvidence", "AccessKeySignatureParameters"} {
+	for _, privateType := range []string{"AccessKeyWrappingKeyring", "AccessKeyWrappingKey", "AccessKeyWrappingScope", "AccessKeyCredential", "AccessKeyAuthorizationEvidence", "AccessKeySignatureParameters", "TOTPKeyring", "TOTPWrappingKey", "TOTPWrappingScope"} {
 		if _, exists := iamOpenAPISchemas(t, document)[privateType]; exists {
 			t.Fatal("public HTTP contract exposed an installation-private keyring type")
 		}
