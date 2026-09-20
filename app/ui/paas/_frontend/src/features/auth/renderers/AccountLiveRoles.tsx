@@ -8,7 +8,7 @@ import { accountError, type RoleAccessClient } from "../application/AccountAcces
 import type { AccountAccessView } from "../domain/accounts";
 import type { RoleAccess, RoleCapability, RoleListing } from "../domain/roles";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
-import { LiveRoleSessions } from "./LiveRoleSessions";
+import { LiveRoleSessions, type LiveRoleSessionRevokeIntent } from "./LiveRoleSessions";
 import styles from "./AccountAccessRenderer.module.css";
 
 type OpenRoleEntity = (view: AccountAccessView, id?: string) => void;
@@ -22,7 +22,13 @@ function capabilityState(capability: RoleCapability) {
   return capability.available ? "available" : "restricted";
 }
 
-function RoleDetail({ client, roleId, onOpen }: { client: RoleAccessClient; roleId: string; onOpen: OpenRoleEntity }) {
+function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange }: {
+  client: RoleAccessClient;
+  roleId: string;
+  onOpen: OpenRoleEntity;
+  revokeIntent: LiveRoleSessionRevokeIntent | null;
+  onRevokeIntentChange(intent: LiveRoleSessionRevokeIntent | null): void;
+}) {
   const t = useTranslations("RoleWorkspace");
   const w = useTranslations("IamWorkspace");
   const a = useTranslations("AccountAccess");
@@ -112,7 +118,7 @@ function RoleDetail({ client, roleId, onOpen }: { client: RoleAccessClient; role
           <p className={styles.note}>{t("verifiedDigest")}: <code>{access.trustVersion.contentDigest}</code></p>
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="sessions">
-          {section === "sessions" ? <LiveRoleSessions client={client} roleId={roleId} listCapability={access.capabilities.find((capability) => capability.action === "iam.role-session.list")!} /> : null}
+          {section === "sessions" ? <LiveRoleSessions client={client} roleId={roleId} listCapability={access.capabilities.find((capability) => capability.action === "iam.role-session.list")!} revokeIntent={revokeIntent} onRevokeIntentChange={onRevokeIntentChange} /> : null}
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="capabilities">
           <Alert>{t("capabilitySnapshotHint")}</Alert>
@@ -144,6 +150,7 @@ export function AccountLiveRoles({ client, entityId, onOpen }: { client: RoleAcc
   const [state, setState] = useState("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [revokeIntent, setRevokeIntent] = useState<LiveRoleSessionRevokeIntent | null>(null);
   const deferredQuery = useDeferredValue(query);
 
   const retry = useCallback(() => {
@@ -182,7 +189,7 @@ export function AccountLiveRoles({ client, entityId, onOpen }: { client: RoleAcc
   const pages = Math.max(1, Math.ceil(matches.length / pageSize));
   const currentPage = Math.min(page, pages);
 
-  if (entityId) return <RoleDetail client={client} roleId={entityId} onOpen={onOpen} />;
+  if (entityId) return <RoleDetail client={client} roleId={entityId} onOpen={onOpen} revokeIntent={revokeIntent} onRevokeIntentChange={setRevokeIntent} />;
 
   return <Card aria-description={t("liveDirectoryHint")}>
     <ContentPage.Heading title={w("roles")} scrollKey="live-role-directory" />

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
@@ -113,14 +113,80 @@ describe("AccountLiveRoles", () => {
     const workflow = screen.getByRole("group", { name: "撤销会话" });
     await user.click(within(workflow).getByRole("button", { name: "撤销会话" }));
     expect(await within(workflow).findByText("撤销结果尚未确认", { exact: false })).toBeTruthy();
-    await user.click(within(workflow).getByRole("button", { name: "读取权威状态" }));
-    expect(await within(workflow).findByText("仍观测为未撤销", { exact: false })).toBeTruthy();
-    await user.click(within(workflow).getByRole("button", { name: "重试原请求" }));
+    const originalRequestId = vi.mocked(api.revokeSession).mock.calls[0]?.[2];
+    await user.click(within(workflow).getByRole("button", { name: "取消" }));
+    expect(await screen.findByText("仍有一个结果未知的撤销请求", { exact: false })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "角色权限策略 (1)" }));
+    await user.click(screen.getByRole("tab", { name: "角色会话" }));
+    await user.click(await screen.findByRole("button", { name: "继续处理未知结果" }));
+    let resumed = screen.getByRole("group", { name: "撤销会话" });
+    expect(within(resumed).getByText(originalRequestId ?? "missing")).toBeTruthy();
+    await user.click(within(resumed).getByRole("button", { name: "读取权威状态" }));
+    expect(await within(resumed).findByText("仍观测为未撤销", { exact: false })).toBeTruthy();
+    await user.click(within(resumed).getByRole("button", { name: "返回会话目录" }));
+    await user.click(await screen.findByRole("button", { name: "继续处理未知结果" }));
+    resumed = screen.getByRole("group", { name: "撤销会话" });
+    await user.click(within(resumed).getByRole("button", { name: "重试原请求" }));
     expect(await screen.findByRole("heading", { name: "没有匹配的角色会话" })).toBeTruthy();
     const revoke = vi.mocked(api.revokeSession);
     expect(revoke.mock.calls[1]?.[2]).toBe(revoke.mock.calls[0]?.[2]);
     expect(api.readSession).toHaveBeenCalledWith(role.id, liveSession.id);
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "角色会话" }));
+  });
+
+  it("does not let a late empty-window continuation overwrite a newer lifecycle filter", async () => {
+    const user = userEvent.setup();
+    let resolveLate!: (value: Awaited<ReturnType<RoleAccessClient["listSessions"]>>) => void;
+    const expiredSession = { ...liveSession, id: "rs2.expired", expiresAt: "2026-09-21T08:15:00Z" };
+    const expiredItem = {
+      ...liveSessionItem,
+      session: expiredSession,
+      lifecycle: "EXPIRED" as const,
+      revokeCapability: { ...liveSessionItem.revokeCapability, resource: { kind: "ROLE_SESSION" as const, id: expiredSession.id }, available: false, restrictionReason: "SESSION_NOT_REVOCABLE" as const }
+    };
+    const lateSession = { ...liveSession, id: "rs3.late" };
+    const lateItem = { ...liveSessionItem, session: lateSession, revokeCapability: { ...liveSessionItem.revokeCapability, resource: { kind: "ROLE_SESSION" as const, id: lateSession.id } } };
+    const api = client({
+      listSessions: vi.fn().mockImplementation((_roleId, filter, after) => {
+        if (after) return new Promise((resolve) => { resolveLate = resolve; });
+        if (filter.lifecycle === "ALL") return Promise.resolve({ accountId: role.accountId, roleId: role.id, observedAt: "2026-09-21T08:30:00Z", items: [expiredItem], nextAfter: null });
+        return Promise.resolve({ accountId: role.accountId, roleId: role.id, observedAt: "2026-09-21T08:30:00Z", items: [], nextAfter: "ic1.unrevoked" });
+      })
+    });
+    render(<LocaleProvider><AccountLiveRoles client={api} entityId={role.id} onOpen={vi.fn()} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("tab", { name: "角色会话" }));
+    expect(await screen.findByRole("heading", { name: "当前扫描窗口没有匹配会话" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "继续扫描" }));
+    await user.click(screen.getByRole("button", { name: "筛选" }));
+    await user.click(screen.getByRole("combobox", { name: "会话生命周期" }));
+    await user.click(screen.getByRole("option", { name: "全部历史" }));
+    expect(await screen.findByText(expiredSession.id)).toBeTruthy();
+    await act(async () => resolveLate({ accountId: role.accountId, roleId: role.id, observedAt: "2026-09-21T08:31:00Z", items: [lateItem], nextAfter: null }));
+    await waitFor(() => expect(screen.queryByText(lateSession.id)).toBeNull());
+    expect(screen.getByText(expiredSession.id)).toBeTruthy();
+  });
+
+  it("treats an authoritative expired observation as terminal without offering another revoke", async () => {
+    const user = userEvent.setup();
+    const expiredSession = { ...liveSession, expiresAt: "2026-09-21T08:15:00Z" };
+    const expiredItem = { ...liveSessionItem, session: expiredSession, lifecycle: "EXPIRED" as const, revokeCapability: { ...liveSessionItem.revokeCapability, available: false, restrictionReason: "SESSION_NOT_REVOCABLE" as const } };
+    const api = client({
+      listSessions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, observedAt: "2026-09-21T08:10:00Z", items: [liveSessionItem], nextAfter: null }),
+      readSession: vi.fn().mockResolvedValue({ observedAt: "2026-09-21T08:30:00Z", item: expiredItem }),
+      revokeSession: vi.fn().mockRejectedValue(new Error("connection lost"))
+    });
+    render(<LocaleProvider><AccountLiveRoles client={api} entityId={role.id} onOpen={vi.fn()} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("tab", { name: "角色会话" }));
+    await user.click(await screen.findByRole("button", { name: `会话 ${liveSession.id} 的操作` }));
+    await user.click(screen.getByRole("menuitem", { name: "撤销会话" }));
+    let workflow = screen.getByRole("group", { name: "撤销会话" });
+    await user.click(within(workflow).getByRole("button", { name: "撤销会话" }));
+    workflow = await screen.findByRole("group", { name: "撤销会话" });
+    await user.click(within(workflow).getByRole("button", { name: "读取权威状态" }));
+    expect(await within(workflow).findByText("权威状态为已到期", { exact: false })).toBeTruthy();
+    expect(within(workflow).queryByRole("button", { name: "重试原请求" })).toBeNull();
   });
 
   it("shows a local LIVE error and never substitutes preview role data", async () => {
