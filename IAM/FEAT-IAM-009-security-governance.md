@@ -393,6 +393,8 @@ LoginResponse仍只允许LOGIN挑战；不能因为通用Challenge可以描述RE
 
 候选恢复码在共享USER尝试预算已提交后比较；非空畸形码也计次，错误challenge秘密不能借公开ID扣他人预算。仅检查同USER唯一有效批次固定十条不可变验证值，按原码ID做用途绑定比较，不因首个匹配提前退出；被消费码永不重新允许。并发同码只一次成功，不同码也不能越过已经消费的原LOGIN挑战。新挑战、新意图、副本、重启及因子修订推进不能返还预算。
 
+完整耗尽门禁沿既有integration owner增加`TestIAMTOTPRecoveryExhaustionPostgres`，复用真实绑定/成员/联系人准备，在专属空白PG18库由HTTP逐条消费原十码，不插入消费记录或移动数据库时钟。必须经过两个真实十分钟窗口，分别观察共享预算、过期原恢复和显式替代；全码耗尽后当前密码证明仍可读取原STARTED/SUPERSEDED元数据，但重用旧码必须拒绝且不产生Session/新意图/完成。仍有效的第十次恢复可以确认其已签发的新因子，原批次终止、新十码仅一次返回，正常密码+新TOTP重新登录；十个开始/一个完成及原通知关联完整。它不是一般三分钟绑定门禁的超时重试：独立上下文25分钟、Go27分钟、串行CI专用lane30分钟，只为不可压缩的自然时间；原其他门禁期限和CPU/内存/并发不增加。
+
 开始/确认沿Account→USER→password→MFA→原批次/因子→challenge/尝试锁序重验当前状态及锁后数据库时间。RECOVERY_REQUIRED只有与合法开始的不可变事实、已撤销原因子及尚未终止的原批次相符时才可取得LOGIN/RECOVER挑战；即使十条码均已消费，仍可查询本人原恢复元数据，但开始新意图必须另有未消费码。迁移发现的未知旧因子不能仅凭同名状态取得资格。密码代际改变、停用、另一恢复或批次终止使旧工作失效。恢复不改密码、不清除forced、不发Session；forced用户重绑后仍须走密码+新TOTP的原强制改密路径。
 
 成功开始/完成各提交一个封闭`iam.authenticator.recovery-started/recovered`本人USER tenant事实和原VERIFIED地址的非秘密通知，不修改地址/角色/Policy。RootIdentity或平台附件不阻止本人持有当前密码及原码的自助操作，但不能据此授予管理员重置他人MFA的能力；丢失全部材料的本地恢复仍独立。当前SQL/函数和Audit目录对应源码IAM38/Audit22，发布profile/revision未分配。必须证明两副本单码/双码竞争、失败预算、outbox失败回滚、开始/完成后TCP丢失、剩余码重启、新绑定后旧批次拒绝、改密/停用交错及真实通知/历史Audit，不能以纯codec或单进程通过称恢复已交付。
@@ -417,7 +419,11 @@ LoginResponse仍只允许LOGIN挑战；不能因为通用Challenge可以描述RE
 
 最终Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB全仓默认race、architecture、vet及模块校验通过；122个API tracked文件重新生成集合/字节一致，全部包Linux amd64构建和diff检查通过。数据库已无客户端、测试邮箱队列为空后，按准确ID及owner/task标签仅清理本轮两个临时容器、两个空网络和合成SMTP配置文件；本轮标签下容器/网络/卷均零残留。临时空目录删除被工具策略拒绝，保留待人工清理；未操作共享或远端服务。
 
-整片仍未验收：完整十码耗尽跨窗口路径、浏览器恢复与独立CI尚须完成；step-up/受限首次强制设置仍属后继S2，离线CLOSED/reconcile/reopen及发布profile由安装主任务独占实施，本片没有修改其契约或消费者。固定48e56cbb的[Verification35528886088](https://github.com/xiak/matrix/actions/runs/35528886088)已由GitHub API核实精确SHA及completed/failure：五项均runner_id=0、steps=0，annotation为账户付款或spending limit，未执行测试。与纯契约c13f6d11的35521839561相同，属于外部未运行，不能算代码通过或证明代码回归；不反复重跑不变的billing阻塞。安装与UX已收到固定对象、准确IAM38/Audit22形状及此验收缺口，只能选择性复用并自行验证。
+十码耗尽的独立长门禁已在另一自有空白PG18.6库通过race：顶层1229.25s、耗尽子例1202.09s、包1232.773s。原绑定已占一次额度，十次真实开始分别经过三轮共享窗口，两次间隔各不少于十分钟；全码消费后旧码401、无第十一个意图/Session/完成，查询原元数据不改权威状态。第十次已签发的恢复正常确认且重复确认拒绝，最终九条SUPERSEDED、一条COMPLETED、旧十码全部消费、新十码未消费、十个开始/一个完成及十一条原通知关联完整；随后密码加新TOTP可以登录。固定1CPU/1GiB/Pids192/max_connections16的数据库和GOMAXPROCS2/GOMEMLIMIT512MiB、race-p1不变，没有改时钟、预算或消费行。该新增证据来自同进程双Authority的真实HTTP handler与受限PG事务，不冒充独立可执行进程、SMTP或浏览器门禁；这些仍由各自原owner证明。
+
+同一受限引擎内另建空白数据库，原`TestIAMTOTPEnrollmentPostgres`串行race通过66.03s（包69.540s），保留三分钟上下文、41类readiness破坏及全部非邮件恢复场景，真实USER锁等待到期31.34s通过；两项Postfix子例因本轮没有SMTP明确SKIP，不继承前轮邮件实收为本次证据。新长门禁与原回归使用的Go源码字节完全相同，没有以短路或缩短时间换取通过。其后全仓默认race/architecture、vet、模块校验、gofmt及diff检查通过；默认外部门禁SKIP仍不算真实验收。本片仅测试、现有CI和FEAT证据，未修改生产API/SQL/schema/profile/UI。两个测试终止且实际无数据库客户端后，仅停止并删除本轮准确owner/task的临时PG容器及空网络，标签下容器/网络/卷零残留；未操作其他任务或远端资源。
+
+整片仍未验收：浏览器恢复与独立CI尚须完成；step-up/受限首次强制设置仍属后继S2，离线CLOSED/reconcile/reopen及发布profile由安装主任务独占实施，本片没有修改其契约或消费者。固定48e56cbb的[Verification35528886088](https://github.com/xiak/matrix/actions/runs/35528886088)已由GitHub API核实精确SHA及completed/failure：五项均runner_id=0、steps=0，annotation为账户付款或spending limit，未执行测试。与纯契约c13f6d11的35521839561相同，属于外部未运行，不能算代码通过或证明代码回归；不反复重跑不变的billing阻塞。安装与UX已收到固定对象、准确IAM38/Audit22形状及此验收缺口，只能选择性复用并自行验证。
 
 #### 事务、锁序与失败结果
 

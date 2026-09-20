@@ -44,14 +44,21 @@ jobs:
   authority-gates:
     name: ${{ matrix.lane }}
     runs-on: ubuntu-24.04
-    # Separate existing storage/HTTP and executable gates without concurrent
-    # databases or a larger per-runner budget. No test deadline is changed.
+    # Keep existing storage/runtime budgets and all database lanes serial.
+    # Recovery exhaustion separately observes two real ten-minute windows;
+    # its wall-clock allowance does not weaken an existing test deadline.
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix:
-        lane: [authority-storage, authority-runtime]
-    timeout-minutes: 20
+        include:
+          - lane: authority-storage
+            minutes: 20
+          - lane: authority-runtime
+            minutes: 20
+          - lane: authority-recovery-window
+            minutes: 30
+    timeout-minutes: ${{ matrix.minutes }}
     services:
       postgres:
         image: postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a
@@ -94,6 +101,9 @@ jobs:
                 matrix_iam_totp_backup_ci matrix_iam_totp_backup_process_ci matrix_iam_notification_ci matrix_iam_totp_enrollment_ci
                 matrix_iam_upgrade_compiled_ci matrix_iam_upgrade_roles_ci matrix_iam_upgrade_role_authority_ci
                 matrix_iam_upgrade_own_session_ci matrix_iam_upgrade_pre_mfa_ci matrix_iam_upgrade_mfa_ci matrix_authority_process_ci matrix_authority_process_capacity_ci)
+              ;;
+            authority-recovery-window)
+              databases=(matrix_iam_totp_recovery_exhaustion_ci)
               ;;
             *) exit 1 ;;
           esac
@@ -145,7 +155,7 @@ jobs:
           while IFS= read -r iam_test; do
             [[ "$iam_test" =~ ^Test[A-Za-z0-9_]+$ ]] || continue
             case "$iam_test" in
-              TestIAMRoleAndManagementReferencesPostgres|TestIAMOwnSessionPostgres|TestIAMOwnSessionExpiryPostgres|TestIAMOwnSessionBulkPostgres|TestIAMPasswordAttemptsPostgres|TestIAMTOTPCustodyPostgres|TestIAMTOTPBackupSnapshotPostgres|TestIAMNotificationContactPostgres) continue ;;
+              TestIAMRoleAndManagementReferencesPostgres|TestIAMOwnSessionPostgres|TestIAMOwnSessionExpiryPostgres|TestIAMOwnSessionBulkPostgres|TestIAMPasswordAttemptsPostgres|TestIAMTOTPCustodyPostgres|TestIAMTOTPEnrollmentPostgres|TestIAMTOTPRecoveryExhaustionPostgres|TestIAMTOTPBackupSnapshotPostgres|TestIAMNotificationContactPostgres) continue ;;
             esac
             printf 'IAM fixture: %s\n' "$iam_test"
             time go test -race -p 1 -count=1 ./app/service/iam/internal/integration -run "^${iam_test}$"
@@ -166,9 +176,9 @@ jobs:
           MATRIX_IAM_TOTP_BACKUP_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_backup_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_NOTIFICATION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_notification_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_TOTP_ENROLLMENT_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_enrollment_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
-        # Existing tests retain their databases/deadlines. Bulk reduction adds
-        # one isolated fixture within the same two serial twenty-minute lanes;
-        # no existing scenario or password cost is reduced.
+        # Existing tests retain their databases/deadlines in the original
+        # twenty-minute lanes; natural-window exhaustion has its own lane.
+        # No existing scenario or password cost is reduced.
         run: |
           time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
             -run '^TestIAM(OwnSession(Postgres|ExpiryPostgres|BulkPostgres)|PasswordAttemptsPostgres|TOTPCustodyPostgres|TOTPEnrollmentPostgres|TOTPBackupSnapshotPostgres|NotificationContactPostgres)$'
@@ -186,6 +196,16 @@ jobs:
           MATRIX_IAM_BACKUP_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
           MATRIX_IAM_BACKUP_POSTGRES_TASK: iam-authority-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
         run: time go test -race -p 1 -count=1 ./test/authorityprocess
+
+      - name: Saved-code exhaustion across actual authentication windows
+        if: matrix.lane == 'authority-recovery-window'
+        env:
+          MATRIX_IAM_TOTP_RECOVERY_EXHAUSTION_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_recovery_exhaustion_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          # Ten successful starts plus original enrollment require three
+          # production windows. No counter/time mutation or lowered cost.
+          time go test -race -p 1 -count=1 -v -timeout 27m ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPRecoveryExhaustionPostgres$'
 
       - name: Bounded IAM HTTP and PostgreSQL capacity observation
         if: matrix.lane == 'authority-runtime'
@@ -233,7 +253,7 @@ jobs:
 
   authority-process:
     # Preserve the branch-protection check. The matrix result is success only
-    # when BOTH named lanes succeeded; failure/cancellation/skip must close it.
+    # when ALL named lanes succeeded; failure/cancellation/skip must close it.
     needs: authority-gates
     if: always()
     runs-on: ubuntu-24.04

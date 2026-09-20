@@ -137,9 +137,11 @@ CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.m
 
 只使用本工作区、任务标签和唯一命名的数据库/容器/网络/卷/端口。Go 默认 GOMAXPROCS=2、-p 2；PG/引擎 CPU/内存/PID 限额；重型门禁串行。不得重启任何远端机器或共享服务，不使用其他 Phase 的运行实例。未运行命令不进入 runbook。
 
-独立CI的数据库门禁分为`authority-storage`与`authority-runtime`两个串行lane，`max-parallel=1`；每个lane各有20分钟预算和独立受限PG实例。前者验证Audit历史/HTTP、IAM一般事务及Role/STS矩阵和PaaS数据库，后者串行验证已发布安装器的效果前拒绝、本人Session与静默锁内到期、固定解释前驱、真实独立进程及受限容量。`authority-process`仅作为2分钟的汇总检查，两个lane都成功才成功，失败、取消或跳过均不能放行。Go和node-process仍是独立检查。
+独立CI的数据库门禁保留`authority-storage`与`authority-runtime`各20分钟预算，新增仅承载[009十码耗尽](./FEAT-IAM-009-security-governance.md#s2b受限自助恢复增量)的`authority-recovery-window`；三个lane以`max-parallel=1`串行，各有独立受限PG实例。前两者仍分别验证Audit历史/HTTP、IAM一般事务及Role/STS/PaaS，以及已发布安装器效果前拒绝、本人Session与静默锁内到期、固定解释前驱、真实独立进程及受限容量。耗尽门禁需要不可压缩的两个真实十分钟窗口，单独分配30分钟作业、27分钟Go进程、25分钟上下文；不延长任何既有fixture/作业期限、不提高CPU/内存/并发或修改生产时钟/预算。它复用现有integration测试owner，不新建框架。`authority-process`仍只是2分钟汇总，三个lane全部成功才成功，失败、取消或跳过均不能放行。Go和node-process保持独立。
 
-IAM的一般事务从实际编译测试目录枚举，除另有入口的Role/STS和三项本人Session外，每个顶层fixture以精确`-run`单独串行调用；Role/STS保留原独立调用，本人Session保留runtime lane。枚举编译失败或没有任何一般事务测试均失败关闭，不用手写固定清单漏掉后续测试。各自独立数据库及完整场景不变，默认无DSN的SKIP不能冒充真库验收。保持Go单进程默认10分钟、IAM独立组矩阵120秒/策略聚合240秒，以及原锁等待、HTTP、进程预算和fixture规模；不增大并发、资源或重试，不弱化密码计算。真实会话到期可在同一矩阵执行其他独立案例期间自然流逝，但到期前正向控制、数据库时间、到期后拒绝、历史证据及后续账号停用顺序都必须验证，不改TTL或伪造时钟。锁内到期另用原owner下的静默数据库、生产最小TTL及120秒预算，要求原事务没有序列化重试掩盖时间检查；该数据库也串行运行，不借另一个矩阵的写入获得偶然正确的结果。
+IAM的一般事务从实际编译测试目录枚举，除在runtime/自然窗口lane有准确入口的fixture及独立Role/STS外，每个顶层fixture以精确`-run`单独串行调用。枚举编译失败或没有任何一般事务测试均失败关闭；编译清单与三个选择入口联合核对，不能漏跑或把无DSN的SKIP当作该fixture验收。各自独立数据库及完整场景不变。除上述新增真实窗口门禁外，保持原Go单进程默认10分钟、IAM独立组矩阵120秒/策略聚合240秒，以及原锁等待、HTTP、进程预算和fixture规模；不增大并发、资源或重试，不弱化密码计算。真实会话到期可在同一矩阵执行其他独立案例期间自然流逝，但到期前正向控制、数据库时间、到期后拒绝、历史证据及后续账号停用顺序都必须验证，不改TTL或伪造时钟。锁内到期另用原owner下的静默数据库、生产最小TTL及120秒预算，要求原事务没有序列化重试掩盖时间检查；该数据库也串行运行，不借另一个矩阵的写入获得偶然正确的结果。
+
+本次本地核对实际编译的15项IAM integration测试：storage一般5项、独立Role1项、runtime8项、自然窗口1项，联合覆盖且互不重复；YAML的串行/期限/汇总准入断言与13段Bash语法检查通过。新自然窗口实际运行证据仅归[009](./FEAT-IAM-009-security-governance.md#s2b受限自助恢复增量)，不以工作流静态校验宣称独立CI通过。
 
 固定`159bb302fed89161c4b60afeb4a6f41f9bd99820`的[Verification35318292984](https://github.com/xiak/matrix/actions/runs/35318292984)在IAM一般事务包600.109s时触发Go默认10分钟总计时器。此时平台恢复fixture仅运行22秒，尚未达到自身3分钟期限；Role/STS与PaaS数据库后续命令没有执行，不能记为通过。失败说明五个独立fixture仍共用一个包计时器，不证明恢复并发死锁，也不能据此降低密码成本或放宽单项/20分钟作业期限。该run最终为failure：Go、node和runtime lane成功，其中本人会话三项package213.561s、保留数据/独立进程package137.821s、容量129.82s通过；汇总检查仍正确拒绝，不用其他作业成功覆盖storage失败。
 

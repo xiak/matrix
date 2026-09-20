@@ -3400,14 +3400,30 @@ func iamNotificationProcess(t *testing.T, ctx context.Context, database *pgx.Con
 // transactions. Both authority instances remain in this test process. Only
 // the explicitly configured Postfix branch proves real notification delivery.
 func TestIAMTOTPEnrollmentPostgres(t *testing.T) {
-	dsn := os.Getenv("MATRIX_IAM_TOTP_ENROLLMENT_POSTGRES_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set MATRIX_IAM_TOTP_ENROLLMENT_POSTGRES_TEST_DSN to an isolated PostgreSQL 18 database")
+	testIAMTOTPEnrollmentPostgres(t, false)
+}
+
+// Exhausting ten saved codes necessarily spans two real ten-minute windows.
+// Keep this wall-clock gate separate; do not relax the normal enrollment gate
+// or manufacture successful consumption by editing the authoritative rows.
+func TestIAMTOTPRecoveryExhaustionPostgres(t *testing.T) {
+	testIAMTOTPEnrollmentPostgres(t, true)
+}
+
+func testIAMTOTPEnrollmentPostgres(t *testing.T, exhaustion bool) {
+	t.Helper()
+	environment, prefix, lifetime := "MATRIX_IAM_TOTP_ENROLLMENT_POSTGRES_TEST_DSN", "matrix_iam_totp_enrollment_", 3*time.Minute
+	if exhaustion {
+		environment, prefix, lifetime = "MATRIX_IAM_TOTP_RECOVERY_EXHAUSTION_POSTGRES_TEST_DSN", "matrix_iam_totp_recovery_exhaustion_", 25*time.Minute
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	dsn := os.Getenv(environment)
+	if dsn == "" {
+		t.Skip("set " + environment + " to an isolated PostgreSQL 18 database")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), lifetime)
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
-	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_totp_enrollment_") {
+	if err != nil || !strings.HasPrefix(config.Database, prefix) {
 		t.Fatal("TOTP enrollment gate needs its own database")
 	}
 	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
@@ -4463,7 +4479,11 @@ func TestIAMTOTPEnrollmentPostgres(t *testing.T) {
 			t.Fatal("rolled-back schema damage changed actual authority readiness", err)
 		}
 	})
-	for _, recoveryCase := range []string{"real-postfix", "complete", "lost-start", "same-code", "same-challenge", "attempt-budget", "rollback-start", "rollback-confirm", "forced", "reset", "disable-user", "lock-expiry"} {
+	recoveryCases := []string{"real-postfix", "complete", "lost-start", "same-code", "same-challenge", "attempt-budget", "rollback-start", "rollback-confirm", "forced", "reset", "disable-user", "lock-expiry"}
+	if exhaustion {
+		recoveryCases = []string{"exhaustion"}
+	}
+	for _, recoveryCase := range recoveryCases {
 		t.Run("authenticator_recovery/"+recoveryCase, func(t *testing.T) {
 			realMail := recoveryCase == "real-postfix"
 			if realMail && startDelivery == nil {
@@ -4651,12 +4671,179 @@ func TestIAMTOTPEnrollmentPostgres(t *testing.T) {
 				}
 				defer clear(body)
 				var result iamv1.StartAuthenticatorRecoveryResponse
-				callMFA(firstHandler, http.MethodPost, "/v1/auth/challenges/"+challenge.Challenge.ID+":recover", iamv1.Secret{}, body, http.StatusOK, &result)
+				callMFA([]http.Handler{firstHandler, secondHandler}[index%2], http.MethodPost, "/v1/auth/challenges/"+challenge.Challenge.ID+":recover", iamv1.Secret{}, body, http.StatusOK, &result)
 				if result.Challenge.Purpose != "RECOVERY" || result.Challenge.NextStep != "ENROLLMENT" || result.Challenge.ID == challenge.Challenge.ID ||
 					!result.Challenge.ExpiresAt.Equal(challenge.Challenge.ExpiresAt) || bytes.Equal(result.ChallengeCredential.CopyBytes(), challenge.ChallengeCredential.CopyBytes()) {
 					t.Fatal("recovery reused a credential, extended expiry, or changed purpose")
 				}
 				return result
+			}
+			inspect := func(challenge iamv1.LoginResponse, requestID, state string) {
+				t.Helper()
+				body, err := iamv1.EncodeInspectAuthenticatorRecoveryRequest(iamv1.InspectAuthenticatorRecoveryRequest{RequestID: requestID, ChallengeCredential: challenge.ChallengeCredential})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer clear(body)
+				var result iamv1.AuthenticatorRecovery
+				callMFA(secondHandler, http.MethodPost, "/v1/auth/challenges/"+challenge.Challenge.ID+":recovery-result", iamv1.Secret{}, body, http.StatusOK, &result)
+				if result.RequestID != requestID || result.State != state {
+					t.Fatal("recovery observation differs")
+				}
+			}
+			if recoveryCase == "exhaustion" {
+				// Read the actual shared budgets without changing time or state.
+				// Password proof has its own minute window; neither a new intent
+				// nor a changed MFA revision is permission to refund either budget.
+				waitBudget := func() {
+					t.Helper()
+					announced := false
+					for {
+						var seconds float64
+						if err := admin.QueryRow(ctx, `SELECT greatest(0,
+							COALESCE((SELECT CASE WHEN used_attempts>=5 THEN extract(epoch FROM window_started_at+interval '60 seconds'-clock_timestamp()) ELSE 0 END
+								FROM iam.password_attempts WHERE tenant_id=$1 AND principal_id=$2),0),
+							COALESCE((SELECT CASE WHEN used_attempts>=5 THEN extract(epoch FROM window_started_at+interval '10 minutes'-clock_timestamp()) ELSE 0 END
+								FROM iam.totp_attempts WHERE tenant_id=$1 AND user_id=$2),0))::double precision`, member.AccountID, member.ID).Scan(&seconds); err != nil {
+							t.Fatal("observe original authentication budget", err)
+						}
+						if seconds <= 0 {
+							return
+						}
+						if !announced {
+							t.Logf("waiting for real shared authentication window: %.1fs remaining", seconds)
+							announced = true
+						}
+						timer := time.NewTimer(min(30*time.Second, time.Duration(seconds*float64(time.Second))+25*time.Millisecond))
+						select {
+						case <-ctx.Done():
+							timer.Stop()
+							t.Fatal("real authentication window did not elapse within exhaustion gate")
+						case <-timer.C:
+						}
+					}
+				}
+				var started iamv1.StartAuthenticatorRecoveryResponse
+				var firstWindow, previousWindow time.Time
+				windows := 0
+				for index := range 10 {
+					waitBudget()
+					challenge := original
+					if index > 0 {
+						challenge = loginRecovery(fmt.Sprintf("recovery-exhaust-login-%d", index), "RECOVER")
+						var expired bool
+						if err := admin.QueryRow(ctx, "SELECT clock_timestamp()>=$1::timestamptz", started.Recovery.ExpiresAt).Scan(&expired); err != nil {
+							t.Fatal(err)
+						}
+						state := "STARTED"
+						if expired {
+							state = "EXPIRED"
+						}
+						inspect(challenge, started.Recovery.RequestID, state)
+					}
+					started = start(challenge, index, fmt.Sprintf("recovery-exhaust-start-%d", index))
+					var consumed, receipts, used int
+					var window time.Time
+					if err := admin.QueryRow(ctx, `SELECT
+						(SELECT count(*) FROM iam.mfa_recovery_codes c JOIN iam.mfa_recovery_batches b ON (b.tenant_id,b.id)=(c.tenant_id,c.batch_id)
+							WHERE b.tenant_id=$1 AND b.user_id=$2 AND c.consumed_at IS NOT NULL),
+						(SELECT count(*) FROM iam.authenticator_recoveries WHERE tenant_id=$1 AND user_id=$2),
+						used_attempts,window_started_at FROM iam.totp_attempts WHERE tenant_id=$1 AND user_id=$2`, member.AccountID, member.ID).Scan(&consumed, &receipts, &used, &window); err != nil {
+						t.Fatal("observe irreversible exhaustion progress", err)
+					}
+					if consumed != index+1 || receipts != index+1 || used < 1 || used > 5 {
+						t.Fatal("saved-code consumption or shared budget differs", consumed, receipts, used)
+					}
+					if !window.Equal(previousWindow) {
+						if !previousWindow.IsZero() && window.Sub(previousWindow) < 10*time.Minute {
+							t.Fatal("recovery refunded the shared window before natural expiry")
+						}
+						if firstWindow.IsZero() {
+							firstWindow = window
+						}
+						windows++
+						previousWindow = window
+					}
+					t.Logf("irreversibly consumed saved code %d/10 through HTTP; shared TOTP window %d, used=%d", consumed, windows, used)
+				}
+				if windows != 3 || previousWindow.Sub(firstWindow) < 20*time.Minute {
+					t.Fatal("exhaustion did not cross both production ten-minute windows")
+				}
+				waitBudget()
+				fresh := loginRecovery("recovery-exhaust-inspect", "RECOVER")
+				inspect(fresh, started.Recovery.RequestID, "STARTED")
+				inspect(fresh, "recovery-exhaust-start-0", "SUPERSEDED")
+				body, err := iamv1.EncodeStartAuthenticatorRecoveryRequest(iamv1.StartAuthenticatorRecoveryRequest{RequestID: "recovery-exhaust-replay", ChallengeCredential: fresh.ChallengeCredential, RecoveryCode: bound.RecoveryCodes[0]})
+				if err != nil {
+					t.Fatal(err)
+				}
+				callMFA(firstHandler, http.MethodPost, "/v1/auth/challenges/"+fresh.Challenge.ID+":recover", iamv1.Secret{}, body, http.StatusUnauthorized, nil)
+				clear(body)
+				var closed bool
+				if err := admin.QueryRow(ctx, `SELECT
+					(SELECT used_attempts=2 AND state='REJECTED' FROM iam.totp_attempts WHERE tenant_id=$1 AND user_id=$2)
+					AND (SELECT count(*) FROM iam.authenticator_recoveries WHERE tenant_id=$1 AND user_id=$2)=10
+					AND (SELECT enrollment_state='RECOVERY_REQUIRED' AND revision=12 FROM iam.user_mfa_states WHERE tenant_id=$1 AND user_id=$2)
+					AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND status='ACTIVE')
+					AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->'actor'->>'id'=$2
+						AND event_document->>'action'='iam.authenticator.recovered')`, member.AccountID, member.ID).Scan(&closed); err != nil || !closed {
+					t.Fatal("exhausted batch granted a new ceremony, Session, or completion", err)
+				}
+				before := stateDigest()
+				inspect(fresh, started.Recovery.RequestID, "STARTED")
+				if stateDigest() != before {
+					t.Fatal("metadata observation changed exhausted authority")
+				}
+				// Exhaustion forbids another ceremony; it does not invalidate the
+				// already-admitted tenth one while its original proof is current.
+				confirmedCode := codeAt(started.Provisioning.Seed, 0)
+				confirm, err := iamv1.EncodeVerifyAuthenticationChallengeRequest(iamv1.VerifyAuthenticationChallengeRequest{RequestID: "recovery-exhaust-complete", ChallengeCredential: started.ChallengeCredential, Code: confirmedCode})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var recovered iamv1.ConfirmAuthenticatorRecoveryResponse
+				callMFA(secondHandler, http.MethodPost, "/v1/auth/challenges/"+started.Challenge.ID+":confirm-recovery", iamv1.Secret{}, confirm, http.StatusOK, &recovered)
+				callMFA(firstHandler, http.MethodPost, "/v1/auth/challenges/"+started.Challenge.ID+":confirm-recovery", iamv1.Secret{}, confirm, http.StatusUnauthorized, nil)
+				clear(confirm)
+				if recovered.Recovery.ID != started.Recovery.ID || recovered.NextStep != "REAUTHENTICATE" || len(recovered.RecoveryCodes) != 10 {
+					t.Fatal("tenth ceremony did not end in normal reauthentication")
+				}
+				fresh = loginRecovery("recovery-exhaust-normal-login", "TOTP")
+				inspect(fresh, started.Recovery.RequestID, "COMPLETED")
+				code := codeAt(started.Provisioning.Seed, 1)
+				for bytes.Equal(code.CopyBytes(), confirmedCode.CopyBytes()) {
+					select {
+					case <-ctx.Done():
+						t.Fatal("next distinct TOTP did not arrive")
+					case <-time.After(time.Second):
+						code = codeAt(started.Provisioning.Seed, 1)
+					}
+				}
+				verify, err := iamv1.EncodeVerifyAuthenticationChallengeRequest(iamv1.VerifyAuthenticationChallengeRequest{RequestID: "recovery-exhaust-totp", ChallengeCredential: fresh.ChallengeCredential, Code: code})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var authenticated iamv1.LoginResponse
+				callMFA(firstHandler, http.MethodPost, "/v1/auth/challenges/"+fresh.Challenge.ID+":verify", iamv1.Secret{}, verify, http.StatusOK, &authenticated)
+				clear(verify)
+				if authenticated.Outcome != iamv1.LoginAuthenticated || !authenticated.Credential.Present() {
+					t.Fatal("new factor after exhaustion cannot authenticate normally")
+				}
+				var intact bool
+				if err := admin.QueryRow(ctx, `SELECT
+					(SELECT count(*) FROM iam.mfa_recovery_codes c JOIN iam.mfa_recovery_batches b ON (b.tenant_id,b.id)=(c.tenant_id,c.batch_id)
+						WHERE b.tenant_id=$1 AND b.user_id=$2 AND b.revoked_at IS NOT NULL AND c.consumed_at IS NOT NULL)=10
+					AND (SELECT count(*) FROM iam.mfa_recovery_codes c JOIN iam.mfa_recovery_batches b ON (b.tenant_id,b.id)=(c.tenant_id,c.batch_id)
+						WHERE b.tenant_id=$1 AND b.user_id=$2 AND b.revoked_at IS NULL AND c.consumed_at IS NULL)=10
+					AND (SELECT count(*) FROM iam.authenticator_recoveries WHERE tenant_id=$1 AND user_id=$2 AND state='SUPERSEDED')=9
+					AND (SELECT count(*) FROM iam.authenticator_recoveries WHERE tenant_id=$1 AND user_id=$2 AND state='COMPLETED')=1
+					AND (SELECT enrollment_state='BOUND' AND revision=13 FROM iam.user_mfa_states WHERE tenant_id=$1 AND user_id=$2)
+					AND (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->'actor'->>'id'=$2 AND event_document->>'action'='iam.authenticator.recovery-started')=10
+					AND (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->'actor'->>'id'=$2 AND event_document->>'action'='iam.authenticator.recovered')=1
+					AND (SELECT count(*) FROM iam.security_notifications WHERE tenant_id=$1 AND user_id=$2 AND kind IN ('RECOVERY_STARTED','AUTHENTICATOR_RECOVERED'))=11`, member.AccountID, member.ID).Scan(&intact); err != nil || !intact {
+					t.Fatal("exhaustion lost consumption, current factor, or original security evidence", err)
+				}
+				return
 			}
 			var unavailable []http.Handler
 			if recoveryCase == "complete" {
@@ -4773,19 +4960,6 @@ func TestIAMTOTPEnrollmentPostgres(t *testing.T) {
 			}
 			for _, credential := range []iamv1.Secret{access.Credential, original.ChallengeCredential, started.ChallengeCredential} {
 				callMFA(secondHandler, http.MethodGet, "/v1/auth/me", credential, nil, http.StatusUnauthorized, nil)
-			}
-			inspect := func(challenge iamv1.LoginResponse, requestID, state string) {
-				t.Helper()
-				body, err := iamv1.EncodeInspectAuthenticatorRecoveryRequest(iamv1.InspectAuthenticatorRecoveryRequest{RequestID: requestID, ChallengeCredential: challenge.ChallengeCredential})
-				if err != nil {
-					t.Fatal(err)
-				}
-				defer clear(body)
-				var result iamv1.AuthenticatorRecovery
-				callMFA(secondHandler, http.MethodPost, "/v1/auth/challenges/"+challenge.Challenge.ID+":recovery-result", iamv1.Secret{}, body, http.StatusOK, &result)
-				if result.RequestID != requestID || result.State != state {
-					t.Fatal("recovery observation differs")
-				}
 			}
 			var pending iamv1.LoginResponse
 			if !racing {
@@ -5061,6 +5235,9 @@ func TestIAMTOTPEnrollmentPostgres(t *testing.T) {
 				t.Log("actual Maildir verification -> recovery start notice -> worker stop -> new-factor confirmation/user disable -> restricted worker restart -> historical completion notice; both DATA250 observations persisted without authentication secrets")
 			}
 		})
+	}
+	if exhaustion {
+		return
 	}
 	t.Run("issued_recovery_material_is_not_a_mutable_verifier", func(t *testing.T) {
 		for _, mutation := range []string{
