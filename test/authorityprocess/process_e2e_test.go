@@ -35,6 +35,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
@@ -123,6 +124,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 	oldMigrator := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
 	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor", "./app/service/iam/cmd/matrix-iam")
 	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-session-current", "./app/service/iam/cmd/matrix-iam")
+	currentMigrator := buildAuthorityBinary(t, ctx, root, temporary, "iam-session-current-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
 	apiDSN := runtimeDSN(t, config, "matrix_iam_api_login", processDBPassword)
 	var migrationEnvironment []string
 	for _, value := range []struct{ name, dsn string }{
@@ -130,6 +132,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		{"MATRIX_MIGRATION_IAM_API_DSN_FILE", localRecoveryMigrationDSN(t, apiDSN)},
 		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword))},
 		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword))},
+		{installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment, localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword))},
 	} {
 		migrationEnvironment = append(migrationEnvironment, value.name+"="+writeProtectedFile(t, temporary, value.name, []byte(value.dsn)))
 	}
@@ -246,15 +249,16 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 	}
 	old.stop()
 	for range 2 {
-		if err := iammigration.Up(ctx, admin); err != nil {
-			t.Fatal("apply retained own-session schema", err)
-		}
-		if err := iammigration.Verify(ctx, admin); err != nil {
-			t.Fatal("verify retained own-session schema", err)
+		for _, action := range []string{"apply", "verify"} {
+			child := startChild(t, root, currentMigrator, migrationEnvironment, action)
+			children = append(children, child)
+			if err := child.wait(30 * time.Second); err != nil {
+				t.Fatal("actual current migrator rejected retained own-session data")
+			}
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=34 AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=35 AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb)') IS NULL
 	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb,text)') IS NOT NULL
 	 AND (SELECT cardinality(proallargtypes)=25 AND proargnames[25]='credential_generation' FROM pg_proc WHERE oid='iam.lookup_session(text)'::regprocedure)
@@ -264,7 +268,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 	 FROM iam.readiness()`).Scan(&shape); err != nil || !shape {
 		t.Fatal("retained database did not replace the exact Session ABI", err)
 	}
-	current := start(currentBinary, 34)
+	current := start(currentBinary, 35)
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
 	}
@@ -329,7 +333,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 	if err := iammigration.Up(ctx, admin); err != nil {
 		t.Fatal("replay completed own-session schema", err)
 	}
-	current = start(currentBinary, 34)
+	current = start(currentBinary, 35)
 	if !bytes.Equal(completedState, identityState()) {
 		t.Fatal("restart/schema replay changed completed session state")
 	}
@@ -381,7 +385,7 @@ func TestIAMRetainedOwnSessionProcessUpgrade(t *testing.T) {
 		}
 	}
 	current.stop()
-	t.Log("actual IAM32 -> IAM34 retained sessions/individual completion, NULL lineage, forced bulk reduction, shared password attempts, exact replay/new-login survival, original receipt/canonical/proof and restart passed; no release compatibility claim")
+	t.Log("actual IAM32 -> IAM35 migrator/runtime retained sessions/individual completion, NULL lineage, forced bulk reduction, shared password attempts, exact replay/new-login survival, original receipt/canonical/proof and restart passed; no release compatibility claim")
 }
 
 func TestIAMRetainedRoleCapabilityProcessUpgrade(t *testing.T) {
@@ -419,6 +423,7 @@ func TestIAMRetainedRoleCapabilityProcessUpgrade(t *testing.T) {
 		{"MATRIX_MIGRATION_IAM_API_DSN_FILE", localRecoveryMigrationDSN(t, apiDSN)},
 		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword))},
 		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword))},
+		{installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment, localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword))},
 	} {
 		migrationEnvironment = append(migrationEnvironment, value.name+"="+writeProtectedFile(t, temporary, value.name, []byte(value.dsn)))
 	}
@@ -620,6 +625,7 @@ func TestIAMRetainedRoleAuthorityProcessUpgrade(t *testing.T) {
 		{"MATRIX_MIGRATION_IAM_API_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_api_login", processDBPassword))},
 		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword))},
 		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword))},
+		{installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment, localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword))},
 	} {
 		migrationEnvironment = append(migrationEnvironment, value.name+"="+file(value.name, value.dsn))
 	}
@@ -959,6 +965,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		{"MATRIX_MIGRATION_IAM_API_DSN_FILE", localRecoveryMigrationDSN(t, apiDSN)},
 		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", localRecoveryMigrationDSN(t, workerDSN)},
 		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, recoveryDSN)},
+		{installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment, localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword))},
 	} {
 		migrationEnvironment = append(migrationEnvironment, value.name+"="+writeProtectedFile(t, temporary, value.name, []byte(value.dsn)))
 	}
@@ -2291,7 +2298,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 34, Audit: 19, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 35, Audit: 19, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")

@@ -39,20 +39,21 @@ func VerifyInstalled(ctx context.Context, adminDSN, apiDSN, workerDSN string) er
 	)
 }
 
-// ApplyWithLocalRecovery provisions the additional installation-private
-// login. This is ordinary migration/provisioning, never a credential recovery
-// effect. Schema-only/runtime consumers of Apply do not acquire this login.
-func ApplyWithLocalRecovery(ctx context.Context, adminDSN, apiDSN, workerDSN, recoveryDSN string) error {
-	return postgresmigration.Apply(ctx, adminDSN, iammigrations.Source(), localRecoveryLogins(apiDSN, workerDSN, recoveryDSN))
+// ApplyWithLocalRecovery provisions separate installation-private recovery
+// and backup-custody logins. Migration performs neither operational effect.
+// Schema-only/runtime consumers of Apply do not acquire these capabilities.
+func ApplyWithLocalRecovery(ctx context.Context, adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN string) error {
+	return postgresmigration.Apply(ctx, adminDSN, iammigrations.Source(), localRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN))
 }
 
-func VerifyInstalledWithLocalRecovery(ctx context.Context, adminDSN, apiDSN, workerDSN, recoveryDSN string) error {
-	return postgresmigration.VerifyInstalled(ctx, adminDSN, iammigrations.Source(), localRecoveryLogins(apiDSN, workerDSN, recoveryDSN))
+func VerifyInstalledWithLocalRecovery(ctx context.Context, adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN string) error {
+	return postgresmigration.VerifyInstalled(ctx, adminDSN, iammigrations.Source(), localRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN))
 }
 
-func localRecoveryLogins(apiDSN, workerDSN, recoveryDSN string) []postgresmigration.Login {
+func localRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN string) []postgresmigration.Login {
 	return []postgresmigration.Login{
 		{Name: "matrix_iam_api_login", Group: "matrix_iam_api", DSN: apiDSN},
+		{Name: "matrix_iam_backup_custody_login", Group: "matrix_iam_backup_custody", DSN: custodyDSN},
 		{Name: "matrix_iam_credential_recovery_login", Group: "matrix_iam_credential_recovery", DSN: recoveryDSN},
 		{Name: "matrix_iam_worker_login", Group: "matrix_iam_worker", DSN: workerDSN},
 	}

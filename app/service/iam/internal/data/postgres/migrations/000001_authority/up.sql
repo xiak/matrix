@@ -1878,6 +1878,7 @@ BEGIN
             AND to_regprocedure('iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb)') IS NULL
            AND iam.password_attempt_contract_ready()
            AND iam.totp_custody_contract_ready()
+           AND iam.totp_backup_custody_contract_ready()
            AND to_regprocedure('iam.change_password(text,text,text,text,jsonb)') IS NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc AS recovery
                 WHERE recovery.oid IN (
@@ -1930,7 +1931,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           34::bigint,
+           35::bigint,
            transaction_timestamp();
 END
 $function$;

@@ -709,6 +709,21 @@ state; this is not a donor enrollment implementation, a backup snapshot lease,
 MFA recovery qualification or acceptance of an enabling release. No legacy
 library, runtime service or foreign worktree becomes a dependency.
 
+The same-snapshot backup target remains in IAM/009. It `REUSE`s fixed
+`d479e1c57b6458852dd029227d32f3d56df6c5ad`'s sole
+`api/adapter/installation/v1` custody/lease contract and its same-source
+authentication-recovery framing/validation dependency. No second digest is
+copied into IAM, and no installation profile, recovery admission or foreign
+acceptance is imported. The CLOSED-only dependency cannot authorize reopening.
+Fixed `2e6714bd95ee7c0d90a289b7b9902539717386d3` is `REUSE` for the same owner's
+bounded command, FILE environment, exact release frame and sanitized exit
+constants; it is not an IAM implementation or backup/recovery acceptance.
+It `ADAPT`s fixed `a36a35c2eddbeb7c76a8d7c140e180b24a169aab`'s authoritative
+registry/reference checks into a separate read-only snapshot boundary; the
+runtime SHARE-lock read is `REJECT` as a backup lease. A new one-shot IAM
+composition root is necessary to hold a dedicated, bounded PostgreSQL snapshot
+without giving runtime/worker/recovery identities database backup authority.
+
 ## Password and authentication-budget target review
 
 IAM/009 owns account-governed password changes and bounded multi-instance

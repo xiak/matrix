@@ -176,11 +176,12 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	apiDSN := runtimeDSN(t, config, "matrix_iam_api_login", processDBPassword)
 	workerDSN := runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword)
 	recoveryDSN := runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword)
+	custodyDSN := runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword)
 	for range 2 {
-		if err := iammigration.ApplyWithLocalRecovery(ctx, dsn, localRecoveryMigrationDSN(t, apiDSN), localRecoveryMigrationDSN(t, workerDSN), localRecoveryMigrationDSN(t, recoveryDSN)); err != nil {
+		if err := iammigration.ApplyWithLocalRecovery(ctx, dsn, localRecoveryMigrationDSN(t, apiDSN), localRecoveryMigrationDSN(t, workerDSN), localRecoveryMigrationDSN(t, recoveryDSN), localRecoveryMigrationDSN(t, custodyDSN)); err != nil {
 			t.Fatalf("provision schema4 purpose-only recovery login: %v", err)
 		}
-		if err := iammigration.VerifyInstalledWithLocalRecovery(ctx, dsn, localRecoveryMigrationDSN(t, apiDSN), localRecoveryMigrationDSN(t, workerDSN), localRecoveryMigrationDSN(t, recoveryDSN)); err != nil {
+		if err := iammigration.VerifyInstalledWithLocalRecovery(ctx, dsn, localRecoveryMigrationDSN(t, apiDSN), localRecoveryMigrationDSN(t, workerDSN), localRecoveryMigrationDSN(t, recoveryDSN), localRecoveryMigrationDSN(t, custodyDSN)); err != nil {
 			t.Fatalf("verify installed recovery login: %v", err)
 		}
 	}

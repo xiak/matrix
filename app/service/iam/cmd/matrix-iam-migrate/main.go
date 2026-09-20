@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 	"github.com/xiak/matrix/app/service/internal/migrationprocess"
 )
@@ -14,6 +15,7 @@ import (
 var dsnFileEnvironments = []string{
 	"MATRIX_MIGRATION_DATABASE_DSN_FILE",
 	"MATRIX_MIGRATION_IAM_API_DSN_FILE",
+	installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment,
 	"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE",
 	"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE",
 }
@@ -31,10 +33,10 @@ func run(ctx context.Context, arguments []string) error {
 	return migrationprocess.Run(ctx, arguments, migrationprocess.Configuration{
 		DSNFileEnvironments: dsnFileEnvironments,
 		Apply: func(ctx context.Context, values []string) error {
-			return iammigration.ApplyWithLocalRecovery(ctx, values[0], values[1], values[3], values[2])
+			return iammigration.ApplyWithLocalRecovery(ctx, values[0], values[1], values[4], values[3], values[2])
 		},
 		Verify: func(ctx context.Context, values []string) error {
-			return iammigration.VerifyInstalledWithLocalRecovery(ctx, values[0], values[1], values[3], values[2])
+			return iammigration.VerifyInstalledWithLocalRecovery(ctx, values[0], values[1], values[4], values[3], values[2])
 		},
 	})
 }

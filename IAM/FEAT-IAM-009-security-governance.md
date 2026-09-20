@@ -181,7 +181,7 @@ S2a后继材料基础片由`api/iam/v1/totp_wrapping.go`单一拥有私有keyrin
 
 #### S2a运行时托管准备
 
-S2a运行时后继已在本分支实现并通过下述本地门禁，独立CI仍待固定提交后确认：网络进程必须读取已冻结的独立TOTP文件；启动时以封存bootstrap tuple注册非秘密材料承诺，不能生成替代秘密。沿原owner增加`000012_totp`是因为多key注册历史及种子持久状态与AccessKey具有不同的用途/退役边界，不复制其单key表或新建服务。源码IAM34/Audit19，发布profile/revision不变。
+S2a运行时后继已在本分支实现并通过下述本地门禁及固定提交的独立CI：网络进程必须读取已冻结的独立TOTP文件；启动时以封存bootstrap tuple注册非秘密材料承诺，不能生成替代秘密。沿原owner增加`000012_totp`是因为多key注册历史及种子持久状态与AccessKey具有不同的用途/退役边界，不复制其单key表或新建服务。该固定片源码IAM34/Audit19，发布profile/revision不变。
 
 本片`register_totp_keyset(jsonb)→void`仅接收`scope/keysetRevision/activeKeyId/contentDigest/keys`；每key为`keyId/formatVersion/materialCommitment`，所有摘要由已验证的私有codec计算。SQL可信边界仍是持有材料的IAM进程，不宣称数据库可独立验证32字节原密钥。封存scope必须精确匹配，注册与读请求串行保持不可变key身份/同revision集合、单调revision；没有数据/副本/备份退役证明前不允许去掉任何已注册key。精确重放不新增记录。该函数没有在线HTTP或worker入口。
 
@@ -189,13 +189,13 @@ S2a运行时后继已在本分支实现并通过下述本地门禁，独立CI仍
 
 该片必须在原测试owner证明：私有文件/用途/scope错误及缺失关闭；真实受限PG首次注册/等值重放/升级revision、同ID换材料/同revision变体/退役/越安装拒绝且无部分注册；另一个真实IAM副本观察注册推进后拒绝旧材料；真实登录和旧Session请求对未知认证器状态失败，不只测ready；登记竞争与读取锁顺序、RLS/ACL/不可变历史、重启/双迁移保留，以及原密码/Role/AccessKey/历史Audit回归。仅测试插入的不可用种子记录是负向边界夹具，不是已实现的绑定路径；没有真实绑定/OTP消费/通知/恢复门禁仍不能称MFA可用。
 
-本地真实PostgreSQL18.6证据沿原owner：独立2逻辑CPU/1GiB/24进程限制、16连接/64MiB shared buffers；Go2/512MiB、race/-p1串行。`TestIAMTOTPCustodyPostgres`最终2.52s覆盖精确注册/变体无部分写、读锁阻止登记越过在途请求、两个不同同revision集合并发仅一方成功、真实密文REVOKED行使登录/Session/重启失败关闭和双迁移保留。原IAM HTTP累计104.94s；实际固定`7cf857bb` IAM32 executable→IAM34保留Session/原receipt/canonical/proof及重启最终15.13s。独立IAM/Audit/PaaS与两个dispatcher门禁最终106.91s，包括真实受限登录、两IAM及新IAM进程推进集合revision后旧两个进程的真实Login/Session均503、匹配材料实例仍接受原有效Session、重启后原业务和历史投递继续。没有借用Docker/远端/其他任务资源；这些源码实验不证明新发布profile或备份恢复兼容。最终同生产源码的clean-export全仓race/架构、vet、模块校验、728文件生成清单/哈希一致性及Linux amd64构建通过；独立CI尚待确认。
+本地真实PostgreSQL18.6证据沿原owner：独立2逻辑CPU/1GiB/24进程限制、16连接/64MiB shared buffers；Go2/512MiB、race/-p1串行。`TestIAMTOTPCustodyPostgres`最终2.52s覆盖精确注册/变体无部分写、读锁阻止登记越过在途请求、两个不同同revision集合并发仅一方成功、真实密文REVOKED行使登录/Session/重启失败关闭和双迁移保留。原IAM HTTP累计104.94s；实际固定`7cf857bb` IAM32 executable→IAM34保留Session/原receipt/canonical/proof及重启最终15.13s。独立IAM/Audit/PaaS与两个dispatcher门禁最终106.91s，包括真实受限登录、两IAM及新IAM进程推进集合revision后旧两个进程的真实Login/Session均503、匹配材料实例仍接受原有效Session、重启后原业务和历史投递继续。没有借用Docker/远端/其他任务资源；这些源码实验不证明新发布profile或备份恢复兼容。最终同生产源码的clean-export全仓race/架构、vet、模块校验、728文件生成清单/哈希一致性及Linux amd64构建通过。
 
-该准备片固定`a36a35c2eddbeb7c76a8d7c140e180b24a169aab`已推送；精确[Verification35491802049](https://github.com/xiak/matrix/actions/runs/35491802049)当前queued，完成前不作为独立CI验收结论。
+该准备片固定`a36a35c2eddbeb7c76a8d7c140e180b24a169aab`已推送；2026-09-20经GitHub API核实精确[Verification35491802049](https://github.com/xiak/matrix/actions/runs/35491802049)及go、node-process、authority-storage、authority-runtime、authority-process全部completed/success。它不证明后继同快照备份、实际MFA或安装恢复已验收。
 
-#### S2a同快照备份交接目标
+#### S2a同快照备份交接
 
-该后继切片尚未实现/验收。按与installation冻结的唯一`api/adapter/installation/v1`契约，只消费固定`d479e1c57b6458852dd029227d32f3d56df6c5ad`的非秘密custody/lease及其同源依赖，不搬动安装WIP或引入其发布profile。custody绑定封存installation/bootstrap、同快照观察到的keysetRevision及按keyId排序唯一的`keyId/formatVersion/commitment`；observed revision不是退役权或强制当前集合回退。显式空数组仅表示IAM从该快照确证无密文引用，缺失/null不能冒充空。snapshotId仅是有期限的PostgreSQL运行句柄，不进入持久备份、Audit或摘要。
+该后继切片已实现，下述聚焦真库/进程及累计本地门禁通过，独立CI待固定提交确认。按与installation冻结的唯一`api/adapter/installation/v1`契约，只消费固定`d479e1c57b6458852dd029227d32f3d56df6c5ad`的非秘密custody/lease及其同源依赖、固定`2e6714bd95ee7c0d90a289b7b9902539717386d3`的协议常量，不搬动安装WIP或引入其发布profile。custody绑定封存installation/bootstrap、同快照观察到的keysetRevision及按keyId排序唯一的`keyId/formatVersion/commitment`；observed revision不是退役权或强制当前集合回退。显式空数组仅表示IAM从该快照确证无密文引用，缺失/null不能冒充空。snapshotId仅是有期限的PostgreSQL运行句柄，不进入持久备份、Audit或摘要。
 
 IAM新增独立目的的一次性入口`matrix-iam-backup-custody snapshot`，不用普通API、worker或凭据恢复登录。仅读取`MATRIX_IAM_BACKUP_CUSTODY_DATABASE_DSN_FILE`，不读取keyring、bootstrap秘密或恢复authority。封闭role/login为`matrix_iam_backup_custody`/`matrix_iam_backup_custody_login`，仅允许`iam.read_totp_backup_custody()`；没有表读写、注册、认证或恢复权限。原迁移入口新增`MATRIX_MIGRATION_IAM_BACKUP_CUSTODY_DSN_FILE`只配置和核对该登录，迁移不执行备份或恢复效果。新增命令保护独立数据库权限与长存活只读事务边界，不另建服务、通用lease框架或第二摘要实现。
 
@@ -203,7 +203,23 @@ helper持有单一REPEATABLE READ READ ONLY事务，核对实际注册与全部�
 
 installation负责真实consumer、签名打包及非秘密custody封存：在helper仍存活的同一10分钟内完成导入snapshot的pg_dump、校验dump、核对本地受保护keyring为所需集合的可信超集，然后写精确RELEASE并关闭stdin、等待0。任何一边失败/未知都不得发布backup manifest，partial清理由安装自己的owner验证。这不是当前恢复资格证明或重新开放认证许可。
 
-源码目标IAM35/Audit19，不分配发布revision、不改变原lookup_service/claim/Session/Audit canonical。原owner门禁必须证明实际受限登录和严格权限、同一snapshot下登记/因子并发变更不混入摘要/pg_dump、显式空/缺引用/错格式关闭、lease存活和释放/提前EOF/额外输入/超时/中断及秘密扫描；至少真实pg_dump导入和恢复查询相符，不能只检查snapshot字符串。API codec通过、Go假事务或迁移重复通过都不能替代该实际运行与安装恢复验收。
+源码IAM35/Audit19，不分配发布revision、不改变原lookup_service/claim/Session/Audit canonical。原owner门禁必须证明实际受限登录和严格权限、同一snapshot下登记/因子并发变更不混入摘要/pg_dump、显式空/缺引用/错格式关闭、lease存活和释放/提前EOF/额外输入/超时/中断及秘密扫描；至少真实pg_dump导入和恢复查询相符，不能只检查snapshot字符串。API codec通过、Go假事务或迁移重复通过都不能替代该实际运行与安装恢复验收。
+
+实现复用同一`totp_keyset_snapshot()`内部校验，运行请求继续持有原SHARE锁；备份使用只读MVCC视图，不阻塞后继登记/因子写入。目的限定函数检查真实session_user、角色闭包、非管理员属性及无其他IAM函数/表权限，readiness/verify同时核对精确函数与ACL形状。helper同时设置数据库statement/idle-in-transaction上限，进程失联不能无限保留导出事务。安装URI沿原pgxpool配置语法解析但只创建一条连接，pool参数不下发为PostgreSQL设置；不能从不完整URI或环境补另一份凭据/目标。
+
+原共享迁移进程只容纳4个私有DSN，本片新增第五个目的后将其上限精确改为5，仍要求完整、唯一、排序的FILE声明；IAM登录库存也保持原排序规则。六个、重复、乱序或缺少所需文件均在迁移调用前拒绝，不开放通用角色/DSN请求。真实进程门禁使用实际新迁移器apply两次及verify，旧IAM32保留数据也走实际当前迁移器；不能用仅执行Up的成功替代这一入口。备份登录和普通API/worker/恢复登录保持分离，既有共享驱动不执行任何备份或恢复效果。
+
+2026-09-20本地真实PG18.6、原2逻辑CPU/1GiB/24进程与16连接限额，Go2/512MiB、race-p1串行：
+
+| 本地门禁 | 实际结果与边界 |
+| --- | --- |
+| 同快照数据7.06s | 旧空视图不混入后继revision/真实REVOKED及PENDING密文，新视图准确要求两把原材料；释放后句柄失效、额外函数/直接登录表权限失败关闭、双迁移保留及DB自身终止孤儿lease。故意损坏的保留记录即使失去NOT NULL约束也不能把缺nonce解释为合法备份依赖；该管理级故障夹具只在自有测试库内使用。 |
+| 一次性真实进程20.10s | 实际新迁移器apply两次/verify、专用登录、pg_dump/pg_restore与摘要引用相符、额外写入不进入原dump；严格控制帧/EOF、非专用DSN、断DB及杀本任务helper均不能成功，失联快照不可导入且不残留客户端。 |
+| 实际IAM32→35迁移/运行16.51s | 固定7cf857bb旧executable产生原数据，当前真实迁移器保留Session/原receipt/canonical/proof；等值bootstrap、双迁移与重启不复活已终止状态。不是逐个未发布schema升级或release准入证明。 |
+| 双权限库与完整独立进程 | 双schema/受限权限/不可变记录7.37s；IAM双实例、Audit、PaaS、双dispatcher84.50s。最后进程组合连同新helper场景的package108.075s全部通过，保留旧材料实例拒绝、原业务/历史投递和实际runtime登录检查。 |
+| 默认累计门禁 | clean-export全仓race/architecture、vet、模块验证、API全部120文件生成清单与SHA256一致、Linux amd64构建通过；最终进程中断/缺nonce安全增量另过真库race，并在再次干净导出中通过IAM、共享迁移、authorityprocess、architecture的race/vet和IAM Linux构建。外部环境默认SKIP不计真运行。 |
+
+新测试文件仍归原authorityprocess package，单独保护其此前没有的非HTTP私有管道与真实快照交接，不新增测试框架。进程中的不透明密文是备份引用负向夹具，不是已实现绑定/解密证据；数据门禁另使用真实加密codec。失败门禁不回填通过：首轮pool参数被单连接解析器当GUC，随后真实迁移入口又发现第五份配置超过原上限/排序规则；按冻结用途修复并补默认负向测试，再分别通过上述新库门禁。未放宽权限、唯一性、期限或跨profile准入。这些门禁不替代签名备份consumer、当前恢复资格或重新开放认证的验收。
 
 #### 不同状态不能混用
 
