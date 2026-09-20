@@ -11,7 +11,9 @@
 - Latest pushed implementation: **ad93b84fa1cbe902b148e62a9d0f0924a5473a98**,
   first S2a internal TOTP and purpose-bound recovery-code primitives.
   [Verification35484114635](https://github.com/xiak/matrix/actions/runs/35484114635)
-  was confirmed for the exact SHA but only QUEUED. No CI success claim.
+  was confirmed for the exact SHA. Go/node-process completed successfully;
+  authority-storage was running and authority-runtime queued. No overall
+  CI success claim.
 - This slice changes only authority credential/TOTP code and tests plus009
   and adoption. No public API, SQL, current authentication path, UI,
   installation, workflow, schema or release profile change.
@@ -66,14 +68,19 @@ planned, not registered/granted. Approval to continue does not mean shared
 implementation has been accepted or that these APIs are currently usable.
 
 On2026-09-20 fixed design6fa39fda was sent to existing peers for bounded
-contract review only; no code/environment changes requested:
+contract review; following explicit user approval, each now has its own
+bounded work below. No foreign WIP/environment is read or modified:
 - Phase3 task01a04149-5dbb-7300-9e4c-31d9e85c8ada returned a read-only review.
-  Its fixed installation source16b42679 offers a REFERENCE/ADAPT pattern,
-  not an imported implementation or new editing window. Exact source still
-  needs local fixed-object inspection before adoption.
+  Its fixed installation source16b42679 was inspected at credentials.go,
+  topology.go and the backup commitment test, and recorded as REFERENCE.
+  It owns protected material/configuration and closed restore isolation.
+  It may own the concrete api/adapter/installation/v1 gate contract; IAM
+  owns TOTP private API/codec and authentication rules. No new revision yet.
 - UX/UI工程师01a07b21-9a0d-7fd0-b090-7827ce18262e received the interaction
-  proposal. Its turn completed but no review text was returned. Do not invent
-  agreement. It owns UI/browser in feat/cloud-console-ux; no UI edits here.
+  proposal. Its later request to do high-fidelity MOCK has been answered:
+  restricted login/enrollment/recovery/error flows and S1b are appropriate,
+  wire enums and mail/recovery integrations remain unfrozen. MOCK is not
+  real MFA acceptance. It owns UI/browser; no UI edits here.
 
 Phase3 confirmed four unfrozen dependencies:
 1. Dedicated TOTP keyring bound to installationId AND bootstrapDigest,
@@ -86,16 +93,19 @@ Phase3 confirmed four unfrozen dependencies:
 3. Reopening requires trustworthy post-backup security evidence OR independently
    authorized invalidation/rebinding. Neither exists. Original password-only
    recovery does not authorize MFA recovery or prove no later revocation.
-4. FEAT012 real notification owner/channel/verified recipient is absent;
-   Deferred is not delivery. Audit or a mock inbox cannot substitute.
+4. FEAT012 S1 now owns minimal security email, with installation protected
+   SMTP configuration. No real channel, verified recipient or delivery yet.
+   Audit or a mock inbox cannot substitute.
 
-Two concise async user questions were submitted and remain unanswered:
-- authorize a minimal verified-address/SMTP/retry security-notification slice
-  here, with protected configuration by installation, or keep it deferred;
-- authorize a bounded original protected-root MFA-recovery/restore-isolation
-  increment jointly with installation, or retain recovery refusal.
-Do not treat preselected answers as approval. Independent internal work may
-continue; do not commission external implementation or open MFA prematurely.
+The user explicitly answered YES to both async questions: implement minimal
+verified-address/SMTP/retry security email, and jointly implement bounded
+original protected-primary MFA recovery/restore isolation. These approvals
+are not pending. FEAT009/012 now own their scope; current recovery evidence,
+same-snapshot custody, gate and notification ABIs/runtime remain unaccepted.
+A backup-external long-lived capability proves source, not absence of later
+User/Account disablement or platform revocation. Do not reopen from old DB
+expected values. Do not claim a preparation release is safe merely because
+it understands an OPEN marker but ignores later MFA/Session state.
 No new tasks/subagents, new generic recovery system, blanket SYSTEM actor,
 Refresh Token or physical Identity/STS split.
 
