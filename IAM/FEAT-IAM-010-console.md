@@ -41,6 +41,14 @@ Role、身份提供商、联合身份、企业账号和 API 密钥均为详情�
 
 身份安全概览与报告继续归 IAM-009 S4 的真实治理契约所有。当前控制台只从隔离体验仓库派生本地建议，明确区分“需复核、已配置、不适用、状态未知”，且把设置开关与认证器绑定证据分开；缺少认证器、最近使用或采集水位时必须为未知，不能猜成 `false`、安全或从未使用。报告只导出字段白名单中的 MOCK 快照，不建立真实报告 API、风险分或自动处置能力。
 
+### 本人安全通知地址的隔离体验
+
+本人第一条安全通知地址遵循 IAM-012 S1b 的固定设计来源 `8ccc632796727261563c952a89e4dfd3ce947144`，但该来源尚未固定公开 HTTP，也未交付持久化或发送 worker。因此控制台只在 DEV 体验仓库提供独立、明确标记的页内 MOCK：本人输入地址与当前密码，完成八位邮件验证码确认后查看本页状态；刷新即丢失，不调用 IAM、不写浏览器存储，也不发送真实邮件。
+
+该地址只承载安全通知，不是登录名、恢复通道、MFA 因子或授权依据。第一片不提供替换、删除、管理员代绑、Account/User/SMTP/模板选择器。体验文案保留 `PENDING`、`IN_FLIGHT`、`RETRY_WAIT`、`ACCEPTED`、`FAILED`、`EXPIRED` 的语义，其中 `ACCEPTED` 只表示通知通道接受了请求，不能呈现为已投递、已送达或已读。真实客户端只能在 IAM-012 固定公开 HTTP 后另片接入；任何网络、5xx、协议或 404 结果都不得回退这个 MOCK。
+
+该流程是设置页中的独立业务区块，不并入个人认证器或 Account 安全策略。进入、返回、取消和完成拥有自己的焦点生命周期；固定标题与说明立即渲染，只有将来真实读取的数据区才允许使用局部延迟反馈，不以整页骨架替换静态结构。
+
 ### 只读权限能力目录
 
 策略工作区以独立“权限能力目录”页签消费 `GET /api/iam/v1/authorization-profiles`。请求不携带 Account、修订、分页、历史或正文 selector；客户端严格验证完整列表、产品顺序、Action 命名空间、scope、资源 shape、可信条件组合及内容摘要格式，并再次核对响应 Account。目录描述平台登记的产品能力，不是当前身份权限，也不是租户产品发布入口；浏览器不重算后端权威摘要，也不从目录推导最终 Allow。
@@ -118,6 +126,17 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - 组件行为验证产品详情在内容区展开而非 Dialog，进入聚焦详情标题，返回聚焦并带回原产品；策略目录状态在页签切换后保留。隔离 DEV 目录使用同一组件与契约形状，同时明确声明 MOCK 不可信、不授权。
 - 同一提交的完整前端、主题、生产导出、嵌入等价及 Go UI 宿主门禁证据由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；本节只接受目录契约和 IAM 交互结果。
 - DEV 浏览器在桌面和 `360 × 800` 验证页签切换无整页骨架闪动、详情进入/返回、移动堆叠与焦点滚动；小屏 document/body 均为 `clientWidth == scrollWidth == 360`，无 Dialog，控制台 warning/error 为空。该结果是隔离 MOCK UX 验收，不冒充固定 IAM 真实进程浏览器验收。
+
+### 本人安全通知地址 MOCK 的开发验收证据
+
+2026-09-20，前端实现固定在已推送的
+[`13a24a34af7da058317b84917ce7be348ae8b85c`](https://github.com/xiak/matrix/commit/13a24a34af7da058317b84917ce7be348ae8b85c)，
+设计来源为本文件记录的 IAM-012 S1b 固定提交。
+
+- 原重复占位项被独立安全通知区块替换；本人可在内容区完成地址/当前密码、八位验证码和确认摘要三步，不打开 Dialog，也不改变个人 MFA 或 Account 安全策略状态。
+- 行为用例证明错误密码、错误验证码、取消与完成边界；完成只保存在当前页面实例，并明确显示 MOCK、无 IAM 写入、无真实 SMTP，以及 `ACCEPTED` 不等于已投递或已读。
+- 进入流程聚焦标题，取消恢复稳定触发器，完成聚焦确认摘要；桌面和 `360 × 800` DEV 浏览器均无页面横向溢出，紧凑页面 document/body 均为 `clientWidth == scrollWidth == 360`，无 Dialog，控制台 warning/error 为空。
+- 完整前端、主题、生产导出、嵌入等价及 Go UI 宿主门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；本证据不宣称 IAM-012 已有公开 HTTP、持久化、发送 worker 或真实投递验收。
 
 公共 UI、生产导出、完整前端及 Go 回归证据只归
 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-user-boundarynavigation-development-evidence)
