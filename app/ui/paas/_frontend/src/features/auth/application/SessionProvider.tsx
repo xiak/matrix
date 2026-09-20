@@ -22,11 +22,13 @@ import { OwnSessionsProvider } from "./OwnSessionsProvider";
 
 export type SessionErrorCode = "invalidCredentials" | "tooManyAttempts" | "loginUnavailable"
   | "invalidCurrentPassword" | "passwordPolicy" | "passwordConflict" | "passwordUnavailable" | "logoutUnavailable";
+export type SessionNoticeCode = "passwordChanged";
 
 type SessionContextValue = {
   phase: SessionPhase;
   current: AuthenticatedSession | null;
   error: SessionErrorCode | null;
+  notice: SessionNoticeCode | null;
   clearError(): void;
   login(loginName: string, password: string): Promise<LoginOutcome | null>;
   changePassword(currentPassword: string, newPassword: string): Promise<boolean>;
@@ -76,13 +78,15 @@ export function SessionProvider({
   const [credential, setCredential] = useState<string | null>(null);
   const credentialRef = useRef<string | null>(null);
   const [error, setError] = useState<SessionErrorCode | null>(null);
+  const [notice, setNotice] = useState<SessionNoticeCode | null>(null);
   const clearError = useCallback(() => { setError(null); }, []);
 
-  const forget = useCallback(() => {
+  const forget = useCallback((nextNotice: SessionNoticeCode | null = null) => {
     credentialRef.current = null;
     setCredential(null);
     setCurrent(null);
     setError(null);
+    setNotice(nextNotice);
     setPhase("anonymous");
   }, []);
 
@@ -105,6 +109,7 @@ export function SessionProvider({
   const login = useCallback(async (loginName: string, password: string) => {
     setPhase("authenticating");
     setError(null);
+    setNotice(null);
     try {
       const result = await repository.login({ loginName, password });
       credentialRef.current = result.credential;
@@ -136,14 +141,16 @@ export function SessionProvider({
     setError(null);
     try {
       await repository.changePassword(credential, { currentPassword, newPassword });
-      setPhase("authenticated");
+      // A forced-password-change credential is intentionally never upgraded
+      // into a normal console session. The user must authenticate afresh.
+      forget("passwordChanged");
       return true;
     } catch (changeError) {
       setError(passwordChangeError(changeError));
       setPhase("password-change-required");
       return false;
     }
-  }, [credential, current, phase, repository]);
+  }, [credential, current, forget, phase, repository]);
 
   const logout = useCallback(async () => {
     if (!credential) {
@@ -175,12 +182,13 @@ export function SessionProvider({
     phase,
     current,
     error,
+    notice,
     clearError,
     login,
     changePassword,
     logout,
     expire
-  }), [changePassword, clearError, current, error, expire, login, logout, phase]);
+  }), [changePassword, clearError, current, error, expire, login, logout, notice, phase]);
   const credentialValue = useMemo(() => ({ credential }), [credential]);
 
   return (

@@ -8,6 +8,25 @@ afterEach(async () => {
 });
 
 describe("preview own login sessions", () => {
+  it("ends the restricted credential after a forced password change", async () => {
+    const login = await previewIamRepository.login({
+      loginName: "preview-admin",
+      password: "Initial-Admin-Password-49!"
+    });
+
+    await previewIamRepository.changePassword(login.credential, {
+      currentPassword: "Initial-Admin-Password-49!",
+      newPassword: "Changed-Admin-Password-73!"
+    });
+
+    await expect(previewIamRepository.sessions!.list(login.credential)).rejects.toMatchObject({ status: 401 });
+    const nextLogin = await previewIamRepository.login({
+      loginName: "preview-admin",
+      password: "Changed-Admin-Password-73!"
+    });
+    expect(nextLogin.credential).not.toBe(login.credential);
+  });
+
   it("models login sessions rather than physical devices or online activity", async () => {
     const page = await previewIamRepository.sessions!.list(previewCredential);
     expect(page.currentSessionId).toBe("session-ux-preview");

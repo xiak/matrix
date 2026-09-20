@@ -50,8 +50,9 @@ describe("branded sign-in flows", () => {
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledExactlyOnceWith("/console/resources/", { scroll: false }));
   });
 
-  it.each(["/console/", "/console/resources/"])("returns an IAM user to %s only after required password replacement", async (returnTo) => {
-    const { user, iam } = open(repository(true), returnTo);
+  it.each(["/console/", "/console/resources/"])("requires a fresh sign-in before returning an IAM user to %s after password replacement", async (returnTo) => {
+    const iam = repository(true);
+    const { user } = open(iam, returnTo);
     await user.click(screen.getByRole("tab", { name: "IAM 子账号" }));
     await user.type(screen.getByLabelText("子账号登录名"), "developer@tenant-a");
     await user.type(screen.getByLabelText("密码", { exact: true }), "Initial-Password-49!");
@@ -61,7 +62,13 @@ describe("branded sign-in flows", () => {
     await user.type(screen.getByLabelText("当前初始密码"), "Initial-Password-49!");
     await user.type(screen.getByLabelText("新密码", { exact: true }), "Permanent-Password-49!");
     await user.type(screen.getByLabelText("确认新密码"), "Permanent-Password-49!");
-    await user.click(screen.getByRole("button", { name: "保存并进入控制台" }));
+    vi.mocked(iam.login).mockResolvedValue({ credential: "fresh-memory-only-token", mustChangePassword: false, session });
+    await user.click(screen.getByRole("button", { name: "保存并重新登录" }));
+    expect(await screen.findByRole("heading", { name: "登录控制台" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("受限会话已经结束");
+    expect(navigation.replace).not.toHaveBeenCalled();
+    await user.type(screen.getByLabelText("密码", { exact: true }), "Permanent-Password-49!");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledExactlyOnceWith(returnTo, { scroll: false }));
     expect(iam.changePassword).toHaveBeenCalledOnce();
   });
@@ -178,7 +185,7 @@ describe("branded sign-in flows", () => {
     expect((screen.getByLabelText("密码", { exact: true }) as HTMLInputElement).value).toBe("");
     expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe(screen.getByRole("tab", { name: "IAM 子账号" }).id);
   });
-  it("requires matching passwords on first login, then enters the requested console route", async () => {
+  it("requires matching passwords on first login, then returns to normal sign-in", async () => {
     const { user, iam } = open(repository(true));
     await user.type(screen.getByLabelText("密码", { exact: true }), "Initial-Password-49!");
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
@@ -187,13 +194,15 @@ describe("branded sign-in flows", () => {
     await user.type(screen.getByLabelText("当前初始密码"), "Initial-Password-49!");
     await user.type(screen.getByLabelText("新密码", { exact: true }), "Permanent-Password-49!");
     await user.type(screen.getByLabelText("确认新密码"), "Different-Password-49!");
-    await user.click(screen.getByRole("button", { name: "保存并进入控制台" }));
+    await user.click(screen.getByRole("button", { name: "保存并重新登录" }));
     expect(screen.getByRole("alert").textContent).toContain("不一致");
     expect(iam.changePassword).not.toHaveBeenCalled();
     await user.clear(screen.getByLabelText("确认新密码"));
     await user.type(screen.getByLabelText("确认新密码"), "Permanent-Password-49!");
-    await user.click(screen.getByRole("button", { name: "保存并进入控制台" }));
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/console/resources/", { scroll: false }));
+    await user.click(screen.getByRole("button", { name: "保存并重新登录" }));
+    expect(await screen.findByRole("heading", { name: "登录控制台" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toContain("请使用新密码重新登录");
+    expect(navigation.replace).not.toHaveBeenCalled();
     expect(iam.changePassword).toHaveBeenCalledWith("memory-only-token", { currentPassword: "Initial-Password-49!", newPassword: "Permanent-Password-49!" });
   });
   it("retains a restricted session after failed revocation and shows translated feedback", async () => {

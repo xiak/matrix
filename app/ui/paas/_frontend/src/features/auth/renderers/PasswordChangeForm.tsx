@@ -1,15 +1,13 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { ArrowRight, LoaderCircle } from "lucide-react";
 import { Button, FormField, Alert, PasswordInput } from "@ui/xiak";
 import { useSession } from "../application/SessionProvider";
 import styles from "./LoginRenderer.module.css";
 
-export function PasswordChangeForm({ returnTo }: { returnTo: string }) {
-  const router = useRouter();
+export function PasswordChangeForm() {
   const session = useSession();
   const t = useTranslations("Auth");
   const [currentPassword, setCurrentPassword] = useState("");
@@ -29,7 +27,6 @@ export function PasswordChangeForm({ returnTo }: { returnTo: string }) {
     if (accepted) {
       setNewPassword("");
       setConfirmedPassword("");
-      router.replace(returnTo, { scroll: false });
     }
   }
 
