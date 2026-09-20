@@ -3,10 +3,10 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-09-16
+- Updated: 2026-09-20
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `ae7d2363055cb38cd9dd12fbfc470c43f3b0ca64`
+- Pushed UI source: `63a6eaed61bb9be3cb450dc9e5c7c48c9d04ccac`
 
 ## Authoritative route
 
