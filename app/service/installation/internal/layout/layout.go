@@ -39,6 +39,7 @@ const (
 	IAMAPI                = "secrets/database/iam-api-dsn"
 	IAMWorker             = "secrets/database/iam-worker-dsn"
 	IAMCredentialRecovery = "secrets/database/iam-credential-recovery-dsn"
+	IAMBackupCustody      = "secrets/database/iam-backup-custody-dsn"
 	AuditRuntime          = "secrets/database/audit-runtime-dsn"
 	PaaSAPI               = "secrets/database/paas-api-dsn"
 	PaaSWorker            = "secrets/database/paas-worker-dsn"

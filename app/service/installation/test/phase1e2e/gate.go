@@ -690,7 +690,7 @@ func (value *gate) recoverOriginalPlatformCredentials(ctx context.Context, oldBe
 			clear(content)
 		}
 	}()
-	for _, relative := range []string{layout.IAMBootstrap, layout.IAMLocalRecoveryAuthority, layout.IAMCredentialRecovery} {
+	for _, relative := range []string{layout.IAMBootstrap, layout.IAMLocalRecoveryAuthority, layout.IAMCredentialRecovery, layout.IAMBackupCustody} {
 		content, err := os.ReadFile(filepath.Join(value.config.root, filepath.FromSlash(relative)))
 		if err != nil || len(content) == 0 {
 			return nil, fail("credential-recovery-protected-baseline")

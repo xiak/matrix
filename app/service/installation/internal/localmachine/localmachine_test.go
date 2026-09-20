@@ -27,6 +27,7 @@ import (
 	"time"
 
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
@@ -730,6 +731,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		{layout.IAMAPI, "matrix_iam_api_login"},
 		{layout.IAMWorker, "matrix_iam_worker_login"},
 		{layout.IAMCredentialRecovery, "matrix_iam_credential_recovery_login"},
+		{layout.IAMBackupCustody, "matrix_iam_backup_custody_login"},
 		{layout.AuditRuntime, "matrix_audit_runtime_login"},
 		{layout.PaaSAPI, "matrix_paas_api_login"},
 		{layout.PaaSWorker, "matrix_paas_worker_login"},
@@ -903,7 +905,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 			if mount.Type != "bind" {
 				continue
 			}
-			for _, private := range []string{layout.IAMCredentialRecovery, layout.IAMLocalRecoveryAuthority, layout.IAMLocalRecoveryRequest, layout.IAMLocalRecoveryQuery} {
+			for _, private := range []string{layout.IAMCredentialRecovery, layout.IAMBackupCustody, layout.IAMLocalRecoveryAuthority, layout.IAMLocalRecoveryRequest, layout.IAMLocalRecoveryQuery} {
 				privatePath := "/matrix-installation-root/" + private
 				if mount.Source == privatePath || strings.HasPrefix(privatePath, strings.TrimRight(mount.Source, "/")+"/") {
 					t.Fatal("ordinary platform service mounted a local recovery capability or its parent")
@@ -916,6 +918,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		readTestFile(t, plan.Root, layout.PostgresPassword),
 		readTestFile(t, plan.Root, layout.BackupSealKey),
 		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
+		readTestFile(t, plan.Root, layout.IAMBackupCustody),
 		issuerPrivateKey,
 		ingressPrivateKeyPEM,
 		controllerPrivateKeyPEM,
@@ -1855,6 +1858,7 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 		readTestFile(t, plan.Root, layout.IAMAPI),
 		readTestFile(t, plan.Root, layout.IAMWorker),
 		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
+		readTestFile(t, plan.Root, layout.IAMBackupCustody),
 		readTestFile(t, plan.Root, layout.AuditRuntime),
 		readTestFile(t, plan.Root, layout.PaaSAPI),
 		readTestFile(t, plan.Root, layout.PaaSWorker),
@@ -1876,10 +1880,13 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 			}
 		}
 		recoveryMount := "type=bind,src=" + filepath.Join(plan.Root, filepath.FromSlash(layout.IAMCredentialRecovery)) + ",dst=/run/matrix/iam-recovery-dsn,readonly"
+		custodyMount := "type=bind,src=" + filepath.Join(plan.Root, filepath.FromSlash(layout.IAMBackupCustody)) + ",dst=/run/matrix/iam-backup-custody-dsn,readonly"
 		iamMigration := wantEntrypoints[index] == "/matrix/bin/matrix-iam-migrate"
 		if hasArgumentPair(arguments, "--mount", recoveryMount) != iamMigration ||
-			hasArgumentPair(arguments, "--env", "MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE=/run/matrix/iam-recovery-dsn") != iamMigration {
-			t.Fatal("local recovery database capability escaped the IAM role-provisioning boundary")
+			hasArgumentPair(arguments, "--env", "MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE=/run/matrix/iam-recovery-dsn") != iamMigration ||
+			hasArgumentPair(arguments, "--mount", custodyMount) != iamMigration ||
+			hasArgumentPair(arguments, "--env", installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment+"=/run/matrix/iam-backup-custody-dsn") != iamMigration {
+			t.Fatal("purpose-only IAM database capability escaped the IAM role-provisioning boundary")
 		}
 	}
 	installation, err := verifiedInstallationConfiguration(plan)
@@ -2174,17 +2181,23 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		t.Fatalf("read backup manifest: %v", err)
 	}
 	sealKey := readTestFile(t, plan.Root, layout.BackupSealKey)
-	for _, forbidden := range [][]byte{secret, sealKey, capabilityKey, readTestFile(t, plan.Root, layout.IAMCredentialRecovery), []byte(plan.Root)} {
+	for _, forbidden := range [][]byte{secret, sealKey, capabilityKey, readTestFile(t, plan.Root, layout.IAMCredentialRecovery), readTestFile(t, plan.Root, layout.IAMBackupCustody), []byte(plan.Root)} {
 		if bytes.Contains(manifestContent, forbidden) {
 			t.Fatal("backup manifest contains secret or absolute-path material")
 		}
+	}
+	if bytes.Contains(manifestContent, []byte(runtimeBoundary.backupLease.SnapshotID)) ||
+		bytes.Contains(manifestContent, []byte("snapshotId")) {
+		t.Fatal("backup manifest persisted the ephemeral PostgreSQL snapshot identity")
 	}
 	var manifest backupManifest
 	if json.Unmarshal(manifestContent, &manifest) != nil ||
 		manifest.BackupID != request.BackupID ||
 		manifest.InstallationID != plan.InstallationID ||
 		manifest.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
-		len(manifest.Artifacts) != 2 || manifest.Seal == nil || manifest.Seal.Value == "" {
+		len(manifest.Artifacts) != 2 || manifest.Seal == nil || manifest.Seal.Value == "" ||
+		validateBackupTOTPBackupCustody(manifest.TOTPBackupCustody) != nil ||
+		manifest.TOTPBackupCustody.CustodyDigest != runtimeBoundary.backupLease.CustodyDigest {
 		t.Fatalf("sealed backup manifest = %#v", manifest)
 	}
 	source, err := effects.InspectBackup(
@@ -2225,6 +2238,7 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	}
 	streams := runtimeBoundary.backupStreams
 	if streams == 0 || runtimeBoundary.restoreChecks == 0 ||
+		runtimeBoundary.backupCustodyRuns != 1 || runtimeBoundary.backupCustodyReleases != 1 ||
 		len(runtimeBoundary.migrationRuns) != len(platformMigrations) {
 		t.Fatal("backup did not verify the schema and PostgreSQL custom dump")
 	}
@@ -2379,7 +2393,7 @@ func TestPublishedBackupSealRemainsDecodableButDoesNotGrantRuntimeCompatibility(
 	if err := json.Unmarshal(content, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	manifest.APIVersion, manifest.SchemaVersion, manifest.Database, manifest.AccessKeyWrapping = legacyBackupAPIVersion, 1, release.DatabaseProfile{}, nil
+	manifest.APIVersion, manifest.SchemaVersion, manifest.Database, manifest.AccessKeyWrapping, manifest.TOTPBackupCustody = legacyBackupAPIVersion, 1, release.DatabaseProfile{}, nil, nil
 	key, err := loadBackupSealKey(plan.Root, nil, false)
 	if err != nil {
 		t.Fatal(err)
@@ -2640,6 +2654,7 @@ func TestSupportEvidenceIsBoundedSanitizedAndUsefulWhenDegraded(t *testing.T) {
 		secret,
 		capabilityKey,
 		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
+		readTestFile(t, plan.Root, layout.IAMBackupCustody),
 		readTestFile(t, plan.Root, layout.BackupSealKey),
 		readTestFile(t, plan.Root, layout.PaaSAPI),
 		[]byte(plan.Root),
@@ -3132,7 +3147,7 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.InitialAdministratorPassword,
 		layout.PostgresPassword, layout.PostgresMigration, layout.IAMAPI,
 		layout.IAMWorker, layout.AuditRuntime, layout.PaaSAPI, layout.PaaSWorker,
-		layout.IAMCredentialRecovery,
+		layout.IAMCredentialRecovery, layout.IAMBackupCustody,
 		layout.IAMLocalRecoveryAuthority,
 	}
 	result := make(map[string]string, len(paths))
@@ -3249,6 +3264,12 @@ type platformStartRuntime struct {
 	migrationRuns             [][]string
 	databaseDump              []byte
 	backupStreams             int
+	backupCustodyRuns         int
+	backupCustodyReleases     int
+	backupLease               installationv1.TOTPBackupSnapshotLease
+	backupLeaseError          error
+	backupCustodyMode         string
+	backupSnapshotRequired    bool
 	restoreChecks             int
 	recoveryRestores          int
 	postgresOnly              bool
@@ -3313,10 +3334,50 @@ func newPlatformStartRuntime(
 	for _, image := range plan.Bundle.Manifest.Images {
 		images[image.ImageID] = true
 	}
+	lease, leaseErr := platformTestTOTPBackupLease(plan)
 	return &platformStartRuntime{
 		expectation: expectation, images: images,
 		databaseDump: []byte("matrix-postgresql-custom-backup-fixture"),
+		backupLease:  lease, backupLeaseError: leaseErr,
+		backupSnapshotRequired: plan.Bundle.Manifest.Database == release.CurrentDatabaseProfile(),
 	}
+}
+
+func platformTestTOTPBackupLease(plan platformcommand.InstallPlan) (installationv1.TOTPBackupSnapshotLease, error) {
+	keyring, err := readTOTPKeyring(plan.Root, plan.InstallationID)
+	if err != nil {
+		return installationv1.TOTPBackupSnapshotLease{}, err
+	}
+	required := make([]installationv1.TOTPBackupRequiredKey, len(keyring.Keys))
+	for index, key := range keyring.Keys {
+		commitment, err := iamv1.TOTPKeyMaterialCommitment(keyring, key.KeyID)
+		if err != nil {
+			return installationv1.TOTPBackupSnapshotLease{}, err
+		}
+		required[index] = installationv1.TOTPBackupRequiredKey{
+			KeyID: key.KeyID, FormatVersion: key.FormatVersion, Commitment: commitment,
+		}
+	}
+	custody := installationv1.TOTPBackupCustody{
+		APIVersion:      installationv1.TOTPBackupCustodyAPIVersion,
+		Kind:            installationv1.TOTPBackupCustodyKind,
+		Purpose:         installationv1.TOTPBackupCustodyPurpose,
+		InstallationID:  keyring.Scope.InstallationID,
+		BootstrapDigest: keyring.Scope.BootstrapDigest,
+		KeysetRevision:  keyring.KeysetRevision,
+		RequiredKeys:    required,
+	}
+	digest, err := installationv1.TOTPBackupCustodyDigest(custody)
+	if err != nil {
+		return installationv1.TOTPBackupSnapshotLease{}, err
+	}
+	return installationv1.TOTPBackupSnapshotLease{
+		APIVersion: installationv1.TOTPBackupCustodyAPIVersion,
+		Kind:       installationv1.TOTPBackupSnapshotLeaseKind,
+		Purpose:    installationv1.TOTPBackupCustodyPurpose,
+		SnapshotID: "00000003-0000001B-1",
+		Custody:    custody, CustodyDigest: digest,
+	}, nil
 }
 
 func newPlatformCleanupRuntime(
@@ -3661,13 +3722,65 @@ func (runtimeBoundary *platformStartRuntime) Run(
 }
 
 func (runtimeBoundary *platformStartRuntime) RunTo(
-	_ context.Context,
+	ctx context.Context,
 	input io.Reader,
 	output io.Writer,
 	arguments ...string,
 ) (bool, error) {
 	if output == nil {
 		return false, errors.New("platform backup streaming invocation is invalid")
+	}
+	if slices.Contains(arguments, totpBackupCustodyEntrypoint) {
+		joined := strings.Join(arguments, "\x00")
+		for _, forbidden := range []string{
+			layout.IAMTOTPKeyring, layout.PostgresMigration, layout.IAMAPI,
+			layout.IAMWorker, layout.IAMCredentialRecovery, layout.IAMLocalRecoveryAuthority,
+		} {
+			if strings.Contains(joined, forbidden) {
+				return false, errors.New("TOTP backup custody received an unrelated authority")
+			}
+		}
+		if runtimeBoundary.backupLeaseError != nil || input == nil ||
+			!slices.Contains(arguments, "--interactive") ||
+			strings.Count(joined, "\x00--mount\x00") != 1 ||
+			strings.Count(joined, "\x00--env\x00") != 1 ||
+			!hasArgumentPair(arguments, "--entrypoint", totpBackupCustodyEntrypoint) ||
+			!hasArgumentPair(arguments, "--env", installationv1.TOTPBackupCustodyDatabaseDSNFileEnvironment+"="+totpBackupCustodyDSNTarget) ||
+			!strings.Contains(joined, "dst="+totpBackupCustodyDSNTarget+",readonly") {
+			return false, errors.New("TOTP backup custody invocation is invalid")
+		}
+		encoded, err := installationv1.EncodeTOTPBackupSnapshotLease(runtimeBoundary.backupLease)
+		if err != nil {
+			return true, err
+		}
+		runtimeBoundary.backupCustodyRuns++
+		switch runtimeBoundary.backupCustodyMode {
+		case "timeout":
+			<-ctx.Done()
+			return true, ctx.Err()
+		case "invalid":
+			encoded = []byte(`{}`)
+		case "extra":
+			encoded = append(encoded, '\n', 'x')
+		}
+		if runtimeBoundary.backupCustodyMode != "extra" {
+			encoded = append(encoded, '\n')
+		}
+		if _, err := output.Write(encoded); err != nil {
+			return true, err
+		}
+		if runtimeBoundary.backupCustodyMode == "premature" {
+			return true, nil
+		}
+		frame, err := io.ReadAll(io.LimitReader(input, int64(len(installationv1.TOTPBackupCustodyReleaseFrame)+1)))
+		if err != nil || string(frame) != installationv1.TOTPBackupCustodyReleaseFrame {
+			return true, errors.New("TOTP backup custody release frame is invalid")
+		}
+		if runtimeBoundary.backupCustodyMode == "release-failure" {
+			return true, errors.New("TOTP backup custody release failed")
+		}
+		runtimeBoundary.backupCustodyReleases++
+		return true, nil
 	}
 	if slices.Contains(arguments, "pg_restore") {
 		if input == nil {
@@ -3721,10 +3834,12 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 		runtimeBoundary.recoveryRestores++
 		return true, nil
 	}
+	hasSnapshot := slices.Contains(arguments, "--snapshot="+runtimeBoundary.backupLease.SnapshotID)
 	if input != nil || !slices.Contains(arguments, "pg_dump") ||
 		slices.Contains(arguments, "--no-owner") ||
 		!slices.Contains(arguments, "--no-privileges") ||
-		!slices.Contains(arguments, "--no-password") {
+		!slices.Contains(arguments, "--no-password") ||
+		hasSnapshot != runtimeBoundary.backupSnapshotRequired {
 		return false, errors.New("platform backup streaming invocation is invalid")
 	}
 	runtimeBoundary.backupStreams++

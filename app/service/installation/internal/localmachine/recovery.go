@@ -680,7 +680,8 @@ func authenticateRecoveryPlan(
 		manifest.ReleaseID != target.Bundle.Manifest.Release.ID ||
 		manifest.ReleaseDigest != target.Bundle.ManifestSHA256 ||
 		profile != target.Bundle.Manifest.Database ||
-		verifyBackupAccessKeyWrapping(plan.Current.Root, plan.Current.InstallationID, target.Bundle.Manifest, manifest) != nil {
+		verifyBackupAccessKeyWrapping(plan.Current.Root, plan.Current.InstallationID, target.Bundle.Manifest, manifest) != nil ||
+		verifyBackupTOTPBackupCustody(plan.Current.Root, plan.Current.InstallationID, manifest) != nil {
 		clear(current.TrustBytes)
 		clear(target.TrustBytes)
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
