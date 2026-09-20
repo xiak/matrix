@@ -5,7 +5,7 @@
 - 全局导航、视觉体系、响应式布局和隔离 MOCK 体验由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md) 拥有；固定来源由 [adoption review](../docs/adoption/FEAT-007-control-plane-console.md) 拥有。不引入另一套 IAM UI。
 - 当前 IAM 集成基线固定为 `04041d2d3f7ed55225a5164bc2bc05251d25a6f1`（Verification `35485632542` completed/success）。该来源只固定当前 API 与权威对象，不把 IAM 各 FEAT 的未完成验收继承为 UI 验收。
 - 权限能力目录的 CAT-06 固定契约为 `40407e2710a45ee1000552146cd362740074369a`，对应 IAM 累积来源 `a36a35c2eddbeb7c76a8d7c140e180b24a169aab`。它只固定只读目录及其错误边界，不接受租户注册产品、目录生命周期或策略作者发布能力。
-- 本人安全通知、首次 TOTP 绑定及登录挑战的固定契约来源为 `f5cec0e132ad18900d9a5a5629eae04fda4817f1`。恢复挑战仍没有可消费的固定公开契约；控制台不得从在制实现或设计稿猜测其请求与响应。
+- 本人安全通知、首次 TOTP 绑定及原登录挑战的固定契约来源为 `f5cec0e132ad18900d9a5a5629eae04fda4817f1`。受限自助恢复客户端按 IAM-009 S2b 候选 `48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e` 的三个封闭接口实现；该候选的独立 CI 因平台 billing/spending 未取得 runner，完整十码跨窗口和真实浏览器仍未验收，因此这里只固定客户端解释与隔离 MOCK，不把后端候选称为已发布或继承其验收。
 
 ## 需求
 
@@ -56,15 +56,17 @@ Role、身份提供商、联合身份和企业账号均为详情优先的管理�
 
 `EQUAL_REPLAY` 永不包含 provisioning；页面不显示验证码确认框，只允许取消仍处于 `PENDING` 的原流程，或在终态后使用新 requestId 重新开始。若首次 `APPLIED` 的秘密已从本地内存丢失，客户端不能尝试恢复或猜测密钥，必须取消/等待过期后重新发起。新 TOTP 确认成功就是绑定提交点；IAM 返回的十条唯一恢复码只在 SessionProvider 内存中一次显示，确认已保存后清除，并要求正常重新登录，不能把恢复材料的确认误作绑定提交。
 
-替换、合法移除与自助恢复仍没有本客户端可消费的固定公开契约。`BOUND` 和 `RECOVERY_REQUIRED` 因此只显示权威状态及明确不可用说明；DEV 体验继续保留既有恢复/换绑状态机用于 UX 检查，但不能伪装成 LIVE。管理员不能代替本人重置因子，任何真实失败也不得进入该 MOCK。
+替换与合法移除仍没有本客户端可消费的固定公开契约，`BOUND` 因此只显示权威状态及明确不可用说明。受限自助恢复只从已验证密码产生的 `LOGIN/TOTP` 或有准确恢复历史的 `LOGIN/RECOVER` 挑战进入，使用一条旧恢复码换取独立 `RECOVERY/ENROLLMENT` 挑战和一次性 provisioning；它不创建 Session、不改变密码，也不授予管理员代替本人重置因子的能力。任何真实失败不得进入 MOCK。
+
+恢复开始一旦提交就消费旧码、终止旧因子与旧会话，关闭页面不能撤销。开始回包未知时，客户端只在内存保留原 loginName/requestId，清除 challenge secret 与 provisioning；用户必须重新以密码取得新的 LOGIN 挑战并显式查询原 requestId。`NOT_FOUND` 不证明回滚，查询不会重发秘密或自动消费另一条码；原 `STARTED` 的一次性材料已经丢失时，页面必须明确说明并由用户选择使用另一条旧码创建新意图。确认回包未知不查询或重放十条新码，只允许使用刚绑定的新因子正常登录验证结果。所有密码、旧码、新 seed、URI、OTP、challenge credential 和新恢复码均只留当前 React 内存，不进入 URL、日志或浏览器持久存储。
 
 ### 登录挑战的固定客户端接入
 
-登录挑战消费 IAM-009 固定来源 `f5cec0e132ad18900d9a5a5629eae04fda4817f1`。`POST /v1/auth/login` 只接受互斥的 `AUTHENTICATED` 或 `CHALLENGE_REQUIRED` 分支；登录返回挑战时只接受 `LOGIN/TOTP`，不会保存 bearer、创建 `Session` 或开放控制台。挑战 credential 仅保存在当前 React provider 的内存状态，不进入 URL、DOM、浏览器存储或普通 session API。
+登录挑战消费 IAM-009 固定来源 `f5cec0e132ad18900d9a5a5629eae04fda4817f1` 及上述 S2b 增量。`POST /v1/auth/login` 只接受互斥的 `AUTHENTICATED` 或 `CHALLENGE_REQUIRED` 分支；登录入口只接受 `LOGIN/TOTP` 或有准确恢复历史的 `LOGIN/RECOVER`，绝不接受 `RECOVERY` purpose，也不会保存 bearer、创建 `Session` 或开放控制台。挑战 credential 仅保存在当前 React provider 的内存状态，不进入 URL、DOM、浏览器存储或普通 session API。
 
 `POST /v1/auth/challenges/{id}:verify` 不携带 `Authorization` bearer，只携带 challenge credential 与验证码。它只能返回完整认证结果，或进入同一登录目的的 `PASSWORD_CHANGE`；任何混合字段、未知步骤或在错误阶段出现的合法步骤都按协议失败关闭。`POST /v1/auth/challenges/{id}:password` 与已有的会话内 `/auth/password` 保持不同：它只使用 challenge credential，成功只接受 `REAUTHENTICATE`，随后清空挑战与任何会话材料并返回普通登录，不能静默进入控制台。
 
-挑战到期在客户端清除内存状态并要求重新登录；取消同样不复活旧挑战。验证码或 challenge 错误只映射为允许公开的本地提示，不把上游细节、credential 或服务端响应展示给用户。恢复码消费、首次强制绑定、通用 step-up、账号安全设置及完整发布 profile 仍不是这条固定 LIVE 客户端的一部分。
+挑战到期在客户端清除秘密状态并要求重新登录；普通登录挑战取消不会复活旧挑战，恢复已经开始后页面只能放弃本地一次性材料，不能描述为服务端取消。验证码或 challenge 错误只映射为允许公开的本地提示，不把上游细节、credential 或服务端响应展示给用户。首次强制绑定、通用 step-up、账号安全设置及完整发布 profile 仍不是这条客户端的一部分。
 
 ### 账号级 MFA 要求的隔离体验
 
@@ -287,7 +289,7 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - LIVE 首次绑定只有在已验证通知地址与 `NEVER_BOUND` 状态下开放，以当前密码、稳定 requestId 和 factor revision 发起。严格适配器验证五分钟生命周期、所有 ID/revision 关联及状态完成时间；首次 `APPLIED` 才接受 provisioning，`EQUAL_REPLAY` 携带 secret/URI 会失败关闭。
 - UI 不调用外部二维码服务，只在首次 `APPLIED` 的当前内存流程显示手动 seed/URI 和六位确认框。等值重放不显示秘密或确认框，只允许取消仍待处理的原流程；终态才允许使用新 requestId 重新开始。组件用例锁定该边界。
 - 确认成功只接受十条非空且唯一的恢复码与 `REAUTHENTICATE`。Provider 立即清除旧 credential/current/challenge，仅在内存一次显示恢复材料；用户确认已保存后清除材料并返回重新登录，不写 URL、DOM 持久态或浏览器存储。
-- `BOUND` 与 `RECOVERY_REQUIRED` 只读显示；替换、移除和自助恢复没有固定客户端，不从 IAM 工程师在制分支猜约定，也不回退隔离 MOCK。既有 MOCK 页面仍可单独验收完整恢复 UX，但不作为 LIVE 后端证据。
+- 设置页中的替换与移除仍只读；登录受限自助恢复已按独立 S2b 候选接入严格客户端。页面不会把恢复开始解释成可取消 enrollment，也不会从 LIVE 失败回退隔离 MOCK。
 - 测试、构建、嵌入与 Go 门禁复用上一本人安全通知证据。尚未以真实 IAM 进程执行首次 secret 交付、TOTP 确认、会话终止和恢复码抄录的浏览器闭环。
 
 ### 登录挑战固定契约的开发验收证据
@@ -298,10 +300,21 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 - 严格 HTTP 适配验证登录与挑战响应的互斥字段、`Session`/`AuthenticationChallenge` 形状、时间顺序、目的及阶段合法步骤；混合响应、未知步骤、登录直接返回 `PASSWORD_CHANGE` 或验证后再次返回 `TOTP` 都失败关闭。TOTP 验证与挑战改密不携带 bearer，挑战改密只接受 `REAUTHENTICATE`。
 - Provider 行为证明挑战开始时清空 credential/current session，挑战材料只保存在内存；验证失败、到期与取消都不能创建会话。验证成功才建立 session；验证后改密成功会清空状态并要求使用新密码重新登录，不调用会话内 `/auth/password`。每次登录、验证、挑战改密、取消、到期或清空身份都会推进本地认证代际；在途旧验证的成功或失败回包失去归属后只能丢弃，不能覆盖新登录、复活旧挑战或写入旧错误。
-- DEV 入口直接运行同一状态机，不再用登录页的平行恢复组件伪装 LIVE 行为。`624810` 演示验证成功，`624811` 演示验证后改密；这些值明确标为 MOCK，挑战 secret 不出现在 DOM 或浏览器存储。恢复流程仍由既有隔离设置体验承载，等待后端新固定来源后再替换。
+- DEV 入口直接运行同一状态机，不再用登录页的平行恢复组件伪装 LIVE 行为。`624810` 演示验证成功或新因子确认，`624811` 演示验证后改密；恢复码和验证码均明确标为 MOCK，challenge secret 不出现在 DOM 或浏览器存储。
 - deferred-promise 用例覆盖 TOTP 验证在途后取消、到期、开始新登录以及迟到成功/失败，也覆盖 challenge-password 在途后取消、新登录和迟到成功/失败；最终身份、phase、错误与挑战始终属于较新的登录。
 - 完整前端 40 个测试文件、622 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出与 223 个嵌入文件等价通过。真实 DEV 在桌面与 `390 × 844`、混色与深色下验证登录挑战和验证后改密页面，无横向溢出或新增 warning/error。
-- 本证据只接受固定客户端解析、会话边界及隔离 MOCK 可检查性；没有执行真实 IAM 登录挑战、真实密码修改、恢复码消费、首次绑定、发布 profile 或安装升级验收。
+- 本证据只接受固定客户端解析、会话边界及隔离 MOCK 可检查性；没有执行真实 IAM 登录挑战、真实密码修改、首次绑定、发布 profile 或安装升级验收。自助恢复的增量证据由下一节单独拥有。
+
+### 受限自助 TOTP 恢复客户端的开发验收证据
+
+2026-09-21，前端实现与同步嵌入资源固定在已推送的
+[`3c9a49fb`](https://github.com/xiak/matrix/commit/3c9a49fb)，契约解释固定到 IAM-009 S2b 候选
+`48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e`；后端独立 CI、完整十码跨窗口和真实 IAM 浏览器仍按本文顶部限制保持未验收。
+
+- 严格 HTTP 适配只调用 `:recover`、`:confirm-recovery` 与 `:recovery-result` 三个无 bearer 路由，发送各自闭合字段并保留原 requestId。客户端验证 challenge purpose/nextStep、五分钟期限、开始 challenge 与 recovery 同期限、终态时间、请求关联及确认结果恰好十条非空唯一恢复码；额外字段、混合 LOGIN/RECOVERY purpose、过期完成或秘密重放形状均失败关闭。
+- Provider 把普通 TOTP、恢复码输入、不可逆开始、新因子确认、结果查询、开始未知和确认未知建成不同阶段。开始网络/5xx 结果未知时不自动重试；重新登录后只查询原非秘密状态。`STARTED` 且材料丢失或 `NOT_FOUND` 均只允许用户明确选择另一条码的新意图。确认未知不会调用结果查询或重放十码，只允许新因子走正常 TOTP 登录。
+- DEV MOCK 与 LIVE 使用同一 Provider/repository/rendering 边界，展示不可逆副作用、手动设置密钥、当前新 OTP 及十条一次性恢复码；秘密不进入 URL、storage 或控制台日志。`539px` 浏览器完整走通恢复码→新因子→十码，document/body 均为 `clientWidth == scrollWidth == 539`，最终 warning/error 为空。
+- 完整前端 42 个测试文件、652 条用例和三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。该结果不替代 IAM 候选的独立 CI、真实进程浏览器、完整十码耗尽跨窗口或发布 profile 验收。
 
 ### 账号级 MFA 要求 MOCK 的开发验收证据
 
