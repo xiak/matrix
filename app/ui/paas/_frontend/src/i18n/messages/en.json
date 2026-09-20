@@ -1976,16 +1976,7 @@
     "noKeyLogs": "No access history. Mock keys never call real APIs.",
     "changeStateTitle": "{action} {name}",
     "changeStateHint": "Confirm the target. This change affects only the current preview data.",
-    "passwordRules": "Password rules",
-    "passwordMinLength": "Minimum password length",
-    "passwordExpiryDays": "Password expiry (days; 0 means no expiry)",
-    "preventPasswordReuse": "Previous passwords blocked",
-    "requireComplexity": "Require upper/lowercase letters, numbers and symbols",
-    "loginSettings": "Sign-in settings",
     "securitySettings": "Security settings",
-    "loginProtection": "Sign-in protection (mock MFA)",
-    "sensitiveProtection": "Sensitive-operation verification (mock)",
-    "securityMock": "These settings are previews only. They do not activate MFA, change password enforcement or revoke sessions.",
     "overviewHint": "Manage identities, permissions and credentials centrally. Start with least privilege and a clear boundary for every access.",
     "sensitiveOperations": "Recent sensitive operations",
     "viewAllEvents": "View all records",
@@ -2014,10 +2005,6 @@
       "loginProtection": {
         "title": "Sign-in protection policy",
         "hint": "Applies to {count} console identities. This is an account policy, not proof that users enrolled an MFA authenticator."
-      },
-      "sensitiveProtection": {
-        "title": "Sensitive-operation protection",
-        "hint": "Only the preview setting is available; the real challenge and session contract is not connected."
       },
       "pendingPasswords": {
         "title": "Pending password changes",

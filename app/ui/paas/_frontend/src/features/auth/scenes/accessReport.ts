@@ -4,7 +4,7 @@ import type { AccountAccessScene } from "./accountAccessScene";
 
 export type AccessSecurityCheckState = "review" | "configured" | "notApplicable" | "unknown";
 export type AccessSecurityCheck = {
-  id: "activeKeys" | "directGrants" | "loginProtection" | "sensitiveProtection" | "pendingPasswords" | "mfaEvidence";
+  id: "activeKeys" | "directGrants" | "loginProtection" | "pendingPasswords" | "mfaEvidence";
   state: AccessSecurityCheckState;
   count: number | null;
   target: Extract<AccountAccessView, "keys" | "settings" | "users" | "groups"> | null;
@@ -41,12 +41,6 @@ export function buildAccessSecuritySnapshot(workspace: AccessWorkspace): {
       id: "loginProtection",
       state: consoleUsers === 0 ? "notApplicable" : workspace.settings.loginProtection ? "configured" : "review",
       count: consoleUsers,
-      target: "settings"
-    },
-    {
-      id: "sensitiveProtection",
-      state: workspace.settings.sensitiveProtection ? "configured" : "review",
-      count: null,
       target: "settings"
     },
     {
@@ -99,7 +93,7 @@ export function buildAccessReport(kind: "credentials" | "security", workspace: A
       };
     }),
     ...(kind === "security" ? {
-      protections: { login: workspace.settings.loginProtection, sensitiveOperations: workspace.settings.sensitiveProtection, userSso: workspace.settings.userSsoEnabled },
+      protections: { login: workspace.settings.loginProtection, userSso: workspace.settings.userSsoEnabled },
       counts: { groups: workspace.groups.length, policies: workspace.policies.length, roles: workspace.roles.length, providers: workspace.providers.length },
       checks: snapshot.checks.map(({ id, state, count }) => ({ id, state, count })),
       events: workspace.events.map(({ action, target, at }) => ({ action, target, at }))

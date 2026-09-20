@@ -1976,16 +1976,7 @@
     "noKeyLogs": "暂无该密钥的访问记录。模拟密钥不会调用真实 API。",
     "changeStateTitle": "{action} {name}",
     "changeStateHint": "请确认变更对象。此操作只影响当前模拟数据。",
-    "passwordRules": "密码规则",
-    "passwordMinLength": "密码最小长度",
-    "passwordExpiryDays": "密码有效期（天，0 为不过期）",
-    "preventPasswordReuse": "禁止重复使用最近的密码数",
-    "requireComplexity": "要求大小写字母、数字与特殊字符",
-    "loginSettings": "登录设置",
     "securitySettings": "安全设置",
-    "loginProtection": "登录保护（模拟 MFA）",
-    "sensitiveProtection": "敏感操作二次验证（模拟）",
-    "securityMock": "这些安全配置仅用于体验演示，不会实际启用 MFA、修改密码校验或撤销会话。",
     "overviewHint": "集中管理身份、权限与凭证。以最小权限开始，为每项访问建立清晰边界。",
     "sensitiveOperations": "近期敏感操作",
     "viewAllEvents": "查看全部记录",
@@ -2014,10 +2005,6 @@
       "loginProtection": {
         "title": "登录保护策略",
         "hint": "{count} 个控制台访问身份适用；这里显示账户策略，不代表用户已经绑定 MFA。"
-      },
-      "sensitiveProtection": {
-        "title": "敏感操作保护",
-        "hint": "当前仅显示模拟配置；真实挑战与会话契约尚未接入。"
       },
       "pendingPasswords": {
         "title": "待修改密码",

@@ -30,9 +30,7 @@ export type EnterpriseMember = { id: string; name: string; department: string };
 export type EnterpriseAccount = { id: string; name: string; corporationId: string; visibleMemberIds: string[]; importedMemberIds: string[]; createdAt: string };
 export function enterprisePrincipalId(accountId: string, memberId: string): string { return "principal-wecom-" + accountId + "-" + memberId; }
 export type AccessSettings = {
-  passwordMinLength: number; passwordExpiryDays: number; preventPasswordReuse: number;
-  requireComplexity: boolean; sessionMinutes: number; loginProtection: boolean; sensitiveProtection: boolean;
-  userSsoEnabled: boolean; userSsoProviderId: string;
+  loginProtection: boolean; userSsoEnabled: boolean; userSsoProviderId: string;
 };
 export type AccessEvent = { id: string; action: AccessWorkspaceCommand["kind"] | "sign-in" | "batch-users"; target: string; at: string };
 export type PreviewUserProfile = {
@@ -419,7 +417,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     }
     case "save-settings": {
       const s = command.settings;
-      if (![s.passwordMinLength, s.passwordExpiryDays, s.preventPasswordReuse, s.sessionMinutes].every(Number.isInteger) || s.passwordMinLength < 12 || s.passwordMinLength > 64 || s.passwordExpiryDays < 0 || s.passwordExpiryDays > 365 || s.preventPasswordReuse < 0 || s.preventPasswordReuse > 24 || s.sessionMinutes < 15 || s.sessionMinutes > 720) invalid();
+      if (typeof s.loginProtection !== "boolean" || typeof s.userSsoEnabled !== "boolean" || typeof s.userSsoProviderId !== "string") invalid();
       if (s.userSsoEnabled && !exists(state.providers, s.userSsoProviderId).enabled) invalid();
       state.settings = { ...s }; target = source.accountId; break;
     }

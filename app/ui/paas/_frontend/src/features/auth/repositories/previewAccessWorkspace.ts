@@ -74,7 +74,7 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
     federations: [{ id: "federation-audit", name: "ExternalAuditor", subject: "audit@example.invalid", providerId: "idp-example", roleId: "role-audit", enabled: true, createdAt: at }],
     keys: [{ id: "MOCK-pipeline-key", ownerId: "principal-lin", description: "Pipeline preview credential", enabled: true, createdAt: at, lastUsedAt: "2026-09-09T01:00:00Z" }],
     userPolicies: { "principal-lin": ["policy-prod-logs"], "principal-qiao": ["policy-tag-logs", "policy-production-guard", "policy-assume-reviewer"] },
-    settings: { passwordMinLength: 12, passwordExpiryDays: 90, preventPasswordReuse: 5, requireComplexity: true, sessionMinutes: 60, loginProtection: false, sensitiveProtection: false, userSsoEnabled: false, userSsoProviderId: "" },
+    settings: { loginProtection: false, userSsoEnabled: false, userSsoProviderId: "" },
     events: [{ id: "event-sign-in", action: "sign-in", target: "preview-admin", at: "2026-09-09T01:10:00Z" }]
   };
 }

@@ -2197,7 +2197,7 @@ describe("CAM-style access workspace", () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
     const workspace = await extension.read("preview");
     const snapshot = buildAccessSecuritySnapshot(workspace);
-    expect(snapshot.counts).toEqual({ review: 4, configured: 1, notApplicable: 0, unknown: 1 });
+    expect(snapshot.counts).toEqual({ review: 3, configured: 1, notApplicable: 0, unknown: 1 });
     expect(snapshot.checks.find((check) => check.id === "mfaEvidence")?.state).toBe("unknown");
 
     const withoutApplicableUsers = structuredClone(workspace);

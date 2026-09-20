@@ -529,9 +529,9 @@ describe("access workspace preview invariants", () => {
     expect(state.userPolicies["principal-lin"]).toBeUndefined();
     expect(state.keys).toHaveLength(0);
   });
-  it("bounds security settings and requires an available SSO provider", () => {
+  it("rejects malformed owned settings and requires an available SSO provider", () => {
     const state = initialAccessWorkspace("org-xiak");
-    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-settings", settings: { ...state.settings, passwordMinLength: 5 } }, context)).toThrow("invalid");
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-settings", settings: { ...state.settings, loginProtection: null as unknown as boolean } }, context)).toThrow("invalid");
     expect(() => applyAccessWorkspaceCommand(state, { kind: "save-settings", settings: { ...state.settings, userSsoEnabled: true, userSsoProviderId: "missing" } }, context)).toThrow("notFound");
     const updated = applyAccessWorkspaceCommand(state, { kind: "save-settings", settings: { ...state.settings, userSsoEnabled: true, userSsoProviderId: "idp-example" } }, context);
     expect(updated.settings.userSsoEnabled).toBe(true);
