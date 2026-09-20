@@ -4,132 +4,119 @@
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Only this
   task's independent worktree is writable. Updated 2026-09-20.
-- User requested continuing the IAM goal from the detailed MFA design.
-  The goal is ACTIVE, not complete; do not narrow it to primitives or tests.
-- Design fixed and pushed: **6fa39fda**. IAM/FEAT-IAM-009-security-governance.md
-  owns S2/S3 details; its existing adoption record owns source decisions.
-- Latest pushed implementation: **ad93b84fa1cbe902b148e62a9d0f0924a5473a98**,
-  first S2a internal TOTP and purpose-bound recovery-code primitives.
-  [Verification35484114635](https://github.com/xiak/matrix/actions/runs/35484114635)
-  was confirmed for the exact SHA. Go/node-process completed successfully;
-  authority-storage was running and authority-runtime queued. No overall
-  CI success claim.
-- This slice changes only authority credential/TOTP code and tests plus009
-  and adoption. No public API, SQL, current authentication path, UI,
-  installation, workflow, schema or release profile change.
-  Source IAM32/Audit19/PaaS2 and IAM product Profile r5 remain unchanged.
+- The IAM goal is ACTIVE, not complete. Do not narrow it to primitives/tests.
+- User explicitly approved both pending questions: minimal verified-address/
+  SMTP/retry security email, and original protected-primary MFA recovery/
+  backup isolation jointly with installation. No new approval is pending
+  for those bounded scopes. Implementation/ABI/real acceptance is not implied.
+- Design6fa39fda; authorized scope fixedb426541d; latest pushed implementation
+  **04041d2d3f7ed55225a5164bc2bc05251d25a6f1** is S2a TOTP private keyring/
+  seed-protection foundation. Its exact
+  [Verification35485632542](https://github.com/xiak/matrix/actions/runs/35485632542)
+  was only QUEUED at last observation. Do not claim CI success yet.
+- Previous algorithm source **ad93b84fa1cbe902b148e62a9d0f0924a5473a98**:
+  exact [Verification35484114635](https://github.com/xiak/matrix/actions/runs/35484114635)
+  confirmed completed/success by API. It does not cover04041d2d.
+- Current HTTP Login, SQL, schema/profile, UI and installation remain unchanged.
+  Source IAM32/Audit19/PaaS2, IAM product Profile r5 remain as before.
+  All requirements/design/evidence stay in IAM/009 and012; adoption in the
+  original FEAT006 record. No second roadmap or implementation diary.
 
-## Current implementation and evidence
+## Fixed implementation and checks
 
-Read AGENTS, IAM/FEAT-IAM-009-security-governance.md S2/S3, then the actual
-authority code/tests. ADR-0004 is specifically AccessKey custody; TOTP
-does not reuse its keyring, wrapping purpose or private codec.
+Read AGENTS, IAM/FEAT-IAM-009-security-governance.md S2/S3, then actual
+api/iam/v1/totp_wrapping.go and authority/totp.go/tests. ADR0004 specifically
+owns AccessKey custody; TOTP has a distinct kind/purpose/keyring/codec.
 
-TOTP uses20-byte random seed, canonical Base32, HMAC-SHA1,6 ASCII digits,
-30 seconds and a fixed adjacent-step window. The pure verifier takes an
-authoritative database instant and the factor's locked consumption watermark.
-It returns only a candidate step, rejects any consumed matching step and
-handles the independently found adjacent collision at910737/910738.
--1 means proven never consumed, never missing/unknown. No local replay cache.
+04041d2d freezes Validate/Encode/DecodeTOTPKeyring, TOTPKeyMaterialCommitment,
+TOTPKeysetDigest and TOTPSeedContext. Scope includes installationId AND the
+single-owner BootstrapDigest; revision1..MaxInt64,1..8 strictly sorted unique
+keys, active present, format1, canonical32-byte RawBase64URL material,8192-byte
+bound. Ordinary JSON/formatting cannot expose secrets. Per-key commitment
+EXCLUDES revision/active; the set digest includes them. Codec cannot prove
+historical monotonicity, key retirement or same-snapshot database dependency.
+The existing AccessKey uint32BE framing moved byte-preservingly into encoding.go
+as credentialBindingBytes; original context/signature/nonce vectors still pass.
+No duplicate Audit canonical or generic keyring/provider was added.
 
-Recovery codes are mrc1 plus128 random bits in strict unpadded Base64URL.
-The one-way verifier binds purpose, installation, Account, USER, batch and
-code ID. This is not a generic bearer type, password-reset capability or
-completed recovery. Original Secret redaction/serialization remains.
-No seed envelope, enrollment, challenge endpoint, SQL consumption, attempt
-budget or MFA-enabled login is implemented by this fixed slice.
+Seal/OpenTOTPSeed use independent HKDF-SHA256 and random-nonce AES256-GCM.
+Identity binds bootstrap/install,Account,USER,factor,key and format; state and
+set revision are not ciphertext identity. Lifecycle must enforce one seal per
+factor/key and row CAS for rewrap; these primitives do not implement that.
+Original TOTP fixed20-byte/SHA1/6-digit/30-second verifier and purpose-bound
+mrc1 recovery verifier remain. A returned time step is not durable consumption.
 
-Local evidence: six focused behavior tests with race; original authority/API
-race and vet;20-second/2-worker fuzz completed83581 executions, no failure.
-RFC vectors and independent Node standard-crypto vectors cover epoch/2038/
-maximum date, windows/collision and recovery verifier. They are synthetic
-algorithm oracles, not real authenticator/browser acceptance.
-Clean-source Go1.26.3 Windows export passed all default race tests-p2/count1,
-architecture, vet and module verification; Linux/amd64 build passed.
-GOMAXPROCS2/GOMEMLIMIT512MiB. Default external SKIPs are not PG/runtime gates.
-No PG/container/network/service/remote resource started; all local test/build
-handles are terminal. Preserve normal compiler/fuzz caches.
+Focused new and old AccessKey/API/authority race passed. Independent Node
+standard-crypto vectors verify material/set hashes, derived key, GCM envelope
+and resulting RFC OTP. Private-file and ciphertext fuzz each20sec/2workers:
+547018 and705841 executions, no failure; not throughput evidence.
+Exact code in clean export passed all default race/architecture-p2/count1,
+vet, module verify, full file-set/hash equality after go generate and
+Linux/amd64 build; GOMAXPROCS2/GOMEMLIMIT512MiB. External SKIPs are not runtime.
+No new PG/container/network/service/remote started. All local test/build
+handles are terminal; preserve normal compiler/fuzz caches.
+04041 is pushed and supplied to installation and UX peers; CI is not yet
+accepted. Do not import their WIP, profile, checkpoint or acceptance.
 
-## Next scope and dependencies
+## Coordination and unresolved gates
 
-Confirm the exact-SHA CI without restarting unchanged or terminal gates.
-Continue009's declared slices, not another repetition of accepted Session/
-capacity work. Shared durable attempts and committed rejection are required
-before MFA can open. Current Login/ChangePassword still verify passwords
-inside the old callback transaction; callback errors roll back. Do not claim
-rate limiting exists or store a counter only in a rolled-back error path.
+Phase3 owner task01a04149-5dbb-7300-9e4c-31d9e85c8ada owns its independent
+installation worktree/branch feat/phase3-mfa-recovery:
+- Fixed16b42679 credentials/topology/backup code inspected and recorded as
+  REFERENCE, not a TOTP implementation.
+- Fixede7d31b6f03a885f576ecb0979d8776b6a6abe26d pure CLOSED contract inspected,
+  not imported. Peer CI unconfirmed. Concrete api/adapter/installation/v1 is
+  its exclusive owner; IAM must not make another codec.
+- Peer may add exact AuthenticationRecoveryIntent/digest in that adapter.
+  Actual verified signed manifest digests bind complete source/target
+  profiles; pure digest does not perform signature/admission/qualification.
+- No OPEN/reopen/helper transport/receipt authority frozen. No new revision.
+- TOTP same-PG-exported-snapshot custody lease is still unfrozen. A SQL
+  function alone cannot keep a cross-process transaction alive. Set digest
+  is not a backup's required-key summary. Backups never carry live keyring.
+- Single-engine isolation must prove all own old processes unreachable
+  BEFORE restore. Atomic host-file replacement does not prove a running
+  container sees it. No multi-host HA claim.
+- Long-lived backup-external capability proves source, not later Account/
+  USER status or platform revocation. Restoring T0 then signing its old
+  expected values cannot prove T1 current eligibility. Do not reopen until
+  password/Key/Role/attachments/ordinary USER/contact rollback is covered,
+  not just primary's factor. Existing password recovery is not MFA recovery.
+- Preparation release may not ignore later factor/Session semantics on OPEN
+  data; gate-aware name alone is not a safe rollback predecessor.
+- Installation handles protected configuration only; IAM owns012 mail/
+  verification/retry. Real SMTP channel and verified acceptance mailbox have
+  not been provided; do not borrow personal credentials or fake delivery.
 
-Public login eventually uses a strict authenticated/challenge union, never
-a half-valid Session. Initial enrollment, proven voluntary removal, lost
-factor and corrupt/unknown state have distinct qualifications. Root and
-unrevoked platform attachment protections remain. security-settings is not
-an authorization Policy; exactly two designed read/update actions are
-planned, not registered/granted. Approval to continue does not mean shared
-implementation has been accepted or that these APIs are currently usable.
+UX/UI owner01a07b21-9a0d-7fd0-b090-7827ce18262e may independently implement
+high-fidelity MOCK. A/B/D/G/H are stable flow skeletons; state words do not
+freeze wire enums. No real MFA/UI acceptance. It has04041 design locations.
+First mandatory setup has no Session: a currently qualified ENROLLMENT
+challenge may verify only a first notice address after forced password
+change. It cannot replace an existing trusted address or serve lost/corrupt/
+restored identities. Mail is not an MFA or recovery factor. This prerequisite
+and unavailable-channel state must not be hidden by issuing a weak Session.
 
-On2026-09-20 fixed design6fa39fda was sent to existing peers for bounded
-contract review; following explicit user approval, each now has its own
-bounded work below. No foreign WIP/environment is read or modified:
-- Phase3 task01a04149-5dbb-7300-9e4c-31d9e85c8ada returned a read-only review.
-  Its fixed installation source16b42679 was inspected at credentials.go,
-  topology.go and the backup commitment test, and recorded as REFERENCE.
-  It owns protected material/configuration and closed restore isolation.
-  It may own the concrete api/adapter/installation/v1 gate contract; IAM
-  owns TOTP private API/codec and authentication rules. No new revision yet.
-- UX/UI工程师01a07b21-9a0d-7fd0-b090-7827ce18262e received the interaction
-  proposal. Its later request to do high-fidelity MOCK has been answered:
-  restricted login/enrollment/recovery/error flows and S1b are appropriate,
-  wire enums and mail/recovery integrations remain unfrozen. MOCK is not
-  real MFA acceptance. It owns UI/browser; no UI edits here.
+## Continue the goal
 
-Phase3 confirmed four unfrozen dependencies:
-1. Dedicated TOTP keyring bound to installationId AND bootstrapDigest,
-   keysetRevision/activeKeyId and multiple keys. IAM supplies a same-snapshot
-   nonsecret custody summary of all required key IDs/commitments for backup.
-   Backups must not archive or overwrite live keyring material.
-2. Installation seals a restore authentication CLOSED barrier outside the DB
-   rollback scope, consumed by every IAM route/readiness; old gate-unaware
-   releases must be rejected before effects. ABI/capability not frozen.
-3. Reopening requires trustworthy post-backup security evidence OR independently
-   authorized invalidation/rebinding. Neither exists. Original password-only
-   recovery does not authorize MFA recovery or prove no later revocation.
-4. FEAT012 S1 now owns minimal security email, with installation protected
-   SMTP configuration. No real channel, verified recipient or delivery yet.
-   Audit or a mock inbox cannot substitute.
+Confirm04041 exact CI without restarting accepted gates. Continue009's actual
+shared attempts/committed failures and restricted challenge vertical slice,
+and012's closed address/notice contract in parallel with peer installation.
+Current Login/ChangePassword still hash inside callback transactions and
+callback errors roll back; no shared durable attempt budget exists yet.
+No MFA endpoint/SQL consumption/session-strength/runtime acceptance exists.
+S3's exactly two security-settings actions remain designed, not granted.
+No Refresh Token, new Identity/STS service, blanket SELF/SYSTEM or online
+administrator resetting another person's MFA. Recovery eligibility remains
+a real gate, not an excuse to infer new authority.
 
-The user explicitly answered YES to both async questions: implement minimal
-verified-address/SMTP/retry security email, and jointly implement bounded
-original protected-primary MFA recovery/restore isolation. These approvals
-are not pending. FEAT009/012 now own their scope; current recovery evidence,
-same-snapshot custody, gate and notification ABIs/runtime remain unaccepted.
-A backup-external long-lived capability proves source, not absence of later
-User/Account disablement or platform revocation. Do not reopen from old DB
-expected values. Do not claim a preparation release is safe merely because
-it understands an OPEN marker but ignores later MFA/Session state.
-No new tasks/subagents, new generic recovery system, blanket SYSTEM actor,
-Refresh Token or physical Identity/STS split.
-
-## Preserved accepted rollback points
-
-- S1 own-session3080922f6ae1871f1c351d5ee30f03551fc3c605.
-- S1b production159bb302fed89161c4b60afeb4a6f41f9bd99820, cumulative
-  7cf857bba48eb5d7da487162c43e8f52534db133 / Verification35324569376,
-  five checks successful. Evidence stays009; UI/full009 not accepted.
-- Independent account-interference measurement7f02d41960f6ca74e49b24f895ad8fc649fc5e49
-  / Verification35338576115, five checks successful. All measurements and
-  limits stay011. Neither observations nor this MFA slice prove fairness,
-  overload enforcement, production capacity or database HA.
-- lookup_session24/revoke_session6, lookup_service5/claim7,
-  record9/contract4/evidence5, ServiceIdentity and old canonical/chains remain.
-
-## Runtime discipline
-
-No subagents/new tasks. Repository-local Xiak <Jellal@aliyun.com> only.
-Go2/-p2 with bounded memory; heavy PG gates serial race-p1, unique names/
-labels and explicit CPU/memory/PID limits. Verify ownership and terminal
-handles before cleanup; no broad prune/shared restart.
-Clean exports outside the repository avoid ignored duplicate build sources
-in architecture checks. Temporary indexes never replace the real index.
-Do not weaken password cost, timeouts, gates or coverage for green.
-No remote1.3/.160/.161, withdrawn GitLab/1.5, foreign WIP/checkpoint or global
-configuration edits. Machine-local paths are not portable memory.
+Preserve S1 source3080922f; S1b cumulative7cf857bb/CI35324569376 accepted.
+Capacity observation7f02d419/CI35338576115 accepted only within011 limits.
+lookup_session24/revoke_session6,lookup_service5/claim7,record9/contract4/
+evidence5, ServiceIdentity and old Audit canonical/chains stay unchanged.
+No new tasks/subagents. Local Xiak <Jellal@aliyun.com> only.
+Go2/-p2; heavy PG serial race-p1 with unique labels and explicit quotas.
+Use clean exports outside repo to avoid ignored duplicate build sources;
+temporary indexes never replace the real index. No lowering cost/gates.
+No remote1.3/.160/.161, withdrawn GitLab/1.5, foreign resources or global
+configuration. Absolute machine paths are not portable memory.

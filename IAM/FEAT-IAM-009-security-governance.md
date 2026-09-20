@@ -169,7 +169,7 @@ TOTP校验只返回须在原子事务内消费的准确时间步，不持久化�
 
 本地聚焦证据：六个TOTP/恢复码行为测试通过race；原authority/API累计race及vet通过；20秒、最多2 worker的TOTP输入fuzz完成83581次执行且无失败。独立Node HMAC向量包括epoch、2038、最大支持日期和910737/910738相邻步的相同码，恢复码SHA256也按独立实现核对；均为公开合成材料，不是用户凭据或真实认证器浏览器验收。秘密仍由原Secret拒绝普通JSON/格式化输出。尚未据此声称材料托管、一次性SQL消费或MFA启用。
 
-2026-09-20本片在干净源码导出、Go1.26.3 Windows/amd64下完成全仓默认`-race -p 2 -count=1`（含architecture）、vet和模块校验，GOMAXPROCS=2/GOMEMLIMIT=512MiB；Linux/amd64构建也通过。未改API生成物、现有SQL或对外运行路径，未启动PG/容器；默认因缺少DSN/运行环境而SKIP的门禁不计为真实运行证据。精确提交的独立CI仍需确认后才记为通过。
+2026-09-20本片在干净源码导出、Go1.26.3 Windows/amd64下完成全仓默认`-race -p 2 -count=1`（含architecture）、vet和模块校验，GOMAXPROCS=2/GOMEMLIMIT=512MiB；Linux/amd64构建也通过。未改API生成物、现有SQL或对外运行路径，未启动PG/容器；默认因缺少DSN/运行环境而SKIP的门禁不计为真实运行证据。初始算法固定`ad93b84fa1cbe902b148e62a9d0f0924a5473a98`的[Verification35484114635](https://github.com/xiak/matrix/actions/runs/35484114635)已由GitHub API核实精确SHA和completed/success；它不包含后继材料片，也不证明MFA登录/恢复已实现。
 
 S2a后继材料基础片由`api/iam/v1/totp_wrapping.go`单一拥有私有keyring、每key承诺、keyset摘要和格式1的种子上下文。新增文件是为了独立TOTP材料边界，不能复用007的AccessKey kind/purpose/文件；现有contract测试拥有它的严格输入、秘密脱敏及不进入公开OpenAPI的门禁。两种凭据共享的仅是原uint32BE长度分界原语，移入既有encoding owner并保留原AccessKey context/signature/nonce字节；没有通用keyring、材料provider或第二套Audit canonical。
 
@@ -177,7 +177,7 @@ S2a后继材料基础片由`api/iam/v1/totp_wrapping.go`单一拥有私有keyrin
 
 本材料片不读取生产文件、不注册keyset、不查询数据库引用、不迁移/轮换真实数据，也不证明备份可恢复、运行副本一致或MFA已开放。后继同快照custody摘要不能拿`TOTPKeysetDigest`代替：后者只证明一套给定材料的内容，前者还必须证明准确备份快照依赖。标准算法参考[Go随机nonce GCM](https://pkg.go.dev/crypto/cipher#NewGCMWithRandomNonce)及[HKDF](https://www.rfc-editor.org/rfc/rfc5869.html)；独立Node标准crypto向量核对原始材料承诺、集合摘要、每记录派生密钥和解密后实际RFC验证码，不以同一实现自算向量作唯一证明。
 
-材料片本地门禁（2026-09-20）：新私有codec/承诺/加密互换及既有AccessKey聚焦race通过；私有codec和密文输入各20秒、最多2 worker的fuzz分别完成547018和705841次执行，无失败，这不是QPS/容量证据。最终代码干净Git导出完成全仓默认race/architecture、vet、模块校验、生成前后全部文件集合及SHA256一致、Linux amd64构建，GOMAXPROCS=2/GOMEMLIMIT=512MiB。外部环境SKIP仍不计真库/进程验收；本片无新DB、容器或远端操作。新固定提交的独立CI另行核实，不能继承前驱或安装分支的通过结论。
+材料片固定`04041d2d3f7ed55225a5164bc2bc05251d25a6f1`本地门禁（2026-09-20）：新私有codec/承诺/加密互换及既有AccessKey聚焦race通过；私有codec和密文输入各20秒、最多2 worker的fuzz分别完成547018和705841次执行，无失败，这不是QPS/容量证据。最终代码干净Git导出完成全仓默认race/architecture、vet、模块校验、生成前后全部文件集合及SHA256一致、Linux amd64构建，GOMAXPROCS=2/GOMEMLIMIT=512MiB。外部环境SKIP仍不计真库/进程验收；本片无新DB、容器或远端操作。[Verification35485632542](https://github.com/xiak/matrix/actions/runs/35485632542)已核对精确SHA，但最后观察仅queued，不能继承前驱或安装分支的通过结论。
 
 #### 不同状态不能混用
 
