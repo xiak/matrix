@@ -1221,6 +1221,75 @@ func TestRecoveryDefinitiveFailureRequiresManualIntervention(t *testing.T) {
 	}
 }
 
+func TestRecoveryInspectionFailureHasSafeSourceCodeBeforeJournalMutation(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{recoveryInspectErr: errors.Join(
+		ErrEffectVerification,
+		errors.New("private backup path must never cross the CLI boundary"),
+	)}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+		t.Fatalf("install recovery-inspection fixture: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixture)
+	before := readJournal(t, root)
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover,
+		Root:   root, BackupID: "backup-" + strings.Repeat("b", 32),
+	})
+	assertFault(t, err, cli.FaultVerification, "RECOVERY_SOURCE_VERIFICATION_FAILED")
+	if !reflect.DeepEqual(before, readJournal(t, root)) || effects.recoveryInspectCalls != 1 ||
+		len(effects.recoveryCalls) != 0 {
+		t.Fatal("failed backup inspection changed the journal or reached recovery effects")
+	}
+}
+
+func TestRecoveryFailureBoundaryReturnsOnlyClosedSafeCodes(t *testing.T) {
+	unsafeCause := errors.Join(
+		ErrEffectVerification,
+		errors.New("private recovery material at /unsafe/path"),
+	)
+	for boundary, wantCode := range map[RecoveryFailureBoundary]string{
+		RecoveryFailureSource:          "RECOVERY_SOURCE_VERIFICATION_FAILED",
+		RecoveryFailureReleaseImages:   "RECOVERY_RELEASE_IMAGES_VERIFICATION_FAILED",
+		RecoveryFailureProviderState:   "RECOVERY_PROVIDER_STATE_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseStart:   "RECOVERY_DATABASE_START_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseDump:    "RECOVERY_DATABASE_DUMP_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestore: "RECOVERY_DATABASE_RESTORE_VERIFICATION_FAILED",
+		RecoveryFailureSecretRestore:   "RECOVERY_SECRET_RESTORE_VERIFICATION_FAILED",
+		RecoveryFailureMigration:       "RECOVERY_MIGRATION_VERIFICATION_FAILED",
+	} {
+		bound := BindRecoveryFailure(boundary, unsafeCause)
+		if !errors.Is(bound, ErrEffectVerification) ||
+			strings.Contains(bound.Error(), "private recovery material") ||
+			strings.Contains(bound.Error(), "/unsafe/path") {
+			t.Fatalf("boundary %q leaked or lost its verification class: %v", boundary, bound)
+		}
+		got := effectFault(lifecycle.PhaseRecovering, bound)
+		if got.Class != cli.FaultVerification || got.Code != wantCode {
+			t.Fatalf("boundary %q fault = %#v", boundary, got)
+		}
+	}
+	if BindRecoveryFailure(RecoveryFailureSource, nil) != nil {
+		t.Fatal("nil recovery failure acquired a boundary")
+	}
+	invalid := effectFault(
+		lifecycle.PhaseRecovering,
+		BindRecoveryFailure(RecoveryFailureBoundary("UNDECLARED"), unsafeCause),
+	)
+	if invalid.Class != cli.FaultVerification || invalid.Code != "RECOVERY_VERIFICATION_FAILED" {
+		t.Fatalf("undeclared recovery boundary fault = %#v", invalid)
+	}
+	conflict := effectFault(
+		lifecycle.PhaseRecovering,
+		BindRecoveryFailure(RecoveryFailureSecretRestore, ErrEffectConflict),
+	)
+	if conflict.Class != cli.FaultConflict || conflict.Code != "OWNERSHIP_CONFLICT" {
+		t.Fatalf("bounded recovery conflict = %#v", conflict)
+	}
+}
+
 func TestStatusIsReadOnlyForStableAndActiveInstallations(t *testing.T) {
 	fixture := writeReleaseFixture(t)
 	effects := &installEffects{observeReady: true}

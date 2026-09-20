@@ -52,6 +52,53 @@ var (
 	ErrCredentialRecoveryConflict  = errors.New("local credential recovery intent conflicts")
 )
 
+// RecoveryFailureBoundary is a closed, non-secret diagnostic classification
+// for destructive restore verification. It lets the CLI persist and return a
+// useful stable code without exposing adapter errors, paths, provider output,
+// database content, or recovery material.
+type RecoveryFailureBoundary string
+
+const (
+	RecoveryFailureSource          RecoveryFailureBoundary = "SOURCE"
+	RecoveryFailureReleaseImages   RecoveryFailureBoundary = "RELEASE_IMAGES"
+	RecoveryFailureProviderState   RecoveryFailureBoundary = "PROVIDER_STATE"
+	RecoveryFailureDatabaseStart   RecoveryFailureBoundary = "DATABASE_START"
+	RecoveryFailureDatabaseDump    RecoveryFailureBoundary = "DATABASE_DUMP"
+	RecoveryFailureDatabaseRestore RecoveryFailureBoundary = "DATABASE_RESTORE"
+	RecoveryFailureSecretRestore   RecoveryFailureBoundary = "SECRET_RESTORE"
+	RecoveryFailureMigration       RecoveryFailureBoundary = "MIGRATION"
+)
+
+type recoveryFailureBoundaryError struct {
+	boundary RecoveryFailureBoundary
+	cause    error
+}
+
+func (failure *recoveryFailureBoundaryError) Error() string {
+	return "platform recovery failed at " + string(failure.boundary)
+}
+
+func (failure *recoveryFailureBoundaryError) Unwrap() error {
+	return failure.cause
+}
+
+func BindRecoveryFailure(boundary RecoveryFailureBoundary, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	switch boundary {
+	case RecoveryFailureSource, RecoveryFailureReleaseImages, RecoveryFailureProviderState,
+		RecoveryFailureDatabaseStart, RecoveryFailureDatabaseDump, RecoveryFailureDatabaseRestore,
+		RecoveryFailureSecretRestore, RecoveryFailureMigration:
+		return &recoveryFailureBoundaryError{boundary: boundary, cause: cause}
+	default:
+		return errors.Join(
+			ErrEffectVerification,
+			errors.New("platform recovery failure boundary is invalid"),
+		)
+	}
+}
+
 // InstallPlan is authenticated input plus the installation-owned identity.
 // TrustBytes contains a public key document, never credential material.
 type InstallPlan struct {
@@ -988,7 +1035,10 @@ func (backend *Backend) recover(
 		if ctx.Err() != nil {
 			return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
 		}
-		return cli.Result{}, effectFault(lifecycle.PhaseRecovering, err)
+		return cli.Result{}, effectFault(
+			lifecycle.PhaseRecovering,
+			BindRecoveryFailure(RecoveryFailureSource, err),
+		)
 	}
 	if source.InstallationID != state.InstallationID || source.BackupID != request.BackupID ||
 		source.ReleaseID == "" || source.ReleaseDigest == "" || source.BackupDigest == "" ||
@@ -1399,12 +1449,30 @@ func effectFault(phase lifecycle.Phase, err error) *cli.Fault {
 		code = "OWNERSHIP_CONFLICT"
 	case errors.Is(err, ErrEffectVerification):
 		class = cli.FaultVerification
-		code = phaseFailureCode(phase, "VERIFICATION_FAILED")
+		code = recoveryVerificationFailureCode(phase, err)
 	case errors.Is(err, ErrEffectUnavailable):
 		class = cli.FaultUnavailable
 		code = "DEPENDENCY_UNAVAILABLE"
 	}
 	return fault(class, code)
+}
+
+func recoveryVerificationFailureCode(phase lifecycle.Phase, err error) string {
+	if phase != lifecycle.PhaseRecovering {
+		return phaseFailureCode(phase, "VERIFICATION_FAILED")
+	}
+	var failure *recoveryFailureBoundaryError
+	if !errors.As(err, &failure) {
+		return phaseFailureCode(phase, "VERIFICATION_FAILED")
+	}
+	switch failure.boundary {
+	case RecoveryFailureSource, RecoveryFailureReleaseImages, RecoveryFailureProviderState,
+		RecoveryFailureDatabaseStart, RecoveryFailureDatabaseDump, RecoveryFailureDatabaseRestore,
+		RecoveryFailureSecretRestore, RecoveryFailureMigration:
+		return "RECOVERY_" + string(failure.boundary) + "_VERIFICATION_FAILED"
+	default:
+		return phaseFailureCode(phase, "VERIFICATION_FAILED")
+	}
 }
 
 func phaseFailureCode(phase lifecycle.Phase, suffix string) string {

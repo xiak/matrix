@@ -84,26 +84,26 @@ func recoverBackup(
 ) error {
 	current, target, manifest, err := authenticateRecoveryPlan(plan)
 	if err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureSource, err)
 	}
 	defer clear(current.TrustBytes)
 	defer clear(target.TrustBytes)
 	for _, image := range target.Bundle.Manifest.Images {
 		present, inspectErr := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
 		if inspectErr != nil {
-			return inspectErr
+			return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureReleaseImages, inspectErr)
 		}
 		if !present {
-			return errors.Join(
+			return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureReleaseImages, errors.Join(
 				platformcommand.ErrEffectVerification,
 				errors.New("recovery release image identity is absent"),
-			)
+			))
 		}
 	}
 
 	state, err := inspectUpgradeProject(ctx, runtimeBoundary, current, target)
 	if err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureProviderState, err)
 	}
 	if state.releaseID != "" {
 		participant := current
@@ -112,20 +112,20 @@ func recoverBackup(
 			participant = target
 		}
 		if err := rollbackInstallation(ctx, runtimeBoundary, participant); err != nil {
-			return err
+			return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureProviderState, err)
 		}
 	}
 	if err := removeRecoveredVerificationProject(
 		ctx, runtimeBoundary, projectInspector, current, target,
 	); err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureProviderState, err)
 	}
 	if err := replaceReleaseConfiguration(current, target); err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureProviderState, err)
 	}
 	postgresID, err := startRecoveryPostgres(ctx, runtimeBoundary, target)
 	if err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureDatabaseStart, err)
 	}
 	backupRelative := filepath.Join(
 		filepath.FromSlash(layout.BackupDirectory), plan.BackupID,
@@ -134,12 +134,12 @@ func recoverBackup(
 	if err := verifyDatabaseDump(
 		ctx, streaming, plan.Current.Root, dumpRelative, postgresID,
 	); err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureDatabaseDump, err)
 	}
 	if err := restoreDatabaseDump(
 		ctx, streaming, plan.Current.Root, dumpRelative, postgresID,
 	); err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureDatabaseRestore, err)
 	}
 	if err := verifyWorkloadSecretRestore(
 		plan.Current.Root,
@@ -147,18 +147,27 @@ func recoverBackup(
 		true,
 	); err != nil {
 		if errors.Is(err, errManagedOutcomeUnknown) {
-			return errors.Join(platformcommand.ErrEffectOutcomeUnknown, err)
+			return platformcommand.BindRecoveryFailure(
+				platformcommand.RecoveryFailureSecretRestore,
+				errors.Join(platformcommand.ErrEffectOutcomeUnknown, err),
+			)
 		}
-		return errors.Join(platformcommand.ErrEffectConflict, err)
+		return platformcommand.BindRecoveryFailure(
+			platformcommand.RecoveryFailureSecretRestore,
+			errors.Join(platformcommand.ErrEffectConflict, err),
+		)
 	}
 	profile, profileErr := manifest.databaseProfile()
 	if profileErr != nil || profile != target.Bundle.Manifest.Database {
-		return errors.Join(
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureSource, errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("recovery schema identity changed"),
-		)
+		))
 	}
-	return migrateInstallation(ctx, runtimeBoundary, target)
+	return platformcommand.BindRecoveryFailure(
+		platformcommand.RecoveryFailureMigration,
+		migrateInstallation(ctx, runtimeBoundary, target),
+	)
 }
 
 func removeRecoveredVerificationProject(
