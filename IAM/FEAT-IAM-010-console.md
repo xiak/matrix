@@ -123,7 +123,9 @@ DEV `AccessSettings` 也只拥有账号级 MFA 要求与用户 SSO 选择。先�
 角色体验以 IAM-006 的固定来源
 `62a18a48168e87a4158b95eba41427b445ed10d1`、公开数量边界修正
 `0567c8b2699521b137db0f8b69f17630c59f04fb` 和来源身份不可复活修正
-`1ebab37aef4bce12b963f52d3919748a9d50d4c6` 为后续 LIVE 接入依据；这些来源尚未进入本 UX 分支，因此这里只接受信息架构和隔离 MOCK 行为，不宣称已调用真实 Role、TrustPolicy 或 STS HTTP。真实首版信任仅接受同 Account 的精确 User，服务身份、身份提供商、跨账号、角色链和通配信任仍属后继能力；体验仓库已有的服务/联合示例必须继续标成合成 MOCK，不能映射成可发行的真实临时凭据。
+`1ebab37aef4bce12b963f52d3919748a9d50d4c6` 为 LIVE 接入依据。管理侧 Role list/read 已由严格客户端接入该固定来源：Account 只用于核对当前认证上下文，不能作为调用者可选参数；响应中的 Role、trust version、policy attachment、能力快照、时间、排序和摘要必须完整核对，协议不符或真实请求失败都不能回退 MOCK。能力快照只描述这次响应允许呈现的动作，不能缓存为后续变更或 AssumeRole 的授权结论。
+
+首个 LIVE 管理片只提供角色目录和详情读取。固定标题、说明、搜索和筛选立即呈现，仅数据区局部加载；目录使用不伪造总数的 opaque cursor，详情在内容区展开并分开呈现权限策略、信任关系与当前能力，不打开 Dialog。真实首版信任仅接受同 Account 的精确 User，信任准入不替代调用 User 对目标 Role 的承担授权，也不授予 Role 对业务资源的访问权。服务身份、身份提供商、跨账号、角色链和通配信任仍属后继能力；体验仓库已有的服务/联合示例继续标成合成 MOCK，不能映射成真实能力或可发行的临时凭据。
 
 角色信任关系是详情页中的完整配置工作流。进入后在当前 trust 页签内选择、校验、审阅前后主体及完整信任文档，再显式保存；返回、取消、失败重试和完成都不打开 Dialog，并恢复到稳定触发器。信任只是承担准入，不替代调用 User 针对该 Role 的 `iam:assumeRole` 授权，也不授予角色资源权限。
 
@@ -143,7 +145,7 @@ Secret 只在创建结果明确为 `APPLIED` 时展示一次，并在确认离�
 
 真实 PolicyVersion 正文、服务器编译快照和默认版本变更需要独立接入及浏览器验收；当前目录元数据和边界引用不能替代它。只读权限能力目录客户端已经接入固定契约，但仍需与固定 IAM 真实进程执行独立浏览器验收；产品声明管理不是租户策略功能。在真实作者契约和发布验证完成前，不开放可成功提交的真实可视化作者表单。
 
-Role/trust/STS、SSO 与登录安全专项按各自固定后端契约接入。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理契约，但仍需真实 IAM 进程的浏览器联调；产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
+Role 管理 list/read 的固定 LIVE 客户端已经完成，但仍需真实 IAM 进程浏览器联调；Role create/update/status/delete、trust/policy attachment 变更、可承担角色发现、AssumeRole、当前 Role 身份、by-request 恢复、logout 与管理员会话管理仍待各自固定契约接入。SSO 与登录安全专项同样按各自固定后端契约推进。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理契约，但仍需真实 IAM 进程的浏览器联调；产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
 
 ## 验收
 
@@ -216,6 +218,19 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - MOCK 成功态只呈现非秘密会话身份、来源 User、签发和到期时间，明确不返回或保存真实 credential、不替换 Header 当前登录。退出确认说明真实 Role logout 不签发或复活来源 USER 凭据，来源会话必须重新检查。选择、审阅、成功与退出均在内容区完成，没有 Dialog。
 - 完整前端 40 个测试文件、590 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价和 Go UI 宿主门禁通过。真实 DEV 在默认紧凑视口与 `360 × 800` 验证账号菜单入口、审阅、成功及未知结果恢复态；小屏 document `clientWidth == scrollWidth == 360`、Dialog 数为零，最终控制台 warning/error 为空。
 - 该证据不表示 IAM-006 固定提交已经进入本分支，也不表示真实 `GET /v1/auth/assumable-roles`、`POST :assume`、当前 Role 身份、by-request 恢复或 logout 已接入。后续 LIVE 适配必须消费固定契约且不得在网络、5xx、404 或协议失败后回退本 MOCK。
+
+### Role 管理只读 LIVE 客户端的开发验收证据
+
+2026-09-21，LIVE 前端适配与同步嵌入资源固定在已推送的
+[`d4bff0d368996833a4bde1c5c44bfad29fe03e4c`](https://github.com/xiak/matrix/commit/d4bff0d368996833a4bde1c5c44bfad29fe03e4c)，
+契约来源为 IAM-006 固定提交 `1ebab37aef4bce12b963f52d3919748a9d50d4c6`。既有 Role/trust/session 与成员承担 MOCK 继续通过上两节记录的独立入口保留。
+
+- 非体验环境通过独立 Role Provider 严格消费 `GET /v1/roles` 与 `GET /v1/roles/{roleId}`。客户端不发送 Account selector，逐项核对当前 Account、Role 归属、资源版本、状态、时间、标签、列表顺序、opaque cursor、trust 当前版本/摘要和 policy attachment；未知字段、越界数量、错误绑定或非法顺序均失败关闭，真实失败不回退 MOCK。
+- 当前身份只接受固定 `iam.role.list` 和 `iam.role.create` Account 能力；`list` 控制 LIVE 目录可见性，`create` 只作为当前响应的展示快照，不开放尚未固定的创建按钮或推断变更权限。身份或 credential 变化会丢弃旧目录、详情和 cursor，401 只过期发起请求的当前会话状态。
+- 固定页面框架、标题、边界说明、搜索与状态筛选同步呈现，只有目录或详情数据区局部加载；快速响应不闪现整页粗骨架。目录不制造总数，下一页只使用后端 opaque cursor；窄屏表格显式堆叠。Role 详情在当前内容区展示 metadata、标签、权限附件、精确 User trust 和当前能力，不打开 Dialog。
+- trust 摘要按固定 Go canonical 规则在前端重新计算并核对。页面明确区分 Role 信任准入、调用 User 的承担授权和 Role 的资源权限；当前 LIVE 不解释服务主体、身份提供商、跨账号、角色链、通配信任或合成 MOCK 示例。
+- 完整前端 42 个测试文件、645 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。DEV 浏览器验证保留的 MOCK Role 目录与内容区详情仍可检查、无 Dialog，控制台 warning/error 为空。
+- 当前证据接受固定 LIVE list/read 客户端、响应式信息架构、局部加载和独立 MOCK 可检查性；尚未以真实 IAM 进程执行 Role 目录/详情的浏览器验收，也没有开放 Role/trust/policy 变更、成员可承担角色发现、真实 AssumeRole、临时凭据、当前 Role 身份、by-request 恢复、logout 或管理员会话 API。
 
 ### 访问密钥生命周期的开发验收证据
 
@@ -297,4 +312,4 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 公共 UI、生产导出、完整前端及 Go 回归证据只归
 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-user-boundarynavigation-development-evidence)
-所有。真实 PolicyVersion/授权目录作者流程、Role/trust/STS、SSO，个人 MFA 的替换/移除/恢复 LIVE 适配，首次绑定与访问密钥的真实后端浏览器联调，以及本边界片的浅色/混色浏览器与键盘专项尚未完成。仍需与固定后端原子整合并执行相应发布门禁；本 UX 分支独立运行不等于完整 IAM 安装候选已验收。
+所有。真实 PolicyVersion/授权目录作者流程、Role/trust/policy 变更与 STS、SSO，个人 MFA 的替换/移除/恢复 LIVE 适配，Role 只读、首次绑定与访问密钥的真实后端浏览器联调，以及本边界片的浅色/混色浏览器与键盘专项尚未完成。仍需与固定后端原子整合并执行相应发布门禁；本 UX 分支独立运行不等于完整 IAM 安装候选已验收。
