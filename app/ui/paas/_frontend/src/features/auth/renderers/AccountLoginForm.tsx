@@ -8,6 +8,7 @@ import { Button, FormField, Alert, Input, PasswordInput, Tabs } from "@ui/xiak";
 import { useSession } from "../application/SessionProvider";
 import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
 import { MfaLoginPreview } from "./MfaPreviewExperience";
+import { beginPreviewPersonalMfaRecovery, completePreviewPersonalMfaLogin, confirmPreviewPersonalMfaRecovery, preparePreviewPersonalMfaDemo, previewPersonalMfaSnapshot } from "../repositories/previewIamRepository";
 import styles from "./LoginRenderer.module.css";
 
 export function AccountLoginForm({ returnTo }: { returnTo: string }) {
@@ -41,6 +42,11 @@ export function AccountLoginForm({ returnTo }: { returnTo: string }) {
       setFormError(mode === "subaccount" ? "childIdentifier" : "primaryIdentifier");
       return;
     }
+    const mfa = uxPreviewEnabled ? previewPersonalMfaSnapshot() : null;
+    if (mfa && (mfa.factorState !== "never-bound" || mfa.recoveryState !== "idle")) {
+      setMfaPreview(true);
+      return;
+    }
     setSubmission("login");
     const outcome = await session.login(identifier, password);
     setPassword("");
@@ -48,8 +54,13 @@ export function AccountLoginForm({ returnTo }: { returnTo: string }) {
     if (outcome === "authenticated") router.replace(returnTo, { scroll: false });
   }
 
-  async function enterPreview() {
+  async function enterPreview(verified = false) {
     if (busy) return;
+    const mfa = previewPersonalMfaSnapshot();
+    if (!verified && (mfa.factorState !== "never-bound" || mfa.recoveryState !== "idle")) {
+      setMfaPreview(true);
+      return;
+    }
     setFormError(null);
     setPassword("");
     setSubmission("preview");
@@ -58,7 +69,9 @@ export function AccountLoginForm({ returnTo }: { returnTo: string }) {
     if (outcome === "authenticated") router.replace(returnTo, { scroll: false });
   }
 
-  if (mfaPreview) return <MfaLoginPreview onBack={() => setMfaPreview(false)} onAuthenticated={() => { void enterPreview(); }} />;
+  if (mfaPreview) return <MfaLoginPreview state={previewPersonalMfaSnapshot()} onBack={() => setMfaPreview(false)}
+    onBeginRecovery={beginPreviewPersonalMfaRecovery} onConfirmRecovery={confirmPreviewPersonalMfaRecovery}
+    onAuthenticated={async () => { if (!await completePreviewPersonalMfaLogin()) return false; await enterPreview(true); }} />;
 
   return <>
     <div className={styles.cardHeading}>
@@ -101,7 +114,7 @@ export function AccountLoginForm({ returnTo }: { returnTo: string }) {
         {busy && submission === "preview" ? <LoaderCircle aria-hidden="true" className={styles.spinner} /> : null}
         {t(busy && submission === "preview" ? "previewPending" : "previewAction")}<ArrowRight aria-hidden="true" />
       </Button>
-      <Button block disabled={busy} onClick={() => setMfaPreview(true)} variant="ghost">{t("previewMfaAction")}</Button>
+      <Button block disabled={busy} onClick={() => { preparePreviewPersonalMfaDemo(); setMfaPreview(true); }} variant="ghost">{t("previewMfaAction")}</Button>
     </div> : null}
   </>;
 }

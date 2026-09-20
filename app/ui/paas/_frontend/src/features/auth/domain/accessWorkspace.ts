@@ -45,6 +45,7 @@ export type AccessSettings = {
 export type PersonalMfaPreviewState = {
   factorState: "never-bound" | "bound" | "removed";
   reauthenticationRequired: boolean;
+  recoveryState: "idle" | "rebind-required";
 };
 export type AccessEvent = { id: string; action: AccessWorkspaceCommand["kind"] | "sign-in" | "batch-users"; target: string; at: string };
 export type PreviewUserProfile = {
@@ -94,11 +95,13 @@ export type AccessWorkspaceCommand =
   | { kind: "save-federation"; id?: string; name: string; subject: string; providerId: string; roleId: string; enabled: boolean }
   | { kind: "delete-federation"; id: string }
   | { kind: "create-key"; ownerId: string; ownerState: AccessKeyOwnerState; userResourceVersion: number; requestId: string; responseMode: "success" | "response-lost" }
-  | { kind: "inspect-key-creation"; ownerId: string; requestId: string }
+  | { kind: "inspect-key-creation"; ownerId: string; requestId: string; resultMode: "found" | "not-found" | "unavailable" }
   | { kind: "set-key-status"; id: string; ownerState: AccessKeyOwnerState; status: AccessKey["status"]; resourceVersion: number; requestId: string }
   | { kind: "delete-key"; id: string; resourceVersion: number; requestId: string }
   | { kind: "confirm-personal-mfa" }
   | { kind: "remove-personal-mfa" }
+  | { kind: "begin-personal-mfa-recovery" }
+  | { kind: "complete-personal-mfa-reauthentication" }
   | { kind: "set-user-policies"; principalId: string; policyIds: string[] }
   | { kind: "set-user-groups"; principalId: string; groupIds: string[] }
   | { kind: "update-user"; principalId: string; displayName: string }
@@ -403,7 +406,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     case "inspect-key-creation": {
       const pending = state.pendingKeyCreation;
       const resolvedKeyId = context.resolvedKeyId;
-      if (!resolvedKeyId) throw new AccessWorkspaceError("invalid");
+      if (command.resultMode !== "found" || !resolvedKeyId) throw new AccessWorkspaceError("invalid");
       if (!pending || pending.status !== "UNKNOWN" ||
         pending.ownerId !== command.ownerId || pending.requestId !== command.requestId) invalid();
       const recoveredKey = exists(state.keys, resolvedKeyId);
@@ -426,12 +429,20 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       if (state.pendingKeyCreation?.status === "COMMITTED_SECRET_LOST" && state.pendingKeyCreation.keyId === id) state.pendingKeyCreation = null;
       break;
     case "confirm-personal-mfa":
-      if (state.personalMfa.reauthenticationRequired) invalid();
-      state.personalMfa = { factorState: "bound", reauthenticationRequired: true };
+      if (state.personalMfa.reauthenticationRequired && state.personalMfa.recoveryState !== "rebind-required") invalid();
+      state.personalMfa = { factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" };
       target = context.primaryPrincipalId; break;
     case "remove-personal-mfa":
-      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired) invalid();
-      state.personalMfa = { factorState: "removed", reauthenticationRequired: true };
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle") invalid();
+      state.personalMfa = { factorState: "removed", reauthenticationRequired: true, recoveryState: "idle" };
+      target = context.primaryPrincipalId; break;
+    case "begin-personal-mfa-recovery":
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.recoveryState !== "idle") invalid();
+      state.personalMfa = { factorState: "removed", reauthenticationRequired: true, recoveryState: "rebind-required" };
+      target = context.primaryPrincipalId; break;
+    case "complete-personal-mfa-reauthentication":
+      if (state.personalMfa.factorState === "never-bound" || state.personalMfa.recoveryState !== "idle") invalid();
+      state.personalMfa = { ...state.personalMfa, reauthenticationRequired: false };
       target = context.primaryPrincipalId; break;
     case "set-user-policies":
       if (!context.userIds.includes(command.principalId)) invalid();

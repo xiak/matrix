@@ -16,7 +16,7 @@ import { GroupDirectory } from "./GroupAccessWorkspace";
 import { AccessReports } from "./AccessReports";
 import { buildAccessReport, buildAccessSecuritySnapshot } from "../scenes/accessReport";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
-import { previewAccountRepository, previewCredential, previewIamRepository } from "../repositories/previewIamRepository";
+import { previewAccountRepository, previewCredential, previewIamRepository, resetPreviewEnvironment } from "../repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 
 vi.mock("next/link", () => ({
@@ -59,6 +59,14 @@ function AccountRefresh() {
   return <button data-testid="refresh-account" onClick={access.reload}>Refresh account</button>;
 }
 
+function ReauthenticationGuardProbe() {
+  const access = useAccountAccess();
+  return <>
+    <button data-testid="guard-workspace" onClick={() => void access.executeWorkspace({ kind: "save-settings", settings: { loginProtection: false, userSsoEnabled: false, userSsoProviderId: "" } })}>Protected workspace mutation</button>
+    <button data-testid="guard-group" onClick={() => void access.groups?.create({ name: "BlockedGroup", description: "must not reach adapter", requestId: "blocked-group" }).catch(() => undefined)}>Protected group mutation</button>
+  </>;
+}
+
 function Harness({ repository, initialView, initialEntityId }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string }) {
   const requestLeave = useLeaveConfirmation();
   const session = useSession();
@@ -67,7 +75,7 @@ function Harness({ repository, initialView, initialEntityId }: { repository: Acc
   const [entityId, setEntityId] = useState(initialEntityId);
   const [policyMethod, setPolicyMethod] = useState<string>();
   if (!session.current) return <button onClick={() => void session.login("admin", "preview")}>Enter</button>;
-  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><AccountRefresh /><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} onNavigate={(next, id, method) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); })} /></AccountAccessProvider>;
+  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><AccountRefresh /><ReauthenticationGuardProbe /><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} onNavigate={(next, id, method) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); })} /></AccountAccessProvider>;
 }
 async function open(initialView: AccountAccessView, options?: { live?: boolean; reader?: boolean; entityId?: string; users?: UserAccess[]; repository?: Partial<AccountRepository>; seed?(extension: ReturnType<typeof createPreviewAccessWorkspace>): Promise<void> }) {
   const directoryUsers = options?.users ?? users;
@@ -118,11 +126,11 @@ async function expectRetainedFailure(dialog: HTMLElement) {
   await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toContain("重试"));
   expect(document.activeElement).toBe(within(dialog).getByRole("alert"));
 }
-afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); });
+afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); resetPreviewEnvironment(); });
 
 describe("selection-driven user directory", () => {
   async function openBatch() {
-    await previewIamRepository.logout(previewCredential);
+    resetPreviewEnvironment();
     const repository = { ...previewAccountRepository, listUsers: vi.fn(previewAccountRepository.listUsers), execute: vi.fn(previewAccountRepository.execute), executeUserBatch: vi.fn(previewAccountRepository.executeUserBatch!) };
     const user = userEvent.setup();
     render(<LocaleProvider><SessionProvider repository={previewIamRepository}><UnsavedChangesProvider><Harness initialView="users" repository={repository} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>);
@@ -2100,6 +2108,15 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByTestId("go-keys"));
     expect(await screen.findByText("UNKNOWN")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "返回列表" })).toBeNull();
+    await select(user, "原请求查询结果", "暂未找到（保持未知）");
+    await user.click(screen.getByRole("button", { name: "按原 requestId 查询" }));
+    expect(await screen.findByText(/原 requestId 暂未查询到确定结果/)).toBeTruthy();
+    expect((await extension.read("preview")).pendingKeyCreation?.status).toBe("UNKNOWN");
+    await select(user, "原请求查询结果", "查询暂不可用（保持未知）");
+    await user.click(screen.getByRole("button", { name: "按原 requestId 查询" }));
+    expect(await screen.findByText(/暂时无法查询原 requestId/)).toBeTruthy();
+    expect((await extension.read("preview")).pendingKeyCreation?.status).toBe("UNKNOWN");
+    await select(user, "原请求查询结果", "已找到原创建结果");
     await user.click(screen.getByRole("button", { name: "按原 requestId 查询" }));
     expect(screen.getByText("不可恢复 · 不可重显")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看并处置这把密钥" }));
@@ -2114,7 +2131,7 @@ describe("CAM-style access workspace", () => {
     expect((await extension.read("preview")).pendingKeyCreation).toBeNull();
   });
   it("models personal MFA, scoped step-up and the frozen account requirement without invented settings", async () => {
-    const { user } = await open("settings");
+    const { user, extension } = await open("settings");
     expect(screen.getByRole("heading", { name: "身份验证方法" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "多因素认证要求" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "登录时的 MFA 要求" })).toBeTruthy();
@@ -2144,20 +2161,26 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "已添加，下一步" }));
     await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
     await user.click(screen.getByRole("button", { name: "验证并绑定" }));
+    expect((await extension.read("preview")).personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
     const oneTimeCodes = screen.getByText("MTRX-4Q7F-K2PA").closest("article")!;
     expect(oneTimeCodes).toBeTruthy();
     expect(within(oneTimeCodes).queryByRole("button", { name: "取消" })).toBeNull();
     await user.click(screen.getByRole("checkbox", { name: "我已安全保存这些恢复码" }));
     await user.click(screen.getByRole("button", { name: "完成设置" }));
-    expect(screen.getByText(/当前会话不会被悄悄升级或继续用于安全操作/)).toBeTruthy();
-    expect(screen.getByText("需要重新登录")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "替换验证器" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "移除" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "生成新恢复码" }) as HTMLButtonElement).disabled).toBe(true);
-    await user.click(screen.getByTestId("go-users"));
-    await user.click(screen.getByTestId("go-settings"));
-    expect(screen.getByText("需要重新登录")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "替换验证器" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "Enter" })).toBeTruthy();
+    expect((await extension.read("preview")).personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
+  });
+  it("blocks workspace and group management while the old session requires reauthentication", async () => {
+    const createGroup = vi.fn().mockRejectedValue(new Error("must not be called"));
+    const { user, repository } = await open("overview", {
+      repository: { createGroup },
+      seed: async (extension) => { extension.transact((source) => ({ workspace: { ...source, personalMfa: { factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" } } })); }
+    });
+    await user.click(screen.getByTestId("guard-workspace"));
+    await user.click(screen.getByTestId("guard-group"));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(createGroup).not.toHaveBeenCalled();
+    expect(await screen.findByText(/当前会话不能继续执行受保护操作/)).toBeTruthy();
   });
   it("keeps first security-notification address verification personal, inline, and explicitly MOCK", async () => {
     const { user, repository } = await open("settings");

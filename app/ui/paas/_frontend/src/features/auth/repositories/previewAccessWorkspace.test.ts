@@ -4,7 +4,7 @@ import { analyzePolicyDocument, includesPermissionManagement, parsePolicyDocumen
 import { expandPolicyActions } from "../domain/policyLanguage";
 import { policyActions, policyServices } from "../domain/previewAuthorizationCatalog";
 import { createPreviewAccessWorkspace, initialAccessWorkspace } from "./previewAccessWorkspace";
-import { previewAccountRepository, previewCredential, previewIamRepository } from "./previewIamRepository";
+import { previewAccountRepository, previewCredential, previewIamRepository, previewPersonalMfaSnapshot, resetPreviewEnvironment } from "./previewIamRepository";
 import type { AccountCommand } from "../domain/accounts";
 import type { AccessWorkspaceCommand } from "../domain/accessWorkspace";
 import { applyUserBatch, userBatchDisabledReason, userBatchLimit, type UserBatchCommand } from "../domain/userBatch";
@@ -14,7 +14,7 @@ const document = parsePolicyDocument('{"version":"1","statement":[{"effect":"all
 
 describe("preview adapter for the fixed group contract", () => {
   it("keeps current identity grant provenance and group capabilities explicit", async () => {
-    await previewIamRepository.logout(previewCredential);
+    resetPreviewEnvironment();
     const identity = await previewAccountRepository.currentIdentity(previewCredential);
     expect(identity.policySources).toEqual([]);
     expect(identity.capabilities.filter((item) => item.action.startsWith("iam.group")).map((item) => item.action)).toEqual([
@@ -23,7 +23,7 @@ describe("preview adapter for the fixed group contract", () => {
   });
 
   it("changes one membership or attachment per versioned command and returns deletion evidence", async () => {
-    await previewIamRepository.logout(previewCredential);
+    resetPreviewEnvironment();
     const accountId = (await previewAccountRepository.currentIdentity(previewCredential)).account.id;
     const created = await previewAccountRepository.createGroup(previewCredential, accountId, { name: "ContractTeam", description: "Contract preview", requestId: "create-contract-team" });
     expect(created).toMatchObject({ accountId, name: "ContractTeam", description: "Contract preview", resourceVersion: 1 });
@@ -40,13 +40,13 @@ describe("preview adapter for the fixed group contract", () => {
     const updated = await previewAccountRepository.updateGroup(previewCredential, accountId, created.id, { name: "ContractOperators", resourceVersion: created.resourceVersion, requestId: "rename-contract-team" });
     const deleted = await previewAccountRepository.deleteGroup(previewCredential, accountId, created.id, { resourceVersion: updated.resourceVersion, requestId: "delete-contract-team" });
     expect(deleted).toMatchObject({ name: "ContractOperators", removedMemberships: 0, revokedPolicyAttachments: 0, resourceVersion: 3 });
-    await previewIamRepository.logout(previewCredential);
+    resetPreviewEnvironment();
   });
 });
 
 describe("atomic user directory batches", () => {
   async function fixture() {
-    await previewIamRepository.logout(previewCredential);
+    resetPreviewEnvironment();
     const identity = await previewAccountRepository.currentIdentity(previewCredential);
     const users = (await previewAccountRepository.listUsers(previewCredential)).items;
     const workspace = await previewAccountRepository.workspace!.read(previewCredential);
@@ -169,7 +169,7 @@ describe("policy modification time", () => {
 
 describe("access workspace preview invariants", () => {
   it("rejects primary authorization and lifecycle mutations without altering preview state", async () => {
-    await previewIamRepository.logout(previewCredential);
+    resetPreviewEnvironment();
     const principalId = (await previewAccountRepository.currentIdentity(previewCredential)).account.rootIdentity.principalId;
     const beforeIdentity = await previewAccountRepository.currentIdentity(previewCredential);
     const beforeUsers = await previewAccountRepository.listUsers(previewCredential);
@@ -203,7 +203,7 @@ describe("access workspace preview invariants", () => {
     expect((await previewAccountRepository.currentIdentity(previewCredential)).account.rootIdentity.principalId).toBe(principalId);
     await previewAccountRepository.execute(previewCredential, { kind: "revoke-policy-attachment", attachmentId: attachment.id, resourceVersion: attachment.resourceVersion });
     expect((await previewAccountRepository.listUsers(previewCredential)).items.find((entry) => entry.user.id === "principal-lin")?.policyAttachments.some((entry) => entry.policyId === policy.id)).toBe(false);
-    await previewIamRepository.logout(previewCredential);
+    resetPreviewEnvironment();
   });
   it("keeps the primary identity outside user groups and other user relations", () => {
     const original = initialAccessWorkspace("org-xiak");
@@ -318,7 +318,7 @@ describe("access workspace preview invariants", () => {
     expect(includesPermissionManagement({ version: "1", statement: [{ effect, action: [action], resource: ["*"] }] })).toBe(expected);
   });
   it("creates a preview user with atomic groups, policies and tags, without live grants or credentials", async () => {
-    await previewIamRepository.logout(previewCredential);
+    resetPreviewEnvironment();
     const extension = previewAccountRepository.workspace!;
     const before = await extension.read(previewCredential);
     const command = { kind: "create-subuser" as const, loginName: "wizard.test", displayName: "Wizard Test", profile: { consoleAccess: true, programmaticAccess: true, passwordResetRequired: true, loginProtection: true, tags: [{ key: "team", value: "platform" }], password: "MUST_NOT_BE_RETAINED" }, policyIds: ["policy-read"], groupIds: ["group-delivery"] };
@@ -339,7 +339,7 @@ describe("access workspace preview invariants", () => {
     expect(removed.workspace.userProfiles[principalId]).toBeUndefined();
     expect(removed.workspace.userPolicies[principalId]).toBeUndefined();
     expect(removed.workspace.groups.some((group) => group.memberIds.includes(principalId))).toBe(false);
-    await previewIamRepository.logout(previewCredential);
+    resetPreviewEnvironment();
   });
   it("rejects preview creation without an access method or with duplicate tag keys", () => {
     const state = initialAccessWorkspace("org-xiak");
@@ -528,8 +528,8 @@ describe("access workspace preview invariants", () => {
     let state = applyAccessWorkspaceCommand(initialAccessWorkspace("org-xiak"), { kind: "create-key", ownerId: "principal-chen", ownerState: "active", userResourceVersion: 2, requestId: "lost-response", responseMode: "response-lost" }, context);
     expect(state.pendingKeyCreation).toEqual({ ownerId: "principal-chen", requestId: "lost-response", status: "UNKNOWN" });
     expect(() => applyAccessWorkspaceCommand(state, { kind: "create-key", ownerId: "principal-lin", ownerState: "active", userResourceVersion: 3, requestId: "bypass-other-user", responseMode: "success" }, context)).toThrow("invalid");
-    expect(() => applyAccessWorkspaceCommand(state, { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "new-request" }, { ...context, resolvedKeyId: "MOCK-new-id" })).toThrow("invalid");
-    state = applyAccessWorkspaceCommand(state, { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "lost-response" }, { ...context, resolvedKeyId: "MOCK-new-id" });
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "new-request", resultMode: "found" }, { ...context, resolvedKeyId: "MOCK-new-id" })).toThrow("invalid");
+    state = applyAccessWorkspaceCommand(state, { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "lost-response", resultMode: "found" }, { ...context, resolvedKeyId: "MOCK-new-id" });
     expect(state.pendingKeyCreation?.status).toBe("COMMITTED_SECRET_LOST");
     state = applyAccessWorkspaceCommand(state, { kind: "set-key-status", id: "MOCK-new-id", ownerState: "active", status: "DISABLED", resourceVersion: 1, requestId: "disable-lost" }, context);
     state = applyAccessWorkspaceCommand(state, { kind: "delete-key", id: "MOCK-new-id", resourceVersion: 2, requestId: "delete-lost" }, context);
@@ -553,17 +553,52 @@ describe("access workspace preview invariants", () => {
     expect(result.workspace.pendingKeyCreation).not.toHaveProperty("keyId");
     expect(JSON.stringify(result.workspace)).not.toContain("MOCK_NOT_A_CREDENTIAL_");
   });
+  it("replays a completed key request immutably and keeps inconclusive lookups UNKNOWN", async () => {
+    const repository = createPreviewAccessWorkspace("org-xiak", () => context.userIds, context.primaryPrincipalId);
+    const command = { kind: "create-key" as const, ownerId: "principal-chen", ownerState: "active" as const, userResourceVersion: 2, requestId: "stable-request", responseMode: "response-lost" as const };
+    const first = await repository.execute("mock", command);
+    const replay = await repository.execute("mock", command);
+    expect(replay.issuedKey).toBeUndefined();
+    expect(replay.workspace.keys).toEqual(first.workspace.keys);
+    expect(replay.workspace.pendingKeyCreation).toEqual({ ownerId: "principal-chen", requestId: "stable-request", status: "UNKNOWN" });
+    await expect(repository.execute("mock", { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "stable-request", resultMode: "not-found" })).rejects.toMatchObject({ code: "keyResultNotFound" });
+    await expect(repository.execute("mock", { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "stable-request", resultMode: "unavailable" })).rejects.toMatchObject({ code: "keyResultUnavailable" });
+    expect((await repository.read("mock")).pendingKeyCreation).toEqual({ ownerId: "principal-chen", requestId: "stable-request", status: "UNKNOWN" });
+    const found = await repository.execute("mock", { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "stable-request", resultMode: "found" });
+    expect(found.workspace.pendingKeyCreation).toMatchObject({ ownerId: "principal-chen", requestId: "stable-request", status: "COMMITTED_SECRET_LOST" });
+    expect(found.workspace.keys).toHaveLength(first.workspace.keys.length);
+  });
   it("keeps personal MFA mutations locked behind a normal reauthentication across workspace reads", async () => {
     const repository = createPreviewAccessWorkspace("org-xiak", () => ["principal-lin"], "admin");
     const result = await repository.execute("mock", { kind: "confirm-personal-mfa" });
-    expect(result.workspace.personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true });
-    expect((await repository.read("mock")).personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true });
+    expect(result.workspace.personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
+    expect((await repository.read("mock")).personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
     await expect(repository.execute("mock", { kind: "confirm-personal-mfa" })).rejects.toMatchObject({ code: "invalid" });
     repository.reset();
-    expect((await repository.read("mock")).personalMfa).toEqual({ factorState: "never-bound", reauthenticationRequired: false });
-    repository.transact((source) => ({ workspace: { ...source, personalMfa: { factorState: "bound", reauthenticationRequired: false } } }));
+    expect((await repository.read("mock")).personalMfa).toEqual({ factorState: "never-bound", reauthenticationRequired: false, recoveryState: "idle" });
+    repository.transact((source) => ({ workspace: { ...source, personalMfa: { factorState: "bound", reauthenticationRequired: false, recoveryState: "idle" } } }));
     const removed = await repository.execute("mock", { kind: "remove-personal-mfa" });
-    expect(removed.workspace.personalMfa).toEqual({ factorState: "removed", reauthenticationRequired: true });
+    expect(removed.workspace.personalMfa).toEqual({ factorState: "removed", reauthenticationRequired: true, recoveryState: "idle" });
+  });
+  it("invalidates the old factor when recovery starts and commits the replacement before recovery codes", async () => {
+    const repository = createPreviewAccessWorkspace("org-xiak", () => ["principal-lin"], "admin");
+    repository.transact((source) => ({ workspace: { ...source, personalMfa: { factorState: "bound", reauthenticationRequired: false, recoveryState: "idle" } } }));
+    const recovering = await repository.execute("mock", { kind: "begin-personal-mfa-recovery" });
+    expect(recovering.workspace.personalMfa).toEqual({ factorState: "removed", reauthenticationRequired: true, recoveryState: "rebind-required" });
+    await expect(repository.execute("mock", { kind: "complete-personal-mfa-reauthentication" })).rejects.toMatchObject({ code: "invalid" });
+    const rebound = await repository.execute("mock", { kind: "confirm-personal-mfa" });
+    expect(rebound.workspace.personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
+    const reauthenticated = await repository.execute("mock", { kind: "complete-personal-mfa-reauthentication" });
+    expect(reauthenticated.workspace.personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: false, recoveryState: "idle" });
+  });
+  it("preserves committed MFA history across ordinary logout and clears it only on explicit demo reset", async () => {
+    resetPreviewEnvironment();
+    await previewAccountRepository.workspace!.execute(previewCredential, { kind: "confirm-personal-mfa" });
+    await previewIamRepository.logout(previewCredential);
+    expect(previewPersonalMfaSnapshot()).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
+    await expect(previewIamRepository.login({ loginName: "preview-admin", password: "experience-only" })).rejects.toMatchObject({ status: 401 });
+    resetPreviewEnvironment();
+    expect(previewPersonalMfaSnapshot()).toEqual({ factorState: "never-bound", reauthenticationRequired: false, recoveryState: "idle" });
   });
   it("removes a deleted user's memberships, direct permissions and keys together", () => {
     const state = applyAccessWorkspaceCommand(initialAccessWorkspace("org-xiak"), { kind: "delete-user", principalId: "principal-lin" }, context);
@@ -578,8 +613,8 @@ describe("access workspace preview invariants", () => {
     const updated = applyAccessWorkspaceCommand(state, { kind: "save-settings", settings: { ...state.settings, userSsoEnabled: true, userSsoProviderId: "idp-example" } }, context);
     expect(updated.settings.userSsoEnabled).toBe(true);
   });
-  it("imports visible enterprise members as ungranted preview users and resets them on logout", async () => {
-    await previewIamRepository.logout(previewCredential);
+  it("imports visible enterprise members as ungranted preview users and resets them only through the explicit demo reset", async () => {
+    resetPreviewEnvironment();
     const originalUsers = (await previewAccountRepository.listUsers(previewCredential)).items;
     const extension = previewAccountRepository.workspace!;
     const connected = await extension.execute(previewCredential, { kind: "save-enterprise", name: "MOCK Enterprise", corporationId: "MOCK_CORP", visibleMemberIds: ["dev01"] });
@@ -592,7 +627,7 @@ describe("access workspace preview invariants", () => {
     await expect(extension.execute(previewCredential, { kind: "delete-enterprise", id })).rejects.toThrow("referenced");
     await extension.execute(previewCredential, { kind: "delete-user", principalId: imported.user.id });
     await extension.execute(previewCredential, { kind: "delete-enterprise", id });
-    await previewIamRepository.logout(previewCredential);
+    resetPreviewEnvironment();
     expect((await previewAccountRepository.listUsers(previewCredential)).items).toEqual(originalUsers);
     expect((await extension.read(previewCredential)).enterprises).toHaveLength(0);
   });

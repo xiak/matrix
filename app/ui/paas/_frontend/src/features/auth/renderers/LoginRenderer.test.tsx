@@ -5,6 +5,7 @@ import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider } from "../application/SessionProvider";
 import type { IamRepository } from "../repositories/iamRepository";
+import { previewPersonalMfaSnapshot, resetPreviewEnvironment } from "../repositories/previewIamRepository";
 import { LoginRenderer } from "./LoginRenderer";
 
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
@@ -21,7 +22,7 @@ function open(iam = repository(), returnTo: string | undefined = "/console/resou
   render(<LocaleProvider><SessionProvider repository={iam}><LoginRenderer returnTo={returnTo} /></SessionProvider></LocaleProvider>);
   return { user, iam };
 }
-afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); resetPreviewEnvironment(); vi.clearAllMocks(); });
 
 describe("branded sign-in flows", () => {
   it.each(["primary", "subaccount", "preview"])("lands a %s sign-in on the dashboard by default", async (mode) => {
@@ -81,6 +82,7 @@ describe("branded sign-in flows", () => {
     expect(screen.getByRole("heading", { name: "完成安全验证" })).toBeTruthy();
     expect(screen.getByText(/尚未创建登录会话/)).toBeTruthy();
     expect(iam.login).not.toHaveBeenCalled();
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
     await user.type(screen.getByLabelText("6 位动态验证码"), "000000");
     await user.click(screen.getByRole("button", { name: "验证并登录" }));
     expect(screen.getByRole("alert").textContent).toContain("未能完成验证");
@@ -109,6 +111,7 @@ describe("branded sign-in flows", () => {
     await user.click(screen.getByRole("button", { name: "已添加，下一步" }));
     await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
     await user.click(screen.getByRole("button", { name: "验证并绑定" }));
+    expect(previewPersonalMfaSnapshot()).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
     expect(screen.getByText("MTRX-4Q7F-K2PA")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "取消" })).toBeNull();
     expect((screen.getByRole("button", { name: "完成设置" }) as HTMLButtonElement).disabled).toBe(true);
@@ -116,6 +119,14 @@ describe("branded sign-in flows", () => {
     await user.click(screen.getByRole("button", { name: "完成设置" }));
     expect(screen.getByRole("heading", { name: "身份验证器已重新绑定" })).toBeTruthy();
     expect(iam.login).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "返回普通登录" }));
+    await user.click(screen.getByRole("button", { name: "一键进入体验控制台" }));
+    expect(screen.getByRole("heading", { name: "完成安全验证" })).toBeTruthy();
+    expect(iam.login).not.toHaveBeenCalled();
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并登录" }));
+    await waitFor(() => expect(iam.login).toHaveBeenCalledWith({ loginName: "preview-admin", password: "experience-only" }));
     expect(localStorage.length + sessionStorage.length).toBe(0);
   });
   it("ends the challenged path when recovery is cancelled instead of reviving the old challenge", async () => {
@@ -128,6 +139,9 @@ describe("branded sign-in flows", () => {
     expect(screen.getByRole("heading", { name: "登录控制台" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "完成安全验证" })).toBeNull();
     expect(iam.login).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "一键进入体验控制台" }));
+    expect(screen.getByRole("heading", { name: "重新绑定身份验证器" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "完成安全验证" })).toBeNull();
   });
   it("translates an existing authentication error immediately and retains the account draft", async () => {
     const iam = repository();

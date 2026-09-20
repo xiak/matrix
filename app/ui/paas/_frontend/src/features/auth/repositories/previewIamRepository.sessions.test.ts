@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
-import { previewCredential, previewIamRepository } from "./previewIamRepository";
+import { previewCredential, previewIamRepository, resetPreviewEnvironment } from "./previewIamRepository";
 
 afterEach(async () => {
   await previewIamRepository.logout(previewCredential);
+  resetPreviewEnvironment();
 });
 
 describe("preview own login sessions", () => {

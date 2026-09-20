@@ -167,6 +167,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     remember(view: PolicyDirectoryView) { storedPolicyView.current = { session: viewSession, view: { ...view } }; }
   }), [viewSession]);
   const clearWorkspaceError = useCallback(() => setWorkspaceError(null), []);
+  const protectedMutation = useCallback(<T,>(request: () => Promise<T>): Promise<T> => {
+    if (workspace?.personalMfa.reauthenticationRequired) {
+      setWorkspaceError("reauthenticationRequired");
+      return Promise.reject(new AccessWorkspaceError("reauthenticationRequired"));
+    }
+    return request();
+  }, [workspace?.personalMfa.reauthenticationRequired]);
   const storedUserView = useRef<{ session: typeof viewSession; view: UserDirectoryView } | null>(null);
   const userDirectoryView = useMemo(() => ({
     read() { const stored = storedUserView.current; return stored?.session === viewSession ? stored.view : { ...defaultUserDirectoryView }; },
@@ -231,16 +238,16 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       createRestrictionReason: scene.createGroupsRestrictionReason,
       list: (after) => repository.listGroups(credential, accountId, after),
       get: (groupId) => repository.getGroup(credential, accountId, groupId),
-      create: (command) => repository.createGroup(credential, accountId, command),
-      update: (groupId, command) => repository.updateGroup(credential, accountId, groupId, command),
-      delete: (groupId, command) => repository.deleteGroup(credential, accountId, groupId, command),
+      create: (command) => protectedMutation(() => repository.createGroup(credential, accountId, command)),
+      update: (groupId, command) => protectedMutation(() => repository.updateGroup(credential, accountId, groupId, command)),
+      delete: (groupId, command) => protectedMutation(() => repository.deleteGroup(credential, accountId, groupId, command)),
       listMemberships: (groupId, after) => repository.listGroupMemberships(credential, accountId, groupId, after),
-      createMembership: (groupId, command) => repository.createGroupMembership(credential, accountId, groupId, command),
-      removeMembership: (groupId, membershipId, command) => repository.removeGroupMembership(credential, accountId, groupId, membershipId, command),
-      createPolicyAttachment: (groupId, command) => repository.createGroupPolicyAttachment(credential, accountId, groupId, command),
-      revokePolicyAttachment: (attachmentId, command) => repository.revokePolicyAttachment(credential, attachmentId, command)
+      createMembership: (groupId, command) => protectedMutation(() => repository.createGroupMembership(credential, accountId, groupId, command)),
+      removeMembership: (groupId, membershipId, command) => protectedMutation(() => repository.removeGroupMembership(credential, accountId, groupId, membershipId, command)),
+      createPolicyAttachment: (groupId, command) => protectedMutation(() => repository.createGroupPolicyAttachment(credential, accountId, groupId, command)),
+      revokePolicyAttachment: (attachmentId, command) => protectedMutation(() => repository.revokePolicyAttachment(credential, attachmentId, command))
     };
-  }, [active, credential, repository, scene, tenantId]);
+  }, [active, credential, protectedMutation, repository, scene, tenantId]);
 
   const permissionBoundaries = useMemo<UserBoundaryClient | null>(() => {
     const boundaryRepository = repository.permissionBoundaries;
@@ -272,10 +279,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         const policies = directory?.items ?? [];
         return { user: buildAccountUserScene({ id: accountId, loginAlias: scene.loginAlias }, policies, access), boundary, policies, policiesAvailable: directory !== null };
       })()),
-      set: (userId, command) => scoped(boundaryRepository.set(credential, accountId, target(userId), command)),
-      remove: (userId, command) => scoped(boundaryRepository.remove(credential, accountId, target(userId), command))
+      set: (userId, command) => protectedMutation(() => scoped(boundaryRepository.set(credential, accountId, target(userId), command))),
+      remove: (userId, command) => protectedMutation(() => scoped(boundaryRepository.remove(credential, accountId, target(userId), command)))
     };
-  }, [active, credential, expireSession, repository, scene, tenantId]);
+  }, [active, credential, expireSession, protectedMutation, repository, scene, tenantId]);
 
   const authorizationProfiles = useMemo<AuthorizationProfileClient | null>(() => {
     if (!active || !credential || !scene || scene.accountId !== tenantId || !scene.canViewPolicies) return null;
@@ -352,6 +359,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     supportsUserBatch: Boolean(repository.executeUserBatch),
     async executeUserBatch(command) {
       if (!active || !credential || !scene || !workspace || !repository.executeUserBatch || loading || mutationPending.current) return false;
+      if (workspace.personalMfa.reauthenticationRequired) { setWorkspaceError("reauthenticationRequired"); return false; }
       const targets = command.targets.map((target) => {
         const user = scene.users.find((entry) => entry.id === target.id);
         return {
@@ -384,6 +392,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     clearWorkspaceError, clearFeedback,
     async executeWorkspace(command) {
       if (!active || !credential || !scene?.canListUsers || !repository.workspace || loading || mutationPending.current) return null;
+      if (workspace?.personalMfa.reauthenticationRequired) { setWorkspaceError("reauthenticationRequired"); return null; }
       if ("principalId" in command && command.principalId === scene.accountOwner.id) { setWorkspaceError("forbidden"); return null; }
       mutationPending.current = true;
       setBusy(true); setWorkspaceError(null); setSuccess(null);
@@ -406,6 +415,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     loadUser,
     async execute(command) {
       if (!active || !credential || loading || mutationPending.current) return false;
+      if (workspace?.personalMfa.reauthenticationRequired) { setWorkspaceError("reauthenticationRequired"); return false; }
       if (!scene || !accountCommandAvailable(scene, command)) { setError("forbidden"); return false; }
       mutationPending.current = true;
       setBusy(true); setError(null); setSuccess(null);

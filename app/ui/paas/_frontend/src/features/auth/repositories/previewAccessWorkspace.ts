@@ -1,4 +1,5 @@
 import { applyAccessWorkspaceCommand, type AccessWorkspace } from "../domain/accessWorkspace";
+import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import { type PolicyDocument } from "../domain/policyDocument";
 import { formatPolicyResource } from "../domain/policyLanguage";
 import { policyActions, policyServices, type PolicyService } from "../domain/previewAuthorizationCatalog";
@@ -75,24 +76,30 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
     keys: [{ id: "MOCK-pipeline-key", ownerId: "principal-lin", status: "ENABLED", resourceVersion: 2, createdAt: at }],
     userPolicies: { "principal-lin": ["policy-prod-logs"], "principal-qiao": ["policy-tag-logs", "policy-production-guard", "policy-assume-reviewer"] },
     settings: { loginProtection: false, userSsoEnabled: false, userSsoProviderId: "" },
-    personalMfa: { factorState: "never-bound", reauthenticationRequired: false },
+    personalMfa: { factorState: "never-bound", reauthenticationRequired: false, recoveryState: "idle" },
     events: [{ id: "event-sign-in", action: "sign-in", target: "preview-admin", at: "2026-09-09T01:10:00Z" }]
   };
 }
 
-export function createPreviewAccessWorkspace(accountId: string, userIds: () => string[], primaryPrincipalId: string): NonNullable<AccountRepository["workspace"]> & { reset(): void; transact<T extends { workspace: AccessWorkspace }>(transition: (source: AccessWorkspace) => T): T } {
+export function createPreviewAccessWorkspace(accountId: string, userIds: () => string[], primaryPrincipalId: string): NonNullable<AccountRepository["workspace"]> & { reset(): void; snapshot(): AccessWorkspace; transact<T extends { workspace: AccessWorkspace }>(transition: (source: AccessWorkspace) => T): T } {
   let state = initialAccessWorkspace(accountId);
   const keyCreationResults = new Map<string, string>();
   const keyCreationRequest = (ownerId: string, requestId: string) => `${ownerId}\u0000${requestId}`;
   return {
     transact(transition) { const result = transition(structuredClone(state)); if (result.workspace.accountId !== accountId || result.workspace.mode !== "preview") throw new Error("INVALID_PREVIEW_WORKSPACE"); state = structuredClone(result.workspace); return result; },
     reset() { state = initialAccessWorkspace(accountId); keyCreationResults.clear(); },
+    snapshot() { return structuredClone(state); },
     async read() { return structuredClone(state); },
     async execute(_credential, command) {
+      const creationRequest = command.kind === "create-key" ? keyCreationRequest(command.ownerId, command.requestId) : null;
+      if (creationRequest && keyCreationResults.has(creationRequest)) return { workspace: structuredClone(state) };
+      if (command.kind === "inspect-key-creation" && command.resultMode === "not-found") throw new AccessWorkspaceError("keyResultNotFound");
+      if (command.kind === "inspect-key-creation" && command.resultMode === "unavailable") throw new AccessWorkspaceError("keyResultUnavailable");
       const id = crypto.randomUUID();
       const resolvedKeyId = command.kind === "inspect-key-creation" ? keyCreationResults.get(keyCreationRequest(command.ownerId, command.requestId)) : undefined;
+      if (command.kind === "inspect-key-creation" && !resolvedKeyId) throw new AccessWorkspaceError("keyResultNotFound");
       state = applyAccessWorkspaceCommand(state, command, { id, at: new Date().toISOString(), userIds: userIds(), primaryPrincipalId, resolvedKeyId });
-      if (command.kind === "create-key") keyCreationResults.set(keyCreationRequest(command.ownerId, command.requestId), "MOCK-" + id);
+      if (creationRequest) keyCreationResults.set(creationRequest, "MOCK-" + id);
       return {
         workspace: structuredClone(state),
         ...(command.kind === "create-key" && command.responseMode === "success"

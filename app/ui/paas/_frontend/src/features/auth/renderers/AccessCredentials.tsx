@@ -31,9 +31,11 @@ function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
   const t = useTranslations("IamWorkspace");
   const access = useAccountAccess();
   const scenarioId = useId();
+  const inspectionId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
+  const [inspectionMode, setInspectionMode] = useState<"found" | "not-found" | "unavailable">("found");
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [flow.kind]);
 
   const title = flow.kind === "create" ? t("keyCreateReview")
@@ -100,7 +102,14 @@ function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
         <Alert status="warning">{t("keyCreateUncertain", { id: flow.requestId })}</Alert>
         <dl className={styles.reviewFacts}><div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div><div><dt>{t("keyIntentState")}</dt><dd><Badge status="warning">UNKNOWN</Badge></dd></div></dl>
         <p className={styles.note}>{t("keyIntentLocked")}</p>
-        <div className={styles.actions}><Button disabled={access.busy} onClick={() => void access.executeWorkspace({ kind: "inspect-key-creation", ownerId: flow.ownerId, requestId: flow.requestId })} variant="secondary">{t("keyQueryOriginal")}</Button></div>
+        <FormField id={inspectionId} label={t("keyInspectionScenario")} hint={t("keyInspectionScenarioHint")}>
+          <Select id={inspectionId} disabled={access.busy} value={inspectionMode} options={[
+            { value: "found", label: t("keyInspectionFound") },
+            { value: "not-found", label: t("keyInspectionNotFound") },
+            { value: "unavailable", label: t("keyInspectionUnavailable") }
+          ]} onValueChange={(mode) => { access.clearWorkspaceError(); setInspectionMode(mode as "found" | "not-found" | "unavailable"); }} />
+        </FormField>
+        <div className={styles.actions}><Button disabled={access.busy} onClick={() => void access.executeWorkspace({ kind: "inspect-key-creation", ownerId: flow.ownerId, requestId: flow.requestId, resultMode: inspectionMode })} variant="secondary">{t("keyQueryOriginal")}</Button></div>
       </> : null}
 
       {flow.kind === "recovered" ? <>

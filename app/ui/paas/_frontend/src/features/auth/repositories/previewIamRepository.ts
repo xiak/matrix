@@ -204,6 +204,60 @@ function resetPreviewOwnSessions(): void {
 
 const initialPreviewState = structuredClone({ account, users, accounts, userPlatformPolicies });
 const workspace = createPreviewAccessWorkspace(account.id, () => users.map((user) => user.id), account.rootIdentity.principalId);
+let previewLoginVerified = false;
+
+export function previewPersonalMfaSnapshot() {
+  return workspace.snapshot().personalMfa;
+}
+
+export function preparePreviewPersonalMfaDemo() {
+  const current = workspace.snapshot().personalMfa;
+  if (current.factorState === "never-bound") {
+    workspace.transact((source) => ({ workspace: { ...source, personalMfa: { factorState: "bound", reauthenticationRequired: false, recoveryState: "idle" } } }));
+  }
+  return workspace.snapshot().personalMfa;
+}
+
+export async function beginPreviewPersonalMfaRecovery(): Promise<boolean> {
+  try {
+    await workspace.execute(previewCredential, { kind: "begin-personal-mfa-recovery" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function confirmPreviewPersonalMfaRecovery(): Promise<boolean> {
+  try {
+    await workspace.execute(previewCredential, { kind: "confirm-personal-mfa" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function completePreviewPersonalMfaLogin(): Promise<boolean> {
+  const state = workspace.snapshot().personalMfa;
+  try {
+    if (state.factorState !== "never-bound") await workspace.execute(previewCredential, { kind: "complete-personal-mfa-reauthentication" });
+    previewLoginVerified = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function resetPreviewEnvironment(): void {
+  previewLoginVerified = false;
+  workspace.reset();
+  const initial = structuredClone(initialPreviewState);
+  account = initial.account;
+  users = initial.users;
+  accounts = initial.accounts;
+  userPlatformPolicies = initial.userPlatformPolicies;
+  clearPreviewGroupContractState();
+  resetPreviewOwnSessions();
+}
 
 function loginResult(): LoginResult {
   return {
@@ -221,18 +275,16 @@ function loginResult(): LoginResult {
 }
 
 export const previewIamRepository: IamRepository = {
-  async login() { return loginResult(); },
+  async login() {
+    const mfa = workspace.snapshot().personalMfa;
+    if ((mfa.factorState !== "never-bound" || mfa.recoveryState !== "idle") && !previewLoginVerified) throw new HttpProblem(401, "PREVIEW_MFA_REQUIRED");
+    previewLoginVerified = false;
+    return loginResult();
+  },
   async changePassword(credential) { requirePreviewCredential(credential); },
   async logout(credential) {
     requirePreviewCredential(credential);
-    workspace.reset();
-    const initial = structuredClone(initialPreviewState);
-    account = initial.account;
-    users = initial.users;
-    accounts = initial.accounts;
-    userPlatformPolicies = initial.userPlatformPolicies;
-    clearPreviewGroupContractState();
-    resetPreviewOwnSessions();
+    previewLoginVerified = false;
   },
   sessions: {
     async list(credential, after) {

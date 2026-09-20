@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-libra
 import { afterEach, describe, expect, it } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { SessionProvider, useSession } from "../application/SessionProvider";
-import { previewCredential, previewIamRepository } from "../repositories/previewIamRepository";
+import { previewCredential, previewIamRepository, resetPreviewEnvironment } from "../repositories/previewIamRepository";
 import { OwnSessionsPage } from "./OwnSessionsPage";
 
 function Harness() {
@@ -16,6 +16,7 @@ afterEach(async () => {
   cleanup();
   localStorage.clear();
   await previewIamRepository.logout(previewCredential);
+  resetPreviewEnvironment();
 });
 
 describe("OwnSessionsPage", () => {
