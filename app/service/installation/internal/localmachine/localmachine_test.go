@@ -3813,7 +3813,8 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 		}
 		for _, required := range []string{
 			"BEGIN;", "DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;",
-			"pg_restore --file=- --exit-on-error --no-privileges --no-password 2>/dev/null",
+			"pg_restore --file=- --exit-on-error --no-privileges --no-password --strict-names",
+			"--schema=audit --schema=iam --schema=managedservice --schema=paas 2>/dev/null",
 			"COMMIT;", "ROLLBACK;", "psql -X --set=ON_ERROR_STOP=1",
 			"--set=VERBOSITY=sqlstate", "mktemp", "RESTORE_OBJECT_CONFLICT",
 			"RESTORE_REFERENCE", "RESTORE_AUTHORITY", "RESTORE_DEPENDENCY",
@@ -3826,7 +3827,7 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 				return true, fmt.Errorf("recovery restore transaction lacks %s", required)
 			}
 		}
-		for _, forbidden := range []string{"--clean", "--no-owner"} {
+		for _, forbidden := range []string{"--clean", "--no-owner", "--schema=public"} {
 			if strings.Contains(databaseRestoreScript, forbidden) {
 				return true, fmt.Errorf("recovery restore transaction contains %s", forbidden)
 			}

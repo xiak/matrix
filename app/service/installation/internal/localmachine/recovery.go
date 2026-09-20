@@ -26,7 +26,8 @@ trap 'rm -f -- "${diagnostic}"' EXIT
 set +e
 {
   printf '%s\n' 'BEGIN;' 'DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;'
-  if pg_restore --file=- --exit-on-error --no-privileges --no-password 2>/dev/null; then
+  if pg_restore --file=- --exit-on-error --no-privileges --no-password --strict-names \
+      --schema=audit --schema=iam --schema=managedservice --schema=paas 2>/dev/null; then
     printf '%s\n' 'COMMIT;'
   else
     printf '%s\n' 'ROLLBACK;'
@@ -857,8 +858,10 @@ func restoreDatabaseDump(
 		"exec", "--interactive", "--user", "postgres", postgresID,
 		// The authenticated custom archive carries the exact IAM/Audit owner
 		// roles. Stream it through one transaction that first removes only the
-		// Matrix-owned schemas. This also removes authenticated successor-only
-		// dependencies that an older backup cannot name in its cleanup TOC.
+		// Matrix-owned schemas, then selects exactly those schemas from the
+		// authenticated archive. This removes authenticated successor-only
+		// dependencies that an older backup cannot name in its cleanup TOC
+		// without replaying unrelated public or extension data.
 		// ACLs remain release-owned and are reapplied by target migrations.
 		"/bin/bash", "-o", "pipefail", "-ceu", databaseRestoreScript,
 	)
