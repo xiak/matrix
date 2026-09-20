@@ -1264,6 +1264,7 @@ func TestRecoveryFailureBoundaryReturnsOnlyClosedSafeCodes(t *testing.T) {
 		RecoveryFailureDatabaseRestoreIntegrity:      "RECOVERY_DATABASE_RESTORE_INTEGRITY_VERIFICATION_FAILED",
 		RecoveryFailureDatabaseRestoreTransaction:    "RECOVERY_DATABASE_RESTORE_TRANSACTION_VERIFICATION_FAILED",
 		RecoveryFailureDatabaseRestorePipeline:       "RECOVERY_DATABASE_RESTORE_PIPELINE_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreClient:         "RECOVERY_DATABASE_RESTORE_CLIENT_VERIFICATION_FAILED",
 		RecoveryFailureSecretRestore:                 "RECOVERY_SECRET_RESTORE_VERIFICATION_FAILED",
 		RecoveryFailureMigration:                     "RECOVERY_MIGRATION_VERIFICATION_FAILED",
 	} {

@@ -3818,6 +3818,7 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 			"--set=VERBOSITY=sqlstate", "mktemp", "RESTORE_OBJECT_CONFLICT",
 			"RESTORE_REFERENCE", "RESTORE_AUTHORITY", "RESTORE_DEPENDENCY",
 			"RESTORE_INTEGRITY", "RESTORE_TRANSACTION", "RESTORE_PIPELINE",
+			"RESTORE_CLIENT", "PIPESTATUS",
 			"--username=matrix --dbname=matrix",
 		} {
 			if !strings.Contains(databaseRestoreScript, required) {
@@ -3901,6 +3902,7 @@ func TestRestoreDatabaseDumpReturnsOnlyClosedDiagnostics(t *testing.T) {
 		"RESTORE_INTEGRITY\n":       platformcommand.RecoveryFailureDatabaseRestoreIntegrity,
 		"RESTORE_TRANSACTION\n":     platformcommand.RecoveryFailureDatabaseRestoreTransaction,
 		"RESTORE_PIPELINE\n":        platformcommand.RecoveryFailureDatabaseRestorePipeline,
+		"RESTORE_CLIENT\n":          platformcommand.RecoveryFailureDatabaseRestoreClient,
 		"RESTORE_UNKNOWN\n":         platformcommand.RecoveryFailureDatabaseRestore,
 		"private relation name\n":   platformcommand.RecoveryFailureDatabaseRestore,
 		"RESTORE_REFERENCE\nextra":  platformcommand.RecoveryFailureDatabaseRestore,
@@ -3956,28 +3958,51 @@ func TestDatabaseRestoreScriptEmitsOnlyClosedSQLStateClass(t *testing.T) {
 		t.Skip("database restore command targets the Linux release image")
 	}
 	bin := t.TempDir()
-	if err := os.WriteFile(
-		filepath.Join(bin, "pg_restore"),
-		[]byte("#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n"),
-		0o700,
-	); err != nil {
-		t.Fatalf("write fake pg_restore: %v", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(bin, "psql"),
-		[]byte("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'ERROR:  42P07' 'private relation name' >&2\nexit 3\n"),
-		0o700,
-	); err != nil {
-		t.Fatalf("write fake psql: %v", err)
-	}
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-	command := exec.Command("/bin/bash", "-o", "pipefail", "-ceu", databaseRestoreScript)
-	command.Stdin = strings.NewReader("archive")
-	output, err := command.Output()
-	if err == nil || string(output) != "RESTORE_OBJECT_CONFLICT\n" ||
-		strings.Contains(string(output), "private relation") {
-		t.Fatalf("restore script diagnostic = %q / %v", output, err)
+	run := func(t *testing.T, restore, psql, want string, wantSuccess bool) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(bin, "pg_restore"), []byte(restore), 0o700); err != nil {
+			t.Fatalf("write fake pg_restore: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "psql"), []byte(psql), 0o700); err != nil {
+			t.Fatalf("write fake psql: %v", err)
+		}
+		command := exec.Command("/bin/bash", "-o", "pipefail", "-ceu", databaseRestoreScript)
+		command.Stdin = strings.NewReader("archive")
+		output, err := command.Output()
+		if (err == nil) != wantSuccess || string(output) != want ||
+			strings.Contains(string(output), "private relation") {
+			t.Fatalf("restore script diagnostic = %q / %v", output, err)
+		}
 	}
+	t.Run("server SQLSTATE", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'ERROR:  42P07' 'private relation name' >&2\nexit 3\n",
+			"RESTORE_OBJECT_CONFLICT\n", false,
+		)
+	})
+	t.Run("archive pipeline", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\nexit 9\n",
+			"#!/bin/sh\ncat >/dev/null\n",
+			"RESTORE_PIPELINE\n", false,
+		)
+	})
+	t.Run("unclassified client failure", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'client failed without SQLSTATE' >&2\nexit 3\n",
+			"RESTORE_CLIENT\n", false,
+		)
+	})
+	t.Run("success", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\n",
+			"", true,
+		)
+	})
 }
 
 func (runtimeBoundary *platformStartRuntime) inspectNetworkLabels(

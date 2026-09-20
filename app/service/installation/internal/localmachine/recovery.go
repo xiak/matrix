@@ -20,7 +20,11 @@ const (
 	recoveryVerificationComponent    = "probe"
 	recoveryVerificationDownTimeout  = "30"
 	maximumDatabaseRestoreDiagnostic = 64
-	databaseRestoreScript            = `{
+	databaseRestoreScript            = `umask 077
+diagnostic="$(mktemp)"
+trap 'rm -f -- "${diagnostic}"' EXIT
+set +e
+{
   printf '%s\n' 'BEGIN;' 'DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;'
   if pg_restore --file=- --exit-on-error --no-privileges --no-password 2>/dev/null; then
     printf '%s\n' 'COMMIT;'
@@ -28,14 +32,16 @@ const (
     printf '%s\n' 'ROLLBACK;'
     exit 1
   fi
-} | {
-  umask 077
-  diagnostic="$(mktemp)"
-  trap 'rm -f -- "${diagnostic}"' EXIT
-  if LC_ALL=C psql -X --set=ON_ERROR_STOP=1 --set=VERBOSITY=sqlstate \
-      --no-password --username=matrix --dbname=matrix >/dev/null 2>"${diagnostic}"; then
-    exit 0
-  fi
+} | LC_ALL=C psql -X --set=ON_ERROR_STOP=1 --set=VERBOSITY=sqlstate \
+    --no-password --username=matrix --dbname=matrix >/dev/null 2>"${diagnostic}"
+statuses=("${PIPESTATUS[@]}")
+set -e
+generator_status="${statuses[0]:-1}"
+database_status="${statuses[1]:-1}"
+if [ "${generator_status}" -eq 0 ] && [ "${database_status}" -eq 0 ]; then
+  exit 0
+fi
+if [ "${database_status}" -ne 0 ]; then
   sqlstate="$(LC_ALL=C awk '/^[A-Z]+:  [0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]$/ { print substr($0, length($0)-4); exit }' "${diagnostic}")"
   case "${sqlstate}" in
     42P06|42P07|42710) printf '%s\n' 'RESTORE_OBJECT_CONFLICT' ;;
@@ -44,11 +50,12 @@ const (
     2BP01) printf '%s\n' 'RESTORE_DEPENDENCY' ;;
     23???) printf '%s\n' 'RESTORE_INTEGRITY' ;;
     40???) printf '%s\n' 'RESTORE_TRANSACTION' ;;
-    '') printf '%s\n' 'RESTORE_PIPELINE' ;;
-    *) printf '%s\n' 'RESTORE_UNKNOWN' ;;
+    *) printf '%s\n' 'RESTORE_CLIENT' ;;
   esac
-  exit 1
-}
+else
+  printf '%s\n' 'RESTORE_PIPELINE'
+fi
+exit 1
 `
 )
 
@@ -881,6 +888,8 @@ func classifyDatabaseRestoreDiagnostic(
 		return platformcommand.RecoveryFailureDatabaseRestoreTransaction
 	case "RESTORE_PIPELINE":
 		return platformcommand.RecoveryFailureDatabaseRestorePipeline
+	case "RESTORE_CLIENT":
+		return platformcommand.RecoveryFailureDatabaseRestoreClient
 	default:
 		return platformcommand.RecoveryFailureDatabaseRestore
 	}
