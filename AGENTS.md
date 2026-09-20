@@ -57,6 +57,12 @@ Every fact has exactly one documentation owner:
   `REUSE`/`ADAPT`/`REFERENCE`/`REJECT` decisions;
 - a runbook owns only commands that have been executed and verified.
 
+A difficult diagnosis enters the single troubleshooting handbook only after
+the root cause, fastest safe discriminator, verified resolution, and cleanup
+are known. Keep searchable symptom and component keywords. Do not record
+hypotheses, secrets, machine-specific paths, or chronological command logs.
+Update the existing entry when the same failure class recurs.
+
 README and index files are link-only navigation. They must not duplicate FEAT
 status, resource tables, acceptance criteria, commands, or adoption results.
 Research notes, implementation diaries, discussion, and transient progress
