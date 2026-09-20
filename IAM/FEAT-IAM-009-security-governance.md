@@ -342,7 +342,7 @@ IAM37的`totp_authentication_contract_ready()`由迁移verify与实际readiness�
 
 新门禁发现缺少已验证通知地址曾被映射为401，并在最终事务拒绝后遗留密码保留。现已在实际Session/材料验证后、预留密码工作前返回403；最终SQL仍在锁内重新检查真实联系人，未用预查替代安全约束。进程断言同时证明拒绝前后原密码预算逐字段不变、原Session仍有效。另一轮代理给无bearer的challenge请求误添空Authorization，夹具被真实入口拒绝；修正为只在调用确有bearer时传头，未放宽生产载体规则。
 
-最终全仓默认race/architecture、vet、模块校验、122个API tracked文件生成集合/哈希一致及Linux amd64构建通过；外部环境SKIP不计真实验收。两项旧binary门禁在CI现有runtime owner显式注册，不逐版回放所有未发布schema。当前切片尚未取得精确固定源码独立CI验收，不证明发布profile兼容；恢复、首次强制设置、step-up、Account设置、真实UI及受支持备份恢复等完整009要求仍未完成。
+最终全仓默认race/architecture、vet、模块校验、122个API tracked文件生成集合/哈希一致及Linux amd64构建通过；外部环境SKIP不计真实验收。两项旧binary门禁在CI现有runtime owner显式注册，不逐版回放所有未发布schema。固定源码`f5cec0e132ad18900d9a5a5629eae04fda4817f1`的[Verification35520219893](https://github.com/xiak/matrix/actions/runs/35520219893)已按精确SHA核对为failure：五项均runner_id=0、steps=0，GitHub annotation说明账户付款或spending limit阻止启动，未执行任何测试。它不是测试通过，也不能据此判为代码回归；独立CI验收仍缺失。本片不证明发布profile兼容；恢复、首次强制设置、step-up、Account设置、真实UI及受支持备份恢复等完整009要求仍未完成。
 
 以下完整流程仍为目标契约，尚待实际事务和消费者组合；不保留“密码通过即成功”的兼容旁路。现有realm仍在loginName中解析，以下路径均不接受accountId/userId作为身份selector。
 
