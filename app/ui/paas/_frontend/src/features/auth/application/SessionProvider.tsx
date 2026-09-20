@@ -97,29 +97,39 @@ export function SessionProvider({
   const [challenge, setChallenge] = useState<PendingAuthenticationChallenge | null>(null);
   const [credential, setCredential] = useState<string | null>(null);
   const credentialRef = useRef<string | null>(null);
+  const challengeRef = useRef<PendingAuthenticationChallenge | null>(null);
+  const authenticationRevisionRef = useRef(0);
   const [error, setError] = useState<SessionErrorCode | null>(null);
   const clearError = useCallback(() => { setError(null); }, []);
 
+  const replaceChallenge = useCallback((next: PendingAuthenticationChallenge | null) => {
+    challengeRef.current = next;
+    setChallenge(next);
+  }, []);
+
   const forget = useCallback(() => {
+    authenticationRevisionRef.current += 1;
     credentialRef.current = null;
     setCredential(null);
     setCurrent(null);
-    setChallenge(null);
+    replaceChallenge(null);
     setError(null);
     setPhase("anonymous");
-  }, []);
+  }, [replaceChallenge]);
 
   useEffect(() => {
     if (!challenge) return;
     const remaining = Date.parse(challenge.challenge.expiresAt) - Date.now();
     const delay = !Number.isFinite(remaining) || remaining <= 0 ? 0 : Math.min(remaining, 2_147_000_000);
     const timer = window.setTimeout(() => {
-      setChallenge(null);
+      if (challengeRef.current !== challenge) return;
+      authenticationRevisionRef.current += 1;
+      replaceChallenge(null);
       setError("challengeExpired");
       setPhase("anonymous");
     }, delay);
     return () => window.clearTimeout(timer);
-  }, [challenge]);
+  }, [challenge, replaceChallenge]);
 
   const expire = useCallback((expectedCredential: string) => {
     if (credentialRef.current !== expectedCredential) return false;
@@ -138,19 +148,22 @@ export function SessionProvider({
   }, [current, forget]);
 
   const login = useCallback(async (loginName: string, password: string) => {
+    const authenticationRevision = ++authenticationRevisionRef.current;
+    replaceChallenge(null);
     setPhase("authenticating");
     setError(null);
     try {
       const result = await repository.login({ loginName, password });
+      if (authenticationRevisionRef.current !== authenticationRevision) return null;
       if (result.outcome === "CHALLENGE_REQUIRED") {
         credentialRef.current = null;
         setCredential(null);
         setCurrent(null);
-        setChallenge({ loginName, challenge: result.challenge, challengeCredential: result.challengeCredential });
+        replaceChallenge({ loginName, challenge: result.challenge, challengeCredential: result.challengeCredential });
         setPhase(result.challenge.nextStep === "PASSWORD_CHANGE" ? "challenge-password-required" : "challenge-required");
         return "challenge-required";
       }
-      setChallenge(null);
+      replaceChallenge(null);
       credentialRef.current = result.credential;
       setCredential(result.credential);
       setCurrent({ loginName, session: result.session });
@@ -160,6 +173,7 @@ export function SessionProvider({
       setPhase(outcome);
       return outcome;
     } catch (loginError) {
+      if (authenticationRevisionRef.current !== authenticationRevision) return null;
       credentialRef.current = null;
       setCredential(null);
       setCurrent(null);
@@ -167,12 +181,14 @@ export function SessionProvider({
       setPhase("anonymous");
       return null;
     }
-  }, [repository]);
+  }, [replaceChallenge, repository]);
 
   const verifyAuthenticationChallenge = useCallback(async (code: string) => {
     if (!challenge || challenge.challenge.nextStep !== "TOTP" ||
         (phase !== "challenge-required" && phase !== "verifying-challenge") ||
         !repository.authenticationChallenges) return null;
+    const requestChallenge = challenge;
+    const authenticationRevision = ++authenticationRevisionRef.current;
     setPhase("verifying-challenge");
     setError(null);
     try {
@@ -181,13 +197,14 @@ export function SessionProvider({
         challengeCredential: challenge.challengeCredential,
         code
       });
+      if (authenticationRevisionRef.current !== authenticationRevision || challengeRef.current !== requestChallenge) return null;
       if (result.outcome === "CHALLENGE_REQUIRED") {
         if (result.challenge.nextStep !== "PASSWORD_CHANGE") throw new Error("INVALID_IAM_RESPONSE");
-        setChallenge({ loginName: challenge.loginName, challenge: result.challenge, challengeCredential: result.challengeCredential });
+        replaceChallenge({ loginName: challenge.loginName, challenge: result.challenge, challengeCredential: result.challengeCredential });
         setPhase("challenge-password-required");
         return "password-change-required";
       }
-      setChallenge(null);
+      replaceChallenge(null);
       credentialRef.current = result.credential;
       setCredential(result.credential);
       setCurrent({ loginName: challenge.loginName, session: result.session });
@@ -195,16 +212,19 @@ export function SessionProvider({
       setPhase(outcome);
       return outcome;
     } catch (verifyError) {
+      if (authenticationRevisionRef.current !== authenticationRevision || challengeRef.current !== requestChallenge) return null;
       setError(challengeError(verifyError));
       setPhase("challenge-required");
       return null;
     }
-  }, [challenge, phase, repository]);
+  }, [challenge, phase, replaceChallenge, repository]);
 
   const changeChallengePassword = useCallback(async (newPassword: string) => {
     if (!challenge || challenge.challenge.nextStep !== "PASSWORD_CHANGE" ||
         (phase !== "challenge-password-required" && phase !== "changing-challenge-password") ||
         !repository.authenticationChallenges) return false;
+    const requestChallenge = challenge;
+    const authenticationRevision = ++authenticationRevisionRef.current;
     setPhase("changing-challenge-password");
     setError(null);
     try {
@@ -213,26 +233,30 @@ export function SessionProvider({
         challengeCredential: challenge.challengeCredential,
         newPassword
       });
-      setChallenge(null);
+      if (authenticationRevisionRef.current !== authenticationRevision || challengeRef.current !== requestChallenge) return false;
+      replaceChallenge(null);
       credentialRef.current = null;
       setCredential(null);
       setCurrent(null);
       setPhase("reauthentication-required");
       return true;
     } catch (changeError) {
+      if (authenticationRevisionRef.current !== authenticationRevision || challengeRef.current !== requestChallenge) return false;
       setError(challengePasswordError(changeError));
       setPhase("challenge-password-required");
       return false;
     }
-  }, [challenge, phase, repository]);
+  }, [challenge, phase, replaceChallenge, repository]);
 
   const cancelAuthenticationChallenge = useCallback(() => {
-    setChallenge(null);
+    authenticationRevisionRef.current += 1;
+    replaceChallenge(null);
     setError(null);
     setPhase("anonymous");
-  }, []);
+  }, [replaceChallenge]);
 
   const acknowledgeReauthentication = useCallback(() => {
+    authenticationRevisionRef.current += 1;
     setError(null);
     setPhase("anonymous");
   }, []);

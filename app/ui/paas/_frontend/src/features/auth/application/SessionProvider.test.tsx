@@ -1,10 +1,21 @@
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import type { LoginResult } from "../domain/session";
 import type { IamRepository } from "../repositories/iamRepository";
 import { SessionProvider, useSession } from "./SessionProvider";
 
 const secretCredential = "must-not-enter-browser-storage-or-dom";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
+}
 
 function Probe() {
   const session = useSession();
@@ -15,6 +26,7 @@ function Probe() {
       <span data-testid="challenge">{session.challenge?.challenge.nextStep ?? "none"}</span>
       <span data-testid="error">{session.error ?? "none"}</span>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
+      <button onClick={() => void session.login("bravo", "password")} type="button">login-b</button>
       <button
         onClick={() => void session.changePassword("Initial-Admin-Password-49!", "Changed-Admin-Password-73!")}
         type="button"
@@ -64,6 +76,7 @@ function repository({
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   cleanup();
   localStorage.clear();
   sessionStorage.clear();
@@ -215,5 +228,115 @@ describe("SessionProvider", () => {
     expect(screen.getByTestId("phase").textContent).toBe("challenge-required");
     expect(screen.getByTestId("principal").textContent).toBe("none");
     expect(screen.getByTestId("error").textContent).toBe("invalidVerificationCode");
+  });
+
+  it.each(["success", "failure"] as const)("discards a late verify %s after cancellation and a newer login", async (result) => {
+    const lateVerify = deferred<LoginResult>();
+    const iam = repository();
+    iam.login = vi.fn(async ({ loginName }) => loginName === "admin" ? {
+      outcome: "CHALLENGE_REQUIRED" as const,
+      challenge: { id: "challenge-a", purpose: "LOGIN" as const, nextStep: "TOTP" as const, expiresAt: "2099-09-20T01:07:03Z" },
+      challengeCredential: "challenge-a-secret"
+    } : {
+      outcome: "AUTHENTICATED" as const,
+      credential: `${secretCredential}-bravo`,
+      mustChangePassword: false,
+      session: { id: "session-bravo", organizationId: "organization-test", principalId: "principal-bravo", status: "ACTIVE" as const,
+        issuedAt: "2026-08-26T12:00:00Z", expiresAt: "2099-08-26T20:00:00Z" }
+    });
+    iam.authenticationChallenges = { verify: vi.fn(() => lateVerify.promise), changePassword: vi.fn() };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("verify")));
+    expect(screen.getByTestId("phase").textContent).toBe("verifying-challenge");
+    await act(async () => fireEvent.click(screen.getByText("cancel-challenge")));
+    await act(async () => fireEvent.click(screen.getByText("login-b")));
+    expect(screen.getByTestId("principal").textContent).toBe("bravo");
+
+    await act(async () => {
+      if (result === "success") lateVerify.resolve({
+        outcome: "AUTHENTICATED", credential: secretCredential, mustChangePassword: false,
+        session: { id: "session-a", organizationId: "organization-test", principalId: "principal-a", status: "ACTIVE",
+          issuedAt: "2026-08-26T12:00:00Z", expiresAt: "2099-08-26T20:00:00Z" }
+      });
+      else lateVerify.reject(new HttpProblem(401, "late-private-error"));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("phase").textContent).toBe("authenticated");
+    expect(screen.getByTestId("principal").textContent).toBe("bravo");
+    expect(screen.getByTestId("error").textContent).toBe("none");
+  });
+
+  it("discards a late verify result after the challenge expires and a newer login succeeds", async () => {
+    vi.useFakeTimers({ now: new Date("2026-09-21T00:00:00Z") });
+    const lateVerify = deferred<LoginResult>();
+    const iam = repository();
+    iam.login = vi.fn(async ({ loginName }) => loginName === "admin" ? {
+      outcome: "CHALLENGE_REQUIRED" as const,
+      challenge: { id: "challenge-expiring", purpose: "LOGIN" as const, nextStep: "TOTP" as const, expiresAt: "2026-09-21T00:00:01Z" },
+      challengeCredential: "challenge-expiring-secret"
+    } : {
+      outcome: "AUTHENTICATED" as const,
+      credential: `${secretCredential}-bravo`, mustChangePassword: false,
+      session: { id: "session-bravo", organizationId: "organization-test", principalId: "principal-bravo", status: "ACTIVE" as const,
+        issuedAt: "2026-08-26T12:00:00Z", expiresAt: "2099-08-26T20:00:00Z" }
+    });
+    iam.authenticationChallenges = { verify: vi.fn(() => lateVerify.promise), changePassword: vi.fn() };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("verify")));
+    await act(async () => vi.advanceTimersByTime(1_001));
+    expect(screen.getByTestId("phase").textContent).toBe("anonymous");
+    expect(screen.getByTestId("error").textContent).toBe("challengeExpired");
+    await act(async () => fireEvent.click(screen.getByText("login-b")));
+    await act(async () => {
+      lateVerify.resolve({
+        outcome: "AUTHENTICATED", credential: secretCredential, mustChangePassword: false,
+        session: { id: "session-a", organizationId: "organization-test", principalId: "principal-a", status: "ACTIVE",
+          issuedAt: "2026-08-26T12:00:00Z", expiresAt: "2099-08-26T20:00:00Z" }
+      });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("phase").textContent).toBe("authenticated");
+    expect(screen.getByTestId("principal").textContent).toBe("bravo");
+    expect(screen.getByTestId("error").textContent).toBe("none");
+  });
+
+  it.each(["success", "failure"] as const)("discards a late challenge-password %s after cancellation and a newer login", async (result) => {
+    const latePassword = deferred<{ nextStep: "REAUTHENTICATE"; changedAt: string }>();
+    const iam = repository();
+    iam.login = vi.fn(async ({ loginName }) => loginName === "admin" ? {
+      outcome: "CHALLENGE_REQUIRED" as const,
+      challenge: { id: "challenge-a", purpose: "LOGIN" as const, nextStep: "TOTP" as const, expiresAt: "2099-09-20T01:07:03Z" },
+      challengeCredential: "challenge-a-secret"
+    } : {
+      outcome: "AUTHENTICATED" as const,
+      credential: `${secretCredential}-bravo`, mustChangePassword: false,
+      session: { id: "session-bravo", organizationId: "organization-test", principalId: "principal-bravo", status: "ACTIVE" as const,
+        issuedAt: "2026-08-26T12:00:00Z", expiresAt: "2099-08-26T20:00:00Z" }
+    });
+    iam.authenticationChallenges = {
+      verify: vi.fn().mockResolvedValue({ outcome: "CHALLENGE_REQUIRED", challenge: {
+        id: "challenge-password", purpose: "LOGIN", nextStep: "PASSWORD_CHANGE", expiresAt: "2099-09-20T01:07:03Z"
+      }, challengeCredential: "challenge-password-secret" }),
+      changePassword: vi.fn(() => latePassword.promise)
+    };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("verify")));
+    await act(async () => fireEvent.click(screen.getByText("challenge-change")));
+    expect(screen.getByTestId("phase").textContent).toBe("changing-challenge-password");
+    await act(async () => fireEvent.click(screen.getByText("cancel-challenge")));
+    await act(async () => fireEvent.click(screen.getByText("login-b")));
+
+    await act(async () => {
+      if (result === "success") latePassword.resolve({ nextStep: "REAUTHENTICATE", changedAt: "2026-09-21T00:00:00Z" });
+      else latePassword.reject(new HttpProblem(409, "late-private-error"));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("phase").textContent).toBe("authenticated");
+    expect(screen.getByTestId("principal").textContent).toBe("bravo");
+    expect(screen.getByTestId("challenge").textContent).toBe("none");
+    expect(screen.getByTestId("error").textContent).toBe("none");
   });
 });
