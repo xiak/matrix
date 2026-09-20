@@ -33,17 +33,18 @@ export type AccessKey = {
   createdAt: string;
 };
 export type AccessKeyOwnerState = "active" | "passwordChangeRequired" | "disabled";
-export type PendingAccessKeyCreation = {
-  ownerId: string;
-  requestId: string;
-  keyId: string;
-  status: "UNKNOWN" | "COMMITTED_SECRET_LOST";
-};
+export type PendingAccessKeyCreation =
+  | { ownerId: string; requestId: string; status: "UNKNOWN" }
+  | { ownerId: string; requestId: string; keyId: string; status: "COMMITTED_SECRET_LOST" };
 export type EnterpriseMember = { id: string; name: string; department: string };
 export type EnterpriseAccount = { id: string; name: string; corporationId: string; visibleMemberIds: string[]; importedMemberIds: string[]; createdAt: string };
 export function enterprisePrincipalId(accountId: string, memberId: string): string { return "principal-wecom-" + accountId + "-" + memberId; }
 export type AccessSettings = {
   loginProtection: boolean; userSsoEnabled: boolean; userSsoProviderId: string;
+};
+export type PersonalMfaPreviewState = {
+  factorState: "never-bound" | "bound" | "removed";
+  reauthenticationRequired: boolean;
 };
 export type AccessEvent = { id: string; action: AccessWorkspaceCommand["kind"] | "sign-in" | "batch-users"; target: string; at: string };
 export type PreviewUserProfile = {
@@ -55,6 +56,7 @@ export type AccessWorkspace = {
   mode: "preview"; accountId: string; groups: AccessGroup[]; policies: AccessPolicy[];
   roles: AccessRole[]; providers: IdentityProvider[]; federations: FederatedAccount[]; keys: AccessKey[];
   userPolicies: Record<string, string[]>; settings: AccessSettings; events: AccessEvent[];
+  personalMfa: PersonalMfaPreviewState;
   enterprises: EnterpriseAccount[]; enterpriseMembers: EnterpriseMember[];
   userProfiles: Record<string, PreviewUserProfile>;
   userBoundaries: Record<string, string>; roleSessions: AccessRoleSession[];
@@ -92,9 +94,11 @@ export type AccessWorkspaceCommand =
   | { kind: "save-federation"; id?: string; name: string; subject: string; providerId: string; roleId: string; enabled: boolean }
   | { kind: "delete-federation"; id: string }
   | { kind: "create-key"; ownerId: string; ownerState: AccessKeyOwnerState; userResourceVersion: number; requestId: string; responseMode: "success" | "response-lost" }
-  | { kind: "inspect-key-creation"; ownerId: string; requestId: string; keyId: string }
+  | { kind: "inspect-key-creation"; ownerId: string; requestId: string }
   | { kind: "set-key-status"; id: string; ownerState: AccessKeyOwnerState; status: AccessKey["status"]; resourceVersion: number; requestId: string }
   | { kind: "delete-key"; id: string; resourceVersion: number; requestId: string }
+  | { kind: "confirm-personal-mfa" }
+  | { kind: "remove-personal-mfa" }
   | { kind: "set-user-policies"; principalId: string; policyIds: string[] }
   | { kind: "set-user-groups"; principalId: string; groupIds: string[] }
   | { kind: "update-user"; principalId: string; displayName: string }
@@ -145,7 +149,7 @@ export function withoutUserAccess(source: AccessWorkspace, principalIds: readonl
 }
 
 // Pure, deterministic preview transitions. Adapters supply identity, IDs and time.
-export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: AccessWorkspaceCommand, context: { id: string; at: string; userIds: string[]; primaryPrincipalId: string }): AccessWorkspace {
+export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: AccessWorkspaceCommand, context: { id: string; at: string; userIds: string[]; primaryPrincipalId: string; resolvedKeyId?: string }): AccessWorkspace {
   const state = command.kind === "delete-user" ? withoutUserAccess(source, [command.principalId], context.at) : structuredClone(source);
   const invalid = (): never => { throw new AccessWorkspaceError("invalid"); };
   // RootIdentity is the account's protected ownership relation, not a User.
@@ -394,15 +398,18 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     case "create-key":
       if (state.pendingKeyCreation || command.ownerState !== "active" || !context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
       state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", resourceVersion: 1, createdAt });
-      if (command.responseMode === "response-lost") state.pendingKeyCreation = { ownerId: command.ownerId, requestId: command.requestId, keyId: "MOCK-" + id, status: "UNKNOWN" };
+      if (command.responseMode === "response-lost") state.pendingKeyCreation = { ownerId: command.ownerId, requestId: command.requestId, status: "UNKNOWN" };
       target = "MOCK-" + id; break;
     case "inspect-key-creation": {
       const pending = state.pendingKeyCreation;
+      const resolvedKeyId = context.resolvedKeyId;
+      if (!resolvedKeyId) throw new AccessWorkspaceError("invalid");
       if (!pending || pending.status !== "UNKNOWN" ||
-        pending.ownerId !== command.ownerId || pending.requestId !== command.requestId || pending.keyId !== command.keyId) invalid();
-      exists(state.keys, command.keyId);
-      state.pendingKeyCreation = { ownerId: command.ownerId, requestId: command.requestId, keyId: command.keyId, status: "COMMITTED_SECRET_LOST" };
-      target = command.keyId; break;
+        pending.ownerId !== command.ownerId || pending.requestId !== command.requestId) invalid();
+      const recoveredKey = exists(state.keys, resolvedKeyId);
+      if (recoveredKey.ownerId !== command.ownerId) invalid();
+      state.pendingKeyCreation = { ownerId: command.ownerId, requestId: command.requestId, keyId: recoveredKey.id, status: "COMMITTED_SECRET_LOST" };
+      target = recoveredKey.id; break;
     }
     case "set-key-status": {
       const key = exists(state.keys, id);
@@ -416,8 +423,16 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       if (exists(state.keys, id).resourceVersion !== command.resourceVersion) invalid();
       if (exists(state.keys, id).status === "ENABLED") throw new AccessWorkspaceError("disableFirst");
       state.keys = state.keys.filter((entry) => entry.id !== id);
-      if (state.pendingKeyCreation?.keyId === id) state.pendingKeyCreation = null;
+      if (state.pendingKeyCreation?.status === "COMMITTED_SECRET_LOST" && state.pendingKeyCreation.keyId === id) state.pendingKeyCreation = null;
       break;
+    case "confirm-personal-mfa":
+      if (state.personalMfa.reauthenticationRequired) invalid();
+      state.personalMfa = { factorState: "bound", reauthenticationRequired: true };
+      target = context.primaryPrincipalId; break;
+    case "remove-personal-mfa":
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired) invalid();
+      state.personalMfa = { factorState: "removed", reauthenticationRequired: true };
+      target = context.primaryPrincipalId; break;
     case "set-user-policies":
       if (!context.userIds.includes(command.principalId)) invalid();
       state.userPolicies[command.principalId] = policies(command.policyIds); target = command.principalId; break;

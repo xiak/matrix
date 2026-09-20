@@ -15,7 +15,7 @@ import styles from "./AccessCredentials.module.css";
 type KeyFlow =
   | { kind: "create"; ownerId: string; requestId: string; scenario: "success" | "response-lost" }
   | { kind: "issued"; ownerId: string; requestId: string; key: { id: string; secret: string } }
-  | { kind: "uncertain"; ownerId: string; requestId: string; keyId: string }
+  | { kind: "uncertain"; ownerId: string; requestId: string }
   | { kind: "recovered"; ownerId: string; requestId: string; keyId: string }
   | { kind: "status"; keyId: string; requestId: string; status: AccessKey["status"] }
   | { kind: "delete"; keyId: string; requestId: string };
@@ -100,7 +100,7 @@ function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
         <Alert status="warning">{t("keyCreateUncertain", { id: flow.requestId })}</Alert>
         <dl className={styles.reviewFacts}><div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div><div><dt>{t("keyIntentState")}</dt><dd><Badge status="warning">UNKNOWN</Badge></dd></div></dl>
         <p className={styles.note}>{t("keyIntentLocked")}</p>
-        <div className={styles.actions}><Button disabled={access.busy} onClick={() => void access.executeWorkspace({ kind: "inspect-key-creation", ownerId: flow.ownerId, requestId: flow.requestId, keyId: flow.keyId })} variant="secondary">{t("keyQueryOriginal")}</Button></div>
+        <div className={styles.actions}><Button disabled={access.busy} onClick={() => void access.executeWorkspace({ kind: "inspect-key-creation", ownerId: flow.ownerId, requestId: flow.requestId })} variant="secondary">{t("keyQueryOriginal")}</Button></div>
       </> : null}
 
       {flow.kind === "recovered" ? <>
@@ -147,12 +147,10 @@ export function AccessCredentials({ workspace, scene, embedded = false }: { work
   const owner = scene.users.find((user) => user.id === (pending?.ownerId ?? ownerId)) ?? null;
   const ownerKeys = owner ? workspace.keys.filter((key) => key.ownerId === owner.id) : [];
   const selected = ownerKeys.find((key) => key.id === selectedId) ?? null;
-  const pendingFlow: KeyFlow | null = !selected && pending ? {
-    kind: pending.status === "UNKNOWN" ? "uncertain" : "recovered",
-    ownerId: pending.ownerId,
-    requestId: pending.requestId,
-    keyId: pending.keyId
-  } : null;
+  const pendingFlow: KeyFlow | null = !selected && pending ? pending.status === "UNKNOWN"
+    ? { kind: "uncertain", ownerId: pending.ownerId, requestId: pending.requestId }
+    : { kind: "recovered", ownerId: pending.ownerId, requestId: pending.requestId, keyId: pending.keyId }
+    : null;
   const activeFlow = flow ?? pendingFlow;
   const flowKey = activeFlow && (activeFlow.kind === "status" || activeFlow.kind === "delete") ? ownerKeys.find((key) => key.id === activeFlow.keyId) ?? null : null;
 

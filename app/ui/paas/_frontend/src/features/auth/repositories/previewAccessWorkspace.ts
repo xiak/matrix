@@ -75,19 +75,24 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
     keys: [{ id: "MOCK-pipeline-key", ownerId: "principal-lin", status: "ENABLED", resourceVersion: 2, createdAt: at }],
     userPolicies: { "principal-lin": ["policy-prod-logs"], "principal-qiao": ["policy-tag-logs", "policy-production-guard", "policy-assume-reviewer"] },
     settings: { loginProtection: false, userSsoEnabled: false, userSsoProviderId: "" },
+    personalMfa: { factorState: "never-bound", reauthenticationRequired: false },
     events: [{ id: "event-sign-in", action: "sign-in", target: "preview-admin", at: "2026-09-09T01:10:00Z" }]
   };
 }
 
 export function createPreviewAccessWorkspace(accountId: string, userIds: () => string[], primaryPrincipalId: string): NonNullable<AccountRepository["workspace"]> & { reset(): void; transact<T extends { workspace: AccessWorkspace }>(transition: (source: AccessWorkspace) => T): T } {
   let state = initialAccessWorkspace(accountId);
+  const keyCreationResults = new Map<string, string>();
+  const keyCreationRequest = (ownerId: string, requestId: string) => `${ownerId}\u0000${requestId}`;
   return {
     transact(transition) { const result = transition(structuredClone(state)); if (result.workspace.accountId !== accountId || result.workspace.mode !== "preview") throw new Error("INVALID_PREVIEW_WORKSPACE"); state = structuredClone(result.workspace); return result; },
-    reset() { state = initialAccessWorkspace(accountId); },
+    reset() { state = initialAccessWorkspace(accountId); keyCreationResults.clear(); },
     async read() { return structuredClone(state); },
     async execute(_credential, command) {
       const id = crypto.randomUUID();
-      state = applyAccessWorkspaceCommand(state, command, { id, at: new Date().toISOString(), userIds: userIds(), primaryPrincipalId });
+      const resolvedKeyId = command.kind === "inspect-key-creation" ? keyCreationResults.get(keyCreationRequest(command.ownerId, command.requestId)) : undefined;
+      state = applyAccessWorkspaceCommand(state, command, { id, at: new Date().toISOString(), userIds: userIds(), primaryPrincipalId, resolvedKeyId });
+      if (command.kind === "create-key") keyCreationResults.set(keyCreationRequest(command.ownerId, command.requestId), "MOCK-" + id);
       return {
         workspace: structuredClone(state),
         ...(command.kind === "create-key" && command.responseMode === "success"

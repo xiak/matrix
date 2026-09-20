@@ -2094,6 +2094,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
     expect(await screen.findByText("UNKNOWN")).toBeTruthy();
     expect(screen.queryByText(/^MOCK_NOT_A_CREDENTIAL_/)).toBeNull();
+    expect((await extension.read("preview")).pendingKeyCreation).not.toHaveProperty("keyId");
     expect(screen.queryByRole("button", { name: "新建访问密钥" })).toBeNull();
     await user.click(screen.getByTestId("go-users"));
     await user.click(screen.getByTestId("go-keys"));
@@ -2139,6 +2140,24 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "验证并继续" }));
     expect(screen.getByRole("heading", { name: "设置身份验证器" })).toBeTruthy();
     expect(screen.getByText(/必须先完成强制改密/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "已添加，下一步" }));
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并绑定" }));
+    const oneTimeCodes = screen.getByText("MTRX-4Q7F-K2PA").closest("article")!;
+    expect(oneTimeCodes).toBeTruthy();
+    expect(within(oneTimeCodes).queryByRole("button", { name: "取消" })).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: "我已安全保存这些恢复码" }));
+    await user.click(screen.getByRole("button", { name: "完成设置" }));
+    expect(screen.getByText(/当前会话不会被悄悄升级或继续用于安全操作/)).toBeTruthy();
+    expect(screen.getByText("需要重新登录")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "替换验证器" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "移除" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "生成新恢复码" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("go-settings"));
+    expect(screen.getByText("需要重新登录")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "替换验证器" }) as HTMLButtonElement).disabled).toBe(true);
   });
   it("keeps first security-notification address verification personal, inline, and explicitly MOCK", async () => {
     const { user, repository } = await open("settings");

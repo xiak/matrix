@@ -23,6 +23,7 @@ import {
   Typography
 } from "@ui/xiak";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
+import { useAccountAccess } from "../application/AccountAccessProvider";
 import styles from "./MfaPreviewExperience.module.css";
 import { SecurityNotificationAddressPreview } from "./SecurityNotificationAddressPreview";
 import { SecurityStepUpPreview, type SecurityStepUpAction } from "./SecurityStepUpPreview";
@@ -54,7 +55,7 @@ function FlowSteps({ current }: { current: number }) {
   </ol>;
 }
 
-function RecoveryCodes({ onDone, onCancel }: { onDone(): void; onCancel?(): void }) {
+function RecoveryCodes({ onDone }: { onDone(): void }) {
   const t = useTranslations("MfaPreview");
   const [acknowledged, setAcknowledged] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -72,20 +73,21 @@ function RecoveryCodes({ onDone, onCancel }: { onDone(): void; onCancel?(): void
     <div className={styles.secretHeader}><div><strong>{t("codesTitle")}</strong><p>{t("codesHint")}</p></div><Button onClick={() => void copy()} size="small" variant="secondary">{t(copied ? "copied" : "copyCodes")}</Button></div>
     <ul aria-label={t("codesTitle")} className={styles.codes}>{recoveryCodes.map((code) => <li key={code}>{code}</li>)}</ul>
     <Checkbox checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)}>{t("codesSaved")}</Checkbox>
-    <div className={styles.flowActions}>{onCancel ? <Button onClick={onCancel} variant="ghost">{t("cancel")}</Button> : null}<Button disabled={!acknowledged} onClick={onDone}>{t("finish")}</Button></div>
+    <div className={styles.flowActions}><Button disabled={!acknowledged} onClick={onDone}>{t("finish")}</Button></div>
   </div>;
 }
 
-function EnrollmentWizard({ reason, onCancel, onFinish }: { reason: EnrollmentReason; onCancel(): void; onFinish(): void }) {
+function EnrollmentWizard({ reason, onCancel, onConfirmed, onFinish }: { reason: EnrollmentReason; onCancel(): void; onConfirmed?(): boolean | void | Promise<boolean | void>; onFinish(): void }) {
   const t = useTranslations("MfaPreview");
   const [step, setStep] = useState(0);
   const [code, setCode] = useState("");
   const [error, setError] = useState(false);
   const codeId = useId();
-  function verify(event: FormEvent<HTMLFormElement>) {
+  async function verify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (code !== demonstrationCode) { setError(true); return; }
     setError(false);
+    if (await onConfirmed?.() === false) return;
     setStep(3);
   }
   return <Card className={styles.flowCard}>
@@ -103,13 +105,13 @@ function EnrollmentWizard({ reason, onCancel, onFinish }: { reason: EnrollmentRe
         <div className={styles.enrollmentGrid}><DemoQr /><div className={styles.manualKey}><strong>{t("scanTitle")}</strong><p>{t("scanHint")}</p><small>{t("manualKey")}</small><code>MTRX-DEMO-NOT-A-SECRET</code><em>{t("demoSecret")}</em></div></div>
         <div className={styles.flowActions}><Button onClick={() => setStep(0)} variant="ghost">{t("back")}</Button><Button onClick={() => setStep(2)}>{t("scanned")}</Button></div>
       </> : null}
-      {step === 2 ? <form className={styles.form} onSubmit={verify}>
+      {step === 2 ? <form className={styles.form} onSubmit={(event) => void verify(event)}>
         <Alert>{t("demoCode", { code: demonstrationCode })}</Alert>
         <FormField id={codeId} label={t("verificationCode")} hint={t("waitForNewCode")}><Input autoComplete="one-time-code" id={codeId} inputMode="numeric" maxLength={6} onChange={(event) => { setCode(event.target.value.replace(/\D/g, "")); setError(false); }} pattern="[0-9]{6}" required value={code} /></FormField>
         {error ? <Alert status="danger">{t("invalidCode")}</Alert> : null}
         <div className={styles.flowActions}><Button onClick={() => setStep(1)} type="button" variant="ghost">{t("back")}</Button><Button disabled={code.length !== 6} type="submit">{t("confirmBinding")}</Button></div>
       </form> : null}
-      {step === 3 ? <RecoveryCodes onCancel={onCancel} onDone={onFinish} /> : null}
+      {step === 3 ? <RecoveryCodes onDone={onFinish} /> : null}
     </Card.Body>
   </Card>;
 }
@@ -120,15 +122,15 @@ export function MfaLoginPreview({ onBack, onAuthenticated }: { onBack(): void; o
   const [code, setCode] = useState("");
   const [error, setError] = useState(false);
   const codeId = useId();
-  if (mode === "enroll-recovery") return <EnrollmentWizard reason="recovery" onCancel={() => setMode("challenge")} onFinish={() => setMode("recovered")} />;
+  if (mode === "enroll-recovery") return <EnrollmentWizard reason="recovery" onCancel={onBack} onFinish={() => setMode("recovered")} />;
   if (mode === "recovered") return <div className={styles.loginFlow}><div className={styles.completion}><CheckCircle2 aria-hidden="true" /><div><h1>{t("reenrollComplete")}</h1><p>{t("reenrollCompleteHint")}</p></div></div><Button block onClick={onBack}>{t("returnToLogin")}</Button></div>;
   if (mode === "recover") return <form className={styles.loginFlow} onSubmit={(event) => { event.preventDefault(); if (code === demonstrationRecoveryCode) setMode("enroll-recovery"); else setError(true); }}>
     <div className={styles.loginHeading}><KeyRound aria-hidden="true" /><div><h1>{t("recoverTitle")}</h1><p>{t("recoverHint")}</p></div></div>
     <Alert status="warning">{t("demoRecoveryCode", { code: demonstrationRecoveryCode })}</Alert>
-    <FormField id={codeId} label={t("recoveryCode")} hint={t("recoverRestriction")}><Input autoComplete="off" id={codeId} onChange={(event) => { setCode(event.target.value.trim().toUpperCase()); setError(false); }} required value={code} /></FormField>
+    <FormField id={codeId} label={t("recoveryCode")} hint={t("recoverRestriction")}><Input autoComplete="off" id={codeId} onChange={(event) => { setCode(event.target.value); setError(false); }} required value={code} /></FormField>
     {error ? <Alert status="danger">{t("invalidRecoveryCode")}</Alert> : null}
     <Button block type="submit">{t("continueRecovery")}</Button>
-    <Button block onClick={() => { setMode("challenge"); setCode(""); setError(false); }} type="button" variant="ghost">{t("back")}</Button>
+    <Button block onClick={onBack} type="button" variant="ghost">{t("returnToLogin")}</Button>
     <p className={styles.boundary}><AlertTriangle aria-hidden="true" />{t("noRecoveryMaterial")}</p>
   </form>;
   return <form className={styles.loginFlow} onSubmit={(event) => { event.preventDefault(); if (code === demonstrationCode) onAuthenticated(); else setError(true); }}>
@@ -145,39 +147,44 @@ export function MfaLoginPreview({ onBack, onAuthenticated }: { onBack(): void; o
 
 export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }) {
   const t = useTranslations("MfaPreview");
-  const [factorState, setFactorState] = useState<"never-bound" | "bound" | "removed">("never-bound");
+  const access = useAccountAccess();
   const [stepUp, setStepUp] = useState<SecurityStepUpAction | null>(null);
   const [enrollment, setEnrollment] = useState<EnrollmentReason | null>(null);
   const [showCodes, setShowCodes] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [verifiedNotificationAddress, setVerifiedNotificationAddress] = useState<string | null>(null);
+  const { factorState, reauthenticationRequired } = workspace.personalMfa;
   const required = workspace.settings.loginProtection;
 
   function begin(action: SecurityStepUpAction) { setFeedback(null); setStepUp(action); setEnrollment(null); setShowCodes(false); }
-  function verified() {
+  async function verified() {
     if (stepUp === "bind") { setEnrollment("first"); setStepUp(null); return; }
     if (stepUp === "replace") { setEnrollment("replace"); setStepUp(null); return; }
     if (stepUp === "regenerate") { setShowCodes(true); setStepUp(null); return; }
-    if (stepUp === "remove") { setFactorState("removed"); setStepUp(null); setFeedback("removed"); }
+    if (stepUp === "remove") {
+      const removed = await access.executeWorkspace({ kind: "remove-personal-mfa" });
+      if (!removed) return false;
+      setStepUp(null); setFeedback("removed");
+    }
   }
-  if (enrollment) return <EnrollmentWizard reason={enrollment} onCancel={() => setEnrollment(null)} onFinish={() => { setFactorState("bound"); setEnrollment(null); setFeedback(enrollment === "replace" ? "replaced" : "bound"); }} />;
-  if (showCodes) return <Card className={styles.flowCard}><Card.Header><Typography.Title as="h2" level={3}>{t("regenerateTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header><Card.Body><RecoveryCodes onCancel={() => setShowCodes(false)} onDone={() => { setShowCodes(false); setFeedback("regenerated"); }} /></Card.Body></Card>;
+  if (enrollment) return <EnrollmentWizard reason={enrollment} onCancel={() => setEnrollment(null)} onConfirmed={async () => Boolean(await access.executeWorkspace({ kind: "confirm-personal-mfa" }))} onFinish={() => { setEnrollment(null); setFeedback(enrollment === "replace" ? "replaced" : "bound"); }} />;
+  if (showCodes) return <Card className={styles.flowCard}><Card.Header><Typography.Title as="h2" level={3}>{t("regenerateTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header><Card.Body><RecoveryCodes onDone={() => { setShowCodes(false); setFeedback("regenerated"); }} /></Card.Body></Card>;
   if (stepUp) return <SecurityStepUpPreview action={stepUp} onCancel={() => setStepUp(null)} onVerified={verified} />;
 
   return <>
     {feedback ? <Alert status="success">{t(`feedback.${feedback}`)}</Alert> : null}
-    {feedback === "bound" || feedback === "replaced" ? <Alert status="warning">{t("reauthenticationRequired")}</Alert> : null}
+    {reauthenticationRequired ? <Alert status="warning">{t("reauthenticationRequired")}</Alert> : null}
     <SecurityNotificationAddressPreview onVerified={setVerifiedNotificationAddress} verifiedAddress={verifiedNotificationAddress} />
     <section aria-labelledby="personal-security" className={styles.section}>
-      <div className={styles.sectionHeading}><div><p>{t("personalEyebrow")}</p><h2 id="personal-security">{t("personalTitle")}</h2><span>{t("personalHint")}</span></div><Badge status={factorState === "bound" ? "success" : required ? "warning" : "neutral"}>{t(factorState === "bound" ? "bound" : required ? "bindingRequired" : "notBound")}</Badge></div>
+      <div className={styles.sectionHeading}><div><p>{t("personalEyebrow")}</p><h2 id="personal-security">{t("personalTitle")}</h2><span>{t("personalHint")}</span></div><Badge status={reauthenticationRequired ? "warning" : factorState === "bound" ? "success" : required ? "warning" : "neutral"}>{t(reauthenticationRequired ? "reauthenticate" : factorState === "bound" ? "bound" : required ? "bindingRequired" : "notBound")}</Badge></div>
       <div className={styles.securityCards}>
         <Card><Card.Header><div className={styles.cardTitle}><span><Smartphone aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("authenticatorTitle")}</Typography.Title><Typography.Text tone="muted">{t("authenticatorHint")}</Typography.Text></div></div></Card.Header><Card.Body className={styles.cardBody}>
           <dl className={styles.facts}><div><dt>{t("method")}</dt><dd>{t("totp")}</dd></div><div><dt>{t("state")}</dt><dd>{t(factorState === "bound" ? "bound" : "notBound")}</dd></div><div><dt>{t("scope")}</dt><dd>{t("currentUserOnly")}</dd></div></dl>
-          <div className={styles.actions}>{factorState === "bound" ? <><Button onClick={() => begin("replace")} variant="secondary">{t("replace")}</Button><Button disabled={required} onClick={() => begin("remove")} title={required ? t("removeBlocked") : undefined} variant="ghost">{t("remove")}</Button></> : <Button disabled={!verifiedNotificationAddress} onClick={() => begin("bind")} title={!verifiedNotificationAddress ? t("bindRequiresVerifiedAddress") : undefined}>{t("bind")}</Button>}</div>
+          <div className={styles.actions}>{factorState === "bound" ? <><Button disabled={reauthenticationRequired} onClick={() => begin("replace")} variant="secondary">{t("replace")}</Button><Button disabled={required || reauthenticationRequired} onClick={() => begin("remove")} title={reauthenticationRequired ? t("reauthenticationActionBlocked") : required ? t("removeBlocked") : undefined} variant="ghost">{t("remove")}</Button></> : <Button disabled={!verifiedNotificationAddress || reauthenticationRequired} onClick={() => begin("bind")} title={reauthenticationRequired ? t("reauthenticationActionBlocked") : !verifiedNotificationAddress ? t("bindRequiresVerifiedAddress") : undefined}>{t("bind")}</Button>}</div>
         </Card.Body></Card>
         <Card><Card.Header><div className={styles.cardTitle}><span><KeyRound aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("recoveryTitle")}</Typography.Title><Typography.Text tone="muted">{t("recoverySummary")}</Typography.Text></div></div></Card.Header><Card.Body className={styles.cardBody}>
           <dl className={styles.facts}><div><dt>{t("state")}</dt><dd>{t(factorState === "bound" ? "recoveryBatchReady" : "notAvailable")}</dd></div><div><dt>{t("display")}</dt><dd>{t("oneTimeOnly")}</dd></div><div><dt>{t("use")}</dt><dd>{t("restrictedRebind")}</dd></div></dl>
-          <div className={styles.actions}><Button disabled={factorState !== "bound"} onClick={() => begin("regenerate")} variant="secondary"><RefreshCw aria-hidden="true" />{t("regenerate")}</Button></div>
+          <div className={styles.actions}><Button disabled={factorState !== "bound" || reauthenticationRequired} onClick={() => begin("regenerate")} title={reauthenticationRequired ? t("reauthenticationActionBlocked") : undefined} variant="secondary"><RefreshCw aria-hidden="true" />{t("regenerate")}</Button></div>
         </Card.Body></Card>
       </div>
     </section>

@@ -526,10 +526,10 @@ describe("access workspace preview invariants", () => {
   });
   it("persists one unknown creation intent across users until the original key is inspected and retired", () => {
     let state = applyAccessWorkspaceCommand(initialAccessWorkspace("org-xiak"), { kind: "create-key", ownerId: "principal-chen", ownerState: "active", userResourceVersion: 2, requestId: "lost-response", responseMode: "response-lost" }, context);
-    expect(state.pendingKeyCreation).toEqual({ ownerId: "principal-chen", requestId: "lost-response", keyId: "MOCK-new-id", status: "UNKNOWN" });
+    expect(state.pendingKeyCreation).toEqual({ ownerId: "principal-chen", requestId: "lost-response", status: "UNKNOWN" });
     expect(() => applyAccessWorkspaceCommand(state, { kind: "create-key", ownerId: "principal-lin", ownerState: "active", userResourceVersion: 3, requestId: "bypass-other-user", responseMode: "success" }, context)).toThrow("invalid");
-    expect(() => applyAccessWorkspaceCommand(state, { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "new-request", keyId: "MOCK-new-id" }, context)).toThrow("invalid");
-    state = applyAccessWorkspaceCommand(state, { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "lost-response", keyId: "MOCK-new-id" }, context);
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "new-request" }, { ...context, resolvedKeyId: "MOCK-new-id" })).toThrow("invalid");
+    state = applyAccessWorkspaceCommand(state, { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "lost-response" }, { ...context, resolvedKeyId: "MOCK-new-id" });
     expect(state.pendingKeyCreation?.status).toBe("COMMITTED_SECRET_LOST");
     state = applyAccessWorkspaceCommand(state, { kind: "set-key-status", id: "MOCK-new-id", ownerState: "active", status: "DISABLED", resourceVersion: 1, requestId: "disable-lost" }, context);
     state = applyAccessWorkspaceCommand(state, { kind: "delete-key", id: "MOCK-new-id", resourceVersion: 2, requestId: "delete-lost" }, context);
@@ -550,7 +550,20 @@ describe("access workspace preview invariants", () => {
     const result = await repository.execute("mock", { kind: "create-key", ownerId: "principal-chen", ownerState: "active", userResourceVersion: 2, requestId: "lost-create", responseMode: "response-lost" });
     expect(result.issuedKey).toBeUndefined();
     expect(result.workspace.pendingKeyCreation).toMatchObject({ ownerId: "principal-chen", requestId: "lost-create", status: "UNKNOWN" });
+    expect(result.workspace.pendingKeyCreation).not.toHaveProperty("keyId");
     expect(JSON.stringify(result.workspace)).not.toContain("MOCK_NOT_A_CREDENTIAL_");
+  });
+  it("keeps personal MFA mutations locked behind a normal reauthentication across workspace reads", async () => {
+    const repository = createPreviewAccessWorkspace("org-xiak", () => ["principal-lin"], "admin");
+    const result = await repository.execute("mock", { kind: "confirm-personal-mfa" });
+    expect(result.workspace.personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true });
+    expect((await repository.read("mock")).personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true });
+    await expect(repository.execute("mock", { kind: "confirm-personal-mfa" })).rejects.toMatchObject({ code: "invalid" });
+    repository.reset();
+    expect((await repository.read("mock")).personalMfa).toEqual({ factorState: "never-bound", reauthenticationRequired: false });
+    repository.transact((source) => ({ workspace: { ...source, personalMfa: { factorState: "bound", reauthenticationRequired: false } } }));
+    const removed = await repository.execute("mock", { kind: "remove-personal-mfa" });
+    expect(removed.workspace.personalMfa).toEqual({ factorState: "removed", reauthenticationRequired: true });
   });
   it("removes a deleted user's memberships, direct permissions and keys together", () => {
     const state = applyAccessWorkspaceCommand(initialAccessWorkspace("org-xiak"), { kind: "delete-user", principalId: "principal-lin" }, context);
