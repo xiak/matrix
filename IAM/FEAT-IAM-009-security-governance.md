@@ -179,7 +179,7 @@ S2a后继材料基础片由`api/iam/v1/totp_wrapping.go`单一拥有私有keyrin
 
 材料片固定`04041d2d3f7ed55225a5164bc2bc05251d25a6f1`本地门禁（2026-09-20）：新私有codec/承诺/加密互换及既有AccessKey聚焦race通过；私有codec和密文输入各20秒、最多2 worker的fuzz分别完成547018和705841次执行，无失败，这不是QPS/容量证据。最终代码干净Git导出完成全仓默认race/architecture、vet、模块校验、生成前后全部文件集合及SHA256一致、Linux amd64构建，GOMAXPROCS=2/GOMEMLIMIT=512MiB。外部环境SKIP仍不计真库/进程验收；本片无新DB、容器或远端操作。[Verification35485632542](https://github.com/xiak/matrix/actions/runs/35485632542)2026-09-20经GitHub API再次核实精确SHA及completed/success；它仍不证明后继IAM33、实际MFA或安装分支已验收。
 
-#### 不同状态不能混用
+#### S2a运行时托管准备
 
 S2a运行时后继已在本分支实现并通过下述本地门禁，独立CI仍待固定提交后确认：网络进程必须读取已冻结的独立TOTP文件；启动时以封存bootstrap tuple注册非秘密材料承诺，不能生成替代秘密。沿原owner增加`000012_totp`是因为多key注册历史及种子持久状态与AccessKey具有不同的用途/退役边界，不复制其单key表或新建服务。源码IAM34/Audit19，发布profile/revision不变。
 
@@ -190,6 +190,22 @@ S2a运行时后继已在本分支实现并通过下述本地门禁，独立CI仍
 该片必须在原测试owner证明：私有文件/用途/scope错误及缺失关闭；真实受限PG首次注册/等值重放/升级revision、同ID换材料/同revision变体/退役/越安装拒绝且无部分注册；另一个真实IAM副本观察注册推进后拒绝旧材料；真实登录和旧Session请求对未知认证器状态失败，不只测ready；登记竞争与读取锁顺序、RLS/ACL/不可变历史、重启/双迁移保留，以及原密码/Role/AccessKey/历史Audit回归。仅测试插入的不可用种子记录是负向边界夹具，不是已实现的绑定路径；没有真实绑定/OTP消费/通知/恢复门禁仍不能称MFA可用。
 
 本地真实PostgreSQL18.6证据沿原owner：独立2逻辑CPU/1GiB/24进程限制、16连接/64MiB shared buffers；Go2/512MiB、race/-p1串行。`TestIAMTOTPCustodyPostgres`最终2.52s覆盖精确注册/变体无部分写、读锁阻止登记越过在途请求、两个不同同revision集合并发仅一方成功、真实密文REVOKED行使登录/Session/重启失败关闭和双迁移保留。原IAM HTTP累计104.94s；实际固定`7cf857bb` IAM32 executable→IAM34保留Session/原receipt/canonical/proof及重启最终15.13s。独立IAM/Audit/PaaS与两个dispatcher门禁最终106.91s，包括真实受限登录、两IAM及新IAM进程推进集合revision后旧两个进程的真实Login/Session均503、匹配材料实例仍接受原有效Session、重启后原业务和历史投递继续。没有借用Docker/远端/其他任务资源；这些源码实验不证明新发布profile或备份恢复兼容。最终同生产源码的clean-export全仓race/架构、vet、模块校验、728文件生成清单/哈希一致性及Linux amd64构建通过；独立CI尚待确认。
+
+该准备片固定`a36a35c2eddbeb7c76a8d7c140e180b24a169aab`已推送；精确[Verification35491802049](https://github.com/xiak/matrix/actions/runs/35491802049)当前queued，完成前不作为独立CI验收结论。
+
+#### S2a同快照备份交接目标
+
+该后继切片尚未实现/验收。按与installation冻结的唯一`api/adapter/installation/v1`契约，只消费固定`d479e1c57b6458852dd029227d32f3d56df6c5ad`的非秘密custody/lease及其同源依赖，不搬动安装WIP或引入其发布profile。custody绑定封存installation/bootstrap、同快照观察到的keysetRevision及按keyId排序唯一的`keyId/formatVersion/commitment`；observed revision不是退役权或强制当前集合回退。显式空数组仅表示IAM从该快照确证无密文引用，缺失/null不能冒充空。snapshotId仅是有期限的PostgreSQL运行句柄，不进入持久备份、Audit或摘要。
+
+IAM新增独立目的的一次性入口`matrix-iam-backup-custody snapshot`，不用普通API、worker或凭据恢复登录。仅读取`MATRIX_IAM_BACKUP_CUSTODY_DATABASE_DSN_FILE`，不读取keyring、bootstrap秘密或恢复authority。封闭role/login为`matrix_iam_backup_custody`/`matrix_iam_backup_custody_login`，仅允许`iam.read_totp_backup_custody()`；没有表读写、注册、认证或恢复权限。原迁移入口新增`MATRIX_MIGRATION_IAM_BACKUP_CUSTODY_DSN_FILE`只配置和核对该登录，迁移不执行备份或恢复效果。新增命令保护独立数据库权限与长存活只读事务边界，不另建服务、通用lease框架或第二摘要实现。
+
+helper持有单一REPEATABLE READ READ ONLY事务，核对实际注册与全部保留密文引用（包括PENDING/ACTIVE/REVOKED），缺注册、未知格式/状态或不完整投影失败。由同一事务调用`pg_export_snapshot()`并输出恰一行canonical lease，然后保持事务；整个生命周期硬上限10分钟，无时间/SQL/tenant selector。stdin必须为恰好8字节ASCII `RELEASE\n`随后EOF，只有正常rollback（绝不commit）并关闭连接后退出0；提前EOF、额外输入、截止、导出/查询/编码/关闭失败均非0。固定stderr/退出码为2=`IAM_BACKUP_CUSTODY_INVALID`、3=`IAM_BACKUP_CUSTODY_FORBIDDEN`、6=`IAM_BACKUP_CUSTODY_UNAVAILABLE`，不输出原生PG/路径/材料错误。lease已输出不表示操作已完成。
+
+installation负责真实consumer、签名打包及非秘密custody封存：在helper仍存活的同一10分钟内完成导入snapshot的pg_dump、校验dump、核对本地受保护keyring为所需集合的可信超集，然后写精确RELEASE并关闭stdin、等待0。任何一边失败/未知都不得发布backup manifest，partial清理由安装自己的owner验证。这不是当前恢复资格证明或重新开放认证许可。
+
+源码目标IAM35/Audit19，不分配发布revision、不改变原lookup_service/claim/Session/Audit canonical。原owner门禁必须证明实际受限登录和严格权限、同一snapshot下登记/因子并发变更不混入摘要/pg_dump、显式空/缺引用/错格式关闭、lease存活和释放/提前EOF/额外输入/超时/中断及秘密扫描；至少真实pg_dump导入和恢复查询相符，不能只检查snapshot字符串。API codec通过、Go假事务或迁移重复通过都不能替代该实际运行与安装恢复验收。
+
+#### 不同状态不能混用
 
 | 状态或材料 | 责任与限制 |
 | --- | --- |
