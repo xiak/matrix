@@ -381,7 +381,7 @@ IAM37基线只发行恢复材料，批次与码的更新、删除、截断全部
 
 #### S2b受限自助恢复增量
 
-三个在线恢复HTTP入口和实际消费事务已接通，并完成下述本地运行门禁；独立CI与消费者验收未完成，不改变f5cec0e1的交付结论。开始时把新PENDING因子与独立RECOVERY挑战一并提交，种子在重试事务之外生成/封装一次。公开`AuthenticatorRecovery`仅描述原ID/requestId、`STARTED/COMPLETED/SUPERSEDED/EXPIRED`和期限/完成时间，不含主体selector或秘密；它不是普通Session首次绑定的Enrollment：开始已终止旧因子并消费一条码，关闭页面不能撤回这些效果。
+三个在线恢复HTTP入口和实际消费事务已固定推送`48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e`，并完成下述本地运行门禁；独立CI与消费者验收未完成，不改变f5cec0e1的交付结论。开始时把新PENDING因子与独立RECOVERY挑战一并提交，种子在重试事务之外生成/封装一次。公开`AuthenticatorRecovery`仅描述原ID/requestId、`STARTED/COMPLETED/SUPERSEDED/EXPIRED`和期限/完成时间，不含主体selector或秘密；它不是普通Session首次绑定的Enrollment：开始已终止旧因子并消费一条码，关闭页面不能撤回这些效果。
 
 | 封闭入口 | 输入与结果 |
 | --- | --- |
@@ -417,7 +417,7 @@ LoginResponse仍只允许LOGIN挑战；不能因为通用Challenge可以描述RE
 
 最终Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB全仓默认race、architecture、vet及模块校验通过；122个API tracked文件重新生成集合/字节一致，全部包Linux amd64构建和diff检查通过。数据库已无客户端、测试邮箱队列为空后，按准确ID及owner/task标签仅清理本轮两个临时容器、两个空网络和合成SMTP配置文件；本轮标签下容器/网络/卷均零残留。临时空目录删除被工具策略拒绝，保留待人工清理；未操作共享或远端服务。
 
-整片仍未验收：完整十码耗尽跨窗口路径、浏览器恢复与独立CI尚须完成；step-up/受限首次强制设置仍属后继S2，离线CLOSED/reconcile/reopen及发布profile由安装主任务独占实施，本片没有修改其契约或消费者。纯契约回滚点c13f6d11的独立CI35521839561因平台billing/spending限制未分配runner、五job零步骤，不能记为代码回归通过或失败；本增量尚无独立CI结论。
+整片仍未验收：完整十码耗尽跨窗口路径、浏览器恢复与独立CI尚须完成；step-up/受限首次强制设置仍属后继S2，离线CLOSED/reconcile/reopen及发布profile由安装主任务独占实施，本片没有修改其契约或消费者。固定48e56cbb的[Verification35528886088](https://github.com/xiak/matrix/actions/runs/35528886088)已由GitHub API核实精确SHA及completed/failure：五项均runner_id=0、steps=0，annotation为账户付款或spending limit，未执行测试。与纯契约c13f6d11的35521839561相同，属于外部未运行，不能算代码通过或证明代码回归；不反复重跑不变的billing阻塞。安装与UX已收到固定对象、准确IAM38/Audit22形状及此验收缺口，只能选择性复用并自行验证。
 
 #### 事务、锁序与失败结果
 
