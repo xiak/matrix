@@ -635,6 +635,26 @@ not administrator discovery, RoleSession/AccessKey management or a new store.
 The source review is not an acceptance claim or a release migration promise;
 routes, qualification, shared edit windows and actual gates belong IAM/009.
 
+## Minimal security-mail transport review
+
+IAM/012 owns the smallest target: fixed security notifications and address
+verification through a configured SMTP service, with honest submission/unknown
+outcomes. This is not a message center, new identity or recovery authority.
+
+| Fixed source / slice | Decision | Rationale |
+| --- | --- | --- |
+| Matrix `285706e3adf76fb0c109dad474f06266c8b67ab5`, `api/iam/v1/secret.go` and IAM `data/audithttp/client.go` | `REUSE` Secret and service-local side-effect ownership; `ADAPT` sanitized submission outcomes | Existing HTTP/Audit dispatch is not an SMTP queue or recipient verification mechanism. Do not reuse its seven-column Audit claim or give its worker mail credentials. No database or worker permissions change in this transport slice. |
+| Product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, `11-contact/support-and-security-escalation.md` | `REFERENCE` secret minimization and independent support contact; `REJECT` deriving mail implementation or recovery authority | The prose provides neither SMTP code nor authenticated recipient proof. It does not authorize support roles, links, password recovery or a general message API. |
+| Go1.26.3 `net/smtp`, `net/textproto` and `crypto/tls` | `REUSE` standard protocol/TLS primitives; `ADAPT` mandatory TLS, complete bounded replies and explicit DATA completion | The convenience SendMail has optional TLS; its DATA closer discards its writer-close error, and textproto can parse an EOF-truncated final line. The adapter must distinguish observed acceptance from uncertainty without copying a second SMTP implementation or logging native errors. |
+
+[RFC5321](https://www.rfc-editor.org/rfc/rfc5321.html#section-4.2.5) and
+[RFC3207](https://www.rfc-editor.org/rfc/rfc3207.html) are `REFERENCE` for
+submission responsibility and STARTTLS, not deliverability evidence. The
+previously rejected foundation framework is not imported; its fixed object
+`f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` was unavailable in this checkout for
+new inspection, so no claim of reusing a donor SMTP implementation is made.
+Transport/recipient budgets and all acceptance status belong only IAM/012.
+
 ## Local MFA governance target review
 
 IAM/009 owns the target: a real USER binds a local TOTP authenticator,

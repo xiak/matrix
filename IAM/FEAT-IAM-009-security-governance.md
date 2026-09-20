@@ -195,7 +195,7 @@ S2a运行时后继已在本分支实现并通过下述本地门禁及固定提�
 
 #### S2a同快照备份交接
 
-该后继切片已实现，下述聚焦真库/进程及累计本地门禁通过，独立CI待固定提交确认。按与installation冻结的唯一`api/adapter/installation/v1`契约，只消费固定`d479e1c57b6458852dd029227d32f3d56df6c5ad`的非秘密custody/lease及其同源依赖、固定`2e6714bd95ee7c0d90a289b7b9902539717386d3`的协议常量，不搬动安装WIP或引入其发布profile。custody绑定封存installation/bootstrap、同快照观察到的keysetRevision及按keyId排序唯一的`keyId/formatVersion/commitment`；observed revision不是退役权或强制当前集合回退。显式空数组仅表示IAM从该快照确证无密文引用，缺失/null不能冒充空。snapshotId仅是有期限的PostgreSQL运行句柄，不进入持久备份、Audit或摘要。
+该后继切片已固定推送`285706e3adf76fb0c109dad474f06266c8b67ab5`，下述聚焦真库/进程及累计本地门禁通过；2026-09-20由GitHub API核实精确[Verification35494523608](https://github.com/xiak/matrix/actions/runs/35494523608)及go、node-process、authority-storage、authority-runtime、authority-process全部completed/success。按与installation冻结的唯一`api/adapter/installation/v1`契约，只消费固定`d479e1c57b6458852dd029227d32f3d56df6c5ad`的非秘密custody/lease及其同源依赖、固定`2e6714bd95ee7c0d90a289b7b9902539717386d3`的协议常量，不搬动安装WIP或引入其发布profile。custody绑定封存installation/bootstrap、同快照观察到的keysetRevision及按keyId排序唯一的`keyId/formatVersion/commitment`；observed revision不是退役权或强制当前集合回退。显式空数组仅表示IAM从该快照确证无密文引用，缺失/null不能冒充空。snapshotId仅是有期限的PostgreSQL运行句柄，不进入持久备份、Audit或摘要。
 
 IAM新增独立目的的一次性入口`matrix-iam-backup-custody snapshot`，不用普通API、worker或凭据恢复登录。仅读取`MATRIX_IAM_BACKUP_CUSTODY_DATABASE_DSN_FILE`，不读取keyring、bootstrap秘密或恢复authority。封闭role/login为`matrix_iam_backup_custody`/`matrix_iam_backup_custody_login`，仅允许`iam.read_totp_backup_custody()`；没有表读写、注册、认证或恢复权限。原迁移入口新增`MATRIX_MIGRATION_IAM_BACKUP_CUSTODY_DSN_FILE`只配置和核对该登录，迁移不执行备份或恢复效果。新增命令保护独立数据库权限与长存活只读事务边界，不另建服务、通用lease框架或第二摘要实现。
 
@@ -240,7 +240,7 @@ installation负责真实consumer、签名打包及非秘密custody封存：在he
 | IAM | 状态机、本人/受保护身份校验、加密上下文、尝试预算、一次性消费、Session/Role有效性、原子事实与最小通知意图 | 不能读取安装私钥、直接恢复数据库或跨库查询业务资源 |
 | 原installation交付owner | 独立材料生成/封存/分发、文件与挂载隔离、启动检查、升级准入、受支持备份恢复和恢复期间访问隔离 | 开发/执行安装程序不等于取得在线租户安全配置或因子管理权限 |
 | Audit | 新事实的封闭actor/action/target与历史proof验证；旧canonical、租户链和投递归属保持 | 不解密因子，不把当前登录资格用于重新授权历史事实 |
-| IAM的012最小安全邮件切片，installation托管通道配置 | 已验证接收人、受限投递、重试/受理证据及失败告警；已获授权，尚未实现/真实验收 | 联系人不是Principal，投递身份不获得租户业务读写或认证器恢复权 |
+| IAM的012最小安全邮件切片，installation托管通道配置 | 已验证接收人、受限投递、重试/受理证据及失败告警；实际切片进度及证据仅归012 | 联系人不是Principal，投递身份不获得租户业务读写或认证器恢复权 |
 | UX/UI owner | 真实绑定/挑战/恢复/设置交互、秘密一次性展示及失败反馈 | 不计算有效权限、不缓存秘密、不靠隐藏按钮保护入口 |
 
 用户已授权IAM补012最小邮件通知，并与原installation负责人设计实施目的限定的原受保护主账号MFA恢复及备份恢复隔离；这不表示接口已经冻结或其他任务已经交付。IAM和installation共同证明材料错误时关闭、两副本一致、真实备份恢复不复活认证资格及原primary封存关系保持。保留原主账号身份不表示其密码、认证器或临时交付凭据永不轮换；永久身份关系与可撤销凭据分开。
@@ -338,7 +338,7 @@ TOTP验证需要可用种子，不能仅存单向摘要；数据库应存目的�
 
 单key的materialCommitment绑定独立domain、purpose、完整scope、keyId、format及原始32字节材料，**不绑定keysetRevision或active选择**；同一不可变key加入新集合时原承诺必须保持，才能验证旧备份所需材料。整套keyset另用非秘密摘要绑定版本、active、有序key引用与各自commitment；它不是恢复资格、反回滚证明或任意key退役许可。同keyId换材料、降级revision或已知revision换集合必须由权威注册/安装封存的历史比较拒绝，纯codec只能验证一个文档，不能伪称已证明历史单调。
 
-备份不归档或覆盖实时keyring。IAM须提供与被备份数据库同一快照的非秘密custody摘要，列出该快照实际依赖的全部keyId/格式/material commitment及keysetRevision；installation将其封存进备份，恢复前确认当前受保护材料是准确可信超集。不能只取activeKey、遍历宿主文件或由dump外一次普通HTTP查询猜测引用；同一快照的只读交接ABI仍待冻结。正常readiness须核对封存scope和实际引用，旧key退役同时需要数据库无引用、所有实际副本读到新集合、仍受支持备份不再依赖旧key的证据。宿主文件替换不自动证明运行副本已读取新集合，挂载和读取方式必须实测。
+备份不归档或覆盖实时keyring。IAM须提供与被备份数据库同一快照的非秘密custody摘要，列出该快照实际依赖的全部keyId/格式/material commitment及keysetRevision；installation将其封存进备份，恢复前确认当前受保护材料是准确可信超集。不能只取activeKey、遍历宿主文件或由dump外一次普通HTTP查询猜测引用；同一快照的只读交接ABI及IAM35实现见上文，安装消费者另有验收边界。正常readiness须核对封存scope和实际引用，旧key退役同时需要数据库无引用、所有实际副本读到新集合、仍受支持备份不再依赖旧key的证据。宿主文件替换不自动证明运行副本已读取新集合，挂载和读取方式必须实测。
 
 种子密文候选采用标准AES-256-GCM与随机nonce；按独立目的通过HKDF-SHA256派生记录密钥，认证上下文包含格式、封存installationId、Account/USER、不可变factorId及keyId，使用唯一无歧义编码。状态、显示名和消费时间步不是密文身份，不能每次修改都重新定义AAD。Go标准原语和[RFC5869](https://www.rfc-editor.org/rfc/rfc5869.html)只作为算法依据，私有codec及互换攻击须实测，不能复制AccessKey编码器或新增通用密钥服务。恢复码为高熵随机值，仅保存目的/主体/批次绑定的单向验证值，不用这套可逆密文保存。
 
@@ -354,9 +354,9 @@ TOTP验证需要可用种子，不能仅存单向摘要；数据库应存目的�
 
 #### 登录与一次性消费
 
-材料准备版与MFA启用版须有不同的精确数据库/函数行为门禁，不能由manifest自声明capabilities或仅比较schema大小推断兼容。准备版必须核对注册材料与实际仍需解密的行；出现其不理解的ACTIVE/PENDING或其他需解密状态时，除readiness为false，实际Login、Session查验及受保护认证路径也须失败关闭。不能假设所有调用方都遵守健康探针。源码IAM34的注册/读形状与拒绝全部保留因子行的行为已在上文实现；实际因子状态机、同快照备份helper及准备→启用的发布profile尚未完成，IAM33密码预算本身不充作这些证明。
+材料准备版与MFA启用版须有不同的精确数据库/函数行为门禁，不能由manifest自声明capabilities或仅比较schema大小推断兼容。准备版必须核对注册材料与实际仍需解密的行；出现其不理解的ACTIVE/PENDING或其他需解密状态时，除readiness为false，实际Login、Session查验及受保护认证路径也须失败关闭。不能假设所有调用方都遵守健康探针。源码IAM34的注册/读形状与拒绝全部保留因子行的行为、IAM35的同快照helper已在上文实现；实际因子状态机、签名备份consumer及准备→启用的发布profile尚未完成，IAM33密码预算本身不充作这些证明。
 
-已与installation冻结运行配置名`MATRIX_IAM_TOTP_KEYRING_FILE`及目标`/run/matrix/iam-totp-keyring.json`，仅IAM单文件只读挂载，不能给其他服务或挂父目录。本分支IAM34已消费独立受保护文件，安装挂载/交付仍由installation自己的固定证据负责。备份要求单一exported snapshot：持有REPEATABLE READ READ ONLY事务的目的限定helper从同一视图得出注册历史/实际依赖，pg_dump在lease未结束时导入该snapshot；普通两次query或当前keyset摘要不证明一致性。required稳定key承诺与本地superset核对不能替代当前恢复资格；同快照交接及只读helper属于后继切片，不将当前`read_totp_custody`称为已具备该能力。
+已与installation冻结运行配置名`MATRIX_IAM_TOTP_KEYRING_FILE`及目标`/run/matrix/iam-totp-keyring.json`，仅IAM单文件只读挂载，不能给其他服务或挂父目录。本分支IAM34已消费独立受保护文件，安装挂载/交付仍由installation自己的固定证据负责。备份要求单一exported snapshot：IAM35的目的限定helper持有REPEATABLE READ READ ONLY事务，从同一视图得出注册历史/实际依赖，pg_dump在lease未结束时导入该snapshot；普通两次query或当前keyset摘要不证明一致性。required稳定key承诺与本地superset核对不能替代当前恢复资格；只读helper的准确门禁见上文，不能将运行请求的`read_totp_custody`冒充备份lease或完整安装consumer。
 
 登录响应必须明确区分“已发行Session”与“需要继续认证”，不能在挑战分支返回半有效bearer。仅密码、账号和User当前状态验证成功后签发短期挑战，不在错误密码/未知realm时暴露是否绑定MFA。完成挑战时，在原Account→USER→凭据锁序下重新检查主体状态、密码代际、因子修订及挑战；密码改变、因子替换或挑战终止使旧阶段证明失效，不根据请求中的user/account字段换主体。原密码Session及不支持新响应的旧客户端不能绕过所需因子。
 
