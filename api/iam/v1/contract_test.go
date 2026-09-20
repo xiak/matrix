@@ -2,13 +2,19 @@ package iamv1
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"reflect"
 	"slices"
@@ -27,6 +33,368 @@ var removedBuiltinRoleNames = []string{
 	"PAAS_VIEWER",
 	"AUDIT_READER",
 	"INSTALLATION_VERIFIER",
+}
+
+func TestSecurityMailSMTPChannelIsOnlyACanonicalPrivateFile(t *testing.T) {
+	password, _ := NewSecret("synthetic-mail-password")
+	value := SecurityMailSMTPChannel{APIVersion: APIVersion, Kind: "SecurityMailSMTPChannel", Purpose: SecurityMailSubmissionPurpose,
+		Scope: SecurityMailInstallationScope{InstallationID: "mxi-" + strings.Repeat("a", 32), BootstrapDigest: "sha256:" + strings.Repeat("b", 64)},
+		Host:  "smtp.matrix.test", Port: 587, TLSMode: SecurityMailSTARTTLS, Username: "test-sender", Password: password, From: "sender@matrix.test"}
+	encoded, err := EncodeSecurityMailSMTPChannel(value)
+	if err != nil || !bytes.Contains(encoded, []byte("synthetic-mail-password")) {
+		t.Fatal("explicit private codec failed")
+	}
+	decoded, err := DecodeSecurityMailSMTPChannel(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(value, decoded) {
+		t.Fatal("SMTP private-file round trip differs")
+	}
+	for _, format := range []string{"%v", "%+v", "%#v", "%s"} {
+		if printed := fmt.Sprintf(format, value); !strings.Contains(printed, "REDACTED") || strings.Contains(printed, "synthetic-mail-password") || strings.Contains(printed, value.Username) {
+			t.Fatal("private SMTP channel formatted")
+		}
+	}
+	if output, err := json.Marshal(value); !errors.Is(err, ErrInvalidSecurityMailSMTPChannel) || len(output) != 0 {
+		t.Fatal("ordinary JSON exposed private SMTP channel")
+	}
+	var ordinary SecurityMailSMTPChannel
+	if json.Unmarshal(encoded, &ordinary) != ErrInvalidSecurityMailSMTPChannel || ordinary.Password.Present() {
+		t.Fatal("ordinary JSON acquired SMTP authority material")
+	}
+	for _, mutate := range []func(*SecurityMailSMTPChannel){
+		func(v *SecurityMailSMTPChannel) { v.APIVersion = "wrong/v1" },
+		func(v *SecurityMailSMTPChannel) { v.Kind = "TOTPKeyring" },
+		func(v *SecurityMailSMTPChannel) { v.Purpose = TOTPWrappingPurpose },
+		func(v *SecurityMailSMTPChannel) { v.Scope.InstallationID = "" },
+		func(v *SecurityMailSMTPChannel) { v.Scope.BootstrapDigest = "unknown" },
+		func(v *SecurityMailSMTPChannel) { v.Host = "smtp://matrix.test" },
+		func(v *SecurityMailSMTPChannel) { v.Host = "localhost" },
+		func(v *SecurityMailSMTPChannel) { v.Host = "smtp.matrix.test\r\n" },
+		func(v *SecurityMailSMTPChannel) { v.Port = 0 },
+		func(v *SecurityMailSMTPChannel) { v.TLSMode = "NONE" },
+		func(v *SecurityMailSMTPChannel) { v.Username = "" },
+		func(v *SecurityMailSMTPChannel) { v.Username = "user\x00" },
+		func(v *SecurityMailSMTPChannel) { v.Username = strings.Repeat("a", 255) },
+		func(v *SecurityMailSMTPChannel) { v.Password = Secret{} },
+		func(v *SecurityMailSMTPChannel) { v.Password, _ = NewSecret(strings.Repeat("s", 1025)) },
+		func(v *SecurityMailSMTPChannel) { v.From = "sender@matrix.test\r\nBcc:other@matrix.test" },
+		func(v *SecurityMailSMTPChannel) { v.TrustedCAPEM = "/caller/path/to/ca" },
+		func(v *SecurityMailSMTPChannel) { v.TrustedCAPEM = strings.Repeat("X", 16385) },
+	} {
+		invalid := value
+		mutate(&invalid)
+		if output, err := EncodeSecurityMailSMTPChannel(invalid); err != ErrInvalidSecurityMailSMTPChannel || len(output) != 0 {
+			t.Fatal("invalid channel encoded")
+		}
+	}
+	for _, bad := range [][]byte{
+		append([]byte(" "), encoded...), append(bytes.Clone(encoded), '\n'),
+		bytes.Replace(encoded, []byte(`"port":587`), []byte(`"port":587.0`), 1),
+		bytes.Replace(encoded, []byte(`"port":587`), []byte(`"port":65536`), 1),
+		bytes.Replace(encoded, []byte(`"port":587`), []byte(`"port":null`), 1),
+		bytes.Replace(encoded, []byte(`"password":"synthetic-mail-password"`), []byte(`"password":null`), 1),
+		append([]byte(`{"skipCertificateVerification":true,`), encoded[1:]...),
+		append([]byte(`{"trustedCaPem":null,`), encoded[1:]...),
+		append([]byte(`{"username":"duplicate",`), encoded[1:]...),
+		append([]byte(`{"userId":"caller",`), encoded[1:]...),
+	} {
+		if decoded, err := DecodeSecurityMailSMTPChannel(bytes.NewReader(bad)); err != ErrInvalidSecurityMailSMTPChannel || !reflect.DeepEqual(decoded, SecurityMailSMTPChannel{}) {
+			t.Fatal("noncanonical, null, duplicate or selector-bearing private document accepted")
+		}
+	}
+	for _, reader := range []io.Reader{nil, strings.NewReader(""), iotest.ErrReader(errors.New("secret diagnostic"))} {
+		if decoded, err := DecodeSecurityMailSMTPChannel(reader); err != ErrInvalidSecurityMailSMTPChannel || !reflect.DeepEqual(decoded, SecurityMailSMTPChannel{}) {
+			t.Fatal("reader error leaked or produced partial channel")
+		}
+	}
+	large := strings.NewReader(strings.Repeat(" ", int(MaxSecurityMailSMTPChannelBytes)+100))
+	if _, err := DecodeSecurityMailSMTPChannel(large); err != ErrInvalidSecurityMailSMTPChannel || large.Len() < 99 {
+		t.Fatal("private SMTP reader exceeded its bound")
+	}
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal("certificate fixture generation failed")
+	}
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "mail fixture root"},
+		NotBefore: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, public, private)
+	if err != nil {
+		t.Fatal("certificate fixture signing failed")
+	}
+	root := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	value.TrustedCAPEM = root
+	value.Host, value.Port, value.TLSMode = "127.0.0.1", 465, SecurityMailImplicitTLS
+	encoded, err = EncodeSecurityMailSMTPChannel(value)
+	if err != nil {
+		t.Fatal("valid private trust or implicit TLS refused")
+	}
+	if decoded, err := DecodeSecurityMailSMTPChannel(bytes.NewReader(encoded)); err != nil || !reflect.DeepEqual(decoded, value) {
+		t.Fatal("private trust changed in transit")
+	}
+	for _, invalid := range []string{root + root, "junk\n" + root, root + "junk", strings.ReplaceAll(root, "\n", "\r\n"),
+		"-----BEGIN CERTIFICATE-----\ncorrupt\n-----END CERTIFICATE-----\n" + root} {
+		value.TrustedCAPEM = invalid
+		if ValidateSecurityMailSMTPChannel(value) != ErrInvalidSecurityMailSMTPChannel {
+			t.Fatal("ambiguous or duplicate trust accepted")
+		}
+	}
+	certificate.IsCA = false
+	der, err = x509.CreateCertificate(rand.Reader, certificate, certificate, public, private)
+	if err != nil {
+		t.Fatal("non-CA fixture failed")
+	}
+	value.TrustedCAPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	if ValidateSecurityMailSMTPChannel(value) != ErrInvalidSecurityMailSMTPChannel {
+		t.Fatal("non-CA trust accepted")
+	}
+}
+
+func TestEmailVerificationBindingIsPrivateCompleteAndPurposeLimited(t *testing.T) {
+	now := time.Date(2026, 9, 20, 8, 0, 0, 123000, time.UTC)
+	value := EmailVerificationBinding{InstallationID: "install-one", BootstrapDigest: "sha256:" + strings.Repeat("a", 64),
+		AccountID: "account-one", UserID: "user-one", VerificationID: "verification-one", Recipient: "User@matrix.test",
+		CredentialGeneration: 1, IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
+	info, aad, err := EmailVerificationCipherContext(value, "mail-key")
+	if err != nil || len(info) == 0 || len(aad) == 0 || bytes.Equal(info, aad) {
+		t.Fatal("email context is not domain separated")
+	}
+	for _, change := range []func(*EmailVerificationBinding){
+		func(v *EmailVerificationBinding) { v.InstallationID = "" },
+		func(v *EmailVerificationBinding) { v.BootstrapDigest = "invalid" },
+		func(v *EmailVerificationBinding) { v.AccountID = "" },
+		func(v *EmailVerificationBinding) { v.UserID = "" },
+		func(v *EmailVerificationBinding) { v.VerificationID = "" },
+		func(v *EmailVerificationBinding) { v.Recipient = "user@matrix.test\r\n" },
+		func(v *EmailVerificationBinding) { v.CredentialGeneration = 0 },
+		func(v *EmailVerificationBinding) { v.CredentialGeneration = 9007199254740992 },
+		func(v *EmailVerificationBinding) { v.ContactRevision = 9007199254740992 },
+		func(v *EmailVerificationBinding) { v.IssuedAt = time.Time{} },
+		func(v *EmailVerificationBinding) { v.IssuedAt = v.IssuedAt.Add(time.Nanosecond) },
+		func(v *EmailVerificationBinding) { v.ExpiresAt = v.ExpiresAt.In(time.FixedZone("local", 3600)) },
+		func(v *EmailVerificationBinding) { v.ExpiresAt = v.IssuedAt },
+		func(v *EmailVerificationBinding) { v.ExpiresAt = v.ExpiresAt.Add(time.Microsecond) },
+		func(v *EmailVerificationBinding) {
+			v.IssuedAt = time.Date(1969, 1, 1, 0, 0, 0, 0, time.UTC)
+			v.ExpiresAt = v.IssuedAt.Add(time.Minute)
+		},
+		func(v *EmailVerificationBinding) {
+			v.IssuedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+			v.ExpiresAt = v.IssuedAt.Add(time.Minute)
+		},
+	} {
+		invalid := value
+		change(&invalid)
+		info, aad, err := EmailVerificationCipherContext(invalid, "mail-key")
+		if err != ErrInvalidEmailVerificationBinding || len(info) != 0 || len(aad) != 0 {
+			t.Fatal("invalid context produced partial protected binding")
+		}
+	}
+	if _, _, err := EmailVerificationCipherContext(value, ""); err != ErrInvalidEmailVerificationBinding {
+		t.Fatal("absent key identity accepted")
+	}
+	// Moving separators between adjacent valid fields cannot preserve context.
+	left, right := value, value
+	left.AccountID, left.UserID = "a", "bc"
+	right.AccountID, right.UserID = "ab", "c"
+	leftInfo, _, _ := EmailVerificationCipherContext(left, "mail-key")
+	rightInfo, _, _ := EmailVerificationCipherContext(right, "mail-key")
+	if bytes.Equal(leftInfo, rightInfo) {
+		t.Fatal("email binding omitted field boundaries")
+	}
+	totpInfo, totpAAD, err := TOTPSeedContext(TOTPWrappingScope{InstallationID: value.InstallationID, BootstrapDigest: value.BootstrapDigest}, value.AccountID, value.UserID, value.VerificationID, "mail-key")
+	if err != nil || bytes.Equal(info, totpInfo) || bytes.Equal(aad, totpAAD) {
+		t.Fatal("email binding was represented as TOTP material")
+	}
+	var ordinary EmailVerificationBinding
+	if json.Unmarshal([]byte(`{}`), &ordinary) == nil || json.Unmarshal([]byte(`null`), &ordinary) == nil {
+		t.Fatal("ordinary JSON acquired email binding")
+	}
+}
+
+func emailVerificationTestKeyring(t testing.TB) EmailVerificationKeyring {
+	t.Helper()
+	material, err := NewSecret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x47}, 32)))
+	if err != nil {
+		t.Fatal("synthetic mail material failed")
+	}
+	return EmailVerificationKeyring{APIVersion: APIVersion, Kind: "EmailVerificationKeyring", Purpose: EmailVerificationWrappingPurpose,
+		Scope:          SecurityMailInstallationScope{InstallationID: "install-one", BootstrapDigest: "sha256:" + strings.Repeat("a", 64)},
+		KeysetRevision: 1, ActiveKeyID: "mail-a", Keys: []EmailVerificationWrappingKey{{KeyID: "mail-a", FormatVersion: 1, KeyMaterial: material}}}
+}
+
+func TestEmailVerificationKeyringPurposeCanonicalBoundsAndCommitments(t *testing.T) {
+	value := emailVerificationTestKeyring(t)
+	encoded, err := EncodeEmailVerificationKeyring(value)
+	if err != nil {
+		t.Fatal("mail keyring encoding failed")
+	}
+	decoded, err := DecodeEmailVerificationKeyring(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(decoded, value) {
+		t.Fatal("mail keyring private round trip differs")
+	}
+	keyCommitment, err := EmailVerificationKeyMaterialCommitment(value, "mail-a")
+	if err != nil || ValidateDigest("keyCommitment", keyCommitment) != nil {
+		t.Fatal("mail key commitment failed")
+	}
+	setDigest, err := EmailVerificationKeysetDigest(value)
+	if err != nil || ValidateDigest("setDigest", setDigest) != nil || setDigest == keyCommitment {
+		t.Fatal("mail key/set identities were conflated")
+	}
+	expanded := value
+	expanded.Keys = append([]EmailVerificationWrappingKey(nil), value.Keys...)
+	otherMaterial, _ := NewSecret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x48}, 32)))
+	expanded.Keys = append(expanded.Keys, EmailVerificationWrappingKey{KeyID: "mail-b", FormatVersion: 1, KeyMaterial: otherMaterial})
+	expanded.KeysetRevision, expanded.ActiveKeyID = 2, "mail-b"
+	if got, err := EmailVerificationKeyMaterialCommitment(expanded, "mail-a"); err != nil || got != keyCommitment {
+		t.Fatal("controlled expansion changed an original key commitment")
+	}
+	if got, err := EmailVerificationKeysetDigest(expanded); err != nil || got == setDigest {
+		t.Fatal("changed set retained its prior digest")
+	}
+	for _, change := range []func(*EmailVerificationKeyring){
+		func(v *EmailVerificationKeyring) { v.Scope.InstallationID = "install-two" },
+		func(v *EmailVerificationKeyring) { v.Scope.BootstrapDigest = "sha256:" + strings.Repeat("b", 64) },
+		func(v *EmailVerificationKeyring) { v.Keys[0].KeyMaterial = otherMaterial },
+	} {
+		candidate := value
+		candidate.Keys = append([]EmailVerificationWrappingKey(nil), value.Keys...)
+		change(&candidate)
+		if got, err := EmailVerificationKeyMaterialCommitment(candidate, "mail-a"); err != nil || got == keyCommitment {
+			t.Fatal("mail key commitment omitted scope or material")
+		}
+	}
+	totp := TOTPKeyring{APIVersion: APIVersion, Kind: "TOTPKeyring", Purpose: TOTPWrappingPurpose,
+		Scope: TOTPWrappingScope(value.Scope), KeysetRevision: 1, ActiveKeyID: "mail-a",
+		Keys: []TOTPWrappingKey{{KeyID: "mail-a", FormatVersion: 1, KeyMaterial: value.Keys[0].KeyMaterial}}}
+	if commitment, err := TOTPKeyMaterialCommitment(totp, "mail-a"); err != nil || commitment == keyCommitment {
+		t.Fatal("same fixture bytes conflate TOTP and email material purposes")
+	}
+	for _, protected := range []any{value, value.Keys[0]} {
+		if output, err := json.Marshal(protected); !errors.Is(err, ErrInvalidEmailVerificationKeyring) || len(output) != 0 {
+			t.Fatal("ordinary JSON emitted mail key material")
+		}
+		for _, format := range []string{"%v", "%+v", "%#v", "%s"} {
+			if printed := fmt.Sprintf(format, protected); !strings.Contains(printed, "REDACTED") || strings.Contains(printed, string(value.Keys[0].KeyMaterial.CopyBytes())) {
+				t.Fatal("mail key material formatted")
+			}
+		}
+	}
+	var ordinary EmailVerificationKeyring
+	var ordinaryKey EmailVerificationWrappingKey
+	if json.Unmarshal(encoded, &ordinary) != ErrInvalidEmailVerificationKeyring ||
+		json.Unmarshal([]byte(`{}`), &ordinaryKey) != ErrInvalidEmailVerificationKeyring {
+		t.Fatal("ordinary JSON decoded private mail material")
+	}
+	for _, mutate := range []func(*EmailVerificationKeyring){
+		func(v *EmailVerificationKeyring) { v.APIVersion = "wrong/v1" },
+		func(v *EmailVerificationKeyring) { v.Kind = "TOTPKeyring" },
+		func(v *EmailVerificationKeyring) { v.Purpose = TOTPWrappingPurpose },
+		func(v *EmailVerificationKeyring) { v.Scope.InstallationID = "" },
+		func(v *EmailVerificationKeyring) { v.Scope.BootstrapDigest = "unknown" },
+		func(v *EmailVerificationKeyring) { v.KeysetRevision = 0 },
+		func(v *EmailVerificationKeyring) { v.KeysetRevision = MaxEmailVerificationKeysetRevision + 1 },
+		func(v *EmailVerificationKeyring) { v.ActiveKeyID = "missing" },
+		func(v *EmailVerificationKeyring) { v.Keys = nil },
+		func(v *EmailVerificationKeyring) { v.Keys = append(v.Keys, v.Keys[0]) },
+		func(v *EmailVerificationKeyring) {
+			v.Keys = []EmailVerificationWrappingKey{{KeyID: "mail-b", FormatVersion: 1, KeyMaterial: otherMaterial}, v.Keys[0]}
+		},
+		func(v *EmailVerificationKeyring) {
+			for index := 1; index <= MaxEmailVerificationWrappingKeys; index++ {
+				v.Keys = append(v.Keys, EmailVerificationWrappingKey{KeyID: fmt.Sprintf("mail-z%d", index), FormatVersion: 1, KeyMaterial: otherMaterial})
+			}
+		},
+		func(v *EmailVerificationKeyring) { v.Keys[0].KeyID = "" },
+		func(v *EmailVerificationKeyring) { v.Keys[0].FormatVersion = 2 },
+		func(v *EmailVerificationKeyring) { v.Keys[0].KeyMaterial = Secret{} },
+		func(v *EmailVerificationKeyring) { v.Keys[0].KeyMaterial, _ = NewSecret(strings.Repeat("!", 43)) },
+		func(v *EmailVerificationKeyring) { v.Keys[0].KeyMaterial, _ = NewSecret(strings.Repeat("a", 44)) },
+		func(v *EmailVerificationKeyring) { v.Keys[0].KeyMaterial, _ = NewSecret(strings.Repeat("_", 43)) },
+	} {
+		invalid := value
+		invalid.Keys = append([]EmailVerificationWrappingKey(nil), value.Keys...)
+		mutate(&invalid)
+		if out, err := EncodeEmailVerificationKeyring(invalid); err != ErrInvalidEmailVerificationKeyring || len(out) != 0 {
+			t.Fatal("invalid mail keyring encoded")
+		}
+		if digest, err := EmailVerificationKeysetDigest(invalid); err != ErrInvalidEmailVerificationKeyring || digest != "" {
+			t.Fatal("invalid mail keyring produced commitment")
+		}
+	}
+	for _, malformed := range [][]byte{
+		append([]byte(" "), encoded...), append(bytes.Clone(encoded), '\n'),
+		append([]byte(`{"activeKeyId":"duplicate",`), encoded[1:]...),
+		append([]byte(`{"smtpPassword":"not-a-key",`), encoded[1:]...),
+		bytes.Replace(encoded, []byte(`"keysetRevision":1`), []byte(`"keysetRevision":1.0`), 1),
+		bytes.Replace(encoded, []byte(`"keysetRevision":1`), []byte(`"keysetRevision":null`), 1),
+		bytes.Replace(encoded, []byte(EmailVerificationWrappingPurpose), []byte(TOTPWrappingPurpose), 1),
+	} {
+		if got, err := DecodeEmailVerificationKeyring(bytes.NewReader(malformed)); err != ErrInvalidEmailVerificationKeyring || !reflect.DeepEqual(got, EmailVerificationKeyring{}) {
+			t.Fatal("malformed or foreign-purpose mail keyring accepted")
+		}
+	}
+	for _, reader := range []io.Reader{nil, strings.NewReader(""), iotest.ErrReader(errors.New("private key diagnostic"))} {
+		if got, err := DecodeEmailVerificationKeyring(reader); err != ErrInvalidEmailVerificationKeyring || !reflect.DeepEqual(got, EmailVerificationKeyring{}) {
+			t.Fatal("reader failure leaked or produced partial keys")
+		}
+	}
+	large := strings.NewReader(strings.Repeat(" ", int(MaxEmailVerificationKeyringBytes)+100))
+	if _, err := DecodeEmailVerificationKeyring(large); err != ErrInvalidEmailVerificationKeyring || large.Len() < 99 {
+		t.Fatal("mail keyring reader exceeded its bound")
+	}
+	if got, err := EmailVerificationKeyMaterialCommitment(value, "missing"); err != ErrInvalidEmailVerificationKeyring || got != "" {
+		t.Fatal("unknown key produced a commitment")
+	}
+}
+
+func FuzzEmailVerificationKeyringCanonicalPrivateFile(f *testing.F) {
+	seed, err := EncodeEmailVerificationKeyring(emailVerificationTestKeyring(f))
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(string(seed))
+	f.Add(`{"kind":"EmailVerificationKeyring"}`)
+	f.Fuzz(func(t *testing.T, wire string) {
+		value, err := DecodeEmailVerificationKeyring(strings.NewReader(wire))
+		if err != nil {
+			if err != ErrInvalidEmailVerificationKeyring || !reflect.DeepEqual(value, EmailVerificationKeyring{}) {
+				t.Fatal("private decode returned partial keys or underlying error")
+			}
+			return
+		}
+		encoded, err := EncodeEmailVerificationKeyring(value)
+		if err != nil || !bytes.Equal(encoded, []byte(wire)) {
+			t.Fatal("accepted mail keyring is not canonical")
+		}
+		if digest, err := EmailVerificationKeysetDigest(value); err != nil || ValidateDigest("digest", digest) != nil {
+			t.Fatal("valid mail keyring has no stable commitment")
+		}
+	})
+}
+
+func FuzzSecurityMailSMTPChannelCanonicalPrivateFile(f *testing.F) {
+	password, _ := NewSecret("synthetic-mail-password")
+	seed, err := EncodeSecurityMailSMTPChannel(SecurityMailSMTPChannel{APIVersion: APIVersion, Kind: "SecurityMailSMTPChannel",
+		Purpose: SecurityMailSubmissionPurpose, Scope: SecurityMailInstallationScope{InstallationID: "install-one", BootstrapDigest: "sha256:" + strings.Repeat("a", 64)},
+		Host: "smtp.matrix.test", Port: 587, TLSMode: SecurityMailSTARTTLS, Username: "sender", Password: password, From: "sender@matrix.test"})
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(string(seed))
+	f.Add(`{"kind":"SecurityMailSMTPChannel"}`)
+	f.Fuzz(func(t *testing.T, wire string) {
+		value, err := DecodeSecurityMailSMTPChannel(strings.NewReader(wire))
+		if err != nil {
+			if err != ErrInvalidSecurityMailSMTPChannel || !reflect.DeepEqual(value, SecurityMailSMTPChannel{}) {
+				t.Fatal("private decode returned partial channel or underlying error")
+			}
+			return
+		}
+		encoded, err := EncodeSecurityMailSMTPChannel(value)
+		if err != nil || !bytes.Equal(encoded, []byte(wire)) {
+			t.Fatal("accepted SMTP channel is not canonical")
+		}
+	})
 }
 
 func TestAccessKeySubjectLineageRequiresItsOwnDeclaredCarrier(t *testing.T) {
@@ -5456,7 +5824,7 @@ func TestIAMLoginResponsePublishesPasswordChangeRequirement(t *testing.T) {
 
 func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 	document := loadIAMOpenAPI(t)
-	for _, privateType := range []string{"AccessKeyWrappingKeyring", "AccessKeyWrappingKey", "AccessKeyWrappingScope", "AccessKeyCredential", "AccessKeyAuthorizationEvidence", "AccessKeySignatureParameters", "TOTPKeyring", "TOTPWrappingKey", "TOTPWrappingScope"} {
+	for _, privateType := range []string{"AccessKeyWrappingKeyring", "AccessKeyWrappingKey", "AccessKeyWrappingScope", "AccessKeyCredential", "AccessKeyAuthorizationEvidence", "AccessKeySignatureParameters", "TOTPKeyring", "TOTPWrappingKey", "TOTPWrappingScope", "SecurityMailSMTPChannel", "SecurityMailInstallationScope", "EmailVerificationBinding", "EmailVerificationKeyring", "EmailVerificationWrappingKey"} {
 		if _, exists := iamOpenAPISchemas(t, document)[privateType]; exists {
 			t.Fatal("public HTTP contract exposed an installation-private keyring type")
 		}
