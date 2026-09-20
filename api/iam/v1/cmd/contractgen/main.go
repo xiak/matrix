@@ -471,6 +471,11 @@ func structContracts() map[string]reflect.Type {
 		"StartTOTPEnrollmentResponse":                   openapi31.StructType[iamv1.StartTOTPEnrollmentResponse](),
 		"ConfirmTOTPEnrollmentRequest":                  openapi31.StructType[iamv1.ConfirmTOTPEnrollmentRequest](),
 		"ConfirmTOTPEnrollmentResponse":                 openapi31.StructType[iamv1.ConfirmTOTPEnrollmentResponse](),
+		"AuthenticatorRecovery":                         openapi31.StructType[iamv1.AuthenticatorRecovery](),
+		"StartAuthenticatorRecoveryRequest":             openapi31.StructType[iamv1.StartAuthenticatorRecoveryRequest](),
+		"StartAuthenticatorRecoveryResponse":            openapi31.StructType[iamv1.StartAuthenticatorRecoveryResponse](),
+		"InspectAuthenticatorRecoveryRequest":           openapi31.StructType[iamv1.InspectAuthenticatorRecoveryRequest](),
+		"ConfirmAuthenticatorRecoveryResponse":          openapi31.StructType[iamv1.ConfirmAuthenticatorRecoveryResponse](),
 		"LogoutRequest":                                 openapi31.StructType[iamv1.LogoutRequest](),
 		"LogoutResponse":                                openapi31.StructType[iamv1.LogoutResponse](),
 		"ChangePasswordRequest":                         openapi31.StructType[iamv1.ChangePasswordRequest](),
@@ -580,10 +585,13 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "TOTPEnrollment" && jsonName == "state" {
 		return object{"enum": []string{"PENDING", "CONFIRMED", "CANCELLED", "EXPIRED"}}
 	}
+	if owner == "AuthenticatorRecovery" && jsonName == "state" {
+		return object{"enum": []string{"STARTED", "COMPLETED", "SUPERSEDED", "EXPIRED"}}
+	}
 	if owner == "StartTOTPEnrollmentResponse" && jsonName == "outcome" {
 		return object{"enum": []string{"APPLIED", "EQUAL_REPLAY"}}
 	}
-	if owner == "ConfirmTOTPEnrollmentResponse" {
+	if owner == "ConfirmTOTPEnrollmentResponse" || owner == "ConfirmAuthenticatorRecoveryResponse" {
 		if jsonName == "nextStep" {
 			return object{"const": "REAUTHENTICATE"}
 		}
@@ -594,9 +602,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "AuthenticationChallenge" {
 		switch jsonName {
 		case "purpose":
-			return object{"const": "LOGIN"}
+			return object{"enum": []string{"LOGIN", "RECOVERY"}}
 		case "nextStep":
-			return object{"enum": []string{"TOTP", "PASSWORD_CHANGE"}}
+			return object{"enum": []string{"TOTP", "PASSWORD_CHANGE", "RECOVER", "ENROLLMENT"}}
 		}
 	}
 	if owner == "ChallengePasswordChangeResponse" && jsonName == "nextStep" {
@@ -905,6 +913,19 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["AuthenticationChallenge"].(object)["oneOf"] = []any{
+		object{"properties": object{"purpose": object{"const": "LOGIN"}, "nextStep": object{"enum": []string{"TOTP", "PASSWORD_CHANGE", "RECOVER"}}}},
+		object{"properties": object{"purpose": object{"const": "RECOVERY"}, "nextStep": object{"const": "ENROLLMENT"}}},
+	}
+	schemas["AuthenticatorRecovery"].(object)["description"] = "Non-secret observation of one purpose-limited recovery. Authoritative validation enforces at most five minutes and completion before expiry; metadata never conveys recovery authority."
+	schemas["AuthenticatorRecovery"].(object)["oneOf"] = []any{
+		object{"properties": object{"state": object{"const": "STARTED"}, "completedAt": false}},
+		object{"required": []string{"completedAt"}, "properties": object{"state": object{"enum": []string{"COMPLETED", "SUPERSEDED", "EXPIRED"}}, "completedAt": object{"type": "string"}}},
+	}
+	schemas["StartAuthenticatorRecoveryResponse"].(object)["properties"].(object)["recovery"] = object{"allOf": []any{openapi31.Ref("AuthenticatorRecovery"), object{"properties": object{"state": object{"const": "STARTED"}}}}}
+	schemas["StartAuthenticatorRecoveryResponse"].(object)["properties"].(object)["challenge"] = object{"allOf": []any{openapi31.Ref("AuthenticationChallenge"), object{"properties": object{"purpose": object{"const": "RECOVERY"}}}}}
+	schemas["StartAuthenticatorRecoveryResponse"].(object)["description"] = "One-time recovery capability and provisioning. The challenge and recovery share the original absolute expiry. Never returned by inspection or a login response."
+	schemas["ConfirmAuthenticatorRecoveryResponse"].(object)["properties"].(object)["recovery"] = object{"allOf": []any{openapi31.Ref("AuthenticatorRecovery"), object{"properties": object{"state": object{"const": "COMPLETED"}}}}}
 	schemas["StartTOTPEnrollmentResponse"].(object)["oneOf"] = []any{
 		object{"required": []string{"provisioning"}, "properties": object{"outcome": object{"const": "APPLIED"}, "provisioning": object{"type": "object"}, "enrollment": object{"properties": object{"state": object{"const": "PENDING"}}}}},
 		object{"properties": object{"outcome": object{"const": "EQUAL_REPLAY"}, "provisioning": false}},
@@ -926,7 +947,7 @@ func applySemanticOverlays(schemas object) {
 			"mustChangePassword": object{"type": "boolean"}, "challenge": false, "challengeCredential": false,
 		}},
 		object{"required": []string{"challenge", "challengeCredential"}, "properties": object{
-			"outcome": object{"const": string(iamv1.LoginChallengeRequired)}, "challenge": object{"type": "object"},
+			"outcome": object{"const": string(iamv1.LoginChallengeRequired)}, "challenge": object{"type": "object", "properties": object{"purpose": object{"const": "LOGIN"}}},
 			"session": false, "credential": false, "mustChangePassword": false,
 		}},
 	}

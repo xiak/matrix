@@ -1002,6 +1002,32 @@
       },
       "AuthenticationChallenge": {
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "nextStep": {
+                "enum": [
+                  "TOTP",
+                  "PASSWORD_CHANGE",
+                  "RECOVER"
+                ]
+              },
+              "purpose": {
+                "const": "LOGIN"
+              }
+            }
+          },
+          {
+            "properties": {
+              "nextStep": {
+                "const": "ENROLLMENT"
+              },
+              "purpose": {
+                "const": "RECOVERY"
+              }
+            }
+          }
+        ],
         "properties": {
           "apiVersion": {
             "type": "string"
@@ -1018,11 +1044,16 @@
           "nextStep": {
             "enum": [
               "TOTP",
-              "PASSWORD_CHANGE"
+              "PASSWORD_CHANGE",
+              "RECOVER",
+              "ENROLLMENT"
             ]
           },
           "purpose": {
-            "const": "LOGIN"
+            "enum": [
+              "LOGIN",
+              "RECOVERY"
+            ]
           }
         },
         "required": [
@@ -1032,6 +1063,78 @@
           "kind",
           "nextStep",
           "purpose"
+        ],
+        "type": "object"
+      },
+      "AuthenticatorRecovery": {
+        "additionalProperties": false,
+        "description": "Non-secret observation of one purpose-limited recovery. Authoritative validation enforces at most five minutes and completion before expiry; metadata never conveys recovery authority.",
+        "oneOf": [
+          {
+            "properties": {
+              "completedAt": false,
+              "state": {
+                "const": "STARTED"
+              }
+            }
+          },
+          {
+            "properties": {
+              "completedAt": {
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "COMPLETED",
+                  "SUPERSEDED",
+                  "EXPIRED"
+                ]
+              }
+            },
+            "required": [
+              "completedAt"
+            ]
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "completedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "state": {
+            "enum": [
+              "STARTED",
+              "COMPLETED",
+              "SUPERSEDED",
+              "EXPIRED"
+            ]
+          }
+        },
+        "required": [
+          "apiVersion",
+          "createdAt",
+          "expiresAt",
+          "id",
+          "kind",
+          "requestId",
+          "state"
         ],
         "type": "object"
       },
@@ -12211,6 +12314,45 @@
         ],
         "type": "string"
       },
+      "ConfirmAuthenticatorRecoveryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "nextStep": {
+            "const": "REAUTHENTICATE"
+          },
+          "recovery": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuthenticatorRecovery"
+              },
+              {
+                "properties": {
+                  "state": {
+                    "const": "COMPLETED"
+                  }
+                }
+              }
+            ]
+          },
+          "recoveryCodes": {
+            "items": {
+              "minLength": 1,
+              "readOnly": true,
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 10,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "nextStep",
+          "recovery",
+          "recoveryCodes"
+        ],
+        "type": "object"
+      },
       "ConfirmNotificationContactVerificationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -13232,6 +13374,23 @@
         ],
         "type": "object"
       },
+      "InspectAuthenticatorRecoveryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "challengeCredential": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "challengeCredential",
+          "requestId"
+        ],
+        "type": "object"
+      },
       "LoginOutcome": {
         "enum": [
           "AUTHENTICATED",
@@ -13296,6 +13455,11 @@
           {
             "properties": {
               "challenge": {
+                "properties": {
+                  "purpose": {
+                    "const": "LOGIN"
+                  }
+                },
                 "type": "object"
               },
               "credential": false,
@@ -21859,6 +22023,76 @@
           "requestId",
           "resourceVersion",
           "status"
+        ],
+        "type": "object"
+      },
+      "StartAuthenticatorRecoveryRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "challengeCredential": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "recoveryCode": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "challengeCredential",
+          "recoveryCode",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "StartAuthenticatorRecoveryResponse": {
+        "additionalProperties": false,
+        "description": "One-time recovery capability and provisioning. The challenge and recovery share the original absolute expiry. Never returned by inspection or a login response.",
+        "properties": {
+          "challenge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuthenticationChallenge"
+              },
+              {
+                "properties": {
+                  "purpose": {
+                    "const": "RECOVERY"
+                  }
+                }
+              }
+            ]
+          },
+          "challengeCredential": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "provisioning": {
+            "$ref": "#/components/schemas/TOTPProvisioning"
+          },
+          "recovery": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuthenticatorRecovery"
+              },
+              {
+                "properties": {
+                  "state": {
+                    "const": "STARTED"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "required": [
+          "challenge",
+          "challengeCredential",
+          "provisioning",
+          "recovery"
         ],
         "type": "object"
       },

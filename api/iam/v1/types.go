@@ -237,6 +237,45 @@ type ConfirmTOTPEnrollmentResponse struct {
 	RecoveryCodes []Secret       `json:"recoveryCodes"`
 }
 
+// Recovery has already consumed one code and ended the lost factor. It is
+// not a Session, ordinary first enrollment, or permission to change identity.
+type AuthenticatorRecovery struct {
+	APIVersion  string     `json:"apiVersion"`
+	Kind        string     `json:"kind"`
+	ID          string     `json:"id"`
+	RequestID   string     `json:"requestId"`
+	State       string     `json:"state"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	ExpiresAt   time.Time  `json:"expiresAt"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
+}
+
+type StartAuthenticatorRecoveryRequest struct {
+	RequestID           string `json:"requestId"`
+	ChallengeCredential Secret `json:"challengeCredential"`
+	RecoveryCode        Secret `json:"recoveryCode"`
+}
+
+// Only the first committed response discloses the new ceremony's secrets.
+// Inspection returns AuthenticatorRecovery alone, never this response.
+type StartAuthenticatorRecoveryResponse struct {
+	Recovery            AuthenticatorRecovery   `json:"recovery"`
+	Challenge           AuthenticationChallenge `json:"challenge"`
+	ChallengeCredential Secret                  `json:"challengeCredential"`
+	Provisioning        TOTPProvisioning        `json:"provisioning"`
+}
+
+type InspectAuthenticatorRecoveryRequest struct {
+	RequestID           string `json:"requestId"`
+	ChallengeCredential Secret `json:"challengeCredential"`
+}
+
+type ConfirmAuthenticatorRecoveryResponse struct {
+	Recovery      AuthenticatorRecovery `json:"recovery"`
+	NextStep      string                `json:"nextStep"`
+	RecoveryCodes []Secret              `json:"recoveryCodes"`
+}
+
 // LoginResponse is a disjoint result. Only AUTHENTICATED contains a Session;
 // CHALLENGE_REQUIRED contains no login bearer or password-change entitlement.
 // Ordinary JSON marshaling is forbidden; use EncodeLoginResponse.

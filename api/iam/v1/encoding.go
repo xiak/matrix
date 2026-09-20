@@ -207,6 +207,124 @@ func EncodeConfirmTOTPEnrollmentResponse(value ConfirmTOTPEnrollmentResponse) ([
 	}{value.Enrollment, value.NextStep, codes})
 }
 
+func (value *AuthenticatorRecovery) UnmarshalJSON(source []byte) error {
+	type wire AuthenticatorRecovery
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateAuthenticatorRecovery(AuthenticatorRecovery(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	_, completed := fields["completedAt"]
+	if completed != (decoded.State != "STARTED") {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = AuthenticatorRecovery(decoded)
+	return nil
+}
+
+func (value *StartAuthenticatorRecoveryRequest) UnmarshalJSON(source []byte) error {
+	type wire StartAuthenticatorRecoveryRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateStartAuthenticatorRecoveryRequest(StartAuthenticatorRecoveryRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = StartAuthenticatorRecoveryRequest(decoded)
+	return nil
+}
+
+func EncodeStartAuthenticatorRecoveryRequest(value StartAuthenticatorRecoveryRequest) ([]byte, error) {
+	if err := ValidateStartAuthenticatorRecoveryRequest(value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		RequestID           string `json:"requestId"`
+		ChallengeCredential string `json:"challengeCredential"`
+		RecoveryCode        string `json:"recoveryCode"`
+	}{value.RequestID, value.ChallengeCredential.reveal(), value.RecoveryCode.reveal()})
+}
+
+func (value *InspectAuthenticatorRecoveryRequest) UnmarshalJSON(source []byte) error {
+	type wire InspectAuthenticatorRecoveryRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateInspectAuthenticatorRecoveryRequest(InspectAuthenticatorRecoveryRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = InspectAuthenticatorRecoveryRequest(decoded)
+	return nil
+}
+
+func EncodeInspectAuthenticatorRecoveryRequest(value InspectAuthenticatorRecoveryRequest) ([]byte, error) {
+	if err := ValidateInspectAuthenticatorRecoveryRequest(value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		RequestID           string `json:"requestId"`
+		ChallengeCredential string `json:"challengeCredential"`
+	}{value.RequestID, value.ChallengeCredential.reveal()})
+}
+
+func (StartAuthenticatorRecoveryResponse) MarshalJSON() ([]byte, error) {
+	return nil, ErrSecretSerialization
+}
+func (ConfirmAuthenticatorRecoveryResponse) MarshalJSON() ([]byte, error) {
+	return nil, ErrSecretSerialization
+}
+
+func (value *StartAuthenticatorRecoveryResponse) UnmarshalJSON(source []byte) error {
+	type wire StartAuthenticatorRecoveryResponse
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateStartAuthenticatorRecoveryResponse(StartAuthenticatorRecoveryResponse(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = StartAuthenticatorRecoveryResponse(decoded)
+	return nil
+}
+
+func EncodeStartAuthenticatorRecoveryResponse(value StartAuthenticatorRecoveryResponse) ([]byte, error) {
+	if err := ValidateStartAuthenticatorRecoveryResponse(value); err != nil {
+		return nil, err
+	}
+	type provisioningWire struct {
+		Seed string `json:"seed"`
+		URI  string `json:"uri"`
+	}
+	return json.Marshal(struct {
+		Recovery            AuthenticatorRecovery   `json:"recovery"`
+		Challenge           AuthenticationChallenge `json:"challenge"`
+		ChallengeCredential string                  `json:"challengeCredential"`
+		Provisioning        provisioningWire        `json:"provisioning"`
+	}{value.Recovery, value.Challenge, value.ChallengeCredential.reveal(), provisioningWire{value.Provisioning.Seed.reveal(), value.Provisioning.URI.reveal()}})
+}
+
+func (value *ConfirmAuthenticatorRecoveryResponse) UnmarshalJSON(source []byte) error {
+	type wire ConfirmAuthenticatorRecoveryResponse
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateConfirmAuthenticatorRecoveryResponse(ConfirmAuthenticatorRecoveryResponse(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = ConfirmAuthenticatorRecoveryResponse(decoded)
+	return nil
+}
+
+func EncodeConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorRecoveryResponse) ([]byte, error) {
+	if err := ValidateConfirmAuthenticatorRecoveryResponse(value); err != nil {
+		return nil, err
+	}
+	codes := make([]string, len(value.RecoveryCodes))
+	defer clear(codes)
+	for i, code := range value.RecoveryCodes {
+		codes[i] = code.reveal()
+	}
+	return json.Marshal(struct {
+		Recovery      AuthenticatorRecovery `json:"recovery"`
+		NextStep      string                `json:"nextStep"`
+		RecoveryCodes []string              `json:"recoveryCodes"`
+	}{value.Recovery, value.NextStep, codes})
+}
+
 func (subject *Subject) UnmarshalJSON(source []byte) error {
 	type wire Subject
 	var decoded wire
