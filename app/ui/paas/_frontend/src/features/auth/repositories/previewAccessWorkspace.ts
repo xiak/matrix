@@ -72,7 +72,7 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
     ],
     providers: [{ id: "idp-example", name: "EnterpriseSSO", protocol: "SAML", issuer: "https://identity.example.invalid/saml", audience: "matrix-cloud", metadata: '<EntityDescriptor entityID="https://identity.example.invalid/saml"></EntityDescriptor>', enabled: true, createdAt: at }],
     federations: [{ id: "federation-audit", name: "ExternalAuditor", subject: "audit@example.invalid", providerId: "idp-example", roleId: "role-audit", enabled: true, createdAt: at }],
-    keys: [{ id: "MOCK-pipeline-key", ownerId: "principal-lin", description: "Pipeline preview credential", enabled: true, createdAt: at, lastUsedAt: "2026-09-09T01:00:00Z" }],
+    keys: [{ id: "MOCK-pipeline-key", ownerId: "principal-lin", status: "ENABLED", resourceVersion: 2, createdAt: at }],
     userPolicies: { "principal-lin": ["policy-prod-logs"], "principal-qiao": ["policy-tag-logs", "policy-production-guard", "policy-assume-reviewer"] },
     settings: { loginProtection: false, userSsoEnabled: false, userSsoProviderId: "" },
     events: [{ id: "event-sign-in", action: "sign-in", target: "preview-admin", at: "2026-09-09T01:10:00Z" }]

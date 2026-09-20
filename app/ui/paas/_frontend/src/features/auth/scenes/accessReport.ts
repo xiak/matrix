@@ -21,7 +21,7 @@ export function buildAccessSecuritySnapshot(workspace: AccessWorkspace): {
   const profiles = Object.values(workspace.userProfiles);
   const consoleUsers = profiles.filter((profile) => profile.consoleAccess).length;
   const programmaticUsers = profiles.filter((profile) => profile.programmaticAccess).length;
-  const activeKeys = workspace.keys.filter((key) => key.enabled).length;
+  const activeKeys = workspace.keys.filter((key) => key.status === "ENABLED").length;
   const directGrants = Object.values(workspace.userPolicies).filter((policyIds) => policyIds.length > 0).length;
   const pendingPasswords = profiles.filter((profile) => profile.consoleAccess && profile.passwordResetRequired).length;
   const checks: AccessSecurityCheck[] = [
@@ -89,7 +89,7 @@ export function buildAccessReport(kind: "credentials" | "security", workspace: A
         passwordResetRequired: profile ? profile.consoleAccess ? profile.passwordResetRequired : "NOT_APPLICABLE" : "UNKNOWN",
         authenticatorEnrollment: profile?.consoleAccess === false ? "NOT_APPLICABLE" : "UNKNOWN",
         directPolicyIds: user.attachments.map((attachment) => attachment.policyId),
-        accessKeys: { total: keys.length, active: keys.filter((key) => key.enabled).length }
+        accessKeys: { total: keys.length, active: keys.filter((key) => key.status === "ENABLED").length }
       };
     }),
     ...(kind === "security" ? {

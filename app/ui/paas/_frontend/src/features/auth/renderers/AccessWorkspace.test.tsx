@@ -676,7 +676,7 @@ describe("CAM-style access workspace", () => {
       await extension.execute("preview", { kind: "change-group-members", id: "group-delivery", added: [], removed: ["principal-lin"] });
       await extension.execute("preview", { kind: "change-group-policies", id: "group-auditors", added: [], removed: ["policy-audit"] });
       await extension.execute("preview", { kind: "change-group-policies", id: "group-operators", added: [], removed: ["policy-delivery", "policy-tag-logs"] });
-      await extension.execute("preview", { kind: "set-key-status", id: "MOCK-pipeline-key", enabled: false });
+      await extension.execute("preview", { kind: "set-key-status", id: "MOCK-pipeline-key", status: "DISABLED", resourceVersion: 2, requestId: "disable-pipeline-key" });
       await extension.execute("preview", { kind: "save-settings", settings: { ...(await extension.read("preview")).settings, loginProtection: true } });
     } });
     expect(await screen.findByText(/0 个启用的模拟长期密钥/)).toBeTruthy();
@@ -685,7 +685,13 @@ describe("CAM-style access workspace", () => {
     expect(screen.getAllByText("状态未知").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("已完成")).toBeNull();
     await user.click(screen.getByRole("button", { name: "查看长期访问密钥" }));
-    expect(await screen.findByRole("table", { name: "API 密钥" })).toBeTruthy();
+    expect(await screen.findByRole("table", { name: "选择要管理的用户" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "管理 lin 的访问密钥" }));
+    const keyDirectory = await screen.findByRole("table", { name: "访问密钥" });
+    expect(within(keyDirectory).getByText("已禁用")).toBeTruthy();
+    expect(screen.queryByText("最近使用")).toBeNull();
+    await user.click(within(keyDirectory).getByRole("button", { name: "MOCK-pipeline-key" }));
+    expect(screen.getByText(/没有可靠的最后使用时间或访问日志/)).toBeTruthy();
   });
   it("filters mock user associations by direct and group sources and opens the same management detail", async () => {
     const { user } = await open("users");
@@ -1992,17 +1998,20 @@ describe("CAM-style access workspace", () => {
     expect(document.activeElement).toBe(screen.getByRole("group", { name: "策略版本" }));
     expect(state.userPolicies["principal-lin"]).toContain("policy-prod-logs");
   });
-  it("shows a mock secret only at creation, then removes it when the dialog closes", async () => {
+  it("shows a mock secret once in the content area, then removes it after acknowledgement", async () => {
     const { user, extension } = await open("keys");
-    await user.click(await screen.findByRole("button", { name: "新建密钥" }));
-    await select(user, "所属用户", "chen · 0/2");
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "新建密钥" }));
-    const dialog = await screen.findByRole("dialog", { name: "模拟密钥已创建" });
-    const secret = within(dialog).getByText(/^MOCK_NOT_A_CREDENTIAL_/).textContent!;
+    await user.click(await screen.findByRole("button", { name: "管理 chen 的访问密钥" }));
+    await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(await screen.findByRole("heading", { name: "核对并创建访问密钥" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const secret = (await screen.findByText(/^MOCK_NOT_A_CREDENTIAL_/)).textContent!;
     expect(JSON.stringify(await extension.read("preview"))).not.toContain(secret);
-    await user.click(within(dialog).getByRole("checkbox"));
-    await user.click(within(dialog).getByRole("button", { name: "已完成" }));
+    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "已完成" }));
     expect(screen.queryByText(secret)).toBeNull();
+    expect(screen.getByRole("table", { name: "访问密钥" })).toBeTruthy();
     expect(JSON.stringify(localStorage) + JSON.stringify(sessionStorage)).not.toContain(secret);
   });
   it.each(["SAML", "OIDC"] as const)("validates and retries %s provider drafts without external discovery, then edits and deletes only the created provider", async (protocol) => {
@@ -2049,29 +2058,50 @@ describe("CAM-style access workspace", () => {
   it("retains key-state failures, requires disable before deletion, and keeps cancellation non-mutating", async () => {
     const { user, repository, extension } = await open("keys");
     const before = await extension.read("preview");
-    const directory = await screen.findByRole("table", { name: "API 密钥" });
+    await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
+    const directory = await screen.findByRole("table", { name: "访问密钥" });
     expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
     expect(within(directory).queryByRole("button", { name: "禁用" })).toBeNull();
     expect(within(directory).queryByRole("button", { name: "删除" })).toBeNull();
     await user.click(within(directory).getByRole("button", { name: "MOCK-pipeline-key" }));
     expect((screen.getByRole("button", { name: "删除" }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole("button", { name: "禁用" }));
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "取消" }));
     expect(await extension.read("preview")).toEqual(before);
+    await user.click(screen.getByRole("button", { name: "MOCK-pipeline-key" }));
     await user.click(screen.getByRole("button", { name: "禁用" }));
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
-    await expectRetainedFailure(screen.getByRole("dialog"));
+    await user.click(screen.getByRole("button", { name: "禁用" }));
+    expect(await screen.findByText("暂时无法完成操作，请重试。")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "禁用 MOCK-pipeline-key" })).toBeTruthy();
     expect(await extension.read("preview")).toEqual(before);
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await user.click(screen.getByRole("button", { name: "禁用" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "禁用 MOCK-pipeline-key" })).toBeNull());
+    await user.click(screen.getByRole("button", { name: "MOCK-pipeline-key" }));
     await user.click(screen.getByRole("button", { name: "删除" }));
-    await user.type(screen.getByLabelText("输入名称以确认"), "MOCK-pipeline-key");
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "确认删除" }));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "删除 MOCK-pipeline-key" })).toBeNull());
     expect((await extension.read("preview")).keys).toEqual([]);
-    expect(screen.getByText("暂无记录")).toBeTruthy();
+    expect(screen.getByText("尚未创建访问密钥")).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("locks an uncertain access-key creation to its original request and never reveals the lost secret", async () => {
+    const { user, extension } = await open("keys");
+    await user.click(await screen.findByRole("button", { name: "管理 chen 的访问密钥" }));
+    await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
+    await select(user, "MOCK 返回场景", "提交已生效，但响应丢失");
+    await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
+    expect(await screen.findByText("UNKNOWN")).toBeTruthy();
+    expect(screen.queryByText(/^MOCK_NOT_A_CREDENTIAL_/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "新建访问密钥" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "按原 requestId 查询" }));
+    expect(screen.getByText("不可恢复 · 不可重显")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查看并处置这把密钥" }));
+    expect(screen.getByText(/没有可靠的最后使用时间或访问日志/)).toBeTruthy();
+    expect((await extension.read("preview")).keys.filter((key) => key.ownerId === "principal-chen")).toHaveLength(1);
   });
   it("models personal MFA, scoped step-up and the frozen account requirement without invented settings", async () => {
     const { user } = await open("settings");

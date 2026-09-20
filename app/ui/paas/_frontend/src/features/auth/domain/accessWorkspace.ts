@@ -25,7 +25,13 @@ export type IdentityProvider = {
   metadata: string; enabled: boolean; createdAt: string;
 };
 export type FederatedAccount = { id: string; name: string; subject: string; providerId: string; roleId: string; enabled: boolean; createdAt: string };
-export type AccessKey = { id: string; ownerId: string; description: string; enabled: boolean; createdAt: string; lastUsedAt: string | null };
+export type AccessKey = {
+  id: string;
+  ownerId: string;
+  status: "ENABLED" | "DISABLED";
+  resourceVersion: number;
+  createdAt: string;
+};
 export type EnterpriseMember = { id: string; name: string; department: string };
 export type EnterpriseAccount = { id: string; name: string; corporationId: string; visibleMemberIds: string[]; importedMemberIds: string[]; createdAt: string };
 export function enterprisePrincipalId(accountId: string, memberId: string): string { return "principal-wecom-" + accountId + "-" + memberId; }
@@ -77,9 +83,9 @@ export type AccessWorkspaceCommand =
   | { kind: "delete-provider"; id: string }
   | { kind: "save-federation"; id?: string; name: string; subject: string; providerId: string; roleId: string; enabled: boolean }
   | { kind: "delete-federation"; id: string }
-  | { kind: "create-key"; ownerId: string; description: string }
-  | { kind: "set-key-status"; id: string; enabled: boolean }
-  | { kind: "delete-key"; id: string }
+  | { kind: "create-key"; ownerId: string; userResourceVersion: number; requestId: string }
+  | { kind: "set-key-status"; id: string; status: AccessKey["status"]; resourceVersion: number; requestId: string }
+  | { kind: "delete-key"; id: string; resourceVersion: number; requestId: string }
   | { kind: "set-user-policies"; principalId: string; policyIds: string[] }
   | { kind: "set-user-groups"; principalId: string; groupIds: string[] }
   | { kind: "update-user"; principalId: string; displayName: string }
@@ -376,13 +382,20 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     case "delete-federation":
       exists(state.federations, id); state.federations = state.federations.filter((entry) => entry.id !== id); break;
     case "create-key":
-      if (!context.userIds.includes(command.ownerId) || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
-      state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, description: command.description, enabled: true, createdAt, lastUsedAt: null });
+      if (!context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
+      state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", resourceVersion: 1, createdAt });
       target = "MOCK-" + id; break;
-    case "set-key-status":
-      exists(state.keys, id).enabled = command.enabled; break;
+    case "set-key-status": {
+      const key = exists(state.keys, id);
+      if (!Number.isInteger(command.resourceVersion) || command.resourceVersion !== key.resourceVersion || !command.requestId.trim()) invalid();
+      key.status = command.status;
+      key.resourceVersion += 1;
+      break;
+    }
     case "delete-key":
-      if (exists(state.keys, id).enabled) throw new AccessWorkspaceError("disableFirst");
+      if (!Number.isInteger(command.resourceVersion) || !command.requestId.trim()) invalid();
+      if (exists(state.keys, id).resourceVersion !== command.resourceVersion) invalid();
+      if (exists(state.keys, id).status === "ENABLED") throw new AccessWorkspaceError("disableFirst");
       state.keys = state.keys.filter((entry) => entry.id !== id); break;
     case "set-user-policies":
       if (!context.userIds.includes(command.principalId)) invalid();
