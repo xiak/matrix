@@ -879,9 +879,10 @@ func verifyBackupDirectory(
 func backupAccessKeyWrappingForRelease(plan platformcommand.InstallPlan) (*backupAccessKeyWrapping, string, error) {
 	version := ""
 	switch plan.Bundle.Manifest.Database {
-	case release.SupportedDatabasePredecessorProfile():
-		version = accessKeyBackupAPIVersion
-	case release.CurrentDatabaseProfile():
+	// The exact supported predecessor already owns the v4 TOTP custody
+	// contract. "Predecessor" is a release relationship, not permission to
+	// downgrade the authenticated backup format; v3 remains decoder-only.
+	case release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile():
 		version = backupAPIVersion
 	default:
 		return nil, "", errors.Join(
@@ -909,9 +910,10 @@ func verifyBackupAccessKeyWrapping(
 ) error {
 	wantVersion := ""
 	switch manifest.Database {
-	case release.SupportedDatabasePredecessorProfile():
-		wantVersion = accessKeyBackupAPIVersion
-	case release.CurrentDatabaseProfile():
+	// Both admitted recovery profiles require the same custody proof emitted by
+	// the fixed predecessor. A structurally decodable v3 backup cannot satisfy
+	// this restore boundary.
+	case release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile():
 		wantVersion = backupAPIVersion
 	default:
 		return errors.New("backup access-key wrapping profile is unsupported")

@@ -1215,7 +1215,7 @@ func TestTOTPKeyringCannotAdoptWrongScopeOrMalformedMaterial(t *testing.T) {
 	}
 }
 
-func TestBackupBindsCurrentAccessKeyWrappingKeyWithoutArchivingIt(t *testing.T) {
+func TestBackupBindsAdmittedProfilesToAccessKeyWrappingWithoutArchivingIt(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
 		t.Fatal(err)
@@ -1258,10 +1258,10 @@ func TestBackupBindsCurrentAccessKeyWrappingKeyWithoutArchivingIt(t *testing.T) 
 	if err := stageInstallation(predecessor, rand.Reader); err != nil {
 		t.Fatal(err)
 	}
-	legacyBinding, legacyVersion, err := backupAccessKeyWrappingForRelease(predecessor)
-	if err != nil || legacyBinding == nil || !validSHA256(legacyBinding.Commitment) ||
-		legacyVersion != accessKeyBackupAPIVersion {
-		t.Fatalf("predecessor backup wrapping contract = %#v / %q / %v", legacyBinding, legacyVersion, err)
+	predecessorBinding, predecessorVersion, err := backupAccessKeyWrappingForRelease(predecessor)
+	if err != nil || predecessorBinding == nil || !validSHA256(predecessorBinding.Commitment) ||
+		predecessorVersion != backupAPIVersion {
+		t.Fatalf("predecessor backup wrapping contract = %#v / %q / %v", predecessorBinding, predecessorVersion, err)
 	}
 }
 
@@ -2478,6 +2478,18 @@ func TestRecoveryAuthenticatesSupportedCrossProfileImmediatePredecessor(t *testi
 	}
 	if err := effects.CreateBackup(context.Background(), backup); err != nil {
 		t.Fatal(err)
+	}
+	manifestContent, err := os.ReadFile(filepath.Join(
+		target.Root, filepath.FromSlash(layout.BackupDirectory), backup.BackupID, backupManifestFilename,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var predecessorBackup backupManifest
+	if json.Unmarshal(manifestContent, &predecessorBackup) != nil ||
+		predecessorBackup.APIVersion != backupAPIVersion ||
+		predecessorBackup.AccessKeyWrapping == nil || predecessorBackup.TOTPBackupCustody == nil {
+		t.Fatalf("supported predecessor backup lost its custody contract: %#v", predecessorBackup)
 	}
 	source, err := effects.InspectBackup(context.Background(), pair.Source, backup.BackupID)
 	if err != nil {
