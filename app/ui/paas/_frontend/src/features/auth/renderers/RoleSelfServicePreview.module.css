@@ -9,6 +9,7 @@
 .actorFacts dt, .sessionFacts dt, .reviewFacts dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .actorFacts dd, .sessionFacts dd, .reviewFacts dd { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
 .actorFacts dd span, .reviewFacts dd span { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-small); }
+.scenarioControl { max-width: 420px; margin-top: var(--xiak-spacing-comfortable); padding-top: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }
 .discovery { display: grid; gap: var(--xiak-spacing-default); }
 .roleGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); }
 .roleHeader code { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-caption); overflow-wrap: anywhere; }
@@ -28,11 +29,16 @@
 .confirmation { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
 .confirmation > div:first-child { display: grid; gap: var(--xiak-spacing-micro); }
 .confirmation span { color: var(--xiak-color-text-muted); }
+.attempt > div { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.attempt > div > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.attempt code { width: fit-content; color: inherit; font-size: var(--xiak-font-size-caption); overflow-wrap: anywhere; }
+.attempt span { color: inherit; }
+.attempt > div > button { flex: 0 0 auto; }
 .focusHeading { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); line-height: var(--xiak-line-height-compact); }
 .focusHeading:focus { outline: none; }
 
 @container role-self-service (max-width: 720px) {
   .actorFacts, .sessionFacts, .reviewFacts, .roleGrid { grid-template-columns: minmax(0, 1fr); }
   .roleBody p { min-height: 0; }
-  .confirmation { align-items: flex-start; flex-direction: column; }
+  .confirmation, .attempt > div { align-items: flex-start; flex-direction: column; }
 }
