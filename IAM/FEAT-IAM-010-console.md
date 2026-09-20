@@ -284,13 +284,15 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 2026-09-21，首次 TOTP 固定客户端与同步嵌入资源同样固定在
 [`80225dce692921aaaeda12e96b58a464f931da30`](https://github.com/xiak/matrix/commit/80225dce692921aaaeda12e96b58a464f931da30)；
-既有恢复/换绑隔离体验仍由 `dabe85d1e64bf20fdcfbe579791694dd9a257e40` 保留。
+既有恢复/换绑隔离体验仍由 `dabe85d1e64bf20fdcfbe579791694dd9a257e40` 保留，首次绑定未知结果加固固定在
+[`d7d6333d`](https://github.com/xiak/matrix/commit/d7d6333d135a65648269443789799d1fccf0b638)。
 
 - LIVE 首次绑定只有在已验证通知地址与 `NEVER_BOUND` 状态下开放，以当前密码、稳定 requestId 和 factor revision 发起。严格适配器验证五分钟生命周期、所有 ID/revision 关联及状态完成时间；首次 `APPLIED` 才接受 provisioning，`EQUAL_REPLAY` 携带 secret/URI 会失败关闭。
 - UI 不调用外部二维码服务，只在首次 `APPLIED` 的当前内存流程显示手动 seed/URI 和六位确认框。等值重放不显示秘密或确认框，只允许取消仍待处理的原流程；终态才允许使用新 requestId 重新开始。组件用例锁定该边界。
+- 开始请求在网络、5xx 或协议结果未知前，Provider 已按当前 credential、Account、User 登记原 requestId；内容页卸载/重新挂载仍保持写锁，只保存这组非秘密归属，不保存密码、seed、URI 或 OTP。页面先按原 requestId 查询：查到 `PENDING` 只允许精确取消该 enrollment，`NOT_FOUND` 或查询不可用继续保持 UNKNOWN，不能据此开放第二次开始。查询后的 `CONFIRMED` 只要求使用新因子正常登录，不能恢复秘密或再次确认。
 - 确认成功只接受十条非空且唯一的恢复码与 `REAUTHENTICATE`。Provider 立即清除旧 credential/current/challenge，仅在内存一次显示恢复材料；用户确认已保存后清除材料并返回重新登录，不写 URL、DOM 持久态或浏览器存储。
 - 设置页中的替换与移除仍只读；登录受限自助恢复已按独立 S2b 候选接入严格客户端。页面不会把恢复开始解释成可取消 enrollment，也不会从 LIVE 失败回退隔离 MOCK。
-- 测试、构建、嵌入与 Go 门禁复用上一本人安全通知证据。尚未以真实 IAM 进程执行首次 secret 交付、TOTP 确认、会话终止和恢复码抄录的浏览器闭环。
+- 完整前端 42 个测试文件、657 条用例和三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。首次绑定未知结果由组件状态机用例验收；尚未以真实 IAM 进程执行首次 secret 交付、TOTP 确认、会话终止和恢复码抄录的浏览器闭环。
 
 ### 登录挑战固定契约的开发验收证据
 
@@ -307,14 +309,15 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 ### 受限自助 TOTP 恢复客户端的开发验收证据
 
-2026-09-21，前端实现与同步嵌入资源固定在已推送的
-[`3c9a49fb`](https://github.com/xiak/matrix/commit/3c9a49fb)，契约解释固定到 IAM-009 S2b 候选
+2026-09-21，前端实现与同步嵌入资源起始于
+[`3c9a49fb`](https://github.com/xiak/matrix/commit/3c9a49fb)，确认未知与身份隔离加固固定在
+[`d7d6333d`](https://github.com/xiak/matrix/commit/d7d6333d135a65648269443789799d1fccf0b638)，契约解释固定到 IAM-009 S2b 候选
 `48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e`；后端独立 CI、完整十码跨窗口和真实 IAM 浏览器仍按本文顶部限制保持未验收。
 
 - 严格 HTTP 适配只调用 `:recover`、`:confirm-recovery` 与 `:recovery-result` 三个无 bearer 路由，发送各自闭合字段并保留原 requestId。客户端验证 challenge purpose/nextStep、五分钟期限、开始 challenge 与 recovery 同期限、终态时间、请求关联及确认结果恰好十条非空唯一恢复码；额外字段、混合 LOGIN/RECOVERY purpose、过期完成或秘密重放形状均失败关闭。
-- Provider 把普通 TOTP、恢复码输入、不可逆开始、新因子确认、结果查询、开始未知和确认未知建成不同阶段。开始网络/5xx 结果未知时不自动重试；重新登录后只查询原非秘密状态。`STARTED` 且材料丢失或 `NOT_FOUND` 均只允许用户明确选择另一条码的新意图。确认未知不会调用结果查询或重放十码，只允许新因子走正常 TOTP 登录。
+- Provider 把普通 TOTP、恢复码输入、不可逆开始、新因子确认、结果查询、开始未知和确认未知建成不同阶段。开始网络/5xx 结果未知时不自动重试；重新登录后只查询原非秘密状态。`STARTED` 且材料丢失或 `NOT_FOUND` 均只允许用户明确选择另一条码的新意图。确认未知后，新的 `LOGIN/TOTP` 仍优先验证新因子；新的 `LOGIN/RECOVER` 则查询原 requestId，以区分确认前断线留下的 `STARTED`/`EXPIRED`，不能循环停在仅返回登录的页面，也不查询或重放十码。未决恢复严格匹配原 loginName，不改变另一身份的挑战阶段。
 - DEV MOCK 与 LIVE 使用同一 Provider/repository/rendering 边界，展示不可逆副作用、手动设置密钥、当前新 OTP 及十条一次性恢复码；秘密不进入 URL、storage 或控制台日志。`539px` 浏览器完整走通恢复码→新因子→十码，document/body 均为 `clientWidth == scrollWidth == 539`，最终 warning/error 为空。
-- 完整前端 42 个测试文件、652 条用例和三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。该结果不替代 IAM 候选的独立 CI、真实进程浏览器、完整十码耗尽跨窗口或发布 profile 验收。
+- 完整前端 42 个测试文件、657 条用例和三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。`539px` DEV 复验仍完整走通恢复码→新因子→十码，document/body 均无横向溢出且 warning/error 为空。该结果不替代 IAM 候选的独立 CI、真实进程浏览器、完整十码耗尽跨窗口或发布 profile 验收。
 
 ### 账号级 MFA 要求 MOCK 的开发验收证据
 
