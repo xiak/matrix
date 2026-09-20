@@ -262,8 +262,9 @@ installation负责真实consumer、签名打包及非秘密custody封存：在he
 | Account安全配置 | `accountId/resourceVersion/mfa.requiredForUsers`，后续密码与会话字段归S3；另有只增不减的登录资格修订。配置版本用于CAS，资格修订用于永久淘汰被收紧规则否定的旧Session，不能混用 |
 | USER安全状态 | 原Account/USER、`enrollmentState=NEVER_BOUND\|BOUND\|REMOVED\|RECOVERY_REQUIRED`、单调`factorRevision`、当前factorId；是原USER的认证状态，不是第二主体。缺行/损坏不是NEVER_BOUND，只有新建或经过证明的迁移可建立该资格；REMOVED必须关联本人合法解绑的原子完成，不从因子缺行推断 |
 | TOTP因子 | factorId、原Account/USER、`PENDING\|ACTIVE\|REVOKED`、格式/keyId/nonce/ciphertext、创建/确认/终止时间及最后消费时间步；每USER至多一个ACTIVE和一个未到期PENDING。替换生成新ID，REVOKED不原地启用；过期待确认行不能变ACTIVE |
-| AuthenticationChallenge | challengeId、目的`LOGIN\|ENROLLMENT\|RECOVERY\|STEP_UP`、实际Account/USER、密码代际、factor/settings修订、已验证阶段、绝对期限、剩余额度、秘密lookup/verification digest。STEP_UP另绑定实际Session、固定操作、目标、输入承诺和预期版本 |
-| Challenge终态 | `PENDING → CONSUMED\|CANCELLED\|EXPIRED`；只有STEP_UP允许`PENDING → PROVED → CONSUMED`。PROVED仍有期限，不是Session；由具体命令消费。不可回到PENDING或延长期限 |
+| AuthenticationChallenge | challengeId、目的`LOGIN\|ENROLLMENT\|RECOVERY`、实际Account/USER、密码代际、factor/settings修订、已验证阶段、绝对期限、剩余额度、秘密lookup/verification digest；这些未登录流程的凭据不能成为Session |
+| 本人操作StepUp | 绑定当前已认证Session、Account/USER、固定操作、实际目标、非秘密输入承诺、密码代际及预期资源版本；通过同一有效Session持有，不另发行可交换秘密或通用permit。其独立生命周期是再次认证证明，不是另一个身份或全局Session升权 |
+| 挑战与证明终态 | AuthenticationChallenge为`PENDING → CONSUMED\|CANCELLED\|EXPIRED`；StepUp为`PENDING → PROVED → CONSUMED`，PENDING/PROVED均受原绝对期限限制。不可回到PENDING、续期或重用完成证明 |
 | 恢复码批次 | Account/USER/batchId、每码随机公共引用及单向验证值、发行/消费/整批终止信息；默认候选10条、每条128位随机秘密，不能按用户名/时间派生或可解密回显 |
 | Session认证事实 | 在原Session追加真实`authenticationMethods/authenticatedAt`和内部factor/settings资格修订；只在实际认证时写入。Role使用原来源Session约束，不复制一份可独立放行的MFA布尔值 |
 | 尝试与命令完成 | S3的有界尝试保留/结果，及本目的不可变命令关联；绑定真实actor或challenge、requestId、非秘密输入、原完成和outbox。不是通用receipt服务，不向调用方发行新的授权能力 |
@@ -371,7 +372,7 @@ IAM37基线只发行恢复材料，批次与码的更新、删除、截断全部
 | `POST /v1/auth/totp/enrollments/{id}:confirm` | `{requestId,code,...原认证上下文}`；验证新种子对应码及原意图后原子确认、消费时间步、保存恢复批次，返回一次性恢复码和`REAUTHENTICATE`；不发行普通Session |
 | `POST /v1/auth/authenticators/{id}:remove` | 本人当前Session、预期因子修订及目标限定step-up；仅有效要求允许无因子时删除，撤销相关Session与恢复批次。强制要求下删除最后因子拒绝，转向替换/恢复 |
 | `POST /v1/auth/recovery-codes:regenerate` | 本人Session及该操作的强认证证明；原子终止旧批次、只展示新批次一次。不改变当前密码或取消MFA |
-| `POST /v1/auth/step-up`、`POST /v1/auth/step-up/{id}:verify` | 前者根据封闭操作及真实目标签发STEP_UP挑战；后者重新验证密码和TOTP后置PROVED。操作只允许本片的因子替换/移除、恢复码重发和security-settings更新，不接受任意业务Action/目标 |
+| `POST /v1/auth/step-up`、`POST /v1/auth/step-up/{id}:verify` | 两者均须本人有效LOGIN_SESSION；创建操作专属StepUp，重新验证密码和TOTP后置PROVED，不发行新bearer。首个实际操作只开放下节恢复码重发；因子替换/移除和security-settings随各自事务接通后才能增加闭合操作值，不接受任意Action/目标 |
 
 表中的省略部分只指两种已声明认证载体的严格联合，不是自由attributes：Session分支从Authorization取得actor，秘密证明用明确Secret字段；challenge分支只接受challengeId/credential，不能同时带Session换主体。公开challenge只含id、purpose、expiresAt、服务器计算的nextStep，不含凭据代际、内部规则摘要或任意跳转URL。准备首次自助绑定使用本人Session加当前密码；替换等其余操作使用目标限定step-up。challengeCredential不进入通用Bearer认证器，不可用于`/authorize`、Role、Key、业务API或本人会话目录。
 
@@ -427,6 +428,30 @@ LoginResponse仍只允许LOGIN挑战；不能因为通用Challenge可以描述RE
 
 整片仍未验收：浏览器恢复与独立CI尚须完成；step-up/受限首次强制设置仍属后继S2，离线CLOSED/reconcile/reopen及发布profile由安装主任务独占实施，本片没有修改其契约或消费者。安装与UX已收到固定对象、准确IAM38/Audit22形状及验收缺口，只能选择性复用并自行验证。
 
+#### S2b后继：目的限定step-up与本人恢复码重发
+
+本纵向目标补足一次性十码回包丢失后、用户仍持有有效认证器的安全重发路径；不是管理员恢复、丢失全部材料的旁路或完整S3设置。现有`api/iam/v1`已实现以下严格类型/codec及生成OpenAPI组件；真实路由、用例、SQL和事实尚未接通，不能当作可运行HTTP。当前源码仍IAM38/Audit22，只有实际新SQL/函数与封闭事实接通时才核对后继版本，不预分配发布profile/revision。
+
+StepUp始终由本人非forced、当前有效的PASSWORD_TOTP登录Session持有。原Account/USER、Session、credential generation、factorId/revision及当时有效恢复批次从IAM推导，不能由URL/body选择；ROLE、AccessKey、SERVICE和未登录挑战不能持有。此处不再另发行挑战秘密：公开ID不是能力，每个写请求仍须原有效bearer与锁内证明。原Session认证事实不被再次认证改写，也没有“最近验证过MFA即可任意操作”的缓存。
+
+| 拟实施入口 | 封闭契约与效果 |
+| --- | --- |
+| `POST /v1/auth/step-up` | `{requestId,operation,expectedFactorRevision}`；首个operation仅`RECOVERY_CODES_REGENERATE`。requestId就是后继敏感命令的原意图，绑定真实USER/Session及准确输入；等值返回原StepUp，变体409。不返回新凭据、剩余额度、内部摘要或可选目标 |
+| `GET /v1/auth/step-up/by-request/{requestId}` | 原有效Session读取该原意图非秘密StepUp；NOT_FOUND不证明提交回滚。不是跨用户列表或通用receipt服务 |
+| `POST /v1/auth/step-up/{id}:verify` | `{requestId,password,code}`加原bearer；这里requestId标识本次认证提交，不替换StepUp绑定的敏感命令意图。共享现有USER密码/OTP预算，重新验证当前密码及未消费TOTP后只返回PROVED元数据；不能用恢复码替代TOTP、发行Session或隐式执行敏感命令 |
+| `POST /v1/auth/recovery-codes:regenerate` | `{requestId,stepUpId,expectedFactorRevision}`加原bearer；requestId/预期修订必须等于StepUp绑定的原意图。成功同事务消费匹配PROVED、终止准确旧批次、保存新十条单向验证值及不可变完成/事实/通知；APPLIED仅一次返回十码，EQUAL_REPLAY只返回原完成元数据 |
+| `GET /v1/auth/recovery-codes/regenerations/by-request/{requestId}` | 当前有效本人Session读取原`RecoveryCodeRegeneration`；可以在正常重新登录后查询原完成，不要求旧Session继续有效，但不能重新取得十码或借查询消费证明 |
+
+公开`StepUp`只含id、原requestId、operation、expectedFactorRevision、`PENDING/PROVED/CONSUMED/EXPIRED`及createdAt/expiresAt/provedAt/consumedAt。创建时固定120秒绝对期限，验证成功不续期；PROVED/CONSUMED时间须在原期限内，消费不得早于证明。状态描述历史阶段，不承诺此刻仍有权限；请求仍检查当前身份、原版本、实际操作与期限。每USER最多三条未到期PENDING/PROVED，创建新意图不清空跨副本共享尝试预算。已证明后的读取或等值认证结果不签发新证明；旧证明到期、logout/reset、密码代际、USER/Account停用、因子或原恢复批次变化后不能用于另一命令。
+
+首次目标没有任意payload：固定操作+原requestId+预期factorRevision是公开输入，真实Session/USER/因子/旧批次和凭据代际是内部绑定。后续其他敏感命令须按准确字段扩展闭合联合，不能改成caller attributes、任意JSON承诺或通用Action字符串。结构错误/错目的不消费另一合法证明；同一证明并发只有一次执行。坏密码/码的持久失败预算遵循原短事务规则，末端成功事实失败必须回滚效果但不能把已提交保留当作免费尝试。
+
+恢复码重发不更换TOTP因子、不推进factorRevision、不清除或升级任何Session、不改密码/角色/Account要求；新批次通过单一`iam.recovery-codes.regenerated`的tenant USER-self/PRINCIPAL事实及准确step-up完成建立不可变来源。旧批次的已消费记录保留，剩余旧码因整批终止永不再次接受；原`factor.bound_event_id`不改写。当前批次与原绑定事实的关联检查必须同时接受有完整封闭重发来源的新批次，不能简单删掉`batch.event_id == factor.bound_event_id`而放宽任意写入。原绑定/恢复批次的canonical及历史proof保留。通知仅发送`RECOVERY_CODES_REGENERATED`到原已验证地址，不包含新旧码、种子、密码、OTP或可用认证链接。
+
+验收沿现有owner：严格字段/秘密显式编码、LoginResponse拒绝StepUp；两个真实副本共享密码和OTP消费，跨Session/主体/目的/意图/旧批次/修订攻击；创建/证明/消费期限在锁等待后重新检查；证明与logout/change/reset/停用/恢复双向交错；同证明双提交、两个证明竞争同旧批次、成功事实/通知失败无部分换码；开始/证明/换码提交前后真实断TCP与重启，只读核对、不重发秘密。换码后用一条真实新码完成原受限恢复，旧十码始终拒绝；旧绑定/恢复记录经等值迁移保持，伪造重发来源不能取得当前资格。真实SMTP原地址实收与操作者之后停用的历史Audit投递另沿原门禁。安装离线CLOSED/reconcile/reopen仍由installation独占，新增批次来源必须通过固定对象协调后集成，不在本片修改其接口或宣称备份防回滚已完成。
+
+本片本地纯契约证据：原`contract_test.go`/`schema_validation_test.go`证明封闭操作与字段、UTC微秒和原120秒期限、状态/时间顺序、已绑定修订范围、秘密显式编码、APPLIED十码唯一性、EQUAL_REPLAY禁止秘密字段及LoginResponse不能接受StepUp。Go1.26.7/GOMAXPROCS2下API与全仓默认race/architecture、vet、模块校验、122个tracked API文件再生成集合/哈希稳定及Linux amd64构建通过；单worker的`FuzzStepUpContractRoundTrip`运行10秒、176823次通过。外部环境默认SKIP不算运行证据，本片未改变数据库schema/readiness、Audit action、通知、安装profile或UI，也未运行新的PG/SMTP/浏览器门禁。
+
 #### 事务、锁序与失败结果
 
 复用当前SERIALIZABLE边界，但认证失败必须是可提交的业务结果。仓储callback返回错误会回滚；因此尝试已验证失败时先提交`REJECTED`及计数，用例在提交成功后映射401。数据库异常、提交未知或必要计数不能持久化时不发行Session，也不把未知结果当作可免费重试。
@@ -437,7 +462,7 @@ LoginResponse仍只允许LOGIN挑战；不能因为通用Challenge可以描述RE
 4. 成功发行将OTP消费、challenge终态、Session认证事实、尝试结果及outbox一起提交；因子/设置变更同样将修订、资格屏障、不可变完成和事实一起提交。失败不产生成功Session或成功事件。
 5. SERIALIZABLE重试使用同一个已保留attempt，不重新获取免费猜测次数；已完成结果只查原非秘密完成。只有可证明事务已回滚的40001/40P01才能重试事务，网络断开/提交未知不得套用该策略。
 
-step-up通过只证明本次再次认证，不等于PDP Allow，也不提升整个Session。其PROVED状态拟最多120秒，绑定当前Session、目标操作、非秘密输入承诺及版本；设置最终写入时再检查权限、未撤销平台附件保护和实际规则，成功时一次消费。因子、密码、会话或权限先改变会让旧证明失效。没有“最近做过一次MFA，之后任意操作都跳过”的全局缓存。
+step-up通过只证明本次再次认证，不等于PDP Allow，也不提升整个Session。其原始120秒绝对期限同时约束PENDING和PROVED，验证不续期，绑定当前Session、目标操作、非秘密输入承诺及版本；设置最终写入时再检查权限、未撤销平台附件保护和实际规则，成功时一次消费。因子、密码、会话或权限先改变会让旧证明失效。没有“最近做过一次MFA，之后任意操作都跳过”的全局缓存。
 
 #### 绑定、替换与秘密托管
 

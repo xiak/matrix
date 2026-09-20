@@ -325,6 +325,117 @@ func EncodeConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorRecove
 	}{value.Recovery, value.NextStep, codes})
 }
 
+func (value *StepUp) UnmarshalJSON(source []byte) error {
+	type wire StepUp
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateStepUp(StepUp(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	_, proved := fields["provedAt"]
+	_, consumed := fields["consumedAt"]
+	if proved != (decoded.ProvedAt != nil) || consumed != (decoded.ConsumedAt != nil) {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = StepUp(decoded)
+	return nil
+}
+
+func (value *StartStepUpRequest) UnmarshalJSON(source []byte) error {
+	type wire StartStepUpRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateStartStepUpRequest(StartStepUpRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = StartStepUpRequest(decoded)
+	return nil
+}
+
+func (value *VerifyStepUpRequest) UnmarshalJSON(source []byte) error {
+	type wire VerifyStepUpRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateVerifyStepUpRequest(VerifyStepUpRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = VerifyStepUpRequest(decoded)
+	return nil
+}
+
+func EncodeVerifyStepUpRequest(value VerifyStepUpRequest) ([]byte, error) {
+	if err := ValidateVerifyStepUpRequest(value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		RequestID string `json:"requestId"`
+		Password  string `json:"password"`
+		Code      string `json:"code"`
+	}{value.RequestID, value.Password.reveal(), value.Code.reveal()})
+}
+
+func (value *RegenerateRecoveryCodesRequest) UnmarshalJSON(source []byte) error {
+	type wire RegenerateRecoveryCodesRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateRegenerateRecoveryCodesRequest(RegenerateRecoveryCodesRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = RegenerateRecoveryCodesRequest(decoded)
+	return nil
+}
+
+func (value *RecoveryCodeRegeneration) UnmarshalJSON(source []byte) error {
+	type wire RecoveryCodeRegeneration
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateRecoveryCodeRegeneration(RecoveryCodeRegeneration(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = RecoveryCodeRegeneration(decoded)
+	return nil
+}
+
+func (RegenerateRecoveryCodesResponse) MarshalJSON() ([]byte, error) {
+	return nil, ErrSecretSerialization
+}
+
+func (value *RegenerateRecoveryCodesResponse) UnmarshalJSON(source []byte) error {
+	type wire RegenerateRecoveryCodesResponse
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateRegenerateRecoveryCodesResponse(RegenerateRecoveryCodesResponse(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	_, codes := fields["recoveryCodes"]
+	if codes != (decoded.Outcome == "APPLIED") {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = RegenerateRecoveryCodesResponse(decoded)
+	return nil
+}
+
+func EncodeRegenerateRecoveryCodesResponse(value RegenerateRecoveryCodesResponse) ([]byte, error) {
+	if err := ValidateRegenerateRecoveryCodesResponse(value); err != nil {
+		return nil, err
+	}
+	var codes []string
+	if value.Outcome == "APPLIED" {
+		codes = make([]string, len(value.RecoveryCodes))
+		defer clear(codes)
+		for index, code := range value.RecoveryCodes {
+			codes[index] = code.reveal()
+		}
+	}
+	return json.Marshal(struct {
+		Outcome      string                   `json:"outcome"`
+		Regeneration RecoveryCodeRegeneration `json:"regeneration"`
+		Codes        []string                 `json:"recoveryCodes,omitempty"`
+	}{value.Outcome, value.Regeneration, codes})
+}
+
 func (subject *Subject) UnmarshalJSON(source []byte) error {
 	type wire Subject
 	var decoded wire

@@ -664,7 +664,8 @@ Transport/recipient budgets and all acceptance status belong only IAM/012.
 IAM/009 owns the target: a real USER binds a local TOTP authenticator,
 completes the required factors before receiving a login Session, and uses
 purpose-limited one-time recovery without acquiring another identity or
-platform permission. This is design review, not an implementation window.
+platform permission. Runtime status and acceptance belong solely to IAM/009;
+these source decisions do not themselves confer an implementation capability.
 
 | Fixed source / slice | Decision | Rationale |
 | --- | --- | --- |
@@ -675,6 +676,7 @@ platform permission. This is design review, not an implementation window.
 | Product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, `04-user-guide/users/login-and-operation-protection.md` | `REFERENCE` binding, step-up, login protection and recovery requirements; `REJECT` executable or current-policy inference | It is requirements prose, not code or proof of MFA, cookie sessions, risk scoring or automatically enforced administrator rules. Its encrypted recovery-code recommendation is not adopted: one-way verification suffices for offline high-entropy saved codes and avoids later recovery of plaintext. |
 | Matrix `d68672514a8920eae0be9a6f0aff2eba2530fdd2`, `api/iam/v1/types.go`, `authentication.go`, `service.go` and PostgreSQL `repository.go` | `REUSE` actual USER/Session identity, strict Secret handling and Serializable transaction owner; `ADAPT` the login result and committed authentication-failure outcome | The password-to-Session path remains unchanged from `644fff09`; the fixed diff in authentication.go only adds S1 self-session discovery. Callback errors still roll back, so a rejected OTP/password result cannot be used as the transaction error after recording attempts. No Refresh Token or pre-authentication Session is adopted. |
 | Same fixed source, current product Profile, ACCOUNT resource, tenant credential protection and session lineage | `ADAPT` exactly two tenant security-settings actions and explicit current-setting checks; `REJECT` a new security-policy DSL, blanket SELF role or automatic administrator recovery powers | Account configuration, USER authenticator state and Session authentication facts are distinct. The MFA design changes no current action registration or system policy; publication/grant and protected-target behavior require their own implementation gates. |
+| Matrix `48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e`, `totp_enrollment.go`, `totp_authentication.go`, password attempts and `000012_totp` recovery-batch provenance | `REUSE` current USER/Session authentication, shared durable password/OTP budgets, one-way saved codes and transactional facts; `ADAPT` a Session-held, operation-bound proof and closed regeneration provenance | IAM/009 defines the regeneration target before this inspection. An original batch is bound to the factor's immutable binding event; a replacement must prove its own exact completion without rewriting that event or simply removing the equality guard. `REJECT` a new bearer, generic cached permit, arbitrary action/payload, a Session-wide strength upgrade, or replaying one-time codes. The first operation is only the user's own recovery-code regeneration; metadata codecs alone do not implement its HTTP/SQL workflow. |
 
 [RFC6238](https://www.rfc-editor.org/rfc/rfc6238.html) and
 [RFC4226](https://www.rfc-editor.org/rfc/rfc4226.html) are `REFERENCE` for

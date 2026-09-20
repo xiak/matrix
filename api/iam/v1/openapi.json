@@ -20269,6 +20269,120 @@
         ],
         "type": "object"
       },
+      "RecoveryCodeRegeneration": {
+        "additionalProperties": false,
+        "description": "Immutable non-secret observation of an original same-user recovery-code regeneration. It neither returns saved codes nor renews step-up authority.",
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "factorId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "factorRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "createdAt",
+          "factorId",
+          "factorRevision",
+          "id",
+          "kind",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "RegenerateRecoveryCodesRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedFactorRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "stepUpId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "expectedFactorRevision",
+          "requestId",
+          "stepUpId"
+        ],
+        "type": "object"
+      },
+      "RegenerateRecoveryCodesResponse": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "outcome": {
+                "const": "APPLIED"
+              },
+              "recoveryCodes": {
+                "type": "array"
+              }
+            },
+            "required": [
+              "recoveryCodes"
+            ]
+          },
+          {
+            "properties": {
+              "outcome": {
+                "const": "EQUAL_REPLAY"
+              },
+              "recoveryCodes": false
+            }
+          }
+        ],
+        "properties": {
+          "outcome": {
+            "enum": [
+              "APPLIED",
+              "EQUAL_REPLAY"
+            ]
+          },
+          "recoveryCodes": {
+            "items": {
+              "minLength": 1,
+              "readOnly": true,
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 10,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "regeneration": {
+            "$ref": "#/components/schemas/RecoveryCodeRegeneration"
+          }
+        },
+        "required": [
+          "outcome",
+          "regeneration"
+        ],
+        "type": "object"
+      },
       "RemoveGroupMembershipRequest": {
         "additionalProperties": false,
         "properties": {
@@ -21847,6 +21961,28 @@
         ],
         "type": "object"
       },
+      "StartStepUpRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedFactorRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "operation": {
+            "const": "RECOVERY_CODES_REGENERATE"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "expectedFactorRevision",
+          "operation",
+          "requestId"
+        ],
+        "type": "object"
+      },
       "StartTOTPEnrollmentRequest": {
         "additionalProperties": false,
         "properties": {
@@ -21919,6 +22055,117 @@
         "required": [
           "enrollment",
           "outcome"
+        ],
+        "type": "object"
+      },
+      "StepUp": {
+        "additionalProperties": false,
+        "description": "Non-secret metadata bound to one operation and its original effective login Session. It is not a bearer, unlogged challenge or authorization permit. Runtime validation enforces the original 120-second lifetime and proof/consumption ordering; proving never extends expiry.",
+        "oneOf": [
+          {
+            "properties": {
+              "consumedAt": false,
+              "provedAt": false,
+              "state": {
+                "const": "PENDING"
+              }
+            }
+          },
+          {
+            "properties": {
+              "consumedAt": false,
+              "provedAt": {
+                "type": "string"
+              },
+              "state": {
+                "const": "PROVED"
+              }
+            },
+            "required": [
+              "provedAt"
+            ]
+          },
+          {
+            "properties": {
+              "consumedAt": {
+                "type": "string"
+              },
+              "provedAt": {
+                "type": "string"
+              },
+              "state": {
+                "const": "CONSUMED"
+              }
+            },
+            "required": [
+              "provedAt",
+              "consumedAt"
+            ]
+          },
+          {
+            "properties": {
+              "consumedAt": false,
+              "provedAt": {
+                "type": "string"
+              },
+              "state": {
+                "const": "EXPIRED"
+              }
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "consumedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "expectedFactorRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "operation": {
+            "const": "RECOVERY_CODES_REGENERATE"
+          },
+          "provedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "state": {
+            "enum": [
+              "PENDING",
+              "PROVED",
+              "CONSUMED",
+              "EXPIRED"
+            ]
+          }
+        },
+        "required": [
+          "apiVersion",
+          "createdAt",
+          "expectedFactorRevision",
+          "expiresAt",
+          "id",
+          "kind",
+          "operation",
+          "requestId",
+          "state"
         ],
         "type": "object"
       },
@@ -22508,6 +22755,28 @@
         "required": [
           "challengeCredential",
           "code",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "VerifyStepUpRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "password": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "code",
+          "password",
           "requestId"
         ],
         "type": "object"

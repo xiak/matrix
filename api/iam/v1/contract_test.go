@@ -26,6 +26,255 @@ import (
 	"github.com/xiak/matrix/api/contractjson"
 )
 
+func TestStepUpMetadataIsBoundedAndNeverLoginAuthority(t *testing.T) {
+	created := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	proved, consumed := created.Add(time.Second), created.Add(2*time.Second)
+	baseline := StepUp{APIVersion: APIVersion, Kind: "StepUp", ID: "proof-a", RequestID: "regenerate-a",
+		Operation: StepUpRegenerateRecoveryCodes, ExpectedFactorRevision: 2, State: "PENDING", CreatedAt: created, ExpiresAt: created.Add(2 * time.Minute)}
+	for _, sample := range []struct {
+		state                string
+		provedAt, consumedAt *time.Time
+	}{
+		{"PENDING", nil, nil},
+		{"PROVED", &proved, nil},
+		{"CONSUMED", &proved, &consumed},
+		{"EXPIRED", nil, nil},
+		{"EXPIRED", &proved, nil},
+	} {
+		state := baseline
+		state.State, state.ProvedAt, state.ConsumedAt = sample.state, sample.provedAt, sample.consumedAt
+		if err := ValidateStepUp(state); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded StepUp
+		if json.Unmarshal(encoded, &decoded) != nil || !reflect.DeepEqual(state, decoded) {
+			t.Fatal("non-secret step-up metadata did not round trip")
+		}
+		var challenge AuthenticationChallenge
+		if json.Unmarshal(encoded, &challenge) == nil && ValidateAuthenticationChallenge(challenge) == nil {
+			t.Fatal("step-up metadata became an unlogged challenge")
+		}
+		var login LoginResponse
+		if json.Unmarshal([]byte(`{"outcome":"CHALLENGE_REQUIRED","challenge":`+string(encoded)+`,"challengeCredential":"synthetic"}`), &login) == nil {
+			t.Fatal("step-up metadata became login authority")
+		}
+	}
+	for name, mutate := range map[string]func(*StepUp){
+		"foreign API":          func(v *StepUp) { v.APIVersion = "other/v1" },
+		"challenge kind":       func(v *StepUp) { v.Kind = "AuthenticationChallenge" },
+		"arbitrary action":     func(v *StepUp) { v.Operation = "iam.user.update" },
+		"unbound factor":       func(v *StepUp) { v.ExpectedFactorRevision = 1 },
+		"unsafe version":       func(v *StepUp) { v.ExpectedFactorRevision = 9007199254740992 },
+		"empty intent":         func(v *StepUp) { v.RequestID = "" },
+		"shortened expiry":     func(v *StepUp) { v.ExpiresAt = v.ExpiresAt.Add(-time.Microsecond) },
+		"extended expiry":      func(v *StepUp) { v.ExpiresAt = v.ExpiresAt.Add(time.Microsecond) },
+		"pending proof":        func(v *StepUp) { v.ProvedAt = &proved },
+		"missing proof":        func(v *StepUp) { v.State = "PROVED" },
+		"missing consume":      func(v *StepUp) { v.State, v.ProvedAt = "CONSUMED", &proved },
+		"expired consumed":     func(v *StepUp) { v.State, v.ProvedAt, v.ConsumedAt = "EXPIRED", &proved, &consumed },
+		"unknown state":        func(v *StepUp) { v.State = "AUTHORIZED" },
+		"proof before start":   func(v *StepUp) { before := created.Add(-time.Microsecond); v.State, v.ProvedAt = "PROVED", &before },
+		"proof at expiry":      func(v *StepUp) { at := v.ExpiresAt; v.State, v.ProvedAt = "PROVED", &at },
+		"consume at expiry":    func(v *StepUp) { at := v.ExpiresAt; v.State, v.ProvedAt, v.ConsumedAt = "CONSUMED", &proved, &at },
+		"consume before proof": func(v *StepUp) { v.State, v.ProvedAt, v.ConsumedAt = "CONSUMED", &consumed, &proved },
+		"non-UTC instant": func(v *StepUp) {
+			v.CreatedAt = v.CreatedAt.In(time.FixedZone("other", 3600))
+			v.ExpiresAt = v.CreatedAt.Add(2 * time.Minute)
+		},
+		"submicrosecond instant": func(v *StepUp) {
+			v.CreatedAt = v.CreatedAt.Add(time.Nanosecond)
+			v.ExpiresAt = v.CreatedAt.Add(2 * time.Minute)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			altered := baseline
+			mutate(&altered)
+			if ValidateStepUp(altered) == nil {
+				t.Fatal("invalid operation metadata was accepted")
+			}
+			encoded, err := json.Marshal(altered)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded StepUp
+			if json.Unmarshal(encoded, &decoded) == nil {
+				t.Fatal("wire decoder bypassed semantic validation")
+			}
+		})
+	}
+	encoded, _ := json.Marshal(baseline)
+	for _, member := range []string{`"provedAt":null`, `"consumedAt":null`, `"sessionId":"other"`, `"credential":"synthetic"`, `"State":"PENDING"`, `"state":"PENDING"`} {
+		decoded := baseline
+		if json.Unmarshal([]byte(strings.TrimSuffix(string(encoded), "}")+","+member+"}"), &decoded) == nil || !reflect.DeepEqual(decoded, baseline) {
+			t.Fatal("ambiguous metadata was accepted or partially replaced the destination")
+		}
+	}
+}
+
+func TestStepUpRequestsAreClosedAndSecretsRequireExplicitEncoding(t *testing.T) {
+	start := `{"requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`
+	verify := `{"requestId":"verify-a","password":"private-password","code":"private-candidate"}`
+	regenerate := `{"requestId":"regenerate-a","stepUpId":"proof-a","expectedFactorRevision":2}`
+	for _, sample := range []struct {
+		name, wire string
+		newValue   func() any
+	}{
+		{"start", start, func() any { return new(StartStepUpRequest) }},
+		{"verify", verify, func() any { return new(VerifyStepUpRequest) }},
+		{"regenerate", regenerate, func() any { return new(RegenerateRecoveryCodesRequest) }},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			if DecodeRequest(strings.NewReader(sample.wire), sample.newValue()) != nil {
+				t.Fatal("closed request rejected, including a nonempty malformed OTP candidate")
+			}
+			for _, member := range []string{`"accountId":"other"`, `"userId":"other"`, `"sessionId":"other"`, `"factorId":"other"`, `"batchId":"other"`, `"action":"iam.user.update"`, `"target":{}`, `"attributes":{}`, `"challengeCredential":"synthetic"`, `"recoveryCode":"synthetic"`, `"RequestId":"regenerate-a"`, `"requestId":"duplicate"`, `"request\u0049d":"duplicate"`} {
+				if DecodeRequest(strings.NewReader(strings.TrimSuffix(sample.wire, "}")+","+member+"}"), sample.newValue()) == nil {
+					t.Fatal("request accepted a selector, alternate authority, duplicate or case alias")
+				}
+			}
+			for _, body := range []string{"null", "[]", sample.wire + "{}", strings.Replace(sample.wire, `"requestId":`, `"requestId":null,"unused":`, 1), strings.Repeat(" ", int(MaxRequestBytes)) + sample.wire} {
+				if DecodeRequest(strings.NewReader(body), sample.newValue()) == nil {
+					t.Fatal("invalid or unbounded request accepted")
+				}
+			}
+		})
+	}
+	for _, version := range []string{"0", "1", "-1", "2.5", "9007199254740992", "null", `"2"`} {
+		if json.Unmarshal([]byte(strings.Replace(start, ":2}", ":"+version+"}", 1)), new(StartStepUpRequest)) == nil ||
+			json.Unmarshal([]byte(strings.Replace(regenerate, ":2}", ":"+version+"}", 1)), new(RegenerateRecoveryCodesRequest)) == nil {
+			t.Fatal("invalid bound-factor revision accepted")
+		}
+	}
+	if json.Unmarshal([]byte(strings.Replace(start, "RECOVERY_CODES_REGENERATE", "LOGIN", 1)), new(StartStepUpRequest)) == nil {
+		t.Fatal("arbitrary operation accepted")
+	}
+	for _, field := range []string{"private-password", "private-candidate"} {
+		for _, invalid := range []string{`null`, `""`, `123456`, `{}`, `[]`} {
+			if json.Unmarshal([]byte(strings.Replace(verify, `"`+field+`"`, invalid, 1)), new(VerifyStepUpRequest)) == nil {
+				t.Fatal("invalid secret carrier accepted")
+			}
+		}
+	}
+	var request VerifyStepUpRequest
+	if err := json.Unmarshal([]byte(verify), &request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := json.Marshal(request); !errors.Is(err, ErrSecretSerialization) || strings.Contains(fmt.Sprintf("%+v %#v", request, request), "private-") {
+		t.Fatal("ordinary serialization or formatting exposed proof secrets")
+	}
+	encoded, err := EncodeVerifyStepUpRequest(request)
+	if err != nil || string(encoded) != verify {
+		t.Fatal("explicit request codec changed the authentication candidates")
+	}
+}
+
+func TestRecoveryCodeRegenerationReplaysOnlyNonSecretCompletion(t *testing.T) {
+	result := RecoveryCodeRegeneration{APIVersion: APIVersion, Kind: "RecoveryCodeRegeneration", ID: "regeneration-a",
+		RequestID: "request-a", FactorID: "factor-a", FactorRevision: 2, CreatedAt: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)}
+	codes := make([]Secret, 10)
+	for index := range codes {
+		var err error
+		codes[index], err = NewSecret(fmt.Sprintf("synthetic-saved-code-%02d", index))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, response := range []RegenerateRecoveryCodesResponse{
+		{Outcome: "APPLIED", Regeneration: result, RecoveryCodes: codes},
+		{Outcome: "EQUAL_REPLAY", Regeneration: result},
+	} {
+		encoded, err := EncodeRegenerateRecoveryCodesResponse(response)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded RegenerateRecoveryCodesResponse
+		if json.Unmarshal(encoded, &decoded) != nil || decoded.Outcome != response.Outcome || decoded.Regeneration != result || len(decoded.RecoveryCodes) != len(response.RecoveryCodes) {
+			t.Fatal("exact completion did not round trip")
+		}
+		if response.Outcome == "EQUAL_REPLAY" && bytes.Contains(encoded, []byte("recoveryCodes")) {
+			t.Fatal("replay contains a secret placeholder")
+		}
+		if _, err := json.Marshal(response); !errors.Is(err, ErrSecretSerialization) || strings.Contains(fmt.Sprintf("%+v %#v", response, response), "synthetic-saved-code-") {
+			t.Fatal("ordinary serialization or formatting exposed saved codes")
+		}
+		for _, member := range []string{`"credential":"synthetic"`, `"session":null`, `"stepUpCredential":"synthetic"`, `"nextStep":"AUTHENTICATED"`, `"outcome":"APPLIED"`} {
+			if json.Unmarshal([]byte(strings.TrimSuffix(string(encoded), "}")+","+member+"}"), new(RegenerateRecoveryCodesResponse)) == nil {
+				t.Fatal("completion accepted another authentication result or duplicate outcome")
+			}
+		}
+	}
+	for _, response := range []RegenerateRecoveryCodesResponse{
+		{Outcome: "APPLIED", Regeneration: result},
+		{Outcome: "APPLIED", Regeneration: result, RecoveryCodes: codes[:9]},
+		{Outcome: "APPLIED", Regeneration: result, RecoveryCodes: append(append([]Secret{}, codes[:9]...), codes[0])},
+		{Outcome: "APPLIED", Regeneration: result, RecoveryCodes: append(append([]Secret{}, codes[:9]...), Secret{})},
+		{Outcome: "EQUAL_REPLAY", Regeneration: result, RecoveryCodes: codes},
+		{Outcome: "EQUAL_REPLAY", Regeneration: result, RecoveryCodes: []Secret{}},
+		{Outcome: "UNKNOWN", Regeneration: result},
+		{Outcome: "APPLIED", RecoveryCodes: codes},
+	} {
+		if _, err := EncodeRegenerateRecoveryCodesResponse(response); err == nil {
+			t.Fatal("invalid or repeated secret result encoded")
+		}
+	}
+	replay, _ := EncodeRegenerateRecoveryCodesResponse(RegenerateRecoveryCodesResponse{Outcome: "EQUAL_REPLAY", Regeneration: result})
+	for _, field := range []string{`null`, `[]`, `["synthetic"]`} {
+		if json.Unmarshal([]byte(strings.TrimSuffix(string(replay), "}")+`,"recoveryCodes":`+field+"}"), new(RegenerateRecoveryCodesResponse)) == nil {
+			t.Fatal("replay accepted a present recovery-code field")
+		}
+	}
+}
+
+func FuzzStepUpContractRoundTrip(f *testing.F) {
+	f.Add(uint8(0), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`)
+	f.Add(uint8(1), `{"requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`)
+	f.Add(uint8(2), `{"requestId":"verify-a","password":"synthetic-password","code":"nonempty-attempt"}`)
+	f.Add(uint8(3), `{"requestId":"regenerate-a","stepUpId":"proof-a","expectedFactorRevision":2}`)
+	f.Add(uint8(4), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RecoveryCodeRegeneration","id":"regeneration-a","requestId":"regenerate-a","factorId":"factor-a","factorRevision":2,"createdAt":"2026-09-21T12:01:00Z"}`)
+	f.Add(uint8(5), `{"outcome":"EQUAL_REPLAY","regeneration":{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RecoveryCodeRegeneration","id":"regeneration-a","requestId":"regenerate-a","factorId":"factor-a","factorRevision":2,"createdAt":"2026-09-21T12:01:00Z"}}`)
+	f.Add(uint8(0), `{"kind":"StepUp","kind":"AuthenticationChallenge"}`)
+	f.Add(uint8(2), `{"requestId":"verify-a","password":null,"code":123456}`)
+	f.Fuzz(func(t *testing.T, kind uint8, source string) {
+		factories := []func() any{
+			func() any { return new(StepUp) }, func() any { return new(StartStepUpRequest) },
+			func() any { return new(VerifyStepUpRequest) }, func() any { return new(RegenerateRecoveryCodesRequest) },
+			func() any { return new(RecoveryCodeRegeneration) }, func() any { return new(RegenerateRecoveryCodesResponse) },
+		}
+		factory := factories[int(kind)%len(factories)]
+		value := factory()
+		if DecodeRequest(strings.NewReader(source), value) != nil {
+			return
+		}
+		var encoded []byte
+		var err error
+		switch typed := value.(type) {
+		case *VerifyStepUpRequest:
+			if _, marshalErr := json.Marshal(typed); !errors.Is(marshalErr, ErrSecretSerialization) {
+				t.Fatal("ordinary serialization accepted authentication secrets")
+			}
+			encoded, err = EncodeVerifyStepUpRequest(*typed)
+		case *RegenerateRecoveryCodesResponse:
+			if _, marshalErr := json.Marshal(typed); !errors.Is(marshalErr, ErrSecretSerialization) {
+				t.Fatal("ordinary serialization accepted one-time result")
+			}
+			encoded, err = EncodeRegenerateRecoveryCodesResponse(*typed)
+		default:
+			encoded, err = json.Marshal(value)
+		}
+		if err != nil {
+			t.Fatal("accepted contract could not be encoded")
+		}
+		decoded := factory()
+		if DecodeRequest(bytes.NewReader(encoded), decoded) != nil || !reflect.DeepEqual(value, decoded) {
+			t.Fatal("accepted contract changed under round trip")
+		}
+	})
+}
+
 func TestAuthenticatorRecoveryWireNeverBecomesLoginOrSecretReplay(t *testing.T) {
 	secret := func(value string) Secret {
 		t.Helper()
