@@ -54,7 +54,9 @@ if [ "${database_status}" -ne 0 ]; then
   }' "${diagnostic}")"
   case "${sqlstate}" in
     42P06|42P07|42710) printf '%s\n' 'RESTORE_OBJECT_CONFLICT' ;;
-    42704|42P01|3F000) printf '%s\n' 'RESTORE_REFERENCE' ;;
+    42704) printf '%s\n' 'RESTORE_MISSING_OBJECT' ;;
+    42P01) printf '%s\n' 'RESTORE_MISSING_RELATION' ;;
+    3F000) printf '%s\n' 'RESTORE_MISSING_SCHEMA' ;;
     42501) printf '%s\n' 'RESTORE_AUTHORITY' ;;
     2BP01) printf '%s\n' 'RESTORE_DEPENDENCY' ;;
     23???) printf '%s\n' 'RESTORE_INTEGRITY' ;;
@@ -894,8 +896,12 @@ func classifyDatabaseRestoreDiagnostic(
 	switch string(bytes.TrimSpace(output)) {
 	case "RESTORE_OBJECT_CONFLICT":
 		return platformcommand.RecoveryFailureDatabaseRestoreObjectConflict
-	case "RESTORE_REFERENCE":
-		return platformcommand.RecoveryFailureDatabaseRestoreReference
+	case "RESTORE_MISSING_OBJECT":
+		return platformcommand.RecoveryFailureDatabaseRestoreMissingObject
+	case "RESTORE_MISSING_RELATION":
+		return platformcommand.RecoveryFailureDatabaseRestoreMissingRelation
+	case "RESTORE_MISSING_SCHEMA":
+		return platformcommand.RecoveryFailureDatabaseRestoreMissingSchema
 	case "RESTORE_AUTHORITY":
 		return platformcommand.RecoveryFailureDatabaseRestoreAuthority
 	case "RESTORE_DEPENDENCY":

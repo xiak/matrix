@@ -3817,7 +3817,8 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 			"--schema=audit --schema=iam --schema=managedservice --schema=paas 2>/dev/null",
 			"COMMIT;", "ROLLBACK;", "psql -X --set=ON_ERROR_STOP=1",
 			"--set=VERBOSITY=sqlstate", "mktemp", "RESTORE_OBJECT_CONFLICT",
-			"RESTORE_REFERENCE", "RESTORE_AUTHORITY", "RESTORE_DEPENDENCY",
+			"RESTORE_MISSING_OBJECT", "RESTORE_MISSING_RELATION", "RESTORE_MISSING_SCHEMA",
+			"RESTORE_AUTHORITY", "RESTORE_DEPENDENCY",
 			"RESTORE_INTEGRITY", "RESTORE_TRANSACTION", "RESTORE_PIPELINE",
 			"RESTORE_CLIENT", "RESTORE_CLIENT_FATAL", "RESTORE_CONNECTION",
 			"RESTORE_CLIENT_SCRIPT", "PIPESTATUS",
@@ -3897,20 +3898,22 @@ func TestRestoreDatabaseDumpReturnsOnlyClosedDiagnostics(t *testing.T) {
 	}
 
 	for diagnostic, want := range map[string]platformcommand.RecoveryFailureBoundary{
-		"RESTORE_OBJECT_CONFLICT\n": platformcommand.RecoveryFailureDatabaseRestoreObjectConflict,
-		"RESTORE_REFERENCE\n":       platformcommand.RecoveryFailureDatabaseRestoreReference,
-		"RESTORE_AUTHORITY\n":       platformcommand.RecoveryFailureDatabaseRestoreAuthority,
-		"RESTORE_DEPENDENCY\n":      platformcommand.RecoveryFailureDatabaseRestoreDependency,
-		"RESTORE_INTEGRITY\n":       platformcommand.RecoveryFailureDatabaseRestoreIntegrity,
-		"RESTORE_TRANSACTION\n":     platformcommand.RecoveryFailureDatabaseRestoreTransaction,
-		"RESTORE_PIPELINE\n":        platformcommand.RecoveryFailureDatabaseRestorePipeline,
-		"RESTORE_CLIENT\n":          platformcommand.RecoveryFailureDatabaseRestoreClient,
-		"RESTORE_CLIENT_FATAL\n":    platformcommand.RecoveryFailureDatabaseRestoreClientFatal,
-		"RESTORE_CONNECTION\n":      platformcommand.RecoveryFailureDatabaseRestoreConnection,
-		"RESTORE_CLIENT_SCRIPT\n":   platformcommand.RecoveryFailureDatabaseRestoreClientScript,
-		"RESTORE_UNKNOWN\n":         platformcommand.RecoveryFailureDatabaseRestore,
-		"private relation name\n":   platformcommand.RecoveryFailureDatabaseRestore,
-		"RESTORE_REFERENCE\nextra":  platformcommand.RecoveryFailureDatabaseRestore,
+		"RESTORE_OBJECT_CONFLICT\n":     platformcommand.RecoveryFailureDatabaseRestoreObjectConflict,
+		"RESTORE_MISSING_OBJECT\n":      platformcommand.RecoveryFailureDatabaseRestoreMissingObject,
+		"RESTORE_MISSING_RELATION\n":    platformcommand.RecoveryFailureDatabaseRestoreMissingRelation,
+		"RESTORE_MISSING_SCHEMA\n":      platformcommand.RecoveryFailureDatabaseRestoreMissingSchema,
+		"RESTORE_AUTHORITY\n":           platformcommand.RecoveryFailureDatabaseRestoreAuthority,
+		"RESTORE_DEPENDENCY\n":          platformcommand.RecoveryFailureDatabaseRestoreDependency,
+		"RESTORE_INTEGRITY\n":           platformcommand.RecoveryFailureDatabaseRestoreIntegrity,
+		"RESTORE_TRANSACTION\n":         platformcommand.RecoveryFailureDatabaseRestoreTransaction,
+		"RESTORE_PIPELINE\n":            platformcommand.RecoveryFailureDatabaseRestorePipeline,
+		"RESTORE_CLIENT\n":              platformcommand.RecoveryFailureDatabaseRestoreClient,
+		"RESTORE_CLIENT_FATAL\n":        platformcommand.RecoveryFailureDatabaseRestoreClientFatal,
+		"RESTORE_CONNECTION\n":          platformcommand.RecoveryFailureDatabaseRestoreConnection,
+		"RESTORE_CLIENT_SCRIPT\n":       platformcommand.RecoveryFailureDatabaseRestoreClientScript,
+		"RESTORE_UNKNOWN\n":             platformcommand.RecoveryFailureDatabaseRestore,
+		"private relation name\n":       platformcommand.RecoveryFailureDatabaseRestore,
+		"RESTORE_MISSING_OBJECT\nextra": platformcommand.RecoveryFailureDatabaseRestore,
 	} {
 		runtimeBoundary := &databaseRestoreDiagnosticRuntime{
 			output: []byte(diagnostic), started: true, err: errors.New("restore failed"),
@@ -3994,6 +3997,20 @@ func TestDatabaseRestoreScriptEmitsOnlyClosedSQLStateClass(t *testing.T) {
 			"RESTORE_OBJECT_CONFLICT\n", false,
 		)
 	})
+	for name, sqlstateAndDiagnostic := range map[string]string{
+		"missing object":   "42704 RESTORE_MISSING_OBJECT",
+		"missing relation": "42P01 RESTORE_MISSING_RELATION",
+		"missing schema":   "3F000 RESTORE_MISSING_SCHEMA",
+	} {
+		t.Run(name, func(t *testing.T) {
+			parts := strings.Fields(sqlstateAndDiagnostic)
+			run(t,
+				"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+				"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'ERROR:  "+parts[0]+"' >&2\nexit 3\n",
+				parts[1]+"\n", false,
+			)
+		})
+	}
 	t.Run("archive pipeline", func(t *testing.T) {
 		run(t,
 			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\nexit 9\n",
