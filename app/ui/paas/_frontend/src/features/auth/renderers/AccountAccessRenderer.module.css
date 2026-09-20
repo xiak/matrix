@@ -70,6 +70,7 @@
 }
 
 .detailWorkspace { display: grid; gap: var(--xiak-spacing-comfortable); min-width: 0; padding: var(--xiak-panel-padding); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
+.associationWorkflow { min-width: 0; }
 .detailWorkspace > .facts { padding-block: var(--xiak-spacing-tight); }
 
 .facts dt {

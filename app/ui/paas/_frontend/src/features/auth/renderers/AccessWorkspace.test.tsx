@@ -1145,6 +1145,32 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-lin");
     expect((await extension.read("preview-only")).userPolicies["principal-lin"]).toEqual(["policy-prod-logs"]);
   });
+  it.each([
+    { tab: "权限策略", trigger: "关联策略", title: "管理直接关联策略", option: "MatrixReadOnlyAccess", change: "新增关联", kind: "policies" },
+    { tab: "所属用户组", trigger: "编辑", title: "管理所属用户组", option: "DeliveryTeam", change: "移除关联", kind: "groups" }
+  ] as const)("keeps $kind association changes in the content area and retries without losing review", async ({ tab, trigger, title, option, change, kind }) => {
+    const { user, repository, extension } = await open("users", { entityId: "principal-lin" });
+    await user.click(await screen.findByRole("tab", { name: tab }));
+    const panel = screen.getByRole("tabpanel", { name: tab });
+    await user.click(within(panel).getByRole("button", { name: trigger }));
+    const workflow = screen.getByRole("form", { name: `${title} · lin` });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(within(workflow).getByRole("checkbox", { name: option }));
+    await user.click(within(workflow).getByRole("button", { name: "下一步：审阅" }));
+    expect(within(workflow).getByRole("region", { name: `${change} · 1` }).textContent).toContain(option);
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.click(within(workflow).getByRole("button", { name: "确认关联" }));
+    await expectRetainedFailure(workflow);
+    expect(within(workflow).getByRole("region", { name: `${change} · 1` }).textContent).toContain(option);
+    await user.click(within(workflow).getByRole("button", { name: "确认关联" }));
+    expect(await screen.findByRole("heading", { name: "关联已更新" })).toBeTruthy();
+    const saved = await extension.read("preview-only");
+    if (kind === "policies") expect(saved.userPolicies["principal-lin"]).toEqual(["policy-prod-logs", "policy-read"]);
+    else expect(saved.groups.find((group) => group.id === "group-delivery")?.memberIds).not.toContain("principal-lin");
+    await user.click(screen.getByRole("button", { name: "完成并返回" }));
+    expect(await screen.findByRole("heading", { name: "lin" })).toBeTruthy();
+  });
   it("creates through a full-page wizard with inline validation, preserved selections and localized errors", async () => {
     const { user, repository, extension } = await open("create-user");
     await screen.findByRole("heading", { name: "选择使用场景" });
