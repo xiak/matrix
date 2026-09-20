@@ -54,7 +54,7 @@
 .pageSummary { font-variant-numeric: tabular-nums; }
 @media (max-width: 760px) { .actions { display: contents; } }
 @media (pointer: coarse) { .selectionCell > label { min-height: var(--xiak-control-height); } .paginationControls button { min-height: var(--xiak-control-height); min-width: var(--xiak-control-height); } }
-@container xiak-table (max-width: 480px) {
+@container xiak-table (max-width: 560px) {
   .table[data-mobile-layout="stack"],
   .table[data-mobile-layout="stack"] tbody {
     display: block;
