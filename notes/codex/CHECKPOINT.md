@@ -7,10 +7,13 @@
 - IAM goal remains ACTIVE. User approved minimal verified-address/SMTP/retry
   security email and original protected-primary MFA recovery/backup isolation
   with installation. No further scope approval is pending for those increments.
-- Latest pushed production **31c18531957ea6d2b52a8ac2cdcd084e13287031**:
+- Latest cumulative fixed **92e3073e290104089af3e02ddaaa6a7d8fb2c457**:
+  original-test adaptation over production31c18531957ea6d2b52a8ac2cdcd084e13287031.
   S3a shared password attempts, source IAM33/Audit19/PaaS2; published profile
-  unchanged. Exact [Verification35488659078](https://github.com/xiak/matrix/actions/runs/35488659078)
+  unchanged. Exact [Verification35489211152](https://github.com/xiak/matrix/actions/runs/35489211152)
   was QUEUED at last observation. Confirm exact SHA before claiming success.
+  Original31c CI35488659078 FAILED: old Audit raw-lookup/overload fixtures and
+  the bulk test's no-login-lock assumption; no production relaxation fixed it.
 - Previous rollback **04041d2d3f7ed55225a5164bc2bc05251d25a6f1**:
   exact Verification35485632542 completed/success confirmed by API; independent
   TOTP private-keyring/seed-protection foundation only, not runtime MFA.
@@ -47,6 +50,11 @@ Own native PostgreSQL18.6 with two logical CPUs/1GiB/24process job limits,
 - Original IAM HTTP84.36s, password options/races/platform protection retained.
 - Actual fixed7cf857bb IAM32 executable retained upgrade/restart20.10s.
 - Independent IAM/Audit/PaaS/two-dispatcher real process gate68.66s.
+- Cumulative92e Audit dual-schema4.46s/retained tenant0.33s passed; original
+  runtime raw lookup now explicitly rejects and valid fixture uses reservations.
+  Full bulk-session fixture49.10s passed including both login lock directions,
+  original snapshot set/count/replay/survivor and all other races. Focused vet
+  passed. These replace obsolete fixture assumptions, not production guards.
 - Same final production source clean-export all default race/architecture;
   final extra test also passed real PG. Final vet/module verification,
   724-file generation inventory/hash equality, Linux amd64 build passed.
@@ -92,7 +100,7 @@ CI and429 semantics. Current Policy/PolicyVersion + PolicyAttachment is the
 online authority; historical RoleBinding IDs are not a legacy online UI.
 Role/RoleSession is real trust/assumption, not the old BuiltinRole enum.
 
-After confirming31c CI, continue actual MFA material consumer, enrollment/
+After confirming92e CI, continue actual MFA material consumer, enrollment/
 confirm, restricted login/recovery challenge, one-time OTP and Session strength
 in existing IAM owners; freeze mutually exclusive Login wire with that slice
 and send exact SHA to UI. Minimal012 email and protected-primary/backup

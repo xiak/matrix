@@ -1245,7 +1245,14 @@ Permission-request approval workflows and time-limited grants are not part of
 the current direct-administrator-grant contract. Database engine/data access
 also remains separate from PaaS control-plane authorization.
 
-External identity providers, LDAP, SAML, OIDC, MFA/WebAuthn, SCIM, customer
+Local TOTP MFA is now owned by
+[IAM-009](../../IAM/FEAT-IAM-009-security-governance.md), with the approved
+minimal security-email increment in
+[IAM-012](../../IAM/FEAT-IAM-012-external-integrations.md). These are not
+accepted by the original password-only milestone; their implementation and
+release evidence remain with those owners, not a blanket MFA deferral here.
+
+External identity providers, LDAP, SAML, OIDC, WebAuthn, SCIM, customer
 policy languages, custom roles, multi-organization principals, token signing
 and key rotation, high availability, remote policy decision points,
 configurable Audit deletion/archival/legal hold, cryptographic external
