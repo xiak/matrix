@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { IamRepository } from "../repositories/iamRepository";
 import { SessionProvider, useSession, useSessionCredential } from "./SessionProvider";
+import { usePersonalSecurity } from "./PersonalSecurityProvider";
 
 const secretCredential = "must-not-enter-browser-storage-or-dom";
 const challengeCredential = "must-not-become-a-session-bearer";
@@ -22,6 +23,7 @@ function challenged(nextStep: "TOTP" | "PASSWORD_CHANGE" = "TOTP", credential = 
 
 function Probe() {
   const session = useSession();
+  const personalSecurity = usePersonalSecurity();
   const hasCredential = useSessionCredential() !== null;
   return (
     <div>
@@ -30,11 +32,14 @@ function Probe() {
       <span data-testid="error">{session.error ?? "none"}</span>
       <span data-testid="has-credential">{String(hasCredential)}</span>
       <span data-testid="has-challenge">{String(session.challenge !== null)}</span>
+      <span data-testid="recovery-count">{session.enrollmentRecovery?.recoveryCodes.length ?? 0}</span>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
       <button onClick={() => void session.verifyAuthenticationChallenge("123456")} type="button">verify</button>
       <button onClick={() => void session.changeChallengePassword("Changed-Admin-Password-73!")} type="button">challenge-password</button>
       <button onClick={session.cancelAuthenticationChallenge} type="button">cancel-challenge</button>
       <button onClick={session.acknowledgeReauthentication} type="button">acknowledge</button>
+      <button onClick={session.acknowledgeEnrollmentRecovery} type="button">acknowledge-recovery</button>
+      <button onClick={() => { void personalSecurity?.confirmTOTPEnrollment("enrollment-one", { requestId: "confirm-one", code: "123456" }).catch(() => undefined); }} type="button">confirm-enrollment</button>
       <button
         onClick={() => void session.changePassword("Initial-Admin-Password-49!", "Changed-Admin-Password-73!")}
         type="button"
@@ -317,5 +322,68 @@ describe("SessionProvider", () => {
     await act(async () => complete());
     expect(screen.getByTestId("phase").textContent).toBe("anonymous");
     expect(screen.getByTestId("has-credential").textContent).toBe("false");
+  });
+
+  it("stores one-time recovery codes only in memory, revokes the old session and requires explicit acknowledgement", async () => {
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `private-recovery-${index}`);
+    const source = repository();
+    source.personalSecurity = {
+      notificationContact: vi.fn(),
+      startNotificationVerification: vi.fn(),
+      notificationVerification: vi.fn(),
+      confirmNotificationVerification: vi.fn(),
+      authenticatorState: vi.fn(),
+      startTOTPEnrollment: vi.fn(),
+      totpEnrollment: vi.fn(),
+      totpEnrollmentByRequest: vi.fn(),
+      cancelTOTPEnrollment: vi.fn(),
+      confirmTOTPEnrollment: vi.fn().mockResolvedValue({
+        enrollment: {
+          id: "enrollment-one", requestId: "start-one", factorRevision: 1, state: "CONFIRMED",
+          createdAt: "2026-08-27T01:00:00Z", expiresAt: "2026-08-27T01:05:00Z", completedAt: "2026-08-27T01:01:00Z"
+        },
+        nextStep: "REAUTHENTICATE",
+        recoveryCodes
+      })
+    };
+    const screen = render(<SessionProvider repository={source}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("confirm-enrollment")));
+    expect(source.personalSecurity!.confirmTOTPEnrollment).toHaveBeenCalledWith(secretCredential, "enrollment-one", {
+      requestId: "confirm-one", code: "123456"
+    });
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-codes-required");
+    expect(screen.getByTestId("has-credential").textContent).toBe("false");
+    expect(screen.getByTestId("principal").textContent).toBe("none");
+    expect(screen.getByTestId("recovery-count").textContent).toBe("10");
+    expect(screen.container.textContent).not.toContain(recoveryCodes[0]);
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+    await act(async () => fireEvent.click(screen.getByText("acknowledge-recovery")));
+    expect(screen.getByTestId("phase").textContent).toBe("reauthentication-required");
+    expect(screen.getByTestId("recovery-count").textContent).toBe("0");
+  });
+
+  it("fails closed on an uncertain enrollment confirmation without claiming that recovery codes exist", async () => {
+    const source = repository();
+    source.personalSecurity = {
+      notificationContact: vi.fn(),
+      startNotificationVerification: vi.fn(),
+      notificationVerification: vi.fn(),
+      confirmNotificationVerification: vi.fn(),
+      authenticatorState: vi.fn(),
+      startTOTPEnrollment: vi.fn(),
+      totpEnrollment: vi.fn(),
+      totpEnrollmentByRequest: vi.fn(),
+      cancelTOTPEnrollment: vi.fn(),
+      confirmTOTPEnrollment: vi.fn().mockRejectedValue(new Error("private transport failure"))
+    };
+    const screen = render(<SessionProvider repository={source}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("confirm-enrollment")));
+    expect(screen.getByTestId("phase").textContent).toBe("reauthentication-required");
+    expect(screen.getByTestId("has-credential").textContent).toBe("false");
+    expect(screen.getByTestId("recovery-count").textContent).toBe("0");
+    expect(screen.getByTestId("error").textContent).toContain("无法确认身份验证器绑定结果");
+    expect(screen.container.textContent).not.toContain("private transport failure");
   });
 });

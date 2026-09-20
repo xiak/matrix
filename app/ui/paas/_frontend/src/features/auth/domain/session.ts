@@ -50,6 +50,7 @@ export type SessionPhase =
   | "challenge-password-required"
   | "changing-challenge-password"
   | "reauthentication-required"
+  | "recovery-codes-required"
   | "password-change-required"
   | "changing-password"
   | "updating-password"

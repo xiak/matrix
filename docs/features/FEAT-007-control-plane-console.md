@@ -322,6 +322,18 @@ with 152 tests, and two clean two-worker static exports whose 72 generated
 files matched the Go embed boundary. Its installed-browser ceremony has not
 yet been repeated and remains open acceptance work.
 
+The following personal-security consumption slice keeps the same UI owners and
+adds the authenticated user's verified notification contact, first TOTP
+enrollment and one-time recovery-code completion. It exposes no user or tenant
+selector, never recreates provisioning material on an equal or reconciled
+replay, closes an uncertain confirmation before another privileged action, and
+requires explicit offline-code acknowledgement before a fresh login. Its
+locked-dependency source gate passed typecheck, lint, architecture, 20 contrast
+pairs, 16 test files with 163 tests, and two 2-worker exports with an identical
+72-file embed digest. FEAT-005/006 continue to own the authority and recovery
+semantics; this evidence proves only the console consumer. Installed-browser
+and signed-release acceptance for the combined Phase 3 source remain open.
+
 - Gate A implementation replaces the Phase 1 page with the complete donor-
   shaped App Router -> route -> provider -> repository -> scene -> renderer ->
   public-component chain, seven static routes, memory-only IAM sessions,

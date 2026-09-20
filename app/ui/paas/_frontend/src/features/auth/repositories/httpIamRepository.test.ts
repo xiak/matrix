@@ -217,3 +217,128 @@ describe("IAM HTTP account boundary", () => {
     await expect(httpAccountRepository.execute("bearer", { kind: "set-alias", alias: "acme", resourceVersion: 1 })).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 });
+
+describe("IAM HTTP personal security boundary", () => {
+  const noneContact = {
+    apiVersion,
+    kind: "NotificationContact",
+    accountId: "account-acme",
+    userId: "principal-alex",
+    state: "NONE",
+    resourceVersion: 0
+  };
+  const pendingVerification = {
+    apiVersion,
+    kind: "NotificationContactVerification",
+    id: "verification-one",
+    accountId: "account-acme",
+    userId: "principal-alex",
+    requestId: "contact-request-one",
+    email: "Alex.Security@mail.example.test",
+    state: "PENDING",
+    issuedAt: "2026-08-27T00:00:00.123456Z",
+    expiresAt: "2026-08-27T00:10:00.123456Z",
+    delivery: { state: "PENDING", attempts: 0, updatedAt: "2026-08-27T00:00:00.123456Z" }
+  };
+  const pendingEnrollment = {
+    apiVersion,
+    kind: "TOTPEnrollment",
+    id: "enrollment-one",
+    requestId: "enrollment-request-one",
+    factorRevision: 1,
+    state: "PENDING",
+    createdAt: "2026-08-27T01:00:00.123456Z",
+    expiresAt: "2026-08-27T01:05:00.123456Z"
+  };
+
+  it("uses only the current bearer and closed personal-security request bodies", async () => {
+    let fetcher = reply(noneContact);
+    expect(await httpIamRepository.personalSecurity!.notificationContact("transient-bearer")).toEqual({
+      accountId: "account-acme", userId: "principal-alex", state: "NONE", resourceVersion: 0, pendingVerificationId: null
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/notification-contact");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ headers: { Authorization: "Bearer transient-bearer" } });
+
+    fetcher = reply(pendingVerification);
+    await httpIamRepository.personalSecurity!.startNotificationVerification("transient-bearer", {
+      email: pendingVerification.email,
+      password: "Current-Test-Password-49!",
+      requestId: pendingVerification.requestId
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/notification-contact/verifications");
+    expect(requestBody(fetcher)).toEqual({
+      email: pendingVerification.email,
+      password: "Current-Test-Password-49!",
+      requestId: pendingVerification.requestId
+    });
+
+    fetcher = reply({ apiVersion, kind: "AuthenticatorState", enrollmentState: "NEVER_BOUND", factorRevision: 1 });
+    expect(await httpIamRepository.personalSecurity!.authenticatorState("transient-bearer"))
+      .toEqual({ enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/authenticators");
+
+    fetcher = reply({ outcome: "APPLIED", enrollment: pendingEnrollment,
+      provisioning: { seed: "ONE-TIME-SEED", uri: "otpauth://totp/Matrix:test?secret=ONE-TIME-SEED" } });
+    await httpIamRepository.personalSecurity!.startTOTPEnrollment("transient-bearer", {
+      requestId: pendingEnrollment.requestId,
+      password: "Current-Test-Password-49!",
+      expectedFactorRevision: 1
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/totp/enrollments");
+    expect(requestBody(fetcher)).toEqual({
+      requestId: pendingEnrollment.requestId,
+      password: "Current-Test-Password-49!",
+      expectedFactorRevision: 1
+    });
+  });
+
+  it("never invents provisioning material for an equal replay and binds confirmation to one enrollment", async () => {
+    let fetcher = reply({ outcome: "EQUAL_REPLAY", enrollment: pendingEnrollment });
+    const replay = await httpIamRepository.personalSecurity!.startTOTPEnrollment("transient-bearer", {
+      requestId: pendingEnrollment.requestId,
+      password: "Current-Test-Password-49!",
+      expectedFactorRevision: 1
+    });
+    expect(replay).toEqual({ outcome: "EQUAL_REPLAY", enrollment: expect.objectContaining({ id: "enrollment-one" }) });
+    expect(JSON.stringify(replay)).not.toContain("seed");
+
+    const confirmed = { ...pendingEnrollment, state: "CONFIRMED", completedAt: "2026-08-27T01:01:00.123456Z" };
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `recovery-code-${index}`);
+    fetcher = reply({ enrollment: confirmed, nextStep: "REAUTHENTICATE", recoveryCodes });
+    const result = await httpIamRepository.personalSecurity!.confirmTOTPEnrollment(
+      "transient-bearer",
+      pendingEnrollment.id,
+      { requestId: "confirm-request-one", code: "123456" }
+    );
+    expect(result.recoveryCodes).toEqual(recoveryCodes);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/totp/enrollments/enrollment-one:confirm");
+    expect(requestBody(fetcher)).toEqual({ requestId: "confirm-request-one", code: "123456" });
+  });
+
+  it("rejects ambiguous security projections, invalid chronology and repeated recovery material", async () => {
+    for (const wire of [
+      { ...noneContact, pendingVerificationId: "pending-one", email: "invented@mail.example.test" },
+      { ...pendingVerification, expiresAt: "2026-08-27T00:09:59.123456Z" },
+      { outcome: "EQUAL_REPLAY", enrollment: pendingEnrollment, provisioning: { seed: "leaked", uri: "leaked" } },
+      { apiVersion, kind: "AuthenticatorState", enrollmentState: "BOUND", factorRevision: 1, factorId: "factor-one" }
+    ]) {
+      reply(wire);
+      const action = "outcome" in wire
+        ? httpIamRepository.personalSecurity!.startTOTPEnrollment("transient-bearer", {
+            requestId: pendingEnrollment.requestId, password: "Current-Test-Password-49!", expectedFactorRevision: 1
+          })
+        : wire.kind === "AuthenticatorState"
+          ? httpIamRepository.personalSecurity!.authenticatorState("transient-bearer")
+          : wire.kind === "NotificationContactVerification"
+            ? httpIamRepository.personalSecurity!.notificationVerification("transient-bearer", pendingVerification.id)
+            : httpIamRepository.personalSecurity!.notificationContact("transient-bearer");
+      await expect(action).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    const confirmed = { ...pendingEnrollment, state: "CONFIRMED", completedAt: "2026-08-27T01:01:00.123456Z" };
+    reply({ enrollment: confirmed, nextStep: "REAUTHENTICATE", recoveryCodes: Array(10).fill("same-code") });
+    await expect(httpIamRepository.personalSecurity!.confirmTOTPEnrollment(
+      "transient-bearer", pendingEnrollment.id, { requestId: "confirm-request-one", code: "123456" }
+    )).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+});

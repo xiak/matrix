@@ -6,6 +6,7 @@ import { Boxes, Database, Gauge, KeyRound, LockKeyhole, MapPin, ShieldCheck } fr
 import { App, Button, Input, Typography } from "@ui/xiak";
 import { useSession } from "../application/SessionProvider";
 import { AuthenticationChallengeForm } from "./AuthenticationChallengeForm";
+import { EnrollmentRecoveryCodes } from "./EnrollmentRecoveryCodes";
 import styles from "./LoginRenderer.module.css";
 
 export function LoginRenderer() {
@@ -22,6 +23,7 @@ export function LoginRenderer() {
     session.current && session.phase !== "authenticated" && session.phase !== "updating-password"
   );
   const challengeScene = Boolean(session.challenge) || session.phase === "reauthentication-required";
+  const recoveryCodesScene = session.phase === "recovery-codes-required" && session.enrollmentRecovery !== null;
 
   async function submitLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -91,7 +93,9 @@ export function LoginRenderer() {
 
             <section className={styles.loginCard} aria-label="登录 Matrix 控制台">
               <div className={styles.mobileMark} aria-hidden="true"><Boxes /></div>
-              {challengeScene ? (
+              {recoveryCodesScene ? (
+                <EnrollmentRecoveryCodes />
+              ) : challengeScene ? (
                 <AuthenticationChallengeForm />
               ) : firstLoginSession ? (
                 <>

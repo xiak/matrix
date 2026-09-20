@@ -17,13 +17,16 @@ import type {
   PendingAuthenticationChallenge,
   SessionPhase
 } from "../domain/session";
+import type { EnrollmentRecoveryMaterial } from "../domain/personalSecurity";
 import { httpIamRepository } from "../repositories/httpIamRepository";
 import type { IamRepository } from "../repositories/iamRepository";
+import { PersonalSecurityProvider } from "./PersonalSecurityProvider";
 
 type SessionContextValue = {
   phase: SessionPhase;
   current: AuthenticatedSession | null;
   challenge: PendingAuthenticationChallenge | null;
+  enrollmentRecovery: EnrollmentRecoveryMaterial | null;
   error: string | null;
   clearError(): void;
   login(loginName: string, password: string): Promise<LoginOutcome | null>;
@@ -31,8 +34,10 @@ type SessionContextValue = {
   changeChallengePassword(newPassword: string): Promise<boolean>;
   cancelAuthenticationChallenge(): void;
   acknowledgeReauthentication(): void;
+  acknowledgeEnrollmentRecovery(): void;
   changePassword(currentPassword: string, newPassword: string, revokeOtherSessions?: boolean): Promise<boolean>;
   logout(): Promise<boolean>;
+  expire(expectedCredential: string): boolean;
 };
 
 type CredentialContextValue = {
@@ -92,7 +97,9 @@ export function SessionProvider({
   const [phase, setPhase] = useState<SessionPhase>("anonymous");
   const [current, setCurrent] = useState<AuthenticatedSession | null>(null);
   const [challenge, setChallenge] = useState<PendingAuthenticationChallenge | null>(null);
+  const [enrollmentRecovery, setEnrollmentRecovery] = useState<EnrollmentRecoveryMaterial | null>(null);
   const [credential, setCredential] = useState<string | null>(null);
+  const credentialRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const transition = useRef(0);
   const challengeRef = useRef<PendingAuthenticationChallenge | null>(null);
@@ -105,11 +112,32 @@ export function SessionProvider({
 
   const forget = useCallback(() => {
     transition.current++;
+    credentialRef.current = null;
     setCredential(null);
     setCurrent(null);
     replaceChallenge(null);
+    setEnrollmentRecovery(null);
     setError(null);
     setPhase("anonymous");
+  }, [replaceChallenge]);
+
+  const expire = useCallback((expectedCredential: string) => {
+    if (credentialRef.current !== expectedCredential) return false;
+    forget();
+    return true;
+  }, [forget]);
+
+  const requireReauthentication = useCallback((expectedCredential: string, message: string) => {
+    if (credentialRef.current !== expectedCredential) return false;
+    transition.current++;
+    credentialRef.current = null;
+    setCredential(null);
+    setCurrent(null);
+    replaceChallenge(null);
+    setEnrollmentRecovery(null);
+    setError(message);
+    setPhase("reauthentication-required");
+    return true;
   }, [replaceChallenge]);
 
   useEffect(() => () => { transition.current++; }, []);
@@ -142,19 +170,25 @@ export function SessionProvider({
 
   const login = useCallback(async (loginName: string, password: string) => {
     const attempt = ++transition.current;
+    credentialRef.current = null;
+    setCredential(null);
+    setCurrent(null);
     replaceChallenge(null);
+    setEnrollmentRecovery(null);
     setPhase("authenticating");
     setError(null);
     try {
       const result = await repository.login({ loginName, password });
       if (attempt !== transition.current) return null;
       if (result.outcome === "CHALLENGE_REQUIRED") {
+        credentialRef.current = null;
         setCredential(null);
         setCurrent(null);
         replaceChallenge({ loginName, challenge: result.challenge, challengeCredential: result.challengeCredential });
         setPhase(result.challenge.nextStep === "PASSWORD_CHANGE" ? "challenge-password-required" : "challenge-required");
         return "challenge-required";
       }
+      credentialRef.current = result.credential;
       setCredential(result.credential);
       setCurrent({ loginName, session: result.session });
       const outcome: LoginOutcome = result.mustChangePassword
@@ -164,6 +198,7 @@ export function SessionProvider({
       return outcome;
     } catch (loginError) {
       if (attempt !== transition.current) return null;
+      credentialRef.current = null;
       setCredential(null);
       setCurrent(null);
       setError(authenticationMessage(loginError));
@@ -194,6 +229,7 @@ export function SessionProvider({
         return "password-change-required";
       }
       replaceChallenge(null);
+      credentialRef.current = result.credential;
       setCredential(result.credential);
       setCurrent({ loginName: challenge.loginName, session: result.session });
       const outcome: LoginOutcome = result.mustChangePassword ? "password-change-required" : "authenticated";
@@ -228,6 +264,7 @@ export function SessionProvider({
       });
       if (attempt !== transition.current || challengeRef.current !== requested) return false;
       replaceChallenge(null);
+      credentialRef.current = null;
       setCredential(null);
       setCurrent(null);
       setPhase("reauthentication-required");
@@ -239,6 +276,7 @@ export function SessionProvider({
         setPhase("challenge-password-required");
       } else {
         replaceChallenge(null);
+        credentialRef.current = null;
         setCredential(null);
         setCurrent(null);
         setPhase("reauthentication-required");
@@ -258,6 +296,33 @@ export function SessionProvider({
     transition.current++;
     setError(null);
     setPhase("anonymous");
+  }, []);
+
+  const completeEnrollment = useCallback((
+    expectedCredential: string,
+    enrollmentId: string,
+    recoveryCodes: string[]
+  ) => {
+    if (credentialRef.current !== expectedCredential || recoveryCodes.length !== 10 ||
+        recoveryCodes.some((code) => !code) || new Set(recoveryCodes).size !== recoveryCodes.length) {
+      return false;
+    }
+    transition.current++;
+    credentialRef.current = null;
+    setCredential(null);
+    setCurrent(null);
+    replaceChallenge(null);
+    setError(null);
+    setEnrollmentRecovery({ enrollmentId, recoveryCodes: [...recoveryCodes] });
+    setPhase("recovery-codes-required");
+    return true;
+  }, [replaceChallenge]);
+
+  const acknowledgeEnrollmentRecovery = useCallback(() => {
+    transition.current++;
+    setEnrollmentRecovery(null);
+    setError(null);
+    setPhase("reauthentication-required");
   }, []);
 
   const changePassword = useCallback(async (
@@ -324,6 +389,7 @@ export function SessionProvider({
     phase,
     current,
     challenge,
+    enrollmentRecovery,
     error,
     clearError,
     login,
@@ -331,15 +397,26 @@ export function SessionProvider({
     changeChallengePassword,
     cancelAuthenticationChallenge,
     acknowledgeReauthentication,
+    acknowledgeEnrollmentRecovery,
     changePassword,
-    logout
-  }), [acknowledgeReauthentication, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, current, error, login, logout, phase, verifyAuthenticationChallenge]);
+    logout,
+    expire
+  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, current, enrollmentRecovery, error, expire, login, logout, phase, verifyAuthenticationChallenge]);
   const credentialValue = useMemo(() => ({ credential }), [credential]);
 
   return (
     <CredentialContext.Provider value={credentialValue}>
       <SessionContext.Provider value={sessionValue}>
-        {children}
+        <PersonalSecurityProvider
+          completeEnrollment={completeEnrollment}
+          credential={credential}
+          current={current}
+          expire={expire}
+          repository={repository}
+          requireReauthentication={requireReauthentication}
+        >
+          {children}
+        </PersonalSecurityProvider>
       </SessionContext.Provider>
     </CredentialContext.Provider>
   );

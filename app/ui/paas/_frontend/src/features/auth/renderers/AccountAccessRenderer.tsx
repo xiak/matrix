@@ -9,6 +9,7 @@ import { userRoles, type UserRole } from "../domain/accounts";
 import type { AccountRepository } from "../repositories/iamRepository";
 import { roleDescriptions, roleLabels, type AccountAccessScene, type AccountUserScene, type TenantAccountScene } from "../scenes/accountAccessScene";
 import styles from "./AccountAccessRenderer.module.css";
+import { PersonalSecuritySettings } from "./PersonalSecuritySettings";
 
 const loginPattern = "[a-z][a-z0-9._\\-]{2,63}";
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
@@ -211,6 +212,7 @@ function UserSettings({ scene }: { scene: AccountAccessScene }) {
   const [alias, setAlias] = useState(scene.loginAlias ?? "");
   return <div className={styles.stack}>
     <PasswordSettings />
+    <PersonalSecuritySettings />
     <Card>
     <Card.Header className={styles.cardHeader}><div><Typography.Title as="h2" level={3}>主账号别名</Typography.Title><Typography.Text tone="muted">主账号的专属登录标识</Typography.Text></div><Badge status={scene.loginAlias ? "success" : "neutral"}>{scene.loginAlias ? "已设置" : "未设置"}</Badge></Card.Header>
     <Card.Body className={styles.detail}>

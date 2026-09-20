@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import type { Account, AccountIdentity, AccountPrincipal, AccountUser } from "../domain/accounts";
+import type { AuthenticatorState, NotificationContact } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LoginRenderer } from "./LoginRenderer";
@@ -34,10 +35,30 @@ function challenged(nextStep: "TOTP" | "PASSWORD_CHANGE" = "TOTP", challengeCred
   }, challengeCredential };
 }
 
+function personalSecurity(
+  overrides: Partial<NonNullable<IamRepository["personalSecurity"]>> = {}
+): NonNullable<IamRepository["personalSecurity"]> {
+  return {
+    notificationContact: vi.fn().mockResolvedValue({
+      accountId: "tenant-a", userId: "primary-a", state: "NONE", resourceVersion: 0, pendingVerificationId: null
+    }),
+    startNotificationVerification: vi.fn(),
+    notificationVerification: vi.fn(),
+    confirmNotificationVerification: vi.fn(),
+    authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null }),
+    startTOTPEnrollment: vi.fn(),
+    totpEnrollment: vi.fn(),
+    totpEnrollmentByRequest: vi.fn(),
+    cancelTOTPEnrollment: vi.fn(),
+    confirmTOTPEnrollment: vi.fn(),
+    ...overrides
+  };
+}
+
 function iam(overrides: Partial<IamRepository> = {}, id = "primary-a"): IamRepository {
   return {
     login: vi.fn().mockResolvedValue(authenticated(id)),
-    changePassword: vi.fn(), logout: vi.fn(), ...overrides
+    changePassword: vi.fn(), logout: vi.fn(), personalSecurity: personalSecurity(), ...overrides
   };
 }
 
@@ -385,6 +406,163 @@ describe("account access", () => {
     expect(screen.queryByRole("button", { name: "撤销平台运营者" })).toBeNull();
     expect(screen.queryByRole("option", { name: "平台运营者" })).toBeNull();
     expect(screen.getByRole("button", { name: "撤销只读用户" })).toBeTruthy();
+  });
+
+  it("requires a verified notification contact before beginning TOTP enrollment", async () => {
+    const security = personalSecurity();
+    const source = iam({ personalSecurity: security });
+    const { user } = await openAccess(accounts(), source);
+    await user.click(await screen.findByRole("button", { name: "用户设置" }));
+    await screen.findByRole("heading", { name: "账号安全" });
+    expect(await screen.findByText("请先验证安全通知邮箱，再开始绑定身份验证器。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "开始绑定" })).toBeNull();
+    expect(security.notificationContact).toHaveBeenCalledWith(credential);
+    expect(security.authenticatorState).toHaveBeenCalledWith(credential);
+  });
+
+  it("keeps the account-security shell stable while only its two live projections load", async () => {
+    let finishContact!: (value: NotificationContact) => void;
+    let finishFactor!: (value: AuthenticatorState) => void;
+    const security = personalSecurity({
+      notificationContact: vi.fn(() => new Promise<NotificationContact>((resolve) => { finishContact = resolve; })),
+      authenticatorState: vi.fn(() => new Promise<AuthenticatorState>((resolve) => { finishFactor = resolve; }))
+    });
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }));
+    await user.click(await screen.findByRole("button", { name: "用户设置" }));
+    const section = (await screen.findByRole("heading", { name: "账号安全" })).closest("section")!;
+    expect(within(section).getByRole("heading", { name: "安全通知邮箱" })).toBeTruthy();
+    expect(within(section).getByRole("heading", { name: "TOTP 身份验证器" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "更新密码" })).toBeTruthy();
+    await act(async () => {
+      finishContact({ accountId: "tenant-a", userId: "primary-a", state: "NONE", resourceVersion: 0, pendingVerificationId: null });
+      finishFactor({ enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null });
+    });
+    expect(await within(section).findByText("未设置")).toBeTruthy();
+  });
+
+  it("verifies the first security notification contact without retaining the password or code", async () => {
+    const pending = {
+      id: "verification-one", accountId: "tenant-a", userId: "primary-a", requestId: "contact-request-one",
+      email: "owner@mail.example.test", state: "PENDING" as const,
+      issuedAt: "2026-08-27T00:00:00Z", expiresAt: "2099-08-27T00:10:00Z", completedAt: null,
+      delivery: { state: "ACCEPTED" as const, attempts: 1, lastOutcome: "ACCEPTED" as const, lastSmtpCode: 250, updatedAt: "2026-08-27T00:00:01Z" }
+    };
+    const security = personalSecurity({
+      notificationContact: vi.fn()
+        .mockResolvedValueOnce({ accountId: "tenant-a", userId: "primary-a", state: "NONE", resourceVersion: 0, pendingVerificationId: null })
+        .mockResolvedValue({ accountId: "tenant-a", userId: "primary-a", state: "VERIFIED", resourceVersion: 1,
+          email: pending.email, verifiedAt: "2026-08-27T00:01:00Z", pendingVerificationId: null }),
+      startNotificationVerification: vi.fn().mockResolvedValue(pending),
+      confirmNotificationVerification: vi.fn().mockResolvedValue({ ...pending, state: "VERIFIED", completedAt: "2026-08-27T00:01:00Z" })
+    });
+    const { user, view } = await openAccess(accounts(), iam({ personalSecurity: security }));
+    await user.click(await screen.findByRole("button", { name: "用户设置" }));
+    await user.type(await screen.findByLabelText("通知邮箱"), pending.email);
+    await user.type(screen.getByLabelText("验证当前密码"), "Current-Test-Password-49!");
+    await user.click(screen.getByRole("button", { name: "发送验证邮件" }));
+    await waitFor(() => expect(security.startNotificationVerification).toHaveBeenCalledWith(credential, expect.objectContaining({
+      email: pending.email, password: "Current-Test-Password-49!", requestId: expect.any(String)
+    })));
+    expect(screen.queryByDisplayValue("Current-Test-Password-49!")).toBeNull();
+    await user.type(await screen.findByLabelText("8 位邮箱验证码"), "12345678");
+    await user.click(screen.getByRole("button", { name: "确认邮箱" }));
+    await waitFor(() => expect(security.confirmNotificationVerification).toHaveBeenCalledWith(credential, pending.id, {
+      code: "12345678", requestId: expect.any(String)
+    }));
+    expect(await screen.findByText(pending.email)).toBeTruthy();
+    expect(screen.getByText("已验证")).toBeTruthy();
+    expect(view.container.innerHTML).not.toContain("Current-Test-Password-49!");
+    expect(view.container.innerHTML).not.toContain("12345678");
+  });
+
+  it("never renders provisioning material or a confirmation action for an equal replay", async () => {
+    const enrollment = {
+      id: "enrollment-one", requestId: "enrollment-request-one", factorRevision: 1, state: "PENDING" as const,
+      createdAt: "2026-08-27T01:00:00Z", expiresAt: "2099-08-27T01:05:00Z", completedAt: null
+    };
+    const security = personalSecurity({
+      notificationContact: vi.fn().mockResolvedValue({
+        accountId: "tenant-a", userId: "primary-a", state: "VERIFIED", resourceVersion: 1,
+        email: "owner@mail.example.test", verifiedAt: "2026-08-27T00:10:00Z", pendingVerificationId: null
+      }),
+      startTOTPEnrollment: vi.fn().mockResolvedValue({ outcome: "EQUAL_REPLAY", enrollment })
+    });
+    const { user, view } = await openAccess(accounts(), iam({ personalSecurity: security }));
+    await user.click(await screen.findByRole("button", { name: "用户设置" }));
+    await user.type(await screen.findByLabelText("绑定当前密码"), "Current-Test-Password-49!");
+    await user.click(screen.getByRole("button", { name: "开始绑定" }));
+    await screen.findByText(/服务端不会再次披露密钥/);
+    expect(screen.queryByRole("button", { name: "确认并生成恢复码" })).toBeNull();
+    expect(screen.getByRole("button", { name: "取消绑定意图" })).toBeTruthy();
+    expect(view.container.innerHTML).not.toContain("otpauth://");
+    expect(view.container.innerHTML).not.toContain("ONE-TIME-SEED");
+  });
+
+  it("reconciles an uncertain enrollment start by request without claiming that a seed can be recovered", async () => {
+    const enrollment = {
+      id: "enrollment-uncertain", requestId: "enrollment-request-uncertain", factorRevision: 1, state: "PENDING" as const,
+      createdAt: "2026-08-27T01:00:00Z", expiresAt: "2099-08-27T01:05:00Z", completedAt: null
+    };
+    const security = personalSecurity({
+      notificationContact: vi.fn().mockResolvedValue({
+        accountId: "tenant-a", userId: "primary-a", state: "VERIFIED", resourceVersion: 1,
+        email: "owner@mail.example.test", verifiedAt: "2026-08-27T00:10:00Z", pendingVerificationId: null
+      }),
+      startTOTPEnrollment: vi.fn().mockRejectedValue(new Error("private connection reset")),
+      totpEnrollmentByRequest: vi.fn().mockResolvedValue(enrollment)
+    });
+    const { user, view } = await openAccess(accounts(), iam({ personalSecurity: security }));
+    await user.click(await screen.findByRole("button", { name: "用户设置" }));
+    await user.type(await screen.findByLabelText("绑定当前密码"), "Current-Test-Password-49!");
+    await user.click(screen.getByRole("button", { name: "开始绑定" }));
+    await screen.findByText(/一次性密钥不能再次读取/);
+    expect(security.totpEnrollmentByRequest).toHaveBeenCalledWith(credential, expect.any(String));
+    expect(screen.queryByRole("button", { name: "确认并生成恢复码" })).toBeNull();
+    expect(view.container.innerHTML).not.toContain("private connection reset");
+    expect(view.container.innerHTML).not.toContain("otpauth://");
+  });
+
+  it("shows recovery codes once after enrollment, clears the old session and requires explicit acknowledgement", async () => {
+    const enrollment = {
+      id: "enrollment-one", requestId: "enrollment-request-one", factorRevision: 1, state: "PENDING" as const,
+      createdAt: "2026-08-27T01:00:00Z", expiresAt: "2099-08-27T01:05:00Z", completedAt: null
+    };
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `offline-recovery-${index}`);
+    const security = personalSecurity({
+      notificationContact: vi.fn().mockResolvedValue({
+        accountId: "tenant-a", userId: "primary-a", state: "VERIFIED", resourceVersion: 1,
+        email: "owner@mail.example.test", verifiedAt: "2026-08-27T00:10:00Z", pendingVerificationId: null
+      }),
+      startTOTPEnrollment: vi.fn().mockResolvedValue({
+        outcome: "APPLIED", enrollment, provisioning: {
+          seed: "ONE-TIME-SEED", uri: "otpauth://totp/Matrix:owner?secret=ONE-TIME-SEED"
+        }
+      }),
+      confirmTOTPEnrollment: vi.fn().mockResolvedValue({
+        enrollment: { ...enrollment, state: "CONFIRMED", completedAt: "2026-08-27T01:01:00Z" },
+        nextStep: "REAUTHENTICATE", recoveryCodes
+      })
+    });
+    const source = iam({ personalSecurity: security });
+    const { user, view } = await openAccess(accounts(), source);
+    await user.click(await screen.findByRole("button", { name: "用户设置" }));
+    await user.type(await screen.findByLabelText("绑定当前密码"), "Current-Test-Password-49!");
+    await user.click(screen.getByRole("button", { name: "开始绑定" }));
+    expect(await screen.findByText("ONE-TIME-SEED", { exact: true })).toBeTruthy();
+    navigation.replace.mockClear();
+    await user.type(screen.getByLabelText("6 位动态验证码"), "123456");
+    await user.click(screen.getByRole("button", { name: "确认并生成恢复码" }));
+    await screen.findByRole("heading", { name: "保存一次性恢复码" });
+    expect(screen.getByText(recoveryCodes[0]!)).toBeTruthy();
+    expect(view.container.innerHTML).not.toContain("ONE-TIME-SEED");
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+    const finish = screen.getByRole("button", { name: "完成并重新登录" }) as HTMLButtonElement;
+    expect(finish.disabled).toBe(true);
+    await user.click(screen.getByRole("checkbox", { name: "我已将恢复码保存到安全的离线位置" }));
+    await user.click(finish);
+    await screen.findByRole("heading", { name: "请重新登录" });
+    expect(screen.queryByText(recoveryCodes[0]!)).toBeNull();
   });
 
   it("clears protected content when a lifecycle command discovers a revoked session", async () => {
