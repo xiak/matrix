@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Button, FormField, Select, Typography } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
@@ -10,10 +10,10 @@ import type { AccessWorkspace } from "../domain/accessWorkspace";
 import { WorkspaceDialog } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
-export function BoundarySelector({ workspace, value, onChange }: { workspace: AccessWorkspace; value?: string; onChange(id: string | undefined): void }) {
+export function BoundarySelector({ workspace, value, onChange, autoFocus = false }: { workspace: AccessWorkspace; value?: string; onChange(id: string | undefined): void; autoFocus?: boolean }) {
   const t = useTranslations("RoleWorkspace");
   const id = useId();
-  return <FormField id={id} label={t("boundary")} hint={t("boundaryHint")}><Select id={id} value={value ?? ""} aria-describedby={id + "-hint"} options={[{ value: "", label: t("noBoundary") }, ...workspace.policies.map((policy) => ({ value: policy.id, label: policy.name }))]} onValueChange={(id) => onChange(id || undefined)} /></FormField>;
+  return <FormField id={id} label={t("boundary")} hint={t("boundaryHint")}><Select autoFocus={autoFocus} id={id} value={value ?? ""} aria-describedby={id + "-hint"} options={[{ value: "", label: t("noBoundary") }, ...workspace.policies.map((policy) => ({ value: policy.id, label: policy.name }))]} onValueChange={(id) => onChange(id || undefined)} /></FormField>;
 }
 function BoundaryEditor({ workspace, current, onSave, onClose }: { workspace: AccessWorkspace; current?: string; onSave(id: string | undefined): Promise<unknown>; onClose(): void }) {
   const t = useTranslations("RoleWorkspace"), w = useTranslations("IamWorkspace");
@@ -52,6 +52,8 @@ export function LivePermissionBoundary({ client, snapshot, onChanged }: {
   const t = useTranslations("UserBoundary"), r = useTranslations("RoleWorkspace"), w = useTranslations("IamWorkspace");
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
+  const editTrigger = useRef<HTMLButtonElement>(null);
+  const restoreEditFocus = useRef(false);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [editing, setEditing] = useState(false);
@@ -70,6 +72,12 @@ export function LivePermissionBoundary({ client, snapshot, onChanged }: {
     : boundary.policy !== null && snapshot.user.canRemovePermissionBoundary);
   const locked = operation.state === "pending" || operation.state === "uncertain" || operation.state === "conflict" || operation.state === "refreshFailed";
   useAccessDraft({ dirty: editing && (value !== (boundary.policy?.policyId ?? "") || review || operation.state === "uncertain"), busy: operation.state === "pending", title: r("editBoundary"), description: t("changeHint"), form });
+  useLayoutEffect(() => {
+    if (!editing && restoreEditFocus.current) {
+      restoreEditFocus.current = false;
+      editTrigger.current?.focus({ preventScroll: true });
+    }
+  }, [editing, operation.state]);
 
   const refresh = async (purpose: "conflict" | "confirmed") => {
     setOperation({ state: "pending" });
@@ -78,7 +86,7 @@ export function LivePermissionBoundary({ client, snapshot, onChanged }: {
       if (!mounted.current) return;
       onChanged(latest);
       setConfirmed(null); intent.current = null; setReview(false);
-      if (purpose === "confirmed") { setValue(latest.boundary.policy?.policyId ?? ""); setEditing(false); }
+      if (purpose === "confirmed") { setValue(latest.boundary.policy?.policyId ?? ""); restoreEditFocus.current = true; setEditing(false); }
       setOperation({ state: purpose === "confirmed" ? "completed" : "idle" });
     } catch (failure) {
       if (mounted.current) setOperation({ state: purpose === "confirmed" ? "refreshFailed" : "conflict", error: accountError(failure) });
@@ -104,7 +112,7 @@ export function LivePermissionBoundary({ client, snapshot, onChanged }: {
         : await client.remove(snapshot.user.id, { resourceVersion: original.resourceVersion, requestId: original.requestId });
       if (!mounted.current) return;
       if (original.kind === "set" && result.policy?.versionId !== original.versionId) throw new Error("INVALID_IAM_RESPONSE");
-      setConfirmed(result); intent.current = null; setEditing(false); setReview(false);
+      setConfirmed(result); intent.current = null; restoreEditFocus.current = true; setEditing(false); setReview(false);
     } catch (failure) {
       if (!mounted.current) return;
       const error = accountError(failure);
@@ -118,7 +126,7 @@ export function LivePermissionBoundary({ client, snapshot, onChanged }: {
   };
 
   return <section className={styles.identitySection} aria-label={r("boundary")}>
-    <div className={styles.actionHeader}><h3>{r("boundary")}</h3>{!editing && canChange ? <Button variant="secondary" disabled={locked} onClick={() => { setValue(boundary.policy?.policyId ?? ""); setEditing(true); setOperation({ state: "idle" }); }}>{r("editBoundary")}</Button> : null}</div>
+    <div className={styles.actionHeader}><h3>{r("boundary")}</h3>{!editing && canChange ? <Button ref={editTrigger} variant="secondary" disabled={locked} onClick={() => { setValue(boundary.policy?.policyId ?? ""); setEditing(true); setOperation({ state: "idle" }); }}>{r("editBoundary")}</Button> : null}</div>
     <p className={styles.note}>{t("hint")}</p>
     <UserBoundarySummary boundary={boundary} />
     <p className={styles.note}>{t("userRevision", { version: boundary.resourceVersion })}</p>
@@ -130,13 +138,13 @@ export function LivePermissionBoundary({ client, snapshot, onChanged }: {
     </Alert> : null}
     {editing ? <form ref={form} className={styles.stack} aria-label={r("editBoundary")} onSubmit={(event) => { event.preventDefault(); void submit(); }}>
       {review ? <><Alert status="warning">{t("changeHint")}</Alert><dl className={styles.facts}><div><dt>{r("before")}</dt><dd>{snapshot.boundary.policy?.policyId ?? t("none")}</dd></div><div><dt>{r("after")}</dt><dd>{value || t("none")}</dd></div>{reviewedVersion ? <div><dt>{t("defaultVersion")}</dt><dd>{reviewedVersion}</dd></div> : null}</dl></> : <FormField id={id} label={r("boundary")} hint={t("selectorHint")}>
-        <Select id={id} disabled={locked} value={value} aria-describedby={`${id}-hint`} options={[{ value: "", label: t("none") }, ...policies.map((policy) => ({ value: policy.id, label: `${policy.displayName} · ${policy.id}` })), ...(!selected && value ? [{ value, label: value, disabled: true }] : [])]} onValueChange={(next) => { setValue(next); intent.current = null; setOperation({ state: "idle" }); }} />
+        <Select autoFocus id={id} disabled={locked} value={value} aria-describedby={`${id}-hint`} options={[{ value: "", label: t("none") }, ...policies.map((policy) => ({ value: policy.id, label: `${policy.displayName} · ${policy.id}` })), ...(!selected && value ? [{ value, label: value, disabled: true }] : [])]} onValueChange={(next) => { setValue(next); intent.current = null; setOperation({ state: "idle" }); }} />
       </FormField>}
       {!snapshot.policiesAvailable ? <p className={styles.note}>{t("directoryUnavailable")}</p> : null}
       <div className={styles.actions}>
         <Button type="submit" disabled={operation.state === "pending" || operation.state === "conflict" || operation.state === "refreshFailed" || (!review && !eligible)}>{operation.state === "pending" ? t("saving") : operation.state === "uncertain" ? t("retryOriginal") : review ? t("confirm") : r("reviewChange")}</Button>
         {review ? <Button variant="secondary" disabled={locked} onClick={() => { intent.current = null; setReview(false); }}>{r("backToSelection")}</Button> : null}
-        <Button variant="ghost" disabled={locked} onClick={() => { intent.current = null; setEditing(false); setReview(false); setOperation({ state: "idle" }); }}>{w("cancel")}</Button>
+        <Button variant="ghost" disabled={locked} onClick={() => { intent.current = null; restoreEditFocus.current = true; setEditing(false); setReview(false); setOperation({ state: "idle" }); }}>{w("cancel")}</Button>
       </div>
     </form> : null}
   </section>;

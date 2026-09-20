@@ -221,6 +221,26 @@ describe("account access", () => {
     expect(f.repository.currentIdentity).toHaveBeenCalledTimes(1);
   });
 
+  it("owns keyboard focus while entering and leaving the inline boundary editor", async () => {
+    const f = boundaryFixture();
+    const { user } = await openBoundary(f);
+    const edit = screen.getByRole("button", { name: "修改权限边界" });
+    edit.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "权限边界" })));
+    await user.click(screen.getByRole("combobox", { name: "权限边界" }));
+    await user.click(screen.getByRole("option", { name: "ReadOnlyAccess · system.paas-viewer" }));
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "返回选择" }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "权限边界" })));
+    const cancel = screen.getByRole("button", { name: "取消" });
+    cancel.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "修改权限边界" })));
+    expect(f.boundaries.set).not.toHaveBeenCalled();
+    expect(f.boundaries.remove).not.toHaveBeenCalled();
+  });
+
   it("keeps the exact live boundary request and review after an uncertain outcome", async () => {
     const f = boundaryFixture();
     f.boundaries.set.mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"));
