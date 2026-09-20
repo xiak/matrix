@@ -18,6 +18,7 @@ import type {
 } from "../domain/accounts";
 import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWorkspace";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
+import type { AuthenticatorState, NotificationContact, NotificationContactVerification, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
 
 export type LoginCommand = { loginName: string; password: string };
@@ -37,6 +38,18 @@ export interface IamRepository {
     list(credential: string, after?: string): Promise<OwnSessionPage>;
     revoke(credential: string, targetSessionId: string, requestId: string): Promise<OwnSessionRevocation>;
     revokeOthers(credential: string, requestId: string): Promise<OtherSessionsRevocation>;
+  };
+  personalSecurity?: {
+    notificationContact(credential: string): Promise<NotificationContact>;
+    startNotificationVerification(credential: string, command: { email: string; password: string; requestId: string }): Promise<NotificationContactVerification>;
+    notificationVerification(credential: string, verificationId: string): Promise<NotificationContactVerification>;
+    confirmNotificationVerification(credential: string, verificationId: string, command: { code: string; requestId: string }): Promise<NotificationContactVerification>;
+    authenticatorState(credential: string): Promise<AuthenticatorState>;
+    startTOTPEnrollment(credential: string, command: { requestId: string; password: string; expectedFactorRevision: number }): Promise<TOTPEnrollmentStart>;
+    totpEnrollment(credential: string, enrollmentId: string): Promise<TOTPEnrollment>;
+    totpEnrollmentByRequest(credential: string, requestId: string): Promise<TOTPEnrollment>;
+    cancelTOTPEnrollment(credential: string, enrollmentId: string): Promise<TOTPEnrollment>;
+    confirmTOTPEnrollment(credential: string, enrollmentId: string, command: { requestId: string; code: string }): Promise<TOTPEnrollmentConfirmation>;
   };
 }
 

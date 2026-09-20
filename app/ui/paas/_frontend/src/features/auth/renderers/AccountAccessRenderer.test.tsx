@@ -8,6 +8,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountCapabilities } from "../application/AccountAccessProvider";
 import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
+import type { AuthenticatorState, NotificationContact } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LoginRenderer } from "./LoginRenderer";
@@ -584,6 +585,78 @@ describe("account access", () => {
     await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-alias", alias: "acme", resourceVersion: 1 }));
     expect(screen.getByText("username@tenant-a")).toBeTruthy();
     expect(screen.getByText("admin", { exact: true })).toBeTruthy();
+  });
+
+  it("keeps the personal-security shell stable while only live security cards load", async () => {
+    let finishContact!: (value: NotificationContact) => void;
+    let finishFactor!: (value: AuthenticatorState) => void;
+    const security = {
+      notificationContact: vi.fn(() => new Promise<NotificationContact>((resolve) => { finishContact = resolve; })),
+      authenticatorState: vi.fn(() => new Promise<AuthenticatorState>((resolve) => { finishFactor = resolve; })),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    expect(within(securityRegion).getByRole("heading", { name: "安全通知地址" })).toBeTruthy();
+    expect(within(securityRegion).getByRole("heading", { name: "身份验证器应用" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await act(async () => {
+      finishContact({ accountId: account.id, userId: rootUser.id, state: "NONE", resourceVersion: 0, pendingVerificationId: null });
+      finishFactor({ enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null });
+    });
+    expect(await within(securityRegion).findByText("未设置")).toBeTruthy();
+  });
+
+  it("verifies the first notification address inline before enabling first authenticator enrollment", async () => {
+    const none = { accountId: account.id, userId: rootUser.id, state: "NONE" as const, resourceVersion: 0 as const, pendingVerificationId: null };
+    const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "admin@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+    const verification = { id: "verification-one", accountId: account.id, userId: rootUser.id, requestId: "request-one", email: "admin@example.com", state: "PENDING" as const, issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z", completedAt: null, delivery: { state: "ACCEPTED" as const, attempts: 1, lastOutcome: "ACCEPTED" as const, lastSmtpCode: 250, updatedAt: timestamp } };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValueOnce(none).mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null }),
+      startNotificationVerification: vi.fn().mockResolvedValue(verification),
+      notificationVerification: vi.fn(),
+      confirmNotificationVerification: vi.fn().mockResolvedValue({ ...verification, state: "VERIFIED", completedAt: "2026-09-11T08:02:00Z" }),
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByText("未设置");
+    await user.type(screen.getByLabelText("邮箱地址"), "admin@example.com");
+    await user.type(screen.getAllByLabelText("当前密码")[0]!, "Private-Password-49!");
+    await user.click(screen.getByRole("button", { name: "发送验证码" }));
+    expect(await screen.findByText(/邮件服务器已接受/)).toBeTruthy();
+    expect(screen.getByText(/不代表收件人已收到或阅读/)).toBeTruthy();
+    await user.type(screen.getByLabelText("8 位邮箱验证码"), "12345678");
+    await user.click(screen.getByRole("button", { name: "验证通知地址" }));
+    expect(await screen.findByText("admin@example.com")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /开始绑定/ })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(security.startNotificationVerification).toHaveBeenCalledWith(credential, expect.objectContaining({ email: "admin@example.com", password: "Private-Password-49!" }));
+    expect(security.confirmNotificationVerification).toHaveBeenCalledWith(credential, "verification-one", expect.objectContaining({ code: "12345678" }));
+  });
+
+  it("never renders TOTP provisioning or confirmation controls for an equal replay", async () => {
+    const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "admin@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+    const enrollment = { id: "enrollment-one", requestId: "request-one", factorRevision: 1, state: "PENDING" as const, createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z", completedAt: null };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "NEVER_BOUND" as const, factorRevision: 1, factorId: null }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn().mockResolvedValue({ outcome: "EQUAL_REPLAY" as const, enrollment }),
+      totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn().mockResolvedValue({ ...enrollment, state: "CANCELLED", completedAt: "2026-09-11T08:01:00Z" }), confirmTOTPEnrollment: vi.fn()
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    const securityRegion = (await screen.findByRole("heading", { name: "安全通知与身份验证器" })).closest("section")!;
+    await within(securityRegion).findByText("admin@example.com");
+    await user.type(screen.getByLabelText("当前密码"), "Private-Password-49!");
+    await user.click(screen.getByRole("button", { name: "开始绑定" }));
+    expect(await screen.findByText(/等值重放/)).toBeTruthy();
+    expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
+    expect(screen.queryByText(/手动密钥/)).toBeNull();
+    expect(screen.getByRole("button", { name: "取消绑定" })).toBeTruthy();
+    expect(security.confirmTOTPEnrollment).not.toHaveBeenCalled();
   });
 
   it("allows an unprivileged user to inspect its own settings without querying admin directories", async () => {

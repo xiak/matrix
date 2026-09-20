@@ -9,6 +9,7 @@ import { useSession } from "../application/SessionProvider";
 import { AccountLoginForm } from "./AccountLoginForm";
 import { AuthenticationChallengeForm } from "./AuthenticationChallengeForm";
 import { PasswordChangeForm } from "./PasswordChangeForm";
+import { EnrollmentRecoveryCodes } from "./EnrollmentRecoveryCodes";
 import styles from "./LoginRenderer.module.css";
 
 export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string }) {
@@ -43,7 +44,8 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
           </div>
         </section>
         <section aria-label={t("region")} className={styles.loginCard}>
-          {challenged ? <AuthenticationChallengeForm returnTo={returnTo} />
+          {session.phase === "recovery-codes-required" ? <EnrollmentRecoveryCodes />
+            : challenged ? <AuthenticationChallengeForm returnTo={returnTo} />
             : firstLogin ? <PasswordChangeForm returnTo={returnTo} />
               : <AccountLoginForm returnTo={returnTo} />}
           <p className={styles.securityNote}><ShieldCheck aria-hidden="true" /><span>{t(uxPreviewEnabled ? "previewSecurity" : "security")}</span></p>

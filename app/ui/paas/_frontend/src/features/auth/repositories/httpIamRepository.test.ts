@@ -193,6 +193,104 @@ describe("IAM HTTP access-key boundary", () => {
   });
 });
 
+const notificationContact = {
+  apiVersion, kind: "NotificationContact", accountId: account.id, userId: user.id,
+  state: "NONE", resourceVersion: 0
+};
+const notificationVerification = {
+  apiVersion, kind: "NotificationContactVerification", id: "verification-primary", accountId: account.id,
+  userId: user.id, requestId: "verify-contact-1", email: "Admin@example.com", state: "PENDING",
+  issuedAt: timestamp, expiresAt: "2026-09-11T08:10:00Z",
+  delivery: { state: "PENDING", attempts: 0, updatedAt: timestamp }
+};
+const pendingEnrollment = {
+  apiVersion, kind: "TOTPEnrollment", id: "enrollment-primary", requestId: "enroll-factor-1",
+  factorRevision: 1, state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z"
+};
+
+describe("IAM HTTP personal-security boundary", () => {
+  it("uses current-session resources without account or user selectors", async () => {
+    let fetcher = reply(notificationContact);
+    const contact = await httpIamRepository.personalSecurity!.notificationContact("bearer");
+    expect(contact).toEqual({ accountId: account.id, userId: user.id, state: "NONE", resourceVersion: 0, pendingVerificationId: null });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/notification-contact");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+
+    fetcher = reply(notificationVerification);
+    await httpIamRepository.personalSecurity!.startNotificationVerification("bearer", {
+      email: "Admin@example.com", password: "private-password", requestId: "verify-contact-1"
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/notification-contact/verifications");
+    expect(requestBody(fetcher)).toEqual({ email: "Admin@example.com", password: "private-password", requestId: "verify-contact-1" });
+
+    fetcher = reply({ apiVersion, kind: "AuthenticatorState", enrollmentState: "NEVER_BOUND", factorRevision: 1 });
+    expect(await httpIamRepository.personalSecurity!.authenticatorState("bearer")).toEqual({ enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/authenticators");
+  });
+
+  it("accepts provisioning only on the first applied enrollment response", async () => {
+    const fetcher = reply({ outcome: "APPLIED", enrollment: pendingEnrollment, provisioning: { seed: "SECRETBASE32", uri: "otpauth://totp/Matrix:alex?secret=SECRETBASE32" } });
+    const applied = await httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", {
+      requestId: "enroll-factor-1", password: "private-password", expectedFactorRevision: 1
+    });
+    expect(applied).toMatchObject({ outcome: "APPLIED", provisioning: { seed: "SECRETBASE32" } });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/totp/enrollments");
+    expect(requestBody(fetcher)).toEqual({ requestId: "enroll-factor-1", password: "private-password", expectedFactorRevision: 1 });
+
+    reply({ outcome: "EQUAL_REPLAY", enrollment: pendingEnrollment, provisioning: { seed: "leaked", uri: "leaked" } });
+    await expect(httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", {
+      requestId: "enroll-factor-1", password: "private-password", expectedFactorRevision: 1
+    })).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("requires a confirmed enrollment and exactly ten unique recovery codes", async () => {
+    const confirmed = { ...pendingEnrollment, state: "CONFIRMED", completedAt: "2026-09-11T08:04:00Z" };
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `RECOVERY-${index}`);
+    const fetcher = reply({ enrollment: confirmed, nextStep: "REAUTHENTICATE", recoveryCodes });
+    const result = await httpIamRepository.personalSecurity!.confirmTOTPEnrollment("bearer", pendingEnrollment.id, { requestId: "confirm-factor-1", code: "123456" });
+    expect(result.recoveryCodes).toEqual(recoveryCodes);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/totp/enrollments/${pendingEnrollment.id}:confirm`);
+    expect(requestBody(fetcher)).toEqual({ requestId: "confirm-factor-1", code: "123456" });
+
+    for (const invalidCodes of [recoveryCodes.slice(0, 9), [...recoveryCodes.slice(0, 9), recoveryCodes[0]]]) {
+      reply({ enrollment: confirmed, nextStep: "REAUTHENTICATE", recoveryCodes: invalidCodes });
+      await expect(httpIamRepository.personalSecurity!.confirmTOTPEnrollment("bearer", pendingEnrollment.id, { requestId: "confirm-factor-1", code: "123456" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("fails closed on malformed state unions, lifetimes, delivery evidence, and replay secrets", async () => {
+    const invalidBodies = [
+      { action: () => httpIamRepository.personalSecurity!.notificationContact("bearer"), body: { ...notificationContact, resourceVersion: 1 } },
+      { action: () => httpIamRepository.personalSecurity!.notificationContact("bearer"), body: { ...notificationContact, state: "VERIFIED", resourceVersion: 1 } },
+      { action: () => httpIamRepository.personalSecurity!.notificationVerification("bearer", notificationVerification.id), body: { ...notificationVerification, expiresAt: "2026-09-11T08:09:59Z" } },
+      { action: () => httpIamRepository.personalSecurity!.notificationVerification("bearer", notificationVerification.id), body: { ...notificationVerification, issuedAt: "2026-09-11T08:00:00.000001Z", expiresAt: "2026-09-11T08:10:00.000999Z", delivery: { ...notificationVerification.delivery, updatedAt: "2026-09-11T08:00:00.000001Z" } } },
+      { action: () => httpIamRepository.personalSecurity!.notificationVerification("bearer", notificationVerification.id), body: { ...notificationVerification, delivery: { state: "ACCEPTED", attempts: 1, updatedAt: timestamp } } },
+      { action: () => httpIamRepository.personalSecurity!.notificationVerification("bearer", notificationVerification.id), body: { ...notificationVerification, delivery: { state: "EXPIRED", attempts: 1, updatedAt: timestamp } } },
+      { action: () => httpIamRepository.personalSecurity!.authenticatorState("bearer"), body: { apiVersion, kind: "AuthenticatorState", enrollmentState: "BOUND", factorRevision: 1, factorId: "factor-one" } },
+      { action: () => httpIamRepository.personalSecurity!.totpEnrollment("bearer", pendingEnrollment.id), body: { ...pendingEnrollment, expiresAt: "2026-09-11T08:04:59Z" } },
+      { action: () => httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", { requestId: "enroll-factor-1", password: "private-password", expectedFactorRevision: 1 }), body: { outcome: "EQUAL_REPLAY", enrollment: pendingEnrollment, provisioning: { seed: "leaked", uri: "leaked" } } }
+    ];
+    for (const item of invalidBodies) {
+      reply(item.body);
+      await expect(item.action()).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("rejects malformed security commands before sending secrets", async () => {
+    for (const action of [
+      () => httpIamRepository.personalSecurity!.startNotificationVerification("bearer", { email: "admin@Example.com", password: "private", requestId: "contact-one" }),
+      () => httpIamRepository.personalSecurity!.startNotificationVerification("bearer", { email: "admin@example.com", password: "", requestId: "contact-one" }),
+      () => httpIamRepository.personalSecurity!.confirmNotificationVerification("bearer", "verification-one", { code: "123", requestId: "confirm-one" }),
+      () => httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", { requestId: "enroll-one", password: "private", expectedFactorRevision: Number.MAX_SAFE_INTEGER }),
+      () => httpIamRepository.personalSecurity!.confirmTOTPEnrollment("bearer", "enrollment-one", { requestId: "confirm-one", code: "" })
+    ]) {
+      const fetcher = reply({});
+      await expect(action()).rejects.toThrow("INVALID_IAM_RESPONSE");
+      expect(fetcher).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe("IAM HTTP group boundary", () => {
   it("reads group detail and direct attachments without caller account selectors", async () => {
     const fetcher = reply(groupAccess());

@@ -28,6 +28,7 @@ import { AccessEnterpriseAccounts } from "./AccessEnterpriseAccounts";
 import { AccountPolicyDirectory } from "./AccountPolicyDirectory";
 import { AccountTenantWorkspace } from "./AccountTenantWorkspace";
 import { OwnSessionsPage } from "./OwnSessionsPage";
+import { LivePersonalSecuritySettings } from "./LivePersonalSecuritySettings";
 import { RoleSelfServicePreview } from "./RoleSelfServicePreview";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -120,7 +121,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "users" ? <AccountUserDirectory key={entityId ?? "users"} entityId={entityId} scene={scene} onCreate={() => onNavigate("create-user")} onOpen={onNavigate} /> :
       view === "create-user" ? <CreateUserWizard onBack={() => onNavigate("users")} /> :
       view === "tenants" ? <TenantDirectory scene={scene} /> :
-      view === "settings" ? <><UserSettings key={scene.accountVersion} scene={scene} />{workspace ? <AccessSecuritySettings workspace={workspace} /> : null}</> :
+      view === "settings" ? <><UserSettings key={scene.accountVersion} scene={scene} />{workspace ? <AccessSecuritySettings workspace={workspace} /> : <LivePersonalSecuritySettings />}</> :
       view === "policies" && !workspace ? <AccountPolicyDirectory scene={scene} /> :
       view === "create-group" ? <GroupCreationWizard workspace={workspace ?? undefined} onBack={() => onNavigate("groups")} onDone={(id) => onNavigate("groups", id)} /> :
       view === "groups" && workspace ? <AccessGroups key={entityId ?? "groups"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :

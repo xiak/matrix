@@ -4,6 +4,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { LoginResult } from "../domain/session";
 import type { IamRepository } from "../repositories/iamRepository";
 import { SessionProvider, useSession } from "./SessionProvider";
+import { usePersonalSecurity } from "./PersonalSecurityProvider";
 
 const secretCredential = "must-not-enter-browser-storage-or-dom";
 
@@ -19,12 +20,14 @@ function deferred<T>() {
 
 function Probe() {
   const session = useSession();
+  const security = usePersonalSecurity();
   return (
     <div>
       <span data-testid="phase">{session.phase}</span>
       <span data-testid="principal">{session.current?.loginName ?? "none"}</span>
       <span data-testid="challenge">{session.challenge?.challenge.nextStep ?? "none"}</span>
       <span data-testid="error">{session.error ?? "none"}</span>
+      <span data-testid="recovery">{session.enrollmentRecovery?.recoveryCodes.join("|") ?? "none"}</span>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
       <button onClick={() => void session.login("bravo", "password")} type="button">login-b</button>
       <button
@@ -35,6 +38,8 @@ function Probe() {
       <button onClick={() => void session.verifyAuthenticationChallenge("123456")} type="button">verify</button>
       <button onClick={() => void session.changeChallengePassword("Changed-Admin-Password-73!")} type="button">challenge-change</button>
       <button onClick={session.acknowledgeReauthentication} type="button">acknowledge</button>
+      <button onClick={session.acknowledgeEnrollmentRecovery} type="button">acknowledge-recovery</button>
+      {security ? <button onClick={() => void security.confirmTOTPEnrollment("enrollment-one", { requestId: "confirm-one", code: "123456" })} type="button">confirm-enrollment</button> : null}
       <button onClick={session.cancelAuthenticationChallenge} type="button">cancel-challenge</button>
       <button onClick={() => session.expire(secretCredential)} type="button">expire</button>
     </div>
@@ -83,6 +88,29 @@ afterEach(() => {
 });
 
 describe("SessionProvider", () => {
+  it("keeps one-time recovery material visible after IAM revokes the enrollment session", async () => {
+    const iam = repository();
+    const codes = Array.from({ length: 10 }, (_, index) => `RECOVERY-${index}`);
+    iam.personalSecurity = {
+      notificationContact: vi.fn(), startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(), authenticatorState: vi.fn(), startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(),
+      confirmTOTPEnrollment: vi.fn().mockResolvedValue({
+        enrollment: { id: "enrollment-one", requestId: "enroll-one", factorRevision: 1, state: "CONFIRMED", createdAt: "2026-09-21T01:00:00Z", expiresAt: "2026-09-21T01:05:00Z", completedAt: "2026-09-21T01:04:00Z" },
+        nextStep: "REAUTHENTICATE", recoveryCodes: codes
+      })
+    };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("confirm-enrollment")));
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-codes-required");
+    expect(screen.getByTestId("principal").textContent).toBe("none");
+    expect(screen.getByTestId("recovery").textContent).toContain("RECOVERY-9");
+    expect(screen.container.textContent).not.toContain(secretCredential);
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+    await act(async () => fireEvent.click(screen.getByText("acknowledge-recovery")));
+    expect(screen.getByTestId("phase").textContent).toBe("reauthentication-required");
+    expect(screen.getByTestId("recovery").textContent).toBe("none");
+  });
+
   it("clears private identity when the current bearer has expired", async () => {
     const screen = render(<SessionProvider repository={repository()}><Probe /></SessionProvider>);
     await act(async () => fireEvent.click(screen.getByText("login")));

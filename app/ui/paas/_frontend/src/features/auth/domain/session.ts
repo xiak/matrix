@@ -77,6 +77,7 @@ export type SessionPhase =
   | "verifying-challenge"
   | "challenge-password-required"
   | "changing-challenge-password"
+  | "recovery-codes-required"
   | "reauthentication-required"
   | "password-change-required"
   | "changing-password"
