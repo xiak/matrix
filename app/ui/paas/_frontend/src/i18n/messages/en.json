@@ -1392,6 +1392,7 @@
       "items": {
         "namespace": { "title": "Namespace and version ownership", "hint": "Confirm that product, callingService, Action prefixes, and revision are owned by the product team, and that one revision cannot be overwritten with a different digest." },
         "resources": { "title": "Action and resource model alignment", "hint": "Review resourceKind, authorization target shapes, result resources, and TENANT versus platform scope for every Action." },
+        "subjects": { "title": "Subject types and user credential carriers", "hint": "Review subjectTypes and userAuthenticationMethods for each Action. USER support does not imply both login sessions and access keys, and ROLE cannot inherit a USER capability implicitly." },
         "conditions": { "title": "Conditions use trusted value sources", "hint": "Accept only IAM-declared identity and transaction-time attributes; products and tenants cannot inject arbitrary caller attributes." },
         "enforcement": { "title": "Real PEP enforcement evidence", "hint": "Product APIs must check the matching Action and cover resource ownership, list filtering, and bulk operations instead of relying on catalog registration alone." }
       },
@@ -1413,6 +1414,71 @@
     "previous": "Previous",
     "next": "Next",
     "finish": "Finish preview"
+  },
+  "ServiceAuthorizationPreview": {
+    "backToRoles": "Back to roles",
+    "backToDirectory": "Back to service authorization",
+    "backToTemplate": "Back to authorization template",
+    "title": "Service authorization",
+    "subtitle": "An isolated MOCK of explicit customer consent for a cloud service to operate resources",
+    "previewOnly": "Backend not connected",
+    "boundary": "Product onboarding, service identity, and customer authorization are separate boundaries. This page creates no role, issues no temporary credential, writes nothing to IAM, and does not mean this tenant has granted consent.",
+    "directory": {
+      "title": "Service authorization templates available for review",
+      "hint": "Cloud products and the IAM platform publish templates through a controlled process. Tenant administrators review and consume them; they cannot register platform Actions.",
+      "tableLabel": "Service authorization templates",
+      "separation": "Ordinary service roles remain managed in the role directory. This page previews service-linked-role customer consent; sharing a service principal does not merge the two concepts."
+    },
+    "detail": {
+      "title": "Service authorization template",
+      "eyebrow": "Template awaiting review",
+      "hint": "Confirm who represents the service, why access is needed, and the exact policy snapshot permitted after consent.",
+      "trustLabel": "Service identity",
+      "trustTitle": "Trust only the registered service subject",
+      "trustHint": "A callingService or ordinary service name is not a customer delegation credential. A future flow must still verify workload, purpose, and target account.",
+      "permissionLabel": "Permission snapshot",
+      "permissionHint": "Customer consent binds an exact policy version. Catalog or template revisions cannot silently expand an existing grant.",
+      "openPolicy": "View policy v{version}",
+      "policyUnavailable": "The matching policy snapshot is unavailable in this MOCK, so the permission cannot be inferred.",
+      "snapshotTitle": "Action patterns in the policy",
+      "snapshotCount": "{count} statements",
+      "ordinaryRole": "The existing PipelineDeploymentRole is an ordinary workload role, not an existing instance of this service authorization. This page does not rename or reuse it to fabricate customer consent.",
+      "review": "Review service authorization"
+    },
+    "template": { "purpose": "Operate application delivery and pipeline tasks on behalf of the tenant" },
+    "fields": {
+      "product": "Cloud product",
+      "purpose": "Business purpose",
+      "policySnapshot": "Permission snapshot",
+      "state": "Authorization state",
+      "templateRevision": "Template revision",
+      "servicePrincipal": "Service principal",
+      "roleName": "Predefined role name"
+    },
+    "states": { "notAuthorized": "Not authorized", "unavailable": "Unavailable" },
+    "progress": "Service authorization review progress",
+    "stageLabel": "Step {current} of {total}",
+    "steps": { "identity": "Service identity and purpose", "permissions": "Permission snapshot", "consent": "Consent and lifecycle" },
+    "review": {
+      "title": "Review service authorization",
+      "identity": { "title": "Confirm service identity and one purpose", "lead": "The authorization target is a trusted service subject acting for a stated purpose—not any service in the product catalog and not an ordinary user credential." },
+      "permissions": { "title": "Confirm the immutable permission snapshot", "lead": "Review every operation the service could perform for the tenant. A policy name is only navigation; authorization must bind exact content and version.", "immutable": "Exact version", "crossProduct": "This snapshot includes both PaaS and DevOps capabilities. Cross-product operation must be explicit before consent; onboarding a product to IAM does not grant these permissions automatically." },
+      "consent": {
+        "title": "Confirm customer consent and revocation boundaries",
+        "lead": "Only explicit customer consent can create a service-linked role scoped to this account and purpose. This MOCK does not perform that action.",
+        "items": {
+          "explicit": { "title": "Explicit customer consent", "hint": "Catalog visibility, product installation, and service authentication do not replace authorization by this account." },
+          "shortTerm": { "title": "Short-lived sessions only", "hint": "The service would assume a dedicated role for constrained temporary credentials instead of receiving a customer's long-lived key." },
+          "noExpansion": { "title": "Template revisions never auto-expand access", "hint": "A new template or revision requires review; existing consent retains its original permission snapshot." },
+          "revocation": { "title": "Check associated resources before revocation", "hint": "Associated resources must block deletion or enter an explicit asynchronous cleanup flow, avoiding uncontrolled service access." }
+        },
+        "unavailable": "IAM has not published tenant authorize, revoke, or assume-role contracts for ServiceRoleTemplate. Final authorization stays disabled and cannot produce a success state."
+      }
+    },
+    "previous": "Previous",
+    "next": "Next",
+    "authorizeDisabled": "Authorize service (not connected)",
+    "finish": "Finish review"
   },
   "Console": {
     "brandHome": "Matrix Cloud console home",
@@ -1943,6 +2009,7 @@
   },
   "RoleWorkspace": {
     "back": "Back to roles",
+    "serviceAuthorization": "Service authorization",
     "next": "Next",
     "saving": "Creating…",
     "created": "Role created",

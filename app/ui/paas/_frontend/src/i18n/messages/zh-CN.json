@@ -1392,6 +1392,7 @@
       "items": {
         "namespace": { "title": "命名空间与版本所有权", "hint": "确认产品、callingService、Action 前缀和 revision 由对应产品团队维护，且同一修订不能覆盖不同内容摘要。" },
         "resources": { "title": "Action 与资源模型一致", "hint": "逐项核对 resourceKind、授权目标形状、结果资源及 TENANT／平台范围边界。" },
+        "subjects": { "title": "主体类型与用户凭据载体", "hint": "逐 Action 核对 subjectTypes 与 userAuthenticationMethods；支持 USER 不代表同时支持登录会话和访问密钥，ROLE 也不能从 USER 能力隐式取得。" },
         "conditions": { "title": "条件值只来自可信来源", "hint": "仅接受 IAM 已声明的身份与事务时间属性，不让产品或租户注入任意调用方属性。" },
         "enforcement": { "title": "真实 PEP 鉴权证据", "hint": "产品 API 必须执行对应 Action 检查，并覆盖资源归属、列表过滤和批量操作，避免只登记目录却绕过鉴权。" }
       },
@@ -1413,6 +1414,71 @@
     "previous": "上一步",
     "next": "下一步",
     "finish": "结束体验"
+  },
+  "ServiceAuthorizationPreview": {
+    "backToRoles": "返回角色列表",
+    "backToDirectory": "返回服务授权",
+    "backToTemplate": "返回授权模板",
+    "title": "服务授权",
+    "subtitle": "客户明确同意云服务代操作资源的隔离 MOCK 体验",
+    "previewOnly": "未接入后端",
+    "boundary": "产品接入、服务身份和客户授权是三个独立边界。本页不创建角色、不签发临时凭据、不写入 IAM，也不表示当前租户已经同意授权。",
+    "directory": {
+      "title": "可审阅的服务授权模板",
+      "hint": "模板由云产品与 IAM 平台受控发布；租户管理员只能审阅和消费，不能自行注册产品 Action。",
+      "tableLabel": "服务授权模板",
+      "separation": "普通服务角色仍在角色列表中单独管理。这里展示的是服务关联角色式的客户同意流程，两者不会因使用同一服务主体而合并。"
+    },
+    "detail": {
+      "title": "服务授权模板",
+      "eyebrow": "待审阅模板",
+      "hint": "确认谁代表该服务、为何需要访问，以及授权后允许使用的精确策略快照。",
+      "trustLabel": "服务身份",
+      "trustTitle": "仅信任已登记的服务主体",
+      "trustHint": "callingService 或普通服务名称不是客户委派凭据；未来仍需校验实际工作负载、用途和目标账号。",
+      "permissionLabel": "权限快照",
+      "permissionHint": "客户同意绑定精确策略版本。目录更新或模板升版不得自动扩大既有授权。",
+      "openPolicy": "查看策略 v{version}",
+      "policyUnavailable": "当前 MOCK 找不到对应策略快照，不能继续推断授权内容。",
+      "snapshotTitle": "策略中的 Action 模式",
+      "snapshotCount": "{count} 条声明",
+      "ordinaryRole": "现有 PipelineDeploymentRole 是普通工作负载角色，不是本服务授权的既有实例；本页不会重命名或复用它来伪造客户同意。",
+      "review": "审阅服务授权"
+    },
+    "template": { "purpose": "代表租户执行应用交付与流水线任务" },
+    "fields": {
+      "product": "云产品",
+      "purpose": "业务用途",
+      "policySnapshot": "权限快照",
+      "state": "授权状态",
+      "templateRevision": "模板修订",
+      "servicePrincipal": "服务主体",
+      "roleName": "预定义角色名"
+    },
+    "states": { "notAuthorized": "未授权", "unavailable": "不可用" },
+    "progress": "服务授权审阅进度",
+    "stageLabel": "第 {current} / {total} 步",
+    "steps": { "identity": "服务身份与用途", "permissions": "权限快照", "consent": "同意与生命周期" },
+    "review": {
+      "title": "审阅服务授权",
+      "identity": { "title": "确认服务身份与单一用途", "lead": "授权对象是受信服务主体在明确业务用途下的访问请求，不是产品目录中的任意服务，也不是普通用户凭据。" },
+      "permissions": { "title": "确认不可变权限快照", "lead": "逐项确认该服务代表租户可执行的操作。策略名称只是导航信息，授权必须绑定精确版本与内容。", "immutable": "精确版本", "crossProduct": "该快照同时包含 PaaS 与 DevOps 能力，属于跨产品代操作，必须在授权前显式展示；产品已接入 IAM 不等于自动获得这些权限。" },
+      "consent": {
+        "title": "确认客户同意与撤销边界",
+        "lead": "只有客户明确同意后，平台才能创建面向该账号和用途的服务关联角色；当前 MOCK 不执行此动作。",
+        "items": {
+          "explicit": { "title": "显式客户同意", "hint": "目录可见、产品安装和服务身份认证均不替代当前账号的授权。" },
+          "shortTerm": { "title": "仅使用短期会话", "hint": "服务未来通过承担专用角色获取受限临时凭据，不接收客户长期密钥。" },
+          "noExpansion": { "title": "模板升版不自动扩权", "hint": "新模板或新修订必须重新审阅；既有同意保持原权限快照。" },
+          "revocation": { "title": "撤销前检查关联资源", "hint": "有关联资源时应阻止删除或进入明确的异步清理流程，不能留下失控服务访问。" }
+        },
+        "unavailable": "IAM 尚未发布 ServiceRoleTemplate 的租户授权、撤销或承担角色契约。最终授权始终禁用，也不会产生成功状态。"
+      }
+    },
+    "previous": "上一步",
+    "next": "下一步",
+    "authorizeDisabled": "授权服务（未接入）",
+    "finish": "结束审阅"
   },
   "Console": {
     "brandHome": "Matrix Cloud 控制台首页",
@@ -1943,6 +2009,7 @@
   },
   "RoleWorkspace": {
     "back": "返回角色列表",
+    "serviceAuthorization": "服务授权",
     "next": "下一步",
     "saving": "正在创建…",
     "created": "角色已创建",

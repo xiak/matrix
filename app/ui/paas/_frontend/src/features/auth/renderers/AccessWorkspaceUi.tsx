@@ -24,9 +24,10 @@ function labelCollectionCells(content: ReactNode, columns: readonly string[]) {
     : cell);
 }
 
-export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, keywords, filter, embedded = false, status, loadMore, footerNote, workflow, createActionRef, createFocusRef }: {
+export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, secondaryActions = [], keywords, filter, embedded = false, status, loadMore, footerNote, workflow, createActionRef, createFocusRef }: {
   title: string; description: string; items: T[]; columns: string[];
   row(item: T): ReactNode; create?: { label: string; disabled?: boolean; reason?: string; onClick(): void }; embedded?: boolean;
+  secondaryActions?: readonly PageCommand[];
   keywords?(item: T): string;
   filter?: { label: string; options: { value: string; label: string }[]; matches(item: T, value: string): boolean };
   status?: string;
@@ -53,8 +54,9 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   const currentPage = Math.min(page, pages);
   const reset = () => { setQuery(""); setKind("all"); setPage(1); };
   const action = create ? <Button ref={createActionRef} disabled={create.disabled} title={create.reason} onClick={create.onClick} size="small"><Plus aria-hidden="true" />{create.label}</Button> : null;
+  const primary = create ? { id: "create", label: create.label, icon: <Plus aria-hidden="true" />, disabled: create.disabled, disabledReason: create.disabled ? create.reason : undefined, onSelect: create.onClick } satisfies PageCommand : undefined;
   return <Card aria-description={description}>
-    {!embedded ? <ContentPage.Heading title={title} scrollKey={`collection:${title}`} actions={!workflow && create ? <ContentPage.Commands label={collection("pageActions")} primaryRef={createActionRef} focusRef={createFocusRef} primary={{ id: "create", label: create.label, icon: <Plus aria-hidden="true" />, disabled: create.disabled, disabledReason: create.disabled ? create.reason : undefined, onSelect: create.onClick }} /> : undefined} /> : null}
+    {!embedded ? <ContentPage.Heading title={title} scrollKey={`collection:${title}`} actions={!workflow && (primary || secondaryActions.length) ? <ContentPage.Commands label={collection("pageActions")} primaryRef={createActionRef} focusRef={createFocusRef} primary={primary} secondary={secondaryActions} /> : undefined} /> : null}
     {workflow ?? <>
     <TableToolbar labels={toolbarLabels} search={{ label: t("search"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
       actions={embedded ? action : null}

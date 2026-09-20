@@ -449,6 +449,7 @@ describe("policy creation entry and directory contract", () => {
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByRole("heading", { level: 3, name: "检查 IAM 契约与真实鉴权边界" })).toBeTruthy();
     expect(screen.getByText(/不是在线校验结果/)).toBeTruthy();
+    expect(screen.getByText(/subjectTypes 与 userAuthenticationMethods/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByRole("heading", { level: 3, name: "审阅不可变发布引用与消费边界" })).toBeTruthy();
     const publish = screen.getByRole("button", { name: "发布修订（未接入）" }) as HTMLButtonElement;
@@ -846,6 +847,49 @@ describe("CAM-style access workspace", () => {
     expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
     expect(within(directory).getByRole("button", { name: "PipelineDeploymentRole" }).closest("td")?.getAttribute("data-label")).toBe("名称");
     expect(within(directory).getByText("云服务").closest("td")?.getAttribute("data-label")).toBe("信任主体类型");
+  });
+  it("previews service authorization as an inline consent review without creating a role or grant", async () => {
+    const { user, repository, extension } = await open("roles");
+    const before = await extension.read("preview");
+    const trigger = await screen.findByRole("button", { name: "服务授权" });
+    await user.click(trigger);
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { level: 2, name: "服务授权" })).toBe(document.activeElement);
+    expect(screen.getByText(/产品接入、服务身份和客户授权是三个独立边界/)).toBeTruthy();
+    expect(screen.getByRole("table", { name: "服务授权模板" })).toBeTruthy();
+    expect(screen.getByText(/普通服务角色仍在角色列表中单独管理/)).toBeTruthy();
+
+    const template = screen.getByRole("button", { name: "Application delivery" });
+    await user.click(template);
+    expect(screen.getByRole("heading", { level: 2, name: "服务授权模板" })).toBe(document.activeElement);
+    expect(screen.getAllByText("devops.matrix.internal").length).toBeGreaterThan(0);
+    expect(screen.getByText("MatrixServiceRoleForApplicationDelivery")).toBeTruthy();
+    expect(screen.getByText(/PipelineDeploymentRole 是普通工作负载角色/)).toBeTruthy();
+
+    const review = screen.getByRole("button", { name: "审阅服务授权" });
+    await user.click(review);
+    expect(screen.getByRole("heading", { level: 2, name: "审阅服务授权" })).toBe(document.activeElement);
+    expect(screen.getByRole("heading", { level: 3, name: "确认服务身份与单一用途" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByText("MatrixDeliveryAccess · v1")).toBeTruthy();
+    expect(screen.getByText("paas:*")).toBeTruthy();
+    expect(screen.getByText("devops:*")).toBeTruthy();
+    expect(screen.getByText(/跨产品代操作/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    const authorize = screen.getByRole("button", { name: "授权服务（未接入）" }) as HTMLButtonElement;
+    expect(authorize.disabled).toBe(true);
+    expect(screen.getByText(/尚未发布 ServiceRoleTemplate/)).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(await extension.read("preview")).toEqual(before);
+
+    await user.click(screen.getByRole("button", { name: "结束审阅" }));
+    expect(screen.getByRole("button", { name: "审阅服务授权" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "返回服务授权" }));
+    expect(screen.getByRole("button", { name: "Application delivery" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "返回角色列表" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "新建角色" })).toBe(document.activeElement));
   });
   it("keeps identity-provider and federation mutations in their detail pages", async () => {
     const { user } = await open("providers");

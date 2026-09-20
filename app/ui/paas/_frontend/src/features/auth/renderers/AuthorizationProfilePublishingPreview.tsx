@@ -59,7 +59,7 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
       <Card.Body className={styles.stageBody}>
         <p className={styles.lead}>{t("validation.lead")}</p>
         <ul className={styles.reviewList}>
-          {(["namespace", "resources", "conditions", "enforcement"] as const).map((item) => <li key={item}><span aria-hidden="true">{item === "enforcement" ? "4" : item === "conditions" ? "3" : item === "resources" ? "2" : "1"}</span><div><strong>{t(`validation.items.${item}.title`)}</strong><p>{t(`validation.items.${item}.hint`)}</p></div></li>)}
+          {(["namespace", "resources", "subjects", "conditions", "enforcement"] as const).map((item, index) => <li key={item}><span aria-hidden="true">{index + 1}</span><div><strong>{t(`validation.items.${item}.title`)}</strong><p>{t(`validation.items.${item}.hint`)}</p></div></li>)}
         </ul>
         <div className={styles.snapshot}>
           <div><span>{t("validation.snapshot.actions")}</span><strong>{profile.actions.length}</strong></div>

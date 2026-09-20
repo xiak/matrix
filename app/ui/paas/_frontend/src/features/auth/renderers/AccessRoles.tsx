@@ -12,6 +12,7 @@ import { WorkspaceCollection, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineF
 import { RoleSessionSettings, RoleTags, RoleTrustFields } from "./RoleConfiguration";
 import { PermissionBoundary } from "./PermissionBoundary";
 import { RoleSessions } from "./RoleSessions";
+import { ServiceAuthorizationPreview } from "./ServiceAuthorizationPreview";
 import styles from "./AccountAccessRenderer.module.css";
 
 function RoleMetadataEditor({ role, onClose }: { role: AccessRole; onClose(): void }) {
@@ -89,9 +90,12 @@ function RolePolicyEditor({ role, workspace, mode, onClose }: { role: AccessRole
 export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("IamWorkspace"), r = useTranslations("RoleWorkspace"), access = useAccountAccess();
   const [workflow, setWorkflow] = useState<"metadata" | "trust" | "settings" | "add" | "remove" | null>(null);
+  const [serviceAuthorizationOpen, setServiceAuthorizationOpen] = useState(false);
   const [tab, setTab] = useState("policies");
   const [deleting, setDeleting] = useState<AccessRole | null>(null);
   const metadataTrigger = useRef<HTMLButtonElement>(null), trustTrigger = useRef<HTMLButtonElement>(null), settingsTrigger = useRef<HTMLButtonElement>(null), addTrigger = useRef<HTMLButtonElement>(null), removeTrigger = useRef<HTMLButtonElement>(null);
+  const collectionActionFocus = useRef<{ focus(): void }>(null);
+  const previousServiceAuthorizationOpen = useRef(false);
   const previousWorkflow = useRef<typeof workflow>(null);
   const selected = workspace.roles.find((role) => role.id === entityId);
   useLayoutEffect(() => {
@@ -102,6 +106,11 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
     const fallback = closed === "remove" && target?.disabled ? addTrigger.current : null;
     (fallback ?? target)?.focus({ preventScroll: true });
   }, [workflow]);
+  useLayoutEffect(() => {
+    const wasOpen = previousServiceAuthorizationOpen.current;
+    previousServiceAuthorizationOpen.current = serviceAuthorizationOpen;
+    if (wasOpen && !serviceAuthorizationOpen) collectionActionFocus.current?.focus();
+  }, [serviceAuthorizationOpen]);
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("roles")}>{t("back")}</Button>} />;
   const principalLabel = (role: AccessRole) => role.principalType === "provider" ? workspace.providers.find((provider) => provider.id === role.principal)?.name ?? role.principal : role.principal;
   const openWorkflow = (next: NonNullable<typeof workflow>) => { access.clearWorkspaceError(); setWorkflow(next); };
@@ -122,7 +131,7 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
         <Tabs.Content className={styles.stack} value="settings"><div><Button ref={settingsTrigger} variant="secondary" onClick={() => openWorkflow("settings")}>{r("editSettings")}</Button></div><dl className={styles.facts}><div><dt>{t("sessionMinutes")}</dt><dd>{selected.sessionMinutes}</dd></div><div><dt>{t("consoleAccess")}</dt><dd>{t(selected.consoleAccess ? "enabled" : "disabled")}</dd></div></dl><Alert>{r("settingsChangeHint")}</Alert></Tabs.Content>
       </Tabs.Root>
       </>}
-    </WorkspaceDetail> : <WorkspaceCollection title={t("roles")} description={t("roleHint")} items={workspace.roles} keywords={(role) => [role.description, principalLabel(role)].join(" ")} filter={{ label: t("principalType"), options: ["account", "service", "provider"].map((value) => ({ value, label: t(value === "service" ? "servicePrincipal" : value as "account" | "provider") })), matches: (role, value) => role.principalType === value }} create={{ label: t("createRole"), onClick: onCreate }} columns={[t("name"), t("principalType"), t("principal"), t("created")]} row={(role) => <><td><button className={styles.userLink} onClick={() => onOpen("roles", role.id)}>{role.name}</button><small>{role.description}</small></td><td>{t(role.principalType === "service" ? "servicePrincipal" : role.principalType)}</td><td>{principalLabel(role)}</td><td><WorkspaceTime value={role.createdAt} /></td></>} />}
+    </WorkspaceDetail> : <WorkspaceCollection title={t("roles")} description={t("roleHint")} items={workspace.roles} keywords={(role) => [role.description, principalLabel(role)].join(" ")} filter={{ label: t("principalType"), options: ["account", "service", "provider"].map((value) => ({ value, label: t(value === "service" ? "servicePrincipal" : value as "account" | "provider") })), matches: (role, value) => role.principalType === value }} create={{ label: t("createRole"), onClick: onCreate }} secondaryActions={[{ id: "service-authorization", label: r("serviceAuthorization"), variant: "secondary", onSelect: () => setServiceAuthorizationOpen(true) }]} createFocusRef={collectionActionFocus} workflow={serviceAuthorizationOpen ? <ServiceAuthorizationPreview workspace={workspace} onClose={() => setServiceAuthorizationOpen(false)} onOpenPolicy={(id) => onOpen("policies", id)} /> : undefined} columns={[t("name"), t("principalType"), t("principal"), t("created")]} row={(role) => <><td><button className={styles.userLink} onClick={() => onOpen("roles", role.id)}>{role.name}</button><small>{role.description}</small></td><td>{t(role.principalType === "service" ? "servicePrincipal" : role.principalType)}</td><td>{principalLabel(role)}</td><td><WorkspaceTime value={role.createdAt} /></td></>} />}
     {deleting ? <WorkspaceDelete name={deleting.name} impact={<Alert status="warning">{r("deleteImpact")}</Alert>} onClose={() => setDeleting(null)} onConfirm={async () => { const result = await access.executeWorkspace({ kind: "delete-role", id: deleting.id }); if (result && entityId === deleting.id) onOpen("roles"); return result; }} /> : null}
   </>;
 }
