@@ -45,6 +45,168 @@ func DecodeRequest(reader io.Reader, destination any) error {
 	return contractjson.DecodeObject(reader, MaxRequestBytes, destination)
 }
 
+func (value *VerifyAuthenticationChallengeRequest) UnmarshalJSON(source []byte) error {
+	type wire VerifyAuthenticationChallengeRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateVerifyAuthenticationChallengeRequest(VerifyAuthenticationChallengeRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = VerifyAuthenticationChallengeRequest(decoded)
+	return nil
+}
+
+func EncodeVerifyAuthenticationChallengeRequest(value VerifyAuthenticationChallengeRequest) ([]byte, error) {
+	if err := ValidateVerifyAuthenticationChallengeRequest(value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		RequestID           string `json:"requestId"`
+		ChallengeCredential string `json:"challengeCredential"`
+		Code                string `json:"code"`
+	}{value.RequestID, value.ChallengeCredential.reveal(), value.Code.reveal()})
+}
+
+func (value *ChallengePasswordChangeRequest) UnmarshalJSON(source []byte) error {
+	type wire ChallengePasswordChangeRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateChallengePasswordChangeRequest(ChallengePasswordChangeRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = ChallengePasswordChangeRequest(decoded)
+	return nil
+}
+
+func EncodeChallengePasswordChangeRequest(value ChallengePasswordChangeRequest) ([]byte, error) {
+	if err := ValidateChallengePasswordChangeRequest(value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		RequestID           string `json:"requestId"`
+		ChallengeCredential string `json:"challengeCredential"`
+		NewPassword         string `json:"newPassword"`
+	}{value.RequestID, value.ChallengeCredential.reveal(), value.NewPassword.reveal()})
+}
+
+func (value *ChallengePasswordChangeResponse) UnmarshalJSON(source []byte) error {
+	type wire ChallengePasswordChangeResponse
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateChallengePasswordChangeResponse(ChallengePasswordChangeResponse(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = ChallengePasswordChangeResponse(decoded)
+	return nil
+}
+
+func (value *StartTOTPEnrollmentRequest) UnmarshalJSON(source []byte) error {
+	type wire StartTOTPEnrollmentRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateStartTOTPEnrollmentRequest(StartTOTPEnrollmentRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = StartTOTPEnrollmentRequest(decoded)
+	return nil
+}
+
+func EncodeStartTOTPEnrollmentRequest(value StartTOTPEnrollmentRequest) ([]byte, error) {
+	if err := ValidateStartTOTPEnrollmentRequest(value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		RequestID              string `json:"requestId"`
+		Password               string `json:"password"`
+		ExpectedFactorRevision uint64 `json:"expectedFactorRevision"`
+	}{value.RequestID, value.Password.reveal(), value.ExpectedFactorRevision})
+}
+
+func (value *ConfirmTOTPEnrollmentRequest) UnmarshalJSON(source []byte) error {
+	type wire ConfirmTOTPEnrollmentRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateConfirmTOTPEnrollmentRequest(ConfirmTOTPEnrollmentRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = ConfirmTOTPEnrollmentRequest(decoded)
+	return nil
+}
+
+func EncodeConfirmTOTPEnrollmentRequest(value ConfirmTOTPEnrollmentRequest) ([]byte, error) {
+	if err := ValidateConfirmTOTPEnrollmentRequest(value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		RequestID string `json:"requestId"`
+		Code      string `json:"code"`
+	}{value.RequestID, value.Code.reveal()})
+}
+
+func (StartTOTPEnrollmentResponse) MarshalJSON() ([]byte, error) { return nil, ErrSecretSerialization }
+func (ConfirmTOTPEnrollmentResponse) MarshalJSON() ([]byte, error) {
+	return nil, ErrSecretSerialization
+}
+
+func (value *StartTOTPEnrollmentResponse) UnmarshalJSON(source []byte) error {
+	type wire StartTOTPEnrollmentResponse
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateStartTOTPEnrollmentResponse(StartTOTPEnrollmentResponse(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	_, provisioning := fields["provisioning"]
+	if provisioning != (decoded.Outcome == "APPLIED") {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = StartTOTPEnrollmentResponse(decoded)
+	return nil
+}
+
+func EncodeStartTOTPEnrollmentResponse(value StartTOTPEnrollmentResponse) ([]byte, error) {
+	if err := ValidateStartTOTPEnrollmentResponse(value); err != nil {
+		return nil, err
+	}
+	type provisioningWire struct {
+		Seed string `json:"seed"`
+		URI  string `json:"uri"`
+	}
+	var provisioning *provisioningWire
+	if value.Provisioning != nil {
+		provisioning = &provisioningWire{value.Provisioning.Seed.reveal(), value.Provisioning.URI.reveal()}
+	}
+	return json.Marshal(struct {
+		Outcome      string            `json:"outcome"`
+		Enrollment   TOTPEnrollment    `json:"enrollment"`
+		Provisioning *provisioningWire `json:"provisioning,omitempty"`
+	}{value.Outcome, value.Enrollment, provisioning})
+}
+
+func (value *ConfirmTOTPEnrollmentResponse) UnmarshalJSON(source []byte) error {
+	type wire ConfirmTOTPEnrollmentResponse
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateConfirmTOTPEnrollmentResponse(ConfirmTOTPEnrollmentResponse(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = ConfirmTOTPEnrollmentResponse(decoded)
+	return nil
+}
+
+func EncodeConfirmTOTPEnrollmentResponse(value ConfirmTOTPEnrollmentResponse) ([]byte, error) {
+	if err := ValidateConfirmTOTPEnrollmentResponse(value); err != nil {
+		return nil, err
+	}
+	codes := make([]string, len(value.RecoveryCodes))
+	defer clear(codes)
+	for i, code := range value.RecoveryCodes {
+		codes[i] = code.reveal()
+	}
+	return json.Marshal(struct {
+		Enrollment    TOTPEnrollment `json:"enrollment"`
+		NextStep      string         `json:"nextStep"`
+		RecoveryCodes []string       `json:"recoveryCodes"`
+	}{value.Enrollment, value.NextStep, codes})
+}
+
 func (subject *Subject) UnmarshalJSON(source []byte) error {
 	type wire Subject
 	var decoded wire
@@ -229,16 +391,71 @@ func EncodeBootstrapDocument(document BootstrapDocument) ([]byte, error) {
 	return encoded, nil
 }
 
-// EncodeLoginResponse explicitly emits a newly issued login credential.
+func (LoginResponse) MarshalJSON() ([]byte, error) { return nil, ErrSecretSerialization }
+
+func (value *LoginResponse) UnmarshalJSON(source []byte) error {
+	var wire struct {
+		Outcome             LoginOutcome             `json:"outcome"`
+		Session             *Session                 `json:"session,omitempty"`
+		Credential          Secret                   `json:"credential,omitempty"`
+		MustChangePassword  *bool                    `json:"mustChangePassword,omitempty"`
+		Challenge           *AuthenticationChallenge `json:"challenge,omitempty"`
+		ChallengeCredential Secret                   `json:"challengeCredential,omitempty"`
+	}
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &wire) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	result := LoginResponse{Outcome: wire.Outcome, Credential: wire.Credential,
+		Challenge: wire.Challenge, ChallengeCredential: wire.ChallengeCredential}
+	switch wire.Outcome {
+	case LoginAuthenticated:
+		if len(fields) != 4 || wire.Session == nil || wire.MustChangePassword == nil {
+			return contractjson.ErrInvalidDocument
+		}
+		result.Session, result.MustChangePassword = *wire.Session, *wire.MustChangePassword
+	case LoginChallengeRequired:
+		// Presence is significant: even null/false/empty Session fields are not
+		// legal in this branch. A challenge never silently becomes a Session.
+		if len(fields) != 3 || wire.Session != nil || wire.MustChangePassword != nil {
+			return contractjson.ErrInvalidDocument
+		}
+	default:
+		return contractjson.ErrInvalidDocument
+	}
+	if ValidateLoginResponse(result) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = result
+	return nil
+}
+
+// EncodeLoginResponse explicitly emits only the selected one-time credential.
 func EncodeLoginResponse(response LoginResponse) ([]byte, error) {
 	if err := ValidateLoginResponse(response); err != nil {
 		return nil, err
 	}
+	if response.Outcome == LoginChallengeRequired {
+		encoded, err := json.Marshal(struct {
+			Outcome             LoginOutcome             `json:"outcome"`
+			Challenge           *AuthenticationChallenge `json:"challenge"`
+			ChallengeCredential string                   `json:"challengeCredential"`
+		}{response.Outcome, response.Challenge, response.ChallengeCredential.reveal()})
+		if err != nil {
+			return nil, ErrEncodingFailed
+		}
+		return encoded, nil
+	}
 	wire := struct {
-		Session            Session `json:"session"`
-		Credential         string  `json:"credential"`
-		MustChangePassword bool    `json:"mustChangePassword"`
+		Outcome            LoginOutcome `json:"outcome"`
+		Session            Session      `json:"session"`
+		Credential         string       `json:"credential"`
+		MustChangePassword bool         `json:"mustChangePassword"`
 	}{
+		Outcome:            response.Outcome,
 		Session:            response.Session,
 		Credential:         response.Credential.reveal(),
 		MustChangePassword: response.MustChangePassword,

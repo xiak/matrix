@@ -1000,6 +1000,107 @@
         ],
         "type": "object"
       },
+      "AuthenticationChallenge": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "nextStep": {
+            "enum": [
+              "TOTP",
+              "PASSWORD_CHANGE"
+            ]
+          },
+          "purpose": {
+            "const": "LOGIN"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "expiresAt",
+          "id",
+          "kind",
+          "nextStep",
+          "purpose"
+        ],
+        "type": "object"
+      },
+      "AuthenticatorState": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "enrollmentState": {
+                "const": "NEVER_BOUND"
+              },
+              "factorId": false,
+              "factorRevision": {
+                "const": 1
+              }
+            }
+          },
+          {
+            "properties": {
+              "enrollmentState": {
+                "const": "BOUND"
+              },
+              "factorRevision": {
+                "minimum": 2
+              }
+            },
+            "required": [
+              "factorId"
+            ]
+          },
+          {
+            "properties": {
+              "enrollmentState": {
+                "const": "RECOVERY_REQUIRED"
+              }
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "enrollmentState": {
+            "enum": [
+              "NEVER_BOUND",
+              "BOUND",
+              "RECOVERY_REQUIRED"
+            ]
+          },
+          "factorId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "factorRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "enrollmentState",
+          "factorRevision",
+          "kind"
+        ],
+        "type": "object"
+      },
       "AuthorityScope": {
         "enum": [
           "TENANT",
@@ -12021,6 +12122,44 @@
         ],
         "type": "string"
       },
+      "ChallengePasswordChangeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "challengeCredential": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "newPassword": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "challengeCredential",
+          "newPassword",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "ChallengePasswordChangeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "changedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "nextStep": {
+            "const": "REAUTHENTICATE"
+          }
+        },
+        "required": [
+          "changedAt",
+          "nextStep"
+        ],
+        "type": "object"
+      },
       "ChangePasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -12089,6 +12228,62 @@
         "required": [
           "code",
           "requestId"
+        ],
+        "type": "object"
+      },
+      "ConfirmTOTPEnrollmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "code",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "ConfirmTOTPEnrollmentResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "enrollment": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TOTPEnrollment"
+              },
+              {
+                "properties": {
+                  "state": {
+                    "const": "CONFIRMED"
+                  }
+                }
+              }
+            ]
+          },
+          "nextStep": {
+            "const": "REAUTHENTICATE"
+          },
+          "recoveryCodes": {
+            "items": {
+              "minLength": 1,
+              "readOnly": true,
+              "type": "string"
+            },
+            "maxItems": 10,
+            "minItems": 10,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "enrollment",
+          "nextStep",
+          "recoveryCodes"
         ],
         "type": "object"
       },
@@ -13037,6 +13232,13 @@
         ],
         "type": "object"
       },
+      "LoginOutcome": {
+        "enum": [
+          "AUTHENTICATED",
+          "CHALLENGE_REQUIRED"
+        ],
+        "type": "string"
+      },
       "LoginRequest": {
         "additionalProperties": false,
         "properties": {
@@ -13063,7 +13265,60 @@
       },
       "LoginResponse": {
         "additionalProperties": false,
+        "description": "Disjoint authentication result. A challenge is not a Session, bearer or authorization. Credential-bearing results require explicit encoding and no-store handling.",
+        "oneOf": [
+          {
+            "properties": {
+              "challenge": false,
+              "challengeCredential": false,
+              "mustChangePassword": {
+                "type": "boolean"
+              },
+              "outcome": {
+                "const": "AUTHENTICATED"
+              },
+              "session": {
+                "properties": {
+                  "revokedAt": false,
+                  "status": {
+                    "const": "ACTIVE"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "session",
+              "credential",
+              "mustChangePassword"
+            ]
+          },
+          {
+            "properties": {
+              "challenge": {
+                "type": "object"
+              },
+              "credential": false,
+              "mustChangePassword": false,
+              "outcome": {
+                "const": "CHALLENGE_REQUIRED"
+              },
+              "session": false
+            },
+            "required": [
+              "challenge",
+              "challengeCredential"
+            ]
+          }
+        ],
         "properties": {
+          "challenge": {
+            "$ref": "#/components/schemas/AuthenticationChallenge"
+          },
+          "challengeCredential": {
+            "$ref": "#/components/schemas/Secret",
+            "readOnly": true
+          },
           "credential": {
             "$ref": "#/components/schemas/Secret",
             "readOnly": true
@@ -13071,14 +13326,15 @@
           "mustChangePassword": {
             "type": "boolean"
           },
+          "outcome": {
+            "$ref": "#/components/schemas/LoginOutcome"
+          },
           "session": {
             "$ref": "#/components/schemas/Session"
           }
         },
         "required": [
-          "credential",
-          "mustChangePassword",
-          "session"
+          "outcome"
         ],
         "type": "object"
       },
@@ -21630,6 +21886,81 @@
         ],
         "type": "object"
       },
+      "StartTOTPEnrollmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expectedFactorRevision": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "password": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "expectedFactorRevision",
+          "password",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "StartTOTPEnrollmentResponse": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "enrollment": {
+                "properties": {
+                  "state": {
+                    "const": "PENDING"
+                  }
+                }
+              },
+              "outcome": {
+                "const": "APPLIED"
+              },
+              "provisioning": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "provisioning"
+            ]
+          },
+          {
+            "properties": {
+              "outcome": {
+                "const": "EQUAL_REPLAY"
+              },
+              "provisioning": false
+            }
+          }
+        ],
+        "properties": {
+          "enrollment": {
+            "$ref": "#/components/schemas/TOTPEnrollment"
+          },
+          "outcome": {
+            "enum": [
+              "APPLIED",
+              "EQUAL_REPLAY"
+            ]
+          },
+          "provisioning": {
+            "$ref": "#/components/schemas/TOTPProvisioning"
+          }
+        },
+        "required": [
+          "enrollment",
+          "outcome"
+        ],
+        "type": "object"
+      },
       "Subject": {
         "additionalProperties": false,
         "oneOf": [
@@ -21689,6 +22020,101 @@
           "ROLE"
         ],
         "type": "string"
+      },
+      "TOTPEnrollment": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "completedAt": false,
+              "state": {
+                "const": "PENDING"
+              }
+            }
+          },
+          {
+            "properties": {
+              "completedAt": {
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "CONFIRMED",
+                  "CANCELLED",
+                  "EXPIRED"
+                ]
+              }
+            },
+            "required": [
+              "completedAt"
+            ]
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "completedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "factorRevision": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "state": {
+            "enum": [
+              "PENDING",
+              "CONFIRMED",
+              "CANCELLED",
+              "EXPIRED"
+            ]
+          }
+        },
+        "required": [
+          "apiVersion",
+          "createdAt",
+          "expiresAt",
+          "factorRevision",
+          "id",
+          "kind",
+          "requestId",
+          "state"
+        ],
+        "type": "object"
+      },
+      "TOTPProvisioning": {
+        "additionalProperties": false,
+        "properties": {
+          "seed": {
+            "$ref": "#/components/schemas/Secret",
+            "readOnly": true
+          },
+          "uri": {
+            "$ref": "#/components/schemas/Secret",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "seed",
+          "uri"
+        ],
+        "type": "object"
       },
       "Timestamp": {
         "format": "date-time",
@@ -22100,6 +22526,28 @@
           "userId",
           "resourceVersion",
           "policy"
+        ],
+        "type": "object"
+      },
+      "VerifyAuthenticationChallengeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "challengeCredential": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "code": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "challengeCredential",
+          "code",
+          "requestId"
         ],
         "type": "object"
       }
@@ -22601,6 +23049,196 @@
         "summary": "Discover only currently assumable roles for the authenticated USER; bounded sparse pages may be empty with a continuation"
       }
     },
+    "/v1/auth/authenticators": {
+      "get": {
+        "operationId": "getAuthenticatorState",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthenticatorState"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "Invalid path, query or unexpected body; no identity selector is accepted."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read this actual login USER's persisted factor state; no inferred settings or permissions"
+      }
+    },
+    "/v1/auth/challenges/{challengeId}:password": {
+      "post": {
+        "operationId": "changeChallengePassword",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChallengePasswordChangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChallengePasswordChangeResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This IAM instance's bounded password-work capacity is occupied; this discloses no user-specific attempt budget.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Consume only a password-and-TOTP authenticated forced-change challenge; revoke all old sessions and challenges, then require a fresh login"
+      }
+    },
+    "/v1/auth/challenges/{challengeId}:verify": {
+      "post": {
+        "operationId": "verifyAuthenticationChallenge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyAuthenticationChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Consume the current login challenge and a fresh TOTP; its secret is not a bearer or permission"
+      }
+    },
     "/v1/auth/login": {
       "post": {
         "operationId": "login",
@@ -22672,7 +23310,7 @@
           }
         },
         "security": [],
-        "summary": "Log in with a password"
+        "summary": "Verify a password and issue either a login session or a restricted authentication challenge"
       }
     },
     "/v1/auth/logout": {
@@ -23227,6 +23865,302 @@
           }
         },
         "summary": "Revoke the source user's original issuance without requiring current assume authority"
+      }
+    },
+    "/v1/auth/totp/enrollments": {
+      "post": {
+        "operationId": "startTOTPEnrollment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartTOTPEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartTOTPEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "This IAM instance's bounded password-work capacity is occupied; this discloses no user-specific attempt budget.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Reauthenticate the current password and start first TOTP enrollment; only APPLIED discloses provisioning"
+      }
+    },
+    "/v1/auth/totp/enrollments/by-request/{requestId}": {
+      "get": {
+        "operationId": "getTOTPEnrollmentByRequest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TOTPEnrollment"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "Invalid path, query or unexpected body; no identity selector is accepted."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "No enrollment metadata found for this authenticated USER and original reference; not evidence that an uncertain command rolled back."
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Find original same-USER metadata after a lost response; NOT_FOUND is not evidence of rollback"
+      }
+    },
+    "/v1/auth/totp/enrollments/{enrollmentId}": {
+      "delete": {
+        "operationId": "cancelTOTPEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "enrollmentId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TOTPEnrollment"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "Invalid path, query or unexpected body; no identity selector is accepted."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "No enrollment metadata found for this authenticated USER and original reference; not evidence that an uncertain command rolled back."
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "The enrollment is already confirmed and cannot be cancelled."
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Irreversibly cancel a pending enrollment, never an already confirmed binding; no body"
+      },
+      "get": {
+        "operationId": "getTOTPEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "enrollmentId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TOTPEnrollment"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "Invalid path, query or unexpected body; no identity selector is accepted."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "No enrollment metadata found for this authenticated USER and original reference; not evidence that an uncertain command rolled back."
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read original enrollment metadata, never its seed or recovery codes"
+      }
+    },
+    "/v1/auth/totp/enrollments/{enrollmentId}:confirm": {
+      "post": {
+        "operationId": "confirmTOTPEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "enrollmentId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmTOTPEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmTOTPEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Commit binding, OTP consumption, recovery batch, notice and session revocation; return codes once then reauthenticate"
       }
     },
     "/v1/authorization-profiles": {

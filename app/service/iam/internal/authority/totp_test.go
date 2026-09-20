@@ -5,6 +5,7 @@ import (
 	"crypto/hkdf"
 	"crypto/sha256"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,61 @@ import (
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
+
+func TestTOTPSeedProtectorRetainsOnlyItsOwnValidatedKeySnapshot(t *testing.T) {
+	scope, material, sealed := totpSeedVector(t)
+	document := iamv1.TOTPKeyring{APIVersion: iamv1.APIVersion, Kind: "TOTPKeyring", Purpose: iamv1.TOTPWrappingPurpose,
+		Scope: scope.Installation, KeysetRevision: 1, ActiveKeyID: "key-a",
+		Keys: []iamv1.TOTPWrappingKey{{KeyID: "key-a", FormatVersion: 1, KeyMaterial: authoritySecret(t, base64.RawURLEncoding.EncodeToString(material))}}}
+	protector, err := NewTOTPSeedProtector(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Changing the source document cannot replace a running replica's material.
+	document.Keys[0].KeyID = "key-b"
+	document.ActiveKeyID = "key-b"
+	document.Keys[0].KeyMaterial = authoritySecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32)))
+	seed, err := protector.Open(scope, sealed)
+	if err != nil || !seed.Present() {
+		t.Fatal("caller mutation changed the process key snapshot", err)
+	}
+	freshScope := scope
+	freshScope.FactorID = "fresh-sealed-factor"
+	fresh, err := protector.Seal(freshScope, seed)
+	if err != nil || fresh.KeyID != "key-a" {
+		t.Fatal("sealing followed mutable source active key", err)
+	}
+	opened, err := protector.Open(freshScope, fresh)
+	if err != nil || !bytes.Equal(opened.CopyBytes(), seed.CopyBytes()) {
+		t.Fatal("own active material cannot reopen its new factor", err)
+	}
+	wrongScope := freshScope
+	wrongScope.Installation.InstallationID = "another-installation"
+	if _, err := protector.Seal(wrongScope, seed); err != ErrTOTPSeedProtection {
+		t.Fatal("another installation obtained seed sealing")
+	}
+	for _, change := range []func(*TOTPSeedScope, *SealedTOTPSeed){
+		func(s *TOTPSeedScope, _ *SealedTOTPSeed) { s.Installation.InstallationID = "other-installation" },
+		func(_ *TOTPSeedScope, s *SealedTOTPSeed) { s.KeyID = "key-b" },
+		func(s *TOTPSeedScope, _ *SealedTOTPSeed) { s.UserID = "other-user" },
+	} {
+		candidateScope, candidate := scope, sealed
+		change(&candidateScope, &candidate)
+		if result, err := protector.Open(candidateScope, candidate); err != ErrTOTPSeedProtection || result.Present() {
+			t.Fatal("changed custody or binding accepted")
+		}
+	}
+	if data, err := json.Marshal(protector); err == nil || len(data) > 0 {
+		t.Fatal("protector material serialized")
+	}
+	if fmt.Sprintf("%+v %#v", protector, protector) != "[REDACTED] authority.TOTPSeedProtector{[REDACTED]}" {
+		t.Fatal("protector diagnostic is not redacted")
+	}
+	document.Keys[0].KeyMaterial = iamv1.Secret{}
+	if _, err := NewTOTPSeedProtector(document); err != ErrTOTPSeedProtection {
+		t.Fatal("missing material accepted")
+	}
+}
 
 func TestTOTPStandardAndIndependentVectors(t *testing.T) {
 	// Public synthetic 20-byte seed from RFC4226/6238. RFC6238's SHA1

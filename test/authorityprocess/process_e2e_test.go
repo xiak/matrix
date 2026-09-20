@@ -4,8 +4,12 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ed25519"
+	"crypto/hkdf"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -19,6 +23,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -26,6 +31,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,7 +39,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pquerna/otp/hotp"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -50,6 +58,7 @@ const (
 	authorityProcessDSN = "MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN"
 
 	iamAPILogin       = "matrix_authority_process_iam_api"
+	iamReplicaLogin   = "matrix_authority_process_iam_replica"
 	iamWorkerLogin    = "matrix_authority_process_iam_worker"
 	auditRuntimeLogin = "matrix_authority_process_audit_runtime"
 	paasAPILogin      = "matrix_authority_process_paas_api"
@@ -138,6 +147,24 @@ func writeProcessTOTPKeyring(t *testing.T, directory string, bootstrap iamv1.Boo
 	}
 	defer clear(encoded)
 	return writeProtectedFile(t, directory, "iam-totp-keyring.json", encoded)
+}
+
+func writeProcessEmailVerificationKeyring(t *testing.T, directory string, bootstrap iamv1.BootstrapDocument) string {
+	t.Helper()
+	digest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring := iamv1.EmailVerificationKeyring{APIVersion: iamv1.APIVersion, Kind: "EmailVerificationKeyring", Purpose: iamv1.EmailVerificationWrappingPurpose,
+		Scope:          iamv1.SecurityMailInstallationScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest},
+		KeysetRevision: 1, ActiveKeyID: "process-mail", Keys: []iamv1.EmailVerificationWrappingKey{{KeyID: "process-mail", FormatVersion: 1,
+			KeyMaterial: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x63}, 32)))}}}
+	encoded, err := iamv1.EncodeEmailVerificationKeyring(keyring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	return writeProtectedFile(t, directory, "iam-email-keyring.json", encoded)
 }
 
 func writeProcessEnrollmentAuthority(
@@ -329,6 +356,287 @@ func TestIAMRetainedPrePlatformProcessUpgrade(t *testing.T) {
 	})
 }
 
+func TestIAMRetainedPreMFAProcessUpgrade(t *testing.T) {
+	testIAMRetainedSessionSource(t, "MATRIX_IAM_PRE_MFA_UPGRADE_POSTGRES_TEST_DSN", "matrix_iam_upgrade_pre_mfa_",
+		"07aa50627318708ed4d3ac9ce481b1e5829669d6", 36)
+}
+
+func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source string, sourceSchema uint64) {
+	t.Helper()
+	dsn := os.Getenv(variable)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, databasePrefix) {
+		t.Fatal("own-session predecessor requires its own disposable database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	admin, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect retained own-session database")
+	}
+	defer admin.Close(context.Background())
+	assertPostgres18(t, ctx, admin)
+	assertCleanSchemas(t, ctx, admin)
+	root, temporary := repositoryRoot(t), t.TempDir()
+	// Fixed accepted predecessors create the data through their own binaries:
+	// IAM32 predates TOTP custody, IAM36 has the real first-contact writer but
+	// no MFA ceremony. This is not a replay of every unpublished migration or
+	// permission to cross a signed release profile.
+	baseline := extractFixedIAMSource(t, ctx, root, temporary, source)
+	oldMigrator := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor", "./app/service/iam/cmd/matrix-iam")
+	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-session-current", "./app/service/iam/cmd/matrix-iam")
+	currentMigrator := buildAuthorityBinary(t, ctx, root, temporary, "iam-session-current-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	apiDSN := runtimeDSN(t, config, "matrix_iam_api_login", processDBPassword)
+	var migrationEnvironment []string
+	for _, value := range []struct{ name, dsn string }{
+		{"MATRIX_MIGRATION_DATABASE_DSN_FILE", dsn},
+		{"MATRIX_MIGRATION_IAM_API_DSN_FILE", localRecoveryMigrationDSN(t, apiDSN)},
+		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword))},
+		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, localRecoveryProcessLogin, processDBPassword))},
+		{installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment, localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword))},
+		{"MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE", localRecoveryMigrationDSN(t, runtimeDSN(t, config, "matrix_iam_notification_worker_login", processDBPassword))},
+	} {
+		migrationEnvironment = append(migrationEnvironment, value.name+"="+writeProtectedFile(t, temporary, value.name, []byte(value.dsn)))
+	}
+	var children []*childProcess
+	sensitive := []string{initialAdminPassword, changedAdminPassword, initialReaderPassword, changedReaderPassword, processDBPassword}
+	defer func() {
+		for _, child := range children {
+			child.stop()
+		}
+		assertProcessOutputsSanitized(t, children, sensitive...)
+	}()
+	for _, action := range []string{"apply", "verify"} {
+		child := startChild(t, baseline, oldMigrator, migrationEnvironment, action)
+		children = append(children, child)
+		if err := child.wait(30 * time.Second); err != nil {
+			t.Fatalf("actual IAM%d migrator failed", sourceSchema)
+		}
+	}
+	bootstrap, err := iamv1.EncodeBootstrapDocument(processBootstrap(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrapPath := writeProtectedFile(t, temporary, "iam-bootstrap", bootstrap)
+	clear(bootstrap)
+	address := freeAddress(t)
+	endpoint := "http://" + address
+	retainedCursorPath, retainedAccessKeyPath := writeProcessIAMPrivateAuthority(t, temporary, processBootstrap(t))
+	// Both exact executables support the same existing key-custody contract.
+	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-api-dsn", []byte(apiDSN)),
+		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
+		"MATRIX_IAM_CURSOR_KEY_FILE=" + retainedCursorPath,
+		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + retainedAccessKeyPath}
+	if sourceSchema == 36 {
+		digest, err := iamv1.BootstrapDigest(processBootstrap(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		mail := iamv1.EmailVerificationKeyring{APIVersion: iamv1.APIVersion, Kind: "EmailVerificationKeyring", Purpose: iamv1.EmailVerificationWrappingPurpose,
+			Scope:          iamv1.SecurityMailInstallationScope{InstallationID: processBootstrap(t).InstallationID, BootstrapDigest: digest},
+			KeysetRevision: 1, ActiveKeyID: "retained-mail", Keys: []iamv1.EmailVerificationWrappingKey{{KeyID: "retained-mail", FormatVersion: 1,
+				KeyMaterial: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x65}, 32)))}}}
+		encoded, err := iamv1.EncodeEmailVerificationKeyring(mail)
+		if err != nil {
+			t.Fatal(err)
+		}
+		environment = append(environment, "MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE="+writeProtectedFile(t, temporary, "iam-email-keyring.json", encoded))
+		clear(encoded)
+	}
+	start := func(binary string, version uint64) *childProcess {
+		t.Helper()
+		currentEnvironment := append([]string(nil), environment...)
+		if binary == currentBinary || sourceSchema == 36 {
+			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_TOTP_KEYRING_FILE="+writeProcessTOTPKeyring(t, temporary, processBootstrap(t)))
+		}
+		child := startChild(t, root, binary, currentEnvironment)
+		children = append(children, child)
+		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
+		assertRuntimeProcessLogins(t, ctx, admin, "matrix_iam_api_login")
+		response := performJSON(t, http.MethodGet, endpoint+"/ready", "", nil)
+		var readiness iamv1.Readiness
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &readiness) != nil || readiness.SchemaVersion != version {
+			t.Fatal("session executable readiness does not match its actual schema")
+		}
+		return child
+	}
+	old := start(oldBinary, sourceSchema)
+	primary := loginIAM(t, endpoint, "admin", initialAdminPassword, "own-upgrade-root-login")
+	changePasswordIAM(t, endpoint, primary.Credential, initialAdminPassword, changedAdminPassword, "own-upgrade-root-password")
+	member := createIAMUser(t, endpoint, primary.Credential, "retained.sessions", "Retained sessions", initialReaderPassword, "own-upgrade-user")
+	realm := member.LoginName + "@" + string(member.AccountID)
+	a := loginIAM(t, endpoint, realm, initialReaderPassword, "own-upgrade-first")
+	changePasswordIAM(t, endpoint, a.Credential, initialReaderPassword, changedReaderPassword, "own-upgrade-password")
+	b := loginIAM(t, endpoint, realm, changedReaderPassword, "own-upgrade-second")
+	for _, session := range []loginResult{primary, a, b} {
+		sensitive = append(sensitive, session.Credential)
+	}
+	var mailState func() []byte
+	var originalMail []byte
+	var oldVerification iamv1.NotificationContactVerification
+	var otherPrimary loginResult
+	if sourceSchema == 36 {
+		response := performJSON(t, http.MethodPost, endpoint+"/v1/accounts", primary.Credential, map[string]any{
+			"id": "retained-pre-mfa-account", "displayName": "Retained pre-MFA account", "rootLoginName": "retained.primary",
+			"rootDisplayName": "Retained root", "initialPassword": initialReaderPassword, "requestId": "pre-mfa-second-account",
+		})
+		if response.Status != http.StatusCreated {
+			t.Fatal("actual IAM36 did not create a second retained Account", response.Status)
+		}
+		otherPrimary = loginIAM(t, endpoint, "retained.primary", initialReaderPassword, "pre-mfa-second-root")
+		sensitive = append(sensitive, otherPrimary.Credential)
+		response = performJSON(t, http.MethodPost, endpoint+"/v1/auth/notification-contact/verifications", a.Credential,
+			map[string]any{"requestId": "pre-mfa-contact", "email": "retained@matrix.test", "password": changedReaderPassword})
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &oldVerification) != nil {
+			t.Fatal("actual IAM36 did not create its first-contact verification", response.Status)
+		}
+		mailState = func() []byte {
+			t.Helper()
+			var state []byte
+			if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
+			 'contacts',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,user_id) FROM iam.notification_contacts c),
+			 'verifications',(SELECT jsonb_agg(to_jsonb(v) ORDER BY tenant_id,id) FROM iam.notification_contact_verifications v),
+			 'notifications',(SELECT jsonb_agg(to_jsonb(n) ORDER BY tenant_id,id) FROM iam.security_notifications n))`).Scan(&state); err != nil {
+				t.Fatal("read retained notification invariants", err)
+			}
+			return state
+		}
+		originalMail = mailState()
+		defer clear(originalMail)
+	}
+	identityState := func() []byte {
+		t.Helper()
+		var state []byte
+		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
+		 'bootstrap',(SELECT jsonb_agg(jsonb_build_array(singleton,installation_id,content_digest,organization_id,administrator_principal_id,applied_at)) FROM iam.bootstrap_receipts),
+		 'credentials',(SELECT jsonb_agg(jsonb_build_array(tenant_id,principal_id,password_hash,credential_version,changed_at) ORDER BY tenant_id,principal_id) FROM iam.user_credentials),
+		 'users',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,status,must_change_password,resource_version) ORDER BY tenant_id,id) FROM iam.principals),
+		 'attachments',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,target_id,policy_id,authority_scope,installation_id,resource_version,revoked_at) ORDER BY tenant_id,id) FROM iam.policy_attachments),
+		 'sessions',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,principal_id,status,credential_version,issued_at,expires_at,revoked_at,resource_version) ORDER BY tenant_id,id) FROM iam.sessions))`).Scan(&state); err != nil {
+			t.Fatal("read retained session/credential invariants", err)
+		}
+		return state
+	}
+	originalState := identityState()
+	var originalFacts []auditv1.Event
+	rows, err := admin.Query(ctx, "SELECT event_document FROM iam.audit_outbox ORDER BY tenant_id,event_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var encoded []byte
+		var event auditv1.Event
+		if rows.Scan(&encoded) != nil || json.Unmarshal(encoded, &event) != nil {
+			t.Fatal("decode original session predecessor fact")
+		}
+		originalFacts = append(originalFacts, event)
+	}
+	rows.Close()
+	if rows.Err() != nil || len(originalFacts) == 0 {
+		t.Fatal("predecessor facts missing")
+	}
+	old.stop()
+	for range 2 {
+		for _, action := range []string{"apply", "verify"} {
+			child := startChild(t, root, currentMigrator, migrationEnvironment, action)
+			children = append(children, child)
+			if err := child.wait(30 * time.Second); err != nil {
+				t.Fatal("actual current migrator rejected retained own-session data")
+			}
+		}
+	}
+	var shape bool
+	if err := admin.QueryRow(ctx, "SELECT schema_version=38 AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready() AND iam.totp_authentication_contract_ready() FROM iam.readiness()").Scan(&shape); err != nil || !shape {
+		t.Fatal("retained database did not install the enabling authentication ABI", err)
+	}
+	current := start(currentBinary, 38)
+	if !bytes.Equal(originalState, identityState()) {
+		t.Fatal("migration or equal bootstrap changed original identity/credential state")
+	}
+	if err := admin.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM iam.principals p LEFT JOIN iam.user_mfa_states m
+	 ON (m.tenant_id,m.user_id)=(p.tenant_id,p.id) WHERE p.principal_type='USER'
+	 AND (m.user_id IS NULL OR m.enrollment_state<>'NEVER_BOUND' OR m.revision<>1 OR m.factor_id IS NOT NULL))
+	 AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE authentication_method IS NOT NULL OR authenticated_at IS NOT NULL OR mfa_revision IS NOT NULL)
+	 AND NOT EXISTS(SELECT 1 FROM iam.authentication_challenges) AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches)`).Scan(&shape); err != nil || !shape {
+		t.Fatal("pre-MFA data gained invented authentication or recovery evidence", err)
+	}
+	assertRetainedMail := func() {
+		t.Helper()
+		if mailState == nil {
+			return
+		}
+		if !bytes.Equal(originalMail, mailState()) {
+			t.Fatal("migration/restart rewrote pending notification or verification material")
+		}
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/notification-contact/verifications/"+oldVerification.ID, a.Credential, nil)
+		var currentVerification iamv1.NotificationContactVerification
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &currentVerification) != nil || !reflect.DeepEqual(oldVerification, currentVerification) {
+			t.Fatal("retained first-contact intent was replaced or relabelled", response.Status)
+		}
+	}
+	assertRetainedMail()
+	if sourceSchema == 36 {
+		for _, identity := range []loginResult{a, otherPrimary} {
+			response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", identity.Credential, nil)
+			if response.Status != http.StatusOK {
+				t.Fatal("migration missed a retained Account under forced RLS", response.Status)
+			}
+		}
+	}
+	for _, identity := range []loginResult{a, b, otherPrimary} {
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", identity.Credential, nil)
+		if response.Status != http.StatusOK {
+			t.Fatal("migration rejected a retained pre-MFA Session", response.Status)
+		}
+	}
+	fresh := loginIAM(t, endpoint, realm, changedReaderPassword, "pre-mfa-current-login")
+	sensitive = append(sensitive, fresh.Credential)
+	completedState := identityState()
+	current.stop()
+	for _, action := range []string{"apply", "verify"} {
+		child := startChild(t, root, currentMigrator, migrationEnvironment, action)
+		children = append(children, child)
+		if err := child.wait(30 * time.Second); err != nil {
+			t.Fatal("current migration replay failed")
+		}
+	}
+	current = start(currentBinary, 37)
+	if !bytes.Equal(completedState, identityState()) {
+		t.Fatal("migration replay or restart changed retained pre-MFA identity state")
+	}
+	assertRetainedMail()
+	if err := admin.QueryRow(ctx, "SELECT NOT EXISTS(SELECT 1 FROM iam.principals p LEFT JOIN iam.user_mfa_states m ON (m.tenant_id,m.user_id)=(p.tenant_id,p.id) WHERE p.principal_type='USER' AND (m.user_id IS NULL OR m.enrollment_state<>'NEVER_BOUND' OR m.revision<>1 OR m.factor_id IS NOT NULL)) AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE authentication_method IS NOT NULL OR authenticated_at IS NOT NULL OR mfa_revision IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM iam.authentication_challenges) AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches)").Scan(&shape); err != nil || !shape {
+		t.Fatal("migration replay invented authentication or recovery evidence", err)
+	}
+	for _, identity := range []loginResult{a, b, otherPrimary, fresh} {
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", identity.Credential, nil); response.Status != http.StatusOK {
+			t.Fatal("restart rejected a retained pre-MFA Session", response.Status)
+		}
+	}
+	for _, event := range originalFacts {
+		var encoded []byte
+		var retained auditv1.Event
+		if err := admin.QueryRow(ctx, "SELECT event_document FROM iam.audit_outbox WHERE event_id=$1", event.EventID).Scan(&encoded); err != nil || json.Unmarshal(encoded, &retained) != nil {
+			t.Fatal("original pre-MFA fact disappeared")
+		}
+		before, beforeDigest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+		after, afterDigest, afterErr := auditv1.CanonicalizeEvent(auditv1.SourceIAM, retained)
+		if err != nil || afterErr != nil || before != after || beforeDigest != afterDigest {
+			t.Fatal("retained pre-MFA canonical bytes changed")
+		}
+		if response := performJSON(t, http.MethodPost, endpoint+"/v1/audit-producer:resolve", iamServiceCredential, iamv1.ResolveAuditProducerRequest{Event: retained}); response.Status != http.StatusOK {
+			t.Fatal("original pre-MFA fact lost its exact historical proof")
+		}
+	}
+	current.stop()
+	t.Log("actual IAM36 -> IAM37 migrator/runtime retained Accounts, Sessions, pending notification material and original canonical facts; no factor, challenge or recovery authority was invented")
+}
+
 type retainedIAMBaseline struct {
 	commit          string
 	qualifiedChild  bool
@@ -385,6 +693,7 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable string, baseline retai
 	clear(bootstrapBytes)
 	iamCursorKeyPath, iamAccessKeyWrappingPath := writeProcessIAMPrivateAuthority(t, temporary, bootstrap)
 	iamTOTPKeyPath := writeProcessTOTPKeyring(t, temporary, bootstrap)
+	iamEmailKeyPath := writeProcessEmailVerificationKeyring(t, temporary, bootstrap)
 	dsnPath := writeProtectedFile(t, temporary, "iam-dsn", []byte(runtimeDSN(t, config, iamAPILogin, processDBPassword)))
 	address := freeAddress(t)
 	endpoint := "http://" + address
@@ -405,7 +714,9 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable string, baseline retai
 	start := func(binary string) *childProcess {
 		currentEnvironment := append([]string(nil), environment...)
 		if binary == currentBinary {
-			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_TOTP_KEYRING_FILE="+iamTOTPKeyPath)
+			currentEnvironment = append(currentEnvironment,
+				"MATRIX_IAM_TOTP_KEYRING_FILE="+iamTOTPKeyPath,
+				"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE="+iamEmailKeyPath)
 		}
 		child := startChild(t, root, binary, currentEnvironment)
 		children = append(children, child)
@@ -693,6 +1004,7 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	clear(bootstrapBytes)
 	iamCursorKeyPath, iamAccessKeyWrappingPath := writeProcessIAMPrivateAuthority(t, temporary, bootstrap)
 	iamTOTPKeyPath := writeProcessTOTPKeyring(t, temporary, bootstrap)
+	iamEmailKeyPath := writeProcessEmailVerificationKeyring(t, temporary, bootstrap)
 	changedBootstrap := bootstrap
 	changedBootstrap.Organization.DisplayName = "Changed Organization"
 	changedBytes, err := iamv1.EncodeBootstrapDocument(changedBootstrap)
@@ -706,6 +1018,12 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 		temporary,
 		"iam-dsn",
 		[]byte(runtimeDSN(t, adminConfig, iamAPILogin, processDBPassword)),
+	)
+	iamReplicaDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"iam-replica-dsn",
+		[]byte(runtimeDSN(t, adminConfig, iamReplicaLogin, processDBPassword)),
 	)
 	iamWorkerDSNPath := writeProtectedFile(
 		t,
@@ -763,11 +1081,13 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	)
 
 	iamAddress := freeAddress(t)
+	iamReplicaAddress := freeAddress(t)
 	auditAddress := freeAddress(t)
 	paasAddress := freeAddress(t)
 	iamDispatcherAddress := freeAddress(t)
 	paasDispatcherAddress := freeAddress(t)
 	iamEndpoint := "http://" + iamAddress
+	iamReplicaEndpoint := "http://" + iamReplicaAddress
 	auditEndpoint := "http://" + auditAddress
 	paasEndpoint := "http://" + paasAddress
 	iamEnvironment := []string{
@@ -777,6 +1097,16 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + iamCursorKeyPath,
 		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + iamAccessKeyWrappingPath,
 		"MATRIX_IAM_TOTP_KEYRING_FILE=" + iamTOTPKeyPath,
+		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE=" + iamEmailKeyPath,
+	}
+	iamReplicaEnvironment := []string{
+		"MATRIX_IAM_DATABASE_DSN_FILE=" + iamReplicaDSNPath,
+		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
+		"MATRIX_IAM_LISTEN_ADDRESS=" + iamReplicaAddress,
+		"MATRIX_IAM_CURSOR_KEY_FILE=" + iamCursorKeyPath,
+		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + iamAccessKeyWrappingPath,
+		"MATRIX_IAM_TOTP_KEYRING_FILE=" + iamTOTPKeyPath,
+		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE=" + iamEmailKeyPath,
 	}
 	auditEnvironment := []string{
 		"MATRIX_AUDIT_DATABASE_DSN_FILE=" + auditDSNPath,
@@ -848,7 +1178,7 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 		}
 		assertProcessOutputsSanitized(t, children, sensitive...)
 	}()
-	for _, variable := range []string{"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE", "MATRIX_IAM_TOTP_KEYRING_FILE"} {
+	for _, variable := range []string{"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE", "MATRIX_IAM_TOTP_KEYRING_FILE", "MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE"} {
 		for _, candidate := range []string{"", filepath.Join(temporary, "missing-keyring"),
 			writeProtectedFile(t, temporary, "invalid-keyring", []byte("{}"))} {
 			environment := []string{}
@@ -902,9 +1232,9 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	// Exercise the exact source services together without silently publishing
 	// an intermediate authority shape. The release profile moves only after the
 	// complete MFA-enabling slice and its predecessor admission gate are fixed.
-	profile := installationrelease.AuthoritySchemas{IAM: 37, Audit: 21, PaaS: 6}
+	profile := installationrelease.AuthoritySchemas{IAM: 38, Audit: 22, PaaS: 6}
 	if current := installationrelease.CurrentDatabaseProfile(); current.Authorities == profile {
-		t.Fatal("intermediate notification authority shape was published before the MFA release gate")
+		t.Fatal("MFA-enabling authority shape was published before the complete release gate")
 	}
 	for _, authority := range []struct {
 		name, endpoint string
@@ -929,7 +1259,9 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 		paasDispatcherEnvironment(paasCredentialPath, "paas-audit-worker-a"),
 	)
 	waitHTTPStatus(t, ctx, paasDispatcher, "http://"+paasDispatcherAddress+"/ready", http.StatusOK)
-	assertRuntimeProcessLogins(t, ctx, admin, iamAPILogin, iamWorkerLogin, auditRuntimeLogin, paasAPILogin, paasWorkerLogin)
+	iamReplicaProcess := start(binaries.iam, iamReplicaEnvironment)
+	waitHTTPStatus(t, ctx, iamReplicaProcess, iamReplicaEndpoint+"/ready", http.StatusOK)
+	assertRuntimeProcessLogins(t, ctx, admin, iamAPILogin, iamReplicaLogin, iamWorkerLogin, auditRuntimeLogin, paasAPILogin, paasWorkerLogin)
 	paasInstallationVerification := verifyPaaSInstallation(
 		t,
 		paasEndpoint,
@@ -1070,6 +1402,25 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 		"application-process",
 		string(developer.ID),
 	)
+	sensitive = append(sensitive, proveTOTPProcesses(
+		t, ctx, admin, iamEndpoint, iamReplicaEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential,
+		func() {
+			iamProcess.stop()
+			iamReplicaProcess.stop()
+			iamProcess = start(binaries.iam, iamEnvironment)
+			iamReplicaProcess = start(binaries.iam, iamReplicaEnvironment)
+			waitHTTPStatus(t, ctx, iamProcess, iamEndpoint+"/ready", http.StatusOK)
+			waitHTTPStatus(t, ctx, iamReplicaProcess, iamReplicaEndpoint+"/ready", http.StatusOK)
+			assertRuntimeProcessLogins(t, ctx, admin, iamAPILogin, iamReplicaLogin)
+		},
+		func(work func()) {
+			dispatcher.stop()
+			work()
+			dispatcher = start(binaries.dispatcher, iamDispatcherEnvironment(iamCredentialPath, "iam-audit-worker-mfa"))
+			waitHTTPStatus(t, ctx, dispatcher, "http://"+iamDispatcherAddress+"/ready", http.StatusOK)
+		},
+	)...)
+	iamReplicaProcess.stop()
 	revokeIAMPolicyAttachment(
 		t,
 		iamEndpoint,
@@ -2143,6 +2494,390 @@ func expireIAMSession(
 		t.Fatal("IAM session fixture did not expire in database time")
 	}
 }
+
+func proveTOTPProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endpoint, replica, auditEndpoint, paasEndpoint, root string,
+	restartIAM func(), withDispatcherStopped func(func())) []string {
+	t.Helper()
+	const initial, password = "Process-MFA-Initial-Password-63!", "Process-MFA-Changed-Password-84!"
+	const reset, final = "Process-MFA-Reset-Password-76!", "Process-MFA-Final-Password-97!"
+	sensitive := []string{initial, password, reset, final}
+	secret := func(value iamv1.Secret) string {
+		material := value.CopyBytes()
+		defer clear(material)
+		sensitive = append(sensitive, string(material))
+		return string(material)
+	}
+	call := func(at, method, path, bearer string, body any, want int, result any) processResponse {
+		t.Helper()
+		response := performJSON(t, method, at+path, bearer, body)
+		if response.Status != want {
+			t.Fatalf("MFA process %s %s status=%d want=%d", method, path, response.Status, want)
+		}
+		if result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body), result) != nil {
+			t.Fatal("invalid MFA process response")
+		}
+		return response
+	}
+	user := createIAMUser(t, endpoint, root, "mfa.process", "Process MFA", initial, "process-mfa-user")
+	for _, policy := range []iamv1.PolicyID{iamv1.SystemPolicyPaaSDeveloper, iamv1.SystemPolicyAuditReader} {
+		createIAMPolicyAttachment(t, endpoint, root, user.ID, policy, "process-mfa-"+string(policy))
+	}
+	realm := "mfa.process@" + string(user.AccountID)
+	first := loginIAM(t, endpoint, realm, initial, "process-mfa-initial-login")
+	changePasswordIAM(t, endpoint, first.Credential, initial, password, "process-mfa-initial-change")
+	other := loginIAM(t, replica, realm, password, "process-mfa-other-login")
+	sensitive = append(sensitive, first.Credential, other.Credential)
+	var state iamv1.AuthenticatorState
+	call(endpoint, http.MethodGet, "/v1/auth/authenticators", first.Credential, nil, http.StatusOK, &state)
+	if state.EnrollmentState != "NEVER_BOUND" || state.FactorRevision != 1 {
+		t.Fatal("new process USER lacks its proven unbound state")
+	}
+	enrollRequest := map[string]any{"requestId": "process-mfa-enroll", "password": password, "expectedFactorRevision": state.FactorRevision}
+	const passwordBudget = `SELECT to_jsonb(a)::text FROM iam.password_attempts a WHERE tenant_id=$1 AND principal_id=$2`
+	var beforeContact, afterContact string
+	if err := admin.QueryRow(ctx, passwordBudget, user.AccountID, user.ID).Scan(&beforeContact); err != nil {
+		t.Fatal("read original process password budget")
+	}
+	call(replica, http.MethodPost, "/v1/auth/totp/enrollments", first.Credential, enrollRequest, http.StatusForbidden, nil)
+	if err := admin.QueryRow(ctx, passwordBudget, user.AccountID, user.ID).Scan(&afterContact); err != nil || afterContact != beforeContact {
+		t.Fatal("missing contact changed or stranded the password attempt")
+	}
+	call(endpoint, http.MethodGet, "/v1/auth/me", first.Credential, nil, http.StatusOK, nil)
+	var verification iamv1.NotificationContactVerification
+	call(endpoint, http.MethodPost, "/v1/auth/notification-contact/verifications", first.Credential,
+		map[string]string{"email": "receiver@matrix.test", "password": password, "requestId": "process-mfa-contact"}, http.StatusOK, &verification)
+	code := readProcessContactCode(t, ctx, admin, verification)
+	sensitive = append(sensitive, code)
+	call(replica, http.MethodPost, "/v1/auth/notification-contact/verifications/"+verification.ID+":confirm", first.Credential,
+		map[string]string{"requestId": "process-mfa-contact-confirm", "code": code}, http.StatusOK, nil)
+	var started iamv1.StartTOTPEnrollmentResponse
+	call(endpoint, http.MethodPost, "/v1/auth/totp/enrollments", first.Credential, enrollRequest, http.StatusOK, &started)
+	if started.Outcome != "APPLIED" || started.Provisioning == nil || started.Enrollment.State != "PENDING" {
+		t.Fatal("process enrollment did not issue its one-time provisioning")
+	}
+	seed := secret(started.Provisioning.Seed)
+	secret(started.Provisioning.URI)
+	factor := started.Enrollment.ID
+	var replay iamv1.StartTOTPEnrollmentResponse
+	call(replica, http.MethodPost, "/v1/auth/totp/enrollments", first.Credential, enrollRequest, http.StatusOK, &replay)
+	if replay.Outcome != "EQUAL_REPLAY" || replay.Provisioning != nil || replay.Enrollment != started.Enrollment {
+		t.Fatal("replica enrollment replay changed the original or reissued a secret")
+	}
+	// Select a client code in the documented skew window using the real clock.
+	// Never mutate the server clock, factor consumption or challenge deadline.
+	nextCode := func(previous int64, initialBinding bool) (string, int64) {
+		t.Helper()
+		deadline := time.Now().Add(65 * time.Second)
+		for time.Now().Before(deadline) {
+			var now time.Time
+			if err := admin.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
+				t.Fatal("read actual TOTP process clock")
+			}
+			step := now.Unix() / 30
+			if initialBinding {
+				step--
+			}
+			if step <= previous {
+				step = previous + 1
+			}
+			if step <= now.Unix()/30+1 {
+				candidate, err := hotp.GenerateCode(seed, uint64(step))
+				if err != nil {
+					t.Fatal("generate synthetic process authenticator code")
+				}
+				// Adjacent decimal collisions are a security rejection, not a
+				// reliable positive fixture. Wait for a distinct valid window.
+				collision := false
+				for old := max(int64(0), now.Unix()/30-1); old <= min(previous, now.Unix()/30+1); old++ {
+					used, err := hotp.GenerateCode(seed, uint64(old))
+					if err != nil {
+						t.Fatal("generate consumed process authenticator code")
+					}
+					collision = collision || used == candidate
+				}
+				if !collision {
+					sensitive = append(sensitive, candidate)
+					return candidate, step
+				}
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatal("TOTP process deadline")
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+		t.Fatal("real clock did not reach a fresh TOTP window")
+		return "", 0
+	}
+	challenge := func(at, pass, request string) iamv1.LoginResponse {
+		t.Helper()
+		var result iamv1.LoginResponse
+		response := call(at, http.MethodPost, "/v1/auth/login", "", map[string]string{"loginName": realm, "password": pass, "requestId": request}, http.StatusOK, &result)
+		if iamv1.ValidateLoginResponse(result) != nil || result.Outcome != iamv1.LoginChallengeRequired || result.Challenge.NextStep != "TOTP" ||
+			bytes.Contains(response.Body, []byte(`"session"`)) || bytes.Contains(response.Body, []byte(`"mustChangePassword"`)) {
+			t.Fatal("bound password issued or implied a login Session")
+		}
+		secret(result.ChallengeCredential)
+		return result
+	}
+	verifyRequest := func(value iamv1.LoginResponse, code, request string) map[string]string {
+		return map[string]string{"requestId": request, "challengeCredential": secret(value.ChallengeCredential), "code": code}
+	}
+	var boundEvent auditv1.Event
+	withDispatcherStopped(func() {
+		confirmation, _ := nextCode(-1, true)
+		intent := map[string]string{"requestId": "process-mfa-confirm", "code": confirmation}
+		lost := loseIAMCompletion(t, ctx, endpoint, "/v1/auth/totp/enrollments/"+factor+":confirm", first.Credential, intent)
+		var confirmed iamv1.ConfirmTOTPEnrollmentResponse
+		if iamv1.DecodeRequest(bytes.NewReader(lost.Body), &confirmed) != nil || confirmed.NextStep != "REAUTHENTICATE" || confirmed.Enrollment.State != "CONFIRMED" || len(confirmed.RecoveryCodes) != 10 {
+			t.Fatal("lost reply did not follow an actual MFA binding completion")
+		}
+		for _, recovery := range confirmed.RecoveryCodes {
+			secret(recovery)
+		}
+		clear(lost.Body)
+		var step int64
+		if err := admin.QueryRow(ctx, "SELECT last_consumed_step FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$2", user.AccountID, factor).Scan(&step); err != nil {
+			t.Fatal("read committed factor consumption")
+		}
+		for _, bearer := range []string{first.Credential, other.Credential} {
+			call(replica, http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized, nil)
+			getPaaSApplication(t, paasEndpoint, bearer, "application-process", http.StatusUnauthorized)
+			queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusUnauthorized)
+		}
+		call(replica, http.MethodPost, "/v1/auth/totp/enrollments/"+factor+":confirm", first.Credential, intent, http.StatusUnauthorized, nil)
+		a, b := challenge(endpoint, password, "process-mfa-login-a"), challenge(replica, password, "process-mfa-login-b")
+		for _, at := range []string{endpoint, replica} {
+			call(at, http.MethodGet, "/v1/auth/me", secret(a.ChallengeCredential), nil, http.StatusUnauthorized, nil)
+			call(at, http.MethodGet, "/v1/auth/sessions", secret(a.ChallengeCredential), nil, http.StatusUnauthorized, nil)
+		}
+		getPaaSApplication(t, paasEndpoint, secret(a.ChallengeCredential), "application-process", http.StatusUnauthorized)
+		queryAudit(t, auditEndpoint, secret(a.ChallengeCredential), auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusUnauthorized)
+		candidate, _ := nextCode(step, false)
+		var responses [2]processResponse
+		requests := []map[string]string{verifyRequest(a, candidate, "process-mfa-race-a"), verifyRequest(b, candidate, "process-mfa-race-b")}
+		var workers sync.WaitGroup
+		for i, entry := range []struct {
+			at    string
+			value iamv1.LoginResponse
+		}{{endpoint, a}, {replica, b}} {
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				responses[i] = performJSON(t, http.MethodPost, entry.at+"/v1/auth/challenges/"+entry.value.Challenge.ID+":verify", "", requests[i])
+			}()
+		}
+		workers.Wait()
+		var authenticated iamv1.LoginResponse
+		success, rejected := 0, 0
+		for _, response := range responses {
+			if response.Status == http.StatusOK {
+				success++
+				if iamv1.DecodeRequest(bytes.NewReader(response.Body), &authenticated) != nil || iamv1.ValidateLoginResponse(authenticated) != nil || authenticated.Outcome != iamv1.LoginAuthenticated {
+					t.Fatal("invalid MFA process Session")
+				}
+			} else if response.Status == http.StatusUnauthorized {
+				rejected++
+			}
+		}
+		if success != 1 || rejected != 1 {
+			t.Fatalf("cross-process OTP success=%d rejection=%d", success, rejected)
+		}
+		bearer := secret(authenticated.Credential)
+		var actual bool
+		if err := admin.QueryRow(ctx, `SELECT authentication_method='PASSWORD_TOTP' AND authenticated_at IS NOT NULL AND mfa_revision=2
+			FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, user.AccountID, authenticated.Session.ID).Scan(&actual); err != nil || !actual {
+			t.Fatal("Session lacks actual MFA ceremony")
+		}
+		call(replica, http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusOK, nil)
+		getPaaSApplication(t, paasEndpoint, bearer, "application-process", http.StatusOK)
+		queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusOK)
+		restartIAM()
+		call(endpoint, http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusOK, nil)
+		var retained iamv1.TOTPEnrollment
+		call(replica, http.MethodGet, "/v1/auth/totp/enrollments/by-request/process-mfa-enroll", bearer, nil, http.StatusOK, &retained)
+		if !reflect.DeepEqual(retained, confirmed.Enrollment) {
+			t.Fatal("restart changed the original binding completion")
+		}
+		// Reset cannot remove the factor or turn the limited password phase
+		// into a Session. The real password completion also loses its TCP reply.
+		var access iamv1.UserAccess
+		call(endpoint, http.MethodGet, "/v1/users/"+string(user.ID), root, nil, http.StatusOK, &access)
+		call(endpoint, http.MethodPost, "/v1/users/"+string(user.ID)+":reset-password", root,
+			map[string]any{"initialPassword": reset, "resourceVersion": access.User.ResourceVersion, "requestId": "process-mfa-reset"}, http.StatusOK, nil)
+		call(replica, http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized, nil)
+		// Neither the consumed winner nor the unfinished losing challenge can
+		// survive reset. These rejections must precede any new OTP reservation.
+		call(endpoint, http.MethodPost, "/v1/auth/challenges/"+a.Challenge.ID+":verify", "", requests[0], http.StatusUnauthorized, nil)
+		call(replica, http.MethodPost, "/v1/auth/challenges/"+b.Challenge.ID+":verify", "", requests[1], http.StatusUnauthorized, nil)
+		forced := challenge(replica, reset, "process-mfa-forced-login")
+		if err := admin.QueryRow(ctx, "SELECT last_consumed_step FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$2", user.AccountID, factor).Scan(&step); err != nil {
+			t.Fatal("read forced process OTP consumption")
+		}
+		fresh, _ := nextCode(step, false)
+		var passwordPhase iamv1.LoginResponse
+		call(endpoint, http.MethodPost, "/v1/auth/challenges/"+forced.Challenge.ID+":verify", "", verifyRequest(forced, fresh, "process-mfa-forced-verify"), http.StatusOK, &passwordPhase)
+		if iamv1.ValidateLoginResponse(passwordPhase) != nil || passwordPhase.Outcome != iamv1.LoginChallengeRequired || passwordPhase.Challenge.NextStep != "PASSWORD_CHANGE" ||
+			passwordPhase.Challenge.ID == forced.Challenge.ID || !passwordPhase.Challenge.ExpiresAt.Equal(forced.Challenge.ExpiresAt) {
+			t.Fatal("forced change lacks its distinct bounded challenge")
+		}
+		passwordIntent := map[string]string{"requestId": "process-mfa-forced-password", "challengeCredential": secret(passwordPhase.ChallengeCredential), "newPassword": final}
+		result := loseIAMCompletion(t, ctx, replica, "/v1/auth/challenges/"+passwordPhase.Challenge.ID+":password", "", passwordIntent)
+		var changed iamv1.ChallengePasswordChangeResponse
+		if iamv1.DecodeRequest(bytes.NewReader(result.Body), &changed) != nil || changed.NextStep != "REAUTHENTICATE" {
+			t.Fatal("lost password completion did not require normal reauthentication")
+		}
+		clear(result.Body)
+		restartIAM()
+		call(endpoint, http.MethodPost, "/v1/auth/challenges/"+passwordPhase.Challenge.ID+":password", "", passwordIntent, http.StatusUnauthorized, nil)
+		call(replica, http.MethodPost, "/v1/auth/login", "", map[string]string{"loginName": realm, "password": reset, "requestId": "process-mfa-old-password"}, http.StatusUnauthorized, nil)
+		newChallenge := challenge(endpoint, final, "process-mfa-final-login")
+		if err := admin.QueryRow(ctx, "SELECT last_consumed_step FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$2", user.AccountID, factor).Scan(&step); err != nil {
+			t.Fatal("read final process OTP consumption")
+		}
+		fresh, _ = nextCode(step, false)
+		call(replica, http.MethodPost, "/v1/auth/challenges/"+newChallenge.Challenge.ID+":verify", "", verifyRequest(newChallenge, fresh, "process-mfa-final-verify"), http.StatusOK, &authenticated)
+		if iamv1.ValidateLoginResponse(authenticated) != nil || authenticated.Outcome != iamv1.LoginAuthenticated {
+			t.Fatal("new password and fresh factor did not authenticate")
+		}
+		bearer = secret(authenticated.Credential)
+		getPaaSApplication(t, paasEndpoint, bearer, "application-process", http.StatusOK)
+		call(endpoint, http.MethodGet, "/v1/users/"+string(user.ID), root, nil, http.StatusOK, &access)
+		call(endpoint, http.MethodPost, "/v1/users/"+string(user.ID)+":set-status", root,
+			iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: access.User.ResourceVersion, RequestID: "process-mfa-disable"}, http.StatusOK, nil)
+		call(replica, http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized, nil)
+		getPaaSApplication(t, paasEndpoint, bearer, "application-process", http.StatusUnauthorized)
+		queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusUnauthorized)
+		_, boundEvent = findIAMEvent(t, ctx, admin, auditv1.ActionIAMAuthenticatorBound, string(user.ID))
+		assertAuditEventCount(t, ctx, admin, string(boundEvent.EventID), 0)
+	})
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	page := queryAudit(t, auditEndpoint, root, auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMAuthenticatorBound}, http.StatusOK)
+	if len(page.Records) != 1 || page.Records[0].Event != boundEvent || page.Records[0].Source != auditv1.SourceIAM {
+		t.Fatal("historical binding lost immutable USER attribution")
+	}
+	for i := 0; i < 2; i++ {
+		response := performJSON(t, http.MethodPost, auditEndpoint+"/v1/events", iamServiceCredential, boundEvent)
+		var replay auditv1.IngestionResult
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &replay) != nil || replay.Outcome != auditv1.IngestionDuplicate || replay.Record != page.Records[0] {
+			t.Fatal("binding replay changed original Audit record")
+		}
+	}
+	forged := boundEvent
+	forged.RequestID = "process-mfa-forged-fact"
+	call(auditEndpoint, http.MethodPost, "/v1/events", iamServiceCredential, forged, http.StatusForbidden, nil)
+	if verification := verifyAudit(t, auditEndpoint, root); verification.State != auditv1.VerificationVerified || !verification.Complete {
+		t.Fatal("MFA facts broke original tenant chain")
+	}
+	t.Log("actual IAM replicas/PaaS/Audit: binding and forced-password commits survived lost TCP replies/restart; one cross-process OTP success; disabled USER history delivered once")
+	return sensitive
+}
+
+// Only this synthetic fixture knows its own wrapping key. Reuse the public
+// cipher-context owner and standard primitives to obtain the HTTP-issued
+// contact code. This is NOT SMTP delivery or a production recovery endpoint.
+func readProcessContactCode(t *testing.T, ctx context.Context, admin *pgx.Conn, verification iamv1.NotificationContactVerification) string {
+	t.Helper()
+	binding := iamv1.EmailVerificationBinding{AccountID: verification.AccountID, UserID: verification.UserID, VerificationID: verification.ID}
+	var keyID string
+	var nonce, ciphertext []byte
+	if err := admin.QueryRow(ctx, `SELECT installation_id,bootstrap_digest,email,credential_generation,contact_revision,issued_at,expires_at,key_id,nonce,ciphertext
+		FROM iam.notification_contact_verifications WHERE tenant_id=$1 AND id=$2`, verification.AccountID, verification.ID).Scan(&binding.InstallationID, &binding.BootstrapDigest, &binding.Recipient, &binding.CredentialGeneration, &binding.ContactRevision, &binding.IssuedAt, &binding.ExpiresAt, &keyID, &nonce, &ciphertext); err != nil {
+		t.Fatal("read synthetic process contact envelope")
+	}
+	binding.IssuedAt, binding.ExpiresAt = binding.IssuedAt.UTC(), binding.ExpiresAt.UTC()
+	info, aad, err := iamv1.EmailVerificationCipherContext(binding, keyID)
+	defer clear(info)
+	defer clear(aad)
+	if err != nil || keyID != "process-mail" {
+		t.Fatal("invalid process contact binding")
+	}
+	key, err := hkdf.Key(sha256.New, bytes.Repeat([]byte{0x63}, 32), []byte("matrix.iam.email-verification.hkdf-sha256.v1"), string(info), 32)
+	defer clear(key)
+	if err != nil {
+		t.Fatal("derive synthetic process contact key")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		t.Fatal("create synthetic process contact cipher")
+	}
+	aead, err := cipher.NewGCMWithRandomNonce(block)
+	if err != nil {
+		t.Fatal("create synthetic process contact AEAD")
+	}
+	plaintext, err := aead.Open(nil, nil, append(nonce, ciphertext...), aad)
+	defer clear(plaintext)
+	if err != nil || len(plaintext) != 8 {
+		t.Fatal("open synthetic process contact code")
+	}
+	return string(plaintext)
+}
+
+// The real IAM process commits the command before this proxy aborts only the
+// TCP response. The captured result is test evidence, never a client retry.
+func loseIAMCompletion(t *testing.T, ctx context.Context, endpoint, path, bearer string, intent any) processResponse {
+	t.Helper()
+	target, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	transport := &http.Transport{DisableKeepAlives: true, MaxConnsPerHost: 1}
+	proxy.Transport = transport
+	completed := make(chan processResponse, 1)
+	proxy.ModifyResponse = func(response *http.Response) error {
+		body, err := io.ReadAll(io.LimitReader(response.Body, 8193))
+		_ = response.Body.Close()
+		result := processResponse{Status: response.StatusCode, Body: body}
+		if err != nil || len(body) > 8192 {
+			result = processResponse{}
+		}
+		completed <- result
+		return errors.New("synthetic lost IAM completion")
+	}
+	proxy.ErrorHandler = func(http.ResponseWriter, *http.Request, error) { panic(http.ErrAbortHandler) }
+	lost := httptest.NewUnstartedServer(proxy)
+	lost.Config.ReadHeaderTimeout, lost.Config.WriteTimeout = 5*time.Second, 10*time.Second
+	lost.Start()
+	defer lost.Close()
+	defer transport.CloseIdleConnections()
+	body, err := json.Marshal(intent)
+	defer clear(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, lost.URL+path, bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bearer != "" {
+		request.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Transport: transport, Timeout: 10 * time.Second}
+	response, lostErr := client.Do(request)
+	if response != nil {
+		_ = response.Body.Close()
+	}
+	if lostErr == nil {
+		t.Fatal("client received a supposedly lost completion")
+	}
+	select {
+	case result := <-completed:
+		if result.Status != http.StatusOK || len(result.Body) == 0 {
+			t.Fatalf("lost response did not follow an actual successful IAM command (status=%d)", result.Status)
+		}
+		return result
+	case <-time.After(10 * time.Second):
+		t.Fatal("lost reply did not reach IAM")
+	case <-ctx.Done():
+		t.Fatal("lost reply gate expired")
+	}
+	return processResponse{}
+}
+
+// These are real application resources, database-service records and reserved
+// quota. The local provisioner gate separately proves a running engine.
 
 func proveTenantAccountProcesses(
 	t *testing.T,
@@ -3479,6 +4214,7 @@ func createProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 		group string
 	}{
 		{iamAPILogin, "matrix_iam_api"},
+		{iamReplicaLogin, "matrix_iam_api"},
 		{iamWorkerLogin, "matrix_iam_worker"},
 		{localRecoveryProcessLogin, "matrix_iam_credential_recovery"},
 		{auditRuntimeLogin, "matrix_audit_runtime"},

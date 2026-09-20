@@ -75,7 +75,7 @@ func TestTOTPCustodyFencesActualLoginAndSessionNotOnlyReadiness(t *testing.T) {
 			case "commitment":
 				stored.Keyset.Keys[0].MaterialCommitment = "sha256:" + strings.Repeat("e", 64)
 			case "unsupported-factor":
-				stored.HasAuthenticators = true
+				stored.HasUnrecognizedAuthenticators = true
 			case "database":
 				tx.totpCustodyErr = ErrUnavailable
 			}
@@ -1170,6 +1170,34 @@ type coreTransaction struct {
 	accessKeyCustodyErr     error
 	totpCustody             *TOTPCustody
 	totpCustodyErr          error
+}
+
+func (*coreTransaction) ReadLoginAuthenticationState(context.Context, iamv1.AccountID, iamv1.PrincipalID) (LoginAuthenticationState, error) {
+	return LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1}, nil
+}
+
+func (*coreTransaction) ReadAuthenticatorState(context.Context, iamv1.Session) (iamv1.AuthenticatorState, error) {
+	return iamv1.AuthenticatorState{}, ErrUnavailable
+}
+
+func (*coreTransaction) StartTOTPEnrollment(context.Context, TOTPEnrollmentStart) (TOTPEnrollmentStartResult, error) {
+	return TOTPEnrollmentStartResult{}, ErrUnavailable
+}
+
+func (*coreTransaction) ReadTOTPEnrollment(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error) {
+	return iamv1.TOTPEnrollment{}, ErrUnavailable
+}
+
+func (*coreTransaction) ReadTOTPEnrollmentByRequest(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error) {
+	return iamv1.TOTPEnrollment{}, ErrUnavailable
+}
+
+func (*coreTransaction) CancelTOTPEnrollment(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error) {
+	return iamv1.TOTPEnrollment{}, ErrUnavailable
+}
+
+func (*coreTransaction) ConfirmTOTPEnrollment(context.Context, TOTPEnrollmentConfirmation) (iamv1.TOTPEnrollment, error) {
+	return iamv1.TOTPEnrollment{}, ErrUnavailable
 }
 
 func (transaction *coreTransaction) RegisterTOTPKeyset(_ context.Context, value TOTPKeysetRegistration) error {

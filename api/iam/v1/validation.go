@@ -275,12 +275,152 @@ func ValidateLoginRequest(value LoginRequest) error {
 }
 
 func ValidateLoginResponse(value LoginResponse) error {
-	var problems []error
-	problems = append(problems, ValidateSession(value.Session))
-	if !value.Credential.Present() {
-		problems = append(problems, ErrInvalidSecret)
+	switch value.Outcome {
+	case LoginAuthenticated:
+		if value.Challenge != nil || value.ChallengeCredential.Present() || !value.Credential.Present() ||
+			value.Session.Status != SessionActive || value.Session.RevokedAt != nil {
+			return errors.New("authenticated login result is invalid")
+		}
+		return ValidateSession(value.Session)
+	case LoginChallengeRequired:
+		if value.Challenge == nil || !value.ChallengeCredential.Present() || value.Credential.Present() ||
+			value.Session != (Session{}) || value.MustChangePassword {
+			return errors.New("challenged login result is invalid")
+		}
+		return ValidateAuthenticationChallenge(*value.Challenge)
+	default:
+		return errors.New("login outcome is invalid")
 	}
-	return errors.Join(problems...)
+}
+
+func ValidateVerifyAuthenticationChallengeRequest(value VerifyAuthenticationChallengeRequest) error {
+	if !value.ChallengeCredential.Present() || !value.Code.Present() {
+		return ErrInvalidSecret
+	}
+	// A nonempty malformed OTP is still an authentication attempt. Canonical
+	// six-digit validation occurs only after the shared debit is committed.
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateAuthenticationChallenge(value AuthenticationChallenge) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthenticationChallenge" ||
+		value.Purpose != "LOGIN" || (value.NextStep != "TOTP" && value.NextStep != "PASSWORD_CHANGE") {
+		return errors.New("authentication challenge is invalid")
+	}
+	return errors.Join(ValidateID("challenge.id", value.ID), validateTime("challenge.expiresAt", value.ExpiresAt))
+}
+
+func ValidateChallengePasswordChangeRequest(value ChallengePasswordChangeRequest) error {
+	if !value.ChallengeCredential.Present() || !value.NewPassword.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateChallengePasswordChangeResponse(value ChallengePasswordChangeResponse) error {
+	if value.NextStep != "REAUTHENTICATE" {
+		return errors.New("password challenge completion is invalid")
+	}
+	return validateTime("changedAt", value.ChangedAt)
+}
+
+func ValidateAuthenticatorState(value AuthenticatorState) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthenticatorState" || value.FactorRevision == 0 || value.FactorRevision > 9007199254740991 {
+		return errors.New("authenticator state is invalid")
+	}
+	switch value.EnrollmentState {
+	case "NEVER_BOUND":
+		if value.FactorRevision != 1 || value.FactorID != "" {
+			return errors.New("first enrollment state is invalid")
+		}
+	case "BOUND":
+		if value.FactorRevision <= 1 || ValidateID("factorId", value.FactorID) != nil {
+			return errors.New("bound authenticator is invalid")
+		}
+	case "RECOVERY_REQUIRED":
+		if value.FactorID != "" && ValidateID("factorId", value.FactorID) != nil {
+			return errors.New("recovery authenticator is invalid")
+		}
+	default:
+		return errors.New("authenticator state is invalid")
+	}
+	return nil
+}
+
+func ValidateTOTPEnrollment(value TOTPEnrollment) error {
+	if value.APIVersion != APIVersion || value.Kind != "TOTPEnrollment" || value.FactorRevision == 0 || value.FactorRevision > 9007199254740990 ||
+		ValidateID("id", value.ID) != nil || ValidateID("requestId", value.RequestID) != nil ||
+		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
+		value.ExpiresAt.Sub(value.CreatedAt) != 5*time.Minute {
+		return errors.New("TOTP enrollment is invalid")
+	}
+	switch value.State {
+	case "PENDING":
+		if value.CompletedAt != nil {
+			return errors.New("pending enrollment has completion")
+		}
+	case "CONFIRMED", "CANCELLED", "EXPIRED":
+		if value.CompletedAt == nil || validateTime("completedAt", *value.CompletedAt) != nil || value.CompletedAt.Before(value.CreatedAt) ||
+			(value.State == "CONFIRMED" && !value.CompletedAt.Before(value.ExpiresAt)) {
+			return errors.New("enrollment completion is invalid")
+		}
+	default:
+		return errors.New("enrollment state is invalid")
+	}
+	return nil
+}
+
+func ValidateStartTOTPEnrollmentRequest(value StartTOTPEnrollmentRequest) error {
+	if !value.Password.Present() {
+		return ErrInvalidSecret
+	}
+	if value.ExpectedFactorRevision == 0 || value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("factor revision is invalid")
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateStartTOTPEnrollmentResponse(value StartTOTPEnrollmentResponse) error {
+	if err := ValidateTOTPEnrollment(value.Enrollment); err != nil {
+		return err
+	}
+	switch value.Outcome {
+	case "APPLIED":
+		if value.Enrollment.State != "PENDING" || value.Provisioning == nil || !value.Provisioning.Seed.Present() || !value.Provisioning.URI.Present() {
+			return errors.New("applied enrollment is invalid")
+		}
+	case "EQUAL_REPLAY":
+		if value.Provisioning != nil {
+			return errors.New("replayed enrollment contains provisioning")
+		}
+	default:
+		return errors.New("enrollment outcome is invalid")
+	}
+	return nil
+}
+
+func ValidateConfirmTOTPEnrollmentRequest(value ConfirmTOTPEnrollmentRequest) error {
+	if !value.Code.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateConfirmTOTPEnrollmentResponse(value ConfirmTOTPEnrollmentResponse) error {
+	if err := ValidateTOTPEnrollment(value.Enrollment); err != nil {
+		return err
+	}
+	if value.Enrollment.State != "CONFIRMED" || value.NextStep != "REAUTHENTICATE" || len(value.RecoveryCodes) != 10 {
+		return errors.New("enrollment confirmation is invalid")
+	}
+	seen := make(map[string]bool, 10)
+	for _, code := range value.RecoveryCodes {
+		if !code.Present() || seen[code.reveal()] {
+			return ErrInvalidSecret
+		}
+		seen[code.reveal()] = true
+	}
+	return nil
 }
 
 func ValidateLogoutRequest(value LogoutRequest) error {

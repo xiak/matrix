@@ -5931,18 +5931,19 @@ func TestIAMLoginResponsePublishesPasswordChangeRequirement(t *testing.T) {
 	if _, exists := properties["mustChangePassword"]; !exists {
 		t.Fatal("login response does not publish the password-change requirement")
 	}
-	required, ok := login["required"].([]any)
-	if !ok {
-		t.Fatalf("login response required fields = %#v", login["required"])
+	schema := compileIAMOpenAPISchema(t, document, "LoginResponse")
+	encoded, err := EncodeLoginResponse(decodeIAMExample[LoginResponse](t, "examples/login-response.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	found := false
-	for _, field := range required {
-		if field == "mustChangePassword" {
-			found = true
-		}
+	defer clear(encoded)
+	var fixture map[string]any
+	if json.Unmarshal(encoded, &fixture) != nil || schema.Validate(fixture) != nil {
+		t.Fatal("valid authenticated response is rejected")
 	}
-	if !found {
-		t.Fatal("login response password-change requirement is optional")
+	delete(fixture, "mustChangePassword")
+	if schema.Validate(fixture) == nil {
+		t.Fatal("authenticated response omitted its password-change requirement")
 	}
 }
 

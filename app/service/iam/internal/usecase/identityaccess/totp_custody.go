@@ -24,8 +24,8 @@ type TOTPKeysetRegistration struct {
 }
 
 type TOTPCustody struct {
-	Keyset            TOTPKeysetRegistration `json:"keyset"`
-	HasAuthenticators bool                   `json:"hasAuthenticators"`
+	Keyset                        TOTPKeysetRegistration `json:"keyset"`
+	HasUnrecognizedAuthenticators bool                   `json:"hasUnrecognizedAuthenticators"`
 }
 
 func newTOTPRegistration(document *iamv1.TOTPKeyring) (*TOTPKeysetRegistration, error) {
@@ -89,11 +89,10 @@ func (service *Authority) checkTOTPCustody(ctx context.Context, tx Transaction) 
 			return ErrUnavailable
 		}
 	}
-	// This preparation implementation cannot interpret a factor lifecycle yet.
-	// Even a retained/revoked row cannot be reinterpreted as "never bound".
-	// The check protects direct requests as well as readiness, and must be
-	// replaced by actual factor/Session rules in the enabling vertical slice.
-	if actual.HasAuthenticators {
+	// Known factor lifecycles are checked by each User/Session transaction.
+	// Unrecognized retained history or corrupt custody can never be treated as
+	// optional MFA or a password-only fallback, including after restart.
+	if actual.HasUnrecognizedAuthenticators {
 		return ErrUnavailable
 	}
 	return nil

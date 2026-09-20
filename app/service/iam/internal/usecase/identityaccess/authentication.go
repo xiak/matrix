@@ -5,7 +5,6 @@ import (
 	"errors"
 	"time"
 
-	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 )
@@ -63,63 +62,35 @@ func (service *Authority) Login(
 		if err := service.checkTOTPCustody(transactionContext, transaction); err != nil {
 			return err
 		}
-		sessionID, err := service.config.NewID("session")
-		if err != nil {
-			return ErrUnavailable
-		}
-		issued, err := service.credentials.Issue(authority.CredentialSession, sessionID)
-		if err != nil {
-			return ErrUnavailable
-		}
-		now, err := transactionTime(transactionContext, transaction)
+		state, err := transaction.ReadLoginAuthenticationState(transactionContext, attempt.AccountID, attempt.PrincipalID)
 		if err != nil {
 			return err
 		}
-		session := iamv1.Session{
-			APIVersion:  iamv1.APIVersion,
-			Kind:        "Session",
-			ID:          iamv1.SessionID(sessionID),
-			AccountID:   attempt.AccountID,
-			PrincipalID: attempt.PrincipalID,
-			Status:      iamv1.SessionActive,
-			IssuedAt:    now,
-			ExpiresAt:   now.Add(service.config.SessionLifetime),
+		switch state.State {
+		case "BOUND":
+			response, err = service.createLoginChallenge(transactionContext, transaction, attempt, request.RequestID, requestDigest)
+			return err
+		case "NEVER_BOUND":
+			if state.Revision != 1 || state.FactorID != "" {
+				return ErrUnavailable
+			}
+		default:
+			// Recovery-required/unknown history is not a password-only fallback.
+			return ErrUnauthenticated
 		}
-		eventID, err := service.config.NewID("event")
-		if err != nil {
-			return ErrUnavailable
-		}
-		event, err := newAuditEvent(
-			eventID,
-			attempt.AccountID,
-			"",
-			auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(attempt.PrincipalID)},
-			auditv1.ActionIAMSessionIssued,
-			auditv1.TargetReference{Kind: auditv1.TargetSession, ID: sessionID},
-			auditv1.ResultSucceeded,
-			"",
-			requestDigest,
-			request.RequestID,
-			request.RequestID,
-			now,
-		)
+		mutation, credential, err := service.newSessionMutation(transactionContext, transaction, attempt.AccountID, attempt.PrincipalID, request.RequestID, requestDigest)
 		if err != nil {
 			return err
 		}
-		storedSession, err := transaction.IssueSession(transactionContext, SessionMutation{
-			AttemptID:          attempt.ID,
-			AttemptSequence:    attempt.Sequence,
-			Session:            session,
-			LookupDigest:       issued.LookupDigest,
-			VerificationDigest: issued.VerificationDigest,
-			AuditEvent:         event,
-		})
+		mutation.AttemptID, mutation.AttemptSequence = attempt.ID, attempt.Sequence
+		storedSession, err := transaction.IssueSession(transactionContext, mutation)
 		if err != nil {
 			return err
 		}
 		response = iamv1.LoginResponse{
+			Outcome:            iamv1.LoginAuthenticated,
 			Session:            storedSession,
-			Credential:         issued.Credential,
+			Credential:         credential,
 			MustChangePassword: attempt.MustChangePassword,
 		}
 		return nil

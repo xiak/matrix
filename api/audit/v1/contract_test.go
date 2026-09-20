@@ -34,16 +34,20 @@ func TestCanonicalEventPreservesTenantBytesAndDigest(t *testing.T) {
 	}
 }
 
-func TestNotificationContactFactsRequireTheActualTenantUser(t *testing.T) {
-	for _, action := range []Action{
-		ActionIAMNotificationContactVerificationStarted,
-		ActionIAMNotificationContactVerified,
+func TestSelfServiceSecurityFactsRequireTheActualTenantUser(t *testing.T) {
+	for _, contract := range []struct {
+		action Action
+		target TargetKind
+	}{
+		{ActionIAMNotificationContactVerificationStarted, TargetUser},
+		{ActionIAMNotificationContactVerified, TargetUser},
+		{ActionIAMAuthenticatorBound, TargetPrincipal},
 	} {
-		t.Run(string(action), func(t *testing.T) {
+		t.Run(string(contract.action), func(t *testing.T) {
 			valid := Event{
 				APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-notification-contact",
 				TenantID: "account-one", Actor: ActorReference{Type: ActorUser, ID: "user-one"},
-				Action: action, Target: TargetReference{Kind: TargetUser, ID: "user-one"}, Result: ResultSucceeded,
+				Action: contract.action, Target: TargetReference{Kind: contract.target, ID: "user-one"}, Result: ResultSucceeded,
 				RequestDigest: "sha256:" + strings.Repeat("a", 64), RequestID: "request-one", CorrelationID: "request-one",
 				OccurredAt: time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC),
 			}
@@ -256,7 +260,7 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		if contract.UserActorRequired {
 			event.Actor.Type = ActorUser
 		}
-		if action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified {
+		if action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified || action == ActionIAMAuthenticatorBound {
 			event.Target.ID = string(event.Actor.ID)
 		}
 		if contract.RoleActorRequired {

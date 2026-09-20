@@ -2,7 +2,7 @@
 
 - Status: Complete
 - Target: [`FEAT-005 Offline platform distribution and lifecycle`](../features/FEAT-005-offline-platform-lifecycle.md)
-- Review date: 2026-08-25
+- Review date: 2026-09-21
 - Direct donor dependency allowed: No
 
 ## Fixed baselines
@@ -12,6 +12,10 @@
 | Legacy PaaS | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Read only through Git object commands; exclude its worktree. |
 | IAM/Audit foundation and delivery donor | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Read only through Git object commands; exclude its worktree. |
 | PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Read only through Git object commands; use as rationale, not executable evidence. |
+| Same-repository IAM TOTP backup-custody donor | `285706e3adf76fb0c109dad474f06266c8b67ab5` | Read only as a fixed Git object; exclude its worktree, profile, checkpoint and acceptance state. |
+| Same-repository IAM recovery-code and TOTP primitive donors | `ad93b84fa1cbe902b148e62a9d0f0924a5473a98`, `5e185e95c9d474443a26171a5f2616816e53bdba` | Read only as fixed Git objects; retain the target authority and secret-ownership boundaries. |
+| Same-repository IAM security-mail preparation donors | `841ebe89aa55121ac4686dc469006ed10b47f0eb`, `8ccc632796727261563c952a89e4dfd3ce947144`, `07aa50627318708ed4d3ac9ce481b1e5829669d6` | Read only as fixed Git objects; exclude their PaaS profile, checkpoint, workflow topology and acceptance state. |
+| Same-repository IAM MFA-enabling donor | `f5cec0e132ad18900d9a5a5629eae04fda4817f1` | Read only as a fixed Git object; adapt the authority slice into the target's PaaS-6 and installation-owned release boundary. |
 
 The FEAT-005 supported host, signed bundle, fixed inventory, lifecycle,
 upgrade/rollback semantics, CLI surface, and real offline gates were committed
@@ -46,6 +50,24 @@ GitLab/current-DevOps execution authority, projection roadmap, staged
 integration provider, and legacy UI plan are `REJECT`: FEAT-005 installs the
 new Docker/Compose-first product and cannot subprocess or depend on the old
 DevOps closure.
+
+## Phase 3 TOTP backup-custody comparison
+
+| Slice at fixed source | Decision | Rationale |
+| --- | --- | --- |
+| Existing installation-owned canonical custody adapter at `d479e1c57b6458852dd029227d32f3d56df6c5ad` | `REUSE` | Keep one encoder, decoder and digest owner for the sealed installation/bootstrap scope, keyset revision and sorted required-key commitments. Do not copy the donor's parallel adapter package. |
+| Dedicated backup-custody executable and database identity, read-only repeatable snapshot lease, exact IAM migration shape, bounded process protocol and real PostgreSQL gates | `ADAPT` | Preserve the purpose-only no-table-access identity and same-snapshot evidence. Integrate it into the signed IAM image and installation-owned backup state machine rather than importing the donor branch or widening an existing runtime role. |
+| Donor PaaS-1 profile, FEAT/checkpoint prose, release status and task-local acceptance claims | `REJECT` | The target owns PaaS 6 and independently verifies the `35/18/6+r13` preparation transition. SQL or donor test success cannot substitute for the signed installation backup/recovery gate. |
+
+## Phase 3 MFA-enabling comparison
+
+| Slice at fixed source | Decision | Rationale |
+| --- | --- | --- |
+| Recovery-code hashing, fixed TOTP profile, seed wrapping, key commitments and secret-safe codecs from `ad93b84…` and `5e185e95…` | `ADAPT` | Keep the bounded cryptographic formats and explicit secret transports under the existing installation-owned TOTP custody. Do not add a parallel key owner or make recovery material ordinary JSON. |
+| Purpose-limited security mail, verified notification contact, persistent outbox and restricted dispatcher from `841ebe89…`, `8ccc6327…` and `07aa5062…` | `ADAPT` | Preserve a verified recovery/notification prerequisite, exact delivery observations and a no-table-access worker. Integrate it into the existing IAM/Audit authorities and keep delivery distinct from transaction success. |
+| Transactional first TOTP enrollment, disjoint password-versus-challenge login result, challenge-only forced password completion, Session MFA facts and immutable binding Audit event from `f5cec0e…` | `ADAPT` | Preserve one-time provisioning, exact intent replay, database-time OTP consumption, cross-process serialization, forced reauthentication and fail-closed Session eligibility. Fit the contracts into the target's existing tenant, policy, host and recovery schemas rather than importing the donor branch. |
+| Donor UI, donor PaaS-1 profile, release revision, workflow layout, FEAT/checkpoint prose and task-local acceptance claims | `REJECT` | The target retains PaaS 6 and cannot publish a release profile until its own fixed preparation predecessor, destructive-recovery closure and disconnected signed-runtime gates pass. |
+| Donor real-PostgreSQL and independent-process scenarios | `REFERENCE` then target-owned verification | Recreate their security invariants against the target's restricted roles, PaaS-6 process topology and fixed `07aa5062…` preparation executable. Donor green status alone is not evidence for this release. |
 
 ## Resulting implementation constraints
 

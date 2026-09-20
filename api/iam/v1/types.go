@@ -144,12 +144,109 @@ type LoginRequest struct {
 	RequestID string `json:"requestId"`
 }
 
-// LoginResponse contains the one-time plaintext session credential. Ordinary
-// JSON marshaling is intentionally forbidden; use EncodeLoginResponse.
+// The challenge credential is accepted only in this private request body,
+// never as a generic bearer. The path ID is a reference, not authentication.
+type VerifyAuthenticationChallengeRequest struct {
+	RequestID           string `json:"requestId"`
+	ChallengeCredential Secret `json:"challengeCredential"`
+	Code                Secret `json:"code"`
+}
+
+// ChallengePasswordChangeRequest consumes only a password-change challenge
+// reached through the actual password and TOTP ceremony, never a Session.
+type ChallengePasswordChangeRequest struct {
+	RequestID           string `json:"requestId"`
+	ChallengeCredential Secret `json:"challengeCredential"`
+	NewPassword         Secret `json:"newPassword"`
+}
+
+type ChallengePasswordChangeResponse struct {
+	NextStep  string    `json:"nextStep"`
+	ChangedAt time.Time `json:"changedAt"`
+}
+
+type LoginOutcome string
+
+const (
+	LoginAuthenticated     LoginOutcome = "AUTHENTICATED"
+	LoginChallengeRequired LoginOutcome = "CHALLENGE_REQUIRED"
+)
+
+// AuthenticationChallenge describes the next restricted authentication step,
+// never an identity or permission. LOGIN may require TOTP then a separately
+// credentialed PASSWORD_CHANGE; enrollment, recovery and step-up are not LOGIN.
+type AuthenticationChallenge struct {
+	APIVersion string    `json:"apiVersion"`
+	Kind       string    `json:"kind"`
+	ID         string    `json:"id"`
+	Purpose    string    `json:"purpose"`
+	NextStep   string    `json:"nextStep"`
+	ExpiresAt  time.Time `json:"expiresAt"`
+}
+
+// AuthenticatorState is a projection of the authenticated USER, not a
+// selectable identity, account security policy or inferred permission.
+type AuthenticatorState struct {
+	APIVersion      string `json:"apiVersion"`
+	Kind            string `json:"kind"`
+	EnrollmentState string `json:"enrollmentState"`
+	FactorRevision  uint64 `json:"factorRevision"`
+	FactorID        string `json:"factorId,omitempty"`
+}
+
+type TOTPEnrollment struct {
+	APIVersion     string     `json:"apiVersion"`
+	Kind           string     `json:"kind"`
+	ID             string     `json:"id"`
+	RequestID      string     `json:"requestId"`
+	FactorRevision uint64     `json:"factorRevision"`
+	State          string     `json:"state"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	ExpiresAt      time.Time  `json:"expiresAt"`
+	CompletedAt    *time.Time `json:"completedAt,omitempty"`
+}
+
+type StartTOTPEnrollmentRequest struct {
+	RequestID              string `json:"requestId"`
+	Password               Secret `json:"password"`
+	ExpectedFactorRevision uint64 `json:"expectedFactorRevision"`
+}
+
+type TOTPProvisioning struct {
+	Seed Secret `json:"seed"`
+	URI  Secret `json:"uri"`
+}
+
+// Only APPLIED contains provisioning. An equal replay cannot recover a seed.
+type StartTOTPEnrollmentResponse struct {
+	Outcome      string            `json:"outcome"`
+	Enrollment   TOTPEnrollment    `json:"enrollment"`
+	Provisioning *TOTPProvisioning `json:"provisioning,omitempty"`
+}
+
+type ConfirmTOTPEnrollmentRequest struct {
+	RequestID string `json:"requestId"`
+	Code      Secret `json:"code"`
+}
+
+// The binding has committed before this response. Saving codes is not another
+// transaction, and closing a page cannot undo the binding or revive a session.
+type ConfirmTOTPEnrollmentResponse struct {
+	Enrollment    TOTPEnrollment `json:"enrollment"`
+	NextStep      string         `json:"nextStep"`
+	RecoveryCodes []Secret       `json:"recoveryCodes"`
+}
+
+// LoginResponse is a disjoint result. Only AUTHENTICATED contains a Session;
+// CHALLENGE_REQUIRED contains no login bearer or password-change entitlement.
+// Ordinary JSON marshaling is forbidden; use EncodeLoginResponse.
 type LoginResponse struct {
-	Session            Session `json:"session"`
-	Credential         Secret  `json:"credential"`
-	MustChangePassword bool    `json:"mustChangePassword"`
+	Outcome             LoginOutcome             `json:"outcome"`
+	Session             Session                  `json:"session,omitempty"`
+	Credential          Secret                   `json:"credential,omitempty"`
+	MustChangePassword  bool                     `json:"mustChangePassword,omitempty"`
+	Challenge           *AuthenticationChallenge `json:"challenge,omitempty"`
+	ChallengeCredential Secret                   `json:"challengeCredential,omitempty"`
 }
 
 type LogoutRequest struct {

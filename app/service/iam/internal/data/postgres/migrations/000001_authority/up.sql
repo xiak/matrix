@@ -780,13 +780,12 @@ BEGIN
             AND cardinality(conkey)=2 AND conkey @> ARRAY[purpose_column,session_column] LOOP
         EXECUTE format('ALTER TABLE iam.password_attempts DROP CONSTRAINT %I',legacy_constraint);
     END LOOP;
-    IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid='iam.password_attempts'::regclass AND conname='password_attempt_purpose_valid') THEN
-        ALTER TABLE iam.password_attempts ADD CONSTRAINT password_attempt_purpose_valid CHECK (
+    ALTER TABLE iam.password_attempts DROP CONSTRAINT IF EXISTS password_attempt_purpose_valid;
+    ALTER TABLE iam.password_attempts ADD CONSTRAINT password_attempt_purpose_valid CHECK (
             (purpose='LOGIN' AND session_id IS NULL AND intent_digest IS NULL)
             OR (purpose='PASSWORD_CHANGE' AND session_id IS NOT NULL AND intent_digest IS NULL)
-            OR (purpose='NOTIFICATION_CONTACT_VERIFY' AND session_id IS NOT NULL AND intent_digest IS NOT NULL
+            OR (purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT') AND session_id IS NOT NULL AND intent_digest IS NOT NULL
                 AND intent_digest ~ '^sha256:[0-9a-f]{64}$'));
-    END IF;
 END $password_purpose$;
 
 CREATE TABLE IF NOT EXISTS iam.session_index (
@@ -1203,7 +1202,7 @@ BEGIN
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.password.changed', 'iam.user.password-changed', 'iam.installation-primary.credentials-recovered',
             'iam.role-session.revoked','iam.role-session.exited',
-            'iam.notification-contact.verification-started','iam.notification-contact.verified'
+            'iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound'
         ) AND submitted_event ? 'iamDecisionId')
         OR (expected_action IN (
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
@@ -1651,6 +1650,7 @@ BEGIN
            AND iam.password_attempt_contract_ready()
 		   AND iam.totp_custody_contract_ready()
 		   AND iam.totp_backup_custody_contract_ready()
+		   AND iam.totp_authentication_contract_ready()
 		   AND iam.notification_contract_ready()
 		   AND iam.authentication_recovery_contract_ready()
            AND to_regprocedure('iam.change_password(text,text,text,text,jsonb)') IS NULL
@@ -1705,7 +1705,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-		   37::bigint,
+		   38::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1797,7 +1797,7 @@ BEGIN
     IF submitted_purpose IS NULL OR NOT (
         (submitted_purpose='LOGIN' AND submitted_login_name IS NOT NULL AND submitted_intent_digest IS NULL)
         OR (submitted_purpose='PASSWORD_CHANGE' AND submitted_login_name IS NULL AND submitted_intent_digest IS NULL)
-        OR (submitted_purpose='NOTIFICATION_CONTACT_VERIFY' AND submitted_login_name IS NULL
+        OR (submitted_purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT') AND submitted_login_name IS NULL
             AND submitted_intent_digest IS NOT NULL AND submitted_intent_digest ~ '^sha256:[0-9a-f]{64}$')) THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='password attempt purpose is invalid';
     END IF;
@@ -1821,14 +1821,15 @@ BEGIN
     SELECT * INTO subject FROM iam.principals p WHERE p.tenant_id=account_id AND p.id=user_id
         AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL FOR UPDATE;
     IF NOT FOUND THEN RETURN; END IF;
-    IF submitted_purpose='NOTIFICATION_CONTACT_VERIFY' AND subject.must_change_password THEN RETURN; END IF;
+    IF submitted_purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT') AND subject.must_change_password THEN RETURN; END IF;
     SELECT * INTO credential FROM iam.user_credentials c WHERE c.tenant_id=account_id AND c.principal_id=user_id FOR UPDATE;
     IF NOT FOUND THEN RETURN; END IF;
     IF submitted_session_id IS NOT NULL THEN
         SELECT * INTO caller FROM iam.sessions s WHERE s.tenant_id=account_id AND s.principal_id=user_id
             AND s.id=submitted_session_id FOR UPDATE;
         IF NOT FOUND OR caller.status<>'ACTIVE' OR caller.revoked_at IS NOT NULL
-            OR caller.credential_version IS DISTINCT FROM credential.credential_version THEN RETURN; END IF;
+            OR caller.credential_version IS DISTINCT FROM credential.credential_version
+            OR NOT iam.session_mfa_eligible(account_id,user_id,submitted_session_id) THEN RETURN; END IF;
     END IF;
     SELECT * INTO budget FROM iam.password_attempts b WHERE b.tenant_id=account_id AND b.principal_id=user_id FOR UPDATE;
     effective_now:=clock_timestamp();
@@ -1913,12 +1914,13 @@ BEGIN
         OR budget.credential_version<>credential.credential_version OR budget.account_version<>account_version
         OR budget.principal_version<>subject.resource_version OR budget.expires_at<=effective_now
         OR (session_id IS NOT NULL AND caller.expires_at<=effective_now)
-        OR (expected_purpose='NOTIFICATION_CONTACT_VERIFY' AND subject.must_change_password) THEN
+        OR (expected_purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT') AND subject.must_change_password)
+        OR (session_id IS NOT NULL AND NOT iam.session_mfa_eligible(tenant,subject_id,session_id)) THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password attempt is unavailable';
     END IF;
     UPDATE iam.password_attempts b SET state='SUCCEEDED',completed_at=effective_now,
-        used_attempts=CASE WHEN expected_purpose='NOTIFICATION_CONTACT_VERIFY' THEN b.used_attempts ELSE 0 END,
-        window_started_at=CASE WHEN expected_purpose='NOTIFICATION_CONTACT_VERIFY' THEN b.window_started_at ELSE effective_now END
+        used_attempts=CASE WHEN expected_purpose='PASSWORD_CHANGE' THEN 0 ELSE b.used_attempts END,
+        window_started_at=CASE WHEN expected_purpose='PASSWORD_CHANGE' THEN effective_now ELSE b.window_started_at END
         WHERE b.tenant_id=tenant AND b.principal_id=subject_id;
     RETURN credential.credential_version;
 END
@@ -1945,6 +1947,7 @@ DECLARE
     effective_now timestamptz(6) := transaction_timestamp();
     effective_expires_at timestamptz(6);
     password_version bigint;
+    authentication_state jsonb;
 BEGIN
     IF submitted_session_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_tenant_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -1957,7 +1960,13 @@ BEGIN
     END IF;
     effective_expires_at := effective_now + make_interval(secs => submitted_lifetime_seconds);
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
+    authentication_state:=iam.login_authentication_state(submitted_tenant_id,submitted_principal_id);
+    IF authentication_state->>'state' IS DISTINCT FROM 'NEVER_BOUND' THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='further authentication is required';
+    END IF;
     password_version:=iam.consume_password_attempt(submitted_tenant_id,submitted_principal_id,NULL,submitted_attempt_id,submitted_attempt_sequence,'LOGIN',NULL);
+    UPDATE iam.password_attempts b SET used_attempts=0,window_started_at=clock_timestamp()
+        WHERE b.tenant_id=submitted_tenant_id AND b.principal_id=submitted_principal_id;
     PERFORM iam.assert_audit_event(
         submitted_audit_event, submitted_tenant_id,
         'iam.session.issued', 'SESSION', submitted_session_id, 'SUCCEEDED'
@@ -1965,11 +1974,11 @@ BEGIN
     PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_principal_id,submitted_audit_event);
     INSERT INTO iam.sessions (
         tenant_id, id, principal_id, verification_digest, status, resource_version,
-        issued_at, expires_at, credential_version
+        issued_at, expires_at, credential_version, authentication_method, authenticated_at, mfa_revision
     ) VALUES (
         submitted_tenant_id, submitted_session_id, submitted_principal_id,
         submitted_verification_digest, 'ACTIVE', 1, effective_now,
-        effective_expires_at, password_version
+        effective_expires_at, password_version, 'PASSWORD', effective_now, (authentication_state->>'revision')::bigint
     );
     INSERT INTO iam.session_index (lookup_digest, tenant_id, session_id)
     VALUES (submitted_lookup_digest, submitted_tenant_id, submitted_session_id);
@@ -2125,6 +2134,7 @@ BEGIN
        AND session.revoked_at IS NULL
        AND session.expires_at > transaction_timestamp()
        AND session.credential_version = credential.credential_version
+       AND iam.session_mfa_eligible(session.tenant_id,session.principal_id,session.id)
        AND organization.status = 'ACTIVE'
        AND principal.status = 'ACTIVE';
 END

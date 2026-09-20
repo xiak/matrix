@@ -24,14 +24,14 @@ func (value *transaction) ReadTOTPCustody(ctx context.Context) (identityaccess.T
 		return identityaccess.TOTPCustody{}, mapDatabaseError("read IAM TOTP custody", err)
 	}
 	var stored struct {
-		Keyset            *identityaccess.TOTPKeysetRegistration `json:"keyset"`
-		HasAuthenticators *bool                                  `json:"hasAuthenticators"`
+		Keyset                        *identityaccess.TOTPKeysetRegistration `json:"keyset"`
+		HasUnrecognizedAuthenticators *bool                                  `json:"hasUnrecognizedAuthenticators"`
 	}
 	if contractjson.DecodeObjectBytes(encoded, iamv1.MaxTOTPKeyringBytes, &stored) != nil ||
-		stored.Keyset == nil || stored.HasAuthenticators == nil ||
+		stored.Keyset == nil || stored.HasUnrecognizedAuthenticators == nil ||
 		stored.Keyset.Keys == nil || len(stored.Keyset.Keys) == 0 || len(stored.Keyset.Keys) > iamv1.MaxTOTPWrappingKeys {
 		return identityaccess.TOTPCustody{}, identityaccess.ErrUnavailable
 	}
 	// The use case compares every registration field with validated material.
-	return identityaccess.TOTPCustody{Keyset: *stored.Keyset, HasAuthenticators: *stored.HasAuthenticators}, nil
+	return identityaccess.TOTPCustody{Keyset: *stored.Keyset, HasUnrecognizedAuthenticators: *stored.HasUnrecognizedAuthenticators}, nil
 }

@@ -7,6 +7,7 @@ import (
 	"crypto/hkdf"
 	"crypto/sha256"
 	"encoding/base32"
+	"encoding/base64"
 	"errors"
 	"io"
 	"time"
@@ -35,6 +36,54 @@ type TOTPSeedScope struct {
 	AccountID    iamv1.AccountID
 	UserID       iamv1.PrincipalID
 	FactorID     string
+}
+
+// TOTPSeedProtector owns an immutable copy of this process's validated material.
+// It provides no factor lifecycle, registration or recovery authority.
+type TOTPSeedProtector struct {
+	scope       iamv1.TOTPWrappingScope
+	activeKeyID string
+	keys        map[string][]byte
+}
+
+func (*TOTPSeedProtector) String() string               { return "[REDACTED]" }
+func (*TOTPSeedProtector) GoString() string             { return "authority.TOTPSeedProtector{[REDACTED]}" }
+func (*TOTPSeedProtector) MarshalJSON() ([]byte, error) { return nil, ErrTOTPSeedProtection }
+
+func NewTOTPSeedProtector(document iamv1.TOTPKeyring) (*TOTPSeedProtector, error) {
+	if iamv1.ValidateTOTPKeyring(document) != nil {
+		return nil, ErrTOTPSeedProtection
+	}
+	value := &TOTPSeedProtector{scope: document.Scope, activeKeyID: document.ActiveKeyID, keys: make(map[string][]byte, len(document.Keys))}
+	for _, key := range document.Keys {
+		encoded := key.KeyMaterial.CopyBytes()
+		material := make([]byte, 32)
+		n, err := base64.RawURLEncoding.Strict().Decode(material, encoded)
+		clear(encoded)
+		if err != nil || n != 32 {
+			clear(material)
+			for _, stored := range value.keys {
+				clear(stored)
+			}
+			return nil, ErrTOTPSeedProtection
+		}
+		value.keys[key.KeyID] = material
+	}
+	return value, nil
+}
+
+func (value *TOTPSeedProtector) Open(scope TOTPSeedScope, sealed SealedTOTPSeed) (iamv1.Secret, error) {
+	if value == nil || scope.Installation != value.scope {
+		return iamv1.Secret{}, ErrTOTPSeedProtection
+	}
+	return OpenTOTPSeed(scope, sealed.KeyID, value.keys[sealed.KeyID], sealed)
+}
+
+func (value *TOTPSeedProtector) Seal(scope TOTPSeedScope, seed iamv1.Secret) (SealedTOTPSeed, error) {
+	if value == nil || scope.Installation != value.scope {
+		return SealedTOTPSeed{}, ErrTOTPSeedProtection
+	}
+	return SealTOTPSeed(scope, value.activeKeyID, value.keys[value.activeKeyID], seed)
 }
 
 // Ciphertext and its metadata stay in the private factor authority. Even a

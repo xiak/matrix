@@ -40,6 +40,7 @@ const (
 	ActionIAMUserPasswordChanged                    Action = "iam.user.password-changed"
 	ActionIAMNotificationContactVerificationStarted Action = "iam.notification-contact.verification-started"
 	ActionIAMNotificationContactVerified            Action = "iam.notification-contact.verified"
+	ActionIAMAuthenticatorBound                     Action = "iam.authenticator.bound"
 	ActionIAMRoleCreated                            Action = "iam.role.created"
 	ActionIAMRoleUpdated                            Action = "iam.role.updated"
 	ActionIAMRoleDisabled                           Action = "iam.role.disabled"
@@ -231,6 +232,7 @@ var allActions = []Action{
 	ActionIAMUserPasswordChanged,
 	ActionIAMNotificationContactVerificationStarted,
 	ActionIAMNotificationContactVerified,
+	ActionIAMAuthenticatorBound,
 	ActionIAMGroupCreated,
 	ActionIAMRoleCreated,
 	ActionIAMRoleUpdated,
@@ -349,6 +351,7 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionIAMNotificationContactVerificationStarted: {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMNotificationContactVerified:            {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMAuthenticatorBound:                     {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMGroupCreated: {
 		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},

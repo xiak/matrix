@@ -137,8 +137,22 @@ func buildPaths() object {
 			[]any{object{"ServiceCredential": []string{}}}, nil,
 		)},
 		"/v1/auth/login": object{"post": mutationOperation(
-			"login", "Log in with a password", "LoginRequest", "LoginResponse", "200", []any{}, nil,
+			"login", "Verify a password and issue either a login session or a restricted authentication challenge", "LoginRequest", "LoginResponse", "200", []any{}, nil,
 		)},
+		"/v1/auth/challenges/{challengeId}:verify": object{"post": mutationOperation(
+			"verifyAuthenticationChallenge", "Consume the current login challenge and a fresh TOTP; its secret is not a bearer or permission", "VerifyAuthenticationChallengeRequest", "LoginResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+		)},
+		"/v1/auth/challenges/{challengeId}:password": object{"post": mutationOperation(
+			"changeChallengePassword", "Consume only a password-and-TOTP authenticated forced-change challenge; revoke all old sessions and challenges, then require a fresh login", "ChallengePasswordChangeRequest", "ChallengePasswordChangeResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+		)},
+		"/v1/auth/authenticators":   object{"get": readOperation("getAuthenticatorState", "Read this actual login USER's persisted factor state; no inferred settings or permissions", "AuthenticatorState", nil, nil)},
+		"/v1/auth/totp/enrollments": object{"post": mutationOperation("startTOTPEnrollment", "Reauthenticate the current password and start first TOTP enrollment; only APPLIED discloses provisioning", "StartTOTPEnrollmentRequest", "StartTOTPEnrollmentResponse", "200", nil, nil)},
+		"/v1/auth/totp/enrollments/{enrollmentId}": object{
+			"get":    readOperation("getTOTPEnrollment", "Read original enrollment metadata, never its seed or recovery codes", "TOTPEnrollment", nil, []any{openapi31.PathIDParameter("enrollmentId")}),
+			"delete": readOperation("cancelTOTPEnrollment", "Irreversibly cancel a pending enrollment, never an already confirmed binding; no body", "TOTPEnrollment", nil, []any{openapi31.PathIDParameter("enrollmentId")}),
+		},
+		"/v1/auth/totp/enrollments/by-request/{requestId}": object{"get": readOperation("getTOTPEnrollmentByRequest", "Find original same-USER metadata after a lost response; NOT_FOUND is not evidence of rollback", "TOTPEnrollment", nil, []any{openapi31.PathIDParameter("requestId")})},
+		"/v1/auth/totp/enrollments/{enrollmentId}:confirm": object{"post": mutationOperation("confirmTOTPEnrollment", "Commit binding, OTP consumption, recovery batch, notice and session revocation; return codes once then reauthenticate", "ConfirmTOTPEnrollmentRequest", "ConfirmTOTPEnrollmentResponse", "200", nil, []any{openapi31.PathIDParameter("enrollmentId")})},
 		"/v1/auth/me":                object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
 		"/v1/authorization-profiles": object{"get": readOperation("listAuthorizationProfiles", "Read complete current product declarations under current account policy-list permission; metadata is not a permit or registration capability. Maximum complete response 64 KiB.", "AuthorizationProfileList", nil, nil)},
 		"/v1/policies": object{
@@ -263,7 +277,7 @@ func mutationOperation(
 ) object {
 	responses := openapi31.ProblemResponses("400", "401", "403", "409", "413", "415", "422", "500", "503")
 	responses[status] = openapi31.JSONResponse("Command completed.", responseSchema)
-	if operationID == "login" || operationID == "changePassword" {
+	if operationID == "login" || operationID == "changePassword" || operationID == "startTOTPEnrollment" || operationID == "changeChallengePassword" {
 		responses["429"] = object{
 			"description": "This IAM instance's bounded password-work capacity is occupied; this discloses no user-specific attempt budget.",
 			"headers":     object{"Retry-After": object{"schema": object{"type": "string", "const": "1"}}},
@@ -296,6 +310,17 @@ func readOperation(
 	responses := openapi31.ProblemResponses("401", "403", "500", "503")
 	if operationID == "getRoleSessionByRequest" {
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No committed issuance found for this source user and request. This does not authorize a new intent."}
+	}
+	switch operationID {
+	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment":
+		responses["400"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "Invalid path, query or unexpected body; no identity selector is accepted."}
+	}
+	switch operationID {
+	case "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment":
+		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No enrollment metadata found for this authenticated USER and original reference; not evidence that an uncertain command rolled back."}
+	}
+	if operationID == "cancelTOTPEnrollment" {
+		responses["409"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "The enrollment is already confirmed and cannot be cancelled."}
 	}
 	responses["200"] = openapi31.JSONResponse("Current authority state.", responseSchema)
 	operation := object{
@@ -382,6 +407,7 @@ func enumSchemas() map[string][]string {
 		"BootstrapState": {string(iamv1.BootstrapUninitialized), string(iamv1.BootstrapReady)},
 		"ServicePurpose": openapi31.StringValues(iamv1.AllServicePurposes()),
 		"ReadinessState": {string(iamv1.ReadinessReady), string(iamv1.ReadinessNotReady)},
+		"LoginOutcome":   {string(iamv1.LoginAuthenticated), string(iamv1.LoginChallengeRequired)},
 	}
 }
 
@@ -433,7 +459,18 @@ func structContracts() map[string]reflect.Type {
 		"ResolveAuditProducerRequest":                   openapi31.StructType[iamv1.ResolveAuditProducerRequest](),
 		"AuditProducerAuthorization":                    openapi31.StructType[iamv1.AuditProducerAuthorization](),
 		"LoginRequest":                                  openapi31.StructType[iamv1.LoginRequest](),
+		"VerifyAuthenticationChallengeRequest":          openapi31.StructType[iamv1.VerifyAuthenticationChallengeRequest](),
+		"ChallengePasswordChangeRequest":                openapi31.StructType[iamv1.ChallengePasswordChangeRequest](),
+		"ChallengePasswordChangeResponse":               openapi31.StructType[iamv1.ChallengePasswordChangeResponse](),
 		"LoginResponse":                                 openapi31.StructType[iamv1.LoginResponse](),
+		"AuthenticationChallenge":                       openapi31.StructType[iamv1.AuthenticationChallenge](),
+		"AuthenticatorState":                            openapi31.StructType[iamv1.AuthenticatorState](),
+		"TOTPEnrollment":                                openapi31.StructType[iamv1.TOTPEnrollment](),
+		"TOTPProvisioning":                              openapi31.StructType[iamv1.TOTPProvisioning](),
+		"StartTOTPEnrollmentRequest":                    openapi31.StructType[iamv1.StartTOTPEnrollmentRequest](),
+		"StartTOTPEnrollmentResponse":                   openapi31.StructType[iamv1.StartTOTPEnrollmentResponse](),
+		"ConfirmTOTPEnrollmentRequest":                  openapi31.StructType[iamv1.ConfirmTOTPEnrollmentRequest](),
+		"ConfirmTOTPEnrollmentResponse":                 openapi31.StructType[iamv1.ConfirmTOTPEnrollmentResponse](),
 		"LogoutRequest":                                 openapi31.StructType[iamv1.LogoutRequest](),
 		"LogoutResponse":                                openapi31.StructType[iamv1.LogoutResponse](),
 		"ChangePasswordRequest":                         openapi31.StructType[iamv1.ChangePasswordRequest](),
@@ -530,6 +567,41 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if jsonName == "factorRevision" || jsonName == "expectedFactorRevision" {
+		maximum := uint64(9007199254740990)
+		if owner == "AuthenticatorState" {
+			maximum++
+		}
+		return object{"type": "integer", "minimum": 1, "maximum": maximum}
+	}
+	if owner == "AuthenticatorState" && jsonName == "enrollmentState" {
+		return object{"enum": []string{"NEVER_BOUND", "BOUND", "RECOVERY_REQUIRED"}}
+	}
+	if owner == "TOTPEnrollment" && jsonName == "state" {
+		return object{"enum": []string{"PENDING", "CONFIRMED", "CANCELLED", "EXPIRED"}}
+	}
+	if owner == "StartTOTPEnrollmentResponse" && jsonName == "outcome" {
+		return object{"enum": []string{"APPLIED", "EQUAL_REPLAY"}}
+	}
+	if owner == "ConfirmTOTPEnrollmentResponse" {
+		if jsonName == "nextStep" {
+			return object{"const": "REAUTHENTICATE"}
+		}
+		if jsonName == "recoveryCodes" {
+			return object{"type": "array", "minItems": 10, "maxItems": 10, "uniqueItems": true, "items": object{"type": "string", "minLength": 1, "readOnly": true}}
+		}
+	}
+	if owner == "AuthenticationChallenge" {
+		switch jsonName {
+		case "purpose":
+			return object{"const": "LOGIN"}
+		case "nextStep":
+			return object{"enum": []string{"TOTP", "PASSWORD_CHANGE"}}
+		}
+	}
+	if owner == "ChallengePasswordChangeResponse" && jsonName == "nextStep" {
+		return object{"const": "REAUTHENTICATE"}
+	}
 	if (owner == "NotificationContact" || owner == "NotificationContactVerification" || owner == "StartNotificationContactVerificationRequest") && jsonName == "email" {
 		return object{"type": "string", "minLength": 3, "maxLength": 254, "description": "One ASCII dot-atom address and canonical lower-case DNS domain. No display name, address list, literal IP, SMTPUTF8 or normalization of local-part case. Authoritative syntax validation applies."}
 	}
@@ -807,7 +879,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	}
 	if field.Type.Name() == "Secret" {
 		base["writeOnly"] = true
-		if (owner == "LoginResponse" && jsonName == "credential") || (owner == "CreateAccessKeyResponse" && jsonName == "secret") {
+		if (owner == "LoginResponse" && (jsonName == "credential" || jsonName == "challengeCredential")) || (owner == "CreateAccessKeyResponse" && jsonName == "secret") || owner == "TOTPProvisioning" {
 			delete(base, "writeOnly")
 			base["readOnly"] = true
 		}
@@ -833,6 +905,31 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["StartTOTPEnrollmentResponse"].(object)["oneOf"] = []any{
+		object{"required": []string{"provisioning"}, "properties": object{"outcome": object{"const": "APPLIED"}, "provisioning": object{"type": "object"}, "enrollment": object{"properties": object{"state": object{"const": "PENDING"}}}}},
+		object{"properties": object{"outcome": object{"const": "EQUAL_REPLAY"}, "provisioning": false}},
+	}
+	schemas["TOTPEnrollment"].(object)["oneOf"] = []any{
+		object{"properties": object{"state": object{"const": "PENDING"}, "completedAt": false}},
+		object{"required": []string{"completedAt"}, "properties": object{"state": object{"enum": []string{"CONFIRMED", "CANCELLED", "EXPIRED"}}, "completedAt": object{"type": "string"}}},
+	}
+	schemas["ConfirmTOTPEnrollmentResponse"].(object)["properties"].(object)["enrollment"] = object{"allOf": []any{openapi31.Ref("TOTPEnrollment"), object{"properties": object{"state": object{"const": "CONFIRMED"}}}}}
+	schemas["AuthenticatorState"].(object)["oneOf"] = []any{
+		object{"properties": object{"enrollmentState": object{"const": "NEVER_BOUND"}, "factorRevision": object{"const": 1}, "factorId": false}},
+		object{"required": []string{"factorId"}, "properties": object{"enrollmentState": object{"const": "BOUND"}, "factorRevision": object{"minimum": 2}}},
+		object{"properties": object{"enrollmentState": object{"const": "RECOVERY_REQUIRED"}}},
+	}
+	schemas["LoginResponse"].(object)["description"] = "Disjoint authentication result. A challenge is not a Session, bearer or authorization. Credential-bearing results require explicit encoding and no-store handling."
+	schemas["LoginResponse"].(object)["oneOf"] = []any{
+		object{"required": []string{"session", "credential", "mustChangePassword"}, "properties": object{
+			"outcome": object{"const": string(iamv1.LoginAuthenticated)}, "session": object{"type": "object", "properties": object{"status": object{"const": "ACTIVE"}, "revokedAt": false}},
+			"mustChangePassword": object{"type": "boolean"}, "challenge": false, "challengeCredential": false,
+		}},
+		object{"required": []string{"challenge", "challengeCredential"}, "properties": object{
+			"outcome": object{"const": string(iamv1.LoginChallengeRequired)}, "challenge": object{"type": "object"},
+			"session": false, "credential": false, "mustChangePassword": false,
+		}},
+	}
 	schemas["NotificationContact"].(object)["oneOf"] = []any{
 		object{"properties": object{"state": object{"const": "NONE"}, "resourceVersion": object{"const": 0}, "email": false, "verifiedAt": false}},
 		object{"required": []string{"email", "verifiedAt"}, "properties": object{"state": object{"const": "VERIFIED"}, "resourceVersion": object{"minimum": 1}, "verifiedAt": object{"type": "string"}, "pendingVerificationId": false}},

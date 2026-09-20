@@ -14,6 +14,383 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestAuthenticationChallengeRequestHasOneRestrictedSecretCarrier(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "VerifyAuthenticationChallengeRequest")
+	valid := `{"requestId":"verify-one","challengeCredential":"synthetic-challenge-material","code":"123456"}`
+	for _, sample := range []struct {
+		wire  string
+		valid bool
+	}{
+		{valid, true},
+		{strings.Replace(valid, `"123456"`, `"not-a-code"`, 1), true},
+		{strings.Replace(valid, `"requestId":`, `"userId":"other","requestId":`, 1), false},
+		{strings.Replace(valid, `"requestId":`, `"purpose":"LOGIN","requestId":`, 1), false},
+		{strings.Replace(valid, `"synthetic-challenge-material"`, `null`, 1), false},
+		{strings.Replace(valid, `"123456"`, `null`, 1), false},
+		{strings.Replace(valid, `"123456"`, `""`, 1), false},
+		{strings.Replace(valid, `,"code":"123456"`, "", 1), false},
+	} {
+		var raw any
+		if json.Unmarshal([]byte(sample.wire), &raw) != nil {
+			t.Fatal("invalid fixture")
+		}
+		if (schema.Validate(raw) == nil) != sample.valid {
+			t.Fatal("challenge request schema mismatch")
+		}
+		var request VerifyAuthenticationChallengeRequest
+		err := DecodeRequest(strings.NewReader(sample.wire), &request)
+		if (err == nil) != sample.valid {
+			t.Fatal("challenge request decoder mismatch")
+		}
+		if sample.valid {
+			if data, err := json.Marshal(request); err == nil || len(data) > 0 {
+				t.Fatal("ordinary encoding emitted authentication material")
+			}
+			encoded, err := EncodeVerifyAuthenticationChallengeRequest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var replay VerifyAuthenticationChallengeRequest
+			if DecodeRequest(bytes.NewReader(encoded), &replay) != nil {
+				t.Fatal("explicit transport failed")
+			}
+			clear(encoded)
+		}
+	}
+	for _, duplicate := range []string{"requestId", "challengeCredential", "code"} {
+		var request VerifyAuthenticationChallengeRequest
+		if DecodeRequest(strings.NewReader(strings.TrimSuffix(valid, "}")+`,"`+duplicate+`":"duplicate"}`), &request) == nil {
+			t.Fatal("duplicate field accepted")
+		}
+	}
+}
+
+func TestChallengePasswordChangeCannotIssueOrRetainASession(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	requestSchema := compileIAMOpenAPISchema(t, api, "ChallengePasswordChangeRequest")
+	valid := `{"requestId":"forced-one","challengeCredential":"synthetic-password-challenge","newPassword":"synthetic-replacement-password"}`
+	for _, sample := range []struct {
+		wire  string
+		valid bool
+	}{
+		{valid, true},
+		{strings.Replace(valid, `"synthetic-password-challenge"`, `null`, 1), false},
+		{strings.Replace(valid, `"synthetic-replacement-password"`, `""`, 1), false},
+		{strings.TrimSuffix(valid, "}") + `,"session":null}`, false},
+		{strings.TrimSuffix(valid, "}") + `,"userId":"other"}`, false},
+		{strings.TrimSuffix(valid, "}") + `,"revokeOtherSessions":false}`, false},
+		{strings.TrimSuffix(valid, "}") + `,"currentPassword":"another"}`, false},
+	} {
+		var raw any
+		if json.Unmarshal([]byte(sample.wire), &raw) != nil {
+			t.Fatal("invalid fixture")
+		}
+		if (requestSchema.Validate(raw) == nil) != sample.valid {
+			t.Fatal("forced password request schema differs")
+		}
+		var request ChallengePasswordChangeRequest
+		if (DecodeRequest(strings.NewReader(sample.wire), &request) == nil) != sample.valid {
+			t.Fatal("forced password request codec differs")
+		}
+		if sample.valid {
+			if encoded, err := json.Marshal(request); err == nil || len(encoded) > 0 {
+				t.Fatal("ordinary JSON disclosed challenge/password")
+			}
+			if strings.Contains(fmt.Sprintf("%+v %#v", request, request), "synthetic-") {
+				t.Fatal("formatted request disclosed material")
+			}
+			encoded, err := EncodeChallengePasswordChangeRequest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded ChallengePasswordChangeRequest
+			if DecodeRequest(bytes.NewReader(encoded), &decoded) != nil {
+				t.Fatal("explicit challenge transport failed")
+			}
+			clear(encoded)
+		}
+	}
+	for _, field := range []string{"requestId", "newPassword", "challengeCredential"} {
+		var request ChallengePasswordChangeRequest
+		if DecodeRequest(strings.NewReader(strings.TrimSuffix(valid, "}")+`,"`+field+`":"duplicate"}`), &request) == nil {
+			t.Fatal("duplicate password command field accepted")
+		}
+	}
+	responseSchema := compileIAMOpenAPISchema(t, api, "ChallengePasswordChangeResponse")
+	completion := `{"nextStep":"REAUTHENTICATE","changedAt":"2026-09-20T12:00:00Z"}`
+	for _, sample := range []struct {
+		wire  string
+		valid bool
+	}{
+		{completion, true},
+		{strings.Replace(completion, "REAUTHENTICATE", "AUTHENTICATED", 1), false},
+		{strings.TrimSuffix(completion, "}") + `,"credential":null}`, false},
+		{strings.TrimSuffix(completion, "}") + `,"session":null}`, false},
+	} {
+		var raw any
+		if json.Unmarshal([]byte(sample.wire), &raw) != nil {
+			t.Fatal("invalid fixture")
+		}
+		if (responseSchema.Validate(raw) == nil) != sample.valid {
+			t.Fatal("password completion schema differs")
+		}
+		var response ChallengePasswordChangeResponse
+		if (DecodeRequest(strings.NewReader(sample.wire), &response) == nil) != sample.valid {
+			t.Fatal("password completion codec differs")
+		}
+	}
+	challengeSchema := compileIAMOpenAPISchema(t, api, "AuthenticationChallenge")
+	for _, step := range []string{"TOTP", "PASSWORD_CHANGE", "RECOVERY", "SESSION"} {
+		challenge := AuthenticationChallenge{APIVersion: APIVersion, Kind: "AuthenticationChallenge", ID: "one", Purpose: "LOGIN", NextStep: step, ExpiresAt: time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)}
+		encoded, _ := json.Marshal(challenge)
+		var raw any
+		_ = json.Unmarshal(encoded, &raw)
+		want := step == "TOTP" || step == "PASSWORD_CHANGE"
+		if (challengeSchema.Validate(raw) == nil) != want || (ValidateAuthenticationChallenge(challenge) == nil) != want {
+			t.Fatal("undeclared challenge step accepted")
+		}
+	}
+}
+
+func TestTOTPEnrollmentContractsKeepOneTimeMaterialOutOfReplay(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	paths := mustIAMObject(t, api["paths"], "paths")
+	for _, endpoint := range []struct {
+		path, method string
+		statuses     []string
+	}{
+		{"/v1/auth/authenticators", "get", []string{"200", "400", "401", "503"}},
+		{"/v1/auth/totp/enrollments/{enrollmentId}", "get", []string{"200", "400", "401", "404", "503"}},
+		{"/v1/auth/totp/enrollments/{enrollmentId}", "delete", []string{"200", "400", "401", "404", "409", "503"}},
+		{"/v1/auth/totp/enrollments/by-request/{requestId}", "get", []string{"200", "400", "401", "404", "503"}},
+	} {
+		path := mustIAMObject(t, paths[endpoint.path], "enrollment path")
+		operation := mustIAMObject(t, path[endpoint.method], "enrollment operation")
+		if _, present := operation["requestBody"]; present {
+			t.Fatal("metadata or cancellation accepts an extra command body")
+		}
+		responses := mustIAMObject(t, operation["responses"], "enrollment responses")
+		for _, status := range endpoint.statuses {
+			if responses[status] == nil {
+				t.Fatalf("%s %s omits actual response %s", endpoint.method, endpoint.path, status)
+			}
+		}
+	}
+	enrollment := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"TOTPEnrollment","id":"factor-one","requestId":"enroll-one","factorRevision":1,"state":"PENDING","createdAt":"2026-09-20T01:00:00Z","expiresAt":"2026-09-20T01:05:00Z"}`
+	applied := `{"outcome":"APPLIED","enrollment":` + enrollment + `,"provisioning":{"seed":"synthetic-seed-only","uri":"synthetic-uri-only"}}`
+	replay := `{"outcome":"EQUAL_REPLAY","enrollment":` + enrollment + `}`
+	schema := compileIAMOpenAPISchema(t, api, "StartTOTPEnrollmentResponse")
+	for _, sample := range []struct {
+		wire  string
+		valid bool
+	}{
+		{applied, true}, {replay, true},
+		{strings.Replace(applied, `"APPLIED"`, `"EQUAL_REPLAY"`, 1), false},
+		{strings.Replace(replay, `"EQUAL_REPLAY"`, `"APPLIED"`, 1), false},
+		{strings.TrimSuffix(replay, "}") + `,"provisioning":null}`, false},
+		{strings.Replace(applied, `"synthetic-seed-only"`, `null`, 1), false},
+		{strings.Replace(applied, `"PENDING"`, `"CONFIRMED"`, 1), false},
+		{strings.TrimSuffix(applied, "}") + `,"session":null}`, false},
+		{strings.Replace(applied, `"factorRevision":1`, `"factorRevision":0`, 1), false},
+	} {
+		var wire any
+		if json.Unmarshal([]byte(sample.wire), &wire) != nil {
+			t.Fatal("invalid fixture")
+		}
+		if (schema.Validate(wire) == nil) != sample.valid {
+			t.Fatal("enrollment schema branch differs")
+		}
+		var result StartTOTPEnrollmentResponse
+		if (DecodeRequest(strings.NewReader(sample.wire), &result) == nil) != sample.valid {
+			t.Fatal("enrollment codec branch differs")
+		}
+		if sample.valid {
+			encoded, err := EncodeStartTOTPEnrollmentResponse(result)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clear(encoded)
+			if result.Outcome == "EQUAL_REPLAY" && bytes.Contains(encoded, []byte("provisioning")) {
+				t.Fatal("replay exposed provisioning")
+			}
+			if raw, err := json.Marshal(result); err == nil || len(raw) != 0 {
+				t.Fatal("ordinary JSON exposed enrollment response")
+			}
+			if strings.Contains(fmt.Sprintf("%+v %#v", result, result), "synthetic-seed-only") || strings.Contains(fmt.Sprintf("%+v %#v", result, result), "synthetic-uri-only") {
+				t.Fatal("formatted enrollment exposed secrets")
+			}
+		}
+	}
+	confirmed := strings.Replace(enrollment, `"PENDING"`, `"CONFIRMED"`, 1)
+	confirmed = strings.TrimSuffix(confirmed, "}") + `,"completedAt":"2026-09-20T01:00:30Z"}`
+	codes := make([]string, 10)
+	for i := range codes {
+		codes[i] = fmt.Sprintf("synthetic-recovery-%02d", i)
+	}
+	encodedCodes, _ := json.Marshal(codes)
+	completion := `{"enrollment":` + confirmed + `,"nextStep":"REAUTHENTICATE","recoveryCodes":` + string(encodedCodes) + `}`
+	confirmSchema := compileIAMOpenAPISchema(t, api, "ConfirmTOTPEnrollmentResponse")
+	for _, sample := range []struct {
+		wire  string
+		valid bool
+	}{
+		{completion, true},
+		{strings.Replace(completion, `"REAUTHENTICATE"`, `"AUTHENTICATED"`, 1), false},
+		{strings.Replace(completion, `"CONFIRMED"`, `"PENDING"`, 1), false},
+		{strings.Replace(completion, `"synthetic-recovery-00",`, "", 1), false},
+		{strings.Replace(completion, `"synthetic-recovery-01"`, `"synthetic-recovery-00"`, 1), false},
+		{strings.TrimSuffix(completion, "}") + `,"credential":"not-a-session"}`, false},
+	} {
+		var raw any
+		if json.Unmarshal([]byte(sample.wire), &raw) != nil {
+			t.Fatal("invalid confirmation fixture")
+		}
+		if (confirmSchema.Validate(raw) == nil) != sample.valid {
+			t.Fatal("confirmation schema differs")
+		}
+		var result ConfirmTOTPEnrollmentResponse
+		if (DecodeRequest(strings.NewReader(sample.wire), &result) == nil) != sample.valid {
+			t.Fatal("confirmation codec differs")
+		}
+		if sample.valid {
+			encoded, err := EncodeConfirmTOTPEnrollmentResponse(result)
+			if err != nil || !bytes.Contains(encoded, []byte("synthetic-recovery-00")) {
+				t.Fatal("explicit confirmation transport failed")
+			}
+			clear(encoded)
+			if raw, err := json.Marshal(result); err == nil || len(raw) != 0 {
+				t.Fatal("ordinary JSON exposed recovery codes")
+			}
+			if strings.Contains(fmt.Sprintf("%+v %#v", result, result), "synthetic-recovery") {
+				t.Fatal("formatting exposed recovery material")
+			}
+		}
+	}
+}
+
+func TestTOTPEnrollmentRequestsRejectSelectorsAndAmbiguousSecrets(t *testing.T) {
+	for _, name := range []string{"StartTOTPEnrollmentRequest", "ConfirmTOTPEnrollmentRequest"} {
+		schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), name)
+		valid := `{"requestId":"enroll-one","password":"synthetic-password","expectedFactorRevision":1}`
+		secretField := "password"
+		if name == "ConfirmTOTPEnrollmentRequest" {
+			valid = `{"requestId":"confirm-one","code":"123456"}`
+			secretField = "code"
+		}
+		for _, sample := range []struct {
+			wire  string
+			valid bool
+		}{
+			{valid, true},
+			{strings.Replace(valid, `"requestId":`, `"userId":"other","requestId":`, 1), false},
+			{strings.Replace(valid, `"requestId":`, `"challengeCredential":"other","requestId":`, 1), false},
+			{strings.Replace(valid, `"requestId":`, `"purpose":"RECOVERY","requestId":`, 1), false},
+			{strings.Replace(valid, `"`+secretField+`":"`+map[string]string{"password": "synthetic-password", "code": "123456"}[secretField]+`"`, `"`+secretField+`":null`, 1), false},
+		} {
+			var wire any
+			if json.Unmarshal([]byte(sample.wire), &wire) != nil {
+				t.Fatal("invalid request fixture")
+			}
+			if (schema.Validate(wire) == nil) != sample.valid {
+				t.Fatal("enrollment request schema mismatch")
+			}
+			var result any = &StartTOTPEnrollmentRequest{}
+			if name == "ConfirmTOTPEnrollmentRequest" {
+				result = &ConfirmTOTPEnrollmentRequest{}
+			}
+			if (DecodeRequest(strings.NewReader(sample.wire), result) == nil) != sample.valid {
+				t.Fatal("enrollment request decoder mismatch")
+			}
+			if sample.valid {
+				if output, err := json.Marshal(result); err == nil || len(output) != 0 {
+					t.Fatal("ordinary request encoding exposed a secret")
+				}
+			}
+		}
+		for _, field := range []string{"requestId", secretField} {
+			var destination any = &StartTOTPEnrollmentRequest{}
+			if name == "ConfirmTOTPEnrollmentRequest" {
+				destination = &ConfirmTOTPEnrollmentRequest{}
+			}
+			if DecodeRequest(strings.NewReader(strings.TrimSuffix(valid, "}")+`,"`+field+`":"duplicate"}`), destination) == nil {
+				t.Fatal("duplicate enrollment field accepted")
+			}
+		}
+	}
+}
+
+func TestLoginResultKeepsChallengeSeparateFromSession(t *testing.T) {
+	authenticated, err := os.ReadFile("examples/login-response.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original map[string]any
+	if json.Unmarshal(authenticated, &original) != nil {
+		t.Fatal("invalid login example")
+	}
+	original["outcome"] = "AUTHENTICATED"
+	authenticated, err = json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := json.Marshal(original["session"])
+	if err != nil {
+		t.Fatal("invalid session fixture")
+	}
+	challenge := `{"outcome":"CHALLENGE_REQUIRED","challenge":{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticationChallenge","id":"challenge-example","purpose":"LOGIN","nextStep":"TOTP","expiresAt":"2026-09-20T01:07:03Z"},"challengeCredential":"example-only-challenge-secret"}`
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "LoginResponse")
+	for _, sample := range []struct {
+		name, wire string
+		valid      bool
+	}{
+		{"authenticated", string(authenticated), true},
+		{"authenticated-no-password-change", strings.Replace(string(authenticated), `"mustChangePassword":true`, `"mustChangePassword":false`, 1), true},
+		{"challenge", challenge, true},
+		{"legacy-ambiguous-result", strings.Replace(string(authenticated), `"outcome":"AUTHENTICATED",`, "", 1), false},
+		{"challenge-is-not-session", strings.Replace(challenge, `"challengeCredential":`, `"mustChangePassword":false,"challengeCredential":`, 1), false},
+		{"challenge-with-session", strings.Replace(challenge, `"challengeCredential":`, `"session":`+string(session)+`,"challengeCredential":`, 1), false},
+		{"challenge-with-null-session", strings.Replace(challenge, `"challengeCredential":`, `"session":null,"challengeCredential":`, 1), false},
+		{"challenge-with-login-secret", strings.Replace(challenge, `"challengeCredential":`, `"credential":"not-a-session","challengeCredential":`, 1), false},
+		{"challenge-without-possession", strings.Replace(challenge, `,"challengeCredential":"example-only-challenge-secret"`, "", 1), false},
+		{"challenge-with-null-possession", strings.Replace(challenge, `"example-only-challenge-secret"`, "null", 1), false},
+		{"challenge-with-selector", strings.Replace(challenge, `"purpose":`, `"userId":"someone-else","purpose":`, 1), false},
+		{"caller-purpose", strings.Replace(challenge, `"LOGIN"`, `"AUTHORIZE"`, 1), false},
+		{"unimplemented-stage", strings.Replace(challenge, `"TOTP"`, `"AUTHENTICATED"`, 1), false},
+		{"authenticated-with-challenge-secret", strings.Replace(string(authenticated), `"outcome":`, `"challengeCredential":"unexpected","outcome":`, 1), false},
+		{"authenticated-without-password-state", strings.Replace(string(authenticated), `"mustChangePassword":true,`, "", 1), false},
+		{"authenticated-null-password-state", strings.Replace(string(authenticated), `"mustChangePassword":true`, `"mustChangePassword":null`, 1), false},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			var document any
+			if json.Unmarshal([]byte(sample.wire), &document) != nil {
+				t.Fatal("invalid JSON fixture")
+			}
+			if got := schema.Validate(document) == nil; got != sample.valid {
+				t.Fatalf("schema valid=%v, want %v", got, sample.valid)
+			}
+			var result LoginResponse
+			err := DecodeRequest(strings.NewReader(sample.wire), &result)
+			if got := err == nil && ValidateLoginResponse(result) == nil; got != sample.valid {
+				t.Fatalf("contract valid=%v, want %v", got, sample.valid)
+			}
+			if sample.valid {
+				encoded, err := EncodeLoginResponse(result)
+				defer clear(encoded)
+				if err != nil {
+					t.Fatal("explicit result encoding failed")
+				}
+				var roundTrip any
+				if json.Unmarshal(encoded, &roundTrip) != nil || schema.Validate(roundTrip) != nil {
+					t.Fatal("explicit encoding changed the result branch")
+				}
+				if output, err := json.Marshal(result); err == nil || len(output) != 0 {
+					t.Fatal("ordinary JSON emitted a credential-bearing result")
+				}
+			}
+		})
+	}
+}
+
 func TestAccessKeySigningSchemasMatchExplicitTransportAndSanitizedResults(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	request, err := NewAuthorizationRequest(ActionPaaSApplicationRead, ResourceReference{Kind: ResourceApplication, ID: "application-one"},

@@ -85,6 +85,14 @@ type Workflow interface {
 	ServiceIdentity(context.Context, iamv1.Secret) (iamv1.ServiceIdentity, error)
 	ResolveAuditProducer(context.Context, iamv1.Secret, iamv1.ResolveAuditProducerRequest) (iamv1.AuditProducerAuthorization, error)
 	Login(context.Context, iamv1.LoginRequest) (iamv1.LoginResponse, error)
+	VerifyAuthenticationChallenge(context.Context, string, iamv1.VerifyAuthenticationChallengeRequest) (iamv1.LoginResponse, error)
+	ChangeChallengePassword(context.Context, string, iamv1.ChallengePasswordChangeRequest) (iamv1.ChallengePasswordChangeResponse, error)
+	AuthenticatorState(context.Context, iamv1.Secret) (iamv1.AuthenticatorState, error)
+	StartTOTPEnrollment(context.Context, iamv1.Secret, iamv1.StartTOTPEnrollmentRequest) (iamv1.StartTOTPEnrollmentResponse, error)
+	TOTPEnrollment(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error)
+	TOTPEnrollmentByRequest(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error)
+	CancelTOTPEnrollment(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error)
+	ConfirmTOTPEnrollment(context.Context, iamv1.Secret, string, iamv1.ConfirmTOTPEnrollmentRequest) (iamv1.ConfirmTOTPEnrollmentResponse, error)
 	Logout(context.Context, iamv1.Secret, iamv1.LogoutRequest) (iamv1.LogoutResponse, error)
 	ChangePassword(context.Context, iamv1.Secret, iamv1.ChangePasswordRequest) (iamv1.ChangePasswordResponse, error)
 	NotificationContact(context.Context, iamv1.Secret) (iamv1.NotificationContact, error)
@@ -145,6 +153,11 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/service-identity", value.serviceIdentity)
 	routes.HandleFunc("/v1/audit-producer:resolve", value.resolveAuditProducer)
 	routes.HandleFunc("/v1/auth/login", value.login)
+	routes.HandleFunc("/v1/auth/challenges/", value.authenticationChallenge)
+	routes.HandleFunc("/v1/auth/authenticators", value.authenticatorState)
+	routes.HandleFunc("/v1/auth/totp/enrollments", value.startTOTPEnrollment)
+	routes.HandleFunc("/v1/auth/totp/enrollments/by-request/", value.totpEnrollmentByRequest)
+	routes.HandleFunc("/v1/auth/totp/enrollments/", value.totpEnrollment)
 	routes.HandleFunc("/v1/auth/me", value.currentIdentity)
 	routes.HandleFunc("/v1/auth/notification-contact", value.notificationContact)
 	routes.HandleFunc("/v1/auth/notification-contact/verifications", value.startNotificationVerification)
@@ -468,6 +481,58 @@ func (value *handler) login(response http.ResponseWriter, request *http.Request)
 		return
 	}
 	result, err := value.workflow.Login(request.Context(), body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	encoded, err := iamv1.EncodeLoginResponse(result)
+	if err != nil {
+		value.writeError(response, request, identityaccess.ErrUnavailable)
+		return
+	}
+	writeEncodedJSON(response, http.StatusOK, encoded)
+}
+
+func (value *handler) authenticationChallenge(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	suffix := ":verify"
+	if strings.HasSuffix(request.URL.Path, ":password") {
+		suffix = ":password"
+	}
+	id, ok := commandPathID(response, request, "/v1/auth/challenges/", suffix, "challengeId")
+	if !ok {
+		return
+	}
+	// This ceremony authenticates its own secret; a bearer cannot select a
+	// second identity, and a challenge cannot enter the generic authenticator.
+	if len(request.Header.Values("Authorization")) != 0 {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.header.unsupported", "IAM header unsupported")
+		return
+	}
+	if suffix == ":password" {
+		body, ok := decodeJSON[iamv1.ChallengePasswordChangeRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.ChangeChallengePassword(request.Context(), id, body)
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		if iamv1.ValidateChallengePasswordChangeResponse(result) != nil {
+			value.writeError(response, request, identityaccess.ErrUnavailable)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	body, ok := decodeJSON[iamv1.VerifyAuthenticationChallengeRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.VerifyAuthenticationChallenge(request.Context(), id, body)
 	if err != nil {
 		value.writeError(response, request, err)
 		return
@@ -1175,6 +1240,8 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusForbidden, "iam.authorization.denied", "IAM authorization denied")
 	case errors.Is(err, identityaccess.ErrConflict):
 		writeProblem(response, requestID, http.StatusConflict, "iam.state.conflict", "IAM state conflict")
+	case errors.Is(err, identityaccess.ErrTOTPEnrollmentNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, "iam.totp.enrollment.not-found", "TOTP enrollment not found")
 	case errors.Is(err, identityaccess.ErrVerificationRejected):
 		writeProblem(response, requestID, http.StatusUnprocessableEntity, "iam.verification.rejected", "IAM verification rejected")
 	case errors.Is(err, identityaccess.ErrOverloaded):

@@ -66,6 +66,22 @@ type Transaction interface {
 	ApplyBootstrap(context.Context, BootstrapMutation) (authority.BootstrapOutcome, error)
 	ReservePasswordAttempt(context.Context, PasswordAttemptRequest) (PasswordAttempt, bool, error)
 	RejectPasswordAttempt(context.Context, PasswordAttempt) error
+	ReadLoginAuthenticationState(context.Context, iamv1.AccountID, iamv1.PrincipalID) (LoginAuthenticationState, error)
+	ReadAuthenticatorState(context.Context, iamv1.Session) (iamv1.AuthenticatorState, error)
+	StartTOTPEnrollment(context.Context, TOTPEnrollmentStart) (TOTPEnrollmentStartResult, error)
+	ReadTOTPEnrollment(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error)
+	ReadTOTPEnrollmentByRequest(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error)
+	CancelTOTPEnrollment(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error)
+	ConfirmTOTPEnrollment(context.Context, TOTPEnrollmentConfirmation) (iamv1.TOTPEnrollment, error)
+	CreateLoginChallenge(context.Context, LoginChallengeCreation) (iamv1.AuthenticationChallenge, error)
+	LookupAuthenticationChallenge(context.Context, string) (AuthenticationChallengeCredential, bool, error)
+	ReserveTOTPAttempt(context.Context, TOTPAttempt) (TOTPAttempt, bool, error)
+	ReadTOTPAttempt(context.Context, TOTPAttempt) (TOTPVerification, error)
+	RejectTOTPAttempt(context.Context, TOTPAttempt) error
+	CompleteLoginChallenge(context.Context, LoginChallengeCompletion) (iamv1.Session, error)
+	BeginPasswordChallenge(context.Context, PasswordChallengeCreation) (iamv1.AuthenticationChallenge, error)
+	ReadPasswordChallenge(context.Context, AuthenticationChallengeCredential) (ChallengePasswordMaterial, error)
+	ChangeChallengePassword(context.Context, ChallengePasswordMutation) (iamv1.ChallengePasswordChangeResponse, error)
 	IssueSession(context.Context, SessionMutation) (iamv1.Session, error)
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
 	LookupRoleSession(context.Context, string) (RoleSessionCredential, bool, error)
@@ -554,6 +570,7 @@ const (
 	PasswordAttemptLogin               PasswordAttemptPurpose = "LOGIN"
 	PasswordAttemptChange              PasswordAttemptPurpose = "PASSWORD_CHANGE"
 	PasswordAttemptNotificationContact PasswordAttemptPurpose = "NOTIFICATION_CONTACT_VERIFY"
+	PasswordAttemptTOTPEnrollment      PasswordAttemptPurpose = "TOTP_ENROLLMENT"
 )
 
 // Private, bounded authority snapshot. Success may only be consumed by the
@@ -781,6 +798,7 @@ type Authority struct {
 	cursors      *authority.CursorCodec
 	accessKeys   *accessKeyWrapping
 	totp         *TOTPKeysetRegistration
+	totpSeeds    *authority.TOTPSeedProtector
 	email        *authority.EmailVerificationProtector
 	passwordWork chan struct{}
 }
