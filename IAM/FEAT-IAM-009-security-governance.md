@@ -423,7 +423,9 @@ LoginResponse仍只允许LOGIN挑战；不能因为通用Challenge可以描述RE
 
 同一受限引擎内另建空白数据库，原`TestIAMTOTPEnrollmentPostgres`串行race通过66.03s（包69.540s），保留三分钟上下文、41类readiness破坏及全部非邮件恢复场景，真实USER锁等待到期31.34s通过；两项Postfix子例因本轮没有SMTP明确SKIP，不继承前轮邮件实收为本次证据。新长门禁与原回归使用的Go源码字节完全相同，没有以短路或缩短时间换取通过。其后全仓默认race/architecture、vet、模块校验、gofmt及diff检查通过；默认外部门禁SKIP仍不算真实验收。本片仅测试、现有CI和FEAT证据，未修改生产API/SQL/schema/profile/UI。两个测试终止且实际无数据库客户端后，仅停止并删除本轮准确owner/task的临时PG容器及空网络，标签下容器/网络/卷零残留；未操作其他任务或远端资源。
 
-整片仍未验收：浏览器恢复与独立CI尚须完成；step-up/受限首次强制设置仍属后继S2，离线CLOSED/reconcile/reopen及发布profile由安装主任务独占实施，本片没有修改其契约或消费者。固定48e56cbb的[Verification35528886088](https://github.com/xiak/matrix/actions/runs/35528886088)已由GitHub API核实精确SHA及completed/failure：五项均runner_id=0、steps=0，annotation为账户付款或spending limit，未执行测试。与纯契约c13f6d11的35521839561相同，属于外部未运行，不能算代码通过或证明代码回归；不反复重跑不变的billing阻塞。安装与UX已收到固定对象、准确IAM38/Audit22形状及此验收缺口，只能选择性复用并自行验证。
+测试与串行CI增量已固定推送`80a6e6d18288df7f5d89ffee40722ee9aa614ee7`；其[Verification35531111030](https://github.com/xiak/matrix/actions/runs/35531111030)已由GitHub API核实精确SHA及completed/failure：六项均runner_id=0、steps=0，新增自然窗口作业的annotation明确为账户付款或spending limit，未执行测试。生产固定48e56cbb的[Verification35528886088](https://github.com/xiak/matrix/actions/runs/35528886088)同为五项零执行失败；这些不能算代码通过或证明代码回归，不反复重跑不变的billing阻塞。
+
+整片仍未验收：浏览器恢复与独立CI尚须完成；step-up/受限首次强制设置仍属后继S2，离线CLOSED/reconcile/reopen及发布profile由安装主任务独占实施，本片没有修改其契约或消费者。安装与UX已收到固定对象、准确IAM38/Audit22形状及验收缺口，只能选择性复用并自行验证。
 
 #### 事务、锁序与失败结果
 

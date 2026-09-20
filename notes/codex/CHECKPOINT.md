@@ -4,109 +4,107 @@
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Write only
   this task's independent worktree. Updated 2026-09-21.
-- The full IAM goal remains ACTIVE/incomplete, not narrowed to this MFA slice.
-  Read AGENTS, IAM/009 for MFA or IAM/012 for mail, then owning code/tests.
-  Fixed adoption: docs/adoption/FEAT-006-platform-authorities.md.
-- Latest fixed/pushed implementation:
-  **48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e**, parent pure-codec c13f6d11.
-  Source IAM38/Audit22/PaaS2; release profile/revision unchanged/unallocated.
-- Exact https://github.com/xiak/matrix/actions/runs/35528886088 is completed/
-  failure. All five jobs runner_id=0/steps=0; account payment/spending limit
-  prevented execution. No independent CI acceptance. Do not change billing,
-  weaken gates or repeatedly rerun an unchanged external condition.
-- Previous f5cec0e132ad18900d9a5a5629eae04fda4817f1 (IAM37/Audit21) and
-  c13f6d11db8055b660c18731a427594d265ff9b2 also had zero-run billing failures.
-  Earlier 5e185e95 CI had an actual Audit runtime-probe failure, cause unknown;
-  later local passes do not rewrite that result. Mail/custody predecessors'
-  distinct CI evidence remains in their FEAT owners.
+- Full IAM goal remains ACTIVE/incomplete. Read AGENTS, IAM/009 for MFA or
+  IAM/012 for mail, then owning code/tests. Fixed adoption belongs to
+  docs/adoption/FEAT-006-platform-authorities.md, not this checkpoint.
+- Latest fixed/pushed test increment:
+  **80a6e6d18288df7f5d89ffee40722ee9aa614ee7**. Only existing integration
+  owner, CI and FEAT009/011. No production/API/SQL/profile/UI change.
+- Latest production remains **48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e**,
+  pure-codec parent c13f6d11. Source IAM38/Audit22/PaaS2; release profile/
+  revision unchanged/unallocated. No cross-release acceptance inferred.
+- Exact https://github.com/xiak/matrix/actions/runs/35531111030 completed/
+  failure: all six jobs runner_id=0/steps=0; payment/spending-limit annotation
+  prevented execution. Independent CI is NOT accepted. Previous48's
+  35528886088, f5's35520219893 and c13's35521839561 also did not execute.
+  Do not alter billing, weaken tests or repeatedly rerun unchanged blockage.
+  Earlier5e185e95's actual Audit runtime-probe failure remains separate;
+  subsequent local passes do not rewrite it. FEAT owners retain its evidence.
 
-## Fixed online recovery increment
+## Latest runtime and CI increment
 
-48e56cbb implements the three constrained HTTP routes and atomic PostgreSQL
-state machine described in IAM/009 S2b受限自助恢复增量. It reuses f5's real
-factor/ten saved-code verifiers, shared USER budget, challenge and outbox.
+Existing integration owner now separates TestIAMTOTPRecoveryExhaustionPostgres
+from the original TestIAMTOTPEnrollmentPostgres via one shared fixture.
+No production budgets, clock, password cost or positive consumption rows
+are changed. Actual PG18.6, API role, two Authority handlers in one process:
 
-- Current LOGIN proof plus one original saved code starts irreversible
-  recovery: revoke original factor, LOGIN_SESSIONs and challenges, consume
-  code, advance revision, bind new PENDING factor/RECOVERY challenge to the
-  original LOGIN deadline. No password/forced/role/contact change or Session.
-- Confirm new TOTP once, end original batch, issue ten new codes once,
-  REAUTHENTICATE. Lost reply never reissues seeds/codes or refunds a code.
-  Fresh password proof can query original nonsecret metadata. Another
-  explicit saved code/new intent supersedes a lost unfinished ceremony.
-- LoginResponse still only contains LOGIN challenges. RECOVERY_REQUIRED
-  permits LOGIN/RECOVER only with exact original recovery lineage; corrupt
-  retained state does not acquire proof. Exhausted codes still allow only
-  metadata access, not a new recovery. Full ten-code runtime gate is pending.
-- IAM38 adds authenticator_recoveries and narrow read/start/confirm/inspect
-  functions (5/17/10/4 arguments, jsonb). Exact tables/constraints/RLS/ACL/
-  ALWAYS triggers/function shapes participate in verify/readiness.
-- Tenant USER-self PRINCIPAL facts: iam.authenticator.recovery-started and
-  iam.authenticator.recovered. Original verified-contact mail kinds are
-  RECOVERY_STARTED/AUTHENTICATOR_RECOVERED. No second canonical/dispatcher.
-- Preserve ServiceIdentity/lookup_service5, Audit claim7, lookup_session24,
-  revoke_session6, record9/contract4/evidence5 and old canonical/receipt/proof.
-  No installation/CLI/profile/offline ABI edit belongs to this increment.
+- Ten original saved codes consumed through HTTP handlers over three shared
+  windows, crossing two real ten-minute intervals. Race passed1229.25s,
+  exhaustion subcase1202.09s/package1232.773s. Exhaustion still permits exact
+  metadata lookup, but used code401 grants no new intent/Session/completion.
+  The current tenth ceremony can finish; old ten consumed/new ten unconsumed,
+  nine SUPERSEDED/one COMPLETED, ten start facts/one completion/eleven notices,
+  and normal password+new-factor login all proved. Not an SMTP/browser gate.
+- A second fresh DB reran original enrollment/recovery:66.03s/package69.540s,
+  original3m context,41 schema damage cases, all non-mail recovery cases and
+  actual USER lock expiry31.34s. Two SMTP subcases explicitly SKIP; do not
+  inherit prior real mailbox results as this run's evidence.
+- Both used exact Go source blob67fa7c06dd7caf9b2a2e29d61f00764ea658e32c.
+  Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB, race-p1 runtime; PG1CPU/1GiB/Pids192,
+  max_connections16. Full default race/architecture, vet, modules, gofmt and
+  diff checks passed afterward. Default external SKIPs are not runtime proof.
+- Original storage/runtime CI lanes remain20m. New recovery-window lane30m,
+  Go27m/context25m for natural-time gate only. All three lanes max-parallel1;
+  aggregate closes on any failure/cancel/skip. YAML and13 Bash blocks checked;
+  actual compiled15 tests assigned once:general5/Role1/runtime8/window1.
+- Both real test handles and full checks terminated successfully. After no
+  DB clients remained, exact owned temporary PG container and empty network
+  removed; task labels show zero containers/networks/volumes. No live fixture
+  or test session remains from this milestone. No shared or remote changes.
+  Earlier policy-denied temporary-directory cleanup is NOT retried/bypassed.
 
-## Evidence and remaining gates
+## Fixed online recovery contract and prior evidence
 
-FEAT009/012 own details. Local Go1.26.7, GOMAXPROCS2/GOMEMLIMIT512MiB;
-default full race/architecture, vet, modules, all122 tracked API hashes,
-gofmt/diff checks and all-package Linux amd64 build passed. Default skips
-are not runtime evidence. Owned PG18.6 gates serial race-p1:
+48e56cbb's three strict no-bearer routes are in IAM/009 S2b recovery:
+:recover, :confirm-recovery and :recovery-result under auth/challenges/{id}.
+Current LOGIN proof plus an original saved code starts irreversible recovery;
+old factor/sessions/challenges end, original LOGIN deadline is retained.
+Confirmation issues new ten codes once and REAUTHENTICATE, not a Session.
+Unknown replies never replay secrets/refund codes; current password proof can
+inspect original nonsecret metadata. No password/forced/role/contact change.
+LOGIN/RECOVER requires exact original recovery lineage, not a loose state flag.
 
-- Enrollment/recovery+real Postfix3.10.13:89.54s/package93.080s, including
-  41 schema damage cases and12 recovery cases. Real mail recovery12.83s:
-  actual contact verification, independent restricted production worker,
-  start notice, stop/restart, completed notice after USER disable; original
-  DATA250/ACCEPTED persisted, no secrets. Not public-mail/read/browser proof.
-- Actual USER lock wait:31.39s, observed pg_blocking_pids, original30s attempt
-  elapsed while OTP remained valid;401/no partial state/no refunded budget.
-  Missing/wrong sealed custody also returns503 before consumption.
-- Independent IAM pair/Audit/PaaS/two dispatchers:83.36s/package86.631s.
-  Real post-commit TCP loss at start/confirm, three IAM pair restarts,
-  superseded exact deadline, original/new credential separation, disabled
-  USER historical proof/replay/full chain. Contact transport here synthetic,
-  not the separate SMTP gate.
-- Actual fixed f5 IAM37 executable retained MFA→38:18.01s/package21.417s.
-  Original factor/codes/consumption/challenges/Session, double migration,
-  equal bootstrap/restart; real recovery then repeat migrate/verify/restart
-  preserves completed state/no resurrection. Original IAM32/36 regressions
-  14.05s/15.05s. Not cross-release compatibility or an unpublished schema ladder.
-- Original custody/backup/password gates package126.157s; Audit dual-schema
-  8.159s and HTTP4.112s. SMTP mailbox/auth/relay gate3.07s/package5.267s.
-- Exact owned container/network labels checked; current PG/SMTP fixtures
-  removed, zero container/network/volume residue. Static SMTP files removed;
-  empty temp directory removal rejected by tool policy, not bypassed. Older
-  denied temp-file cleanup remains manual. No shared/remote restart or prune.
+IAM38 narrow read/start/confirm/inspect functions are5/17/10/4 args,jsonb.
+USER-self tenant facts recovery-started/recovered and original-recipient
+RECOVERY_STARTED/AUTHENTICATOR_RECOVERED mail. Preserve ServiceIdentity,
+lookup_service5, Audit claim7, lookup_session24, revoke_session6, oldcanonical,
+record9/contract4/evidence5 and private mailclaim18. No new hash/dispatcher.
 
-Next online work: prove ten-code exhaustion across actual budget windows,
-then other S2 (step-up, restricted forced enrollment), S3 settings/expiry and
-S4 governance per existing FEAT. UI/browser and full release remain missing.
-No factor/session recovery acceptance is inferred from algorithm unit tests.
-OTP standard math remains pquerna/otp v1.5.0 fixed upstream5971b1ef; MATRIX
-owns custody, database time/replay and transaction policy, not a second HMAC-OTP.
+FEAT009/012 retain prior local evidence: real Postfix recovery and disabled
+USER historical delivery; independent IAM pair/Audit/PaaS/two dispatchers
+with actual post-commit TCP loss, three restarts and complete history chain;
+actual fixedf5 IAM37 executable retained MFA→38 including completed recovery
+followed by double migration/bootstrap/restart without resurrection; selected
+IAM32/36 predecessors. Those remain scoped source/database evidence, not
+full release/profile/UI acceptance or a requirement to replay every schema.
 
-## Shared ownership
+Next backend work remains009 S2 step-up, restricted first forced enrollment,
+S3 settings/expiry and S4 governance; full UI and release gates remain open.
+Standard OTP math uses pquerna/otp1.5.0; MATRIX owns custody, replay/budgets
+and transaction policy, not another HMAC/OTP implementation.
 
-Installation01a04149-5dbb-7300-9e4c-31d9e85c8ada received fixed48e56cbb,
-exact function/schema shape, local evidence and zero-run CI boundary.
-It exclusively owns offline close-before-restore/reconcile/one-time-reopen,
-including api/adapter/installation/v1.AuthenticationRecoveryClosure,
-installation/release/profile/CLI/journal. Do not implement or edit those now.
-Its fixed002d788b adapts f5 while retaining PaaS6; do not import its profile,
-WIP, host files, checkpoint or acceptance. Source version alone is not ABI.
+## Shared ownership and fixed UI review
 
-UX/UI01a07b21-9a0d-7fd0-b090-7827ce18262e owns all UI on its own branch.
-It received fixed48e56cbb routes, secret/unknown completion rules and gaps.
-Recent UI fixed reports:80225dce first binding;d4bff0d3 Role LIVE read-only;
-6066bf2b Role MOCK workflow;fb08f614 IdP/federated mapping MOCK. These are
-peer-reported candidates, not read-only reviewed/accepted here. No guessed
-LIVE SSO writes. Do not create interfaces merely to match MOCK screens.
-Earlier fixed2c460a39's MOCK UNKNOWN persistence path was reviewed only for
-that narrow behavior; no inherited UI/runtime acceptance.
+Installation01a04149-5dbb-7300-9e4c-31d9e85c8ada exclusively owns offline
+close-before-restore/reconcile/one-time-reopen, including
+api/adapter/installation/v1.AuthenticationRecoveryClosure and installation/
+release/profile/CLI/journal. It has fixed48 and exact shapes/evidence/gaps.
+Do not edit those or import its PaaS6, WIP, host files, profile or acceptance.
 
-Only fixed objects, no foreign worktree changes. Git identity exactly
-Xiak <Jellal@aliyun.com>, repository-local. No extra agents/tasks, remote1.3/
-.160/.161, withdrawn GitLab/1.5, global settings or Docker/WSL/system restart.
-Unique bounded fixtures; Markdown only; no personal mailboxes.
+UX/UI01a07b21-9a0d-7fd0-b090-7827ce18262e owns ALL UI on its own branch.
+Received fixed3c9a49fb251ceb80331b611b76843233ad1dafd1 recovery client and
+doc1e0cf9e7 as peer-reported candidates, not accepted UI/browser evidence here.
+Read-only fixed-code review found and sent two cases: precommit confirm loss
+followed by LOGIN/RECOVER loops in CONFIRM_OUTCOME_UNKNOWN instead of exact
+nonsecret result lookup; pending A intent can affect B login because realm/
+loginName context is not compared. Backend48 already permits safe original
+metadata query; no secret replay or automatic retry is authorized.
+Earlier fixed80225dce first-enrollment start-unknown loses requestId on edit/
+remount and never invokes existing by-request lookup; UX acknowledged and
+owns its next repair. Do not read their WIP or implement parallel UI.
+Other Role/IdP MOCK/LIVE peer reports remain candidates, not acceptance.
+
+Only fixed-object exchange. Git identity Xiak <Jellal@aliyun.com> locally.
+No extra agents/tasks, foreign worktree writes, remote1.3/.160/.161 or withdrawn
+GitLab/1.5 work, global settings, Docker/WSL/system restart or prune. Unique
+bounded fixtures, Markdown only; no personal mailboxes.
