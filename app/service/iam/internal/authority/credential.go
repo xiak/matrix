@@ -24,6 +24,7 @@ var (
 	ErrInvalidCredentialHash = errors.New("stored credential digest is invalid")
 	ErrAccessKeyProtection   = errors.New("access key protection failed")
 	ErrAccessKeySignature    = errors.New("access key signature verification failed")
+	ErrMFARecoveryCode       = errors.New("MFA recovery code verification failed")
 )
 
 type CredentialType string
@@ -144,6 +145,79 @@ func VerifyCredential(
 
 func knownCredentialType(value CredentialType) bool {
 	return value == CredentialSession || value == CredentialService || value == CredentialRoleSession
+}
+
+const mfaRecoveryCodePrefix = "mrc1."
+
+// MFARecoveryCodeScope comes from the actual USER and persisted recovery
+// batch, never caller selectors. It is not an authenticated identity.
+type MFARecoveryCodeScope struct {
+	InstallationID string
+	AccountID      iamv1.AccountID
+	UserID         iamv1.PrincipalID
+	BatchID        string
+	CodeID         string
+}
+
+func (issuer *CredentialIssuer) IssueMFARecoveryCode() (iamv1.Secret, error) {
+	if issuer == nil || issuer.entropy == nil {
+		return iamv1.Secret{}, ErrCredentialGeneration
+	}
+	material := make([]byte, 16)
+	defer clear(material)
+	if _, err := io.ReadFull(issuer.entropy, material); err != nil {
+		return iamv1.Secret{}, ErrCredentialGeneration
+	}
+	secret, err := iamv1.NewSecret(mfaRecoveryCodePrefix + base64.RawURLEncoding.EncodeToString(material))
+	if err != nil {
+		return iamv1.Secret{}, ErrCredentialGeneration
+	}
+	return secret, nil
+}
+
+// DigestMFARecoveryCode is a one-way verifier for a random 128-bit code.
+// It deliberately does not encrypt, register or consume recovery material.
+func DigestMFARecoveryCode(scope MFARecoveryCodeScope, code iamv1.Secret) (string, error) {
+	fields := []string{scope.InstallationID, string(scope.AccountID), string(scope.UserID), scope.BatchID, scope.CodeID}
+	for _, field := range fields {
+		if iamv1.ValidateID("recovery.scope", field) != nil {
+			return "", ErrMFARecoveryCode
+		}
+	}
+	encoded := code.CopyBytes()
+	defer clear(encoded)
+	if len(encoded) != len(mfaRecoveryCodePrefix)+22 || !bytes.HasPrefix(encoded, []byte(mfaRecoveryCodePrefix)) {
+		return "", ErrMFARecoveryCode
+	}
+	material := make([]byte, 16)
+	defer clear(material)
+	if n, err := base64.RawURLEncoding.Strict().Decode(material, encoded[len(mfaRecoveryCodePrefix):]); err != nil || n != len(material) ||
+		base64.RawURLEncoding.EncodeToString(material) != string(encoded[len(mfaRecoveryCodePrefix):]) {
+		return "", ErrMFARecoveryCode
+	}
+	digest := sha256.New()
+	digest.Write([]byte("matrix.iam.mfa-recovery-code.v1\x00"))
+	for _, field := range fields {
+		// Validated IDs cannot contain NUL; the final secret has fixed length.
+		digest.Write([]byte(field))
+		digest.Write([]byte{0})
+	}
+	digest.Write(material)
+	return "sha256:" + hex.EncodeToString(digest.Sum(nil)), nil
+}
+
+// VerifyMFARecoveryCode proves possession only. A successful result is not
+// proof of current eligibility or non-consumption; those remain transactional
+// authority checks. It never issues a Session or clears an MFA requirement.
+func VerifyMFARecoveryCode(scope MFARecoveryCodeScope, code iamv1.Secret, storedDigest string) (bool, error) {
+	if iamv1.ValidateDigest("recovery.digest", storedDigest) != nil {
+		return false, ErrMFARecoveryCode
+	}
+	actual, err := DigestMFARecoveryCode(scope, code)
+	if err != nil {
+		return false, err
+	}
+	return subtle.ConstantTimeCompare([]byte(actual), []byte(storedDigest)) == 1, nil
 }
 
 const (

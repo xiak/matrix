@@ -15,6 +15,116 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
+func TestMFARecoveryCodesArePurposeAndSubjectBound(t *testing.T) {
+	scope := MFARecoveryCodeScope{InstallationID: "install-a", AccountID: "account-a", UserID: "user-a", BatchID: "batch-a", CodeID: "code-a"}
+	code, err := NewCredentialIssuer(bytes.NewReader(bytes.Repeat([]byte{0x71}, 16))).IssueMFARecoveryCode()
+	if err != nil || len(code.CopyBytes()) != 27 || !strings.HasPrefix(string(code.CopyBytes()), "mrc1.") {
+		t.Fatal("recovery code did not preserve 128 random bits with its own purpose")
+	}
+	digest, err := DigestMFARecoveryCode(scope, code)
+	if err != nil || iamv1.ValidateDigest("digest", digest) != nil || strings.Contains(digest, string(code.CopyBytes())) {
+		t.Fatal("recovery verifier was not a one-way scoped digest")
+	}
+	// Independently calculated using Node's SHA256 over the purpose, five
+	// NUL-delimited scope fields and the public synthetic 16-byte material.
+	if digest != "sha256:b4f2521cd04332d3c06e295bdbccfed9ffeb0a1d6ea576b0508c34dcb54a43e8" {
+		t.Fatal("independent scoped recovery verifier differs")
+	}
+	if valid, err := VerifyMFARecoveryCode(scope, code, digest); err != nil || !valid {
+		t.Fatal("original recovery code did not verify")
+	}
+	for field := range 5 {
+		changed := scope
+		switch field {
+		case 0:
+			changed.InstallationID = "install-b"
+		case 1:
+			changed.AccountID = "account-b"
+		case 2:
+			changed.UserID = "user-b"
+		case 3:
+			changed.BatchID = "batch-b"
+		case 4:
+			changed.CodeID = "code-b"
+		}
+		if valid, err := VerifyMFARecoveryCode(changed, code, digest); err != nil || valid {
+			t.Fatal("recovery material crossed its immutable scope")
+		}
+	}
+	for _, purpose := range []CredentialType{CredentialSession, CredentialService, CredentialRoleSession} {
+		if valid, err := VerifyCredential(purpose, scope.CodeID, code, digest); err != nil || valid {
+			t.Fatal("recovery verifier became a bearer credential verifier")
+		}
+	}
+	if _, err := LookupCredentialDigest(CredentialType("MFA_RECOVERY"), code); err != ErrInvalidCredentialType {
+		t.Fatal("recovery entered the generic authenticated credential catalog")
+	}
+	other, err := NewCredentialIssuer(nil).IssueMFARecoveryCode()
+	if err != nil {
+		t.Fatal("recovery generation failed")
+	}
+	if valid, err := VerifyMFARecoveryCode(scope, other, digest); err != nil || valid {
+		t.Fatal("another well-formed secret verified")
+	}
+	if output, err := json.Marshal(code); !errors.Is(err, iamv1.ErrSecretSerialization) || len(output) != 0 {
+		t.Fatal("recovery code escaped ordinary JSON")
+	}
+	for _, format := range []string{"%v", "%+v", "%#v", "%q"} {
+		if strings.Contains(fmt.Sprintf(format, code), string(code.CopyBytes())) {
+			t.Fatal("recovery code escaped formatting")
+		}
+	}
+}
+
+func TestMFARecoveryCodesRejectAmbiguousAndInvalidMaterial(t *testing.T) {
+	scope := MFARecoveryCodeScope{InstallationID: "install-a", AccountID: "account-a", UserID: "user-a", BatchID: "batch-a", CodeID: "code-a"}
+	code := authoritySecret(t, "mrc1.AAAAAAAAAAAAAAAAAAAAAA")
+	digest, err := DigestMFARecoveryCode(scope, code)
+	if err != nil {
+		t.Fatal("canonical synthetic recovery code rejected")
+	}
+	for _, invalid := range []iamv1.Secret{{}, authoritySecret(t, "mrc1.AAAAAAAAAAAAAAAAAAAAAB"),
+		authoritySecret(t, "mrc1.AAAAAAAAAAAAAAAAAAAAAA=="), authoritySecret(t, "MRC1.AAAAAAAAAAAAAAAAAAAAAA"),
+		authoritySecret(t, "mrc1."+strings.Repeat("A", 21)), authoritySecret(t, "mrc1."+strings.Repeat("A", 23)),
+		authoritySecret(t, "mak1."+strings.Repeat("A", 43)), authoritySecret(t, "mx1."+strings.Repeat("A", 43)),
+		authoritySecret(t, "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")} {
+		if result, err := DigestMFARecoveryCode(scope, invalid); err != ErrMFARecoveryCode || result != "" {
+			t.Fatal("noncanonical/wrong-purpose recovery material accepted")
+		}
+		if valid, err := VerifyMFARecoveryCode(scope, invalid, digest); err != ErrMFARecoveryCode || valid {
+			t.Fatal("noncanonical recovery material verified")
+		}
+	}
+	for _, invalid := range []string{"", " padded", "embedded\x00separator", strings.Repeat("a", 129)} {
+		for field := range 5 {
+			changed := scope
+			switch field {
+			case 0:
+				changed.InstallationID = invalid
+			case 1:
+				changed.AccountID = iamv1.AccountID(invalid)
+			case 2:
+				changed.UserID = iamv1.PrincipalID(invalid)
+			case 3:
+				changed.BatchID = invalid
+			case 4:
+				changed.CodeID = invalid
+			}
+			if result, err := DigestMFARecoveryCode(changed, code); err != ErrMFARecoveryCode || result != "" {
+				t.Fatal("unbound or ambiguous recovery scope accepted")
+			}
+		}
+	}
+	if valid, err := VerifyMFARecoveryCode(scope, code, "not-a-digest"); err != ErrMFARecoveryCode || valid {
+		t.Fatal("corrupt recovery digest accepted")
+	}
+	for _, issuer := range []*CredentialIssuer{nil, {}, NewCredentialIssuer(failingEntropy{}), NewCredentialIssuer(bytes.NewReader(make([]byte, 15)))} {
+		if code, err := issuer.IssueMFARecoveryCode(); err != ErrCredentialGeneration || code.Present() {
+			t.Fatal("failed entropy produced recovery material")
+		}
+	}
+}
+
 func TestAccessKeyRequestHMACMatchesIndependentNodeVector(t *testing.T) {
 	// Public synthetic vector independently computed with Node crypto. The
 	// signing key is the raw 32 bytes 00..1f, not its mak1 display encoding.

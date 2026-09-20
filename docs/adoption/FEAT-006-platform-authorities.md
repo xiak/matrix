@@ -677,6 +677,16 @@ No library/version is selected or added by this review. Runtime, material
 protection, recovery eligibility and acceptance belong solely009; this
 review does not make the proposed APIs or shared-owner work available.
 
+The first009 S2a internal foundation `REUSE`s the fixed `d6867251`
+CredentialIssuer entropy and Secret redaction owners, and `ADAPT`s a
+purpose-scoped one-way verifier for random MFA recovery codes. It does not
+add recovery to the generic bearer credential catalog. RFC vectors and
+independently computed Node standard-crypto vectors are `REFERENCE` test
+oracles, not another production verifier or a library/runtime dependency.
+The fixed TOTP domain algorithm is new code in the existing authority owner;
+no donor authenticator service, enrollment flow or secret envelope is copied.
+Pure validation does not implement durable consumption or prove deployment.
+
 ## Password and authentication-budget target review
 
 IAM/009 owns account-governed password changes and bounded multi-instance
