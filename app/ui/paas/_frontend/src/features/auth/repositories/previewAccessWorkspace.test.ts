@@ -4,7 +4,7 @@ import { analyzePolicyDocument, includesPermissionManagement, parsePolicyDocumen
 import { expandPolicyActions } from "../domain/policyLanguage";
 import { policyActions, policyServices } from "../domain/previewAuthorizationCatalog";
 import { createPreviewAccessWorkspace, initialAccessWorkspace } from "./previewAccessWorkspace";
-import { previewAccountRepository, previewCredential, previewIamRepository, previewPersonalMfaSnapshot, resetPreviewEnvironment } from "./previewIamRepository";
+import { beginPreviewPersonalMfaRecovery, cancelPreviewPersonalMfaRecovery, completePreviewPersonalMfaLogin, nextPreviewPersonalMfaRecoveryCode, preparePreviewPersonalMfaDemo, previewAccountRepository, previewCredential, previewIamRepository, previewPersonalMfaSnapshot, resetPreviewEnvironment } from "./previewIamRepository";
 import type { AccountCommand } from "../domain/accounts";
 import type { AccessWorkspaceCommand } from "../domain/accessWorkspace";
 import { applyUserBatch, userBatchDisabledReason, userBatchLimit, type UserBatchCommand } from "../domain/userBatch";
@@ -599,6 +599,29 @@ describe("access workspace preview invariants", () => {
     await expect(previewIamRepository.login({ loginName: "preview-admin", password: "experience-only" })).rejects.toMatchObject({ status: 401 });
     resetPreviewEnvironment();
     expect(previewPersonalMfaSnapshot()).toEqual({ factorState: "never-bound", reauthenticationRequired: false, recoveryState: "idle" });
+  });
+  it("consumes recovery material and requires a new restricted challenge after it is abandoned", async () => {
+    resetPreviewEnvironment();
+    preparePreviewPersonalMfaDemo();
+    expect(await beginPreviewPersonalMfaRecovery("wrong-password", "MTRX-RECOVER-01")).toBeNull();
+    expect(nextPreviewPersonalMfaRecoveryCode()).toBe("MTRX-RECOVER-01");
+    const challenge = await beginPreviewPersonalMfaRecovery("demo-password", "MTRX-RECOVER-01");
+    expect(challenge).toMatch(/^preview-mfa-recovery-/);
+    cancelPreviewPersonalMfaRecovery(challenge!);
+    expect(await beginPreviewPersonalMfaRecovery("demo-password", "MTRX-RECOVER-01")).toBeNull();
+    expect(nextPreviewPersonalMfaRecoveryCode()).toBe("MTRX-RECOVER-02");
+  });
+  it("revokes the old preview bearer at binding confirmation and never revives it after a fresh login", async () => {
+    resetPreviewEnvironment();
+    const oldSession = await previewIamRepository.login({ loginName: "preview-admin", password: "experience-only" });
+    expect(await previewAccountRepository.currentIdentity(oldSession.credential)).toBeTruthy();
+    await previewAccountRepository.workspace!.execute(oldSession.credential, { kind: "confirm-personal-mfa" });
+    await expect(previewAccountRepository.currentIdentity(oldSession.credential)).rejects.toMatchObject({ status: 401 });
+    expect(await completePreviewPersonalMfaLogin()).toBe(true);
+    const freshSession = await previewIamRepository.login({ loginName: "preview-admin", password: "experience-only" });
+    expect(freshSession.credential).not.toBe(oldSession.credential);
+    expect(await previewAccountRepository.currentIdentity(freshSession.credential)).toBeTruthy();
+    await expect(previewAccountRepository.currentIdentity(oldSession.credential)).rejects.toMatchObject({ status: 401 });
   });
   it("removes a deleted user's memberships, direct permissions and keys together", () => {
     const state = applyAccessWorkspaceCommand(initialAccessWorkspace("org-xiak"), { kind: "delete-user", principalId: "principal-lin" }, context);

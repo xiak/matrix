@@ -32,6 +32,8 @@ import type { AccountRepository, IamRepository, LoginResult } from "./iamReposit
 import { createPreviewAccessWorkspace } from "./previewAccessWorkspace";
 
 export const previewCredential = "matrix-ux-preview-memory-only";
+const previewPassword = "demo-password";
+const previewRecoveryCodes = ["MTRX-RECOVER-01", "MTRX-RECOVER-02"] as const;
 const previewAt = "2026-09-08T09:00:00Z";
 const previewSessionObservedAt = "2026-09-18T12:00:00Z";
 
@@ -178,8 +180,23 @@ let previewOwnSessions = structuredClone(initialPreviewSessions);
 const previewOwnSessionReplays = new Map<string, { targetSessionId: string; result: OwnSessionRevocation }>();
 const previewOtherSessionReplays = new Map<string, OtherSessionsRevocation>();
 
+let activePreviewCredential: string | null = null;
+let activeRecoveryChallenge: string | null = null;
+const consumedRecoveryCodes = new Set<string>();
+
+export function isPreviewCredential(credential: string): boolean {
+  // Browser sessions receive a fresh opaque value so a superseded bearer
+  // cannot be reused. The stable fixture is accepted only by unit tests.
+  return credential === activePreviewCredential
+    || (process.env.NODE_ENV === "test" && credential === previewCredential);
+}
+
 function requirePreviewCredential(credential: string): void {
-  if (credential !== previewCredential) throw new Error("INVALID_PREVIEW_CREDENTIAL");
+  if (!isPreviewCredential(credential)) throw new HttpProblem(401, "PREVIEW_SESSION_EXPIRED");
+}
+
+function invalidateActivePreviewCredential(credential?: string): void {
+  if (!credential || credential === activePreviewCredential) activePreviewCredential = null;
 }
 
 function requirePreviewAccount(accountId: string): void {
@@ -218,18 +235,34 @@ export function preparePreviewPersonalMfaDemo() {
   return workspace.snapshot().personalMfa;
 }
 
-export async function beginPreviewPersonalMfaRecovery(): Promise<boolean> {
+export function nextPreviewPersonalMfaRecoveryCode(): string | null {
+  return previewRecoveryCodes.find((code) => !consumedRecoveryCodes.has(code)) ?? null;
+}
+
+export async function beginPreviewPersonalMfaRecovery(password: string, recoveryCode: string): Promise<string | null> {
   try {
-    await workspace.execute(previewCredential, { kind: "begin-personal-mfa-recovery" });
-    return true;
+    if (password !== previewPassword || !previewRecoveryCodes.includes(recoveryCode as typeof previewRecoveryCodes[number]) || consumedRecoveryCodes.has(recoveryCode)) return null;
+    const state = workspace.snapshot().personalMfa;
+    if (state.recoveryState === "idle") await workspace.execute(previewCredential, { kind: "begin-personal-mfa-recovery" });
+    else if (state.recoveryState !== "rebind-required") return null;
+    consumedRecoveryCodes.add(recoveryCode);
+    activeRecoveryChallenge = `preview-mfa-recovery-${crypto.randomUUID()}`;
+    return activeRecoveryChallenge;
   } catch {
-    return false;
+    return null;
   }
 }
 
-export async function confirmPreviewPersonalMfaRecovery(): Promise<boolean> {
+export function cancelPreviewPersonalMfaRecovery(challenge: string): void {
+  if (challenge === activeRecoveryChallenge) activeRecoveryChallenge = null;
+}
+
+export async function confirmPreviewPersonalMfaRecovery(challenge: string): Promise<boolean> {
   try {
+    if (!challenge || challenge !== activeRecoveryChallenge) return false;
     await workspace.execute(previewCredential, { kind: "confirm-personal-mfa" });
+    activeRecoveryChallenge = null;
+    invalidateActivePreviewCredential();
     return true;
   } catch {
     return false;
@@ -249,6 +282,9 @@ export async function completePreviewPersonalMfaLogin(): Promise<boolean> {
 
 export function resetPreviewEnvironment(): void {
   previewLoginVerified = false;
+  activePreviewCredential = null;
+  activeRecoveryChallenge = null;
+  consumedRecoveryCodes.clear();
   workspace.reset();
   const initial = structuredClone(initialPreviewState);
   account = initial.account;
@@ -259,9 +295,9 @@ export function resetPreviewEnvironment(): void {
   resetPreviewOwnSessions();
 }
 
-function loginResult(): LoginResult {
+function loginResult(credential: string): LoginResult {
   return {
-    credential: previewCredential,
+    credential,
     mustChangePassword: false,
     session: {
       id: "session-ux-preview",
@@ -279,11 +315,13 @@ export const previewIamRepository: IamRepository = {
     const mfa = workspace.snapshot().personalMfa;
     if ((mfa.factorState !== "never-bound" || mfa.recoveryState !== "idle") && !previewLoginVerified) throw new HttpProblem(401, "PREVIEW_MFA_REQUIRED");
     previewLoginVerified = false;
-    return loginResult();
+    activePreviewCredential = `matrix-ux-preview-${crypto.randomUUID()}`;
+    return loginResult(activePreviewCredential);
   },
   async changePassword(credential) { requirePreviewCredential(credential); },
   async logout(credential) {
     requirePreviewCredential(credential);
+    invalidateActivePreviewCredential(credential);
     previewLoginVerified = false;
   },
   sessions: {
@@ -647,6 +685,7 @@ export const previewAccountRepository: AccountRepository = {
         delete userPlatformPolicies[command.principalId];
       }
       if (command.kind === "update-user") updateUser(command.principalId, (user) => ({ ...user, displayName: command.displayName.trim(), resourceVersion: user.resourceVersion + 1 }));
+      if (command.kind === "confirm-personal-mfa" || command.kind === "remove-personal-mfa") invalidateActivePreviewCredential(credential);
       return result;
     }
   },

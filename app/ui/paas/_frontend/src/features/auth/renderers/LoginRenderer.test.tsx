@@ -98,9 +98,10 @@ describe("branded sign-in flows", () => {
     const { user, iam } = open();
     await user.click(screen.getByRole("button", { name: "体验 MFA 登录与恢复" }));
     await user.click(screen.getByRole("button", { name: "无法使用验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
     await user.type(screen.getByLabelText("一次性恢复码"), "mtrx-recover-01");
     await user.click(screen.getByRole("button", { name: "验证并开始重新绑定" }));
-    expect(screen.getByRole("alert").textContent).toContain("未能完成恢复材料验证");
+    expect(screen.getByRole("alert").textContent).toContain("未能完成密码与恢复材料验证");
     await user.clear(screen.getByLabelText("一次性恢复码"));
     await user.type(screen.getByLabelText("一次性恢复码"), "MTRX-RECOVER-01");
     await user.click(screen.getByRole("button", { name: "验证并开始重新绑定" }));
@@ -133,6 +134,7 @@ describe("branded sign-in flows", () => {
     const { user, iam } = open();
     await user.click(screen.getByRole("button", { name: "体验 MFA 登录与恢复" }));
     await user.click(screen.getByRole("button", { name: "无法使用验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
     await user.type(screen.getByLabelText("一次性恢复码"), "MTRX-RECOVER-01");
     await user.click(screen.getByRole("button", { name: "验证并开始重新绑定" }));
     await user.click(screen.getByRole("button", { name: "取消" }));
@@ -140,8 +142,16 @@ describe("branded sign-in flows", () => {
     expect(screen.queryByRole("heading", { name: "完成安全验证" })).toBeNull();
     expect(iam.login).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "一键进入体验控制台" }));
-    expect(screen.getByRole("heading", { name: "重新绑定身份验证器" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "使用恢复码" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "完成安全验证" })).toBeNull();
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("一次性恢复码"), "MTRX-RECOVER-01");
+    await user.click(screen.getByRole("button", { name: "验证并开始重新绑定" }));
+    expect(screen.getByRole("alert").textContent).toContain("未能完成密码与恢复材料验证");
+    await user.clear(screen.getByLabelText("一次性恢复码"));
+    await user.type(screen.getByLabelText("一次性恢复码"), "MTRX-RECOVER-02");
+    await user.click(screen.getByRole("button", { name: "验证并开始重新绑定" }));
+    expect(screen.getByRole("heading", { name: "重新绑定身份验证器" })).toBeTruthy();
   });
   it("translates an existing authentication error immediately and retains the account draft", async () => {
     const iam = repository();

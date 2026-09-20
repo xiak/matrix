@@ -8,7 +8,7 @@ import { Button, FormField, Alert, Input, PasswordInput, Tabs } from "@ui/xiak";
 import { useSession } from "../application/SessionProvider";
 import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
 import { MfaLoginPreview } from "./MfaPreviewExperience";
-import { beginPreviewPersonalMfaRecovery, completePreviewPersonalMfaLogin, confirmPreviewPersonalMfaRecovery, preparePreviewPersonalMfaDemo, previewPersonalMfaSnapshot } from "../repositories/previewIamRepository";
+import { beginPreviewPersonalMfaRecovery, cancelPreviewPersonalMfaRecovery, completePreviewPersonalMfaLogin, confirmPreviewPersonalMfaRecovery, nextPreviewPersonalMfaRecoveryCode, preparePreviewPersonalMfaDemo, previewPersonalMfaSnapshot } from "../repositories/previewIamRepository";
 import styles from "./LoginRenderer.module.css";
 
 export function AccountLoginForm({ returnTo }: { returnTo: string }) {
@@ -70,7 +70,8 @@ export function AccountLoginForm({ returnTo }: { returnTo: string }) {
   }
 
   if (mfaPreview) return <MfaLoginPreview state={previewPersonalMfaSnapshot()} onBack={() => setMfaPreview(false)}
-    onBeginRecovery={beginPreviewPersonalMfaRecovery} onConfirmRecovery={confirmPreviewPersonalMfaRecovery}
+    recoveryCodeHint={nextPreviewPersonalMfaRecoveryCode()} onBeginRecovery={beginPreviewPersonalMfaRecovery}
+    onCancelRecovery={cancelPreviewPersonalMfaRecovery} onConfirmRecovery={confirmPreviewPersonalMfaRecovery}
     onAuthenticated={async () => { if (!await completePreviewPersonalMfaLogin()) return false; await enterPreview(true); }} />;
 
   return <>

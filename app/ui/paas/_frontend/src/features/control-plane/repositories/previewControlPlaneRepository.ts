@@ -4,7 +4,7 @@ import type {
   ServiceInstallation
 } from "../domain/resources";
 import type { ControlPlaneRepository } from "./controlPlaneRepository";
-import { previewCredential } from "@/features/auth/repositories/previewIamRepository";
+import { isPreviewCredential } from "@/features/auth/repositories/previewIamRepository";
 
 let entitlementSequence = 3;
 
@@ -89,7 +89,7 @@ let snapshot: ControlPlaneSnapshot = {
 };
 
 function requirePreviewCredential(credential: string): void {
-  if (credential !== previewCredential) throw new Error("INVALID_PREVIEW_CREDENTIAL");
+  if (!isPreviewCredential(credential)) throw new Error("INVALID_PREVIEW_CREDENTIAL");
 }
 
 function copySnapshot(): ControlPlaneSnapshot {

@@ -31,7 +31,6 @@ import { SecurityNotificationAddressPreview } from "./SecurityNotificationAddres
 import { SecurityStepUpPreview, type SecurityStepUpAction } from "./SecurityStepUpPreview";
 
 const demonstrationCode = "624810";
-const demonstrationRecoveryCode = "MTRX-RECOVER-01";
 const recoveryCodes = [
   "MTRX-4Q7F-K2PA", "MTRX-9C2M-W6RT", "MTRX-3J8N-H5VX", "MTRX-7P4D-Y9KL",
   "MTRX-5T2B-Q8NC", "MTRX-8R6W-F3JM", "MTRX-2V9K-P7HD", "MTRX-6N3X-C4QA"
@@ -118,29 +117,33 @@ function EnrollmentWizard({ reason, onCancel, onConfirmed, onFinish }: { reason:
   </Card>;
 }
 
-export function MfaLoginPreview({ state, onBack, onAuthenticated, onBeginRecovery, onConfirmRecovery }: {
+export function MfaLoginPreview({ state, recoveryCodeHint, onBack, onAuthenticated, onBeginRecovery, onCancelRecovery, onConfirmRecovery }: {
   state: PersonalMfaPreviewState;
   onBack(): void;
   onAuthenticated(): boolean | void | Promise<boolean | void>;
-  onBeginRecovery(): boolean | void | Promise<boolean | void>;
-  onConfirmRecovery(): boolean | void | Promise<boolean | void>;
+  recoveryCodeHint: string | null;
+  onBeginRecovery(password: string, recoveryCode: string): Promise<string | null>;
+  onCancelRecovery(challenge: string): void;
+  onConfirmRecovery(challenge: string): boolean | void | Promise<boolean | void>;
 }) {
   const t = useTranslations("MfaPreview");
   const auth = useTranslations("Auth");
-  const [mode, setMode] = useState<"challenge" | "recover" | "enroll-recovery" | "recovered">(state.recoveryState === "rebind-required" ? "enroll-recovery" : "challenge");
+  const [mode, setMode] = useState<"challenge" | "recover" | "enroll-recovery" | "recovered">(state.recoveryState === "rebind-required" ? "recover" : "challenge");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
+  const [recoveryChallenge, setRecoveryChallenge] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const codeId = useId();
   const requiresFactor = state.factorState !== "removed";
-  if (mode === "enroll-recovery") return <EnrollmentWizard reason="recovery" onCancel={onBack} onConfirmed={onConfirmRecovery} onFinish={() => setMode("recovered")} />;
+  if (mode === "enroll-recovery") return <EnrollmentWizard reason="recovery" onCancel={() => { if (recoveryChallenge) onCancelRecovery(recoveryChallenge); setRecoveryChallenge(null); onBack(); }} onConfirmed={() => recoveryChallenge ? onConfirmRecovery(recoveryChallenge) : false} onFinish={() => setMode("recovered")} />;
   if (mode === "recovered") return <div className={styles.loginFlow}><div className={styles.completion}><CheckCircle2 aria-hidden="true" /><div><h1>{t("reenrollComplete")}</h1><p>{t("reenrollCompleteHint")}</p></div></div><Button block onClick={onBack}>{t("returnToLogin")}</Button></div>;
-  if (mode === "recover") return <form className={styles.loginFlow} onSubmit={(event) => { event.preventDefault(); void (async () => { if (code !== demonstrationRecoveryCode || await onBeginRecovery() === false) { setError(true); return; } setMode("enroll-recovery"); })(); }}>
+  if (mode === "recover") return <form className={styles.loginFlow} onSubmit={(event) => { event.preventDefault(); void (async () => { const challenge = await onBeginRecovery(password, code); if (!challenge) { setError(true); return; } setRecoveryChallenge(challenge); setMode("enroll-recovery"); })(); }}>
     <div className={styles.loginHeading}><KeyRound aria-hidden="true" /><div><h1>{t("recoverTitle")}</h1><p>{t("recoverHint")}</p></div></div>
-    <Alert status="warning">{t("demoRecoveryCode", { code: demonstrationRecoveryCode })}</Alert>
+    <Alert status="warning">{recoveryCodeHint ? t("demoRecoveryCode", { code: recoveryCodeHint }) : t("noRecoveryMaterial")}</Alert>
+    <FormField id={`${codeId}-recovery-password`} label={t("currentPassword")}><PasswordInput autoComplete="current-password" capsLockLabel={auth("capsLock")} hideLabel={auth("hidePassword")} id={`${codeId}-recovery-password`} onChange={(event) => { setPassword(event.target.value); setError(false); }} showLabel={auth("showPassword")} value={password} /></FormField>
     <FormField id={codeId} label={t("recoveryCode")} hint={t("recoverRestriction")}><Input autoComplete="off" id={codeId} onChange={(event) => { setCode(event.target.value); setError(false); }} required value={code} /></FormField>
     {error ? <Alert status="danger">{t("invalidRecoveryCode")}</Alert> : null}
-    <Button block type="submit">{t("continueRecovery")}</Button>
+    <Button block disabled={!password || !code || !recoveryCodeHint} type="submit">{t("continueRecovery")}</Button>
     <Button block onClick={onBack} type="button" variant="ghost">{t("returnToLogin")}</Button>
     <p className={styles.boundary}><AlertTriangle aria-hidden="true" />{t("noRecoveryMaterial")}</p>
   </form>;
@@ -182,7 +185,10 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
       if (credential) session.expire(credential);
     }
   }
-  if (enrollment) return <EnrollmentWizard reason={enrollment} onCancel={() => setEnrollment(null)} onConfirmed={async () => Boolean(await access.executeWorkspace({ kind: "confirm-personal-mfa" }))} onFinish={() => { setEnrollment(null); setFeedback(enrollment === "replace" ? "replaced" : "bound"); if (credential) session.expire(credential); }} />;
+  if (enrollment) return <EnrollmentWizard reason={enrollment} onCancel={() => setEnrollment(null)} onConfirmed={async () => {
+    const confirmed = Boolean(await access.executeWorkspace({ kind: "confirm-personal-mfa" }));
+    return confirmed;
+  }} onFinish={() => { setEnrollment(null); setFeedback(enrollment === "replace" ? "replaced" : "bound"); if (credential) session.expire(credential); }} />;
   if (showCodes) return <Card className={styles.flowCard}><Card.Header><Typography.Title as="h2" level={3}>{t("regenerateTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header><Card.Body><RecoveryCodes onDone={() => { setShowCodes(false); setFeedback("regenerated"); }} /></Card.Body></Card>;
   if (stepUp) return <SecurityStepUpPreview action={stepUp} onCancel={() => setStepUp(null)} onVerified={verified} />;
 
