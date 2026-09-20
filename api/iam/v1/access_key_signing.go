@@ -253,7 +253,7 @@ func AccessKeySigningBytes(parameters AccessKeySignatureParameters, request Acce
 	}
 	nonce := parameters.Nonce.CopyBytes()
 	defer clear(nonce)
-	return accessKeyBindingBytes("matrix.iam.access-key-http-signature.v1",
+	return credentialBindingBytes("matrix.iam.access-key-http-signature.v1",
 		[]byte(AccessKeySignatureScheme), []byte(parameters.AccessKeyID), []byte(parameters.InstallationID), []byte(parameters.Audience),
 		[]byte(strconv.FormatInt(parameters.SignedAt, 10)), nonce, []byte(request.Method), []byte(request.Scheme), []byte(request.Authority),
 		[]byte(request.EscapedPath), []byte(request.RawQuery), []byte(request.ContentType), []byte(request.IdempotencyKey),
@@ -281,7 +281,7 @@ func AccessKeyNonceDigest(parameters AccessKeySignatureParameters) (string, erro
 	}
 	nonce := parameters.Nonce.CopyBytes()
 	defer clear(nonce)
-	encoded := accessKeyBindingBytes("matrix.iam.access-key-http-nonce.v1", []byte(parameters.InstallationID), []byte(parameters.AccessKeyID), nonce)
+	encoded := credentialBindingBytes("matrix.iam.access-key-http-nonce.v1", []byte(parameters.InstallationID), []byte(parameters.AccessKeyID), nonce)
 	defer clear(encoded)
 	digest := sha256.Sum256(encoded)
 	return "sha256:" + hex.EncodeToString(digest[:]), nil

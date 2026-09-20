@@ -3,6 +3,7 @@ package iamv1
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,20 @@ import (
 )
 
 var ErrEncodingFailed = errors.New("IAM contract encoding failed")
+
+// credentialBindingBytes is the existing uint32BE framing, shared only by
+// closed credential encodings in this package. Every caller first validates
+// its own bounded fields and supplies a fixed, purpose-specific domain.
+// Moving this primitive does not change any AccessKey context/signature bytes.
+func credentialBindingBytes(domain string, fields ...[]byte) []byte {
+	encoded := binary.BigEndian.AppendUint32(nil, uint32(len(domain)))
+	encoded = append(encoded, domain...)
+	for _, field := range fields {
+		encoded = binary.BigEndian.AppendUint32(encoded, uint32(len(field)))
+		encoded = append(encoded, field...)
+	}
+	return encoded
+}
 
 // BootstrapDigest is the single byte-preserving commitment to the sealed
 // installer bootstrap document. It deliberately reuses its private encoder.
