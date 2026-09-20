@@ -889,7 +889,43 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "返回服务授权" }));
     expect(screen.getByRole("button", { name: "Application delivery" })).toBe(document.activeElement);
     await user.click(screen.getByRole("button", { name: "返回角色列表" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "新建角色" })).toBe(document.activeElement));
+    await waitFor(() => expect(screen.getByRole("button", { name: "服务授权" })).toBe(document.activeElement));
+  });
+  it("keeps service consent pinned to policy v1 when the policy default later moves to v2", async () => {
+    const { user } = await open("roles", { seed: async (extension) => {
+      extension.transact((source) => ({ workspace: { ...source, policies: source.policies.map((policy) => policy.id !== "policy-delivery" ? policy : {
+        ...policy,
+        defaultVersion: 2,
+        lastVersion: 2,
+        versions: [...policy.versions, { id: 2, document: { version: "1" as const, statement: [{ effect: "allow" as const, action: ["iam:*"], resource: ["*"] }] }, createdAt: "2026-09-10T09:00:00Z" }]
+      }) } }));
+    } });
+    await user.click(await screen.findByRole("button", { name: "服务授权" }));
+    await user.click(screen.getByRole("button", { name: "Application delivery" }));
+    expect(screen.getByRole("button", { name: "打开策略详情（当前默认 v2）" })).toBeTruthy();
+    expect(screen.getByText(/本次服务授权仍固定审阅 v1/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByText("MatrixDeliveryAccess · v1")).toBeTruthy();
+    expect(screen.getByText("paas:*")).toBeTruthy();
+    expect(screen.queryByText("iam:*")).toBeNull();
+  });
+  it("blocks service consent instead of falling back when its pinned policy version is missing", async () => {
+    const { user } = await open("roles", { seed: async (extension) => {
+      extension.transact((source) => ({ workspace: { ...source, policies: source.policies.map((policy) => policy.id !== "policy-delivery" ? policy : {
+        ...policy,
+        defaultVersion: 2,
+        lastVersion: 2,
+        versions: [{ id: 2, document: { version: "1" as const, statement: [{ effect: "allow" as const, action: ["iam:*"] , resource: ["*"] }] }, createdAt: "2026-09-10T09:00:00Z" }]
+      }) } }));
+    } });
+    await user.click(await screen.findByRole("button", { name: "服务授权" }));
+    const directory = screen.getByRole("table", { name: "服务授权模板" });
+    expect(within(directory).getByText("不可用")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Application delivery" }));
+    expect(screen.getByText(/找不到模板固定引用的策略 v1/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "审阅服务授权" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: /当前默认 v2/ })).toBeNull();
   });
   it("keeps identity-provider and federation mutations in their detail pages", async () => {
     const { user } = await open("providers");

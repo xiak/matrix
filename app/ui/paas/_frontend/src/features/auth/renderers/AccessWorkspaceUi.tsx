@@ -3,7 +3,7 @@
 import { Children, Fragment, cloneElement, isValidElement, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type Ref, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableToolbar, TablePagination, Transfer, type PageCommand } from "@ui/xiak";
+import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableToolbar, TablePagination, Transfer, type PageCommand, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import styles from "./AccountAccessRenderer.module.css";
@@ -35,7 +35,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   footerNote?: ReactNode;
   workflow?: ReactNode;
   createActionRef?: RefObject<HTMLButtonElement | null>;
-  createFocusRef?: Ref<{ focus(): void }>;
+  createFocusRef?: Ref<PageCommandsHandle>;
 }) {
   const t = useTranslations("IamWorkspace");
   const collection = useTranslations("Collection");
@@ -76,7 +76,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
 export function WorkspaceDetail({ title, onBack, actions, children, embedded = false, primaryActionRef, actionFocusRef }: {
   title: string; onBack(): void; actions?: { primary?: PageCommand; secondary?: readonly PageCommand[] }; children: ReactNode; embedded?: boolean;
   primaryActionRef?: RefObject<HTMLButtonElement | null>;
-  actionFocusRef?: Ref<{ focus(): void }>;
+  actionFocusRef?: Ref<PageCommandsHandle>;
 }) {
   const t = useTranslations("IamWorkspace");
   const c = useTranslations("Collection");

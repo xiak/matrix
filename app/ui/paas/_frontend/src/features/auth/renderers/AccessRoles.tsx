@@ -1,7 +1,7 @@
 "use client";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, EmptyState, FormField, Table, Tabs, TextArea } from "@ui/xiak";
+import { Alert, Badge, Button, Card, EmptyState, FormField, Table, Tabs, TextArea, type PageCommandsHandle } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessRole, AccessWorkspace } from "../domain/accessWorkspace";
@@ -94,7 +94,7 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
   const [tab, setTab] = useState("policies");
   const [deleting, setDeleting] = useState<AccessRole | null>(null);
   const metadataTrigger = useRef<HTMLButtonElement>(null), trustTrigger = useRef<HTMLButtonElement>(null), settingsTrigger = useRef<HTMLButtonElement>(null), addTrigger = useRef<HTMLButtonElement>(null), removeTrigger = useRef<HTMLButtonElement>(null);
-  const collectionActionFocus = useRef<{ focus(): void }>(null);
+  const collectionActionFocus = useRef<PageCommandsHandle>(null);
   const previousServiceAuthorizationOpen = useRef(false);
   const previousWorkflow = useRef<typeof workflow>(null);
   const selected = workspace.roles.find((role) => role.id === entityId);
@@ -109,7 +109,7 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
   useLayoutEffect(() => {
     const wasOpen = previousServiceAuthorizationOpen.current;
     previousServiceAuthorizationOpen.current = serviceAuthorizationOpen;
-    if (wasOpen && !serviceAuthorizationOpen) collectionActionFocus.current?.focus();
+    if (wasOpen && !serviceAuthorizationOpen) collectionActionFocus.current?.focus("service-authorization");
   }, [serviceAuthorizationOpen]);
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("roles")}>{t("back")}</Button>} />;
   const principalLabel = (role: AccessRole) => role.principalType === "provider" ? workspace.providers.find((provider) => provider.id === role.principal)?.name ?? role.principal : role.principal;

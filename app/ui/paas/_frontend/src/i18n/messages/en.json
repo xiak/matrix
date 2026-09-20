@@ -1422,7 +1422,7 @@
     "title": "Service authorization",
     "subtitle": "An isolated MOCK of explicit customer consent for a cloud service to operate resources",
     "previewOnly": "Backend not connected",
-    "boundary": "Product onboarding, service identity, and customer authorization are separate boundaries. This page creates no role, issues no temporary credential, writes nothing to IAM, and does not mean this tenant has granted consent.",
+    "boundary": "Product onboarding, service identity, and customer authorization are separate boundaries. Template IDs, service principals, and role names here are UX examples. This page creates no role, issues no temporary credential, writes nothing to IAM, and does not mean this tenant has granted consent.",
     "directory": {
       "title": "Service authorization templates available for review",
       "hint": "Cloud products and the IAM platform publish templates through a controlled process. Tenant administrators review and consume them; they cannot register platform Actions.",
@@ -1439,7 +1439,9 @@
       "permissionLabel": "Permission snapshot",
       "permissionHint": "Customer consent binds an exact policy version. Catalog or template revisions cannot silently expand an existing grant.",
       "openPolicy": "View policy v{version}",
-      "policyUnavailable": "The matching policy snapshot is unavailable in this MOCK, so the permission cannot be inferred.",
+      "openPolicyCurrent": "Open policy details (current default v{version})",
+      "policyNavigationHint": "Policy details open the current default v{current}; this service authorization still reviews pinned v{version}. One cannot substitute for the other.",
+      "policyUnavailable": "The policy v1 pinned by this template is unavailable in the MOCK. The review cannot fall back to the default version or continue.",
       "snapshotTitle": "Action patterns in the policy",
       "snapshotCount": "{count} statements",
       "ordinaryRole": "The existing PipelineDeploymentRole is an ordinary workload role, not an existing instance of this service authorization. This page does not rename or reuse it to fabricate customer consent.",
@@ -1470,7 +1472,7 @@
           "explicit": { "title": "Explicit customer consent", "hint": "Catalog visibility, product installation, and service authentication do not replace authorization by this account." },
           "shortTerm": { "title": "Short-lived sessions only", "hint": "The service would assume a dedicated role for constrained temporary credentials instead of receiving a customer's long-lived key." },
           "noExpansion": { "title": "Template revisions never auto-expand access", "hint": "A new template or revision requires review; existing consent retains its original permission snapshot." },
-          "revocation": { "title": "Check associated resources before revocation", "hint": "Associated resources must block deletion or enter an explicit asynchronous cleanup flow, avoiding uncontrolled service access." }
+          "cleanup": { "title": "Check associated resources before deletion or cleanup", "hint": "Associated resources must block service-linked-role deletion or enter an explicit asynchronous cleanup flow. Backend contracts must still define authorization revocation and when existing short-lived sessions expire." }
         },
         "unavailable": "IAM has not published tenant authorize, revoke, or assume-role contracts for ServiceRoleTemplate. Final authorization stays disabled and cannot produce a success state."
       }

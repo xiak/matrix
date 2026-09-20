@@ -11,6 +11,7 @@ import styles from "./ContentPage.module.css";
 
 type BackAction = { label: string; parentLabel?: string; disabled?: boolean; onClick(): void };
 export type PageCommand = ActionMenuItem & { variant?: "primary" | "secondary" | "ghost"; icon?: ReactNode };
+export type PageCommandsHandle = { focus(actionId?: string): void };
 type PageSelection = Omit<ComponentPropsWithoutRef<typeof TableActions>, "triggerRef">;
 type PageHeading = { title: string; back?: BackAction; focus?: boolean; scrollKey?: string };
 type HeadingContribution = PageHeading & { owner: string };
@@ -90,14 +91,16 @@ function Heading({ title, back, actions, focus = false, scrollKey }: PageHeading
 // first paint; resizing never subscribes the shell or remounts the feature.
 function Commands({ label, primary, secondary = [], selection, primaryRef, focusRef }: {
   label: string; primary?: PageCommand; secondary?: readonly PageCommand[];
-  selection?: PageSelection; primaryRef?: RefObject<HTMLButtonElement | null>; focusRef?: Ref<{ focus(): void }>;
+  selection?: PageSelection; primaryRef?: RefObject<HTMLButtonElement | null>; focusRef?: Ref<PageCommandsHandle>;
 }) {
   const desktopAction = useRef<HTMLButtonElement>(null);
+  const desktopActions = useRef(new Map<string, HTMLButtonElement>());
   const desktopCommands = useRef<HTMLDivElement>(null);
   const compactAction = useRef<HTMLButtonElement>(null);
-  useImperativeHandle(focusRef, () => ({ focus() {
+  useImperativeHandle(focusRef, () => ({ focus(actionId?: string) {
     const compact = desktopCommands.current && getComputedStyle(desktopCommands.current).display === "none";
-    (compact ? compactAction.current : desktopAction.current)?.focus({ preventScroll: true });
+    const requested = actionId ? desktopActions.current.get(actionId) : undefined;
+    (compact ? compactAction.current : requested ?? desktopAction.current)?.focus({ preventScroll: true });
   } }), []);
   const items = primary ? [primary, ...secondary] : secondary;
   const firstAvailable = items.find((item) => !item.disabled && !item.disabledReason);
@@ -110,6 +113,8 @@ function Commands({ label, primary, secondary = [], selection, primaryRef, focus
     <div className={styles.expandedCommands} ref={desktopCommands}>
       {selection ? <TableActions {...selection} /> : null}
       {items.map((action) => <Button key={action.id} ref={(element) => {
+        if (element && !action.disabled && !action.disabledReason) desktopActions.current.set(action.id, element);
+        else desktopActions.current.delete(action.id);
         if (action.id === firstAvailable?.id) desktopAction.current = element;
         if (action === primary && primaryRef) primaryRef.current = element;
       }} size={selection || action.icon ? "small" : "default"} variant={action.variant ?? (action.danger ? "ghost" : action === primary ? "primary" : "secondary")} data-danger={action.danger || undefined} disabled={action.disabled || Boolean(action.disabledReason)} aria-controls={action.controls} aria-expanded={action.expanded} title={action.disabledReason} onClick={action.onSelect}>{action.icon}{action.label}</Button>)}

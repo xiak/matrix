@@ -1,8 +1,8 @@
-import { createContext, Profiler, useContext, useState } from "react";
+import { createContext, Profiler, useContext, useRef, useState } from "react";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ContentPage } from "./ContentPage";
+import { ContentPage, type PageCommandsHandle } from "./ContentPage";
 
 afterEach(cleanup);
 
@@ -65,6 +65,23 @@ describe("ContentPage context heading", () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     await user.click(menu.getByRole("menuitem", { name: "Save policy" }));
     expect(invoke.mock.calls).toEqual([["Latest description"], ["Latest description"]]);
+  });
+
+  it("restores focus to a requested desktop command and keeps the first available command as the default", async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const commands = useRef<PageCommandsHandle>(null);
+      return <><ContentPage.Commands label="Page actions" focusRef={commands}
+        primary={{ id: "create", label: "Create role", onSelect() {} }}
+        secondary={[{ id: "service-authorization", label: "Service authorization", onSelect() {} }]} />
+        <button onClick={() => commands.current?.focus("service-authorization")}>Restore workflow trigger</button>
+        <button onClick={() => commands.current?.focus()}>Restore default trigger</button></>;
+    }
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Restore workflow trigger" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Service authorization" }));
+    await user.click(screen.getByRole("button", { name: "Restore default trigger" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Create role" }));
   });
 
   it("keeps creation available with no selection, then exposes eligible batch commands and clear through the same compact trigger", async () => {

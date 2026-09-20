@@ -10,7 +10,7 @@ export { Button, type ButtonProps } from "./button/Button";
 export { Card } from "./card/Card";
 export { PanelSections } from "./panel-sections/PanelSections";
 export { ContentLayout } from "./content/ContentLayout";
-export { ContentPage, type PageCommand } from "./content/ContentPage";
+export { ContentPage, type PageCommand, type PageCommandsHandle } from "./content/ContentPage";
 export { Input, type InputProps } from "./input/Input";
 export { TextArea } from "./input/TextArea";
 export { Layout } from "./layout/Layout";

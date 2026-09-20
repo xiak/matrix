@@ -19,12 +19,17 @@ const previewTemplate = {
   purpose: "application-delivery",
   revision: 1,
   policyId: "policy-delivery",
+  policyVersion: 1,
 } as const;
 
 const stageIds = ["identity", "permissions", "consent"] as const;
 
-function defaultPolicy(workspace: AccessWorkspace): AccessPolicy | undefined {
+function referencedPolicy(workspace: AccessWorkspace): AccessPolicy | undefined {
   return workspace.policies.find((policy) => policy.id === previewTemplate.policyId);
+}
+
+function pinnedPolicyVersion(policy?: AccessPolicy) {
+  return policy?.versions.find((entry) => entry.id === previewTemplate.policyVersion);
 }
 
 function TemplateDirectory({ policy, triggerRef, onOpen }: {
@@ -33,6 +38,7 @@ function TemplateDirectory({ policy, triggerRef, onOpen }: {
   onOpen(): void;
 }) {
   const t = useTranslations("ServiceAuthorizationPreview");
+  const version = pinnedPolicyVersion(policy);
   return <div className={styles.stack}>
     <div className={styles.sectionHeading}><div><h3>{t("directory.title")}</h3><p>{t("directory.hint")}</p></div><Badge status="warning">{t("states.notAuthorized")}</Badge></div>
     <Table aria-label={t("directory.tableLabel")} mobileLayout="stack">
@@ -40,7 +46,7 @@ function TemplateDirectory({ policy, triggerRef, onOpen }: {
       <tbody><tr>
         <td data-label={t("fields.product")}><button className={styles.link} ref={triggerRef} onClick={onOpen}>{previewTemplate.product}</button><small><code>{previewTemplate.id}</code></small></td>
         <td data-label={t("fields.purpose")}>{t("template.purpose")}<small><code>{previewTemplate.servicePrincipal}</code></small></td>
-        <td data-label={t("fields.policySnapshot")}>{policy?.name ?? previewTemplate.policyId}<small>{policy ? `v${policy.defaultVersion}` : t("states.unavailable")}</small></td>
+        <td data-label={t("fields.policySnapshot")}>{policy?.name ?? previewTemplate.policyId}<small>{version ? `v${previewTemplate.policyVersion}` : t("states.unavailable")}</small></td>
         <td data-label={t("fields.state")}><Badge status="warning">{t("states.notAuthorized")}</Badge></td>
       </tr></tbody>
     </Table>
@@ -55,7 +61,8 @@ function TemplateDetail({ policy, reviewRef, onReview, onOpenPolicy }: {
   onOpenPolicy(id: string): void;
 }) {
   const t = useTranslations("ServiceAuthorizationPreview");
-  const version = policy?.versions.find((entry) => entry.id === policy.defaultVersion);
+  const version = pinnedPolicyVersion(policy);
+  const currentDefaultMatches = policy?.defaultVersion === previewTemplate.policyVersion;
   return <div className={styles.stack}>
     <div className={styles.sectionHeading}><div><span>{t("detail.eyebrow")}</span><h3>{previewTemplate.product}</h3><p>{t("detail.hint")}</p></div><Badge status="warning">{t("states.notAuthorized")}</Badge></div>
     <dl className={styles.facts}>
@@ -66,11 +73,11 @@ function TemplateDetail({ policy, reviewRef, onReview, onOpenPolicy }: {
     </dl>
     <div className={styles.detailGrid}>
       <Card><Card.Header className={styles.cardHeading}><KeyRound aria-hidden="true" /><div><span>{t("detail.trustLabel")}</span><h4>{t("detail.trustTitle")}</h4></div></Card.Header><Card.Body className={styles.cardBody}><p>{t("detail.trustHint")}</p><code>{previewTemplate.servicePrincipal}</code></Card.Body></Card>
-      <Card><Card.Header className={styles.cardHeading}><ShieldCheck aria-hidden="true" /><div><span>{t("detail.permissionLabel")}</span><h4>{policy?.name ?? previewTemplate.policyId}</h4></div></Card.Header><Card.Body className={styles.cardBody}><p>{t("detail.permissionHint")}</p>{policy ? <Button variant="ghost" size="small" onClick={() => onOpenPolicy(policy.id)}>{t("detail.openPolicy", { version: policy.defaultVersion })}</Button> : <Alert status="warning">{t("detail.policyUnavailable")}</Alert>}</Card.Body></Card>
+      <Card><Card.Header className={styles.cardHeading}><ShieldCheck aria-hidden="true" /><div><span>{t("detail.permissionLabel")}</span><h4>{policy?.name ?? previewTemplate.policyId} · v{previewTemplate.policyVersion}</h4></div></Card.Header><Card.Body className={styles.cardBody}><p>{t("detail.permissionHint")}</p>{version && policy ? <><Button variant="ghost" size="small" onClick={() => onOpenPolicy(policy.id)}>{currentDefaultMatches ? t("detail.openPolicy", { version: previewTemplate.policyVersion }) : t("detail.openPolicyCurrent", { version: policy.defaultVersion })}</Button>{!currentDefaultMatches ? <Alert status="info">{t("detail.policyNavigationHint", { current: policy.defaultVersion, version: previewTemplate.policyVersion })}</Alert> : null}</> : <Alert status="warning">{t("detail.policyUnavailable")}</Alert>}</Card.Body></Card>
     </div>
     {version ? <div className={styles.snapshot}><div><strong>{t("detail.snapshotTitle")}</strong><span>{t("detail.snapshotCount", { count: version.document.statement.length })}</span></div><ul>{version.document.statement.flatMap((statement) => statement.action).map((action) => <li key={action}><code>{action}</code></li>)}</ul></div> : null}
     <Alert status="info">{t("detail.ordinaryRole")}</Alert>
-    <div className={styles.actions}><Button ref={reviewRef} onClick={onReview}>{t("detail.review")}</Button></div>
+    <div className={styles.actions}><Button ref={reviewRef} disabled={!version} title={!version ? t("detail.policyUnavailable") : undefined} onClick={onReview}>{t("detail.review")}</Button></div>
   </div>;
 }
 
@@ -83,7 +90,7 @@ function ConsentReview({ policy, stage, onStageChange, onClose }: {
   const t = useTranslations("ServiceAuthorizationPreview");
   const steps = useMemo(() => stageIds.map((id) => ({ id, label: t(`steps.${id}`) })), [t]);
   const currentStage = stageIds[stage] ?? "identity";
-  const version = policy?.versions.find((entry) => entry.id === policy.defaultVersion);
+  const version = pinnedPolicyVersion(policy);
   const actions = version?.document.statement.flatMap((statement) => statement.action) ?? [];
   return <div className={styles.stack}>
     <div className={styles.steps}><Steps label={t("progress")} items={steps} current={stage} onChange={onStageChange} /></div>
@@ -92,8 +99,8 @@ function ConsentReview({ policy, stage, onStageChange, onClose }: {
       <Card.Body className={styles.cardBody}>
         <p className={styles.lead}>{t(`review.${currentStage}.lead`)}</p>
         {stage === 0 ? <dl className={styles.facts}><div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div><div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div><div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div></dl> : null}
-        {stage === 1 ? <><div className={styles.permissionReference}><div><span>{t("fields.policySnapshot")}</span><strong>{policy?.name ?? previewTemplate.policyId} · {policy ? `v${policy.defaultVersion}` : "—"}</strong></div><Badge>{t("review.permissions.immutable")}</Badge></div><ul className={styles.permissionList}>{actions.map((action) => <li key={action}><code>{action}</code></li>)}</ul><Alert status="warning">{t("review.permissions.crossProduct")}</Alert></> : null}
-        {stage === 2 ? <><ul className={styles.boundaries}>{(["explicit", "shortTerm", "noExpansion", "revocation"] as const).map((item) => <li key={item}><strong>{t(`review.consent.items.${item}.title`)}</strong><p>{t(`review.consent.items.${item}.hint`)}</p></li>)}</ul><Alert status="warning">{t("review.consent.unavailable")}</Alert></> : null}
+        {stage === 1 ? <><div className={styles.permissionReference}><div><span>{t("fields.policySnapshot")}</span><strong>{policy && version ? `${policy.name} · v${previewTemplate.policyVersion}` : "—"}</strong></div><Badge>{t("review.permissions.immutable")}</Badge></div><ul className={styles.permissionList}>{actions.map((action) => <li key={action}><code>{action}</code></li>)}</ul><Alert status="warning">{t("review.permissions.crossProduct")}</Alert></> : null}
+        {stage === 2 ? <><ul className={styles.boundaries}>{(["explicit", "shortTerm", "noExpansion", "cleanup"] as const).map((item) => <li key={item}><strong>{t(`review.consent.items.${item}.title`)}</strong><p>{t(`review.consent.items.${item}.hint`)}</p></li>)}</ul><Alert status="warning">{t("review.consent.unavailable")}</Alert></> : null}
       </Card.Body>
     </Card>
     <div className={styles.reviewActions}>
@@ -115,7 +122,7 @@ export function ServiceAuthorizationPreview({ workspace, onClose, onOpenPolicy }
   const templateTrigger = useRef<HTMLButtonElement>(null);
   const reviewTrigger = useRef<HTMLButtonElement>(null);
   const previousView = useRef<PreviewView>(view);
-  const policy = defaultPolicy(workspace);
+  const policy = referencedPolicy(workspace);
 
   useLayoutEffect(() => {
     const previous = previousView.current;

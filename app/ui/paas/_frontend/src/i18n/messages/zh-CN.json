@@ -1422,7 +1422,7 @@
     "title": "服务授权",
     "subtitle": "客户明确同意云服务代操作资源的隔离 MOCK 体验",
     "previewOnly": "未接入后端",
-    "boundary": "产品接入、服务身份和客户授权是三个独立边界。本页不创建角色、不签发临时凭据、不写入 IAM，也不表示当前租户已经同意授权。",
+    "boundary": "产品接入、服务身份和客户授权是三个独立边界。本页模板标识、服务主体与角色名均为 UX 示意值；不创建角色、不签发临时凭据、不写入 IAM，也不表示当前租户已经同意授权。",
     "directory": {
       "title": "可审阅的服务授权模板",
       "hint": "模板由云产品与 IAM 平台受控发布；租户管理员只能审阅和消费，不能自行注册产品 Action。",
@@ -1439,7 +1439,9 @@
       "permissionLabel": "权限快照",
       "permissionHint": "客户同意绑定精确策略版本。目录更新或模板升版不得自动扩大既有授权。",
       "openPolicy": "查看策略 v{version}",
-      "policyUnavailable": "当前 MOCK 找不到对应策略快照，不能继续推断授权内容。",
+      "openPolicyCurrent": "打开策略详情（当前默认 v{version}）",
+      "policyNavigationHint": "策略详情默认展示 v{current}；本次服务授权仍固定审阅 v{version}，两者不能互相替代。",
+      "policyUnavailable": "当前 MOCK 找不到模板固定引用的策略 v1，不能回退到默认版本，也不能继续审阅授权。",
       "snapshotTitle": "策略中的 Action 模式",
       "snapshotCount": "{count} 条声明",
       "ordinaryRole": "现有 PipelineDeploymentRole 是普通工作负载角色，不是本服务授权的既有实例；本页不会重命名或复用它来伪造客户同意。",
@@ -1470,7 +1472,7 @@
           "explicit": { "title": "显式客户同意", "hint": "目录可见、产品安装和服务身份认证均不替代当前账号的授权。" },
           "shortTerm": { "title": "仅使用短期会话", "hint": "服务未来通过承担专用角色获取受限临时凭据，不接收客户长期密钥。" },
           "noExpansion": { "title": "模板升版不自动扩权", "hint": "新模板或新修订必须重新审阅；既有同意保持原权限快照。" },
-          "revocation": { "title": "撤销前检查关联资源", "hint": "有关联资源时应阻止删除或进入明确的异步清理流程，不能留下失控服务访问。" }
+          "cleanup": { "title": "删除／清理前检查关联资源", "hint": "删除服务关联角色前，有关联资源时应拒绝删除或进入明确的异步清理流程；授权撤销和既有短期会话何时失效仍需后端契约定义。" }
         },
         "unavailable": "IAM 尚未发布 ServiceRoleTemplate 的租户授权、撤销或承担角色契约。最终授权始终禁用，也不会产生成功状态。"
       }
