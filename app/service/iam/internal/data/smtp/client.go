@@ -82,8 +82,8 @@ func (*Client) MarshalJSON() ([]byte, error) { return nil, ErrConfig }
 func NewClient(config Config) (*Client, error) {
 	if !validInstallation(config.InstallationID) || config.Port == 0 ||
 		(config.TLSMode != STARTTLS && config.TLSMode != ImplicitTLS) ||
-		(net.ParseIP(config.Host) == nil && !authority.SecurityMailDNSName(config.Host)) ||
-		authority.ValidateSecurityMailAddress(config.From) != nil ||
+		(net.ParseIP(config.Host) == nil && !iamv1.SecurityMailDNSName(config.Host)) ||
+		iamv1.ValidateSecurityMailAddress(config.From) != nil ||
 		len(config.Username) == 0 || len(config.Username) > 254 ||
 		!config.Password.Present() {
 		return nil, ErrConfig
