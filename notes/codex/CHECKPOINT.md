@@ -126,10 +126,18 @@ feat/phase3-mfa-recovery: exclusively owns backup consumer/install/profile
 window. It received 285/841 final CI and8ccc6327 pure-contract candidate with
 CI pending. Its same-snapshot consumer9815916 has reported final CI success;
 it now owns the separate35/18/6+r13 preparation release. Do not import its
-profile, WIP, node state or inherited acceptance. Current mail window is
-pure IAM contract/design; next runtime/DB/worker and migration-file6 boundary
-was requested, not yet approved. No FILE/SQL/shared migrationprocess edit
-until that owner alignment; HTTP is still only proposed in IAM/012.
+profile, WIP, node state or inherited acceptance. The next mail window is now
+approved: IAM/API/Audit, IAM migration library/matrix-iam-migrate, notification
+worker/role/login and only the sixth protected IAM FILE's exact shared
+migrationprocess shape/tests. Frozen migration FILE is
+MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE; login is
+matrix_iam_notification_worker_login. Never inherit mail powers through
+API/Audit-worker/verifier/backup/recovery roles. Installation still owns
+layout/localmachine/topology/release/releasebuild/FEAT005/offline tests and
+consumes only later fixed production/CI. No runtime code is implemented yet;
+HTTP remains proposed in IAM/012. UI owner received8ccc's flow design with
+this explicit non-LIVE boundary. Proceed with the actual first-contact and
+durable notification slice, not more standalone crypto as goal completion.
 Later CLOSED/reopen must use backup-external epoch, exact immutable intent,
 invalidate old Session/challenge/enrollment and fence OTP/attempt state;
 backup key availability is not current recovery eligibility. Unimplemented.

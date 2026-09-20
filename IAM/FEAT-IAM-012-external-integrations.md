@@ -99,13 +99,15 @@ SMTP目标、发件地址与认证材料只来自受保护部署配置的后续�
 
 #### 目的限定材料与安装交接
 
-以下私有命名及单向隔离已由installation owner确认不与同快照consumer冲突；当前编辑窗口仅允许IAM纯契约/设计，未因此增加部署进程、运行FILE、迁移、schema/profile或发布revision：
+以下私有命名及单向隔离已由installation owner确认不与同快照consumer冲突；本固定增量只实现IAM纯契约/材料，未因此增加部署进程、运行FILE、迁移、schema/profile或发布revision：
 
 | 材料/进程 | 拟定最小契约与暴露范围 |
 | --- | --- |
 | `SecurityMailSMTPChannel` | `apiVersion/kind/purpose=IAM_SECURITY_MAIL_SUBMISSION/scope{installationId,bootstrapDigest}/host/port/tlsMode/username/password/from/可选trustedCaPem`；唯一私有codec，不接受URL、客户端路径、TLS关闭或跳过证书选项。仅邮件投递进程持有；IAM API、Audit/PaaS、verifier/support不持有 |
 | `EmailVerificationKeyring` | `purpose=IAM_EMAIL_VERIFICATION_WRAPPING`、同封存scope、修订/activeKeyId及受限有序key集合；每key格式1、独立32字节随机材料及非秘密承诺。只供IAM与邮件投递进程保护原验证意图；不是TOTP/AccessKey/离线恢复材料或通用消息加密服务 |
 | `matrix-iam-notification-dispatcher` | 独立受限数据库登录`matrix_iam_notification_worker_login`及role`matrix_iam_notification_worker`；只领取/完成已提交通知，单实例最多2个在途。不是用户或服务principal，不获取通用PDP/原Audit worker权限 |
+
+后继IAM运行片的编辑边界已对齐：IAM拥有其API/Audit、原迁移library/`matrix-iam-migrate`、通知worker及对应真实测试；专用迁移FILE冻结为`MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE`，仅允许在共享migrationprocess中实施第六个受保护IAM角色文件直接要求的精确形状/测试，不能变成任意FILE或权限入口。installation继续独占layout、localmachine、topology、release/releasebuild、FEAT-005及签名离线门禁，只在后继固定生产提交及精确CI之后集成文件挂载和发布profile。本次窗口许可不等于这些消费者、角色或函数已经实现，也不授权把当前准备版profile改标为通知可用。
 
 验证码按独立AES-256-GCM/HKDF用途密封；上下文绑定封存安装/bootstrap、Account、USER、原验证ID、确切接收地址、联系修订、密码代际、原签发/到期及keyId/格式。通知私有持久行只存秘密的认证密文，不存明文或可离线遍历的短码无密钥摘要；生命周期比较时仍重验当前权威，能够解密不等于可以确认。普通JSON、原Audit outbox、Audit、错误和support不输出原码、密文或keyring。重试使用原已保存密文和同一意图，不生成新码、不延长有效期。受控恢复须终止备份中的未完成验证及未发送验证邮件；具备历史密钥不自动赋予恢复后重发资格。
 
