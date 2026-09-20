@@ -551,10 +551,10 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, "SELECT schema_version=38 AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready() AND iam.totp_authentication_contract_ready() FROM iam.readiness()").Scan(&shape); err != nil || !shape {
+	if err := admin.QueryRow(ctx, "SELECT schema_version=39 AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready() AND iam.totp_authentication_contract_ready() FROM iam.readiness()").Scan(&shape); err != nil || !shape {
 		t.Fatal("retained database did not install the enabling authentication ABI", err)
 	}
-	current := start(currentBinary, 38)
+	current := start(currentBinary, 39)
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
 	}
@@ -1232,7 +1232,7 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	// Exercise the exact source services together without silently publishing
 	// an intermediate authority shape. The release profile moves only after the
 	// complete MFA-enabling slice and its predecessor admission gate are fixed.
-	profile := installationrelease.AuthoritySchemas{IAM: 38, Audit: 22, PaaS: 6}
+	profile := installationrelease.AuthoritySchemas{IAM: 39, Audit: 23, PaaS: 6}
 	if current := installationrelease.CurrentDatabaseProfile(); current.Authorities == profile {
 		t.Fatal("MFA-enabling authority shape was published before the complete release gate")
 	}

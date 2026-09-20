@@ -1141,6 +1141,63 @@ func (repository *coreRepository) run(
 	return err
 }
 
+func TestRecoveryCodeMatchUsesCompleteOriginalBatchAndScope(t *testing.T) {
+	issuer := authority.NewCredentialIssuer(nil)
+	attempt := TOTPAttempt{AccountID: "account-one", UserID: "user-one", Purpose: "RECOVERY_CODE"}
+	material := RecoveryCodeVerification{InstallationID: "installation-one", BatchID: "batch-one", Codes: make([]RecoveryCodeCandidate, 10)}
+	secrets := make([]iamv1.Secret, 10)
+	for i := range material.Codes {
+		id := fmt.Sprintf("code-%02d", i)
+		code, err := issuer.IssueMFARecoveryCode()
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest, err := authority.DigestMFARecoveryCode(authority.MFARecoveryCodeScope{InstallationID: material.InstallationID, AccountID: attempt.AccountID, UserID: attempt.UserID, BatchID: material.BatchID, CodeID: id}, code)
+		if err != nil {
+			t.Fatal(err)
+		}
+		secrets[i], material.Codes[i] = code, RecoveryCodeCandidate{ID: id, VerificationDigest: digest}
+	}
+	for i, secret := range secrets {
+		matched, ok, err := matchRecoveryCode(attempt, material, secret)
+		if err != nil || !ok || matched.ID != material.Codes[i].ID {
+			t.Fatal("original scoped code not found", err)
+		}
+	}
+	material.Codes[0].Consumed = true
+	if _, ok, err := matchRecoveryCode(attempt, material, secrets[0]); err != nil || ok {
+		t.Fatal("consumed code matched", err)
+	}
+	malformed, _ := iamv1.NewSecret("not-a-recovery-code")
+	if _, ok, err := matchRecoveryCode(attempt, material, malformed); err != nil || ok {
+		t.Fatal("malformed candidate matched", err)
+	}
+	for _, alter := range []func(*TOTPAttempt, *RecoveryCodeVerification){
+		func(a *TOTPAttempt, _ *RecoveryCodeVerification) { a.AccountID = "account-other" },
+		func(a *TOTPAttempt, _ *RecoveryCodeVerification) { a.UserID = "user-other" },
+		func(_ *TOTPAttempt, m *RecoveryCodeVerification) { m.InstallationID = "installation-other" },
+		func(_ *TOTPAttempt, m *RecoveryCodeVerification) { m.BatchID = "batch-other" },
+	} {
+		a, m := attempt, material
+		alter(&a, &m)
+		if _, ok, err := matchRecoveryCode(a, m, secrets[9]); err != nil || ok {
+			t.Fatal("another scope matched a recovery code", err)
+		}
+	}
+	for _, alter := range []func(*RecoveryCodeVerification){
+		func(m *RecoveryCodeVerification) { m.Codes = m.Codes[:9] },
+		func(m *RecoveryCodeVerification) { m.Codes[9].ID = m.Codes[1].ID },
+		func(m *RecoveryCodeVerification) { m.Codes[9].VerificationDigest = "invalid" },
+	} {
+		m := material
+		m.Codes = append([]RecoveryCodeCandidate(nil), material.Codes...)
+		alter(&m)
+		if _, ok, err := matchRecoveryCode(attempt, m, secrets[1]); !errors.Is(err, ErrUnavailable) || ok {
+			t.Fatal("incomplete or corrupt tail accepted an early match", err)
+		}
+	}
+}
+
 type coreTransaction struct {
 	Transaction
 	now                     time.Time
@@ -1195,8 +1252,7 @@ func (*coreTransaction) ReadTOTPEnrollmentByRequest(context.Context, iamv1.Sessi
 func (*coreTransaction) CancelTOTPEnrollment(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error) {
 	return iamv1.TOTPEnrollment{}, ErrUnavailable
 }
-
-func (*coreTransaction) ConfirmTOTPEnrollment(context.Context, TOTPEnrollmentConfirmation) (iamv1.TOTPEnrollment, error) {
+func (*coreTransaction) ConfirmTOTPEnrollment(context.Context, TOTPBindingConfirmation) (iamv1.TOTPEnrollment, error) {
 	return iamv1.TOTPEnrollment{}, ErrUnavailable
 }
 

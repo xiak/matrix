@@ -60,7 +60,7 @@ func (value *transaction) LookupAuthenticationChallenge(ctx context.Context, dig
 	var result identityaccess.AuthenticationChallengeCredential
 	if contractjson.DecodeObjectBytes(encoded, 1024, &result) != nil ||
 		iamv1.ValidateID("accountId", string(result.AccountID)) != nil || iamv1.ValidateID("userId", string(result.UserID)) != nil ||
-		(result.NextStep != "TOTP" && result.NextStep != "PASSWORD_CHANGE") ||
+		(result.NextStep != "TOTP" && result.NextStep != "PASSWORD_CHANGE" && result.NextStep != "RECOVER" && result.NextStep != "ENROLLMENT") ||
 		iamv1.ValidateID("id", result.ID) != nil || iamv1.ValidateDigest("verificationDigest", result.VerificationDigest) != nil {
 		return identityaccess.AuthenticationChallengeCredential{}, false, identityaccess.ErrUnavailable
 	}

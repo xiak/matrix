@@ -90,7 +90,7 @@ func (value *transaction) enrollmentMetadata(ctx context.Context, query string, 
 	return decodeTOTPEnrollment(encoded)
 }
 
-func (value *transaction) ConfirmTOTPEnrollment(ctx context.Context, mutation identityaccess.TOTPEnrollmentConfirmation) (iamv1.TOTPEnrollment, error) {
+func (value *transaction) ConfirmTOTPEnrollment(ctx context.Context, mutation identityaccess.TOTPBindingConfirmation) (iamv1.TOTPEnrollment, error) {
 	a := mutation.Attempt
 	if a.Purpose != "ENROLLMENT" || a.SessionID == "" || len(mutation.Codes) != 10 ||
 		mutation.AuditEvent.Action != auditv1.ActionIAMAuthenticatorBound ||

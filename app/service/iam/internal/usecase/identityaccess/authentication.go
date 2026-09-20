@@ -67,7 +67,7 @@ func (service *Authority) Login(
 			return err
 		}
 		switch state.State {
-		case "BOUND":
+		case "BOUND", "RECOVERY_REQUIRED":
 			response, err = service.createLoginChallenge(transactionContext, transaction, attempt, request.RequestID, requestDigest)
 			return err
 		case "NEVER_BOUND":
@@ -75,7 +75,8 @@ func (service *Authority) Login(
 				return ErrUnavailable
 			}
 		default:
-			// Recovery-required/unknown history is not a password-only fallback.
+			// Unknown history is never a password-only fallback. The SQL
+			// challenge issuer separately requires exact recovery lineage.
 			return ErrUnauthenticated
 		}
 		mutation, credential, err := service.newSessionMutation(transactionContext, transaction, attempt.AccountID, attempt.PrincipalID, request.RequestID, requestDigest)

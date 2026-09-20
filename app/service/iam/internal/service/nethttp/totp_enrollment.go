@@ -7,6 +7,57 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
+// The shared challenge router already rejects a bearer, query parameters and
+// every method except POST. No caller-supplied tenant/user selector is read.
+func (value *handler) authenticatorRecovery(response http.ResponseWriter, request *http.Request, id, suffix string) {
+	var encoded []byte
+	var err error
+	switch suffix {
+	case ":recover":
+		body, ok := decodeJSON[iamv1.StartAuthenticatorRecoveryRequest](value, response, request)
+		if !ok {
+			return
+		}
+		var result iamv1.StartAuthenticatorRecoveryResponse
+		result, err = value.workflow.StartAuthenticatorRecovery(request.Context(), id, body)
+		if err == nil {
+			encoded, err = iamv1.EncodeStartAuthenticatorRecoveryResponse(result)
+		}
+	case ":confirm-recovery":
+		body, ok := decodeJSON[iamv1.VerifyAuthenticationChallengeRequest](value, response, request)
+		if !ok {
+			return
+		}
+		var result iamv1.ConfirmAuthenticatorRecoveryResponse
+		result, err = value.workflow.ConfirmAuthenticatorRecovery(request.Context(), id, body)
+		if err == nil {
+			encoded, err = iamv1.EncodeConfirmAuthenticatorRecoveryResponse(result)
+		}
+	case ":recovery-result":
+		body, ok := decodeJSON[iamv1.InspectAuthenticatorRecoveryRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, failure := value.workflow.InspectAuthenticatorRecovery(request.Context(), id, body)
+		if failure != nil {
+			value.writeError(response, request, failure)
+			return
+		}
+		if failure = iamv1.ValidateAuthenticatorRecovery(result); failure != nil {
+			value.writeError(response, request, failure)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	defer clear(encoded)
+	writeEncodedJSON(response, http.StatusOK, encoded)
+}
+
 func (value *handler) authenticatorState(response http.ResponseWriter, request *http.Request) {
 	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
 		return

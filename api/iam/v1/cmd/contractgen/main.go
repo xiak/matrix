@@ -145,6 +145,15 @@ func buildPaths() object {
 		"/v1/auth/challenges/{challengeId}:password": object{"post": mutationOperation(
 			"changeChallengePassword", "Consume only a password-and-TOTP authenticated forced-change challenge; revoke all old sessions and challenges, then require a fresh login", "ChallengePasswordChangeRequest", "ChallengePasswordChangeResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
 		)},
+		"/v1/auth/challenges/{challengeId}:recover": object{"post": mutationOperation(
+			"startAuthenticatorRecovery", "Consume one original recovery code under a current password-authenticated LOGIN challenge; revoke the lost factor and old sessions, issue only one-time rebinding material", "StartAuthenticatorRecoveryRequest", "StartAuthenticatorRecoveryResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+		)},
+		"/v1/auth/challenges/{challengeId}:confirm-recovery": object{"post": mutationOperation(
+			"confirmAuthenticatorRecovery", "Consume only a RECOVERY/ENROLLMENT challenge and new-factor TOTP; replace the entire recovery-code batch and require a fresh login", "VerifyAuthenticationChallengeRequest", "ConfirmAuthenticatorRecoveryResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+		)},
+		"/v1/auth/challenges/{challengeId}:recovery-result": object{"post": mutationOperation(
+			"inspectAuthenticatorRecovery", "Read only same-user recovery metadata using a fresh current LOGIN challenge; no secret replay or automatic new intent", "InspectAuthenticatorRecoveryRequest", "AuthenticatorRecovery", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+		)},
 		"/v1/auth/authenticators":   object{"get": readOperation("getAuthenticatorState", "Read this actual login USER's persisted factor state; no inferred settings or permissions", "AuthenticatorState", nil, nil)},
 		"/v1/auth/totp/enrollments": object{"post": mutationOperation("startTOTPEnrollment", "Reauthenticate the current password and start first TOTP enrollment; only APPLIED discloses provisioning", "StartTOTPEnrollmentRequest", "StartTOTPEnrollmentResponse", "200", nil, nil)},
 		"/v1/auth/totp/enrollments/{enrollmentId}": object{

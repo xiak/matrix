@@ -449,8 +449,7 @@ func assertAuditContractCatalog(
 				invalid = append(invalid, candidate)
 			}
 		}
-		if action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified ||
-			action == auditv1.ActionIAMAuthenticatorBound {
+		if action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered {
 			candidate := event
 			candidate.Target.ID = "another-users-principal"
 			invalid = append(invalid, candidate)
@@ -1091,7 +1090,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 37 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 38 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	_, err := iamAPI.Exec(ctx, "SELECT * FROM iam.lookup_login($1)", fixture.LoginName)
@@ -1151,7 +1150,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 37 || checkedAt.IsZero() {
+	if ready || schemaVersion != 38 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -2380,8 +2379,7 @@ func authorityAuditEvent(
 	if contract.UserActorRequired {
 		event.Actor.Type = auditv1.ActorUser
 	}
-	if action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified ||
-		action == auditv1.ActionIAMAuthenticatorBound {
+	if action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered {
 		event.Target.ID = string(event.Actor.ID)
 	}
 	if contract.RoleActorRequired {

@@ -42,6 +42,8 @@ func TestSelfServiceSecurityFactsRequireTheActualTenantUser(t *testing.T) {
 		{ActionIAMNotificationContactVerificationStarted, TargetUser},
 		{ActionIAMNotificationContactVerified, TargetUser},
 		{ActionIAMAuthenticatorBound, TargetPrincipal},
+		{ActionIAMAuthenticatorRecoveryStarted, TargetPrincipal},
+		{ActionIAMAuthenticatorRecovered, TargetPrincipal},
 	} {
 		t.Run(string(contract.action), func(t *testing.T) {
 			valid := Event{
@@ -260,7 +262,7 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		if contract.UserActorRequired {
 			event.Actor.Type = ActorUser
 		}
-		if action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified || action == ActionIAMAuthenticatorBound {
+		if action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified || action == ActionIAMAuthenticatorBound || action == ActionIAMAuthenticatorRecoveryStarted || action == ActionIAMAuthenticatorRecovered {
 			event.Target.ID = string(event.Actor.ID)
 		}
 		if contract.RoleActorRequired {
