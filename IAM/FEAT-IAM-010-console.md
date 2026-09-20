@@ -49,6 +49,14 @@ Role、身份提供商、联合身份、企业账号和 API 密钥均为详情�
 
 该流程是设置页中的独立业务区块，不并入个人认证器或 Account 安全策略。进入、返回、取消和完成拥有自己的焦点生命周期；固定标题与说明立即渲染，只有将来真实读取的数据区才允许使用局部延迟反馈，不以整页骨架替换静态结构。
 
+### 账号级 MFA 要求的隔离体验
+
+账号级 MFA 要求遵循 IAM-009 S2/S3 的固定设计来源 `8ccc632796727261563c952a89e4dfd3ce947144`，但该来源尚未固定公开 HTTP。因此设置页把它作为独立于本人认证器、恢复代码与安全通知地址的 Account 安全规则呈现：编辑后先审阅准确的 Account 目标、适用身份和会话影响，再完成仅绑定本次规则变更的密码加 TOTP step-up，最后写入隔离 DEV 体验仓库。step-up 只证明认证强度，不授予 IAM 权限；真实保存仍须由后端重新鉴权，任何真实读取或写入失败都不得回退 MOCK。
+
+规则只覆盖普通 IAM User。Account Root 与仍由平台管理关系保护的身份不适用；收紧规则会使不再满足要求的普通 User 会话重新认证，放宽规则不会恢复已经失效的会话，也不会删除个人已经绑定的认证器或恢复代码。审阅页必须固定并复述上述范围，不能用一个通用确认替代目标和副作用。
+
+在 IAM-009 固定相应契约前，控制台不公开密码长度、会话时长或任意“敏感操作”选择器，也不把 step-up 票据抽象成通用提权令牌。当前预览只验证信息架构、审阅与焦点体验，不声称 Account 安全规则已由真实 IAM 保存或执行。
+
 ### 只读权限能力目录
 
 策略工作区以独立“权限能力目录”页签消费 `GET /api/iam/v1/authorization-profiles`。请求不携带 Account、修订、分页、历史或正文 selector；客户端严格验证完整列表、产品顺序、Action 命名空间、scope、资源 shape、可信条件组合及内容摘要格式，并再次核对响应 Account。目录描述平台登记的产品能力，不是当前身份权限，也不是租户产品发布入口；浏览器不重算后端权威摘要，也不从目录推导最终 Allow。
@@ -137,6 +145,18 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - 行为用例证明错误密码、错误验证码、取消与完成边界；完成只保存在当前页面实例，并明确显示 MOCK、无 IAM 写入、无真实 SMTP，以及 `ACCEPTED` 不等于已投递或已读。
 - 进入流程聚焦标题，取消恢复稳定触发器，完成聚焦确认摘要；桌面和 `360 × 800` DEV 浏览器均无页面横向溢出，紧凑页面 document/body 均为 `clientWidth == scrollWidth == 360`，无 Dialog，控制台 warning/error 为空。
 - 完整前端、主题、生产导出、嵌入等价及 Go UI 宿主门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；本证据不宣称 IAM-012 已有公开 HTTP、持久化、发送 worker 或真实投递验收。
+
+### 账号级 MFA 要求 MOCK 的开发验收证据
+
+2026-09-20，前端实现固定在已推送的
+[`3f247bdaa214a055bb89b4f961a5dfd678b2e530`](https://github.com/xiak/matrix/commit/3f247bdaa214a055bb89b4f961a5dfd678b2e530)，
+设计来源为本文件记录的 IAM-009 S2/S3 固定提交。
+
+- Account 安全规则使用独立语义组件，不再混入本人认证器与安全通知；编辑、准确目标审阅、作用域 step-up 和预览保存均在内容区完成，不打开 Dialog。
+- 审阅固定展示 `org-xiak`、普通 IAM User、受保护 Root/平台托管身份及收紧/放宽规则的会话影响。step-up 组件由本人安全操作和 Account 规则复用，但操作类型、目标和输入绑定保持显式，不产生通用提权能力。
+- 行为用例覆盖密码/TOTP 失败后保留输入并重试、从 step-up 返回审阅、取消与完成的焦点恢复；完成只写当前 DEV 体验仓库。任何真实失败不回退 MOCK。
+- 默认桌面与 `360 × 800` DEV 浏览器均无页面横向溢出、Dialog 或控制台 warning/error；小屏 document/body 均保持 `clientWidth == scrollWidth == 360`，规则目标和副作用仍完整可见。
+- 完整前端、主题、生产导出、嵌入等价及 Go UI 宿主门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；本证据不宣称 IAM-009 已有公开 HTTP、真实持久化、会话失效或后端执行验收。
 
 公共 UI、生产导出、完整前端及 Go 回归证据只归
 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-user-boundarynavigation-development-evidence)
