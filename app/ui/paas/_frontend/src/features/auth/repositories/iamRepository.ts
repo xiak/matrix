@@ -12,6 +12,7 @@ import type {
   GroupPolicyAttachment,
   PolicyAttachmentRevocation,
   PolicyDirectory,
+  AuthorizationProfileDirectory,
   UserAccess,
   UserPermissionBoundary
 } from "../domain/accounts";
@@ -59,6 +60,9 @@ export interface AccountRepository {
   listUsers(credential: string, after?: string): Promise<DirectoryPage<UserAccess>>;
   getUser(credential: string, userId: string): Promise<UserAccess>;
   listPolicies(credential: string, platform: boolean): Promise<PolicyDirectory>;
+  // Complete current product declarations under the caller's existing policy
+  // list permission. There is deliberately no account or revision selector.
+  listAuthorizationProfiles(credential: string): Promise<AuthorizationProfileDirectory>;
   listAccounts(credential: string, after?: string): Promise<DirectoryPage<AccountAccess>>;
   // accountId is a local response-scope check, never an HTTP authority selector.
   // Callers retain the same explicit requestId/input for an uncertain outcome.

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountCapabilities } from "../application/AccountAccessProvider";
-import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, ActionCapability, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
+import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LoginRenderer } from "./LoginRenderer";
@@ -23,6 +23,10 @@ const tenantPolicy: AccountPolicy = { id: "system.paas-viewer", management: "SYS
 const platformPolicy: AccountPolicy = { ...tenantPolicy, id: "system.platform-admin", displayName: "PlatformAdministrator", scope: "INSTALLATION", resourceVersion: 2 };
 const attachment = (principalId: string, policy: AccountPolicy): UserPolicyAttachment => ({ id: `attachment-${principalId}-${policy.id}`, accountId: "tenant-a", target: { kind: "USER", id: principalId }, policyId: policy.id, scope: policy.scope, installationId: policy.scope === "INSTALLATION" ? "installation-a" : null, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp });
 const directory = (platform: boolean): PolicyDirectory => ({ accountId: "tenant-a", scope: platform ? "INSTALLATION" : "TENANT", installationId: platform ? "installation-a" : null, items: [platform ? platformPolicy : tenantPolicy] });
+const profileDirectory = (): AuthorizationProfileDirectory => ({ accountId: account.id, items: [{
+  profile: { product: "paas", revision: 1, callingService: "PAAS", actions: [{ action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }], conditions: [{ key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }] }] },
+  contentDigest: `sha256:${"a".repeat(64)}`
+}] });
 const capability = (action: IamAction, kind: ActionCapability["resource"]["kind"], id: string, reason: CapabilityRestriction | null = null): ActionCapability => ({ action, resource: { kind, id }, available: reason === null, restrictionReason: reason });
 const currentCapabilities = (available = true): ActionCapability[] => [
   capability("iam.account.create", "ACCOUNT", "collection", available ? null : "AUTHORITY_REQUIRED"),
@@ -69,6 +73,7 @@ function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository
     listUsers: vi.fn().mockResolvedValue({ items: [child], nextAfter: null }),
     getUser: vi.fn().mockResolvedValue(structuredClone(child)),
     listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => directory(platform)),
+    listAuthorizationProfiles: vi.fn().mockResolvedValue(profileDirectory()),
     listAccounts: vi.fn().mockResolvedValue({ items: [accountAccess(identity.account)], nextAfter: null }),
     execute: vi.fn().mockResolvedValue(undefined), ...overrides
   } as AccountRepository;
@@ -604,6 +609,47 @@ describe("account access", () => {
     expect(screen.getByText("ReadOnlyAccess")).toBeTruthy();
     expect(screen.getByText(/租户策略仍可查看/)).toBeTruthy();
     expect(listPolicies).toHaveBeenCalledTimes(2);
+  });
+
+  it("loads the permission catalog only after its tab opens and keeps product detail in the content area", async () => {
+    const listAuthorizationProfiles = vi.fn().mockResolvedValue(profileDirectory());
+    const { user } = await openAccess(accounts({ listAuthorizationProfiles }), iam(), "policies");
+    expect(await screen.findByRole("table", { name: "策略元数据目录" })).toBeTruthy();
+    expect(listAuthorizationProfiles).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
+    expect(await screen.findByRole("table", { name: "产品权限能力目录" })).toBeTruthy();
+    expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/不是当前用户权限/)).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "paas" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { level: 2, name: "paas" })).toBe(document.activeElement);
+    expect(screen.getByRole("table", { name: "产品 paas 的 Action 声明" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回能力目录" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "paas" })).toBe(document.activeElement));
+  });
+
+  it.each([
+    [403, "当前身份无权读取权限能力目录"],
+    [404, "后端版本或路由可能未匹配"],
+    [503, "权限能力目录暂时不可用"]
+  ])("localizes catalog HTTP %s without replacing the policy directory or falling back to MOCK", async (status, message) => {
+    const { user } = await openAccess(accounts({ listAuthorizationProfiles: vi.fn().mockRejectedValue(new HttpProblem(status, "PRIVATE")) }), iam(), "policies");
+    await screen.findByRole("table", { name: "策略元数据目录" });
+    await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
+    expect(await screen.findByText(new RegExp(message))).toBeTruthy();
+    expect(screen.queryByText(/隔离 MOCK 的权限能力目录/)).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "策略目录" }));
+    expect(screen.getByRole("table", { name: "策略元数据目录" })).toBeTruthy();
+  });
+
+  it("rejects a catalog bound to another account without clearing the policy scene", async () => {
+    const { user } = await openAccess(accounts({ listAuthorizationProfiles: vi.fn().mockResolvedValue({ ...profileDirectory(), accountId: "tenant-b" }) }), iam(), "policies");
+    await user.click(await screen.findByRole("tab", { name: "权限能力目录" }));
+    expect(await screen.findByText(/权限能力目录暂时不可用/)).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "策略目录" }));
+    expect(screen.getByRole("table", { name: "策略元数据目录" })).toBeTruthy();
   });
 
   it("fails the live scene without substituting MOCK data when a policy directory has a non-authorization error", async () => {

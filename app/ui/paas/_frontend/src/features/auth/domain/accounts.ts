@@ -111,6 +111,53 @@ export type PolicyDirectory = {
   items: AccountPolicy[];
 };
 
+// Product-owned authorization declarations are policy-authoring metadata. They
+// are not Policy records, grants, effective permissions or tenant-owned
+// registration state, so keep their open action namespace separate from the
+// console's closed management-action union above.
+export type AuthorizationAuthorityScope = "TENANT" | "INSTALLATION" | "INSTALLATION_PROBE";
+export type AuthorizationResourceMode = "INSTANCE" | "COLLECTION";
+export type AuthorizationCollectionUsage = "COLLECTION_LIST" | "COLLECTION_CREATE";
+export type AuthorizationConditionKey = "iam.account-id" | "iam.current-time" | "iam.principal-id";
+
+export type AuthorizationProfileCondition = {
+  key: AuthorizationConditionKey;
+  valueType: "STRING" | "TIME";
+  source: "IAM_AUTHENTICATED_IDENTITY" | "IAM_TRANSACTION_TIME";
+};
+
+export type AuthorizationResourceShape = {
+  mode: AuthorizationResourceMode;
+  prefixAllowed: boolean;
+  collectionUsage?: AuthorizationCollectionUsage;
+};
+
+export type AuthorizationProfileAction = {
+  action: string;
+  resourceKind: string;
+  scope: AuthorizationAuthorityScope;
+  resourceShapes: AuthorizationResourceShape[];
+  conditions?: AuthorizationProfileCondition[];
+  resultResourceKind?: string;
+};
+
+export type AuthorizationProfile = {
+  product: string;
+  revision: number;
+  callingService: string;
+  actions: AuthorizationProfileAction[];
+};
+
+export type AuthorizationProfileEntry = {
+  profile: AuthorizationProfile;
+  contentDigest: string;
+};
+
+export type AuthorizationProfileDirectory = {
+  accountId: string;
+  items: AuthorizationProfileEntry[];
+};
+
 export type AccountIdentity = {
   account: Account;
   user: User;

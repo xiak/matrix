@@ -6,6 +6,7 @@ import type {
   AccountIdentity,
   AccountPolicy,
   ActionCapability,
+  AuthorizationProfileEntry,
   CapabilityRestriction,
   DirectoryPage,
   Group,
@@ -33,6 +34,80 @@ import { createPreviewAccessWorkspace } from "./previewAccessWorkspace";
 export const previewCredential = "matrix-ux-preview-memory-only";
 const previewAt = "2026-09-08T09:00:00Z";
 const previewSessionObservedAt = "2026-09-18T12:00:00Z";
+
+// This exact-shaped sample lets the DEV console exercise the catalog UX while
+// remaining visibly isolated from IAM's trusted registry and digests.
+const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
+  {
+    profile: {
+      product: "iam", revision: 1, callingService: "IAM", actions: [
+        { action: "iam.group.create", resourceKind: "ACCOUNT", scope: "TENANT", resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
+          ], resultResourceKind: "GROUP" },
+        { action: "iam.policy.list", resourceKind: "ACCOUNT", scope: "TENANT", resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
+          ] },
+        { action: "iam.user.create", resourceKind: "ACCOUNT", scope: "TENANT", resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
+          ], resultResourceKind: "USER" }
+      ]
+    },
+    contentDigest: `sha256:${"1".repeat(64)}`
+  },
+  {
+    profile: {
+      product: "managedservice", revision: 1, callingService: "PAAS", actions: [
+        { action: "managedservice.installation.create", resourceKind: "SERVICE_INSTALLATION", scope: "TENANT",
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
+          ], resultResourceKind: "SERVICE_INSTALLATION" },
+        { action: "managedservice.installation.read", resourceKind: "SERVICE_INSTALLATION", scope: "TENANT",
+          resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }, { mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
+          ] }
+      ]
+    },
+    contentDigest: `sha256:${"2".repeat(64)}`
+  },
+  {
+    profile: {
+      product: "paas", revision: 1, callingService: "PAAS", actions: [
+        { action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT",
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
+          ], resultResourceKind: "APPLICATION" },
+        { action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT",
+          resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
+          ] },
+        { action: "paas.execution-target.register", resourceKind: "EXECUTION_TARGET", scope: "INSTALLATION",
+          resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }], resultResourceKind: "EXECUTION_TARGET" }
+      ]
+    },
+    contentDigest: `sha256:${"3".repeat(64)}`
+  }
+];
 
 let account: Account = {
   id: "org-xiak",
@@ -540,6 +615,10 @@ export const previewAccountRepository: AccountRepository = {
   async listPolicies(credential, platform) {
     requirePreviewCredential(credential);
     return structuredClone(platform ? platformPolicyDirectory() : tenantPolicyDirectory(await workspace.read(credential)));
+  },
+  async listAuthorizationProfiles(credential) {
+    requirePreviewCredential(credential);
+    return { accountId: account.id, items: structuredClone(previewAuthorizationProfiles) };
   },
   async listAccounts(credential) {
     requirePreviewCredential(credential);

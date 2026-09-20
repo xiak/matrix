@@ -36,6 +36,24 @@ const platformPolicy = {
   ...tenantPolicy, id: "system.platform-operator", displayName: "平台运营策略", scope: "INSTALLATION",
   defaultVersionId: "version-platform"
 };
+const profileConditions = [
+  { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+  { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+  { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
+];
+function profileEntry(product = "paas") {
+  return {
+    profile: { apiVersion, kind: "AuthorizationProfile", product, revision: 1, callingService: "PAAS", actions: [{
+      action: `${product}.application.create`, resourceKind: "APPLICATION", scope: "TENANT",
+      resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
+      conditions: profileConditions, resultResourceKind: "APPLICATION"
+    }, {
+      action: `${product}.application.read`, resourceKind: "APPLICATION", scope: "TENANT",
+      resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }], conditions: profileConditions
+    }] },
+    contentDigest: `sha256:${"a".repeat(64)}`
+  };
+}
 
 function capability(action: string, kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT", id: string, available = true, restrictionReason = "AUTHORITY_REQUIRED") {
   return { action, resource: { kind, id }, available, ...(available ? {} : { restrictionReason }) };
@@ -523,6 +541,43 @@ describe("IAM HTTP account boundary", () => {
     ]) {
       reply(body);
       await expect(httpAccountRepository.listPolicies("bearer", false)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("reads the complete current authorization profiles without an account or version selector", async () => {
+    const fetcher = reply({ apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [profileEntry("iam"), profileEntry("paas")] });
+    const result = await httpAccountRepository.listAuthorizationProfiles("bearer");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/authorization-profiles");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(firstRequest(fetcher)[1].method).toBeUndefined();
+    expect(firstRequest(fetcher)[1].body).toBeUndefined();
+    expect(result).toEqual({ accountId: account.id, items: [
+      { ...profileEntry("iam"), profile: { ...profileEntry("iam").profile, apiVersion: undefined, kind: undefined } },
+      { ...profileEntry("paas"), profile: { ...profileEntry("paas").profile, apiVersion: undefined, kind: undefined } }
+    ].map((entry) => ({ contentDigest: entry.contentDigest, profile: {
+      product: entry.profile.product, revision: entry.profile.revision, callingService: entry.profile.callingService, actions: entry.profile.actions
+    } })) });
+  });
+
+  it("fails closed on partial, reordered or semantically invalid authorization profile declarations", async () => {
+    const valid = profileEntry("paas");
+    const action = valid.profile.actions[0]!;
+    for (const body of [
+      { apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [] },
+      { apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [profileEntry("paas"), profileEntry("iam")] },
+      { apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [valid, valid] },
+      { apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...valid, allowed: true }] },
+      { apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...valid, contentDigest: `sha256:${"A".repeat(64)}` }] },
+      { apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...valid, profile: { ...valid.profile, actions: [{ ...action, action: "other.application.create" }] } }] },
+      { apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...valid, profile: { ...valid.profile, actions: [{ ...action, resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false }] }] } }] },
+      { apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...valid, profile: { ...valid.profile, actions: [{ ...action, scope: "INSTALLATION", conditions: [], resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }] }] } }] },
+      { apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...valid, profile: { ...valid.profile, actions: [{ ...action, conditions: [{ key: "iam.current-time", valueType: "STRING", source: "CALLER" }] }] } }] },
+      { apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...valid, profile: { ...valid.profile, actions: [{ ...action, resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }] }] } }] },
+      { apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...valid, profile: { ...valid.profile, actions: [{ ...action, resultResourceKind: undefined }] } }] },
+      { apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: Array.from({ length: 17 }, (_, index) => profileEntry(`p${index.toString().padStart(2, "0")}`)) }
+    ]) {
+      reply(body);
+      await expect(httpAccountRepository.listAuthorizationProfiles("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });
 

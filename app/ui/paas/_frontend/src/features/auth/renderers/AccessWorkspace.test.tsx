@@ -82,6 +82,7 @@ async function open(initialView: AccountAccessView, options?: { live?: boolean; 
       return entry;
     }),
     listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => ({ accountId: "org-xiak", scope: platform ? "INSTALLATION" : "TENANT", installationId: platform ? "preview" : null, items: [] })),
+    listAuthorizationProfiles: vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: { product: "paas", revision: 1, callingService: "PAAS", actions: [{ action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }] }] }, contentDigest: `sha256:${"a".repeat(64)}` }] }),
     listAccounts: vi.fn().mockResolvedValue({ items: [], nextAfter: null }),
     listGroups: vi.fn().mockRejectedValue(new Error("unused group contract")),
     getGroup: vi.fn().mockRejectedValue(new Error("unused group contract")),
@@ -410,6 +411,18 @@ describe("policy creation entry and directory contract", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(create);
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("previews the exact-shaped permission catalog without presenting it as the IAM registry", async () => {
+    const { user, repository } = await open("policies");
+    await screen.findByRole("table", { name: "策略" });
+    expect(repository.listAuthorizationProfiles).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
+    expect(await screen.findByRole("table", { name: "产品权限能力目录" })).toBeTruthy();
+    expect(screen.getByText(/隔离 MOCK 的权限能力目录示例/)).toBeTruthy();
+    expect(repository.listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "paas" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { level: 2, name: "paas" })).toBe(document.activeElement);
   });
   it.each([
     ["visual", "按策略生成器创建", "可视化编辑"],

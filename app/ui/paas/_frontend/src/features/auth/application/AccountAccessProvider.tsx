@@ -6,6 +6,7 @@ import { useSession, useSessionCredential } from "./SessionProvider";
 import type {
   AccountCommand,
   AccountPolicy,
+  AuthorizationProfileDirectory,
   CapabilityRestriction,
   DirectoryPage,
   Group,
@@ -57,6 +58,16 @@ export type GroupAccessClient = {
   revokePolicyAttachment(attachmentId: string, command: { resourceVersion: number; requestId: string }): Promise<PolicyAttachmentRevocation>;
 };
 
+export type AuthorizationProfileLoad =
+  | { status: "ready"; directory: AuthorizationProfileDirectory }
+  | { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
+
+export type AuthorizationProfileClient = {
+  accountId: string;
+  preview: boolean;
+  load(): Promise<AuthorizationProfileLoad>;
+};
+
 export type PolicyDirectoryView = { query: string; kind: string; service: string; category: string; sort: string; page: number; pageSize: number };
 export const defaultPolicyDirectoryView: PolicyDirectoryView = { query: "", kind: "all", service: "all", category: "all", sort: "name", page: 1, pageSize: 10 };
 export type UserDirectoryView = { query: string; state: string; role: string };
@@ -74,6 +85,7 @@ type AccountAccess = {
   clearFeedback(): void;
   groups: GroupAccessClient | null;
   permissionBoundaries: UserBoundaryClient | null;
+  authorizationProfiles: AuthorizationProfileClient | null;
   scene: AccountAccessScene | null;
   loading: boolean;
   busy: boolean;
@@ -265,6 +277,34 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [active, credential, expireSession, repository, scene, tenantId]);
 
+  const authorizationProfiles = useMemo<AuthorizationProfileClient | null>(() => {
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !scene.canViewPolicies) return null;
+    const accountId = scene.accountId;
+    return {
+      accountId,
+      preview: Boolean(repository.workspace),
+      async load() {
+        try {
+          const directory = await repository.listAuthorizationProfiles(credential);
+          if (directory.accountId !== accountId) throw new Error("INVALID_IAM_TENANT");
+          return { status: "ready", directory };
+        } catch (failure) {
+          if (failure instanceof HttpProblem) {
+            if (failure.status === 401) {
+              if (expireSession(credential)) {
+                setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+              }
+              return { status: "expired" };
+            }
+            if (failure.status === 403) return { status: "forbidden" };
+            if (failure.status === 404) return { status: "routeUnavailable" };
+          }
+          return { status: "unavailable" };
+        }
+      }
+    };
+  }, [active, credential, expireSession, repository, scene, tenantId]);
+
   const loadUsersPage = useCallback(async (after: string) => {
     if (!active || !credential || !scene || loading || mutationPending.current) return;
     const source = scene;
@@ -339,6 +379,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     userDirectoryView,
     groups,
     permissionBoundaries,
+    authorizationProfiles,
     workspace, workspaceError,
     clearWorkspaceError, clearFeedback,
     async executeWorkspace(command) {
@@ -376,7 +417,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

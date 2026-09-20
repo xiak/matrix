@@ -5,6 +5,12 @@ import type {
   AccountIdentity,
   AccountPolicy,
   ActionCapability,
+  AuthorizationAuthorityScope,
+  AuthorizationProfile,
+  AuthorizationProfileAction,
+  AuthorizationProfileCondition,
+  AuthorizationProfileDirectory,
+  AuthorizationResourceShape,
   CapabilityRestriction,
   DirectoryPage,
   Group,
@@ -464,6 +470,117 @@ function postAccount(credential: string, path: string, body: Record<string, unkn
   });
 }
 
+function authorizationIdentifier(value: unknown, upper: boolean): string {
+  const text = accountText(value);
+  const pattern = upper ? /^[A-Z][A-Z0-9_-]{0,63}$/ : /^[a-z][a-z0-9_-]{0,63}$/;
+  if (!pattern.test(text)) throw new Error("INVALID_IAM_RESPONSE");
+  return text;
+}
+
+function parseAuthorizationCondition(value: unknown): AuthorizationProfileCondition {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["key", "valueType", "source"]);
+  if (wire.key === "iam.current-time" && wire.valueType === "TIME" && wire.source === "IAM_TRANSACTION_TIME") {
+    return { key: wire.key, valueType: wire.valueType, source: wire.source };
+  }
+  if ((wire.key === "iam.account-id" || wire.key === "iam.principal-id") &&
+      wire.valueType === "STRING" && wire.source === "IAM_AUTHENTICATED_IDENTITY") {
+    return { key: wire.key, valueType: wire.valueType, source: wire.source };
+  }
+  throw new Error("INVALID_IAM_RESPONSE");
+}
+
+function parseAuthorizationShape(value: unknown, scope: AuthorizationAuthorityScope): AuthorizationResourceShape {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["mode", "prefixAllowed"], ["collectionUsage"]);
+  if (typeof wire.prefixAllowed !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+  if (wire.mode === "INSTANCE") {
+    if (wire.collectionUsage !== undefined || (scope !== "TENANT" && wire.prefixAllowed)) throw new Error("INVALID_IAM_RESPONSE");
+    return { mode: "INSTANCE", prefixAllowed: wire.prefixAllowed };
+  }
+  if (wire.mode !== "COLLECTION" || wire.prefixAllowed ||
+      (wire.collectionUsage !== "COLLECTION_LIST" && wire.collectionUsage !== "COLLECTION_CREATE")) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return { mode: "COLLECTION", prefixAllowed: false, collectionUsage: wire.collectionUsage };
+}
+
+function parseAuthorizationAction(value: unknown, product: string): AuthorizationProfileAction {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["action", "resourceKind", "scope", "resourceShapes"], ["conditions", "resultResourceKind"]);
+  const action = accountText(wire.action);
+  const parts = action.split(".");
+  if (!/^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$/.test(action) || action.length > 128 || parts[0] !== product) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  if (wire.scope !== "TENANT" && wire.scope !== "INSTALLATION" && wire.scope !== "INSTALLATION_PROBE") {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const scope = wire.scope as AuthorizationAuthorityScope;
+  if (!Array.isArray(wire.resourceShapes) || wire.resourceShapes.length < 1 || wire.resourceShapes.length > 3) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const resourceShapes = wire.resourceShapes.map((shape) => parseAuthorizationShape(shape, scope));
+  const shapeKeys = resourceShapes.map((shape) => `${shape.mode}:${shape.collectionUsage ?? ""}`);
+  if (new Set(shapeKeys).size !== shapeKeys.length) throw new Error("INVALID_IAM_RESPONSE");
+
+  const conditionValues = wire.conditions === undefined || wire.conditions === null ? [] : wire.conditions;
+  if (!Array.isArray(conditionValues) || conditionValues.length > 3 || (scope !== "TENANT" && conditionValues.length)) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const conditions = conditionValues.map(parseAuthorizationCondition);
+  if (new Set(conditions.map((condition) => condition.key)).size !== conditions.length) throw new Error("INVALID_IAM_RESPONSE");
+
+  const resultResourceKind = wire.resultResourceKind === undefined ? undefined : authorizationIdentifier(wire.resultResourceKind, true);
+  if (resourceShapes.some((shape) => shape.collectionUsage === "COLLECTION_LIST") && resultResourceKind !== undefined ||
+      resourceShapes.some((shape) => shape.collectionUsage === "COLLECTION_CREATE") && resultResourceKind === undefined) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return {
+    action,
+    resourceKind: authorizationIdentifier(wire.resourceKind, true),
+    scope,
+    resourceShapes,
+    ...(conditions.length ? { conditions } : {}),
+    ...(resultResourceKind === undefined ? {} : { resultResourceKind })
+  };
+}
+
+function parseAuthorizationProfile(value: unknown): AuthorizationProfile {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "product", "revision", "callingService", "actions"]);
+  requireAccountKind(wire, "AuthorizationProfile");
+  const product = authorizationIdentifier(wire.product, false);
+  if (!Array.isArray(wire.actions) || wire.actions.length < 1 || wire.actions.length > 128) throw new Error("INVALID_IAM_RESPONSE");
+  const actions = wire.actions.map((action) => parseAuthorizationAction(action, product));
+  if (new Set(actions.map((action) => action.action)).size !== actions.length) throw new Error("INVALID_IAM_RESPONSE");
+  return {
+    product,
+    revision: accountVersion(wire.revision),
+    callingService: authorizationIdentifier(wire.callingService, true),
+    actions
+  };
+}
+
+function parseAuthorizationProfileDirectory(value: unknown): AuthorizationProfileDirectory {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "items"]);
+  requireAccountKind(wire, "AuthorizationProfileList");
+  if (!Array.isArray(wire.items) || wire.items.length < 1 || wire.items.length > 16) throw new Error("INVALID_IAM_RESPONSE");
+  const items = wire.items.map((value) => {
+    const entry = accountRecord(value);
+    exactKeys(entry, ["profile", "contentDigest"]);
+    if (typeof entry.contentDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(entry.contentDigest)) {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
+    return { profile: parseAuthorizationProfile(entry.profile), contentDigest: entry.contentDigest };
+  });
+  if (items.some((entry, index) => index > 0 && items[index - 1]!.profile.product >= entry.profile.product)) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return { accountId: accountIdentifier(wire.accountId), items };
+}
+
 function parsePolicy(value: unknown): AccountPolicy {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "id", "management", "displayName", "scope", "status", "defaultVersionId", "resourceVersion", "createdAt", "updatedAt"], ["accountId"]);
@@ -661,6 +778,9 @@ export const httpAccountRepository: AccountRepository = {
   },
   async listPolicies(credential, platform) {
     return parsePolicyDirectory(await requestJSON<unknown>(platform ? "/api/iam/v1/platform-policies" : "/api/iam/v1/policies", { headers: accountHeaders(credential) }), platform ? "INSTALLATION" : "TENANT");
+  },
+  async listAuthorizationProfiles(credential) {
+    return parseAuthorizationProfileDirectory(await requestJSON<unknown>("/api/iam/v1/authorization-profiles", { headers: accountHeaders(credential) }));
   },
   async listAccounts(credential, after) {
     return accountPage<AccountAccess>(await requestJSON<unknown>(`/api/iam/v1/accounts${pageQuery(after)}`, { headers: accountHeaders(credential) }), "AccountList", parseAccountAccess, (item) => item.account.id, after);
