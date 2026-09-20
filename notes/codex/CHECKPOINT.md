@@ -92,17 +92,27 @@ release/profile/CLI/journal. It has fixed48 and exact shapes/evidence/gaps.
 Do not edit those or import its PaaS6, WIP, host files, profile or acceptance.
 
 UX/UI01a07b21-9a0d-7fd0-b090-7827ce18262e owns ALL UI on its own branch.
-Received fixed3c9a49fb251ceb80331b611b76843233ad1dafd1 recovery client and
-doc1e0cf9e7 as peer-reported candidates, not accepted UI/browser evidence here.
-Read-only fixed-code review found and sent two cases: precommit confirm loss
-followed by LOGIN/RECOVER loops in CONFIRM_OUTCOME_UNKNOWN instead of exact
-nonsecret result lookup; pending A intent can affect B login because realm/
-loginName context is not compared. Backend48 already permits safe original
-metadata query; no secret replay or automatic retry is authorized.
-Earlier fixed80225dce first-enrollment start-unknown loses requestId on edit/
-remount and never invokes existing by-request lookup; UX acknowledged and
-owns its next repair. Do not read their WIP or implement parallel UI.
-Other Role/IdP MOCK/LIVE peer reports remain candidates, not acceptance.
+Fixed3c9a49fb251ceb80331b611b76843233ad1dafd1 added the recovery client.
+Read-only review found precommit confirm loss could loop after LOGIN/RECOVER,
+pending A recovery could affect B login, and first-enrollment unknown intent
+was lost on content remount without by-request lookup. UX then fixed these in
+**d7d6333d135a65648269443789799d1fccf0b638**, doc689305d8. Read-only review of
+that fixed diff and its five added tests confirms the intended branches:
+fresh LOGIN/RECOVER inspects original nonsecret result; loginName isolation;
+Session-owned enrollment intent survives content remount and requires exact
+query/cancel before restart, while404 remains unknown. No seed/code replay.
+UX reports657 frontend tests and539px MOCK; those are NOT executed or accepted
+as real UI/browser gates here. No UI was imported. Do not read WIP or build a
+parallel UI. Other Role/IdP MOCK/LIVE reports also remain candidates.
+
+UX asked about a product-declaration publishing workspace. Replied from fixed
+80a6e6d1/001/008: immutable AuthorizationProfile and exact revision/digest plus
+GET /v1/authorization-profiles under iam.policy.list exist. There is NO fixed
+online Profile draft/validate/publish workflow or management permission name.
+Keep proposal MOCK-only; pure Go validation is not a trusted publication,
+platform/admin/service identity is not publishing authority, and a catalog
+is neither permission nor proof a product PEP is implemented. No new API was
+promised merely to serve a MOCK design. Online registration remains001/008.
 
 Only fixed-object exchange. Git identity Xiak <Jellal@aliyun.com> locally.
 No extra agents/tasks, foreign worktree writes, remote1.3/.160/.161 or withdrawn
