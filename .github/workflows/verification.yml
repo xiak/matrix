@@ -342,6 +342,25 @@ jobs:
             --trust-key "$RUNNER_TEMP/platform-release-trust.json"
           CGO_ENABLED=0 go test -c -p 2 -o "$RUNNER_TEMP/phase1e2e.test" \
             ./app/service/installation/test/phase1e2e
+      - name: Reclaim build-only release resources
+        run: |
+          git worktree remove --force "$RUNNER_TEMP/matrix-platform-predecessor"
+          git worktree prune
+          docker builder prune --all --force
+          docker image prune --force
+          docker image rm \
+            apache/apisix:3.17.0-debian \
+            apache/apisix@sha256:6cbf65f3085d1386bfd636b7e88400c163c3641841909e674af7896a5766b092
+          docker image rm \
+            alpine:3.24.1 \
+            alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+          docker image rm \
+            postgres:18 \
+            postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a
+          go clean -cache -testcache -modcache
+          du -sh "$RUNNER_TEMP/platform-release-a" "$RUNNER_TEMP/platform-release-b"
+          docker system df
+          df -h "$RUNNER_TEMP"
       - name: Verify signed disconnected upgrade, custody backup and recovery
         run: |
           docker volume create --label "matrix.task=$PLATFORM_DIND" "$PLATFORM_DATA_VOLUME"
@@ -367,6 +386,9 @@ jobs:
             fi
             sleep 1
           done
+          docker exec "$PLATFORM_DIND" docker version --format '{{.Server.Version}}'
+          docker exec "$PLATFORM_DIND" docker compose version --short
+          docker exec "$PLATFORM_DIND" df -h /data /var/lib/docker
           timeout 2100s docker exec \
             --env GOMAXPROCS=2 --env GOMEMLIMIT=512MiB \
             --env MATRIX_PHASE1_E2E=1 --env MATRIX_PHASE1_E2E_PHASE=run \
