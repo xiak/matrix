@@ -3328,11 +3328,12 @@ func newPlatformStartRuntime(
 		images[image.ImageID] = true
 	}
 	lease, leaseErr := platformTestTOTPBackupLease(plan)
+	backupVersion, _ := backupAPIVersionForDatabaseProfile(plan.Bundle.Manifest.Database)
 	return &platformStartRuntime{
 		expectation: expectation, images: images,
 		databaseDump: []byte("matrix-postgresql-custom-backup-fixture"),
 		backupLease:  lease, backupLeaseError: leaseErr,
-		backupSnapshotRequired: plan.Bundle.Manifest.Database == release.CurrentDatabaseProfile(),
+		backupSnapshotRequired: backupVersion == backupAPIVersion,
 	}
 }
 
