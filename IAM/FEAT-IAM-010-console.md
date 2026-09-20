@@ -102,8 +102,9 @@ DEV `AccessSettings` 也只拥有账号级 MFA 要求与用户 SSO 选择。先�
 ### Role、trust 与会话的契约对齐体验
 
 角色体验以 IAM-006 的固定来源
-`62a18a48168e87a4158b95eba41427b445ed10d1` 和公开数量边界修正
-`0567c8b2699521b137db0f8b69f17630c59f04fb` 为后续 LIVE 接入依据；两者尚未进入本 UX 分支，因此这里只接受信息架构和隔离 MOCK 行为，不宣称已调用真实 Role、TrustPolicy 或 STS HTTP。真实首版信任仅接受同 Account 的精确 User，服务身份、身份提供商、跨账号、角色链和通配信任仍属后继能力；体验仓库已有的服务/联合示例必须继续标成合成 MOCK，不能映射成可发行的真实临时凭据。
+`62a18a48168e87a4158b95eba41427b445ed10d1`、公开数量边界修正
+`0567c8b2699521b137db0f8b69f17630c59f04fb` 和来源身份不可复活修正
+`1ebab37aef4bce12b963f52d3919748a9d50d4c6` 为后续 LIVE 接入依据；这些来源尚未进入本 UX 分支，因此这里只接受信息架构和隔离 MOCK 行为，不宣称已调用真实 Role、TrustPolicy 或 STS HTTP。真实首版信任仅接受同 Account 的精确 User，服务身份、身份提供商、跨账号、角色链和通配信任仍属后继能力；体验仓库已有的服务/联合示例必须继续标成合成 MOCK，不能映射成可发行的真实临时凭据。
 
 角色信任关系是详情页中的完整配置工作流。进入后在当前 trust 页签内选择、校验、审阅前后主体及完整信任文档，再显式保存；返回、取消、失败重试和完成都不打开 Dialog，并恢复到稳定触发器。信任只是承担准入，不替代调用 User 针对该 Role 的 `iam:assumeRole` 授权，也不授予角色资源权限。
 
@@ -176,12 +177,13 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 ### 成员自服务 Role 承担 MOCK 的开发验收证据
 
 2026-09-20，前端实现固定在已推送的
-[`8b703cfe6c65e342c1651ff438f53fafa96d9fb0`](https://github.com/xiak/matrix/commit/8b703cfe6c65e342c1651ff438f53fafa96d9fb0)。
+[`eed277abf4d0d176943a1fe0aa26096aadf104ac`](https://github.com/xiak/matrix/commit/eed277abf4d0d176943a1fe0aa26096aadf104ac)。
 
 - 账号菜单只在隔离 DEV 体验中提供“角色切换体验”，深链为 `/console/access/role-access/`。它不加入租户管理员角色目录，也不启动 `AccountAccessProvider` 的 User、Policy、Role 管理读取；页面使用明确标记的成员场景来证明只有承担权限、没有角色管理权限的 User 仍可使用自服务入口。
-- 发现页只展示当前场景成员可以承担的角色，不泄露未授权 Role 或管理员总数。审阅固定展示来源 User、Account、准确 Role、资源版本和有界时长；结果未知提示要求保留原 `requestId` 查询，不能创建第二次签发，凭据丢失必须先撤销原意图再产生新意图。
+- 发现页只展示当前场景成员可以承担的角色，不泄露未授权 Role 或管理员总数。审阅固定展示来源 User、Account、准确 Role、资源版本和有界时长。可切换体验路径把三类恢复约束变成可执行状态：`iam.authorization.denied` 不猜测 Trust、承担权限、Role 状态或边界的具体变化，只重新发现当前资格；`iam.state.conflict` 不翻译为确定的“版本过期”，也不证明原 `requestId` 从未提交，只有 MOCK 明确知道它是未重用、此前没有 `UNKNOWN` 的全新意图时才重新读取成员自己的 assumable-role 目录并审阅，不能改读管理员 Role 详情；网络或 5xx 未知结果锁定场景和时长，保留原 `requestId` 查询，不能创建第二次签发。
+- 原请求查询只展示非秘密会话记录；若已签发但秘密凭据不可恢复，必须先按原请求撤销已确认会话，之后才开放使用新 `requestId` 的新承担意图。`NOT_FOUND`、非预期 Problem 结构或无法核对请求关联都不能擅自降级成“未创建”，更不能回退 MOCK 成功态。
 - MOCK 成功态只呈现非秘密会话身份、来源 User、签发和到期时间，明确不返回或保存真实 credential、不替换 Header 当前登录。退出确认说明真实 Role logout 不签发或复活来源 USER 凭据，来源会话必须重新检查。选择、审阅、成功与退出均在内容区完成，没有 Dialog。
-- 完整前端 40 个测试文件、587 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价和 Go UI 宿主门禁通过。真实 DEV 在桌面与 `360 × 800` 验证账号菜单入口、审阅和成功态；小屏 document `clientWidth == scrollWidth == 360`、Dialog 数为零，工作流标题获得焦点。浏览器仅保留生成文件出现前的旧 HMR 缺模块/缺翻译记录，当前旅程没有新增错误。
+- 完整前端 40 个测试文件、590 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价和 Go UI 宿主门禁通过。真实 DEV 在默认紧凑视口与 `360 × 800` 验证账号菜单入口、审阅、成功及未知结果恢复态；小屏 document `clientWidth == scrollWidth == 360`、Dialog 数为零，最终控制台 warning/error 为空。
 - 该证据不表示 IAM-006 固定提交已经进入本分支，也不表示真实 `GET /v1/auth/assumable-roles`、`POST :assume`、当前 Role 身份、by-request 恢复或 logout 已接入。后续 LIVE 适配必须消费固定契约且不得在网络、5xx、404 或协议失败后回退本 MOCK。
 
 ### 本人安全通知地址 MOCK 的开发验收证据
