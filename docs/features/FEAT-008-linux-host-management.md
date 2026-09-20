@@ -83,6 +83,14 @@ command and filenames are product-owned constants; installation of Linux,
 Docker Engine and Compose, firewall changes, PXE/BMC/VM provisioning and
 Kubernetes node provisioning remain outside this FEAT.
 
+The supported product onboarding path is this one-time registration command.
+The current release has no SSH enrollment mode, no control-plane SSH credential
+custody and no UI action that logs in to a host. Any independently managed SSH
+access is an out-of-band operator responsibility and is not a substitute for
+the enrollment, identity, Audit or lifecycle gates in this FEAT. An SSH-based
+bootstrap or rescue workflow is deferred until a later feature establishes a
+separate security and operations boundary.
+
 The console follows the enrollment without a manual refresh through
 `WAITING_INSTALL`, `VERIFYING` and `READY`, or the terminal `FAILED`, `EXPIRED`
 and `REVOKED` states. A ready enrollment links to the existing host detail and
@@ -216,8 +224,9 @@ boundary.
 The first node transport is bounded mTLS HTTPS on a private management
 listener. Nodes have exact installation/target identities, no control-plane
 database credentials and no scheduling or IAM authority. Installation owns
-certificate provisioning, renewal and revocation. SSH may bootstrap or rescue
-a node; it is not the steady-state workload protocol.
+certificate provisioning, renewal and revocation. SSH is neither an enrollment
+transport nor a supported bootstrap or rescue path in the current product;
+the one-time registration command establishes the resident mTLS identity.
 
 The signed-platform connection increment uses `mx platform configure-nodes`
 with a protected, installation-bound controller configuration and the expected
