@@ -41,12 +41,12 @@ function PolicyVersionHistory({ policy, usageCount, workspace, scene }: { policy
   return <div className={styles.stack} ref={history}>
     <p className={styles.note}>{t("versionHistoryHint", { count: policy.versions.length, limit: policyVersionLimit })}</p>
     {policy.kind === "custom" && policy.versions.length >= policyVersionLimit ? <Alert status="warning">{t("errors.versionLimit")}</Alert> : null}
-    <Table aria-label={t("versions")}>
+    <Table aria-label={t("versions")} mobileLayout="stack">
       <thead><tr><th scope="col">{t("version")}</th><th scope="col">{t("created")}</th><th scope="col">{t("actions")}</th></tr></thead>
       <tbody>{[...policy.versions].reverse().map((item) => <tr key={item.id}>
-        <td>v{item.id} {item.id === policy.defaultVersion ? <Badge status="success">{t("defaultVersion")}</Badge> : null}</td>
-        <td><WorkspaceTime value={item.createdAt} /></td>
-        <td><div className={styles.actions}>
+        <td data-label={t("version")}>v{item.id} {item.id === policy.defaultVersion ? <Badge status="success">{t("defaultVersion")}</Badge> : null}</td>
+        <td data-label={t("created")}><WorkspaceTime value={item.createdAt} /></td>
+        <td data-label={t("actions")}><div className={styles.actions}>
           <Button variant="ghost" size="small" aria-label={t("inspectVersion", { version: item.id })} onClick={() => setIntent({ action: "inspect", version: item.id })}>{t("viewContent")}</Button>
           {policy.kind === "custom" && item.id !== policy.defaultVersion ? <>
             <Button variant="ghost" size="small" aria-label={t("activateVersion", { version: item.id })} onClick={() => setIntent({ action: "activate", version: item.id })}>{t("setDefault")}</Button>
@@ -85,7 +85,7 @@ function PolicyUseSection({ title, hint, empty, subjects, onOpen }: { title: str
   return <section className={styles.stack}>
     <h3>{title} ({subjects.length})</h3>
     <p className={styles.note}>{hint}</p>
-    {subjects.length ? <Table aria-label={title}><thead><tr><th>{t("name")}</th><th>{t("type")}</th></tr></thead><tbody>{subjects.map((subject) => <tr key={subject.view + subject.id}><td><button className={styles.userLink} onClick={() => onOpen(subject.view, subject.id)}>{subject.name}</button></td><td>{t(subject.view === "users" ? "subusers" : subject.view)}</td></tr>)}</tbody></Table> : <p className={styles.note}>{empty}</p>}
+    {subjects.length ? <Table aria-label={title} mobileLayout="stack"><thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("type")}</th></tr></thead><tbody>{subjects.map((subject) => <tr key={subject.view + subject.id}><td data-label={t("name")}><button className={styles.userLink} onClick={() => onOpen(subject.view, subject.id)}>{subject.name}</button></td><td data-label={t("type")}>{t(subject.view === "users" ? "subusers" : subject.view)}</td></tr>)}</tbody></Table> : <p className={styles.note}>{empty}</p>}
   </section>;
 }
 

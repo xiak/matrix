@@ -1,5 +1,6 @@
 @layer xiak {
 .viewport {
+  container: xiak-table / inline-size;
   width: 100%;
   min-width: 0;
   max-height: var(--xiak-table-scroll-max-height, none);
@@ -53,5 +54,51 @@
 .pageSummary { font-variant-numeric: tabular-nums; }
 @media (max-width: 760px) { .actions { display: contents; } }
 @media (pointer: coarse) { .selectionCell > label { min-height: var(--xiak-control-height); } .paginationControls button { min-height: var(--xiak-control-height); min-width: var(--xiak-control-height); } }
+@container xiak-table (max-width: 480px) {
+  .table[data-mobile-layout="stack"],
+  .table[data-mobile-layout="stack"] tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .table[data-mobile-layout="stack"] thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .table[data-mobile-layout="stack"] tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    padding-block: var(--xiak-spacing-tight);
+    border-bottom: var(--xiak-border-subtle);
+  }
+
+  .table[data-mobile-layout="stack"] tbody tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table[data-mobile-layout="stack"] td {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    height: auto;
+    border: 0;
+    padding: var(--xiak-spacing-tight) var(--xiak-spacing-default);
+    vertical-align: top;
+  }
+
+  .table[data-mobile-layout="stack"] td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: var(--xiak-spacing-narrow);
+    color: var(--xiak-color-text-muted);
+    font-size: var(--xiak-font-size-small);
+    font-weight: var(--xiak-font-weight-medium);
+  }
+}
 @container xiak-card (max-width: 480px) { .footer { padding-inline: var(--xiak-spacing-comfortable); } }
 }

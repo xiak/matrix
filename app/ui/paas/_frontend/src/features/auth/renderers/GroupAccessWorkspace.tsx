@@ -98,15 +98,15 @@ function GroupMemberTable({ members, onOpen }: {
   const t = useTranslations("IamWorkspace");
   const a = useTranslations("AccountAccess");
 
-  return <Table aria-label={t("members")}>
-    <thead><tr><th>{t("name")}</th><th>{a("userType")}</th><th>{t("state")}</th></tr></thead>
+  return <Table aria-label={t("members")} mobileLayout="stack">
+    <thead><tr><th scope="col">{t("name")}</th><th scope="col">{a("userType")}</th><th scope="col">{t("state")}</th></tr></thead>
     <tbody>{members.map((member) => <tr key={member.id}>
-      <td>
+      <td data-label={t("name")}>
         <button className={styles.userLink} onClick={() => onOpen(member.userId)}>{member.name}</button>
         <small>{member.description}</small>
       </td>
-      <td>{a(member.identityType)}</td>
-      <td>{member.state
+      <td data-label={a("userType")}>{a(member.identityType)}</td>
+      <td data-label={t("state")}>{member.state
         ? <Badge status={member.state === "disabled" ? "neutral" : "success"}>{a(`states.${member.state}`)}</Badge>
         : "—"}</td>
     </tr>)}</tbody>
@@ -119,15 +119,15 @@ function GroupPolicyTable({ policies, onOpen }: {
 }) {
   const t = useTranslations("IamWorkspace");
 
-  return <Table aria-label={t("permissions")}>
-    <thead><tr><th>{t("name")}</th><th>{t("type")}</th><th>{t("version")}</th></tr></thead>
+  return <Table aria-label={t("permissions")} mobileLayout="stack">
+    <thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("type")}</th><th scope="col">{t("version")}</th></tr></thead>
     <tbody>{policies.map((policy) => <tr key={policy.id}>
-      <td>
+      <td data-label={t("name")}>
         <button className={styles.userLink} onClick={() => onOpen(policy.policyId)}>{policy.name}</button>
         <small>{policy.description}</small>
       </td>
-      <td>{policy.kind ? t(policy.kind) : "—"}</td>
-      <td>{policy.version === undefined ? "—" : typeof policy.version === "number" ? `v${policy.version}` : policy.version}</td>
+      <td data-label={t("type")}>{policy.kind ? t(policy.kind) : "—"}</td>
+      <td data-label={t("version")}>{policy.version === undefined ? "—" : typeof policy.version === "number" ? `v${policy.version}` : policy.version}</td>
     </tr>)}</tbody>
   </Table>;
 }

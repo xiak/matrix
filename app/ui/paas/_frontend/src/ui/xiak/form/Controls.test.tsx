@@ -276,4 +276,12 @@ describe("shared themed controls", () => {
     expect(screen.getByRole("alert").textContent).toContain("Could not save");
     expect(screen.getByRole("status").textContent).toContain("Saved");
   });
+  it("keeps stacked mobile tables native and gives every compact value its column label", () => {
+    render(<Table aria-label="Policy sources" mobileLayout="stack"><thead><tr><th scope="col">Policy</th><th scope="col">Source</th></tr></thead><tbody><tr><td data-label="Policy">Read logs</td><td data-label="Source">Release group</td></tr></tbody></Table>);
+    const table = screen.getByRole("table", { name: "Policy sources" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getByText("Read logs").getAttribute("data-label")).toBe("Policy");
+    expect(within(table).getByText("Release group").getAttribute("data-label")).toBe("Source");
+    expect(within(table).getAllByRole("columnheader").map((header) => header.getAttribute("scope"))).toEqual(["col", "col"]);
+  });
 });

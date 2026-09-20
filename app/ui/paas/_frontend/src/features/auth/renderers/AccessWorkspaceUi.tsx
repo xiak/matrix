@@ -1,6 +1,6 @@
 "use client";
 
-import { useDeferredValue, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { Children, Fragment, cloneElement, isValidElement, useDeferredValue, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableToolbar, TablePagination, Transfer, type PageCommand } from "@ui/xiak";
@@ -12,6 +12,16 @@ export function WorkspaceTime({ value }: { value: string | null }) {
   const format = useFormatter();
   const t = useTranslations("IamWorkspace");
   return value ? <time dateTime={value} title={value}>{format.dateTime(new Date(value), { dateStyle: "medium", timeStyle: "short" })}</time> : <span>{t("neverUsed")}</span>;
+}
+
+function labelCollectionCells(content: ReactNode, columns: readonly string[]) {
+  const nodes = Children.toArray(content);
+  const cells = nodes.length === 1 && isValidElement<{ children?: ReactNode }>(nodes[0]) && nodes[0].type === Fragment
+    ? Children.toArray(nodes[0].props.children)
+    : nodes;
+  return cells.map((cell, index) => isValidElement<{ "data-label"?: string }>(cell)
+    ? cloneElement(cell, { "data-label": cell.props["data-label"] ?? columns[index] })
+    : cell);
 }
 
 export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, keywords, filter, embedded = false, status, loadMore, footerNote }: {
@@ -46,7 +56,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
       actions={embedded ? action : null}
       filters={filter ? [{ id: "kind", label: filter.label, options: [{ value: "all", label: t("all") }, ...filter.options], value: kind, onChange: (value) => { setKind(value); setPage(1); } }] : []}
       status={status ?? t("count", { count: matches.length })} />
-    <Table aria-label={title} aria-busy={deferredQuery !== query}><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((item) => <tr key={item.id}>{row(item)}</tr>)}</tbody></Table>
+    <Table aria-label={title} aria-busy={deferredQuery !== query} mobileLayout="stack"><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((item) => <tr key={item.id}>{labelCollectionCells(row(item), columns)}</tr>)}</tbody></Table>
     {!matches.length ? <EmptyState title={items.length ? t("noResults") : t("empty")} description={items.length ? t("noResultsHint") : t("emptyHint")} action={items.length ? <Button onClick={reset} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
     <Table.Footer note={footerNote}>
       <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}

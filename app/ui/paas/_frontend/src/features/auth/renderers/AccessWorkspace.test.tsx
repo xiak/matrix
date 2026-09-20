@@ -782,6 +782,13 @@ describe("CAM-style access workspace", () => {
     expect(repository.workspace!.read).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
+  it("uses the shared stacked mobile contract for compact workspace directories", async () => {
+    await open("roles");
+    const directory = await screen.findByRole("table", { name: "角色" });
+    expect(directory.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(directory).getByRole("button", { name: "PipelineDeploymentRole" }).closest("td")?.getAttribute("data-label")).toBe("名称");
+    expect(within(directory).getByText("云服务").closest("td")?.getAttribute("data-label")).toBe("信任主体类型");
+  });
   it("creates a role in the content area with explicit trust, no preselected grants and a preserved localized draft", async () => {
     const { user, repository, extension } = await open("roles");
     await user.click(await screen.findByRole("button", { name: "新建角色" }));
@@ -1065,6 +1072,10 @@ describe("CAM-style access workspace", () => {
   it("reviews user boundary changes separately and links boundary usage back to its exact owner", async () => {
     const { user, extension } = await open("users", { entityId: "principal-lin" });
     await user.click(await screen.findByRole("tab", { name: "权限策略" }));
+    const policies = screen.getByRole("table", { name: "用户关联策略（模拟）" });
+    expect(policies.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(policies).getByText("ProductionLogReader").closest("td")?.getAttribute("data-label")).toBe("名称");
+    expect(screen.queryByRole("button", { name: "平台内置角色" })).toBeNull();
     await user.click(await screen.findByRole("button", { name: "修改权限边界" }));
     await select(user, "权限边界", "MatrixReadOnlyAccess");
     await user.click(screen.getByRole("button", { name: "审阅变更" }));

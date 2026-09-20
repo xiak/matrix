@@ -651,7 +651,7 @@
     "choosePolicies": "直接关联策略",
     "joinGroups": "加入用户组",
     "copyUser": "复用现有用户权限",
-    "copyHint": "复制所选用户的直接关联策略与用户组。将替换当前选择，不复制平台固定角色、密码或密钥。",
+    "copyHint": "复制所选用户的直接关联策略与用户组。将替换当前选择，不复制访问方式、密码、密钥或权限边界。",
     "sourceUser": "选择来源用户",
     "copySummary": "将复用 {policies} 条直接策略和 {groups} 个用户组。",
     "applyCopy": "应用到当前选择",
@@ -1902,7 +1902,6 @@
     "inheritedPolicies": "从用户组继承",
     "directPolicies": "直接关联",
     "userGroups": "所属用户组",
-    "realRoles": "平台内置角色",
     "errors": {
       "invalid": "请检查输入格式、引用对象及数值范围。",
       "duplicate": "名称已存在，请使用其他名称。",

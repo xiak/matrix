@@ -3,6 +3,7 @@
 - 状态：实施中；在既有控制台接入固定 IAM 契约，完整 IAM 页面与发布验收尚未完成。
 - Owner：UX/UI 工程师负责页面、客户端、公共组件和独立浏览器验收；IAM 工程师负责后端契约、鉴权及真实进程支持。
 - 全局导航、视觉体系、响应式布局和隔离 MOCK 体验由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md) 拥有；固定来源由 [adoption review](../docs/adoption/FEAT-007-control-plane-console.md) 拥有。不引入另一套 IAM UI。
+- 当前 IAM 集成基线固定为 `04041d2d3f7ed55225a5164bc2bc05251d25a6f1`（Verification `35485632542` completed/success）。该来源只固定当前 API 与权威对象，不把 IAM 各 FEAT 的未完成验收继承为 UI 验收。
 
 ## 需求
 
@@ -26,6 +27,8 @@
 Account/RootIdentity 与日常 User 分开。主身份展示资源所有者说明，不因没有普通策略附件显示为未授权，也不进入普通 User 的授权、禁用、删除或边界设置流程。创建 User 不开通另一个 Account。
 
 `AccountPolicy`、`PolicyDirectory` 和 `UserPolicyAttachment` 替代旧的内置角色投影；新 User 默认无业务授权。Tenant/installation 策略目录独立读取与授权，各为稳定 ID 有序、最多 256 项的完整元数据快照；仅 403 是局部不可用，其他失败关闭对应真实场景。缺少 installation 策略元数据时展示稳定 Policy ID，不隐藏有效直接附件，也不由元数据制造正文、继承、边界或最终允许结果。
+
+当前在线授权权威只有 `Policy`、`PolicyVersion` 与 `PolicyAttachment`；历史 `RoleBinding` 标识只服务旧事实或迁移证据，不能形成兼容授权页、只读入口或第二套客户端模型。真正的 `Role` / `RoleSession` 拥有独立信任策略、承担检查与有界临时会话，不得与旧枚举角色混淆。目标 MOCK 同样不再显示“平台内置角色”并行入口。
 
 签名目录 continuation 原样传递，不当作资源 ID 或许可。搜索、分页和全选明确覆盖已加载记录，不捏造全局总数，也不为装饰表格逐行查询 User。同账号缓存摘要仅装饰成员关系中的 User ID，不证明存在性或操作权限。组成员关系、直接组附件、直接 User 附件与 policySources 保留各自来源和修订。
 
@@ -87,6 +90,7 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - 返回目录、浏览器后退重新读取 User revision 5、前进回到目录均完成；root/member 页面捕获的 error 日志为空。
 - 页面观察结束后才写 completion marker。fixture 最终核对真实的两个设置事实、一个移除事实、明确 `policy: null` 及 Audit `VERIFIED`，随后通过；不是仅靠 marker 或 API 调用替代 UX 验收。临时数据库环境及其合成数据已清理，不是用户安装验收。
 - 严格 HTTP/组件用例覆盖不确定提交、409 新意图、迟到旧凭据的 401 和成功写入后读取失败；本次浏览器未执行这些故障注入，不把自动化用例标为浏览器证据。
+- 隔离 MOCK 已删除 User 权限页的“平台内置角色”并行入口；直接策略、组继承、权限边界与真实 Role/RoleSession 保持不同语义。关系与详情表格使用共享的可选移动堆叠契约；`360px` DEV Role 目录保留原生表格语义与逐值列标签，页面和表格均无横向溢出。该结果只接受信息架构与响应式体验，不代表真实 Role/STS 后端已交付。
 
 公共 UI、生产导出、完整前端及 Go 回归证据只归
 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-user-boundarynavigation-development-evidence)

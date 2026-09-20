@@ -651,7 +651,7 @@
     "choosePolicies": "Attach policies",
     "joinGroups": "Join groups",
     "copyUser": "Copy user permissions",
-    "copyHint": "Copy the selected user's direct policies and groups, replacing your current selection. Platform roles, passwords and keys are not copied.",
+    "copyHint": "Copy the selected user's direct policies and groups, replacing your current selection. Access methods, passwords, keys and permission boundaries are not copied.",
     "sourceUser": "Select a source user",
     "copySummary": "Copy {policies} direct policies and {groups} groups.",
     "applyCopy": "Apply to selection",
@@ -1902,7 +1902,6 @@
     "inheritedPolicies": "Inherited from groups",
     "directPolicies": "Direct associations",
     "userGroups": "Group memberships",
-    "realRoles": "Platform roles",
     "errors": {
       "invalid": "Check input format, referenced objects and numeric ranges.",
       "duplicate": "This name already exists. Choose a different name.",
