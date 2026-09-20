@@ -258,6 +258,23 @@ the following in an externally disconnected, task-owned runtime:
    writes the closed Audit evidence, passes restart plus signed
    upgrade/rollback gates, and leaves Phase 2 and every remote host untouched.
 
+Current source `d479e1c57b6458852dd029227d32f3d56df6c5ad` freezes the
+installation-owned, non-secret same-snapshot adapter contract. It binds the
+sealed installation/bootstrap scope, the observed keyset revision and the
+strictly sorted required `keyId`/format/commitment triples; its custody digest
+excludes the ephemeral PostgreSQL snapshot identifier. Canonical decoding
+rejects missing, null, duplicate, reordered, unknown, oversized or trailing
+input, while an explicit empty requirement set remains representable only for
+IAM to assert after a complete snapshot query. The exact source passed all
+four jobs in
+[independent CI](https://github.com/xiak/matrix/actions/runs/35491112269),
+plus local full-repository tests, focused race, architecture and vet. This is
+only the cross-process evidence contract: the purpose-only IAM snapshot
+helper, sealed backup-manifest consumption, restore-time keyring-superset
+check, durable `CLOSED`/one-shot reopen transactions, signed two-release
+transition and disconnected populated recovery gates remain unaccepted. The
+published database profile is unchanged.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract
