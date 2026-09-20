@@ -2053,6 +2053,7 @@ describe("CAM-style access workspace", () => {
     const { user } = await open("settings");
     expect(screen.getByRole("heading", { name: "身份验证方法" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "多因素认证要求" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "登录时的 MFA 要求" })).toBeTruthy();
     expect(screen.queryByLabelText("密码最小长度")).toBeNull();
     expect(screen.queryByLabelText("会话时长（分钟）")).toBeNull();
     expect(screen.getByRole("heading", { name: "安全通知" })).toBeTruthy();
@@ -2104,19 +2105,34 @@ describe("CAM-style access workspace", () => {
   it.each(["settings", "user-sso"] as const)("retains %s inputs on failure and saves only its owned settings on retry", async (view) => {
     const { user, repository, extension } = await open(view);
     const before = await extension.read("preview");
-    const saveName = view === "settings" ? "保存 MFA 要求" : "保存";
     if (view === "settings") {
       await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+      await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+      const review = screen.getByRole("heading", { name: "审阅账号安全规则变更" });
+      await waitFor(() => expect(review).toBe(document.activeElement));
+      expect(screen.getByText("主身份及持有未撤销平台附件的受保护身份")).toBeTruthy();
+      await user.click(screen.getByRole("button", { name: "继续验证身份" }));
+      const verification = screen.getByRole("heading", { name: "验证身份后更新账号安全规则" });
+      await waitFor(() => expect(verification).toBe(document.activeElement));
+      await user.type(screen.getByLabelText("当前密码"), "demo-password");
+      await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
     } else {
       await select(user, "选择身份提供商", "EnterpriseSSO · SAML");
       await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
     }
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    const saveName = view === "settings" ? "验证并继续" : "保存";
     await user.click(screen.getByRole("button", { name: saveName }));
     await screen.findByText("暂时无法完成操作，请重试。");
     expect(await extension.read("preview")).toEqual(before);
     await user.click(screen.getByRole("button", { name: saveName }));
-    await waitFor(() => expect((screen.getByRole("button", { name: saveName }) as HTMLButtonElement).disabled).toBe(true));
+    if (view === "settings") {
+      await waitFor(() => expect(screen.queryByRole("heading", { name: "验证身份后更新账号安全规则" })).toBeNull());
+      expect((screen.getByRole("button", { name: "审阅规则变更" }) as HTMLButtonElement).disabled).toBe(true);
+      await waitFor(() => expect(screen.getByRole("heading", { name: "多因素认证要求" })).toBe(document.activeElement));
+    } else {
+      await waitFor(() => expect((screen.getByRole("button", { name: saveName }) as HTMLButtonElement).disabled).toBe(true));
+    }
     const state = await extension.read("preview");
     expect(state.settings).toEqual({ ...before.settings, ...(view === "settings" ? { loginProtection: true } : { userSsoEnabled: true, userSsoProviderId: "idp-example" }) });
     expect(state.providers).toEqual(before.providers);

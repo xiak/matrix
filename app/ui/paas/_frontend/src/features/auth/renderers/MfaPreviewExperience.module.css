@@ -3,6 +3,7 @@
 .section { display: grid; gap: var(--xiak-spacing-comfortable); }
 .section + .section { border-top: var(--xiak-border-subtle); padding-top: 28px; }
 .sectionHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--xiak-spacing-comfortable); }
+.headingBadges { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: var(--xiak-spacing-tight); }
 .sectionHeading p { margin: 0 0 4px; color: var(--xiak-color-brand); font-size: var(--xiak-font-size-caption); font-weight: var(--xiak-font-weight-semibold); letter-spacing: .08em; text-transform: uppercase; }
 .sectionHeading h2 { margin: 0; color: var(--xiak-color-text-strong); font-size: 20px; line-height: 1.45; }
 .sectionHeading span { display: block; margin-top: 6px; color: var(--xiak-color-text-muted); line-height: 1.7; }
@@ -17,11 +18,6 @@
 .actions, .flowActions, .loginLinks { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); }
 .flowActions { justify-content: flex-end; }
 .policyForm > p { margin: -8px 0 0 28px; color: var(--xiak-color-text-muted); line-height: 1.7; }
-.plannedGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--xiak-spacing-default); }
-.plannedGrid > div { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-comfortable); background: var(--xiak-color-bg-panel); }
-.plannedGrid svg { width: 18px; height: 18px; color: var(--xiak-color-text-muted); }
-.plannedGrid span { display: grid; gap: 4px; }
-.plannedGrid small { color: var(--xiak-color-text-muted); line-height: 1.6; }
 .flowCard { max-width: 920px; }
 .flowTitle { margin: 0 0 4px; color: var(--xiak-color-text-strong); font-size: 16px; line-height: 1.45; }
 .steps { display: grid; grid-template-columns: repeat(4, 1fr); margin: 0; padding: 0; list-style: none; }
@@ -65,7 +61,7 @@
 .boundary svg { width: 15px; height: 15px; flex: none; margin-top: 2px; }
 
 @media (max-width: 720px) {
-  .securityCards, .plannedGrid { grid-template-columns: 1fr; }
+  .securityCards { grid-template-columns: 1fr; }
   .sectionHeading { align-items: flex-start; }
   .enrollmentGrid { grid-template-columns: 1fr; justify-items: center; padding: 18px; }
   .manualKey { width: 100%; }

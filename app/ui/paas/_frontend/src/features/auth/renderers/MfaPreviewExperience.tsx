@@ -7,7 +7,6 @@ import {
   Check,
   CheckCircle2,
   KeyRound,
-  LockKeyhole,
   Mail,
   RefreshCw,
   ShieldCheck,
@@ -21,13 +20,12 @@ import {
   Checkbox,
   FormField,
   Input,
-  PasswordInput,
   Typography
 } from "@ui/xiak";
-import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import styles from "./MfaPreviewExperience.module.css";
 import { SecurityNotificationAddressPreview } from "./SecurityNotificationAddressPreview";
+import { SecurityStepUpPreview, type SecurityStepUpAction } from "./SecurityStepUpPreview";
 
 const demonstrationCode = "624810";
 const demonstrationRecoveryCode = "MTRX-RECOVER-01";
@@ -37,8 +35,7 @@ const recoveryCodes = [
 ];
 
 type EnrollmentReason = "first" | "recovery" | "replace";
-type StepUpAction = "bind" | "replace" | "remove" | "regenerate";
-type Feedback = "removed" | "replaced" | "bound" | "regenerated" | "policyEnabled" | "policyDisabled";
+type Feedback = "removed" | "replaced" | "bound" | "regenerated";
 const enrollmentSteps = ["prepare", "scan", "verify", "recoveryCodes"] as const;
 
 function DemoQr() {
@@ -146,38 +143,16 @@ export function MfaLoginPreview({ onBack, onAuthenticated }: { onBack(): void; o
   </form>;
 }
 
-function StepUpPanel({ action, onCancel, onVerified }: { action: StepUpAction; onCancel(): void; onVerified(): void }) {
-  const t = useTranslations("MfaPreview");
-  const auth = useTranslations("Auth");
-  const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
-  const [error, setError] = useState(false);
-  const id = useId();
-  return <Card className={styles.flowCard}>
-    <Card.Header><div><Typography.Title as="h2" level={3}>{t(`stepUp.${action}.title`)}</Typography.Title><Typography.Text tone="muted">{t("stepUp.hint")}</Typography.Text></div><Badge status="warning">{t("stepUp.once")}</Badge></Card.Header>
-    <Card.Body><form className={styles.form} onSubmit={(event) => { event.preventDefault(); if (password === "demo-password" && code === demonstrationCode) onVerified(); else setError(true); }}>
-      <Alert>{t("demoStepUp", { password: "demo-password", code: demonstrationCode })}</Alert>
-      <FormField id={`${id}-password`} label={t("currentPassword")}><PasswordInput autoComplete="current-password" capsLockLabel={auth("capsLock")} hideLabel={auth("hidePassword")} id={`${id}-password`} onChange={(event) => { setPassword(event.target.value); setError(false); }} showLabel={auth("showPassword")} value={password} /></FormField>
-      <FormField id={`${id}-code`} label={t("verificationCode")}><Input autoComplete="one-time-code" id={`${id}-code`} inputMode="numeric" maxLength={6} onChange={(event) => { setCode(event.target.value.replace(/\D/g, "")); setError(false); }} value={code} /></FormField>
-      {error ? <Alert status="danger">{t("stepUp.invalid")}</Alert> : null}
-      <p className={styles.boundary}><LockKeyhole aria-hidden="true" />{t("stepUp.boundary")}</p>
-      <div className={styles.flowActions}><Button onClick={onCancel} type="button" variant="ghost">{t("cancel")}</Button><Button disabled={!password || code.length !== 6} type="submit">{t("stepUp.verify")}</Button></div>
-    </form></Card.Body>
-  </Card>;
-}
-
 export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }) {
   const t = useTranslations("MfaPreview");
-  const access = useAccountAccess();
-  const [required, setRequired] = useState(workspace.settings.loginProtection);
   const [factorState, setFactorState] = useState<"bound" | "removed">("bound");
-  const [stepUp, setStepUp] = useState<StepUpAction | null>(null);
+  const [stepUp, setStepUp] = useState<SecurityStepUpAction | null>(null);
   const [enrollment, setEnrollment] = useState<EnrollmentReason | null>(null);
   const [showCodes, setShowCodes] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const changed = required !== workspace.settings.loginProtection;
+  const required = workspace.settings.loginProtection;
 
-  function begin(action: StepUpAction) { setFeedback(null); setStepUp(action); setEnrollment(null); setShowCodes(false); }
+  function begin(action: SecurityStepUpAction) { setFeedback(null); setStepUp(action); setEnrollment(null); setShowCodes(false); }
   function verified() {
     if (stepUp === "bind") { setEnrollment("first"); setStepUp(null); return; }
     if (stepUp === "replace") { setEnrollment("replace"); setStepUp(null); return; }
@@ -186,10 +161,9 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
   }
   if (enrollment) return <EnrollmentWizard reason={enrollment} onCancel={() => setEnrollment(null)} onFinish={() => { setFactorState("bound"); setEnrollment(null); setFeedback(enrollment === "replace" ? "replaced" : "bound"); }} />;
   if (showCodes) return <Card className={styles.flowCard}><Card.Header><Typography.Title as="h2" level={3}>{t("regenerateTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header><Card.Body><RecoveryCodes onCancel={() => setShowCodes(false)} onDone={() => { setShowCodes(false); setFeedback("regenerated"); }} /></Card.Body></Card>;
-  if (stepUp) return <StepUpPanel action={stepUp} onCancel={() => setStepUp(null)} onVerified={verified} />;
+  if (stepUp) return <SecurityStepUpPreview action={stepUp} onCancel={() => setStepUp(null)} onVerified={verified} />;
 
-  return <div className={styles.securityRoot}>
-    <Alert>{t("mockBoundary")}</Alert>
+  return <>
     {feedback ? <Alert status="success">{t(`feedback.${feedback}`)}</Alert> : null}
     <SecurityNotificationAddressPreview />
     <section aria-labelledby="personal-security" className={styles.section}>
@@ -205,18 +179,5 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
         </Card.Body></Card>
       </div>
     </section>
-    <section aria-labelledby="account-policy" className={styles.section}>
-      <div className={styles.sectionHeading}><div><p>{t("accountEyebrow")}</p><h2 id="account-policy">{t("accountTitle")}</h2><span>{t("accountHint")}</span></div><Badge status={workspace.settings.loginProtection ? "success" : "neutral"}>{t(workspace.settings.loginProtection ? "required" : "optional")}</Badge></div>
-      <Card><Card.Body><form className={styles.policyForm} onSubmit={async (event) => { event.preventDefault(); const saved = await access.executeWorkspace({ kind: "save-settings", settings: { ...workspace.settings, loginProtection: required } }); if (saved) setFeedback(required ? "policyEnabled" : "policyDisabled"); }}>
-        <Checkbox checked={required} onChange={(event) => { setRequired(event.target.checked); setFeedback(null); }}>{t("requireForUsers")}</Checkbox>
-        <p>{t("requireForUsersHint")}</p>
-        {changed && required ? <Alert status="warning">{t("reauthenticationWarning")}</Alert> : null}
-        <div className={styles.flowActions}><Button disabled={!changed || access.busy} type="submit">{access.busy ? t("saving") : t("savePolicy")}</Button><Button disabled={!changed || access.busy} onClick={() => setRequired(workspace.settings.loginProtection)} type="button" variant="ghost">{t("cancel")}</Button></div>
-      </form></Card.Body></Card>
-    </section>
-    <section aria-labelledby="planned-security" className={styles.section}>
-      <div className={styles.sectionHeading}><div><p>{t("plannedEyebrow")}</p><h2 id="planned-security">{t("plannedTitle")}</h2><span>{t("plannedHint")}</span></div></div>
-      <div className={styles.plannedGrid}><div><LockKeyhole aria-hidden="true" /><span><strong>{t("operationProtection")}</strong><small>{t("operationProtectionHint")}</small></span><Badge>{t("designing")}</Badge></div></div>
-    </section>
-  </div>;
+  </>;
 }

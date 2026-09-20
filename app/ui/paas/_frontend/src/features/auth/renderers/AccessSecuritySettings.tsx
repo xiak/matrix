@@ -1,14 +1,21 @@
 "use client";
 import { useId, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Badge, Button, Card, Checkbox, FormField, Select, Typography } from "@ui/xiak";
+import { Alert, Badge, Button, Card, Checkbox, FormField, Select, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccessSettings, AccessWorkspace } from "../domain/accessWorkspace";
 import { MfaSecurityPreview } from "./MfaPreviewExperience";
+import { AccountSecuritySettingsPreview } from "./AccountSecuritySettingsPreview";
 import styles from "./AccountAccessRenderer.module.css";
+import securityStyles from "./MfaPreviewExperience.module.css";
 
 export function AccessSecuritySettings({ workspace }: { workspace: AccessWorkspace }) {
-  return <MfaSecurityPreview workspace={workspace} />;
+  const t = useTranslations("MfaPreview");
+  return <div className={securityStyles.securityRoot}>
+    <Alert>{t("mockBoundary")}</Alert>
+    <MfaSecurityPreview workspace={workspace} />
+    <AccountSecuritySettingsPreview workspace={workspace} />
+  </div>;
 }
 
 export function AccessUserSso({ workspace, onProviders }: { workspace: AccessWorkspace; onProviders(): void }) {
