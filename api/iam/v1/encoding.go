@@ -250,6 +250,35 @@ func EncodeLoginResponse(response LoginResponse) ([]byte, error) {
 	return encoded, nil
 }
 
+func EncodeStartNotificationContactVerificationRequest(request StartNotificationContactVerificationRequest) ([]byte, error) {
+	if err := ValidateStartNotificationContactVerificationRequest(request); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(struct {
+		Email     string `json:"email"`
+		Password  string `json:"password"`
+		RequestID string `json:"requestId"`
+	}{request.Email, request.Password.reveal(), request.RequestID})
+	if err != nil {
+		return nil, ErrEncodingFailed
+	}
+	return encoded, nil
+}
+
+func EncodeConfirmNotificationContactVerificationRequest(request ConfirmNotificationContactVerificationRequest) ([]byte, error) {
+	if err := ValidateConfirmNotificationContactVerificationRequest(request); err != nil {
+		return nil, err
+	}
+	encoded, err := json.Marshal(struct {
+		Code      string `json:"code"`
+		RequestID string `json:"requestId"`
+	}{request.Code.reveal(), request.RequestID})
+	if err != nil {
+		return nil, ErrEncodingFailed
+	}
+	return encoded, nil
+}
+
 // EncodeAssumeRoleResponse is the sole role-credential response encoder.
 // An equal replay carries only the original non-secret issuance record.
 func EncodeAssumeRoleResponse(response AssumeRoleResponse) ([]byte, error) {

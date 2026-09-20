@@ -27,6 +27,71 @@ var (
 	ErrInvalidSecurityMailSMTPChannel  = errors.New("security mail SMTP channel is invalid")
 )
 
+// NotificationContact is the authenticated USER's security destination, not
+// an identity, a factor, a login name or evidence of recovery qualification.
+type NotificationContact struct {
+	APIVersion            string      `json:"apiVersion"`
+	Kind                  string      `json:"kind"`
+	AccountID             AccountID   `json:"accountId"`
+	UserID                PrincipalID `json:"userId"`
+	State                 string      `json:"state"`
+	ResourceVersion       uint64      `json:"resourceVersion"`
+	Email                 string      `json:"email,omitempty"`
+	VerifiedAt            *time.Time  `json:"verifiedAt,omitempty"`
+	PendingVerificationID string      `json:"pendingVerificationId,omitempty"`
+}
+
+type StartNotificationContactVerificationRequest struct {
+	Email     string `json:"email"`
+	Password  Secret `json:"password"`
+	RequestID string `json:"requestId"`
+}
+
+type ConfirmNotificationContactVerificationRequest struct {
+	Code      Secret `json:"code"`
+	RequestID string `json:"requestId"`
+}
+
+// An SMTP acceptance is not delivery or read confirmation. LastOutcome is
+// absent until an attempt has an observation; a lease itself proves no send.
+type NotificationDeliveryObservation struct {
+	State        string    `json:"state"`
+	Attempts     uint32    `json:"attempts"`
+	LastOutcome  string    `json:"lastOutcome,omitempty"`
+	LastSMTPCode uint16    `json:"lastSmtpCode,omitempty"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
+type NotificationContactVerification struct {
+	APIVersion  string                          `json:"apiVersion"`
+	Kind        string                          `json:"kind"`
+	ID          string                          `json:"id"`
+	AccountID   AccountID                       `json:"accountId"`
+	UserID      PrincipalID                     `json:"userId"`
+	RequestID   string                          `json:"requestId"`
+	Email       string                          `json:"email"`
+	State       string                          `json:"state"`
+	IssuedAt    time.Time                       `json:"issuedAt"`
+	ExpiresAt   time.Time                       `json:"expiresAt"`
+	CompletedAt *time.Time                      `json:"completedAt,omitempty"`
+	Delivery    NotificationDeliveryObservation `json:"delivery"`
+}
+
+func (NotificationContact) String() string             { return "[REDACTED]" }
+func (NotificationContact) GoString() string           { return "iamv1.NotificationContact{[REDACTED]}" }
+func (NotificationContactVerification) String() string { return "[REDACTED]" }
+func (NotificationContactVerification) GoString() string {
+	return "iamv1.NotificationContactVerification{[REDACTED]}"
+}
+func (StartNotificationContactVerificationRequest) String() string { return "[REDACTED]" }
+func (StartNotificationContactVerificationRequest) GoString() string {
+	return "iamv1.StartNotificationContactVerificationRequest{[REDACTED]}"
+}
+func (ConfirmNotificationContactVerificationRequest) String() string { return "[REDACTED]" }
+func (ConfirmNotificationContactVerificationRequest) GoString() string {
+	return "iamv1.ConfirmNotificationContactVerificationRequest{[REDACTED]}"
+}
+
 type SecurityMailInstallationScope struct {
 	InstallationID  string `json:"installationId"`
 	BootstrapDigest string `json:"bootstrapDigest"`

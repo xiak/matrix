@@ -12072,6 +12072,26 @@
         ],
         "type": "string"
       },
+      "ConfirmNotificationContactVerificationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 8,
+            "minLength": 8,
+            "pattern": "^[0-9]{8}$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "code",
+          "requestId"
+        ],
+        "type": "object"
+      },
       "CreateAccessKeyRequest": {
         "additionalProperties": false,
         "properties": {
@@ -13083,6 +13103,543 @@
         },
         "required": [
           "revokedAt"
+        ],
+        "type": "object"
+      },
+      "NotificationContact": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "email": false,
+              "resourceVersion": {
+                "const": 0
+              },
+              "state": {
+                "const": "NONE"
+              },
+              "verifiedAt": false
+            }
+          },
+          {
+            "properties": {
+              "pendingVerificationId": false,
+              "resourceVersion": {
+                "minimum": 1
+              },
+              "state": {
+                "const": "VERIFIED"
+              },
+              "verifiedAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "email",
+              "verifiedAt"
+            ]
+          }
+        ],
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "email": {
+            "description": "One ASCII dot-atom address and canonical lower-case DNS domain. No display name, address list, literal IP, SMTPUTF8 or normalization of local-part case. Authoritative syntax validation applies.",
+            "maxLength": 254,
+            "minLength": 3,
+            "type": "string"
+          },
+          "kind": {
+            "const": "NotificationContact"
+          },
+          "pendingVerificationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "NONE",
+              "VERIFIED"
+            ],
+            "type": "string"
+          },
+          "userId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "verifiedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "kind",
+          "resourceVersion",
+          "state",
+          "userId"
+        ],
+        "type": "object"
+      },
+      "NotificationContactVerification": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "completedAt": false,
+              "state": {
+                "const": "PENDING"
+              }
+            }
+          },
+          {
+            "properties": {
+              "completedAt": {
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "VERIFIED",
+                  "CANCELLED",
+                  "EXPIRED"
+                ]
+              }
+            },
+            "required": [
+              "completedAt"
+            ]
+          }
+        ],
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "completedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "delivery": {
+            "$ref": "#/components/schemas/NotificationDeliveryObservation"
+          },
+          "email": {
+            "description": "One ASCII dot-atom address and canonical lower-case DNS domain. No display name, address list, literal IP, SMTPUTF8 or normalization of local-part case. Authoritative syntax validation applies.",
+            "maxLength": 254,
+            "minLength": 3,
+            "type": "string"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "const": "NotificationContactVerification"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "state": {
+            "enum": [
+              "PENDING",
+              "VERIFIED",
+              "CANCELLED",
+              "EXPIRED"
+            ],
+            "type": "string"
+          },
+          "userId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "delivery",
+          "email",
+          "expiresAt",
+          "id",
+          "issuedAt",
+          "kind",
+          "requestId",
+          "state",
+          "userId"
+        ],
+        "type": "object"
+      },
+      "NotificationDeliveryObservation": {
+        "additionalProperties": false,
+        "description": "Exact durable submission observation, never delivery/read proof. ACCEPTED requires lastOutcome ACCEPTED and exact SMTP 250. Retriable observations are UNKNOWN/UNAVAILABLE or 4xx; 5xx is terminal. Original intent, time and attempt progression are validated authoritatively.",
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "attempts": {
+                    "maximum": 0,
+                    "minimum": 0
+                  },
+                  "state": {
+                    "const": "PENDING"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "lastOutcome": false,
+                  "lastSmtpCode": false
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "attempts": {
+                    "maximum": 1,
+                    "minimum": 1
+                  },
+                  "state": {
+                    "const": "IN_FLIGHT"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "lastOutcome": false,
+                  "lastSmtpCode": false
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "attempts": {
+                    "maximum": 5,
+                    "minimum": 2
+                  },
+                  "state": {
+                    "const": "IN_FLIGHT"
+                  }
+                }
+              },
+              {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "lastOutcome": {
+                        "enum": [
+                          "UNKNOWN",
+                          "UNAVAILABLE"
+                        ]
+                      },
+                      "lastSmtpCode": false
+                    }
+                  },
+                  {
+                    "properties": {
+                      "lastOutcome": {
+                        "const": "REJECTED"
+                      },
+                      "lastSmtpCode": {
+                        "maximum": 499,
+                        "minimum": 400
+                      }
+                    },
+                    "required": [
+                      "lastSmtpCode"
+                    ]
+                  }
+                ],
+                "required": [
+                  "lastOutcome"
+                ]
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "attempts": {
+                    "maximum": 4,
+                    "minimum": 1
+                  },
+                  "state": {
+                    "const": "RETRY_WAIT"
+                  }
+                }
+              },
+              {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "lastOutcome": {
+                        "enum": [
+                          "UNKNOWN",
+                          "UNAVAILABLE"
+                        ]
+                      },
+                      "lastSmtpCode": false
+                    }
+                  },
+                  {
+                    "properties": {
+                      "lastOutcome": {
+                        "const": "REJECTED"
+                      },
+                      "lastSmtpCode": {
+                        "maximum": 499,
+                        "minimum": 400
+                      }
+                    },
+                    "required": [
+                      "lastSmtpCode"
+                    ]
+                  }
+                ],
+                "required": [
+                  "lastOutcome"
+                ]
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "attempts": {
+                    "maximum": 5,
+                    "minimum": 1
+                  },
+                  "state": {
+                    "const": "ACCEPTED"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "lastOutcome": {
+                    "const": "ACCEPTED"
+                  },
+                  "lastSmtpCode": {
+                    "const": 250
+                  }
+                },
+                "required": [
+                  "lastOutcome",
+                  "lastSmtpCode"
+                ]
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "attempts": {
+                    "maximum": 5,
+                    "minimum": 1
+                  },
+                  "state": {
+                    "const": "FAILED"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "lastOutcome": {
+                    "const": "REJECTED"
+                  },
+                  "lastSmtpCode": {
+                    "maximum": 599,
+                    "minimum": 500
+                  }
+                },
+                "required": [
+                  "lastOutcome",
+                  "lastSmtpCode"
+                ]
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "attempts": {
+                    "maximum": 5,
+                    "minimum": 5
+                  },
+                  "state": {
+                    "const": "FAILED"
+                  }
+                }
+              },
+              {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "lastOutcome": {
+                        "enum": [
+                          "UNKNOWN",
+                          "UNAVAILABLE"
+                        ]
+                      },
+                      "lastSmtpCode": false
+                    }
+                  },
+                  {
+                    "properties": {
+                      "lastOutcome": {
+                        "const": "REJECTED"
+                      },
+                      "lastSmtpCode": {
+                        "maximum": 499,
+                        "minimum": 400
+                      }
+                    },
+                    "required": [
+                      "lastSmtpCode"
+                    ]
+                  }
+                ],
+                "required": [
+                  "lastOutcome"
+                ]
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "attempts": {
+                    "maximum": 0,
+                    "minimum": 0
+                  },
+                  "state": {
+                    "const": "EXPIRED"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "lastOutcome": false,
+                  "lastSmtpCode": false
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "properties": {
+                  "attempts": {
+                    "maximum": 4,
+                    "minimum": 1
+                  },
+                  "state": {
+                    "const": "EXPIRED"
+                  }
+                }
+              },
+              {
+                "oneOf": [
+                  {
+                    "properties": {
+                      "lastOutcome": {
+                        "enum": [
+                          "UNKNOWN",
+                          "UNAVAILABLE"
+                        ]
+                      },
+                      "lastSmtpCode": false
+                    }
+                  },
+                  {
+                    "properties": {
+                      "lastOutcome": {
+                        "const": "REJECTED"
+                      },
+                      "lastSmtpCode": {
+                        "maximum": 499,
+                        "minimum": 400
+                      }
+                    },
+                    "required": [
+                      "lastSmtpCode"
+                    ]
+                  }
+                ],
+                "required": [
+                  "lastOutcome"
+                ]
+              }
+            ]
+          }
+        ],
+        "properties": {
+          "attempts": {
+            "maximum": 5,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lastOutcome": {
+            "enum": [
+              "ACCEPTED",
+              "REJECTED",
+              "UNKNOWN",
+              "UNAVAILABLE"
+            ],
+            "type": "string"
+          },
+          "lastSmtpCode": {
+            "anyOf": [
+              {
+                "const": 250
+              },
+              {
+                "maximum": 599,
+                "minimum": 400
+              }
+            ],
+            "type": "integer"
+          },
+          "state": {
+            "enum": [
+              "PENDING",
+              "IN_FLIGHT",
+              "RETRY_WAIT",
+              "ACCEPTED",
+              "FAILED",
+              "EXPIRED"
+            ],
+            "type": "string"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "attempts",
+          "state",
+          "updatedAt"
         ],
         "type": "object"
       },
@@ -21049,6 +21606,30 @@
         ],
         "type": "object"
       },
+      "StartNotificationContactVerificationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "description": "One ASCII dot-atom address and canonical lower-case DNS domain. No display name, address list, literal IP, SMTPUTF8 or normalization of local-part case. Authoritative syntax validation applies.",
+            "maxLength": 254,
+            "minLength": 3,
+            "type": "string"
+          },
+          "password": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "email",
+          "password",
+          "requestId"
+        ],
+        "type": "object"
+      },
       "Subject": {
         "additionalProperties": false,
         "oneOf": [
@@ -22177,6 +22758,202 @@
           }
         },
         "summary": "Get the current account and identity"
+      }
+    },
+    "/v1/auth/notification-contact": {
+      "get": {
+        "operationId": "getNotificationContact",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationContact"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read only this login USER's security contact; not an authentication or recovery identity"
+      }
+    },
+    "/v1/auth/notification-contact/verifications": {
+      "post": {
+        "operationId": "startNotificationVerification",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartNotificationContactVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationContactVerification"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Reauthenticate the current password to verify the first notification address; no replacement or selectors"
+      }
+    },
+    "/v1/auth/notification-contact/verifications/{verificationId}": {
+      "get": {
+        "operationId": "getNotificationVerification",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "verificationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationContactVerification"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read the original verification from its actual starting login session; never consumes a code"
+      }
+    },
+    "/v1/auth/notification-contact/verifications/{verificationId}:confirm": {
+      "post": {
+        "operationId": "confirmNotificationContact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "verificationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmNotificationContactVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationContactVerification"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Consume the original address-possession code once; a repeated confirmation conflicts; query lost completions with GET"
       }
     },
     "/v1/auth/password": {

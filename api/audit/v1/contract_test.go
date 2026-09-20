@@ -34,6 +34,47 @@ func TestCanonicalEventPreservesTenantBytesAndDigest(t *testing.T) {
 	}
 }
 
+func TestNotificationContactFactsRequireTheActualTenantUser(t *testing.T) {
+	for _, action := range []Action{
+		ActionIAMNotificationContactVerificationStarted,
+		ActionIAMNotificationContactVerified,
+	} {
+		t.Run(string(action), func(t *testing.T) {
+			valid := Event{
+				APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-notification-contact",
+				TenantID: "account-one", Actor: ActorReference{Type: ActorUser, ID: "user-one"},
+				Action: action, Target: TargetReference{Kind: TargetUser, ID: "user-one"}, Result: ResultSucceeded,
+				RequestDigest: "sha256:" + strings.Repeat("a", 64), RequestID: "request-one", CorrelationID: "request-one",
+				OccurredAt: time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC),
+			}
+			if _, _, err := CanonicalizeEvent(SourceIAM, valid); err != nil {
+				t.Fatal(err)
+			}
+			for _, mutate := range []func(*Event){
+				func(value *Event) { value.Actor.Type = ActorSystem },
+				func(value *Event) { value.Actor.Type = ActorServiceAccount },
+				func(value *Event) { value.Actor.AccessKeyID = "key-one" },
+				func(value *Event) { value.Target.ID = "another-user" },
+				func(value *Event) { value.Target.Kind = TargetSession },
+				func(value *Event) { value.Target.TenantID = value.TenantID },
+				func(value *Event) { value.TenantID, value.InstallationID = "", "installation-one" },
+				func(value *Event) { value.IAMDecisionID = "invented-permit" },
+				func(value *Event) { value.OperationID = "invented-operation" },
+				func(value *Event) { value.Result = ResultDenied },
+			} {
+				forged := valid
+				mutate(&forged)
+				if ValidateEventForSource(SourceIAM, forged) == nil {
+					t.Fatal("unrelated authority accepted as notification contact self-service")
+				}
+			}
+			if ValidateEventForSource(SourcePaaS, valid) == nil {
+				t.Fatal("another producer accepted")
+			}
+		})
+	}
+}
+
 func TestAccessKeyFactsRequireRealTenantUserDecisions(t *testing.T) {
 	event := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-key", TenantID: "account-a",
 		Actor: ActorReference{Type: ActorUser, ID: "manager-a"}, IAMDecisionID: "decision-key", Target: TargetReference{Kind: TargetAccessKey, ID: "key-a"},
@@ -214,6 +255,9 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		}
 		if contract.UserActorRequired {
 			event.Actor.Type = ActorUser
+		}
+		if action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified {
+			event.Target.ID = string(event.Actor.ID)
 		}
 		if contract.RoleActorRequired {
 			event.Actor = ActorReference{Type: ActorRole, ID: "role-example",

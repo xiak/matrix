@@ -6,7 +6,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
-const SchemaVersion uint64 = 36
+const SchemaVersion uint64 = 37
 
 // CheckSchema is startup admission before bootstrap/material registration,
 // not network readiness or permission to serve authentication requests.
@@ -36,7 +36,20 @@ func (service *Authority) Readiness(ctx context.Context) (iamv1.Readiness, error
 		if err := service.checkAccessKeyCustody(transactionContext, transaction); err != nil {
 			return err
 		}
-		return service.checkTOTPCustody(transactionContext, transaction)
+		if err := service.checkTOTPCustody(transactionContext, transaction); err != nil {
+			return err
+		}
+		mail, err := transaction.ReadEmailVerificationKeyset(transactionContext)
+		if err != nil {
+			return err
+		}
+		if mail == nil && service.email == nil {
+			return nil
+		}
+		if service.email == nil || mail == nil || !service.email.Matches(*mail) {
+			return ErrUnavailable
+		}
+		return nil
 	})
 	if err != nil {
 		return iamv1.Readiness{}, err

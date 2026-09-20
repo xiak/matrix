@@ -8,8 +8,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"errors"
 	"math/big"
+	"slices"
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -23,10 +25,44 @@ var (
 
 const emailVerificationDigits = 8
 
+type MailSubmissionState string
+
+const (
+	MailAccepted    MailSubmissionState = "ACCEPTED"
+	MailRejected    MailSubmissionState = "REJECTED"
+	MailUnknown     MailSubmissionState = "UNKNOWN"
+	MailUnavailable MailSubmissionState = "UNAVAILABLE"
+)
+
+// A closed observation, not a delivered/read receipt or server error text.
+type MailSubmission struct {
+	State    MailSubmissionState
+	SMTPCode int
+}
+
+func (value MailSubmission) Validate() error {
+	switch value.State {
+	case MailAccepted:
+		if value.SMTPCode == 250 {
+			return nil
+		}
+	case MailRejected:
+		if value.SMTPCode >= 400 && value.SMTPCode <= 599 {
+			return nil
+		}
+	case MailUnknown, MailUnavailable:
+		if value.SMTPCode == 0 {
+			return nil
+		}
+	}
+	return ErrSecurityMail
+}
+
 type SecurityMailKind string
 
 const (
 	MailAddressVerification     SecurityMailKind = "ADDRESS_VERIFICATION"
+	MailContactVerified         SecurityMailKind = "CONTACT_VERIFIED"
 	MailAuthenticatorBound      SecurityMailKind = "AUTHENTICATOR_BOUND"
 	MailAuthenticatorReplaced   SecurityMailKind = "AUTHENTICATOR_REPLACED"
 	MailAuthenticatorRemoved    SecurityMailKind = "AUTHENTICATOR_REMOVED"
@@ -72,12 +108,102 @@ func (message SecurityMail) Validate() error {
 		return ErrSecurityMail
 	}
 	switch message.Kind {
-	case MailAuthenticatorBound, MailAuthenticatorReplaced, MailAuthenticatorRemoved,
+	case MailContactVerified, MailAuthenticatorBound, MailAuthenticatorReplaced, MailAuthenticatorRemoved,
 		MailRecoveryStarted, MailAuthenticatorRecovered, MailRecoveryCodesChanged, MailSecuritySettingsChanged:
 		return nil
 	default:
 		return ErrSecurityMail
 	}
+}
+
+type EmailVerificationKeyCommitment struct {
+	KeyID              string `json:"keyId"`
+	FormatVersion      uint8  `json:"formatVersion"`
+	MaterialCommitment string `json:"materialCommitment"`
+}
+
+// A material-free registration shared by the API and its restricted mail
+// consumer. It proves neither mailbox possession nor recovery eligibility.
+type EmailVerificationKeyset struct {
+	Scope          iamv1.SecurityMailInstallationScope `json:"scope"`
+	KeysetRevision uint64                              `json:"keysetRevision"`
+	ActiveKeyID    string                              `json:"activeKeyId"`
+	ContentDigest  string                              `json:"contentDigest"`
+	Keys           []EmailVerificationKeyCommitment    `json:"keys"`
+}
+
+type EmailVerificationProtector struct {
+	registration EmailVerificationKeyset
+	keys         map[string][]byte
+}
+
+func (EmailVerificationProtector) String() string { return "[REDACTED]" }
+func (EmailVerificationProtector) GoString() string {
+	return "authority.EmailVerificationProtector{[REDACTED]}"
+}
+func (EmailVerificationProtector) MarshalJSON() ([]byte, error) {
+	return nil, ErrEmailVerificationProtection
+}
+
+func NewEmailVerificationProtector(document iamv1.EmailVerificationKeyring) (*EmailVerificationProtector, error) {
+	if iamv1.ValidateEmailVerificationKeyring(document) != nil {
+		return nil, ErrEmailVerificationProtection
+	}
+	digest, err := iamv1.EmailVerificationKeysetDigest(document)
+	if err != nil {
+		return nil, ErrEmailVerificationProtection
+	}
+	value := &EmailVerificationProtector{registration: EmailVerificationKeyset{Scope: document.Scope, KeysetRevision: document.KeysetRevision,
+		ActiveKeyID: document.ActiveKeyID, ContentDigest: digest}, keys: make(map[string][]byte, len(document.Keys))}
+	for _, key := range document.Keys {
+		encoded := key.KeyMaterial.CopyBytes()
+		material, err := base64.RawURLEncoding.Strict().DecodeString(string(encoded))
+		clear(encoded)
+		if err != nil || len(material) != 32 {
+			clear(material)
+			return nil, ErrEmailVerificationProtection
+		}
+		commitment, err := iamv1.EmailVerificationKeyMaterialCommitment(document, key.KeyID)
+		if err != nil {
+			clear(material)
+			return nil, ErrEmailVerificationProtection
+		}
+		value.keys[key.KeyID] = material
+		value.registration.Keys = append(value.registration.Keys, EmailVerificationKeyCommitment{key.KeyID, key.FormatVersion, commitment})
+	}
+	return value, nil
+}
+
+func (value *EmailVerificationProtector) Registration() EmailVerificationKeyset {
+	if value == nil {
+		return EmailVerificationKeyset{}
+	}
+	copy := value.registration
+	copy.Keys = slices.Clone(copy.Keys)
+	return copy
+}
+
+func (value *EmailVerificationProtector) Matches(registration EmailVerificationKeyset) bool {
+	if value == nil {
+		return false
+	}
+	expected := value.registration
+	return expected.Scope == registration.Scope && expected.KeysetRevision == registration.KeysetRevision &&
+		expected.ActiveKeyID == registration.ActiveKeyID && expected.ContentDigest == registration.ContentDigest && slices.Equal(expected.Keys, registration.Keys)
+}
+
+func (value *EmailVerificationProtector) Seal(binding iamv1.EmailVerificationBinding, code iamv1.Secret) (SealedEmailVerificationCode, error) {
+	if value == nil || binding.InstallationID != value.registration.Scope.InstallationID || binding.BootstrapDigest != value.registration.Scope.BootstrapDigest {
+		return SealedEmailVerificationCode{}, ErrEmailVerificationProtection
+	}
+	return SealEmailVerificationCode(binding, value.registration.ActiveKeyID, value.keys[value.registration.ActiveKeyID], code)
+}
+
+func (value *EmailVerificationProtector) Open(binding iamv1.EmailVerificationBinding, sealed SealedEmailVerificationCode) (iamv1.Secret, error) {
+	if value == nil || binding.InstallationID != value.registration.Scope.InstallationID || binding.BootstrapDigest != value.registration.Scope.BootstrapDigest {
+		return iamv1.Secret{}, ErrEmailVerificationProtection
+	}
+	return OpenEmailVerificationCode(binding, sealed.KeyID, value.keys[sealed.KeyID], sealed)
 }
 
 // IssueEmailVerificationCode creates only address-possession material. It is

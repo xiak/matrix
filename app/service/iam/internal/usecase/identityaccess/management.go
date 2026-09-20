@@ -115,7 +115,7 @@ func (service *Authority) ChangePassword(
 			return err
 		}
 		attempt, admitted, err = tx.ReservePasswordAttempt(ctx, PasswordAttemptRequest{ID: attemptID,
-			AccountID: subject.Subject.Organization.ID, UserID: subject.Subject.Principal.ID, SessionID: subject.Subject.Session.ID})
+			AccountID: subject.Subject.Organization.ID, UserID: subject.Subject.Principal.ID, SessionID: subject.Subject.Session.ID, Purpose: PasswordAttemptChange})
 		return err
 	})
 	if err != nil {

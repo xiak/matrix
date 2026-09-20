@@ -79,6 +79,10 @@ func ValidateEvent(value Event) error {
 		if value.Action == ActionIAMRoleSessionExited && (value.Actor.RoleSession == nil || value.Target.ID != value.Actor.RoleSession.SessionID) {
 			problems = append(problems, errors.New("role self-exit must target the actor's exact session"))
 		}
+		if (value.Action == ActionIAMNotificationContactVerificationStarted || value.Action == ActionIAMNotificationContactVerified) &&
+			value.Target.ID != string(value.Actor.ID) {
+			problems = append(problems, errors.New("self-service event must target the actual actor"))
+		}
 		if contract.PlatformOnly != (value.InstallationID != "") ||
 			contract.PlatformOnly && contract.PlatformSystemActorID == "" && value.Actor.Type != ActorUser ||
 			contract.PlatformSystemActorID != "" && (value.Actor.Type != ActorSystem || value.Actor.ID != contract.PlatformSystemActorID) ||

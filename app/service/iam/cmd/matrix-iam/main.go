@@ -29,6 +29,7 @@ const (
 	cursorKeyFileEnvironment         = "MATRIX_IAM_CURSOR_KEY_FILE"
 	accessKeyWrappingFileEnvironment = "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE"
 	totpKeyringFileEnvironment       = "MATRIX_IAM_TOTP_KEYRING_FILE"
+	emailKeyringFileEnvironment      = "MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE"
 )
 
 type configuration struct {
@@ -38,6 +39,7 @@ type configuration struct {
 	cursorKeyFile         string
 	accessKeyWrappingFile string
 	totpKeyringFile       string
+	emailKeyringFile      string
 }
 
 func main() {
@@ -79,6 +81,14 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer func() { totpKeyring = iamv1.TOTPKeyring{} }()
+	var emailKeyring *iamv1.EmailVerificationKeyring
+	if config.emailKeyringFile != "" {
+		material, err := readEmailVerificationKeyring(config.emailKeyringFile, document)
+		if err != nil {
+			return err
+		}
+		emailKeyring = &material
+	}
 	dsn, err := processconfig.ReadText(config.databaseDSNFile, 16*1024, true)
 	if err != nil {
 		return err
@@ -99,10 +109,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{CursorKey: cursorKey, AccessKeyWrapping: &keyring, TOTPKeyring: &totpKeyring})
+	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{CursorKey: cursorKey, AccessKeyWrapping: &keyring, TOTPKeyring: &totpKeyring, EmailVerificationKeyring: emailKeyring})
 	clear(cursorKey)
 	keyring = iamv1.AccessKeyWrappingKeyring{}
 	totpKeyring = iamv1.TOTPKeyring{}
+	emailKeyring = nil
 	if err != nil {
 		return err
 	}
@@ -116,6 +127,11 @@ func run(ctx context.Context) error {
 	document = iamv1.BootstrapDocument{}
 	if err := workflow.RegisterTOTPKeyset(ctx); err != nil {
 		return errors.New("IAM TOTP custody is unavailable")
+	}
+	if config.emailKeyringFile != "" {
+		if err := workflow.RegisterEmailVerificationKeyset(ctx); err != nil {
+			return errors.New("IAM email custody is unavailable")
+		}
 	}
 	if err := workflow.VerifyAccessKeyCustody(ctx); err != nil {
 		return errors.New("IAM access key custody is unavailable")
@@ -139,6 +155,7 @@ func loadConfiguration() (configuration, error) {
 		cursorKeyFile:         os.Getenv(cursorKeyFileEnvironment),
 		accessKeyWrappingFile: os.Getenv(accessKeyWrappingFileEnvironment),
 		totpKeyringFile:       os.Getenv(totpKeyringFileEnvironment),
+		emailKeyringFile:      os.Getenv(emailKeyringFileEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.bootstrapFile == "" ||
 		config.listenAddress == "" || config.cursorKeyFile == "" || config.accessKeyWrappingFile == "" || config.totpKeyringFile == "" {
@@ -184,6 +201,24 @@ func readTOTPKeyring(path string, bootstrap iamv1.BootstrapDocument) (iamv1.TOTP
 	if err != nil || document.Scope.InstallationID != bootstrap.InstallationID ||
 		subtle.ConstantTimeCompare([]byte(document.Scope.BootstrapDigest), []byte(digest)) != 1 {
 		return iamv1.TOTPKeyring{}, invalid
+	}
+	return document, nil
+}
+
+func readEmailVerificationKeyring(path string, bootstrap iamv1.BootstrapDocument) (iamv1.EmailVerificationKeyring, error) {
+	invalid := errors.New("IAM email verification file is unavailable")
+	encoded, err := readPrivateMaterial(path, iamv1.MaxEmailVerificationKeyringBytes)
+	defer clear(encoded)
+	if err != nil {
+		return iamv1.EmailVerificationKeyring{}, invalid
+	}
+	document, err := iamv1.DecodeEmailVerificationKeyring(bytes.NewReader(encoded))
+	if err != nil {
+		return iamv1.EmailVerificationKeyring{}, invalid
+	}
+	digest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil || document.Scope.InstallationID != bootstrap.InstallationID || subtle.ConstantTimeCompare([]byte(document.Scope.BootstrapDigest), []byte(digest)) != 1 {
+		return iamv1.EmailVerificationKeyring{}, invalid
 	}
 	return document, nil
 }

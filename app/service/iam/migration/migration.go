@@ -76,6 +76,51 @@ func authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, au
 	}), logins[1:]...)
 }
 
+// Explicit notification provisioning does not add capabilities to existing
+// API/Audit/custody/recovery logins. The earlier entry has real installation
+// consumers which do not enable mail; it is not an implicit optional DSN.
+func ApplyWithNotificationDelivery(ctx context.Context, adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN string) error {
+	return postgresmigration.Apply(ctx, adminDSN, iammigrations.Source(), notificationDeliveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN))
+}
+
+func VerifyInstalledWithNotificationDelivery(ctx context.Context, adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN string) error {
+	return postgresmigration.VerifyInstalled(ctx, adminDSN, iammigrations.Source(), notificationDeliveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN))
+}
+
+func notificationDeliveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN string) []postgresmigration.Login {
+	logins := localRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN)
+	// Maintain the existing sorted login inventory, adding one closed purpose.
+	return append(append(logins[:3:3], postgresmigration.Login{Name: "matrix_iam_notification_worker_login", Group: "matrix_iam_notification_worker", DSN: notificationDSN}), logins[3])
+}
+
+// ApplyWithAuthenticationRecoveryAndNotificationDelivery provisions both
+// independent purpose-only capabilities without adding either capability to
+// an existing runtime, custody, or credential-recovery login.
+func ApplyWithAuthenticationRecoveryAndNotificationDelivery(
+	ctx context.Context,
+	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN, notificationDSN string,
+) error {
+	return postgresmigration.Apply(ctx, adminDSN, iammigrations.Source(),
+		authenticationRecoveryAndNotificationLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN, notificationDSN))
+}
+
+func VerifyInstalledWithAuthenticationRecoveryAndNotificationDelivery(
+	ctx context.Context,
+	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN, notificationDSN string,
+) error {
+	return postgresmigration.VerifyInstalled(ctx, adminDSN, iammigrations.Source(),
+		authenticationRecoveryAndNotificationLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN, notificationDSN))
+}
+
+func authenticationRecoveryAndNotificationLogins(
+	apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN, notificationDSN string,
+) []postgresmigration.Login {
+	logins := authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN)
+	return append(append(logins[:4:4], postgresmigration.Login{
+		Name: "matrix_iam_notification_worker_login", Group: "matrix_iam_notification_worker", DSN: notificationDSN,
+	}), logins[4:]...)
+}
+
 func localRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN string) []postgresmigration.Login {
 	return []postgresmigration.Login{
 		{Name: "matrix_iam_api_login", Group: "matrix_iam_api", DSN: apiDSN},

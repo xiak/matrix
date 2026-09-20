@@ -2597,7 +2597,7 @@ func TestIAMTOTPCustodyPostgres(t *testing.T) {
 		t.Fatal("restart reclassified retained factor", err)
 	}
 	var shape bool
-	if err := database.QueryRow(ctx, "SELECT iam.totp_custody_contract_ready() AND iam.totp_backup_custody_contract_ready() AND (SELECT schema_version=36 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
+	if err := database.QueryRow(ctx, "SELECT iam.totp_custody_contract_ready() AND iam.totp_backup_custody_contract_ready() AND (SELECT schema_version=37 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
 		t.Fatal("TOTP contract shape", err)
 	}
 }
@@ -3049,7 +3049,7 @@ func TestIAMPasswordAttemptsPostgres(t *testing.T) {
 		t.Fatal("suppressed calls changed the attempt", err)
 	}
 	var shape bool
-	if err := database.QueryRow(ctx, "SELECT iam.password_attempt_contract_ready() AND (SELECT schema_version=36 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
+	if err := database.QueryRow(ctx, "SELECT iam.password_attempt_contract_ready() AND (SELECT schema_version=37 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
 		t.Fatal("password function/ACL shape not ready", err)
 	}
 	apiConfig := config.Copy()
@@ -3060,7 +3060,7 @@ func TestIAMPasswordAttemptsPostgres(t *testing.T) {
 	}
 	defer api.Close(context.Background())
 	for _, attack := range []string{"SELECT * FROM iam.lookup_login('admin')", "SELECT * FROM iam.password_attempts", "DELETE FROM iam.password_attempts",
-		"SELECT iam.consume_password_attempt('a','b',NULL,'c',1)"} {
+		"SELECT iam.consume_password_attempt('a','b',NULL,'c',1,'LOGIN',NULL)"} {
 		_, err := api.Exec(ctx, attack)
 		var pgerr *pgconn.PgError
 		if !errors.As(err, &pgerr) || pgerr.Code != "42501" {
@@ -3093,7 +3093,7 @@ func provePasswordAttemptExpiryAndReplay(
 	reserve := func(connection *pgx.Conn, user iamv1.User, id string) (identityaccess.PasswordAttempt, bool, error) {
 		var attempt identityaccess.PasswordAttempt
 		var hash string
-		err := connection.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,NULL,NULL,NULL,$2)", user.LoginName+"@"+string(user.AccountID), id).
+		err := connection.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,NULL,NULL,NULL,$2,'LOGIN',NULL)", user.LoginName+"@"+string(user.AccountID), id).
 			Scan(&attempt.AccountID, &attempt.PrincipalID, &hash, &attempt.MustChangePassword, &attempt.CredentialGeneration, &attempt.Sequence, &attempt.ExpiresAt)
 		attempt.ID, attempt.PasswordHash = id, authority.PasswordHash(hash)
 		return attempt, !errors.Is(err, pgx.ErrNoRows), err
@@ -3182,7 +3182,7 @@ func provePasswordAttemptExpiryAndReplay(
 	refuseSession(consumedID, consumedSequence)
 	changeAttempt := identityaccess.PasswordAttempt{ID: "change-purpose-only"}
 	var privateHash string
-	if err := api.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt(NULL,$1,$2,$3,$4)", user.AccountID, user.ID, recovered.Session.ID, changeAttempt.ID).
+	if err := api.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt(NULL,$1,$2,$3,$4,'PASSWORD_CHANGE',NULL)", user.AccountID, user.ID, recovered.Session.ID, changeAttempt.ID).
 		Scan(&changeAttempt.AccountID, &changeAttempt.PrincipalID, &privateHash, &changeAttempt.MustChangePassword,
 			&changeAttempt.CredentialGeneration, &changeAttempt.Sequence, &changeAttempt.ExpiresAt); err != nil {
 		t.Fatal("reserve actual caller password recheck", err)

@@ -17,6 +17,7 @@ var dsnFileEnvironments = []string{
 	"MATRIX_MIGRATION_IAM_API_DSN_FILE",
 	installationv1.AuthenticationRecoveryMigrationDSNFileEnvironment,
 	installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment,
+	"MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE",
 	"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE",
 	"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE",
 }
@@ -34,10 +35,14 @@ func run(ctx context.Context, arguments []string) error {
 	return migrationprocess.Run(ctx, arguments, migrationprocess.Configuration{
 		DSNFileEnvironments: dsnFileEnvironments,
 		Apply: func(ctx context.Context, values []string) error {
-			return iammigration.ApplyWithAuthenticationRecovery(ctx, values[0], values[1], values[5], values[4], values[3], values[2])
+			return iammigration.ApplyWithAuthenticationRecoveryAndNotificationDelivery(
+				ctx, values[0], values[1], values[6], values[5], values[3], values[2], values[4],
+			)
 		},
 		Verify: func(ctx context.Context, values []string) error {
-			return iammigration.VerifyInstalledWithAuthenticationRecovery(ctx, values[0], values[1], values[5], values[4], values[3], values[2])
+			return iammigration.VerifyInstalledWithAuthenticationRecoveryAndNotificationDelivery(
+				ctx, values[0], values[1], values[6], values[5], values[3], values[2], values[4],
+			)
 		},
 	})
 }

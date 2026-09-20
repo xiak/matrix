@@ -25,46 +25,48 @@ const (
 )
 
 const (
-	ActionIAMAccountCreated                  Action = "iam.account.created"
-	ActionIAMAccountDisabled                 Action = "iam.account.disabled"
-	ActionIAMAccountEnabled                  Action = "iam.account.enabled"
-	ActionIAMAccountRootCredentialsRecovered Action = "iam.account-root.credentials-recovered"
-	ActionIAMAccountAliasUpdated             Action = "iam.account.alias-set"
-	ActionIAMUserCreated                     Action = "iam.user.created"
-	ActionIAMUserUpdated                     Action = "iam.user.updated"
-	ActionIAMUserDeleted                     Action = "iam.user.deleted"
-	ActionIAMUserPermissionBoundarySet       Action = "iam.user.permission-boundary.set"
-	ActionIAMUserPermissionBoundaryRemoved   Action = "iam.user.permission-boundary.removed"
-	ActionIAMUserStatusSet                   Action = "iam.user.status-set"
-	ActionIAMUserPasswordReset               Action = "iam.user.password-reset"
-	ActionIAMUserPasswordChanged             Action = "iam.user.password-changed"
-	ActionIAMRoleCreated                     Action = "iam.role.created"
-	ActionIAMRoleUpdated                     Action = "iam.role.updated"
-	ActionIAMRoleDisabled                    Action = "iam.role.disabled"
-	ActionIAMRoleEnabled                     Action = "iam.role.enabled"
-	ActionIAMRoleTrustSet                    Action = "iam.role.trust-set"
-	ActionIAMRoleDeleted                     Action = "iam.role.deleted"
-	ActionIAMRolePermissionBoundarySet       Action = "iam.role.permission-boundary.set"
-	ActionIAMRolePermissionBoundaryRemoved   Action = "iam.role.permission-boundary.removed"
-	ActionIAMRoleSessionIssued               Action = "iam.role-session.issued"
-	ActionIAMRoleSessionRevoked              Action = "iam.role-session.revoked"
-	ActionIAMRoleSessionAdminRevoked         Action = "iam.role-session.admin-revoked"
-	ActionIAMRoleSessionExited               Action = "iam.role-session.exited"
-	ActionIAMAccessKeyCreated                Action = "iam.access-key.created"
-	ActionIAMAccessKeyEnabled                Action = "iam.access-key.enabled"
-	ActionIAMAccessKeyDisabled               Action = "iam.access-key.disabled"
-	ActionIAMAccessKeyDeleted                Action = "iam.access-key.deleted"
-	ActionIAMGroupCreated                    Action = "iam.group.created"
-	ActionIAMPolicyCreated                   Action = "iam.policy.created"
-	ActionIAMPolicyVersionCreated            Action = "iam.policy-version.created"
-	ActionIAMPolicyVersionDeleted            Action = "iam.policy-version.deleted"
-	ActionIAMPolicyDefaultVersionSet         Action = "iam.policy.default-version-set"
-	ActionIAMPolicyUpdated                   Action = "iam.policy.updated"
-	ActionIAMPolicyDeleted                   Action = "iam.policy.deleted"
-	ActionIAMGroupUpdated                    Action = "iam.group.updated"
-	ActionIAMGroupDeleted                    Action = "iam.group.deleted"
-	ActionIAMGroupMembershipCreated          Action = "iam.group-membership.created"
-	ActionIAMGroupMembershipRemoved          Action = "iam.group-membership.removed"
+	ActionIAMAccountCreated                         Action = "iam.account.created"
+	ActionIAMAccountDisabled                        Action = "iam.account.disabled"
+	ActionIAMAccountEnabled                         Action = "iam.account.enabled"
+	ActionIAMAccountRootCredentialsRecovered        Action = "iam.account-root.credentials-recovered"
+	ActionIAMAccountAliasUpdated                    Action = "iam.account.alias-set"
+	ActionIAMUserCreated                            Action = "iam.user.created"
+	ActionIAMUserUpdated                            Action = "iam.user.updated"
+	ActionIAMUserDeleted                            Action = "iam.user.deleted"
+	ActionIAMUserPermissionBoundarySet              Action = "iam.user.permission-boundary.set"
+	ActionIAMUserPermissionBoundaryRemoved          Action = "iam.user.permission-boundary.removed"
+	ActionIAMUserStatusSet                          Action = "iam.user.status-set"
+	ActionIAMUserPasswordReset                      Action = "iam.user.password-reset"
+	ActionIAMUserPasswordChanged                    Action = "iam.user.password-changed"
+	ActionIAMNotificationContactVerificationStarted Action = "iam.notification-contact.verification-started"
+	ActionIAMNotificationContactVerified            Action = "iam.notification-contact.verified"
+	ActionIAMRoleCreated                            Action = "iam.role.created"
+	ActionIAMRoleUpdated                            Action = "iam.role.updated"
+	ActionIAMRoleDisabled                           Action = "iam.role.disabled"
+	ActionIAMRoleEnabled                            Action = "iam.role.enabled"
+	ActionIAMRoleTrustSet                           Action = "iam.role.trust-set"
+	ActionIAMRoleDeleted                            Action = "iam.role.deleted"
+	ActionIAMRolePermissionBoundarySet              Action = "iam.role.permission-boundary.set"
+	ActionIAMRolePermissionBoundaryRemoved          Action = "iam.role.permission-boundary.removed"
+	ActionIAMRoleSessionIssued                      Action = "iam.role-session.issued"
+	ActionIAMRoleSessionRevoked                     Action = "iam.role-session.revoked"
+	ActionIAMRoleSessionAdminRevoked                Action = "iam.role-session.admin-revoked"
+	ActionIAMRoleSessionExited                      Action = "iam.role-session.exited"
+	ActionIAMAccessKeyCreated                       Action = "iam.access-key.created"
+	ActionIAMAccessKeyEnabled                       Action = "iam.access-key.enabled"
+	ActionIAMAccessKeyDisabled                      Action = "iam.access-key.disabled"
+	ActionIAMAccessKeyDeleted                       Action = "iam.access-key.deleted"
+	ActionIAMGroupCreated                           Action = "iam.group.created"
+	ActionIAMPolicyCreated                          Action = "iam.policy.created"
+	ActionIAMPolicyVersionCreated                   Action = "iam.policy-version.created"
+	ActionIAMPolicyVersionDeleted                   Action = "iam.policy-version.deleted"
+	ActionIAMPolicyDefaultVersionSet                Action = "iam.policy.default-version-set"
+	ActionIAMPolicyUpdated                          Action = "iam.policy.updated"
+	ActionIAMPolicyDeleted                          Action = "iam.policy.deleted"
+	ActionIAMGroupUpdated                           Action = "iam.group.updated"
+	ActionIAMGroupDeleted                           Action = "iam.group.deleted"
+	ActionIAMGroupMembershipCreated                 Action = "iam.group-membership.created"
+	ActionIAMGroupMembershipRemoved                 Action = "iam.group-membership.removed"
 
 	// Published historical facts remain decodable and hash-stable. New writes
 	// use the Account/User facts above so their target contracts cannot drift.
@@ -227,6 +229,8 @@ var allActions = []Action{
 	ActionIAMUserStatusSet,
 	ActionIAMUserPasswordReset,
 	ActionIAMUserPasswordChanged,
+	ActionIAMNotificationContactVerificationStarted,
+	ActionIAMNotificationContactVerified,
 	ActionIAMGroupCreated,
 	ActionIAMRoleCreated,
 	ActionIAMRoleUpdated,
@@ -343,6 +347,8 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMUserPasswordChanged: {
 		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true,
 	},
+	ActionIAMNotificationContactVerificationStarted: {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMNotificationContactVerified:            {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMGroupCreated: {
 		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},

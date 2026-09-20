@@ -35,6 +35,133 @@ func ValidateDigest(name, value string) error {
 	return nil
 }
 
+func ValidateNotificationContact(value NotificationContact) error {
+	if value.APIVersion != APIVersion || value.Kind != "NotificationContact" ||
+		ValidateID("accountId", string(value.AccountID)) != nil || ValidateID("userId", string(value.UserID)) != nil ||
+		(value.PendingVerificationID != "" && ValidateID("pendingVerificationId", value.PendingVerificationID) != nil) {
+		return errors.New("notification contact is invalid")
+	}
+	switch value.State {
+	case "NONE":
+		if value.ResourceVersion != 0 || value.Email != "" || value.VerifiedAt != nil {
+			return errors.New("unverified notification contact has trusted fields")
+		}
+	case "VERIFIED":
+		if validatePositiveVersion(value.ResourceVersion) != nil || ValidateSecurityMailAddress(value.Email) != nil ||
+			value.VerifiedAt == nil || validateTime("verifiedAt", *value.VerifiedAt) != nil || value.PendingVerificationID != "" {
+			return errors.New("verified notification contact is invalid")
+		}
+	default:
+		return errors.New("notification contact state is invalid")
+	}
+	return nil
+}
+
+func ValidateStartNotificationContactVerificationRequest(value StartNotificationContactVerificationRequest) error {
+	if ValidateSecurityMailAddress(value.Email) != nil || !value.Password.Present() || ValidateID("requestId", value.RequestID) != nil {
+		return errors.New("notification contact verification request is invalid")
+	}
+	return nil
+}
+
+func ValidateConfirmNotificationContactVerificationRequest(value ConfirmNotificationContactVerificationRequest) error {
+	code := value.Code.CopyBytes()
+	defer clear(code)
+	if ValidateID("requestId", value.RequestID) != nil || len(code) != 8 {
+		return errors.New("notification contact confirmation is invalid")
+	}
+	for _, digit := range code {
+		if digit < '0' || digit > '9' {
+			return errors.New("notification contact confirmation is invalid")
+		}
+	}
+	return nil
+}
+
+func ValidateNotificationDeliveryObservation(value NotificationDeliveryObservation) error {
+	if value.Attempts > 5 || validateTime("updatedAt", value.UpdatedAt) != nil {
+		return errors.New("notification delivery observation is invalid")
+	}
+	switch value.State {
+	case "PENDING":
+		if value.Attempts != 0 || value.LastOutcome != "" {
+			return errors.New("pending notification already has an attempt")
+		}
+	case "IN_FLIGHT", "RETRY_WAIT", "ACCEPTED", "FAILED":
+		if value.Attempts == 0 {
+			return errors.New("notification observation lacks an attempt")
+		}
+	case "EXPIRED":
+	default:
+		return errors.New("notification delivery state is invalid")
+	}
+	if value.State == "IN_FLIGHT" && ((value.Attempts == 1 && value.LastOutcome != "") || (value.Attempts > 1 && value.LastOutcome == "")) ||
+		value.State == "RETRY_WAIT" && value.Attempts >= 5 || value.State == "EXPIRED" && value.Attempts >= 5 {
+		return errors.New("notification attempt progression is invalid")
+	}
+	switch value.LastOutcome {
+	case "":
+		if value.LastSMTPCode != 0 || value.Attempts > 1 || value.State == "EXPIRED" && value.Attempts != 0 || value.State == "RETRY_WAIT" || value.State == "ACCEPTED" || value.State == "FAILED" {
+			return errors.New("notification outcome is missing")
+		}
+	case "ACCEPTED":
+		if value.State != "ACCEPTED" || value.LastSMTPCode != 250 {
+			return errors.New("notification acceptance is not an exact SMTP observation")
+		}
+	case "REJECTED":
+		if value.LastSMTPCode < 400 || value.LastSMTPCode > 599 || value.State == "ACCEPTED" || value.Attempts == 0 {
+			return errors.New("notification rejection is invalid")
+		}
+		if value.LastSMTPCode >= 500 && value.State != "FAILED" || value.LastSMTPCode < 500 && value.State == "FAILED" && value.Attempts != 5 {
+			return errors.New("notification rejection disposition is invalid")
+		}
+	case "UNKNOWN", "UNAVAILABLE":
+		if value.LastSMTPCode != 0 || value.State == "ACCEPTED" || value.Attempts == 0 {
+			return errors.New("notification uncertainty is invalid")
+		}
+		if value.State == "FAILED" && value.Attempts != 5 {
+			return errors.New("notification attempts are not exhausted")
+		}
+	default:
+		return errors.New("notification outcome is invalid")
+	}
+	return nil
+}
+
+func ValidateNotificationContactVerification(value NotificationContactVerification) error {
+	if value.APIVersion != APIVersion || value.Kind != "NotificationContactVerification" ||
+		ValidateID("id", value.ID) != nil || ValidateID("accountId", string(value.AccountID)) != nil ||
+		ValidateID("userId", string(value.UserID)) != nil || ValidateID("requestId", value.RequestID) != nil ||
+		ValidateSecurityMailAddress(value.Email) != nil || validateTime("issuedAt", value.IssuedAt) != nil ||
+		validateTime("expiresAt", value.ExpiresAt) != nil || value.ExpiresAt.Sub(value.IssuedAt) != 10*time.Minute ||
+		ValidateNotificationDeliveryObservation(value.Delivery) != nil || value.Delivery.UpdatedAt.Before(value.IssuedAt) {
+		return errors.New("notification contact verification is invalid")
+	}
+	if value.State == "PENDING" {
+		if value.CompletedAt != nil {
+			return errors.New("pending verification has a completion")
+		}
+		return nil
+	}
+	if value.CompletedAt == nil || validateTime("completedAt", *value.CompletedAt) != nil || value.CompletedAt.Before(value.IssuedAt) {
+		return errors.New("notification contact completion is invalid")
+	}
+	switch value.State {
+	case "VERIFIED":
+		if !value.CompletedAt.Before(value.ExpiresAt) {
+			return errors.New("notification contact completed after expiry")
+		}
+	case "CANCELLED":
+	case "EXPIRED":
+		if *value.CompletedAt != value.ExpiresAt {
+			return errors.New("verification expiry has no exact boundary")
+		}
+	default:
+		return errors.New("notification contact verification state is invalid")
+	}
+	return nil
+}
+
 func ValidateBootstrapDocument(value BootstrapDocument) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "IAMBootstrap" {

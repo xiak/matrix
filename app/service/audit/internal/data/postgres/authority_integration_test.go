@@ -449,6 +449,11 @@ func assertAuditContractCatalog(
 				invalid = append(invalid, candidate)
 			}
 		}
+		if action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified {
+			candidate := event
+			candidate.Target.ID = "another-users-principal"
+			invalid = append(invalid, candidate)
+		}
 		if contract.IAMDecisionRequired {
 			candidate := event
 			candidate.IAMDecisionID = ""
@@ -1634,14 +1639,16 @@ func assertAuditImmutability(
 func reserveIAMPasswordAttempt(t *testing.T, ctx context.Context, iamAPI *pgx.Conn, fixture iamBootstrapFixture, attemptID, sessionID string) uint64 {
 	t.Helper()
 	var login, tenant, principal, session any = fixture.LoginName, nil, nil, nil
+	purpose := "LOGIN"
 	if sessionID != "" {
 		login, tenant, principal, session = nil, string(fixture.TenantID), fixture.Administrator, sessionID
+		purpose = "PASSWORD_CHANGE"
 	}
 	var actualTenant, actualPrincipal, hash string
 	var mustChange bool
 	var generation, sequence uint64
 	var expires time.Time
-	if err := iamAPI.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,$2,$3,$4,$5)", login, tenant, principal, session, attemptID).
+	if err := iamAPI.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,$2,$3,$4,$5,$6,NULL)", login, tenant, principal, session, attemptID, purpose).
 		Scan(&actualTenant, &actualPrincipal, &hash, &mustChange, &generation, &sequence, &expires); err != nil {
 		t.Fatal("reserve IAM storage fixture password attempt", err)
 	}
@@ -2371,6 +2378,9 @@ func authorityAuditEvent(
 	}
 	if contract.UserActorRequired {
 		event.Actor.Type = auditv1.ActorUser
+	}
+	if action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified {
+		event.Target.ID = string(event.Actor.ID)
 	}
 	if contract.RoleActorRequired {
 		event.Actor = auditv1.ActorReference{Type: auditv1.ActorRole, ID: "catalog-base-role",

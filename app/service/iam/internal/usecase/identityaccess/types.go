@@ -17,16 +17,18 @@ var (
 	ErrConflict             = errors.New("IAM state conflicts with the request")
 	ErrUnavailable          = errors.New("IAM authority is unavailable")
 	ErrOverloaded           = errors.New("IAM authentication work is at capacity")
+	ErrVerificationRejected = errors.New("IAM address verification was rejected")
 	ErrRetryableTransaction = errors.New("IAM transaction is retryable")
 )
 
 type Config struct {
-	SessionLifetime        time.Duration
-	MaxTransactionAttempts int
-	NewID                  func(prefix string) (string, error)
-	CursorKey              []byte
-	AccessKeyWrapping      *iamv1.AccessKeyWrappingKeyring
-	TOTPKeyring            *iamv1.TOTPKeyring
+	SessionLifetime          time.Duration
+	MaxTransactionAttempts   int
+	NewID                    func(prefix string) (string, error)
+	CursorKey                []byte
+	AccessKeyWrapping        *iamv1.AccessKeyWrappingKeyring
+	TOTPKeyring              *iamv1.TOTPKeyring
+	EmailVerificationKeyring *iamv1.EmailVerificationKeyring
 }
 
 type Repository interface {
@@ -46,6 +48,14 @@ type Transaction interface {
 	ReadAccessKeyCustody(context.Context) (AccessKeyCustody, error)
 	RegisterTOTPKeyset(context.Context, TOTPKeysetRegistration) error
 	ReadTOTPCustody(context.Context) (TOTPCustody, error)
+	RegisterEmailVerificationKeyset(context.Context, authority.EmailVerificationKeyset) error
+	ReadEmailVerificationKeyset(context.Context) (*authority.EmailVerificationKeyset, error)
+	ReadNotificationContact(context.Context, NotificationContactSubject) (iamv1.NotificationContact, error)
+	ReadNotificationVerification(context.Context, NotificationContactSubject, string) (iamv1.NotificationContactVerification, error)
+	StartNotificationVerification(context.Context, NotificationVerificationStart) (iamv1.NotificationContactVerification, error)
+	ReserveNotificationConfirmation(context.Context, NotificationContactSubject, string, string) (NotificationConfirmationAttempt, bool, error)
+	RejectNotificationConfirmation(context.Context, NotificationConfirmationAttempt) error
+	ConfirmNotificationContact(context.Context, NotificationConfirmation) (iamv1.NotificationContactVerification, error)
 	LookupAccessKey(context.Context, string, iamv1.AccessKeyID, string, iamv1.ProductID) (AccessKeyCredential, bool, error)
 	ReadAccessKeys(context.Context, AccessKeyRead) (AccessKeyDirectory, error)
 	ReserveAccessKey(context.Context, AccessKeyReservation) (AccessKeyReservationResult, error)
@@ -529,12 +539,22 @@ type BootstrapMutation struct {
 // LoginName or the authenticated Session tuple, never both. Only the service
 // generates ID; a public request ID is not an authentication-attempt identity.
 type PasswordAttemptRequest struct {
-	ID        string
-	LoginName string
-	AccountID iamv1.AccountID
-	UserID    iamv1.PrincipalID
-	SessionID iamv1.SessionID
+	ID           string
+	LoginName    string
+	AccountID    iamv1.AccountID
+	UserID       iamv1.PrincipalID
+	SessionID    iamv1.SessionID
+	Purpose      PasswordAttemptPurpose
+	IntentDigest string
 }
+
+type PasswordAttemptPurpose string
+
+const (
+	PasswordAttemptLogin               PasswordAttemptPurpose = "LOGIN"
+	PasswordAttemptChange              PasswordAttemptPurpose = "PASSWORD_CHANGE"
+	PasswordAttemptNotificationContact PasswordAttemptPurpose = "NOTIFICATION_CONTACT_VERIFY"
+)
 
 // Private, bounded authority snapshot. Success may only be consumed by the
 // final session/password transaction, not converted to a reusable permit.
@@ -548,6 +568,8 @@ type PasswordAttempt struct {
 	CredentialGeneration uint64
 	MustChangePassword   bool
 	ExpiresAt            time.Time
+	Purpose              PasswordAttemptPurpose
+	IntentDigest         string
 }
 
 func (PasswordAttempt) String() string               { return "[REDACTED]" }
@@ -565,8 +587,9 @@ type SessionMutation struct {
 }
 
 type SessionCredential struct {
-	Subject            authority.SubjectContext
-	VerificationDigest string
+	Subject              authority.SubjectContext
+	VerificationDigest   string
+	CredentialGeneration uint64
 }
 
 type RoleSessionCredential struct {
@@ -758,5 +781,6 @@ type Authority struct {
 	cursors      *authority.CursorCodec
 	accessKeys   *accessKeyWrapping
 	totp         *TOTPKeysetRegistration
+	email        *authority.EmailVerificationProtector
 	passwordWork chan struct{}
 }

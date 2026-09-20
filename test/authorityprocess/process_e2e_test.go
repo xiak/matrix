@@ -899,12 +899,12 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	assertIAMEventsStoredOnce(t, ctx, admin)
 	paasProcess := start(binaries.paas, paasEnvironment)
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
-	// Exercise the exact source services together and keep the signed release
-	// profile aligned with the now-complete MFA preparation runtime and backup
-	// custody contract.
-	profile := installationrelease.AuthoritySchemas{IAM: 36, Audit: 19, PaaS: 6}
-	if current := installationrelease.CurrentDatabaseProfile(); current.Authorities != profile || current.ContractRevision != 14 {
-		t.Fatalf("published database profile = %#v, want authorities %#v revision 13", current, profile)
+	// Exercise the exact source services together without silently publishing
+	// an intermediate authority shape. The release profile moves only after the
+	// complete MFA-enabling slice and its predecessor admission gate are fixed.
+	profile := installationrelease.AuthoritySchemas{IAM: 37, Audit: 21, PaaS: 6}
+	if current := installationrelease.CurrentDatabaseProfile(); current.Authorities == profile {
+		t.Fatal("intermediate notification authority shape was published before the MFA release gate")
 	}
 	for _, authority := range []struct {
 		name, endpoint string
