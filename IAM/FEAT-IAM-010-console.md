@@ -57,6 +57,8 @@ Role、身份提供商、联合身份、企业账号和 API 密钥均为详情�
 
 在 IAM-009 固定相应契约前，控制台不公开密码长度、会话时长或任意“敏感操作”选择器，也不把 step-up 票据抽象成通用提权令牌。当前预览只验证信息架构、审阅与焦点体验，不声称 Account 安全规则已由真实 IAM 保存或执行。
 
+DEV `AccessSettings` 也只拥有账号级 MFA 要求与用户 SSO 选择。先前残留但没有 IAM 契约所有者的密码长度、密码到期、密码复用、账号会话时长及泛化“敏感操作保护”字段已经从领域模型、预览仓库和安全报告中替换删除，而不是继续隐藏在页面背后。安全总览只呈现能够说明证据来源的五项检查：访问密钥、直接授权、登录保护、待重置密码和 MFA 证据；不能从真实后端观察的泛化保护状态不得伪装成已配置或待处理。
+
 ### 只读权限能力目录
 
 策略工作区以独立“权限能力目录”页签消费 `GET /api/iam/v1/authorization-profiles`。请求不携带 Account、修订、分页、历史或正文 selector；客户端严格验证完整列表、产品顺序、Action 命名空间、scope、资源 shape、可信条件组合及内容摘要格式，并再次核对响应 Account。目录描述平台登记的产品能力，不是当前身份权限，也不是租户产品发布入口；浏览器不重算后端权威摘要，也不从目录推导最终 Allow。
@@ -150,12 +152,13 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 ### 账号级 MFA 要求 MOCK 的开发验收证据
 
 2026-09-20，前端实现固定在已推送的
-[`3f247bdaa214a055bb89b4f961a5dfd678b2e530`](https://github.com/xiak/matrix/commit/3f247bdaa214a055bb89b4f961a5dfd678b2e530)，
+[`ca5048fa`](https://github.com/xiak/matrix/commit/ca5048fa)，
 设计来源为本文件记录的 IAM-009 S2/S3 固定提交。
 
 - Account 安全规则使用独立语义组件，不再混入本人认证器与安全通知；编辑、准确目标审阅、作用域 step-up 和预览保存均在内容区完成，不打开 Dialog。
 - 审阅固定展示 `org-xiak`、普通 IAM User、受保护 Root/平台托管身份及收紧/放宽规则的会话影响。step-up 组件由本人安全操作和 Account 规则复用，但操作类型、目标和输入绑定保持显式，不产生通用提权能力。
 - 行为用例覆盖密码/TOTP 失败后保留输入并重试、从 step-up 返回审阅、取消与完成的焦点恢复；完成只写当前 DEV 体验仓库。任何真实失败不回退 MOCK。
+- 预览设置模型只保留账号级 MFA 要求和用户 SSO 选择；无契约所有者的密码规则、账号会话时长与泛化敏感操作字段及报告检查已经删除。安全总览因此只计算五项有明确证据来源的检查，不制造隐藏配置或伪状态。
 - 默认桌面与 `360 × 800` DEV 浏览器均无页面横向溢出、Dialog 或控制台 warning/error；小屏 document/body 均保持 `clientWidth == scrollWidth == 360`，规则目标和副作用仍完整可见。
 - 完整前端、主题、生产导出、嵌入等价及 Go UI 宿主门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；本证据不宣称 IAM-009 已有公开 HTTP、真实持久化、会话失效或后端执行验收。
 
