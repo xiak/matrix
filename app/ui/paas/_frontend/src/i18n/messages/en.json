@@ -1304,6 +1304,7 @@
     "loading": "Loading the permission catalog…",
     "retry": "Retry",
     "back": "Back to permission catalog",
+    "previewPublishing": "Preview product onboarding review",
     "notConnected": "Permission catalog is not connected",
     "notConnectedHint": "This console has no available live catalog client and will not fall back to MOCK data.",
     "errors": {
@@ -1356,6 +1357,62 @@
       "COLLECTION_LIST": "Collection list",
       "COLLECTION_CREATE": "Collection create"
     }
+  },
+  "AuthorizationProfilePublishingPreview": {
+    "back": "Back to product declaration",
+    "title": "Product onboarding review · {product}",
+    "subtitle": "An internal engineering workflow prototype from product declaration to trusted registration",
+    "internal": "Internal engineering flow",
+    "boundary": "This flow previews collaboration between product engineering and IAM. It is not a tenant self-service publishing surface, writes nothing to the IAM registry, and grants no permissions.",
+    "progress": "Product authorization declaration onboarding progress",
+    "stageLabel": "Step {current} of {total}",
+    "steps": {
+      "declaration": "Product declaration",
+      "validation": "IAM contract validation",
+      "release": "Trusted release review"
+    },
+    "fields": {
+      "product": "Product namespace",
+      "callingService": "Calling service",
+      "revision": "Immutable revision",
+      "actions": "Actions",
+      "scopes": "Authority scopes",
+      "resources": "Resource kinds",
+      "digest": "Content digest"
+    },
+    "declaration": {
+      "title": "Confirm the product-owned permission declaration",
+      "lead": "This view reuses the real AuthorizationProfile shape from the catalog. It displays the current declaration read-only and does not recompute its digest in the browser.",
+      "owner": "Owner: product engineering",
+      "ownerHint": "The product team defines Actions, resource kinds, target shapes, and trusted conditions, then ensures real product APIs enforce the same declaration. Registering names alone does not complete product onboarding."
+    },
+    "validation": {
+      "title": "Review the IAM contract and real enforcement boundary",
+      "lead": "A future controlled onboarding flow must prove each item below. This is a UX checklist, not evidence that the browser called an online validation service.",
+      "items": {
+        "namespace": { "title": "Namespace and version ownership", "hint": "Confirm that product, callingService, Action prefixes, and revision are owned by the product team, and that one revision cannot be overwritten with a different digest." },
+        "resources": { "title": "Action and resource model alignment", "hint": "Review resourceKind, authorization target shapes, result resources, and TENANT versus platform scope for every Action." },
+        "conditions": { "title": "Conditions use trusted value sources", "hint": "Accept only IAM-declared identity and transaction-time attributes; products and tenants cannot inject arbitrary caller attributes." },
+        "enforcement": { "title": "Real PEP enforcement evidence", "hint": "Product APIs must check the matching Action and cover resource ownership, list filtering, and bulk operations instead of relying on catalog registration alone." }
+      },
+      "snapshot": { "actions": "Actions to review", "resources": "Resource kinds", "conditions": "Condition keys" },
+      "notProof": "IAM currently exposes code-level pure validation and a read-only directory only. These checklist items are not an online validation result, approval record, or release credential."
+    },
+    "release": {
+      "title": "Review the immutable release reference and consumption boundary",
+      "lead": "A trusted release identifies content with an exact product, revision, and contentDigest. Catalog visibility and permission grants remain separate concerns.",
+      "boundaries": {
+        "noGrant": "Catalog registration grants no permissions to a user, group, role, or service.",
+        "immutable": "A revision remains immutable; a different digest cannot overwrite an existing revision.",
+        "noExpansion": "A higher revision does not expand existing policies automatically; policies retain their resolved capability snapshot.",
+        "serviceConsent": "Cross-product operations still require a separate service identity and customer consent. Product onboarding does not unlock every tenant resource."
+      },
+      "unavailable": "IAM does not yet provide AuthorizationProfile drafts, online approval, a publish API, or a matching publish Action. Final publishing is always unavailable in this prototype.",
+      "publishDisabled": "Publish revision (not connected)"
+    },
+    "previous": "Previous",
+    "next": "Next",
+    "finish": "Finish preview"
   },
   "Console": {
     "brandHome": "Matrix Cloud console home",

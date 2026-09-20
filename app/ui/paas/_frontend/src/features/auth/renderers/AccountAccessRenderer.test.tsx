@@ -764,6 +764,7 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "paas" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { level: 2, name: "paas" })).toBe(document.activeElement);
+    expect(screen.queryByRole("button", { name: "体验产品接入审阅" })).toBeNull();
     expect(screen.getByRole("table", { name: "产品 paas 的 Action 声明" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "返回能力目录" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "paas" })).toBe(document.activeElement));

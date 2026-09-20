@@ -432,6 +432,34 @@ describe("policy creation entry and directory contract", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { level: 2, name: "paas" })).toBe(document.activeElement);
   });
+  it("previews product-owned profile onboarding inline without inventing a live publish contract", async () => {
+    const { user, repository } = await open("policies");
+    await screen.findByRole("table", { name: "策略" });
+    await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
+    await user.click(await screen.findByRole("button", { name: "paas" }));
+    const trigger = screen.getByRole("button", { name: "体验产品接入审阅" });
+    await user.click(trigger);
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { level: 2, name: "产品接入审阅 · paas" })).toBe(document.activeElement);
+    expect(screen.getByText(/不是租户自助发布入口/)).toBeTruthy();
+    expect(screen.getByText(`sha256:${"a".repeat(64)}`)).toBeTruthy();
+    expect(screen.getByText("责任人：产品研发团队")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("heading", { level: 3, name: "检查 IAM 契约与真实鉴权边界" })).toBeTruthy();
+    expect(screen.getByText(/不是在线校验结果/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("heading", { level: 3, name: "审阅不可变发布引用与消费边界" })).toBeTruthy();
+    const publish = screen.getByRole("button", { name: "发布修订（未接入）" }) as HTMLButtonElement;
+    expect(publish.disabled).toBe(true);
+    expect(screen.getByText(/没有对应发布 Action/)).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "结束体验" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "体验产品接入审阅" })).toBe(document.activeElement));
+  });
   it.each([
     ["visual", "按策略生成器创建", "可视化编辑"],
     ["json", "按策略语法创建", "JSON 编辑"],

@@ -7,6 +7,7 @@ import { Alert, Badge, Button, EmptyState, Table, TablePagination, TableSkeleton
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess, type AuthorizationProfileClient, type AuthorizationProfileLoad } from "../application/AccountAccessProvider";
 import type { AuthorizationProfileAction, AuthorizationProfileEntry, AuthorizationResourceShape } from "../domain/accounts";
+import { AuthorizationProfilePublishingPreview } from "./AuthorizationProfilePublishingPreview";
 import styles from "./AccountAccessRenderer.module.css";
 
 type CatalogState = { status: "loading" } | AuthorizationProfileLoad;
@@ -33,7 +34,10 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [selected, setSelected] = useState<AuthorizationProfileEntry | null>(null);
+  const [publishingPreview, setPublishingPreview] = useState(false);
   const selectedHeading = useRef<HTMLHeadingElement>(null);
+  const publishingTrigger = useRef<HTMLButtonElement>(null);
+  const restorePublishingFocus = useRef(false);
   const returnProduct = useRef<string | null>(null);
   const productButtons = useRef(new Map<string, HTMLButtonElement>());
   const request = useRef(0);
@@ -52,6 +56,11 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
     return () => { request.current += 1; };
   }, [client]);
   useEffect(() => { if (selected) selectedHeading.current?.focus(); }, [selected]);
+  useLayoutEffect(() => {
+    if (publishingPreview || !restorePublishingFocus.current) return;
+    restorePublishingFocus.current = false;
+    publishingTrigger.current?.focus();
+  }, [publishingPreview]);
   useLayoutEffect(() => {
     if (selected || !returnProduct.current) return;
     const product = returnProduct.current;
@@ -86,6 +95,7 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
     setActionQuery(""); setPage(1); setSelected(entry);
   };
   const back = () => setSelected(null);
+  const closePublishingPreview = () => { restorePublishingFocus.current = true; setPublishingPreview(false); };
 
   if (state.status === "loading") return <div className={styles.catalogSection}>
     <CatalogNotice preview={client.preview} />
@@ -97,11 +107,14 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
     {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => load()}>{t("retry")}</Button></div> : null}
   </div>;
 
+  if (selected && publishingPreview) return <AuthorizationProfilePublishingPreview entry={selected} onClose={closePublishingPreview} />;
+
   if (selected) return <section aria-label={t("productDetail", { product: selected.profile.product })} className={styles.catalogSection}>
     <div className={styles.catalogDetailHeading}>
       <Button variant="ghost" size="small" onClick={back}><ArrowLeft aria-hidden="true" />{t("back")}</Button>
       <h2 ref={selectedHeading} tabIndex={-1}>{selected.profile.product}</h2>
       {client.preview ? <Badge status="warning">{t("mock")}</Badge> : null}
+      {client.preview ? <Button ref={publishingTrigger} variant="secondary" size="small" onClick={() => setPublishingPreview(true)}>{t("previewPublishing")}</Button> : null}
     </div>
     <p className={styles.note}>{t("detailHint")}</p>
     <dl className={styles.catalogFacts}>

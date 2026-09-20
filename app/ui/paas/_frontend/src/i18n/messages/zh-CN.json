@@ -1304,6 +1304,7 @@
     "loading": "正在读取权限能力目录…",
     "retry": "重新读取",
     "back": "返回能力目录",
+    "previewPublishing": "体验产品接入审阅",
     "notConnected": "权限能力目录未连接",
     "notConnectedHint": "当前控制台没有可用的真实目录客户端，也不会回退到 MOCK 数据。",
     "errors": {
@@ -1356,6 +1357,62 @@
       "COLLECTION_LIST": "集合列表",
       "COLLECTION_CREATE": "集合创建"
     }
+  },
+  "AuthorizationProfilePublishingPreview": {
+    "back": "返回产品声明",
+    "title": "产品接入审阅 · {product}",
+    "subtitle": "从产品权限声明到受信登记的内部工程流程原型",
+    "internal": "内部工程流程",
+    "boundary": "该流程仅用于提前验证产品研发与 IAM 团队的协作体验，不是租户自助发布入口；不会写入 IAM 注册表，也不会授予任何权限。",
+    "progress": "产品权限声明接入进度",
+    "stageLabel": "第 {current} / {total} 步",
+    "steps": {
+      "declaration": "产品声明",
+      "validation": "IAM 契约校验",
+      "release": "受信发布审阅"
+    },
+    "fields": {
+      "product": "产品命名空间",
+      "callingService": "调用服务",
+      "revision": "不可变修订",
+      "actions": "Action 数量",
+      "scopes": "权限范围",
+      "resources": "资源类型",
+      "digest": "内容摘要"
+    },
+    "declaration": {
+      "title": "确认产品拥有的权限声明",
+      "lead": "这里复用目录中的真实 AuthorizationProfile 结构，只读展示待审阅的当前声明，不在浏览器中重新计算摘要。",
+      "owner": "责任人：产品研发团队",
+      "ownerHint": "产品团队定义 Action、资源类型、资源表达方式与可信条件，并保证真实业务接口按同一声明执行鉴权。登记几个名称并不等于完成产品接入。"
+    },
+    "validation": {
+      "title": "检查 IAM 契约与真实鉴权边界",
+      "lead": "以下是未来受控接入流程必须证明的审阅项。它们是 UX 检查清单，不代表当前浏览器已经调用在线校验服务。",
+      "items": {
+        "namespace": { "title": "命名空间与版本所有权", "hint": "确认产品、callingService、Action 前缀和 revision 由对应产品团队维护，且同一修订不能覆盖不同内容摘要。" },
+        "resources": { "title": "Action 与资源模型一致", "hint": "逐项核对 resourceKind、授权目标形状、结果资源及 TENANT／平台范围边界。" },
+        "conditions": { "title": "条件值只来自可信来源", "hint": "仅接受 IAM 已声明的身份与事务时间属性，不让产品或租户注入任意调用方属性。" },
+        "enforcement": { "title": "真实 PEP 鉴权证据", "hint": "产品 API 必须执行对应 Action 检查，并覆盖资源归属、列表过滤和批量操作，避免只登记目录却绕过鉴权。" }
+      },
+      "snapshot": { "actions": "待审 Action", "resources": "资源类型", "conditions": "条件键" },
+      "notProof": "当前 IAM 只提供代码内纯校验与只读目录；本页的检查项不是在线校验结果、审批记录或发布凭证。"
+    },
+    "release": {
+      "title": "审阅不可变发布引用与消费边界",
+      "lead": "受信发布必须以精确的 product、revision 与 contentDigest 标识内容；目录可见性和权限授予是两件不同的事。",
+      "boundaries": {
+        "noGrant": "声明进入目录不向任何用户、组、角色或服务自动授予权限。",
+        "immutable": "同一修订必须保持内容不可变；不同摘要不能覆盖既有修订。",
+        "noExpansion": "更高修订不会自动扩大既有策略，策略仍遵守其已解析的精确能力快照。",
+        "serviceConsent": "跨产品代操作仍需独立的服务身份与客户授权，产品接入不等于可访问所有租户资源。"
+      },
+      "unavailable": "IAM 尚未提供 AuthorizationProfile 草稿、在线审批或发布 API，也没有对应发布 Action。最终发布在此原型中始终不可用。",
+      "publishDisabled": "发布修订（未接入）"
+    },
+    "previous": "上一步",
+    "next": "下一步",
+    "finish": "结束体验"
   },
   "Console": {
     "brandHome": "Matrix Cloud 控制台首页",
