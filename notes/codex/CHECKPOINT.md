@@ -7,21 +7,54 @@
 - Full IAM goal remains ACTIVE/incomplete. Read AGENTS, IAM/009 for MFA or
   IAM/012 for mail, then owning code/tests. Fixed adoption belongs to
   docs/adoption/FEAT-006-platform-authorities.md, not this checkpoint.
-- Latest fixed/pushed test increment:
-  **80a6e6d18288df7f5d89ffee40722ee9aa614ee7**. Only existing integration
-  owner, CI and FEAT009/011. No production/API/SQL/profile/UI change.
-- Latest production remains **48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e**,
+- Latest fixed/pushed increment:
+  **303093bb945da43eb597f56b52059009580d0da1**. StepUp/regeneration pure
+  contract, original API tests/generator, FEAT009 and adoption only. It does
+  NOT add routes, use cases, SQL, Audit actions, notifications or UI.
+- Latest implemented runtime remains **48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e**,
   pure-codec parent c13f6d11. Source IAM38/Audit22/PaaS2; release profile/
   revision unchanged/unallocated. No cross-release acceptance inferred.
-- Exact https://github.com/xiak/matrix/actions/runs/35531111030 completed/
+- Exact https://github.com/xiak/matrix/actions/runs/35532968349 completed/
   failure: all six jobs runner_id=0/steps=0; payment/spending-limit annotation
-  prevented execution. Independent CI is NOT accepted. Previous48's
+  prevented execution. Independent CI is NOT accepted. Previous80's
+  35531111030, 48's
   35528886088, f5's35520219893 and c13's35521839561 also did not execute.
   Do not alter billing, weaken tests or repeatedly rerun unchanged blockage.
   Earlier5e185e95's actual Audit runtime-probe failure remains separate;
   subsequent local passes do not rewrite it. FEAT owners retain its evidence.
 
-## Latest runtime and CI increment
+## Current pure step-up contract and next runtime slice
+
+303093bb defines Session-held nonsecret StepUp, not a new challenge credential
+or bearer. Only RECOVERY_CODES_REGENERATE is declared. Original120s absolute
+expiry, PENDING/PROVED/CONSUMED/EXPIRED with strict timestamp presence/order;
+no extension on proof. Requests accept no user/account/session/factor/batch
+selector. APPLIED has ten unique saved codes once; EQUAL_REPLAY has metadata
+only, not even a null/empty code field. Normal JSON rejects secret carriers;
+explicit codecs own private wire serialization. Login cannot accept StepUp.
+
+API/full-repository race and architecture, vet, modules,122 tracked API files'
+regeneration set/hashes, Linux amd64 build all passed. Fuzz10s/oneworker,
+176823 executions passed. Full handle31283 and fuzz handle51908 are terminal
+exit0; no new PG/SMTP/browser fixture was created. Local passes are not CI.
+
+Next: implement the existing009 S2b operation across IAM HTTP/usecase/SQL,
+closed Audit fact and security notice, then actual PG/process/SMTP gates.
+The locked proof binds original current nonforced PASSWORD_TOTP Session,
+USER/Account, generation, factor/revision and old batch. Reauthentication
+uses existing shared durable password/OTP budgets, not another quota/store.
+Regeneration leaves factor revision/password/Session facts/roles unchanged.
+Existing lock_recovery_batch requires batch.event_id=factor.bound_event_id;
+new closed completion provenance and batch termination must preserve old
+binding/recovery evidence, not delete that guard or forge a recovery intent.
+Expected IAM39/Audit23 are only a proposal until actual shapes are verified;
+no release revision/profile is allocated. Installation received this scope
+and fixed303 and was asked to flag offline batch/terminal-shape dependencies.
+It still exclusively owns CLOSED/reconcile/reopen and installation files.
+
+## Prior retained runtime and CI increment
+
+Fixed **80a6e6d18288df7f5d89ffee40722ee9aa614ee7**:
 
 Existing integration owner now separates TestIAMTOTPRecoveryExhaustionPostgres
 from the original TestIAMTOTPEnrollmentPostgres via one shared fixture.
@@ -78,7 +111,7 @@ followed by double migration/bootstrap/restart without resurrection; selected
 IAM32/36 predecessors. Those remain scoped source/database evidence, not
 full release/profile/UI acceptance or a requirement to replay every schema.
 
-Next backend work remains009 S2 step-up, restricted first forced enrollment,
+Next backend work remains009 S2 step-up runtime, restricted first forced enrollment,
 S3 settings/expiry and S4 governance; full UI and release gates remain open.
 Standard OTP math uses pquerna/otp1.5.0; MATRIX owns custody, replay/budgets
 and transaction policy, not another HMAC/OTP implementation.
@@ -113,6 +146,15 @@ Keep proposal MOCK-only; pure Go validation is not a trusted publication,
 platform/admin/service identity is not publishing authority, and a catalog
 is neither permission nor proof a product PEP is implemented. No new API was
 promised merely to serve a MOCK design. Online registration remains001/008.
+
+UX then fixed **5114dda3f03615532e179f463db041439dfc47bf**, docs2ad6b016:
+preview-only internal onboarding review, existing catalog metadata, no writer
+or live entry, final publish always disabled. Read-only fixed diff review
+confirmed these boundaries. Sent one missing checklist item: per-Action
+subjectTypes/userAuthenticationMethods and sealed absence ceilings; USER
+does not automatically mean ACCESS_KEY or ROLE. No UI source was imported
+or browser/test results inherited. UX also received303 as design-only types,
+explicitly not a signal to enable live routes before the atomic runtime gate.
 
 Only fixed-object exchange. Git identity Xiak <Jellal@aliyun.com> locally.
 No extra agents/tasks, foreign worktree writes, remote1.3/.160/.161 or withdrawn

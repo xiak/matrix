@@ -452,6 +452,8 @@ StepUp始终由本人非forced、当前有效的PASSWORD_TOTP登录Session持有
 
 本片本地纯契约证据：原`contract_test.go`/`schema_validation_test.go`证明封闭操作与字段、UTC微秒和原120秒期限、状态/时间顺序、已绑定修订范围、秘密显式编码、APPLIED十码唯一性、EQUAL_REPLAY禁止秘密字段及LoginResponse不能接受StepUp。Go1.26.7/GOMAXPROCS2下API与全仓默认race/architecture、vet、模块校验、122个tracked API文件再生成集合/哈希稳定及Linux amd64构建通过；单worker的`FuzzStepUpContractRoundTrip`运行10秒、176823次通过。外部环境默认SKIP不算运行证据，本片未改变数据库schema/readiness、Audit action、通知、安装profile或UI，也未运行新的PG/SMTP/浏览器门禁。
 
+固定`303093bb945da43eb597f56b52059009580d0da1`已推送；[Verification35532968349](https://github.com/xiak/matrix/actions/runs/35532968349)按精确SHA核实completed/failure，六项均runner_id=0、steps=0，付款/spending-limit annotation阻止启动。独立CI未执行，不能继承本地结果或记作验收通过；该外部限制不改变下一步原子实现的安全边界。
+
 #### 事务、锁序与失败结果
 
 复用当前SERIALIZABLE边界，但认证失败必须是可提交的业务结果。仓储callback返回错误会回滚；因此尝试已验证失败时先提交`REJECTED`及计数，用例在提交成功后映射401。数据库异常、提交未知或必要计数不能持久化时不发行Session，也不把未知结果当作可免费重试。
