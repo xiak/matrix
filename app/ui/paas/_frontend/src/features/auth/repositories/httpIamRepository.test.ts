@@ -55,7 +55,7 @@ function profileEntry(product = "paas") {
   };
 }
 
-function capability(action: string, kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT" | "ACCESS_KEY", id: string, available = true, restrictionReason = "AUTHORITY_REQUIRED") {
+function capability(action: string, kind: "ACCOUNT" | "USER" | "GROUP" | "ROLE" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT" | "ACCESS_KEY", id: string, available = true, restrictionReason = "AUTHORITY_REQUIRED") {
   return { action, resource: { kind, id }, available, ...(available ? {} : { restrictionReason }) };
 }
 
@@ -68,7 +68,9 @@ function currentCapabilities(available = true) {
     capability("iam.user.create", "ACCOUNT", account.id, available),
     capability("iam.policy.list", "ACCOUNT", account.id, available),
     capability("iam.group.list", "ACCOUNT", account.id, available),
-    capability("iam.group.create", "ACCOUNT", account.id, available)
+    capability("iam.group.create", "ACCOUNT", account.id, available),
+    capability("iam.role.list", "ACCOUNT", account.id, available),
+    capability("iam.role.create", "ACCOUNT", account.id, available)
   ];
 }
 
@@ -130,6 +132,87 @@ function membershipPage() {
   return { apiVersion, kind: "GroupMembershipList", accountId: account.id, groupId: group.id, items: [{ membership,
     capabilities: [capability("iam.group-membership.remove", "GROUP_MEMBERSHIP", membership.id)] }] };
 }
+
+const role = {
+  apiVersion, kind: "Role", id: "role-reviewer", accountId: account.id, name: "ProductionLogReviewer",
+  description: "Review production logs during an incident", tags: [{ key: "team", value: "operations" }],
+  management: "CUSTOMER", status: "ACTIVE", maxSessionDurationSeconds: 3600, resourceVersion: 3,
+  currentTrustVersionId: "trust-reviewer-v2", createdAt: timestamp, updatedAt: timestamp
+};
+const roleAttachment = {
+  ...tenantAttachment, id: "attachment-role-reviewer", target: { kind: "ROLE", id: role.id }, policyId: "system.paas-viewer"
+};
+const roleCapabilityActions = [
+  "iam.role.read", "iam.role.update", "iam.role.set-status", "iam.role.delete", "iam.role-trust.set",
+  "iam.role-policy-attachment.create", "iam.role.permission-boundary.set", "iam.role.permission-boundary.remove"
+];
+function roleCapabilities(value = role, attachments = [roleAttachment]) {
+  return [
+    ...roleCapabilityActions.map((action) => capability(action, "ROLE", value.id)),
+    capability("iam.role.assume", "ROLE", value.id, false),
+    ...attachments.map((attachment) => capability("iam.role-policy-attachment.revoke", "POLICY_ATTACHMENT", attachment.id))
+  ];
+}
+async function trustDigest(document: object) {
+  const bytes = new TextEncoder().encode(`matrix.iam.role-trust.v1\u0000${JSON.stringify(document)}`);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return `sha256:${Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+async function roleAccess() {
+  const document = { languageVersion: "1", statements: [{ sid: "incident-review", effect: "ALLOW", principals: [{ type: "USER", id: user.id }] }] };
+  return {
+    role,
+    trustVersion: { apiVersion, kind: "RoleTrustVersion", id: role.currentTrustVersionId, accountId: account.id, roleId: role.id, document, contentDigest: await trustDigest(document), createdAt: timestamp },
+    policyAttachments: [roleAttachment],
+    capabilities: roleCapabilities()
+  };
+}
+
+describe("IAM HTTP role boundary", () => {
+  it("loads the account-confined role directory without caller selectors", async () => {
+    const fetcher = reply({ apiVersion, kind: "RoleList", accountId: account.id, items: [{ role, capabilities: roleCapabilities(role, []).slice(0, 8) }] });
+    const directory = await httpAccountRepository.roles!.list("bearer", account.id);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/roles");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(directory).toMatchObject({ accountId: account.id, nextAfter: null, items: [{ role: { id: role.id, name: role.name } }] });
+  });
+
+  it("reads an exact role, current trust document and policy attachment set", async () => {
+    const response = await roleAccess();
+    const fetcher = reply(response);
+    const result = await httpAccountRepository.roles!.read("bearer", account.id, role.id);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}`);
+    expect(result.role.id).toBe(role.id);
+    expect(result.trustVersion.document.statements[0]?.principals).toEqual([{ type: "USER", id: user.id }]);
+    expect(result.policyAttachments[0]?.target).toEqual({ kind: "ROLE", id: role.id });
+  });
+
+  it("rejects foreign ownership, invented trust carriers, mismatched revisions and bad digests", async () => {
+    const base = await roleAccess();
+    const invalid = [
+      { ...base, role: { ...base.role, accountId: "account-foreign" } },
+      { ...base, trustVersion: { ...base.trustVersion, roleId: "role-other" } },
+      { ...base, trustVersion: { ...base.trustVersion, id: "trust-old" } },
+      { ...base, trustVersion: { ...base.trustVersion, contentDigest: `sha256:${"0".repeat(64)}` } },
+      { ...base, trustVersion: { ...base.trustVersion, document: { languageVersion: "1", statements: [{ sid: "service", effect: "ALLOW", principals: [{ type: "SERVICE", id: "paas" }] }] } } },
+      { ...base, policyAttachments: [{ ...base.policyAttachments[0], target: { kind: "USER", id: user.id } }] },
+      { ...base, capabilities: base.capabilities.map((item, index) => index ? item : { ...item, resource: { kind: "ROLE", id: "role-other" } }) },
+      { ...base, sourceSessionId: "private-lineage" }
+    ];
+    for (const response of invalid) {
+      reply(response);
+      await expect(httpAccountRepository.roles!.read("bearer", account.id, role.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("keeps role cursors opaque, bounded and tied to complete pages", async () => {
+    await expect(httpAccountRepository.roles!.list("bearer", account.id, "ir1.discovery-cursor")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    reply({ apiVersion, kind: "RoleList", accountId: account.id, items: [{ role, capabilities: roleCapabilities(role, []).slice(0, 8) }], nextAfter: "ic1.next-page" });
+    await expect(httpAccountRepository.roles!.list("bearer", account.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    reply({ apiVersion, kind: "RoleList", accountId: "account-foreign", items: [] });
+    await expect(httpAccountRepository.roles!.list("bearer", account.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+});
 
 const accessKey = { apiVersion, kind: "AccessKey", id: "mak1.alex-primary", accountId: account.id, userId: user.id,
   status: "ENABLED", resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };

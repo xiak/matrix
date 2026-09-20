@@ -20,6 +20,7 @@ import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWo
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
 import type { AuthenticatorState, NotificationContact, NotificationContactVerification, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
+import type { RoleAccess, RoleDirectory } from "../domain/roles";
 
 export type LoginCommand = { loginName: string; password: string };
 export type ChangePasswordCommand = { currentPassword: string; newPassword: string; revokeOtherSessions?: boolean };
@@ -85,6 +86,13 @@ export interface AccountRepository {
       accessKeyResourceVersion: number;
       requestId: string;
     }): Promise<AccessKeyDeletion>;
+  };
+  // Role management is account-scoped by the authenticated credential. The
+  // account ID below verifies responses locally and is never sent as an
+  // authority selector.
+  roles?: {
+    list(credential: string, accountId: string, after?: string): Promise<RoleDirectory>;
+    read(credential: string, accountId: string, roleId: string): Promise<RoleAccess>;
   };
   // Explicit, isolated DEMO capabilities. The live HTTP adapter never exposes them.
   executeUserBatch?(credential: string, command: UserBatchCommand): Promise<{ workspace: AccessWorkspace }>;

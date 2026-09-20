@@ -25,6 +25,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
+import type { RoleAccess, RoleDirectory } from "../domain/roles";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
 type WorkspaceExecutionError = AccessWorkspaceError["code"] | AccountError;
@@ -79,6 +80,12 @@ export type AccessKeyClient = {
   delete(userId: string, accessKeyId: string, command: { accessKeyResourceVersion: number; requestId: string }): Promise<AccessKeyDeletion>;
 };
 
+export type RoleAccessClient = {
+  accountId: string;
+  list(after?: string): Promise<RoleDirectory>;
+  read(roleId: string): Promise<RoleAccess>;
+};
+
 export type PolicyDirectoryView = { query: string; kind: string; service: string; category: string; sort: string; page: number; pageSize: number };
 export const defaultPolicyDirectoryView: PolicyDirectoryView = { query: "", kind: "all", service: "all", category: "all", sort: "name", page: 1, pageSize: 10 };
 export type UserDirectoryView = { query: string; state: string; role: string };
@@ -98,6 +105,7 @@ type AccountAccess = {
   permissionBoundaries: UserBoundaryClient | null;
   authorizationProfiles: AuthorizationProfileClient | null;
   accessKeys: AccessKeyClient | null;
+  roles: RoleAccessClient | null;
   scene: AccountAccessScene | null;
   loading: boolean;
   busy: boolean;
@@ -111,7 +119,7 @@ type AccountAccess = {
 };
 
 const AccountAccessContext = createContext<AccountAccess | null>(null);
-type AccountCapabilities = Pick<AccountAccessScene, "canListUsers" | "canListGroups" | "canReadAccounts" | "canCreateAccounts" | "canViewPolicies"> & { hasPreviewWorkspace: boolean };
+type AccountCapabilities = Pick<AccountAccessScene, "canListUsers" | "canListGroups" | "canListRoles" | "canReadAccounts" | "canCreateAccounts" | "canViewPolicies"> & { hasPreviewWorkspace: boolean; supportsLiveRoles: boolean };
 const AccountCapabilitiesContext = createContext<AccountCapabilities | null>(null);
 
 export function accountError(error: unknown): AccountError {
@@ -195,12 +203,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const clearFeedback = useCallback(() => { setWorkspaceError(null); setSuccess(null); }, []);
   const canListUsers = Boolean(scene?.canListUsers);
   const canListGroups = Boolean(scene?.canListGroups);
+  const canListRoles = Boolean(scene?.canListRoles);
   const canReadAccounts = Boolean(scene?.canReadAccounts);
   const canCreateAccounts = Boolean(scene?.canCreateAccounts);
   const canViewPolicies = Boolean(scene?.canViewPolicies);
   const hasPreviewWorkspace = Boolean(repository.workspace);
+  const supportsLiveRoles = Boolean(repository.roles);
   // Navigation observes permission changes, not every form's pending/error state.
-  const capabilities = useMemo(() => ({ canListUsers, canListGroups, canReadAccounts, canCreateAccounts, canViewPolicies, hasPreviewWorkspace }), [canCreateAccounts, canListGroups, canListUsers, canReadAccounts, canViewPolicies, hasPreviewWorkspace]);
+  const capabilities = useMemo(() => ({ canListUsers, canListGroups, canListRoles, canReadAccounts, canCreateAccounts, canViewPolicies, hasPreviewWorkspace, supportsLiveRoles }), [canCreateAccounts, canListGroups, canListRoles, canListUsers, canReadAccounts, canViewPolicies, hasPreviewWorkspace, supportsLiveRoles]);
 
   useEffect(() => {
     if (!active || !credential || !tenantId) return;
@@ -358,6 +368,26 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [active, credential, expireSession, repository, scene, tenantId]);
 
+  const roles = useMemo<RoleAccessClient | null>(() => {
+    const roleRepository = repository.roles;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !roleRepository || !scene.canListRoles) return null;
+    const accountId = scene.accountId;
+    const scoped = async <T,>(request: Promise<T>): Promise<T> => {
+      try { return await request; }
+      catch (failure) {
+        if (failure instanceof HttpProblem && failure.status === 401 && expireSession(credential)) {
+          setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+        }
+        throw failure;
+      }
+    };
+    return {
+      accountId,
+      list: (after) => scoped(roleRepository.list(credential, accountId, after)),
+      read: (roleId) => scoped(roleRepository.read(credential, accountId, roleId))
+    };
+  }, [active, credential, expireSession, repository, scene, tenantId]);
+
   const loadUsersPage = useCallback(async (after: string) => {
     if (!active || !credential || !scene || loading || mutationPending.current) return;
     const source = scene;
@@ -435,6 +465,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     permissionBoundaries,
     authorizationProfiles,
     accessKeys,
+    roles,
     workspace, workspaceError,
     clearWorkspaceError, clearFeedback,
     async executeWorkspace(command, onError) {
@@ -503,7 +534,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, accessKeys, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, accessKeys, roles, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

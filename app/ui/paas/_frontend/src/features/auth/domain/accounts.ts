@@ -21,6 +21,8 @@ export type IamAction =
   | "iam.group-membership.remove"
   | "iam.group-policy-attachment.create"
   | "iam.group-policy-attachment.revoke"
+  | "iam.role.list"
+  | "iam.role.create"
   | "iam.user.read"
   | "iam.user.update"
   | "iam.user.delete"
