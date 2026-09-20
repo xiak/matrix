@@ -47,6 +47,7 @@ function repository({
     async login() {
       const index = Math.min(logins++, 1);
       return {
+        outcome: "AUTHENTICATED" as const,
         credential: credentials[index]!,
         mustChangePassword: false,
         session: {

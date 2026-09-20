@@ -30,14 +30,8 @@ import type {
   UserPolicyAttachment,
   UserPermissionBoundary
 } from "../domain/accounts";
-import type { OtherSessionsRevocation, OwnSessionPage, OwnSessionRevocation, SessionSummary } from "../domain/session";
-import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand, LoginResult } from "./iamRepository";
-
-type LoginWire = {
-  session?: { id?: unknown; organizationId?: unknown; principalId?: unknown; status?: unknown; issuedAt?: unknown; expiresAt?: unknown };
-  credential?: unknown;
-  mustChangePassword?: unknown;
-};
+import type { AuthenticationChallenge, LoginResult, OtherSessionsRevocation, OwnSessionPage, OwnSessionRevocation, SessionSummary } from "../domain/session";
+import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
 
 function accountRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("INVALID_IAM_RESPONSE");
@@ -975,24 +969,109 @@ export const httpAccountRepository: AccountRepository = {
 
 type ChangePasswordWire = { changedAt?: unknown; bootstrapFileRetirable?: unknown };
 
-function parseLogin(value: LoginWire): LoginResult {
-  const session = value.session;
-  if (!session || typeof session.id !== "string" || typeof session.organizationId !== "string" || typeof session.principalId !== "string" || session.status !== "ACTIVE" || typeof session.issuedAt !== "string" || typeof session.expiresAt !== "string" || typeof value.credential !== "string" || !value.credential || typeof value.mustChangePassword !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+function parseActiveSession(value: unknown): SessionSummary {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "organizationId", "principalId", "status", "issuedAt", "expiresAt"]);
+  requireAccountKind(wire, "Session");
+  if (wire.status !== "ACTIVE") throw new Error("INVALID_IAM_RESPONSE");
+  const issuedAt = accountTimestamp(wire.issuedAt);
+  const expiresAt = accountTimestamp(wire.expiresAt);
+  if (timestampOrder(expiresAt) <= timestampOrder(issuedAt)) throw new Error("INVALID_IAM_RESPONSE");
   return {
-    credential: value.credential,
-    mustChangePassword: value.mustChangePassword,
-    session: { id: session.id, organizationId: session.organizationId, principalId: session.principalId, status: "ACTIVE", issuedAt: session.issuedAt, expiresAt: session.expiresAt }
+    id: accountIdentifier(wire.id),
+    organizationId: accountIdentifier(wire.organizationId),
+    principalId: accountIdentifier(wire.principalId),
+    status: "ACTIVE",
+    issuedAt,
+    expiresAt
   };
+}
+
+function parseAuthenticationChallenge(value: unknown): AuthenticationChallenge {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "purpose", "nextStep", "expiresAt"]);
+  requireAccountKind(wire, "AuthenticationChallenge");
+  if (wire.purpose !== "LOGIN" || (wire.nextStep !== "TOTP" && wire.nextStep !== "PASSWORD_CHANGE")) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return {
+    id: accountIdentifier(wire.id),
+    purpose: "LOGIN",
+    nextStep: wire.nextStep,
+    expiresAt: accountTimestamp(wire.expiresAt)
+  };
+}
+
+function parseLogin(value: unknown): LoginResult {
+  const wire = accountRecord(value);
+  if (wire.outcome === "AUTHENTICATED") {
+    exactKeys(wire, ["outcome", "session", "credential", "mustChangePassword"]);
+    if (typeof wire.credential !== "string" || !wire.credential || typeof wire.mustChangePassword !== "boolean") {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
+    return {
+      outcome: "AUTHENTICATED",
+      credential: wire.credential,
+      mustChangePassword: wire.mustChangePassword,
+      session: parseActiveSession(wire.session)
+    };
+  }
+  if (wire.outcome === "CHALLENGE_REQUIRED") {
+    exactKeys(wire, ["outcome", "challenge", "challengeCredential"]);
+    if (typeof wire.challengeCredential !== "string" || !wire.challengeCredential) throw new Error("INVALID_IAM_RESPONSE");
+    return {
+      outcome: "CHALLENGE_REQUIRED",
+      challenge: parseAuthenticationChallenge(wire.challenge),
+      challengeCredential: wire.challengeCredential
+    };
+  }
+  throw new Error("INVALID_IAM_RESPONSE");
 }
 
 export const httpIamRepository: IamRepository = {
   async login(command: LoginCommand): Promise<LoginResult> {
-    const wire = await requestJSON<LoginWire>("/api/iam/v1/auth/login", {
+    const wire = await requestJSON<unknown>("/api/iam/v1/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ loginName: command.loginName, password: command.password, requestId: requestToken("ui-login-") })
     });
-    return parseLogin(wire);
+    const result = parseLogin(wire);
+    if (result.outcome === "CHALLENGE_REQUIRED" && result.challenge.nextStep !== "TOTP") {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
+    return result;
+  },
+  authenticationChallenges: {
+    async verify(command) {
+      const wire = await requestJSON<unknown>(`/api/iam/v1/auth/challenges/${encodeURIComponent(accountIdentifier(command.challengeId))}:verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId: requestToken("ui-login-challenge-"),
+          challengeCredential: command.challengeCredential,
+          code: command.code
+        })
+      });
+      const result = parseLogin(wire);
+      if (result.outcome === "CHALLENGE_REQUIRED" && result.challenge.nextStep !== "PASSWORD_CHANGE") {
+        throw new Error("INVALID_IAM_RESPONSE");
+      }
+      return result;
+    },
+    async changePassword(command) {
+      const wire = accountRecord(await requestJSON<unknown>(`/api/iam/v1/auth/challenges/${encodeURIComponent(accountIdentifier(command.challengeId))}:password`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId: requestToken("ui-login-password-"),
+          challengeCredential: command.challengeCredential,
+          newPassword: command.newPassword
+        })
+      }));
+      exactKeys(wire, ["nextStep", "changedAt"]);
+      if (wire.nextStep !== "REAUTHENTICATE") throw new Error("INVALID_IAM_RESPONSE");
+      return { nextStep: "REAUTHENTICATE", changedAt: accountTimestamp(wire.changedAt) };
+    }
   },
   async changePassword(credential: string, command: ChangePasswordCommand): Promise<void> {
     const wire = await requestJSON<ChangePasswordWire>("/api/iam/v1/auth/password", {

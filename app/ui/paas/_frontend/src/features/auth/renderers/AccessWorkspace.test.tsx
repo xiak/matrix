@@ -52,7 +52,7 @@ const userAccess = (name: string): UserAccess => {
 const identity: AccountIdentity = { account, user: rootUser, identityKind: "ROOT_IDENTITY", policySources: [], permissionBoundary: { accountId: account.id, userId: rootUser.id, resourceVersion: rootUser.resourceVersion, policy: null }, capabilities: currentCapabilities() };
 const users: UserAccess[] = ["lin", "chen"].map(userAccess);
 const reviewUsers: UserAccess[] = [...users, ...["qiao", "wu"].map(userAccess)];
-const login: IamRepository = { login: async () => ({ credential: "preview-only", mustChangePassword: false, session: { id: "session", organizationId: "org-xiak", principalId: "admin", status: "ACTIVE", issuedAt: "2026-09-09T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z" } }), changePassword: async () => {}, logout: async () => {} };
+const login: IamRepository = { login: async () => ({ outcome: "AUTHENTICATED", credential: "preview-only", mustChangePassword: false, session: { id: "session", organizationId: "org-xiak", principalId: "admin", status: "ACTIVE", issuedAt: "2026-09-09T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z" } }), changePassword: async () => {}, logout: async () => {} };
 
 function AccountRefresh() {
   const access = useAccountAccess();

@@ -27,8 +27,8 @@ import type {
 import { enterprisePrincipalId, previewUserPrincipalId, type AccessWorkspace } from "../domain/accessWorkspace";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import { applyUserBatch } from "../domain/userBatch";
-import type { OtherSessionsRevocation, OwnSessionRevocation, SessionSummary } from "../domain/session";
-import type { AccountRepository, IamRepository, LoginResult } from "./iamRepository";
+import type { LoginResult, OtherSessionsRevocation, OwnSessionRevocation, SessionSummary } from "../domain/session";
+import type { AccountRepository, IamRepository } from "./iamRepository";
 import { createPreviewAccessWorkspace } from "./previewAccessWorkspace";
 
 export const previewCredential = "matrix-ux-preview-memory-only";
@@ -182,6 +182,7 @@ const previewOtherSessionReplays = new Map<string, OtherSessionsRevocation>();
 
 let activePreviewCredential: string | null = null;
 let activeRecoveryChallenge: string | null = null;
+let activeLoginChallenge: { id: string; credential: string; nextStep: "TOTP" | "PASSWORD_CHANGE" } | null = null;
 const consumedRecoveryCodes = new Set<string>();
 
 export function isPreviewCredential(credential: string): boolean {
@@ -284,6 +285,7 @@ export function resetPreviewEnvironment(): void {
   previewLoginVerified = false;
   activePreviewCredential = null;
   activeRecoveryChallenge = null;
+  activeLoginChallenge = null;
   consumedRecoveryCodes.clear();
   workspace.reset();
   const initial = structuredClone(initialPreviewState);
@@ -297,6 +299,7 @@ export function resetPreviewEnvironment(): void {
 
 function loginResult(credential: string): LoginResult {
   return {
+    outcome: "AUTHENTICATED",
     credential,
     mustChangePassword: false,
     session: {
@@ -313,10 +316,70 @@ function loginResult(credential: string): LoginResult {
 export const previewIamRepository: IamRepository = {
   async login() {
     const mfa = workspace.snapshot().personalMfa;
-    if ((mfa.factorState !== "never-bound" || mfa.recoveryState !== "idle") && !previewLoginVerified) throw new HttpProblem(401, "PREVIEW_MFA_REQUIRED");
+    if ((mfa.factorState !== "never-bound" || mfa.recoveryState !== "idle") && !previewLoginVerified) {
+      activePreviewCredential = null;
+      activeLoginChallenge = {
+        id: `preview-login-challenge-${crypto.randomUUID()}`,
+        credential: `preview-challenge-${crypto.randomUUID()}`,
+        nextStep: "TOTP"
+      };
+      return {
+        outcome: "CHALLENGE_REQUIRED",
+        challenge: {
+          id: activeLoginChallenge.id,
+          purpose: "LOGIN",
+          nextStep: "TOTP",
+          expiresAt: new Date(Date.now() + 5 * 60_000).toISOString()
+        },
+        challengeCredential: activeLoginChallenge.credential
+      };
+    }
     previewLoginVerified = false;
     activePreviewCredential = `matrix-ux-preview-${crypto.randomUUID()}`;
     return loginResult(activePreviewCredential);
+  },
+  authenticationChallenges: {
+    async verify(command) {
+      if (!activeLoginChallenge || activeLoginChallenge.nextStep !== "TOTP"
+          || command.challengeId !== activeLoginChallenge.id
+          || command.challengeCredential !== activeLoginChallenge.credential) {
+        throw new HttpProblem(409, "PREVIEW_CHALLENGE_EXPIRED");
+      }
+      if (command.code !== "624810" && command.code !== "624811") {
+        throw new HttpProblem(401, "PREVIEW_CHALLENGE_INVALID_CODE");
+      }
+      if (command.code === "624811") {
+        activeLoginChallenge = {
+          id: `preview-password-challenge-${crypto.randomUUID()}`,
+          credential: `preview-challenge-${crypto.randomUUID()}`,
+          nextStep: "PASSWORD_CHANGE"
+        };
+        return {
+          outcome: "CHALLENGE_REQUIRED",
+          challenge: {
+            id: activeLoginChallenge.id,
+            purpose: "LOGIN",
+            nextStep: "PASSWORD_CHANGE",
+            expiresAt: new Date(Date.now() + 5 * 60_000).toISOString()
+          },
+          challengeCredential: activeLoginChallenge.credential
+        };
+      }
+      activeLoginChallenge = null;
+      activePreviewCredential = `matrix-ux-preview-${crypto.randomUUID()}`;
+      return loginResult(activePreviewCredential);
+    },
+    async changePassword(command) {
+      if (!activeLoginChallenge || activeLoginChallenge.nextStep !== "PASSWORD_CHANGE"
+          || command.challengeId !== activeLoginChallenge.id
+          || command.challengeCredential !== activeLoginChallenge.credential) {
+        throw new HttpProblem(409, "PREVIEW_CHALLENGE_EXPIRED");
+      }
+      if (command.newPassword.length < 12) throw new HttpProblem(422, "PREVIEW_PASSWORD_POLICY");
+      activeLoginChallenge = null;
+      activePreviewCredential = null;
+      return { nextStep: "REAUTHENTICATE", changedAt: new Date().toISOString() };
+    }
   },
   async changePassword(credential) { requirePreviewCredential(credential); },
   async logout(credential) {

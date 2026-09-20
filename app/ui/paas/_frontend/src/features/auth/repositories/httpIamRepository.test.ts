@@ -414,11 +414,56 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("sends the qualified username as one login identifier", async () => {
-    const fetcher = reply({ credential: "transient-bearer", mustChangePassword: false,
-      session: { id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } });
-    await httpIamRepository.login({ loginName: "alex@acme", password: "synthetic-test-password" });
+    const fetcher = reply({ outcome: "AUTHENTICATED", credential: "transient-bearer", mustChangePassword: false,
+      session: { apiVersion, kind: "Session", id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } });
+    await expect(httpIamRepository.login({ loginName: "alex@acme", password: "synthetic-test-password" })).resolves.toMatchObject({ outcome: "AUTHENTICATED", credential: "transient-bearer" });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/login");
     expect(requestBody(fetcher)).toEqual({ loginName: "alex@acme", password: "synthetic-test-password", requestId: expect.any(String) });
+  });
+
+  it("keeps a login challenge separate from a session and verifies it without a bearer", async () => {
+    const challenge = { apiVersion, kind: "AuthenticationChallenge", id: "challenge-one", purpose: "LOGIN", nextStep: "TOTP", expiresAt: "2099-09-20T01:07:03Z" };
+    const loginFetch = reply({ outcome: "CHALLENGE_REQUIRED", challenge, challengeCredential: "challenge-secret" });
+    await expect(httpIamRepository.login({ loginName: "alex@acme", password: "synthetic-test-password" })).resolves.toEqual({
+      outcome: "CHALLENGE_REQUIRED",
+      challenge: { id: "challenge-one", purpose: "LOGIN", nextStep: "TOTP", expiresAt: "2099-09-20T01:07:03Z" },
+      challengeCredential: "challenge-secret"
+    });
+    expect(firstRequest(loginFetch)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+
+    const verifyFetch = reply({ outcome: "AUTHENTICATED", credential: "transient-bearer", mustChangePassword: false,
+      session: { apiVersion, kind: "Session", id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } });
+    await expect(httpIamRepository.authenticationChallenges!.verify({ challengeId: "challenge-one", challengeCredential: "challenge-secret", code: "123456" })).resolves.toMatchObject({ outcome: "AUTHENTICATED" });
+    expect(firstRequest(verifyFetch)[0]).toBe("/api/iam/v1/auth/challenges/challenge-one:verify");
+    expect(requestBody(verifyFetch)).toEqual({ requestId: expect.any(String), challengeCredential: "challenge-secret", code: "123456" });
+    expect(firstRequest(verifyFetch)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+  });
+
+  it("uses the separately credentialed challenge password endpoint and only accepts reauthentication", async () => {
+    const fetcher = reply({ nextStep: "REAUTHENTICATE", changedAt: timestamp });
+    await expect(httpIamRepository.authenticationChallenges!.changePassword({ challengeId: "challenge-password", challengeCredential: "challenge-secret", newPassword: "New-Only-Test-Password-73!" })).resolves.toEqual({ nextStep: "REAUTHENTICATE", changedAt: timestamp });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/challenges/challenge-password:password");
+    expect(requestBody(fetcher)).toEqual({ requestId: expect.any(String), challengeCredential: "challenge-secret", newPassword: "New-Only-Test-Password-73!" });
+    expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+  });
+
+  it.each([
+    { outcome: "AUTHENTICATED", credential: "bearer", mustChangePassword: false, challenge: { apiVersion, kind: "AuthenticationChallenge", id: "challenge", purpose: "LOGIN", nextStep: "TOTP", expiresAt: "2099-09-20T01:07:03Z" }, session: { apiVersion, kind: "Session", id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } },
+    { outcome: "CHALLENGE_REQUIRED", challenge: { apiVersion, kind: "AuthenticationChallenge", id: "challenge", purpose: "LOGIN", nextStep: "RECOVERY", expiresAt: "2099-09-20T01:07:03Z" }, challengeCredential: "secret" },
+    { outcome: "CHALLENGE_REQUIRED", challenge: { apiVersion, kind: "AuthenticationChallenge", id: "challenge", purpose: "LOGIN", nextStep: "TOTP", expiresAt: "2099-09-20T01:07:03Z" }, challengeCredential: "secret", credential: "forbidden" }
+  ])("rejects mixed or unsupported login response branches", async (response) => {
+    reply(response);
+    await expect(httpIamRepository.login({ loginName: "alex@acme", password: "synthetic-test-password" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("rejects challenge steps that are valid in another phase but not at this endpoint", async () => {
+    const passwordChallenge = { apiVersion, kind: "AuthenticationChallenge", id: "challenge-password", purpose: "LOGIN", nextStep: "PASSWORD_CHANGE", expiresAt: "2099-09-20T01:07:03Z" };
+    reply({ outcome: "CHALLENGE_REQUIRED", challenge: passwordChallenge, challengeCredential: "secret" });
+    await expect(httpIamRepository.login({ loginName: "alex@acme", password: "synthetic-test-password" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+
+    const totpChallenge = { ...passwordChallenge, id: "challenge-totp", nextStep: "TOTP" };
+    reply({ outcome: "CHALLENGE_REQUIRED", challenge: totpChallenge, challengeCredential: "secret" });
+    await expect(httpIamRepository.authenticationChallenges!.verify({ challengeId: "challenge-totp", challengeCredential: "secret", code: "123456" })).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
   it("creates a user with no implicit policy or caller-supplied account", async () => {

@@ -596,7 +596,8 @@ describe("access workspace preview invariants", () => {
     await previewAccountRepository.workspace!.execute(previewCredential, { kind: "confirm-personal-mfa" });
     await previewIamRepository.logout(previewCredential);
     expect(previewPersonalMfaSnapshot()).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
-    await expect(previewIamRepository.login({ loginName: "preview-admin", password: "experience-only" })).rejects.toMatchObject({ status: 401 });
+    const challenge = await previewIamRepository.login({ loginName: "preview-admin", password: "experience-only" });
+    expect(challenge).toMatchObject({ outcome: "CHALLENGE_REQUIRED", challenge: { purpose: "LOGIN", nextStep: "TOTP" } });
     resetPreviewEnvironment();
     expect(previewPersonalMfaSnapshot()).toEqual({ factorState: "never-bound", reauthenticationRequired: false, recoveryState: "idle" });
   });
@@ -614,11 +615,13 @@ describe("access workspace preview invariants", () => {
   it("revokes the old preview bearer at binding confirmation and never revives it after a fresh login", async () => {
     resetPreviewEnvironment();
     const oldSession = await previewIamRepository.login({ loginName: "preview-admin", password: "experience-only" });
+    if (oldSession.outcome !== "AUTHENTICATED") throw new Error("expected preview session");
     expect(await previewAccountRepository.currentIdentity(oldSession.credential)).toBeTruthy();
     await previewAccountRepository.workspace!.execute(oldSession.credential, { kind: "confirm-personal-mfa" });
     await expect(previewAccountRepository.currentIdentity(oldSession.credential)).rejects.toMatchObject({ status: 401 });
     expect(await completePreviewPersonalMfaLogin()).toBe(true);
     const freshSession = await previewIamRepository.login({ loginName: "preview-admin", password: "experience-only" });
+    if (freshSession.outcome !== "AUTHENTICATED") throw new Error("expected preview session");
     expect(freshSession.credential).not.toBe(oldSession.credential);
     expect(await previewAccountRepository.currentIdentity(freshSession.credential)).toBeTruthy();
     await expect(previewAccountRepository.currentIdentity(oldSession.credential)).rejects.toMatchObject({ status: 401 });

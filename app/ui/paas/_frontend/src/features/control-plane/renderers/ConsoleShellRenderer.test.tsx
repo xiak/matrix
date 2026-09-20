@@ -114,6 +114,7 @@ async function renderConsole({
   const iam: IamRepository = iamRepository ?? {
     async login() {
       return {
+        outcome: "AUTHENTICATED",
         credential: "renderer-test-memory-only-session",
         mustChangePassword: false,
         session: {

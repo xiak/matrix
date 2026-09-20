@@ -17,6 +17,15 @@
 .cardHeading h1 { margin: 0; color: var(--xiak-color-text-strong); font-size: 24px; font-weight: var(--xiak-font-weight-semibold); line-height: 1.4; }
 .cardHeading > p { color: var(--xiak-color-text-muted); line-height: 1.7; }
 .form { display: grid; gap: 20px; }
+.challengeIcon { display: grid; width: 40px; height: 40px; place-items: center; border: 1px solid var(--xiak-color-border-accent); border-radius: var(--xiak-radius-small); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
+.challengeIcon svg { width: 20px; height: 20px; }
+.challengeIdentity { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; margin-bottom: 20px; border-bottom: var(--xiak-border-subtle); padding-bottom: 16px; }
+.challengeIdentity span { grid-row: 1 / span 2; align-self: center; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.challengeIdentity strong { min-width: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
+.challengeCompletion { display: grid; gap: 20px; }
+.challengeCompletion > svg { width: 40px; height: 40px; color: var(--xiak-color-status-success); }
+.challengeCompletion .cardHeading { margin-bottom: 0; }
+.previewChallengeHint { margin: -4px 0 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.5; }
 .previewEntry { display: grid; gap: var(--xiak-spacing-default); margin-top: var(--xiak-spacing-roomy); border-top: var(--xiak-border-subtle); padding-top: var(--xiak-spacing-roomy); }
 .previewHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-tight); color: var(--xiak-color-text-base); }
 .previewHeading > span { border: 1px solid var(--xiak-color-border-accent); border-radius: var(--xiak-radius-small); padding: 2px 6px; color: var(--xiak-color-accent-text); font-family: var(--xiak-font-mono); font-size: var(--xiak-font-size-caption); line-height: 1.3; }

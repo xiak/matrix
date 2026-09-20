@@ -1,4 +1,4 @@
-import type { OtherSessionsRevocation, OwnSessionPage, OwnSessionRevocation, SessionSummary } from "../domain/session";
+import type { LoginResult, OtherSessionsRevocation, OwnSessionPage, OwnSessionRevocation } from "../domain/session";
 import type {
   AccountAccess,
   AccountCommand,
@@ -20,11 +20,16 @@ import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWo
 import type { UserBatchCommand } from "../domain/userBatch";
 
 export type LoginCommand = { loginName: string; password: string };
-export type LoginResult = { session: SessionSummary; credential: string; mustChangePassword: boolean };
 export type ChangePasswordCommand = { currentPassword: string; newPassword: string; revokeOtherSessions?: boolean };
+export type VerifyAuthenticationChallengeCommand = { challengeId: string; challengeCredential: string; code: string };
+export type ChangeChallengePasswordCommand = { challengeId: string; challengeCredential: string; newPassword: string };
 
 export interface IamRepository {
   login(command: LoginCommand): Promise<LoginResult>;
+  authenticationChallenges?: {
+    verify(command: VerifyAuthenticationChallengeCommand): Promise<LoginResult>;
+    changePassword(command: ChangeChallengePasswordCommand): Promise<{ nextStep: "REAUTHENTICATE"; changedAt: string }>;
+  };
   changePassword(credential: string, command: ChangePasswordCommand): Promise<void>;
   logout(credential: string): Promise<void>;
   sessions?: {

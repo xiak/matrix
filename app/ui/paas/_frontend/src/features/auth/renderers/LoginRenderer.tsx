@@ -7,6 +7,7 @@ import { AppearanceControls } from "@/preferences/AppearanceControls";
 import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
 import { useSession } from "../application/SessionProvider";
 import { AccountLoginForm } from "./AccountLoginForm";
+import { AuthenticationChallengeForm } from "./AuthenticationChallengeForm";
 import { PasswordChangeForm } from "./PasswordChangeForm";
 import styles from "./LoginRenderer.module.css";
 
@@ -14,6 +15,9 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
   const session = useSession();
   const t = useTranslations("Auth");
   const firstLogin = Boolean(session.current && session.phase !== "authenticated");
+  const challenged = session.phase === "challenge-required" || session.phase === "verifying-challenge"
+    || session.phase === "challenge-password-required" || session.phase === "changing-challenge-password"
+    || session.phase === "reauthentication-required";
   return <App.Frame><App.Background /><App.Layers><App.Layer>
     <div className={styles.page}>
       <header className={styles.header}>
@@ -39,7 +43,9 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
           </div>
         </section>
         <section aria-label={t("region")} className={styles.loginCard}>
-          {firstLogin ? <PasswordChangeForm returnTo={returnTo} /> : <AccountLoginForm returnTo={returnTo} />}
+          {challenged ? <AuthenticationChallengeForm returnTo={returnTo} />
+            : firstLogin ? <PasswordChangeForm returnTo={returnTo} />
+              : <AccountLoginForm returnTo={returnTo} />}
           <p className={styles.securityNote}><ShieldCheck aria-hidden="true" /><span>{t(uxPreviewEnabled ? "previewSecurity" : "security")}</span></p>
         </section>
       </main>
