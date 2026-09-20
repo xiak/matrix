@@ -276,6 +276,67 @@ type ConfirmAuthenticatorRecoveryResponse struct {
 	RecoveryCodes []Secret              `json:"recoveryCodes"`
 }
 
+type StepUpOperation string
+
+const StepUpRegenerateRecoveryCodes StepUpOperation = "RECOVERY_CODES_REGENERATE"
+
+// StepUp is non-secret metadata for one operation bound to its original login
+// Session. Neither its ID nor PROVED state is a bearer or a permission decision.
+type StepUp struct {
+	APIVersion             string          `json:"apiVersion"`
+	Kind                   string          `json:"kind"`
+	ID                     string          `json:"id"`
+	RequestID              string          `json:"requestId"`
+	Operation              StepUpOperation `json:"operation"`
+	ExpectedFactorRevision uint64          `json:"expectedFactorRevision"`
+	State                  string          `json:"state"`
+	CreatedAt              time.Time       `json:"createdAt"`
+	ExpiresAt              time.Time       `json:"expiresAt"`
+	ProvedAt               *time.Time      `json:"provedAt,omitempty"`
+	ConsumedAt             *time.Time      `json:"consumedAt,omitempty"`
+}
+
+// RequestID is the intended sensitive command's identity, not a target selector.
+type StartStepUpRequest struct {
+	RequestID              string          `json:"requestId"`
+	Operation              StepUpOperation `json:"operation"`
+	ExpectedFactorRevision uint64          `json:"expectedFactorRevision"`
+}
+
+// The original login bearer is still required; this request cannot authenticate
+// by an ID alone or exchange a LOGIN/RECOVERY challenge for a proved operation.
+type VerifyStepUpRequest struct {
+	RequestID string `json:"requestId"`
+	Password  Secret `json:"password"`
+	Code      Secret `json:"code"`
+}
+
+type RegenerateRecoveryCodesRequest struct {
+	RequestID              string `json:"requestId"`
+	StepUpID               string `json:"stepUpId"`
+	ExpectedFactorRevision uint64 `json:"expectedFactorRevision"`
+}
+
+// This immutable completion can be inspected after a new normal login. It does
+// not disclose a batch verifier, a saved code, or usable step-up authority.
+type RecoveryCodeRegeneration struct {
+	APIVersion     string    `json:"apiVersion"`
+	Kind           string    `json:"kind"`
+	ID             string    `json:"id"`
+	RequestID      string    `json:"requestId"`
+	FactorID       string    `json:"factorId"`
+	FactorRevision uint64    `json:"factorRevision"`
+	CreatedAt      time.Time `json:"createdAt"`
+}
+
+// APPLIED returns exactly ten new codes once. EQUAL_REPLAY has only completion
+// metadata; no null/empty code placeholder or new session is part of that result.
+type RegenerateRecoveryCodesResponse struct {
+	Outcome       string                   `json:"outcome"`
+	Regeneration  RecoveryCodeRegeneration `json:"regeneration"`
+	RecoveryCodes []Secret                 `json:"recoveryCodes,omitempty"`
+}
+
 // LoginResponse is a disjoint result. Only AUTHENTICATED contains a Session;
 // CHALLENGE_REQUIRED contains no login bearer or password-change entitlement.
 // Ordinary JSON marshaling is forbidden; use EncodeLoginResponse.

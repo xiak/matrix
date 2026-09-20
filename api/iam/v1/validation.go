@@ -505,6 +505,89 @@ func ValidateConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorReco
 	return validateRecoveryCodes(value.RecoveryCodes)
 }
 
+func ValidateStepUp(value StepUp) error {
+	if value.APIVersion != APIVersion || value.Kind != "StepUp" ||
+		value.Operation != StepUpRegenerateRecoveryCodes || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||
+		ValidateID("stepUp.id", value.ID) != nil || ValidateID("stepUp.requestId", value.RequestID) != nil ||
+		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
+		value.ExpiresAt.Sub(value.CreatedAt) != 2*time.Minute {
+		return errors.New("step-up is invalid")
+	}
+	if value.ProvedAt != nil && (validateTime("provedAt", *value.ProvedAt) != nil || value.ProvedAt.Before(value.CreatedAt) || !value.ProvedAt.Before(value.ExpiresAt)) {
+		return errors.New("step-up proof time is invalid")
+	}
+	if value.ConsumedAt != nil && (value.ProvedAt == nil || validateTime("consumedAt", *value.ConsumedAt) != nil ||
+		value.ConsumedAt.Before(*value.ProvedAt) || !value.ConsumedAt.Before(value.ExpiresAt)) {
+		return errors.New("step-up consumption time is invalid")
+	}
+	switch value.State {
+	case "PENDING":
+		if value.ProvedAt != nil || value.ConsumedAt != nil {
+			return errors.New("pending step-up has completion")
+		}
+	case "PROVED":
+		if value.ProvedAt == nil || value.ConsumedAt != nil {
+			return errors.New("step-up proof is invalid")
+		}
+	case "CONSUMED":
+		if value.ProvedAt == nil || value.ConsumedAt == nil {
+			return errors.New("step-up consumption is invalid")
+		}
+	case "EXPIRED":
+		if value.ConsumedAt != nil {
+			return errors.New("consumed step-up cannot expire again")
+		}
+	default:
+		return errors.New("step-up state is invalid")
+	}
+	return nil
+}
+
+func ValidateStartStepUpRequest(value StartStepUpRequest) error {
+	if value.Operation != StepUpRegenerateRecoveryCodes || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil {
+		return errors.New("step-up operation is invalid")
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateVerifyStepUpRequest(value VerifyStepUpRequest) error {
+	// Nonempty malformed candidates must reach the shared durable budget.
+	if !value.Password.Present() || !value.Code.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateRegenerateRecoveryCodesRequest(value RegenerateRecoveryCodesRequest) error {
+	if value.ExpectedFactorRevision < 2 {
+		return errors.New("bound factor revision is required")
+	}
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID), validatePositiveVersion(value.ExpectedFactorRevision))
+}
+
+func ValidateRecoveryCodeRegeneration(value RecoveryCodeRegeneration) error {
+	if value.APIVersion != APIVersion || value.Kind != "RecoveryCodeRegeneration" || value.FactorRevision <= 1 {
+		return errors.New("recovery code regeneration is invalid")
+	}
+	return errors.Join(ValidateID("id", value.ID), ValidateID("requestId", value.RequestID), ValidateID("factorId", value.FactorID),
+		validatePositiveVersion(value.FactorRevision), validateTime("createdAt", value.CreatedAt))
+}
+
+func ValidateRegenerateRecoveryCodesResponse(value RegenerateRecoveryCodesResponse) error {
+	if err := ValidateRecoveryCodeRegeneration(value.Regeneration); err != nil {
+		return err
+	}
+	switch value.Outcome {
+	case "APPLIED":
+		return validateRecoveryCodes(value.RecoveryCodes)
+	case "EQUAL_REPLAY":
+		if value.RecoveryCodes == nil {
+			return nil
+		}
+	}
+	return errors.New("recovery code regeneration outcome is invalid")
+}
+
 func ValidateLogoutRequest(value LogoutRequest) error {
 	return ValidateID("requestId", value.RequestID)
 }

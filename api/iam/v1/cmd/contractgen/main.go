@@ -485,6 +485,12 @@ func structContracts() map[string]reflect.Type {
 		"StartAuthenticatorRecoveryResponse":            openapi31.StructType[iamv1.StartAuthenticatorRecoveryResponse](),
 		"InspectAuthenticatorRecoveryRequest":           openapi31.StructType[iamv1.InspectAuthenticatorRecoveryRequest](),
 		"ConfirmAuthenticatorRecoveryResponse":          openapi31.StructType[iamv1.ConfirmAuthenticatorRecoveryResponse](),
+		"StepUp":                                        openapi31.StructType[iamv1.StepUp](),
+		"StartStepUpRequest":                            openapi31.StructType[iamv1.StartStepUpRequest](),
+		"VerifyStepUpRequest":                           openapi31.StructType[iamv1.VerifyStepUpRequest](),
+		"RegenerateRecoveryCodesRequest":                openapi31.StructType[iamv1.RegenerateRecoveryCodesRequest](),
+		"RecoveryCodeRegeneration":                      openapi31.StructType[iamv1.RecoveryCodeRegeneration](),
+		"RegenerateRecoveryCodesResponse":               openapi31.StructType[iamv1.RegenerateRecoveryCodesResponse](),
 		"LogoutRequest":                                 openapi31.StructType[iamv1.LogoutRequest](),
 		"LogoutResponse":                                openapi31.StructType[iamv1.LogoutResponse](),
 		"ChangePasswordRequest":                         openapi31.StructType[iamv1.ChangePasswordRequest](),
@@ -582,6 +588,9 @@ func structContracts() map[string]reflect.Type {
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
 	if jsonName == "factorRevision" || jsonName == "expectedFactorRevision" {
+		if owner == "StepUp" || owner == "StartStepUpRequest" || owner == "RegenerateRecoveryCodesRequest" || owner == "RecoveryCodeRegeneration" {
+			return object{"type": "integer", "minimum": 2, "maximum": uint64(9007199254740991)}
+		}
 		maximum := uint64(9007199254740990)
 		if owner == "AuthenticatorState" {
 			maximum++
@@ -597,10 +606,16 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "AuthenticatorRecovery" && jsonName == "state" {
 		return object{"enum": []string{"STARTED", "COMPLETED", "SUPERSEDED", "EXPIRED"}}
 	}
-	if owner == "StartTOTPEnrollmentResponse" && jsonName == "outcome" {
+	if (owner == "StepUp" || owner == "StartStepUpRequest") && jsonName == "operation" {
+		return object{"const": string(iamv1.StepUpRegenerateRecoveryCodes)}
+	}
+	if owner == "StepUp" && jsonName == "state" {
+		return object{"enum": []string{"PENDING", "PROVED", "CONSUMED", "EXPIRED"}}
+	}
+	if (owner == "StartTOTPEnrollmentResponse" || owner == "RegenerateRecoveryCodesResponse") && jsonName == "outcome" {
 		return object{"enum": []string{"APPLIED", "EQUAL_REPLAY"}}
 	}
-	if owner == "ConfirmTOTPEnrollmentResponse" || owner == "ConfirmAuthenticatorRecoveryResponse" {
+	if owner == "ConfirmTOTPEnrollmentResponse" || owner == "ConfirmAuthenticatorRecoveryResponse" || owner == "RegenerateRecoveryCodesResponse" {
 		if jsonName == "nextStep" {
 			return object{"const": "REAUTHENTICATE"}
 		}
@@ -922,6 +937,18 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["StepUp"].(object)["description"] = "Non-secret metadata bound to one operation and its original effective login Session. It is not a bearer, unlogged challenge or authorization permit. Runtime validation enforces the original 120-second lifetime and proof/consumption ordering; proving never extends expiry."
+	schemas["StepUp"].(object)["oneOf"] = []any{
+		object{"properties": object{"state": object{"const": "PENDING"}, "provedAt": false, "consumedAt": false}},
+		object{"required": []string{"provedAt"}, "properties": object{"state": object{"const": "PROVED"}, "provedAt": object{"type": "string"}, "consumedAt": false}},
+		object{"required": []string{"provedAt", "consumedAt"}, "properties": object{"state": object{"const": "CONSUMED"}, "provedAt": object{"type": "string"}, "consumedAt": object{"type": "string"}}},
+		object{"properties": object{"state": object{"const": "EXPIRED"}, "provedAt": object{"type": "string"}, "consumedAt": false}},
+	}
+	schemas["RecoveryCodeRegeneration"].(object)["description"] = "Immutable non-secret observation of an original same-user recovery-code regeneration. It neither returns saved codes nor renews step-up authority."
+	schemas["RegenerateRecoveryCodesResponse"].(object)["oneOf"] = []any{
+		object{"required": []string{"recoveryCodes"}, "properties": object{"outcome": object{"const": "APPLIED"}, "recoveryCodes": object{"type": "array"}}},
+		object{"properties": object{"outcome": object{"const": "EQUAL_REPLAY"}, "recoveryCodes": false}},
+	}
 	schemas["AuthenticationChallenge"].(object)["oneOf"] = []any{
 		object{"properties": object{"purpose": object{"const": "LOGIN"}, "nextStep": object{"enum": []string{"TOTP", "PASSWORD_CHANGE", "RECOVER"}}}},
 		object{"properties": object{"purpose": object{"const": "RECOVERY"}, "nextStep": object{"const": "ENROLLMENT"}}},

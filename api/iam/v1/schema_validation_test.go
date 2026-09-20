@@ -14,6 +14,87 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	step := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`
+	start := `{"requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`
+	verify := `{"requestId":"verify-a","password":"synthetic-password","code":"malformed-nonempty-candidate"}`
+	command := `{"requestId":"regenerate-a","stepUpId":"proof-a","expectedFactorRevision":2}`
+	result := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RecoveryCodeRegeneration","id":"regeneration-a","requestId":"regenerate-a","factorId":"factor-a","factorRevision":2,"createdAt":"2026-09-21T12:01:00Z"}`
+	codeJSON, err := json.Marshal([]string{"code-0", "code-1", "code-2", "code-3", "code-4", "code-5", "code-6", "code-7", "code-8", "code-9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := `{"outcome":"APPLIED","regeneration":` + result + `,"recoveryCodes":` + string(codeJSON) + `}`
+	replayed := `{"outcome":"EQUAL_REPLAY","regeneration":` + result + `}`
+	proved := strings.TrimSuffix(strings.Replace(step, "PENDING", "PROVED", 1), "}") + `,"provedAt":"2026-09-21T12:00:30Z"}`
+	consumed := strings.TrimSuffix(strings.Replace(proved, "PROVED", "CONSUMED", 1), "}") + `,"consumedAt":"2026-09-21T12:01:00Z"}`
+	newValue := map[string]func() any{
+		"StepUp":                          func() any { return new(StepUp) },
+		"StartStepUpRequest":              func() any { return new(StartStepUpRequest) },
+		"VerifyStepUpRequest":             func() any { return new(VerifyStepUpRequest) },
+		"RegenerateRecoveryCodesRequest":  func() any { return new(RegenerateRecoveryCodesRequest) },
+		"RecoveryCodeRegeneration":        func() any { return new(RecoveryCodeRegeneration) },
+		"RegenerateRecoveryCodesResponse": func() any { return new(RegenerateRecoveryCodesResponse) },
+		"LoginResponse":                   func() any { return new(LoginResponse) },
+	}
+	for index, sample := range []struct {
+		kind, wire string
+		valid      bool
+	}{
+		{"StepUp", step, true},
+		{"StepUp", proved, true},
+		{"StepUp", consumed, true},
+		{"StepUp", strings.Replace(step, "PENDING", "EXPIRED", 1), true},
+		{"StepUp", strings.Replace(proved, "PROVED", "EXPIRED", 1), true},
+		{"StepUp", strings.Replace(consumed, "CONSUMED", "EXPIRED", 1), false},
+		{"StepUp", strings.Replace(step, "PENDING", "PROVED", 1), false},
+		{"StepUp", strings.TrimSuffix(step, "}") + `,"provedAt":null}`, false},
+		{"StepUp", strings.TrimSuffix(proved, "}") + `,"consumedAt":null}`, false},
+		{"StepUp", strings.TrimSuffix(step, "}") + `,"sessionId":"other"}`, false},
+		{"StepUp", strings.Replace(step, "RECOVERY_CODES_REGENERATE", "iam.user.update", 1), false},
+		{"StepUp", strings.Replace(step, `"expectedFactorRevision":2`, `"expectedFactorRevision":1`, 1), false},
+		{"StepUp", strings.Replace(step, `"expectedFactorRevision":2`, `"expectedFactorRevision":9007199254740991`, 1), true},
+		{"StartStepUpRequest", start, true},
+		{"StartStepUpRequest", strings.Replace(start, ":2}", ":1}", 1), false},
+		{"StartStepUpRequest", strings.TrimSuffix(start, "}") + `,"input":{}}`, false},
+		{"VerifyStepUpRequest", verify, true},
+		{"VerifyStepUpRequest", strings.Replace(verify, `"synthetic-password"`, `null`, 1), false},
+		{"VerifyStepUpRequest", strings.Replace(verify, `"malformed-nonempty-candidate"`, `""`, 1), false},
+		{"VerifyStepUpRequest", strings.TrimSuffix(verify, "}") + `,"challengeCredential":"synthetic"}`, false},
+		{"RegenerateRecoveryCodesRequest", command, true},
+		{"RegenerateRecoveryCodesRequest", strings.Replace(command, ":2}", ":9007199254740992}", 1), false},
+		{"RegenerateRecoveryCodesRequest", strings.TrimSuffix(command, "}") + `,"userId":"other"}`, false},
+		{"RecoveryCodeRegeneration", result, true},
+		{"RecoveryCodeRegeneration", strings.Replace(result, `"factorRevision":2`, `"factorRevision":1`, 1), false},
+		{"RecoveryCodeRegeneration", strings.TrimSuffix(result, "}") + `,"codes":[]}`, false},
+		{"RegenerateRecoveryCodesResponse", applied, true},
+		{"RegenerateRecoveryCodesResponse", replayed, true},
+		{"RegenerateRecoveryCodesResponse", strings.Replace(applied, "APPLIED", "EQUAL_REPLAY", 1), false},
+		{"RegenerateRecoveryCodesResponse", strings.Replace(replayed, "EQUAL_REPLAY", "APPLIED", 1), false},
+		{"RegenerateRecoveryCodesResponse", strings.Replace(applied, `"code-9"`, `"code-0"`, 1), false},
+		{"RegenerateRecoveryCodesResponse", strings.Replace(applied, string(codeJSON), "[]", 1), false},
+		{"RegenerateRecoveryCodesResponse", strings.TrimSuffix(replayed, "}") + `,"recoveryCodes":null}`, false},
+		{"RegenerateRecoveryCodesResponse", strings.TrimSuffix(replayed, "}") + `,"recoveryCodes":[]}`, false},
+		{"RegenerateRecoveryCodesResponse", strings.TrimSuffix(applied, "}") + `,"session":null}`, false},
+		{"LoginResponse", `{"outcome":"CHALLENGE_REQUIRED","challenge":` + proved + `,"challengeCredential":"synthetic"}`, false},
+	} {
+		t.Run(fmt.Sprintf("%s/%d", sample.kind, index), func(t *testing.T) {
+			schema := compileIAMOpenAPISchema(t, api, sample.kind)
+			var raw any
+			if json.Unmarshal([]byte(sample.wire), &raw) != nil {
+				t.Fatal("invalid synthetic fixture")
+			}
+			if (schema.Validate(raw) == nil) != sample.valid {
+				t.Fatal("schema step-up boundary differs from expected behavior")
+			}
+			if (json.Unmarshal([]byte(sample.wire), newValue[sample.kind]()) == nil) != sample.valid {
+				t.Fatal("decoder step-up boundary differs from expected behavior")
+			}
+		})
+	}
+}
+
 func TestAuthenticatorRecoverySchemasSeparateLoginProofFromRebinding(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	recovery := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticatorRecovery","id":"recovery-a","requestId":"request-a","state":"STARTED","createdAt":"2026-09-20T12:01:00Z","expiresAt":"2026-09-20T12:05:00Z"}`
