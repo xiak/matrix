@@ -516,8 +516,9 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 	if err != nil {
 		t.Fatalf("published predecessor install arguments: %v", err)
 	}
-	if slices.Contains(arguments, "--northbound-origin") {
-		t.Fatal("published predecessor received a flag its CLI cannot parse")
+	index := slices.Index(arguments, "--northbound-origin")
+	if index < 0 || index+1 >= len(arguments) || arguments[index+1] != defaultEdgeEndpoint {
+		t.Fatalf("published predecessor install arguments=%q", arguments)
 	}
 
 	current := predecessor
@@ -527,7 +528,7 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 	if err != nil {
 		t.Fatalf("current install arguments: %v", err)
 	}
-	index := slices.Index(arguments, "--northbound-origin")
+	index = slices.Index(arguments, "--northbound-origin")
 	if index < 0 || index+1 >= len(arguments) || arguments[index+1] != defaultEdgeEndpoint {
 		t.Fatalf("current install arguments=%q", arguments)
 	}
@@ -539,8 +540,10 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 
 	changed := base
 	changed.edge = "https://matrix.example.test:443"
-	if _, err := releaseInstallArguments(changed, predecessor); err == nil {
-		t.Fatal("published predecessor accepted a nondefault origin it cannot persist")
+	arguments, err = releaseInstallArguments(changed, predecessor)
+	index = slices.Index(arguments, "--northbound-origin")
+	if err != nil || index < 0 || index+1 >= len(arguments) || arguments[index+1] != changed.edge {
+		t.Fatalf("published predecessor rejected its explicit origin: arguments=%q err=%v", arguments, err)
 	}
 	unknown := predecessor
 	unknown.Manifest.Database = release.DatabaseProfile{}

@@ -157,16 +157,9 @@ func releaseInstallArguments(config options, initial release.VerifiedBundle) ([]
 		"--root", config.root,
 		"--trust-key", config.trustKey,
 	}
-	switch initial.Manifest.Database {
-	case release.CurrentDatabaseProfile():
+	if initial.Manifest.Database == release.CurrentDatabaseProfile() ||
+		initial.Manifest.Database == release.SupportedDatabasePredecessorProfile() {
 		return append(arguments, "--northbound-origin", config.edge), nil
-	case release.SupportedDatabasePredecessorProfile():
-		// The published predecessor predates the explicit origin input and owns
-		// this exact listener as its immutable default. Do not pass a flag that
-		// its CLI cannot parse or invent compatibility in the old executable.
-		if config.edge == defaultEdgeEndpoint {
-			return arguments, nil
-		}
 	}
 	return nil, errors.New("release installation profile is unsupported")
 }
