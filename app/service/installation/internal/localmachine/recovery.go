@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,20 +16,49 @@ import (
 )
 
 const (
-	recoveryVerificationTenantID    = paasv1.TenantID("organization-default")
-	recoveryVerificationComponent   = "probe"
-	recoveryVerificationDownTimeout = "30"
-	databaseRestoreScript           = `{
+	recoveryVerificationTenantID     = paasv1.TenantID("organization-default")
+	recoveryVerificationComponent    = "probe"
+	recoveryVerificationDownTimeout  = "30"
+	maximumDatabaseRestoreDiagnostic = 64
+	databaseRestoreScript            = `{
   printf '%s\n' 'BEGIN;' 'DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;'
-  if pg_restore --file=- --exit-on-error --no-privileges --no-password; then
+  if pg_restore --file=- --exit-on-error --no-privileges --no-password 2>/dev/null; then
     printf '%s\n' 'COMMIT;'
   else
     printf '%s\n' 'ROLLBACK;'
     exit 1
   fi
-} | psql -X --set=ON_ERROR_STOP=1 --no-password --username=matrix --dbname=matrix
+} | {
+  umask 077
+  diagnostic="$(mktemp)"
+  trap 'rm -f -- "${diagnostic}"' EXIT
+  if LC_ALL=C psql -X --set=ON_ERROR_STOP=1 --set=VERBOSITY=sqlstate \
+      --no-password --username=matrix --dbname=matrix >/dev/null 2>"${diagnostic}"; then
+    exit 0
+  fi
+  sqlstate="$(LC_ALL=C awk '/^[A-Z]+:  [0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]$/ { print substr($0, length($0)-4); exit }' "${diagnostic}")"
+  case "${sqlstate}" in
+    42P06|42P07|42710) printf '%s\n' 'RESTORE_OBJECT_CONFLICT' ;;
+    42704|42P01|3F000) printf '%s\n' 'RESTORE_REFERENCE' ;;
+    42501) printf '%s\n' 'RESTORE_AUTHORITY' ;;
+    2BP01) printf '%s\n' 'RESTORE_DEPENDENCY' ;;
+    23???) printf '%s\n' 'RESTORE_INTEGRITY' ;;
+    40???) printf '%s\n' 'RESTORE_TRANSACTION' ;;
+    '') printf '%s\n' 'RESTORE_PIPELINE' ;;
+    *) printf '%s\n' 'RESTORE_UNKNOWN' ;;
+  esac
+  exit 1
+}
 `
 )
+
+type databaseRestoreFailure struct {
+	boundary platformcommand.RecoveryFailureBoundary
+}
+
+func (failure *databaseRestoreFailure) Error() string {
+	return "PostgreSQL backup recovery failed"
+}
 
 type recoveryVerificationParticipant struct {
 	release release.ReleaseIdentity
@@ -139,7 +167,7 @@ func recoverBackup(
 	if err := restoreDatabaseDump(
 		ctx, streaming, plan.Current.Root, dumpRelative, postgresID,
 	); err != nil {
-		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureDatabaseRestore, err)
+		return platformcommand.BindRecoveryFailure(databaseRestoreFailureBoundary(err), err)
 	}
 	if err := verifyWorkloadSecretRestore(
 		plan.Current.Root,
@@ -800,8 +828,10 @@ func restoreDatabaseDump(
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	defer file.Close()
+	var diagnostic boundedOutput
+	diagnostic.maximum = maximumDatabaseRestoreDiagnostic
 	started, err := runtimeBoundary.RunTo(
-		ctx, file, io.Discard,
+		ctx, file, &diagnostic,
 		"exec", "--interactive", "--user", "postgres", postgresID,
 		// The authenticated custom archive carries the exact IAM/Audit owner
 		// roles. Stream it through one transaction that first removes only the
@@ -811,6 +841,12 @@ func restoreDatabaseDump(
 		"/bin/bash", "-o", "pipefail", "-ceu", databaseRestoreScript,
 	)
 	if err == nil {
+		if diagnostic.exceeded || len(bytes.TrimSpace(diagnostic.Bytes())) != 0 {
+			return errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("PostgreSQL backup recovery output is invalid"),
+			)
+		}
 		return nil
 	}
 	if !started {
@@ -819,10 +855,43 @@ func restoreDatabaseDump(
 	if ctx.Err() != nil {
 		return errors.Join(platformcommand.ErrEffectOutcomeUnknown, ctx.Err())
 	}
-	return errors.Join(
-		platformcommand.ErrEffectVerification,
-		errors.New("PostgreSQL backup recovery failed"),
-	)
+	boundary := classifyDatabaseRestoreDiagnostic(diagnostic.Bytes(), diagnostic.exceeded)
+	return errors.Join(platformcommand.ErrEffectVerification, &databaseRestoreFailure{boundary: boundary})
+}
+
+func classifyDatabaseRestoreDiagnostic(
+	output []byte,
+	exceeded bool,
+) platformcommand.RecoveryFailureBoundary {
+	if exceeded {
+		return platformcommand.RecoveryFailureDatabaseRestore
+	}
+	switch string(bytes.TrimSpace(output)) {
+	case "RESTORE_OBJECT_CONFLICT":
+		return platformcommand.RecoveryFailureDatabaseRestoreObjectConflict
+	case "RESTORE_REFERENCE":
+		return platformcommand.RecoveryFailureDatabaseRestoreReference
+	case "RESTORE_AUTHORITY":
+		return platformcommand.RecoveryFailureDatabaseRestoreAuthority
+	case "RESTORE_DEPENDENCY":
+		return platformcommand.RecoveryFailureDatabaseRestoreDependency
+	case "RESTORE_INTEGRITY":
+		return platformcommand.RecoveryFailureDatabaseRestoreIntegrity
+	case "RESTORE_TRANSACTION":
+		return platformcommand.RecoveryFailureDatabaseRestoreTransaction
+	case "RESTORE_PIPELINE":
+		return platformcommand.RecoveryFailureDatabaseRestorePipeline
+	default:
+		return platformcommand.RecoveryFailureDatabaseRestore
+	}
+}
+
+func databaseRestoreFailureBoundary(err error) platformcommand.RecoveryFailureBoundary {
+	var failure *databaseRestoreFailure
+	if errors.As(err, &failure) {
+		return failure.boundary
+	}
+	return platformcommand.RecoveryFailureDatabaseRestore
 }
 
 func verifyRecoveredInstallation(

@@ -1251,14 +1251,21 @@ func TestRecoveryFailureBoundaryReturnsOnlyClosedSafeCodes(t *testing.T) {
 		errors.New("private recovery material at /unsafe/path"),
 	)
 	for boundary, wantCode := range map[RecoveryFailureBoundary]string{
-		RecoveryFailureSource:          "RECOVERY_SOURCE_VERIFICATION_FAILED",
-		RecoveryFailureReleaseImages:   "RECOVERY_RELEASE_IMAGES_VERIFICATION_FAILED",
-		RecoveryFailureProviderState:   "RECOVERY_PROVIDER_STATE_VERIFICATION_FAILED",
-		RecoveryFailureDatabaseStart:   "RECOVERY_DATABASE_START_VERIFICATION_FAILED",
-		RecoveryFailureDatabaseDump:    "RECOVERY_DATABASE_DUMP_VERIFICATION_FAILED",
-		RecoveryFailureDatabaseRestore: "RECOVERY_DATABASE_RESTORE_VERIFICATION_FAILED",
-		RecoveryFailureSecretRestore:   "RECOVERY_SECRET_RESTORE_VERIFICATION_FAILED",
-		RecoveryFailureMigration:       "RECOVERY_MIGRATION_VERIFICATION_FAILED",
+		RecoveryFailureSource:                        "RECOVERY_SOURCE_VERIFICATION_FAILED",
+		RecoveryFailureReleaseImages:                 "RECOVERY_RELEASE_IMAGES_VERIFICATION_FAILED",
+		RecoveryFailureProviderState:                 "RECOVERY_PROVIDER_STATE_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseStart:                 "RECOVERY_DATABASE_START_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseDump:                  "RECOVERY_DATABASE_DUMP_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestore:               "RECOVERY_DATABASE_RESTORE_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreObjectConflict: "RECOVERY_DATABASE_RESTORE_OBJECT_CONFLICT_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreReference:      "RECOVERY_DATABASE_RESTORE_REFERENCE_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreAuthority:      "RECOVERY_DATABASE_RESTORE_AUTHORITY_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreDependency:     "RECOVERY_DATABASE_RESTORE_DEPENDENCY_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreIntegrity:      "RECOVERY_DATABASE_RESTORE_INTEGRITY_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreTransaction:    "RECOVERY_DATABASE_RESTORE_TRANSACTION_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestorePipeline:       "RECOVERY_DATABASE_RESTORE_PIPELINE_VERIFICATION_FAILED",
+		RecoveryFailureSecretRestore:                 "RECOVERY_SECRET_RESTORE_VERIFICATION_FAILED",
+		RecoveryFailureMigration:                     "RECOVERY_MIGRATION_VERIFICATION_FAILED",
 	} {
 		bound := BindRecoveryFailure(boundary, unsafeCause)
 		if !errors.Is(bound, ErrEffectVerification) ||

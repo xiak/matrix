@@ -59,14 +59,21 @@ var (
 type RecoveryFailureBoundary string
 
 const (
-	RecoveryFailureSource          RecoveryFailureBoundary = "SOURCE"
-	RecoveryFailureReleaseImages   RecoveryFailureBoundary = "RELEASE_IMAGES"
-	RecoveryFailureProviderState   RecoveryFailureBoundary = "PROVIDER_STATE"
-	RecoveryFailureDatabaseStart   RecoveryFailureBoundary = "DATABASE_START"
-	RecoveryFailureDatabaseDump    RecoveryFailureBoundary = "DATABASE_DUMP"
-	RecoveryFailureDatabaseRestore RecoveryFailureBoundary = "DATABASE_RESTORE"
-	RecoveryFailureSecretRestore   RecoveryFailureBoundary = "SECRET_RESTORE"
-	RecoveryFailureMigration       RecoveryFailureBoundary = "MIGRATION"
+	RecoveryFailureSource                        RecoveryFailureBoundary = "SOURCE"
+	RecoveryFailureReleaseImages                 RecoveryFailureBoundary = "RELEASE_IMAGES"
+	RecoveryFailureProviderState                 RecoveryFailureBoundary = "PROVIDER_STATE"
+	RecoveryFailureDatabaseStart                 RecoveryFailureBoundary = "DATABASE_START"
+	RecoveryFailureDatabaseDump                  RecoveryFailureBoundary = "DATABASE_DUMP"
+	RecoveryFailureDatabaseRestore               RecoveryFailureBoundary = "DATABASE_RESTORE"
+	RecoveryFailureDatabaseRestoreObjectConflict RecoveryFailureBoundary = "DATABASE_RESTORE_OBJECT_CONFLICT"
+	RecoveryFailureDatabaseRestoreReference      RecoveryFailureBoundary = "DATABASE_RESTORE_REFERENCE"
+	RecoveryFailureDatabaseRestoreAuthority      RecoveryFailureBoundary = "DATABASE_RESTORE_AUTHORITY"
+	RecoveryFailureDatabaseRestoreDependency     RecoveryFailureBoundary = "DATABASE_RESTORE_DEPENDENCY"
+	RecoveryFailureDatabaseRestoreIntegrity      RecoveryFailureBoundary = "DATABASE_RESTORE_INTEGRITY"
+	RecoveryFailureDatabaseRestoreTransaction    RecoveryFailureBoundary = "DATABASE_RESTORE_TRANSACTION"
+	RecoveryFailureDatabaseRestorePipeline       RecoveryFailureBoundary = "DATABASE_RESTORE_PIPELINE"
+	RecoveryFailureSecretRestore                 RecoveryFailureBoundary = "SECRET_RESTORE"
+	RecoveryFailureMigration                     RecoveryFailureBoundary = "MIGRATION"
 )
 
 type recoveryFailureBoundaryError struct {
@@ -89,6 +96,10 @@ func BindRecoveryFailure(boundary RecoveryFailureBoundary, cause error) error {
 	switch boundary {
 	case RecoveryFailureSource, RecoveryFailureReleaseImages, RecoveryFailureProviderState,
 		RecoveryFailureDatabaseStart, RecoveryFailureDatabaseDump, RecoveryFailureDatabaseRestore,
+		RecoveryFailureDatabaseRestoreObjectConflict, RecoveryFailureDatabaseRestoreReference,
+		RecoveryFailureDatabaseRestoreAuthority, RecoveryFailureDatabaseRestoreDependency,
+		RecoveryFailureDatabaseRestoreIntegrity, RecoveryFailureDatabaseRestoreTransaction,
+		RecoveryFailureDatabaseRestorePipeline,
 		RecoveryFailureSecretRestore, RecoveryFailureMigration:
 		return &recoveryFailureBoundaryError{boundary: boundary, cause: cause}
 	default:
@@ -1468,6 +1479,10 @@ func recoveryVerificationFailureCode(phase lifecycle.Phase, err error) string {
 	switch failure.boundary {
 	case RecoveryFailureSource, RecoveryFailureReleaseImages, RecoveryFailureProviderState,
 		RecoveryFailureDatabaseStart, RecoveryFailureDatabaseDump, RecoveryFailureDatabaseRestore,
+		RecoveryFailureDatabaseRestoreObjectConflict, RecoveryFailureDatabaseRestoreReference,
+		RecoveryFailureDatabaseRestoreAuthority, RecoveryFailureDatabaseRestoreDependency,
+		RecoveryFailureDatabaseRestoreIntegrity, RecoveryFailureDatabaseRestoreTransaction,
+		RecoveryFailureDatabaseRestorePipeline,
 		RecoveryFailureSecretRestore, RecoveryFailureMigration:
 		return "RECOVERY_" + string(failure.boundary) + "_VERIFICATION_FAILED"
 	default:

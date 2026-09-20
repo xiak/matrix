@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -3812,8 +3813,11 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 		}
 		for _, required := range []string{
 			"BEGIN;", "DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;",
-			"pg_restore --file=- --exit-on-error --no-privileges --no-password",
+			"pg_restore --file=- --exit-on-error --no-privileges --no-password 2>/dev/null",
 			"COMMIT;", "ROLLBACK;", "psql -X --set=ON_ERROR_STOP=1",
+			"--set=VERBOSITY=sqlstate", "mktemp", "RESTORE_OBJECT_CONFLICT",
+			"RESTORE_REFERENCE", "RESTORE_AUTHORITY", "RESTORE_DEPENDENCY",
+			"RESTORE_INTEGRITY", "RESTORE_TRANSACTION", "RESTORE_PIPELINE",
 			"--username=matrix --dbname=matrix",
 		} {
 			if !strings.Contains(databaseRestoreScript, required) {
@@ -3839,6 +3843,141 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 	runtimeBoundary.backupStreams++
 	_, err := output.Write(runtimeBoundary.databaseDump)
 	return true, err
+}
+
+type databaseRestoreDiagnosticRuntime struct {
+	output    []byte
+	started   bool
+	err       error
+	input     []byte
+	arguments []string
+}
+
+func (*databaseRestoreDiagnosticRuntime) Run(
+	context.Context,
+	io.Reader,
+	...string,
+) ([]byte, bool, error) {
+	return nil, false, errors.New("unexpected non-streaming restore command")
+}
+
+func (runtimeBoundary *databaseRestoreDiagnosticRuntime) RunTo(
+	_ context.Context,
+	input io.Reader,
+	output io.Writer,
+	arguments ...string,
+) (bool, error) {
+	content, err := io.ReadAll(input)
+	if err != nil {
+		return true, err
+	}
+	runtimeBoundary.input = content
+	runtimeBoundary.arguments = slices.Clone(arguments)
+	if len(runtimeBoundary.output) != 0 {
+		if _, writeErr := output.Write(runtimeBoundary.output); writeErr != nil {
+			return true, writeErr
+		}
+	}
+	return runtimeBoundary.started, runtimeBoundary.err
+}
+
+func TestRestoreDatabaseDumpReturnsOnlyClosedDiagnostics(t *testing.T) {
+	root := t.TempDir()
+	relative := filepath.Join("backups", "backup-test", databaseDumpFilename)
+	target := filepath.Join(root, relative)
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatalf("create restore fixture: %v", err)
+	}
+	dump := []byte("authenticated custom archive")
+	if err := os.WriteFile(target, dump, 0o600); err != nil {
+		t.Fatalf("write restore fixture: %v", err)
+	}
+
+	for diagnostic, want := range map[string]platformcommand.RecoveryFailureBoundary{
+		"RESTORE_OBJECT_CONFLICT\n": platformcommand.RecoveryFailureDatabaseRestoreObjectConflict,
+		"RESTORE_REFERENCE\n":       platformcommand.RecoveryFailureDatabaseRestoreReference,
+		"RESTORE_AUTHORITY\n":       platformcommand.RecoveryFailureDatabaseRestoreAuthority,
+		"RESTORE_DEPENDENCY\n":      platformcommand.RecoveryFailureDatabaseRestoreDependency,
+		"RESTORE_INTEGRITY\n":       platformcommand.RecoveryFailureDatabaseRestoreIntegrity,
+		"RESTORE_TRANSACTION\n":     platformcommand.RecoveryFailureDatabaseRestoreTransaction,
+		"RESTORE_PIPELINE\n":        platformcommand.RecoveryFailureDatabaseRestorePipeline,
+		"RESTORE_UNKNOWN\n":         platformcommand.RecoveryFailureDatabaseRestore,
+		"private relation name\n":   platformcommand.RecoveryFailureDatabaseRestore,
+		"RESTORE_REFERENCE\nextra":  platformcommand.RecoveryFailureDatabaseRestore,
+	} {
+		runtimeBoundary := &databaseRestoreDiagnosticRuntime{
+			output: []byte(diagnostic), started: true, err: errors.New("restore failed"),
+		}
+		err := restoreDatabaseDump(
+			context.Background(), runtimeBoundary, root, relative, "postgres-container",
+		)
+		if !errors.Is(err, platformcommand.ErrEffectVerification) ||
+			databaseRestoreFailureBoundary(err) != want ||
+			!bytes.Equal(runtimeBoundary.input, dump) ||
+			!slices.Contains(runtimeBoundary.arguments, databaseRestoreScript) {
+			t.Fatalf("diagnostic %q = %v / %q / input=%q / args=%q", diagnostic, err, databaseRestoreFailureBoundary(err), runtimeBoundary.input, runtimeBoundary.arguments)
+		}
+		if strings.Contains(err.Error(), diagnostic) || strings.Contains(err.Error(), "private relation") {
+			t.Fatalf("diagnostic %q leaked through error %q", diagnostic, err)
+		}
+	}
+
+	t.Run("successful restore rejects output", func(t *testing.T) {
+		runtimeBoundary := &databaseRestoreDiagnosticRuntime{
+			output: []byte("unexpected output"), started: true,
+		}
+		err := restoreDatabaseDump(
+			context.Background(), runtimeBoundary, root, relative, "postgres-container",
+		)
+		if !errors.Is(err, platformcommand.ErrEffectVerification) ||
+			databaseRestoreFailureBoundary(err) != platformcommand.RecoveryFailureDatabaseRestore {
+			t.Fatalf("successful restore output = %v", err)
+		}
+	})
+
+	t.Run("oversized failure output closes to generic boundary", func(t *testing.T) {
+		runtimeBoundary := &databaseRestoreDiagnosticRuntime{
+			output:  bytes.Repeat([]byte("x"), maximumDatabaseRestoreDiagnostic+1),
+			started: true,
+			err:     errors.New("restore failed"),
+		}
+		err := restoreDatabaseDump(
+			context.Background(), runtimeBoundary, root, relative, "postgres-container",
+		)
+		if !errors.Is(err, platformcommand.ErrEffectVerification) ||
+			databaseRestoreFailureBoundary(err) != platformcommand.RecoveryFailureDatabaseRestore {
+			t.Fatalf("oversized restore diagnostic = %v", err)
+		}
+	})
+}
+
+func TestDatabaseRestoreScriptEmitsOnlyClosedSQLStateClass(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("database restore command targets the Linux release image")
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(bin, "pg_restore"),
+		[]byte("#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n"),
+		0o700,
+	); err != nil {
+		t.Fatalf("write fake pg_restore: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(bin, "psql"),
+		[]byte("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'ERROR:  42P07' 'private relation name' >&2\nexit 3\n"),
+		0o700,
+	); err != nil {
+		t.Fatalf("write fake psql: %v", err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	command := exec.Command("/bin/bash", "-o", "pipefail", "-ceu", databaseRestoreScript)
+	command.Stdin = strings.NewReader("archive")
+	output, err := command.Output()
+	if err == nil || string(output) != "RESTORE_OBJECT_CONFLICT\n" ||
+		strings.Contains(string(output), "private relation") {
+		t.Fatalf("restore script diagnostic = %q / %v", output, err)
+	}
 }
 
 func (runtimeBoundary *platformStartRuntime) inspectNetworkLabels(
