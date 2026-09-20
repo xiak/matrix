@@ -127,8 +127,13 @@ func runMX(
 	args := []string{"--format", "json", "platform", action}
 	args = append(args, arguments...)
 	output, err := runProcess(ctx, mxPath(bundle), args...)
-	if err != nil || output.exit != 0 || containsAny(output.stdout, forbidden) ||
-		containsAny(output.stderr, forbidden) || len(output.stderr) != 0 {
+	if err != nil || containsAny(output.stdout, forbidden) || containsAny(output.stderr, forbidden) {
+		return mxResult{}, fail("mx-" + action)
+	}
+	if output.exit != 0 || len(output.stderr) != 0 {
+		if code, ok := classifyMXFailure(output, action); ok {
+			return mxResult{}, fail("mx-" + action + "-" + code)
+		}
 		return mxResult{}, fail("mx-" + action)
 	}
 	var envelope mxEnvelope
@@ -139,6 +144,58 @@ func runMX(
 		return mxResult{}, fail("mx-" + action + "-result")
 	}
 	return envelope.Result, nil
+}
+
+func classifyMXFailure(output commandOutput, action string) (string, bool) {
+	if output.exit == 0 || len(output.stdout) != 0 || len(output.stderr) == 0 {
+		return "", false
+	}
+	var envelope mxFailure
+	if decodeOne(output.stderr, &envelope) != nil ||
+		envelope.APIVersion != "cli.matrix.xiak.com/v1" ||
+		envelope.Kind != "PlatformCommandFailure" ||
+		envelope.Action != strings.ToUpper(strings.ReplaceAll(action, "-", "_")) ||
+		envelope.Status != "FAILED" || !validMXFailureCode(envelope.Error.Code) {
+		return "", false
+	}
+	wantExit, wantMessage, ok := mxFailureContract(envelope.Error.Class)
+	if !ok || output.exit != wantExit || envelope.Error.Message != wantMessage {
+		return "", false
+	}
+	return envelope.Error.Code, true
+}
+
+func mxFailureContract(class string) (int, string, bool) {
+	switch class {
+	case "INVALID_ARGUMENT":
+		return 2, "Command input is invalid", true
+	case "PRECONDITION_FAILED":
+		return 3, "Platform preconditions are not satisfied", true
+	case "CONFLICT":
+		return 4, "Platform state conflicts with this command", true
+	case "VERIFICATION_FAILED":
+		return 5, "Platform verification failed", true
+	case "UNAVAILABLE":
+		return 6, "A required platform dependency is unavailable", true
+	case "INTERNAL":
+		return 70, "Matrix could not complete the command", true
+	case "INTERRUPTED":
+		return 130, "Command was interrupted", true
+	default:
+		return 0, "", false
+	}
+}
+
+func validMXFailureCode(value string) bool {
+	if len(value) < 3 || len(value) > 64 || value[0] < 'A' || value[0] > 'Z' {
+		return false
+	}
+	for _, character := range value[1:] {
+		if (character < 'A' || character > 'Z') && (character < '0' || character > '9') && character != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func startMX(

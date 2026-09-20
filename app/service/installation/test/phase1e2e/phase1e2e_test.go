@@ -370,6 +370,32 @@ func TestOfflinePhase1Lifecycle(t *testing.T) {
 	}
 }
 
+func TestMXFailureClassificationOnlyAdmitsTheClosedCLIContract(t *testing.T) {
+	valid := `{"apiVersion":"cli.matrix.xiak.com/v1","kind":"PlatformCommandFailure","action":"INSTALL","status":"FAILED","error":{"class":"PRECONDITION_FAILED","code":"INSTALLATION_PRECONDITION_FAILED","message":"Platform preconditions are not satisfied"}}
+`
+	for _, scenario := range []struct {
+		name   string
+		output commandOutput
+		action string
+		code   string
+	}{
+		{name: "closed failure", output: commandOutput{stderr: []byte(valid), exit: 3}, action: "install", code: "INSTALLATION_PRECONDITION_FAILED"},
+		{name: "wrong exit", output: commandOutput{stderr: []byte(valid), exit: 4}, action: "install"},
+		{name: "unexpected stdout", output: commandOutput{stdout: []byte("unexpected"), stderr: []byte(valid), exit: 3}, action: "install"},
+		{name: "unknown field", output: commandOutput{stderr: []byte(strings.Replace(valid, `"status":"FAILED"`, `"status":"FAILED","secret":"unsafe"`, 1)), exit: 3}, action: "install"},
+		{name: "unbound action", output: commandOutput{stderr: []byte(valid), exit: 3}, action: "upgrade"},
+		{name: "unsafe code", output: commandOutput{stderr: []byte(strings.Replace(valid, "INSTALLATION_PRECONDITION_FAILED", "INSTALLATION/PRECONDITION", 1)), exit: 3}, action: "install"},
+		{name: "untrusted message", output: commandOutput{stderr: []byte(strings.Replace(valid, "Platform preconditions are not satisfied", "/private/operator-input", 1)), exit: 3}, action: "install"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			code, ok := classifyMXFailure(scenario.output, scenario.action)
+			if ok != (scenario.code != "") || code != scenario.code {
+				t.Fatalf("classification=(%q,%t), want (%q,%t)", code, ok, scenario.code, scenario.code != "")
+			}
+		})
+	}
+}
+
 func offlineLifecycleTimeout(config options) time.Duration {
 	if config.nativeDeploymentRuntime {
 		// Two independent one-vCPU TCG guests exercise signed node upgrade,

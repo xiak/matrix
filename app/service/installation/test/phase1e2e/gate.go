@@ -77,7 +77,10 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 	installed, err := runMX(
 		ctx, initial, "install", installArguments, value.pathLeakage(),
 	)
-	if err != nil || installed.ReleaseID != initial.Manifest.Release.ID ||
+	if err != nil {
+		return err
+	}
+	if installed.ReleaseID != initial.Manifest.Release.ID ||
 		installed.PreviousID != "" || !installed.Changed {
 		return fail(installStep)
 	}
