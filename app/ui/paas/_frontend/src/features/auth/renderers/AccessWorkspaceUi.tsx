@@ -1,6 +1,6 @@
 "use client";
 
-import { Children, Fragment, cloneElement, isValidElement, useDeferredValue, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { Children, Fragment, cloneElement, isValidElement, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableToolbar, TablePagination, Transfer, type PageCommand } from "@ui/xiak";
@@ -66,13 +66,51 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   </Card>;
 }
 
-export function WorkspaceDetail({ title, onBack, actions, children, embedded = false }: {
+export function WorkspaceDetail({ title, onBack, actions, children, embedded = false, primaryActionRef }: {
   title: string; onBack(): void; actions?: { primary?: PageCommand; secondary?: readonly PageCommand[] }; children: ReactNode; embedded?: boolean;
+  primaryActionRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const t = useTranslations("IamWorkspace");
   const c = useTranslations("Collection");
-  const commands = actions ? <ContentPage.Commands label={c("pageActions")} {...actions} /> : undefined;
+  const commands = actions ? <ContentPage.Commands label={c("pageActions")} primaryRef={primaryActionRef} {...actions} /> : undefined;
   return <div className={styles.detailWorkspace}>{embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{t("back")}</Button><h2 className={styles.detailTitle}>{title}</h2>{commands}</div> : <ContentPage.Heading title={title} scrollKey={`detail:${title}`} back={{ label: t("back"), onClick: onBack }} actions={commands} focus />}{children}</div>;
+}
+
+export function WorkspaceInlineForm({ title, onClose, onSubmit, children, backLabel, submitLabel, submitDisabled, submitVariant, validationError, operation }: {
+  title: string; onClose(): void; onSubmit(): Promise<boolean>; children: ReactNode;
+  backLabel?: string; submitLabel?: string; submitDisabled?: boolean; submitVariant?: ComponentProps<typeof Button>["variant"];
+  validationError?: string; operation?: { busy: boolean; error?: string; clearError(): void };
+}) {
+  const t = useTranslations("IamWorkspace");
+  const access = useAccountAccess();
+  const form = useRef<HTMLFormElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const submitting = useRef(false);
+  const clearError = operation?.clearError ?? access.clearWorkspaceError;
+  const busy = operation?.busy ?? access.busy;
+  const error = validationError ?? operation?.error ?? (access.workspaceError ? t(`errors.${access.workspaceError}`) : undefined);
+  useEffect(() => { clearError(); }, [clearError]);
+  useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
+  useEffect(() => {
+    if (!error || busy) return;
+    const alert = form.current?.querySelector<HTMLElement>('[role="alert"]');
+    alert?.focus({ preventScroll: true });
+    alert?.scrollIntoView?.({ block: "nearest" });
+  }, [error, busy]);
+  return <section className={styles.stack} role="group" aria-label={title}>
+    <div className={styles.sectionHeading}><Button type="button" variant="ghost" disabled={busy} onClick={onClose}>{backLabel ?? t("back")}</Button><h3 className={styles.detailTitle} ref={heading} tabIndex={-1}>{title}</h3></div>
+    <form ref={form} className={styles.stack} aria-busy={busy || undefined} onSubmit={async (event) => {
+      event.preventDefault();
+      if (submitting.current || busy || submitDisabled) return;
+      submitting.current = true;
+      clearError();
+      try { if (await onSubmit()) onClose(); } finally { submitting.current = false; }
+    }}>
+      {error ? <Alert status="danger" tabIndex={-1}>{error}</Alert> : null}
+      <fieldset className={styles.editorFields} disabled={busy}>{children}</fieldset>
+      <div className={styles.actions}><Button type="submit" variant={submitVariant} disabled={busy || submitDisabled}>{submitLabel ?? t("save")}</Button><Button type="button" variant="secondary" disabled={busy} onClick={onClose}>{t("cancel")}</Button></div>
+    </form>
+  </section>;
 }
 
 export function WorkspaceDialog({ title, onClose, onSubmit, children, submitLabel, submitDisabled, submitVariant, validationError, size, fallbackFocusRef, operation }: { title: string; onClose(): void; onSubmit(): Promise<boolean>; children: ReactNode; submitLabel?: string; submitDisabled?: boolean; submitVariant?: ComponentProps<typeof Button>["variant"]; validationError?: string; size?: ComponentProps<typeof Dialog>["size"]; fallbackFocusRef?: ComponentProps<typeof Dialog>["fallbackFocusRef"]; operation?: { busy: boolean; error?: string; clearError(): void } }) {

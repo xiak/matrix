@@ -1892,6 +1892,7 @@
     "cancelTitle": "Discard role draft?",
     "cancelHint": "The unsaved trust, policies and role details will be discarded. Nothing has been created.",
     "editMetadata": "Edit role information",
+    "backToRoleDetails": "Back to role details",
     "editTrust": "Edit trust",
     "backToTrust": "Back to trust relationship",
     "reviewTrust": "Review trust changes",

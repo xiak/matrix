@@ -1892,6 +1892,7 @@
     "cancelTitle": "放弃角色草稿？",
     "cancelHint": "将丢弃尚未保存的信任配置、策略及角色信息，不会创建任何角色。",
     "editMetadata": "编辑角色信息",
+    "backToRoleDetails": "返回角色详情",
     "editTrust": "修改信任关系",
     "backToTrust": "返回信任关系",
     "reviewTrust": "审阅信任关系变更",
