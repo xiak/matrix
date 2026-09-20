@@ -419,3 +419,6 @@ jobs:
           docker volume rm "$PLATFORM_DOCKER_VOLUME" 2>/dev/null || true
           git worktree remove --force "$RUNNER_TEMP/matrix-platform-predecessor" 2>/dev/null || true
           git worktree prune
+          test -z "$(docker ps --all --quiet --filter "label=matrix.task=$PLATFORM_DIND")"
+          test -z "$(docker volume ls --quiet --filter "label=matrix.task=$PLATFORM_DIND")"
+          test ! -e "$RUNNER_TEMP/matrix-platform-predecessor"

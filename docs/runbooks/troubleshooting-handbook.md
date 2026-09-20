@@ -27,6 +27,26 @@ untrusted command output, or a chronological investigation transcript. If a
 failure belongs to an existing class, improve that entry instead of appending
 a new incident diary.
 
+## Mandatory test-resource closure
+
+Every real-runtime test owns a unique task label or exact generated name and a
+bounded CPU, memory, process, network, and storage scope. On success, failure,
+or interruption, its final gate must:
+
+1. stop and remove only its owned containers or processes;
+2. remove its owned networks, volumes, temporary worktrees, exported source,
+   test binaries, profiles, archives, and logs when they are no longer needed;
+3. preserve durable evidence in the owning FEAT or CI result, not in a running
+   test environment;
+4. query the exact owner labels and paths again and require zero unintended
+   remnants; and
+5. report anything intentionally retained, including its owner and reason.
+
+Cleanup is part of test acceptance. A passing assertion with leaked runtime
+resources is not a completed test. Never substitute a global Docker prune,
+filesystem-wide delete, WSL shutdown, engine restart, or remote-host restart
+for exact owner-scoped cleanup.
+
 ## Signed release gate fails before or during predecessor installation
 
 **Keywords:** DIND, Docker-in-Docker, signed release, fixed base image,
@@ -48,6 +68,7 @@ any persistent system.
 | Release assembly stops at the fixed-image check | Pull the declared `name@sha256:...`, then compare the expected digest with `docker image inspect <tag> --format '{{.Id}}'` | A mutable tag drifted, or the classic image store exposed the selected platform config rather than the multi-platform manifest identity. Pull immutable digests and use a manifest-aware containerd image store for the gate. Do not weaken the identity assertion. |
 | Cleanup reports `No such image` for an image that was just present | Check whether the command names both a tag and its digest for the same image | Removing the tag can also remove the final digest reference. Remove one resolved reference, then make cleanup idempotent. Do not treat this as disk corruption. |
 | The signed bundles assemble, but the predecessor install fails immediately | Record only the CLI's validated failure class/code; then inspect the command contract at the exact predecessor commit | The supported predecessor required an explicit `--northbound-origin`; a compatibility assumption omitted it. Pass the origin to both the current release and its unique supported predecessor. Do not infer old CLI behavior from the current source tree. |
+| The predecessor installs, but verification stops at `platform-topology-contract` | Compare the exact predecessor and current commits for topology/APISIX inputs, then inspect the database-profile and topology-digest pair in both signed manifests | The supported database predecessor had advanced while its selector still described an older topology. Bind the exact supported predecessor to its actually published topology, origin, secret mounts, and edge contracts; remove the obsolete compatibility branch instead of weakening verification. |
 | The install step fails and disk pressure is suspected | Before changing limits, inspect outer free space, DIND `/data`, inner Docker version, Compose version, and the exact release-bundle sizes | In the verified case the gate had sufficient bounded space; the real failure was invalid command input. Measure first. Do not respond with a workstation-wide Docker prune. |
 
 ### Verified diagnostic sequence

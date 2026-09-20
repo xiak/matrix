@@ -445,7 +445,10 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 		{name: "actual different-source predecessor and workload", accept: true, mutate: func(_, b *release.Manifest) {
 			b.Release.SourceCommit = strings.Repeat("b", 40)
 		}},
-		{name: "exact retained-data profile and topology successor", accept: true, mutate: func(a, _ *release.Manifest) {
+		{name: "exact retained-data profile with published topology", accept: true, mutate: func(a, _ *release.Manifest) {
+			a.Database = release.SupportedDatabasePredecessorProfile()
+		}},
+		{name: "retained-data profile with changed predecessor topology", mutate: func(a, _ *release.Manifest) {
 			a.Database = release.SupportedDatabasePredecessorProfile()
 			a.TopologyDigest = "sha256:" + strings.Repeat("3", 64)
 		}},
@@ -571,8 +574,8 @@ func TestReleaseSequenceRequiresTwoCompatibleImmediateTransitions(t *testing.T) 
 		{name: "same-profile bridge changes topology", mutate: func(_, bridge, _ *release.Manifest) {
 			bridge.TopologyDigest = "sha256:" + strings.Repeat("4", 64)
 		}},
-		{name: "successor topology changes without profile transition", mutate: func(_, bridge, successor *release.Manifest) {
-			successor.Database = bridge.Database
+		{name: "successor changes the published topology", mutate: func(_, _, successor *release.Manifest) {
+			successor.TopologyDigest = "sha256:" + strings.Repeat("2", 64)
 		}},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
@@ -601,7 +604,7 @@ func TestReleaseSequenceRequiresTwoCompatibleImmediateTransitions(t *testing.T) 
 					ID: "release-successor", Version: "v0.3.0", SourceCommit: strings.Repeat("c", 40),
 					PreviousID: bridge.Manifest.Release.ID, PreviousVersion: bridge.Manifest.Release.Version,
 				},
-				Database: successorProfile, TopologyDigest: "sha256:" + strings.Repeat("2", 64),
+				Database: successorProfile, TopologyDigest: bridge.Manifest.TopologyDigest,
 				Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:successor"}},
 			}}
 			if scenario.mutate != nil {

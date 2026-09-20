@@ -782,7 +782,7 @@ func (value *gate) recoverOriginalPlatformCredentials(ctx context.Context, oldBe
 	}
 	value.sensitive = append(value.sensitive, current, other)
 	value.edge.addForbidden(current, other)
-	if _, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/organizations", current, nil, nil, http.StatusForbidden); err != nil {
+	if _, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/accounts", current, nil, nil, http.StatusForbidden); err != nil {
 		return nil, fail("credential-recovery-forced-change-only")
 	}
 	if err := value.edge.changePassword(ctx, current, temporaryPassword, finalPassword); err != nil {
