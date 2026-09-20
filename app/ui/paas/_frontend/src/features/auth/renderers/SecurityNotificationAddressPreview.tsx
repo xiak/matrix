@@ -30,14 +30,18 @@ function ContactProgress({ current }: { current: number }) {
   </ol>;
 }
 
-export function SecurityNotificationAddressPreview() {
+export function SecurityNotificationAddressPreview({ verifiedAddress: controlledVerifiedAddress, onVerified }: {
+  verifiedAddress?: string | null;
+  onVerified?(address: string): void;
+} = {}) {
   const t = useTranslations("SecurityNotificationPreview");
   const auth = useTranslations("Auth");
   const [stage, setStage] = useState<ContactStage>("summary");
   const [address, setAddress] = useState("");
   const [password, setPassword] = useState("");
   const [pendingAddress, setPendingAddress] = useState<string | null>(null);
-  const [verifiedAddress, setVerifiedAddress] = useState<string | null>(null);
+  const [localVerifiedAddress, setLocalVerifiedAddress] = useState<string | null>(null);
+  const verifiedAddress = controlledVerifiedAddress === undefined ? localVerifiedAddress : controlledVerifiedAddress;
   const [code, setCode] = useState("");
   const [error, setError] = useState<"credentials" | "code" | null>(null);
   const [completed, setCompleted] = useState(false);
@@ -91,7 +95,8 @@ export function SecurityNotificationAddressPreview() {
       setError("code");
       return;
     }
-    setVerifiedAddress(pendingAddress);
+    if (controlledVerifiedAddress === undefined) setLocalVerifiedAddress(pendingAddress);
+    onVerified?.(pendingAddress);
     setPendingAddress(null);
     setCode("");
     setError(null);

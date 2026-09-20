@@ -48,18 +48,19 @@ function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
     const result = await access.executeWorkspace({
       kind: "create-key",
       ownerId: owner.id,
+      ownerState: owner.state,
       userResourceVersion: owner.resourceVersion,
-      requestId: flow.requestId
+      requestId: flow.requestId,
+      responseMode: flow.scenario
     });
-    if (!result?.issuedKey) return;
-    onChange(flow.scenario === "response-lost"
-      ? { kind: "uncertain", ownerId: owner.id, requestId: flow.requestId, keyId: result.issuedKey.id }
-      : { kind: "issued", ownerId: owner.id, requestId: flow.requestId, key: result.issuedKey });
+    if (!result) return;
+    if (flow.scenario === "response-lost") { onClose(); return; }
+    if (result.issuedKey) onChange({ kind: "issued", ownerId: owner.id, requestId: flow.requestId, key: result.issuedKey });
   };
 
   const applyStatus = async () => {
     if (flow.kind !== "status" || !keyValue) return;
-    if (await access.executeWorkspace({ kind: "set-key-status", id: keyValue.id, status: flow.status, resourceVersion: keyValue.resourceVersion, requestId: flow.requestId })) onClose();
+    if (await access.executeWorkspace({ kind: "set-key-status", id: keyValue.id, ownerState: owner.state, status: flow.status, resourceVersion: keyValue.resourceVersion, requestId: flow.requestId })) onClose();
   };
 
   const remove = async () => {
@@ -84,7 +85,8 @@ function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
             { value: "response-lost", label: t("keyScenarioLost") }
           ]} onValueChange={(scenario) => onChange({ ...flow, scenario: scenario as "success" | "response-lost" })} />
         </FormField>
-        <div className={styles.actions}><Button disabled={access.busy || !owner.enabled} onClick={() => void create()}>{t("createKey")}</Button><Button disabled={access.busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
+        {owner.state !== "active" ? <Alert status="warning">{t(owner.state === "passwordChangeRequired" ? "keyOwnerPasswordChangeRequired" : "keyOwnerDisabled")}</Alert> : null}
+        <div className={styles.actions}><Button disabled={access.busy || owner.state !== "active"} onClick={() => void create()}>{t("createKey")}</Button><Button disabled={access.busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
       </> : null}
 
       {flow.kind === "issued" ? <>
@@ -98,7 +100,7 @@ function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
         <Alert status="warning">{t("keyCreateUncertain", { id: flow.requestId })}</Alert>
         <dl className={styles.reviewFacts}><div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div><div><dt>{t("keyIntentState")}</dt><dd><Badge status="warning">UNKNOWN</Badge></dd></div></dl>
         <p className={styles.note}>{t("keyIntentLocked")}</p>
-        <div className={styles.actions}><Button onClick={() => onChange({ ...flow, kind: "recovered" })} variant="secondary">{t("keyQueryOriginal")}</Button></div>
+        <div className={styles.actions}><Button disabled={access.busy} onClick={() => void access.executeWorkspace({ kind: "inspect-key-creation", ownerId: flow.ownerId, requestId: flow.requestId, keyId: flow.keyId })} variant="secondary">{t("keyQueryOriginal")}</Button></div>
       </> : null}
 
       {flow.kind === "recovered" ? <>
@@ -111,7 +113,8 @@ function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
       {flow.kind === "status" && keyValue ? <>
         <Alert status={flow.status === "DISABLED" ? "warning" : "info"}>{t(flow.status === "DISABLED" ? "keyDisableImpact" : "keyEnableImpact")}</Alert>
         <dl className={styles.reviewFacts}><div><dt>{t("keyId")}</dt><dd><code>{keyValue.id}</code></dd></div><div><dt>{t("state")}</dt><dd>{t(keyValue.status === "ENABLED" ? "enabled" : "disabled")} → {t(flow.status === "ENABLED" ? "enabled" : "disabled")}</dd></div><div><dt>{t("keyRevision")}</dt><dd>v{keyValue.resourceVersion}</dd></div><div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div></dl>
-        <div className={styles.actions}><Button disabled={access.busy} onClick={() => void applyStatus()}>{t(flow.status === "ENABLED" ? "enable" : "disable")}</Button><Button disabled={access.busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
+        {flow.status === "ENABLED" && owner.state !== "active" ? <Alert status="warning">{t(owner.state === "passwordChangeRequired" ? "keyOwnerPasswordChangeRequired" : "keyOwnerDisabled")}</Alert> : null}
+        <div className={styles.actions}><Button disabled={access.busy || (flow.status === "ENABLED" && owner.state !== "active")} onClick={() => void applyStatus()}>{t(flow.status === "ENABLED" ? "enable" : "disable")}</Button><Button disabled={access.busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
       </> : null}
 
       {flow.kind === "delete" && keyValue ? <>
@@ -140,16 +143,28 @@ export function AccessCredentials({ workspace, scene, embedded = false }: { work
   const [ownerId, setOwnerId] = useState<string | null>(initialOwner);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [flow, setFlow] = useState<KeyFlow | null>(null);
-  const owner = scene.users.find((user) => user.id === ownerId) ?? null;
+  const pending = workspace.pendingKeyCreation;
+  const owner = scene.users.find((user) => user.id === (pending?.ownerId ?? ownerId)) ?? null;
   const ownerKeys = owner ? workspace.keys.filter((key) => key.ownerId === owner.id) : [];
   const selected = ownerKeys.find((key) => key.id === selectedId) ?? null;
-  const flowKey = flow && (flow.kind === "status" || flow.kind === "delete") ? ownerKeys.find((key) => key.id === flow.keyId) ?? null : null;
+  const pendingFlow: KeyFlow | null = !selected && pending ? {
+    kind: pending.status === "UNKNOWN" ? "uncertain" : "recovered",
+    ownerId: pending.ownerId,
+    requestId: pending.requestId,
+    keyId: pending.keyId
+  } : null;
+  const activeFlow = flow ?? pendingFlow;
+  const flowKey = activeFlow && (activeFlow.kind === "status" || activeFlow.kind === "delete") ? ownerKeys.find((key) => key.id === activeFlow.keyId) ?? null : null;
 
+  const closeFlow = () => {
+    if (!flow || flow.kind !== "status") setSelectedId(null);
+    setFlow(null);
+  };
   const returnToDirectory = () => { setFlow(null); setSelectedId(null); };
-  const openOwner = (id: string) => { setOwnerId(id); setSelectedId(null); setFlow(null); };
+  const openOwner = (id: string) => { if (pending) return; setOwnerId(id); setSelectedId(null); setFlow(null); };
   const openKey = (id: string) => { setFlow(null); setSelectedId(id); };
   const startCreate = () => {
-    if (!owner) return;
+    if (!owner || pending || owner.state !== "active") return;
     access.clearWorkspaceError();
     setSelectedId(null);
     setFlow({ kind: "create", ownerId: owner.id, requestId: requestToken("ui-access-key-create-"), scenario: "success" });
@@ -165,11 +180,12 @@ export function AccessCredentials({ workspace, scene, embedded = false }: { work
     <RotationGuide />
   </section>;
 
-  const createDisabled = !owner.enabled || ownerKeys.length >= 2;
-  const commands = !flow && !selected ? <ContentPage.Commands label={collection("pageActions")} primary={{ id: "create-key", label: t("createKey"), disabled: createDisabled, disabledReason: !owner.enabled ? t("keyOwnerDisabled") : ownerKeys.length >= 2 ? t("keyQuotaReached") : undefined, onSelect: startCreate }} /> : undefined;
+  const createDisabled = owner.state !== "active" || ownerKeys.length >= 2 || Boolean(pending);
+  const ownerDisabledReason = owner.state === "passwordChangeRequired" ? t("keyOwnerPasswordChangeRequired") : owner.state === "disabled" ? t("keyOwnerDisabled") : undefined;
+  const commands = !activeFlow && !selected ? <ContentPage.Commands label={collection("pageActions")} primary={{ id: "create-key", label: t("createKey"), disabled: createDisabled, disabledReason: pending ? t("keyIntentLocked") : ownerDisabledReason ?? (ownerKeys.length >= 2 ? t("keyQuotaReached") : undefined), onSelect: startCreate }} /> : undefined;
 
-  if (selected && !flow) return <WorkspaceDetail embedded={embedded} title={selected.id} onBack={() => setSelectedId(null)} actions={{
-    primary: { id: "status", label: t(selected.status === "ENABLED" ? "disable" : "enable"), variant: "secondary", onSelect: () => setFlow({ kind: "status", keyId: selected.id, status: selected.status === "ENABLED" ? "DISABLED" : "ENABLED", requestId: requestToken("ui-access-key-status-") }) },
+  if (selected && !activeFlow) return <WorkspaceDetail embedded={embedded} title={selected.id} onBack={() => setSelectedId(null)} actions={{
+    primary: { id: "status", label: t(selected.status === "ENABLED" ? "disable" : "enable"), variant: "secondary", disabled: selected.status === "DISABLED" && owner.state !== "active", disabledReason: selected.status === "DISABLED" ? ownerDisabledReason : undefined, onSelect: () => setFlow({ kind: "status", keyId: selected.id, status: selected.status === "ENABLED" ? "DISABLED" : "ENABLED", requestId: requestToken("ui-access-key-status-") }) },
     secondary: [{ id: "delete", label: t("delete"), danger: true, disabled: selected.status === "ENABLED", disabledReason: selected.status === "ENABLED" ? t("errors.disableFirst") : undefined, onSelect: () => setFlow({ kind: "delete", keyId: selected.id, requestId: requestToken("ui-access-key-delete-") }) }]
   }}>
     <Card><Card.Body className={styles.detailBody}>
@@ -181,7 +197,8 @@ export function AccessCredentials({ workspace, scene, embedded = false }: { work
 
   const body = <div className={styles.ownerBody}>
     <Alert status="info">{t("keyProductBoundary")}</Alert>
-    {flow ? <InlineFlow flow={flow} owner={owner} keyValue={flowKey} onChange={setFlow} onClose={returnToDirectory} onOpenKey={openKey} /> : <>
+    {ownerDisabledReason && !activeFlow ? <Alert status="warning">{ownerDisabledReason}</Alert> : null}
+    {activeFlow ? <InlineFlow flow={activeFlow} owner={owner} keyValue={flowKey} onChange={setFlow} onClose={closeFlow} onOpenKey={openKey} /> : <>
       <Card>
         <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={ownerKeys.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: ownerKeys.length })}</Badge></Card.Header>
         <Card.Body className={styles.tableBody}>{ownerKeys.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("state")}</th><th scope="col">{t("created")}</th><th scope="col">{t("keyRevision")}</th></tr></thead><tbody>{ownerKeys.map((key) => <tr key={key.id}><td data-label={t("keyId")}><button className={styles.keyLink} onClick={() => setSelectedId(key.id)}>{key.id}</button></td><td data-label={t("state")}><Badge status={key.status === "ENABLED" ? "success" : "neutral"}>{t(key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={key.createdAt} /></td><td data-label={t("keyRevision")}>v{key.resourceVersion}</td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body>
@@ -190,6 +207,6 @@ export function AccessCredentials({ workspace, scene, embedded = false }: { work
     </>}
   </div>;
 
-  if (embedded) return <section className={styles.root}><div className={styles.embeddedHeading}><div><h2>{t("keys")}</h2><p>{t("keyOwnerSummary", { name: owner.loginName, id: owner.id })}</p></div>{!flow ? <Button disabled={createDisabled} onClick={startCreate} size="small">{t("createKey")}</Button> : null}</div>{body}</section>;
-  return <section className={styles.root}><ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`access-keys:${owner.id}`} back={{ label: t("back"), onClick: () => { setOwnerId(null); returnToDirectory(); } }} actions={commands} focus />{body}</section>;
+  if (embedded) return <section className={styles.root}><div className={styles.embeddedHeading}><div><h2>{t("keys")}</h2><p>{t("keyOwnerSummary", { name: owner.loginName, id: owner.id })}</p></div>{!activeFlow ? <Button disabled={createDisabled} onClick={startCreate} size="small">{t("createKey")}</Button> : null}</div>{body}</section>;
+  return <section className={styles.root}><ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`access-keys:${owner.id}`} back={pending ? undefined : { label: t("back"), onClick: () => { setOwnerId(null); returnToDirectory(); } }} actions={commands} focus />{body}</section>;
 }

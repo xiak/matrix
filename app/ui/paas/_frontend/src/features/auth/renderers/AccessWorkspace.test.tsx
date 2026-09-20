@@ -676,7 +676,7 @@ describe("CAM-style access workspace", () => {
       await extension.execute("preview", { kind: "change-group-members", id: "group-delivery", added: [], removed: ["principal-lin"] });
       await extension.execute("preview", { kind: "change-group-policies", id: "group-auditors", added: [], removed: ["policy-audit"] });
       await extension.execute("preview", { kind: "change-group-policies", id: "group-operators", added: [], removed: ["policy-delivery", "policy-tag-logs"] });
-      await extension.execute("preview", { kind: "set-key-status", id: "MOCK-pipeline-key", status: "DISABLED", resourceVersion: 2, requestId: "disable-pipeline-key" });
+      await extension.execute("preview", { kind: "set-key-status", id: "MOCK-pipeline-key", ownerState: "active", status: "DISABLED", resourceVersion: 2, requestId: "disable-pipeline-key" });
       await extension.execute("preview", { kind: "save-settings", settings: { ...(await extension.read("preview")).settings, loginProtection: true } });
     } });
     expect(await screen.findByText(/0 个启用的模拟长期密钥/)).toBeTruthy();
@@ -2069,7 +2069,6 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(await extension.read("preview")).toEqual(before);
-    await user.click(screen.getByRole("button", { name: "MOCK-pipeline-key" }));
     await user.click(screen.getByRole("button", { name: "禁用" }));
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
     await user.click(screen.getByRole("button", { name: "禁用" }));
@@ -2078,7 +2077,6 @@ describe("CAM-style access workspace", () => {
     expect(await extension.read("preview")).toEqual(before);
     await user.click(screen.getByRole("button", { name: "禁用" }));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "禁用 MOCK-pipeline-key" })).toBeNull());
-    await user.click(screen.getByRole("button", { name: "MOCK-pipeline-key" }));
     await user.click(screen.getByRole("button", { name: "删除" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("checkbox"));
@@ -2097,11 +2095,22 @@ describe("CAM-style access workspace", () => {
     expect(await screen.findByText("UNKNOWN")).toBeTruthy();
     expect(screen.queryByText(/^MOCK_NOT_A_CREDENTIAL_/)).toBeNull();
     expect(screen.queryByRole("button", { name: "新建访问密钥" })).toBeNull();
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("go-keys"));
+    expect(await screen.findByText("UNKNOWN")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "返回列表" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "按原 requestId 查询" }));
     expect(screen.getByText("不可恢复 · 不可重显")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看并处置这把密钥" }));
     expect(screen.getByText(/没有可靠的最后使用时间或访问日志/)).toBeTruthy();
     expect((await extension.read("preview")).keys.filter((key) => key.ownerId === "principal-chen")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "禁用" }));
+    await user.click(screen.getByRole("button", { name: "禁用" }));
+    await user.click(screen.getByRole("button", { name: "删除" }));
+    await user.click(screen.getByRole("checkbox"));
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: /删除 MOCK-/ })).toBeNull());
+    expect((await extension.read("preview")).pendingKeyCreation).toBeNull();
   });
   it("models personal MFA, scoped step-up and the frozen account requirement without invented settings", async () => {
     const { user } = await open("settings");
@@ -2113,14 +2122,23 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "安全通知" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "验证第一条地址" })).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "替换验证器" }));
-    expect(screen.getByRole("heading", { name: "验证身份后替换验证器" })).toBeTruthy();
-    expect(screen.getByText(/不增加任何 IAM 权限/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "绑定验证器" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: "验证第一条地址" }));
+    await user.type(screen.getByLabelText("安全通知邮箱"), "mfa.owner@example.com");
     await user.type(screen.getByLabelText("当前密码"), "demo-password");
-    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "创建验证意图" }));
+    await user.type(screen.getByLabelText("8 位邮箱验证码"), "48392017");
+    await user.click(screen.getByRole("button", { name: "确认地址" }));
+    const bind = screen.getByRole("button", { name: "绑定验证器" }) as HTMLButtonElement;
+    expect(bind.disabled).toBe(false);
+    await user.click(bind);
+    expect(screen.getByRole("heading", { name: "验证身份后绑定验证器" })).toBeTruthy();
+    expect(screen.getByText(/不增加任何 IAM 权限/)).toBeTruthy();
+    expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
     await user.click(screen.getByRole("button", { name: "验证并继续" }));
-    expect(screen.getByRole("heading", { name: "替换身份验证器" })).toBeTruthy();
-    expect(screen.getByText(/原验证器继续有效/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "设置身份验证器" })).toBeTruthy();
+    expect(screen.getByText(/必须先完成强制改密/)).toBeTruthy();
   });
   it("keeps first security-notification address verification personal, inline, and explicitly MOCK", async () => {
     const { user, repository } = await open("settings");

@@ -83,7 +83,7 @@ describe("branded sign-in flows", () => {
     expect(iam.login).not.toHaveBeenCalled();
     await user.type(screen.getByLabelText("6 位动态验证码"), "000000");
     await user.click(screen.getByRole("button", { name: "验证并登录" }));
-    expect(screen.getByRole("alert").textContent).toContain("无效");
+    expect(screen.getByRole("alert").textContent).toContain("未能完成验证");
     expect(iam.login).not.toHaveBeenCalled();
     await user.clear(screen.getByLabelText("6 位动态验证码"));
     await user.type(screen.getByLabelText("6 位动态验证码"), "624810");

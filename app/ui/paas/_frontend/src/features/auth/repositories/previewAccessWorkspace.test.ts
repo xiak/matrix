@@ -187,7 +187,7 @@ describe("access workspace preview invariants", () => {
       { kind: "set-user-policies", principalId, policyIds: ["policy-read"] },
       { kind: "set-user-groups", principalId: "foreign-primary", groupIds: ["group-delivery"] },
       { kind: "set-user-boundary", principalId, policyId: "policy-read" },
-      { kind: "create-key", ownerId: principalId, userResourceVersion: 1, requestId: "root-key" },
+      { kind: "create-key", ownerId: principalId, ownerState: "active", userResourceVersion: 1, requestId: "root-key", responseMode: "success" },
       { kind: "associate-policy", id: "policy-read", userIds: [principalId], groupIds: [], roleIds: [] },
       { kind: "change-group-members", id: "group-delivery", added: ["foreign-primary"], removed: [] }
     ];
@@ -507,21 +507,50 @@ describe("access workspace preview invariants", () => {
   });
   it("limits keys per subuser and requires disabling before deletion", () => {
     let state = initialAccessWorkspace("org-xiak");
-    state = applyAccessWorkspaceCommand(state, { kind: "create-key", ownerId: "principal-lin", userResourceVersion: 3, requestId: "create-lin-key" }, context);
-    expect(() => applyAccessWorkspaceCommand(state, { kind: "create-key", ownerId: "principal-lin", userResourceVersion: 3, requestId: "create-second-lin-key" }, context)).toThrow("invalid");
+    state = applyAccessWorkspaceCommand(state, { kind: "create-key", ownerId: "principal-lin", ownerState: "active", userResourceVersion: 3, requestId: "create-lin-key", responseMode: "success" }, context);
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "create-key", ownerId: "principal-lin", ownerState: "active", userResourceVersion: 3, requestId: "create-second-lin-key", responseMode: "success" }, context)).toThrow("invalid");
     expect(() => applyAccessWorkspaceCommand(state, { kind: "delete-key", id: "MOCK-new-id", resourceVersion: 1, requestId: "delete-enabled" }, context)).toThrow("disableFirst");
-    state = applyAccessWorkspaceCommand(state, { kind: "set-key-status", id: "MOCK-new-id", status: "DISABLED", resourceVersion: 1, requestId: "disable-lin-key" }, context);
+    state = applyAccessWorkspaceCommand(state, { kind: "set-key-status", id: "MOCK-new-id", ownerState: "active", status: "DISABLED", resourceVersion: 1, requestId: "disable-lin-key" }, context);
     expect(applyAccessWorkspaceCommand(state, { kind: "delete-key", id: "MOCK-new-id", resourceVersion: 2, requestId: "delete-lin-key" }, context).keys).toHaveLength(1);
-    expect(() => applyAccessWorkspaceCommand(state, { kind: "create-key", ownerId: "primary-admin", userResourceVersion: 1, requestId: "root-key" }, context)).toThrow("invalid");
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "create-key", ownerId: "primary-admin", ownerState: "active", userResourceVersion: 1, requestId: "root-key", responseMode: "success" }, context)).toThrow("invalid");
+  });
+  it("requires an active owner for creation and enable while preserving defensive key operations", () => {
+    let state = initialAccessWorkspace("org-xiak");
+    for (const ownerState of ["disabled", "passwordChangeRequired"] as const) {
+      expect(() => applyAccessWorkspaceCommand(state, { kind: "create-key", ownerId: "principal-chen", ownerState, userResourceVersion: 2, requestId: `create-${ownerState}`, responseMode: "success" }, context)).toThrow("invalid");
+    }
+    state = applyAccessWorkspaceCommand(state, { kind: "set-key-status", id: "MOCK-pipeline-key", ownerState: "passwordChangeRequired", status: "DISABLED", resourceVersion: 2, requestId: "disable-existing" }, context);
+    expect(state.keys[0]?.status).toBe("DISABLED");
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "set-key-status", id: "MOCK-pipeline-key", ownerState: "passwordChangeRequired", status: "ENABLED", resourceVersion: 3, requestId: "enable-existing" }, context)).toThrow("invalid");
+    expect(applyAccessWorkspaceCommand(state, { kind: "delete-key", id: "MOCK-pipeline-key", resourceVersion: 3, requestId: "delete-existing" }, context).keys).toEqual([]);
+  });
+  it("persists one unknown creation intent across users until the original key is inspected and retired", () => {
+    let state = applyAccessWorkspaceCommand(initialAccessWorkspace("org-xiak"), { kind: "create-key", ownerId: "principal-chen", ownerState: "active", userResourceVersion: 2, requestId: "lost-response", responseMode: "response-lost" }, context);
+    expect(state.pendingKeyCreation).toEqual({ ownerId: "principal-chen", requestId: "lost-response", keyId: "MOCK-new-id", status: "UNKNOWN" });
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "create-key", ownerId: "principal-lin", ownerState: "active", userResourceVersion: 3, requestId: "bypass-other-user", responseMode: "success" }, context)).toThrow("invalid");
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "new-request", keyId: "MOCK-new-id" }, context)).toThrow("invalid");
+    state = applyAccessWorkspaceCommand(state, { kind: "inspect-key-creation", ownerId: "principal-chen", requestId: "lost-response", keyId: "MOCK-new-id" }, context);
+    expect(state.pendingKeyCreation?.status).toBe("COMMITTED_SECRET_LOST");
+    state = applyAccessWorkspaceCommand(state, { kind: "set-key-status", id: "MOCK-new-id", ownerState: "active", status: "DISABLED", resourceVersion: 1, requestId: "disable-lost" }, context);
+    state = applyAccessWorkspaceCommand(state, { kind: "delete-key", id: "MOCK-new-id", resourceVersion: 2, requestId: "delete-lost" }, context);
+    expect(state.pendingKeyCreation).toBeNull();
+    expect(applyAccessWorkspaceCommand(state, { kind: "create-key", ownerId: "principal-chen", ownerState: "active", userResourceVersion: 2, requestId: "replacement", responseMode: "success" }, context).keys.filter((key) => key.ownerId === "principal-chen")).toHaveLength(1);
   });
   it("returns a mock secret once without storing it in snapshots or reports", async () => {
     const repository = createPreviewAccessWorkspace("org-xiak", () => context.userIds, context.primaryPrincipalId);
-    const result = await repository.execute("mock", { kind: "create-key", ownerId: "principal-chen", userResourceVersion: 2, requestId: "create-chen-key" });
+    const result = await repository.execute("mock", { kind: "create-key", ownerId: "principal-chen", ownerState: "active", userResourceVersion: 2, requestId: "create-chen-key", responseMode: "success" });
     expect(result.issuedKey?.secret).toMatch(/^MOCK_NOT_A_CREDENTIAL_/);
     expect(JSON.stringify(result.workspace)).not.toContain(result.issuedKey?.secret);
     expect(JSON.stringify(await repository.read("mock"))).not.toContain("MOCK_NOT_A_CREDENTIAL_");
     repository.reset();
     expect((await repository.read("mock")).keys).toHaveLength(1);
+  });
+  it("does not mint or return a replacement secret when the create response is lost", async () => {
+    const repository = createPreviewAccessWorkspace("org-xiak", () => context.userIds, context.primaryPrincipalId);
+    const result = await repository.execute("mock", { kind: "create-key", ownerId: "principal-chen", ownerState: "active", userResourceVersion: 2, requestId: "lost-create", responseMode: "response-lost" });
+    expect(result.issuedKey).toBeUndefined();
+    expect(result.workspace.pendingKeyCreation).toMatchObject({ ownerId: "principal-chen", requestId: "lost-create", status: "UNKNOWN" });
+    expect(JSON.stringify(result.workspace)).not.toContain("MOCK_NOT_A_CREDENTIAL_");
   });
   it("removes a deleted user's memberships, direct permissions and keys together", () => {
     const state = applyAccessWorkspaceCommand(initialAccessWorkspace("org-xiak"), { kind: "delete-user", principalId: "principal-lin" }, context);

@@ -32,6 +32,13 @@ export type AccessKey = {
   resourceVersion: number;
   createdAt: string;
 };
+export type AccessKeyOwnerState = "active" | "passwordChangeRequired" | "disabled";
+export type PendingAccessKeyCreation = {
+  ownerId: string;
+  requestId: string;
+  keyId: string;
+  status: "UNKNOWN" | "COMMITTED_SECRET_LOST";
+};
 export type EnterpriseMember = { id: string; name: string; department: string };
 export type EnterpriseAccount = { id: string; name: string; corporationId: string; visibleMemberIds: string[]; importedMemberIds: string[]; createdAt: string };
 export function enterprisePrincipalId(accountId: string, memberId: string): string { return "principal-wecom-" + accountId + "-" + memberId; }
@@ -51,6 +58,7 @@ export type AccessWorkspace = {
   enterprises: EnterpriseAccount[]; enterpriseMembers: EnterpriseMember[];
   userProfiles: Record<string, PreviewUserProfile>;
   userBoundaries: Record<string, string>; roleSessions: AccessRoleSession[];
+  pendingKeyCreation: PendingAccessKeyCreation | null;
   testResources: { id: string; reference: string; tags?: Record<string, string> }[];
   // Synthetic diagnostic inputs, not canned decisions or authorization rules.
   testRequests: { id: "path" | "duplicate" | "tags" | "deny" | "boundary" | "ungranted"; request: AccessTestRequest }[];
@@ -83,8 +91,9 @@ export type AccessWorkspaceCommand =
   | { kind: "delete-provider"; id: string }
   | { kind: "save-federation"; id?: string; name: string; subject: string; providerId: string; roleId: string; enabled: boolean }
   | { kind: "delete-federation"; id: string }
-  | { kind: "create-key"; ownerId: string; userResourceVersion: number; requestId: string }
-  | { kind: "set-key-status"; id: string; status: AccessKey["status"]; resourceVersion: number; requestId: string }
+  | { kind: "create-key"; ownerId: string; ownerState: AccessKeyOwnerState; userResourceVersion: number; requestId: string; responseMode: "success" | "response-lost" }
+  | { kind: "inspect-key-creation"; ownerId: string; requestId: string; keyId: string }
+  | { kind: "set-key-status"; id: string; ownerState: AccessKeyOwnerState; status: AccessKey["status"]; resourceVersion: number; requestId: string }
   | { kind: "delete-key"; id: string; resourceVersion: number; requestId: string }
   | { kind: "set-user-policies"; principalId: string; policyIds: string[] }
   | { kind: "set-user-groups"; principalId: string; groupIds: string[] }
@@ -130,6 +139,7 @@ export function withoutUserAccess(source: AccessWorkspace, principalIds: readonl
   for (const role of state.roles) role.trustedUserIds = role.trustedUserIds.filter((id) => !ids.has(id));
   for (const session of state.roleSessions) if (session.caller.type === "user" && ids.has(session.caller.id) && !session.revokedAt) session.revokedAt = at;
   state.keys = state.keys.filter((key) => !ids.has(key.ownerId));
+  if (state.pendingKeyCreation && ids.has(state.pendingKeyCreation.ownerId)) state.pendingKeyCreation = null;
   for (const enterprise of state.enterprises) enterprise.importedMemberIds = enterprise.importedMemberIds.filter((member) => !ids.has(enterprisePrincipalId(enterprise.id, member)));
   return state;
 }
@@ -137,7 +147,7 @@ export function withoutUserAccess(source: AccessWorkspace, principalIds: readonl
 // Pure, deterministic preview transitions. Adapters supply identity, IDs and time.
 export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: AccessWorkspaceCommand, context: { id: string; at: string; userIds: string[]; primaryPrincipalId: string }): AccessWorkspace {
   const state = command.kind === "delete-user" ? withoutUserAccess(source, [command.principalId], context.at) : structuredClone(source);
-  const invalid = () => { throw new AccessWorkspaceError("invalid"); };
+  const invalid = (): never => { throw new AccessWorkspaceError("invalid"); };
   // RootIdentity is the account's protected ownership relation, not a User.
   // Every user relation stays constrained to the authoritative User directory,
   // even if an adapter supplies the root ID or a foreign identity.
@@ -382,12 +392,21 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     case "delete-federation":
       exists(state.federations, id); state.federations = state.federations.filter((entry) => entry.id !== id); break;
     case "create-key":
-      if (!context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
+      if (state.pendingKeyCreation || command.ownerState !== "active" || !context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
       state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", resourceVersion: 1, createdAt });
+      if (command.responseMode === "response-lost") state.pendingKeyCreation = { ownerId: command.ownerId, requestId: command.requestId, keyId: "MOCK-" + id, status: "UNKNOWN" };
       target = "MOCK-" + id; break;
+    case "inspect-key-creation": {
+      const pending = state.pendingKeyCreation;
+      if (!pending || pending.status !== "UNKNOWN" ||
+        pending.ownerId !== command.ownerId || pending.requestId !== command.requestId || pending.keyId !== command.keyId) invalid();
+      exists(state.keys, command.keyId);
+      state.pendingKeyCreation = { ownerId: command.ownerId, requestId: command.requestId, keyId: command.keyId, status: "COMMITTED_SECRET_LOST" };
+      target = command.keyId; break;
+    }
     case "set-key-status": {
       const key = exists(state.keys, id);
-      if (!Number.isInteger(command.resourceVersion) || command.resourceVersion !== key.resourceVersion || !command.requestId.trim()) invalid();
+      if (!Number.isInteger(command.resourceVersion) || command.resourceVersion !== key.resourceVersion || !command.requestId.trim() || (command.status === "ENABLED" && command.ownerState !== "active")) invalid();
       key.status = command.status;
       key.resourceVersion += 1;
       break;
@@ -396,7 +415,9 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       if (!Number.isInteger(command.resourceVersion) || !command.requestId.trim()) invalid();
       if (exists(state.keys, id).resourceVersion !== command.resourceVersion) invalid();
       if (exists(state.keys, id).status === "ENABLED") throw new AccessWorkspaceError("disableFirst");
-      state.keys = state.keys.filter((entry) => entry.id !== id); break;
+      state.keys = state.keys.filter((entry) => entry.id !== id);
+      if (state.pendingKeyCreation?.keyId === id) state.pendingKeyCreation = null;
+      break;
     case "set-user-policies":
       if (!context.userIds.includes(command.principalId)) invalid();
       state.userPolicies[command.principalId] = policies(command.policyIds); target = command.principalId; break;
