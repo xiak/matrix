@@ -493,11 +493,13 @@ false→true收紧时，最小方案单调推进本Account日常User的登录资
 | --- | --- |
 | `TestIAMPasswordAttemptsPostgres` | 最终矩阵63.39s通过；两个受限运行身份池、同名跨租户/别名、登录与改密共用5次限制、失败落库、未知输入无新行、真实30秒槽位到期无返额/60秒窗口恢复、并发reset拒绝旧计算、schema/bootstrap/新Authority不清额度、原子Session/outbox和ACL/精确形状；真实SQL证明已消费尝试不能再签Session、改密目的不能换成登录且拒绝后原尝试不被消费 |
 | `TestIAMHTTPPostgresVerticalSlice` | 84.36s通过；原租户/成员/删除/别名/生命周期、密码选项及change/reset/recover/logout/旧密码登录竞争、平台附件与凭据保护、历史生产者及物理owner/审计链保持 |
+| `TestIAMOwnSessionBulkPostgres` | 最终夹具49.10s通过；包含两个提交方向的登录/撤销真实锁依赖。保留原成功数量、原目标集合、精确重放、后继登录存活及完整密码/恢复/停用竞争，不把新用户锁等待误当成发行无效 |
+| Audit原双schema/保留数据门禁 | `TestPostgresAuthorityIntegration`4.46s及`TestAuditRetainedTenantPartitionUpgrade`0.33s通过，包7.572s；正向存储夹具先提交密码尝试，再以真实USER事实消费新形状。原裸查询的运行权限明确拒绝；RLS、数据库时间、末端原子性、旧canonical及不可变记录攻击保留 |
 | `TestIAMRetainedOwnSessionProcessUpgrade` | 20.10s通过；真实固定`7cf857bb` IAM32 executable产生原数据，IAM33双次迁移/原六字段receipt/原绑定及canonical/proof保留；实际进程重启不清密码尝试，NULL/撤销Session不复活。旧Session完成/forced批量减权门禁保留，未声称跨release兼容 |
 | `TestIndependentIAMAuditAndPaaSProcesses` | 68.66s通过；实际受限数据库登录、双IAM及Audit/PaaS/dispatcher进程、真实HTTP/原outbox/审计及资源隔离回归；源码readiness精确33/19/2，不改已发布profile |
 | 默认/架构及构建检查 | 相同最终生产代码的干净导出全仓race/architecture通过；最后追加的SQL攻击在上述新PG18门禁通过。最终导出vet、模块校验、724文件生成集合及SHA256一致、Linux amd64构建通过；外部DSN的默认SKIP不是运行证据 |
 
-候选仍需精确固定源码的独立CI确认；上表不替代未完成的Account公平配额、密码规则、MFA/通知/恢复或完整009验收。本机默认DSN缺失时的SKIP不作为上述证据；原Docker不可用没有被用来降低门禁或重启共享服务。
+初始`31c18531`的[Verification35488659078](https://github.com/xiak/matrix/actions/runs/35488659078)未通过：Audit存储夹具还直接调用裸密码查询/旧函数，会话并发夹具还要求新登录绕过同USER写锁；两处已在原测试owner按当前契约替换并完成上述本地复验，没有恢复旁路、删场景、增时限或修改生产实现。后继候选仍需精确固定源码的独立CI确认，不能回填该失败。上表不替代未完成的Account公平配额、密码规则、MFA/通知/恢复或完整009验收。本机默认DSN缺失时的SKIP不作为上述证据；原Docker不可用没有被用来降低门禁或重启共享服务。
 
 必须分清三种限制：进程/入口预算保护CPU、内存和连接；当前实际USER/凭据预算限制猜测；Account公平预算避免一个账号占满认证资源。前者可以有每副本本地上限，但不能冒充集群级尝试上限；后两者需要共享权威状态，所有IAM副本按相同数据库时间核对。安装/edge的限额是补充，不授权IAM失联时回退到内存计数或旧Allow。
 

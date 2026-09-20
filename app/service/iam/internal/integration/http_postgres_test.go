@@ -3872,17 +3872,11 @@ func proveOwnSessionWriters(t *testing.T, ctx context.Context, handlers []http.H
 				ticker := time.NewTicker(10 * time.Millisecond)
 				defer ticker.Stop()
 				var responseSecond *httptest.ResponseRecorder
-				if mutation == "login" {
-					// A new login inserts a distinct row. Both transactions overlap,
-					// but SERIALIZABLE can order the reduction before that issuance.
-					// Do not infer its membership from start/issue/commit timestamps.
-					select {
-					case responseSecond = <-finishedSecond:
-					case <-wait.Done():
-						t.Fatal("independent session issuance/reduction did not finish")
-					}
-				}
-				for mutation != "login" {
+				// Password admission/final consumption now shares the same USER
+				// lock as reduction. Observe the real dependency before releasing
+				// the first writer, including login; do not demand that an unlocked
+				// insertion bypass an uncommitted identity mutation.
+				for {
 					var blocked bool
 					if err := database.QueryRow(wait, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))`, firstPID).Scan(&blocked); err != nil {
 						t.Fatal("observe production session lock", err)
