@@ -290,10 +290,18 @@ jobs:
         run: |
           sudo timeout 30s systemctl start docker
           timeout 30s docker info --format '{{.ServerVersion}}'
-          docker pull apache/apisix:3.17.0-debian
-          docker pull alpine:3.24.1
-          docker pull docker:27.5.1-dind-alpine3.21
-          docker pull postgres:18
+          docker pull apache/apisix@sha256:6cbf65f3085d1386bfd636b7e88400c163c3641841909e674af7896a5766b092
+          docker pull alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
+          docker pull docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce
+          docker pull postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a
+          docker image tag apache/apisix@sha256:6cbf65f3085d1386bfd636b7e88400c163c3641841909e674af7896a5766b092 apache/apisix:3.17.0-debian
+          docker image tag alpine@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b alpine:3.24.1
+          docker image tag docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce docker:27.5.1-dind-alpine3.21
+          docker image tag postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a postgres:18
+          test "$(docker image inspect apache/apisix:3.17.0-debian --format '{{.Id}}')" = "sha256:6cbf65f3085d1386bfd636b7e88400c163c3641841909e674af7896a5766b092"
+          test "$(docker image inspect alpine:3.24.1 --format '{{.Id}}')" = "sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
+          test "$(docker image inspect docker:27.5.1-dind-alpine3.21 --format '{{.Id}}')" = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
+          test "$(docker image inspect postgres:18 --format '{{.Id}}')" = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
           df -h "$RUNNER_TEMP" /var/lib/docker
       - name: Assemble authenticated predecessor and preparation releases
         run: |
