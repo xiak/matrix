@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted
+- Status: Phase 1 accepted; Phase 3 enterprise authentication recovery extension not accepted
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract version: `v1`
@@ -189,6 +189,74 @@ probe. `status` is read-only. `support` emits only release IDs, component
 health, normalized state, image/content digests, migration version, bounded
 timestamps, and correlation IDs; it excludes secrets, tokens, configuration
 values, database rows, native errors, arbitrary logs, and absolute paths.
+
+## Phase 3 enterprise authentication recovery extension
+
+Phase 3 adds installation custody for IAM TOTP wrapping keys without changing
+the accepted Phase 1 lifecycle boundary. Installation generates a distinct
+installation-scoped keyring once, binds it to the sealed bootstrap identity,
+and mounts the exact read-only file only into IAM. The keyring, TOTP seeds,
+password material and recovery capabilities never enter a signed release,
+Audit event, support bundle, command output or ordinary backup manifest field.
+An immutable per-key commitment may cross the boundary; a complete keyset
+digest is inventory evidence only and cannot prove which keys a database
+snapshot needs.
+
+MFA is enabled through two exact signed releases. The preparation release owns
+the key custody, database registry and runtime guards while leaving MFA
+creation disabled. Its readiness, login, credential validation and Session
+use paths all fail closed if they encounter MFA state they cannot enforce; a
+health probe alone is not the security boundary. The enabling release is
+admitted only from that exact predecessor and only after the predecessor's
+database/function behavior has been verified. A schema number, equal version
+tuple, manifest capability string or caller override cannot substitute for
+that behavior. If a rollback binary cannot enforce existing MFA state, it
+must remain unable to serve authentication rather than silently issue a weak
+Session.
+
+Each protected backup obtains TOTP custody and the PostgreSQL dump from one
+read-only repeatable snapshot. A purpose-only IAM entry, reached through a
+dedicated no-table-access identity, exports the snapshot, returns the bounded
+sorted set of immutable key commitments required by every factor state that
+still needs decryption, and holds that snapshot while the fixed lifecycle
+invokes `pg_dump --snapshot`. Unknown key references or factor states fail the
+backup. The sealed backup records only the non-secret required commitments
+and their custody digest. Restore verifies that the current installation
+keyring is a superset before changing the database, and IAM readiness verifies
+the restored database needs again before authentication can start. The active
+key alone, an independently timed query, or the current keyset digest is not
+same-snapshot proof.
+
+Destructive restore closes authentication before the first database effect.
+The durable closed record binds the exact installation, command, backup and
+custody digest plus the authenticated source and target signed release
+manifests. It has no caller-selectable tenant or user and confers no permission
+to reopen authentication. Reopening requires a separate purpose-limited IAM
+transaction that matches that exact closed intent, advances the recovery
+epoch, revokes restored Sessions, fences credential and TOTP replay state,
+writes one immutable completion and succeeds exactly once. Changed or missing
+evidence, an unknown outcome, a second command, a restored pre-completion
+receipt, or a release/profile mismatch remains closed. Recovery never grants
+a role, enables a tenant, transfers root ownership or exposes a wrapping key.
+
+This extension is accepted only after the same committed source proves all of
+the following in an externally disconnected, task-owned runtime:
+
+1. a populated preparation release upgrades to the enabling release without
+   changing installation identity, key commitments, tenants, roles or Audit
+   history, while skipped and mismatched release pairs fail before effects;
+2. real password, TOTP enrollment/challenge, Session and readiness paths fail
+   closed under unknown keys, unknown factor states, missing custody and an
+   attempted rollback that cannot enforce MFA;
+3. a backup taken during concurrent factor creation/rotation either contains
+   the exact same-snapshot requirement set or fails, and restore cannot begin
+   with a missing or changed required key;
+4. crash/resume around snapshot export, dump completion, closure, restore and
+   reopen has one observable result and cannot authenticate from restored old
+   Sessions or replay state; and
+5. successful restore preserves usable authorized identities and factors,
+   writes the closed Audit evidence, passes restart plus signed
+   upgrade/rollback gates, and leaves Phase 2 and every remote host untouched.
 
 ## Incremental acceptance
 
