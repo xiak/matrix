@@ -245,15 +245,15 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 ### 账号级 MFA 要求 MOCK 的开发验收证据
 
 2026-09-20，前端实现固定在已推送的
-[`ca5048fa`](https://github.com/xiak/matrix/commit/ca5048fa)，
+[`d934e785`](https://github.com/xiak/matrix/commit/d934e785)，
 设计来源为本文件记录的 IAM-009 S2/S3 固定提交。
 
-- Account 安全规则使用独立语义组件，不再混入本人认证器与安全通知；编辑、准确目标审阅、作用域 step-up 和预览保存均在内容区完成，不打开 Dialog。
+- Account 安全规则使用独立语义组件，不再混入本人认证器与安全通知；默认先呈现只读规则摘要，只有显式进入编辑后才显示控件。编辑、准确目标审阅、作用域 step-up 和预览保存均在稳定的内容区完成，不打开 Dialog，也不在阶段切换时卸载固定标题与范围说明。
 - 审阅固定展示 `org-xiak`、普通 IAM User、受保护 Root/平台托管身份及收紧/放宽规则的会话影响。step-up 组件由本人安全操作和 Account 规则复用，但操作类型、目标和输入绑定保持显式，不产生通用提权能力。
-- 行为用例覆盖密码/TOTP 失败后保留输入并重试、从 step-up 返回审阅、取消与完成的焦点恢复；完成只写当前 DEV 体验仓库。任何真实失败不回退 MOCK。
+- 行为用例覆盖密码/TOTP 失败后保留输入并重试、从 step-up 返回审阅、取消与完成的焦点恢复；明确 `409` 冲突会进入页内失效态，丢弃旧审阅和本次操作证明，不自动刷新后重放写入，也不复用刚输入的密码或 TOTP。重新读取当前规则后必须从新基线重新编辑、审阅和验证。完成只写当前 DEV 体验仓库，任何真实失败不回退 MOCK。
 - 预览设置模型只保留账号级 MFA 要求和用户 SSO 选择；无契约所有者的密码规则、账号会话时长与泛化敏感操作字段及报告检查已经删除。安全总览因此只计算五项有明确证据来源的检查，不制造隐藏配置或伪状态。
 - 默认桌面与 `360 × 800` DEV 浏览器均无页面横向溢出、Dialog 或控制台 warning/error；小屏 document/body 均保持 `clientWidth == scrollWidth == 360`，规则目标和副作用仍完整可见。
-- 完整前端、主题、生产导出、嵌入等价及 Go UI 宿主门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；本证据不宣称 IAM-009 已有公开 HTTP、真实持久化、会话失效或后端执行验收。
+- 访问工作区 124 条行为用例、完整前端 40 个文件/603 条用例、三条静态归一化、228 组主题对比、40 页生产导出、222 个嵌入文件及 `go test ./...`、`go vet ./...` 均通过。完整共享门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；本证据不宣称 IAM-009 已有公开 HTTP、真实持久化、会话失效、未知完成查询或后端执行验收。
 
 ### 安全报告证据覆盖 MOCK 的开发验收证据
 
